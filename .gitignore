@@ -1,0 +1,8 @@
+.DS_Store
+.env
+node_modules/
+*.log
+.idea/
+.vscode/
+# ローカル生成物
+SCRIPTS/*.local.sh
