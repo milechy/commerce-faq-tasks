@@ -18,11 +18,19 @@ env:
 jobs:
   update-status:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Install jq (gh は runner に同梱済み)
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq
+
+      - name: Authenticate gh with GITHUB_TOKEN
+        run: |
+          gh --version || true
+          echo "$GH_TOKEN" | gh auth login --with-token
+          gh auth status
 
       - name: Decide target status
         id: decide
@@ -56,7 +64,8 @@ jobs:
         id: linked
         shell: bash
         run: |
-          body=$(jq -r '.pull_request.body // ""' <<< '${{ toJson(github.event) }}')
+          echo '${{ toJson(github.event) }}' > event.json
+          body=$(jq -r '.pull_request.body // ""' event.json)
           if [[ "$body" =~ ([Cc]loses|[Ff]ixes|[Rr]esolves)[[:space:]]+#([0-9]+) ]]; then
             echo "num=${BASH_REMATCH[2]}" >> $GITHUB_OUTPUT
           else
