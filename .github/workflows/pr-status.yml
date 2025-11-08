@@ -5,11 +5,12 @@ on:
     types: [opened, reopened, ready_for_review, converted_to_draft, closed]
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: read
-  projects: write   # ← Project (v2) への書込
+  repository-projects: read   # GITHUB_TOKEN 権限（PATは別途使用）
 
 env:
   OWNER: milechy          # ← あなた
@@ -22,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN != '' && secrets.GH_PROJECT_TOKEN || github.token }}
+      USING_PAT: ${{ secrets.GH_PROJECT_TOKEN != '' }}
     steps:
       - name: Install jq (gh は runner に同梱済み)
         run: |
@@ -34,6 +36,21 @@ jobs:
           gh --version || true
           echo "$GH_TOKEN" | gh auth login --with-token
           gh auth status
+
+      - name: Smoke check Projects API access
+        env:
+          OWNER: ${{ env.OWNER }}
+          PROJECT_NUMBER: ${{ env.PROJECT_NUMBER }}
+          USING_PAT: ${{ env.USING_PAT }}
+        run: |
+          set -e
+          echo "USING_PAT=${USING_PAT} (true means GH_PROJECT_TOKEN is set)"
+          echo "== gh auth status =="
+          gh auth status
+          echo "== list projects for owner =="
+          gh project list --owner "$OWNER" --format json | jq '.projects[] | {number,title,id}'
+          echo "== field-list for project ${PROJECT_NUMBER} =="
+          gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json | jq '.fields[] | {name,id}' >/dev/null
 
       - name: Decide target status
         id: decide
