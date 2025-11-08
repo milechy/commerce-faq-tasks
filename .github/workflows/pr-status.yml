@@ -14,12 +14,14 @@ permissions:
 env:
   OWNER: milechy          # ← あなた
   PROJECT_NUMBER: "2"     # ← Commerce-FAQ MVP Tasks
+  # NOTE: If this project is USER-owned, GITHUB_TOKEN cannot access Projects v2.
+  # Provide a classic PAT with project scope in repo secret GH_PROJECT_TOKEN.
 
 jobs:
   update-status:
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN != '' && secrets.GH_PROJECT_TOKEN || github.token }}
     steps:
       - name: Install jq (gh は runner に同梱済み)
         run: |
@@ -28,6 +30,7 @@ jobs:
 
       - name: Authenticate gh with GITHUB_TOKEN
         run: |
+          set -e
           gh --version || true
           echo "$GH_TOKEN" | gh auth login --with-token
           gh auth status
