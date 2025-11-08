@@ -1,0 +1,108 @@
+name: Project Status via PR
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  pull-requests: read
+  projects: write   # ← Project (v2) への書込
+
+env:
+  OWNER: milechy          # ← あなた
+  PROJECT_NUMBER: "2"     # ← Commerce-FAQ MVP Tasks
+
+jobs:
+  update-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq (gh は runner に同梱済み)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Decide target status
+        id: decide
+        shell: bash
+        run: |
+          ev="${{ github.event_name }}"
+          action="${{ github.event.action }}"
+          merged="${{ github.event.pull_request.merged }}"
+          target=""
+
+          if [[ "$ev" == "pull_request" ]]; then
+            case "$action" in
+              opened|reopened) target="In Progress" ;;      # PR作成→作業中
+              ready_for_review) target="In Review" ;;       # Draft解除→レビュー中
+              converted_to_draft) target="In Progress" ;;   # Draft戻し→作業中
+              closed)
+                if [[ "$merged" == "true" ]]; then
+                  target="QA"                               # マージ→QAへ
+                else
+                  target="Todo"                             # 非Mergeクローズ→Todoに戻す
+                fi
+              ;;
+            esac
+          elif [[ "$ev" == "pull_request_review" ]]; then
+            target="In Review"
+          fi
+
+          echo "target=$target" >> $GITHUB_OUTPUT
+
+      - name: Find linked issue number (via closing keywords)
+        id: linked
+        shell: bash
+        run: |
+          body=$(jq -r '.pull_request.body // ""' <<< '${{ toJson(github.event) }}')
+          if [[ "$body" =~ ([Cc]loses|[Ff]ixes|[Rr]esolves)[[:space:]]+#([0-9]+) ]]; then
+            echo "num=${BASH_REMATCH[2]}" >> $GITHUB_OUTPUT
+          else
+            echo "num=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Short-circuit when nothing to do
+        if: steps.decide.outputs.target == '' || steps.linked.outputs.num == ''
+        run: echo "No status change."
+
+      - name: Resolve Project/Field/Option/Item IDs dynamically
+        if: steps.decide.outputs.target != '' && steps.linked.outputs.num != ''
+        id: ids
+        env:
+          OWNER: ${{ env.OWNER }}
+          PROJECT_NUMBER: ${{ env.PROJECT_NUMBER }}
+          ISSUE_NUM: ${{ steps.linked.outputs.num }}
+          TARGET: ${{ steps.decide.outputs.target }}
+        run: |
+          # Project ID
+          PROJECT_ID=$(gh project list --owner "$OWNER" --format json -q ".projects[] | select(.number==(${PROJECT_NUMBER}|tonumber)) | .id")
+          # Status Field ID
+          STATUS_FIELD_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json | jq -r '.fields[] | select(.name=="Status") | .id')
+          # Option ID (名前→ID解決)
+          OPT_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
+            | jq -r --arg s "$TARGET" '.fields[] | select(.name=="Status") | .options[] | select(.name==$s) | .id')
+
+          # Item ID（プロジェクト内でIssue番号一致を検索。無ければ追加）
+          ITEM_ID=$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
+            | jq -r --arg n "$ISSUE_NUM" '.items[] | select(.content.number==($n|tonumber)) | .id')
+          if [[ -z "$ITEM_ID" || "$ITEM_ID" == "null" ]]; then
+            ISSUE_URL="https://github.com/${OWNER}/commerce-faq-tasks/issues/${ISSUE_NUM}"
+            ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$OWNER" --url "$ISSUE_URL" --format json -q .id)
+          fi
+
+          echo "project_id=$PROJECT_ID" >> $GITHUB_OUTPUT
+          echo "status_field_id=$STATUS_FIELD_ID" >> $GITHUB_OUTPUT
+          echo "opt_id=$OPT_ID" >> $GITHUB_OUTPUT
+          echo "item_id=$ITEM_ID" >> $GITHUB_OUTPUT
+
+      - name: Update Status
+        if: steps.decide.outputs.target != '' && steps.linked.outputs.num != ''
+        run: |
+          gh project item-edit \
+            --id "${{ steps.ids.outputs.item_id }}" \
+            --project-id "${{ steps.ids.outputs.project_id }}" \
+            --field-id "${{ steps.ids.outputs.status_field_id }}" \
+            --single-select-option-id "${{ steps.ids.outputs.opt_id }}" \
+            --format json -q .id
