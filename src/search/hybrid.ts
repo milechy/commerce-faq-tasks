@@ -46,10 +46,10 @@ export async function hybridSearch(q: string) {
   let pgHits: Hit[] = [];
   try {
     const esRes: any = await es.search({
-      index: 'docs',
-      size: 50,
-      query: { match: { text: q } }
-    });
+  index: 'docs',
+  size: 50,
+  query: { match: { text: q } }
+}, { requestTimeout: BUDGET });
     esHits = (esRes.hits?.hits || []).map((h: any) => ({
       id: h._id, text: h._source?.text, score: h._score, source: 'es' as const
     }));
@@ -60,7 +60,8 @@ export async function hybridSearch(q: string) {
   // PG text search (tsvector ベースの簡易BM25相当). pg が未設定ならスキップ
   if (pg) {
     try {
-      const sql = `
+      // まずは FTS（英数は強いが日本語は弱い）
+      const sqlTs = `
         with q as (
           select plainto_tsquery('simple', $1) as tsq
         )
@@ -70,7 +71,25 @@ export async function hybridSearch(q: string) {
         where to_tsvector('simple', coalesce(text,'')) @@ (select tsq from q)
         order by score desc
         limit 50;`;
-      const r = await pg.query(sql, [q]);
+
+      let r = await pg.query(sqlTs, [q]);
+
+      // 日本語などで 0 件なら pg_trgm にフォールバック
+      if (!r.rowCount) {
+        // 類似度の最小しきい値を少し下げる（既定は 0.3）
+        try { await pg.query("select set_limit(0.2)"); } catch {}
+
+        const sqlTrgm = `
+          select id::text as id, text, similarity(text, $1) as score
+          from docs
+          where text % $1
+          order by score desc
+          limit 50;`;
+        r = await pg.query(sqlTrgm, [q]);
+        if (!r.rowCount) notes.push('pg_trgm:no_hits');
+        else notes.push('pg_trgm:fallback_used');
+      }
+
       pgHits = r.rows.map((row: any) => ({ id: String(row.id), text: row.text, score: Number(row.score)||0, source: 'pg' as const }));
     } catch (e: any) {
       notes.push(`pg_error:${e.name||'Error'}:${e.message||String(e)}`);
@@ -81,10 +100,10 @@ export async function hybridSearch(q: string) {
   if (esHits.length === 0) {
     try {
       const probe: any = await es.search({
-        index: 'docs',
-        size: 5,
-        query: { match: { text: '返品 送料' } }
-      });
+  index: 'docs',
+  size: 5,
+  query: { match: { text: '返品 送料' } }
+}, { requestTimeout: BUDGET });
       const probeHits = (probe.hits?.hits || []).map((h: any) => ({
         id: h._id, text: h._source?.text, score: h._score, source: 'es' as const
       }));

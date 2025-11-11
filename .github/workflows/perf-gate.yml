@@ -1,0 +1,21 @@
+# .github/workflows/perf-gate.yml
+name: perf-gate
+on: [workflow_dispatch]
+jobs:
+  perf:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: 'pnpm' }
+      - run: pnpm i
+      - run: pnpm run stack:auto
+      - run: RPS_MIN=5000 P90_MAX=15 pnpm run perf:save:raw
+      - run: RPS_MIN=5000 P90_MAX=15 pnpm run perf:budget
+      - run: pnpm run perf:summary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perf-logs
+          path: logs/perf/
