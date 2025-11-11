@@ -1,24 +1,39 @@
 {
   "name": "commerce-faq-tasks",
   "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "stack:up": "docker ps --filter name=es-dev --format '{{.Names}}' | grep -q '^es-dev$' || docker run -d --name es-dev -p 9200:9200 -e 'discovery.type=single-node' -e 'xpack.security.enabled=false' -e 'ES_JAVA_OPTS=-Xms2g -Xmx2g' docker.elastic.co/elasticsearch/elasticsearch:8.15.3 && docker ps --filter name=pg-dev --format '{{.Names}}' | grep -q '^pg-dev$' || docker run -d --name pg-dev -p 5434:5432 -e POSTGRES_PASSWORD=pass ankane/pgvector",
+    "stack:down": "docker rm -f es-dev pg-dev || true",
+    "stack:wait": "for i in {1..60}; do curl -fsS http://localhost:9200 >/dev/null && break; sleep 1; done && for i in {1..60}; do PGPASSWORD=pass psql 'postgres://postgres:pass@127.0.0.1:5434/postgres' -tAc 'SELECT 1' >/dev/null 2>&1 && break; sleep 1; done",
+    "stack:seed:es": "curl -s -X PUT localhost:9200/docs >/dev/null || true && curl -s -X POST localhost:9200/docs/_doc -H 'Content-Type: application/json' -d '{\"text\":\"配送と返品 送料 のガイド：セール品は対象外の場合があります。\"}' >/dev/null && curl -s -X POST localhost:9200/docs/_doc -H 'Content-Type: application/json' -d '{\"text\":\"【FAQ】返品 送料 の基本ポリシー：条件次第で当社負担になります。\"}' >/dev/null && curl -s -X POST localhost:9200/docs/_doc -H 'Content-Type: application/json' -d '{\"text\":\"返金手続きの流れ。交換時の 送料 と期間について。\"}' >/dev/null && curl -s -X POST localhost:9200/docs/_refresh >/dev/null",
+    "stack:seed:pg": "psql 'postgres://postgres:pass@127.0.0.1:5434/postgres' -tAc \"SELECT 1 FROM pg_database WHERE datname='faq'\" | grep -q 1 || psql 'postgres://postgres:pass@127.0.0.1:5434/postgres' -c 'CREATE DATABASE faq;' && psql 'postgres://postgres:pass@127.0.0.1:5434/faq' -c 'CREATE EXTENSION IF NOT EXISTS vector;' && psql 'postgres://postgres:pass@127.0.0.1:5434/faq' -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;' && psql 'postgres://postgres:pass@127.0.0.1:5434/faq' -c \"CREATE TABLE IF NOT EXISTS docs (id serial PRIMARY KEY, text text NOT NULL);\" && psql 'postgres://postgres:pass@127.0.0.1:5434/faq' -c \"INSERT INTO docs(text) VALUES ('【PG】返品 送料 の考え方：一定条件で当社負担'), ('【PG】配送と返品 送料 のFAQ：セール品除外の場合あり') ON CONFLICT DO NOTHING;\"",
+    "check:search": "jq -n --arg q '返品 送料' '{q:$q}' | curl -s -X POST http://localhost:3000/search -H 'Content-Type: application/json' --data @- | jq .",
+    "smoke": "curl -s http://localhost:3000/health | jq . && echo && jq -n --arg q '返品 送料' '{q:$q}' | curl -s -X POST http://localhost:3000/search -H 'Content-Type: application/json' --data @- | jq .",
+    "perf:local": "BODY=$(jq -nc --arg q '返品 送料' '{q:$q}') && npx autocannon -d 15 -c 10 -p 4 --renderStatusCodes -m POST -H 'Content-Type: application/json' -b \"$BODY\" http://localhost:3000/search",
+    "ce:warmup": "curl -s -X POST http://localhost:3000/ce/warmup | jq .",
+    "ce:auto": "bash -lc 'set -e; pkill -f ts-node-dev || true; export NODE_OPTIONS=\"--max-old-space-size=6144\"; if command -v nvm >/dev/null 2>&1; then nvm use 20 || true; fi; if command -v npm >/dev/null 2>&1; then npm i onnxruntime-node@1.20.0 || true; fi; pnpm add onnxruntime-node@1.20.0 || true; mkdir -p models; pnpm run ce:warmup; curl -s http://localhost:3000/ce/status | jq .'",
+    "stack:auto": "pnpm run stack:up && pnpm run stack:wait && pnpm run stack:seed:es && pnpm run stack:seed:pg && pnpm run smoke",
+    "all:auto": "pnpm run stack:auto && pnpm run ce:auto && pnpm dev",
+    "doctor": "bash -lc 'set -e; echo \"# Doctor\"; echo \"Node:\" $(node -v); echo \"pnpm:\" $(pnpm -v); echo \"Docker:\" $(docker --version 2>/dev/null || echo none); echo \"jq:\" $(jq --version 2>/dev/null || echo none); echo; echo \"# Checking Docker Desktop...\"; docker info >/dev/null 2>&1 && echo ok || echo warn; echo \"# Checking ES...\"; curl -fsS http://localhost:9200 >/dev/null && echo ok || echo warmup; echo \"# Checking PG...\"; PGPASSWORD=pass psql \"postgres://postgres:pass@127.0.0.1:5434/postgres\" -tAc 'SELECT 1' >/dev/null 2>&1 && echo ok || echo warmup; echo \"# Checking CE deps...\"; node -e \"try{require('onnxruntime-node');console.log('onnxruntime-node: ok')}catch(e){console.log('onnxruntime-node: missing')}\"; echo; echo \"# Hints\"; echo \"- Start stack: pnpm run stack:auto\"; echo \"- Warmup CE: pnpm run ce:auto\"; echo \"- All-in-one: pnpm run all:auto\"'"
   },
   "dependencies": {
-    "@elastic/elasticsearch": "8",
-    "dotenv": "^17.2.3",
-    "express": "^5.1.0",
-    "pg": "^8.16.3",
-    "pino": "^10.1.0",
-    "pino-pretty": "^13.1.2",
-    "zod": "^4.1.12"
+    "@elastic/elasticsearch": "8.19.1",
+    "dotenv": "17.2.3",
+    "express": "5.1.0",
+    "pg": "8.16.3",
+    "pino": "10.1.0",
+    "pino-pretty": "13.1.2",
+    "zod": "4.1.12"
   },
   "devDependencies": {
-    "@types/express": "^5.0.5",
-    "@types/node": "^24.10.0",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.9.3"
+    "@types/express": "5.0.5",
+    "@types/node": "24.10.0",
+    "ts-node-dev": "2.0.0",
+    "typescript": "5.9.3"
   }
 }
