@@ -63,10 +63,11 @@
     "perf:save:v1:perf:fast": "bash -lc 'PERF_MODE=1 mkdir -p logs/perf; BODY='\\''{\"q\":\"返品 送料\",\"topK\":3}'\\''; npx autocannon -d 5 -c 12 -p 6 -H x-perf=1 -m POST -H '\\''Content-Type: application/json'\\'' -b \"$BODY\" http://localhost:3000/search.v1 >/dev/null; npx autocannon -j -d 12 -c 12 -p 6 -H x-perf=1 -m POST -H '\\''Content-Type: application/json'\\'' -b \"$BODY\" http://localhost:3000/search.v1 | tee logs/perf/$(date +%Y%m%d-%H%M%S)-v1-perf-fast.json'",
     "perf:save:v1:perf:auto:fast": "start-server-and-test 'LOG_LEVEL=error PERF_MODE=1 pnpm dev' http://localhost:3000/health 'pnpm run perf:save:v1:perf:fast && RPS_MIN=5000 P90_MAX=15 pnpm run perf:budget'",
     "perf:budget:v1:strict": "RPS_MIN=5000 P90_MAX=15 pnpm run perf:budget",
-    "perf:pickbest": "bash -lc 'best=$(for f in logs/perf/*.json; do [ -f \"$f\" ] || continue; p90=$(jq -r \"(.latency.p90 // .latency.p97_5 // 1e9)\" \"$f\"); rps=$(jq -r \".requests.average\" \"$f\"); printf \"%s\\t%s\\t%s\\n\" \"$p90\" \"$rps\" \"$f\"; done | sort -n -k1,1 -k2,2r | head -n1 | cut -f3); [ -n \"$best\" ] && touch \"$best\" || true'",
+    "perf:pickbest": "bash -lc 'best=$(\n  for f in logs/perf/*.json; do\n    [ -f \"$f\" ] || continue\n    if jq -e \".requests.average and .latency\" \"$f\" >/dev/null 2>&1; then\n      p90=$(jq -r \"(.latency.p90 // .latency.p97_5 // 1e9)\" \"$f\")\n      rps=$(jq -r \".requests.average // 0\" \"$f\")\n      printf \"%s\\t%s\\t%s\\n\" \"$p90\" \"$rps\" \"$f\"\n    fi\n  done | sort -n -k1,1 -k2,2r | head -n1 | cut -f3\n); [ -n \"$best\" ] && touch \"$best\" || { echo \"no valid perf logs\"; exit 1; }'",
     "perf:gate:best": "pnpm run perf:pickbest && RPS_MIN=5000 P90_MAX=15 pnpm run perf:budget",
     "perf:gate:strict": "pnpm run perf:pickbest && RPS_MIN=6000 P90_MAX=14 pnpm run perf:budget",
-    "ci:perf": "pnpm i --frozen-lockfile && pnpm run node:use:20 && pnpm run build && pnpm run perf:gate:strict"
+    "ci:perf": "pnpm i --frozen-lockfile && pnpm run node:use:20 && pnpm run build && pnpm run perf:gate:strict",
+    "ci:perf:fast": "SCRIPTS/ci_perf_fast.sh"
   },
   "dependencies": {
     "@elastic/elasticsearch": "8.19.1",
@@ -80,6 +81,7 @@
   "devDependencies": {
     "@types/express": "5.0.5",
     "@types/node": "24.10.0",
+    "autocannon": "^8.0.0",
     "onnxruntime-node": "1.20.0",
     "start-server-and-test": "^2.1.2",
     "ts-node-dev": "2.0.0",
