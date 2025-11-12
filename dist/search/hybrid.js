@@ -2,6 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.hybridSearch = hybridSearch;
 const elasticsearch_1 = require("@elastic/elasticsearch");
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+// @ts-ignore - pg has no bundled types in this project, treat as any
+const { Pool } = require('pg');
 const esUrl = process.env.ES_URL;
 const BUDGET = Number(process.env.HYBRID_TIMEOUT_MS || 600);
 const ALLOW_MOCK = process.env.HYBRID_MOCK_ON_FAILURE === '1';
@@ -12,7 +15,8 @@ const es = esUrl ? new elasticsearch_1.Client({
         'content-type': 'application/vnd.elasticsearch+json; compatible-with=8'
     }
 }) : null;
-// const pg = undefined;
+const pgUrl = process.env.DATABASE_URL;
+const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
 const normZ = (xs) => {
     const m = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
     const v = xs.reduce((a, b) => a + (b - m) ** 2, 0) / Math.max(1, xs.length);
@@ -37,18 +41,59 @@ async function hybridSearch(q) {
         return { items: [], ms: Date.now() - t0, note: 'es:null and mock disabled' };
     }
     let esHits = [];
+    let pgHits = [];
     try {
         const esRes = await es.search({
             index: 'docs',
             size: 50,
             query: { match: { text: q } }
-        });
+        }, { requestTimeout: BUDGET });
         esHits = (esRes.hits?.hits || []).map((h) => ({
             id: h._id, text: h._source?.text, score: h._score, source: 'es'
         }));
     }
     catch (e) {
         notes.push(`es_error:${e.message || String(e)}`);
+    }
+    // PG text search (tsvector ベースの簡易BM25相当). pg が未設定ならスキップ
+    if (pg) {
+        try {
+            // まずは FTS（英数は強いが日本語は弱い）
+            const sqlTs = `
+        with q as (
+          select plainto_tsquery('simple', $1) as tsq
+        )
+        select id::text as id, text,
+               ts_rank_cd(to_tsvector('simple', coalesce(text,'')), (select tsq from q)) as score
+        from docs
+        where to_tsvector('simple', coalesce(text,'')) @@ (select tsq from q)
+        order by score desc
+        limit 50;`;
+            let r = await pg.query(sqlTs, [q]);
+            // 日本語などで 0 件なら pg_trgm にフォールバック
+            if (!r.rowCount) {
+                // 類似度の最小しきい値を少し下げる（既定は 0.3）
+                try {
+                    await pg.query("select set_limit(0.2)");
+                }
+                catch { }
+                const sqlTrgm = `
+          select id::text as id, text, similarity(text, $1) as score
+          from docs
+          where text % $1
+          order by score desc
+          limit 50;`;
+                r = await pg.query(sqlTrgm, [q]);
+                if (!r.rowCount)
+                    notes.push('pg_trgm:no_hits');
+                else
+                    notes.push('pg_trgm:fallback_used');
+            }
+            pgHits = r.rows.map((row) => ({ id: String(row.id), text: row.text, score: Number(row.score) || 0, source: 'pg' }));
+        }
+        catch (e) {
+            notes.push(`pg_error:${e.name || 'Error'}:${e.message || String(e)}`);
+        }
     }
     // 念のため、0件なら固定クエリで再試行（投入確認）
     if (esHits.length === 0) {
@@ -57,7 +102,7 @@ async function hybridSearch(q) {
                 index: 'docs',
                 size: 5,
                 query: { match: { text: '返品 送料' } }
-            });
+            }, { requestTimeout: BUDGET });
             const probeHits = (probe.hits?.hits || []).map((h) => ({
                 id: h._id, text: h._source?.text, score: h._score, source: 'es'
             }));
@@ -73,7 +118,7 @@ async function hybridSearch(q) {
             notes.push(`probe_error:${e.message || String(e)}`);
         }
     }
-    if (esHits.length === 0 && ALLOW_MOCK) {
+    if ((esHits.length + pgHits.length) === 0 && ALLOW_MOCK) {
         return {
             items: [
                 { id: 'mock-es', text: `ES mock for: ${q}`, score: 1.0, source: 'es' },
@@ -85,8 +130,13 @@ async function hybridSearch(q) {
     }
     // z-scoreで正規化（将来PG経路とマージする前提のままにしておく）
     const zES = normZ(esHits.map(h => h.score));
-    const merged = esHits.map((h, i) => ({ ...h, z: zES(h.score) }))
+    const zPG = normZ(pgHits.map(h => h.score));
+    const merged = [
+        ...esHits.map(h => ({ ...h, z: zES(h.score) })),
+        ...pgHits.map(h => ({ ...h, z: zPG(h.score) }))
+    ]
         .sort((a, b) => b.z - a.z)
+        .filter((h, i, self) => self.findIndex(x => x.id === h.id) === i)
         .slice(0, 80)
         .map(({ z, ...rest }) => rest);
     return { items: merged, ms: Date.now() - t0, note: notes.join(' | ') || undefined };

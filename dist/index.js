@@ -1,65 +1,130 @@
-// src/search/rerank.ts
-export type Item = { id: string; text: string; score: number; source: 'es'|'pg' };
-export type RerankResult = { items: Item[]; ce_ms: number };
-
-// --- Optional ONNX loader (scaffold) ---
-let onnxLoaded = false;
-let onnxError: string | null = null;
-
-/** Attempt to load ONNX model if CE_MODEL_PATH is set and onnxruntime-node is available.
- *  NOTE: This scaffold intentionally does not run real CE inference yet (tokenizer未接続)。
- *  It prepares the session and keeps dummy re-ranking for safety.
- */
-export async function warmupCE(): Promise<{ ok: boolean; engine: string; model?: string; error?: string }>{
-  const modelPath = process.env.CE_MODEL_PATH;
-  if (!modelPath) {
-    onnxLoaded = false;
-    onnxError = 'CE_MODEL_PATH not set';
-    return { ok: false, engine: 'dummy', error: onnxError };
-  }
-  try {
-    // 動的 import（存在しない環境でも落ちない）
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const ort = require('onnxruntime-node') as typeof import('onnxruntime-node');
-    // セッションを開くだけ（推論はまだ行わない）
-    // 本番では tokenizer → input_ids/attention_mask 生成後に run() を呼ぶ
-    const session = await ort.InferenceSession.create(modelPath, {
-      executionProviders: ['cpu'],
-      // 最小限の最適化（環境差で失敗しにくく）
-      graphOptimizationLevel: 'all'
-    } as any);
-    // すぐ破棄せずヒープ上で保持する場合は、グローバルに退避
-    // ここではロード可否の検証のみ行い、即 close はしない（GC へ）
-    void session; // keep allocated
-    onnxLoaded = true;
-    onnxError = null;
-    return { ok: true, engine: 'onnx', model: modelPath };
-  } catch (e: any) {
-    onnxLoaded = false;
-    onnxError = String(e?.message || e);
-    return { ok: false, engine: 'dummy', error: onnxError };
-  }
-}
-
-export function ceStatus(){
-  return { onnxLoaded, onnxError, engine: onnxLoaded ? 'onnx' : 'dummy' };
-}
-
-// --- 現行: 軽量ダミーCE（ONNX準備が整うまでのフォールバック） ---
-export async function rerank(q: string, items: Item[], topK = 5): Promise<RerankResult> {
-  const t0 = Date.now();
-  // ダミー: クエリ語の包含数 + 元スコアのわずかな寄与
-  const qTokens = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const scored = items
-    .map((it) => {
-      const textL = (it.text || '').toLowerCase();
-      const matches = qTokens.reduce((acc, t) => acc + Number(textL.includes(t)), 0);
-      const ce = matches / Math.max(1, qTokens.length) + (it.score || 0) * 1e-6;
-      return { ...it, __ce: ce } as Item & { __ce: number };
-    })
-    .sort((a, b) => (b.__ce - a.__ce) || (b.score - a.score))
-    .slice(0, Math.max(1, topK))
-    .map(({ __ce, ...rest }) => rest);
-
-  return { items: scored, ce_ms: Date.now() - t0 };
-}
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
+const express_1 = __importDefault(require("express"));
+const pino_1 = __importDefault(require("pino"));
+const zod_1 = require("zod");
+const hybrid_1 = require("./search/hybrid");
+const rerank_1 = require("./search/rerank");
+const app = (0, express_1.default)();
+const logger = (0, pino_1.default)({ level: process.env.LOG_LEVEL || 'info' });
+// env snapshot for troubleshooting
+logger.info({
+    ES_URL: process.env.ES_URL,
+    DATABASE_URL: process.env.DATABASE_URL,
+    HYBRID_TIMEOUT_MS: process.env.HYBRID_TIMEOUT_MS,
+}, 'env snapshot');
+const parseJSON = express_1.default.json({ limit: '2kb' });
+app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/debug/env', (_req, res) => {
+    res.json({
+        ES_URL: process.env.ES_URL || null,
+        DATABASE_URL: process.env.DATABASE_URL || null,
+        hasES: Boolean(process.env.ES_URL),
+        hasPG: Boolean(process.env.DATABASE_URL),
+    });
+});
+app.get('/ce/status', (_req, res) => res.json((0, rerank_1.ceStatus)()));
+app.post('/ce/warmup', async (_req, res) => {
+    const r = await (0, rerank_1.warmupCE)();
+    res.json(r);
+});
+app.post('/search', parseJSON, async (req, res) => {
+    const schema = zod_1.z.object({ q: zod_1.z.string() });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid request' });
+    }
+    const { q } = parsed.data;
+    try {
+        const results = await (0, hybrid_1.hybridSearch)(q);
+        const re = await (0, rerank_1.rerank)(q, results.items, 12);
+        return res.json({ ...results, items: re.items, ce_ms: re.ce_ms });
+    }
+    catch (error) {
+        logger.error(error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// v1: schema-validated search with meta (keeps existing /search intact)
+app.post('/search.v1', parseJSON, async (req, res) => {
+    // Fast path: perf mode first (skip zod + rerank)
+    const perfMode = (req.headers['x-perf'] === '1') || (process.env.PERF_MODE === '1');
+    if (perfMode) {
+        const q = typeof (req.body?.q) === 'string' ? req.body.q : '';
+        const topKRaw = req.body?.topK;
+        const k = (typeof topKRaw === 'number' && isFinite(topKRaw) && topKRaw > 0)
+            ? Math.min(Math.floor(topKRaw), 50)
+            : 12;
+        if (!q)
+            return res.status(400).json({ error: 'invalid_request' });
+        try {
+            const results = await (0, hybrid_1.hybridSearch)(q);
+            const payload = {
+                items: results.items,
+                meta: {
+                    route: `es${k}`,
+                    rerank_score: null,
+                    tuning_version: 'v1',
+                    flags: ['v1', 'validated', 'perf:mode', 'ce:skipped'],
+                },
+                ce_ms: 0,
+            };
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify(payload));
+        }
+        catch (error) {
+            return res.status(500).json({ error: 'internal', message: error.message });
+        }
+    }
+    // Normal mode: schema-validated + rerank
+    const schemaIn = zod_1.z.object({
+        q: zod_1.z.string().min(1),
+        topK: zod_1.z.number().int().positive().max(50).optional(),
+    });
+    const parsed = schemaIn.safeParse(req.body ?? {});
+    if (!parsed.success) {
+        return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+    }
+    const { q, topK } = parsed.data;
+    const k = typeof topK === 'number' ? topK : 12;
+    const routeStr = 'hybrid:es50+pg50';
+    try {
+        const results = await (0, hybrid_1.hybridSearch)(q);
+        const re = await (0, rerank_1.rerank)(q, results.items, k);
+        // build flags (CE visibility)
+        const flags = ['v1', 'validated'];
+        try {
+            const st = (0, rerank_1.ceStatus)();
+            if (st?.onnxLoaded && (re?.ce_ms ?? 0) >= 1) {
+                flags.push('ce:active');
+            }
+            else {
+                flags.push('ce:skipped');
+            }
+        }
+        catch {
+            flags.push('ce:skipped');
+        }
+        return res.json({
+            items: re.items,
+            meta: {
+                route: routeStr,
+                rerank_score: null,
+                tuning_version: 'v1',
+                flags,
+            },
+            ce_ms: re.ce_ms,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: 'internal', message: error.message });
+    }
+});
+const port = Number(process.env.PORT || 3000);
+app.listen(port, () => {
+    logger.info({ port, env: process.env.NODE_ENV }, 'server listening');
+});

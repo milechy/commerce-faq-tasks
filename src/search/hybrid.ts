@@ -1,5 +1,7 @@
 import { Client as ES } from '@elastic/elasticsearch';
-import { Pool } from 'pg';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+// @ts-ignore - pg has no bundled types in this project, treat as any
+const { Pool } = require('pg') as { Pool: any };
 
 export interface Hit { id: string; text: string; score: number; source: 'es'|'pg'; }
 const esUrl = process.env.ES_URL;
