@@ -11,4 +11,4 @@ for l in high medium low; do mk "prio:$l" "C2E0C6"; done
 for l in feat bug chore ops; do mk "type:$l" "BFD4F2"; done
 for l in db api ui billing monitoring ci; do mk "phase:$l" "FEF2C0"; done
 
-echo "✅ labels ensured on $OWNER/$REPO"
+echo "labels ensured on $OWNER/$REPO"
