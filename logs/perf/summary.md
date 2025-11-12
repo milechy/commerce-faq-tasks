@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 **Perf Gate:** PASS  (RPS_MIN=4000, P90_MAX=20, last=[2025-11-11T04:57:34.122Z RPS=5660.46 P90=11 ERR=0])
+=======
+**Perf Gate:** PASS  (RPS_MIN=4000, P90_MAX=20, last=[2025-11-11T05:32:25.962Z RPS=5343.3 P90=11 ERR=0])
+>>>>>>> 2a1d020 (feat(phase1): import Phase0–1 artifacts and perf gate (rebased from feat/phase1-core-rebased) (#24))
 
 | Date | Status | RPS | P50 | P90 | ERR |
 |------|:------:|----:|----:|----:|----:|
@@ -16,3 +20,8 @@
 | 2025-11-11T04:55:22.461Z | OK | 5342 | 5 | 11 | 0 |
 | 2025-11-11T04:55:54.038Z | OK | 5902 | 5 | 11 | 0 |
 | 2025-11-11T04:57:34.122Z | OK | 5660 | 5 | 11 | 0 |
+<<<<<<< HEAD
+=======
+| 2025-11-11T05:32:25.962Z | OK | 5343 | 5 | 11 | 0 |
+- 2025-11-12T08:05:01.402Z  RPS=25853.12  P90=3  ERR=0
+>>>>>>> 2a1d020 (feat(phase1): import Phase0–1 artifacts and perf gate (rebased from feat/phase1-core-rebased) (#24))

@@ -27,6 +27,19 @@
 > Notion 側の参照：Billing Architecture / DevOps & QA Runbook / Onboarding Quick Guide / Implementation Checklist など（各ドキュメントからリンク）
 
 ---
+<<<<<<< HEAD
+=======
+## CI / Performance Gate（GitHub Actions）
+
+- ワークフロー: `.github/workflows/perf-gate.yml`
+- ローカルと同じチェックをCIで実行します。
+  - **ローカル**: `pnpm run perf:gate:strict`
+  - **CI**: `pnpm run ci:perf`（Node 20 でビルド → 最良ログを選択 → **RPS ≥ 6000** & **P90 ≤ 14** をゲート）
+- 参考コマンド:
+  - 最新ログ表示: `pnpm run perf:last`
+  - 要約レポート: `pnpm run perf:report`
+
+>>>>>>> 2a1d020 (feat(phase1): import Phase0–1 artifacts and perf gate (rebased from feat/phase1-core-rebased) (#24))
 ## タスク運用（Issues + Labels）
 **必須ラベル**
 - `status:*` → `todo` / `in-progress` / `review` / `qa` / `done`
@@ -164,4 +177,14 @@ A/Bテスト
 	1.	20B失敗→120B(1回)
 	2.	両方失敗→静的FAQ
 	3.	API失敗→CFキャッシュ/エラーバナー
+<<<<<<< HEAD
 	4.	緊急→Circuit Breaker + Ops通知
+=======
+	4.	緊急→Circuit Breaker + Ops通知
+
+### Performance Gate
+
+- ローカル最速ログを選んで厳密ゲート：
+  ```bash
+  pnpm run perf:gate:strict
+>>>>>>> 2a1d020 (feat(phase1): import Phase0–1 artifacts and perf gate (rebased from feat/phase1-core-rebased) (#24))

@@ -1,4 +1,5 @@
 // src/search/rerank.ts
+import { performance } from 'node:perf_hooks'
 export type Item = { id: string; text: string; score: number; source: 'es'|'pg' };
 export type RerankResult = { items: Item[]; ce_ms: number };
 
@@ -19,8 +20,8 @@ export async function warmupCE(): Promise<{ ok: boolean; engine: string; model?:
   }
   try {
     // 動的 import（存在しない環境でも落ちない）
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const ort = require('onnxruntime-node') as typeof import('onnxruntime-node');
+    // @ts-ignore - onnxruntime-node type declarations are not installed
+    const ort = require('onnxruntime-node') as any;
     // セッションを開くだけ（推論はまだ行わない）
     // 本番では tokenizer → input_ids/attention_mask 生成後に run() を呼ぶ
     const session = await ort.InferenceSession.create(modelPath, {
@@ -47,7 +48,7 @@ export function ceStatus(){
 
 // --- 現行: 軽量ダミーCE（ONNX準備が整うまでのフォールバック） ---
 export async function rerank(q: string, items: Item[], topK = 5): Promise<RerankResult> {
-  const t0 = Date.now();
+  const t0 = performance.now();
   // ダミー: クエリ語の包含数 + 元スコアのわずかな寄与
   const qTokens = q.toLowerCase().split(/\s+/).filter(Boolean);
   const scored = items
@@ -61,5 +62,6 @@ export async function rerank(q: string, items: Item[], topK = 5): Promise<Rerank
     .slice(0, Math.max(1, topK))
     .map(({ __ce, ...rest }) => rest);
 
-  return { items: scored, ce_ms: Date.now() - t0 };
+  const elapsed = performance.now() - t0;
+  return { items: scored, ce_ms: Math.max(1, Math.round(elapsed)) };
 }
