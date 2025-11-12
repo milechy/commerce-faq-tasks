@@ -1,0 +1,27 @@
+version: "3.9"
+services:
+  es-dev:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+    ports:
+      - "9200:9200"
+  pg-dev:
+    image: ankane/pgvector
+    environment:
+      - POSTGRES_PASSWORD=pass
+    ports:
+      - "5434:5432"
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      - es-dev
+      - pg-dev
+    ports:
+      - "3000:3000"
+    command: ["pnpm","dev"]
