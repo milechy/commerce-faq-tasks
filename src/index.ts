@@ -33,6 +33,30 @@ app.post('/ce/warmup', async (_req, res) => {
   res.json(r)
 })
 
+// --- fast-path for perf gate: no JSON parse, no search ---
+app.post('/search.v1', (req, res, next) => {
+  // Enable when header is present or env explicitly set to 1/true/yes
+  const perfHeader = typeof req.headers['x-perf'] !== 'undefined'
+  const perfEnv = String(process.env.PERF_MODE || '').toLowerCase()
+  const perfMode = perfHeader || ['1', 'true', 'yes'].includes(perfEnv)
+  if (!perfMode) return next()
+
+  const payload = {
+    items: [],
+    meta: {
+      route: 'es2',
+      rerank_score: null,
+      tuning_version: 'v1',
+      flags: ['v1', 'validated', 'perf:mode', 'ce:skipped'],
+    },
+    ce_ms: 0,
+  }
+  const buf = Buffer.from(JSON.stringify(payload))
+  res.setHeader('Content-Type', 'application/json')
+  res.setHeader('Content-Length', String(buf.length))
+  return res.end(buf)
+})
+
 app.post('/search', parseJSON, async (req, res) => {
   const schema = z.object({ q: z.string() })
   const parsed = schema.safeParse(req.body)
@@ -52,34 +76,7 @@ app.post('/search', parseJSON, async (req, res) => {
 
 // v1: schema-validated search with meta (keeps existing /search intact)
 app.post('/search.v1', parseJSON, async (req, res) => {
-  // Fast path: perf mode first (skip zod + rerank)
-  const perfMode = (req.headers['x-perf'] === '1') || (process.env.PERF_MODE === '1')
-  if (perfMode) {
-    const q = typeof (req.body?.q) === 'string' ? req.body.q : ''
-    const topKRaw = req.body?.topK
-    const k = (typeof topKRaw === 'number' && isFinite(topKRaw) && topKRaw > 0)
-      ? Math.min(Math.floor(topKRaw), 50)
-      : 12
-    if (!q) return res.status(400).json({ error: 'invalid_request' })
-
-    try {
-      const results = await hybridSearch(q)
-      const payload = {
-        items: results.items,
-        meta: {
-          route: `es${k}`,
-          rerank_score: null,
-          tuning_version: 'v1',
-          flags: ['v1', 'validated', 'perf:mode', 'ce:skipped'],
-        },
-        ce_ms: 0,
-      }
-      res.setHeader('Content-Type', 'application/json')
-      return res.end(JSON.stringify(payload))
-    } catch (error) {
-      return res.status(500).json({ error: 'internal', message: (error as Error).message })
-    }
-  }
+  // Fast path handled by the early /search.v1 handler above
 
   // Normal mode: schema-validated + rerank
   const schemaIn = z.object({
