@@ -6,3 +6,6 @@ node_modules/
 .vscode/
 # ローカル生成物
 SCRIPTS/*.local.sh
+# generated
+/dist/
+logs/perf/
