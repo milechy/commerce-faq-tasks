@@ -3,8 +3,10 @@ import 'dotenv/config'
 import express from 'express'
 import pino from 'pino'
 import { z } from 'zod'
+// src/index.ts の先頭付近
 import { hybridSearch } from './search/hybrid'
-import { warmupCE, ceStatus, rerank } from './search/rerank'
+import { ceStatus, rerank, warmupCE } from './search/rerank'
+import { createAgentSearchHandler } from './agent/http/agentSearchRoute';
 
 const app = express()
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
@@ -17,6 +19,8 @@ logger.info({
 }, 'env snapshot')
 
 const parseJSON = express.json({ limit: '2kb' })
+
+app.post('/agent.search', parseJSON, createAgentSearchHandler(logger))
 
 app.get('/health', (_req, res) => res.json({ ok: true }))
 app.get('/debug/env', (_req, res) => {
