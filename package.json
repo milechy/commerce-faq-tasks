@@ -51,6 +51,8 @@
     "perf:budget:strict": "RPS_MIN=5000 P90_MAX=15 pnpm run perf:budget",
     "perf:summary": "bash SCRIPTS/perf_summary.sh",
     "perf:summary:auto": "pnpm run perf:save:auto && pnpm run perf:summary",
+    "perf:agent": "bash SCRIPTS/perf_agent.sh",
+    "perf:agent:budget": "bash SCRIPTS/perf_agent_budget.sh",
     "node:use:20": "bash -lc 'export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\"; [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\"; [ -s \"/opt/homebrew/opt/nvm/nvm.sh\" ] && . \"/opt/homebrew/opt/nvm/nvm.sh\"; if command -v nvm >/dev/null 2>&1; then nvm use 20 >/dev/null 2>&1 || (nvm install 20 >/dev/null 2>&1 && nvm use 20 >/dev/null 2>&1); node -v || true; else printf \"hint: nvm is not loaded in this subshell. Add nvm init lines to your shell profile.\\n\"; fi'",
     "smoke:v1": "curl -s -X POST http://localhost:3000/search.v1 -H 'Content-Type: application/json' -d '{\"q\":\"返品 送料\"}' | jq .",
     "perf:save:v1": "mkdir -p logs/perf && BODY='{\"q\":\"返品 送料\"}' && npx autocannon -j -d 10 -c 10 -p 4 -m POST -H 'Content-Type: application/json' -b \"$BODY\" http://localhost:3000/search.v1 | tee logs/perf/$(date +%Y%m%d-%H%M%S)-v1.json",

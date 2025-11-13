@@ -28,7 +28,8 @@ export function synthesizeAnswer(input: SynthesisInput): SynthesisOutput {
     return { answer: truncate(msg, maxChars) };
   }
 
-  const top = items.slice(0, 3);
+  // 箇条書きは 2 件までに制限して、よりタイトな回答にする
+  const top = items.slice(0, 2);
   const bullets = top
     .map((it) => `・${sanitizeText(it.text)}`)
     .join('\n');
@@ -36,7 +37,7 @@ export function synthesizeAnswer(input: SynthesisInput): SynthesisOutput {
   let answer =
     `ご質問「${query}」に対して、関連性の高いFAQから要点をまとめました。\n` +
     `${bullets}\n\n` +
-    '詳細な手順や条件は、該当FAQ本文をご確認ください。';
+    '具体的な手順や最新の条件は、各FAQ本文をご確認ください。';
 
   answer = truncate(answer, maxChars);
 

@@ -1,0 +1,136 @@
+# Agent API Specification (Phase2)
+Version: 0.1  
+Updated: YYYY-MM-DD
+
+---
+
+## 1. Overview
+
+Phase2 では、ChatGPT-like な検索・要約エージェントを `/agent.search` として提供する。  
+この API は Phase1 の `/search`, `/search.v1` とは独立し、以下の処理を内部で実行する：
+
+- Query Planning（自然文 → 検索クエリ）（LLM Planner 対応済み）
+- Hybrid Search（ES + PG）
+- Rerank（Cross-Encoder/ONNX）
+- Answer Synthesis（FAQ要約生成）
+- Agent logs（reasoning steps）返却
+
+---
+
+## 2. Endpoint
+
+### `POST /agent.search`
+
+自然文問い合わせに対して検索・要約された FAQ 回答を返却する。
+
+#### Request (JSON)
+
+```jsonc
+{
+  "q": "返品したい場合の送料について教えて",
+  "topK": 8,
+  "debug": true,
+  "useLlmPlanner": false
+}
+```
+
+| field | type | required | description |
+|-------|------|----------|-------------|
+| q | string | required | 自然文問い合わせ |
+| topK | number | optional | rerank の上限。1〜20（デフォルト: 8） |
+| debug | boolean | optional | trueなら検索結果/スコア等を返却 |
+| useLlmPlanner | boolean | optional | LLM ベースの Query Planner を使用する（デフォルト: false） |
+
+---
+
+## 3. Response (JSON)
+
+```jsonc
+{
+  "answer": "要約された回答",
+  "steps": [ /* agent reasoning logs */ ],
+  "debug": { /* search / rerank raw */ }
+}
+```
+
+### 3.1 `answer`
+エージェントが生成した最終回答（300〜500文字程度）
+
+### 3.2 `steps`
+Agent が内部で実行した処理のログ（chain-of-thought の外部表現）
+
+例：
+
+```jsonc
+{
+  "type": "plan",
+  "message": "自然文クエリから検索クエリを生成しました。",
+  "input": { "q": "返品したい場合の送料について教えて" },
+  "output": {
+    "searchQuery": "返品したい場合の送料について",
+    "topK": 8
+  },
+  "elapsed_ms": 1
+}
+```
+
+### 3.3 `debug`
+内部処理の raw データ（性能評価・開発用途）
+
+```jsonc
+{
+  "query": {...},
+  "search": {...},
+  "rerank": {...}
+}
+```
+
+---
+
+## 4. Error Responses
+
+### 4.1 400 Bad Request
+
+```json
+{
+  "error": "bad_request",
+  "message": "q is required"
+}
+```
+
+### 4.2 500 Internal Error
+
+```json
+{
+  "error": "internal",
+  "message": "unexpected error"
+}
+```
+
+---
+
+## 5. Examples
+
+### Curl
+
+```bash
+curl -X POST http://localhost:3000/agent.search \
+  -H "Content-Type: application/json" \
+  -d '{"q":"返品したい場合の送料について教えて"}' | jq .
+```
+
+### Curl (LLM Planner 有効)
+```bash
+curl -X POST http://localhost:3000/agent.search \
+  -H "Content-Type: application/json" \
+  -d '{"q":"返品したい場合の送料について教えて","useLlmPlanner":true}' | jq .
+```
+
+---
+
+## 6. Versioning
+
+- `v0.1`: 初期版  
+- 今後 `/agent.chat` などの拡張を追加予定
+
+---
