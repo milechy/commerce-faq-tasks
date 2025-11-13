@@ -8,7 +8,8 @@ import type {
   AgentSearchResponse,
   AgentStep,
 } from '../types';
-import { planQuery, planQueryAsync } from './queryPlanner';
+import { planQuery } from './queryPlanner';
+import { planQueryWithLlmAsync } from './llmPlannerRuntime';
 
 /**
  * /agent.search から呼ばれるメイン関数
@@ -22,14 +23,14 @@ export async function runSearchAgent(
   // 1) Query Planning
   const tPlan0 = performance.now();
   let plan;
-  if (useLlmPlanner) {
-    // 将来的に LLM プランナーに差し替え可能な経路。
-    // 現時点では planQueryAsync は Rule-based Planner に委譲している。
-    plan = await planQueryAsync(q, { topK });
-  } else {
-    // 既存どおりの Rule-based Planner
-    plan = planQuery(q, { topK });
-  }
+if (useLlmPlanner) {
+  // LLM プランナーが有効なら LLM 経路を使用し、
+  // 無効・エラー時は内部で Rule-based にフォールバックする。
+  plan = await planQueryWithLlmAsync(q, { topK });
+} else {
+  // 既存どおりの Rule-based Planner
+  plan = planQuery(q, { topK });
+}
   const tPlan1 = performance.now();
 
   steps.push({
