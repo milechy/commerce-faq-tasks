@@ -41,6 +41,32 @@ async function test_ok_debug_true() {
   assert.ok(json.debug, '[ok_debug_true] debug should be defined')
 }
 
+async function test_ok_with_llm_planner() {
+  const { res, json } = await postAgent({
+    q: '返品したい場合の送料について教えて',
+    debug: true,
+    useLlmPlanner: true,
+  })
+
+  assert.equal(res.status, 200, `[ok_with_llm_planner] expected 200, got ${res.status}`)
+
+  assert.ok(json, '[ok_with_llm_planner] response json should not be null')
+  assert.ok(
+    typeof json.answer === 'string' && json.answer.length > 0,
+    '[ok_with_llm_planner] answer should be non-empty string',
+  )
+  assert.ok(
+    Array.isArray(json.steps),
+    '[ok_with_llm_planner] steps should be an array',
+  )
+  assert.ok(json.steps.length > 0 && json.steps[0].type === 'plan', '[ok_with_llm_planner] first step should have type "plan"')
+  const msg = String(json.steps[0].message ?? '')
+  assert.ok(
+    msg.length > 0,
+    '[ok_with_llm_planner] first step message should be a non-empty string',
+  )
+}
+
 async function test_bad_request_missing_q() {
   const { res, json } = await postAgent({})
 
@@ -73,6 +99,7 @@ async function main() {
     { name: 'ok_debug_true', fn: test_ok_debug_true },
     { name: 'bad_request_missing_q', fn: test_bad_request_missing_q },
     { name: 'bad_request_invalid_topK', fn: test_bad_request_invalid_topK },
+    { name: 'ok_with_llm_planner', fn: test_ok_with_llm_planner },
   ]
 
   let failed = 0
