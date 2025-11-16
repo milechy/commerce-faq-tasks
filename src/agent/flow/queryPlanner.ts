@@ -44,7 +44,10 @@ export class RuleBasedQueryPlanner implements QueryPlanner {
     const normalized = normalizeQuestion(input, locale)
 
     const topK = clamp(options.topK ?? 8, 1, 20)
-    const filters = inferFilters(normalized, locale)
+    const filters = inferFilters(
+  normalized,
+  locale === 'en' ? 'en' : 'ja',
+);
 
     return {
       searchQuery: normalized,
