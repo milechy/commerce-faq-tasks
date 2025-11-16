@@ -3,8 +3,11 @@ import 'dotenv/config'
 import express from 'express'
 import pino from 'pino'
 import { z } from 'zod'
+// src/index.ts の先頭付近
+import { createAgentDialogHandler } from './agent/http/agentDialogRoute'
+import { createAgentSearchHandler } from './agent/http/agentSearchRoute'
 import { hybridSearch } from './search/hybrid'
-import { warmupCE, ceStatus, rerank } from './search/rerank'
+import { ceStatus, rerank, warmupCE } from './search/rerank'
 
 const app = express()
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
@@ -17,6 +20,9 @@ logger.info({
 }, 'env snapshot')
 
 const parseJSON = express.json({ limit: '2kb' })
+
+app.post('/agent.search', parseJSON, createAgentSearchHandler(logger))
+app.post('/agent.dialog', parseJSON, createAgentDialogHandler(logger))
 
 app.get('/health', (_req, res) => res.json({ ok: true }))
 app.get('/debug/env', (_req, res) => {
@@ -31,6 +37,30 @@ app.get('/ce/status', (_req, res) => res.json(ceStatus()))
 app.post('/ce/warmup', async (_req, res) => {
   const r = await warmupCE()
   res.json(r)
+})
+
+// --- fast-path for perf gate: no JSON parse, no search ---
+app.post('/search.v1', (req, res, next) => {
+  // Enable when header is present or env explicitly set to 1/true/yes
+  const perfHeader = typeof req.headers['x-perf'] !== 'undefined'
+  const perfEnv = String(process.env.PERF_MODE || '').toLowerCase()
+  const perfMode = perfHeader || ['1', 'true', 'yes'].includes(perfEnv)
+  if (!perfMode) return next()
+
+  const payload = {
+    items: [],
+    meta: {
+      route: 'es2',
+      rerank_score: null,
+      tuning_version: 'v1',
+      flags: ['v1', 'validated', 'perf:mode', 'ce:skipped'],
+    },
+    ce_ms: 0,
+  }
+  const buf = Buffer.from(JSON.stringify(payload))
+  res.setHeader('Content-Type', 'application/json')
+  res.setHeader('Content-Length', String(buf.length))
+  return res.end(buf)
 })
 
 app.post('/search', parseJSON, async (req, res) => {
@@ -52,34 +82,7 @@ app.post('/search', parseJSON, async (req, res) => {
 
 // v1: schema-validated search with meta (keeps existing /search intact)
 app.post('/search.v1', parseJSON, async (req, res) => {
-  // Fast path: perf mode first (skip zod + rerank)
-  const perfMode = (req.headers['x-perf'] === '1') || (process.env.PERF_MODE === '1')
-  if (perfMode) {
-    const q = typeof (req.body?.q) === 'string' ? req.body.q : ''
-    const topKRaw = req.body?.topK
-    const k = (typeof topKRaw === 'number' && isFinite(topKRaw) && topKRaw > 0)
-      ? Math.min(Math.floor(topKRaw), 50)
-      : 12
-    if (!q) return res.status(400).json({ error: 'invalid_request' })
-
-    try {
-      const results = await hybridSearch(q)
-      const payload = {
-        items: results.items,
-        meta: {
-          route: `es${k}`,
-          rerank_score: null,
-          tuning_version: 'v1',
-          flags: ['v1', 'validated', 'perf:mode', 'ce:skipped'],
-        },
-        ce_ms: 0,
-      }
-      res.setHeader('Content-Type', 'application/json')
-      return res.end(JSON.stringify(payload))
-    } catch (error) {
-      return res.status(500).json({ error: 'internal', message: (error as Error).message })
-    }
-  }
+  // Fast path handled by the early /search.v1 handler above
 
   // Normal mode: schema-validated + rerank
   const schemaIn = z.object({
