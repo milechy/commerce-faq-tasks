@@ -27,8 +27,6 @@
 > Notion 側の参照：Billing Architecture / DevOps & QA Runbook / Onboarding Quick Guide / Implementation Checklist など（各ドキュメントからリンク）
 
 ---
-<<<<<<< HEAD
-=======
 ## CI / Performance Gate（GitHub Actions）
 
 - ワークフロー: `.github/workflows/perf-gate.yml`
@@ -39,7 +37,6 @@
   - 最新ログ表示: `pnpm run perf:last`
   - 要約レポート: `pnpm run perf:report`
 
->>>>>>> 2a1d020 (feat(phase1): import Phase0–1 artifacts and perf gate (rebased from feat/phase1-core-rebased) (#24))
 ## タスク運用（Issues + Labels）
 **必須ラベル**
 - `status:*` → `todo` / `in-progress` / `review` / `qa` / `done`
@@ -177,9 +174,6 @@ A/Bテスト
 	1.	20B失敗→120B(1回)
 	2.	両方失敗→静的FAQ
 	3.	API失敗→CFキャッシュ/エラーバナー
-<<<<<<< HEAD
-	4.	緊急→Circuit Breaker + Ops通知
-=======
 	4.	緊急→Circuit Breaker + Ops通知
 
 ### Performance Gate
@@ -187,4 +181,35 @@ A/Bテスト
 - ローカル最速ログを選んで厳密ゲート：
   ```bash
   pnpm run perf:gate:strict
->>>>>>> 2a1d020 (feat(phase1): import Phase0–1 artifacts and perf gate (rebased from feat/phase1-core-rebased) (#24))
+
+  ## Phase3: Multi-Step Query Planning & Dialog Orchestrator 概要
+
+Phase3 では、既存の `/agent.search` を壊さずに、対話型 FAQ エージェント `/agent.dialog` と Multi-Step Planner を追加した。
+
+- `/agent.dialog` エンドポイント
+  - セッション ID ベースで会話コンテキストを継続
+  - `needsClarification` / `clarifyingQuestions` による Clarify フロー
+  - `steps` と `meta.orchestrationSteps` により、Planner / Orchestrator の内部ステップログをトレース可能
+
+- Multi-Step Planner
+  - `MultiStepQueryPlan` 型を導入（clarify / search / followup_search / answer ステップ）
+  - Rule-based Planner と LLM Planner をオプション `useLlmPlanner` で切り替え
+  - `llmMultiStepPlannerRuntime.ts` で Groq GPT-OSS 20B/120B を利用した JSON プラン生成を実装
+
+- LLM ルーティング（GPT-OSS 20B/120B）
+  - `src/agent/llm/modelRouter.ts` の `routePlannerModel` で 20B/120B のルーティング規則を定義
+  - contextTokens / recall / complexity / safetyTag に基づき、昇格条件を判定
+  - `LLM_FORCE_PLANNER_ROUTE` によるデバッグ用強制ルートにも対応
+
+- Dialog Orchestrator
+  - `runDialogOrchestrator` が Planner / SearchAgent / AnswerAgent を統合
+  - Clarify / Follow-up / Search の分岐ロジックを Orchestrator の責務として集約
+  - 単体テスト (`dialogOrchestrator.test.ts`) および HTTP E2E テスト (`agentDialogRoute.test.ts`) を追加
+
+- CrewAI / LangGraph 連携のためのポート定義
+  - `src/agent/orchestrator/crew/crewSchemas.ts` / `crewClient.ts` で Crew Orchestrator との I/F を定義
+  - Phase3 ではポートのみ定義し、実装は Phase4 (Agent Orchestration) で追加予定
+
+---
+
+Phase3 の詳細な設計・API 例・シーケンス図は `docs/PHASE3_MULTISTEP.md` を参照。

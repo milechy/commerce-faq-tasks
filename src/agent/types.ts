@@ -41,6 +41,7 @@ export interface AgentSearchParams {
   q: string;
   topK?: number;
   debug?: boolean;
+  useLlmPlanner?: boolean;
 }
 
 export interface AgentSearchResponse {
