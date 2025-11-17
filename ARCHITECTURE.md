@@ -124,3 +124,77 @@ gh issue create -R milechy/commerce-faq-tasks \
 - 根拠提示率 ≥ 95%
 - 120B比率 ≤ 10%
 - E2E/k6/Unit 全合格
+
+# Phase4: Agent Orchestration 拡張まとめ
+
+## LangGraph Orchestrator（Planner / Clarify / Search / Answer）
+
+- `/agent.dialog` の主要処理は LangGraph ベースの Orchestrator に移行  
+- 各ノード:
+  - **contextBuilderNode**: RAG & history summary（ロング対話の圧縮）
+  - **plannerNode**: Groq 20B/120B を用いた Clarify / Follow-up / Search ステップ計画
+  - **searchNode**: Phase3 RAG（ES + pgvector + Cross-encoder）と完全統合
+  - **answerNode**: Answer LLM による最終回答生成（トーン/スタイル制御）
+
+```
+## 新ルーティング（20B/120B） + Safety 強化
+
+### routePlannerModelV2 の導入
+- `route ∈ {20b,120b}`
+- `requiresSafeMode` フラグ追加（legal / security / policy / violence など）
+- safety あり → **必ず 120B** へ昇格
+- safety なし → 基本は 20B
+
+### Answer 出力
+- セーフティ時はより慎重なトーンとガイダンスへ最適化
+- maxTokens を調整（20B=256, 120B=320）
+```
+
+```
+## Fast-path（Planner スキップ）
+
+2ターン目以降で以下を満たす場合、Planner を省略して即 Answer へ遷移：
+
+- history.length > 0  
+- intent ∈ {shipping, returns, payment, product-info}  
+- テキスト長 ≥ 15  
+- safety 無し  
+
+結果として 2ターン目の p50 は **1.5〜1.8s** まで短縮。
+```
+
+```
+## 長期履歴の圧縮（Summary Node）
+
+- history が長い場合、自動で summary を生成
+- summary + 直近数ターンのみを Planner/Answer に渡す
+- context_tokens の暴走を防ぎ、120B の無駄な昇格を抑制
+```
+
+```
+## p95 / RPS パフォーマンス
+
+- 1ターン目（Clarify 必要）: 1.7〜2.7s  
+- 2ターン目 fast-path: 1.3〜1.8s  
+- safety モード（120B）: 2.7〜4.0s  
+- fallback(local) 時は 3.0〜3.8s  
+
+p50 が 1.7s、p95 は fallback/混雑時で 3.6s 程度。
+```
+
+```
+## ログ統合（pino）
+
+- route / plannerReasons / safetyTag / requiresSafeMode / durationMs を `/agent.dialog` で一元ログ化
+- Datadog/Otel でも集計しやすい構造へ統一
+```
+
+```
+## 今後の拡張ポイント（Phase5 以降）
+
+- Search Agent の非同期化 / prefetch  
+- Planner の軽量化（20B→8B 相当モデルへの差し替え）  
+- Summarizer の再最適化（context budget 1200〜1600 tokens へ）  
+- RAG の Top-K 動的最適化（高速クエリは bm25 先行）  
+- 120B への昇格率 < 10% を堅持  
+```

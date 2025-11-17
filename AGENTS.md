@@ -94,6 +94,47 @@ Projects連動用のActionは削除済み。復活させる場合は別ブラン
 
 
 ---
+---
+
+## 9. Phase4 — Agent Orchestrator Roles（LangGraph / Planner / Safety）
+
+本フェーズで追加された **Orchestrator（対話制御）系エージェントの役割定義**を以下にまとめる。
+
+### ● Dialog Orchestrator（LangGraph）
+- `/agent.dialog` のメイン制御フローを担当
+- 各ノード（ContextBuilder / Planner / Search / Answer）を統合
+- history summary によるロング対話の圧縮
+- multi-step plan（clarify / follow‑up / search）の分岐
+- safety 情報（safetyTag / requiresSafeMode）を収集し、LLM ルートを決定
+
+### ● Planner Agent（Groq 20B/120B）
+- Clarify / Follow-up / Search ステップの生成
+- 複雑度・曖昧度の解析 → 20B/120B の昇格判断補助
+- safety キーワード検出（暴力/自傷/法務/規制/安全）
+- “fast-path skip” 不要判定のための軽量解析
+
+### ● Safety Agent（軽量ルール + LLM）
+- ユーザー入力の即時スキャン（暴力/虐待/自殺/法的リスク）
+- safe-zone 判定 → requiresSafeMode=true の設定
+- 120B を強制ルート（安全性優先）
+- Answer のトーン（慎重/中立）を切り替える
+
+### ● Search Agent（Phase3 RAG統合）
+- Planner で決定された search ステップを実行
+- Elasticsearch（BM25）+ pgvector（semantic）ハイブリッド検索
+- Cross‑encoder による再ランク（Top‑80 → Top‑5）
+- notes / scores / recall 情報を Orchestrator に返却
+
+### ● Answer Agent（Groq 20B/120B）
+- RAG＋Planner＋Safety結果を統合した最終回答
+- 言語別テンプレ（ja/en）を使用
+- safety モードでは慎重な表現・注意喚起を付与
+- maxTokens を制御し、p95低減（20B=256, 120B=320）
+
+### ● Route Planner（20B → 120B）
+- route ∈ {20b,120b}
+- plannerReasons を付加（base-rule, complexity, safety, history-depth）
+- fallback（Planner失敗 → Phase3 local agent）も統合的に処理
 
 ## 10. `REQUIREMENTS.md`
 ```markdown
