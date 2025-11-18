@@ -13,7 +13,7 @@ services:
     environment:
       - POSTGRES_PASSWORD=pass
     ports:
-      - "5434:5432"
+      - "5435:5432"
   app:
     build:
       context: .

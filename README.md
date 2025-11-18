@@ -127,6 +127,74 @@ Phase,Status,Due Date,Notes
 
 2025-11-08: README を初期化（開発HQとしての正しい説明に更新、固定費削除、Roadmap追加）
 
+## Phase5: Agent / LangGraph / RAG パフォーマンス計測メモ
+
+Phase5 では、実装リポジトリ（同名 repo）側の `/agent.search` / `/agent.dialog` に対して、
+
+- Groq 呼び出しの graceful degradation（429/500 時の fallback）
+- RAG ハイブリッド検索（ES + PG + 再ランク）の p50/p95 計測
+- LangGraph Orchestrator を含む `/agent.dialog` 全体の p50/p95 計測
+
+を一通り実施した。
+
+### ベンチマークスクリプト（実装リポジトリ側）
+
+実装リポジトリ（Node/TypeScript 側）の `SCRIPTS/` に、以下の簡易ベンチを用意している:
+
+- `/agent.search`（RAG 検索のみ）:
+  - `npx ts-node SCRIPTS/bench-agent-search.ts`
+- `/agent.dialog`（LangGraph Orchestrator 経由）:
+  - `BENCH_N=100 npx ts-node SCRIPTS/bench-agent-dialog.ts`
+
+出力例（イメージ）:
+
+```text
+N = 100
+target = http://localhost:3000/agent.dialog
+---
+...
+===
+latency p50/p95: 5029 6374
+rag_total_ms p50/p95: 66 150 (N=50)
+rag_search_ms p50/p95: 66 150 (N=50)
+rag_rerank_ms p50/p95: 0 0 (N=50)
+```
+
+※ Groq API が HTTP 500 を返している期間は、/agent.dialog の値が local fallback 寄りになるため、  
+Groq 復旧後に再ベンチする想定。
+
+### ログ観測（Groq / Orchestrator / RAG）
+
+ログは `logs/app.log` に JSON で出力される。代表的なウォッチ用コマンド:
+
+- Groq 呼び出し単位（planner / answer / summary / 429 など）:
+
+  ```bash
+  tail -f logs/app.log \
+    | jq 'select(.msg=="Groq call success"
+              or .msg=="Groq call failed (non-429)"
+              or .msg=="Groq 429, backing off before retry"
+              or .msg=="Groq 429 after retries, giving up")
+          | {msg, tag, model, latencyMs, attempt, status, retryAfterMs, backoffUntil}'
+  ```
+
+- `/agent.dialog` 最終サマリ（orchestratorMode / fallback / RAG 計測値）:
+
+  ```bash
+  tail -f logs/app.log \
+    | jq 'select(.msg=="agent.dialog final summary")
+          | {orchestratorMode, groq429Fallback, hasLanggraphError,
+             durationMs, ragTotalMs, ragSearchMs, ragRerankMs}'
+  ```
+
+これにより、
+
+- LangGraph 経路（`orchestratorMode: "langgraph"`）と local 経路（`"local"` / `"fallback-local-429"`）
+- Groq の 429（rate limit）/ 500（server error）と、それに伴う fallback の動き
+- `/agent.dialog` 全体の duration と、内部の RAG (`rag_*`) のコスト
+
+を定量的に追跡できる。
+
 text---
 
 ### 3. `ARCHITECTURE.md`

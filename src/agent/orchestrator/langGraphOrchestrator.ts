@@ -1,13 +1,14 @@
 // src/agent/orchestrator/langGraphOrchestrator.ts
 
-import { hybridSearch } from '../../search/hybrid'
-import { groqClient } from '../llm/groqClient'
+import { runSearchAgent } from '../flow/searchAgent'
+import { callGroqWith429Retry } from '../llm/groqClient'
 import {
 	PlannerRoute,
 	PlannerRoutingDecision,
 	RouteContextV2,
 	routePlannerModelV2,
 } from '../llm/modelRouter'
+import pino from 'pino'
 
 /**
  * /agent.dialog の入力ペイロードのサマリ型。
@@ -48,6 +49,16 @@ export interface DialogOutput {
    */
   safetyTag?: string
   requiresSafeMode?: boolean
+  /**
+   * RAG 部分のメトリクス。
+   * HTTP レイヤーから meta.ragContext / ragStats へ反映するために公開する。
+   */
+  ragStats?: {
+    search_ms?: number
+    rerank_ms?: number
+    rerank_engine?: 'heuristic' | 'ce' | 'ce+fallback'
+    total_ms?: number
+  }
 }
 
 /**
@@ -136,39 +147,92 @@ type RagContext = {
   documents: Array<{ id: string; score: number; text: string }>
   recall: number | null
   contextTokens: number
+  stats?: {
+    search_ms?: number
+    rerank_ms?: number
+    rerank_engine?: 'heuristic' | 'ce' | 'ce+fallback'
+    total_ms?: number
+  }
 }
 
 /**
  * 初回の RAG 検索を実行し、DialogGraphState.ragContext 相当の値を返す。
  *
- * Phase3 で実装済みのハイブリッド検索を利用して、RAG コンテキストを構築する。
+ * Phase5: /agent.search と同じハイブリッド + 再ランクパイプラインを再利用するために、
+ * runSearchAgent を呼び出して RAG コンテキストを構築する。
  */
 async function runInitialRagRetrieval(initialInput: DialogInput): Promise<RagContext> {
-  // Phase3 で実装済みのハイブリッド検索を利用して、RAG コンテキストを構築する。
-  // hybridSearch はクエリ文字列を受け取り、items 配列を含む結果を返す想定。
-  const result = await hybridSearch(initialInput.userMessage)
+  // Phase5: /agent.search と同じハイブリッド + 再ランクパイプラインを再利用するために、
+  // runSearchAgent を呼び出して RAG コンテキストを構築する。
+  const searchResponse = await runSearchAgent({
+    q: initialInput.userMessage,
+    topK: 8,
+    // Planner はここでは使わず、軽量な Rule-based Planner に任せる。
+    useLlmPlanner: false,
+    debug: true,
+  });
 
-  const documents = (result.items ?? []).map((item: any) => ({
+  const rerankDebug = searchResponse.debug?.rerank as
+    | {
+        items: Array<{ id: string; text: string; score: number }>
+        ce_ms?: number
+        engine?: 'heuristic' | 'ce' | 'ce+fallback'
+        rerankEngine?: 'heuristic' | 'ce' | 'ce+fallback'
+      }
+    | undefined;
+
+  const searchDebug = searchResponse.debug?.search as
+    | {
+        items: Array<{ id: string; text: string; score: number }>
+        ms?: number
+        note?: string
+      }
+    | undefined;
+
+  const items =
+    rerankDebug?.items && rerankDebug.items.length
+      ? rerankDebug.items
+      : searchDebug?.items ?? [];
+
+  const documents = (items ?? []).map((item: any) => ({
     id: String(item.id),
     score: typeof item.score === 'number' ? item.score : 0,
     text: String(item.text ?? ''),
-  }))
+  }));
 
   // 簡易的にトークン数を概算（文字数/4）し、上限を設ける。
-  const totalChars = documents.reduce((sum, doc) => sum + doc.text.length, 0)
-  const contextTokens = Math.min(4096, Math.max(128, Math.floor(totalChars / 4) || 256))
+  const totalChars = documents.reduce((sum, doc) => sum + doc.text.length, 0);
+  const contextTokens = Math.min(4096, Math.max(128, Math.floor(totalChars / 4) || 256));
+
+  const search_ms = typeof searchDebug?.ms === 'number' ? searchDebug.ms : undefined;
+  const rerank_ms = typeof rerankDebug?.ce_ms === 'number' ? rerankDebug.ce_ms : undefined;
+  const rerank_engine =
+    rerankDebug?.rerankEngine ?? rerankDebug?.engine ?? undefined;
+
+  const total_ms =
+    typeof search_ms === 'number' || typeof rerank_ms === 'number'
+      ? (search_ms ?? 0) + (rerank_ms ?? 0)
+      : undefined;
 
   return {
     documents,
     // Phase3 の hybridSearch には recall 指標がない前提で null とする。
     recall: null,
     contextTokens,
-  }
+    stats: {
+      search_ms,
+      rerank_ms,
+      rerank_engine,
+      total_ms,
+    },
+  };
 }
 
 /**
- * 長期対話向け: history が一定以上に伸びたら、古いターンを要約して historySummary に格納し、
- * 直近のターンだけを残す。
+ * 長期対話向け:
+ * - history が一定以上に伸びたら、古いターンを semantic summary (goals / constraints / decisions / open-questions など)
+ *   として historySummary に格納し、
+ * - 直近のターンだけを残す。
  */
 async function summarizeHistoryIfNeeded(initialInput: DialogInput): Promise<DialogInput> {
   const MAX_HISTORY_MESSAGES = 12 // これを超えたらサマリを作る
@@ -216,8 +280,48 @@ async function summarizeHistoryWithLLM(payload: {
 
   const systemContent =
     locale === 'ja'
-      ? 'あなたは会話履歴を要約するアシスタントです。重要な事実・ユーザーの意図・制約条件だけを短くまとめてください。'
-      : 'You are an assistant that summarizes conversation history. Capture key facts, user goals, and constraints concisely.'
+      ? [
+          'あなたはコマース FAQ アシスタント向けに会話履歴を要約するアシスタントです。',
+          '常に次の 5 つのセクションを、この順番・見出し名で出力してください（足りない情報がある場合でも空で残してください）。',
+          '',
+          'Goals:',
+          '- ユーザーの目的・ゴールを箇条書きでまとめる',
+          '',
+          'Constraints:',
+          '- 配送エリア・予算・支払方法・利用不可なオプションなど、明示された制約を箇条書きでまとめる',
+          '',
+          'Decisions:',
+          '- すでに合意・決定された事項を箇条書きでまとめる',
+          '',
+          'OpenQuestions:',
+          '- まだ解決していない質問や TODO を箇条書きでまとめる',
+          '',
+          'FAQContext:',
+          '- 店舗種別・ユーザー区分・既に説明済みのポリシーなど、補助的な文脈を箇条書きでまとめる',
+          '',
+          '出力は必ずこの 5 見出しと箇条書きのみを含めてください。余計な説明文や前後の文章は追加しないでください。',
+        ].join('\n')
+      : [
+          'You summarize conversation history for a commerce FAQ assistant.',
+          'Always respond using the following 5 sections, in this exact order and with these exact headings (even if some are empty):',
+          '',
+          'Goals:',
+          '- Bullet points summarizing the user’s goals.',
+          '',
+          'Constraints:',
+          '- Bullet points summarizing explicit constraints (delivery region, budget, payment methods, unavailable options, etc.).',
+          '',
+          'Decisions:',
+          '- Bullet points summarizing already agreed or decided items.',
+          '',
+          'OpenQuestions:',
+          '- Bullet points summarizing unresolved questions or TODOs.',
+          '',
+          'FAQContext:',
+          '- Bullet points summarizing any helpful context (store type, user segment, policies already explained, etc.).',
+          '',
+          'Only output these 5 headings and bullet points. Do not add any additional prose before or after.',
+        ].join('\n')
 
   const userParts: string[] = []
 
@@ -231,21 +335,27 @@ async function summarizeHistoryWithLLM(payload: {
 
   userParts.push(
     locale === 'ja'
-      ? `以下の会話ターンを 5〜7 行程度の短いサマリにしてください:\n${turnsText}`
-      : `Summarize the following conversation turns into 5–7 short lines:\n${turnsText}`,
+      ? `以下の会話ターンを、先ほどのフォーマット (Goals / Constraints / Decisions / OpenQuestions / FAQContext) に従ってセマンティックサマリとしてまとめ直してください:\n${turnsText}`
+      : `Rewrite the following conversation turns as a structured semantic summary using the sections (Goals / Constraints / Decisions / OpenQuestions / FAQContext):\n${turnsText}`,
   )
 
   const prompt = userParts.join('\n\n')
 
-  const raw = await groqClient.call({
-    model,
-    messages: [
-      { role: 'system', content: systemContent },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0.2,
-    maxTokens: 384,
-  })
+  const raw = await callGroqWith429Retry(
+    {
+      model,
+      messages: [
+        { role: 'system', content: systemContent },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.2,
+      maxTokens: 384,
+      tag: 'summary',
+    },
+    {
+      logger,
+    },
+  )
 
   return raw.trim()
 }
@@ -285,7 +395,6 @@ async function contextBuilderNode(initialInput: DialogInput): Promise<DialogGrap
     used120bCount: 0,
     max120bPerRequest: 1, // とりあえず 1 回まで
     intentType: intentHint,
-    ragStats: undefined,
     requiresSafeMode,
   }
 
@@ -468,6 +577,7 @@ export async function runDialogGraph(input: DialogInput): Promise<DialogOutput> 
         plannerPlan: state.plannerSteps,
         safetyTag: state.routeContext.safetyTag,
         requiresSafeMode: state.routeContext.requiresSafeMode,
+        ragStats: state.ragContext?.stats,
       }
     }
 
@@ -478,6 +588,7 @@ export async function runDialogGraph(input: DialogInput): Promise<DialogOutput> 
       plannerPlan: state.plannerSteps,
       safetyTag: state.routeContext.safetyTag,
       requiresSafeMode: state.routeContext.requiresSafeMode,
+      ragStats: state.ragContext?.stats,
     }
   }
 
@@ -496,6 +607,7 @@ export async function runDialogGraph(input: DialogInput): Promise<DialogOutput> 
       plannerPlan: state.plannerSteps,
       safetyTag: state.routeContext.safetyTag,
       requiresSafeMode: state.routeContext.requiresSafeMode,
+      ragStats: state.ragContext?.stats,
     }
   }
 
@@ -506,6 +618,7 @@ export async function runDialogGraph(input: DialogInput): Promise<DialogOutput> 
     plannerPlan: state.plannerSteps,
     safetyTag: state.routeContext.safetyTag,
     requiresSafeMode: state.routeContext.requiresSafeMode,
+    ragStats: state.ragContext?.stats,
   }
 }
 /**
@@ -682,7 +795,7 @@ function buildPlannerPrompt(payload: {
 
   const summaryBlock = input.historySummary
     ? [
-        'Summarized earlier conversation (compressed):',
+        'Summarized earlier conversation (compressed, semantic sections: Goals / Constraints / Decisions / OpenQuestions / FAQContext):',
         input.historySummary,
         '',
         'Recent conversation history (most recent last):',
@@ -691,6 +804,8 @@ function buildPlannerPrompt(payload: {
 
   return [
     'You are the dialog planner for a commerce FAQ assistant.',
+    'You receive a semantic summary of earlier conversation organized into sections: Goals, Constraints, Decisions, OpenQuestions, FAQContext.',
+    'Use these sections to respect user constraints, remember agreed decisions, and prioritize unresolved questions when planning steps.',
     `User locale: ${input.locale}`,
     `Detected intent (rough guess): ${intent}`,
     '',
@@ -741,6 +856,8 @@ function buildPlannerPrompt(payload: {
     '- When the detected intent is "returns", prefer clarification questions about order ID, purchase date, item condition, and reason for return.',
     '- When the detected intent is "payment", prefer clarification questions about payment method, error messages, and whether the charge was completed.',
     '- When the detected intent is "product-info", prefer clarification questions about size, color, stock availability, or specific product variants.',
+    '- Use the "Constraints" section in the summary to avoid proposing steps or answers that violate explicit user constraints (e.g., delivery region, budget, payment method).',
+    '- Use the "OpenQuestions" section in the summary to identify unresolved issues and, when relevant, include steps that help resolve them in the current turn.',
   ].join('\n')
 }
 
@@ -815,22 +932,28 @@ async function callPlannerLLM(
 
   const prompt = buildPlannerPrompt(payload)
 
-  const raw = await groqClient.call({
-    model,
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are the dialog planner for a commerce FAQ assistant. Always respond with valid JSON only.',
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-    temperature: 0,
-    maxTokens: 512,
-  })
+  const raw = await callGroqWith429Retry(
+    {
+      model,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are the dialog planner for a commerce FAQ assistant. Always respond with valid JSON only.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: 0,
+      maxTokens: 512,
+      tag: 'planner',
+    },
+    {
+      logger,
+    },
+  )
 
   try {
     const parsed = JSON.parse(raw) as PlannerPlan
@@ -878,22 +1001,29 @@ async function callAnswerLLM(
 
   const maxTokens = payload.safeMode ? 320 : 256
 
-  const raw = await groqClient.call({
-    model,
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.',
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-    temperature: 0.2,
-    maxTokens,
-  })
+  const raw = await callGroqWith429Retry(
+    {
+      model,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: 0.2,
+      maxTokens,
+      tag: payload.safeMode ? 'answer-safe' : 'answer',
+    },
+    {
+      logger,
+    },
+  )
 
   return raw
 }
+const logger = pino()
