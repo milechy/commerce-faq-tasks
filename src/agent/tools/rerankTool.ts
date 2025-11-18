@@ -9,7 +9,13 @@ export interface RerankToolInput {
   topK: number;
 }
 
-export interface RerankToolOutput extends RerankResult {}
+export interface RerankToolOutput extends RerankResult {
+  /**
+   * Convenience alias for downstream logging / meta.
+   * Mirrors the `engine` field from RerankResult.
+   */
+  rerankEngine: RerankResult['engine'];
+}
 
 export async function rerankTool(
   input: RerankToolInput,
@@ -24,5 +30,8 @@ export async function rerankTool(
   }));
 
   const result = await rerank(query, ceItems, topK);
-  return result;
+  return {
+    ...result,
+    rerankEngine: result.engine,
+  };
 }

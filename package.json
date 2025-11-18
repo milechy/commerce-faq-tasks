@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "start": "node dist/index.js 2>&1 | tee logs/app.log",
     "stack:up": "docker ps --filter name=es-dev --format '{{.Names}}' | grep -q '^es-dev$' || docker run -d --name es-dev -p 9200:9200 -e 'discovery.type=single-node' -e 'xpack.security.enabled=false' -e 'ES_JAVA_OPTS=-Xms2g -Xmx2g' docker.elastic.co/elasticsearch/elasticsearch:8.15.3 && docker ps --filter name=pg-dev --format '{{.Names}}' | grep -q '^pg-dev$' || docker run -d --name pg-dev -p 5434:5432 -e POSTGRES_PASSWORD=pass ankane/pgvector",
     "stack:down": "docker rm -f es-dev pg-dev || true",
     "stack:wait": "for i in {1..60}; do curl -fsS http://localhost:9200 >/dev/null && break; sleep 1; done && for i in {1..60}; do PGPASSWORD=pass psql 'postgres://postgres:pass@127.0.0.1:5434/postgres' -tAc 'SELECT 1' >/dev/null 2>&1 && break; sleep 1; done",

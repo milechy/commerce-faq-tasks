@@ -4,17 +4,8 @@ import { Client as ES } from '@elastic/elasticsearch';
 const { Pool } = require('pg') as { Pool: any };
 
 export interface Hit { id: string; text: string; score: number; source: 'es'|'pg'; }
-const esUrl = process.env.ES_URL;
 const BUDGET = Number(process.env.HYBRID_TIMEOUT_MS || 600);
 const ALLOW_MOCK = process.env.HYBRID_MOCK_ON_FAILURE === '1';
-
-const es = esUrl ? new ES({
-  node: esUrl,
-  headers: {
-    accept: 'application/vnd.elasticsearch+json; compatible-with=8',
-    'content-type': 'application/vnd.elasticsearch+json; compatible-with=8'
-  }
-}) : null;
 const pgUrl = process.env.DATABASE_URL;
 const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
 
@@ -29,19 +20,50 @@ export async function hybridSearch(q: string) {
   const t0 = Date.now();
   const notes: string[] = [];
 
+  const esUrl = process.env.ES_URL;
+  const es = esUrl
+    ? new ES({
+        node: esUrl,
+        headers: {
+          accept: 'application/vnd.elasticsearch+json; compatible-with=8',
+          'content-type':
+            'application/vnd.elasticsearch+json; compatible-with=8',
+        },
+      })
+    : null;
+
   if (!es) {
+    // デバッグ用: 実際にこのコードが使われているかを判別するための一時的な note
+    const baseNote = `es:null-debug-v2 esUrl=${esUrl || 'undefined'} ALLOW_MOCK=${String(
+      ALLOW_MOCK,
+    )}`;
+
     if (ALLOW_MOCK) {
-      notes.push('es:null => mock');
       return {
         items: [
-          { id: 'mock-es', text: `ES mock for: ${q}`, score: 1.0, source: 'es' as const },
-          { id: 'mock-pg', text: `PG mock for: ${q}`, score: 0.8, source: 'pg' as const },
+          {
+            id: 'mock-es',
+            text: `ES mock for: ${q}`,
+            score: 1.0,
+            source: 'es' as const,
+          },
+          {
+            id: 'mock-pg',
+            text: `PG mock for: ${q}`,
+            score: 0.8,
+            source: 'pg' as const,
+          },
         ],
         ms: Date.now() - t0,
-        note: notes.join(' | ')
+        note: baseNote + ' | mock-used',
       };
     }
-    return { items: [], ms: Date.now() - t0, note: 'es:null and mock disabled' };
+
+    return {
+      items: [],
+      ms: Date.now() - t0,
+      note: baseNote,
+    };
   }
 
   let esHits: Hit[] = [];
@@ -143,5 +165,14 @@ export async function hybridSearch(q: string) {
   .slice(0, 80)
   .map(({z, ...rest}) => rest);
 
-  return { items: merged, ms: Date.now() - t0, note: notes.join(' | ') || undefined };
+  const elapsed = Date.now() - t0;
+  const metricsNote = [
+    `search_ms=${elapsed}`,
+    `es_hits=${esHits.length}`,
+    `pg_hits=${pgHits.length}`,
+  ].join(' ');
+
+  const noteJoined = [notes.join(' | '), metricsNote].filter(Boolean).join(' | ');
+
+  return { items: merged, ms: elapsed, note: noteJoined || undefined };
 }
