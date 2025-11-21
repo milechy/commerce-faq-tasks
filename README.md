@@ -10,11 +10,13 @@
 
 ---
 ## プロダクト要約（再掲）
-- サービス名: **Commerce-FAQ SaaS**
-- 目的: AI FAQ + 販促誘導 + 従量課金（固定費ゼロ）
-- モデル: Groq GPT-OSS 20B/120B（自動ルーティング）
-- 構成: Widget / API / RAG(DB: PostgreSQL+pgvector) / Billing(Stripe) / SendGrid / Datadog & Sentry
-- 料金: **従量オンリー**（スタンダード×1.5 / カスタム×2.5、初月無料）
+- サービス名: **Commerce-AaaS（Sales Assistant as a Service）**
+- 目的: HP/LP/FAQ すべてを横断し、顧客の目的達成（購買・予約・問い合わせ）を支援する AI セールスアシスタント
+- コア機能: FAQ応答 + 商品レコメンド + キャンペーン案内 + クーポン提示 + ページ誘導
+- モデル: Groq GPT-OSS 20B / 120B（Claude 互換 Prompt でベイズ誘導も可能）
+- RAG構成: pgvector（Hetzner）+ Elasticsearch（Hetzner）+ Web検索（Compound内蔵）
+- インフラ: Cloudflare（WAF/CDN）+ Hetzner（DB/ES）+ n8n Cloud（Automation）
+- 料金: 従量課金（Sales + FAQ）＋ テナント初期セットアップ（RAG整備＋チューニング）
 
 ---
 ## 主なドキュメント

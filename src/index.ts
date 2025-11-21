@@ -1,30 +1,56 @@
+
 import 'dotenv/config'
 
 import express from 'express'
 import pino from 'pino'
 import { z } from 'zod'
-// src/index.ts の先頭付近
 import { createAgentDialogHandler } from './agent/http/agentDialogRoute'
 import { createAgentSearchHandler } from './agent/http/agentSearchRoute'
 import { hybridSearch } from './search/hybrid'
 import { ceStatus, rerank, warmupCE } from './search/rerank'
+import { createAuthMiddleware } from './agent/http/middleware/auth'
+import { WebhookNotifier } from './integration/webhookNotifier'
 
 const app = express()
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 
+const auth = createAuthMiddleware(logger)
+const webhookNotifier = new WebhookNotifier(logger)
+
 // env snapshot for troubleshooting
-logger.info({
-  ES_URL: process.env.ES_URL,
-  DATABASE_URL: process.env.DATABASE_URL,
-  HYBRID_TIMEOUT_MS: process.env.HYBRID_TIMEOUT_MS,
-}, 'env snapshot')
+logger.info(
+  {
+    ES_URL: process.env.ES_URL,
+    DATABASE_URL: process.env.DATABASE_URL,
+    HYBRID_TIMEOUT_MS: process.env.HYBRID_TIMEOUT_MS,
+  },
+  'env snapshot',
+)
 
 const parseJSON = express.json({ limit: '2kb' })
 
-app.post('/agent.search', parseJSON, createAgentSearchHandler(logger))
-app.post('/agent.dialog', parseJSON, createAgentDialogHandler(logger))
+// === Agent endpoints ===
+app.post(
+  '/agent.search',
+  auth,
+  parseJSON,
+  createAgentSearchHandler(logger, { webhookNotifier }),
+)
+app.post(
+  '/agent.dialog',
+  auth,
+  parseJSON,
+  createAgentDialogHandler(logger, { webhookNotifier }),
+)
 
+// Simple auth test endpoint
+app.post('/auth-test', auth, (_req, res) => {
+  res.json({ ok: true })
+})
+
+// === Health / debug ===
 app.get('/health', (_req, res) => res.json({ ok: true }))
+
 app.get('/debug/env', (_req, res) => {
   res.json({
     ES_URL: process.env.ES_URL || null,
@@ -33,57 +59,19 @@ app.get('/debug/env', (_req, res) => {
     hasPG: Boolean(process.env.DATABASE_URL),
   })
 })
-app.get('/ce/status', (_req, res) => res.json(ceStatus()))
-app.post('/ce/warmup', async (_req, res) => {
+
+// === Cross-encoder / rerank helpers ===
+app.get('/ce/status', auth, (_req, res) => res.json(ceStatus()))
+
+app.post('/ce/warmup', auth, async (_req, res) => {
   const r = await warmupCE()
   res.json(r)
 })
 
-// --- fast-path for perf gate: no JSON parse, no search ---
-app.post('/search.v1', (req, res, next) => {
-  // Enable when header is present or env explicitly set to 1/true/yes
-  const perfHeader = typeof req.headers['x-perf'] !== 'undefined'
-  const perfEnv = String(process.env.PERF_MODE || '').toLowerCase()
-  const perfMode = perfHeader || ['1', 'true', 'yes'].includes(perfEnv)
-  if (!perfMode) return next()
+// === /search & /search.v1 ===
 
-  const payload = {
-    items: [],
-    meta: {
-      route: 'es2',
-      rerank_score: null,
-      tuning_version: 'v1',
-      flags: ['v1', 'validated', 'perf:mode', 'ce:skipped'],
-    },
-    ce_ms: 0,
-  }
-  const buf = Buffer.from(JSON.stringify(payload))
-  res.setHeader('Content-Type', 'application/json')
-  res.setHeader('Content-Length', String(buf.length))
-  return res.end(buf)
-})
-
-app.post('/search', parseJSON, async (req, res) => {
-  const schema = z.object({ q: z.string() })
-  const parsed = schema.safeParse(req.body)
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Invalid request' })
-  }
-  const { q } = parsed.data
-  try {
-    const results = await hybridSearch(q)
-    const re = await rerank(q, results.items, 12)
-    return res.json({ ...results, items: re.items, ce_ms: re.ce_ms })
-  } catch (error) {
-    logger.error(error)
-    res.status(500).json({ error: 'Internal server error' })
-  }
-})
-
-// v1: schema-validated search with meta (keeps existing /search intact)
-app.post('/search.v1', parseJSON, async (req, res) => {
-  // Fast path handled by the early /search.v1 handler above
-
+// v1: schema-validated search with meta (primary endpoint)
+app.post('/search.v1', auth, parseJSON, async (req, res) => {
   // Normal mode: schema-validated + rerank
   const schemaIn = z.object({
     q: z.string().min(1),
@@ -92,13 +80,15 @@ app.post('/search.v1', parseJSON, async (req, res) => {
 
   const parsed = schemaIn.safeParse(req.body ?? {})
   if (!parsed.success) {
-    return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues })
+    return res
+      .status(400)
+      .json({ error: 'invalid_request', details: parsed.error.format() })
   }
 
   const { q, topK } = parsed.data
   const k = typeof topK === 'number' ? topK : 12
 
-  const routeStr = 'hybrid:es50+pg50'
+  const routeStr = 'hybrid:es+pg'
 
   try {
     const results = await hybridSearch(q)
@@ -128,7 +118,32 @@ app.post('/search.v1', parseJSON, async (req, res) => {
       ce_ms: re.ce_ms,
     })
   } catch (error) {
-    return res.status(500).json({ error: 'internal', message: (error as Error).message })
+    logger.error({ error }, 'search.v1 failed')
+    return res.status(500).json({
+      error: 'internal',
+      message: (error as Error).message,
+    })
+  }
+})
+
+// Legacy /search endpoint (kept for compatibility / simple testing)
+app.post('/search', auth, parseJSON, async (req, res) => {
+  const schema = z.object({ q: z.string() })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid request' })
+  }
+  const { q } = parsed.data
+  try {
+    const results = await hybridSearch(q)
+    const re = await rerank(q, results.items, 12)
+    return res.json({ ...results, items: re.items, ce_ms: re.ce_ms })
+  } catch (error) {
+    logger.error({ error }, 'search failed')
+    return res.status(500).json({
+      error: 'internal',
+      message: (error as Error).message,
+    })
   }
 })
 

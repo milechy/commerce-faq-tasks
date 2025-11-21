@@ -7,6 +7,10 @@ import {
 } from "../llm/groqClient";
 import { runDialogTurn } from "../dialog/dialogAgent";
 import { runDialogGraph } from "../orchestrator/langGraphOrchestrator";
+import type {
+  AgentWebhookEvent,
+  WebhookNotifier,
+} from "../../integration/webhookNotifier";
 
 const DialogMessageSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
@@ -29,7 +33,16 @@ const AgentDialogSchema = z.object({
   options: DialogOptionsSchema.optional(),
 });
 
-export function createAgentDialogHandler(logger: pino.Logger) {
+type AgentDialogDeps = {
+  webhookNotifier?: WebhookNotifier;
+};
+
+export function createAgentDialogHandler(
+  logger: pino.Logger,
+  deps: AgentDialogDeps = {},
+) {
+  const webhook = deps.webhookNotifier;
+
   return async (req: Request, res: Response): Promise<void> => {
     const parsed = AgentDialogSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -81,7 +94,8 @@ export function createAgentDialogHandler(logger: pino.Logger) {
           });
           const plan = output.plannerPlan;
 
-          // Phase4: safety / routing 情報を pino に構造化ログとして残す
+          const durationMs = Date.now() - startedAt;
+
           logger.info(
             {
               sessionId: data.sessionId ?? "unknown-session",
@@ -92,7 +106,7 @@ export function createAgentDialogHandler(logger: pino.Logger) {
               requiresSafeMode: output.requiresSafeMode,
               hasPlan: !!plan,
               needsClarification: plan?.needsClarification ?? false,
-              durationMs: Date.now() - startedAt,
+              durationMs,
               ragStats: output.ragStats,
               ragSearchMs: output.ragStats?.search_ms,
               ragRerankMs: output.ragStats?.rerank_ms,
@@ -100,6 +114,30 @@ export function createAgentDialogHandler(logger: pino.Logger) {
             },
             "agent.dialog langgraph routing summary",
           );
+
+          // Webhook 通知（LangGraph 成功時）
+          if (webhook) {
+            const event: AgentWebhookEvent = {
+              type: "agent.dialog.completed",
+              timestamp: new Date().toISOString(),
+              endpoint: "/agent.dialog",
+              latencyMs: durationMs,
+              tenantId: "default",
+              meta: {
+                orchestratorMode: "langgraph",
+                route: output.route,
+                groq429Fallback: false,
+                hasLanggraphError: false,
+                groqBackoffRemainingMs: getGroqGlobalBackoffRemainingMs(),
+                ragStats: output.ragStats,
+                needsClarification: plan?.needsClarification ?? false,
+              },
+            };
+
+            webhook.send(event).catch((err) => {
+              logger.warn({ err }, "failed to send agent.dialog webhook (langgraph)");
+            });
+          }
 
           res.json({
             sessionId: data.sessionId,
@@ -168,6 +206,35 @@ export function createAgentDialogHandler(logger: pino.Logger) {
 
       const finalMeta = (result as any)?.meta ?? {};
       const groqBackoffRemainingMs = getGroqGlobalBackoffRemainingMs();
+      const durationMs = Date.now() - startedAt;
+
+      // Webhook 通知（正常完了 / フォールバック）
+      if (webhook) {
+        const event: AgentWebhookEvent = {
+          type: groq429Fallback
+            ? "agent.dialog.fallback"
+            : "agent.dialog.completed",
+          timestamp: new Date().toISOString(),
+          endpoint: "/agent.dialog",
+          latencyMs: durationMs,
+          tenantId: "default",
+          meta: {
+            orchestratorMode:
+              finalMeta.orchestratorMode ??
+              (useLangGraph ? "langgraph" : "local"),
+            route: finalMeta.route ?? "20b",
+            groq429Fallback,
+            hasLanggraphError: !!langgraphError,
+            groqBackoffRemainingMs,
+            ragStats: finalMeta.ragStats,
+            needsClarification: finalMeta.needsClarification ?? false,
+          },
+        };
+
+        webhook.send(event).catch((err) => {
+          logger.warn({ err }, "failed to send agent.dialog webhook");
+        });
+      }
 
       logger.info(
         {
@@ -180,7 +247,7 @@ export function createAgentDialogHandler(logger: pino.Logger) {
           groq429Fallback,
           hasLanggraphError: !!langgraphError,
           groqBackoffRemainingMs,
-          durationMs: Date.now() - startedAt,
+          durationMs,
         },
         "agent.dialog final summary",
       );
@@ -188,6 +255,31 @@ export function createAgentDialogHandler(logger: pino.Logger) {
       res.json(result);
     } catch (err) {
       logger.error({ err }, "agent.dialog error");
+
+      const durationMs = Date.now() - startedAt;
+
+      if (deps.webhookNotifier) {
+        const errorEvent: AgentWebhookEvent = {
+          type: "agent.dialog.error",
+          timestamp: new Date().toISOString(),
+          endpoint: "/agent.dialog",
+          latencyMs: durationMs,
+          tenantId: "default",
+          error: {
+            name: err instanceof Error ? err.name : "Error",
+            message:
+              err instanceof Error ? err.message : String(err ?? "unknown"),
+            stack: err instanceof Error && err.stack ? err.stack : undefined,
+          },
+        };
+        deps.webhookNotifier.send(errorEvent).catch((sendErr) => {
+          logger.warn(
+            { err: sendErr },
+            "failed to send agent.dialog error webhook",
+          );
+        });
+      }
+
       res.status(500).json({
         error: "internal_error",
         message: "Dialog agent failed",
