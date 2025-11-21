@@ -1,5 +1,11 @@
 # AGENTS.md — Minimal Issue-Only Workflow (No Projects)
 
+## Sales AaaS対応（2025-11 更新）
+- 本リポジトリは FAQ だけでなく HP/LP/キャンペーン情報を扱う Sales AaaS を前提に拡張。
+- RAGソースは Notion/CSV/API/HPクロール を含み、テンプレチューニングは Partner が担当。
+- モデルは Groq GPT‑OSS 20B/120B（Compound）で Web検索統合。
+- すべての Issue/PR 運用ルールは従来通り（Projects 不使用）。
+
 このリポジトリは **Issues + Labels + PRの自動クローズ** だけで運用します。GitHub Projects 連携や Action に依存しません。
 
 ---
@@ -98,6 +104,8 @@ Projects連動用のActionは削除済み。復活させる場合は別ブラン
 
 ## 9. Phase4 — Agent Orchestrator Roles（LangGraph / Planner / Safety）
 
+※Sales AaaSでは、Planner/Search に "promo", "campaign", "coupon", "product-intent" を追加識別。
+
 本フェーズで追加された **Orchestrator（対話制御）系エージェントの役割定義**を以下にまとめる。
 
 ### ● Dialog Orchestrator（LangGraph）
@@ -135,50 +143,3 @@ Projects連動用のActionは削除済み。復活させる場合は別ブラン
 - route ∈ {20b,120b}
 - plannerReasons を付加（base-rule, complexity, safety, history-depth）
 - fallback（Planner失敗 → Phase3 local agent）も統合的に処理
-
-## 10. `REQUIREMENTS.md`
-```markdown
-# 要件サマリ（v2025-10-R3）
-
-## 非機能
-- レイテンシ: p95 ≤ 1.5s（Cloudflare + regional endpoint）
-- 可用性: 99.9% （Multi-region）
-- 拡張性: 100 tenants+
-- コスト: $<0.001/req を目安（20B優先・キャッシュ再利用）
-- 監査性: 全ログ署名・改ざん不可保存
-
-## アーキ概要
-- Frontend: Next.js/React Widget
-- Backend: FastAPI（Node可） / API Gateway
-- LLM: Groq GPT-OSS 20B/120B（昇格・フォールバック）
-- RAG: PostgreSQL + pgvector（+ Chroma optional）× Elasticsearch（BM25）
-- 再ランク: Cross-encoder（軽量）
-- DB: PostgreSQL 16 + RLS
-- Cache: Redis（prompt cache + rate limit）
-- Infra: Cloudflare WAF/CDN/ZeroTrust + GCP/AWS Compute
-- Orchestration: n8n + CrewAI
-- DevOps: GitHub Actions + CodeRabbit
-- QA/E2E: Tester-H（staging）/ k6
-- Observability: Datadog + OpenTelemetry
-- Billing: Stripe（従量）+ SendGrid通知 + Webhook
-
-## 主要機能差分（R3）
-- ルーティング最適化（20B既定、複雑時120Bへ）
-- RAGハイブリッド強化（Top-50×2→Top-80→再ランクTop-5）
-- A/Bテスト（tone×CTA）管理UI
-- 多言語（ja/en）v1.0でリリース
-- コストモデル：トークン実測×係数（1.5/2.5）Notionに反映
-
-## 多言語
-- LangID → ja/en プロンプト切替
-- 禁則辞書・テンプレを言語別管理
-- 評価セット：`eval_ja`, `eval_en`
-
-## Billing（要点）
-- 実コスト（最小通貨整数）× Margin Rate → Invoice
-- Stripe UsageRecord（1円=1unit）冪等キー：`billing:{tenant}:{yyyymm}`
-- Webhook成功でNotionにInvoice URL/Status反映
-
-## 監視/KPI
-- p95/p99, 成功率, tokens_in/out, CTR, 再購率, 粗利率, 根拠提示率
-- アラート例：p95>1.8s(5分), 120B比率>15%, Error>1%

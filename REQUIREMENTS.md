@@ -4,23 +4,23 @@
 - レイテンシ: p95 ≤ 1.5s（Cloudflare + regional endpoint）
 - 可用性: 99.9% （Multi-region）
 - 拡張性: 100 tenants+
-- コスト: $<0.001/req を目安（20B優先・キャッシュ再利用）
+- コスト: $<0.001/req（Groq 20B優先・pgvector/ESローカルでの高速再利用）
 - 監査性: 全ログ署名・改ざん不可保存
 
 ## アーキ概要
 - Frontend: Next.js/React Widget
 - Backend: FastAPI（Node可） / API Gateway
 - LLM: Groq GPT-OSS 20B/120B（昇格・フォールバック）
-- RAG: PostgreSQL + pgvector（+ Chroma optional）× Elasticsearch（BM25）
+- RAG: PostgreSQL + pgvector（Hetzner）× Elasticsearch（Hetzner, BM25）
 - 再ランク: Cross-encoder（軽量）
 - DB: PostgreSQL 16 + RLS
 - Cache: Redis（prompt cache + rate limit）
-- Infra: Cloudflare WAF/CDN/ZeroTrust + GCP/AWS Compute
+- Infra: Cloudflare WAF/CDN/ZeroTrust + Hetzner Dedicated (DB/ES/Orchestrator)
 - Orchestration: n8n + CrewAI
 - DevOps: GitHub Actions + CodeRabbit
 - QA/E2E: Tester-H（staging）/ k6
 - Observability: Datadog + OpenTelemetry
-- Billing: Stripe（従量）+ SendGrid通知 + Webhook
+- Billing: Stripe（従量）+ n8n通知 + Webhook
 
 ## 主要機能差分（R3）
 - ルーティング最適化（20B既定、複雑時120Bへ）

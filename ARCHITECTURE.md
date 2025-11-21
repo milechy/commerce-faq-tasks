@@ -4,9 +4,9 @@
 graph TD
 A[Client Widget] -->|HTTPS| B[API Gateway]
 B --> C[RAG Retriever]
-C --> C1[pgvector] & C2[Elasticsearch]
+C --> C1[pgvector (Hetzner)] & C2[Elasticsearch (Hetzner)]
 C --> C3[Cross-encoder Re-ranker]
-B --> D[Groq LLM (20B/120B)]
+B --> D[Groq Cloud (GPT‑OSS 20B/120B)]
 B --> E[Commerce Engine]
 E --> P[Product/Order DB]
 B --> F[Redis Cache]
@@ -24,7 +24,7 @@ B --> T[Tuning DB (Templates & Tone)]
 {"route":"20b|120b|static|human","rerank_score":0.74,"tuning_version":"r2025.10.22-01","flags":{"uncertain":false,"safe_route":false}}
 
 RAGハイブリッド
-	1.	ES Top-50 と pgvector Top-50 を並列
+	1.	(Hetzner) ES Top-50 と (Hetzner) pgvector Top-50 を並列
 	2.	結合/重複排除→Top-80
 	3.	Cross-encoder 再ランク→Top-5
 	4.	チャンク要約・重複削除→ ~1.5–2k tokens
@@ -42,6 +42,10 @@ A/Bテスト
 	2.	両方失敗→静的FAQ
 	3.	API失敗→CFキャッシュ/エラーバナー
 	4.	緊急→Circuit Breaker + Ops通知
+
+---
+
+Sales AaaS拡張: HP/LP/キャンペーン/クーポン/商品DBを統合し、RAG+Web検索で誘導最適化
 
 ---
 
@@ -99,6 +103,12 @@ gh issue create -R milechy/commerce-faq-tasks \
 ```markdown
 # AGENTルール（GPT/Claude/Copilot用）
 
+## Sales AaaS対応（2025-11 更新）
+- 本リポジトリは FAQ だけでなく HP/LP/キャンペーン情報を扱う Sales AaaS を前提に拡張。
+- RAGソースは Notion/CSV/API/HPクロール を含み、テンプレチューニングは Partner が担当。
+- モデルは Groq GPT‑OSS 20B/120B（Compound）で Web検索統合。
+- すべての Issue/PR 運用ルールは従来通り（Projects 不使用）。
+
 ## 目的
 - Issues/Labels/PRのみで進捗管理。Projects不要。
 - PR本文の `Closes #<num>` を厳守。
@@ -125,7 +135,9 @@ gh issue create -R milechy/commerce-faq-tasks \
 - 120B比率 ≤ 10%
 - E2E/k6/Unit 全合格
 
-# Phase4: Agent Orchestration 拡張まとめ
+# Phase4: Agent Orchestrator 拡張まとめ
+
+※Sales AaaSでは、Planner/Search に "promo", "campaign", "coupon", "product-intent" を追加識別。
 
 ## LangGraph Orchestrator（Planner / Clarify / Search / Answer）
 
