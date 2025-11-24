@@ -1,0 +1,95 @@
+{
+  "name": "Agent Dialog - Slack Alerts",
+  "nodes": [
+    {
+      "id": "WebhookAgentEvents",
+      "name": "Agent Events Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [260, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent-events",
+        "responseMode": "onReceived",
+        "options": {
+          "responseContentType": "application/json",
+          "responseBody": "={\"ok\": true}"
+        }
+      },
+      "webhookId": ""
+    },
+    {
+      "id": "IfFilterEvents",
+      "name": "Filter Fallback/Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [540, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [],
+          "string": [
+            {
+              "value1": "={{$json[\"type\"]}}",
+              "operation": "equal",
+              "value2": "agent.dialog.fallback"
+            },
+            {
+              "value1": "={{$json[\"type\"]}}",
+              "operation": "equal",
+              "value2": "agent.dialog.error"
+            }
+          ]
+        },
+        "combineOperation": "any"
+      }
+    },
+    {
+      "id": "SlackSendMessage",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [840, 260],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "#faq-alerts",
+        "text": "={{\"[\" + $json[\"type\"] + \"] /agent.dialog event\\n\\n\" +\n\"Latency: \" + ($json[\"latencyMs\"] || \"n/a\") + \" ms\\n\" +\n\"Orchestrator: \" + ($json[\"meta\"][\"orchestratorMode\"] || \"unknown\") + \"\\n\" +\n\"Route: \" + ($json[\"meta\"][\"route\"] || \"n/a\") + \"\\n\" +\n\"Groq429Fallback: \" + String($json[\"meta\"][\"groq429Fallback\"] || false) + \"\\n\" +\n\"LangGraphError: \" + String($json[\"meta\"][\"hasLanggraphError\"] || false) + \"\\n\\n\" +\n\"Error: \" + (($json[\"error\"] && $json[\"error\"][\"message\"]) || \"n/a\")\n}}"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "",
+          "name": "Slack API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Agent Events Webhook": {
+      "main": [
+        [
+          {
+            "node": "Filter Fallback/Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Fallback/Error": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Asia/Tokyo"
+  },
+  "versionId": "agent-dialog-slack-alert-v1"
+}

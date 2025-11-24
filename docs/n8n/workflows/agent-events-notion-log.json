@@ -1,0 +1,97 @@
+{
+  "name": "Agent Events - Notion Log",
+  "nodes": [
+    {
+      "id": "WebhookAgentEvents",
+      "name": "Agent Events Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [260, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent-events-notion",
+        "responseMode": "onReceived",
+        "options": {
+          "responseContentType": "application/json",
+          "responseBody": "={\"ok\": true}"
+        }
+      },
+      "webhookId": ""
+    },
+    {
+      "id": "NotionCreatePage",
+      "name": "Create Notion Log",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [540, 300],
+      "parameters": {
+        "resource": "page",
+        "operation": "create",
+        "databaseId": "",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Title",
+              "title": "={{$json[\"endpoint\"] + \" \" + $json[\"type\"]}}"
+            },
+            {
+              "key": "Endpoint",
+              "richText": "={{$json[\"endpoint\"]}}"
+            },
+            {
+              "key": "Type",
+              "select": "={{$json[\"type\"]}}"
+            },
+            {
+              "key": "LatencyMs",
+              "number": "={{$json[\"latencyMs\"] ?? 0}}"
+            },
+            {
+              "key": "Route",
+              "richText": "={{$json[\"meta\"]?.[\"route\"] ?? \"n/a\"}}"
+            },
+            {
+              "key": "OrchestratorMode",
+              "richText": "={{$json[\"meta\"]?.[\"orchestratorMode\"] ?? \"n/a\"}}"
+            },
+            {
+              "key": "NeedsClarification",
+              "checkbox": "={{$json[\"meta\"]?.[\"needsClarification\"] ?? false}}"
+            },
+            {
+              "key": "HasLanggraphError",
+              "checkbox": "={{$json[\"meta\"]?.[\"hasLanggraphError\"] ?? false}}"
+            },
+            {
+              "key": "CreatedAt",
+              "date": "={{$json[\"timestamp\"]}}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "notionApi": {
+          "id": "",
+          "name": "Notion API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Agent Events Webhook": {
+      "main": [
+        [
+          {
+            "node": "Create Notion Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Asia/Tokyo"
+  },
+  "versionId": "agent-events-notion-log-v1"
+}
