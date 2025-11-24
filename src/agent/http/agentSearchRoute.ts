@@ -49,11 +49,19 @@ export function createAgentSearchHandler(
     const { q, topK, debug, useLlmPlanner } = parsed.data;
     const startedAt = Date.now();
 
+    const headerTenantId = req.header("x-tenant-id");
+    const tenantId =
+      headerTenantId && headerTenantId.trim().length > 0
+        ? headerTenantId.trim()
+        : "demo"; // fallback tenant for local/dev (matches faq_embeddings.tenant_id)
+
     try {
-      const result = await runSearchAgent(q, {
+      const result = await runSearchAgent({
+        q,
         topK,
         debug,
         useLlmPlanner,
+        tenantId,
       });
 
       const durationMs = Date.now() - startedAt;
@@ -65,7 +73,7 @@ export function createAgentSearchHandler(
           timestamp: new Date().toISOString(),
           endpoint: "/agent.search",
           latencyMs: durationMs,
-          tenantId: "default", // TODO: Phase7 で Multi-tenant 対応時に差し替え
+          tenantId,
           meta: {
             // n8n 側でモニタリングしやすい軽めの情報だけ載せる
             topK: topK ?? undefined,
@@ -76,6 +84,7 @@ export function createAgentSearchHandler(
             stepsCount: Array.isArray((result as any).steps)
               ? (result as any).steps.length
               : undefined,
+            ragStats: (result as any).ragStats,
           },
         };
 
@@ -97,7 +106,7 @@ export function createAgentSearchHandler(
           timestamp: new Date().toISOString(),
           endpoint: "/agent.search",
           latencyMs: durationMs,
-          tenantId: "default",
+          tenantId,
           error: {
             name: err instanceof Error ? err.name : "Error",
             message:

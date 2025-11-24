@@ -54,10 +54,10 @@ export interface DialogOutput {
    * HTTP レイヤーから meta.ragContext / ragStats へ反映するために公開する。
    */
   ragStats?: {
-    search_ms?: number
-    rerank_ms?: number
-    rerank_engine?: 'heuristic' | 'ce' | 'ce+fallback'
-    total_ms?: number
+    searchMs?: number
+    rerankMs?: number
+    rerankEngine?: 'heuristic' | 'ce' | 'ce+fallback'
+    totalMs?: number
   }
 }
 
@@ -148,10 +148,10 @@ type RagContext = {
   recall: number | null
   contextTokens: number
   stats?: {
-    search_ms?: number
-    rerank_ms?: number
-    rerank_engine?: 'heuristic' | 'ce' | 'ce+fallback'
-    total_ms?: number
+    searchMs?: number
+    rerankMs?: number
+    rerankEngine?: 'heuristic' | 'ce' | 'ce+fallback'
+    totalMs?: number
   }
 }
 
@@ -204,14 +204,14 @@ async function runInitialRagRetrieval(initialInput: DialogInput): Promise<RagCon
   const totalChars = documents.reduce((sum, doc) => sum + doc.text.length, 0);
   const contextTokens = Math.min(4096, Math.max(128, Math.floor(totalChars / 4) || 256));
 
-  const search_ms = typeof searchDebug?.ms === 'number' ? searchDebug.ms : undefined;
-  const rerank_ms = typeof rerankDebug?.ce_ms === 'number' ? rerankDebug.ce_ms : undefined;
-  const rerank_engine =
+  const searchMs = typeof searchDebug?.ms === 'number' ? searchDebug.ms : undefined;
+  const rerankMs = typeof rerankDebug?.ce_ms === 'number' ? rerankDebug.ce_ms : undefined;
+  const rerankEngine =
     rerankDebug?.rerankEngine ?? rerankDebug?.engine ?? undefined;
 
-  const total_ms =
-    typeof search_ms === 'number' || typeof rerank_ms === 'number'
-      ? (search_ms ?? 0) + (rerank_ms ?? 0)
+  const totalMs =
+    typeof searchMs === 'number' || typeof rerankMs === 'number'
+      ? (searchMs ?? 0) + (rerankMs ?? 0)
       : undefined;
 
   return {
@@ -220,10 +220,10 @@ async function runInitialRagRetrieval(initialInput: DialogInput): Promise<RagCon
     recall: null,
     contextTokens,
     stats: {
-      search_ms,
-      rerank_ms,
-      rerank_engine,
-      total_ms,
+      searchMs,
+      rerankMs,
+      rerankEngine,
+      totalMs,
     },
   };
 }

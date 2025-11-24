@@ -2,6 +2,7 @@
 import 'dotenv/config'
 
 import express from 'express'
+import cors from 'cors'
 import pino from 'pino'
 import { z } from 'zod'
 import { createAgentDialogHandler } from './agent/http/agentDialogRoute'
@@ -10,9 +11,19 @@ import { hybridSearch } from './search/hybrid'
 import { ceStatus, rerank, warmupCE } from './search/rerank'
 import { createAuthMiddleware } from './agent/http/middleware/auth'
 import { WebhookNotifier } from './integration/webhookNotifier'
+import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 
 const app = express()
+
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
+
+// Allow CORS from admin UI (Vite dev server or configured origin)
+app.use(
+  cors({
+    origin: process.env.ADMIN_UI_ORIGIN || 'http://localhost:5173',
+    credentials: true,
+  }),
+)
 
 const auth = createAuthMiddleware(logger)
 const webhookNotifier = new WebhookNotifier(logger)
@@ -68,7 +79,11 @@ app.post('/ce/warmup', auth, async (_req, res) => {
   res.json(r)
 })
 
+
 // === /search & /search.v1 ===
+
+// === Admin / FAQ management ===
+registerFaqAdminRoutes(app, auth)
 
 // v1: schema-validated search with meta (primary endpoint)
 app.post('/search.v1', auth, parseJSON, async (req, res) => {

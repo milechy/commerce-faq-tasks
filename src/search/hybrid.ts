@@ -16,9 +16,10 @@ const normZ = (xs: number[]) => {
   return (x:number)=> (x-m)/(s||1);
 };
 
-export async function hybridSearch(q: string) {
+export async function hybridSearch(q: string, tenantId?: string) {
   const t0 = Date.now();
   const notes: string[] = [];
+  void tenantId; // reserved for future multi-tenant filtering
 
   const esUrl = process.env.ES_URL;
   const es = esUrl
@@ -81,47 +82,15 @@ export async function hybridSearch(q: string) {
     notes.push(`es_error:${e.message || String(e)}`);
   }
 
-  // PG text search (tsvector ベースの簡易BM25相当). pg が未設定ならスキップ
+  // PG text search
+  // Phase7: pgvector 経路に一本化したため、ここでの FTS（docs テーブル）は無効化。
+  // pgHits は空のままにし、必要な場合は searchPgVector を利用する。
   if (pg) {
-    try {
-      // まずは FTS（英数は強いが日本語は弱い）
-      const sqlTs = `
-        with q as (
-          select plainto_tsquery('simple', $1) as tsq
-        )
-        select id::text as id, text,
-               ts_rank_cd(to_tsvector('simple', coalesce(text,'')), (select tsq from q)) as score
-        from docs
-        where to_tsvector('simple', coalesce(text,'')) @@ (select tsq from q)
-        order by score desc
-        limit 50;`;
-
-      let r = await pg.query(sqlTs, [q]);
-
-      // 日本語などで 0 件なら pg_trgm にフォールバック
-      if (!r.rowCount) {
-        // 類似度の最小しきい値を少し下げる（既定は 0.3）
-        try { await pg.query("select set_limit(0.2)"); } catch {}
-
-        const sqlTrgm = `
-          select id::text as id, text, similarity(text, $1) as score
-          from docs
-          where text % $1
-          order by score desc
-          limit 50;`;
-        r = await pg.query(sqlTrgm, [q]);
-        if (!r.rowCount) notes.push('pg_trgm:no_hits');
-        else notes.push('pg_trgm:fallback_used');
-      }
-
-      pgHits = r.rows.map((row: any) => ({ id: String(row.id), text: row.text, score: Number(row.score)||0, source: 'pg' as const }));
-    } catch (e: any) {
-      notes.push(`pg_error:${e.name||'Error'}:${e.message||String(e)}`);
-    }
+    notes.push('pg_fts:disabled_phase7_use_pgvector');
   }
 
   // 念のため、0件なら固定クエリで再試行（投入確認）
-  if (esHits.length === 0) {
+  if (esHits.length === 0 && !notes.some((n) => n.startsWith('es_error:'))) {
     try {
       const probe: any = await es.search({
   index: 'docs',

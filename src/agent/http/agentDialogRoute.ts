@@ -60,6 +60,13 @@ export function createAgentDialogHandler(
 
     const startedAt = Date.now();
     const data = parsed.data;
+
+    const headerTenantId = req.header("x-tenant-id");
+    const tenantId =
+      headerTenantId && headerTenantId.trim().length > 0
+        ? headerTenantId.trim()
+        : "default";
+
     const useLangGraph =
       (process.env.DIALOG_ORCHESTRATOR_MODE ?? "langgraph") === "langgraph";
 
@@ -86,7 +93,7 @@ export function createAgentDialogHandler(
           );
 
           const output = await runDialogGraph({
-            tenantId: "default", // TODO: 実際のテナント解決ロジックに差し替え
+            tenantId,
             userMessage: data.message,
             locale: locale as "ja" | "en",
             conversationId: data.sessionId ?? "unknown-session",
@@ -108,9 +115,9 @@ export function createAgentDialogHandler(
               needsClarification: plan?.needsClarification ?? false,
               durationMs,
               ragStats: output.ragStats,
-              ragSearchMs: output.ragStats?.search_ms,
-              ragRerankMs: output.ragStats?.rerank_ms,
-              ragTotalMs: output.ragStats?.total_ms,
+              ragSearchMs: output.ragStats?.searchMs,
+              ragRerankMs: output.ragStats?.rerankMs,
+              ragTotalMs: output.ragStats?.totalMs,
             },
             "agent.dialog langgraph routing summary",
           );
@@ -122,7 +129,7 @@ export function createAgentDialogHandler(
               timestamp: new Date().toISOString(),
               endpoint: "/agent.dialog",
               latencyMs: durationMs,
-              tenantId: "default",
+              tenantId,
               meta: {
                 orchestratorMode: "langgraph",
                 route: output.route,
@@ -217,7 +224,7 @@ export function createAgentDialogHandler(
           timestamp: new Date().toISOString(),
           endpoint: "/agent.dialog",
           latencyMs: durationMs,
-          tenantId: "default",
+          tenantId,
           meta: {
             orchestratorMode:
               finalMeta.orchestratorMode ??
@@ -264,7 +271,7 @@ export function createAgentDialogHandler(
           timestamp: new Date().toISOString(),
           endpoint: "/agent.dialog",
           latencyMs: durationMs,
-          tenantId: "default",
+          tenantId,
           error: {
             name: err instanceof Error ? err.name : "Error",
             message:

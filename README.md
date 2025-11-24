@@ -283,3 +283,265 @@ Phase3 では、既存の `/agent.search` を壊さずに、対話型 FAQ エー
 ---
 
 Phase3 の詳細な設計・API 例・シーケンス図は `docs/PHASE3_MULTISTEP.md` を参照。
+# Commerce-AaaS（Sales Assistant as a Service）— 開発HQ / ワークフロー管理リポジトリ
+
+このリポジトリは **AIセールスアシスタント「Commerce-AaaS」** の  
+**開発HQ（アーキテクチャ / Docs / タスク運用）を集約するためのリポジトリ** です。
+
+> ⚠️ **プロダクト実装コードは別リポジトリ**  
+> ここは開発組織・ワークフロー・アーキ・運用・QA・チューニングの「HQ（司令塔）」です。
+
+---
+
+## 🚀 Commerce-AaaS とは
+**FAQ回答だけのサービスではなく、Ruffus（Amazonの販売アシスタント）を超える “能動的AIセールス” AaaS。**
+
+### ✔ 特徴
+- HP / LP / FAQ / 商品DB を横断して  
+  **「顧客の目的達成（購入・予約・問い合わせ）」を自律的に誘導**
+- パートナー（心理学 × 営業の専門家）が  
+  **クライアント毎に AI の会話テンプレ・トークスクリプトを Notion でチューニング**
+- Multi-Agent（LangGraph / CrewAI）ベースの会話オーケストレーション
+- テナント毎に  
+  **RAG・営業ロジック・会話トーン・誘導ルール（CTA/UpSell/CrossSell）を完全分離**
+- A/Bテスト（トーン・CTA・営業動線）＋ ベイズ最適化で継続改善
+
+---
+
+## 🏗 技術構成（Phase7 時点の確定版）
+
+### 🔍 RAG 基盤
+- **Elasticsearch（BM25 Top50）**
+- **pgvector（Cosine Top50 / HNSW）**
+- 並列検索 → 統合 → CE再ランク → Top5
+- Groq embeddings（20B）使用
+
+### 🤖 LLM
+- **Groq GPT-OSS 20B / 120B**
+- プランナー / 回答 / 要約
+- 20B → 120B への自動昇格条件  
+  `context_tokens / recall / complexity / safety_tag`
+
+### 🎛 Orchestration
+- Multi-Step Planner（Clarify, Search, Follow-up, Answer）
+- LangGraph / CrewAI と互換インターフェース設計済  
+  → Phase8 でフロー全体を移行予定
+
+### 🗃 ストレージ
+- PostgreSQL（Hetzner）
+- `faq_docs`（元データ）
+- `faq_embeddings`（pgvector）
+- `faq_usage`（将来の A/B / ベイズ用）
+- Supabase Auth（Admin UI ログイン用）
+
+### 🌐 API（実装リポジトリ）
+- `/agent.search`（高速RAG）
+- `/agent.dialog`（対話型セールスエージェント）
+- `/admin/faqs`（FAQ管理UI用）
+- JWT（Supabase発行）による管理画面アクセス
+
+### 🖥 Admin UI
+- React + Supabase Auth  
+- FAQ作成 / 編集（ES同期 + Embedding同期）  
+- テナント切替  
+- フィールド：question / answer / category / tags / is_published
+
+---
+
+# 📚 このHQリポジトリの役割
+**アプリ実装ではなく、以下を管理するためのリポジトリです：**
+
+### 1. アーキテクチャ
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)  
+- マイクロサービス構成 / RAGパイプライン / LLMルーティング / 監視 / Billing
+
+### 2. API 仕様
+- [`docs/api-agent.md`](docs/api-agent.md)  
+- [`docs/api-admin.md`](docs/api-admin.md)
+
+### 3. RAG / 検索パイプライン
+- [`docs/search-pipeline.md`](docs/search-pipeline.md)
+
+### 4. DB スキーマ
+- [`docs/db-schema.md`](docs/db-schema.md)
+
+### 5. 認証とテナント管理
+- [`docs/auth.md`](docs/auth.md)
+- [`docs/tenant.md`](docs/tenant.md)
+
+### 6. タスク運用
+- Issues / Labels  
+- CI / Performance Gate  
+- ユーザーオンボーディング手順
+
+> Notion 側の資料は「営業テンプレ」「会話フロー」「A/B 施策」「クライアント要件」  
+> ＝ **パートナーが調整する “Sales Playbook DB”** として運用。
+
+---
+
+# 🧭 タスク管理（Issues + Labels）
+
+### 必須ラベル
+- `status:*` → todo / in-progress / review / qa / done  
+- `prio:*` → high / medium / low  
+- `type:*` → feat / bug / chore / ops  
+- `phase:*` → db / api / ui / billing / monitoring / ci / agent
+
+### よく使うコマンド（GH CLI）
+```bash
+# 新規タスク
+gh issue create -R <owner>/<repo> \
+  --title "pgvector HNSW 最適化" \
+  --body "目的: 検索p95を1.0s以下へ。Top80→Top50バランス調査" \
+  --label "type:feat,status:todo,prio:high,phase:api" \
+  --assignee "@me"
+```
+
+---
+
+# 🛠 CI / パフォーマンスゲート
+
+### RAG / Agent 処理の自動性能チェック
+- `.github/workflows/perf-gate.yml`
+- ローカル：`pnpm run perf:gate:strict`
+- CI：`pnpm run ci:perf`
+
+判定基準（例）  
+- **RPS ≥ 6000**  
+- **P90 ≤ 14ms**
+
+---
+
+# 🗺 MVP Roadmap（Phase0〜7 完了 / Phase8〜10 着手前）
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 0: Setup | Done | Vault / Auth |
+| 1: DB+RLS | Done | faq_docs / embeddings |
+| 2: RAG | Done | ES+PG+CE統合 |
+| 3: Orchestrator | Done | Multi-step planner |
+| 4: API | Done | /agent.search / dialog |
+| 5: Admin UI | Done | Supabase Auth / CRUD |
+| 6: Billing | In Progress | Stripe / n8n |
+| 7: Monitoring | In Progress | Datadog / Cloudflare |
+| **8: LangGraph** | **Next** | Multi-agent化 |
+| **9: A/B + Tuning DB** | **Next** | トーン/CTAベイズ最適化 |
+| **10: Release** | **Next** | Rollback + GA |
+
+---
+
+# 📄 変更履歴
+- **2025-11-24**: Commerce-AaaS 仕様に全面刷新（①②③反映）
+- 2025-11-08: 初期READMEをHQ仕様に更新
+# Commerce-AaaS（Sales Assistant as a Service）— 開発HQ / ワークフロー管理リポジトリ
+
+このリポジトリは **AIセールスアシスタント「Commerce-AaaS」** の
+**開発HQ（アーキテクチャ / Docs / タスク運用）を集約するためのリポジトリ** です。
+
+> ⚠️ **ここにはアプリ本体の実装コードはありません**  
+> 実装は別リポジトリで管理し、このリポジトリは「設計・運用・タスク管理」の司令塔として使います。
+
+---
+
+## 🚀 Commerce-AaaS の概要
+
+- サービス種別: **Sales Assistant as a Service（AaaS）**
+- 役割: HP / LP / FAQ / 商品DB を横断し、
+  **顧客の目的達成（購入・予約・問い合わせ）を能動的に支援する AI セールスパートナー**
+- 位置づけ: Ruffus（Amazon の販売アシスタント）よりも、
+  **一歩踏み込んで提案・クロージングまで行う能動的セールスAI**
+- パートナー（心理学 × 営業の専門家）が、
+  **各クライアントごとにトークスクリプト / 会話フローを Notion 上でチューニング**
+
+詳細なアーキテクチャや API 仕様は、すべて `docs/` 配下のドキュメントに記載しています。
+
+---
+
+## 📚 ドキュメント一覧（詳細はそれぞれ参照）
+
+### アーキテクチャ / 全体像
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)
+  - システム全体構成（クライアント〜API〜RAG〜LLM〜Billing〜Monitoring）
+  - LangGraph / CrewAI 連携を見据えた Orchestrator 構成
+
+### API 仕様
+- [`docs/api-agent.md`](docs/api-agent.md)
+  - `/agent.search`：RAG ベースの FAQ / セールス回答 API
+- [`docs/api-admin.md`](docs/api-admin.md)
+  - `/admin/faqs`：FAQ CRUD + Elasticsearch 更新 + Embedding 更新 API
+  - Admin UI（React + Supabase Auth）との連携仕様
+
+### 検索 / RAG パイプライン
+- [`docs/search-pipeline.md`](docs/search-pipeline.md)
+  - Elasticsearch（BM25） + pgvector（cosine / HNSW）のハイブリッド検索
+  - TopK マージ手順 / Cross-encoder 再ランク / RAG コンテキスト構築
+
+### DB スキーマ
+- [`docs/db-schema.md`](docs/db-schema.md)
+  - `faq_docs` / `faq_embeddings` / 将来の `faq_usage` などのテーブル定義
+  - テナント分離・インデックス設計・パフォーマンスの方針
+
+### 認証 / テナント管理
+- [`docs/auth.md`](docs/auth.md)
+  - Supabase Auth を用いた Admin ログイン / JWT 連携
+- [`docs/tenant.md`](docs/tenant.md)
+  - テナントIDベースのデータ分離・RAG・APIルーティング方針
+
+### その他（HQ 運用系）
+- [`REQUIREMENTS.md`](REQUIREMENTS.md)  
+  追加要件・グローバル展開・モデル構成・価格設計メモ
+- [`AGENTS.md`](AGENTS.md)  
+  AI エージェント（Claude / Copilot / ほか）にこのリポジトリを操作させるときのガイド
+- [`README_PROJECT.md`](README_PROJECT.md)  
+  GitHub Projects を使う場合の運用メモ（現在は Issues/Labels が中心）
+- [`team-members.md`](team-members.md)  
+  メンバー一覧 / GitHub ID 対応表
+
+> 👆 **仕様・設計・API の詳細は、上記の各ドキュメントを参照してください。**  
+> README ではあえて詳細を書かず、「どこに何があるか」だけを示します。
+
+---
+
+## 🧭 タスク管理（ざっくり）
+
+開発タスクは **GitHub Issues + Labels** で管理します。
+
+- ラベル種別（例）
+  - `status:*` → `todo` / `in-progress` / `review` / `qa` / `done`
+  - `prio:*` → `high` / `medium` / `low`
+  - `type:*` → `feat` / `bug` / `chore` / `ops`
+  - `phase:*` → `db` / `api` / `ui` / `billing` / `monitoring` / `ci` / `agent`
+- よく使うコマンドやフローの詳細は、今後 `docs/` 配下に分離予定
+
+---
+
+## 🔍 Phase / Roadmap（概要）
+
+フェーズの詳細なスコープや完了条件は、`docs/` 配下で管理します。  
+README では、現在地点だけをざっくり共有します。
+
+- Phase0–2: DB / RAG / Hybrid Search 基盤 → **完了**
+- Phase3–4: Multi-step Orchestrator + `/agent.*` API → **完了**
+- Phase5: Admin UI（Supabase Auth + FAQ CRUD + ES/Embedding 同期） → **完了**
+- Phase6–7: Billing / Monitoring → **着手中**
+- Phase8 以降: LangGraph / CrewAI への移行、A/B テスト & ベイズ最適化 → **次フェーズ**
+
+フェーズごとの詳細仕様・テスト方針・k6/Perf Gate 条件などは、順次 `docs/` に追い出していきます。
+
+---
+
+## 🧪 実装側リポジトリとの関係
+
+- このリポジトリ: **HQ（設計・仕様・運用・タスク）**
+- 実装リポジトリ（別 repo）: **API / Worker / Frontend 実装**
+
+実装側リポジトリからこの HQ にリンクし、
+- どの Phase のタスクなのか
+- どのドキュメント（設計）を参照しているか
+を常に紐づけておく運用を想定しています。
+
+---
+
+## 📝 更新履歴
+
+- **2025-11-24**: README をシンプル化し、詳細は `docs/` へ集約する方針に変更

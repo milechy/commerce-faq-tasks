@@ -1,0 +1,26 @@
+import { useEffect, useState } from "react";
+import { adminFetch } from "../lib/api";
+
+export default function FaqList() {
+  const [faqs, setFaqs] = useState([]);
+
+  useEffect(() => {
+    adminFetch("/admin/faqs?tenantId=demo")
+      .then((res) => setFaqs(res.items))
+      .catch((e) => console.error(e));
+  }, []);
+
+  return (
+    <div style={{ padding: 40 }}>
+      <h1>FAQs</h1>
+      <ul>
+        {faqs.map((f: any) => (
+          <li key={f.id}>
+            <b>{f.question}</b>
+            <p>{f.answer}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
