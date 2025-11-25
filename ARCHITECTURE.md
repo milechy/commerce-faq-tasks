@@ -139,14 +139,50 @@ gh issue create -R milechy/commerce-faq-tasks \
 
 ※Sales AaaSでは、Planner/Search に "promo", "campaign", "coupon", "product-intent" を追加識別。
 
-## LangGraph Orchestrator（Planner / Clarify / Search / Answer）
+## LangGraph Orchestrator（Planner / Clarify / Search / Sales / Answer / Final）
 
-- `/agent.dialog` の主要処理は LangGraph ベースの Orchestrator に移行  
-- 各ノード:
-  - **contextBuilderNode**: RAG & history summary（ロング対話の圧縮）
-  - **plannerNode**: Groq 20B/120B を用いた Clarify / Follow-up / Search ステップ計画
-  - **searchNode**: Phase3 RAG（ES + pgvector + Cross-encoder）と完全統合
-  - **answerNode**: Answer LLM による最終回答生成（トーン/スタイル制御）
+ - `/agent.dialog` の主要処理は LangGraph ベースの Orchestrator に移行  
+ - 各ノード:
+   - **contextBuilderNode**: RAG & history summary（ロング対話の圧縮）
+   - **plannerNode**: Groq 20B/120B を用いた Clarify / Follow-up / Search / Sales ステップ計画
+   - **clarifyNode**: 不足情報のヒアリング（Clarify 質問生成）
+   - **searchNode**: Phase3 RAG（ES + pgvector + Cross-encoder）と完全統合
+   - **salesNode**: PlannerPlan（SalesStage）とテキストから Upsell / CTA を判定し、`salesMeta` を構築
+   - **answerNode**: Answer LLM による最終回答生成（トーン/スタイル制御）
+   - **finalNode**: UI 向けレスポンス整形（steps/salesMeta/graphVersion をまとめて返却）
+
+## /agent.dialog レスポンス拡張（Phase8: LangGraph + SalesMeta）
+
+- LangGraph Orchestrator 経由の応答では、従来の `answer` に加えて以下のメタ情報を返却：
+  - `steps[]`: Planner が生成した SalesStage 列（`clarify / propose / recommend / close`）
+  - `meta.plannerPlan`: PlannerPlan 全体（steps / clarifyingQuestions / confidence）
+  - `meta.salesMeta`: セールス文脈メタ（`upsellTriggered / ctaTriggered / notes[]`）
+  - `meta.graphVersion`: 現在は `"langgraph-v1"` 固定（将来のバージョニング用）
+
+```jsonc
+{
+  "answer": "...",
+  "steps": [
+    { "id": "step_clarify_1", "stage": "clarify", "title": "用途のヒアリング", ... },
+    { "id": "step_recommend_1", "stage": "recommend", "title": "おすすめプランの提示", ... },
+    { "id": "step_close_1", "stage": "close", "cta": "purchase", ... }
+  ],
+  "meta": {
+    "route": "20b",
+    "plannerPlan": { "steps": [...], "needsClarification": true },
+    "salesMeta": {
+      "upsellTriggered": true,
+      "ctaTriggered": true,
+      "notes": [
+        "planner:recommend-with-upsell-hint",
+        "planner:cta:purchase",
+        "heuristic:upsell-keyword-detected"
+      ]
+    },
+    "graphVersion": "langgraph-v1"
+  }
+}
+```
 
 ```
 ## 新ルーティング（20B/120B） + Safety 強化

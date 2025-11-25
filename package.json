@@ -60,6 +60,8 @@
     "perf:save:v1:perf": "PERF_MODE=1 mkdir -p logs/perf && BODY='{\"q\":\"返品 送料\"}' && npx autocannon -j -d 10 -c 10 -p 4 -H x-perf=1 -m POST -H 'Content-Type: application/json' -b \"$BODY\" http://localhost:3000/search.v1 | tee logs/perf/$(date +%Y%m%d-%H%M%S)-v1-perf.json",
     "perf:save:v1:perf:auto": "start-server-and-test 'LOG_LEVEL=error PERF_MODE=1 pnpm dev' http://localhost:3000/health 'pnpm run perf:save:v1:perf && pnpm run perf:budget'",
     "start:prod": "node dist/index.js",
+    "test:agent:graph": "ts-node --transpile-only tests/agent/dialogGraph.smoke.ts",
+    "test:agent:sales": "ts-node --transpile-only tests/agent/salesPipeline.test.ts",
     "test:agent:planner": "ts-node --transpile-only tests/agent/queryPlanner.smoke.ts",
     "test:agent:synthesis": "ts-node --transpile-only tests/agent/synthesisTool.smoke.ts",
     "test:agent:search": "ts-node --transpile-only tests/agent/searchAgent.smoke.ts",
@@ -91,7 +93,9 @@
     "pg": "8.16.3",
     "pino": "10.1.0",
     "pino-pretty": "13.1.2",
-    "zod": "4.1.12"
+    "zod": "4.1.12",
+    "@langchain/core": "^0.3.8",
+    "@langchain/langgraph": "^0.2.35"
   },
   "devDependencies": {
     "@types/express": "5.0.5",

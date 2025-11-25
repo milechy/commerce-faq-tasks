@@ -89,6 +89,57 @@ Phase5 では、実装リポジトリ側の LangGraph ベース `/agent.dialog` 
   - rerank_ms が 0〜1ms 程度
   であることを確認しており、現状のボトルネックは LLM（Groq）側である。
 
+## Phase8: LangGraph / Multi-Agent Orchestration（/agent.dialog 強化）
+
+Phase8 では `/agent.dialog` が **LangGraph Orchestrator** ベースへ全面移行し、従来の Multi‑Step Planner に加えて次の機能が追加された：
+
+### 🧩 LangGraph 芸体系（Planner → Clarify → Search → Sales → Answer → Final）
+- **plannerNode**: Groq 20B/120B により Clarify / Propose / Recommend / Close の 4段 SalesStage を生成
+- **clarifyNode**: 不足情報のヒアリング（Clarify 質問）
+- **searchNode**: Phase3 の ES/BM25 + pgvector ハイブリッド検索 + rerank
+- **salesNode**: SalesPipeline を用いて Upsell / CTA（購入・予約意図）を判定し `salesMeta` を構築
+- **answerNode**: Answer LLM による最終応答生成（safe-mode あり）
+- **finalNode**: UI 用レスポンス構築（steps / salesMeta / plannerPlan / graphVersion）
+
+### 🧠 SalesPipeline（Upsell / CTA 検出）
+- PlannerPlan（SalesStage）とユーザー発話から **営業文脈メタ（salesMeta）** を抽出：
+  - `upsellTriggered: boolean`
+  - `ctaTriggered: boolean`
+  - `notes: string[]`（どのロジックが発火したかを可視化）
+- ルールは `SalesRules` として外部化済み（将来 Notion / DB からロード可能）
+
+### 📤 /agent.dialog のレスポンス拡張
+LangGraph モードでは次の追加メタデータが返却される：
+
+```jsonc
+{
+  "steps": [
+    { "stage": "clarify", ... },
+    { "stage": "recommend", ... },
+    { "stage": "close", "cta": "purchase" }
+  ],
+  "meta": {
+    "plannerPlan": { "steps": [...] },
+    "salesMeta": {
+      "upsellTriggered": true,
+      "ctaTriggered": true,
+      "notes": [
+        "planner:recommend-with-upsell-hint",
+        "planner:cta:purchase",
+        "heuristic:upsell-keyword-detected"
+      ]
+    },
+    "graphVersion": "langgraph-v1"
+  }
+}
+```
+
+### ✔ 安定稼働のためのテスト
+- `test:agent:graph` : LangGraph 全体の smoke test
+- `test:agent:sales` : SalesPipeline（Upsell/CTA判定）の単体テスト
+
+---
+
 ## 進め方（最小）
 1. **Issue起票**（テンプレ：`3_TASKS.md` 参照 or `5_SCRIPTS/new_task_template.sh`）
 2. **ブランチ作成**：`<type>/<slug>-<#>` 例: `feat/rag-hybrid-perf-4`
