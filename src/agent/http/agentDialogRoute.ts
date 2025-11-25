@@ -1,16 +1,16 @@
 import type { Request, Response } from "express";
 import type pino from "pino";
 import { z } from "zod";
-import {
-  GroqRateLimitError,
-  getGroqGlobalBackoffRemainingMs,
-} from "../llm/groqClient";
-import { runDialogTurn } from "../dialog/dialogAgent";
-import { runDialogGraph } from "../orchestrator/langGraphOrchestrator";
 import type {
   AgentWebhookEvent,
   WebhookNotifier,
 } from "../../integration/webhookNotifier";
+import { runDialogTurn } from "../dialog/dialogAgent";
+import {
+  GroqRateLimitError,
+  getGroqGlobalBackoffRemainingMs,
+} from "../llm/groqClient";
+import { runDialogGraph } from "../orchestrator/langGraphOrchestrator";
 
 const DialogMessageSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
@@ -39,7 +39,7 @@ type AgentDialogDeps = {
 
 export function createAgentDialogHandler(
   logger: pino.Logger,
-  deps: AgentDialogDeps = {},
+  deps: AgentDialogDeps = {}
 ) {
   const webhook = deps.webhookNotifier;
 
@@ -48,7 +48,7 @@ export function createAgentDialogHandler(
     if (!parsed.success) {
       logger.warn(
         { errors: parsed.error.format() },
-        "agent.dialog invalid request body",
+        "agent.dialog invalid request body"
       );
       res.status(400).json({
         error: "invalid_request",
@@ -75,7 +75,7 @@ export function createAgentDialogHandler(
         envMode: process.env.DIALOG_ORCHESTRATOR_MODE,
         useLangGraph,
       },
-      "agent.dialog orchestrator mode decision",
+      "agent.dialog orchestrator mode decision"
     );
 
     let langgraphError: unknown = null;
@@ -84,12 +84,12 @@ export function createAgentDialogHandler(
     try {
       if (useLangGraph) {
         try {
-          // Phase4: Groq + LangGraph ベースの新 Orchestrator 経由で処理する
+          // Phase8: Groq + LangGraph ベースの新 Orchestrator 経由で処理する
           const language = data.options?.language ?? "ja";
           const locale = language === "auto" ? "ja" : language;
           const history = (data.history ?? []).filter(
             (m): m is { role: "user" | "assistant"; content: string } =>
-              m.role === "user" || m.role === "assistant",
+              m.role === "user" || m.role === "assistant"
           );
 
           const output = await runDialogGraph({
@@ -118,8 +118,10 @@ export function createAgentDialogHandler(
               ragSearchMs: output.ragStats?.searchMs,
               ragRerankMs: output.ragStats?.rerankMs,
               ragTotalMs: output.ragStats?.totalMs,
+              salesMeta: output.salesMeta,
+              graphVersion: "langgraph-v1",
             },
-            "agent.dialog langgraph routing summary",
+            "agent.dialog langgraph routing summary"
           );
 
           // Webhook 通知（LangGraph 成功時）
@@ -138,11 +140,18 @@ export function createAgentDialogHandler(
                 groqBackoffRemainingMs: getGroqGlobalBackoffRemainingMs(),
                 ragStats: output.ragStats,
                 needsClarification: plan?.needsClarification ?? false,
+                plannerReasons: output.plannerReasons,
+                clarifyingQuestions: plan?.clarifyingQuestions ?? [],
+                salesMeta: output.salesMeta,
+                graphVersion: "langgraph-v1",
               },
             };
 
             webhook.send(event).catch((err) => {
-              logger.warn({ err }, "failed to send agent.dialog webhook (langgraph)");
+              logger.warn(
+                { err },
+                "failed to send agent.dialog webhook (langgraph)"
+              );
             });
           }
 
@@ -162,6 +171,10 @@ export function createAgentDialogHandler(
               safetyTag: output.safetyTag,
               requiresSafeMode: output.requiresSafeMode,
               ragStats: output.ragStats,
+              // Phase8: LangGraph メタ情報（後方互換を壊さない範囲で追加）
+              salesMeta: output.salesMeta,
+              plannerPlan: plan,
+              graphVersion: "langgraph-v1",
             },
           });
           return;
@@ -177,12 +190,12 @@ export function createAgentDialogHandler(
                 retryAfterMs: err.retryAfterMs,
                 status: err.status,
               },
-              "agent.dialog langgraph orchestrator hit Groq 429, falling back to local",
+              "agent.dialog langgraph orchestrator hit Groq 429, falling back to local"
             );
           } else {
             logger.error(
               { err },
-              "agent.dialog langgraph orchestrator failed, falling back to local",
+              "agent.dialog langgraph orchestrator failed, falling back to local"
             );
           }
         }
@@ -256,7 +269,7 @@ export function createAgentDialogHandler(
           groqBackoffRemainingMs,
           durationMs,
         },
-        "agent.dialog final summary",
+        "agent.dialog final summary"
       );
 
       res.json(result);
@@ -282,7 +295,7 @@ export function createAgentDialogHandler(
         deps.webhookNotifier.send(errorEvent).catch((sendErr) => {
           logger.warn(
             { err: sendErr },
-            "failed to send agent.dialog error webhook",
+            "failed to send agent.dialog error webhook"
           );
         });
       }

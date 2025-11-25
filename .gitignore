@@ -14,3 +14,4 @@ logs/perf/*
 !logs/perf/summary.md
 !logs/perf/.gitkeep
 .env.local
+commerce-faq-phase8-*.zip
