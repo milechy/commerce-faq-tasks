@@ -152,6 +152,18 @@ export interface DialogTurnResult {
   clarifyingQuestions?: string[];
 
   /**
+   * LangGraph / Sales パイプラインで生成された PlannerPlan（全体構造）。
+   * Phase9 では steps だけでなく、この plannerPlan 全体をクライアントが参照できるようにする。
+   */
+  plannerPlan?: PlannerPlan | null;
+
+  /**
+   * SalesPipeline / SalesRules による判定メタ情報。
+   * pipelineKind / upsellTriggered / ctaTriggered 等が含まれる。
+   */
+  salesMeta?: Record<string, unknown> | null;
+
+  /**
    * Agent の内部ステップログ。
    * 既存の AgentStep を再利用する。
    */
