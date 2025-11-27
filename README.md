@@ -517,8 +517,40 @@ gh issue create -R <owner>/<repo> \
 
 ## 🔍 Phase / Roadmap（概要）
 
+
 フェーズの詳細なスコープや完了条件は、`docs/` 配下で管理します。  
 README では、現在地点だけをざっくり共有します。
+
+### Phase10 → Phase11 ブリッジメモ（実装リポジトリ向け）
+
+**Phase10（完了） — Agent HTTP / E2E テスト整備**
+
+実装リポジトリ側で、以下を完了済み：
+
+- `/agent.dialog` HTTP ハンドラの整備
+  - `sessionId` の発行・再利用ロジックの安定化
+  - multi-step planner 有効時のレスポンス仕様（`answer: null` ＋ `needsClarification: true`）をテストと揃える
+- 認証まわりの整理
+  - API キー: `x-api-key` ヘッダでの認証を利用
+  - Basic 認証: `demo:pass123` でのデモ用クレデンシャルを確認（ローカル）
+- E2E テスト `/agent.dialog`（Phase10 でグリーン）
+  - `basic dialog returns answer and steps`
+  - `dialog reuses sessionId across turns`
+  - `dialog returns clarify when multi-step enabled`
+
+**Phase11（これから） — LangGraph / CrewGraph 連携と拡張**
+
+Phase11 では、Phase10 で安定化した `/agent.dialog` を土台に、以下を進める：
+
+- LangGraph / CrewGraph ベースの Orchestrator への移行・統合
+  - 既存の `langGraphOrchestrator` / `CrewOrchestrator` 実装を、Phase10 の HTTP レイヤに自然に差し込む
+  - `meta.graphVersion` や `meta.multiStepPlan` など、Phase10 時点で追加済みのメタ情報を LangGraph 側でそのまま利用
+- Planner/Orchestrator の観測性強化
+  - Clarify / Search / Answer ステップごとのメトリクス・ログ項目を追加
+  - Phase10 のテストケースをベースに、Phase11 のフロー変更に対するリグレッションテストを追加
+- 将来 Phase（12 以降）に向けた A/B / ベイズ最適化のハブとして `/agent.dialog` を位置づけ
+
+👉 詳細なタスク分解や完了条件は、Phase11 用の Issues / Projects 側で管理する（この README では概要のみ）。
 
 - Phase0–2: DB / RAG / Hybrid Search 基盤 → **完了**
 - Phase3–4: Multi-step Orchestrator + `/agent.*` API → **完了**

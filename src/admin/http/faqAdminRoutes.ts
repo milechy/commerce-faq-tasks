@@ -1,5 +1,6 @@
 // src/admin/http/faqAdminRoutes.ts
 import express, { type Express, type Request, type Response } from "express";
+// @ts-ignore - pg has no bundled type declarations in this project
 import { Pool } from "pg";
 import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { supabaseAuthMiddleware } from "./supabaseAuthMiddleware";
