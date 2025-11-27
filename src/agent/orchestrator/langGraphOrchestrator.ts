@@ -13,6 +13,9 @@ import {
   routePlannerModelV2,
 } from "../llm/modelRouter";
 
+import { runSalesPipeline } from "./sales/salesPipeline";
+import { resolveSalesPipelineKind } from "./sales/pipelines/pipelineFactory";
+
 /**
  * /agent.dialog の入力ペイロードのサマリ型。
  * 実際には既存のハンドラの型に合わせて拡張してください。
@@ -63,10 +66,11 @@ export interface DialogOutput {
     totalMs?: number;
   };
   /**
-   * SalesNode / CTA 検出などの LangGraph メタ。
-   * Phase8 では簡易フラグのみ。
+   * SalesPipeline / SalesRules ベースの営業メタ情報。
+   * Phase9 では pipelineKind / upsellTriggered / ctaTriggered / notes などを含む。
    */
   salesMeta?: {
+    pipelineKind?: "generic" | "saas" | "ec" | "reservation";
     upsellTriggered?: boolean;
     ctaTriggered?: boolean;
     notes?: string[];
@@ -88,6 +92,7 @@ const DialogStateAnnotation = Annotation.Root({
   finalText: Annotation<string | undefined>(),
   salesMeta: Annotation<
     | {
+        pipelineKind?: "generic" | "saas" | "ec" | "reservation";
         upsellTriggered?: boolean;
         ctaTriggered?: boolean;
         notes?: string[];
@@ -370,15 +375,24 @@ async function contextBuilderNode(
     requiresSafeMode,
   };
 
+  const pipelineKind = resolveSalesPipelineKind({
+    explicitKind: undefined,
+    tenantId: initialInput.tenantId,
+  });
+
   return {
     input: initialInput,
     ragContext,
     routeContext,
     salesMeta: {
+      pipelineKind,
       upsellTriggered: false,
       ctaTriggered: false,
       notes: [],
     },
+    plannerDecision: undefined,
+    plannerSteps: undefined,
+    finalText: undefined,
   };
 }
 
@@ -522,111 +536,30 @@ async function searchNode(state: DialogGraphState): Promise<DialogGraphState> {
  * - Phase8 ではルールベースのみ（将来 LLM ベースの SalesAgent に差し替え予定）。
  */
 async function salesNode(state: DialogGraphState): Promise<DialogGraphState> {
-  const plan = state.plannerSteps;
-
-  // --- 1) PlannerPlan ベースの検出 ---
-  let upsellByPlan = false;
-  let ctaByPlan = false;
-  const planNotes: string[] = [];
-
-  if (plan && Array.isArray(plan.steps)) {
-    for (const step of plan.steps) {
-      const title = (step as any).title ?? "";
-      const description = (step as any).description ?? "";
-      const textForStep = `${title} ${description}`.toLowerCase();
-      const stage = (step as any).stage;
-
-      // Recommend フェーズで「上位プラン」っぽい表現や productIds があればアップセルの可能性あり
-      if (stage === "recommend") {
-        const premiumHints = [
-          "上位",
-          "プレミアム",
-          "ハイグレード",
-          "高いプラン",
-          "upgrade",
-          "higher",
-          "premium",
-        ];
-        const hasPremiumHint = premiumHints.some((k) =>
-          textForStep.includes(k.toLowerCase())
-        );
-        const hasProducts =
-          Array.isArray((step as any).productIds) &&
-          (step as any).productIds.length > 0;
-
-        if (hasPremiumHint || hasProducts) {
-          upsellByPlan = true;
-          planNotes.push("planner:recommend-with-upsell-hint");
-        }
-      }
-
-      // Close フェーズで cta が明示されていれば CTA トリガー
-      if (stage === "close" && (step as any).cta) {
-        ctaByPlan = true;
-        planNotes.push(`planner:cta:${String((step as any).cta)}`);
-      }
-    }
-  }
-
-  // --- 2) ヒューリスティック（ユーザーテキストベース）の検出 ---
-  const text = [
-    state.input.userMessage,
-    ...(state.input.history ?? []).map((m) => m.content),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  const upsellKeywords = [
-    "おすすめ",
-    "他に",
-    "似た",
-    "おすすめの商品",
-    "upgrade",
-    "higher plan",
-  ];
-  const ctaKeywords = [
-    "購入",
-    "買いたい",
-    "予約",
-    "申し込み",
-    "order",
-    "buy",
-    "checkout",
-  ];
-
-  const upsellByHeuristic = upsellKeywords.some((k) =>
-    text.includes(k.toLowerCase())
-  );
-  const ctaByHeuristic = ctaKeywords.some((k) =>
-    text.includes(k.toLowerCase())
-  );
-
-  const heuristicNotes: string[] = [];
-  if (upsellByHeuristic)
-    heuristicNotes.push("heuristic:upsell-keyword-detected");
-  if (ctaByHeuristic) heuristicNotes.push("heuristic:cta-keyword-detected");
-
-  // --- 3) 既存の salesMeta とマージ ---
-  const prevMeta = state.salesMeta ?? {
-    upsellTriggered: false,
-    ctaTriggered: false,
-    notes: [],
+  // SalesDetectionContext は SalesPipeline 側で定義されているが、
+  // ここでは型に依存しない形で必要なフィールドだけ組み立てる。
+  const detectionContext = {
+    userMessage: state.input.userMessage,
+    history: state.input.history,
+    plan: state.plannerSteps,
   };
 
-  const upsellTriggered =
-    prevMeta.upsellTriggered || upsellByPlan || upsellByHeuristic;
-  const ctaTriggered = prevMeta.ctaTriggered || ctaByPlan || ctaByHeuristic;
+  const prevMeta = state.salesMeta;
 
-  const allNotes = [...(prevMeta.notes ?? []), ...planNotes, ...heuristicNotes];
-  const dedupedNotes = Array.from(new Set(allNotes));
+  // すでに pipelineKind が入っていればそれを優先し、無ければ tenant 情報から推定する。
+  const pipelineKind = resolveSalesPipelineKind({
+    explicitKind: prevMeta?.pipelineKind,
+    tenantId: state.input.tenantId,
+  });
+
+  const nextMeta = runSalesPipeline(detectionContext, prevMeta, {
+    tenantId: state.input.tenantId,
+    pipelineKind,
+  });
 
   return {
     ...state,
-    salesMeta: {
-      upsellTriggered,
-      ctaTriggered,
-      notes: dedupedNotes,
-    },
+    salesMeta: nextMeta,
   };
 }
 /**

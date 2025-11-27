@@ -2,7 +2,7 @@
 
 import { hybridSearch, type Hit } from '../../search/hybrid';
 import { searchPgVector } from '../../search/pgvector';
-import { embedText } from '../llm/groqClient';
+const { embedText } = require("../llm/groqClient") as any;
 
 export interface SearchToolInput {
   query: string;
