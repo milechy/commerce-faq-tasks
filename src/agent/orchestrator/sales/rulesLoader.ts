@@ -26,7 +26,14 @@ export type SalesRulesLoadOptions = {
  * - Phase9 の段階では、まだ default を返すシンプル実装のみを用意します。
  */
 export interface SalesRulesLoader {
-  load(options?: SalesRulesLoadOptions): Promise<SalesRules>;
+  /**
+   * すべてのテナントの SalesRules をロードする。
+   *
+   * キー:
+   *  - "default" : デフォルトテナント
+   *  - その他     : 具体的な tenantId
+   */
+  loadAll(): Promise<Record<string, SalesRules>>;
 }
 
 /**
@@ -35,8 +42,8 @@ export interface SalesRulesLoader {
  * - tests やローカル開発で特に設定しなくても動くようにするための実装です。
  */
 export class DefaultSalesRulesLoader implements SalesRulesLoader {
-  async load(): Promise<SalesRules> {
-    return defaultSalesRules;
+  async loadAll(): Promise<Record<string, SalesRules>> {
+    return { default: defaultSalesRules };
   }
 }
 
@@ -52,14 +59,21 @@ export class DefaultSalesRulesLoader implements SalesRulesLoader {
  */
 export async function initSalesRulesProviderFromLoader(
   loader: SalesRulesLoader,
-  options?: SalesRulesLoadOptions,
 ): Promise<SalesRules> {
-  const rules = await loader.load(options);
+  const allRules = await loader.loadAll();
 
-  const provider: SalesRulesProvider = () => rules;
+  const provider: SalesRulesProvider = (opts?: SalesRulesLoadOptions) => {
+    const tenantId = opts?.tenantId;
+    if (tenantId && allRules[tenantId]) {
+      return allRules[tenantId];
+    }
+    return allRules["default"] ?? defaultSalesRules;
+  };
+
   setSalesRulesProvider(provider);
 
-  return rules;
+  // 呼び出し側には「デフォルトとして利用されるルール」を返す
+  return allRules["default"] ?? defaultSalesRules;
 }
 
 /**

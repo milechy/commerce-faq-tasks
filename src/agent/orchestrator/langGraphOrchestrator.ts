@@ -390,6 +390,9 @@ async function contextBuilderNode(
       ctaTriggered: false,
       notes: [],
     },
+    plannerDecision: undefined,
+    plannerSteps: undefined,
+    finalText: undefined,
   };
 }
 
