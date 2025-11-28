@@ -4,6 +4,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import pino from "pino";
 
 import { PlannerPlan } from "../dialog/types";
+import { buildRuleBasedPlan } from "../flow/ruleBasedPlanner";
 import { runSearchAgent } from "../flow/searchAgent";
 import { callGroqWith429Retry } from "../llm/groqClient";
 import {
@@ -130,6 +131,14 @@ type RagContext = {
 async function runInitialRagRetrieval(
   initialInput: DialogInput
 ): Promise<RagContext> {
+  logger.info(
+    {
+      tenantId: initialInput.tenantId,
+      locale: initialInput.locale,
+      preview: initialInput.userMessage.slice(0, 120),
+    },
+    "dialog.rag.start",
+  );
   // Phase5: /agent.search と同じハイブリッド + 再ランクパイプラインを再利用するために、
   // runSearchAgent を呼び出して RAG コンテキストを構築する。
   const searchResponse = await runSearchAgent({
@@ -187,6 +196,18 @@ async function runInitialRagRetrieval(
       ? (searchMs ?? 0) + (rerankMs ?? 0)
       : undefined;
 
+  logger.info(
+    {
+      tenantId: initialInput.tenantId,
+      locale: initialInput.locale,
+      documents: documents.length,
+      searchMs,
+      rerankMs,
+      rerankEngine,
+      totalMs,
+    },
+    "dialog.rag.finished",
+  );
   return {
     documents,
     // Phase3 の hybridSearch には recall 指標がない前提で null とする。
@@ -380,6 +401,19 @@ async function contextBuilderNode(
     tenantId: initialInput.tenantId,
   });
 
+  logger.debug(
+    {
+      tenantId: initialInput.tenantId,
+      locale: initialInput.locale,
+      depth,
+      tokens,
+      complexity,
+      intentHint,
+      requiresSafeMode,
+      pipelineKind,
+    },
+    "dialog.context.built",
+  );
   return {
     input: initialInput,
     ragContext,
@@ -418,8 +452,48 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
       },
     };
   }
+  // Phase11: Rule-based Planner のフックを先に用意しておく。
+  // 現時点では buildRuleBasedPlan は常に null を返すため挙動に変化はないが、
+  // Phase12 以降で shipping / returns などの定型意図については LLM Planner を
+  // 呼ばずにここで PlannerPlan を構築する予定。
+  const intentHint = detectIntentHint(state.input);
+  if (!state.routeContext.requiresSafeMode && intentHint !== "general") {
+    const rulePlan = buildRuleBasedPlan(state.input, intentHint);
+    if (rulePlan) {
+      const decision: PlannerRoutingDecision = {
+        route: "20b",
+        reasons: [`rule-based:${intentHint}`],
+        used120bCount: 0,
+      };
+      logger.info(
+        {
+          intentHint,
+          route: decision.route,
+          reasons: decision.reasons,
+        },
+        "dialog.planner.rule-based",
+      );
+      return {
+        ...state,
+        plannerDecision: decision,
+        plannerSteps: rulePlan,
+        routeContext: {
+          ...state.routeContext,
+          used120bCount: decision.used120bCount,
+        },
+      };
+    }
+  }
   // まずは既存の V2 ルーターにルーティングさせる
   const baseDecision = routePlannerModelV2(state.routeContext);
+  logger.info(
+    {
+      routeContext: state.routeContext,
+      baseRoute: baseDecision.route,
+      baseReasons: baseDecision.reasons,
+    },
+    "dialog.planner.route.base",
+  );
 
   const ctx = state.routeContext;
   let decision = baseDecision;
@@ -471,11 +545,28 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
     void extraReasons;
   }
 
+  logger.info(
+    {
+      finalRoute: decision.route,
+      finalReasons: decision.reasons,
+    },
+    "dialog.planner.route.final",
+  );
   const plannerSteps = await callPlannerLLM(decision.route, {
     input: state.input,
     ragContext: state.ragContext,
   });
 
+  logger.debug(
+    {
+      route: decision.route,
+      stepCount: Array.isArray(plannerSteps?.steps)
+        ? plannerSteps.steps.length
+        : 0,
+      needsClarification: plannerSteps?.needsClarification ?? false,
+    },
+    "dialog.planner.plan",
+  );
   return {
     ...state,
     plannerDecision: decision,
@@ -502,6 +593,12 @@ async function clarifyNode(state: DialogGraphState): Promise<DialogGraphState> {
   }
 
   if (plan && plan.needsClarification && plan.clarifyingQuestions?.length) {
+    logger.info(
+      {
+        questions: plan.clarifyingQuestions,
+      },
+      "dialog.clarify.emit",
+    );
     const clarificationText = plan.clarifyingQuestions.join("\n");
 
     return {
@@ -557,6 +654,15 @@ async function salesNode(state: DialogGraphState): Promise<DialogGraphState> {
     pipelineKind,
   });
 
+  logger.debug(
+    {
+      tenantId: state.input.tenantId,
+      pipelineKind: nextMeta.pipelineKind,
+      upsellTriggered: nextMeta.upsellTriggered,
+      ctaTriggered: nextMeta.ctaTriggered,
+    },
+    "dialog.sales.meta",
+  );
   return {
     ...state,
     salesMeta: nextMeta,
@@ -648,6 +754,15 @@ async function answerNode(state: DialogGraphState): Promise<DialogGraphState> {
 
   const route: PlannerRoute = state.plannerDecision?.route ?? "20b"; // 念のためデフォルト 20B
 
+  logger.info(
+    {
+      route,
+      safeMode: state.routeContext.requiresSafeMode,
+      hasPlan: !!plan,
+      hasRagContext: !!state.ragContext,
+    },
+    "dialog.answer.call",
+  );
   const answerText = await callAnswerLLM(route, {
     input: state.input,
     ragContext: state.ragContext,
@@ -667,6 +782,15 @@ async function answerNode(state: DialogGraphState): Promise<DialogGraphState> {
 export async function runDialogGraph(
   input: DialogInput
 ): Promise<DialogOutput> {
+  logger.info(
+    {
+      tenantId: input.tenantId,
+      locale: input.locale,
+      conversationId: input.conversationId,
+      preview: input.userMessage.slice(0, 120),
+    },
+    "dialog.run.start",
+  );
   // 0. 長期対話向けの履歴サマリ圧縮
   const summarizedInput = await summarizeHistoryIfNeeded(input);
 
@@ -677,6 +801,13 @@ export async function runDialogGraph(
   //     既存の fast-path で Answer まで一気に生成
   const fastDecision = routePlannerModelV2(initialState.routeContext);
   if (shouldUseFastAnswer(summarizedInput, initialState.routeContext)) {
+    logger.info(
+      {
+        route: fastDecision.route,
+        reasons: fastDecision.reasons,
+      },
+      "dialog.run.fast-path",
+    );
     const fastState: DialogGraphState = {
       ...initialState,
       plannerDecision: fastDecision,
@@ -685,6 +816,12 @@ export async function runDialogGraph(
     const answered = await answerNode(fastState);
 
     if (!answered.finalText) {
+      logger.warn(
+        {
+          route: fastDecision.route,
+        },
+        "dialog.run.fast-path.no-final-text",
+      );
       return {
         text: "現在うまくお応えできません。しばらくしてからお試しください。",
         route: fastDecision.route,
@@ -716,6 +853,10 @@ export async function runDialogGraph(
   const finalState = await dialogGraph.invoke(initialState);
 
   if (!finalState.finalText || !finalState.plannerDecision) {
+    logger.warn(
+      {},
+      "dialog.run.no-final-text-or-decision",
+    );
     // 何かがおかしい場合のフォールバック
     return {
       text: "現在うまくお応えできません。しばらくしてからお試しください。",
@@ -729,6 +870,15 @@ export async function runDialogGraph(
     };
   }
 
+  logger.info(
+    {
+      route: finalState.plannerDecision.route,
+      reasons: finalState.plannerDecision.reasons,
+      safetyTag: finalState.routeContext.safetyTag,
+      requiresSafeMode: finalState.routeContext.requiresSafeMode,
+    },
+    "dialog.run.success",
+  );
   return {
     text: finalState.finalText,
     route: finalState.plannerDecision.route,
@@ -1202,6 +1352,7 @@ async function callAnswerLLM(
 
   const maxTokens = payload.safeMode ? 320 : 256;
 
+  const start = Date.now();
   const raw = await callGroqWith429Retry(
     {
       model,
@@ -1223,6 +1374,17 @@ async function callAnswerLLM(
     {
       logger,
     }
+  );
+  const latencyMs = Date.now() - start;
+
+  logger.info(
+    {
+      route,
+      model,
+      safeMode: !!payload.safeMode,
+      latencyMs,
+    },
+    "dialog.answer.finished",
   );
 
   return raw;

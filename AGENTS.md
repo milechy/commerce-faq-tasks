@@ -9,6 +9,34 @@
 このリポジトリは **Issues + Labels + PRの自動クローズ** だけで運用します。GitHub Projects 連携や Action に依存しません。
 
 ---
+## 10. Phase11 — Dialog Runtime / Crew Orchestrator / Planner 軽量化フック
+
+Phase11 では、Phase4 で導入した Orchestrator 群に対して「実行経路の安定化」と「パフォーマンス計測」の役割を明確にした。
+
+### ● AgentDialogOrchestrator
+- `/agent.dialog` 専用のアプリケーション層 Orchestrator
+- HTTP Request/Response に依存せず、`DialogTurnInput → DialogAgentResponse` を構築
+- CrewOrchestrator / LangGraphOrchestrator に対する単一の呼び出し窓口
+- ログ: `agent.dialog.orchestrator.response` として `route / graphVersion / needsClarification / hasPlannerPlan / hasKpiFunnel / kpiFunnelStage` を出力
+
+### ● Crew Orchestrator / CrewGraph
+- Input / Planner / Kpi / Final ノードを制御する CrewGraph の実行を担当
+- PlannerNode を LangGraph runtime 呼び出しに限定し、CrewGraph と LangGraph の責務境界を明確化
+- テスト: `test:agent:crew:once` で linear flow を保証
+
+### ● Rule-based Planner（Skeleton）
+- `buildRuleBasedPlan(input, intent)` を通じて、shipping / returns / payment / product-info などの典型 FAQ を将来的にルールベースで扱うためのフック
+- Phase11 時点では常に `null` を返し、挙動は LLM Planner にフォールバックさせる
+- 今後、Planner Agent の負荷軽減・p95 改善のために実装を追加予定
+
+### ● Metrics / Perf Agent（ログ解析ツール）
+- `SCRIPTS/analyze-agent-logs.ts` により、pino ログから次のレイテンシ指標を集計:
+  - RAG: `dialog.rag.finished.totalMs`
+  - Planner: `tag="planner".latencyMs`
+  - Answer: `dialog.answer.finished.latencyMs`
+- 役割:
+  - RAG / Planner / Answer のどこがボトルネックかを可視化
+  - 「Planner をどこまで Rule-based に寄せるか」の意思決定材料を提供
 ## Label Scheme
 - **status:** `status:todo`, `status:in-progress`, `status:review`, `status:qa`, `status:done`
 - **prio:** `prio:high`, `prio:medium`, `prio:low`
