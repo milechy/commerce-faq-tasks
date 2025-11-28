@@ -1,5 +1,10 @@
 // src/agent/http/agentDialogRoute.test.ts
 
+import "dotenv/config";
+
+// Ensure test mode for Groq/OpenAI clients
+process.env.NODE_ENV = process.env.NODE_ENV ?? "test";
+
 import { strict as assert } from "assert";
 import pino from "pino";
 import { createAgentDialogHandler } from "./agentDialogRoute";
