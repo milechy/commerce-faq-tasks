@@ -1,5 +1,7 @@
 // src/agent/crew/CrewAgent.ts
 
+import type { DialogAgentMeta } from "../dialog/types";
+
 export type CrewAgentInput = {
   message: string;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
@@ -9,7 +11,7 @@ export type CrewAgentInput = {
 export type CrewAgentOutput = {
   text: string;
   reasoning?: string;
-  meta?: any;
+  meta?: DialogAgentMeta;
 };
 
 export class CrewAgent {

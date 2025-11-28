@@ -75,8 +75,14 @@ export function planQuery(input: string, options: PlanOptions = {}): QueryPlan {
 
 /**
  * 日本語の自然文から余計な語尾や記号を取り除いて検索クエリにする。
+ * ランタイム安全性のため、q が string 以外の場合は空文字を返す。
  */
 function normalizeQuestion(q: string, locale: 'ja' | 'en' | 'auto'): string {
+  if (typeof q !== 'string') {
+    // 想定外ケースだが、例外は投げず安全側で空文字を返す。
+    return ''
+  }
+
   let s = q.trim().replace(/\s+/g, ' ')
 
   // 末尾の ? / ？ をざっくり削る
