@@ -42,3 +42,9 @@
 ## 監視/KPI
 - p95/p99, 成功率, tokens_in/out, CTR, 再購率, 粗利率, 根拠提示率
 - アラート例：p95>1.8s(5分), 120B比率>15%, Error>1%
+- `/agent.dialog` については、1ターンごとに pino ログで以下を記録すること:
+  - `dialog.rag.finished`: `totalMs`, `searchMs`, `rerankMs`
+  - `tag: "planner"`: Planner LLM の `latencyMs`
+  - `dialog.answer.finished`: Answer LLM の `latencyMs`
+  - `agent.dialog.orchestrator.response`: `route`, `graphVersion`, `needsClarification`, `final`, `hasPlannerPlan`, `hasKpiFunnel`, `kpiFunnelStage`
+- `SCRIPTS/analyze-agent-logs.ts` 等のツールで、これらログから RAG / Planner / Answer の p50 / p95 をオフライン集計できること（p95 ≤ 1.5s を満たしているかを定期チェック）

@@ -1,3 +1,5 @@
+import pino from "pino";
+const logger = pino();
 import type { CrewAgentInput, CrewAgentOutput } from "./CrewAgent";
 import type { DialogAgentMeta } from "../dialog/types";
 import { computeKpiFunnelFromPlan } from "../orchestrator/sales/kpiFunnel";
@@ -18,6 +20,15 @@ export class CrewOrchestrator {
   };
 
   async run(input: CrewAgentInput): Promise<CrewAgentOutput> {
+    logger.info(
+      {
+        messagePreview: input.message.slice(0, 120),
+        sessionId: input.context?.sessionId,
+        locale: input.context?.locale,
+        tenantId: input.context?.tenantId,
+      },
+      "crew.run.start",
+    );
     const initialState: CrewGraphState = {
       phase: "input",
       input: {
@@ -56,6 +67,18 @@ export class CrewOrchestrator {
       ...finalState.meta,
       kpiFunnel,
     };
+
+    logger.info(
+      {
+        graphId: this.graph.id,
+        phase: finalState.phase,
+        hasPlannerPlan: !!finalState.plannerPlan,
+        hasDialogResponse: !!finalState.dialogResponse,
+        route: meta.route,
+        graphVersion: meta.graphVersion,
+      },
+      "crew.run.finished",
+    );
 
     const answer =
       finalState.dialogResponse?.answer ?? finalState.answerText ?? "";
