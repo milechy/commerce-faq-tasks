@@ -19,4 +19,7 @@ commerce-faq-phase8-*.zip
 commerce-faq-phase7-minimal/**/*.js
 phase10-base.zip
 node
+commerce-faq-tasks@0.1.0commerce-faq-phase7-minimal/
+logs/
+*.zip
 commerce-faq-tasks@0.1.0
