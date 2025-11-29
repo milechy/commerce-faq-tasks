@@ -521,6 +521,16 @@ gh issue create -R <owner>/<repo> \
 フェーズの詳細なスコープや完了条件は、`docs/` 配下で管理します。  
 README では、現在地点だけをざっくり共有します。
 
+### Phase12 — Planner軽量化 / Fast-path / p95計測
+
+Phase12 では `/agent.dialog` の Planner 軽量化と p95 計測ループを整備しています。詳細は以下のドキュメントを参照してください。
+
+- `docs/PHASE12_SUMMARY.md`
+- `docs/PLANNER_RULE_BASED.md`
+- `docs/FAST_PATH_LOGIC.md`
+- `docs/LOGGING_SCHEMA.md`
+- `docs/P95_METRICS.md`
+
 ### Phase10 → Phase11 ブリッジメモ（実装リポジトリ向け）
 
 **Phase10（完了） — Agent HTTP / E2E テスト整備**
