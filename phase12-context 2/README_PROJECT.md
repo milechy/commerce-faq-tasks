@@ -168,17 +168,6 @@ Phase11 では `/agent.dialog` の **実行基盤の安定化と計測まわり*
 - `plannerNode` 内で intent ヒント（shipping / returns / payment / product-info / general）を元に Rule-based Planner を呼び出すフックを実装
 - 将来 Phase12 以降で shipping / returns などの定型問い合わせを Rule-based Planner に寄せることで、Planner LLM 呼び出し頻度を下げて p95 を削減できる構造を用意
 
-## Phase12: Planner 軽量化 / Fast-path / p95 計測
-
-Phase12 では、Phase11 で用意していた Rule-based Planner フックとログ基盤を活用し、次を実施した。
-
-- shipping / returns / product-info 向けの Rule-based Planner を実装し、missing 判定 → Clarify → fallback のルールを確定
-- simple な general FAQ 向けに Fast-path を導入し、Planner LLM をスキップして RAG→Answer のみで応答
-- `/agent.dialog` ログから RAG / Planner / Answer の p50/p95 を集計する `SCRIPTS/analyze-agent-logs.ts` を整備
-- Planner LLM 呼び出し頻度を 5〜10% 程度に抑える構造を確認
-
-詳細仕様は、実装リポジトリ側の `docs/PHASE12_SUMMARY.md` を参照。
-
 
 ## 進め方（最小）
 1. **Issue起票**（テンプレ：`3_TASKS.md` 参照 or `5_SCRIPTS/new_task_template.sh`）

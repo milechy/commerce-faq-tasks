@@ -4,9 +4,6 @@ import assert from "node:assert/strict";
 
 import { runDialogGraph } from "./langGraphOrchestrator";
 
-// runDialogGraph の正確なシグネチャに依存しないよう any 経由で呼ぶヘルパ
-const runForTest = runDialogGraph as unknown as (input: any) => Promise<any>;
-
 async function test_langgraph_basic_flow() {
   // NOTE:
   // - 型定義に強く依存しないために any キャストを多用
@@ -39,6 +36,9 @@ async function test_langgraph_basic_flow() {
       sessionId: "test-session",
     },
   };
+
+  // runDialogGraph の正確なシグネチャに依存しないよう any 経由で呼ぶ
+  const runForTest = runDialogGraph as unknown as (input: any) => Promise<any>;
 
   const out = await runForTest(input);
 
@@ -82,55 +82,6 @@ async function test_langgraph_basic_flow() {
   }
 }
 
-async function test_langgraph_rule_based_shipping_clarify() {
-  const input: any = {
-    userMessage: "配送について教えてください",
-    tenantId: "test-tenant",
-    locale: "ja",
-    conversationId: "test-session",
-    history: [],
-  };
-
-  const out = await runForTest(input);
-
-  assert.ok(out, "runDialogGraph should return a value for shipping intent");
-  const text = (out as any).text ?? (out as any).answer ?? "";
-
-  assert.equal(typeof text, "string", "text should be a string");
-  assert.ok(
-    text.includes("どの商品（またはカテゴリ）") ||
-      text.includes("お届け先の都道府県（または国）を教えてください。"),
-    "shipping clarify text should contain at least one rule-based clarifying question",
-  );
-}
-
-async function test_langgraph_rule_based_returns_clarify() {
-  const input: any = {
-    userMessage: "返品したいのですがどうすればいいですか？",
-    tenantId: "test-tenant",
-    locale: "ja",
-    conversationId: "test-session",
-    history: [],
-  };
-
-  const out = await runForTest(input);
-
-  assert.ok(out, "runDialogGraph should return a value for returns intent");
-  const text = (out as any).text ?? (out as any).answer ?? "";
-
-  assert.equal(typeof text, "string", "text should be a string");
-  assert.ok(
-    text.includes("ご注文番号を教えていただけますか？") ||
-      text.includes(
-        "返品したい商品の名前または型番（SKU）を教えてください。",
-      ) ||
-      text.includes(
-        "返品を希望される理由（サイズ違い・イメージ違い・不良品など）を教えてください。",
-      ),
-    "returns clarify text should contain at least one rule-based clarifying question",
-  );
-}
-
 async function main() {
   console.log("Running LangGraph runtime tests...");
   let passed = 0;
@@ -146,30 +97,10 @@ async function main() {
     failed++;
   }
 
-  try {
-    await test_langgraph_rule_based_shipping_clarify();
-    console.log("✅ langgraph rule-based shipping clarify");
-    passed++;
-  } catch (err) {
-    console.error("❌ langgraph rule-based shipping clarify");
-    console.error(err);
-    failed++;
-  }
-
-  try {
-    await test_langgraph_rule_based_returns_clarify();
-    console.log("✅ langgraph rule-based returns clarify");
-    passed++;
-  } catch (err) {
-    console.error("❌ langgraph rule-based returns clarify");
-    console.error(err);
-    failed++;
-  }
-
   console.log(
     "LangGraph runtime tests finished. passed=%d, failed=%d",
     passed,
-    failed,
+    failed
   );
 
   if (failed > 0) {

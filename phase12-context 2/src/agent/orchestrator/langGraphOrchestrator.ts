@@ -891,14 +891,13 @@ export async function runDialogGraph(
   };
 }
 /**
- * シンプルな follow-up （例: Clarify に答えた 2 ターン目など）や、
- * 支払い方法のような定型 FAQ では Planner LLM をスキップして
- * Answer だけを実行するためのヒューリスティック。
+ * シンプルな follow-up （例: Clarify に答えた 2 ターン目など）では、
+ * Planner LLM をスキップして Answer だけを実行するためのヒューリスティック。
  *
  * - safety フラグが立っている場合は常に Planner 経由にする
- * - shipping / returns / product-info は follow-up（history がある場合）のみ fast-path を許可
- * - payment は初回メッセージでも、ある程度長さがあれば fast-path を許可
- * - general のうち「簡単な店舗情報 / 問い合わせ FAQ」は fast-path を許可
+ * - history がまったく無い初回メッセージでは使わない
+ * - shipping / returns / payment / product-info などの典型的なコマース系意図で、
+ *   現在メッセージが十分に具体的（文字数がある程度長い）な場合に fast-path を有効にする
  */
 function shouldUseFastAnswer(
   input: DialogInput,
@@ -908,159 +907,20 @@ function shouldUseFastAnswer(
     return false;
   }
 
-  const intent = detectIntentHint(input);
-  const text = (input.userMessage || "").toLowerCase();
-  const isClarifyFollowup = looksLikeClarifyFollowup(input);
   const depth = input.history?.length ?? 0;
-
-  // general のうち「簡単な店舗情報 / お問い合わせ FAQ」だけ fast-path を許可
-  if (intent === "general") {
-    if (isSimpleGeneralFaq(input, routeContext)) {
-      return true;
-    }
-    return false;
-  }
-
-  const fastIntents = ["shipping", "returns", "payment", "product-info"];
-  if (!fastIntents.includes(intent)) {
-    return false;
-  }
-
-  // payment は「支払い方法を教えてください」のような 1 ターン質問が多いため、
-  // 初回メッセージでもある程度の長さがあれば fast-path を許可する。
-  if (intent === "payment") {
-    const minLengthForPayment = 8;
-    if (text.length < minLengthForPayment) {
-      return false;
-    }
-    return true;
-  }
-
-  // shipping / returns / product-info は follow-up（history > 0）のみ fast-path 対象。
   if (depth === 0) {
     return false;
   }
 
-  // Clarify のフォローアップ（2 ターン目）では、やや短めの応答でも fast-path を許可する。
-  const minLength = isClarifyFollowup ? 8 : 15;
-  if (text.length < minLength) {
+  const text = (input.userMessage || "").toLowerCase();
+  if (text.length < 15) {
     return false;
   }
 
-  return true;
-}
+  const intent = detectIntentHint(input);
+  const fastIntents = ["shipping", "returns", "payment", "product-info"];
 
-/**
- * general intent のうち、簡単な店舗情報 / お問い合わせ FAQ かどうかを判定するヘルパー
- */
-function isSimpleGeneralFaq(
-  input: DialogInput,
-  routeContext: RouteContextV2,
-): boolean {
-  const text = [
-    input.userMessage,
-    ...(input.history ?? []).map((m) => m.content),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  // 会話が深かったり、complexity が high の場合は Planner に任せる
-  if (routeContext.conversationDepth > 1) return false;
-  if (routeContext.complexity === "high") return false;
-
-  // 長すぎる質問はノウハウ相談の可能性が高いので除外（ざっくり）
-  if (text.length > 60) return false;
-
-  // 「簡単な店舗情報 / お問い合わせ」系のキーワード
-  const faqKeywords = [
-    "営業時間",
-    "何時から",
-    "何時まで",
-    "定休日",
-    "休業日",
-    "営業日",
-    "店舗",
-    "ショップ",
-    "お店",
-    "場所",
-    "住所",
-    "アクセス",
-    "行き方",
-    "電話番号",
-    "問い合わせ先",
-    "お問い合わせ",
-    "連絡先",
-    "サポート",
-    "カスタマーサポート",
-  ];
-
-  if (!faqKeywords.some((k) => text.includes(k.toLowerCase()))) {
-    return false;
-  }
-
-  // ノウハウ / 戦略的な相談っぽいマーカーが入っていたら Planner に回す
-  const complexMarkers = [
-    "コツ",
-    "やり方",
-    "方法",
-    "テクニック",
-    "戦略",
-    "比較",
-    "どれがいい",
-    "どれが良い",
-    "おすすめ",
-    "最適",
-    "一番",
-    "お得",
-    "安く",
-    "なるべく",
-  ];
-  if (complexMarkers.some((k) => text.includes(k.toLowerCase()))) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * 直前のアシスタント発話が Rule-based Clarify 質問であるかどうかを判定する簡易ヘルパー。
- * shipping / returns 用の代表的な Clarify 質問文にマッチした場合は、
- * 「Clarify に答えた 2 ターン目」である可能性が高いとみなす。
- */
-function looksLikeClarifyFollowup(input: DialogInput): boolean {
-  const history = input.history ?? [];
-  if (!history.length) {
-    return false;
-  }
-
-  const lastAssistant = [...history].reverse().find(
-    (m) => m.role === "assistant",
-  );
-  if (!lastAssistant) {
-    return false;
-  }
-
-  const t = lastAssistant.content;
-
-  const clarifyPhrases = [
-    // shipping 用 Clarify 質問
-    "どの商品（またはカテゴリ）についての配送・送料を知りたいですか？",
-    "お届け先の都道府県（または国）を教えてください。",
-    // returns 用 Clarify 質問
-    "ご注文番号を教えていただけますか？",
-    "返品したい商品の名前または型番（SKU）を教えてください。",
-    "返品を希望される理由（サイズ違い・イメージ違い・不良品など）を教えてください。",
-    // returns 向けの一問多投スタイルのバリエーション
-    "ご注文番号、購入日、商品の状態、返品理由を教えていただけますか？",
-    "購入日を教えてください。",
-    "商品の状態はどうですか？",
-    "返品理由を教えてください。",
-    // product-info 用 Clarify 質問
-    "どの商品についてのご質問でしょうか？（商品名や型番などを教えてください）",
-    "どのような点について知りたいですか？（サイズ感・色・在庫状況・素材など）",
-  ];
-
-  return clarifyPhrases.some((phrase) => t.includes(phrase));
+  return fastIntents.includes(intent);
 }
 
 /**
@@ -1351,10 +1211,8 @@ async function callPlannerLLM(
       route,
       model,
       preview: prompt.slice(0, 400),
-      conversationId: payload.input.conversationId,
-      userMessagePreview: payload.input.userMessage.slice(0, 120),
     },
-    "planner.prompt",
+    "planner.prompt"
   );
 
   const raw = await callGroqWith429Retry(

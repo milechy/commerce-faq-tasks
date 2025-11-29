@@ -56,6 +56,34 @@ async function main() {
   const plannerLatencies: number[] = [];
   const answerLatencies: number[] = [];
 
+  // Phase12 planner metrics
+  type PlannerMetrics = {
+    totalDialogs: number;
+    ruleBasedCount: number;
+    ruleBasedByIntent: Record<string, number>;
+    plannerLlmCount: number;
+    plannerLlmByRoute: Record<string, number>;
+    fastPathCount: number;
+  };
+
+  const plannerMetrics: PlannerMetrics = {
+    totalDialogs: 0,
+    ruleBasedCount: 0,
+    ruleBasedByIntent: {},
+    plannerLlmCount: 0,
+    plannerLlmByRoute: {},
+    fastPathCount: 0,
+  };
+
+  type PlannerLlmCallSample = {
+    route: string;
+    conversationId?: string;
+    userMessagePreview?: string;
+    model?: string;
+  };
+
+  const plannerLlmCalls: PlannerLlmCallSample[] = [];
+
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath, { encoding: "utf8" }),
     crlfDelay: Infinity,
@@ -90,6 +118,43 @@ async function main() {
     ) {
       answerLatencies.push(obj.latencyMs);
     }
+
+    // Phase12 Planner Metrics
+    const msg = obj.msg;
+    if (msg === "dialog.run.start") {
+      plannerMetrics.totalDialogs += 1;
+    }
+
+    if (msg === "dialog.planner.rule-based") {
+      plannerMetrics.ruleBasedCount += 1;
+      const intent = typeof obj.intentHint === "string" ? obj.intentHint : "unknown";
+      plannerMetrics.ruleBasedByIntent[intent] =
+        (plannerMetrics.ruleBasedByIntent[intent] ?? 0) + 1;
+    }
+
+    if (msg === "planner.prompt") {
+      plannerMetrics.plannerLlmCount += 1;
+      const route = typeof obj.route === "string" ? obj.route : "unknown";
+      plannerMetrics.plannerLlmByRoute[route] =
+        (plannerMetrics.plannerLlmByRoute[route] ?? 0) + 1;
+
+      plannerLlmCalls.push({
+        route,
+        conversationId:
+          typeof obj.conversationId === "string"
+            ? obj.conversationId
+            : undefined,
+        userMessagePreview:
+          typeof obj.userMessagePreview === "string"
+            ? obj.userMessagePreview
+            : undefined,
+        model: typeof obj.model === "string" ? obj.model : undefined,
+      });
+    }
+
+    if (msg === "dialog.run.fast-path") {
+      plannerMetrics.fastPathCount += 1;
+    }
   }
 
   console.log("=== Agent latency stats (from logs) ===");
@@ -99,6 +164,58 @@ async function main() {
     "Answer latencyMs (dialog.answer.finished)",
     answerLatencies,
   );
+
+  function pct(num: number, den: number): string {
+    return den > 0 ? ((num / den) * 100).toFixed(1) : "0.0";
+  }
+
+  console.log("\n=== Planner Metrics (Phase12) ===");
+  console.log(`total dialogs            : ${plannerMetrics.totalDialogs}`);
+  console.log(
+    `rule-based planner used  : ${plannerMetrics.ruleBasedCount} (${pct(
+      plannerMetrics.ruleBasedCount,
+      plannerMetrics.totalDialogs,
+    )}%)`,
+  );
+  console.log(
+    `planner LLM calls        : ${plannerMetrics.plannerLlmCount} (${pct(
+      plannerMetrics.plannerLlmCount,
+      plannerMetrics.totalDialogs,
+    )}%)`,
+  );
+  console.log(
+    `fast-path answers        : ${plannerMetrics.fastPathCount} (${pct(
+      plannerMetrics.fastPathCount,
+      plannerMetrics.totalDialogs,
+    )}%)`,
+  );
+
+  console.log("\n- Rule-based by intent:");
+  for (const [intent, count] of Object.entries(plannerMetrics.ruleBasedByIntent)) {
+    console.log(`  ${intent}: ${count} (${pct(count, plannerMetrics.ruleBasedCount)}%)`);
+  }
+
+  console.log("\n- Planner LLM by route:");
+  for (const [route, count] of Object.entries(plannerMetrics.plannerLlmByRoute)) {
+    console.log(`  ${route}: ${count} (${pct(count, plannerMetrics.plannerLlmCount)}%)`);
+  }
+
+  if (plannerLlmCalls.length > 0) {
+    console.log("\n- Planner LLM call samples:");
+    plannerLlmCalls.forEach((c, idx) => {
+      const msgPreview = c.userMessagePreview
+        ? c.userMessagePreview.replace(/\s+/g, " ")
+        : "(no preview)";
+      console.log(
+        `  ${idx + 1}. route=${c.route}, model=${c.model ?? "unknown"}, conversationId=${c.conversationId ?? "n/a"}`,
+      );
+      console.log(`     userMessage="${msgPreview.slice(0, 80)}"`);
+    });
+  } else {
+    console.log("\n- Planner LLM call samples: (none)");
+  }
+
+  console.log("=================================\n");
 }
 
 main().catch((err) => {
