@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "sync:notion": "ts-node SCRIPTS/sync-notion.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js 2>&1 | tee logs/app.log",
     "stack:up": "docker ps --filter name=es-dev --format '{{.Names}}' | grep -q '^es-dev$' || docker run -d --name es-dev -p 9200:9200 -e 'discovery.type=single-node' -e 'xpack.security.enabled=false' -e 'ES_JAVA_OPTS=-Xms2g -Xmx2g' docker.elastic.co/elasticsearch/elasticsearch:8.15.3 && docker ps --filter name=pg-dev --format '{{.Names}}' | grep -q '^pg-dev$' || docker run -d --name pg-dev -p 5434:5432 -e POSTGRES_PASSWORD=pass ankane/pgvector",
@@ -90,6 +91,7 @@
     "@elastic/elasticsearch": "8.19.1",
     "@langchain/core": "^0.3.8",
     "@langchain/langgraph": "^0.2.35",
+    "@notionhq/client": "^5.4.0",
     "@supabase/supabase-js": "^2.84.0",
     "cors": "^2.8.5",
     "dotenv": "17.2.3",

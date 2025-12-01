@@ -17,6 +17,9 @@ importers:
       '@langchain/langgraph':
         specifier: ^0.2.35
         version: 0.2.74(@langchain/core@0.3.79(@opentelemetry/api@1.9.0))(zod-to-json-schema@3.25.0(zod@4.1.12))
+      '@notionhq/client':
+        specifier: ^5.4.0
+        version: 5.4.0
       '@supabase/supabase-js':
         specifier: ^2.84.0
         version: 2.84.0
@@ -176,6 +179,10 @@ packages:
 
   '@minimistjs/subarg@1.0.0':
     resolution: {integrity: sha512-Q/ONBiM2zNeYUy0mVSO44mWWKYM3UHuEK43PKIOzJCbvUnPoMH1K+gk3cf1kgnCVJFlWmddahQQCmrmBGlk9jQ==}
+
+  '@notionhq/client@5.4.0':
+    resolution: {integrity: sha512-SJsprS26S0Wi9CoTQp4vC8/nPpAIo1gMB4H7aJ2E/k0fWnNGIEAg984KwtzK6h9ZGaPcEaryVRSz1VVClJcVUw==}
+    engines: {node: '>=18'}
 
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
@@ -1583,6 +1590,8 @@ snapshots:
   '@minimistjs/subarg@1.0.0':
     dependencies:
       minimist: 1.2.8
+
+  '@notionhq/client@5.4.0': {}
 
   '@opentelemetry/api@1.9.0': {}
 
