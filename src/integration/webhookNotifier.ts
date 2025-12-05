@@ -83,7 +83,7 @@ export class WebhookNotifier {
     } catch (err) {
       this.logger.warn(
         { err, url },
-        "failed to send webhook event to n8n (ignored)"
+        "failed to send webhook event (ignored)"
       );
     }
   }

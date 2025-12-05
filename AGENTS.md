@@ -58,6 +58,30 @@ Phase12 では、Phase11 でスケルトンとして用意していた Rule-base
 - LLM Planner をどこまで Rule-based / Fast-path に置き換えるかを定量的に判断できる基盤を整備
 
 > 詳細は `docs/PHASE12_SUMMARY.md`, `docs/PLANNER_RULE_BASED.md`, `docs/FAST_PATH_LOGIC.md`, `docs/P95_METRICS.md` を参照。
+
+## 12. Phase13 — Notion-driven Sales AaaS Foundation
+
+Phase13 では、英会話テナント向けの Sales AaaS を想定し、Notion を外部データソースとする役割を以下のエージェント／コンポーネントに分担した。
+
+### ● NotionSyncService / NotionClient
+- Notion DB（FAQ / Products / LP Points / TuningTemplates）からデータを取得し、Postgres の各 Repository に一括同期する。
+- 実行入口は `SCRIPTS/sync-notion.ts`（手動バッチ）と、アプリ起動時の TuningTemplates 自動同期。
+- 失敗時はログ＋アラートのみとし、本番の `/agent.search` `/agent.dialog` の呼び出しには影響させない。
+
+### ● SalesTemplateProvider（Notion-backed）
+- Notion から同期された TuningTemplates をメモリ上にロードし、Sales 用テンプレの Single Source of Truth として扱う。
+- キー: `phase (Clarify/Propose/Recommend/Close) × intent × personaTags`
+- Phase13 時点では Clarify 用テンプレのみ必須（英会話 intent: `level_diagnosis`, `goal_setting`）。
+
+### ● ClarifyPromptBuilder（英会話テンプレ）
+- SalesTemplateProvider から Clarify テンプレを取得し、英会話テナント向けの Clarify 質問文を構築する。
+- テンプレが見つからない場合は、従来の固定テンプレ or LLM 生成にフォールバックする。
+
+### ● ClarifyLogWriter（Notion 書き戻し）
+- Clarify 実行時のメタ情報（Original / Clarify / Missing / Intent / TenantId）を Notion Clarify Log DB に書き戻す。
+- エラー時はアプリ応答をブロックしない fire-and-forget 実装とし、ログベースでのリカバリを前提とする。
+
+> Phase14 以降では、本 Foundation の上に Propose / Recommend / Close / Objection Handling などを拡張し、LP/HP 連動の SalesFlow を実装する。
 ## Label Scheme
 - **status:** `status:todo`, `status:in-progress`, `status:review`, `status:qa`, `status:done`
 - **prio:** `prio:high`, `prio:medium`, `prio:low`

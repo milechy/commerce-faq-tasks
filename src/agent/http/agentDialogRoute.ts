@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
-import type { DialogTurnInput, DialogAgentResponse, DialogAgentMeta, PlannerPlan } from "../dialog/types";
+import type { DialogTurnInput } from "../dialog/types";
 import { AgentDialogOrchestrator } from "./AgentDialogOrchestrator";
 
 // NOTE:
@@ -13,11 +13,15 @@ export type AgentDialogDeps = {
   webhookNotifier?: any;
 };
 
-export function createAgentDialogHandler(logger: Logger, _deps: AgentDialogDeps) {
+export function createAgentDialogHandler(
+  logger: Logger,
+  _deps: AgentDialogDeps
+) {
   // Phase11: /agent.dialog は AgentDialogOrchestrator 経由で LangGraph / CrewGraph を実行する。
   const orchestrator = new AgentDialogOrchestrator(logger);
 
   return async (req: Request, res: Response) => {
+    // NOTE: body は DialogTurnInput としてそのまま Orchestrator に渡す（options.personaTags なども含む）
     const body = req.body as DialogTurnInput | undefined;
 
     if (!body || typeof body.message !== "string") {

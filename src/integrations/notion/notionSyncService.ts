@@ -1,16 +1,16 @@
 // src/integrations/notion/notionSyncService.ts
 import { FaqRepository } from "../../repositories/faqRepository";
-import { ProductRepository } from "../../repositories/productRepository";
 import { LpPointRepository } from "../../repositories/lpPointRepository";
+import { ProductRepository } from "../../repositories/productRepository";
 import { TuningTemplateRepository } from "../../repositories/tuningTemplateRepository";
 import { INotionClient, NotionClient } from "./notionClient";
+import type { NotionTuningTemplate } from "./notionSchemas";
 import {
   mapFaqRow,
-  mapProductRow,
   mapLpPointRow,
+  mapProductRow,
   mapTuningTemplateRow,
 } from "./notionSchemas";
-import type { NotionTuningTemplate } from "./notionSchemas";
 
 const DEFAULT_TENANT_ID = process.env.DEFAULT_TENANT_ID ?? "english-demo";
 
