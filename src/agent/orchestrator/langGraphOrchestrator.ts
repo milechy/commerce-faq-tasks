@@ -4,6 +4,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import pino from "pino";
 
 import { PlannerPlan } from "../dialog/types";
+import { buildRuleBasedPlan } from "../flow/ruleBasedPlanner";
 import { runSearchAgent } from "../flow/searchAgent";
 import { callGroqWith429Retry } from "../llm/groqClient";
 import {
@@ -12,6 +13,9 @@ import {
   RouteContextV2,
   routePlannerModelV2,
 } from "../llm/modelRouter";
+
+import { runSalesPipeline } from "./sales/salesPipeline";
+import { resolveSalesPipelineKind } from "./sales/pipelines/pipelineFactory";
 
 /**
  * /agent.dialog の入力ペイロードのサマリ型。
@@ -63,10 +67,11 @@ export interface DialogOutput {
     totalMs?: number;
   };
   /**
-   * SalesNode / CTA 検出などの LangGraph メタ。
-   * Phase8 では簡易フラグのみ。
+   * SalesPipeline / SalesRules ベースの営業メタ情報。
+   * Phase9 では pipelineKind / upsellTriggered / ctaTriggered / notes などを含む。
    */
   salesMeta?: {
+    pipelineKind?: "generic" | "saas" | "ec" | "reservation";
     upsellTriggered?: boolean;
     ctaTriggered?: boolean;
     notes?: string[];
@@ -88,6 +93,7 @@ const DialogStateAnnotation = Annotation.Root({
   finalText: Annotation<string | undefined>(),
   salesMeta: Annotation<
     | {
+        pipelineKind?: "generic" | "saas" | "ec" | "reservation";
         upsellTriggered?: boolean;
         ctaTriggered?: boolean;
         notes?: string[];
@@ -125,6 +131,14 @@ type RagContext = {
 async function runInitialRagRetrieval(
   initialInput: DialogInput
 ): Promise<RagContext> {
+  logger.info(
+    {
+      tenantId: initialInput.tenantId,
+      locale: initialInput.locale,
+      preview: initialInput.userMessage.slice(0, 120),
+    },
+    "dialog.rag.start",
+  );
   // Phase5: /agent.search と同じハイブリッド + 再ランクパイプラインを再利用するために、
   // runSearchAgent を呼び出して RAG コンテキストを構築する。
   const searchResponse = await runSearchAgent({
@@ -182,6 +196,18 @@ async function runInitialRagRetrieval(
       ? (searchMs ?? 0) + (rerankMs ?? 0)
       : undefined;
 
+  logger.info(
+    {
+      tenantId: initialInput.tenantId,
+      locale: initialInput.locale,
+      documents: documents.length,
+      searchMs,
+      rerankMs,
+      rerankEngine,
+      totalMs,
+    },
+    "dialog.rag.finished",
+  );
   return {
     documents,
     // Phase3 の hybridSearch には recall 指標がない前提で null とする。
@@ -370,15 +396,37 @@ async function contextBuilderNode(
     requiresSafeMode,
   };
 
+  const pipelineKind = resolveSalesPipelineKind({
+    explicitKind: undefined,
+    tenantId: initialInput.tenantId,
+  });
+
+  logger.debug(
+    {
+      tenantId: initialInput.tenantId,
+      locale: initialInput.locale,
+      depth,
+      tokens,
+      complexity,
+      intentHint,
+      requiresSafeMode,
+      pipelineKind,
+    },
+    "dialog.context.built",
+  );
   return {
     input: initialInput,
     ragContext,
     routeContext,
     salesMeta: {
+      pipelineKind,
       upsellTriggered: false,
       ctaTriggered: false,
       notes: [],
     },
+    plannerDecision: undefined,
+    plannerSteps: undefined,
+    finalText: undefined,
   };
 }
 
@@ -404,8 +452,48 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
       },
     };
   }
+  // Phase11: Rule-based Planner のフックを先に用意しておく。
+  // 現時点では buildRuleBasedPlan は常に null を返すため挙動に変化はないが、
+  // Phase12 以降で shipping / returns などの定型意図については LLM Planner を
+  // 呼ばずにここで PlannerPlan を構築する予定。
+  const intentHint = detectIntentHint(state.input);
+  if (!state.routeContext.requiresSafeMode && intentHint !== "general") {
+    const rulePlan = buildRuleBasedPlan(state.input, intentHint);
+    if (rulePlan) {
+      const decision: PlannerRoutingDecision = {
+        route: "20b",
+        reasons: [`rule-based:${intentHint}`],
+        used120bCount: 0,
+      };
+      logger.info(
+        {
+          intentHint,
+          route: decision.route,
+          reasons: decision.reasons,
+        },
+        "dialog.planner.rule-based",
+      );
+      return {
+        ...state,
+        plannerDecision: decision,
+        plannerSteps: rulePlan,
+        routeContext: {
+          ...state.routeContext,
+          used120bCount: decision.used120bCount,
+        },
+      };
+    }
+  }
   // まずは既存の V2 ルーターにルーティングさせる
   const baseDecision = routePlannerModelV2(state.routeContext);
+  logger.info(
+    {
+      routeContext: state.routeContext,
+      baseRoute: baseDecision.route,
+      baseReasons: baseDecision.reasons,
+    },
+    "dialog.planner.route.base",
+  );
 
   const ctx = state.routeContext;
   let decision = baseDecision;
@@ -457,11 +545,28 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
     void extraReasons;
   }
 
+  logger.info(
+    {
+      finalRoute: decision.route,
+      finalReasons: decision.reasons,
+    },
+    "dialog.planner.route.final",
+  );
   const plannerSteps = await callPlannerLLM(decision.route, {
     input: state.input,
     ragContext: state.ragContext,
   });
 
+  logger.debug(
+    {
+      route: decision.route,
+      stepCount: Array.isArray(plannerSteps?.steps)
+        ? plannerSteps.steps.length
+        : 0,
+      needsClarification: plannerSteps?.needsClarification ?? false,
+    },
+    "dialog.planner.plan",
+  );
   return {
     ...state,
     plannerDecision: decision,
@@ -488,6 +593,12 @@ async function clarifyNode(state: DialogGraphState): Promise<DialogGraphState> {
   }
 
   if (plan && plan.needsClarification && plan.clarifyingQuestions?.length) {
+    logger.info(
+      {
+        questions: plan.clarifyingQuestions,
+      },
+      "dialog.clarify.emit",
+    );
     const clarificationText = plan.clarifyingQuestions.join("\n");
 
     return {
@@ -522,111 +633,39 @@ async function searchNode(state: DialogGraphState): Promise<DialogGraphState> {
  * - Phase8 ではルールベースのみ（将来 LLM ベースの SalesAgent に差し替え予定）。
  */
 async function salesNode(state: DialogGraphState): Promise<DialogGraphState> {
-  const plan = state.plannerSteps;
-
-  // --- 1) PlannerPlan ベースの検出 ---
-  let upsellByPlan = false;
-  let ctaByPlan = false;
-  const planNotes: string[] = [];
-
-  if (plan && Array.isArray(plan.steps)) {
-    for (const step of plan.steps) {
-      const title = (step as any).title ?? "";
-      const description = (step as any).description ?? "";
-      const textForStep = `${title} ${description}`.toLowerCase();
-      const stage = (step as any).stage;
-
-      // Recommend フェーズで「上位プラン」っぽい表現や productIds があればアップセルの可能性あり
-      if (stage === "recommend") {
-        const premiumHints = [
-          "上位",
-          "プレミアム",
-          "ハイグレード",
-          "高いプラン",
-          "upgrade",
-          "higher",
-          "premium",
-        ];
-        const hasPremiumHint = premiumHints.some((k) =>
-          textForStep.includes(k.toLowerCase())
-        );
-        const hasProducts =
-          Array.isArray((step as any).productIds) &&
-          (step as any).productIds.length > 0;
-
-        if (hasPremiumHint || hasProducts) {
-          upsellByPlan = true;
-          planNotes.push("planner:recommend-with-upsell-hint");
-        }
-      }
-
-      // Close フェーズで cta が明示されていれば CTA トリガー
-      if (stage === "close" && (step as any).cta) {
-        ctaByPlan = true;
-        planNotes.push(`planner:cta:${String((step as any).cta)}`);
-      }
-    }
-  }
-
-  // --- 2) ヒューリスティック（ユーザーテキストベース）の検出 ---
-  const text = [
-    state.input.userMessage,
-    ...(state.input.history ?? []).map((m) => m.content),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  const upsellKeywords = [
-    "おすすめ",
-    "他に",
-    "似た",
-    "おすすめの商品",
-    "upgrade",
-    "higher plan",
-  ];
-  const ctaKeywords = [
-    "購入",
-    "買いたい",
-    "予約",
-    "申し込み",
-    "order",
-    "buy",
-    "checkout",
-  ];
-
-  const upsellByHeuristic = upsellKeywords.some((k) =>
-    text.includes(k.toLowerCase())
-  );
-  const ctaByHeuristic = ctaKeywords.some((k) =>
-    text.includes(k.toLowerCase())
-  );
-
-  const heuristicNotes: string[] = [];
-  if (upsellByHeuristic)
-    heuristicNotes.push("heuristic:upsell-keyword-detected");
-  if (ctaByHeuristic) heuristicNotes.push("heuristic:cta-keyword-detected");
-
-  // --- 3) 既存の salesMeta とマージ ---
-  const prevMeta = state.salesMeta ?? {
-    upsellTriggered: false,
-    ctaTriggered: false,
-    notes: [],
+  // SalesDetectionContext は SalesPipeline 側で定義されているが、
+  // ここでは型に依存しない形で必要なフィールドだけ組み立てる。
+  const detectionContext = {
+    userMessage: state.input.userMessage,
+    history: state.input.history,
+    plan: state.plannerSteps,
   };
 
-  const upsellTriggered =
-    prevMeta.upsellTriggered || upsellByPlan || upsellByHeuristic;
-  const ctaTriggered = prevMeta.ctaTriggered || ctaByPlan || ctaByHeuristic;
+  const prevMeta = state.salesMeta;
 
-  const allNotes = [...(prevMeta.notes ?? []), ...planNotes, ...heuristicNotes];
-  const dedupedNotes = Array.from(new Set(allNotes));
+  // すでに pipelineKind が入っていればそれを優先し、無ければ tenant 情報から推定する。
+  const pipelineKind = resolveSalesPipelineKind({
+    explicitKind: prevMeta?.pipelineKind,
+    tenantId: state.input.tenantId,
+  });
 
+  const nextMeta = runSalesPipeline(detectionContext, prevMeta, {
+    tenantId: state.input.tenantId,
+    pipelineKind,
+  });
+
+  logger.debug(
+    {
+      tenantId: state.input.tenantId,
+      pipelineKind: nextMeta.pipelineKind,
+      upsellTriggered: nextMeta.upsellTriggered,
+      ctaTriggered: nextMeta.ctaTriggered,
+    },
+    "dialog.sales.meta",
+  );
   return {
     ...state,
-    salesMeta: {
-      upsellTriggered,
-      ctaTriggered,
-      notes: dedupedNotes,
-    },
+    salesMeta: nextMeta,
   };
 }
 /**
@@ -715,6 +754,15 @@ async function answerNode(state: DialogGraphState): Promise<DialogGraphState> {
 
   const route: PlannerRoute = state.plannerDecision?.route ?? "20b"; // 念のためデフォルト 20B
 
+  logger.info(
+    {
+      route,
+      safeMode: state.routeContext.requiresSafeMode,
+      hasPlan: !!plan,
+      hasRagContext: !!state.ragContext,
+    },
+    "dialog.answer.call",
+  );
   const answerText = await callAnswerLLM(route, {
     input: state.input,
     ragContext: state.ragContext,
@@ -734,6 +782,15 @@ async function answerNode(state: DialogGraphState): Promise<DialogGraphState> {
 export async function runDialogGraph(
   input: DialogInput
 ): Promise<DialogOutput> {
+  logger.info(
+    {
+      tenantId: input.tenantId,
+      locale: input.locale,
+      conversationId: input.conversationId,
+      preview: input.userMessage.slice(0, 120),
+    },
+    "dialog.run.start",
+  );
   // 0. 長期対話向けの履歴サマリ圧縮
   const summarizedInput = await summarizeHistoryIfNeeded(input);
 
@@ -744,6 +801,13 @@ export async function runDialogGraph(
   //     既存の fast-path で Answer まで一気に生成
   const fastDecision = routePlannerModelV2(initialState.routeContext);
   if (shouldUseFastAnswer(summarizedInput, initialState.routeContext)) {
+    logger.info(
+      {
+        route: fastDecision.route,
+        reasons: fastDecision.reasons,
+      },
+      "dialog.run.fast-path",
+    );
     const fastState: DialogGraphState = {
       ...initialState,
       plannerDecision: fastDecision,
@@ -752,6 +816,12 @@ export async function runDialogGraph(
     const answered = await answerNode(fastState);
 
     if (!answered.finalText) {
+      logger.warn(
+        {
+          route: fastDecision.route,
+        },
+        "dialog.run.fast-path.no-final-text",
+      );
       return {
         text: "現在うまくお応えできません。しばらくしてからお試しください。",
         route: fastDecision.route,
@@ -783,6 +853,10 @@ export async function runDialogGraph(
   const finalState = await dialogGraph.invoke(initialState);
 
   if (!finalState.finalText || !finalState.plannerDecision) {
+    logger.warn(
+      {},
+      "dialog.run.no-final-text-or-decision",
+    );
     // 何かがおかしい場合のフォールバック
     return {
       text: "現在うまくお応えできません。しばらくしてからお試しください。",
@@ -796,6 +870,15 @@ export async function runDialogGraph(
     };
   }
 
+  logger.info(
+    {
+      route: finalState.plannerDecision.route,
+      reasons: finalState.plannerDecision.reasons,
+      safetyTag: finalState.routeContext.safetyTag,
+      requiresSafeMode: finalState.routeContext.requiresSafeMode,
+    },
+    "dialog.run.success",
+  );
   return {
     text: finalState.finalText,
     route: finalState.plannerDecision.route,
@@ -808,13 +891,14 @@ export async function runDialogGraph(
   };
 }
 /**
- * シンプルな follow-up （例: Clarify に答えた 2 ターン目など）では、
- * Planner LLM をスキップして Answer だけを実行するためのヒューリスティック。
+ * シンプルな follow-up （例: Clarify に答えた 2 ターン目など）や、
+ * 支払い方法のような定型 FAQ では Planner LLM をスキップして
+ * Answer だけを実行するためのヒューリスティック。
  *
  * - safety フラグが立っている場合は常に Planner 経由にする
- * - history がまったく無い初回メッセージでは使わない
- * - shipping / returns / payment / product-info などの典型的なコマース系意図で、
- *   現在メッセージが十分に具体的（文字数がある程度長い）な場合に fast-path を有効にする
+ * - shipping / returns / product-info は follow-up（history がある場合）のみ fast-path を許可
+ * - payment は初回メッセージでも、ある程度長さがあれば fast-path を許可
+ * - general のうち「簡単な店舗情報 / 問い合わせ FAQ」は fast-path を許可
  */
 function shouldUseFastAnswer(
   input: DialogInput,
@@ -824,20 +908,159 @@ function shouldUseFastAnswer(
     return false;
   }
 
+  const intent = detectIntentHint(input);
+  const text = (input.userMessage || "").toLowerCase();
+  const isClarifyFollowup = looksLikeClarifyFollowup(input);
   const depth = input.history?.length ?? 0;
+
+  // general のうち「簡単な店舗情報 / お問い合わせ FAQ」だけ fast-path を許可
+  if (intent === "general") {
+    if (isSimpleGeneralFaq(input, routeContext)) {
+      return true;
+    }
+    return false;
+  }
+
+  const fastIntents = ["shipping", "returns", "payment", "product-info"];
+  if (!fastIntents.includes(intent)) {
+    return false;
+  }
+
+  // payment は「支払い方法を教えてください」のような 1 ターン質問が多いため、
+  // 初回メッセージでもある程度の長さがあれば fast-path を許可する。
+  if (intent === "payment") {
+    const minLengthForPayment = 8;
+    if (text.length < minLengthForPayment) {
+      return false;
+    }
+    return true;
+  }
+
+  // shipping / returns / product-info は follow-up（history > 0）のみ fast-path 対象。
   if (depth === 0) {
     return false;
   }
 
-  const text = (input.userMessage || "").toLowerCase();
-  if (text.length < 15) {
+  // Clarify のフォローアップ（2 ターン目）では、やや短めの応答でも fast-path を許可する。
+  const minLength = isClarifyFollowup ? 8 : 15;
+  if (text.length < minLength) {
     return false;
   }
 
-  const intent = detectIntentHint(input);
-  const fastIntents = ["shipping", "returns", "payment", "product-info"];
+  return true;
+}
 
-  return fastIntents.includes(intent);
+/**
+ * general intent のうち、簡単な店舗情報 / お問い合わせ FAQ かどうかを判定するヘルパー
+ */
+function isSimpleGeneralFaq(
+  input: DialogInput,
+  routeContext: RouteContextV2,
+): boolean {
+  const text = [
+    input.userMessage,
+    ...(input.history ?? []).map((m) => m.content),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  // 会話が深かったり、complexity が high の場合は Planner に任せる
+  if (routeContext.conversationDepth > 1) return false;
+  if (routeContext.complexity === "high") return false;
+
+  // 長すぎる質問はノウハウ相談の可能性が高いので除外（ざっくり）
+  if (text.length > 60) return false;
+
+  // 「簡単な店舗情報 / お問い合わせ」系のキーワード
+  const faqKeywords = [
+    "営業時間",
+    "何時から",
+    "何時まで",
+    "定休日",
+    "休業日",
+    "営業日",
+    "店舗",
+    "ショップ",
+    "お店",
+    "場所",
+    "住所",
+    "アクセス",
+    "行き方",
+    "電話番号",
+    "問い合わせ先",
+    "お問い合わせ",
+    "連絡先",
+    "サポート",
+    "カスタマーサポート",
+  ];
+
+  if (!faqKeywords.some((k) => text.includes(k.toLowerCase()))) {
+    return false;
+  }
+
+  // ノウハウ / 戦略的な相談っぽいマーカーが入っていたら Planner に回す
+  const complexMarkers = [
+    "コツ",
+    "やり方",
+    "方法",
+    "テクニック",
+    "戦略",
+    "比較",
+    "どれがいい",
+    "どれが良い",
+    "おすすめ",
+    "最適",
+    "一番",
+    "お得",
+    "安く",
+    "なるべく",
+  ];
+  if (complexMarkers.some((k) => text.includes(k.toLowerCase()))) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * 直前のアシスタント発話が Rule-based Clarify 質問であるかどうかを判定する簡易ヘルパー。
+ * shipping / returns 用の代表的な Clarify 質問文にマッチした場合は、
+ * 「Clarify に答えた 2 ターン目」である可能性が高いとみなす。
+ */
+function looksLikeClarifyFollowup(input: DialogInput): boolean {
+  const history = input.history ?? [];
+  if (!history.length) {
+    return false;
+  }
+
+  const lastAssistant = [...history].reverse().find(
+    (m) => m.role === "assistant",
+  );
+  if (!lastAssistant) {
+    return false;
+  }
+
+  const t = lastAssistant.content;
+
+  const clarifyPhrases = [
+    // shipping 用 Clarify 質問
+    "どの商品（またはカテゴリ）についての配送・送料を知りたいですか？",
+    "お届け先の都道府県（または国）を教えてください。",
+    // returns 用 Clarify 質問
+    "ご注文番号を教えていただけますか？",
+    "返品したい商品の名前または型番（SKU）を教えてください。",
+    "返品を希望される理由（サイズ違い・イメージ違い・不良品など）を教えてください。",
+    // returns 向けの一問多投スタイルのバリエーション
+    "ご注文番号、購入日、商品の状態、返品理由を教えていただけますか？",
+    "購入日を教えてください。",
+    "商品の状態はどうですか？",
+    "返品理由を教えてください。",
+    // product-info 用 Clarify 質問
+    "どの商品についてのご質問でしょうか？（商品名や型番などを教えてください）",
+    "どのような点について知りたいですか？（サイズ感・色・在庫状況・素材など）",
+  ];
+
+  return clarifyPhrases.some((phrase) => t.includes(phrase));
 }
 
 /**
@@ -1128,8 +1351,10 @@ async function callPlannerLLM(
       route,
       model,
       preview: prompt.slice(0, 400),
+      conversationId: payload.input.conversationId,
+      userMessagePreview: payload.input.userMessage.slice(0, 120),
     },
-    "planner.prompt"
+    "planner.prompt",
   );
 
   const raw = await callGroqWith429Retry(
@@ -1269,6 +1494,7 @@ async function callAnswerLLM(
 
   const maxTokens = payload.safeMode ? 320 : 256;
 
+  const start = Date.now();
   const raw = await callGroqWith429Retry(
     {
       model,
@@ -1290,6 +1516,17 @@ async function callAnswerLLM(
     {
       logger,
     }
+  );
+  const latencyMs = Date.now() - start;
+
+  logger.info(
+    {
+      route,
+      model,
+      safeMode: !!payload.safeMode,
+      latencyMs,
+    },
+    "dialog.answer.finished",
   );
 
   return raw;

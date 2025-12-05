@@ -9,6 +9,79 @@
 このリポジトリは **Issues + Labels + PRの自動クローズ** だけで運用します。GitHub Projects 連携や Action に依存しません。
 
 ---
+## 10. Phase11 — Dialog Runtime / Crew Orchestrator / Planner 軽量化フック
+
+Phase11 では、Phase4 で導入した Orchestrator 群に対して「実行経路の安定化」と「パフォーマンス計測」の役割を明確にした。
+
+### ● AgentDialogOrchestrator
+- `/agent.dialog` 専用のアプリケーション層 Orchestrator
+- HTTP Request/Response に依存せず、`DialogTurnInput → DialogAgentResponse` を構築
+- CrewOrchestrator / LangGraphOrchestrator に対する単一の呼び出し窓口
+- ログ: `agent.dialog.orchestrator.response` として `route / graphVersion / needsClarification / hasPlannerPlan / hasKpiFunnel / kpiFunnelStage` を出力
+
+### ● Crew Orchestrator / CrewGraph
+- Input / Planner / Kpi / Final ノードを制御する CrewGraph の実行を担当
+- PlannerNode を LangGraph runtime 呼び出しに限定し、CrewGraph と LangGraph の責務境界を明確化
+- テスト: `test:agent:crew:once` で linear flow を保証
+
+### ● Rule-based Planner（Skeleton）
+- `buildRuleBasedPlan(input, intent)` を通じて、shipping / returns / payment / product-info などの典型 FAQ を将来的にルールベースで扱うためのフック
+- Phase11 時点では常に `null` を返し、挙動は LLM Planner にフォールバックさせる
+- 今後、Planner Agent の負荷軽減・p95 改善のために実装を追加予定
+
+### ● Metrics / Perf Agent（ログ解析ツール）
+- `SCRIPTS/analyze-agent-logs.ts` により、pino ログから次のレイテンシ指標を集計:
+  - RAG: `dialog.rag.finished.totalMs`
+  - Planner: `tag="planner".latencyMs`
+  - Answer: `dialog.answer.finished.latencyMs`
+- 役割:
+  - RAG / Planner / Answer のどこがボトルネックかを可視化
+  - 「Planner をどこまで Rule-based に寄せるか」の意思決定材料を提供
+
+## 11. Phase12 — Rule-based Planner 本実装 / Fast-path 導入
+
+Phase12 では、Phase11 でスケルトンとして用意していた Rule-based Planner とログ解析を「実際に本番で使える形」に仕上げた。
+
+### ● Rule-based Planner の本実装
+- `buildRuleBasedPlan(input, intent)` を shipping / returns / product-info 向けに実装
+- `missing` フィールド（例: product / region / orderId / item / reason / aspect）を判定し、Clarify 質問テンプレを返却
+- すべての必須情報が揃っている場合は `null` を返し、LLM Planner へフォールバック
+
+### ● Fast-path（shouldUseFastAnswer）の導入
+- simple な general FAQ（支払い方法 / 営業時間 など）は Planner LLM を呼ばずに RAG→Answer のみで応答
+- 「比較したい」「一番お得」「どっちが良いか教えて」などの複雑質問は LLM Planner 経由にルーティング
+- これにより、Planner LLM の呼び出し割合を 5〜10% 程度に抑制
+
+### ● ログ / p95 計測の統合
+- `dialog.planner.rule-based` / `dialog.planner.llm` / `dialog.answer.finished` などのログを統合
+- `SCRIPTS/analyze-agent-logs.ts` で RAG / Planner / Answer の p50/p95 を一括集計
+- LLM Planner をどこまで Rule-based / Fast-path に置き換えるかを定量的に判断できる基盤を整備
+
+> 詳細は `docs/PHASE12_SUMMARY.md`, `docs/PLANNER_RULE_BASED.md`, `docs/FAST_PATH_LOGIC.md`, `docs/P95_METRICS.md` を参照。
+
+## 12. Phase13 — Notion-driven Sales AaaS Foundation
+
+Phase13 では、英会話テナント向けの Sales AaaS を想定し、Notion を外部データソースとする役割を以下のエージェント／コンポーネントに分担した。
+
+### ● NotionSyncService / NotionClient
+- Notion DB（FAQ / Products / LP Points / TuningTemplates）からデータを取得し、Postgres の各 Repository に一括同期する。
+- 実行入口は `SCRIPTS/sync-notion.ts`（手動バッチ）と、アプリ起動時の TuningTemplates 自動同期。
+- 失敗時はログ＋アラートのみとし、本番の `/agent.search` `/agent.dialog` の呼び出しには影響させない。
+
+### ● SalesTemplateProvider（Notion-backed）
+- Notion から同期された TuningTemplates をメモリ上にロードし、Sales 用テンプレの Single Source of Truth として扱う。
+- キー: `phase (Clarify/Propose/Recommend/Close) × intent × personaTags`
+- Phase13 時点では Clarify 用テンプレのみ必須（英会話 intent: `level_diagnosis`, `goal_setting`）。
+
+### ● ClarifyPromptBuilder（英会話テンプレ）
+- SalesTemplateProvider から Clarify テンプレを取得し、英会話テナント向けの Clarify 質問文を構築する。
+- テンプレが見つからない場合は、従来の固定テンプレ or LLM 生成にフォールバックする。
+
+### ● ClarifyLogWriter（Notion 書き戻し）
+- Clarify 実行時のメタ情報（Original / Clarify / Missing / Intent / TenantId）を Notion Clarify Log DB に書き戻す。
+- エラー時はアプリ応答をブロックしない fire-and-forget 実装とし、ログベースでのリカバリを前提とする。
+
+> Phase14 以降では、本 Foundation の上に Propose / Recommend / Close / Objection Handling などを拡張し、LP/HP 連動の SalesFlow を実装する。
 ## Label Scheme
 - **status:** `status:todo`, `status:in-progress`, `status:review`, `status:qa`, `status:done`
 - **prio:** `prio:high`, `prio:medium`, `prio:low`
