@@ -71,6 +71,7 @@ export interface DialogTurnInput {
     useLlmPlanner?: boolean;
     useMultiStepPlanner?: boolean;
     mode?: "local" | "crew";
+    personaTags?: string[];
     debug?: boolean;
   };
 }

@@ -47,6 +47,20 @@ A/Bテスト
 
 Sales AaaS拡張: HP/LP/キャンペーン/クーポン/商品DBを統合し、RAG+Web検索で誘導最適化
 
+## Phase13: Notion-driven Sales AaaS（Clarify / Templates / Logs）
+
+Phase13 では、上記アーキテクチャに対して次のコンポーネントを追加する。
+
+- Notion Client / Notion Sync Service
+  - Notion DB（FAQ / Products / LP Points / TuningTemplates / Clarify Log）からデータを取得
+  - `SCRIPTS/sync-notion.ts` 経由で FAQ / Products / LP Points / TuningTemplates を Postgres に同期
+- TuningTemplates（Sales Templates & Tone）
+  - Tuning DB ノード `T` の実体として、Notion から同期されたテンプレ＋トーン設定を保持
+  - SalesTemplateProvider がメモリ上でテンプレをキャッシュし、Clarify / Propose / Recommend / Close の各フェーズで利用
+- Clarify Log Writer
+  - `/integrations/notion/clarify-log` エンドポイントから呼ばれ、Clarify 実行結果を Notion Clarify Log DB に書き戻す
+  - Dialog Runtime 本体とは疎結合に保ち、書き戻し失敗時もユーザ応答フローは継続する設計とする
+
 ---
 
 # 3_TASKS.md
