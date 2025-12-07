@@ -23,3 +23,5 @@ commerce-faq-tasks@0.1.0commerce-faq-phase7-minimal/
 logs/
 *.zip
 commerce-faq-tasks@0.1.0
+data/
+reports/
