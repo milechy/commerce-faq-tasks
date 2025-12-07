@@ -1,9 +1,8 @@
-
-
 // src/agent/orchestrator/sales/recommendPromptBuilder.ts
 // Phase14: Recommend-flow helper — similar to Propose, but used for course/module recommendations.
 
-import { getSalesTemplate, type SalesPhase } from "./salesRules";
+import { getSalesTemplate, type SalesPhase, type SalesTemplate } from "./salesRules";
+import type { BuiltSalesPromptResult } from "./proposePromptBuilder";
 
 /**
  * RecommendIntent — 英会話向けの「推奨」フェーズ Intent
@@ -86,4 +85,35 @@ export function buildRecommendPrompt(opts: {
         "もし興味があれば、現在の課題や目標をもう少しだけ教えてください。",
       ].join("\n");
   }
+}
+
+/**
+ * Phase15: Recommend ステージ向けのテンプレートメタ付きビルダー。
+ * 既存の buildRecommendPrompt の挙動はそのまま利用し、SalesTemplate 情報を付与する。
+ */
+export function buildRecommendPromptWithMeta(opts: {
+  intent: RecommendIntent;
+  personaTags?: string[];
+}): BuiltSalesPromptResult {
+  const prompt = buildRecommendPrompt(opts);
+
+  const template =
+    getSalesTemplate({
+      phase: RECOMMEND_PHASE,
+      intent: opts.intent,
+      personaTags: opts.personaTags,
+    }) ?? {
+      id: "fallback:recommend:runtime",
+      phase: RECOMMEND_PHASE,
+      intent: opts.intent,
+      personaTags: opts.personaTags,
+      template: prompt,
+      source: "fallback",
+      matrixKey: `recommend|${opts.intent}|${opts.personaTags?.[0] ?? "ANY"}`,
+    };
+
+  return {
+    prompt,
+    template,
+  };
 }

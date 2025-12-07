@@ -253,3 +253,44 @@ Phase13 では、英会話テナント向け Sales AaaS の基盤として、Not
 - SalesFlow（Clarify → Propose → Recommend → Close）
 - Intent taxonomy 拡張
 - Clarify Log を使った改善サイクル
+
+## Phase15: SalesFlow Control / Sales Logs / KPI Reports
+
+Phase15 では、英会話テナント向け SalesFlow を **Clarify → Propose → Recommend → Close → Ended** まで一貫して制御・観測できるようにした。
+
+### 🧠 Sales Intent Rules（YAML）
+
+- `config/salesIntentRules.yaml` に SalesFlow 用 Intent ルールを集約
+- `salesIntentDetector.ts` で YAML をロードし、Propose / Recommend / Close の intent 候補を検出
+- YAML 読み込み失敗時は legacy ルールに自動フォールバックする安全設計
+- 詳細: `docs/INTENT_DETECTION_RULES.md`
+
+### 🔁 SalesStage Machine / Orchestrator 統合
+
+- `salesStageMachine.ts` により、`clarify / propose / recommend / close / ended` の状態遷移を明示的に管理
+- `computeNextSalesStage()` が `prevStage / nextStage / stageTransitionReason` を返し、SalesOrchestrator がそれに従ってテンプレ生成を実行
+- Orchestrator 入口として `runSalesFlowWithLogging` を導入し、ステージ制御・テンプレ選択・ログ書き込みを一か所で行う構造に統一
+- 詳細: `docs/SALESFLOW_DESIGN.md`, `docs/SALESFLOW_RUNTIME.md`
+
+### 📝 SalesLogWriter / Sales Log Spec（Phase15）
+
+- SalesLog を Clarify / Propose / Recommend / Close 全体で共通フォーマット化
+- ログ項目:
+  - `phase`, `prevStage`, `nextStage`, `stageTransitionReason`
+  - `intent`, `personaTags`, `userMessage`
+  - `templateSource`（`notion` / `fallback`）
+  - `templateId`, `templateText`, `promptPreview`
+- SalesLogWriter により、将来の Postgres 保存にも対応可能な adapter 構造を定義
+- 詳細: `docs/SALES_LOG_SPEC.md`
+
+### 📊 Template Fallback / KPI レポート CLI
+
+- TemplateMatrix（phase × intent × personaTag）と SalesLog をもとに、Fallback 状況を可視化:
+  - `SCRIPTS/convertTemplateMatrixCsvToJson.ts`
+  - `SCRIPTS/convertSalesLogsCsvToJson.ts`
+  - `SCRIPTS/analyzeTemplateFallbacks.ts`
+  - `SCRIPTS/run_template_fallback_report.sh`
+- Sales KPI Funnel（Stage / Intent / PersonaTag 別）を Markdown レポートとして生成:
+  - `SCRIPTS/analyzeSalesKpiFunnel.ts`
+  - `SCRIPTS/run_sales_reports.sh`
+- これにより、「どの intent / persona で fallback が多いか」「どのステージに滞留しがちか」を定量的に把握できる。

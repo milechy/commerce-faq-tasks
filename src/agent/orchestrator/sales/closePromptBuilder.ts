@@ -1,7 +1,8 @@
 // src/agent/orchestrator/sales/closePromptBuilder.ts
 // Phase14: Close-flow helper — final decision / closing messages.
 
-import { getSalesTemplate, type SalesPhase } from "./salesRules";
+import { getSalesTemplate, type SalesPhase, type SalesTemplate } from "./salesRules";
+import type { BuiltSalesPromptResult } from "./proposePromptBuilder";
 
 /**
  * CloseIntent — 英会話向けの「クロージング」フェーズ Intent
@@ -84,4 +85,35 @@ export function buildClosePrompt(opts: {
         "気になる点や不安な点があれば、遠慮なく相談してくださいね。",
       ].join("\n");
   }
+}
+
+/**
+ * Phase15: Close ステージ向けのテンプレートメタ付きビルダー。
+ * 既存の buildClosePrompt の挙動はそのまま利用し、SalesTemplate 情報を付与する。
+ */
+export function buildClosePromptWithMeta(opts: {
+  intent: CloseIntent;
+  personaTags?: string[];
+}): BuiltSalesPromptResult {
+  const prompt = buildClosePrompt(opts);
+
+  const template =
+    getSalesTemplate({
+      phase: CLOSE_PHASE,
+      intent: opts.intent,
+      personaTags: opts.personaTags,
+    }) ?? {
+      id: "fallback:close:runtime",
+      phase: CLOSE_PHASE,
+      intent: opts.intent,
+      personaTags: opts.personaTags,
+      template: prompt,
+      source: "fallback",
+      matrixKey: `close|${opts.intent}|${opts.personaTags?.[0] ?? "ANY"}`,
+    };
+
+  return {
+    prompt,
+    template,
+  };
 }

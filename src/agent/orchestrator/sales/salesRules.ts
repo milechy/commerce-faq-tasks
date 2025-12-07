@@ -37,6 +37,13 @@ export type SalesTemplate = {
   personaTags?: string[];
   /** 実際にプロンプトとして利用するテンプレート文面 */
   template: string;
+  /** テンプレートのソース（Notion / fallback など）。Provider 側で任意に設定可能。 */
+  source?: "notion" | "fallback" | string;
+  /**
+   * TemplateMatrix / TemplateGaps と突き合わせるためのセルキー。
+   * 例: "propose|trial_lesson_offer|beginner"
+   */
+  matrixKey?: string;
 };
 
 /**
@@ -114,7 +121,82 @@ export function getSalesTemplate(opts: {
   intent?: string;
   personaTags?: string[];
 }): SalesTemplate | null {
-  return currentSalesTemplateProvider(opts);
+  const fromProvider = currentSalesTemplateProvider(opts);
+
+  if (fromProvider) {
+    return fromProvider;
+  }
+
+  // Provider からテンプレートが見つからなかった場合のフォールバック:
+  // Phase15 では、少なくとも phase ごとの最低限テンプレートを返す。
+  return getFallbackSalesTemplate(opts);
+}
+
+/**
+ * Provider からテンプレートが取得できなかった場合に利用する
+ * 最低限のフォールバックテンプレート。
+ *
+ * - Notion / DB が未設定のテナント
+ * - テンプレマトリクス上で穴になっているフェーズ
+ * などでも、SalesFlow 自体が動作し続けることを目的とする。
+ */
+function getFallbackSalesTemplate(opts: {
+  phase: SalesPhase;
+  intent?: string;
+  personaTags?: string[];
+}): SalesTemplate {
+  const { phase, intent, personaTags } = opts;
+  const tags = personaTags ?? [];
+  const isBeginner = tags.includes("beginner");
+
+  let templateText: string;
+
+  switch (phase) {
+    case "clarify":
+      templateText =
+        "あなたはヒアリング担当です。ユーザーの現状・目的・制約条件（予算や時間帯など）を丁寧に質問し、SalesFlow の次の提案フェーズに進めるための情報を整理してください。専門用語は避け、わかりやすい言葉で対話してください。";
+      break;
+
+    case "propose":
+      if (isBeginner) {
+        templateText =
+          "ユーザーは初心者想定です。これまでのヒアリング内容を踏まえて、1〜2 個の具体的なプラン案と料金の目安を、専門用語を避けてシンプルに提案してください。最後に「この中だとどれが気になりましたか？」のように、ユーザーに選びやすい聞き方をしてください。";
+      } else {
+        templateText =
+          "これまでのヒアリング内容を踏まえて、ユーザーに合いそうな 1〜2 個の具体的なプラン案と料金の目安を提案してください。各プランの違いとメリットを短く整理し、ユーザーが比較しやすい形で提示してください。";
+      }
+      break;
+
+    case "recommend":
+      templateText =
+        "すでに提案したプラン案を前提に、ユーザーに最も合いそうな選択肢を 1 つ推薦してください。その理由（レベル・目的・通いやすさ・予算など）を簡潔に説明し、もし合わなそうであれば代替案も 1 つだけ示してください。";
+      break;
+
+    case "close":
+      templateText =
+        "これまでの対話内容を要約しつつ、ユーザーが感じていそうな不安（料金・継続できるか・レベル感など）を 1 つずつ確認しながら、次の具体的なステップ（体験予約、申込フォームの案内など）を提案してください。押し付けにならないよう、ユーザーのペースに合わせて選択肢を提示してください。";
+      break;
+
+    default:
+      templateText =
+        "テンプレートが見つかりませんでした。率直に状況を説明し、ユーザーの要望をもう一度丁寧に確認してください。";
+      break;
+  }
+
+  const fallbackIdParts = ["fallback", phase];
+  if (isBeginner) {
+    fallbackIdParts.push("beginner");
+  }
+
+  return {
+    id: fallbackIdParts.join(":"),
+    phase,
+    intent,
+    personaTags: tags,
+    template: templateText,
+    source: "fallback",
+    matrixKey: `${phase}|${intent ?? "ANY"}|${isBeginner ? "beginner" : "ANY"}`,
+  };
 }
 
 /**
