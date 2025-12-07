@@ -4,19 +4,27 @@
 // - For Phase14 Step1, focuses on Propose stage integration using ProposePromptBuilder
 
 import type { KpiFunnelMeta, SalesStage } from "../../dialog/types";
-import { buildClosePrompt, type CloseIntent } from "./closePromptBuilder";
-import { computeKpiFunnelFromPlan } from "./kpiFunnel";
-import { buildProposePrompt, type ProposeIntent } from "./proposePromptBuilder";
 import {
-  buildRecommendPrompt,
+  buildClosePromptWithMeta,
+  type CloseIntent,
+} from "./closePromptBuilder";
+import { computeKpiFunnelFromPlan } from "./kpiFunnel";
+import {
+  buildProposePromptWithMeta,
+  type ProposeIntent,
+} from "./proposePromptBuilder";
+import {
+  buildRecommendPromptWithMeta,
   type RecommendIntent,
 } from "./recommendPromptBuilder";
+import type { SalesTemplate } from "./salesRules";
 import {
   runSalesPipeline,
   type SalesDetectionContext,
   type SalesMeta,
   type SalesPipelineOptions,
 } from "./salesPipeline";
+import { computeNextSalesStage } from "./salesStageMachine";
 
 // Extend SalesMeta with simple stage flags
 export type ExtendedSalesMeta = SalesMeta & {
@@ -50,6 +58,7 @@ export type SalesOrchestratorInput = {
  * - meta: SalesMeta に KPI ファネル情報を拡張したもの
  * - nextStage: 次に進むべき SalesStage（"propose" / "recommend" / "close" など）
  * - prompt: nextStage に応じて組み立てられた文面（Propose / Recommend / Close 用テンプレなど）
+ * - templateMeta: 実際に利用したテンプレートのメタ情報（Propose / Recommend / Close の場合のみ）
  */
 export type SalesOrchestratorResult = {
   meta: ExtendedSalesMeta & {
@@ -57,6 +66,11 @@ export type SalesOrchestratorResult = {
   };
   nextStage?: SalesStage;
   prompt?: string;
+  /**
+   * Propose / Recommend / Close で実際に利用したテンプレートのメタ情報。
+   * SalesLogWriter などで templateSource / templateId を記録するために利用する。
+   */
+  templateMeta?: SalesTemplate;
 };
 
 /**
@@ -112,40 +126,72 @@ export function runSalesOrchestrator(
   const hasClosed =
     metaWithFunnel.closeTriggered ?? previousMeta?.closeTriggered ?? false;
 
-  // 3) 前ターンとの差分を見て、必要なら Sales ステージを起動
+  const stageTransition = computeNextSalesStage({
+    previousStage: (previousMeta as any)?.phase ?? null,
+    hasProposeIntent: !!proposeIntent && !hasProposed,
+    hasRecommendIntent: !!recommendIntent && !hasRecommended,
+    hasCloseIntent: !!closeIntent && !hasClosed,
+  });
+
+  // メタ情報にも現在のステージを反映しておく（Phase15）
+  (metaWithFunnel as any).phase = stageTransition.nextStage;
+
+  // 3) 前ターンとの差分 + state machine の結果を見て、必要なら Sales ステージを起動
   let nextStage: SalesStage | undefined;
   let prompt: string | undefined;
+  let templateMeta: SalesTemplate | undefined;
 
-  // シンプルなルール:
-  // - まだ Propose を出していなければ Propose を優先（intent が未指定ならスキップ）
-  // - 次に Recommend（intent が未指定ならスキップ）
-  // - 最後に Close（intent が未指定ならスキップ）
-  if (!hasProposed && proposeIntent) {
-    nextStage = "propose";
-    prompt = buildProposePrompt({
-      intent: proposeIntent,
-      personaTags,
-    });
-    metaWithFunnel.proposeTriggered = true;
-  } else if (!hasRecommended && recommendIntent) {
-    nextStage = "recommend";
-    prompt = buildRecommendPrompt({
-      intent: recommendIntent,
-      personaTags,
-    });
-    metaWithFunnel.recommendTriggered = true;
-  } else if (!hasClosed && closeIntent) {
-    nextStage = "close";
-    prompt = buildClosePrompt({
-      intent: closeIntent,
-      personaTags,
-    });
-    metaWithFunnel.closeTriggered = true;
+  // Phase15: salesStageMachine の nextStage を優先しつつ、
+  // これまでの「一度だけトリガー」ポリシー（*_Triggered フラグ）も維持する。
+  switch (stageTransition.nextStage) {
+    case "propose":
+      if (!hasProposed && proposeIntent) {
+        nextStage = "propose";
+        const built = buildProposePromptWithMeta({
+          intent: proposeIntent,
+          personaTags,
+        });
+        prompt = built.prompt;
+        templateMeta = built.template;
+        metaWithFunnel.proposeTriggered = true;
+      }
+      break;
+
+    case "recommend":
+      if (!hasRecommended && recommendIntent) {
+        nextStage = "recommend";
+        const built = buildRecommendPromptWithMeta({
+          intent: recommendIntent,
+          personaTags,
+        });
+        prompt = built.prompt;
+        templateMeta = built.template;
+        metaWithFunnel.recommendTriggered = true;
+      }
+      break;
+
+    case "close":
+      if (!hasClosed && closeIntent) {
+        nextStage = "close";
+        const built = buildClosePromptWithMeta({
+          intent: closeIntent,
+          personaTags,
+        });
+        prompt = built.prompt;
+        templateMeta = built.template;
+        metaWithFunnel.closeTriggered = true;
+      }
+      break;
+
+    // clarify / ended などの場合は、この段階ではテンプレ生成は行わない
+    default:
+      break;
   }
 
   return {
     meta: metaWithFunnel,
     nextStage,
     prompt,
+    templateMeta,
   };
 }

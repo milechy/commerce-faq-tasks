@@ -8,9 +8,9 @@ import {
   type SalesRulesLoadOptions,
 } from "../../src/agent/orchestrator/sales/rulesLoader";
 import {
+  defaultSalesRules,
   getSalesRules,
   setSalesRulesProvider,
-  defaultSalesRules,
   type SalesRules,
 } from "../../src/agent/orchestrator/sales/salesRules";
 
@@ -23,9 +23,18 @@ class FakeSalesRulesLoader implements SalesRulesLoader {
 
   constructor(private readonly rules: SalesRules) {}
 
-  async load(options?: SalesRulesLoadOptions): Promise<SalesRules> {
+  async loadAll(
+    options?: SalesRulesLoadOptions
+  ): Promise<Record<string, SalesRules>> {
     this.lastOptions = options;
-    return this.rules;
+    // Phase15 のテスト用簡易実装:
+    // - default: デフォルトテナント向け
+    // - tenant-001 / another-tenant: 任意のテナント ID に対して同じ rules を返す
+    return {
+      default: this.rules,
+      "tenant-001": this.rules,
+      "another-tenant": this.rules,
+    };
   }
 }
 
@@ -35,12 +44,13 @@ afterEach(() => {
 });
 
 describe("DefaultSalesRulesLoader", () => {
-  it("returns defaultSalesRules", async () => {
+  it("returns a map that includes defaultSalesRules", async () => {
     const loader = new DefaultSalesRulesLoader();
 
-    const rules = await loader.load();
+    const rulesMap = await loader.loadAll();
 
-    expect(rules).toEqual(defaultSalesRules);
+    // キー名には依存せず、どこかの値として defaultSalesRules が含まれていることだけを確認する
+    expect(Object.values(rulesMap)).toContain(defaultSalesRules);
   });
 });
 
@@ -64,15 +74,13 @@ describe("initSalesRulesProviderFromLoader", () => {
 
     const loader = new FakeSalesRulesLoader(customRules);
 
-    const loadedRules = await initSalesRulesProviderFromLoader(loader);
-
-    expect(loadedRules).toEqual(customRules);
+    await initSalesRulesProviderFromLoader(loader);
 
     const rulesFromProvider = getSalesRules();
     expect(rulesFromProvider).toEqual(customRules);
   });
 
-  it("passes options (e.g. tenantId) through to the loader", async () => {
+  it("returns loader's rules regardless of tenantId", async () => {
     const customRules: SalesRules = {
       premiumHints: ["pro"],
       upsellKeywords: ["upgrade"],
@@ -81,11 +89,12 @@ describe("initSalesRulesProviderFromLoader", () => {
 
     const loader = new FakeSalesRulesLoader(customRules);
 
-    await initSalesRulesProviderFromLoader(loader, { tenantId: "tenant-001" });
+    // Phase15 の実装では initSalesRulesProviderFromLoader は loader のみを受け取り、
+    // 内部で loadAll した結果をテナントごとに切り替える。
+    await initSalesRulesProviderFromLoader(loader);
 
-    expect(loader.lastOptions).toEqual({ tenantId: "tenant-001" });
-
-    // provider 側では options は使わず、事前にロード済みの rules を返すことを確認
+    // tenantId を指定しても、FakeSalesRulesLoader はすべて customRules を返すようにしているので
+    // getSalesRules の結果も customRules になることを確認する。
     const rulesFromProvider = getSalesRules({ tenantId: "another-tenant" });
     expect(rulesFromProvider).toEqual(customRules);
   });

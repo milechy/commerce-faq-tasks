@@ -31,6 +31,7 @@ export type SalesIntentDetectionInput = {
 type PhaseRuleBase<TIntent extends string> = {
   intent: TIntent
   name?: string
+  weight?: number
   patterns?: {
     any?: string[]
     require?: string[]
@@ -45,6 +46,15 @@ type SalesIntentRuleConfig = {
 
 let cachedRules: SalesIntentRuleConfig | null = null
 let rulesLoadErrorLogged = false
+
+function buildDetectionText(input: SalesIntentDetectionInput): string {
+  const history = input.history ?? []
+  const recentHistory = history.slice(-5)
+  const historyText = recentHistory.map((m) => m.content || '').join('\n')
+
+  const fullText = `${input.userMessage}\n${historyText}`
+  return normalize(fullText)
+}
 
 function normalize(text: string): string {
   return text.toLowerCase()
@@ -76,31 +86,36 @@ function loadRulesFromYaml(): SalesIntentRuleConfig | null {
   }
 }
 
-function matchesRule<TIntent extends string>(
+function computeRuleScore<TIntent extends string>(
   text: string,
   rule: PhaseRuleBase<TIntent>,
-): boolean {
+): number {
   const patterns = rule.patterns ?? {}
   const anyPatterns = patterns.any ?? []
   const requirePatterns = patterns.require ?? []
 
-  if (anyPatterns.length > 0) {
-    const anyMatched = anyPatterns.some((p) => {
-      const needle = normalize(p)
-      return needle.length > 0 && text.includes(needle)
-    })
-    if (!anyMatched) return false
-  }
-
+  // require: いずれか 1 つ以上のヒットが必須（OR 条件）
   if (requirePatterns.length > 0) {
-    const allMatched = requirePatterns.every((p) => {
+    const hasRequired = requirePatterns.some((p) => {
       const needle = normalize(p)
       return needle.length > 0 && text.includes(needle)
     })
-    if (!allMatched) return false
+    if (!hasRequired) return 0
   }
 
-  return true
+  // any: ヒット数をスコアとしてカウント
+  const hitCount =
+    anyPatterns.length > 0
+      ? anyPatterns.filter((p) => {
+          const needle = normalize(p)
+          return needle.length > 0 && text.includes(needle)
+        }).length
+      : 0
+
+  if (hitCount <= 0) return 0
+
+  const weight = typeof rule.weight === 'number' ? rule.weight : 1
+  return hitCount * weight
 }
 
 function detectFromRules<TIntent extends string>(
@@ -108,12 +123,19 @@ function detectFromRules<TIntent extends string>(
   rules?: PhaseRuleBase<TIntent>[],
 ): TIntent | undefined {
   if (!rules || rules.length === 0) return undefined
+
+  let bestIntent: TIntent | undefined
+  let bestScore = 0
+
   for (const rule of rules) {
-    if (matchesRule(text, rule)) {
-      return rule.intent
+    const score = computeRuleScore(text, rule)
+    if (score > bestScore) {
+      bestScore = score
+      bestIntent = rule.intent
     }
   }
-  return undefined
+
+  return bestIntent
 }
 
 function detectSalesIntentsFromYaml(
@@ -122,7 +144,7 @@ function detectSalesIntentsFromYaml(
   const rules = loadRulesFromYaml()
   if (!rules) return null
 
-  const text = normalize(input.userMessage)
+  const text = buildDetectionText(input)
 
   const proposeIntent = detectFromRules(text, rules.propose)
   const recommendIntent = detectFromRules(text, rules.recommend)

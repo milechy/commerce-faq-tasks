@@ -1,7 +1,7 @@
 // src/agent/orchestrator/sales/proposePromptBuilder.ts
 // Phase14: Propose-flow facing helper that pulls templates from SalesTemplateProvider
 
-import { getSalesTemplate, type SalesPhase } from "./salesRules";
+import { getSalesTemplate, type SalesPhase, type SalesTemplate } from "./salesRules";
 
 /**
  * 英会話向け Propose Intent
@@ -22,6 +22,16 @@ export type ProposeIntent =
   | "propose_subscription_upgrade";   // 既存ユーザー向けアップグレード提案
 
 const PROPOSE_PHASE: SalesPhase = "propose";
+
+/**
+ * Phase15: テンプレートメタ情報付きのビルド結果。
+ * - prompt: 実際に LLM に渡すプロンプト全文
+ * - template: 利用した SalesTemplate（source / matrixKey などを含む）
+ */
+export type BuiltSalesPromptResult = {
+  prompt: string;
+  template: SalesTemplate;
+};
 
 /**
  * Propose 用の提案文を構築するユーティリティ。
@@ -106,4 +116,37 @@ export function buildProposePrompt(opts: {
         "気になる点や不安な点があれば、あわせて教えていただけると嬉しいです。",
       ].join("\n");
   }
+}
+
+/**
+ * Phase15: SalesFlow 用に、テンプレートメタ情報も含めて返すラッパー関数。
+ * 既存の buildProposePrompt の挙動（文字列プロンプト生成）はそのまま利用しつつ、
+ * SalesRules.getSalesTemplate から取得した SalesTemplate をメタとして同梱する。
+ */
+export function buildProposePromptWithMeta(opts: {
+  intent: ProposeIntent;
+  personaTags?: string[];
+}): BuiltSalesPromptResult {
+  const prompt = buildProposePrompt(opts);
+
+  const template =
+    getSalesTemplate({
+      phase: PROPOSE_PHASE,
+      intent: opts.intent,
+      personaTags: opts.personaTags,
+    }) ?? {
+      // 念のため、null の場合にも最低限のメタ情報を持つテンプレートを生成する
+      id: "fallback:propose:runtime",
+      phase: PROPOSE_PHASE,
+      intent: opts.intent,
+      personaTags: opts.personaTags,
+      template: prompt,
+      source: "fallback",
+      matrixKey: `propose|${opts.intent}|${opts.personaTags?.[0] ?? "ANY"}`,
+    };
+
+  return {
+    prompt,
+    template,
+  };
 }
