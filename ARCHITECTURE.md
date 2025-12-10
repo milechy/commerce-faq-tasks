@@ -47,6 +47,20 @@ A/Bテスト
 
 Sales AaaS拡張: HP/LP/キャンペーン/クーポン/商品DBを統合し、RAG+Web検索で誘導最適化
 
+## Phase13: Notion-driven Sales AaaS（Clarify / Templates / Logs）
+
+Phase13 では、上記アーキテクチャに対して次のコンポーネントを追加する。
+
+- Notion Client / Notion Sync Service
+  - Notion DB（FAQ / Products / LP Points / TuningTemplates / Clarify Log）からデータを取得
+  - `SCRIPTS/sync-notion.ts` 経由で FAQ / Products / LP Points / TuningTemplates を Postgres に同期
+- TuningTemplates（Sales Templates & Tone）
+  - Tuning DB ノード `T` の実体として、Notion から同期されたテンプレ＋トーン設定を保持
+  - SalesTemplateProvider がメモリ上でテンプレをキャッシュし、Clarify / Propose / Recommend / Close の各フェーズで利用
+- Clarify Log Writer
+  - `/integrations/notion/clarify-log` エンドポイントから呼ばれ、Clarify 実行結果を Notion Clarify Log DB に書き戻す
+  - Dialog Runtime 本体とは疎結合に保ち、書き戻し失敗時もユーザ応答フローは継続する設計とする
+
 ---
 
 # 3_TASKS.md
@@ -235,6 +249,31 @@ p50 が 1.7s、p95 は fallback/混雑時で 3.6s 程度。
 
 - route / plannerReasons / safetyTag / requiresSafeMode / durationMs を `/agent.dialog` で一元ログ化
 - Datadog/Otel でも集計しやすい構造へ統一
+
+## Phase11: Dialog Runtime Hardening（CrewGraph + LangGraph）
+
+Phase11 では、これまで Phase4/8 で導入した LangGraph Orchestrator をベースに、実行経路とログ構造を本番運用前提で固めた。
+
+### Orchestrator レイヤの分離
+- `/agent.dialog`:
+  - HTTP ハンドラ → **AgentDialogOrchestrator** → **CrewOrchestrator** → **LangGraphOrchestrator** というレイヤ構造に整理
+  - HTTP 依存のない `AgentDialogOrchestrator.run()` が `DialogTurnInput → DialogAgentResponse` を組み立てる単一の入口となる
+- CrewGraph:
+  - Input / Planner / Kpi / Final のノード構成を固定し、PlannerNode は LangGraph runtime をラップする役割に限定
+  - `CrewGraph.test.ts` / `langGraphOrchestrator.test.ts` により、CrewGraph と LangGraph の pipeline 一致を検証
+
+### Planner 軽量化フック（Rule-based Planner）
+- `plannerNode` 内に Rule-based Planner (`buildRuleBasedPlan(input, intent)`) を差し込むフックを追加
+- Phase11 時点では常に `null` を返すスケルトンとし、挙動は従来通り LLM Planner を経由
+- 将来、shipping / returns / payment / product-info などの典型 FAQ はここで PlannerPlan を構築し、LLM Planner の呼び出し頻度を削減する前提
+
+### Dialog Runtime ログ（p95 計測基盤）
+- pino ログで `/agent.dialog` の 1ターンごとに以下を記録:
+  - `dialog.rag.finished`: `totalMs`, `searchMs`, `rerankMs`
+  - `tag: "planner"`: Planner LLM の `latencyMs`
+  - `dialog.answer.finished`: Answer LLM の `latencyMs`
+  - `agent.dialog.orchestrator.response`: `route`, `graphVersion`, `needsClarification`, `final`, `hasPlannerPlan`, `hasKpiFunnel`, `kpiFunnelStage`
+- `SCRIPTS/analyze-agent-logs.ts` により、これらログから RAG / Planner / Answer の p50 / p95 をオフライン集計可能とし、p95 ≤ 1.5s の要件を検証しやすくした。
 ```
 
 ```
