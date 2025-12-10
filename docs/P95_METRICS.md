@@ -38,6 +38,25 @@
 | Planner LLM | 2500〜3500ms | 呼び出しは 5〜10%に抑える |
 | End-to-end  | **≤ 1500ms** | Fast-path 中心            |
 
+## 2.1 Phase17 現状値（/search.v1 ベンチマーク）
+
+Phase17 では、RAG レイヤの実測値として `/search.v1` に対して 100 リクエストのベンチマークを実施した。
+
+- 計測対象: `SCRIPTS/bench-agent-search.ts` による `/search.v1` への連続リクエスト（N=100）
+- 計測結果（代表値）:
+  - RAG 全体（/search.v1 HTTP 往復込み）
+    - `latency p50/p95 ≒ 628 / 654 ms`
+  - RAG 内部（search + rerank）
+    - `search_ms p50/p95 ≒ 625 / 651 ms`
+    - `rerank_ms p50/p95 ≒ 1 / 1 ms`（現状は dummy Cross-Encoder）
+    - `rag_total_ms p50/p95 ≒ 626 / 652 ms`
+
+補足:
+
+- `/search.v1` の `meta.hybrid_note` から、`search_ms` と `es_ms` はほぼ一致しており、多くのクエリで RAG の大部分が Elasticsearch 検索のレイテンシとなっている。
+- Phase17 時点では pgvector は無効化されており、Cross-Encoder は `engine: "dummy"` としてスタブ実装になっている（`ce_ms ≒ 1 ms`）。
+- 将来 ONNX Cross-Encoder / pgvector を有効化する際は、上記のベースラインからの増分（特に `rerank_ms p95`）をモニタリングする。
+
 ---
 
 # 3. 使用ツール
