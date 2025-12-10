@@ -58,12 +58,24 @@
 - Stripe UsageRecord（1円=1unit）冪等キー：`billing:{tenant}:{yyyymm}`
 - Webhook成功でNotionにInvoice URL/Status反映
 
-## 監視/KPI
-- p95/p99, 成功率, tokens_in/out, CTR, 再購率, 粗利率, 根拠提示率
-- アラート例：p95>1.8s(5分), 120B比率>15%, Error>1%
-- `/agent.dialog` については、1ターンごとに pino ログで以下を記録すること:
-  - `dialog.rag.finished`: `totalMs`, `searchMs`, `rerankMs`
-  - `tag: "planner"`: Planner LLM の `latencyMs`
-  - `dialog.answer.finished`: Answer LLM の `latencyMs`
-  - `agent.dialog.orchestrator.response`: `route`, `graphVersion`, `needsClarification`, `final`, `hasPlannerPlan`, `hasKpiFunnel`, `kpiFunnelStage`
-- `SCRIPTS/analyze-agent-logs.ts` 等のツールで、これらログから RAG / Planner / Answer の p50 / p95 をオフライン集計できること（p95 ≤ 1.5s を満たしているかを定期チェック）
+### Billing レイヤーモデル
+
+- Layer1: 従量課金（Usage）
+  - `/agent.dialog`, `/agent.search`, HP/LP ナビなどの API 呼び出しを対象とする
+  - 1 リクエストごとに tokens_in / tokens_out / model / latency / route / tenantId を計測し、日次で `usage_logs` に集計されること
+  - `usage_logs` の `cost_llm`（LLM原価）と `cost_total`（マージン込みコスト）を Stripe 請求のベースとすること
+- Layer2: サブスクリプション（ベース料金）
+  - テナントごとに「月額基本料金」を Stripe Subscription で管理できること
+  - 従量課金が 0 の月でも、ベース料金による請求が継続されること
+- Layer3: チューニング・初期セットアップ
+  - 初期導入時の RAG 構築・SalesFlow チューニングを別途「一時費用」として請求できること
+  - このレイヤーの金額・ステータスは Notion Billing Summary DB にメタ情報として保持されること
+
+### 管理 UI（Billing / Usage）要件（概略）
+
+- 管理 UI には、FAQ 管理とは別に「Billing / Usage」タブが存在すること
+- テナントごとに以下を参照できること（少なくとも日次・月次集計）
+  - total_requests / dialog_requests / search_requests / hp_sessions
+  - cost_llm / cost_total
+  - billing_status（pending / billed / error 等）
+- Stripe 連携が有効な環境では、Notion または DB に保存された Invoice URL / Customer Portal へのリンクを表示できること

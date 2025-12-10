@@ -309,3 +309,15 @@ Phase16 では SalesLogWriter / runSalesFlowWithLogging が `prevStage` / `nextS
 - `personaTag` 別の Funnel（beginner と non-beginner での比較）を出す
 
 これらは Phase16 以降のテーマとして検討する。
+
+---
+
+## 5. Billing / Usage との関係
+
+Sales Analytics は主に SalesFlow（SalesLogs）を対象としているが、Billing / Usage との間には次のような関係がある。
+
+- Billing 用の `usage_logs` は、tenant × date レベルで「どれだけ API を使ったか」を集計するためのテーブルであり、SalesLogs は「どの intent / phase / personaTag でどのような SalesFlow が走ったか」を記録するテーブルである。
+- 将来的には、以下のようなレポートを想定している:
+  - 「あるテナントの月次 usage（cost_total）が、どの intent / personaTag / Sales ステージに分布しているか」
+  - 「SalesFlow の改善（テンプレ増強・Funnel 改善）が、usage あたりのコンバージョン率や売上にどう影響しているか」
+- これらは Phase21 以降の拡張テーマとしつつ、本ドキュメントでは SalesLogs ベースの分析にフォーカスし、Billing/usage は `usage_logs` 側で別途設計する。
