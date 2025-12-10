@@ -120,8 +120,14 @@ export async function runDialogTurn(
     {
       detection: {
         userMessage: message,
-        history: history ?? [],
-        plan: multiStepPlan,
+        history: (history ?? [])
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content ?? "",
+          })),
+        // Phase17: MultiStepQueryPlan は PlannerPlan と構造が異なるため、
+        // sales detection にはまだ渡さない（将来 PlannerPlan 側と揃えてから連携する）
       },
       // Phase16: previousMeta はまだ SalesSessionMeta とは統合していないため、一旦 undefined とする
       previousMeta: undefined,

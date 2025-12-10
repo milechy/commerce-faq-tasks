@@ -54,9 +54,6 @@ export async function runSalesFlowWithLogging(
     input.closeIntent ??
     "unknown";
 
-  // personaTags は orchestrator input をそのまま使う
-  const personaTags = input.personaTags;
-
   const record = buildSalesLogRecord({
     context: { tenantId, sessionId },
     phase,
@@ -64,7 +61,7 @@ export async function runSalesFlowWithLogging(
     nextStage: nextStageForLog,
     stageTransitionReason,
     intent,
-    personaTags,
+    personaTags: input.personaTags ?? [],
     userMessage: input.detection.userMessage,
     templateSource,
     templateId,

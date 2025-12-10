@@ -123,7 +123,14 @@ app.post("/search.v1", async (req, res) => {
   const routeStr = "hybrid:es50+pg50";
 
   try {
+    const tSearch0 = Date.now();
     const results = await hybridSearch(q);
+    const tSearch1 = Date.now();
+
+    const search_ms = Math.max(0, tSearch1 - tSearch0);
+
+    const hybrid_note = (results as any)?.note;
+
     const re = await rerank(q, results.items, k);
 
     const flags: string[] = ["v1", "validated"];
@@ -138,6 +145,11 @@ app.post("/search.v1", async (req, res) => {
       flags.push("ce:skipped");
     }
 
+    const rerank_ms =
+      typeof re?.ce_ms === "number" ? (re.ce_ms as number) : undefined;
+    const total_ms =
+      typeof rerank_ms === "number" ? search_ms + rerank_ms : search_ms;
+
     return res.json({
       items: re.items,
       meta: {
@@ -145,6 +157,12 @@ app.post("/search.v1", async (req, res) => {
         rerank_score: null,
         tuning_version: "v1",
         flags,
+        ragStats: {
+          search_ms,
+          rerank_ms,
+          total_ms,
+        },
+        hybrid_note,
       },
       ce_ms: re.ce_ms,
     });
@@ -163,7 +181,7 @@ app.post("/dialog/turn", async (req, res) => {
     options: z
       .object({
         topK: z.number().int().positive().max(50).optional(),
-        language: z.string().optional(),
+        language: z.enum(["ja", "en", "auto"]).optional(),
         useMultiStepPlanner: z.boolean().optional(),
         useLlmPlanner: z.boolean().optional(),
         personaTags: z.array(z.string()).optional(),
