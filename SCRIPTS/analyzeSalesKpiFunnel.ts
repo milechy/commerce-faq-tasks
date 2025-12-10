@@ -29,6 +29,7 @@ interface SalesLogEntry {
   templateId?: string | null;
   prevStage?: Stage | null;
   nextStage?: Stage | null;
+  timestamp?: string;
   createdAt?: string;
   // その他のフィールドが存在しても良い
   [key: string]: unknown;

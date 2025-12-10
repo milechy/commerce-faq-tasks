@@ -1,12 +1,19 @@
-# SalesFlow Design (Phase15)
+# SalesFlow Design (Phase15-16)
 
-This document describes the consolidated design of SalesFlow as of Phase15.
+This document describes the consolidated design of SalesFlow as of Phase15-16.
 
 Phase15 builds on Phase14 by:
+
 - Externalizing templates to a Notion-based TuningTemplates DB
 - Introducing a state machine for stage control
 - Centralizing template fallback behaviour
 - Adding logging and analysis hooks for KPI and fallback visibility
+
+Phase16 builds on Phase15 by:
+
+- Adding stage transition metadata (`prevStage`, `nextStage`, `stageTransitionReason`, `timestamp`) to SalesLogs for KPI funnel and stage transition analysis
+- Introducing `SalesRulesLoader` / `SalesRulesProvider` to allow tenant-specific SalesRules to be loaded and swapped at startup
+- Adding `SalesSessionMeta` and `salesContextStore` as a lightweight in-memory store for the current SalesStage and related session metadata
 
 ## 1. SalesFlow Overview
 
@@ -52,17 +59,21 @@ computeNextSalesStage({
   hasRecommendIntent,
   hasCloseIntent,
   manualNextStage,
-})
+});
 ```
 
 and receives a `SalesStageTransition`:
 
 ```ts
 type SalesStageTransition = {
-  previousStage: SalesStage | null
-  nextStage: SalesStage
-  reason: 'initial_clarify' | 'auto_progress_by_intent' | 'stay_in_stage' | 'manual_override'
-}
+  previousStage: SalesStage | null;
+  nextStage: SalesStage;
+  reason:
+    | "initial_clarify"
+    | "auto_progress_by_intent"
+    | "stay_in_stage"
+    | "manual_override";
+};
 ```
 
 High-level behaviour:
@@ -73,6 +84,8 @@ High-level behaviour:
 - From **recommend**, `close` intents move to `close`, otherwise the stage stays at `recommend`.
 - **close** / **ended** default to staying in the same stage.
 - If `manualNextStage` is provided, it overrides the transitions above and sets reason `manual_override`.
+
+Stage transitions are materialized as a `SalesStageTransition` and later logged via `SalesLogWriter` as `prevStage`, `nextStage`, and `stageTransitionReason` in the SalesLogs (see `SALES_LOG_SPEC.md`).
 
 This keeps control flow explicit and testable, while still allowing future business rules to be layered on top.
 
@@ -100,6 +113,7 @@ The selection flow is:
    - `templateSource = "fallback"` when the internal fallback is used
 
 Phase15 also adds beginner-specific fallbacks:
+
 - When `personaTags` includes `beginner`, a more guided, simpler tone is used where appropriate.
 
 ## 5. Orchestrator Responsibilities
@@ -107,32 +121,37 @@ Phase15 also adds beginner-specific fallbacks:
 The main orchestrator (`salesOrchestrator.ts`) coordinates:
 
 1. **Inputs**
+
    - Multi-step `plan` (from the planner)
    - Conversation `history`
    - `personaTags`
    - Detection context (`userMessage` and intents from `salesIntentDetector`)
+   - Sales rules loaded via `SalesRulesProvider` (initialized by `SalesRulesLoader` at startup)
 
 2. **Stage decision**
+
    - Calls `salesStageMachine.computeNextSalesStage()` with the previous stage and current intent signals.
    - Receives `prevStage`, `nextStage`, and `stageTransitionReason`.
 
 3. **Template selection**
+
    - Invokes `getSalesTemplate` for the decided `nextStage`.
    - Obtains `{ template, templateId, templateSource }`.
 
 4. **Logging**
+
    - Builds a log payload for `SalesLogWriter` including:
      - `phase`/`stage`
      - `intent`
      - `personaTags`
      - `templateId` and `templateSource`
-     - stage transition metadata
+     - stage transition metadata: prevStage, nextStage, stageTransitionReason
 
 5. **Answer construction**
    - Combines the selected template with planner outputs and search results (when present).
    - Returns a response object that the dialog layer can render to the user.
 
-Phase15 also introduces `runSalesFlowWithLogging`, a thin wrapper around the orchestrator that ensures consistent logging across all SalesFlow turns.
+Phase15-16 also introduces `runSalesFlowWithLogging`, a thin wrapper around the orchestrator that ensures consistent logging across all SalesFlow turns, and integrates with `SalesLogWriter` to emit stage transition metadata. Phase16 additionally wires the SalesFlow result into `salesContextStore` so that the current SalesStage is stored as `SalesSessionMeta` for the session.
 
 Phase15 では、これらのステージ設計に加えて「観測可能性」も強化された。  
 具体的には、テンプレート選択結果（`templateId` / `templateSource`）とステージ遷移メタデータを `SalesLogWriter` から一貫して出力し、TemplateMatrix / TemplateGaps と照合できるようにしている。  
@@ -140,19 +159,22 @@ Phase15 では、これらのステージ設計に加えて「観測可能性」
 
 ## 6. Logging & Analysis Hooks
 
-SalesFlow emits structured logs via `SalesLogWriter`. As of Phase15:
+SalesFlow emits structured logs via `SalesLogWriter`. As of Phase15-16:
 
 - Each sales turn includes:
   - `phase` / `stage`
+  - `prevStage`, `nextStage`, `stageTransitionReason`
   - `intent`
   - `personaTags`
   - `templateId`
   - `templateSource` (e.g. `notion`, `fallback`)
+  - `timestamp`
 - Logs can be exported to CSV and analyzed by scripts in `SCRIPTS/`:
   - Fallback coverage and TemplateMatrix alignment: `analyzeTemplateFallbacks.ts`
-  - Stage/intent-level funnel and fallback KPIs: `analyzeSalesKpiFunnel.ts`
+  - Stage/intent-level funnel and fallback KPIs（Stage Distribution / Stage Transitions / Funnel Metrics）: `analyzeSalesKpiFunnel.ts`
 
 These hooks make it possible to:
+
 - Identify intents/personas that still rely heavily on fallback templates
 - Prioritize where to add or refine Notion templates
 - Track the effectiveness of template tuning over time.
@@ -162,6 +184,6 @@ These hooks make it possible to:
 Future phases may explore:
 
 - Richer personaTag interactions (multiple tags with scoring/priority)
-- Cross-session SalesFlow memory (longer-term user context)
+- Richer use of SalesSessionMeta for cross-session SalesFlow memory（前回ステージや lastIntent, personaTags に応じたエントリロジックの分岐）
 - ML-based or hybrid intent detection feeding into the same state machine
 - A UI layer for non-technical users to inspect KPIs and drive template updates directly.

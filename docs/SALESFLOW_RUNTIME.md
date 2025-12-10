@@ -1,8 +1,6 @@
-# SalesFlow Runtime (Phase15)
+# SalesFlow Runtime (Phase15-16)
 
-This document explains the runtime execution flow of SalesFlow as of Phase15.
-
-Phase15 の Runtime では、従来の「その場しのぎの if 文ベース制御」から一歩進めて、(1) YAML ベースの `salesIntentDetector` による intent 検出、(2) `salesStageMachine` による明示的なステージ遷移、(3) Notion テンプレ / fallback のどちらが使われたかを表す `templateSource` ログ、(4) これらを一括で扱う `runSalesFlowWithLogging` ラッパー、という 4 つの要素を追加した。これにより、Runtime は「テンプレ生成」と「ログ / KPI 計測」がセットになった一貫したパイプラインとして動作する。
+Phase15-16 の Runtime では、従来の「その場しのぎの if 文ベース制御」から一歩進めて、(1) YAML ベースの `salesIntentDetector` による intent 検出、(2) `salesStageMachine` による明示的なステージ遷移、(3) Notion テンプレ / fallback のどちらが使われたかを表す `templateSource` ログ、(4) これらを一括で扱う `runSalesFlowWithLogging` ラッパー、(5) SalesLogWriter によるステージ遷移メタ付き SalesLog の出力、(6) `salesContextStore` による Sales セッションメタ（SalesSessionMeta）の保存、という 6 つの要素を追加・統合した。これにより、Runtime は「テンプレ生成」と「ログ / KPI 計測」、および「セッション状態の更新」がセットになった一貫したパイプラインとして動作する。
 
 ## 1. High-level Architecture
 
@@ -10,6 +8,7 @@ SalesFlow Runtime sits between:
 
 - **multi-step planner** (search, retrieval planning)
 - **template providers** (Clarify / Propose / Recommend / Close)
+- **salesContextStore** (current SalesStage / SalesSessionMeta)
 - **SalesLogWriter**
 
 The orchestrator determines:
@@ -48,7 +47,7 @@ Where:
 - `prevStage` / `nextStage` are `SalesStage` values resolved via `salesStageMachine.computeNextSalesStage()`
 - `stageTransitionReason` is a label describing _why_ the transition happened (e.g. `initial_clarify`, `auto_progress_by_intent`, `stay_in_stage`, `manual_override`)
 - `templateSource` distinguishes Notion templates vs internal fallbacks
-- `logPayload` is a structured object passed to `SalesLogWriter`
+- `logPayload` is a structured object passed to `SalesLogWriter`. Phase16 では `SalesLogWriter` が `prevStage` / `nextStage` / `stageTransitionReason` を含む SalesLog レコードを構築し、後続の Sales Analytics（KPI Funnel / Stage Transitions）で利用される。
 
 ### Step 3 — Template Provider selection
 
@@ -74,12 +73,24 @@ Orchestrator prepares:
 - personaTags
 - templateId & templateSource
 - userMessage
-  Then passes to `SalesLogWriter`.
+- prevStage / nextStage / stageTransitionReason
+
+これらを `logPayload` として `SalesLogWriter` に渡し、SalesLog に書き込む。
 
 ### Step 5 — dialogAgent finalizes answer
 
 - Append to session history
 - Return combined result (search steps + salesflow output)
+
+### Step 6 — SalesSessionMeta の更新（salesContextStore）
+
+Phase16 では、SalesFlow 実行後に「このセッションはいまどの SalesStage にいるか」を保存するために、`salesContextStore` に `SalesSessionMeta` を書き込む。
+
+- `SalesSessionKey = { tenantId, sessionId }` でセッションを一意に識別する
+- `SalesSessionMeta` には少なくとも `currentStage` と `lastUpdatedAt` が含まれる
+- `dialogAgent.ts` は `runSalesFlowWithLogging` の結果（`salesResult.nextStage`）を用いて、`updateSalesSessionMeta(key, { currentStage })` を呼び出す
+
+これにより、次ターン以降で「現在の SalesStage」を参照したり、将来的には `lastIntent` / `personaTags` などをセッションメタとして扱う基盤が整う。
 
 ## 3. Stage Transition Rules
 
@@ -203,3 +214,4 @@ personaTags influence:
 - ML classification for intent feeding into the same state machine
 - Conversation memory beyond a single session (longer-term user state)
 - Online monitoring dashboards for SalesFlow KPIs and fallback rates
+- SalesSessionMeta（Sales セッション状態）を使った SalesFlow エントリロジックの強化（前回ステージや lastIntent に応じた Clarify / Propose の分岐）
