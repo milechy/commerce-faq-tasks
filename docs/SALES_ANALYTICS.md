@@ -1,4 +1,4 @@
-# Sales Analytics (Phase15)
+# Sales Analytics (Phase15-16)
 
 SalesFlow の実運用ログ（SalesLogs）と TemplateMatrix をもとに、
 
@@ -22,7 +22,7 @@ SalesFlow の実運用ログ（SalesLogs）と TemplateMatrix をもとに、
 
 ### 1.1 何をしたいか
 
-Phase15 の Sales Analytics は、次のような問いに答えるための仕組み:
+Phase15-16 の Sales Analytics は、次のような問いに答えるための仕組み:
 
 - **Template 側の問い**
 
@@ -110,7 +110,7 @@ JSON への変換:
 - `personaTags` — カンマ区切りのタグ（例: `beginner,price_sensitive`）
 - `templateId` — 実際に使われたテンプレート ID（Notion ID や fallback ID）
 - `templateSource` — `notion` / `fallback`
-- （ある場合）`prevStage`, `nextStage`, `stageTransitionReason` など
+- `prevStage`, `nextStage`, `stageTransitionReason` — Phase16 時点では、ステージ遷移分析・Funnel 分析のために含める前提
 
 役割:
 
@@ -125,7 +125,8 @@ JSON への変換:
   - `phase`
   - `intent`
   - `personaTags`
-    と将来的には `prevStage` / `nextStage` を利用する。
+  - `prevStage` / `nextStage` / `stageTransitionReason`
+    を利用して、ステージ分布・ステージ遷移・Funnel を算出する。
 
 JSON への変換:
 
@@ -239,7 +240,7 @@ Sales KPI Funnel のレポートは、主に次のスクリプトで生成する
 
 出力例（抜粋）:
 
-```md
+```
 # Sales KPI Funnel Analysis
 
 - Logs file: data/sales_logs.json
@@ -247,60 +248,63 @@ Sales KPI Funnel のレポートは、主に次のスクリプトで生成する
 
 ## Summary
 
-- Entries: 3
-- Unique sessions: N/A (sessionId not provided)
-- Unique tenants: N/A (tenantId not provided)
+- Entries: 5
+- Unique sessions: 1
+- Unique tenants: 1
 
 ## Stage Distribution
 
 | Stage     | Count | Ratio |
 | --------- | ----: | ----: |
-| propose   |     2 | 66.7% |
-| recommend |     1 | 33.3% |
+| propose   |     3 | 60.0% |
+| recommend |     2 | 40.0% |
+
+## Stage Transitions
+
+| From    | To        | Count |
+| ------- | --------- | ----: |
+| clarify | propose   |     1 |
+| propose | recommend |     1 |
+
+## Funnel Metrics (clarify → propose → recommend → close)
+
+| From    | To        | Count | Base (from *) | Rate   |
+| ------- | --------- | ----: | ------------: | -----: |
+| clarify | propose   |     1 |             1 | 100.0% |
+| propose | recommend |     1 |             1 | 100.0% |
+| recommend | close   |     0 |             0 |   0.0% |
 
 ## PersonaTag Breakdown
 
 | PersonaTag | Total | clarify | propose | recommend | close |
 | ---------- | ----: | ------: | ------: | --------: | ----: |
-| beginner   |     3 |       0 |       2 |         1 |     0 |
+| beginner   |     5 |       0 |       3 |         2 |     0 |
 
 ## Intent Breakdown
 
 | Intent                          | Count | FallbackCount | FallbackRate |
 | ------------------------------- | ----: | ------------: | -----------: |
-| recommend_course_based_on_level |     1 |             1 |       100.0% |
-| trial_lesson_offer              |     2 |             1 |        50.0% |
+| recommend_course_based_on_level |     2 |             1 |        50.0% |
+| trial_lesson_offer              |     3 |             1 |        33.3% |
 ```
 
 主に見るポイント:
 
 1. **Stage Distribution**
-
    - 各ステージ（clarify / propose / recommend / close）に、SalesLogs がどれだけ分布しているか。
-   - 例:
-     - `clarify` が極端に多い → Clarify の設計・テンプレが弱く、次ステージに進みづらい可能性
-     - `recommend` に滞留 → Propose から Recommend への移行はできているが、Close まで届いていない など
-
-2. **PersonaTag Breakdown**
-
+2. **Stage Transitions**
+   - `prevStage` / `nextStage` ごとの遷移回数を確認し、どのステージ間で詰まりやすいかを見る。
+3. **Funnel Metrics**
+   - clarify → propose → recommend → close の各ステップで、何件が次のステージに進めているか（Rate を含む）を確認する。
+4. **PersonaTag Breakdown**
    - personaTag ごとに、どのステージで多く出現しているかを見る。
-   - 例:
-     - `beginner` が `propose` に偏りすぎている → レベル感の説明や不安解消（recommend / close 側）のテンプレを増やす余地がある
-
-3. **Intent Breakdown（FallbackRate を含む）**
-   - intent ごとのヒット数と、fallback 利用率（FallbackRate）を一覧で確認できる。
-   - Template fallback レポートが「セル単位」の分析なのに対して、こちらは **intent 単位での全体傾向** が分かるイメージ。
-   - 例:
-     - `trial_lesson_offer` の FallbackRate が高い → 体験レッスン周りのテンプレ拡充が優先度高い
-     - `recommend_course_based_on_level` の FallbackRate が高い → コースレコメンドの Notion テンプレ設計を見直す
+5. **Intent Breakdown（FallbackRate を含む）**
+   - intent ごとのヒット数と fallback 利用率を一覧で確認し、どの intent を優先的にチューニングすべきかを判断する。
 
 ### 4.2 今後の拡張ポイント
 
-現状のレポートでは、`prevStage` / `nextStage` を使った厳密な Funnel（clarify → propose → recommend → close）の遷移分析はまだ行っていないが、ログ形式としては対応可能な状態になっている。
+Phase16 では SalesLogWriter / runSalesFlowWithLogging が `prevStage` / `nextStage` / `stageTransitionReason` を書き出し、`SCRIPTS/analyzeSalesKpiFunnel.ts` では Stage Distribution / Stage Transitions / Funnel Metrics までを出力するようになった。一方で、personaTag 別の Funnel や userAction ベースのコンバージョン分析など、高度な分析はまだ最小限であり、以下は今後の拡張アイデアである。
 
-今後の拡張アイデア:
-
-- `prevStage` / `nextStage` を使い、ステージ間の遷移回数と遷移率を算出
 - `userAction`（例: trial レッスン予約）のイベントをログに追加し、コンバージョン率を計測
 - `personaTag` 別の Funnel（beginner と non-beginner での比較）を出す
 

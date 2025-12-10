@@ -17,6 +17,11 @@
 // - promptPreview: leading ~120 chars (for list UI)
 // - timestamp: ISO8601 string
 
+import type {
+  SalesStage,
+  SalesStageTransitionReason,
+} from "./salesStageMachine";
+
 export type SalesLogPhase = "clarify" | "propose" | "recommend" | "close";
 
 export type TemplateSource = "notion" | "fallback";
@@ -25,6 +30,12 @@ export interface SalesLogRecord {
   tenantId: string;
   sessionId: string;
   phase: SalesLogPhase;
+
+  // Stage transition metadata from salesStageMachine
+  prevStage: SalesStage | null;
+  nextStage: SalesStage;
+  stageTransitionReason: SalesStageTransitionReason;
+
   intent: string;
   personaTags: string[];
   userMessage: string;
@@ -54,6 +65,12 @@ export interface SalesLogContext {
 export function buildSalesLogRecord(params: {
   context: SalesLogContext;
   phase: SalesLogPhase;
+
+  // Stage transition metadata from salesStageMachine
+  prevStage: SalesStage | null;
+  nextStage: SalesStage;
+  stageTransitionReason: SalesStageTransitionReason;
+
   intent: string;
   personaTags: string[];
   userMessage: string;
@@ -76,6 +93,11 @@ export function buildSalesLogRecord(params: {
     tenantId: params.context.tenantId,
     sessionId: params.context.sessionId,
     phase: params.phase,
+
+    prevStage: params.prevStage,
+    nextStage: params.nextStage,
+    stageTransitionReason: params.stageTransitionReason,
+
     intent: params.intent,
     personaTags: params.personaTags,
     userMessage: params.userMessage,

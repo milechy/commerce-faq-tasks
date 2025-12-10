@@ -33,6 +33,12 @@ export async function runSalesFlowWithLogging(
 
   const template = result.templateMeta;
 
+  const stageTransition = result.stageTransition;
+
+  const prevStage = stageTransition?.previousStage ?? null;
+  const nextStageForLog = stageTransition?.nextStage ?? result.nextStage;
+  const stageTransitionReason = stageTransition?.reason ?? "stay_in_stage";
+
   // source から templateSource を決定（デフォルトは notion 扱い）
   const templateSource: TemplateSource =
     template.source === "fallback" ? "fallback" : "notion";
@@ -54,6 +60,9 @@ export async function runSalesFlowWithLogging(
   const record = buildSalesLogRecord({
     context: { tenantId, sessionId },
     phase,
+    prevStage,
+    nextStage: nextStageForLog,
+    stageTransitionReason,
     intent,
     personaTags,
     userMessage: input.detection.userMessage,

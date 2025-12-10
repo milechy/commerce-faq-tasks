@@ -10,7 +10,11 @@ import type { RecommendIntent } from "../orchestrator/sales/recommendPromptBuild
 import { runSalesFlowWithLogging } from "../orchestrator/sales/runSalesFlowWithLogging";
 import { detectSalesIntents } from "../orchestrator/sales/salesIntentDetector";
 import { appendToSessionHistory, getSessionHistory } from "./contextStore";
-import { getSalesSessionMeta, setSalesSessionMeta } from "./salesContextStore";
+import {
+  getSalesSessionMeta,
+  updateSalesSessionMeta,
+  type SalesSessionKey,
+} from "./salesContextStore";
 import type { DialogMessage, DialogTurnInput, DialogTurnResult } from "./types";
 
 // ユーザー入力 + 会話履歴からざっくりトークン数を見積もる。
@@ -88,7 +92,10 @@ export async function runDialogTurn(
   }
 
   // 1.5) SalesOrchestrator: SalesFlow (Propose など) を評価
-  const previousSalesMeta = getSalesSessionMeta(effectiveSessionId);
+  const salesSessionKey: SalesSessionKey = {
+    tenantId: DEFAULT_TENANT_ID,
+    sessionId: effectiveSessionId,
+  };
 
   const personaTags =
     options?.personaTags && options.personaTags.length > 0
@@ -116,7 +123,8 @@ export async function runDialogTurn(
         history: history ?? [],
         plan: multiStepPlan,
       },
-      previousMeta: previousSalesMeta,
+      // Phase16: previousMeta はまだ SalesSessionMeta とは統合していないため、一旦 undefined とする
+      previousMeta: undefined,
       proposeIntent,
       recommendIntent,
       closeIntent,
@@ -124,8 +132,13 @@ export async function runDialogTurn(
     }
   );
 
-  // セッションに SalesMeta を保存（次ターンの previousMeta 用）
-  setSalesSessionMeta(effectiveSessionId, salesResult.meta);
+  // SalesFlow の現在ステージをセッションメタに保存（次ターンのコンテキスト用）
+  if (salesResult.nextStage) {
+    updateSalesSessionMeta(salesSessionKey, {
+      currentStage: salesResult.nextStage,
+      // lastIntent や personaTags は必要になったタイミングで拡張する
+    });
+  }
 
   // 2) Orchestrator に実行を委譲
   const orchestrated = await runDialogOrchestrator({

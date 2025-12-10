@@ -294,3 +294,34 @@ Phase15 では、英会話テナント向け SalesFlow を **Clarify → Propose
   - `SCRIPTS/analyzeSalesKpiFunnel.ts`
   - `SCRIPTS/run_sales_reports.sh`
 - これにより、「どの intent / persona で fallback が多いか」「どのステージに滞留しがちか」を定量的に把握できる。
+
+## Phase16: SalesFlow Logging / SalesRulesLoader / SalesSessionMeta
+
+Phase16 では、Phase15 で導入した SalesFlow（Clarify → Propose → Recommend → Close → Ended）を、より安定して **観測・制御・拡張** できるようにするため、次の 3 点を中心に整備した。
+
+### 📝 SalesLog 拡張（ステージ遷移メタ）
+
+- SalesLog に以下のフィールドを追加し、SalesStageMachine の出力と 1:1 で対応付けた:
+  - `prevStage`, `nextStage`, `stageTransitionReason`, `timestamp`
+- `runSalesFlowWithLogging` → `SalesLogWriter` の経路で、`SalesOrchestratorResult.stageTransition` からステージ遷移メタをログに落とす構造を確立
+- `SCRIPTS/analyzeSalesKpiFunnel.ts` を拡張し、SalesLog から
+  - Stage Distribution
+  - Stage Transitions（from/to/count）
+  - Funnel Metrics（clarify → propose → recommend → close）
+  を集計できるようにした（サンプルログ: `data/sales_logs.json`）
+
+### ⚙️ SalesRulesLoader（テナント別 SalesRules 差し替え）
+
+- `SalesRulesLoader` インターフェースと `DefaultSalesRulesLoader` を追加し、将来 Notion / DB などから SalesRules をロードできる入口を用意
+- `initSalesRulesProviderFromLoader` / `initDefaultSalesRulesProvider` により、起動時に `SalesRulesProvider` を初期化する経路を標準化
+- テナント単位で SalesRules を差し替え可能な構造を `tests/agent/rulesLoader.test.ts` / `tests/agent/salesRulesLoader.test.ts` / `src/agent/orchestrator/sales/rulesLoader.test.ts` で検証
+
+### 💾 SalesSessionMeta / salesContextStore（Sales セッション状態の保存）
+
+- `SalesSessionMeta` 型を定義し、Sales セッションごとのメタ情報を in-memory で管理:
+  - `currentStage`, `lastIntent?`, `personaTags?`, `lastUpdatedAt`
+- `SalesSessionKey { tenantId, sessionId }` を導入し、テナント + セッション単位でセッションメタを管理
+- `salesContextStore.ts` に `get/set/update/clearSalesSessionMeta` を実装し、`salesContextStore.test.ts` でユニットテストを整備
+- `dialogAgent.ts` から `runSalesFlowWithLogging` 実行後に `salesResult.nextStage` を `SalesSessionMeta.currentStage` として保存することで、「このセッションはいまどの SalesStage にいるか」を後続処理で参照できるようにした
+
+詳細は `docs/PHASE16_SUMMARY.md` および `docs/SALES_LOG_SPEC.md` / `docs/SALES_ANALYTICS.md` / `docs/SALESFLOW_DESIGN.md` / `docs/SALESFLOW_RUNTIME.md` を参照。

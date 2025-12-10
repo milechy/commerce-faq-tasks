@@ -24,7 +24,10 @@ import {
   type SalesMeta,
   type SalesPipelineOptions,
 } from "./salesPipeline";
-import { computeNextSalesStage } from "./salesStageMachine";
+import {
+  computeNextSalesStage,
+  type SalesStageTransition,
+} from "./salesStageMachine";
 
 // Extend SalesMeta with simple stage flags
 export type ExtendedSalesMeta = SalesMeta & {
@@ -71,6 +74,12 @@ export type SalesOrchestratorResult = {
    * SalesLogWriter などで templateSource / templateId を記録するために利用する。
    */
   templateMeta?: SalesTemplate;
+
+  /**
+   * salesStageMachine によるステージ遷移結果。
+   * SalesLogWriter から prevStage / nextStage / stageTransitionReason を記録するために利用する。
+   */
+  stageTransition?: SalesStageTransition;
 };
 
 /**
@@ -193,5 +202,6 @@ export function runSalesOrchestrator(
     nextStage,
     prompt,
     templateMeta,
+    stageTransition,
   };
 }
