@@ -2,9 +2,11 @@ import "dotenv/config";
 
 import { Client as NotionClientSdk } from "@notionhq/client";
 import express from "express";
+import path from "node:path";
 import pino from "pino";
 import { z } from "zod";
 import { runDialogTurn } from "./agent/dialog/dialogAgent";
+import { createAgentSearchHandler } from "./agent/http/agentSearchRoute";
 import {
   buildClarifyPrompt,
   type ClarifyIntent,
@@ -22,12 +24,25 @@ import {
 import { ClarifyLogWriter } from "./integrations/notion/clarifyLogWriter";
 import { NotionSyncService } from "./integrations/notion/notionSyncService";
 import { hybridSearch } from "./search/hybrid";
-import { ceStatus, rerank, warmupCE } from "./search/rerank";
+import {
+  ceFlagFromRerankResult,
+  ceStatus,
+  rerank,
+  warmupCE,
+} from "./search/rerank";
 
 const app = express();
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
 app.use(express.json({ limit: "1mb" }));
+
+// --- minimal internal UI ---
+// Serve static assets from /public (no CORS needed; same-origin)
+const publicDir = path.resolve(process.cwd(), "public");
+app.use(express.static(publicDir));
+
+// Convenience: /ui -> /ui/index.html
+app.get("/ui", (_req, res) => res.redirect("/ui/index.html"));
 
 const clarifyLogWriter = new ClarifyLogWriter();
 
@@ -60,25 +75,28 @@ logger.info({
   HYBRID_TIMEOUT_MS: process.env.HYBRID_TIMEOUT_MS,
 });
 
-// --- health & debug ---
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
+// --- agent endpoints ---
+// /agent.search (dot) is the canonical route.
+app.post("/agent.search", createAgentSearchHandler(logger));
+
+// Compatibility alias (slash). Some clients/frameworks have trouble with dots in paths.
+app.post("/agent/search", createAgentSearchHandler(logger));
+
+// --- CE endpoints (for troubleshooting) ---
+// NOTE: GET /ce/status must be side-effect free.
+app.get("/ce/status", (_req, res) => {
+  return res.json(ceStatus());
 });
 
-app.get("/debug/env", (_req, res) => {
-  res.json({
-    ES_URL: process.env.ES_URL || null,
-    DATABASE_URL: process.env.DATABASE_URL || null,
-    hasES: Boolean(process.env.ES_URL),
-    hasPG: Boolean(process.env.DATABASE_URL),
-  });
-});
-
-// CE status / warmup
-app.get("/ce/status", (_req, res) => res.json(ceStatus()));
+// Explicit warmup to load the CE model (if ONNX).
 app.post("/ce/warmup", async (_req, res) => {
-  const r = await warmupCE();
-  res.json(r);
+  try {
+    const out = await warmupCE();
+    return res.json(out);
+  } catch (error) {
+    logger.error({ error }, "[ce] warmup failed");
+    return res.status(500).json({ ok: false, error: "warmup_failed" });
+  }
 });
 
 // --- search endpoints ---
@@ -96,7 +114,12 @@ app.post("/search", async (req, res) => {
   try {
     const results = await hybridSearch(q);
     const re = await rerank(q, results.items, 12);
-    return res.json({ ...results, items: re.items, ce_ms: re.ce_ms });
+    return res.json({
+      ...results,
+      items: re.items,
+      ce_ms: re.ce_ms,
+      engine: re.engine,
+    });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ error: "Internal server error" });
@@ -120,53 +143,53 @@ app.post("/search.v1", async (req, res) => {
   const { q, topK } = parsed.data;
   const k = typeof topK === "number" ? topK : 12;
 
+  const startedAt = Date.now();
   const routeStr = "hybrid:es50+pg50";
 
   try {
     const tSearch0 = Date.now();
     const results = await hybridSearch(q);
     const tSearch1 = Date.now();
-
     const search_ms = Math.max(0, tSearch1 - tSearch0);
+
+    const tRerank0 = Date.now();
+    const re = await rerank(q, results.items, k);
+    const tRerank1 = Date.now();
+    const rerank_ms = Math.max(0, tRerank1 - tRerank0);
+
+    const duration_ms = Math.max(0, Date.now() - startedAt);
+
+    const flags: string[] = ["v1", "validated", ceFlagFromRerankResult(re)];
+    if (re.engine === "ce+fallback") flags.push("ce:fallback");
 
     const hybrid_note = (results as any)?.note;
 
-    const re = await rerank(q, results.items, k);
-
-    const flags: string[] = ["v1", "validated"];
-    try {
-      const st = ceStatus();
-      if (st?.onnxLoaded && (re?.ce_ms ?? 0) >= 1) {
-        flags.push("ce:active");
-      } else {
-        flags.push("ce:skipped");
-      }
-    } catch {
-      flags.push("ce:skipped");
-    }
-
-    const rerank_ms =
-      typeof re?.ce_ms === "number" ? (re.ce_ms as number) : undefined;
-    const total_ms =
-      typeof rerank_ms === "number" ? search_ms + rerank_ms : search_ms;
-
     return res.json({
+      ...results,
       items: re.items,
-      meta: {
-        route: routeStr,
-        rerank_score: null,
-        tuning_version: "v1",
-        flags,
-        ragStats: {
-          search_ms,
-          rerank_ms,
-          total_ms,
-        },
-        hybrid_note,
-      },
       ce_ms: re.ce_ms,
+      // Explicit engine label for troubleshooting (heuristic / ce / ce+fallback)
+      engine: re.engine,
+      meta: {
+        tenant_id: (results as any)?.meta?.tenant_id ?? undefined,
+        route: routeStr,
+        duration_ms,
+        flags,
+        note: hybrid_note,
+        ragStats: {
+          plannerMs: 0,
+          searchMs: search_ms,
+          rerankMs: rerank_ms,
+          answerMs: 0,
+          totalMs: duration_ms,
+          rerankEngine: re.engine,
+          // Backward-compat: some clients expect snake_case.
+          rerank_engine: re.engine,
+        },
+      },
     });
   } catch (error) {
+    logger.error({ error }, "[search.v1] internal error");
     return res
       .status(500)
       .json({ error: "internal", message: (error as Error).message });
