@@ -1,3 +1,5 @@
+import { performance } from "node:perf_hooks";
+
 // @ts-ignore - pg has no bundled type declarations in this project
 import { Pool } from "pg";
 
