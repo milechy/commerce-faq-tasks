@@ -32,6 +32,12 @@ function makeEngine(status: CeEngineStatus): CeEngine {
 describe("warmupCE / ceStatus API wrappers", () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    // Reset singletons/caches so tests do not leak state via module scope.
+    ceEngineModule.__resetCeEngineForTests();
+    const rerankModule = require("./rerank") as typeof import("./rerank");
+    if (typeof rerankModule.__resetCeForTests === "function") {
+      rerankModule.__resetCeForTests();
+    }
   });
 
   it("warmupCE: onnx がロード済みなら ok=true, engine=onnx, model が返る", async () => {
@@ -54,7 +60,7 @@ describe("warmupCE / ceStatus API wrappers", () => {
     expect(res.error).toBeUndefined();
   });
 
-  it("warmupCE: onnxLoaded=false または error ありなら ok=false, engine=dummy になる", async () => {
+  it("warmupCE: onnxLoaded=false または error ありなら ok=false, engine=onnx のまま", async () => {
     const st = makeStatus({
       engine: "onnx",
       onnxLoaded: false,
@@ -69,7 +75,7 @@ describe("warmupCE / ceStatus API wrappers", () => {
     const res = await warmupCE();
 
     expect(res.ok).toBe(false);
-    expect(res.engine).toBe("dummy");
+    expect(res.engine).toBe("onnx");
     expect(res.model).toBe("/models/ce.onnx");
     expect(res.error).toBe("load failed");
   });

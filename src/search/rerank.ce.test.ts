@@ -6,6 +6,12 @@ import { rerank, type Item } from "./rerank";
 describe("rerank with CeEngine", () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    // Reset singletons/caches so tests do not leak state via module scope.
+    ceEngineModule.__resetCeEngineForTests();
+    const rerankModule = require("./rerank") as typeof import("./rerank");
+    if (typeof rerankModule.__resetCeForTests === "function") {
+      rerankModule.__resetCeForTests();
+    }
   });
 
   function makeStatus(overrides: Partial<CeEngineStatus> = {}): CeEngineStatus {

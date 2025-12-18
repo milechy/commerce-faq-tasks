@@ -9,6 +9,15 @@ import { getCeEngine } from "./ceEngine";
 let _ce: ReturnType<typeof getCeEngine> | null = null;
 let _engine: string | null = null;
 
+/**
+ * Jest などのテスト用に、rerank.ts 側のモジュールスコープキャッシュをリセットする。
+ * 本番コードからは呼ばない前提。
+ */
+export function __resetCeForTests(): void {
+  _ce = null;
+  _engine = null;
+}
+
 // Read env lazily (at first access) and then pin the resolved values in module-scoped state.
 // This avoids "module imported before env is set" issues in tests/dev, while still preventing flapping.
 function readEnvEngine(): "onnx" | "dummy" {
