@@ -1,5 +1,11 @@
 # Phase19 UI Specification
 
+> **Phase19: 暫定**
+>
+> Phase19 UI は意図的に未完成であり、
+> 目的は UI を完成させることではなく「実挙動を隠さず観測できる診断サーフェス」に整合させること。
+> 将来の約束や最終形は記載しない。
+
 ## Purpose
 
 Phase19 UI は「ローンチ用 UI の最小形」であり、目的は **成果の可視化と検証** です。
@@ -11,7 +17,7 @@ Phase19 UI は「ローンチ用 UI の最小形」であり、目的は **成�
 
 ## Scope (Phase19 で“必ず”できること)
 
-1. **1 ターン検索（Query → Answer）**
+1. **1 ターン検索（Query → Answer）**（`/agent.search` と `/search.v1` を UI から切替可能）
 2. **Sales 回答の妥当性を人が判断できる**
 3. **CE の状態と rerank の挙動が UI で即わかる**
 4. **フィードバックを最短で残せる（人力で OK）**
@@ -41,11 +47,14 @@ Phase19 UI は「ローンチ用 UI の最小形」であり、目的は **成�
 
 必ず可視化する項目：
 
+- `meta.engine`（例：`ce` / `heuristic` / `ce+fallback`）
+- `meta.ce_ms`
 - `meta.ragStats.rerankEngine`
-- `ce_ms`
-- `meta.flags`（例：`ce:active` / `ce:skipped`）
-- `meta.tenant_id`（または同等）
+- `meta.flags`（例：`v1` / `agent` / `validated` / `ce:active` / `ce:skipped` / `ce:fallback`）
+- `meta.route`（または同等）
 - `meta.duration_ms`（または同等）
+
+加えて、`/agent.search` 経路では `steps`（plan/search/rerank/synthesis）を表示し、意思決定の追跡を可能にすること（推奨）。
 
 **CE が不活性/失敗/フォールバックの場合は一目でわかる表示**にすること。
 
@@ -83,6 +92,7 @@ Yes/No で即答できるチェックに限定する：
 - CE のフォールバックが見えない（＝「動いたように見える」）
 - answer が provenance（根拠）なしで表示される
 - フィードバックが残せない
+- API 呼び出し失敗（ネットワーク/CORS/500 等）が UI 上で見えず、ローディングのまま止まる
 
 ## File Edit Rule (Must)
 
