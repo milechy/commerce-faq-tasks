@@ -1,5 +1,11 @@
 # Phase19 System Prompt
 
+> **Phase19: 暫定**
+>
+> Phase19 は意図的に未完成である。
+> 本ドキュメントは、最終仕様や将来設計ではなく、
+> Phase19 時点の**実挙動と観測可能性**のみを正準として定義する。
+
 You are operating strictly within **Phase19** of this project.
 
 This phase exists to validate that the system can reliably produce
@@ -11,6 +17,9 @@ You must not perform any action outside the scope explicitly defined below.
 ---
 
 ## 1. Phase19 Purpose
+
+Phase19 では `/agent.search` と `/search.v1` の両エンドポイントを併存させ、
+UI および API レベルで挙動差を診断可能な状態を正とする。
 
 Phase19 establishes the **minimum viable sales-answering baseline**.
 
@@ -47,24 +56,29 @@ You are limited to the following three areas.
 
 ### C. Metadata Annotation (Mandatory)
 
-Every response must include metadata.
+Every response must include metadata sufficient to explain **why that answer was produced**.
 
-Required fields:
+The following fields are mandatory and must be externally observable.
 
-- `rerankEngine`
+- `meta.engine`
 
-  - `ce`
-  - `ce+fallback`
-  - `heuristic`
+  - `"ce"`
+  - `"ce+fallback"`
+  - `"heuristic"`
 
-- `ce_ms`
+- `meta.ce_ms`
 
   - number or null
 
-- `flags`
-  - e.g. `ce:active`, `validated`, `fallback`
+- `meta.flags`
 
-If metadata is missing, the response is invalid.
+  - e.g. `agent`, `v1`, `validated`, `ce:active`, `ce:skipped`, `ce:fallback`
+
+- `meta.ragStats`
+  - must include `rerankEngine`
+  - must reflect actual execution timings
+
+If any of these fields are missing or hidden, the response is invalid in Phase19.
 
 ---
 
@@ -95,6 +109,7 @@ Rules:
 - Make fallback clearly visible
 - No hidden metadata
 - No analytics dashboards
+- Metadata is displayed using the `meta.*` canonical fields (`meta.engine`, `meta.ce_ms`, `meta.flags`, `meta.ragStats`)
 
 If behavior cannot be seen, the UI is wrong.
 
@@ -133,6 +148,7 @@ Phase19 is complete only when:
 - Metadata is always present and correct
 - CE on / off / fallback paths are tested
 - No future-phase logic exists in code or docs
+- `/agent.search` と `/search.v1` の両方で、同一の meta 観測軸（engine / ce_ms / flags / ragStats）が確認できる
 
 This document is the **single source of truth** for Phase19 behavior.
 

@@ -1,8 +1,17 @@
 # Phase19 — Launch UI + CE Visibility + Partner Verification
 
+> **Phase19: 暫定**
+>
+> Phase19 は意図的に未完成である。
+> 本フェーズの目的は「完成させること」ではなく、
+> 現時点の実装・挙動・仕様のズレを検出し、明示したうえで整合を取ることである。
+>
+> 仕様・UI・API・テストはいずれも暫定であり、
+> 不足や矛盾が存在することを前提として扱う。
+
 ## Phase Goal (One Sentence)
 
-Phase19 のゴールは、**クライアント導入前に「Sales 回答が業務で使えるか」を人間が評価できるローンチ最小 UI と、CE の挙動可視化を完成**させること。
+Phase19 のゴールは、**Sales 応答の実挙動（CE / rerank / fallback を含む）を人間が説明・検証できる状態に整合させること**であり、完成させることではない。
 
 ---
 
@@ -23,6 +32,19 @@ Phase19 のゴールは、**クライアント導入前に「Sales 回答が業�
 - `/ce/status` が UI/運用で使える
 - `/ce/warmup` の結果が UI/運用で確認できる
 - CE が落ちた/スキップされた/フォールバックした、が隠れない
+
+---
+
+## Known Gaps / 未整合（Phase19 時点）
+
+- `/search.v1` と `/agent.search` は内部実装・責務が異なる。
+  Phase19 ではどちらかに統一せず、**UI から両方を切り替えて診断できる状態**を正とする。
+- Agent 経路では `ce_ms` / `engine` は rerank step（steps）由来であり、
+  route 層で `meta` に正規化して露出している（Phase19 時点の暫定措置）。
+- `src/agent/flow/searchAgent.ts` は Phase19 コンテキスト ZIP 上では正準化されておらず、
+  Agent 内部仕様は Phase20 以降で確定させる前提とする。
+- `pnpm start` は `dist/index.js` を実行するため、`src` 側の変更を反映するには **`pnpm build` の後にプロセス再起動**が必要。
+  反映漏れがあると `/ui` や `/search.v1` の `meta` 露出が古い挙動のままになり、診断結果がズレる。
 
 ---
 
