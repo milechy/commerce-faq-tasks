@@ -1,25 +1,175 @@
-# Phase21: Conversational Sales Flow & Multi-Turn Control
+# Phase21: 会話型セールスフロー & マルチターン制御
 
-## Goal
-Enable coherent, multi-turn sales conversations that progress toward resolution instead of repeating or stalling.
+**＋ 外部アヴァター API（Lemon Slice）判断**
 
-## Scope
-- Session-aware sales context accumulation
-- Explicit step progression (clarify → answer → confirm)
-- Prevent redundant follow-up questions
+---
 
-## Key Deliverables
-- Sales conversation state machine
-- Context carry-over between turns
-- Clear terminal conditions for sales flows
+## 目的（Goal）
 
-## Technical Tasks
-- Extend sales context store schema
-- Improve dialog orchestrator step control
-- Add multi-turn integration tests
-- Surface conversation state in logs
+繰り返しや停滞に陥らず、**解決に向かって進行する一貫性のあるマルチターンのセールス会話**を実現する。
 
-## Exit Criteria
-- Multi-turn sales flows complete without looping
-- Context persists correctly across turns
-- Observability shows clear flow transitions
+Phase21 ではこれに加えて、
+**会話型セールス体験の補助要素として、外部アヴァター API を条件付きで採用・評価する**。
+
+---
+
+## スコープ（Scope）
+
+### コアスコープ（会話制御）
+
+- セッションをまたいだセールス文脈の蓄積
+- 明示的なステップ進行（clarify → answer → confirm）
+- 冗長なフォローアップ質問の防止
+- セールスフローの明確な終了条件定義
+
+### 拡張スコープ（Phase21 限定）
+
+- 外部（他社）アヴァター API の条件付き評価・採用
+- 以下を損なわないことを前提とする
+
+  - コアなセールスフローの正確性
+  - 可観測性（Observability）
+  - セキュリティ・法務上の境界
+  - Phase20「UI が嘘をつかない」原則
+
+---
+
+## 成果物（Key Deliverables）
+
+### 会話型セールスフロー
+
+- セールス会話用ステートマシン
+- ターン間のコンテキスト引き継ぎ
+- 明示的なステップ遷移および終了状態
+- ループ・冗長質問の防止
+
+### 外部アヴァター（Phase21）
+
+- 外部アヴァター API 採用可否の明確な判断
+- 以下の明示的定義
+
+  - 利用を許可する範囲
+  - 利用を禁止する範囲
+  - 保証しない事項
+
+- 実行時に完全無効化できる設計
+
+---
+
+## 技術タスク（Technical Tasks）
+
+### 会話制御
+
+- セールスコンテキストストアのスキーマ拡張
+- ダイアログオーケストレーターのステップ制御改善
+- マルチターン統合テストの追加
+- 会話状態をログに可視化
+
+### 外部アヴァター連携（Lemon Slice）
+
+- 外部アヴァター API 用の backend-only プロキシ実装
+- feature flag によるアヴァター利用制御
+- アヴァター状態ログを `meta.avatar.*` に分離
+- 失敗時は即座にテキスト UI へフォールバック
+- PII を扱う導線・SLA 期待導線での利用禁止
+
+---
+
+## 外部アヴァター API 判断（Phase21）
+
+### 判断結果
+
+**Lemon Slice を Phase21 において、条件付き・非コア機能として採用する。**
+
+本判断は、Phase20 で defer されていた項目に対し、
+Phase21 で初めて明示的な結論を与えるものである。
+
+---
+
+### 利用を許可する範囲
+
+外部アヴァターは、以下の用途に **限定して** 利用可能とする。
+
+- デモ・ショーケースページ
+- PoC / R&D 用 UI
+- セールス説明・デモ用途
+- 管理者・内部検証画面
+
+---
+
+### 利用を禁止する範囲
+
+以下の用途では **使用してはならない**。
+
+- 注文・決済・配送・請求などのフロー
+- 個人情報（PII）や機密情報を含む UI
+- CS / FAQ の一次対応など、コア導線
+- 常時利用可能・標準機能であると誤認させる UI
+
+---
+
+### 技術的制約（必須）
+
+1. API Key は **backend のみで管理**する
+2. 外部アヴァター API 呼び出しは **feature flag で制御**する
+3. アヴァターは **準備完了シグナル受信後のみ接続済み表示**を行う
+4. エラー・タイムアウト時は **即座にテキスト UI へ切り替える**
+5. アヴァター関連ログは `meta.ragStats` 等と意味衝突させない
+
+---
+
+### セキュリティ・法務上の扱い
+
+- ユーザの音声・映像・発話内容は **外部サービスに送信される**
+- その事実を UI 上で明示する
+- 個人情報を入力しない注意喚起を行う
+- 本機能は **試験提供 / オプション機能**として扱う
+- データ保持・可用性・継続提供について保証しない
+
+---
+
+### 明示的な非保証事項
+
+Phase21 では、以下について **一切保証しない**。
+
+- 可用性（SLA）
+- レイテンシ
+- 常時利用可能性
+- 長期的な継続提供
+- 商用サポート範囲
+
+---
+
+## 完了条件（Exit Criteria）
+
+### 会話フロー
+
+- マルチターンのセールスフローがループせず完了する
+- コンテキストが正しく引き継がれる
+- 明確な終了状態に到達する
+- ログ上でステップ遷移が明確に確認できる
+
+### アヴァター連携
+
+- アヴァターの ON/OFF がコアフローに影響しない
+- 障害時にセールス会話がブロックされない
+- UI が利用可否を誤認させない
+- アヴァター利用有無をログで明確に区別できる
+
+---
+
+## Phase21 原則との整合
+
+- Phase20 で defer された事項を明示的に判断している
+- 実態以上の機能提供を UI で示唆しない
+- SLA・サポートなどの約束を先行して作らない
+- すべてのオプション機能は将来切り離し可能
+
+---
+
+## 記録
+
+本ドキュメントは **Phase21 における正式な判断記録**である。
+上記制約に違反した場合、外部アヴァター機能は **即時無効化**される。
+
+---
