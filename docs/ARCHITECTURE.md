@@ -1,5 +1,3 @@
-
-
 # Commerce-FAQ / Sales AaaS – Architecture
 
 このプロジェクトは「Commerce-FAQ / Sales AaaS」として、EC/オンラインビジネス向けに **FAQ回答 + セールス支援** を行うエージェントを提供するバックエンドです。
@@ -119,3 +117,28 @@
 
 今後、AaaS としての **会話フローのチューニング（パートナー監修）** や、
 Notion 等との連携は Phase8 以降で拡張していく前提です。
+
+## Billing アーキテクチャ（AaaS）
+
+本プロジェクトでは、AaaS 向けの Billing を次のコンポーネントで構成する。
+
+- Usage Logging（アプリ DB）
+  - `/agent.dialog`, `/agent.search`, `/search.v1` などのコア API から、1 リクエストごとに usage 情報を記録する。
+  - 生ログから日次集計した結果を `usage_logs` テーブルとして保持する（tenant_id × date 単位）。
+- Billing Orchestrator（n8n）
+  - `usage_logs` を定期的に参照し、テナントごとの月次 Usage を集計する。
+  - 集計結果を Stripe UsageRecord / Invoice に反映するフローを n8n で構成する。
+- Stripe
+  - Subscription（ベース料金）と Usage-based Billing（従量部分）を管理する。
+  - Invoice 発行後、Webhook で決済ステータスをアプリ側に通知する。
+- Notion Billing Summary
+  - テナントごとの Billing 状況（プラン、請求履歴、メモ）を管理する Notion DB。
+  - 必要に応じて、Stripe の Invoice URL やサマリ情報を同期する。
+
+想定フロー（概要）:
+
+1. アプリケーションサーバーは、各 API 呼び出し時に usage 情報を記録する（生ログ）。
+2. 日次バッチまたは n8n フローにより、生ログから `usage_logs`（日次×テナント）を集計する。
+3. 月次で n8n フローが `usage_logs` を元に Stripe UsageRecord / Invoice draft を作成する。
+4. Stripe の Webhook 成功時に、Invoice URL / Status を Notion Billing Summary またはアプリ DB に反映する。
+5. 管理 UI の「Billing / Usage」タブから、`usage_logs` と Stripe / Notion の情報を組み合わせて利用状況・請求状況を閲覧できるようにする。

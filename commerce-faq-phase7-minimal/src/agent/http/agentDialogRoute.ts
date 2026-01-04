@@ -142,8 +142,14 @@ export function createAgentDialogHandler(
           res.json({
             sessionId: data.sessionId,
             answer: output.text,
-            // PlannerPlan の steps をそのまま公開（id/type/description/... を含む）
+            // PlannerPlan 本体をそのまま公開（id/type/description/... を含む）
+            // - Phase9 以降、フロントでは steps だけでなく plannerPlan 全体も参照できるようにする
+            plannerPlan: plan ?? null,
+            // PlannerPlan の steps をそのまま公開
             steps: plan?.steps ?? [],
+            // SalesPipeline / SalesRules による判定結果メタ情報
+            // - Phase9 では pipelineKind や upsell/cta のフラグなどをここに含める想定
+            salesMeta: output.salesMeta ?? null,
             // needsClarification が true の場合はフロント互換で final=false にする
             final: !(plan?.needsClarification ?? false),
             needsClarification: plan?.needsClarification ?? false,

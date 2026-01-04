@@ -128,3 +128,119 @@ Reranker の上位候補を、LLM にプロンプトとして渡して回答文�
 
 エージェントの会話トーンや構成（セールス寄り / FAQ 寄り）は、
 プロンプトテンプレートや将来の "会話フローテンプレート" でチューニングする想定です。
+
+## /search.v1 – RAG 検索 API（Phase17）
+
+Phase17 では、RAG 検索レイヤの正準エンドポイントとして `/search.v1` を定義し、  
+パイプラインとメトリクスの仕様を整理した。
+
+### エンドポイント概要
+
+- メソッド: `POST`
+- パス: `/search.v1`
+- 用途: FAQ・ナレッジ向けの RAG 検索（ハイブリッド検索 + 再ランク）
+- 想定クライアント:
+  - `/dialog/turn` 内部の検索呼び出し
+  - ベンチ / 計測スクリプト（例: `SCRIPTS/bench-agent-search.ts`）
+
+### リクエストスキーマ
+
+```ts
+type SearchV1Request = {
+  q: string;
+  topK?: number; // 1〜50, デフォルト 12
+};
+```
+
+Zod スキーマ（実装準拠）:
+
+```ts
+const schemaIn = z.object({
+  q: z.string(),
+  topK: z.number().int().positive().max(50).optional(),
+});
+```
+
+### レスポンススキーマ（概要）
+
+```ts
+type SearchV1Response = {
+  items: Array<{
+    id: string;
+    text: string;
+    score: number;
+    source: "es" | "pg" | string;
+  }>;
+  meta: {
+    route: string; // 例: "hybrid:es50+pg50"
+    rerank_score: number | null;
+    tuning_version: string; // 例: "v1"
+    flags: string[]; // ["v1","validated","ce:active"|"ce:skipped", ...]
+    ragStats?: {
+      search_ms: number; // hybridSearch の所要時間
+      rerank_ms?: number; // Cross-Encoder (ce_ms)
+      total_ms: number; // search_ms + rerank_ms
+    };
+    hybrid_note?: string; // hybridSearch 内部のメトリクス文字列
+  };
+  ce_ms?: number; // rerank に要した時間（ms）
+};
+```
+
+### パイプライン構成（/search.v1）
+
+`/search.v1` の内部パイプラインはおおよそ次のとおり:
+
+1. 入力バリデーション（Zod）
+   - `q: string`
+   - `topK?: number`（1〜50）
+2. `hybridSearch(q)` の実行
+   - Embedding 生成（LLM ベースの埋め込み。Phase17 では計測をまとめて `search_ms` に含める）
+   - Elasticsearch 検索
+   - pgvector 検索（Phase17 では無効化されているケースが多い）
+   - マージ + ソート
+   - 内部メトリクスの組み立て:
+     - `note: "search_ms=... es_ms=... es_hits=... pg_hits=..."` 形式の文字列
+3. `rerank(q, results.items, k)` の実行
+   - Cross-Encoder による再ランク。
+   - Phase17 時点では `engine: "dummy"` で、実質 no-op に近い軽量処理。
+   - 将来 ONNX ランタイムを利用した Cross-Encoder に差し替える想定。
+4. メタ情報の組み立てとレスポンス返却
+   - `route`: `"hybrid:es50+pg50"` など、パイプラインルートの識別子。
+   - `flags`:
+     - `"v1"`: `/search.v1` であること
+     - `"validated"`: Zod によるバリデーション済みであること
+     - `"ce:active"` / `"ce:skipped"`: CE の有効/無効を表すフラグ
+   - `ragStats`:
+     - `search_ms`: `hybridSearch` に要した時間（ms）
+     - `rerank_ms`: `ce_ms` をそのまま反映（Phase17 では ~1ms）
+     - `total_ms`: `search_ms + rerank_ms`
+   - `hybrid_note`:
+     - `pg_fts:...` や `search_ms`, `es_ms`, `es_hits`, `pg_hits` など、
+       hybridSearch 内部で計測したメトリクス文字列。
+
+### メトリクスの扱い
+
+Phase17 時点での代表的な `/search.v1` 計測値（ベンチ N=100）:
+
+- RAG レイテンシ:
+  - `ragStats.total_ms p50/p95 ≒ 626 / 652 ms`
+- 内訳:
+  - `search_ms p50/p95 ≒ 625 / 651 ms`
+  - `rerank_ms p50/p95 ≒ 1 / 1 ms`（dummy CE）
+  - `hybrid_note` から、`search_ms` と `es_ms` はほぼ一致し、多くのクエリで RAG のほとんどの時間が ES 検索に費やされていることが分かる。
+  - `pg_hits=0` のケースでは pgvector 部分のコストはゼロ。
+
+このため、Cross-Encoder ONNX 導入後の最適化では、
+
+- `search_ms` を大きく悪化させないこと（ES 側のチューニング）
+- `rerank_ms p95` を 100〜150ms 程度に抑えること
+- pgvector を有効化した際にも `es_ms` / `pg_ms` の内訳を見ながら分担を調整すること
+
+がパフォーマンス設計上の重要なポイントとなる。
+
+### 今後の拡張ポイント（メモ）
+
+- `hybrid_note` を構造化メトリクス（例: `meta.ragStats.es_ms`, `meta.ragStats.pg_ms`）に昇格させる。
+- `/dialog/turn` 側で、`/search.v1` の `ragStats` をそのままログ・メトリクスに取り込む。
+- 複数の route（例: `"es-only"`, `"pg-only"`, `"hybrid:es+pg"`）を定義し、`meta.route` に反映させる。

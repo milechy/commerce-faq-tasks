@@ -1,0 +1,122 @@
+mkdir -p public/ui cat > public/ui/index.html <<'HTML'
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Agent Search (Internal)</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 900px;
+        margin: 24px auto;
+        padding: 0 16px;
+      }
+      textarea {
+        width: 100%;
+        height: 80px;
+      }
+      pre {
+        white-space: pre-wrap;
+        background: #f6f6f6;
+        padding: 12px;
+        border-radius: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      label {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      input[type="number"] {
+        width: 80px;
+      }
+      button {
+        padding: 8px 12px;
+      }
+      .muted {
+        color: #666;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Agent Search (Internal)</h1>
+
+    <div class="row">
+      <label>API <input id="baseUrl" size="28" /></label>
+      <label>tenant <input id="tenant" value="demo" size="10" /></label>
+      <label
+        >topK <input id="topK" type="number" value="5" min="1" max="20"
+      /></label>
+      <label><input id="debug" type="checkbox" checked /> debug</label>
+      <button id="run">Search</button>
+    </div>
+    <div class="muted">
+      Endpoint: POST <code>/agent/search</code>（slash alias） / POST
+      <code>/agent.search</code>（dot canonical）
+    </div>
+
+    <p><b>Query</b></p>
+    <textarea id="q">初期不良 送料 負担</textarea>
+
+    <p><b>Answer</b></p>
+    <pre id="answer"></pre>
+
+    <p><b>ragStats</b></p>
+    <pre id="stats"></pre>
+
+    <p><b>Raw</b></p>
+    <pre id="raw"></pre>
+
+    <script>
+      const el = (id) => document.getElementById(id);
+
+      // 同一ホストで配信される前提なので origin をデフォルトにする（CORS不要）
+      el("baseUrl").value = window.location.origin;
+
+      el("run").onclick = async () => {
+        el("answer").textContent = "Loading...";
+        el("stats").textContent = "";
+        el("raw").textContent = "";
+
+        const baseUrl = el("baseUrl").value.replace(/\/$/, "");
+        const body = {
+          q: el("q").value,
+          topK: Number(el("topK").value || 5),
+          debug: el("debug").checked,
+        };
+
+        const resp = await fetch(baseUrl + "/agent/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-tenant-id": el("tenant").value,
+          },
+          body: JSON.stringify(body),
+        });
+
+        const text = await resp.text();
+        try {
+          const json = JSON.parse(text);
+          el("answer").textContent = json.answer ?? "(no answer)";
+          el("stats").textContent = JSON.stringify(
+            json.ragStats ?? json.meta?.ragStats ?? null,
+            null,
+            2
+          );
+          el("raw").textContent = JSON.stringify(json, null, 2);
+        } catch {
+          el("answer").textContent = "Non-JSON response: " + resp.status;
+          el("raw").textContent = text;
+        }
+      };
+    </script>
+  </body>
+</html>
+HTML

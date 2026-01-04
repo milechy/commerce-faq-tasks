@@ -4,6 +4,14 @@ import assert from "assert";
 import type { PlannerPlan } from "../../src/agent/dialog/types";
 import { runSalesPipeline } from "../../src/agent/orchestrator/sales/salesPipeline";
 
+function assertDefaultPipelineKind(meta: { pipelineKind?: string }) {
+  assert.strictEqual(
+    meta.pipelineKind,
+    "generic",
+    "pipelineKind should default to \"generic\" when not specified",
+  );
+}
+
 function makePlan(partial: Partial<PlannerPlan>): PlannerPlan {
   return {
     steps: [],
@@ -37,6 +45,8 @@ async function testUpsellFromPlan() {
     },
     undefined
   );
+
+  assertDefaultPipelineKind(meta);
 
   assert.strictEqual(
     meta.upsellTriggered,
@@ -72,6 +82,8 @@ async function testCtaFromPlan() {
     undefined
   );
 
+  assertDefaultPipelineKind(meta);
+
   assert.strictEqual(
     meta.ctaTriggered,
     true,
@@ -93,6 +105,8 @@ async function testUpsellFromTextOnly() {
     undefined
   );
 
+  assertDefaultPipelineKind(meta);
+
   assert.strictEqual(
     meta.upsellTriggered,
     true,
@@ -113,6 +127,8 @@ async function testCtaFromTextOnly() {
     },
     undefined
   );
+
+  assertDefaultPipelineKind(meta);
 
   assert.strictEqual(
     meta.ctaTriggered,
@@ -141,6 +157,8 @@ async function testMergeWithPreviousMeta() {
     previousMeta
   );
 
+  assertDefaultPipelineKind(meta);
+
   // 新しい入力では upsell/cta を検出しなくても、以前の upsellTriggered は維持される想定
   assert.strictEqual(
     meta.upsellTriggered,
@@ -153,6 +171,36 @@ async function testMergeWithPreviousMeta() {
   );
 }
 
+async function testSaasPipelineKindAndIndustryHints() {
+  const meta = runSalesPipeline(
+    {
+      userMessage: "現在の月額プランをアップグレードしたいです。",
+      history: [],
+      plan: undefined,
+    },
+    undefined,
+    {
+      pipelineKind: "saas",
+    }
+  );
+
+  assert.strictEqual(
+    meta.pipelineKind,
+    "saas",
+    "pipelineKind should be 'saas' when explicitly specified",
+  );
+
+  assert.strictEqual(
+    meta.upsellTriggered,
+    true,
+    "upsellTriggered should be true when SaaS-specific upsell hints are present",
+  );
+  assert.ok(
+    meta.notes?.includes("heuristic:upsell-keyword-detected"),
+    'notes should include "heuristic:upsell-keyword-detected" for SaaS upsell detection',
+  );
+}
+
 async function main() {
   console.log("Running salesPipeline tests...");
 
@@ -161,6 +209,7 @@ async function main() {
   await testUpsellFromTextOnly();
   await testCtaFromTextOnly();
   await testMergeWithPreviousMeta();
+  await testSaasPipelineKindAndIndustryHints();
 
   console.log("salesPipeline tests passed 🎉");
 }
