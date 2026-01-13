@@ -643,6 +643,7 @@ Phase23 で定義した KPI・SLA は、Phase24 以降で次のように拡張�
 
 - [PHASE22.md](../PHASE22.md) - 制御可能性の確立（Phase22 設計）
 - [PHASE22_IMPLEMENTATION.md](./PHASE22_IMPLEMENTATION.md) - Phase22 実装詳細
+- [LAUNCH_CHECKLIST_MVP.md](./LAUNCH_CHECKLIST_MVP.md) - MVP ローンチ準備チェックリスト
 - [LOGGING_SCHEMA.md](./LOGGING_SCHEMA.md) - ログスキーマ定義
 - [P95_METRICS.md](./P95_METRICS.md) - p95 計測ルール
 - [AGENTS.md](../AGENTS.md) - Issue/PR 運用ガイド
