@@ -1,11 +1,22 @@
 // src/agent/orchestrator/langGraphOrchestrator.ts
 
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
+import crypto from "crypto";
 import pino from "pino";
 
+import {
+  defaultFlowBudgets,
+  getOrInitFlowSessionMeta,
+  setFlowSessionMeta,
+  toClarifySignature,
+  type FlowState,
+  type TerminalReason,
+} from "../dialog/flowContextStore";
 import { PlannerPlan } from "../dialog/types";
+import { detectStatePatternLoop } from "../flow/loopDetector";
 import { buildRuleBasedPlan } from "../flow/ruleBasedPlanner";
 import { runSearchAgent } from "../flow/searchAgent";
+import { detectUserStop, detectYesNo } from "../flow/userSignals";
 import { callGroqWith429Retry } from "../llm/groqClient";
 import {
   PlannerRoute,
@@ -14,8 +25,13 @@ import {
   routePlannerModelV2,
 } from "../llm/modelRouter";
 
-import { runSalesPipeline } from "./sales/salesPipeline";
+import { evaluateAvatarPolicy } from "../avatar/avatarPolicy";
+import { logPhase22Event } from "../observability/phase22EventLogger";
+
 import { resolveSalesPipelineKind } from "./sales/pipelines/pipelineFactory";
+import { runSalesPipeline } from "./sales/salesPipeline";
+
+const logger = pino();
 
 /**
  * /agent.dialog の入力ペイロードのサマリ型。
@@ -78,11 +94,55 @@ export interface DialogOutput {
   };
 }
 
+function buildConfirmPrompt(locale: "ja" | "en"): string {
+  return locale === "ja"
+    ? "\n\nこの内容で会話を終了してよいですか？（はい / いいえ）"
+    : "\n\nIs it OK to end the conversation with this? (yes / no)";
+}
+
+function buildTerminalText(
+  locale: "ja" | "en",
+  reason: TerminalReason
+): string {
+  if (locale === "en") {
+    switch (reason) {
+      case "completed":
+        return "Understood. Ending the conversation.";
+      case "aborted_user":
+        return "Understood. Ending the conversation.";
+      case "aborted_budget":
+        return "We could not complete confirmation. For safety, we are ending this conversation. Please start over if needed.";
+      case "aborted_loop_detected":
+        return "We detected a repeated loop. For safety, we are ending this conversation. Please start over if needed.";
+      case "failed_safe_mode":
+        return "For safety reasons, we are ending this conversation.";
+      case "escalated_handoff":
+        return "We will hand this off to a human agent. Ending the conversation.";
+      default:
+        return "Ending the conversation.";
+    }
+  }
+
+  switch (reason) {
+    case "completed":
+      return "承知しました。会話を終了します。";
+    case "aborted_user":
+      return "承知しました。会話を終了します。";
+    case "aborted_budget":
+      return "確認が完了しないため、安全のため会話を終了します。必要なら最初からやり直してください。";
+    case "aborted_loop_detected":
+      return "同じ確認が繰り返されたため、安全のため会話を終了します。必要なら最初からやり直してください。";
+    case "failed_safe_mode":
+      return "安全上の理由により、この会話は終了します。";
+    case "escalated_handoff":
+      return "担当者に引き継ぎます。会話を終了します。";
+    default:
+      return "会話を終了します。";
+  }
+}
+
 /**
- * Graph 内でやり取りする状態 (LangGraph Annotation ベース)。
- * LangGraph ではこの State をそのまま node 間で共有する。
- *
- * State は Annotation.Root で定義し、実体の型は typeof DialogStateAnnotation.State から取得する。
+ * Graph 内でやり取りする状態 (LangGraph Annotation ベース)
  */
 const DialogStateAnnotation = Annotation.Root({
   input: Annotation<DialogInput>(),
@@ -104,12 +164,6 @@ const DialogStateAnnotation = Annotation.Root({
 
 export type DialogGraphState = typeof DialogStateAnnotation.State;
 
-/**
- * RAG パイプラインから返されるコンテキストの型。
- *
- * DialogGraphState では optional（?）として扱われるが、
- * runInitialRagRetrieval などから戻る値としては必須。
- */
 type RagContext = {
   documents: Array<{ id: string; score: number; text: string }>;
   recall: number | null;
@@ -122,12 +176,6 @@ type RagContext = {
   };
 };
 
-/**
- * 初回の RAG 検索を実行し、DialogGraphState.ragContext 相当の値を返す。
- *
- * Phase5: /agent.search と同じハイブリッド + 再ランクパイプラインを再利用するために、
- * runSearchAgent を呼び出して RAG コンテキストを構築する。
- */
 async function runInitialRagRetrieval(
   initialInput: DialogInput
 ): Promise<RagContext> {
@@ -137,14 +185,12 @@ async function runInitialRagRetrieval(
       locale: initialInput.locale,
       preview: initialInput.userMessage.slice(0, 120),
     },
-    "dialog.rag.start",
+    "dialog.rag.start"
   );
-  // Phase5: /agent.search と同じハイブリッド + 再ランクパイプラインを再利用するために、
-  // runSearchAgent を呼び出して RAG コンテキストを構築する。
+
   const searchResponse = await runSearchAgent({
     q: initialInput.userMessage,
     topK: 8,
-    // Planner はここでは使わず、軽量な Rule-based Planner に任せる。
     useLlmPlanner: false,
     debug: true,
   });
@@ -177,7 +223,6 @@ async function runInitialRagRetrieval(
     text: String(item.text ?? ""),
   }));
 
-  // 簡易的にトークン数を概算（文字数/4）し、上限を設ける。
   const totalChars = documents.reduce((sum, doc) => sum + doc.text.length, 0);
   const contextTokens = Math.min(
     4096,
@@ -206,33 +251,22 @@ async function runInitialRagRetrieval(
       rerankEngine,
       totalMs,
     },
-    "dialog.rag.finished",
+    "dialog.rag.finished"
   );
+
   return {
     documents,
-    // Phase3 の hybridSearch には recall 指標がない前提で null とする。
     recall: null,
     contextTokens,
-    stats: {
-      searchMs,
-      rerankMs,
-      rerankEngine,
-      totalMs,
-    },
+    stats: { searchMs, rerankMs, rerankEngine, totalMs },
   };
 }
 
-/**
- * 長期対話向け:
- * - history が一定以上に伸びたら、古いターンを semantic summary (goals / constraints / decisions / open-questions など)
- *   として historySummary に格納し、
- * - 直近のターンだけを残す。
- */
 async function summarizeHistoryIfNeeded(
   initialInput: DialogInput
 ): Promise<DialogInput> {
-  const MAX_HISTORY_MESSAGES = 12; // これを超えたらサマリを作る
-  const KEEP_RECENT = 6; // 直近はそのまま保持
+  const MAX_HISTORY_MESSAGES = 12;
+  const KEEP_RECENT = 6;
 
   const history = initialInput.history ?? [];
   if (history.length <= MAX_HISTORY_MESSAGES) {
@@ -264,9 +298,7 @@ async function summarizeHistoryWithLLM(payload: {
 }): Promise<string> {
   const { locale, older, existingSummary } = payload;
 
-  if (!older.length) {
-    return existingSummary ?? "";
-  }
+  if (!older.length) return existingSummary ?? "";
 
   const model = process.env.GROQ_PLANNER_20B_MODEL ?? "groq/compound-mini";
 
@@ -320,7 +352,6 @@ async function summarizeHistoryWithLLM(payload: {
         ].join("\n");
 
   const userParts: string[] = [];
-
   if (existingSummary && existingSummary.trim().length > 0) {
     userParts.push(
       locale === "ja"
@@ -328,7 +359,6 @@ async function summarizeHistoryWithLLM(payload: {
         : `Existing summary:\n${existingSummary}`
     );
   }
-
   userParts.push(
     locale === "ja"
       ? `以下の会話ターンを、先ほどのフォーマット (Goals / Constraints / Decisions / OpenQuestions / FAQContext) に従ってセマンティックサマリとしてまとめ直してください:\n${turnsText}`
@@ -348,42 +378,28 @@ async function summarizeHistoryWithLLM(payload: {
       maxTokens: 384,
       tag: "summary",
     },
-    {
-      logger,
-    }
+    { logger }
   );
 
   return raw.trim();
 }
 
-/**
- * ContextBuilder Node:
- * - RAG 実行
- * - RouteContextV2 の構築
- */
 async function contextBuilderNode(
   initialInput: DialogInput
 ): Promise<DialogGraphState> {
-  // Phase4: 初回の RAG 検索を実行し、RouteContextV2 を構築する。
   const ragContext = await runInitialRagRetrieval(initialInput);
 
-  // 会話の深さとコンテキストトークン数から、ざっくり複雑さを推定する。
   const depth = initialInput.history.length;
   const tokens = ragContext.contextTokens;
 
   let complexity: "low" | "medium" | "high";
-  if (tokens < 512 && depth <= 1) {
-    complexity = "low";
-  } else if (tokens > 2048 || depth > 6) {
-    complexity = "high";
-  } else {
-    complexity = "medium";
-  }
+  if (tokens < 512 && depth <= 1) complexity = "low";
+  else if (tokens > 2048 || depth > 6) complexity = "high";
+  else complexity = "medium";
 
-  // DetectIntentHint をルーティング側でも利用しておく
   const intentHint = detectIntentHint(initialInput);
-
   const requiresSafeMode = detectSafetyFlag(initialInput);
+
   const routeContext: RouteContextV2 = {
     contextTokens: tokens,
     recall: ragContext.recall,
@@ -391,7 +407,7 @@ async function contextBuilderNode(
     safetyTag: requiresSafeMode ? "sensitive" : "none",
     conversationDepth: depth,
     used120bCount: 0,
-    max120bPerRequest: 1, // とりあえず 1 回まで
+    max120bPerRequest: 1,
     intentType: intentHint,
     requiresSafeMode,
   };
@@ -412,8 +428,9 @@ async function contextBuilderNode(
       requiresSafeMode,
       pipelineKind,
     },
-    "dialog.context.built",
+    "dialog.context.built"
   );
+
   return {
     input: initialInput,
     ragContext,
@@ -430,12 +447,6 @@ async function contextBuilderNode(
   };
 }
 
-/**
- * Planner Node:
- * - routePlannerModelV2 で 20B/120B を選択
- * - 選択したモデルで Planner LLM を実行
- * - Phase4 ヒューリスティクスで 20B/120B ルーティングを上書き
- */
 async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
   if (process.env.NODE_ENV === "test") {
     return {
@@ -445,17 +456,10 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
         reasons: ["test-mode"],
         used120bCount: 0,
       },
-      plannerSteps: {
-        steps: [],
-        needsClarification: false,
-        confidence: "low",
-      },
+      plannerSteps: { steps: [], needsClarification: false, confidence: "low" },
     };
   }
-  // Phase11: Rule-based Planner のフックを先に用意しておく。
-  // 現時点では buildRuleBasedPlan は常に null を返すため挙動に変化はないが、
-  // Phase12 以降で shipping / returns などの定型意図については LLM Planner を
-  // 呼ばずにここで PlannerPlan を構築する予定。
+
   const intentHint = detectIntentHint(state.input);
   if (!state.routeContext.requiresSafeMode && intentHint !== "general") {
     const rulePlan = buildRuleBasedPlan(state.input, intentHint);
@@ -466,12 +470,8 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
         used120bCount: 0,
       };
       logger.info(
-        {
-          intentHint,
-          route: decision.route,
-          reasons: decision.reasons,
-        },
-        "dialog.planner.rule-based",
+        { intentHint, route: decision.route, reasons: decision.reasons },
+        "dialog.planner.rule-based"
       );
       return {
         ...state,
@@ -484,7 +484,7 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
       };
     }
   }
-  // まずは既存の V2 ルーターにルーティングさせる
+
   const baseDecision = routePlannerModelV2(state.routeContext);
   logger.info(
     {
@@ -492,20 +492,13 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
       baseRoute: baseDecision.route,
       baseReasons: baseDecision.reasons,
     },
-    "dialog.planner.route.base",
+    "dialog.planner.route.base"
   );
 
   const ctx = state.routeContext;
   let decision = baseDecision;
 
-  // Phase4 ヒューリスティクス:
-  // - セーフティモードが必要な場合
-  // - コンテキストトークンが大きい場合
-  // - 会話が深い場合
-  // などのときに 120B にエスカレートする。
   if (decision.route === "20b") {
-    const extraReasons: string[] = [];
-
     if (ctx.requiresSafeMode) {
       decision = {
         ...decision,
@@ -540,18 +533,13 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
         reasons: [...decision.reasons, "phase4:complexity-high"],
       };
     }
-
-    // extraReasons 変数は今後拡張用のプレースホルダとして残しておく。
-    void extraReasons;
   }
 
   logger.info(
-    {
-      finalRoute: decision.route,
-      finalReasons: decision.reasons,
-    },
-    "dialog.planner.route.final",
+    { finalRoute: decision.route, finalReasons: decision.reasons },
+    "dialog.planner.route.final"
   );
+
   const plannerSteps = await callPlannerLLM(decision.route, {
     input: state.input,
     ragContext: state.ragContext,
@@ -565,13 +553,13 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
         : 0,
       needsClarification: plannerSteps?.needsClarification ?? false,
     },
-    "dialog.planner.plan",
+    "dialog.planner.plan"
   );
+
   return {
     ...state,
     plannerDecision: decision,
     plannerSteps,
-    // V2 ルーティング結果を routeContext に反映しておく
     routeContext: {
       ...state.routeContext,
       used120bCount: decision.used120bCount,
@@ -579,62 +567,25 @@ async function plannerNode(state: DialogGraphState): Promise<DialogGraphState> {
   };
 }
 
-/**
- * Clarify Node:
- * - Planner が Clarify を要求している場合は Clarifying Questions をそのまま出力にする。
- * - それ以外の場合は状態を変更せずに次ノードへ。
- */
 async function clarifyNode(state: DialogGraphState): Promise<DialogGraphState> {
   const plan = state.plannerSteps;
 
-  // Safety フラグが立っている場合は Clarify をスキップ（Answer 側で安全な応答に集中する）
-  if (state.routeContext.requiresSafeMode) {
-    return state;
-  }
+  if (state.routeContext.requiresSafeMode) return state;
 
   if (plan && plan.needsClarification && plan.clarifyingQuestions?.length) {
-    logger.info(
-      {
-        questions: plan.clarifyingQuestions,
-      },
-      "dialog.clarify.emit",
-    );
-    const clarificationText = plan.clarifyingQuestions.join("\n");
-
-    return {
-      ...state,
-      finalText: clarificationText,
-    };
+    logger.info({ questions: plan.clarifyingQuestions }, "dialog.clarify.emit");
+    return { ...state, finalText: plan.clarifyingQuestions.join("\n") };
   }
 
   return state;
 }
 
-/**
- * Search Node:
- * - PlannerPlan に search ステップが含まれている場合は、その query で再検索して ragContext を更新。
- *   Phase8 では、RAG クエリは ContextBuilder で既に実行済み。将来的に拡張予定。
- */
 async function searchNode(state: DialogGraphState): Promise<DialogGraphState> {
-  const plan = state.plannerSteps;
-
-  if (!plan) {
-    return state;
-  }
-
-  // Phase8: SalesStage ベースの PlannerPlan では、RAG クエリは ContextBuilder で既に実行済み。
-  // 将来的に「plannerPlan から再検索クエリを組み立てる」場合にここを拡張する。
+  void state;
   return state;
 }
 
-/**
- * Sales Node:
- * - PlannerPlan（SalesStage）とヒューリスティックの両方を使ってアップセル / CTA 検出を行い、salesMeta にフラグを立てる。
- * - Phase8 ではルールベースのみ（将来 LLM ベースの SalesAgent に差し替え予定）。
- */
 async function salesNode(state: DialogGraphState): Promise<DialogGraphState> {
-  // SalesDetectionContext は SalesPipeline 側で定義されているが、
-  // ここでは型に依存しない形で必要なフィールドだけ組み立てる。
   const detectionContext = {
     userMessage: state.input.userMessage,
     history: state.input.history,
@@ -643,7 +594,6 @@ async function salesNode(state: DialogGraphState): Promise<DialogGraphState> {
 
   const prevMeta = state.salesMeta;
 
-  // すでに pipelineKind が入っていればそれを優先し、無ければ tenant 情報から推定する。
   const pipelineKind = resolveSalesPipelineKind({
     explicitKind: prevMeta?.pipelineKind,
     tenantId: state.input.tenantId,
@@ -661,48 +611,65 @@ async function salesNode(state: DialogGraphState): Promise<DialogGraphState> {
       upsellTriggered: nextMeta.upsellTriggered,
       ctaTriggered: nextMeta.ctaTriggered,
     },
-    "dialog.sales.meta",
+    "dialog.sales.meta"
   );
-  return {
-    ...state,
-    salesMeta: nextMeta,
-  };
+
+  return { ...state, salesMeta: nextMeta };
 }
-/**
- * Final Node:
- * - LangGraph 的には特別な処理は行わず、そのまま State を返す。
- * - runDialogGraph 側で DialogOutput にマッピングする。
- */
+
 async function finalNode(state: DialogGraphState): Promise<DialogGraphState> {
   return state;
 }
 
-/**
- * PlannerNode のあとにどのノードへ遷移するかを決める Edge 関数。
- * - safety: AnswerNode へ
- * - needsClarification: ClarifyNode へ
- * - それ以外: AnswerNode へ
- */
 function routeFromPlanner(state: DialogGraphState): string {
-  if (state.routeContext.requiresSafeMode) {
-    // セーフモード時は SalesNode を飛ばして直接 AnswerNode へ
-    return "AnswerNode";
-  }
+  if (state.routeContext.requiresSafeMode) return "AnswerNode";
 
   const plan = state.plannerSteps;
-
-  if (plan && plan.needsClarification && plan.clarifyingQuestions?.length) {
+  if (plan && plan.needsClarification && plan.clarifyingQuestions?.length)
     return "ClarifyNode";
-  }
 
-  // 通常時は SalesNode を通して salesMeta を構築してから AnswerNode へ進む
   return "SalesNode";
 }
 
-/**
- * Dialog 用 LangGraph の構築。
- * - ContextBuilder は runDialogGraph の外側で実行し、Planner から先を Graph に乗せる。
- */
+async function answerNode(state: DialogGraphState): Promise<DialogGraphState> {
+  if (process.env.NODE_ENV === "test")
+    return { ...state, finalText: "[test output]" };
+
+  const plan = state.plannerSteps;
+
+  // Clarifyターンは clarifyNode が入れた finalText を維持（上書きしない）
+  if (
+    plan &&
+    plan.needsClarification &&
+    plan.clarifyingQuestions?.length &&
+    !state.routeContext.requiresSafeMode
+  ) {
+    if (state.finalText && state.finalText.length > 0) return state;
+    return { ...state, finalText: plan.clarifyingQuestions.join("\n") };
+  }
+
+  const route: PlannerRoute = state.plannerDecision?.route ?? "20b";
+
+  logger.info(
+    {
+      route,
+      safeMode: state.routeContext.requiresSafeMode,
+      hasPlan: !!plan,
+      hasRagContext: !!state.ragContext,
+    },
+    "dialog.answer.call"
+  );
+
+  const answerText = await callAnswerLLM(route, {
+    input: state.input,
+    ragContext: state.ragContext,
+    plannerSteps: state.plannerSteps,
+    safeMode: state.routeContext.requiresSafeMode,
+  });
+
+  return { ...state, finalText: answerText };
+}
+
 const dialogGraph = new StateGraph(DialogStateAnnotation)
   .addNode("PlannerNode", plannerNode)
   .addNode("ClarifyNode", clarifyNode)
@@ -719,65 +686,25 @@ const dialogGraph = new StateGraph(DialogStateAnnotation)
   .addEdge("FinalNode", END)
   .compile();
 
-/**
- * Answer Node:
- * - 実際の Answer LLM を呼び出して応答テキストを生成する。
- */
-async function answerNode(state: DialogGraphState): Promise<DialogGraphState> {
-  if (process.env.NODE_ENV === "test") {
-    return {
-      ...state,
-      finalText: "[test output]",
-    };
-  }
+function readAvatarFlags() {
+  const enabled = (process.env.FF_AVATAR_ENABLED ?? "false") === "true";
+  const forceOff = (process.env.FF_AVATAR_FORCE_OFF ?? "false") === "true";
+  return { avatarEnabled: enabled, avatarForceOff: forceOff };
+}
 
-  const plan = state.plannerSteps;
+function readKillSwitch() {
+  const enabled = (process.env.KILL_SWITCH_AVATAR ?? "false") === "true";
+  const reason = process.env.KILL_SWITCH_REASON ?? undefined;
+  return { enabled, reason };
+}
 
-  // Clarify ターンの場合は、ClarifyNode が設定した finalText（または clarifyingQuestions）をそのまま返し、
-  // Answer LLM は呼ばない。これにより Clarify → SalesNode → AnswerNode → FinalNode という経路でも
-  // 質問文が上書きされない。
-  if (
-    plan &&
-    plan.needsClarification &&
-    plan.clarifyingQuestions?.length &&
-    !state.routeContext.requiresSafeMode
-  ) {
-    if (state.finalText && state.finalText.length > 0) {
-      return state;
-    }
-    const clarificationText = plan.clarifyingQuestions.join("\n");
-    return {
-      ...state,
-      finalText: clarificationText,
-    };
-  }
-
-  const route: PlannerRoute = state.plannerDecision?.route ?? "20b"; // 念のためデフォルト 20B
-
-  logger.info(
-    {
-      route,
-      safeMode: state.routeContext.requiresSafeMode,
-      hasPlan: !!plan,
-      hasRagContext: !!state.ragContext,
-    },
-    "dialog.answer.call",
-  );
-  const answerText = await callAnswerLLM(route, {
-    input: state.input,
-    ragContext: state.ragContext,
-    plannerSteps: state.plannerSteps,
-    safeMode: state.routeContext.requiresSafeMode,
-  });
-
-  return {
-    ...state,
-    finalText: answerText,
-  };
+function newCorrelationId(): string {
+  return crypto.randomBytes(8).toString("hex");
 }
 
 /**
  * LangGraph ベースの Dialog Orchestrator エントリポイント。
+ * Phase22: meta.flow による「終端保証」を最優先で適用する。
  */
 export async function runDialogGraph(
   input: DialogInput
@@ -789,41 +716,274 @@ export async function runDialogGraph(
       conversationId: input.conversationId,
       preview: input.userMessage.slice(0, 120),
     },
-    "dialog.run.start",
+    "dialog.run.start"
   );
-  // 0. 長期対話向けの履歴サマリ圧縮
-  const summarizedInput = await summarizeHistoryIfNeeded(input);
 
-  // 1. Context 構築 (RAG + RouteContextV2)
+  // -------------------------
+  // Phase22: Flow Controller
+  // -------------------------
+  const flowKey = {
+    tenantId: input.tenantId,
+    conversationId: input.conversationId,
+  };
+  const budgets = defaultFlowBudgets();
+  const flow = getOrInitFlowSessionMeta(flowKey);
+  const turnIndex = flow.turnIndex + 1;
+
+  // 予算超過 → 強制終端
+  if (turnIndex > budgets.maxTurnsPerSession) {
+    const next = {
+      ...flow,
+      turnIndex,
+      state: "terminal" as const,
+      terminalReason: "aborted_budget" as const,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    setFlowSessionMeta(flowKey, next);
+    logger.info(
+      { event: "flow.terminal_reached", meta: { flow: next } },
+      "phase22.flow.terminal_reached"
+    );
+    return {
+      text: buildTerminalText(input.locale, "aborted_budget"),
+      route: "20b",
+      plannerReasons: ["phase22:aborted_budget"],
+    };
+  }
+
+  // confirm 状態なら、graph を呼ばずに Yes/No を決定的に処理して終端へ
+  if (flow.state === "confirm") {
+    const stop = detectUserStop(input.userMessage);
+    const yn = stop ? "stop" : detectYesNo(input.userMessage);
+
+    // Phase22: confirm 入力を必ずログ化（後追い）
+    logger.info(
+      {
+        event: "flow.confirm_input",
+        tenantId: input.tenantId,
+        conversationId: input.conversationId,
+        turnIndex,
+        decision: yn, // "yes" | "no" | "unknown" | "stop"
+      },
+      "phase22.flow.confirm_input"
+    );
+
+    if (stop) {
+      const next = {
+        ...flow,
+        turnIndex,
+        state: "terminal" as const,
+        terminalReason: "aborted_user" as const,
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      setFlowSessionMeta(flowKey, next);
+      logger.info(
+        { event: "flow.terminal_reached", meta: { flow: next } },
+        "phase22.flow.terminal_reached"
+      );
+      return {
+        text: buildTerminalText(input.locale, "aborted_user"),
+        route: "20b",
+        plannerReasons: ["phase22:aborted_user"],
+      };
+    }
+
+    if (yn === "yes") {
+      const next = {
+        ...flow,
+        turnIndex,
+        state: "terminal" as const,
+        terminalReason: "completed" as const,
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      setFlowSessionMeta(flowKey, next);
+      logger.info(
+        { event: "flow.terminal_reached", meta: { flow: next } },
+        "phase22.flow.terminal_reached"
+      );
+      return {
+        text: buildTerminalText(input.locale, "completed"),
+        route: "20b",
+        plannerReasons: ["phase22:completed"],
+      };
+    }
+
+    if (yn === "no") {
+      // Phase22: no で clarify に戻さない（ループ余地を削る）
+      const next = {
+        ...flow,
+        turnIndex,
+        state: "terminal" as const,
+        terminalReason: "aborted_user" as const,
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      setFlowSessionMeta(flowKey, next);
+      logger.info(
+        { event: "flow.terminal_reached", meta: { flow: next } },
+        "phase22.flow.terminal_reached"
+      );
+      return {
+        text: buildTerminalText(input.locale, "aborted_user"),
+        route: "20b",
+        plannerReasons: ["phase22:aborted_user"],
+      };
+    }
+
+    const confirmRepeats = flow.confirmRepeats + 1;
+    if (confirmRepeats > budgets.maxConfirmRepeats) {
+      const next = {
+        ...flow,
+        turnIndex,
+        confirmRepeats,
+        state: "terminal" as const,
+        terminalReason: "aborted_budget" as const,
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      setFlowSessionMeta(flowKey, next);
+      logger.info(
+        { event: "flow.terminal_reached", meta: { flow: next } },
+        "phase22.flow.terminal_reached"
+      );
+      return {
+        text: buildTerminalText(input.locale, "aborted_budget"),
+        route: "20b",
+        plannerReasons: ["phase22:aborted_budget"],
+      };
+    }
+
+    const next = {
+      ...flow,
+      turnIndex,
+      confirmRepeats,
+      state: "confirm" as const,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    setFlowSessionMeta(flowKey, next);
+    logger.info(
+      { event: "flow.enter_state", meta: { flow: next } },
+      "phase22.flow.enter_state"
+    );
+    return {
+      text:
+        (input.locale === "ja"
+          ? "「はい」または「いいえ」でお答えください。"
+          : "Please answer with yes or no.") + buildConfirmPrompt(input.locale),
+      route: "20b",
+      plannerReasons: ["phase22:confirm_retry"],
+    };
+  }
+
+  // -------------------------
+  // Phase22: Avatar Policy (presentation-only)
+  // -------------------------
+  const correlationId = newCorrelationId();
+  const avatarFlags = readAvatarFlags();
+  const avatarKill = readKillSwitch();
+  const intentHint = detectIntentHint(input);
+
+  const avatarDecision = evaluateAvatarPolicy({
+    provider: "lemon_slice",
+    locale: input.locale,
+    userMessage: input.userMessage,
+    history: input.history,
+    intentHint,
+    flags: avatarFlags,
+    killSwitch: avatarKill,
+    timing: {
+      readinessTimeoutMs: Number(
+        process.env.AVATAR_READINESS_TIMEOUT_MS ?? 1500
+      ),
+    },
+  });
+
+  // NOTE: ここでは "ready" を絶対に出さない（UIが嘘をつかない）。
+  // requested/disabled/forced-off のみを扱う（presentation-only）。
+  if (avatarDecision.status === "forced_off_pii") {
+    logPhase22Event(logger, {
+      event: "avatar.forced_off_pii",
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      correlationId,
+      meta: {
+        avatar: {
+          provider: "lemon_slice",
+          disableReason: avatarDecision.disableReason,
+          piiReasons: avatarDecision.piiReasons ?? [],
+        },
+      },
+    });
+  } else if (avatarDecision.status === "disabled_by_flag") {
+    logPhase22Event(logger, {
+      event: "avatar.disabled_by_flag",
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      correlationId,
+      meta: {
+        avatar: {
+          provider: "lemon_slice",
+          disableReason: avatarDecision.disableReason,
+        },
+      },
+    });
+  } else if (avatarDecision.status === "disabled_by_kill_switch") {
+    logPhase22Event(logger, {
+      event: "avatar.disabled_by_kill_switch",
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      correlationId,
+      meta: {
+        avatar: {
+          provider: "lemon_slice",
+          disableReason: avatarDecision.disableReason,
+          killReason: avatarDecision.killReason,
+        },
+      },
+    });
+  } else if (avatarDecision.status === "requested") {
+    logPhase22Event(logger, {
+      event: "avatar.requested",
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      correlationId,
+      meta: {
+        avatar: {
+          provider: "lemon_slice",
+          readinessTimeoutMs: avatarDecision.readinessTimeoutMs,
+        },
+      },
+    });
+  }
+
+  // -------------------------
+  // Normal dialog execution
+  // -------------------------
+  const summarizedInput = await summarizeHistoryIfNeeded(input);
   const initialState = await contextBuilderNode(summarizedInput);
 
-  // 1.5 シンプルな follow-up などの場合は Planner LLM をスキップして、
-  //     既存の fast-path で Answer まで一気に生成
+  // fast-path
   const fastDecision = routePlannerModelV2(initialState.routeContext);
   if (shouldUseFastAnswer(summarizedInput, initialState.routeContext)) {
     logger.info(
-      {
-        route: fastDecision.route,
-        reasons: fastDecision.reasons,
-      },
-      "dialog.run.fast-path",
+      { route: fastDecision.route, reasons: fastDecision.reasons },
+      "dialog.run.fast-path"
     );
+
     const fastState: DialogGraphState = {
       ...initialState,
       plannerDecision: fastDecision,
     };
-
     const answered = await answerNode(fastState);
 
     if (!answered.finalText) {
       logger.warn(
-        {
-          route: fastDecision.route,
-        },
-        "dialog.run.fast-path.no-final-text",
+        { route: fastDecision.route },
+        "dialog.run.fast-path.no-final-text"
       );
       return {
-        text: "現在うまくお応えできません。しばらくしてからお試しください。",
+        text:
+          input.locale === "ja"
+            ? "現在うまくお応えできません。しばらくしてからお試しください。"
+            : "Sorry, I couldn’t generate an answer right now. Please try again.",
         route: fastDecision.route,
         plannerReasons: [
           "fallback:no-final-text-in-fast-path",
@@ -837,8 +997,19 @@ export async function runDialogGraph(
       };
     }
 
+    const applied = applyPhase22FlowAfterGeneration({
+      input,
+      flowKey,
+      budgets,
+      prevFlow: flow,
+      turnIndex,
+      isClarifyTurn: false,
+      finalText: answered.finalText,
+    });
+    if (applied.forcedTerminal) return applied.forcedTerminal;
+
     return {
-      text: answered.finalText,
+      text: applied.textWithConfirm,
       route: fastDecision.route,
       plannerReasons: fastDecision.reasons,
       plannerPlan: answered.plannerSteps,
@@ -849,17 +1020,16 @@ export async function runDialogGraph(
     };
   }
 
-  // 2. LangGraph 実行（Planner / Clarify / Search / Sales / Answer / Final）
+  // graph slow-path
   const finalState = await dialogGraph.invoke(initialState);
 
   if (!finalState.finalText || !finalState.plannerDecision) {
-    logger.warn(
-      {},
-      "dialog.run.no-final-text-or-decision",
-    );
-    // 何かがおかしい場合のフォールバック
+    logger.warn({}, "dialog.run.no-final-text-or-decision");
     return {
-      text: "現在うまくお応えできません。しばらくしてからお試しください。",
+      text:
+        input.locale === "ja"
+          ? "現在うまくお応えできません。しばらくしてからお試しください。"
+          : "Sorry, I couldn’t generate an answer right now. Please try again.",
       route: "20b",
       plannerReasons: ["fallback:no-final-text-or-decision"],
       plannerPlan: finalState.plannerSteps,
@@ -877,10 +1047,27 @@ export async function runDialogGraph(
       safetyTag: finalState.routeContext.safetyTag,
       requiresSafeMode: finalState.routeContext.requiresSafeMode,
     },
-    "dialog.run.success",
+    "dialog.run.success"
   );
+
+  const isClarifyTurn =
+    Boolean(finalState.plannerSteps?.needsClarification) &&
+    Boolean(finalState.plannerSteps?.clarifyingQuestions?.length) &&
+    !finalState.routeContext.requiresSafeMode;
+
+  const applied = applyPhase22FlowAfterGeneration({
+    input,
+    flowKey,
+    budgets,
+    prevFlow: flow,
+    turnIndex,
+    isClarifyTurn,
+    finalText: finalState.finalText,
+  });
+  if (applied.forcedTerminal) return applied.forcedTerminal;
+
   return {
-    text: finalState.finalText,
+    text: applied.textWithConfirm,
     route: finalState.plannerDecision.route,
     plannerReasons: finalState.plannerDecision.reasons,
     plannerPlan: finalState.plannerSteps,
@@ -890,72 +1077,215 @@ export async function runDialogGraph(
     salesMeta: finalState.salesMeta,
   };
 }
+
+function applyPhase22FlowAfterGeneration(params: {
+  input: DialogInput;
+  flowKey: { tenantId: string; conversationId: string };
+  budgets: ReturnType<typeof defaultFlowBudgets>;
+  prevFlow: ReturnType<typeof getOrInitFlowSessionMeta>;
+  turnIndex: number;
+  isClarifyTurn: boolean;
+  finalText: string;
+}): { textWithConfirm: string; forcedTerminal?: DialogOutput } {
+  const {
+    input,
+    flowKey,
+    budgets,
+    prevFlow,
+    turnIndex,
+    isClarifyTurn,
+    finalText,
+  } = params;
+
+  const nextState: FlowState = isClarifyTurn ? "clarify" : "confirm";
+
+  // Phase22: recentStates は無制限に増やさない（壊れない）
+  const rawRecentStates = [...prevFlow.recentStates, nextState];
+  const maxKeep = Math.max(8, budgets.loopWindowTurns * 2);
+  const recentStates = rawRecentStates.slice(-maxKeep);
+
+  const loopCheck = detectStatePatternLoop(
+    recentStates,
+    budgets.loopWindowTurns
+  );
+
+  const clarifySig = isClarifyTurn ? toClarifySignature(finalText) : undefined;
+  const clarifySignatureLoop =
+    isClarifyTurn && clarifySig && prevFlow.lastClarifySignature === clarifySig;
+
+  if (loopCheck.loopDetected || clarifySignatureLoop) {
+    const next = {
+      ...prevFlow,
+      turnIndex,
+      state: "terminal" as const,
+      terminalReason: "aborted_loop_detected" as const,
+      recentStates,
+      lastClarifySignature: clarifySig ?? prevFlow.lastClarifySignature,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    setFlowSessionMeta(flowKey, next);
+
+    logger.info(
+      {
+        event: "flow.loop_detected",
+        meta: {
+          flow: {
+            pattern: loopCheck.pattern,
+            loopType: clarifySignatureLoop
+              ? "clarify_signature"
+              : "state_pattern",
+            // Phase22: 後追い用
+            recentTail: recentStates.slice(
+              -Math.min(recentStates.length, budgets.loopWindowTurns)
+            ),
+          },
+        },
+      },
+      "phase22.flow.loop_detected"
+    );
+
+    logger.info(
+      { event: "flow.terminal_reached", meta: { flow: next } },
+      "phase22.flow.terminal_reached"
+    );
+
+    const text = buildTerminalText(input.locale, "aborted_loop_detected");
+    return {
+      textWithConfirm: text,
+      forcedTerminal: {
+        text,
+        route: "20b",
+        plannerReasons: ["phase22:aborted_loop_detected"],
+      },
+    };
+  }
+
+  const sameStateRepeats =
+    prevFlow.state === nextState ? prevFlow.sameStateRepeats + 1 : 0;
+  const clarifyRepeats =
+    nextState === "clarify" ? prevFlow.clarifyRepeats + 1 : 0;
+
+  // Phase22: 上限に達したら止める（決定性）
+  if (
+    sameStateRepeats >= budgets.maxSameStateRepeats ||
+    clarifyRepeats >= budgets.maxClarifyRepeats
+  ) {
+    const next = {
+      ...prevFlow,
+      turnIndex,
+      state: "terminal" as const,
+      terminalReason: "aborted_budget" as const,
+      sameStateRepeats,
+      clarifyRepeats,
+      recentStates,
+      lastClarifySignature: clarifySig ?? prevFlow.lastClarifySignature,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+    setFlowSessionMeta(flowKey, next);
+
+    logger.info(
+      { event: "flow.terminal_reached", meta: { flow: next } },
+      "phase22.flow.terminal_reached"
+    );
+
+    const text = buildTerminalText(input.locale, "aborted_budget");
+    return {
+      textWithConfirm: text,
+      forcedTerminal: {
+        text,
+        route: "20b",
+        plannerReasons: ["phase22:aborted_budget"],
+      },
+    };
+  }
+
+  // Phase22: Log exit from previous state
+  if (prevFlow.state !== nextState) {
+    logger.info(
+      {
+        event: "flow.exit_state",
+        meta: {
+          from: prevFlow.state,
+          to: nextState,
+          turnIndex,
+          conversationId: flowKey.conversationId,
+        },
+      },
+      "phase22.flow.exit_state"
+    );
+  }
+
+  const next = {
+    ...prevFlow,
+    turnIndex,
+    state: nextState,
+    sameStateRepeats,
+    clarifyRepeats,
+    confirmRepeats: nextState === "confirm" ? 0 : prevFlow.confirmRepeats,
+    recentStates,
+    lastClarifySignature: clarifySig ?? prevFlow.lastClarifySignature,
+    lastUpdatedAt: new Date().toISOString(),
+  };
+  setFlowSessionMeta(flowKey, next);
+
+  // Phase22: Log entry to new state
+  if (prevFlow.state !== nextState) {
+    logger.info(
+      {
+        event: "flow.enter_state",
+        meta: {
+          state: nextState,
+          from: prevFlow.state,
+          turnIndex,
+          conversationId: flowKey.conversationId,
+        },
+      },
+      "phase22.flow.enter_state"
+    );
+  }
+
+  logger.info(
+    { event: "flow.state_updated", meta: { flow: next } },
+    "phase22.flow.state_updated"
+  );
+
+  const textWithConfirm = isClarifyTurn
+    ? finalText
+    : finalText + buildConfirmPrompt(input.locale);
+  return { textWithConfirm };
+}
+
 /**
- * シンプルな follow-up （例: Clarify に答えた 2 ターン目など）や、
- * 支払い方法のような定型 FAQ では Planner LLM をスキップして
- * Answer だけを実行するためのヒューリスティック。
- *
- * - safety フラグが立っている場合は常に Planner 経由にする
- * - shipping / returns / product-info は follow-up（history がある場合）のみ fast-path を許可
- * - payment は初回メッセージでも、ある程度長さがあれば fast-path を許可
- * - general のうち「簡単な店舗情報 / 問い合わせ FAQ」は fast-path を許可
+ * シンプルな follow-up などの場合は Planner LLM をスキップするヒューリスティック。
  */
 function shouldUseFastAnswer(
   input: DialogInput,
   routeContext: RouteContextV2
 ): boolean {
-  if (routeContext.requiresSafeMode) {
-    return false;
-  }
+  if (routeContext.requiresSafeMode) return false;
 
   const intent = detectIntentHint(input);
   const text = (input.userMessage || "").toLowerCase();
   const isClarifyFollowup = looksLikeClarifyFollowup(input);
   const depth = input.history?.length ?? 0;
 
-  // general のうち「簡単な店舗情報 / お問い合わせ FAQ」だけ fast-path を許可
-  if (intent === "general") {
-    if (isSimpleGeneralFaq(input, routeContext)) {
-      return true;
-    }
-    return false;
-  }
+  if (intent === "general") return isSimpleGeneralFaq(input, routeContext);
 
   const fastIntents = ["shipping", "returns", "payment", "product-info"];
-  if (!fastIntents.includes(intent)) {
-    return false;
-  }
+  if (!fastIntents.includes(intent)) return false;
 
-  // payment は「支払い方法を教えてください」のような 1 ターン質問が多いため、
-  // 初回メッセージでもある程度の長さがあれば fast-path を許可する。
-  if (intent === "payment") {
-    const minLengthForPayment = 8;
-    if (text.length < minLengthForPayment) {
-      return false;
-    }
-    return true;
-  }
+  if (intent === "payment") return text.length >= 8;
+  if (depth === 0) return false;
 
-  // shipping / returns / product-info は follow-up（history > 0）のみ fast-path 対象。
-  if (depth === 0) {
-    return false;
-  }
-
-  // Clarify のフォローアップ（2 ターン目）では、やや短めの応答でも fast-path を許可する。
   const minLength = isClarifyFollowup ? 8 : 15;
-  if (text.length < minLength) {
-    return false;
-  }
+  if (text.length < minLength) return false;
 
   return true;
 }
 
-/**
- * general intent のうち、簡単な店舗情報 / お問い合わせ FAQ かどうかを判定するヘルパー
- */
 function isSimpleGeneralFaq(
   input: DialogInput,
-  routeContext: RouteContextV2,
+  routeContext: RouteContextV2
 ): boolean {
   const text = [
     input.userMessage,
@@ -964,14 +1294,10 @@ function isSimpleGeneralFaq(
     .join(" ")
     .toLowerCase();
 
-  // 会話が深かったり、complexity が high の場合は Planner に任せる
   if (routeContext.conversationDepth > 1) return false;
   if (routeContext.complexity === "high") return false;
-
-  // 長すぎる質問はノウハウ相談の可能性が高いので除外（ざっくり）
   if (text.length > 60) return false;
 
-  // 「簡単な店舗情報 / お問い合わせ」系のキーワード
   const faqKeywords = [
     "営業時間",
     "何時から",
@@ -993,12 +1319,8 @@ function isSimpleGeneralFaq(
     "サポート",
     "カスタマーサポート",
   ];
+  if (!faqKeywords.some((k) => text.includes(k.toLowerCase()))) return false;
 
-  if (!faqKeywords.some((k) => text.includes(k.toLowerCase()))) {
-    return false;
-  }
-
-  // ノウハウ / 戦略的な相談っぽいマーカーが入っていたら Planner に回す
   const complexMarkers = [
     "コツ",
     "やり方",
@@ -1015,47 +1337,32 @@ function isSimpleGeneralFaq(
     "安く",
     "なるべく",
   ];
-  if (complexMarkers.some((k) => text.includes(k.toLowerCase()))) {
-    return false;
-  }
+  if (complexMarkers.some((k) => text.includes(k.toLowerCase()))) return false;
 
   return true;
 }
 
-/**
- * 直前のアシスタント発話が Rule-based Clarify 質問であるかどうかを判定する簡易ヘルパー。
- * shipping / returns 用の代表的な Clarify 質問文にマッチした場合は、
- * 「Clarify に答えた 2 ターン目」である可能性が高いとみなす。
- */
 function looksLikeClarifyFollowup(input: DialogInput): boolean {
   const history = input.history ?? [];
-  if (!history.length) {
-    return false;
-  }
+  if (!history.length) return false;
 
-  const lastAssistant = [...history].reverse().find(
-    (m) => m.role === "assistant",
-  );
-  if (!lastAssistant) {
-    return false;
-  }
+  const lastAssistant = [...history]
+    .reverse()
+    .find((m) => m.role === "assistant");
+  if (!lastAssistant) return false;
 
   const t = lastAssistant.content;
 
   const clarifyPhrases = [
-    // shipping 用 Clarify 質問
     "どの商品（またはカテゴリ）についての配送・送料を知りたいですか？",
     "お届け先の都道府県（または国）を教えてください。",
-    // returns 用 Clarify 質問
     "ご注文番号を教えていただけますか？",
     "返品したい商品の名前または型番（SKU）を教えてください。",
     "返品を希望される理由（サイズ違い・イメージ違い・不良品など）を教えてください。",
-    // returns 向けの一問多投スタイルのバリエーション
     "ご注文番号、購入日、商品の状態、返品理由を教えていただけますか？",
     "購入日を教えてください。",
     "商品の状態はどうですか？",
     "返品理由を教えてください。",
-    // product-info 用 Clarify 質問
     "どの商品についてのご質問でしょうか？（商品名や型番などを教えてください）",
     "どのような点について知りたいですか？（サイズ感・色・在庫状況・素材など）",
   ];
@@ -1063,10 +1370,6 @@ function looksLikeClarifyFollowup(input: DialogInput): boolean {
   return clarifyPhrases.some((phrase) => t.includes(phrase));
 }
 
-/**
- * 簡易的なセーフティフラグ検出ヘルパー。
- * 本番環境では専用の safety classifier に置き換える想定。
- */
 function detectSafetyFlag(input: DialogInput): boolean {
   const text = [
     input.userMessage,
@@ -1076,7 +1379,6 @@ function detectSafetyFlag(input: DialogInput): boolean {
     .toLowerCase();
 
   const safetyKeywords = [
-    // self-harm / suicide (日本語・英語の一部)
     "自殺",
     "死にたい",
     "リストカット",
@@ -1084,14 +1386,12 @@ function detectSafetyFlag(input: DialogInput): boolean {
     "自殺したい",
     "suicide",
     "kill myself",
-    // violence / abuse
     "暴力",
     "虐待",
     "dv",
     "暴行",
     "assault",
     "abuse",
-    // illegal activity (ごく一部の一般的なキーワード)
     "違法",
     "犯罪",
     "drug",
@@ -1101,9 +1401,6 @@ function detectSafetyFlag(input: DialogInput): boolean {
   return safetyKeywords.some((k) => text.includes(k.toLowerCase()));
 }
 
-/**
- * Intent ヒント検出ヘルパー
- */
 function detectIntentHint(input: DialogInput): string {
   const text = [
     input.userMessage,
@@ -1112,7 +1409,6 @@ function detectIntentHint(input: DialogInput): string {
     .join(" ")
     .toLowerCase();
 
-  // shipping / delivery
   const shippingKeywords = [
     "送料",
     "配送料",
@@ -1125,11 +1421,9 @@ function detectIntentHint(input: DialogInput): string {
     "delivery",
     "shipping",
   ];
-  if (shippingKeywords.some((k) => text.includes(k.toLowerCase()))) {
+  if (shippingKeywords.some((k) => text.includes(k.toLowerCase())))
     return "shipping";
-  }
 
-  // returns / refunds / cancellations
   const returnKeywords = [
     "返品",
     "返金",
@@ -1140,11 +1434,9 @@ function detectIntentHint(input: DialogInput): string {
     "refund",
     "cancel",
   ];
-  if (returnKeywords.some((k) => text.includes(k.toLowerCase()))) {
+  if (returnKeywords.some((k) => text.includes(k.toLowerCase())))
     return "returns";
-  }
 
-  // payment / billing
   const paymentKeywords = [
     "支払",
     "支払い",
@@ -1157,11 +1449,9 @@ function detectIntentHint(input: DialogInput): string {
     "payment",
     "pay",
   ];
-  if (paymentKeywords.some((k) => text.includes(k.toLowerCase()))) {
+  if (paymentKeywords.some((k) => text.includes(k.toLowerCase())))
     return "payment";
-  }
 
-  // product information
   const productKeywords = [
     "在庫",
     "入荷",
@@ -1176,17 +1466,12 @@ function detectIntentHint(input: DialogInput): string {
     "color",
     "material",
   ];
-  if (productKeywords.some((k) => text.includes(k.toLowerCase()))) {
+  if (productKeywords.some((k) => text.includes(k.toLowerCase())))
     return "product-info";
-  }
 
   return "general";
 }
 
-/**
- * Planner 用のプロンプトを組み立てるヘルパ。
- * 実際のプロンプト設計は Phase3 の仕様に合わせてチューニングしてください。
- */
 function buildPlannerPrompt(payload: {
   input: DialogInput;
   ragContext?: DialogGraphState["ragContext"];
@@ -1276,9 +1561,6 @@ function buildPlannerPrompt(payload: {
   ].join("\n");
 }
 
-/**
- * Answer 用のプロンプトを組み立てるヘルパ。
- */
 function buildAnswerPrompt(payload: {
   input: DialogInput;
   ragContext?: DialogGraphState["ragContext"];
@@ -1325,20 +1607,12 @@ function buildAnswerPrompt(payload: {
   ];
 
   const instructions = safeMode ? safeModeInstructions : normalInstructions;
-
   return [...baseLines, ...instructions].join("\n");
 }
 
-/**
- * 実際の Planner LLM 呼び出し。
- * - Groq GPT-OSS 20B/120B を呼ぶ実装をここに隠蔽する。
- */
 async function callPlannerLLM(
   route: PlannerRoute,
-  payload: {
-    input: DialogInput;
-    ragContext?: DialogGraphState["ragContext"];
-  }
+  payload: { input: DialogInput; ragContext?: DialogGraphState["ragContext"] }
 ): Promise<PlannerPlan> {
   const model =
     route === "120b"
@@ -1346,6 +1620,7 @@ async function callPlannerLLM(
       : process.env.GROQ_PLANNER_20B_MODEL ?? "groq/compound-mini";
 
   const prompt = buildPlannerPrompt(payload);
+
   logger.info(
     {
       route,
@@ -1354,7 +1629,7 @@ async function callPlannerLLM(
       conversationId: payload.input.conversationId,
       userMessagePreview: payload.input.userMessage.slice(0, 120),
     },
-    "planner.prompt",
+    "planner.prompt"
   );
 
   const raw = await callGroqWith429Retry(
@@ -1366,42 +1641,24 @@ async function callPlannerLLM(
           content:
             "You are the dialog planner for a commerce FAQ assistant. Always respond with valid JSON only.",
         },
-        {
-          role: "user",
-          content: prompt,
-        },
+        { role: "user", content: prompt },
       ],
       temperature: 0,
       maxTokens: 512,
       tag: "planner",
     },
-    {
-      logger,
-    }
+    { logger }
   );
-  logger.info(
-    {
-      route,
-      model,
-      rawPreview: raw.slice(0, 400),
-    },
-    "planner.raw"
-  );
+
+  logger.info({ route, model, rawPreview: raw.slice(0, 400) }, "planner.raw");
 
   try {
     const rawJson = JSON.parse(raw) as any;
-
-    if (!rawJson || !Array.isArray(rawJson.steps)) {
+    if (!rawJson || !Array.isArray(rawJson.steps))
       throw new Error("Planner JSON has no steps array");
-    }
 
-    // Normalize legacy MultiStepPlanner-style steps (type: "clarify" | "search" | "answer")
-    // into SalesStage-based PlannerStep objects (stage: "clarify" | "propose" | "recommend" | "close").
     const normalizedSteps = rawJson.steps.map((step: any, idx: number) => {
-      // If it already has stage, assume it is in the new format and return as-is.
-      if (step && typeof step === "object" && step.stage) {
-        return step;
-      }
+      if (step && typeof step === "object" && step.stage) return step;
 
       const id = step.id ?? `step_${idx + 1}`;
       const type = String(step.type ?? "answer");
@@ -1438,7 +1695,6 @@ async function callPlannerLLM(
         };
       }
 
-      // Default: treat answer/tool-like steps as recommend-stage
       return {
         id,
         stage: "recommend",
@@ -1449,11 +1705,7 @@ async function callPlannerLLM(
       };
     });
 
-    const normalizedPlan: PlannerPlan = {
-      ...rawJson,
-      steps: normalizedSteps,
-    };
-
+    const normalizedPlan: PlannerPlan = { ...rawJson, steps: normalizedSteps };
     return normalizedPlan;
   } catch {
     return {
@@ -1472,10 +1724,6 @@ async function callPlannerLLM(
   }
 }
 
-/**
- * 実際の Answer LLM 呼び出し。
- * - Groq GPT-OSS 20B/120B を呼ぶ実装をここに隠蔽する。
- */
 async function callAnswerLLM(
   route: PlannerRoute,
   payload: {
@@ -1491,7 +1739,6 @@ async function callAnswerLLM(
       : process.env.GROQ_ANSWER_20B_MODEL ?? "groq/compound-mini";
 
   const prompt = buildAnswerPrompt(payload);
-
   const maxTokens = payload.safeMode ? 320 : 256;
 
   const start = Date.now();
@@ -1504,31 +1751,19 @@ async function callAnswerLLM(
           content:
             "You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.",
         },
-        {
-          role: "user",
-          content: prompt,
-        },
+        { role: "user", content: prompt },
       ],
       temperature: 0.2,
       maxTokens,
       tag: payload.safeMode ? "answer-safe" : "answer",
     },
-    {
-      logger,
-    }
+    { logger }
   );
   const latencyMs = Date.now() - start;
 
   logger.info(
-    {
-      route,
-      model,
-      safeMode: !!payload.safeMode,
-      latencyMs,
-    },
-    "dialog.answer.finished",
+    { route, model, safeMode: !!payload.safeMode, latencyMs },
+    "dialog.answer.finished"
   );
-
   return raw;
 }
-const logger = pino();
