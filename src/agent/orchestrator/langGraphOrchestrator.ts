@@ -389,7 +389,8 @@ async function contextBuilderNode(
 ): Promise<DialogGraphState> {
   const ragContext = await runInitialRagRetrieval(initialInput);
 
-  const depth = initialInput.history.length;
+  const history = initialInput.history ?? [];
+  const depth = history.length;
   const tokens = ragContext.contextTokens;
 
   let complexity: "low" | "medium" | "high";
@@ -830,7 +831,9 @@ export async function runDialogGraph(
     }
 
     const confirmRepeats = flow.confirmRepeats + 1;
-    if (confirmRepeats > budgets.maxConfirmRepeats) {
+    // NOTE: maxConfirmRepeats を「許容回数」として扱うため >= にする
+    // (例) maxConfirmRepeats=2 なら unknown 2回目で aborted_budget
+    if (confirmRepeats >= budgets.maxConfirmRepeats) {
       const next = {
         ...flow,
         turnIndex,

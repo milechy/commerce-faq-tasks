@@ -1,7 +1,10 @@
 // tests/agent/observability/phase22Logging.test.ts
 
 import pino from "pino";
-import { logPhase22Event, type Phase22EventName } from "../../../src/agent/observability/phase22EventLogger";
+import {
+  logPhase22Event,
+  type Phase22EventName,
+} from "../../../src/agent/observability/phase22EventLogger";
 
 describe("Phase22 Logging Completeness Tests", () => {
   let logs: any[];
@@ -18,11 +21,11 @@ describe("Phase22 Logging Completeness Tests", () => {
         },
       },
     });
-    
+
     // Mock logger to capture logs
-    logger.info = jest.fn((obj: any, msg: string) => {
+    logger.info = jest.fn((obj: any, msg?: string) => {
       logs.push({ ...obj, msg });
-    });
+    }) as any;
   });
 
   const basePayload = {
@@ -207,7 +210,9 @@ describe("Phase22 Logging Completeness Tests", () => {
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           event: "avatar.forced_off_pii",
-          meta: expect.objectContaining({ piiReasons: expect.arrayContaining(["payment_billing"]) }),
+          meta: expect.objectContaining({
+            piiReasons: expect.arrayContaining(["payment_billing"]),
+          }),
         }),
         "phase22.avatar.forced_off_pii"
       );

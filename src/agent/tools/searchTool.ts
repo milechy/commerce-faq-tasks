@@ -50,6 +50,6 @@ export async function searchTool(
   }
 
   // 2) Fallback: 既存の hybridSearch（ES + PG FTS 等）
-  const result = await hybridSearch(query, tenantId);
+  const result = await hybridSearch(query);
   return result;
 }
