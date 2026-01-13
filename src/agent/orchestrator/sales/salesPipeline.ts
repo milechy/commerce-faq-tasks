@@ -1,8 +1,8 @@
 // src/agent/orchestrator/sales/salesPipeline.ts
 
 import { PlannerPlan } from "../../dialog/types";
-import { getSalesRules, type SalesRules } from "./salesRules";
 import { getIndustryPipelineByKind } from "./pipelines/pipelineFactory";
+import { getSalesRules, type SalesRules } from "./salesRules";
 
 export type SalesPipelineKind = "generic" | "saas" | "ec" | "reservation";
 
@@ -120,7 +120,8 @@ function detectUpsellFromText(
   triggered: boolean;
   notes: string[];
 } {
-  const text = [ctx.userMessage, ...ctx.history.map((m) => m.content)]
+  const history = ctx.history ?? [];
+  const text = [ctx.userMessage, ...history.map((m) => m.content)]
     .join(" ")
     .toLowerCase();
 
@@ -146,7 +147,8 @@ function detectCtaFromText(
   triggered: boolean;
   notes: string[];
 } {
-  const text = [ctx.userMessage, ...ctx.history.map((m) => m.content)]
+  const history = ctx.history ?? [];
+  const text = [ctx.userMessage, ...history.map((m) => m.content)]
     .join(" ")
     .toLowerCase();
 
@@ -228,10 +230,7 @@ export function runSalesPipeline(
           ...baseRules.upsellKeywords,
           ...industryPipeline.upsellHints,
         ],
-        ctaKeywords: [
-          ...baseRules.ctaKeywords,
-          ...industryPipeline.ctaHints,
-        ],
+        ctaKeywords: [...baseRules.ctaKeywords, ...industryPipeline.ctaHints],
       }
     : baseRules;
 
