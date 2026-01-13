@@ -74,3 +74,56 @@ export interface AgentSearchOptions {
    */
   useLlmPlanner?: boolean;
 }
+
+// src/agent/dialog/types.ts
+
+export type PlannerRoute = "20b" | "120b";
+
+export interface DialogTurnInput {
+  message: string;
+  sessionId?: string;
+  options?: {
+    language?: "ja" | "en";
+    useMultiStepPlanner?: boolean;
+    piiMode?: boolean;
+    personaTags?: string[];
+  };
+}
+
+export type DialogOrchestratorMode = "langgraph";
+
+export type DialogAgentStep = {
+  id: string;
+  title: string;
+  description?: string;
+  stage?: "clarify" | "propose" | "recommend" | "close";
+  question?: string;
+  cta?: "purchase" | "reserve" | "contact" | "download" | "other";
+};
+
+export type DialogAgentResponse = {
+  sessionId?: string;
+  answer: string | null;
+  steps: DialogAgentStep[];
+  meta: DialogAgentMeta;
+};
+
+export interface DialogAgentMeta {
+  route: PlannerRoute;
+  plannerReasons: string[];
+  orchestratorMode: DialogOrchestratorMode;
+  safetyTag?: string;
+  requiresSafeMode?: boolean;
+
+  /**
+   * Phase22 (PR2b): Presentation/adapter state for external avatar connection.
+   * - UI MUST NOT display "connected" unless status === "ready".
+   * - This field is presentation-only and MUST NOT affect dialog correctness.
+   */
+  adapter?: {
+    provider: "lemon_slice";
+    status: "disabled" | "skipped_pii" | "fallback" | "failed" | "ready";
+    reason?: string;
+    readinessMs?: number;
+  };
+}

@@ -1,6 +1,4 @@
-
-
-/**
+/ **
  * Minimal smoke test for runDialogGraph (LangGraph).
  *
  * This does NOT mock LLM or search — it simply verifies
@@ -45,6 +43,13 @@ async function main() {
   assert.ok(typeof out.salesMeta.upsellTriggered === 'boolean', 'salesMeta.upsellTriggered should be boolean');
   assert.ok(typeof out.salesMeta.ctaTriggered === 'boolean', 'salesMeta.ctaTriggered should be boolean');
   assert.ok(Array.isArray(out.salesMeta.notes), 'salesMeta.notes should be array');
+  assert.ok(
+    out.salesMeta.pipelineKind === 'generic' ||
+      out.salesMeta.pipelineKind === 'saas' ||
+      out.salesMeta.pipelineKind === 'ec' ||
+      out.salesMeta.pipelineKind === 'reservation',
+    'salesMeta.pipelineKind should be a valid pipeline kind',
+  );
 
   // Graph metadata checks
   assert.ok(out.graphVersion === 'langgraph-v1', 'graphVersion should be langgraph-v1');

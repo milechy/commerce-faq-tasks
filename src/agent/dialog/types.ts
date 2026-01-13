@@ -1,6 +1,8 @@
 // src/agent/dialog/types.ts
 
 import type { OrchestratorStep } from "../flow/dialogOrchestrator";
+import type { PlannerRoute } from "../orchestrator/modelRouter";
+import type { SalesMeta } from "../orchestrator/sales/salesPipeline";
 import type { AgentStep } from "../types";
 
 export type PlanStepType = "clarify" | "search" | "followup_search" | "answer";
@@ -13,34 +15,18 @@ export interface BasePlanStep {
 
 export interface ClarifyStep extends BasePlanStep {
   type: "clarify";
-  /**
-   * ユーザーに投げる Clarifying Question。
-   * 複数ある場合は順番に確認していく。
-   */
   questions: string[];
 }
 
 export interface SearchStep extends BasePlanStep {
   type: "search";
-  /**
-   * 実際に検索ツールに投げる query
-   */
   query: string;
-  /**
-   * Hybrid Search / Rerank 用の topK
-   */
   topK: number;
-  /**
-   * 将来のフィルタ（カテゴリや必須キーワードなど）
-   */
   filters?: Record<string, unknown> | null;
 }
 
 export interface FollowupSearchStep extends BasePlanStep {
   type: "followup_search";
-  /**
-   * どの情報をベースに follow-up を生成したか
-   */
   basedOn: "user" | "previous_answer";
   query: string;
   topK: number;
@@ -60,37 +46,11 @@ export type PlanStep =
 
 export interface MultiStepQueryPlan {
   steps: PlanStep[];
-
-  /**
-   * ClarifyStep が必要かどうか。
-   * steps 内に ClarifyStep が含まれている場合は true になる。
-   */
   needsClarification: boolean;
-
-  /**
-   * ユーザーに提示すべき Clarifying Question の一覧。
-   * steps 内の ClarifyStep からまとめたもの。
-   */
   clarifyingQuestions?: string[];
-
-  /**
-   * 追撃検索に使う候補クエリ。
-   */
   followupQueries?: string[];
-
-  /**
-   * プラン全体の信頼度。
-   */
   confidence: "low" | "medium" | "high";
-
-  /**
-   * 入力クエリの主要言語（Planner が推定）。
-   */
   language?: "ja" | "en" | "other";
-
-  /**
-   * LLM プランナーなどの生レスポンスをそのまま保持するためのフィールド。
-   */
   raw?: unknown;
 }
 
@@ -101,31 +61,17 @@ export interface DialogMessage {
   content: string;
 }
 
-/**
- * /agent.dialog に相当する 1 ターン分の入力
- */
 export interface DialogTurnInput {
   sessionId?: string;
-  /**
-   * 今回のユーザーメッセージ
-   */
   message: string;
-  /**
-   * 必要に応じてクライアント / サーバ側で保持している履歴を含める。
-   * MVP では必須ではない。
-   */
   history?: DialogMessage[];
   options?: {
     topK?: number;
     language?: "ja" | "en" | "auto";
     useLlmPlanner?: boolean;
     useMultiStepPlanner?: boolean;
-    /**
-     * Orchestrator のモード。
-     * - 'local': Node.js 内で完結
-     * - 'crew': 外部 CrewAI Orchestrator に委譲（将来）
-     */
     mode?: "local" | "crew";
+    personaTags?: string[];
     debug?: boolean;
   };
 }
@@ -139,88 +85,227 @@ export interface DialogTurnMeta {
   orchestrationSteps?: OrchestratorStep[];
 }
 
-/**
- * /agent.dialog からクライアントに返す 1 ターン分の結果
- */
 export interface DialogTurnResult {
   sessionId: string;
-  /**
-   * Clarifying Question のターンなどでは null のこともある。
-   */
   answer: string | null;
   needsClarification: boolean;
   clarifyingQuestions?: string[];
-
-  /**
-   * Agent の内部ステップログ。
-   * 既存の AgentStep を再利用する。
-   */
+  plannerPlan?: PlannerPlan | null;
+  salesMeta?: Record<string, unknown> | null;
   steps: (AgentStep | OrchestratorStep)[];
-
-  /**
-   * このターンで FAQ の回答が完結しているかどうか。
-   * false の場合、クライアント側は追加のユーザー入力を促すことができる。
-   */
   final: boolean;
-
   meta?: DialogTurnMeta;
 }
 
 // --- Phase8: Sales-oriented Planner types ---
 
-/**
- * セールス会話の4フェーズ。
- * - clarify: ヒアリング・状況整理
- * - propose: ベースプランの提示
- * - recommend: 具体的な商品・プランの推薦（アップセル・クロスセル含む）
- * - close: クロージング（CTA・不安つぶし）
- */
 export type SalesStage = "clarify" | "propose" | "recommend" | "close";
 
-/**
- * Planner が出力する 1 ステップ分の中間表現。
- * AnswerNode / SalesNode がこの情報を使って挙動を切り替える。
- */
 export type PlannerStep = {
-  /** ステップ ID（plan 内で一意なら OK） */
   id: string;
-
-  /** セールス会話のどのフェーズか */
   stage: SalesStage;
-
-  /** ステップの短いラベル（例: 「用途ヒアリング」「プラン提示」など） */
   title: string;
-
-  /** LLM / オペレーション向けの詳細説明（実際に何をするステップか） */
   description: string;
-
-  /**
-   * Clarify フェーズなどでユーザーに投げる質問文。
-   * stage === "clarify" のときによく使う。
-   */
   question?: string;
-
-  /**
-   * Recommend フェーズで提示する候補商品の ID 群。
-   * 商品 DB / 外部システムと紐づけるために使う。
-   */
   productIds?: string[];
-
-  /**
-   * Close フェーズのときの CTA 種別。
-   * - purchase: 購入
-   * - reserve: 予約
-   * - contact: お問い合わせ
-   * - download: 資料DL
-   * - other: その他カスタム CTA
-   */
   cta?: "purchase" | "reserve" | "contact" | "download" | "other";
 };
 
-/**
- * LangGraph / Sales 向けの PlannerPlan。
- * 既存の MultiStepQueryPlan と同じ構造だが、steps が SalesStage 付きの PlannerStep になる。
- */
 export interface PlannerPlan extends Omit<MultiStepQueryPlan, "steps"> {
   steps: PlannerStep[];
 }
+
+export type KpiFunnelStage = "awareness" | "consideration" | "conversion";
+
+export interface KpiFunnelMeta {
+  currentStage?: KpiFunnelStage;
+  reachedStages?: KpiFunnelStage[];
+  stepsCountByStage?: Record<KpiFunnelStage, number>;
+}
+
+export type DialogOrchestratorMode =
+  | "langgraph"
+  | "crewgraph"
+  | "local"
+  | "fallback-local-429";
+
+export interface DialogAgentMeta {
+  route: PlannerRoute;
+  plannerReasons: string[];
+  orchestratorMode: DialogOrchestratorMode;
+  safetyTag?: string;
+  requiresSafeMode?: boolean;
+  ragStats?: {
+    searchMs?: number;
+    rerankMs?: number;
+    rerankEngine?: "heuristic" | "ce" | "ce+fallback";
+    totalMs?: number;
+  };
+  salesMeta?: SalesMeta;
+  plannerPlan?: PlannerPlan;
+  graphVersion: string;
+  kpiFunnel?: KpiFunnelMeta;
+  multiStepPlan?: unknown;
+  sessionId?: string;
+}
+
+export interface DialogAgentResponse {
+  sessionId?: string;
+  answer: string | null;
+  steps: PlannerStep[];
+  final: boolean;
+  needsClarification: boolean;
+  clarifyingQuestions: string[];
+  meta: DialogAgentMeta;
+}
+
+// src/agent/dialog/types.ts
+
+export type DialogTurnInput = {
+  message: string;
+  sessionId: string;
+  options?: {
+    useMultiStepPlanner?: boolean;
+    language?: "ja" | "en";
+    /** PII 導線（Phase22: avatar を使用しない） */
+    piiMode?: boolean;
+    personaTags?: string[];
+  };
+};
+
+export type DialogAgentStep = {
+  id: string;
+  type: "clarify" | "search" | "answer";
+  title?: string;
+  description?: string;
+  questions?: string[];
+  query?: string;
+};
+
+export type DialogAgentMeta = {
+  route: "20b" | "120b";
+  plannerReasons: string[];
+  orchestratorMode: "langgraph";
+  safetyTag: "none" | "sensitive";
+  requiresSafeMode: boolean;
+  ragStats?: {
+    searchMs?: number;
+    rerankMs?: number;
+    totalMs?: number;
+    rerankEngine?: "heuristic" | "ce" | "ce+fallback";
+  };
+  graphVersion: "langgraph-v1";
+  sessionId: string;
+
+  /**
+   * Phase22 (PR2b):
+   * 接続層（UI/adapter）が参照する avatar adapter 状態
+   * - UI は status==="ready" のときのみ成功表示してよい
+   * - それ以外は disabled/fallback/failed として扱う
+   */
+  adapter?: {
+    avatar?: {
+      provider: "lemon_slice";
+      status: "disabled" | "ready" | "fallback" | "failed";
+      reason?:
+        | "pii_mode"
+        | "flag_disabled"
+        | "kill_switch"
+        | "missing_url"
+        | "http_non_2xx"
+        | "timeout"
+        | "exception";
+      correlationId?: string;
+      killReason?: string;
+      readinessUrl?: string;
+      httpStatus?: number;
+      latencyMs?: number;
+    };
+  };
+};
+
+export type DialogAgentResponse = {
+  answer?: string | null;
+  steps?: DialogAgentStep[];
+  meta: DialogAgentMeta;
+};
+
+// src/agent/dialog/types.ts
+
+export type AdapterStatus = "disabled" | "fallback" | "failed" | "ready";
+
+export type AdapterMeta = {
+  provider: "lemon_slice" | "none" | string;
+  status: AdapterStatus;
+
+  // disabled/fallback/failed の理由（UI表示/調査用）
+  reason?: string;
+
+  // readiness をプローブしたか（UIが嘘をつかないため）
+  probed?: boolean;
+
+  // 取れた場合のみ
+  latencyMs?: number;
+
+  // 失敗時分類（取れた場合のみ）
+  errorClass?: "timeout" | "network" | "http" | "unknown";
+  httpStatus?: number;
+};
+
+export interface DialogAgentMeta {
+  route: PlannerRoute;
+  plannerReasons: string[];
+  orchestratorMode: DialogOrchestratorMode;
+  safetyTag?: string;
+  requiresSafeMode?: boolean;
+  ragStats?: {
+    searchMs?: number;
+    rerankMs?: number;
+    rerankEngine?: "heuristic" | "ce" | "ce+fallback";
+    totalMs?: number;
+  };
+  salesMeta?: SalesMeta;
+  plannerPlan?: PlannerPlan;
+  graphVersion: string;
+  kpiFunnel?: KpiFunnelMeta;
+  multiStepPlan?: unknown;
+  sessionId?: string;
+
+  // Phase22 (PR2b): presentation-only adapter state
+  adapter?: AdapterMeta;
+}
+
+export interface DialogAgentResponse {
+  sessionId?: string;
+  answer: string | null;
+  steps: PlannerStep[];
+  final: boolean;
+  needsClarification: boolean;
+  clarifyingQuestions: string[];
+  meta: DialogAgentMeta;
+}
+
+// src/agent/dialog/types.ts（追記例）
+
+export type AdapterProvider = "lemon_slice";
+
+export type AdapterStatus =
+  | "disabled"
+  | "skipped_pii"
+  | "requested"
+  | "ready"
+  | "fallback"
+  | "failed";
+
+export type AdapterMeta = {
+  provider: AdapterProvider;
+  status: AdapterStatus;
+  reason?: string;
+  correlationId?: string;
+};
+
+// DialogAgentMeta の定義にこれを追加
+export type DialogAgentMeta = {
+  // ...既存...
+  adapter?: AdapterMeta;
+};
