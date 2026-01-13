@@ -39,11 +39,38 @@ async function callHandler(body: any): Promise<TestResult> {
   return { statusCode, body: jsonBody };
 }
 
+function assertAdapterMetaShape(meta: any) {
+  assert.ok(meta, "meta should be defined");
+  assert.ok(meta.adapter, "meta.adapter should be defined");
+
+  const status = meta.adapter.status;
+  assert.equal(typeof status, "string", "meta.adapter.status should be string");
+
+  const allowed = ["disabled", "fallback", "failed", "ready"];
+  assert.ok(
+    allowed.includes(status),
+    `meta.adapter.status should be one of ${allowed.join(", ")}`
+  );
+
+  // provider は文字列であることだけ固定（将来 provider 増えても壊れない）
+  assert.equal(
+    typeof meta.adapter.provider,
+    "string",
+    "meta.adapter.provider should be string"
+  );
+}
+
 async function test_basic_dialog_returns_answer_and_steps() {
   const { statusCode, body } = await callHandler({
     message: "返品の送料を知りたい",
     options: { language: "ja" },
   });
+
+  assert.ok(body.meta, "meta should be defined");
+  if (body.meta.adapter !== undefined) {
+    assert.equal(body.meta.adapter.provider, "lemon_slice");
+    assert.equal(typeof body.meta.adapter.status, "string");
+  }
 
   assert.equal(statusCode, 200, "status should be 200");
   assert.ok(body, "response body should be defined");
@@ -64,6 +91,9 @@ async function test_basic_dialog_returns_answer_and_steps() {
   );
 
   assert.ok(Array.isArray(body.steps), "steps should be an array");
+
+  // Phase22 (PR2b): meta.adapter shape
+  assertAdapterMetaShape(body.meta);
 }
 
 async function test_dialog_reuses_session_id() {
@@ -81,6 +111,9 @@ async function test_dialog_reuses_session_id() {
       options: { language: "ja" },
     });
     assert.equal(second.statusCode, 200, "second call should succeed");
+
+    // meta.adapter shape だけは固定で確認
+    assertAdapterMetaShape(second.body?.meta);
     return;
   }
 
@@ -95,6 +128,9 @@ async function test_dialog_reuses_session_id() {
     firstId,
     "sessionId should be reused across turns"
   );
+
+  // meta.adapter shape
+  assertAdapterMetaShape(second.body?.meta);
 }
 
 async function test_dialog_returns_clarify_when_multi_step_enabled() {
@@ -118,7 +154,8 @@ async function test_dialog_returns_clarify_when_multi_step_enabled() {
     "clarifyingQuestions should be a non-empty array"
   );
 
-  // answer は null でも string でも OK（実装依存）
+  // meta.adapter shape
+  assertAdapterMetaShape(body.meta);
 }
 
 async function main() {
