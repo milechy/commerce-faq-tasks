@@ -531,6 +531,27 @@ Phase12 では `/agent.dialog` の Planner 軽量化と p95 計測ループを�
 - `docs/LOGGING_SCHEMA.md`
 - `docs/P95_METRICS.md`
 
+### Phase22 — Failure-Safe Conversational Control（完了 2026-01-13）
+
+Phase22 では、会話型セールスフローと外部アヴァターを対象に、失敗・停止・非利用を前提とした安全な制御状態を確立しました。
+
+- **マルチターン制御**: 状態遷移（clarify → answer → confirm → terminal）、ループ検出、予算制限
+- **外部アヴァター制御**: PII検出、Feature Flag、Kill Switch
+- **運用・可観測性**: 11種類のログイベント（flow × 4、avatar × 7）
+
+詳細: [`PHASE22.md`](./PHASE22.md), [`docs/PHASE22_IMPLEMENTATION.md`](./docs/PHASE22_IMPLEMENTATION.md)
+
+### Phase23 — KPI & SLA Definitions（完了 2026-01-13）
+
+Phase23 では、Phase22 で確立した制御可能性を基盤に、本番運用レベルの KPI・SLA 定義と計測手順を標準化しました。
+
+- **MVP KPI セット**: 会話完了率、ループ検出率、アヴァターフォールバック率、検索レイテンシ、エラー率、Kill Switch発動回数
+- **SLA ゲート**: CI/CD（RPS≥5000, P90≤15ms）、本番（P95≤1500ms, Error<1%）
+- **運用キャデンス**: 日次5分チェック、週次レビュー、インシデント対応フロー
+- **計測スクリプト**: 7つのKPI計測コマンド（既存ログ活用）
+
+詳細: [`docs/PHASE23.md`](./docs/PHASE23.md)
+
 ### Phase10 → Phase11 ブリッジメモ（実装リポジトリ向け）
 
 **Phase10（完了） — Agent HTTP / E2E テスト整備**
