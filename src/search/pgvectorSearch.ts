@@ -1,3 +1,6 @@
+import { performance } from "node:perf_hooks";
+
+// @ts-ignore - pg has no bundled type declarations in this project
 import { Pool } from "pg";
 
 export type PgvectorSearchParams = {
@@ -27,7 +30,7 @@ const pool = databaseUrl
   : null;
 
 export async function searchPgVector(
-  params: PgvectorSearchParams,
+  params: PgvectorSearchParams
 ): Promise<PgvectorSearchResult> {
   const { tenantId, embedding, topK = 5 } = params;
   const t0 = performance.now();
@@ -64,7 +67,8 @@ export async function searchPgVector(
       id: String(row.id),
       text: row.text as string,
       score: (() => {
-        const s = typeof row.score === "number" ? row.score : Number(row.score) || 0;
+        const s =
+          typeof row.score === "number" ? row.score : Number(row.score) || 0;
         return Math.max(0, Math.min(1, s));
       })(),
       source: "pgvector",

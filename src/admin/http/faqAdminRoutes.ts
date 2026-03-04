@@ -1,5 +1,6 @@
 // src/admin/http/faqAdminRoutes.ts
 import express, { type Express, type Request, type Response } from "express";
+// @ts-ignore - pg has no bundled type declarations in this project
 import { Pool } from "pg";
 import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { supabaseAuthMiddleware } from "./supabaseAuthMiddleware";
@@ -33,17 +34,14 @@ function requireDb() {
 }
 
 function resolveTenantId(req: Request): string | null {
-  // 優先順位: 明示的なクエリパラメータ -> ヘッダー -> ボディ
+  // CLAUDE.md: tenantId は body から取得禁止
   const fromQuery = (req.query.tenantId || req.query.tenant_id) as
     | string
     | undefined;
   const fromHeader =
     (req.headers["x-tenant-id"] as string | undefined) ?? undefined;
-  const fromBody = (req.body?.tenantId || req.body?.tenant_id) as
-    | string
-    | undefined;
 
-  return fromQuery || fromHeader || fromBody || null;
+  return fromQuery || fromHeader || null;
 }
 
 async function updateEsFaqDocument(row: FaqRow) {
@@ -304,8 +302,6 @@ export function registerFaqAdminRoutes(app: Express) {
     const tenantId = resolveTenantId(req);
     const id = Number(req.params.id);
     const { question, answer, category, tags, isPublished } = req.body || {};
-
-    console.log("[PUT] body =", req.body);
 
     if (!tenantId) {
       return res.status(400).json({ error: "tenantId is required" });

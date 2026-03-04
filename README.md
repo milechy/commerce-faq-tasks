@@ -17,6 +17,11 @@
 - RAG構成: pgvector（Hetzner）+ Elasticsearch（Hetzner）+ Web検索（Compound内蔵）
 - インフラ: Cloudflare（WAF/CDN）+ Hetzner（DB/ES）+ n8n Cloud（Automation）
 - 料金: 従量課金（Sales + FAQ）＋ テナント初期セットアップ（RAG整備＋チューニング）
+- サービス名: **Commerce-FAQ SaaS**
+- 目的: AI FAQ + 販促誘導 + 従量課金（固定費ゼロ）
+- モデル: Groq GPT-OSS 20B/120B（自動ルーティング）
+- 構成: Widget / API / RAG(DB: PostgreSQL+pgvector) / Billing(Stripe) / SendGrid / Datadog & Sentry
+- 料金: **従量オンリー**（スタンダード×1.5 / カスタム×2.5、初月無料）
 
 ---
 ## 主なドキュメント
@@ -517,8 +522,71 @@ gh issue create -R <owner>/<repo> \
 
 ## 🔍 Phase / Roadmap（概要）
 
+
 フェーズの詳細なスコープや完了条件は、`docs/` 配下で管理します。  
 README では、現在地点だけをざっくり共有します。
+
+### Phase12 — Planner軽量化 / Fast-path / p95計測
+
+Phase12 では `/agent.dialog` の Planner 軽量化と p95 計測ループを整備しています。詳細は以下のドキュメントを参照してください。
+
+- `docs/PHASE12_SUMMARY.md`
+- `docs/PLANNER_RULE_BASED.md`
+- `docs/FAST_PATH_LOGIC.md`
+- `docs/LOGGING_SCHEMA.md`
+- `docs/P95_METRICS.md`
+
+### Phase22 — Failure-Safe Conversational Control（完了 2026-01-13）
+
+Phase22 では、会話型セールスフローと外部アヴァターを対象に、失敗・停止・非利用を前提とした安全な制御状態を確立しました。
+
+- **マルチターン制御**: 状態遷移（clarify → answer → confirm → terminal）、ループ検出、予算制限
+- **外部アヴァター制御**: PII検出、Feature Flag、Kill Switch
+- **運用・可観測性**: 11種類のログイベント（flow × 4、avatar × 7）
+
+詳細: [`PHASE22.md`](./PHASE22.md), [`docs/PHASE22_IMPLEMENTATION.md`](./docs/PHASE22_IMPLEMENTATION.md)
+
+### Phase23 — KPI & SLA Definitions（完了 2026-01-13）
+
+Phase23 では、Phase22 で確立した制御可能性を基盤に、本番運用レベルの KPI・SLA 定義と計測手順を標準化しました。
+
+- **MVP KPI セット**: 会話完了率、ループ検出率、アヴァターフォールバック率、検索レイテンシ、エラー率、Kill Switch発動回数
+- **SLA ゲート**: CI/CD（RPS≥5000, P90≤15ms）、本番（P95≤1500ms, Error<1%）
+- **運用キャデンス**: 日次5分チェック、週次レビュー、インシデント対応フロー
+- **計測スクリプト**: 7つのKPI計測コマンド（既存ログ活用）
+
+詳細: [`docs/PHASE23.md`](./docs/PHASE23.md)
+
+### Phase10 → Phase11 ブリッジメモ（実装リポジトリ向け）
+
+**Phase10（完了） — Agent HTTP / E2E テスト整備**
+
+実装リポジトリ側で、以下を完了済み：
+
+- `/agent.dialog` HTTP ハンドラの整備
+  - `sessionId` の発行・再利用ロジックの安定化
+  - multi-step planner 有効時のレスポンス仕様（`answer: null` ＋ `needsClarification: true`）をテストと揃える
+- 認証まわりの整理
+  - API キー: `x-api-key` ヘッダでの認証を利用
+  - Basic 認証: `demo:pass123` でのデモ用クレデンシャルを確認（ローカル）
+- E2E テスト `/agent.dialog`（Phase10 でグリーン）
+  - `basic dialog returns answer and steps`
+  - `dialog reuses sessionId across turns`
+  - `dialog returns clarify when multi-step enabled`
+
+**Phase11（これから） — LangGraph / CrewGraph 連携と拡張**
+
+Phase11 では、Phase10 で安定化した `/agent.dialog` を土台に、以下を進める：
+
+- LangGraph / CrewGraph ベースの Orchestrator への移行・統合
+  - 既存の `langGraphOrchestrator` / `CrewOrchestrator` 実装を、Phase10 の HTTP レイヤに自然に差し込む
+  - `meta.graphVersion` や `meta.multiStepPlan` など、Phase10 時点で追加済みのメタ情報を LangGraph 側でそのまま利用
+- Planner/Orchestrator の観測性強化
+  - Clarify / Search / Answer ステップごとのメトリクス・ログ項目を追加
+  - Phase10 のテストケースをベースに、Phase11 のフロー変更に対するリグレッションテストを追加
+- 将来 Phase（12 以降）に向けた A/B / ベイズ最適化のハブとして `/agent.dialog` を位置づけ
+
+👉 詳細なタスク分解や完了条件は、Phase11 用の Issues / Projects 側で管理する（この README では概要のみ）。
 
 - Phase0–2: DB / RAG / Hybrid Search 基盤 → **完了**
 - Phase3–4: Multi-step Orchestrator + `/agent.*` API → **完了**
@@ -545,3 +613,110 @@ README では、現在地点だけをざっくり共有します。
 ## 📝 更新履歴
 
 - **2025-11-24**: README をシンプル化し、詳細は `docs/` へ集約する方針に変更
+
+スクリプト
+
+SCRIPTS/env_setup.sh … ラベルの一括作成/整合
+SCRIPTS/gh_workflow_shortcuts.sh … gh CLI のショートハンド（任意）
+SCRIPTS/new_task_template.sh … 新規タスク雛形（任意）
+
+
+実行権限がない場合は chmod +x SCRIPTS/*.sh を実行。
+
+
+セキュリティ/運用メモ（抜粋）
+
+Secrets は Vault/Cloudflare 管理（本リポジトリに秘匿情報を置かない）
+Stripe Webhook / Billing同期は 専用サービス 側で実装、HQでは手順書を管理
+監視: Datadog/Sentry／パフォーマンスKPI: p95<1.5s, error<1%
+
+
+QA / 出荷前チェック（チェックリスト）
+
+ Unit/Integration/k6 Pass
+ CrewAI 自動レビュー ≥ 90
+ Stripe サンドボックス請求 OK
+ Cloudflare Rate-limit 動作確認
+ Runbook 更新済み / Rollback 手順確認
+
+
+コントリビューション
+
+Issue を作成し、status:todo と各種メタラベルを付与
+ブランチ命名: feat|bug|chore|ops/<scope>-<issue#>
+PR の本文に Closes #<issue> を必ず記載
+マージ後、必要に応じて status:qa → status:done に手動更新
+
+
+開発ツール前提
+
+Git / GitHub CLI (gh >= 2.30 目安)
+Node/PNPM or Python はこのリポジトリでは不要（アプリ実装は別リポ）
+
+
+MVP Roadmap（Phase進捗テーブル）
+Phase,Status,Due Date,Notes
+0: Setup,Done,11/1,Vault/RLS基盤OK
+1: DB+RLS,Done,11/5,RLSポリシー統合
+2: RAG,Done,11/10,Hybrid検索テスト
+3: Routing,Done,11/12,20B/120Bルート
+4: API,Done,11/15,FastAPI/JWT
+5: UI Widget,In Progress,11/20,Multi-langプレビュー
+6: Billing,In Progress,11/25,Stripe/n8n同期
+7: Monitoring,Todo,11/28,Datadogアラート
+8: CI/CD & QA,Todo,11/30,k6/Tester-H
+9: A/B+Lang,Todo,12/5,Toneベイズテスト
+10: Release,Todo,12/10,Rollback/GA
+
+変更履歴
+
+2025-11-08: README を初期化（開発HQとしての正しい説明に更新、固定費削除、Roadmap追加）
+
+text---
+
+### 3. `ARCHITECTURE.md`
+```markdown
+# 改善後アーキテクチャ（要点）
+
+```mermaid
+graph TD
+A[Client Widget] -->|HTTPS| B[API Gateway]
+B --> C[RAG Retriever]
+C --> C1[pgvector] & C2[Elasticsearch]
+C --> C3[Cross-encoder Re-ranker]
+B --> D[Groq LLM (20B/120B)]
+B --> E[Commerce Engine]
+E --> P[Product/Order DB]
+B --> F[Redis Cache]
+B --> G[Billing/Usage Logs]
+B --> H[Monitoring (Datadog/Otel)]
+B --> I[Security (Cloudflare)]
+B --> T[Tuning DB (Templates & Tone)]
+
+モデルルーティング
+	•	既定: 20B
+	•	昇格条件（例）: context_tokens>2000 / recall<0.6 / complexity≥τ / safety_tag ∈ {legal,security,policy}
+	•	フォールバック: 20B失敗→120B→静的FAQ→HITL
+
+レスポンス拡張:
+{"route":"20b|120b|static|human","rerank_score":0.74,"tuning_version":"r2025.10.22-01","flags":{"uncertain":false,"safe_route":false}}
+
+RAGハイブリッド
+	1.	ES Top-50 と pgvector Top-50 を並列
+	2.	結合/重複排除→Top-80
+	3.	Cross-encoder 再ランク→Top-5
+	4.	チャンク要約・重複削除→ ~1.5–2k tokens
+
+k_semantic=50, k_bm25=50, k_final=5, max_context_tokens=2000
+
+A/Bテスト
+	•	tone ∈ {Polite, Simple, SalesSoft}
+	•	cta_template_id ∈ {cta_v1, v2, v3}
+	•	rule_set ∈ {default, upsell, cross}
+	•	ベイズAB 勝率>95%で採択
+
+フェイルオーバ
+	1.	20B失敗→120B(1回)
+	2.	両方失敗→静的FAQ
+	3.	API失敗→CFキャッシュ/エラーバナー
+	4.	緊急→Circuit Breaker + Ops通知

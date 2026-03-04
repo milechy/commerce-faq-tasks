@@ -3,6 +3,9 @@ import "./App.css";
 import FaqList from "./pages/FaqList";
 import FaqForm from "./pages/FaqForm";
 import Login from "./pages/Login";
+import AdminDashboard from "./pages/admin/index";
+import KnowledgePage from "./pages/admin/knowledge/index";
+import MonitoringPage from "./pages/admin/monitoring/index";
 
 export default function App() {
   return (
@@ -11,8 +14,17 @@ export default function App() {
         {/* ログイン画面 */}
         <Route path="/login" element={<Login />} />
 
-        {/* ルートは FAQ 一覧へリダイレクト */}
-        <Route path="/" element={<Navigate to="/faqs" replace />} />
+        {/* ルートは管理ダッシュボードへリダイレクト */}
+        <Route path="/" element={<Navigate to="/admin" replace />} />
+
+        {/* 管理ダッシュボード */}
+        <Route path="/admin" element={<AdminDashboard />} />
+
+        {/* AIナレッジ（書籍PDF）管理 */}
+        <Route path="/admin/knowledge" element={<KnowledgePage />} />
+
+        {/* KPI監視ダッシュボード */}
+        <Route path="/admin/monitoring" element={<MonitoringPage />} />
 
         {/* FAQ 一覧 */}
         <Route path="/faqs" element={<FaqList />} />
@@ -21,8 +33,8 @@ export default function App() {
         <Route path="/faqs/new" element={<FaqForm mode="create" />} />
         <Route path="/faqs/:id/edit" element={<FaqForm mode="edit" />} />
 
-        {/* それ以外のパスは FAQ 一覧へ */}
-        <Route path="*" element={<Navigate to="/faqs" replace />} />
+        {/* それ以外のパスは管理ダッシュボードへ */}
+        <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
     </BrowserRouter>
   );
