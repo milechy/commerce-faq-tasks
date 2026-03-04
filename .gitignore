@@ -28,3 +28,4 @@ reports/
 
 # local generated context
 .context/
+.pnpm-store

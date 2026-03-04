@@ -5,8 +5,20 @@ import express from "express";
 import path from "node:path";
 import pino from "pino";
 import { z } from "zod";
+import { createChatHandler } from "./api/chat/route";
 import { runDialogTurn } from "./agent/dialog/dialogAgent";
+import { initAuthMiddleware } from "./agent/http/authMiddleware";
 import { createAgentSearchHandler } from "./agent/http/agentSearchRoute";
+import { createCorsMiddleware } from "./lib/cors";
+import { securityHeadersMiddleware } from "./lib/headers";
+import { createRateLimitMiddleware } from "./lib/rate-limit";
+import { requestIdMiddleware } from "./lib/request-id";
+import { createSecurityPolicyMiddleware } from "./lib/security-policy";
+import {
+  createTenantContextMiddleware,
+  getTenantByApiKeyHash,
+  seedTenantsFromEnv,
+} from "./lib/tenant-context";
 import {
   buildClarifyPrompt,
   type ClarifyIntent,
@@ -32,17 +44,64 @@ import {
 } from "./search/rerank";
 
 const app = express();
+app.disable("x-powered-by");
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
+// ---------------------------------------------------------------------------
+// Seed tenant registry (env / JSON) — must run before middleware init
+// ---------------------------------------------------------------------------
+seedTenantsFromEnv();
+
+// ---------------------------------------------------------------------------
+// Global middleware (applied to ALL requests, order matters)
+// ---------------------------------------------------------------------------
+app.use(requestIdMiddleware);
+app.use(securityHeadersMiddleware);
 app.use(express.json({ limit: "1mb" }));
 
-// --- minimal internal UI ---
-// Serve static assets from /public (no CORS needed; same-origin)
+// ---------------------------------------------------------------------------
+// Middleware chain — 5-layer security stack
+//   1. CORS          → preflight + origin echo
+//   2. rateLimiter   → global DDoS / flood protection (pre-auth, IP/anon key)
+//   3. auth          → JWT / API Key / Basic → tenantId
+//   4. tenantContext  → load TenantConfig into req
+//   5. securityPolicy → per-tenant origin / policy enforcement
+// ---------------------------------------------------------------------------
+const defaultOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim())
+  : [];
+
+const corsMiddleware = createCorsMiddleware({
+  defaultAllowedOrigins: defaultOrigins,
+  logger,
+});
+const globalRateLimiter = createRateLimitMiddleware({ logger });
+const authMiddleware = initAuthMiddleware({
+  resolveByApiKeyHash: getTenantByApiKeyHash,
+});
+const tenantContext = createTenantContextMiddleware({ logger });
+const securityPolicy = createSecurityPolicyMiddleware({ logger });
+
+// --- minimal internal UI (no auth required) ---
 const publicDir = path.resolve(process.cwd(), "public");
 app.use(express.static(publicDir));
-
-// Convenience: /ui -> /ui/index.html
 app.get("/ui", (_req, res) => res.redirect("/ui/index.html"));
+
+// CE status is public (side-effect free)
+app.get("/ce/status", (_req, res) => {
+  return res.json(ceStatus());
+});
+
+// ---------------------------------------------------------------------------
+// Protected API routes — full middleware chain applied
+// ---------------------------------------------------------------------------
+const apiStack = [
+  corsMiddleware,        // 1. CORS
+  globalRateLimiter,     // 2. Rate limit
+  authMiddleware,        // 3. Auth → tenantId
+  tenantContext,         // 4. Load TenantConfig
+  securityPolicy,        // 5. Per-tenant policy
+] as express.RequestHandler[];
 
 const clarifyLogWriter = new ClarifyLogWriter();
 
@@ -68,28 +127,21 @@ if (process.env.NOTION_API_KEY && notionSalesLogDatabaseId) {
   );
 }
 
-// env snapshot for troubleshooting
 logger.info({
   ES_URL: process.env.ES_URL,
   DATABASE_URL: process.env.DATABASE_URL,
   HYBRID_TIMEOUT_MS: process.env.HYBRID_TIMEOUT_MS,
 });
 
+// --- chat endpoint ---
+app.post("/api/chat", ...apiStack, createChatHandler(logger));
+
 // --- agent endpoints ---
-// /agent.search (dot) is the canonical route.
-app.post("/agent.search", createAgentSearchHandler(logger));
+app.post("/agent.search", ...apiStack, createAgentSearchHandler(logger));
+app.post("/agent/search", ...apiStack, createAgentSearchHandler(logger));
 
-// Compatibility alias (slash). Some clients/frameworks have trouble with dots in paths.
-app.post("/agent/search", createAgentSearchHandler(logger));
-
-// --- CE endpoints (for troubleshooting) ---
-// NOTE: GET /ce/status must be side-effect free.
-app.get("/ce/status", (_req, res) => {
-  return res.json(ceStatus());
-});
-
-// Explicit warmup to load the CE model (if ONNX).
-app.post("/ce/warmup", async (_req, res) => {
+// CE warmup (internal — protected)
+app.post("/ce/warmup", ...apiStack, async (_req, res) => {
   try {
     const out = await warmupCE();
     return res.json(out);
@@ -99,10 +151,9 @@ app.post("/ce/warmup", async (_req, res) => {
   }
 });
 
-// --- search endpoints ---
+// --- search endpoints (protected) ---
 
-// Simple search endpoint
-app.post("/search", async (req, res) => {
+app.post("/search", ...apiStack, async (req, res) => {
   const schema = z.object({ q: z.string() });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
@@ -127,7 +178,7 @@ app.post("/search", async (req, res) => {
 });
 
 // v1: schema-validated search with meta
-app.post("/search.v1", async (req, res) => {
+app.post("/search.v1", ...apiStack, async (req, res) => {
   const schemaIn = z.object({
     q: z.string(),
     topK: z.number().int().positive().max(50).optional(),
@@ -197,7 +248,7 @@ app.post("/search.v1", async (req, res) => {
 });
 
 // --- dialog (multi-step planner + orchestrator + sales) endpoint ---
-app.post("/dialog/turn", async (req, res) => {
+app.post("/dialog/turn", ...apiStack, async (req, res) => {
   const schemaIn = z.object({
     message: z.string(),
     sessionId: z.string().optional(),
@@ -231,7 +282,7 @@ app.post("/dialog/turn", async (req, res) => {
 });
 
 // --- sales template debug endpoint ---
-app.post("/sales/debug/template", (req, res) => {
+app.post("/sales/debug/template", ...apiStack, (req, res) => {
   const schema = z.object({
     phase: z.enum(["clarify", "propose", "recommend", "close"]),
     intent: z.string().optional(),
@@ -264,7 +315,7 @@ app.post("/sales/debug/template", (req, res) => {
 });
 
 // --- clarify prompt debug endpoint (uses Notion + fallback) ---
-app.post("/sales/debug/clarify", (req, res) => {
+app.post("/sales/debug/clarify", ...apiStack, (req, res) => {
   const schema = z.object({
     intent: z.enum(["level_diagnosis", "goal_setting"]),
     personaTags: z.array(z.string()).optional(),
@@ -292,7 +343,7 @@ app.post("/sales/debug/clarify", (req, res) => {
 });
 
 // --- clarify log write-back endpoint (Phase13: MVP) ---
-app.post("/integrations/notion/clarify-log", async (req, res) => {
+app.post("/integrations/notion/clarify-log", ...apiStack, async (req, res) => {
   const schema = z.object({
     originalQuestion: z.string(),
     clarifyQuestion: z.string(),

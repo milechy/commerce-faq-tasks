@@ -389,7 +389,7 @@ async function contextBuilderNode(
 ): Promise<DialogGraphState> {
   const ragContext = await runInitialRagRetrieval(initialInput);
 
-  const depth = initialInput.history.length;
+  const depth = (initialInput.history ?? []).length;
   const tokens = ragContext.contextTokens;
 
   let complexity: "low" | "medium" | "high";
@@ -830,7 +830,7 @@ export async function runDialogGraph(
     }
 
     const confirmRepeats = flow.confirmRepeats + 1;
-    if (confirmRepeats > budgets.maxConfirmRepeats) {
+    if (confirmRepeats >= budgets.maxConfirmRepeats) {
       const next = {
         ...flow,
         turnIndex,

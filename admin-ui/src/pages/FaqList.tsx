@@ -89,9 +89,9 @@ export default function FaqList() {
             new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
         );
         setFaqs(sorted);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("[FaqList] fetch error", err);
-        setError(err.message ?? "Failed to load FAQs");
+        setError(err instanceof Error ? err.message : "Failed to load FAQs");
       } finally {
         setLoading(false);
       }
@@ -139,9 +139,9 @@ export default function FaqList() {
       }
 
       setFaqs((prev) => prev.filter((f) => f.id !== faq.id));
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[FaqList] delete error", err);
-      alert(err.message ?? "Failed to delete FAQ");
+      alert(err instanceof Error ? err.message : "Failed to delete FAQ");
     }
   };
 

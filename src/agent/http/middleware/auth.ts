@@ -1,4 +1,6 @@
 // src/agent/http/middleware/auth.ts
+// @deprecated — Use initAuthMiddleware from "../authMiddleware" instead.
+// This file is kept only for backward compatibility and will be removed.
 import type { NextFunction, Request, Response } from "express";
 import type pino from "pino";
 

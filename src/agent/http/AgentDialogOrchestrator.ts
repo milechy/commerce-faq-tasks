@@ -15,6 +15,10 @@ export type AgentDialogOrchestratorRunInput = {
    * body.sessionId が優先される。
    */
   defaultSessionId?: string;
+  /**
+   * PR2b: 接続層（adapter/UI）側で決定した presentation-only 状態を meta に載せる
+   */
+  adapterMeta?: DialogAgentMeta["adapter"];
 };
 
 /**
@@ -36,7 +40,7 @@ export class AgentDialogOrchestrator {
   }
 
   async run(input: AgentDialogOrchestratorRunInput): Promise<DialogAgentResponse> {
-    const { body, tenantId, defaultSessionId } = input;
+    const { body, tenantId, defaultSessionId, adapterMeta } = input;
 
     // --- sessionId を必ず string にする ---
     const sessionId: string =
@@ -161,6 +165,7 @@ export class AgentDialogOrchestrator {
       // multiStepPlan は HTTP レイヤから参照される想定なので、常に object を返す
       multiStepPlan:
         baseMeta.multiStepPlan ?? (useMultiStep ? plannerPlan ?? {} : {}),
+      adapter: adapterMeta ?? baseMeta.adapter,
     };
 
     const payload: DialogAgentResponse = {

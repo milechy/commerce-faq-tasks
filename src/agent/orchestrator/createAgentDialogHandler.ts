@@ -2,10 +2,8 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import type { DialogTurnInput } from "../dialog/types";
 import { AgentDialogOrchestrator } from "./AgentDialogOrchestrator";
-import {
-  maybeProbeLemonSliceReadiness,
-  type LemonSliceAdapterMeta,
-} from "./presentation/lemonSliceAdapter";
+import { maybeProbeLemonSliceReadiness } from "../http/presentation/lemonSliceAdapter";
+import type { AdapterMeta } from "../dialog/types";
 
 // NOTE:
 // このファイルは /agent.dialog HTTP ルート専用の軽量ハンドラ。
@@ -41,7 +39,7 @@ export function createAgentDialogHandler(
     // - UI は readiness 確認できたときのみ成功表示（= readiness_ok ログは成功時のみ）
     // - PII 導線では avatar を使わない（ここで判断できる場合は明示的に無効化）
     // ------------------------------------------------------------
-    let adapterMeta: LemonSliceAdapterMeta | undefined;
+    let adapterMeta: AdapterMeta | undefined;
     try {
       const options = (body as any).options ?? {};
       const locale: "ja" | "en" = options.language === "en" ? "en" : "ja";

@@ -120,7 +120,7 @@ function detectUpsellFromText(
   triggered: boolean;
   notes: string[];
 } {
-  const text = [ctx.userMessage, ...ctx.history.map((m) => m.content)]
+  const text = [ctx.userMessage, ...(ctx.history ?? []).map((m) => m.content)]
     .join(" ")
     .toLowerCase();
 
@@ -146,7 +146,7 @@ function detectCtaFromText(
   triggered: boolean;
   notes: string[];
 } {
-  const text = [ctx.userMessage, ...ctx.history.map((m) => m.content)]
+  const text = [ctx.userMessage, ...(ctx.history ?? []).map((m) => m.content)]
     .join(" ")
     .toLowerCase();
 

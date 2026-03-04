@@ -1,6 +1,6 @@
 // frontend/src/ui/avatar/resolveAvatarUiMode.ts
 
-import { AdapterMeta } from "@/types/agentDialog";
+import { AdapterMeta } from "../../types/agentDialog";
 
 export type AvatarUiMode =
   | "show_avatar"

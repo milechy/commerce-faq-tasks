@@ -20,9 +20,11 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
     
     // Mock logger to capture logs
-    logger.info = jest.fn((obj: any, msg: string) => {
+    logger.info = jest.fn((...args: any[]) => {
+      const obj = typeof args[0] === "object" ? args[0] : {};
+      const msg = typeof args[1] === "string" ? args[1] : typeof args[0] === "string" ? args[0] : "";
       logs.push({ ...obj, msg });
-    });
+    }) as any;
   });
 
   const basePayload = {
