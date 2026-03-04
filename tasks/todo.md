@@ -221,3 +221,210 @@ Agent-D / Repo: commerce-faq-tasks / admin-ui (React + Vite)
 - [ ] ドラッグ&ドロップが390px viewportで動作すること
 - [ ] 全操作後に成功フィードバックが表示されること
 - [ ] エラー時に親切なメッセージが表示されること
+
+---
+
+# Agent-G: Health & SLA Config 実装計画
+
+## 担当
+Agent-G / Repo: commerce-faq-tasks
+
+## 実装ファイル一覧
+
+| # | ファイル | 内容 | 優先度 |
+|---|---------|------|--------|
+| 1 | `src/lib/health.ts` | `/health` エンドポイント: ES/PG/CE の接続確認 | P0 |
+| 2 | `types/contracts.ts` + `src/types/contracts.ts` | `TenantSla` インターフェース追加 | P0 |
+| 3 | `src/lib/security-policy.ts` | `skipPaths` に `/health`, `/metrics` を追加 | P0 |
+| 4 | `src/index.ts` | `/health` ルートを登録 | P0 |
+
+## セキュリティ制約
+
+- `/health` はセンシティブ情報（接続文字列・APIキー・テナント情報）を返さない
+- 認証不要だが IP フィルタ推奨（`skipPaths` で認証ミドルウェアをスキップ）
+- 各コンポーネントの `ok: true/false` と応答時間（ms）のみを返す
+- `console.log` でヘルスデータ（特に接続情報）を出力しない
+
+## 実装詳細
+
+### src/lib/health.ts
+レスポンス形式（センシティブ情報なし）:
+```json
+{
+  "status": "ok" | "degraded",
+  "timestamp": "<ISO8601>",
+  "components": {
+    "es":  { "ok": true,  "latencyMs": 12 },
+    "pg":  { "ok": true,  "latencyMs": 8  },
+    "ce":  { "ok": true,  "engine": "dummy" }
+  }
+}
+```
+- ES: `client.ping()` で疎通確認
+- PG: `pool.query('SELECT 1')` で疎通確認
+- CE: `ceStatus().onnxLoaded` または engine != null で確認
+- タイムアウト: 各コンポーネント最大 2000ms
+
+### TenantSla インターフェース
+- `completionRateMin: number`  // default 70
+- `loopRateMax: number`        // default 10
+- `fallbackRateMax: number`    // default 30
+- `searchP95Max: number`       // default 1500
+- `errorRateMax: number`       // default 1
+
+## 完了条件
+
+- [x] tasks/todo.md に計画を記載
+- [ ] src/lib/health.ts 作成（センシティブ情報なし）
+- [ ] types/contracts.ts に TenantSla 追加
+- [ ] src/types/contracts.ts に TenantSla 追加
+- [ ] security-policy.ts の skipPaths に /health, /metrics 追加
+- [ ] src/index.ts に /health ルート登録
+- [ ] pnpm typecheck → 0 errors
+- [ ] pnpm test → all pass
+
+---
+
+# Agent-J: Admin Dashboard UI（KPI監視画面）実装計画
+
+## 担当
+Agent-J / Repo: commerce-faq-tasks / admin-ui (React + Vite)
+
+## 実装ファイル一覧
+
+| # | ファイル | 内容 | 優先度 |
+|---|---------|------|--------|
+| 1 | `admin-ui/src/components/admin/KpiCard.tsx` | KPI名・現在値・SLA閾値・達成/未達成・未達成時赤背景 | P0 |
+| 2 | `admin-ui/src/components/admin/TenantSlaTable.tsx` | テナント別SLA達成率テーブル（◎/✗） | P0 |
+| 3 | `admin-ui/src/pages/admin/monitoring/index.tsx` | 30秒ポーリング・KpiCard×6・ローディング表示 | P0 |
+| 4 | `admin-ui/src/App.tsx` | /admin/monitoring ルート追加 | P0 |
+
+## KPI定義（表示名・内部名対応）
+
+| 表示名 | 内部キー | 単位 | SLA方向 |
+|---|---|---|---|
+| 会話完了率 | completionRate | % | ≥ completionRateMin (70%) |
+| ループ検出率 | loopRate | % | ≤ loopRateMax (10%) |
+| フォールバック率 | fallbackRate | % | ≤ fallbackRateMax (30%) |
+| 応答速度（95%ile） | searchP95Ms | ms | ≤ searchP95Max (1500ms) |
+| エラー率 | errorRate | % | ≤ errorRateMax (1%) |
+| 緊急停止スイッチ | killSwitchActive | on/off | off が正常 |
+
+## UX制約（絶対厳守）
+
+- ❌「rajiuce_conversation_terminal_total」→ ✅「会話完了率」
+- ❌「p95 latency」→ ✅「応答速度（95%ile）」
+- 全ボタン min-h: 56px
+- エラー時「データの取得に失敗しました 🙏 自動的に再試行します」
+- ローディング時「データを取得中...」
+- 未達成KPI: 赤背景で直感的に判別
+
+## 完了条件
+
+- [x] tasks/todo.md に計画を記載
+- [ ] KpiCard.tsx 作成
+- [ ] TenantSlaTable.tsx 作成
+- [ ] admin/monitoring/index.tsx 作成
+- [ ] App.tsx に /admin/monitoring ルート追加
+- [ ] pnpm tsc --noEmit → 0 errors
+
+---
+
+# Agent-F: MetricsCollector + Prometheus エクスポーター 実装計画
+
+## 担当
+Agent-F / Repo: commerce-faq-tasks
+
+## 実装ファイル一覧
+
+| # | ファイル | 内容 | 優先度 |
+|---|---------|------|--------|
+| 1 | `src/lib/metrics/kpiDefinitions.ts` | Phase23の6 KPI定数定義 | P0 |
+| 2 | `src/lib/metrics/metricsCollector.ts` | pinoログ→KPIカウンター更新ロジック | P0 |
+| 3 | `src/lib/metrics/promExporter.ts` | prom-clientでCounter/Gauge/Histogram定義・register | P0 |
+| 4 | `src/index.ts` | `/metrics` エンドポイント追加（X-Internal-Request認証） | P0 |
+| 5 | `package.json` | prom-client 追加 | P0 |
+
+## メトリクス定義
+
+| メトリクス名 | 種別 | ラベル |
+|---|---|---|
+| `rajiuce_conversation_terminal_total` | Counter | reason, tenantId |
+| `rajiuce_loop_detected_total` | Counter | tenantId |
+| `rajiuce_avatar_requests_total` | Counter | status, tenantId |
+| `rajiuce_rag_duration_ms` | Histogram | phase, tenantId |
+| `rajiuce_http_errors_total` | Counter | statusCode, tenantId |
+| `rajiuce_kill_switch_active` | Gauge | reason |
+| `rajiuce_active_sessions` | Gauge | tenantId |
+
+## セキュリティ制約
+
+- `/metrics` は `X-Internal-Request: 1` ヘッダーがある場合のみ許可
+- ragContent・書籍内容をメトリクスに含めない
+- tenantId はラベルに使用するが PII（メールアドレス等）は含めない
+
+## 完了条件
+
+- [x] tasks/todo.md に計画を記載
+- [x] src/lib/metrics/kpiDefinitions.ts 作成
+- [x] src/lib/metrics/metricsCollector.ts 作成
+- [x] src/lib/metrics/promExporter.ts 作成
+- [x] src/index.ts に /metrics エンドポイント追加
+- [x] pnpm typecheck → 0 errors
+- [x] pnpm test → all pass
+
+---
+
+# Agent-I: Slack Alerting 実装計画
+
+## 担当
+Agent-I / Repo: commerce-faq-tasks
+
+## 実装ファイル一覧
+
+| # | ファイル | 内容 | 優先度 |
+|---|---------|------|--------|
+| 1 | `src/lib/alerts/slackNotifier.ts` | Slack Incoming Webhook 呼び出し | P0 |
+| 2 | `src/lib/alerts/alertRules.ts` | Phase23 アラート条件の評価ロジック | P0 |
+| 3 | `src/lib/alerts/alertEngine.ts` | 60秒周期評価 + cooldown 30分 | P0 |
+| 4 | `src/index.ts` | AlertEngine 起動を追加（末尾） | P0 |
+
+## アラート条件（Phase23）
+
+| KPI | 条件 | 継続時間 | レベル |
+|---|---|---|---|
+| 会話完了率 | < 60% | 1時間 | CRITICAL |
+| ループ検出率 | > 15% | 30分 | CRITICAL |
+| アバターフォールバック率 | > 50% | 15分 | WARNING |
+| 検索レイテンシ p95 | > 2000ms | 10分 | WARNING |
+| エラー率 | > 3% | 5分 | CRITICAL |
+| Kill Switch | 発動時即座 | 0ms | INFO |
+
+## アーキテクチャ
+
+```
+AlertEngine (60s interval)
+  └── collectRawCounters()       … prom-client から Counter/Histogram 値を取得
+  └── computeSnapshot()          … delta 計算 → MetricsSnapshot
+  └── ALERT_RULES[].evaluate()   … 条件評価
+  └── violationDuration check    … 継続時間チェック
+  └── cooldown check (30min)     … 再送防止
+  └── sendSlackAlert()           … Slack Webhook POST
+  └── RESOLVED 通知              … 回復時
+```
+
+## セキュリティ制約
+
+- SLACK_WEBHOOK_URL は環境変数から取得（ハードコード禁止）
+- アラートメッセージに PII・書籍内容を含めない
+- Webhook 送信失敗はログのみ（アプリをクラッシュさせない）
+
+## 完了条件
+
+- [x] tasks/todo.md に計画を記載
+- [ ] src/lib/alerts/slackNotifier.ts 作成
+- [ ] src/lib/alerts/alertRules.ts 作成
+- [ ] src/lib/alerts/alertEngine.ts 作成
+- [ ] src/index.ts に AlertEngine 起動を追加
+- [ ] pnpm typecheck → 0 errors
+- [ ] pnpm test → all pass

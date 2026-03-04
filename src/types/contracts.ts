@@ -15,6 +15,7 @@ export interface TenantConfig {
     rateLimitWindowMs: number;
   };
   enabled: boolean;
+  sla?: TenantSla;
 }
 
 export interface ChatMessage {
@@ -47,4 +48,17 @@ export interface ApiResponse<T> {
   error?: string;
   requestId: string;
   tenantId: string;
+}
+
+export interface TenantSla {
+  /** 最低完了率 (%) — デフォルト 70 */
+  completionRateMin: number;
+  /** 最大ループ率 (%) — デフォルト 10 */
+  loopRateMax: number;
+  /** 最大フォールバック率 (%) — デフォルト 30 */
+  fallbackRateMax: number;
+  /** 検索 p95 上限 (ms) — デフォルト 1500 */
+  searchP95Max: number;
+  /** 最大エラー率 (%) — デフォルト 1 */
+  errorRateMax: number;
 }
