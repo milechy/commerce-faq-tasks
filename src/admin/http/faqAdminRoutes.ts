@@ -34,17 +34,14 @@ function requireDb() {
 }
 
 function resolveTenantId(req: Request): string | null {
-  // 優先順位: 明示的なクエリパラメータ -> ヘッダー -> ボディ
+  // CLAUDE.md: tenantId は body から取得禁止
   const fromQuery = (req.query.tenantId || req.query.tenant_id) as
     | string
     | undefined;
   const fromHeader =
     (req.headers["x-tenant-id"] as string | undefined) ?? undefined;
-  const fromBody = (req.body?.tenantId || req.body?.tenant_id) as
-    | string
-    | undefined;
 
-  return fromQuery || fromHeader || fromBody || null;
+  return fromQuery || fromHeader || null;
 }
 
 async function updateEsFaqDocument(row: FaqRow) {
@@ -305,8 +302,6 @@ export function registerFaqAdminRoutes(app: Express) {
     const tenantId = resolveTenantId(req);
     const id = Number(req.params.id);
     const { question, answer, category, tags, isPublished } = req.body || {};
-
-    console.log("[PUT] body =", req.body);
 
     if (!tenantId) {
       return res.status(400).json({ error: "tenantId is required" });

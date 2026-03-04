@@ -7,8 +7,8 @@
     "strict": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "."
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "commerce-faq-phase7-minimal"]
+  "include": ["src/**/*.ts", "lib/**/*.ts", "convex/**/*.ts", "types/**/*.ts"],
+  "exclude": ["node_modules", "dist", "commerce-faq-phase7-minimal", "phase12-context", "phase12-context 2", "admin-ui"]
 }
