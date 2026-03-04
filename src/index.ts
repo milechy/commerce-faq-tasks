@@ -1,11 +1,15 @@
 import "dotenv/config";
 
 import { Client as NotionClientSdk } from "@notionhq/client";
+import { alertEngine } from "./lib/alerts/alertEngine";
 import express from "express";
 import path from "node:path";
 import pino from "pino";
 import { z } from "zod";
+import { INTERNAL_REQUEST_HEADER } from "./lib/metrics/kpiDefinitions";
+import { metricsRegistry } from "./lib/metrics/promExporter";
 import { createChatHandler } from "./api/chat/route";
+import { healthHandler } from "./lib/health";
 import { runDialogTurn } from "./agent/dialog/dialogAgent";
 import { initAuthMiddleware } from "./agent/http/authMiddleware";
 import { createAgentSearchHandler } from "./agent/http/agentSearchRoute";
@@ -90,6 +94,24 @@ app.get("/ui", (_req, res) => res.redirect("/ui/index.html"));
 // CE status is public (side-effect free)
 app.get("/ce/status", (_req, res) => {
   return res.json(ceStatus());
+});
+
+// Health check — public, no sensitive data returned
+app.get("/health", healthHandler);
+
+// Prometheus metrics — 内部ネットワーク専用（X-Internal-Request: 1 必須）
+app.get("/metrics", async (req, res) => {
+  if (req.headers[INTERNAL_REQUEST_HEADER] !== "1") {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  try {
+    const output = await metricsRegistry.metrics();
+    res.set("Content-Type", metricsRegistry.contentType);
+    return res.end(output);
+  } catch (error) {
+    logger.error({ error }, "[metrics] failed to collect metrics");
+    return res.status(500).json({ error: "metrics_collection_failed" });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -421,6 +443,10 @@ async function startServer() {
   app.listen(port, () => {
     logger.info({ port, env: process.env.NODE_ENV }, "server listening");
   });
+
+  // Phase23: AlertEngine — 60秒周期で KPI を評価し Slack アラートを送信
+  alertEngine.start();
+  logger.info("[startup] AlertEngine started");
 }
 
 startServer().catch((error) => {

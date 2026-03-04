@@ -21,7 +21,7 @@ export interface SecurityPolicyOptions {
 export function createSecurityPolicyMiddleware(
   opts: SecurityPolicyOptions = {}
 ) {
-  const skipPaths = opts.skipPaths ?? new Set(["/ce/status", "/ui"]);
+  const skipPaths = opts.skipPaths ?? new Set(["/ce/status", "/ui", "/health", "/metrics"]);
 
   return function securityPolicyMiddleware(
     req: Request,
