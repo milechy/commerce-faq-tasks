@@ -9,6 +9,7 @@
 // - planner logs (tag === "planner"): uses `latencyMs` as planner latency
 
 import * as fs from "fs";
+import * as path from "path";
 import * as readline from "readline";
 
 function percentile(values: number[], p: number): number | null {
@@ -39,11 +40,24 @@ function summarize(name: string, values: number[]) {
 }
 
 async function main() {
-  const filePath = process.argv[2];
-  if (!filePath) {
+  const rawInput = process.argv[2];
+  if (!rawInput) {
     console.error(
       "Usage: node dist/SCRIPTS/analyze-agent-logs.js /path/to/log.jsonl"
     );
+    process.exit(1);
+  }
+
+  const filePath = path.resolve(rawInput);
+  const allowedBase = path.resolve(process.env.LOGS_DIR ?? process.cwd());
+
+  if (!filePath.startsWith(allowedBase + path.sep) && filePath !== allowedBase) {
+    console.error(`Error: Log file must be within the allowed directory: ${allowedBase}`);
+    process.exit(1);
+  }
+
+  if (path.extname(filePath) !== ".jsonl") {
+    console.error("Error: Only .jsonl files are supported.");
     process.exit(1);
   }
 

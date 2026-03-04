@@ -88,9 +88,9 @@ export default function FaqForm({ mode }: Props) {
         setAnswer(faq.answer);
         setCategory(faq.category ?? "");
         setIsPublished(faq.is_published);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("[FaqForm] fetch error", err);
-        setError(err.message ?? "Failed to load FAQ");
+        setError(err instanceof Error ? err.message : "Failed to load FAQ");
       } finally {
         setLoading(false);
       }
@@ -169,9 +169,9 @@ export default function FaqForm({ mode }: Props) {
 
       // 保存できたら一覧へ戻る
       navigate("/faqs");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[FaqForm] save error", err);
-      setError(err.message ?? "Failed to save FAQ");
+      setError(err instanceof Error ? err.message : "Failed to save FAQ");
     } finally {
       setSaving(false);
     }

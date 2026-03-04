@@ -1,4 +1,4 @@
-import type { AdapterStatus } from "@/api/contracts/agentDialog";
+import type { AdapterStatus } from "../../types/agentDialog";
 import { toAvatarUIMode } from "./adapterUIMode";
 
 describe("toAvatarUIMode", () => {

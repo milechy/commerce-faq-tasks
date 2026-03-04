@@ -1,6 +1,6 @@
 // src/ui/adapter/adapterUIMode.ts
 
-import type { AdapterStatus } from "@/api/contracts/agentDialog";
+import type { AdapterStatus } from "../../types/agentDialog";
 
 export type AvatarUIMode =
   | "hidden" // UI に出さない（成功表示もここ）

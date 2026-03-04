@@ -2,7 +2,7 @@
 
 import crypto from "crypto";
 import type { Logger } from "pino";
-import type { AdapterMeta } from "../../../api/contracts/agentDialog";
+import type { AdapterMeta } from "../../dialog/types";
 
 export type LemonSliceProbeInput = {
   tenantId: string;

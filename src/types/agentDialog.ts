@@ -2,6 +2,7 @@
 
 export type AdapterStatus =
   | "ready"
+  | "requested"
   | "disabled"
   | "skipped_pii"
   | "failed"

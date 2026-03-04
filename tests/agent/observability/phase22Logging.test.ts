@@ -1,27 +1,30 @@
 // tests/agent/observability/phase22Logging.test.ts
 
-import {
-  logPhase22Event,
-  type Phase22EventName,
-} from "../../../src/agent/observability/phase22EventLogger";
+import pino from "pino";
+import { logPhase22Event, type Phase22EventName } from "../../../src/agent/observability/phase22EventLogger";
 
 describe("Phase22 Logging Completeness Tests", () => {
   let logs: any[];
-  let logger: { info: jest.Mock };
+  let logger: pino.Logger;
 
   beforeEach(() => {
     logs = [];
-
-    // NOTE:
-    // pino() を生成すると transport が process に exit listener を追加し、
-    // テスト実行中に MaxListenersExceededWarning が発生しうる。
-    // このテストは logPhase22Event の引数整形と logger.info 呼び出しを検証したいだけなので、
-    // info だけを持つ軽量 logger を使う。
-    logger = {
-      info: jest.fn((obj: any, msg?: string) => {
-        logs.push({ ...obj, msg });
-      }),
-    };
+    logger = pino({
+      level: "info",
+      transport: {
+        target: "pino/file",
+        options: {
+          destination: 1,
+        },
+      },
+    });
+    
+    // Mock logger to capture logs
+    logger.info = jest.fn((...args: any[]) => {
+      const obj = typeof args[0] === "object" ? args[0] : {};
+      const msg = typeof args[1] === "string" ? args[1] : typeof args[0] === "string" ? args[0] : "";
+      logs.push({ ...obj, msg });
+    }) as any;
   });
 
   const basePayload = {
@@ -32,7 +35,7 @@ describe("Phase22 Logging Completeness Tests", () => {
 
   describe("Flow Events", () => {
     test("should log flow.enter_state event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "flow.enter_state",
         meta: { state: "clarify", from: "answer" },
@@ -51,7 +54,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log flow.exit_state event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "flow.exit_state",
         meta: { from: "answer", to: "clarify" },
@@ -69,7 +72,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log flow.terminal_reached event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "flow.terminal_reached",
         meta: { terminalReason: "completed" },
@@ -85,7 +88,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log flow.loop_detected event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "flow.loop_detected",
         meta: { loopType: "state_pattern", pattern: ["answer", "clarify"] },
@@ -103,7 +106,7 @@ describe("Phase22 Logging Completeness Tests", () => {
 
   describe("Avatar Events", () => {
     test("should log avatar.requested event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.requested",
         meta: { provider: "lemon_slice", readinessTimeoutMs: 1500 },
@@ -119,7 +122,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log avatar.ready event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.ready",
         meta: { provider: "lemon_slice", readinessMs: 450 },
@@ -134,7 +137,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log avatar.failed event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.failed",
         meta: { provider: "lemon_slice", error: "Connection timeout" },
@@ -150,7 +153,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log avatar.fallback_to_text event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.fallback_to_text",
         meta: { reason: "timeout", timeoutMs: 1500 },
@@ -166,7 +169,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log avatar.disabled_by_flag event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.disabled_by_flag",
         meta: { flag: "FF_AVATAR_ENABLED", value: false },
@@ -181,7 +184,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log avatar.disabled_by_kill_switch event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.disabled_by_kill_switch",
         meta: { reason: "Cost threshold exceeded" },
@@ -197,7 +200,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should log avatar.forced_off_pii event", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.forced_off_pii",
         meta: { piiReasons: ["payment_billing", "order_tracking"] },
@@ -206,9 +209,7 @@ describe("Phase22 Logging Completeness Tests", () => {
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           event: "avatar.forced_off_pii",
-          meta: expect.objectContaining({
-            piiReasons: expect.arrayContaining(["payment_billing"]),
-          }),
+          meta: expect.objectContaining({ piiReasons: expect.arrayContaining(["payment_billing"]) }),
         }),
         "phase22.avatar.forced_off_pii"
       );
@@ -232,7 +233,7 @@ describe("Phase22 Logging Completeness Tests", () => {
       ];
 
       events.forEach((event) => {
-        logPhase22Event(logger as any, {
+        logPhase22Event(logger, {
           ...basePayload,
           event,
           meta: {},
@@ -254,7 +255,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should handle missing optional meta", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "avatar.requested",
       });
@@ -269,7 +270,7 @@ describe("Phase22 Logging Completeness Tests", () => {
     });
 
     test("should preserve custom meta fields", () => {
-      logPhase22Event(logger as any, {
+      logPhase22Event(logger, {
         ...basePayload,
         event: "flow.terminal_reached",
         meta: {
@@ -302,7 +303,7 @@ describe("Phase22 Logging Completeness Tests", () => {
       ];
 
       flowEvents.forEach((event) => {
-        logPhase22Event(logger as any, {
+        logPhase22Event(logger, {
           ...basePayload,
           event,
         });
@@ -326,7 +327,7 @@ describe("Phase22 Logging Completeness Tests", () => {
       ];
 
       avatarEvents.forEach((event) => {
-        logPhase22Event(logger as any, {
+        logPhase22Event(logger, {
           ...basePayload,
           event,
         });
@@ -350,7 +351,7 @@ describe("Phase22 Logging Completeness Tests", () => {
 
       requiredFlowEvents.forEach((event) => {
         expect(() => {
-          logPhase22Event(logger as any, {
+          logPhase22Event(logger, {
             ...basePayload,
             event,
           });
@@ -369,7 +370,7 @@ describe("Phase22 Logging Completeness Tests", () => {
 
       requiredAvatarEvents.forEach((event) => {
         expect(() => {
-          logPhase22Event(logger as any, {
+          logPhase22Event(logger, {
             ...basePayload,
             event,
           });
