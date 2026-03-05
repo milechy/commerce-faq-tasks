@@ -1,7 +1,7 @@
 # RAJIUCE CLAUDE.md
 
 ## Core Principles
-1. **Security First** — Book content never leaves Convex DB. RAG excerpts ≤200 chars. API keys hashed.
+1. **Security First** — Book content never leaves DB. RAG excerpts ≤200 chars. API keys SHA-256 hashed. tenantId from JWT only.
 2. **Mobile First** — Touch targets ≥44px. Font ≥16px. Test 390px viewport first.
 3. **Partner Friendly** — No jargon. Every error = kind message. Every action = success feedback.
 
@@ -14,11 +14,51 @@
 
 ## Anti-Slop
 - ragExcerpt.slice(0, 200) 必須
-- tenantId: JWTから取得、bodyから禁止
+- tenantId: JWTまたはAPIキーから取得、bodyから禁止
 - console.log(ragContent) 禁止
-- 70Bモデル: 複雑クエリのみ
+- 120Bモデル: 複雑クエリ/safety時のみ（比率 ≤10%）
+- PII・書籍内容をメトリクスラベル/アラートメッセージに含めない
 
-## Agent Repos
-| エイリアス | パス |
-|---|---|
-| Agent-A-Auth | /Users/hkobayashi/commerce-faq-agent-auth-tenant |
+## Architecture Summary
+- Widget: `public/widget.js` — 1行埋め込み、Shadow DOM、data-api-key 認証
+- API: `src/index.ts` — Express + 4層セキュリティスタック (rateLimiter → auth → tenantContext → securityPolicy)
+- CORS: グローバル適用 (OPTIONS preflight 対応)
+- RAG: pgvector + Elasticsearch → Cross-encoder rerank → Groq 20B/120B
+- Flow: clarify → answer → confirm → terminal (Phase22 State Machine)
+- Sales: clarify → propose → recommend → close (SalesFlow Pipeline)
+- Monitoring: Prometheus + Grafana + Slack AlertEngine (Phase24)
+
+## Key Endpoints
+| Path | Auth | Purpose |
+|---|---|---|
+| POST /api/chat | x-api-key | Widget → Chat |
+| POST /dialog/turn | x-api-key / JWT | Multi-turn dialog |
+| POST /agent.search | x-api-key / JWT | RAG search |
+| GET /health | public | ES/PG/CE health |
+| GET /metrics | X-Internal-Request: 1 | Prometheus metrics |
+
+## Security Middleware Order (src/index.ts)
+1. requestIdMiddleware (global)
+2. securityHeadersMiddleware (global)
+3. express.json (global)
+4. corsMiddleware (global — preflight handling)
+5. rateLimiter (per-route stack)
+6. authMiddleware (per-route stack)
+7. tenantContextLoader (per-route stack)
+8. securityPolicyEnforcer (per-route stack)
+
+## Environment Variables
+```bash
+PORT, LOG_LEVEL, ES_URL, DATABASE_URL
+AGENT_API_KEY, ALLOWED_ORIGINS
+API_KEY_TENANT_ID, BASIC_AUTH_TENANT_ID
+CE_MODEL_PATH, CE_ENGINE
+SLACK_WEBHOOK_URL
+PHASE22_MAX_CONFIRM_REPEATS, DEFAULT_TENANT_ID
+```
+
+## Cost Constraint
+- Monthly: $27-48
+- Grafana + Prometheus: self-hosted $0-5
+- Slack Webhook: free
+- Groq API: usage-based (120B ratio ≤10%)
