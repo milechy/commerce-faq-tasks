@@ -178,6 +178,7 @@ export async function runDialogTurn(
   const result: DialogTurnResult = {
     sessionId: effectiveSessionId,
     answer: orchestrated.answer,
+    detectedIntents,
     steps: orchestrated.steps,
     final: orchestrated.final,
     needsClarification:

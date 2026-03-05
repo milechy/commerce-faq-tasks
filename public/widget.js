@@ -188,6 +188,25 @@
     '  color: #1e293b;',
     '  border-radius: 18px 18px 18px 4px;',
     '}',
+    '.actions {',
+    '  display: flex;',
+    '  flex-wrap: wrap;',
+    '  gap: 8px;',
+    '  margin-top: 8px;',
+    '}',
+    '.action-btn {',
+    '  min-height: 44px;',
+    '  border: none;',
+    '  border-radius: 10px;',
+    '  background: #2563eb;',
+    '  color: #fff;',
+    '  padding: 10px 14px;',
+    '  font-size: 16px;',
+    '  line-height: 1.2;',
+    '  cursor: pointer;',
+    '}',
+    '.action-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+    '.action-btn:hover { background: #1d4ed8; }',
     '.ts { font-size: 11px; color: #94a3b8; margin-top: 4px; text-align: center; }',
     '.empty-state {',
     '  flex: 1;',
@@ -503,9 +522,35 @@
       var bubble = el('div', { className: 'bubble ' + msg.role });
       // textContent を使用（innerHTML 禁止）
       bubble.textContent = msg.content;
+      if (Array.isArray(msg.actions) && msg.actions.length > 0) {
+        var actionsEl = el('div', { className: 'actions' });
+        msg.actions.forEach(function (action) {
+          if (!action || !action.url || !action.label) return;
+          var actionBtn = el('button', {
+            className: 'action-btn',
+            type: 'button',
+          });
+          actionBtn.textContent = String(action.label);
+          actionBtn.addEventListener('click', function () {
+            try {
+              window.open(String(action.url), '_blank', 'noopener,noreferrer');
+            } catch (_e) {
+              // ignore navigation failure
+            }
+          });
+          actionsEl.appendChild(actionBtn);
+        });
+        if (actionsEl.childNodes.length > 0) {
+          inner.appendChild(bubble);
+          inner.appendChild(actionsEl);
+        } else {
+          inner.appendChild(bubble);
+        }
+      } else {
+        inner.appendChild(bubble);
+      }
       var ts = el('div', { className: 'ts' });
       ts.textContent = formatTime(msg.timestamp);
-      inner.appendChild(bubble);
       inner.appendChild(ts);
       wrapper.appendChild(inner);
       messagesArea.appendChild(wrapper);
@@ -652,6 +697,19 @@
           id: (json.data && json.data.id) || generateMsgId(),
           role: 'assistant',
           content: assistantContent,
+          actions:
+            json.data &&
+            Array.isArray(json.data.actions)
+              ? json.data.actions.map(function (action) {
+                  return {
+                    type: action && action.type ? String(action.type) : 'link',
+                    label: action && action.label ? String(action.label) : '',
+                    url: action && action.url ? String(action.url) : '',
+                  };
+                }).filter(function (action) {
+                  return action.label.length > 0 && action.url.length > 0;
+                })
+              : undefined,
           timestamp: (json.data && json.data.timestamp) || Date.now(),
         };
         messages.push(assistantMsg);

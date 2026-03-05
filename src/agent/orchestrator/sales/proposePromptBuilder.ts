@@ -19,7 +19,10 @@ export type ProposeIntent =
   | "trial_lesson_offer"              // 初回の体験レッスン提案
   | "propose_monthly_plan_basic"      // ベーシックな月額プラン提案
   | "propose_monthly_plan_premium"    // プレミアムな月額プラン提案
-  | "propose_subscription_upgrade";   // 既存ユーザー向けアップグレード提案
+  | "propose_subscription_upgrade"    // 既存ユーザー向けアップグレード提案
+  | "visit_booking"                   // 来店・試乗予約
+  | "financing"                       // ローン・支払い相談
+  | "trade_in";                       // 下取り・買取相談
 
 const PROPOSE_PHASE: SalesPhase = "propose";
 

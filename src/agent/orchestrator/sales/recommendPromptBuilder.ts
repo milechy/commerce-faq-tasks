@@ -16,7 +16,9 @@ import type { BuiltSalesPromptResult } from "./proposePromptBuilder";
 export type RecommendIntent =
   | "recommend_course_based_on_level"
   | "recommend_course_for_goal"
-  | "recommend_addon_module";
+  | "recommend_addon_module"
+  | "vehicle_detail"
+  | "after_service";
 
 const RECOMMEND_PHASE: SalesPhase = "recommend";
 

@@ -74,6 +74,37 @@ propose:
         - "まずは始めてみたい"
         - "気軽に始めたい"
 
+  - intent: visit_booking
+    name: "来店・試乗予約"
+    patterns:
+      any:
+        - "来店"
+        - "予約"
+        - "試乗"
+        - "見に行きたい"
+        - "店舗"
+
+  - intent: financing
+    name: "ローン・支払い相談"
+    patterns:
+      any:
+        - "ローン"
+        - "オートローン"
+        - "金利"
+        - "審査"
+        - "分割"
+        - "頭金"
+
+  - intent: trade_in
+    name: "下取り・買取相談"
+    patterns:
+      any:
+        - "下取り"
+        - "査定"
+        - "買取"
+        - "今の車"
+        - "乗り換え"
+
 recommend:
   - intent: recommend_course_based_on_level
     name: "レベル・コース相談"
@@ -118,6 +149,27 @@ recommend:
         - "キャリアアップ"
         - "転職"
         - "英語が必要"
+
+  - intent: vehicle_detail
+    name: "車両詳細確認"
+    patterns:
+      any:
+        - "修復歴"
+        - "事故歴"
+        - "保証"
+        - "整備"
+        - "状態"
+        - "走行距離"
+
+  - intent: after_service
+    name: "アフターサービス"
+    patterns:
+      any:
+        - "車検"
+        - "アフターサービス"
+        - "点検"
+        - "保証範囲"
+        - "保証期間"
 
 close:
   - intent: close_next_step_confirmation
@@ -169,3 +221,25 @@ close:
         - "金銭的に"
         - "家計"
         - "予算が心配"
+
+  - intent: pricing_negotiation
+    name: "価格・見積り交渉"
+    patterns:
+      any:
+        - "値引き"
+        - "諸費用"
+        - "総額"
+        - "乗り出し"
+        - "見積もり"
+        - "コミコミ"
+
+  - intent: store_trust
+    name: "店舗信頼確認"
+    patterns:
+      any:
+        - "口コミ"
+        - "評判"
+        - "実績"
+        - "JU適正"
+        - "信頼"
+        - "安心"

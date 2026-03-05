@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { runDialogTurn } from "../../agent/dialog/dialogAgent";
-import type { ApiResponse, ChatMessage } from "../../types/contracts";
+import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts";
 
 // ---------------------------------------------------------------------------
 // Zod スキーマ
@@ -113,10 +113,20 @@ export function createChatHandler(logger: Logger) {
           "申し訳ありません。現在回答を生成できませんでした。再度お試しください。";
       }
 
+      const actions: ChatAction[] = [];
+      if (result.detectedIntents?.proposeIntent === "visit_booking") {
+        actions.push({
+          type: "booking",
+          label: "来店予約はこちら",
+          url: "https://www.s-time.co.jp/reservation/",
+        });
+      }
+
       const chatMessage: ChatMessage = {
         id: requestId,
         role: "assistant",
         content,
+        actions: actions.length > 0 ? actions : undefined,
         timestamp: Date.now(),
         tenantId,
       };

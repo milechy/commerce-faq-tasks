@@ -13,7 +13,9 @@ import type { BuiltSalesPromptResult } from "./proposePromptBuilder";
 export type CloseIntent =
   | "close_after_trial"
   | "close_handle_objection_price"
-  | "close_next_step_confirmation";
+  | "close_next_step_confirmation"
+  | "pricing_negotiation"
+  | "store_trust";
 
 const CLOSE_PHASE: SalesPhase = "close";
 

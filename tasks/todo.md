@@ -482,3 +482,46 @@ RAJIUCE統括アーキテクト / agent_id: `agent_aee377cb0fec68ea`
 - [x] `admin-ui/src/components/admin/AvatarUpload.tsx` 実装
 - [x] `admin-ui/src/components/admin/VoiceSettings.tsx` 実装
 - [x] `pnpm verify` が成功
+
+---
+
+# Phase26: カーネーション導入準備 実装計画
+
+## 担当
+RAJIUCE統括アーキテクト / Repo: commerce-faq-tasks
+
+## 依存順実装 (A → B → C → D)
+
+### A. ナレッジ投入スクリプト
+- `SCRIPTS/scrape-carnation.ts` を作成
+- 6 URL を fetch（User-Agent 指定、10秒タイムアウト、1回リトライ）
+- HTML から本文抽出（`script/style/nav/header/footer` を除去）
+- 500文字チャンク分割
+- `embedTextOpenAI()` でベクトル化し、`faq_embeddings` へ `tenant_id='carnation'` で保存
+
+### B. 中古車 Intent 追加
+- `config/salesIntentRules.yaml` に中古車向け intent/pattern を追加
+- 型拡張:
+  - `src/agent/orchestrator/sales/proposePromptBuilder.ts`
+  - `src/agent/orchestrator/sales/recommendPromptBuilder.ts`
+  - `src/agent/orchestrator/sales/closePromptBuilder.ts`
+
+### C. CTA 返却
+- `DialogTurnResult` に `detectedIntents?: DetectedSalesIntents` を追加
+- `dialogAgent.ts` の result 構築で `detectedIntents` を設定
+- `src/types/contracts.ts` と `types/contracts.ts` に `ChatAction` と `ChatMessage.actions?` を追加
+- `src/api/chat/route.ts` で `visit_booking` 検出時に予約 CTA を返却
+- `public/widget.js` で `actions` ボタンを描画（min-height 44px、`textContent` のみ）
+
+### D. テスト HTML
+- `public/carnation-test.html` を作成
+- `data-tenant="carnation"` `data-api-key="secret-123"` を設定
+- 白ベース + 赤アクセント、指定ウェルカム文、質問例3ボタンを配置
+
+## 完了条件
+- [ ] A 完了後に `pnpm verify` 成功
+- [ ] B 完了後に `pnpm verify` 成功
+- [ ] C 完了後に `pnpm verify` 成功
+- [ ] D 完了後に `pnpm verify` 成功
+- [ ] 最終 `pnpm verify` 成功
+- [ ] `git commit -m "feat(phase26): carnation knowledge & intent setup"`

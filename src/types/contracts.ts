@@ -22,9 +22,16 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  actions?: ChatAction[];
   modelUsed?: GroqModel;
   timestamp: number;
   tenantId: string;
+}
+
+export interface ChatAction {
+  type: "booking" | "link";
+  label: string;
+  url: string;
 }
 
 export type GroqModel =

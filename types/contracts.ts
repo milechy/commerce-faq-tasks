@@ -17,9 +17,15 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  actions?: ChatAction[]
   modelUsed?: GroqModel
   timestamp: number
   tenantId: string
+}
+export interface ChatAction {
+  type: 'booking' | 'link'
+  label: string
+  url: string
 }
 export type GroqModel = 'llama-3.1-8b-instant' | 'llama-3.3-70b-versatile'
 export interface RagContextItem {

@@ -2,6 +2,7 @@
 
 import type { OrchestratorStep } from "../flow/dialogOrchestrator";
 import type { PlannerRoute } from "../orchestrator/modelRouter";
+import type { DetectedSalesIntents } from "../orchestrator/sales/salesIntentDetector";
 import type { SalesMeta } from "../orchestrator/sales/salesPipeline";
 import type { AgentStep } from "../types";
 
@@ -91,6 +92,7 @@ export interface DialogTurnResult {
   answer: string | null;
   needsClarification: boolean;
   clarifyingQuestions?: string[];
+  detectedIntents?: DetectedSalesIntents;
   plannerPlan?: PlannerPlan | null;
   salesMeta?: Record<string, unknown> | null;
   steps: (AgentStep | OrchestratorStep)[];
