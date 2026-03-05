@@ -428,3 +428,57 @@ AlertEngine (60s interval)
 - [ ] src/index.ts に AlertEngine 起動を追加
 - [ ] pnpm typecheck → 0 errors
 - [ ] pnpm test → all pass
+
+---
+
+# Phase25: Lemonslice Avatar強化 実装計画
+
+## 担当
+RAJIUCE統括アーキテクト / agent_id: `agent_aee377cb0fec68ea`
+
+## 実装ファイル一覧
+
+| # | ファイル | 内容 | 優先度 |
+|---|---------|------|--------|
+| 1 | `src/lib/avatar/avatarStorage.ts` | アバター画像の AES-256-GCM 暗号化保存/復号 | P0 |
+| 2 | `src/lib/avatar/lemonsliceAvatarApi.ts` | Lemonslice API へのアバター登録（LiveKit設定含む） | P0 |
+| 3 | `src/lib/avatar/voiceSettings.ts` | 音声設定（男性/女性/ニュートラル、話速、ピッチ） | P0 |
+| 4 | `admin-ui/src/components/admin/AvatarUpload.tsx` | アバター画像アップロードUI（親切文言） | P0 |
+| 5 | `admin-ui/src/components/admin/VoiceSettings.tsx` | 音声設定UI（専門用語なし） | P0 |
+
+## 制約（絶対厳守）
+
+- Phase10 の LiveKit 設定を流用する（endpoint/token の扱いを統一）
+- tenantId は JWT 由来のみ（request body から受け取らない）
+- アバター画像は保存前に AES-256 で暗号化（認証タグ付き）
+- 管理UIは専門用語を使わない
+- ボタンは `min-height: 56px` 以上
+- タッチターゲットは `44px` 以上
+
+## 実装手順
+
+1. `avatarStorage.ts`
+   - 32byte キー（base64/hex/utf8）を環境変数から読み込み
+   - `AES-256-GCM` で `iv + authTag + ciphertext` を保存形式として管理
+   - tenantId / mimeType / hash を含むメタ情報を返却
+2. `lemonsliceAvatarApi.ts`
+   - JWT 由来 tenantId を受け取る型で API 呼び出し
+   - LiveKit（Phase10流用）設定を payload に含めて登録
+   - 失敗時は内部情報を漏らさない安全なエラーメッセージ
+3. `voiceSettings.ts`
+   - 音声タイプ、話速、ピッチのバリデーション
+   - デフォルト値と正規化処理を提供
+4. `AvatarUpload.tsx` / `VoiceSettings.tsx`
+   - 390px 幅でも押しやすい配置
+   - 成功/失敗の親切なフィードバック
+   - JWT を使って API 呼び出し（tenantId を body に含めない）
+
+## 完了条件
+
+- [x] tasks/todo.md に計画を記載
+- [x] `src/lib/avatar/avatarStorage.ts` 実装
+- [x] `src/lib/avatar/lemonsliceAvatarApi.ts` 実装
+- [x] `src/lib/avatar/voiceSettings.ts` 実装
+- [x] `admin-ui/src/components/admin/AvatarUpload.tsx` 実装
+- [x] `admin-ui/src/components/admin/VoiceSettings.tsx` 実装
+- [x] `pnpm verify` が成功

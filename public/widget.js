@@ -21,6 +21,7 @@
 
   // tenantId は data-tenant 属性から取得（CLAUDE.md Anti-Slop: body から禁止）
   var tenantId = currentScript ? currentScript.getAttribute('data-tenant') : '';
+  var apiKey = currentScript ? currentScript.getAttribute('data-api-key') : '';
 
   if (!tenantId) {
     console.warn('[FAQ Widget] data-tenant 属性が必要です。例: data-tenant="your-tenant-id"');
@@ -440,7 +441,11 @@
   var isOpen = false;
   var isLoading = false;
   var messages = [];
-  var conversationId = 'conv-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+  var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0;
+    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
   var currentAbortController = null;
 
   function generateMsgId() {
@@ -610,13 +615,17 @@
       history: historyForApi,
     });
 
+    var headers = {
+      'Content-Type': 'application/json',
+      'X-Tenant-ID': tenantId,
+    };
+    if (apiKey) {
+      headers['x-api-key'] = apiKey;
+    }
+
     var fetchOptions = {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // tenantId は X-Tenant-ID ヘッダで送信（body から禁止）
-        'X-Tenant-ID': tenantId,
-      },
+      headers: headers,
       body: requestBody,
     };
     if (currentAbortController) {

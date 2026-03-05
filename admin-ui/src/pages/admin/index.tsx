@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import TuningPanel from "../../components/admin/TuningPanel";
+import AvatarUpload from "../../components/admin/AvatarUpload";
+import VoiceSettings from "../../components/admin/VoiceSettings";
 
 interface DashboardStats {
   faqCount: number;
@@ -382,6 +384,20 @@ export default function AdminDashboard() {
               AIの返答スタイルをカスタマイズ
             </h2>
             <TuningPanel tenantId="demo" />
+          </section>
+
+          <section style={{ marginTop: 24 }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
+              会話アバターの設定
+            </h2>
+            <AvatarUpload />
+          </section>
+
+          <section style={{ marginTop: 24 }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
+              声の設定
+            </h2>
+            <VoiceSettings />
           </section>
         </>
       )}

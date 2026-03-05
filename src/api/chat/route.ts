@@ -99,12 +99,24 @@ export function createChatHandler(logger: Logger) {
           : undefined,
       });
 
+      let content: string;
+      if (result.answer) {
+        content = result.answer;
+      } else if (
+        result.needsClarification &&
+        result.clarifyingQuestions &&
+        result.clarifyingQuestions.length > 0
+      ) {
+        content = result.clarifyingQuestions[0];
+      } else {
+        content =
+          "申し訳ありません。現在回答を生成できませんでした。再度お試しください。";
+      }
+
       const chatMessage: ChatMessage = {
         id: requestId,
         role: "assistant",
-        content:
-          result.answer ??
-          "申し訳ありません。現在回答を生成できませんでした。再度お試しください。",
+        content,
         timestamp: Date.now(),
         tenantId,
       };

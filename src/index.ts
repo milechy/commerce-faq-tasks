@@ -64,12 +64,8 @@ app.use(securityHeadersMiddleware);
 app.use(express.json({ limit: "1mb" }));
 
 // ---------------------------------------------------------------------------
-// Middleware chain — 5-layer security stack
-//   1. CORS          → preflight + origin echo
-//   2. rateLimiter   → global DDoS / flood protection (pre-auth, IP/anon key)
-//   3. auth          → JWT / API Key / Basic → tenantId
-//   4. tenantContext  → load TenantConfig into req
-//   5. securityPolicy → per-tenant origin / policy enforcement
+// CORS — must be global so OPTIONS preflight is handled before route matching.
+// app.post() only matches POST; OPTIONS needs app.use() to reach corsMiddleware.
 // ---------------------------------------------------------------------------
 const defaultOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim())
@@ -79,6 +75,15 @@ const corsMiddleware = createCorsMiddleware({
   defaultAllowedOrigins: defaultOrigins,
   logger,
 });
+app.use(corsMiddleware);
+
+// ---------------------------------------------------------------------------
+// Middleware chain — 4-layer security stack (CORS is now global)
+//   1. rateLimiter   → global DDoS / flood protection (pre-auth, IP/anon key)
+//   2. auth          → JWT / API Key / Basic → tenantId
+//   3. tenantContext  → load TenantConfig into req
+//   4. securityPolicy → per-tenant origin / policy enforcement
+// ---------------------------------------------------------------------------
 const globalRateLimiter = createRateLimitMiddleware({ logger });
 const authMiddleware = initAuthMiddleware({
   resolveByApiKeyHash: getTenantByApiKeyHash,
@@ -118,11 +123,10 @@ app.get("/metrics", async (req, res) => {
 // Protected API routes — full middleware chain applied
 // ---------------------------------------------------------------------------
 const apiStack = [
-  corsMiddleware,        // 1. CORS
-  globalRateLimiter,     // 2. Rate limit
-  authMiddleware,        // 3. Auth → tenantId
-  tenantContext,         // 4. Load TenantConfig
-  securityPolicy,        // 5. Per-tenant policy
+  globalRateLimiter,     // 1. Rate limit
+  authMiddleware,        // 2. Auth → tenantId
+  tenantContext,         // 3. Load TenantConfig
+  securityPolicy,        // 4. Per-tenant policy
 ] as express.RequestHandler[];
 
 const clarifyLogWriter = new ClarifyLogWriter();
