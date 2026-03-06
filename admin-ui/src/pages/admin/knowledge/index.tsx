@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../../../components/admin/FileUpload";
 
@@ -12,6 +12,13 @@ interface BookMetadata {
 }
 
 type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
+
+interface OcrJobStatus {
+  status: "processing" | "done" | "failed";
+  pages?: number;
+  chunks?: number;
+  error?: string;
+}
 
 interface DeleteTarget {
   id: string;
@@ -46,6 +53,9 @@ export default function KnowledgePage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<OcrJobStatus | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchBooks = useCallback(async () => {
     const token = getAccessToken();
@@ -87,14 +97,65 @@ export default function KnowledgePage() {
     fetchBooks();
   }, [fetchBooks]);
 
+  // ジョブステータスのポーリング
+  useEffect(() => {
+    if (!currentJobId) return;
+
+    const pollOnce = async () => {
+      const token = getAccessToken();
+      if (!token) return;
+
+      try {
+        const res = await fetch(
+          `http://localhost:3100/v1/admin/knowledge/jobs/${currentJobId}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) return;
+
+        const data = (await res.json()) as OcrJobStatus;
+        setJobStatus(data);
+
+        if (data.status === "done" || data.status === "failed") {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setCurrentJobId(null);
+          if (data.status === "done") {
+            fetchBooks();
+          }
+        }
+      } catch {
+        // ポーリング失敗は無視
+      }
+    };
+
+    void pollOnce();
+    pollingRef.current = setInterval(() => void pollOnce(), 10_000);
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [currentJobId, fetchBooks]);
+
   const handleUploadSuccess = useCallback(
     (fileName: string) => {
       setUploadSuccess(fileName);
       setTimeout(() => setUploadSuccess(null), 5000);
-      fetchBooks();
     },
-    [fetchBooks],
+    [],
   );
+
+  const handleUploadResponse = useCallback((data: unknown) => {
+    const parsed = data as { jobId?: string } | null;
+    if (parsed?.jobId) {
+      setJobStatus({ status: "processing" });
+      setCurrentJobId(parsed.jobId);
+    }
+  }, []);
 
   const handleDeleteClick = useCallback((book: BookMetadata) => {
     setDeleteTarget({ id: book.id, title: book.title, state: "confirming" });
@@ -233,9 +294,52 @@ export default function KnowledgePage() {
           新しい資料を追加する
         </h2>
         <FileUpload
-          uploadEndpoint="/admin/knowledge/upload"
+          uploadEndpoint="/v1/admin/knowledge/pdf"
           onUploadSuccess={handleUploadSuccess}
+          onUploadResponse={handleUploadResponse}
         />
+        {jobStatus && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "12px 16px",
+              borderRadius: 10,
+              border: `1px solid ${
+                jobStatus.status === "done"
+                  ? "rgba(74,222,128,0.3)"
+                  : jobStatus.status === "failed"
+                    ? "rgba(248,113,113,0.3)"
+                    : "rgba(96,165,250,0.3)"
+              }`,
+              background:
+                jobStatus.status === "done"
+                  ? "rgba(5,46,22,0.5)"
+                  : jobStatus.status === "failed"
+                    ? "rgba(127,29,29,0.4)"
+                    : "rgba(23,37,84,0.5)",
+              fontSize: 14,
+              color:
+                jobStatus.status === "done"
+                  ? "#86efac"
+                  : jobStatus.status === "failed"
+                    ? "#fca5a5"
+                    : "#93c5fd",
+            }}
+          >
+            {jobStatus.status === "processing" && (
+              <>⏳ AIが書籍を読み込み中です... しばらくお待ちください</>
+            )}
+            {jobStatus.status === "done" && (
+              <>
+                ✅ OCR完了！ {jobStatus.pages}ページ /{" "}
+                {jobStatus.chunks}チャンクをAIナレッジに追加しました
+              </>
+            )}
+            {jobStatus.status === "failed" && (
+              <>⚠️ OCR処理に失敗しました。{jobStatus.error ?? "しばらく経ってから再試行してください。"}</>
+            )}
+          </div>
+        )}
         <p
           style={{
             marginTop: 8,

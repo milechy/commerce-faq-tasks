@@ -12,6 +12,8 @@ type UploadState =
 
 interface FileUploadProps {
   onUploadSuccess?: (fileName: string) => void;
+  /** アップロード成功時にレスポンスJSONを受け取るコールバック */
+  onUploadResponse?: (data: unknown) => void;
   /** POST先エンドポイント。デフォルト /admin/knowledge/upload */
   uploadEndpoint?: string;
 }
@@ -28,13 +30,14 @@ function validateFile(file: File): string | null {
 
 export default function FileUpload({
   onUploadSuccess,
+  onUploadResponse,
   uploadEndpoint = "/admin/knowledge/upload",
 }: FileUploadProps) {
   const [state, setState] = useState<UploadState>({ status: "idle" });
   const inputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
 
-  const processFile = useCallback(
+      const processFile = useCallback(
     async (file: File) => {
       const validationError = validateFile(file);
       if (validationError) {
@@ -59,6 +62,7 @@ export default function FileUpload({
         formData.append("file", file);
 
         const xhr = new XMLHttpRequest();
+        let uploadResponseData: unknown = null;
 
         await new Promise<void>((resolve, reject) => {
           xhr.upload.addEventListener("progress", (e) => {
@@ -70,6 +74,11 @@ export default function FileUpload({
 
           xhr.addEventListener("load", () => {
             if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                uploadResponseData = JSON.parse(xhr.responseText);
+              } catch {
+                uploadResponseData = null;
+              }
               resolve();
             } else if (xhr.status === 401 || xhr.status === 403) {
               reject(new Error("ログインの有効期限が切れました。再度ログインしてください。"));
@@ -93,6 +102,7 @@ export default function FileUpload({
 
         setState({ status: "success", fileName: file.name });
         onUploadSuccess?.(file.name);
+        onUploadResponse?.(uploadResponseData);
 
         setTimeout(() => setState({ status: "idle" }), 4000);
       } catch (err: unknown) {
@@ -101,7 +111,7 @@ export default function FileUpload({
         setState({ status: "error", message });
       }
     },
-    [uploadEndpoint, onUploadSuccess],
+    [uploadEndpoint, onUploadSuccess, onUploadResponse],
   );
 
   const handleDrop = useCallback(

@@ -3,9 +3,13 @@ import "dotenv/config";
 import { Client as NotionClientSdk } from "@notionhq/client";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import express from "express";
+import multer from "multer";
 import path from "node:path";
 import pino from "pino";
+import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
+import type { AuthedRequest } from "./agent/http/authMiddleware";
+import { runOcrPipeline } from "./lib/ocrPipeline";
 import { INTERNAL_REQUEST_HEADER } from "./lib/metrics/kpiDefinitions";
 import { metricsRegistry } from "./lib/metrics/promExporter";
 import { createChatHandler } from "./api/chat/route";
@@ -394,6 +398,85 @@ app.post("/integrations/notion/clarify-log", ...apiStack, async (req, res) => {
     return res.status(500).json({ error: "internal_error" });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Admin: PDF OCR upload (v1)
+// ---------------------------------------------------------------------------
+
+interface OcrJobStatus {
+  status: "processing" | "done" | "failed";
+  pages?: number;
+  chunks?: number;
+  error?: string;
+}
+const ocrJobs = new Map<string, OcrJobStatus>();
+
+const pdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/pdf") {
+      cb(null, true);
+    } else {
+      cb(new Error("PDFファイルのみアップロードできます。") as unknown as null, false);
+    }
+  },
+});
+
+// POST /v1/admin/knowledge/pdf — JWT 認証 → tenantId 取得 → バックグラウンド OCR
+app.post(
+  "/v1/admin/knowledge/pdf",
+  ...apiStack,
+  pdfUpload.single("file"),
+  async (req: express.Request, res: express.Response): Promise<void> => {
+    const tenantId = (req as AuthedRequest).tenantId;
+
+    if (!req.file) {
+      res
+        .status(400)
+        .json({ error: "ファイルが見つかりません。PDFをアップロードしてください。" });
+      return;
+    }
+
+    const jobId = uuidv4();
+    ocrJobs.set(jobId, { status: "processing" });
+
+    const pdfBuffer = req.file.buffer;
+
+    // バックグラウンド実行 (fire-and-forget)
+    void (async () => {
+      try {
+        const result = await runOcrPipeline(pdfBuffer, tenantId);
+        ocrJobs.set(jobId, { status: "done", ...result });
+        logger.info({ jobId, tenantId, ...result }, "[ocr] pipeline completed");
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+        logger.error({ jobId, tenantId, error: message }, "[ocr] pipeline failed");
+        ocrJobs.set(jobId, { status: "failed", error: message });
+      }
+    })();
+
+    res.status(202).json({ jobId, status: "processing" });
+  }
+);
+
+// GET /v1/admin/knowledge/jobs/:jobId — ジョブステータス確認
+app.get(
+  "/v1/admin/knowledge/jobs/:jobId",
+  ...apiStack,
+  (req: express.Request, res: express.Response): void => {
+    const { jobId } = req.params;
+    const job = ocrJobs.get(jobId);
+
+    if (!job) {
+      res.status(404).json({ error: "ジョブが見つかりません。" });
+      return;
+    }
+
+    res.json(job);
+  }
+);
 
 const port = Number(process.env.PORT || 3000);
 

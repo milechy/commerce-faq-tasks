@@ -525,3 +525,47 @@ RAJIUCE統括アーキテクト / Repo: commerce-faq-tasks
 - [ ] D 完了後に `pnpm verify` 成功
 - [ ] 最終 `pnpm verify` 成功
 - [ ] `git commit -m "feat(phase26): carnation knowledge & intent setup"`
+
+---
+
+# Phase27: 書籍PDFアップロード + Qwen OCR 実装計画
+
+## 担当
+RAJIUCE統括アーキテクト / Repo: commerce-faq-tasks
+
+## 依存順実装 (A → B)
+
+### A. OCRスクリプト
+- `SCRIPTS/ocr-pdf-qwen.ts` を新規作成
+- pdfjs-dist + canvas で PDF → ページごとに PNG Buffer (DPI 300) → base64
+- Qwen2.5-VL API (`qwen-vl-max-latest`) でページごと OCR
+  - エンドポイント: https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions
+  - レート制限対策: ページ間に `setTimeout(6000)`
+  - exponential backoff リトライ 3回
+- OCRテキストは `.slice(0, 30) + "..."` のみログ（書籍内容保護）
+- `splitIntoChunks(text, 500)` でチャンク分割
+- `embedTextOpenAI()` でベクトル化 → `faq_embeddings` に `tenant_id='partner'` で保存
+  - metadata: `{ source: "book:pdf:qwen-ocr", page: N, chunkIndex: N }`
+- 新規依存: `pnpm add pdfjs-dist canvas`
+
+### B. バックエンドAPI + Admin UI
+- `src/lib/ocrPipeline.ts` に OCR ロジックを関数として切り出す
+  - `export async function runOcrPipeline(pdfBuffer: Buffer, tenantId: string): Promise<{pages: number, chunks: number}>`
+- `POST /v1/admin/knowledge/pdf` を `src/index.ts` に追加
+  - JWT認証 → tenantId 取得（body からは取らない）
+  - multer でPDF受信（メモリストレージ、50MB 上限）
+  - 202 Accepted + jobId を即返却
+  - バックグラウンドで `runOcrPipeline()` 実行
+- `GET /v1/admin/knowledge/jobs/:jobId` を `src/index.ts` に追加
+  - `{ status: "processing"|"done"|"failed", pages?, chunks? }` を返す
+  - インメモリ Map で管理
+- `admin-ui/src/components/admin/FileUpload.tsx` に `onUploadResponse` prop を追加
+- `admin-ui/src/pages/admin/knowledge/index.tsx` を更新
+  - uploadEndpoint を `/v1/admin/knowledge/pdf` に変更
+  - 10秒ごとにジョブステータスをポーリング
+- 新規依存: `pnpm add multer && pnpm add -D @types/multer`
+
+## 完了条件
+- [ ] A 完了後に `pnpm verify` 成功
+- [ ] B 完了後に `pnpm verify` 成功
+- [ ] `git commit -m "feat(phase27): book PDF OCR with Qwen"`
