@@ -1,6 +1,8 @@
 import "dotenv/config";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fromPath } from "pdf2pic";
 import { embedTextOpenAI } from "../src/agent/llm/openaiEmbeddingClient";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -34,12 +36,41 @@ function splitIntoChunks(text: string, chunkSize: number): string[] {
   while (start < text.length) {
     const end = Math.min(start + chunkSize, text.length);
     const chunk = text.slice(start, end).trim();
-    if (chunk.length > 0) {
-      chunks.push(chunk);
-    }
+    if (chunk.length > 0) chunks.push(chunk);
     start = end;
   }
   return chunks;
+}
+
+async function pdfToImages(
+  pdfPath: string
+): Promise<{ imagePaths: string[]; tmpDir: string }> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ocr-"));
+
+  const convert = fromPath(pdfPath, {
+    density: 300,
+    saveFilename: "page",
+    savePath: tmpDir,
+    format: "png",
+    width: 2480,
+    height: 3508,
+  });
+
+  const result = await convert.bulk(-1, { responseType: "image" });
+
+  const imagePaths = result
+    .filter((r) => r.path)
+    .map((r) => r.path as string);
+
+  return { imagePaths, tmpDir };
+}
+
+function imageToBase64(imagePath: string): string {
+  return fs.readFileSync(imagePath).toString("base64");
+}
+
+function cleanup(dir: string): void {
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 async function callQwenWithRetry(
@@ -105,32 +136,6 @@ async function callQwenWithRetry(
   throw lastError ?? new Error("Qwen API failed after all retries");
 }
 
-async function renderPageToPngBuffer(
-  pdfDoc: any,
-  pageNum: number
-): Promise<Buffer> {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { createCanvas } = require("canvas") as typeof import("canvas");
-
-  const page = await pdfDoc.getPage(pageNum);
-  const scale = 300 / 72; // DPI 300
-  const viewport = page.getViewport({ scale });
-  const canvas = createCanvas(
-    Math.ceil(viewport.width),
-    Math.ceil(viewport.height)
-  );
-  const context = canvas.getContext("2d");
-
-  await page
-    .render({
-      canvasContext: context as unknown as CanvasRenderingContext2D,
-      viewport,
-    })
-    .promise;
-
-  return canvas.toBuffer("image/png");
-}
-
 async function saveChunk(params: {
   pdfBaseName: string;
   chunkText: string;
@@ -180,51 +185,47 @@ async function main(): Promise<void> {
 
   console.log(`[ocr-pdf-qwen] start: ${pdfBaseName}, tenant=${tenantId}`);
 
-  // Dynamic import for ESM-only pdfjs-dist
-  const pdfjsLib = await import("pdfjs-dist");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "";
-
-  const pdfData = fs.readFileSync(pdfPath);
-  const pdfDoc = await pdfjsLib
-    .getDocument({ data: new Uint8Array(pdfData) })
-    .promise;
-  const totalPages = pdfDoc.numPages;
+  const { imagePaths, tmpDir } = await pdfToImages(pdfPath);
+  const totalPages = imagePaths.length;
 
   console.log(`[ocr-pdf-qwen] pages: ${totalPages}`);
 
   let totalChunks = 0;
 
-  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-    if (pageNum > 1) {
-      await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
+  try {
+    for (let i = 0; i < imagePaths.length; i++) {
+      const pageNum = i + 1;
+
+      if (i > 0) {
+        await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
+      }
+
+      console.log(`[ocr-pdf-qwen] processing page ${pageNum}/${totalPages}`);
+
+      const base64 = imageToBase64(imagePaths[i]);
+      const ocrText = await callQwenWithRetry(base64, pageNum);
+
+      // 書籍内容保護: 先頭30文字のみログ
+      console.log(`[ocr-pdf-qwen] page ${pageNum} OCR: ${ocrText.slice(0, 30)}...`);
+
+      const chunks = splitIntoChunks(ocrText, CHUNK_SIZE);
+
+      for (let j = 0; j < chunks.length; j++) {
+        await saveChunk({
+          pdfBaseName,
+          chunkText: chunks[j],
+          chunkIndex: j,
+          chunkCount: chunks.length,
+          page: pageNum,
+          tenantId,
+        });
+      }
+
+      totalChunks += chunks.length;
+      console.log(`[ocr-pdf-qwen] page ${pageNum}: inserted ${chunks.length} chunks`);
     }
-
-    console.log(`[ocr-pdf-qwen] processing page ${pageNum}/${totalPages}`);
-
-    const pngBuffer = await renderPageToPngBuffer(pdfDoc, pageNum);
-    const base64 = pngBuffer.toString("base64");
-
-    const ocrText = await callQwenWithRetry(base64, pageNum);
-    // 書籍内容保護: 先頭30文字のみログ
-    console.log(`[ocr-pdf-qwen] page ${pageNum} OCR: ${ocrText.slice(0, 30)}...`);
-
-    const chunks = splitIntoChunks(ocrText, CHUNK_SIZE);
-
-    for (let i = 0; i < chunks.length; i++) {
-      await saveChunk({
-        pdfBaseName,
-        chunkText: chunks[i],
-        chunkIndex: i,
-        chunkCount: chunks.length,
-        page: pageNum,
-        tenantId,
-      });
-    }
-
-    totalChunks += chunks.length;
-    console.log(
-      `[ocr-pdf-qwen] page ${pageNum}: inserted ${chunks.length} chunks`
-    );
+  } finally {
+    cleanup(tmpDir);
   }
 
   await pool.end();

@@ -1,7 +1,10 @@
 // src/lib/ocrPipeline.ts
-// OCR pipeline: PDF → Qwen2.5-VL → embeddings → faq_embeddings
+// OCR pipeline: PDF → pdf2pic(GraphicsMagick) → Qwen2.5-VL → embeddings → faq_embeddings
 
-import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fromPath } from "pdf2pic";
 import { embedTextOpenAI } from "../agent/llm/openaiEmbeddingClient";
 
 const CHUNK_SIZE = 500;
@@ -24,9 +27,7 @@ export function splitIntoChunks(text: string, chunkSize: number): string[] {
   while (start < text.length) {
     const end = Math.min(start + chunkSize, text.length);
     const chunk = text.slice(start, end).trim();
-    if (chunk.length > 0) {
-      result.push(chunk);
-    }
+    if (chunk.length > 0) result.push(chunk);
     start = end;
   }
   return result;
@@ -97,33 +98,6 @@ async function callQwenWithRetry(
   throw lastError ?? new Error("Qwen API failed after all retries");
 }
 
-async function renderPageToPngBuffer(
-  page: PDFPageProxy
-): Promise<Buffer> {
-  // Lazy require to avoid test failures when native canvas module isn't available
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { createCanvas } = require("canvas") as typeof import("canvas");
-
-  const scale = 300 / 72; // DPI 300
-  const viewport = page.getViewport({ scale });
-  const canvas = createCanvas(
-    Math.ceil(viewport.width),
-    Math.ceil(viewport.height)
-  );
-  const context = canvas.getContext("2d");
-
-  // pdfjs-dist v5: canvas must be null when using canvasContext
-  await page
-    .render({
-      canvas: null,
-      canvasContext: context as unknown as CanvasRenderingContext2D,
-      viewport,
-    })
-    .promise;
-
-  return canvas.toBuffer("image/png");
-}
-
 async function saveChunk(
   pool: { query: (text: string, values: unknown[]) => Promise<unknown> },
   params: {
@@ -157,6 +131,7 @@ async function saveChunk(
 
 /**
  * PDF バッファを Qwen OCR でテキスト化し faq_embeddings へ投入する。
+ * Buffer はいったん /tmp に書き出してから pdf2pic で変換する。
  * 書籍内容はログに出力しない（先頭30文字 + "..." のみ）。
  */
 export async function runOcrPipeline(
@@ -171,34 +146,47 @@ export async function runOcrPipeline(
 
   // Lazy require to avoid module-level side effects during tests
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { Pool } = require("pg") as { Pool: new (opts: object) => {
-    query: (text: string, values: unknown[]) => Promise<unknown>;
-    end: () => Promise<void>;
-  } };
+  const { Pool } = require("pg") as {
+    Pool: new (opts: object) => {
+      query: (text: string, values: unknown[]) => Promise<unknown>;
+      end: () => Promise<void>;
+    };
+  };
   const pool = new Pool({ connectionString: pgUrl });
 
+  // Buffer → /tmp に一時PDF保存 → pdf2pic で変換
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ocr-pipeline-"));
+  const tmpPdfPath = path.join(tmpDir, "input.pdf");
+  fs.writeFileSync(tmpPdfPath, pdfBuffer);
+
   try {
-    // Dynamic import for ESM-only pdfjs-dist v5
-    const pdfjsLib = await import("pdfjs-dist");
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+    const convert = fromPath(tmpPdfPath, {
+      density: 300,
+      saveFilename: "page",
+      savePath: tmpDir,
+      format: "png",
+      width: 2480,
+      height: 3508,
+    });
 
-    const pdfDoc: PDFDocumentProxy = await pdfjsLib
-      .getDocument({ data: new Uint8Array(pdfBuffer) })
-      .promise;
+    const result = await convert.bulk(-1, { responseType: "image" });
+    const imagePaths = result
+      .filter((r) => r.path)
+      .map((r) => r.path as string);
 
-    const totalPages = pdfDoc.numPages;
+    const totalPages = imagePaths.length;
     let totalChunks = 0;
 
-    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-      if (pageNum > 1) {
+    for (let i = 0; i < imagePaths.length; i++) {
+      const pageNum = i + 1;
+
+      if (i > 0) {
         await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
       }
 
-      const page = await pdfDoc.getPage(pageNum);
-      const pngBuffer = await renderPageToPngBuffer(page);
-      const base64 = pngBuffer.toString("base64");
-
+      const base64 = fs.readFileSync(imagePaths[i]).toString("base64");
       const ocrText = await callQwenWithRetry(base64, pageNum, qwenApiKey);
+
       // 書籍内容保護: ログには先頭30文字のみ出力
       process.stdout.write(
         `[ocrPipeline] page ${pageNum}/${totalPages}: ${ocrText.slice(0, 30)}...\n`
@@ -206,10 +194,10 @@ export async function runOcrPipeline(
 
       const chunks = splitIntoChunks(ocrText, CHUNK_SIZE);
 
-      for (let i = 0; i < chunks.length; i++) {
+      for (let j = 0; j < chunks.length; j++) {
         await saveChunk(pool, {
-          chunkText: chunks[i],
-          chunkIndex: i,
+          chunkText: chunks[j],
+          chunkIndex: j,
           chunkCount: chunks.length,
           page: pageNum,
           tenantId,
@@ -221,6 +209,8 @@ export async function runOcrPipeline(
 
     return { pages: totalPages, chunks: totalChunks };
   } finally {
+    // 一時ファイルを必ず削除
+    fs.rmSync(tmpDir, { recursive: true, force: true });
     await pool.end().catch(() => {
       // ignore pool close errors
     });
