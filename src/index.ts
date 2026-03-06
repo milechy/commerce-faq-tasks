@@ -410,6 +410,26 @@ interface OcrJobStatus {
   error?: string;
 }
 const ocrJobs = new Map<string, OcrJobStatus>();
+const OCR_JOBS_MAX = 100;
+const OCR_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+/** Map 上限超過時に最古エントリを削除する */
+function pruneOcrJobs(): void {
+  if (ocrJobs.size >= OCR_JOBS_MAX) {
+    const oldestKey = ocrJobs.keys().next().value;
+    if (oldestKey !== undefined) {
+      ocrJobs.delete(oldestKey);
+    }
+  }
+}
+
+/** 完了/失敗ジョブを TTL 後に自動削除する */
+function scheduleOcrJobCleanup(jobId: string): void {
+  setTimeout(() => ocrJobs.delete(jobId), OCR_JOB_TTL_MS);
+}
+
+// [P1-1] PDF マジックナンバー: %PDF-
+const PDF_MAGIC = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d]);
 
 const pdfUpload = multer({
   storage: multer.memoryStorage(),
@@ -438,6 +458,17 @@ app.post(
       return;
     }
 
+    // [P1-1] マジックナンバー検証 — MIME 偽装対策
+    if (!req.file.buffer.subarray(0, 5).equals(PDF_MAGIC)) {
+      res
+        .status(400)
+        .json({ error: "無効なファイル形式です。PDFファイルをアップロードしてください。" });
+      return;
+    }
+
+    // [P1-2] Map 上限チェック
+    pruneOcrJobs();
+
     const jobId = uuidv4();
     ocrJobs.set(jobId, { status: "processing" });
 
@@ -448,12 +479,14 @@ app.post(
       try {
         const result = await runOcrPipeline(pdfBuffer, tenantId);
         ocrJobs.set(jobId, { status: "done", ...result });
+        scheduleOcrJobCleanup(jobId); // [P1-2] TTL 30分
         logger.info({ jobId, tenantId, ...result }, "[ocr] pipeline completed");
       } catch (err) {
         const message =
           err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
         logger.error({ jobId, tenantId, error: message }, "[ocr] pipeline failed");
         ocrJobs.set(jobId, { status: "failed", error: message });
+        scheduleOcrJobCleanup(jobId); // [P1-2] TTL 30分
       }
     })();
 
