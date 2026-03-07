@@ -1,0 +1,11 @@
+node_modules
+dist
+admin-ui/node_modules
+admin-ui/dist
+.pnpm-store
+*.log
+logs/
+.env
+.env.local
+.env.production
+.git

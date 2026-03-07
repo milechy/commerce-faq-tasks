@@ -4,6 +4,7 @@ import KpiCard from "../../../components/admin/KpiCard";
 import TenantSlaTable, {
   type TenantSlaRow,
 } from "../../../components/admin/TenantSlaTable";
+import { API_BASE } from "../../../lib/api";
 
 interface MonitoringKpis {
   completionRate: number;
@@ -39,7 +40,6 @@ interface MonitoringKpis {
 }
 
 const POLL_INTERVAL_MS = 30_000;
-const API_BASE = "http://localhost:3100";
 
 function getAccessToken(): string | null {
   const raw = localStorage.getItem("supabaseSession");

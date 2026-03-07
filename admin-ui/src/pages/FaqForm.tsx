@@ -1,6 +1,7 @@
 // admin-ui/src/pages/FaqForm.tsx
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { API_BASE } from "../lib/api";
 
 type Mode = "create" | "edit";
 
@@ -66,7 +67,7 @@ export default function FaqForm({ mode }: Props) {
         setError(null);
 
         const res = await fetch(
-          `http://localhost:3100/admin/faqs/${id}?tenantId=demo`,
+          `${API_BASE}/admin/faqs/${id}?tenantId=demo`,
           {
             headers: {
               Authorization: `Bearer ${accessToken}`,
@@ -137,7 +138,7 @@ export default function FaqForm({ mode }: Props) {
       let res: Response;
 
       if (mode === "create") {
-        res = await fetch("http://localhost:3100/admin/faqs?tenantId=demo", {
+        res = await fetch(`${API_BASE}/admin/faqs?tenantId=demo`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -148,7 +149,7 @@ export default function FaqForm({ mode }: Props) {
       } else {
         if (!id) throw new Error("Missing FAQ id");
         res = await fetch(
-          `http://localhost:3100/admin/faqs/${id}?tenantId=demo`,
+          `${API_BASE}/admin/faqs/${id}?tenantId=demo`,
           {
             method: "PUT",
             headers: {

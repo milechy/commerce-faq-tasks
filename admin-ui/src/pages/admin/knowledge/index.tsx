@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../../../components/admin/FileUpload";
+import { API_BASE } from "../../../lib/api";
 
 interface BookMetadata {
   id: string;
@@ -68,7 +69,7 @@ export default function KnowledgePage() {
       setLoading(true);
       setFetchError(null);
 
-      const res = await fetch("http://localhost:3100/admin/knowledge?tenantId=demo", {
+      const res = await fetch(`${API_BASE}/admin/knowledge?tenantId=demo`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -107,7 +108,7 @@ export default function KnowledgePage() {
 
       try {
         const res = await fetch(
-          `http://localhost:3100/v1/admin/knowledge/jobs/${currentJobId}`,
+          `${API_BASE}/v1/admin/knowledge/jobs/${currentJobId}`,
           { headers: { Authorization: `Bearer ${token}` } },
         );
         if (!res.ok) return;
@@ -173,7 +174,7 @@ export default function KnowledgePage() {
 
     try {
       const res = await fetch(
-        `http://localhost:3100/admin/knowledge/${encodeURIComponent(deleteTarget.id)}?tenantId=demo`,
+        `${API_BASE}/admin/knowledge/${encodeURIComponent(deleteTarget.id)}?tenantId=demo`,
         {
           method: "DELETE",
           headers: { Authorization: `Bearer ${token}` },

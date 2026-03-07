@@ -29,3 +29,11 @@ reports/
 # local generated context
 .context/
 .pnpm-store
+
+# Production env files (secrets)
+.env.production
+admin-ui/.env.production
+admin-ui/.env.local
+
+# Admin UI build output
+admin-ui/dist/

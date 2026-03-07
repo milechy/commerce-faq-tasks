@@ -55,7 +55,16 @@ API_KEY_TENANT_ID, BASIC_AUTH_TENANT_ID
 CE_MODEL_PATH, CE_ENGINE
 SLACK_WEBHOOK_URL
 PHASE22_MAX_CONFIRM_REPEATS, DEFAULT_TENANT_ID
+QWEN_API_KEY, OPENAI_API_KEY
 ```
+
+## Deployment (Phase28)
+- VPS: Hetzner 65.108.159.161
+- API: PM2 → `node dist/index.js` (port 3100)
+- Admin UI: PM2 → `serve -s admin-ui/dist` (port 5173)
+- Admin UI API base: `VITE_API_BASE` 環境変数 (default: localhost:3100)
+- Deploy: `bash SCRIPTS/deploy-vps.sh [user@host]`
+- Checklist: `docs/DEPLOY_CHECKLIST.md`
 
 ## Cost Constraint
 - Monthly: $27-48

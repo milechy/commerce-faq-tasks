@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { API_BASE } from "../../lib/api";
 
 interface TuningSettings {
   responseStyle: "friendly" | "formal" | "concise";
@@ -42,7 +43,7 @@ export default function TuningPanel({ tenantId = "demo" }: TuningPanelProps) {
     const token = getAccessToken();
     if (!token) return;
 
-    fetch(`http://localhost:3100/admin/tuning?tenantId=${encodeURIComponent(tenantId)}`, {
+    fetch(`${API_BASE}/admin/tuning?tenantId=${encodeURIComponent(tenantId)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
@@ -78,7 +79,7 @@ export default function TuningPanel({ tenantId = "demo" }: TuningPanelProps) {
 
     try {
       const res = await fetch(
-        `http://localhost:3100/admin/tuning?tenantId=${encodeURIComponent(tenantId)}`,
+        `${API_BASE}/admin/tuning?tenantId=${encodeURIComponent(tenantId)}`,
         {
           method: "PUT",
           headers: {

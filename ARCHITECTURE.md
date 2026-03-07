@@ -314,6 +314,22 @@ DEFAULT_TENANT_ID=english-demo
 | エラー率 | < 0.5% |
 | コスト | 月 $27-48 |
 
+## Deployment (Phase28)
+
+```
+VPS: 65.108.159.161 (Hetzner)
+├─ PM2: rajiuce-api   → node dist/index.js       (port 3100)
+├─ PM2: rajiuce-admin → serve -s admin-ui/dist    (port 5173)
+├─ PostgreSQL + pgvector                          (port 5432)
+├─ Elasticsearch                                  (port 9200)
+└─ Prometheus + Grafana (optional)                (port 9090/3001)
+```
+
+- Deploy: `bash SCRIPTS/deploy-vps.sh [user@host]`
+- PM2 config: `ecosystem.config.cjs`
+- Admin UI API: `VITE_API_BASE` 環境変数で切替 (default: `http://localhost:3100`)
+- Checklist: `docs/DEPLOY_CHECKLIST.md`
+
 ## Directory Structure
 
 ```
@@ -350,7 +366,12 @@ src/
 public/
 └── widget.js                      # 1行埋め込みウィジェット
 admin-ui/                          # React SPA
+SCRIPTS/
+├── deploy-vps.sh                  # VPS デプロイスクリプト
+├── scrape-carnation.ts            # Phase26: カーネーション HP スクレイプ
+└── seedFaqEmbeddings.ts           # FAQ embedding seed
 infra/                             # Grafana + Prometheus
+ecosystem.config.cjs               # PM2 プロセス管理
 types/
 └── contracts.ts                   # Shared type definitions
 ```

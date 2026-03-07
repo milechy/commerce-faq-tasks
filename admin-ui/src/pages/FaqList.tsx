@@ -1,6 +1,7 @@
 // admin-ui/src/pages/FaqList.tsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { API_BASE } from "../lib/api";
 
 type Faq = {
   id: number;
@@ -61,7 +62,7 @@ export default function FaqList() {
         setError(null);
 
         const res = await fetch(
-          "http://localhost:3100/admin/faqs?tenantId=demo&limit=50&offset=0",
+          `${API_BASE}/admin/faqs?tenantId=demo&limit=50&offset=0`,
           {
             headers: {
               Authorization: `Bearer ${accessToken}`,
@@ -115,7 +116,7 @@ export default function FaqList() {
 
     try {
       const res = await fetch(
-        `http://localhost:3100/admin/faqs/${faq.id}?tenantId=demo`,
+        `${API_BASE}/admin/faqs/${faq.id}?tenantId=demo`,
         {
           method: "DELETE",
           headers: {

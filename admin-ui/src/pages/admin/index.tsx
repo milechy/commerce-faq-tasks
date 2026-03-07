@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import TuningPanel from "../../components/admin/TuningPanel";
 import AvatarUpload from "../../components/admin/AvatarUpload";
 import VoiceSettings from "../../components/admin/VoiceSettings";
+import { API_BASE } from "../../lib/api";
 
 interface DashboardStats {
   faqCount: number;
@@ -85,10 +86,10 @@ export default function AdminDashboard() {
         setError(null);
 
         const [faqRes, bookRes] = await Promise.allSettled([
-          fetch("http://localhost:3100/admin/faqs?tenantId=demo&limit=1&offset=0", {
+          fetch(`${API_BASE}/admin/faqs?tenantId=demo&limit=1&offset=0`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch("http://localhost:3100/admin/knowledge?tenantId=demo", {
+          fetch(`${API_BASE}/admin/knowledge?tenantId=demo`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);

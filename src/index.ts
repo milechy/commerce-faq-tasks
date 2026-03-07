@@ -1,6 +1,5 @@
 import "dotenv/config";
 
-import { Client as NotionClientSdk } from "@notionhq/client";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import express from "express";
 import multer from "multer";
@@ -31,18 +30,10 @@ import {
   buildClarifyPrompt,
   type ClarifyIntent,
 } from "./agent/orchestrator/sales/clarifyPromptBuilder";
-import { registerNotionSalesTemplateProvider } from "./agent/orchestrator/sales/notionSalesTemplatesProvider";
 import {
   getSalesTemplate,
   type SalesPhase,
 } from "./agent/orchestrator/sales/salesRules";
-import { createNotionSalesLogSink } from "./integration/notion/notionSalesLogSink";
-import {
-  SalesLogWriter,
-  setGlobalSalesLogWriter,
-} from "./integration/notion/salesLogWriter";
-import { ClarifyLogWriter } from "./integrations/notion/clarifyLogWriter";
-import { NotionSyncService } from "./integrations/notion/notionSyncService";
 import { hybridSearch } from "./search/hybrid";
 import {
   ceFlagFromRerankResult,
@@ -97,7 +88,16 @@ const securityPolicy = createSecurityPolicyMiddleware({ logger });
 
 // --- minimal internal UI (no auth required) ---
 const publicDir = path.resolve(process.cwd(), "public");
-app.use(express.static(publicDir));
+app.use(
+  (_req, res, next) => {
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+    );
+    next();
+  },
+  express.static(publicDir)
+);
 app.get("/ui", (_req, res) => res.redirect("/ui/index.html"));
 
 // CE status is public (side-effect free)
@@ -132,30 +132,6 @@ const apiStack = [
   tenantContext,         // 3. Load TenantConfig
   securityPolicy,        // 4. Per-tenant policy
 ] as express.RequestHandler[];
-
-const clarifyLogWriter = new ClarifyLogWriter();
-
-// Phase14: SalesLogWriter (Notion) initialization
-const notionSalesLogDatabaseId = process.env.NOTION_DB_SALES_LOGS_ID;
-if (process.env.NOTION_API_KEY && notionSalesLogDatabaseId) {
-  const notionClient = new NotionClientSdk({
-    auth: process.env.NOTION_API_KEY,
-  });
-
-  const salesLogSink = createNotionSalesLogSink({
-    notion: notionClient,
-    databaseId: notionSalesLogDatabaseId,
-  });
-
-  const writer = new SalesLogWriter(salesLogSink);
-  setGlobalSalesLogWriter(writer);
-  logger.info("[startup] SalesLogWriter initialized for Notion");
-} else {
-  setGlobalSalesLogWriter(undefined);
-  logger.warn(
-    "[startup] SalesLogWriter not initialized (missing NOTION_API_KEY or NOTION_DB_SALES_LOGS_ID)"
-  );
-}
 
 logger.info({
   ES_URL: process.env.ES_URL,
@@ -372,33 +348,6 @@ app.post("/sales/debug/clarify", ...apiStack, (req, res) => {
   });
 });
 
-// --- clarify log write-back endpoint (Phase13: MVP) ---
-app.post("/integrations/notion/clarify-log", ...apiStack, async (req, res) => {
-  const schema = z.object({
-    originalQuestion: z.string(),
-    clarifyQuestion: z.string(),
-    missingInfo: z.string().optional(),
-    intent: z.string().optional(),
-    tenantId: z.string().optional(),
-  });
-
-  const parsed = schema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({
-      error: "invalid_request",
-      details: parsed.error.issues,
-    });
-  }
-
-  try {
-    await clarifyLogWriter.createLog(parsed.data);
-    return res.json({ ok: true });
-  } catch (error) {
-    logger.error({ error }, "[clarify-log] failed to create clarify log");
-    return res.status(500).json({ error: "internal_error" });
-  }
-});
-
 // ---------------------------------------------------------------------------
 // Admin: PDF OCR upload (v1)
 // ---------------------------------------------------------------------------
@@ -514,52 +463,6 @@ app.get(
 const port = Number(process.env.PORT || 3000);
 
 async function startServer() {
-  // Phase13: initialize sales templates from Notion (best-effort)
-  logger.info("[startup] initializing sales templates from Notion");
-
-  try {
-    const notionSync = new NotionSyncService();
-    logger.info("[startup] NotionSyncService created");
-
-    const templates = await notionSync.syncTuningTemplates();
-    logger.info(
-      { count: templates.length },
-      "[startup] tuning templates synced from Notion"
-    );
-
-    try {
-      if (templates.length > 0) {
-        registerNotionSalesTemplateProvider(templates);
-        logger.info(
-          { count: templates.length },
-          "[startup] sales templates provider registered"
-        );
-      } else {
-        logger.warn("[startup] no tuning templates loaded from Notion");
-      }
-    } catch (error) {
-      logger.error(
-        {
-          errorStage: "registerNotionSalesTemplateProvider",
-          errorMessage: (error as any)?.message,
-          errorStack: (error as any)?.stack,
-          errorRaw: error,
-        },
-        "failed to register sales templates provider"
-      );
-    }
-  } catch (error) {
-    logger.error(
-      {
-        errorStage: "syncTuningTemplates",
-        errorMessage: (error as any)?.message,
-        errorStack: (error as any)?.stack,
-        errorRaw: error,
-      },
-      "failed to initialize sales templates from Notion"
-    );
-  }
-
   app.listen(port, () => {
     logger.info({ port, env: process.env.NODE_ENV }, "server listening");
   });

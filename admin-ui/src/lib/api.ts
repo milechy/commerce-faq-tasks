@@ -1,5 +1,6 @@
 // src/lib/api.ts
-const API_BASE = "http://localhost:3100";
+export const API_BASE: string =
+  import.meta.env.VITE_API_BASE || "http://localhost:3100";
 
 export async function adminFetch(path: string, options: RequestInit = {}) {
   const token = localStorage.getItem("admin_token");

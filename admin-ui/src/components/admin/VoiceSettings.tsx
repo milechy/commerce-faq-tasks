@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { API_BASE } from "../../lib/api";
 
 type VoiceType = "male" | "female" | "neutral";
 
@@ -62,7 +63,7 @@ export default function VoiceSettings({
     setSaveState("saving");
     setErrorMessage(null);
     try {
-      const res = await fetch(`http://localhost:3100${saveEndpoint}`, {
+      const res = await fetch(`${API_BASE}${saveEndpoint}`, {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${token}`,

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { API_BASE } from "../../lib/api";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const ACCEPTED_MIME = "application/pdf";
@@ -93,7 +94,7 @@ export default function FileUpload({
             reject(new Error("ネットワークエラーが発生しました。接続を確認してもう一度お試しください。"));
           });
 
-          xhr.open("POST", `http://localhost:3100${uploadEndpoint}`);
+          xhr.open("POST", `${API_BASE}${uploadEndpoint}`);
           if (token) {
             xhr.setRequestHeader("Authorization", `Bearer ${token}`);
           }

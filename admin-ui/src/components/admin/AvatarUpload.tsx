@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { API_BASE } from "../../lib/api";
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
@@ -104,7 +105,7 @@ export default function AvatarUpload({
             reject(new Error("通信が不安定です。接続を確認してもう一度お試しください。"));
           });
 
-          xhr.open("POST", `http://localhost:3100${uploadEndpoint}`);
+          xhr.open("POST", `${API_BASE}${uploadEndpoint}`);
           xhr.setRequestHeader("Authorization", `Bearer ${token}`);
           xhr.send(formData);
         });
