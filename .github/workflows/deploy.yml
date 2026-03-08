@@ -1,0 +1,82 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify (typecheck + test)
+        run: pnpm verify
+
+  deploy:
+    name: Deploy to VPS
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API
+        run: pnpm build
+
+      - name: Build admin-ui
+        working-directory: admin-ui
+        env:
+          VITE_API_BASE: http://65.108.159.161:3100
+        run: pnpm install --frozen-lockfile && pnpm build
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Transfer dist/ to VPS
+        run: |
+          rsync -avz --delete \
+            --exclude=node_modules \
+            dist/ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/rajiuce/dist/
+
+      - name: Transfer admin-ui/dist/ to VPS
+        run: |
+          rsync -avz --delete \
+            admin-ui/dist/ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/rajiuce/admin-ui/dist/
+
+      - name: Restart API on VPS
+        run: |
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "pm2 restart rajiuce-api"
