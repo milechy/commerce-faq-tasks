@@ -78,7 +78,7 @@ export async function hybridSearch(q: string, tenantId?: string) {
     const tEs0 = Date.now();
     const esRes: any = await es.search(
       {
-        index: "docs",
+        index: `faq_${tenantId ?? "demo"}`,
         size: 50,
         query: tenantId
           ? {
@@ -116,7 +116,7 @@ export async function hybridSearch(q: string, tenantId?: string) {
       const tProbe0 = Date.now();
       const probe: any = await es.search(
         {
-          index: "docs",
+          index: `faq_${tenantId ?? "demo"}`,
           size: 5,
           query: tenantId
             ? {
