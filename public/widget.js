@@ -743,8 +743,12 @@
     updateSendButton();
   });
 
+  var isComposing = false;
+  textarea.addEventListener('compositionstart', function () { isComposing = true; });
+  textarea.addEventListener('compositionend', function () { isComposing = false; });
+
   textarea.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isComposing) {
       e.preventDefault();
       var text = textarea.value;
       textarea.value = '';
