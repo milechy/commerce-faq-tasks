@@ -149,7 +149,7 @@ async function bulkIndex(index: string, rows: any[]): Promise<number> {
   // バルクAPIフォーマット: action\ndoc\n 繰り返し
   const lines: string[] = [];
   for (const row of rows) {
-    const action = JSON.stringify({ index: { _index: index, _id: String(row.faq_id) } });
+    const action = JSON.stringify({ index: { _index: index, _id: String(row.id) } });
     const doc = JSON.stringify({
       tenant_id: row.tenant_id,
       question: row.question,
@@ -157,7 +157,7 @@ async function bulkIndex(index: string, rows: any[]): Promise<number> {
       answer: (row.answer || "").slice(0, 2000),
       category: row.category || null,
       tags: Array.isArray(row.tags) ? row.tags : (row.tags ? [row.tags] : []),
-      faq_id: row.faq_id,
+      faq_id: row.id,
       created_at: row.created_at
         ? new Date(row.created_at).toISOString()
         : null,
