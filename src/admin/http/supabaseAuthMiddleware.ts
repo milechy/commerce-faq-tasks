@@ -14,7 +14,16 @@ export function supabaseAuthMiddleware(
   res: Response,
   next: NextFunction
 ) {
-  // 開発中に JWT をまだ使いたくない時は、ここで early return してもOK
+  // development: X-Api-Key ヘッダーのみで認証を通す（Bearer token 不要）
+  if (process.env.NODE_ENV === "development") {
+    const apiKey = req.headers["x-api-key"];
+    if (!apiKey) {
+      return res.status(401).json({ error: "Missing X-Api-Key header" });
+    }
+    return next();
+  }
+
+  // SUPABASE_JWT_SECRET 未設定時はスキップ（非 production 環境向け）
   if (!SUPABASE_JWT_SECRET) {
     console.warn(
       "[supabaseAuthMiddleware] SUPABASE_JWT_SECRET が設定されていないため、認証をスキップします。"

@@ -67,6 +67,7 @@
     "smoke:v1:perf": "curl -s -H 'x-perf: 1' -X POST http://localhost:3000/search.v1 -H 'Content-Type: application/json' -d '{\"q\":\"返品 送料\"}' | jq '{flags:.meta.flags, ce_ms}'",
     "perf:save:v1:perf": "PERF_MODE=1 mkdir -p logs/perf && BODY='{\"q\":\"返品 送料\"}' && npx autocannon -j -d 10 -c 10 -p 4 -H x-perf=1 -m POST -H 'Content-Type: application/json' -b \"$BODY\" http://localhost:3000/search.v1 | tee logs/perf/$(date +%Y%m%d-%H%M%S)-v1-perf.json",
     "perf:save:v1:perf:auto": "start-server-and-test 'LOG_LEVEL=error PERF_MODE=1 pnpm dev' http://localhost:3000/health 'pnpm run perf:save:v1:perf && pnpm run perf:budget'",
+    "dev:all": "concurrently --kill-others-on-fail --prefix-colors \"cyan,magenta,yellow\" --names \"[API],[ADMIN],[TEST]\" \"pnpm dev\" \"cd admin-ui && pnpm dev\" \"npx serve public -l 8081\"",
     "start:dev": "pnpm dev",
     "start:prod": "node dist/index.js",
     "test:agent:graph": "ts-node --transpile-only tests/agent/dialogGraph.smoke.ts",
@@ -129,6 +130,7 @@
     "ts-node": "^10.9.2",
     "ts-node-dev": "2.0.0",
     "typescript": "5.9.3",
+    "concurrently": "^9.0.0",
     "wait-on": "^9.0.3"
   }
 }

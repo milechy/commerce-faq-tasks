@@ -34,6 +34,7 @@ import {
   getSalesTemplate,
   type SalesPhase,
 } from "./agent/orchestrator/sales/salesRules";
+import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { hybridSearch } from "./search/hybrid";
 import {
   ceFlagFromRerankResult,
@@ -461,6 +462,9 @@ app.get(
 );
 
 const port = Number(process.env.PORT || 3000);
+
+// Phase29: ナレッジ管理API
+registerKnowledgeAdminRoutes(app);
 
 async function startServer() {
   app.listen(port, () => {
