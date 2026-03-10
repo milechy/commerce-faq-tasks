@@ -47,17 +47,31 @@ export function seedTenantsFromEnv(): void {
     return;
   }
 
-  // Minimal default tenant for development
-  if (process.env.API_KEY) {
-    const crypto = require("node:crypto") as typeof import("node:crypto");
-    const hash = crypto
-      .createHash("sha256")
-      .update(process.env.API_KEY)
-      .digest("hex");
+  // Support API_KEY / API_KEY_TENANT_ID and API_KEY_2 / API_KEY_2_TENANT_ID ... API_KEY_10
+  const crypto = require("node:crypto") as typeof import("node:crypto");
 
+  const keyEntries: Array<{ key: string; tenantId: string }> = [];
+
+  // API_KEY (no suffix) with API_KEY_TENANT_ID
+  const baseKey = process.env.API_KEY;
+  if (baseKey) {
+    const tenantId = process.env.API_KEY_TENANT_ID || "default";
+    keyEntries.push({ key: baseKey, tenantId });
+  }
+
+  // API_KEY_2 ... API_KEY_10 with corresponding TENANT_ID
+  for (let i = 2; i <= 10; i++) {
+    const k = process.env[`API_KEY_${i}`];
+    if (!k) continue;
+    const tenantId = process.env[`API_KEY_${i}_TENANT_ID`] || `tenant_${i}`;
+    keyEntries.push({ key: k, tenantId });
+  }
+
+  for (const { key, tenantId } of keyEntries) {
+    const hash = crypto.createHash("sha256").update(key).digest("hex");
     registerTenant({
-      tenantId: "default",
-      name: "Default Tenant",
+      tenantId,
+      name: tenantId,
       plan: "starter",
       features: { avatar: false, voice: false, rag: true },
       security: {
