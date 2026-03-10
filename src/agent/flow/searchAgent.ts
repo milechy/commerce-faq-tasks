@@ -141,7 +141,7 @@ export async function runSearchAgent(
 
   // 4) Answer Synthesis
   const tSynth0 = performance.now();
-  const synth = synthesizeAnswer({
+  const synth = await synthesizeAnswer({
     query: q,
     items: rerankResult.items,
     maxChars: 450,
