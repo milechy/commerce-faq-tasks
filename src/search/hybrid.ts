@@ -24,7 +24,6 @@ const normZ = (xs: number[]) => {
 export async function hybridSearch(q: string, tenantId?: string) {
   const t0 = Date.now();
   const notes: string[] = [];
-  void tenantId; // reserved for future multi-tenant filtering
 
   const esUrl = process.env.ES_URL;
   const es = esUrl
@@ -81,7 +80,14 @@ export async function hybridSearch(q: string, tenantId?: string) {
       {
         index: "docs",
         size: 50,
-        query: { match: { text: q } },
+        query: tenantId
+          ? {
+              bool: {
+                must: { match: { text: q } },
+                filter: { term: { tenant_id: tenantId } },
+              },
+            }
+          : { match: { text: q } },
       },
       { requestTimeout: BUDGET }
     );
@@ -112,7 +118,14 @@ export async function hybridSearch(q: string, tenantId?: string) {
         {
           index: "docs",
           size: 5,
-          query: { match: { text: "返品 送料" } },
+          query: tenantId
+            ? {
+                bool: {
+                  must: { match: { text: "返品 送料" } },
+                  filter: { term: { tenant_id: tenantId } },
+                },
+              }
+            : { match: { text: "返品 送料" } },
         },
         { requestTimeout: BUDGET }
       );
