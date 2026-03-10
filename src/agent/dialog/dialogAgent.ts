@@ -46,7 +46,8 @@ const DEFAULT_TENANT_ID = process.env.DEFAULT_TENANT_ID ?? "english-demo";
 export async function runDialogTurn(
   input: DialogTurnInput
 ): Promise<DialogTurnResult> {
-  const { message, sessionId, options } = input;
+  const { message, sessionId, tenantId, options } = input;
+  const effectiveTenantId = tenantId ?? DEFAULT_TENANT_ID;
 
   const effectiveSessionId = ensureSessionId(sessionId);
 
@@ -93,7 +94,7 @@ export async function runDialogTurn(
 
   // 1.5) SalesOrchestrator: SalesFlow (Propose など) を評価
   const salesSessionKey: SalesSessionKey = {
-    tenantId: DEFAULT_TENANT_ID,
+    tenantId: effectiveTenantId,
     sessionId: effectiveSessionId,
   };
 
@@ -115,7 +116,7 @@ export async function runDialogTurn(
   const closeIntent = detectedIntents.closeIntent ?? DEFAULT_CLOSE_INTENT;
 
   const salesResult = await runSalesFlowWithLogging(
-    DEFAULT_TENANT_ID,
+    effectiveTenantId,
     effectiveSessionId,
     {
       detection: {
@@ -150,6 +151,7 @@ export async function runDialogTurn(
   const orchestrated = await runDialogOrchestrator({
     plan: multiStepPlan,
     sessionId: effectiveSessionId,
+    tenantId: effectiveTenantId,
     history: history ?? [],
     options: {
       topK: options?.topK,

@@ -64,6 +64,7 @@ export interface DialogMessage {
 
 export interface DialogTurnInput {
   sessionId?: string;
+  tenantId?: string;
   message: string;
   history?: DialogMessage[];
   options?: {

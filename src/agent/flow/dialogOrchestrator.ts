@@ -11,6 +11,7 @@ export type OrchestratorStep =
 export interface OrchestratorInput {
   plan: MultiStepQueryPlan
   sessionId: string
+  tenantId?: string
   history: DialogMessage[]
   options?: {
     topK?: number
@@ -41,7 +42,7 @@ export interface OrchestratorResult {
 export async function runDialogOrchestrator(
   input: OrchestratorInput,
 ): Promise<OrchestratorResult> {
-  const { plan, options } = input
+  const { plan, options, tenantId } = input
   const debug = options?.debug ?? false
 
   // 1) Clarification branch
@@ -86,6 +87,7 @@ export async function runDialogOrchestrator(
     topK: options?.topK ?? 8,
     debug,
     useLlmPlanner: false,
+    tenantId,
   })
 
   // 4) Return orchestrated result

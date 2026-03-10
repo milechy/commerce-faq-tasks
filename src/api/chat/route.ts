@@ -84,6 +84,7 @@ export function createChatHandler(logger: Logger) {
     try {
       const result = await runDialogTurn({
         sessionId: body.sessionId ?? body.conversationId,
+        tenantId,
         message: body.message,
         history: body.history,
         options: body.options
