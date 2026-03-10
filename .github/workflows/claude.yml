@@ -1,0 +1,62 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  claude-review:
+    name: Claude PR Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # pull_request は全件実行、コメントは @claude メンション時のみ
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            このPRのコード変更をレビューしてください。
+            プロジェクトの CLAUDE.md に定義されたセキュリティ基準・DoD基準で評価します。
+
+            ## セキュリティチェック（P0 — 必ずコメント）
+            - tenantId を body から取得していないか（JWT/APIキーからのみ許可）
+            - ragExcerpt が 200文字以内に制限されているか
+            - APIキーが SHA-256 ハッシュで保存されているか
+            - console.log() で RAG コンテンツ・PII を出力していないか
+            - SQL インジェクション・XSS などの OWASP Top 10 脆弱性がないか
+            - 認証なしでアクセス可能なエンドポイントがないか
+
+            ## DoD チェック（P1 — 問題があればコメント）
+            - pnpm typecheck が通るか（型エラーがないか）
+            - pnpm lint が通るか（lint エラーがないか）
+            - 新規エンドポイント・ロジックにテストがあるか
+            - モバイルファースト: タッチターゲット ≥ 44px、フォント ≥ 16px
+            - 120B モデルの使用比率が 10% 以内か
+
+            ## コードレビュー（P2 — 改善提案）
+            - ロジックエラー・バグの可能性
+            - パフォーマンス問題（N+1クエリ、不要な API 呼び出しなど）
+            - 過度な複雑性・リファクタリングの余地
+
+            ## 出力形式
+            - P0/P1 の問題はインラインコメントで該当行に指摘
+            - 問題なければ「✅ セキュリティ・DoD チェック問題なし」と summary に記載
+            - PR の承認・却下はしない（コメントのみ）
