@@ -282,7 +282,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
   // -------------------------------------------------------------------------
   // POST /v1/admin/knowledge/scrape
-  // URL取得 → テキスト抽出 → Groq FAQ化 → DB投入
+  // URL取得 → テキスト抽出 → Groq FAQ化 → プレビューとして返す（DB未登録）
   // -------------------------------------------------------------------------
   app.post("/v1/admin/knowledge/scrape", async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
@@ -302,7 +302,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { urls, category } = parsed.data;
-    const results: { url: string; ok: boolean; count?: number; error?: string }[] = [];
+    const results: { url: string; faqs: FaqEntry[]; error?: string }[] = [];
 
     for (const url of urls) {
       try {
@@ -311,7 +311,6 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           signal: AbortSignal.timeout(10_000),
         }).then((r) => r.text());
 
-        // 簡易HTMLテキスト抽出
         const text = html
           .replace(/<script[\s\S]*?<\/script>/gi, "")
           .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -321,47 +320,79 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           .slice(0, 5000);
 
         const faqs = await textToFaqs(text, category);
-        let count = 0;
-
-        for (const faq of faqs) {
-          try {
-            const r = await db.query(
-              `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published)
-               VALUES ($1, $2, $3, $4, $5, true)
-               RETURNING id`,
-              [
-                tenantId,
-                faq.question.slice(0, 500),
-                faq.answer.slice(0, 2000),
-                category,
-                [url],
-              ]
-            );
-            const faqId = r.rows[0].id as number;
-            count++;
-
-            const embText = `${faq.question}\n${faq.answer}`;
-            insertEmbeddingAsync(db, tenantId, embText, faqId, {
-              source: "scrape",
-              faq_id: faqId,
-              url,
-            });
-          } catch (err) {
-            console.error("[scrape] insert failed", err);
-          }
-        }
-
-        results.push({ url, ok: true, count });
+        results.push({ url, faqs });
       } catch (err) {
-        results.push({
-          url,
-          ok: false,
-          error: String(err).slice(0, 200),
-        });
+        results.push({ url, faqs: [], error: String(err).slice(0, 200) });
       }
     }
 
-    return res.json({ ok: true, results });
+    return res.json({ ok: true, preview: results });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /v1/admin/knowledge/scrape/commit
+  // プレビュー済みFAQ（スクレイプ結果）をDB登録
+  // -------------------------------------------------------------------------
+  app.post("/v1/admin/knowledge/scrape/commit", async (req: Request, res: Response) => {
+    const tenantId = resolveTenantId(req);
+    if (!tenantId) {
+      return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
+    }
+
+    const schema = z.object({
+      items: z
+        .array(
+          z.object({
+            url: z.string().url(),
+            faqs: z
+              .array(z.object({ question: z.string(), answer: z.string() }))
+              .min(1)
+              .max(20),
+          })
+        )
+        .min(1)
+        .max(5),
+      category: z.enum(CATEGORIES).default("store_info"),
+    });
+    const parsed = schema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+
+    const { items, category } = parsed.data;
+    let totalInserted = 0;
+
+    for (const item of items) {
+      for (const faq of item.faqs) {
+        try {
+          const r = await db.query(
+            `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published)
+             VALUES ($1, $2, $3, $4, $5, true)
+             RETURNING id`,
+            [
+              tenantId,
+              faq.question.slice(0, 500),
+              faq.answer.slice(0, 2000),
+              category,
+              [item.url],
+            ]
+          );
+          const faqId = r.rows[0].id as number;
+          totalInserted++;
+
+          const embText = `${faq.question}\n${faq.answer}`;
+          insertEmbeddingAsync(db, tenantId, embText, faqId, {
+            source: "scrape",
+            faq_id: faqId,
+            url: item.url,
+          });
+        } catch (err) {
+          console.error("[scrape/commit] insert failed", err);
+        }
+      }
+    }
+
+    return res.status(201).json({ ok: true, inserted: totalInserted });
   });
 
   console.log("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");

@@ -30,6 +30,12 @@ interface FaqEntry {
   answer: string;
 }
 
+interface ScrapePreviewItem {
+  url: string;
+  faqs: FaqEntry[];
+  error?: string;
+}
+
 interface OcrJobStatus {
   status: "processing" | "done" | "failed";
   pages?: number;
@@ -565,15 +571,17 @@ function TextInputTab() {
 
 // ─── タブ3: URLスクレイプ ────────────────────────────────────────────────────
 
-function ScrapeTab() {
+function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
   const navigate = useNavigate();
   const [urls, setUrls] = useState("");
   const [category, setCategory] = useState<Category>("store_info");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<{ url: string; ok: boolean; count?: number; error?: string }[] | null>(null);
+  const [preview, setPreview] = useState<ScrapePreviewItem[] | null>(null);
+  const [committing, setCommitting] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  const handleScrape = async () => {
+  const handleFetch = async () => {
     const urlList = urls
       .split("\n")
       .map((u) => u.trim())
@@ -590,7 +598,8 @@ function ScrapeTab() {
 
     setLoading(true);
     setError(null);
-    setResults(null);
+    setPreview(null);
+    setSuccess(null);
 
     try {
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${TENANT}`, {
@@ -598,9 +607,13 @@ function ScrapeTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ urls: urlList, category }),
       });
-      const data = (await res.json()) as { ok?: boolean; results?: typeof results; error?: string };
+      if (res.status === 401 || res.status === 403) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      const data = (await res.json()) as { ok?: boolean; preview?: ScrapePreviewItem[]; error?: string };
       if (!res.ok) throw new Error(data.error ?? "取得に失敗しました");
-      setResults(data.results ?? []);
+      setPreview(data.preview ?? []);
     } catch (err) {
       if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
         navigate("/login", { replace: true });
@@ -612,42 +625,85 @@ function ScrapeTab() {
     }
   };
 
+  const handleCommit = async () => {
+    if (!preview || preview.length === 0) return;
+    const validItems = preview.filter((p) => p.faqs.length > 0);
+    if (validItems.length === 0) return;
+
+    setCommitting(true);
+    setError(null);
+
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${TENANT}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: validItems, category }),
+      });
+      const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "登録に失敗しました");
+      setSuccess(`✅ ${data.inserted}件のFAQをAIナレッジに登録しました！`);
+      setPreview(null);
+      setUrls("");
+      onCommitSuccess();
+    } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
+      setError(err instanceof Error ? err.message : "登録に失敗しました。もう一度お試しください 🙏");
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const totalFaqs = preview?.reduce((sum, p) => sum + p.faqs.length, 0) ?? 0;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={CARD_STYLE}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
-          WebサイトのURLを入力してください
-        </h3>
-        <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px", lineHeight: 1.6 }}>
-          1行に1つのURLを入力してください（最大5件）。
-          AIがページの内容を読み取り、FAQに変換して登録します。
-        </p>
-        <textarea
-          value={urls}
-          onChange={(e) => setUrls(e.target.value)}
-          placeholder={"https://example.com/campaign\nhttps://example.com/store"}
-          style={{ ...TEXTAREA_STYLE, minHeight: 120, fontFamily: "monospace" }}
-        />
-      </div>
+      {!preview && (
+        <>
+          <div style={CARD_STYLE}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
+              WebサイトのURLを入力してください
+            </h3>
+            <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px", lineHeight: 1.6 }}>
+              1行に1つのURLを入力してください（最大5件）。
+              AIがページの内容を読み取り、FAQに変換します。
+            </p>
+            <textarea
+              value={urls}
+              onChange={(e) => setUrls(e.target.value)}
+              placeholder={"https://example.com/campaign\nhttps://example.com/store"}
+              style={{ ...TEXTAREA_STYLE, minHeight: 120, fontFamily: "monospace" }}
+            />
+          </div>
 
-      <div style={CARD_STYLE}>
-        <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}>
-          情報のカテゴリを選んでください
-        </label>
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value as Category)}
-          style={SELECT_STYLE}
-        >
-          {CATEGORIES.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
-          ))}
-        </select>
-      </div>
+          <div style={CARD_STYLE}>
+            <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}>
+              情報のカテゴリを選んでください
+            </label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value as Category)}
+              style={SELECT_STYLE}
+            >
+              {CATEGORIES.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
+          </div>
+        </>
+      )}
 
       {error && (
         <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 15 }}>
           {error}
+        </div>
+      )}
+
+      {success && (
+        <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(5,46,22,0.6)", border: "1px solid rgba(74,222,128,0.3)", color: "#86efac", fontSize: 15 }}>
+          {success}
         </div>
       )}
 
@@ -660,9 +716,9 @@ function ScrapeTab() {
         </div>
       )}
 
-      {!loading && (
+      {!preview && !loading && (
         <button
-          onClick={handleScrape}
+          onClick={handleFetch}
           disabled={urls.trim().length === 0}
           style={{
             ...BTN_PRIMARY,
@@ -670,38 +726,66 @@ function ScrapeTab() {
             cursor: urls.trim().length === 0 ? "not-allowed" : "pointer",
           }}
         >
-          🌐 取得して登録する
+          🌐 AIで内容を取得する
         </button>
       )}
 
-      {results && (
+      {/* プレビュー */}
+      {preview && preview.length > 0 && (
         <div>
-          <h3 style={{ fontSize: 16, fontWeight: 600, color: "#f9fafb", margin: "0 0 12px" }}>
-            処理結果
+          <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>
+            取得結果 — 合計{totalFaqs}件のFAQが生成されました
           </h3>
-          <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
-            {results.map((r, idx) => (
-              <div
-                key={idx}
-                style={{
-                  padding: "14px 18px",
-                  borderBottom: idx === results.length - 1 ? "none" : "1px solid #111827",
-                  display: "flex",
-                  gap: 12,
-                  alignItems: "flex-start",
-                }}
-              >
-                <span style={{ fontSize: 20, flexShrink: 0 }}>{r.ok ? "✅" : "⚠️"}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {r.url}
-                  </p>
-                  <p style={{ fontSize: 14, color: r.ok ? "#4ade80" : "#fca5a5", margin: 0 }}>
-                    {r.ok ? `${r.count}件のFAQを登録しました` : r.error ?? "取得に失敗しました"}
-                  </p>
-                </div>
+          <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px" }}>
+            内容を確認して「登録する」ボタンを押してください。
+          </p>
+
+          {preview.map((item) => (
+            <div key={item.url} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                🔗 {item.url}
               </div>
-            ))}
+              {item.error ? (
+                <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 13 }}>
+                  ⚠️ 取得に失敗しました: {item.error}
+                </div>
+              ) : (
+                <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
+                  {item.faqs.map((faq, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: "14px 18px",
+                        borderBottom: idx === item.faqs.length - 1 ? "none" : "1px solid #111827",
+                      }}
+                    >
+                      <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
+                        Q: {faq.question}
+                      </p>
+                      <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
+                        A: {faq.answer}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <button
+              onClick={() => { setPreview(null); setError(null); }}
+              style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 12, border: "1px solid #374151", background: "transparent", color: "#e5e7eb", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
+            >
+              やり直す
+            </button>
+            <button
+              onClick={handleCommit}
+              disabled={committing || totalFaqs === 0}
+              style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: (committing || totalFaqs === 0) ? 0.6 : 1 }}
+            >
+              {committing ? "⏳ 登録中..." : "✅ この内容で登録する"}
+            </button>
           </div>
         </div>
       )}
@@ -871,7 +955,7 @@ export default function KnowledgePage() {
       {/* タブコンテンツ */}
       {activeTab === "list" && <KnowledgeListTab />}
       {activeTab === "text" && <TextInputTab />}
-      {activeTab === "scrape" && <ScrapeTab />}
+      {activeTab === "scrape" && <ScrapeTab onCommitSuccess={() => setActiveTab("list")} />}
     </div>
   );
 }
