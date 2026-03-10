@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../../../components/admin/FileUpload";
 import { API_BASE } from "../../../lib/api";
+import { supabase } from "../../../lib/supabaseClient";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -51,19 +52,41 @@ const CATEGORIES: { value: Category; label: string }[] = [
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
-function getAccessToken(): string | null {
-  const raw = localStorage.getItem("supabaseSession");
-  if (!raw) return null;
-  try {
-    return (JSON.parse(raw) as { access_token?: string })?.access_token ?? null;
-  } catch {
-    localStorage.removeItem("supabaseSession");
-    return null;
-  }
+async function getAccessToken(): Promise<string | null> {
+  const { data, error } = await supabase.auth.getSession();
+  if (error || !data.session) return null;
+  return data.session.access_token;
 }
 
-function authHeaders(token: string): Record<string, string> {
-  return { Authorization: `Bearer ${token}` };
+// 401時にリフレッシュ→リトライするfetchラッパー
+async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+  let token = await getAccessToken();
+  if (!token) {
+    const { data } = await supabase.auth.refreshSession();
+    token = data.session?.access_token ?? null;
+  }
+  if (!token) throw new Error("__AUTH_REQUIRED__");
+
+  const makeRequest = (t: string) =>
+    fetch(url, {
+      ...options,
+      headers: {
+        ...(options.headers as Record<string, string>),
+        Authorization: `Bearer ${t}`,
+      },
+    });
+
+  const res = await makeRequest(token);
+
+  if (res.status === 401 || res.status === 403) {
+    // リフレッシュしてリトライ
+    const { data } = await supabase.auth.refreshSession();
+    const refreshedToken = data.session?.access_token ?? null;
+    if (!refreshedToken) throw new Error("__AUTH_REQUIRED__");
+    return makeRequest(refreshedToken);
+  }
+
+  return res;
 }
 
 function formatDate(iso: string): string {
@@ -149,27 +172,21 @@ function KnowledgeListTab() {
   } | null>(null);
 
   const fetchItems = useCallback(async () => {
-    const token = getAccessToken();
-    if (!token) { navigate("/login", { replace: true }); return; }
-
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({ tenant: TENANT });
       if (categoryFilter !== "all") params.set("category", categoryFilter);
 
-      const res = await fetch(`${API_BASE}/v1/admin/knowledge?${params}`, {
-        headers: authHeaders(token),
-      });
-      if (res.status === 401 || res.status === 403) {
-        localStorage.removeItem("supabaseSession");
-        navigate("/login", { replace: true });
-        return;
-      }
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?${params}`);
       if (!res.ok) throw new Error("読み込みに失敗しました。もう一度お試しください 🙏");
       const data = (await res.json()) as { items: KnowledgeItem[] };
       setItems(data.items ?? []);
     } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       setError(err instanceof Error ? err.message : "エラーが発生しました");
     } finally {
       setLoading(false);
@@ -180,20 +197,22 @@ function KnowledgeListTab() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const token = getAccessToken();
-    if (!token) { navigate("/login", { replace: true }); return; }
 
     setDeleteTarget((prev) => prev ? { ...prev, state: "deleting" } : null);
     try {
-      const res = await fetch(
+      const res = await fetchWithAuth(
         `${API_BASE}/v1/admin/knowledge/${deleteTarget.id}?tenant=${TENANT}`,
-        { method: "DELETE", headers: authHeaders(token) }
+        { method: "DELETE" }
       );
       if (!res.ok) throw new Error("削除に失敗しました。もう一度お試しください 🙏");
       setDeleteTarget((prev) => prev ? { ...prev, state: "success" } : null);
       setItems((prev) => prev.filter((i) => i.id !== deleteTarget.id));
       setTimeout(() => setDeleteTarget(null), 2000);
     } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       setDeleteTarget((prev) =>
         prev ? { ...prev, state: "error", error: err instanceof Error ? err.message : "エラーが発生しました" } : null
       );
@@ -380,8 +399,6 @@ function TextInputTab() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const handleConvert = async () => {
-    const token = getAccessToken();
-    if (!token) { navigate("/login", { replace: true }); return; }
     if (text.trim().length < 10) {
       setError("10文字以上のテキストを入力してください");
       return;
@@ -393,20 +410,19 @@ function TextInputTab() {
     setSuccess(null);
 
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/knowledge/text?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${TENANT}`, {
         method: "POST",
-        headers: { ...authHeaders(token), "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: text.trim(), category }),
       });
-      if (res.status === 401 || res.status === 403) {
-        localStorage.removeItem("supabaseSession");
-        navigate("/login", { replace: true });
-        return;
-      }
       const data = (await res.json()) as { ok?: boolean; preview?: FaqEntry[]; error?: string };
       if (!res.ok) throw new Error(data.error ?? "変換に失敗しました");
       setPreview(data.preview ?? []);
     } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       setError(err instanceof Error ? err.message : "エラーが発生しました。もう一度お試しください 🙏");
     } finally {
       setConverting(false);
@@ -415,15 +431,13 @@ function TextInputTab() {
 
   const handleCommit = async () => {
     if (!preview || preview.length === 0) return;
-    const token = getAccessToken();
-    if (!token) { navigate("/login", { replace: true }); return; }
 
     setCommitting(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${TENANT}`, {
         method: "POST",
-        headers: { ...authHeaders(token), "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ faqs: preview, category }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
@@ -432,6 +446,10 @@ function TextInputTab() {
       setPreview(null);
       setText("");
     } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       setError(err instanceof Error ? err.message : "登録に失敗しました。もう一度お試しください 🙏");
     } finally {
       setCommitting(false);
@@ -556,9 +574,6 @@ function ScrapeTab() {
   const [results, setResults] = useState<{ url: string; ok: boolean; count?: number; error?: string }[] | null>(null);
 
   const handleScrape = async () => {
-    const token = getAccessToken();
-    if (!token) { navigate("/login", { replace: true }); return; }
-
     const urlList = urls
       .split("\n")
       .map((u) => u.trim())
@@ -578,20 +593,19 @@ function ScrapeTab() {
     setResults(null);
 
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${TENANT}`, {
         method: "POST",
-        headers: { ...authHeaders(token), "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ urls: urlList, category }),
       });
-      if (res.status === 401 || res.status === 403) {
-        localStorage.removeItem("supabaseSession");
-        navigate("/login", { replace: true });
-        return;
-      }
       const data = (await res.json()) as { ok?: boolean; results?: typeof results; error?: string };
       if (!res.ok) throw new Error(data.error ?? "取得に失敗しました");
       setResults(data.results ?? []);
     } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       setError(err instanceof Error ? err.message : "エラーが発生しました。もう一度お試しください 🙏");
     } finally {
       setLoading(false);
@@ -705,17 +719,13 @@ function PdfSection() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchBooks = useCallback(async () => {
-    const token = getAccessToken();
-    if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/v1/admin/knowledge?tenant=${TENANT}`, {
-        headers: authHeaders(token),
-      });
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?tenant=${TENANT}`);
       if (!res.ok) return;
       const data = (await res.json()) as { items?: unknown[]; count?: number };
       setBooks((data.items ?? []) as BookMetadata[]);
     } catch {
-      // ignore
+      // ignore (認証エラーを含む)
     }
   }, []);
 
@@ -724,12 +734,8 @@ function PdfSection() {
   useEffect(() => {
     if (!currentJobId) return;
     const poll = async () => {
-      const token = getAccessToken();
-      if (!token) return;
       try {
-        const res = await fetch(`${API_BASE}/v1/admin/knowledge/jobs/${currentJobId}`, {
-          headers: authHeaders(token),
-        });
+        const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/jobs/${currentJobId}`);
         if (!res.ok) return;
         const data = (await res.json()) as OcrJobStatus;
         setJobStatus(data);
@@ -739,7 +745,7 @@ function PdfSection() {
           if (data.status === "done") fetchBooks();
         }
       } catch {
-        // ignore
+        // ignore (認証エラーを含む)
       }
     };
     void poll();
@@ -793,8 +799,10 @@ export default function KnowledgePage() {
   const [activeTab, setActiveTab] = useState<Tab>("list");
 
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) navigate("/login", { replace: true });
+    void (async () => {
+      const token = await getAccessToken();
+      if (!token) navigate("/login", { replace: true });
+    })();
   }, [navigate]);
 
   const tabs: { id: Tab; label: string; icon: string }[] = [

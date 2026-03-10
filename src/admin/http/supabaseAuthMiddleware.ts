@@ -14,13 +14,13 @@ export function supabaseAuthMiddleware(
   res: Response,
   next: NextFunction
 ) {
-  // development: X-Api-Key ヘッダーのみで認証を通す（Bearer token 不要）
+  // development: X-Api-Key または Bearer token で認証を通す
   if (process.env.NODE_ENV === "development") {
     const apiKey = req.headers["x-api-key"];
-    if (!apiKey) {
-      return res.status(401).json({ error: "Missing X-Api-Key header" });
-    }
-    return next();
+    if (apiKey) return next();
+    const authHeader = req.headers.authorization ?? "";
+    if (authHeader.startsWith("Bearer ")) return next();
+    return res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
   }
 
   // SUPABASE_JWT_SECRET 未設定時はスキップ（非 production 環境向け）
