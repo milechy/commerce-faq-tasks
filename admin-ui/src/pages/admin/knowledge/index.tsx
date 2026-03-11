@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import FileUpload from "../../../components/admin/FileUpload";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
+import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../components/KnowledgeFaqEditModal";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ interface KnowledgeItem {
   answer: string;
   category: string | null;
   tags: string[] | null;
+  is_published?: boolean;
   created_at: string;
 }
 
@@ -176,6 +178,21 @@ function KnowledgeListTab() {
     state: DeleteState;
     error?: string;
   } | null>(null);
+  const [editTarget, setEditTarget] = useState<KnowledgeFaqItem | null>(null);
+  const [createMode, setCreateMode] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleModalSuccess = (msg: string) => {
+    setEditTarget(null);
+    setCreateMode(false);
+    showToast(msg);
+    void fetchItems();
+  };
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -232,6 +249,32 @@ function KnowledgeListTab() {
 
   return (
     <div>
+      {/* 新規追加ボタン */}
+      <button
+        onClick={() => setCreateMode(true)}
+        style={{
+          width: "100%",
+          padding: "18px 24px",
+          minHeight: 60,
+          borderRadius: 14,
+          border: "none",
+          background: "linear-gradient(135deg, #22c55e 0%, #4ade80 50%, #22c55e 100%)",
+          color: "#022c22",
+          fontSize: 18,
+          fontWeight: 700,
+          cursor: "pointer",
+          marginBottom: 20,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 10,
+          boxShadow: "0 8px 24px rgba(34,197,94,0.25)",
+        }}
+      >
+        <span style={{ fontSize: 22 }}>＋</span>
+        新しいFAQを追加する
+      </button>
+
       {/* フィルター */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 14, color: "#9ca3af" }}>カテゴリ絞り込み:</span>
@@ -332,14 +375,85 @@ function KnowledgeListTab() {
                   A: {item.answer.slice(0, 120)}{item.answer.length > 120 ? "…" : ""}
                 </p>
               </div>
-              <button
-                onClick={() => setDeleteTarget({ id: item.id, question: item.question, state: "confirming" })}
-                style={BTN_DANGER}
-              >
-                削除
-              </button>
+              <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+                <button
+                  onClick={() =>
+                    setEditTarget({
+                      id: item.id,
+                      question: item.question,
+                      answer: item.answer,
+                      category: item.category,
+                      tags: item.tags,
+                      is_published: item.is_published,
+                    })
+                  }
+                  style={{
+                    padding: "10px 16px",
+                    minHeight: 44,
+                    borderRadius: 10,
+                    border: "1px solid #1d4ed8",
+                    background: "rgba(29,78,216,0.15)",
+                    color: "#93c5fd",
+                    fontSize: 14,
+                    cursor: "pointer",
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  ✏️ 編集
+                </button>
+                <button
+                  onClick={() => setDeleteTarget({ id: item.id, question: item.question, state: "confirming" })}
+                  style={BTN_DANGER}
+                >
+                  削除
+                </button>
+              </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* 編集モーダル */}
+      {editTarget && (
+        <KnowledgeFaqEditModal
+          mode="edit"
+          item={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSuccess={handleModalSuccess}
+        />
+      )}
+
+      {/* 新規作成モーダル */}
+      {createMode && (
+        <KnowledgeFaqEditModal
+          mode="create"
+          onClose={() => setCreateMode(false)}
+          onSuccess={handleModalSuccess}
+        />
+      )}
+
+      {/* トースト通知 */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 32,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 2000,
+            padding: "16px 28px",
+            borderRadius: 12,
+            background: "rgba(5,46,22,0.95)",
+            border: "1px solid rgba(74,222,128,0.4)",
+            color: "#86efac",
+            fontSize: 16,
+            fontWeight: 600,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {toast}
         </div>
       )}
 
