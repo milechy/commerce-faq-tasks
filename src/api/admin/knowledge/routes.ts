@@ -7,6 +7,7 @@ import { z } from "zod";
 import { groqClient } from "../../../agent/llm/groqClient";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 
 const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
@@ -394,6 +395,8 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     return res.status(201).json({ ok: true, inserted: totalInserted });
   });
+
+  registerFaqCrudRoutes(app, db);
 
   console.log("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");
 }

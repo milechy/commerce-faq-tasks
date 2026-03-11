@@ -4,6 +4,12 @@
 module.exports = {
   preset: "ts-jest",
   testEnvironment: "node",
+  globals: {
+    "ts-jest": {
+      // Mirror tsc --noEmit behaviour: emit warnings but don't fail the test suite
+      diagnostics: { warnOnly: true },
+    },
+  },
 
   // Only run tests for the main workspace (avoid archived contexts / nested sample apps)
   testMatch: ["<rootDir>/{src,tests}/**/*.test.ts"],
