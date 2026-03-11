@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+// @ts-ignore
+import { Pool } from "pg";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import express from "express";
 import multer from "multer";
@@ -35,6 +37,7 @@ import {
   type SalesPhase,
 } from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
+import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
 import { hybridSearch } from "./search/hybrid";
 import {
   ceFlagFromRerankResult,
@@ -465,6 +468,12 @@ const port = Number(process.env.PORT || 3000);
 
 // Phase29: ナレッジ管理API
 registerKnowledgeAdminRoutes(app);
+
+// Phase31: テナント管理API
+const db = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : null;
+if (db) registerTenantAdminRoutes(app, db);
 
 async function startServer() {
   app.listen(port, () => {
