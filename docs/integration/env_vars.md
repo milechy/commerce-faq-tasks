@@ -8,3 +8,10 @@
 
 ## 申請リスト
 （まだなし）
+
+## Phase31 (Stream A)
+- SUPER_ADMIN_BYPASS: development環境でSuper Admin認証をバイパス / "true" (Stream A, Phase31)
+- SUPABASE_JWT_SECRET: Supabase JWT検証シークレット（既存変数、Phase31で必須化）
+
+DBスキーマ変更: src/api/admin/tenants/migration.sql を実行すること
+- 新規テーブル: tenants, tenant_api_keys
