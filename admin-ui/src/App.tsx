@@ -6,6 +6,8 @@ import Login from "./pages/Login";
 import AdminDashboard from "./pages/admin/index";
 import KnowledgePage from "./pages/admin/knowledge/index";
 import MonitoringPage from "./pages/admin/monitoring/index";
+import TenantsPage from "./pages/admin/tenants/index";
+import TenantDetailPage from "./pages/admin/tenants/[id]";
 
 export default function App() {
   return (
@@ -25,6 +27,10 @@ export default function App() {
 
         {/* KPI監視ダッシュボード */}
         <Route path="/admin/monitoring" element={<MonitoringPage />} />
+
+        {/* テナント管理 */}
+        <Route path="/admin/tenants" element={<TenantsPage />} />
+        <Route path="/admin/tenants/:id" element={<TenantDetailPage />} />
 
         {/* FAQ 一覧 */}
         <Route path="/faqs" element={<FaqList />} />
