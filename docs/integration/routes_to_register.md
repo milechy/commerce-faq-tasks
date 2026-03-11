@@ -25,3 +25,25 @@
 - POST /v1/admin/knowledge/faq: FAQ新規作成 (Stream A, Phase30)
 - PUT /v1/admin/knowledge/faq/:id: FAQ更新 (Stream A, Phase30)
 - DELETE /v1/admin/knowledge/faq/:id: FAQ削除 (Stream A, Phase30)
+
+## Phase31: テナント管理API (Stream A)
+
+- GET /v1/admin/tenants: テナント一覧 (Stream A, Phase31)
+  - ファイル: src/api/admin/tenants/routes.ts
+  - 認証: supabaseAuthMiddleware + superAdminMiddleware
+  - 登録: registerTenantAdminRoutes(app, db)
+
+- POST /v1/admin/tenants: テナント作成 (Stream A, Phase31)
+- GET /v1/admin/tenants/:id: テナント詳細 (Stream A, Phase31)
+- PATCH /v1/admin/tenants/:id: テナント更新 (Stream A, Phase31)
+- POST /v1/admin/tenants/:id/keys: APIキー発行 (Stream A, Phase31)
+- GET /v1/admin/tenants/:id/keys: APIキー一覧 (Stream A, Phase31)
+- DELETE /v1/admin/tenants/:id/keys/:keyId: APIキー無効化 (Stream A, Phase31)
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase31: テナント管理API
+import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
+// ...
+if (db) registerTenantAdminRoutes(app, db);
+```
