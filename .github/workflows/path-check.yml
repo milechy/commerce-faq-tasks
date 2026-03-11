@@ -1,0 +1,84 @@
+name: Stream Path Check
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  path-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check path restrictions
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          FILES=$(git diff --name-only origin/main...HEAD)
+
+          echo "Branch: $BRANCH"
+          echo "Changed files:"
+          echo "$FILES"
+
+          # Integration-onlyファイルのチェック
+          INTEGRATION_FILES="src/index.ts package.json pnpm-lock.yaml .github/workflows/deploy.yml"
+          for file in $INTEGRATION_FILES; do
+            if echo "$FILES" | grep -q "^${file}$"; then
+              if echo "$BRANCH" | grep -q "^feature/stream-"; then
+                echo "❌ ERROR: ${file} は Stream ブランチから変更できません。"
+                echo "   docs/integration/ に申請してください。"
+                exit 1
+              fi
+            fi
+          done
+
+          # Stream A パスチェック
+          if echo "$BRANCH" | grep -q "^feature/stream-a-"; then
+            INVALID=$(echo "$FILES" | grep "^src/" | grep -v "^src/api/" | grep -v "^src/lib/billing/" | grep -v "^src/lib/stripe/")
+            if [ -n "$INVALID" ]; then
+              echo "❌ ERROR: Stream Aは以下のファイルを変更できません:"
+              echo "$INVALID"
+              echo "   許可: src/api/**, src/lib/billing/**, src/lib/stripe/**"
+              exit 1
+            fi
+          fi
+
+          # Stream B パスチェック
+          if echo "$BRANCH" | grep -q "^feature/stream-b-"; then
+            INVALID=$(echo "$FILES" | grep "^admin-ui/src/" | grep -v "^admin-ui/src/pages/" | grep -v "^admin-ui/src/components/")
+            if [ -n "$INVALID" ]; then
+              echo "❌ ERROR: Stream Bは以下のファイルを変更できません:"
+              echo "$INVALID"
+              echo "   許可: admin-ui/src/pages/**, admin-ui/src/components/**"
+              exit 1
+            fi
+            INVALID_BACKEND=$(echo "$FILES" | grep "^src/")
+            if [ -n "$INVALID_BACKEND" ]; then
+              echo "❌ ERROR: Stream Bはsrc/以下を変更できません"
+              exit 1
+            fi
+          fi
+
+          # Stream C パスチェック
+          if echo "$BRANCH" | grep -q "^feature/stream-c-"; then
+            INVALID=$(echo "$FILES" | grep "^src/" | grep -v "^src/agent/" | grep -v "^src/search/")
+            if [ -n "$INVALID" ]; then
+              echo "❌ ERROR: Stream Cは以下のファイルを変更できません:"
+              echo "$INVALID"
+              echo "   許可: src/agent/**, src/search/**"
+              exit 1
+            fi
+          fi
+
+          # Stream D パスチェック
+          if echo "$BRANCH" | grep -q "^feature/stream-d-"; then
+            INVALID=$(echo "$FILES" | grep -E "^src/|^admin-ui/src/")
+            if [ -n "$INVALID" ]; then
+              echo "❌ ERROR: Stream Dは以下のファイルを変更できません:"
+              echo "$INVALID"
+              echo "   許可: SCRIPTS/**, .github/workflows/**, public/widget.js"
+              exit 1
+            fi
+          fi
+
+          echo "✅ パスチェック通過"
