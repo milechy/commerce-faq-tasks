@@ -1,8 +1,5 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import TuningPanel from "../../components/admin/TuningPanel";
-import AvatarUpload from "../../components/admin/AvatarUpload";
-import VoiceSettings from "../../components/admin/VoiceSettings";
 import { API_BASE } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import LangSwitcher from "../../components/LangSwitcher";
@@ -74,7 +71,7 @@ function StatCard({
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin, isClientAdmin, logout } = useAuth();
+  const { user, isSuperAdmin, isClientAdmin, logout, previewMode, previewTenantName, exitPreview } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -157,6 +154,49 @@ export default function AdminDashboard() {
         margin: "0 auto",
       }}
     >
+      {previewMode && <div style={{ height: 44 }} />}
+      {/* プレビューモードバナー */}
+      {previewMode && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            background: "rgba(234,179,8,0.95)",
+            padding: "10px 20px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
+            fontSize: 14,
+            fontWeight: 600,
+            color: "#1c1917",
+            boxShadow: "0 2px 12px rgba(0,0,0,0.3)",
+          }}
+        >
+          <span>👁 {t("preview.mode_label")}</span>
+          <span style={{ color: "#78350f" }}>
+            {t("preview.viewing_as", { tenant: previewTenantName ?? "" })}
+          </span>
+          <button
+            onClick={exitPreview}
+            style={{
+              padding: "6px 14px",
+              borderRadius: 999,
+              border: "1px solid #78350f",
+              background: "rgba(0,0,0,0.15)",
+              color: "#1c1917",
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {t("preview.exit")}
+          </button>
+        </div>
+      )}
       <header
         style={{
           display: "flex",
@@ -494,26 +534,6 @@ export default function AdminDashboard() {
             </div>
           </section>
 
-          <section>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              {t("dashboard.customize_ai")}
-            </h2>
-            <TuningPanel tenantId="demo" />
-          </section>
-
-          <section style={{ marginTop: 24 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              {t("dashboard.avatar_settings")}
-            </h2>
-            <AvatarUpload />
-          </section>
-
-          <section style={{ marginTop: 24 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              {t("dashboard.voice_settings")}
-            </h2>
-            <VoiceSettings />
-          </section>
         </>
       )}
     </div>

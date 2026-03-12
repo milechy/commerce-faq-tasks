@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { API_BASE } from "../lib/api";
+import { supabase } from "../lib/supabaseClient";
 
 interface Props {
   tenantId: string;
@@ -7,11 +9,26 @@ interface Props {
 }
 
 async function issueApiKey(tenantId: string): Promise<string> {
-  // TODO: 本番では fetchWithAuth(`${API_BASE}/v1/admin/tenants/${tenantId}/keys`, { method: "POST" })
-  void tenantId;
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const random = Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  return `rjc_live_${random}`;
+  const { data } = await supabase.auth.getSession();
+  let token = data.session?.access_token ?? null;
+  if (!token) {
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    token = refreshed.session?.access_token ?? null;
+  }
+  if (!token) throw new Error("認証が必要です");
+
+  const res = await fetch(`${API_BASE}/v1/admin/tenants/${tenantId}/keys`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = (await res.json()) as { key?: string; apiKey?: string; plaintext?: string };
+  const key = json.key ?? json.apiKey ?? json.plaintext;
+  if (!key) throw new Error("APIキーが返されませんでした");
+  return key;
 }
 
 export default function ApiKeyCreateModal({ tenantId, onClose, onSuccess }: Props) {

@@ -1,17 +1,93 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { useAuth } from "../../../auth/useAuth";
+import { API_BASE } from "../../../lib/api";
+import { supabase } from "../../../lib/supabaseClient";
+
+async function getToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  if (data.session) return data.session.access_token;
+  const { data: refreshed } = await supabase.auth.refreshSession();
+  return refreshed.session?.access_token ?? null;
+}
+
+async function fetchFirstActiveKey(tenantId: string): Promise<string | null> {
+  const token = await getToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(`${API_BASE}/v1/admin/tenants/${tenantId}/keys`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { keys?: Array<{ status: string; maskedKey?: string }>; items?: Array<{ status: string; maskedKey?: string }> };
+    const keys = data.keys ?? data.items ?? [];
+    const active = keys.find((k) => k.status === "active");
+    return active ? (active.maskedKey ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function ChatTestPage() {
   const navigate = useNavigate();
   const { t } = useLang();
-  const { user } = useAuth();
+  const { user, previewMode, previewTenantId } = useAuth();
   const [started, setStarted] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+  const widgetContainerRef = useRef<HTMLDivElement>(null);
+  const widgetScriptRef = useRef<HTMLScriptElement | null>(null);
 
-  // テナントの API キーは実際には /v1/auth/me または tenant detail から取得する
-  // TODO: Stream A の GET /v1/auth/me が実装されたら apiKey をそこから取得する
-  const tenantId = user?.tenantId ?? "demo";
+  const effectiveTenantId = previewMode && previewTenantId ? previewTenantId : (user?.tenantId ?? "demo");
+  const displayTenantName = user?.tenantName ?? effectiveTenantId;
+
+  // APIキー存在確認
+  useEffect(() => {
+    if (!started) return;
+    void fetchFirstActiveKey(effectiveTenantId).then((key) => {
+      setHasApiKey(key !== null);
+    });
+  }, [started, effectiveTenantId]);
+
+  // widget.js 埋め込み
+  useEffect(() => {
+    if (!started) return;
+
+    // 既存のウィジェットホストをクリーンアップ
+    const cleanup = () => {
+      const existingHost = document.getElementById("faq-chat-widget-host");
+      if (existingHost) existingHost.remove();
+      if (widgetScriptRef.current) {
+        widgetScriptRef.current.remove();
+        widgetScriptRef.current = null;
+      }
+    };
+
+    cleanup();
+
+    const script = document.createElement("script");
+    script.src = `${API_BASE}/widget.js`;
+    script.setAttribute("data-tenant", effectiveTenantId);
+    script.setAttribute("data-api-key", "");
+    script.async = true;
+    widgetScriptRef.current = script;
+
+    document.body.appendChild(script);
+
+    return cleanup;
+  }, [started, effectiveTenantId]);
+
+  const handleReset = () => {
+    // ウィジェット削除してリセット
+    const existingHost = document.getElementById("faq-chat-widget-host");
+    if (existingHost) existingHost.remove();
+    if (widgetScriptRef.current) {
+      widgetScriptRef.current.remove();
+      widgetScriptRef.current = null;
+    }
+    setStarted(false);
+    setHasApiKey(null);
+  };
 
   return (
     <div
@@ -69,6 +145,9 @@ export default function ChatTestPage() {
             <p style={{ fontSize: 15, color: "#9ca3af", marginBottom: 32, maxWidth: 400, margin: "0 auto 32px" }}>
               {t("chat_test.description")}
             </p>
+            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 24 }}>
+              {t("chat_test.tenant_label")}: <strong style={{ color: "#9ca3af" }}>{displayTenantName}</strong>
+            </p>
             <button
               onClick={() => setStarted(true)}
               style={{
@@ -89,45 +168,52 @@ export default function ChatTestPage() {
           </>
         ) : (
           <>
-            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 16 }}>
-              {t("chat_test.tenant_label")}: <strong style={{ color: "#9ca3af" }}>{user?.tenantName ?? tenantId}</strong>
+            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 12 }}>
+              {t("chat_test.tenant_label")}: <strong style={{ color: "#9ca3af" }}>{displayTenantName}</strong>
             </p>
-            {/* ウィジェット埋め込みエリア */}
+
+            {hasApiKey === false && (
+              <div
+                style={{
+                  marginBottom: 20,
+                  padding: "14px 18px",
+                  borderRadius: 12,
+                  background: "rgba(120,53,15,0.3)",
+                  border: "1px solid rgba(251,191,36,0.3)",
+                  color: "#fbbf24",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                ⚠️ {t("chat_test.need_api_key")}
+              </div>
+            )}
+
+            {/* ウィジェット表示エリア — widget.js が Shadow DOM を body に追加 */}
             <div
+              ref={widgetContainerRef}
               style={{
                 width: "100%",
                 maxWidth: 420,
-                height: 560,
-                margin: "0 auto",
+                minHeight: 120,
+                margin: "0 auto 16px",
                 borderRadius: 12,
-                border: "1px solid #374151",
-                overflow: "hidden",
-                position: "relative",
-                background: "#0f172a",
+                border: "1px dashed #374151",
+                padding: "20px",
+                color: "#4b5563",
+                fontSize: 13,
               }}
             >
-              {/* TODO: 実際の widget.js を data-tenant-id で埋め込む */}
-              {/* <script src="/widget.js" data-tenant-id={tenantId} async /> */}
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 12,
-                  color: "#4b5563",
-                }}
-              >
-                <span style={{ fontSize: 40 }}>🔧</span>
-                <p style={{ fontSize: 14, margin: 0 }}>{t("chat_test.widget_placeholder")}</p>
-              </div>
+              <span>↘ {t("chat_test.widget_placeholder")}</span>
             </div>
+
             <button
-              onClick={() => setStarted(false)}
+              onClick={handleReset}
               style={{
-                marginTop: 24,
+                marginTop: 8,
                 padding: "12px 24px",
                 minHeight: 44,
                 borderRadius: 10,

@@ -3,6 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import ApiKeyCreateModal from "../../../components/ApiKeyCreateModal";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
+import { API_BASE } from "../../../lib/api";
+import { supabase } from "../../../lib/supabaseClient";
+import { useAuth } from "../../../auth/useAuth";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -25,47 +28,62 @@ interface ApiKey {
   lastUsedAt: string | null;
 }
 
-// ─── モックデータ ─────────────────────────────────────────────────────────────
+// ─── 認証ヘルパー ─────────────────────────────────────────────────────────────
 
-const MOCK_TENANT_DETAIL: TenantDetail = {
-  id: "1",
-  name: "カーネーション自動車",
-  slug: "carnation",
-  plan: "pro",
-  status: "active",
-  createdAt: "2024-01-15T00:00:00Z",
-  widgetTitle: "カーネーション自動車 AIアシスタント",
-  widgetColor: "#22c55e",
-};
+async function getToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  if (data.session) return data.session.access_token;
+  const { data: refreshed } = await supabase.auth.refreshSession();
+  return refreshed.session?.access_token ?? null;
+}
 
-const MOCK_API_KEYS: ApiKey[] = [
-  { id: "k1", maskedKey: "rjc_live_xxxx...****", status: "active", createdAt: "2024-01-15T00:00:00Z", lastUsedAt: "2024-03-10T00:00:00Z" },
-  { id: "k2", maskedKey: "rjc_live_yyyy...****", status: "revoked", createdAt: "2024-02-01T00:00:00Z", lastUsedAt: null },
-];
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const token = await getToken();
+  if (!token) throw new Error("__AUTH_REQUIRED__");
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers as Record<string, string>),
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+}
 
 // ─── API関数 ─────────────────────────────────────────────────────────────────
 
 async function fetchTenantDetail(tenantId: string): Promise<TenantDetail> {
-  void tenantId;
-  return { ...MOCK_TENANT_DETAIL, id: tenantId };
+  const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as { tenant?: TenantDetail } | TenantDetail;
+  return ("tenant" in data ? data.tenant : data) as TenantDetail;
 }
 
 async function updateTenant(
   tenantId: string,
   data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive" }
 ): Promise<TenantDetail> {
-  void tenantId;
-  return { ...MOCK_TENANT_DETAIL, ...data, id: tenantId };
+  const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = (await res.json()) as { tenant?: TenantDetail } | TenantDetail;
+  return ("tenant" in json ? json.tenant : json) as TenantDetail;
 }
 
 async function fetchApiKeys(tenantId: string): Promise<ApiKey[]> {
-  void tenantId;
-  return MOCK_API_KEYS;
+  const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}/keys`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as { keys?: ApiKey[]; items?: ApiKey[] };
+  return data.keys ?? data.items ?? [];
 }
 
 async function revokeApiKey(tenantId: string, keyId: string): Promise<void> {
-  void tenantId;
-  void keyId;
+  const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}/keys/${keyId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 // ─── スタイル定数 ─────────────────────────────────────────────────────────────
@@ -243,6 +261,7 @@ function SettingsTab({
 
 function ApiKeysTab({ tenantId }: { tenantId: string }) {
   const { t, lang } = useLang();
+  const navigate = useNavigate();
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
@@ -261,12 +280,16 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
       try {
         const data = await fetchApiKeys(tenantId);
         setKeys(data);
+      } catch (err) {
+        if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+          navigate("/login", { replace: true });
+        }
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [tenantId]);
+  }, [tenantId, navigate]);
 
   const handleRevoke = async (keyId: string) => {
     if (!window.confirm(t("tenant_detail.revoke_confirm"))) return;
@@ -277,7 +300,11 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
         prev.map((k) => (k.id === keyId ? { ...k, status: "revoked" as const } : k))
       );
       showToast(t("tenant_detail.revoke_success"));
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       showToast(t("tenant_detail.revoke_error"));
     } finally {
       setRevoking(null);
@@ -555,6 +582,7 @@ export default function TenantDetailPage() {
   const { t } = useLang();
   const { id } = useParams<{ id: string }>();
   const tenantId = id ?? "1";
+  const { enterPreview } = useAuth();
 
   const [tenant, setTenant] = useState<TenantDetail | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
@@ -577,12 +605,18 @@ export default function TenantDetailPage() {
         ]);
         setTenant(tenantData);
         setApiKeys(keysData);
+      } catch (err) {
+        if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+          navigate("/login", { replace: true });
+          return;
+        }
+        // tenant not found — leave null
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [tenantId]);
+  }, [tenantId, navigate]);
 
   const handleSaveSettings = async (data: {
     name: string;
@@ -592,6 +626,12 @@ export default function TenantDetailPage() {
     const updated = await updateTenant(tenantId, data);
     setTenant(updated);
     showToast(t("tenant_detail.saved"));
+  };
+
+  const handleEnterPreview = () => {
+    if (!tenant) return;
+    enterPreview(tenantId, tenant.name);
+    navigate("/admin");
   };
 
   const TABS: { id: TabId; label: string }[] = [
@@ -657,7 +697,30 @@ export default function TenantDetailPage() {
           >
             {t("tenant_detail.back")}
           </button>
-          <LangSwitcher />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {tenant && (
+              <button
+                onClick={handleEnterPreview}
+                style={{
+                  padding: "8px 14px",
+                  minHeight: 44,
+                  borderRadius: 999,
+                  border: "1px solid rgba(234,179,8,0.4)",
+                  background: "rgba(234,179,8,0.1)",
+                  color: "#fbbf24",
+                  fontSize: 14,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                {t("preview.enter")}
+              </button>
+            )}
+            <LangSwitcher />
+          </div>
         </div>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "#f9fafb" }}>
           {loading ? t("tenant_detail.loading") : (tenant?.name ?? t("tenant_detail.not_found"))}

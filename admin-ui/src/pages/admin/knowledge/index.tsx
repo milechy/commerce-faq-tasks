@@ -7,6 +7,7 @@ import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../component
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { SuperAdminOnly } from "../../../components/RoleGuard";
+import { useAuth } from "../../../auth/useAuth";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -516,6 +517,7 @@ function KnowledgeListTab() {
 function TextInputTab() {
   const navigate = useNavigate();
   const { t } = useLang();
+  const { isSuperAdmin } = useAuth();
 
   const CATEGORIES = [
     { value: "inventory", label: t("category.inventory") },
@@ -526,6 +528,7 @@ function TextInputTab() {
 
   const [text, setText] = useState("");
   const [category, setCategory] = useState<Category>("inventory");
+  const [isGlobal, setIsGlobal] = useState(false);
   const [converting, setConverting] = useState(false);
   const [preview, setPreview] = useState<FaqEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -547,7 +550,7 @@ function TextInputTab() {
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${TENANT}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), category }),
+        body: JSON.stringify({ text: text.trim(), category, ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; preview?: FaqEntry[]; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -572,7 +575,7 @@ function TextInputTab() {
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${TENANT}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ faqs: preview, category }),
+        body: JSON.stringify({ faqs: preview, category, ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -620,6 +623,11 @@ function TextInputTab() {
             <option key={c.value} value={c.value}>{c.label}</option>
           ))}
         </select>
+        {isSuperAdmin && (
+          <div style={{ marginTop: 16 }}>
+            <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+          </div>
+        )}
       </div>
 
       {error && (
@@ -700,6 +708,7 @@ function TextInputTab() {
 function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
   const navigate = useNavigate();
   const { t } = useLang();
+  const { isSuperAdmin } = useAuth();
 
   const CATEGORIES = [
     { value: "inventory", label: t("category.inventory") },
@@ -710,6 +719,7 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
 
   const [urls, setUrls] = useState("");
   const [category, setCategory] = useState<Category>("store_info");
+  const [isGlobal, setIsGlobal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ScrapePreviewItem[] | null>(null);
@@ -740,7 +750,7 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${TENANT}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls: urlList, category }),
+        body: JSON.stringify({ urls: urlList, category, ...(isGlobal ? { target: "global" } : {}) }),
       });
       if (res.status === 401 || res.status === 403) {
         navigate("/login", { replace: true });
@@ -772,7 +782,7 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${TENANT}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: validItems, category }),
+        body: JSON.stringify({ items: validItems, category, ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -825,6 +835,11 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
                 <option key={c.value} value={c.value}>{c.label}</option>
               ))}
             </select>
+            {isSuperAdmin && (
+              <div style={{ marginTop: 16 }}>
+                <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+              </div>
+            )}
           </div>
         </>
       )}
@@ -926,10 +941,52 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
   );
 }
 
+// ─── グローバルナレッジチェックボックス（Super Admin専用） ────────────────────
+
+function GlobalKnowledgeCheckbox({
+  isGlobal,
+  onChange,
+}: {
+  isGlobal: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  const { t } = useLang();
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        cursor: "pointer",
+        padding: "12px 14px",
+        borderRadius: 10,
+        border: `1px solid ${isGlobal ? "rgba(234,179,8,0.4)" : "#374151"}`,
+        background: isGlobal ? "rgba(234,179,8,0.08)" : "rgba(0,0,0,0.2)",
+        marginBottom: 16,
+        fontSize: 14,
+        color: isGlobal ? "#fbbf24" : "#9ca3af",
+        fontWeight: isGlobal ? 600 : 400,
+        transition: "all 0.15s",
+        userSelect: "none",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={isGlobal}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ width: 18, height: 18, accentColor: "#fbbf24", cursor: "pointer" }}
+      />
+      📚 {t("knowledge.global_label")}
+    </label>
+  );
+}
+
 // ─── PDFアップロードセクション（既存機能） ────────────────────────────────────
 
 function PdfSection() {
   const { t } = useLang();
+  const { isSuperAdmin } = useAuth();
+  const [isGlobal, setIsGlobal] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<OcrJobStatus | null>(null);
@@ -971,13 +1028,20 @@ function PdfSection() {
     return () => { if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; } };
   }, [currentJobId, fetchBooks]);
 
+  const uploadEndpoint = isGlobal
+    ? `/v1/admin/knowledge/pdf?tenant=${TENANT}&target=global`
+    : `/v1/admin/knowledge/pdf?tenant=${TENANT}`;
+
   return (
     <div style={{ ...CARD_STYLE, marginBottom: 24 }}>
       <h3 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 12px" }}>
         {t("knowledge.pdf_title")}
       </h3>
+      {isSuperAdmin && (
+        <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+      )}
       <FileUpload
-        uploadEndpoint="/v1/admin/knowledge/pdf"
+        uploadEndpoint={uploadEndpoint}
         onUploadSuccess={(name) => { setUploadSuccess(name); setTimeout(() => setUploadSuccess(null), 5000); }}
         onUploadResponse={(data) => {
           const d = data as { jobId?: string } | null;

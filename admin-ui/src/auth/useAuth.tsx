@@ -15,6 +15,11 @@ interface AuthContextValue {
   isSuperAdmin: boolean;
   isClientAdmin: boolean;
   logout: () => Promise<void>;
+  previewMode: boolean;
+  previewTenantId: string | null;
+  previewTenantName: string | null;
+  enterPreview: (tenantId: string, tenantName: string) => void;
+  exitPreview: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -23,6 +28,11 @@ const AuthContext = createContext<AuthContextValue>({
   isSuperAdmin: false,
   isClientAdmin: false,
   logout: async () => {},
+  previewMode: false,
+  previewTenantId: null,
+  previewTenantName: null,
+  enterPreview: () => {},
+  exitPreview: () => {},
 });
 
 function parseRole(meta: Record<string, unknown>): AuthUser["role"] {
@@ -35,6 +45,9 @@ function parseRole(meta: Record<string, unknown>): AuthUser["role"] {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [previewMode, setPreviewMode] = useState(false);
+  const [previewTenantId, setPreviewTenantId] = useState<string | null>(null);
+  const [previewTenantName, setPreviewTenantName] = useState<string | null>(null);
 
   const loadUser = useCallback(async () => {
     setIsLoading(true);
@@ -80,13 +93,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
     setUser(null);
+    setPreviewMode(false);
+    setPreviewTenantId(null);
+    setPreviewTenantName(null);
   }, []);
 
-  const isSuperAdmin = user?.role === "super_admin";
-  const isClientAdmin = user?.role === "client_admin";
+  const enterPreview = useCallback((tenantId: string, tenantName: string) => {
+    setPreviewMode(true);
+    setPreviewTenantId(tenantId);
+    setPreviewTenantName(tenantName);
+  }, []);
+
+  const exitPreview = useCallback(() => {
+    setPreviewMode(false);
+    setPreviewTenantId(null);
+    setPreviewTenantName(null);
+  }, []);
+
+  const effectiveRole = previewMode ? "client_admin" : (user?.role ?? "anonymous");
+  const isSuperAdmin = effectiveRole === "super_admin";
+  const isClientAdmin = effectiveRole === "client_admin";
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isSuperAdmin, isClientAdmin, logout }}>
+    <AuthContext.Provider value={{
+      user,
+      isLoading,
+      isSuperAdmin,
+      isClientAdmin,
+      logout,
+      previewMode,
+      previewTenantId,
+      previewTenantName,
+      enterPreview,
+      exitPreview,
+    }}>
       {children}
     </AuthContext.Provider>
   );

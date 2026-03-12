@@ -223,9 +223,20 @@ const ja = {
   "chat_test.description": "お客様に見える画面を確認できます",
   "chat_test.start": "チャットを開始する",
   "chat_test.tenant_label": "テナント",
-  "chat_test.widget_placeholder": "ウィジェットの設定が完了すると、ここにチャット画面が表示されます",
-  "chat_test.reset": "最初に戻る",
+  "chat_test.widget_placeholder": "ウィジェットは右下に表示されます（FABボタン）",
+  "chat_test.reset": "会話をリセット",
   "chat_test.no_access": "この機能はご利用いただけません",
+  "chat_test.need_api_key": "このテナントのAPIキーが必要です",
+
+  // Preview mode
+  "preview.mode_label": "👁 プレビューモード",
+  "preview.viewing_as": "{tenant} のクライアントとして表示中",
+  "preview.exit": "元に戻す",
+  "preview.enter": "🔍 クライアントビューで見る",
+
+  // Knowledge global
+  "knowledge.global_label": "グローバルナレッジとして登録（全テナント共通）",
+  "tenants.load_error": "テナント一覧の読み込みに失敗しました",
 
   // FAQ Edit Modal
   "modal.edit_title": "FAQを編集する",
