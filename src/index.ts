@@ -44,6 +44,8 @@ import { initUsageTracker } from "./lib/billing/usageTracker";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
+import { registerAuthRoutes } from "./api/auth/routes";
+import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
   ceFlagFromRerankResult,
@@ -55,6 +57,13 @@ import {
 const app = express();
 app.disable("x-powered-by");
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
+
+// ---------------------------------------------------------------------------
+// DB pool (shared across admin routes)
+// ---------------------------------------------------------------------------
+const db = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : null;
 
 // ---------------------------------------------------------------------------
 // Seed tenant registry (env / JSON) — must run before middleware init
@@ -403,10 +412,13 @@ const pdfUpload = multer({
   },
 });
 
-// POST /v1/admin/knowledge/pdf — JWT 認証 → tenantId 取得 → バックグラウンド OCR
+// POST /v1/admin/knowledge/pdf — JWT 認証 → Super Admin専用 → tenantId 取得 → バックグラウンド OCR
 app.post(
   "/v1/admin/knowledge/pdf",
   ...apiStack,
+  supabaseAuthMiddleware,
+  roleAuthMiddleware,
+  requireRole("super_admin"),
   pdfUpload.single("file"),
   async (req: express.Request, res: express.Response): Promise<void> => {
     const tenantId = (req as AuthedRequest).tenantId;
@@ -477,9 +489,6 @@ const port = Number(process.env.PORT || 3000);
 registerKnowledgeAdminRoutes(app);
 
 // Phase31: テナント管理API
-const db = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL })
-  : null;
 if (db) registerTenantAdminRoutes(app, db);
 
 // Phase32: 課金管理API
@@ -496,6 +505,9 @@ app.post(
 if (db) {
   registerBillingAdminRoutes(app, db, logger, [supabaseAuthMiddleware, superAdminMiddleware]);
 }
+
+// Phase34: 認証情報API
+registerAuthRoutes(app, db);
 
 async function startServer() {
   app.listen(port, () => {
