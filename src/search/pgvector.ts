@@ -3,6 +3,7 @@
 // @ts-ignore - pg types are not bundled in this project, treat as any
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { Pool } = require("pg") as { Pool: any };
+import { decryptText } from "../lib/crypto/textEncrypt";
 
 const pgUrl = process.env.DATABASE_URL;
 const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
@@ -93,7 +94,7 @@ export async function searchPgVector(
 
     const items: PgVectorHit[] = (res.rows || []).map((row: any) => ({
       id: String(row.id),
-      text: row.text,
+      text: decryptText(row.text ?? ""),
       metadata: row.metadata ?? undefined,
       score: typeof row.score === "number" ? row.score : 0,
     }));
