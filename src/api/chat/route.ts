@@ -3,6 +3,8 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { runDialogTurn } from "../../agent/dialog/dialogAgent";
 import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts";
+import { t } from "../i18n/messages";
+import type { Lang } from "../i18n/messages";
 
 // ---------------------------------------------------------------------------
 // Zod スキーマ
@@ -46,6 +48,8 @@ export function createChatHandler(logger: Logger) {
     const requestId = req.requestId;
     // tenantId は authMiddleware が JWT/APIキーから設定する（bodyから取得禁止）
     const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";
+    // Phase33: lang は langDetectMiddleware が設定する（フォールバック: "ja"）
+    const lang: Lang = (req as any).lang ?? "ja";
 
     // Zod バリデーション
     const parsed = ChatRequestSchema.safeParse(req.body);
@@ -59,10 +63,11 @@ export function createChatHandler(logger: Logger) {
 
       res.status(400).json({
         error: "validation_error",
-        message: "入力内容に誤りがあります。確認してから再試行してください。",
+        message: t("error.validation", lang),
         issues,
         requestId,
         tenantId,
+        lang,
       });
       return;
     }
@@ -111,7 +116,9 @@ export function createChatHandler(logger: Logger) {
         content = result.clarifyingQuestions[0];
       } else {
         content =
-          "申し訳ありません。現在回答を生成できませんでした。再度お試しください。";
+          lang === "en"
+            ? "Sorry, we could not generate a response at this time. Please try again."
+            : "申し訳ありません。現在回答を生成できませんでした。再度お試しください。";
       }
 
       const actions: ChatAction[] = [];
@@ -148,6 +155,7 @@ export function createChatHandler(logger: Logger) {
         data: chatMessage,
         requestId,
         tenantId,
+        lang,
       };
 
       res.status(200).json(response);
@@ -158,9 +166,10 @@ export function createChatHandler(logger: Logger) {
       );
 
       const response: ApiResponse<never> = {
-        error: "内部エラーが発生しました。しばらくしてから再試行してください。",
+        error: t("error.server", lang),
         requestId,
         tenantId,
+        lang,
       };
 
       res.status(500).json(response);
