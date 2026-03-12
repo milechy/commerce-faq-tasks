@@ -14,6 +14,45 @@
 ## 申請リスト
 （まだなし）
 
+## Phase32: 課金管理API (Stream A)
+
+- GET /v1/admin/billing/usage: テナント別使用量集計（日次/月次） (Stream A, Phase32)
+  - ファイル: src/lib/billing/billingApi.ts
+  - 認証: supabaseAuthMiddleware + superAdminMiddleware
+  - 登録: registerBillingAdminRoutes(app, db, logger, adminMiddleware)
+
+- GET /v1/admin/billing/invoices: Stripe Invoice一覧 (Stream A, Phase32)
+
+- POST /v1/billing/webhook: Stripe Webhook受信 (Stream A, Phase32)
+  - ファイル: src/lib/billing/stripeWebhook.ts
+  - 認証: なし（Stripe署名検証で保護）
+  - ⚠️ express.raw({ type: 'application/json' }) ミドルウェアが必要
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase32: 課金管理API
+import express from 'express';
+import { registerBillingAdminRoutes } from './lib/billing/billingApi';
+import { createStripeWebhookHandler } from './lib/billing/stripeWebhook';
+import { supabaseAuthMiddleware } from './admin/http/supabaseAuthMiddleware';
+import { superAdminMiddleware } from './api/admin/tenants/superAdminMiddleware';
+import { initUsageTracker } from './lib/billing/usageTracker';
+
+// usageTracker 初期化（DB起動後）
+if (db) initUsageTracker(db, logger);
+
+// Stripe Webhook（raw body 必須）
+app.post('/v1/billing/webhook',
+  express.raw({ type: 'application/json' }),
+  createStripeWebhookHandler(db, logger)
+);
+
+// 課金管理API（Super Admin認証）
+if (db) {
+  registerBillingAdminRoutes(app, db, logger, [supabaseAuthMiddleware, superAdminMiddleware]);
+}
+```
+
 ## Phase30: FAQ管理API (Stream A)
 
 - GET /v1/admin/knowledge/faq: FAQ一覧（ページネーション対応）(Stream A, Phase30)
