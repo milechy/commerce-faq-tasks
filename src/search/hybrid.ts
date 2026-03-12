@@ -6,6 +6,7 @@ import { decryptText } from "../lib/crypto/textEncrypt";
 
 // Phase33 C: 言語別インデックス解決
 import { toSupportedLang, resolveFallbackIndices, DEFAULT_LANG, type SupportedLang } from "./langIndex";
+import { decryptText } from "../lib/crypto/textEncrypt";
 
 export interface Hit {
   id: string;
