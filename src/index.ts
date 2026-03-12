@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+// @ts-ignore
+import { Pool } from "pg";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import express from "express";
 import multer from "multer";
@@ -35,6 +37,10 @@ import {
   type SalesPhase,
 } from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
+import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
+import { registerAuthRoutes } from "./api/auth/routes";
+import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
+import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
   ceFlagFromRerankResult,
@@ -46,6 +52,13 @@ import {
 const app = express();
 app.disable("x-powered-by");
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
+
+// ---------------------------------------------------------------------------
+// DB pool (shared across admin routes)
+// ---------------------------------------------------------------------------
+const db = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : null;
 
 // ---------------------------------------------------------------------------
 // Seed tenant registry (env / JSON) — must run before middleware init
@@ -393,10 +406,13 @@ const pdfUpload = multer({
   },
 });
 
-// POST /v1/admin/knowledge/pdf — JWT 認証 → tenantId 取得 → バックグラウンド OCR
+// POST /v1/admin/knowledge/pdf — JWT 認証 → Super Admin専用 → tenantId 取得 → バックグラウンド OCR
 app.post(
   "/v1/admin/knowledge/pdf",
   ...apiStack,
+  supabaseAuthMiddleware,
+  roleAuthMiddleware,
+  requireRole("super_admin"),
   pdfUpload.single("file"),
   async (req: express.Request, res: express.Response): Promise<void> => {
     const tenantId = (req as AuthedRequest).tenantId;
@@ -465,6 +481,12 @@ const port = Number(process.env.PORT || 3000);
 
 // Phase29: ナレッジ管理API
 registerKnowledgeAdminRoutes(app);
+
+// Phase31: テナント管理API
+if (db) registerTenantAdminRoutes(app, db);
+
+// Phase34: 認証情報API
+registerAuthRoutes(app, db);
 
 async function startServer() {
   app.listen(port, () => {

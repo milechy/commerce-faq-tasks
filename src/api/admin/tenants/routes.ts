@@ -7,6 +7,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { registerTenant } from "../../../lib/tenant-context";
 import { superAdminMiddleware } from "./superAdminMiddleware";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
+import { supabaseAdmin } from "../../../auth/supabaseClient";
 
 const planValues = ["starter", "growth", "enterprise"] as const;
 
@@ -239,6 +240,84 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     } catch (err) {
       console.warn("[DELETE /v1/admin/tenants/:id/keys/:keyId]", err);
       return res.status(500).json({ error: "APIキー無効化に失敗しました" });
+    }
+  });
+
+  // POST /v1/admin/tenants/:id/invite — client_adminユーザー招待（Super Admin専用）
+  app.post("/v1/admin/tenants/:id/invite", async (req: Request, res: Response) => {
+    const { id } = req.params;
+
+    const schema = z.object({
+      email: z.string().email("有効なメールアドレスを入力してください"),
+    });
+    const parsed = schema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+    const { email } = parsed.data;
+
+    // テナント存在チェック
+    try {
+      const tenantCheck = await db.query("SELECT id, name, is_active FROM tenants WHERE id = $1", [id]);
+      if (tenantCheck.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
+      }
+      if (!tenantCheck.rows[0].is_active) {
+        return res.status(403).json({ error: "tenant_disabled", message: "無効なテナントにはユーザーを招待できません。" });
+      }
+    } catch (err) {
+      console.warn("[POST /v1/admin/tenants/:id/invite] tenant check failed", err);
+      return res.status(500).json({ error: "テナント確認に失敗しました" });
+    }
+
+    if (!supabaseAdmin) {
+      return res.status(503).json({ error: "service_unavailable", message: "Supabase Adminクライアントが設定されていません。" });
+    }
+
+    try {
+      // ユーザーを招待（メール送信）
+      const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
+        email,
+        { data: { role: "client_admin", tenant_id: id } }
+      );
+
+      if (inviteError) {
+        console.warn("[POST /v1/admin/tenants/:id/invite] invite error", inviteError);
+        return res.status(400).json({
+          error: "invite_failed",
+          message: inviteError.message || "招待メールの送信に失敗しました。",
+        });
+      }
+
+      const userId = inviteData.user?.id;
+      if (!userId) {
+        return res.status(500).json({ error: "invite_failed", message: "ユーザーIDの取得に失敗しました。" });
+      }
+
+      // app_metadata に role と tenant_id を設定
+      const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+        app_metadata: { role: "client_admin", tenant_id: id },
+      });
+
+      if (updateError) {
+        console.warn("[POST /v1/admin/tenants/:id/invite] app_metadata update error", updateError);
+        // 招待は成功しているが app_metadata の更新に失敗した場合も通知
+        return res.status(500).json({
+          error: "metadata_update_failed",
+          message: "招待メールは送信しましたが、ロール設定に失敗しました。手動で設定してください。",
+        });
+      }
+
+      return res.status(201).json({
+        ok: true,
+        userId,
+        email,
+        tenantId: id,
+        role: "client_admin",
+      });
+    } catch (err) {
+      console.warn("[POST /v1/admin/tenants/:id/invite]", err);
+      return res.status(500).json({ error: "招待処理に失敗しました" });
     }
   });
 
