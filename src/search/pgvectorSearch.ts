@@ -49,7 +49,7 @@ export async function searchPgVector(
         text,
         1 - (embedding <-> $1::vector) / 2 AS score
       FROM faq_embeddings
-      WHERE tenant_id = $2
+      WHERE tenant_id = $2 OR tenant_id = 'global'
       ORDER BY embedding <-> $1::vector
       LIMIT $3
     `;

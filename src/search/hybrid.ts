@@ -106,7 +106,15 @@ export async function hybridSearch(
           ? {
               bool: {
                 must: { match: { text: q } },
-                filter: { term: { tenant_id: tenantId } },
+                filter: {
+                  bool: {
+                    should: [
+                      { term: { tenant_id: tenantId } },
+                      { term: { tenant_id: "global" } },
+                    ],
+                    minimum_should_match: 1,
+                  },
+                },
               },
             }
           : { match: { text: q } },
@@ -176,7 +184,15 @@ export async function hybridSearch(
             ? {
                 bool: {
                   must: { match: { text: "返品 送料" } },
-                  filter: { term: { tenant_id: tenantId } },
+                  filter: {
+                    bool: {
+                      should: [
+                        { term: { tenant_id: tenantId } },
+                        { term: { tenant_id: "global" } },
+                      ],
+                      minimum_should_match: 1,
+                    },
+                  },
                 },
               }
             : { match: { text: "返品 送料" } },

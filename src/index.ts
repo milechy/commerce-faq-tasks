@@ -422,6 +422,13 @@ app.post(
   pdfUpload.single("file"),
   async (req: express.Request, res: express.Response): Promise<void> => {
     const tenantId = (req as AuthedRequest).tenantId;
+    const target: string = (req.body?.target as string | undefined) || tenantId;
+
+    // "global" は super_admin のみ許可
+    if (target === "global" && (req as any).user?.role !== "super_admin") {
+      res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+      return;
+    }
 
     if (!req.file) {
       res
@@ -449,14 +456,14 @@ app.post(
     // バックグラウンド実行 (fire-and-forget)
     void (async () => {
       try {
-        const result = await runOcrPipeline(pdfBuffer, tenantId);
+        const result = await runOcrPipeline(pdfBuffer, target);
         ocrJobs.set(jobId, { status: "done", ...result });
         scheduleOcrJobCleanup(jobId); // [P1-2] TTL 30分
-        logger.info({ jobId, tenantId, ...result }, "[ocr] pipeline completed");
+        logger.info({ jobId, tenantId, target, ...result }, "[ocr] pipeline completed");
       } catch (err) {
         const message =
           err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
-        logger.error({ jobId, tenantId, error: message }, "[ocr] pipeline failed");
+        logger.error({ jobId, tenantId, target, error: message }, "[ocr] pipeline failed");
         ocrJobs.set(jobId, { status: "failed", error: message });
         scheduleOcrJobCleanup(jobId); // [P1-2] TTL 30分
       }

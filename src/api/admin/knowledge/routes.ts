@@ -153,6 +153,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // -------------------------------------------------------------------------
   // DELETE /v1/admin/knowledge/:id
   // faq_docs + faq_embeddings + ES から削除（tenant_id 一致チェック必須）
+  // global ナレッジは super_admin のみ削除可能
   // -------------------------------------------------------------------------
   app.delete("/v1/admin/knowledge/:id", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
@@ -166,13 +167,22 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     try {
-      // tenant_id 一致チェック + es_doc_id 取得
+      // tenant_id 一致チェック + es_doc_id 取得（globalも対象に含める）
       const check = await db.query(
-        "SELECT id, es_doc_id FROM faq_docs WHERE id = $1 AND tenant_id = $2",
+        "SELECT id, es_doc_id, tenant_id FROM faq_docs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'global')",
         [id, tenantId]
       );
       if (check.rowCount === 0) {
         return res.status(404).json({ error: "ナレッジが見つかりません" });
+      }
+
+      // global ナレッジは super_admin のみ削除可能
+      const recordTenantId = check.rows[0].tenant_id as string;
+      if (recordTenantId === "global") {
+        const user = (req as any).user;
+        if (user?.role !== "super_admin") {
+          return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ削除可能です" });
+        }
       }
 
       const esDocId = check.rows[0].es_doc_id as string | null;
@@ -183,13 +193,13 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
          WHERE tenant_id = $1
            AND metadata->>'faq_id' IS NOT NULL
            AND (metadata->>'faq_id')::bigint = $2`,
-        [tenantId, id]
+        [recordTenantId, id]
       );
 
       // faq_docs 削除
       await db.query(
         "DELETE FROM faq_docs WHERE id = $1 AND tenant_id = $2",
-        [id, tenantId]
+        [id, recordTenantId]
       );
 
       // ES 削除（best-effort）
@@ -255,6 +265,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .min(1)
         .max(20),
       category: z.enum(CATEGORIES),
+      target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -263,7 +274,14 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { faqs, category } = parsed.data;
+    const { faqs, category, target: rawTarget } = parsed.data;
+    const target = rawTarget || tenantId;
+
+    // "global" は super_admin のみ許可
+    if (target === "global" && (req as any).user?.role !== "super_admin") {
+      return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+    }
+
     const inserted: number[] = [];
 
     for (const faq of faqs) {
@@ -272,13 +290,13 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
            VALUES ($1, $2, $3, $4, true)
            RETURNING id`,
-          [tenantId, faq.question.slice(0, 500), faq.answer.slice(0, 2000), category]
+          [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), category]
         );
         const faqId = r.rows[0].id as number;
         inserted.push(faqId);
 
         const embText = `${faq.question}\n${faq.answer}`;
-        insertEmbeddingAsync(db, tenantId, embText, faqId, {
+        insertEmbeddingAsync(db, target, embText, faqId, {
           source: "text",
           faq_id: faqId,
         });
@@ -363,13 +381,21 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .min(1)
         .max(5),
       category: z.enum(CATEGORIES).default("store_info"),
+      target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { items, category } = parsed.data;
+    const { items, category, target: rawTarget } = parsed.data;
+    const target = rawTarget || tenantId;
+
+    // "global" は super_admin のみ許可
+    if (target === "global" && (req as any).user?.role !== "super_admin") {
+      return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+    }
+
     let totalInserted = 0;
 
     for (const item of items) {
@@ -380,7 +406,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
              VALUES ($1, $2, $3, $4, $5, true)
              RETURNING id`,
             [
-              tenantId,
+              target,
               faq.question.slice(0, 500),
               faq.answer.slice(0, 2000),
               category,
@@ -391,7 +417,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           totalInserted++;
 
           const embText = `${faq.question}\n${faq.answer}`;
-          insertEmbeddingAsync(db, tenantId, embText, faqId, {
+          insertEmbeddingAsync(db, target, embText, faqId, {
             source: "scrape",
             faq_id: faqId,
             url: item.url,
