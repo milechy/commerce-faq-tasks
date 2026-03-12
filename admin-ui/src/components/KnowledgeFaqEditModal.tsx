@@ -2,15 +2,9 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { API_BASE } from "../lib/api";
+import { useLang } from "../i18n/LangContext";
 
 const TENANT = "carnation";
-
-const CATEGORIES: { value: string; label: string }[] = [
-  { value: "inventory", label: "在庫・車両情報" },
-  { value: "campaign", label: "キャンペーン・セール" },
-  { value: "coupon", label: "クーポン・割引" },
-  { value: "store_info", label: "店舗情報・アクセス" },
-];
 
 export interface KnowledgeFaqItem {
   id: number;
@@ -62,6 +56,7 @@ const LABEL_STYLE: React.CSSProperties = {
 };
 
 export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }: Props) {
+  const { t } = useLang();
   const [question, setQuestion] = useState(item?.question ?? "");
   const [answer, setAnswer] = useState(item?.answer ?? "");
   const [category, setCategory] = useState(item?.category ?? "inventory");
@@ -70,21 +65,28 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const CATEGORIES = [
+    { value: "inventory", label: t("category.inventory") },
+    { value: "campaign", label: t("category.campaign") },
+    { value: "coupon", label: t("category.coupon") },
+    { value: "store_info", label: t("category.store_info") },
+  ];
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!question.trim()) {
-      setError("質問を入力してください");
+      setError(t("modal.question_required"));
       return;
     }
     if (!answer.trim()) {
-      setError("回答を入力してください");
+      setError(t("modal.answer_required"));
       return;
     }
 
     const token = await getToken();
     if (!token) {
-      setError("セッションが切れました。ページを再読み込みしてください。");
+      setError(t("modal.session_expired"));
       return;
     }
 
@@ -120,24 +122,24 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
       });
 
       if (res.status === 401 || res.status === 403) {
-        setError("セッションが切れました。ページを再読み込みしてください。");
+        setError(t("modal.session_expired"));
         return;
       }
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(text || "保存に失敗しました");
+        throw new Error(text || t("modal.save_error"));
       }
 
-      onSuccess(mode === "edit" ? "✅ 保存しました！" : "✅ 追加しました！");
+      onSuccess(mode === "edit" ? t("modal.saved") : t("modal.added"));
     } catch {
-      setError("❌ 保存できませんでした。もう一度お試しください。");
+      setError(t("modal.save_error"));
     } finally {
       setSaving(false);
     }
   };
 
-  const title = mode === "edit" ? "FAQを編集する" : "FAQを新しく追加する";
+  const title = mode === "edit" ? t("modal.edit_title") : t("modal.create_title");
 
   return (
     <div
@@ -193,7 +195,7 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
           <button
             onClick={onClose}
             disabled={saving}
-            aria-label="閉じる"
+            aria-label={t("modal.close")}
             style={{
               width: 44,
               height: 44,
@@ -218,7 +220,6 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
           onSubmit={(e) => void handleSubmit(e)}
           style={{ padding: "24px", display: "flex", flexDirection: "column", gap: 20 }}
         >
-          {/* エラー */}
           {error && (
             <div
               style={{
@@ -238,7 +239,7 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
           {/* 質問 */}
           <div>
             <label style={LABEL_STYLE}>
-              質問
+              {t("modal.question")}
               <span style={{ color: "#ef4444", marginLeft: 4 }}>*</span>
             </label>
             <textarea
@@ -246,7 +247,7 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               rows={3}
-              placeholder="例：在庫はどのくらいありますか？"
+              placeholder={t("modal.question_placeholder")}
               style={TEXTAREA_STYLE}
             />
           </div>
@@ -254,7 +255,7 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
           {/* 回答 */}
           <div>
             <label style={LABEL_STYLE}>
-              回答
+              {t("modal.answer")}
               <span style={{ color: "#ef4444", marginLeft: 4 }}>*</span>
             </label>
             <textarea
@@ -262,14 +263,14 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
               value={answer}
               onChange={(e) => setAnswer(e.target.value)}
               rows={6}
-              placeholder="例：現在〇〇台の在庫がございます。お気軽にお問い合わせください。"
+              placeholder={t("modal.answer_placeholder")}
               style={TEXTAREA_STYLE}
             />
           </div>
 
           {/* カテゴリ */}
           <div>
-            <label style={LABEL_STYLE}>カテゴリ</label>
+            <label style={LABEL_STYLE}>{t("modal.category")}</label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
@@ -289,15 +290,15 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
 
           {/* タグ */}
           <div>
-            <label style={LABEL_STYLE}>タグ（任意）</label>
+            <label style={LABEL_STYLE}>{t("modal.tags")}</label>
             <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 8px", lineHeight: 1.5 }}>
-              複数のタグはカンマ（，）で区切って入力してください。例: 在庫, 新車, 人気
+              {t("modal.tags_hint")}
             </p>
             <input
               type="text"
               value={tagsInput}
               onChange={(e) => setTagsInput(e.target.value)}
-              placeholder="例: 在庫, 新車, 人気"
+              placeholder={t("modal.tags_placeholder")}
               style={INPUT_STYLE}
             />
           </div>
@@ -323,12 +324,10 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
               <div
                 style={{ fontSize: 16, fontWeight: 600, color: isPublished ? "#4ade80" : "#9ca3af" }}
               >
-                {isPublished ? "✅ 公開中" : "⬜ 非公開（下書き）"}
+                {isPublished ? t("modal.published") : t("modal.draft")}
               </div>
               <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2 }}>
-                {isPublished
-                  ? "お客さまのチャットに表示されます"
-                  : "保存されますが、お客さまには表示されません"}
+                {isPublished ? t("modal.published_hint") : t("modal.draft_hint")}
               </div>
             </div>
             {/* トグルスイッチ */}
@@ -378,7 +377,7 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
                 cursor: saving ? "not-allowed" : "pointer",
               }}
             >
-              キャンセル
+              {t("modal.cancel")}
             </button>
             <button
               type="submit"
@@ -418,10 +417,10 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
                       animation: "spin 0.8s linear infinite",
                     }}
                   />
-                  保存中...
+                  {t("modal.saving")}
                 </>
               ) : (
-                "💾 保存する"
+                t("modal.save")
               )}
             </button>
           </div>

@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ApiKeyCreateModal from "../../../components/ApiKeyCreateModal";
+import { useLang } from "../../../i18n/LangContext";
+import LangSwitcher from "../../../components/LangSwitcher";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -44,7 +46,6 @@ const MOCK_API_KEYS: ApiKey[] = [
 // ─── API関数 ─────────────────────────────────────────────────────────────────
 
 async function fetchTenantDetail(tenantId: string): Promise<TenantDetail> {
-  // TODO: APIが完成したら fetchWithAuth(`${API_BASE}/v1/admin/tenants/${tenantId}`) に差し替え
   void tenantId;
   return { ...MOCK_TENANT_DETAIL, id: tenantId };
 }
@@ -53,31 +54,18 @@ async function updateTenant(
   tenantId: string,
   data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive" }
 ): Promise<TenantDetail> {
-  // TODO: APIが完成したら fetchWithAuth(`${API_BASE}/v1/admin/tenants/${tenantId}`, { method: "PUT", ... }) に差し替え
   void tenantId;
   return { ...MOCK_TENANT_DETAIL, ...data, id: tenantId };
 }
 
 async function fetchApiKeys(tenantId: string): Promise<ApiKey[]> {
-  // TODO: APIが完成したら fetchWithAuth(`${API_BASE}/v1/admin/tenants/${tenantId}/keys`) に差し替え
   void tenantId;
   return MOCK_API_KEYS;
 }
 
 async function revokeApiKey(tenantId: string, keyId: string): Promise<void> {
-  // TODO: APIが完成したら fetchWithAuth(`${API_BASE}/v1/admin/tenants/${tenantId}/keys/${keyId}`, { method: "DELETE" }) に差し替え
   void tenantId;
   void keyId;
-}
-
-// ─── ユーティリティ ───────────────────────────────────────────────────────────
-
-function formatDate(isoString: string): string {
-  return new Date(isoString).toLocaleDateString("ja-JP", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }
 
 // ─── スタイル定数 ─────────────────────────────────────────────────────────────
@@ -118,6 +106,7 @@ function SettingsTab({
   tenant: TenantDetail;
   onSave: (data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive" }) => Promise<void>;
 }) {
+  const { t } = useLang();
   const [name, setName] = useState(tenant.name);
   const [plan, setPlan] = useState<"starter" | "pro">(tenant.plan);
   const [status, setStatus] = useState<"active" | "inactive">(tenant.status);
@@ -131,7 +120,7 @@ function SettingsTab({
     try {
       await onSave({ name: name.trim(), plan, status });
     } catch {
-      setError("保存に失敗しました。もう一度お試しください 🙏");
+      setError(t("tenant_detail.save_error"));
     } finally {
       setSaving(false);
     }
@@ -157,7 +146,7 @@ function SettingsTab({
 
       <div style={{ ...CARD_STYLE, display: "flex", flexDirection: "column", gap: 20 }}>
         <div>
-          <label style={LABEL_STYLE}>テナント名</label>
+          <label style={LABEL_STYLE}>{t("tenant_detail.settings_name_label")}</label>
           <input
             type="text"
             value={name}
@@ -168,7 +157,7 @@ function SettingsTab({
         </div>
 
         <div>
-          <label style={LABEL_STYLE}>プラン</label>
+          <label style={LABEL_STYLE}>{t("tenant_detail.settings_plan_label")}</label>
           <div style={{ display: "flex", gap: 12 }}>
             {(["starter", "pro"] as const).map((p) => (
               <button
@@ -195,7 +184,7 @@ function SettingsTab({
         </div>
 
         <div>
-          <label style={LABEL_STYLE}>状態</label>
+          <label style={LABEL_STYLE}>{t("tenant_detail.settings_status_label")}</label>
           <div style={{ display: "flex", gap: 12 }}>
             {(["active", "inactive"] as const).map((s) => (
               <button
@@ -219,7 +208,7 @@ function SettingsTab({
                   cursor: "pointer",
                 }}
               >
-                {s === "active" ? "有効" : "無効"}
+                {s === "active" ? t("tenant_detail.status_active") : t("tenant_detail.status_inactive")}
               </button>
             ))}
           </div>
@@ -243,7 +232,7 @@ function SettingsTab({
             width: "100%",
           }}
         >
-          {saving ? "⏳ 保存中..." : "💾 設定を保存する"}
+          {saving ? t("tenant_detail.saving") : t("tenant_detail.save_settings")}
         </button>
       </div>
     </form>
@@ -253,6 +242,8 @@ function SettingsTab({
 // ─── タブ: APIキー ────────────────────────────────────────────────────────────
 
 function ApiKeysTab({ tenantId }: { tenantId: string }) {
+  const { t, lang } = useLang();
+  const locale = lang === "en" ? "en-US" : "ja-JP";
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -278,16 +269,16 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
   }, [tenantId]);
 
   const handleRevoke = async (keyId: string) => {
-    if (!window.confirm("このAPIキーを無効化しますか？この操作は元に戻せません。")) return;
+    if (!window.confirm(t("tenant_detail.revoke_confirm"))) return;
     setRevoking(keyId);
     try {
       await revokeApiKey(tenantId, keyId);
       setKeys((prev) =>
         prev.map((k) => (k.id === keyId ? { ...k, status: "revoked" as const } : k))
       );
-      showToast("🔒 APIキーを無効化しました");
+      showToast(t("tenant_detail.revoke_success"));
     } catch {
-      showToast("❌ 無効化に失敗しました。もう一度お試しください");
+      showToast(t("tenant_detail.revoke_error"));
     } finally {
       setRevoking(null);
     }
@@ -302,8 +293,11 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
       lastUsedAt: null,
     };
     setKeys((prev) => [newEntry, ...prev]);
-    showToast("✅ 新しいAPIキーを発行しました！");
+    showToast(t("tenant_detail.key_issued"));
   };
+
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
 
   return (
     <div>
@@ -350,7 +344,7 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
           marginBottom: 20,
         }}
       >
-        🔑 新しいAPIキーを発行
+        {t("tenant_detail.issue_key")}
       </button>
 
       {loading ? (
@@ -365,7 +359,7 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
           }}
         >
           <span style={{ marginRight: 8 }}>⏳</span>
-          読み込んでいます...
+          {t("tenant_detail.key_loading")}
         </div>
       ) : keys.length === 0 ? (
         <div
@@ -377,7 +371,7 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
             padding: "32px 20px",
           }}
         >
-          APIキーがまだ発行されていません
+          {t("tenant_detail.key_empty")}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -416,13 +410,15 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {key.status === "active" ? "有効" : "無効化済み"}
+                    {key.status === "active" ? t("tenant_detail.key_status_active") : t("tenant_detail.key_status_revoked")}
                   </span>
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 16, flexWrap: "wrap" }}>
-                  <span>作成日: {formatDate(key.createdAt)}</span>
+                  <span>{t("tenant_detail.key_created_at", { date: formatDate(key.createdAt) })}</span>
                   <span>
-                    最終使用: {key.lastUsedAt ? formatDate(key.lastUsedAt) : "未使用"}
+                    {key.lastUsedAt
+                      ? t("tenant_detail.key_last_used", { date: formatDate(key.lastUsedAt) })
+                      : t("tenant_detail.key_never_used")}
                   </span>
                 </div>
               </div>
@@ -444,7 +440,7 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {revoking === key.id ? "⏳ 処理中..." : "🔒 無効化"}
+                  {revoking === key.id ? t("tenant_detail.revoking") : t("tenant_detail.revoke")}
                 </button>
               )}
             </div>
@@ -466,6 +462,7 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
 // ─── タブ: 埋め込みコード ──────────────────────────────────────────────────────
 
 function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiKey[] }) {
+  const { t } = useLang();
   const [copied, setCopied] = useState(false);
 
   const activeKey = apiKeys.find((k) => k.status === "active");
@@ -492,7 +489,7 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
     <div>
       <div style={CARD_STYLE}>
         <p style={{ fontSize: 14, color: "#9ca3af", marginBottom: 16, lineHeight: 1.6 }}>
-          以下のコードをWebサイトのHTMLに埋め込むと、チャットウィジェットが表示されます。
+          {t("tenant_detail.embed_desc")}
         </p>
         <pre
           style={{
@@ -528,7 +525,7 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
             width: "100%",
           }}
         >
-          {copied ? "✅ コピーしました！" : "📋 コードをコピー"}
+          {copied ? t("tenant_detail.copied") : t("tenant_detail.copy")}
         </button>
       </div>
 
@@ -543,10 +540,8 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
           fontSize: 13,
           lineHeight: 1.6,
         }}
-      >
-        💡 <strong>YOUR_API_KEY</strong> の部分は、「APIキー」タブで発行した実際のキーに置き換えてください。
-        APIキーは発行時にのみ確認できます。
-      </div>
+        dangerouslySetInnerHTML={{ __html: t("tenant_detail.embed_hint") }}
+      />
     </div>
   );
 }
@@ -555,14 +550,9 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
 
 type TabId = "settings" | "apikeys" | "embed";
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: "settings", label: "⚙️ 設定" },
-  { id: "apikeys", label: "🔑 APIキー" },
-  { id: "embed", label: "📋 埋め込みコード" },
-];
-
 export default function TenantDetailPage() {
   const navigate = useNavigate();
+  const { t } = useLang();
   const { id } = useParams<{ id: string }>();
   const tenantId = id ?? "1";
 
@@ -601,8 +591,14 @@ export default function TenantDetailPage() {
   }) => {
     const updated = await updateTenant(tenantId, data);
     setTenant(updated);
-    showToast("✅ 設定を保存しました");
+    showToast(t("tenant_detail.saved"));
   };
+
+  const TABS: { id: TabId; label: string }[] = [
+    { id: "settings", label: t("tenant_detail.tab_settings") },
+    { id: "apikeys", label: t("tenant_detail.tab_apikeys") },
+    { id: "embed", label: t("tenant_detail.tab_embed") },
+  ];
 
   return (
     <div
@@ -641,28 +637,30 @@ export default function TenantDetailPage() {
 
       {/* ヘッダー */}
       <header style={{ marginBottom: 32 }}>
-        <button
-          onClick={() => navigate("/admin/tenants")}
-          style={{
-            padding: "8px 14px",
-            minHeight: 44,
-            borderRadius: 999,
-            border: "1px solid #374151",
-            background: "transparent",
-            color: "#9ca3af",
-            fontSize: 14,
-            cursor: "pointer",
-            fontWeight: 500,
-            marginBottom: 16,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          ← テナント一覧に戻る
-        </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+          <button
+            onClick={() => navigate("/admin/tenants")}
+            style={{
+              padding: "8px 14px",
+              minHeight: 44,
+              borderRadius: 999,
+              border: "1px solid #374151",
+              background: "transparent",
+              color: "#9ca3af",
+              fontSize: 14,
+              cursor: "pointer",
+              fontWeight: 500,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            {t("tenant_detail.back")}
+          </button>
+          <LangSwitcher />
+        </div>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "#f9fafb" }}>
-          {loading ? "読み込み中..." : (tenant?.name ?? "テナント詳細")}
+          {loading ? t("tenant_detail.loading") : (tenant?.name ?? t("tenant_detail.not_found"))}
         </h1>
         {tenant && (
           <p style={{ fontSize: 14, color: "#9ca3af", margin: 0 }}>
@@ -683,7 +681,7 @@ export default function TenantDetailPage() {
           }}
         >
           <span style={{ marginRight: 8 }}>⏳</span>
-          読み込んでいます...
+          {t("common.loading")}
         </div>
       ) : tenant ? (
         <>
@@ -745,7 +743,7 @@ export default function TenantDetailPage() {
             fontSize: 15,
           }}
         >
-          テナントが見つかりませんでした 🙏
+          {t("tenant_detail.not_found")}
         </div>
       )}
     </div>

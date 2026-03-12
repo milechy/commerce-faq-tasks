@@ -4,6 +4,8 @@ import TuningPanel from "../../components/admin/TuningPanel";
 import AvatarUpload from "../../components/admin/AvatarUpload";
 import VoiceSettings from "../../components/admin/VoiceSettings";
 import { API_BASE } from "../../lib/api";
+import { useLang } from "../../i18n/LangContext";
+import LangSwitcher from "../../components/LangSwitcher";
 
 interface DashboardStats {
   faqCount: number;
@@ -69,6 +71,7 @@ function StatCard({
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const { t, lang } = useLang();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -122,19 +125,21 @@ export default function AdminDashboard() {
 
         setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated });
       } catch {
-        setError("少し問題が起きました。もう一度試してみてください 🙏");
+        setError(t("dashboard.error"));
       } finally {
         setLoading(false);
       }
     };
 
     fetchStats();
-  }, [navigate]);
+  }, [navigate, t]);
 
   const handleLogout = () => {
     localStorage.removeItem("supabaseSession");
     navigate("/login", { replace: true });
   };
+
+  const locale = lang === "en" ? "en-US" : "ja-JP";
 
   return (
     <div
@@ -182,32 +187,35 @@ export default function AdminDashboard() {
                 boxShadow: "0 0 6px #22c55e",
               }}
             />
-            接続中
+            {t("dashboard.connected")}
           </div>
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            管理ダッシュボード
+            {t("dashboard.title")}
           </h1>
           <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            FAQ・AIナレッジの管理と設定
+            {t("dashboard.subtitle")}
           </p>
         </div>
 
-        <button
-          onClick={handleLogout}
-          style={{
-            padding: "10px 16px",
-            minHeight: 44,
-            borderRadius: 999,
-            border: "1px solid #374151",
-            background: "transparent",
-            color: "#9ca3af",
-            fontSize: 14,
-            cursor: "pointer",
-            fontWeight: 500,
-          }}
-        >
-          ログアウト
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <LangSwitcher />
+          <button
+            onClick={handleLogout}
+            style={{
+              padding: "10px 16px",
+              minHeight: 44,
+              borderRadius: 999,
+              border: "1px solid #374151",
+              background: "transparent",
+              color: "#9ca3af",
+              fontSize: 14,
+              cursor: "pointer",
+              fontWeight: 500,
+            }}
+          >
+            {t("dashboard.logout")}
+          </button>
+        </div>
       </header>
 
       {error && (
@@ -238,53 +246,53 @@ export default function AdminDashboard() {
           }}
         >
           <span style={{ marginRight: 8 }}>⏳</span>
-          情報を読み込んでいます...
+          {t("dashboard.loading")}
         </div>
       ) : (
         <>
           <section style={{ marginBottom: 32 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              現在の状況
+              {t("dashboard.current_status")}
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <StatCard
                 icon="💬"
-                label="登録FAQ数"
+                label={t("dashboard.faq_count")}
                 value={stats?.faqCount ?? 0}
-                sub="公開中・下書きを含む"
+                sub={t("dashboard.faq_count_sub")}
               />
               <StatCard
                 icon="✅"
-                label="公開中のFAQ"
+                label={t("dashboard.published_faq")}
                 value={stats?.publishedFaqCount ?? 0}
                 accent="#4ade80"
-                sub="お客様に表示されています"
+                sub={t("dashboard.published_faq_sub")}
               />
               <StatCard
                 icon="📚"
-                label="登録ナレッジ"
+                label={t("dashboard.knowledge_count")}
                 value={stats?.bookCount ?? 0}
-                sub="AIが参照する書籍・資料"
+                sub={t("dashboard.knowledge_count_sub")}
               />
               <StatCard
                 icon="🕐"
-                label="最終更新"
+                label={t("dashboard.last_updated")}
                 value={
                   stats?.lastUpdated
-                    ? new Date(stats.lastUpdated).toLocaleDateString("ja-JP", {
+                    ? new Date(stats.lastUpdated).toLocaleDateString(locale, {
                         month: "short",
                         day: "numeric",
                       })
                     : "—"
                 }
-                sub={stats?.lastUpdated ? "FAQの最終更新日" : "まだ更新がありません"}
+                sub={stats?.lastUpdated ? t("dashboard.last_updated_sub") : t("dashboard.no_updates")}
               />
             </div>
           </section>
 
           <section style={{ marginBottom: 32 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              クイックアクション
+              {t("dashboard.quick_actions")}
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <button
@@ -313,7 +321,7 @@ export default function AdminDashboard() {
                 }}
               >
                 <span style={{ fontSize: 22 }}>💬</span>
-                FAQ を管理する
+                {t("dashboard.manage_faq")}
               </button>
 
               <button
@@ -342,7 +350,7 @@ export default function AdminDashboard() {
                 }}
               >
                 <span style={{ fontSize: 22 }}>📚</span>
-                AIナレッジを管理する
+                {t("dashboard.manage_knowledge")}
               </button>
 
               <button
@@ -375,7 +383,7 @@ export default function AdminDashboard() {
                 }}
               >
                 <span style={{ fontSize: 22 }}>＋</span>
-                新しいFAQを追加する
+                {t("dashboard.add_faq")}
               </button>
 
               <button
@@ -400,7 +408,7 @@ export default function AdminDashboard() {
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
               >
                 <span style={{ fontSize: 22 }}>🏢</span>
-                テナントを管理する
+                {t("dashboard.manage_tenants")}
               </button>
 
               <button
@@ -425,28 +433,28 @@ export default function AdminDashboard() {
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
               >
                 <span style={{ fontSize: 22 }}>💰</span>
-                請求・使用量を確認する
+                {t("dashboard.view_billing")}
               </button>
             </div>
           </section>
 
           <section>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              AIの返答スタイルをカスタマイズ
+              {t("dashboard.customize_ai")}
             </h2>
             <TuningPanel tenantId="demo" />
           </section>
 
           <section style={{ marginTop: 24 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              会話アバターの設定
+              {t("dashboard.avatar_settings")}
             </h2>
             <AvatarUpload />
           </section>
 
           <section style={{ marginTop: 24 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              声の設定
+              {t("dashboard.voice_settings")}
             </h2>
             <VoiceSettings />
           </section>

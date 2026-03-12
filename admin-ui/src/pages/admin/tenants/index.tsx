@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useLang } from "../../../i18n/LangContext";
+import LangSwitcher from "../../../components/LangSwitcher";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -24,12 +26,10 @@ const MOCK_TENANTS: Tenant[] = [
 // ─── API関数 ─────────────────────────────────────────────────────────────────
 
 async function fetchTenants(): Promise<Tenant[]> {
-  // TODO: APIが完成したら fetchWithAuth(`${API_BASE}/v1/admin/tenants`) に差し替え
   return MOCK_TENANTS;
 }
 
 async function createTenant(data: { name: string; slug: string; plan: string }): Promise<Tenant> {
-  // TODO: APIが完成したら fetchWithAuth(`${API_BASE}/v1/admin/tenants`, { method: "POST", ... }) に差し替え
   const newTenant: Tenant = {
     id: String(Date.now()),
     name: data.name,
@@ -40,16 +40,6 @@ async function createTenant(data: { name: string; slug: string; plan: string }):
     createdAt: new Date().toISOString(),
   };
   return newTenant;
-}
-
-// ─── ユーティリティ ───────────────────────────────────────────────────────────
-
-function formatDate(isoString: string): string {
-  return new Date(isoString).toLocaleDateString("ja-JP", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }
 
 // ─── スタイル定数 ─────────────────────────────────────────────────────────────
@@ -69,6 +59,7 @@ interface CreateModalProps {
 }
 
 function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
+  const { t } = useLang();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [plan, setPlan] = useState<"starter" | "pro">("starter");
@@ -87,7 +78,7 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
       const tenant = await createTenant({ name: name.trim(), slug, plan });
       onSuccess(tenant);
     } catch {
-      setError("テナントの作成に失敗しました。もう一度お試しください 🙏");
+      setError(t("tenants.create_error"));
     } finally {
       setLoading(false);
     }
@@ -142,7 +133,7 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
         }}
       >
         <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f9fafb", margin: "0 0 24px" }}>
-          🏢 新しいテナントを追加
+          {t("tenants.modal_title")}
         </h2>
 
         {error && (
@@ -163,24 +154,24 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: 18 }}>
-            <label style={labelStyle}>テナント名 *</label>
+            <label style={labelStyle}>{t("tenants.name_label")}</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例: カーネーション自動車"
+              placeholder={t("tenants.name_placeholder")}
               style={inputStyle}
               required
             />
           </div>
 
           <div style={{ marginBottom: 18 }}>
-            <label style={labelStyle}>スラッグ * (英数字・ハイフンのみ)</label>
+            <label style={labelStyle}>{t("tenants.slug_label")}</label>
             <input
               type="text"
               value={slug}
               onChange={(e) => setSlug(e.target.value.toLowerCase())}
-              placeholder="例: carnation-auto"
+              placeholder={t("tenants.slug_placeholder")}
               style={{
                 ...inputStyle,
                 borderColor: slug && !slugValid ? "#ef4444" : "#374151",
@@ -189,13 +180,13 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
             />
             {slug && !slugValid && (
               <p style={{ fontSize: 12, color: "#ef4444", marginTop: 4 }}>
-                英小文字・数字・ハイフンのみ使用できます
+                {t("tenants.slug_invalid")}
               </p>
             )}
           </div>
 
           <div style={{ marginBottom: 28 }}>
-            <label style={labelStyle}>プラン</label>
+            <label style={labelStyle}>{t("tenants.plan_label")}</label>
             <div style={{ display: "flex", gap: 12 }}>
               {(["starter", "pro"] as const).map((p) => (
                 <button
@@ -240,7 +231,7 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
                 width: "100%",
               }}
             >
-              {loading ? "⏳ 作成中..." : "✅ テナントを作成する"}
+              {loading ? t("tenants.creating") : t("tenants.create")}
             </button>
             <button
               type="button"
@@ -259,7 +250,7 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
                 width: "100%",
               }}
             >
-              キャンセル
+              {t("common.cancel")}
             </button>
           </div>
         </form>
@@ -272,6 +263,8 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
 
 export default function TenantsPage() {
   const navigate = useNavigate();
+  const { t, lang } = useLang();
+  const locale = lang === "en" ? "en-US" : "ja-JP";
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -298,7 +291,7 @@ export default function TenantsPage() {
   const handleCreateSuccess = (newTenant: Tenant) => {
     setTenants((prev) => [...prev, newTenant]);
     setShowModal(false);
-    showToast("✅ テナントを作成しました！");
+    showToast(t("tenants.created_success"));
   };
 
   return (
@@ -338,31 +331,33 @@ export default function TenantsPage() {
 
       {/* ヘッダー */}
       <header style={{ marginBottom: 32 }}>
-        <button
-          onClick={() => navigate("/admin")}
-          style={{
-            padding: "8px 14px",
-            minHeight: 44,
-            borderRadius: 999,
-            border: "1px solid #374151",
-            background: "transparent",
-            color: "#9ca3af",
-            fontSize: 14,
-            cursor: "pointer",
-            fontWeight: 500,
-            marginBottom: 16,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          ← ダッシュボードに戻る
-        </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+          <button
+            onClick={() => navigate("/admin")}
+            style={{
+              padding: "8px 14px",
+              minHeight: 44,
+              borderRadius: 999,
+              border: "1px solid #374151",
+              background: "transparent",
+              color: "#9ca3af",
+              fontSize: 14,
+              cursor: "pointer",
+              fontWeight: 500,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            {t("common.back_to_dashboard")}
+          </button>
+          <LangSwitcher />
+        </div>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "#f9fafb" }}>
-          テナント管理
+          {t("tenants.title")}
         </h1>
         <p style={{ fontSize: 14, color: "#9ca3af", margin: 0 }}>
-          接続テナントの管理・設定・APIキー発行
+          {t("tenants.subtitle")}
         </p>
       </header>
 
@@ -389,7 +384,7 @@ export default function TenantsPage() {
         }}
       >
         <span style={{ fontSize: 22 }}>＋</span>
-        新しいテナントを追加
+        {t("tenants.add")}
       </button>
 
       {/* テナント一覧 */}
@@ -405,7 +400,7 @@ export default function TenantsPage() {
           }}
         >
           <span style={{ marginRight: 8 }}>⏳</span>
-          読み込んでいます...
+          {t("tenants.loading")}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -419,7 +414,7 @@ export default function TenantsPage() {
                 padding: "40px 20px",
               }}
             >
-              テナントがまだ登録されていません
+              {t("tenants.empty")}
             </div>
           ) : (
             tenants.map((tenant) => (
@@ -451,7 +446,7 @@ export default function TenantsPage() {
                         border: `1px solid ${tenant.status === "active" ? "rgba(74,222,128,0.3)" : "rgba(107,114,128,0.3)"}`,
                       }}
                     >
-                      {tenant.status === "active" ? "有効" : "無効"}
+                      {tenant.status === "active" ? t("tenants.status_active") : t("tenants.status_inactive")}
                     </span>
                     {/* プランバッジ */}
                     <span
@@ -484,12 +479,12 @@ export default function TenantsPage() {
                   }}
                 >
                   <div>
-                    <span style={{ color: "#6b7280" }}>APIキー: </span>
-                    <span style={{ color: "#d1d5db", fontWeight: 600 }}>{tenant.apiKeyCount}件</span>
+                    <span style={{ color: "#6b7280" }}>{t("tenants.api_keys", { n: tenant.apiKeyCount })}</span>
                   </div>
                   <div>
-                    <span style={{ color: "#6b7280" }}>作成日: </span>
-                    <span style={{ color: "#d1d5db" }}>{formatDate(tenant.createdAt)}</span>
+                    <span style={{ color: "#6b7280" }}>
+                      {t("tenants.created_at", { date: new Date(tenant.createdAt).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" }) })}
+                    </span>
                   </div>
                 </div>
 
@@ -509,7 +504,7 @@ export default function TenantsPage() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  設定 →
+                  {t("tenants.settings")}
                 </button>
               </div>
             ))
