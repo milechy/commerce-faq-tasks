@@ -225,9 +225,20 @@ const en: Record<TranslationKey, string> = {
   "chat_test.description": "Preview the chat your customers will see",
   "chat_test.start": "Start Chat",
   "chat_test.tenant_label": "Tenant",
-  "chat_test.widget_placeholder": "The chat widget will appear here once your widget is configured",
-  "chat_test.reset": "Reset",
+  "chat_test.widget_placeholder": "The widget will appear in the bottom-right corner (FAB button)",
+  "chat_test.reset": "Reset Conversation",
   "chat_test.no_access": "You do not have access to this feature",
+  "chat_test.need_api_key": "An API key is required for this tenant",
+
+  // Preview mode
+  "preview.mode_label": "👁 Preview Mode",
+  "preview.viewing_as": "Viewing as client of {tenant}",
+  "preview.exit": "Exit Preview",
+  "preview.enter": "🔍 View as Client",
+
+  // Knowledge global
+  "knowledge.global_label": "Register as Global Knowledge (shared across all tenants)",
+  "tenants.load_error": "Failed to load tenant list",
 
   // FAQ Edit Modal
   "modal.edit_title": "Edit FAQ",

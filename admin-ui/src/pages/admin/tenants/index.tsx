@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
+import { API_BASE } from "../../../lib/api";
+import { supabase } from "../../../lib/supabaseClient";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -15,31 +17,45 @@ interface Tenant {
   createdAt: string;
 }
 
-// ─── モックデータ ─────────────────────────────────────────────────────────────
+// ─── 認証ヘルパー ─────────────────────────────────────────────────────────────
 
-const MOCK_TENANTS: Tenant[] = [
-  { id: "1", name: "カーネーション自動車", slug: "carnation", plan: "pro", status: "active", apiKeyCount: 2, createdAt: "2024-01-15T00:00:00Z" },
-  { id: "2", name: "サクラ不動産", slug: "sakura-realty", plan: "starter", status: "active", apiKeyCount: 1, createdAt: "2024-02-20T00:00:00Z" },
-  { id: "3", name: "テスト株式会社", slug: "test-corp", plan: "starter", status: "inactive", apiKeyCount: 0, createdAt: "2024-03-01T00:00:00Z" },
-];
+async function getToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  if (data.session) return data.session.access_token;
+  const { data: refreshed } = await supabase.auth.refreshSession();
+  return refreshed.session?.access_token ?? null;
+}
+
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const token = await getToken();
+  if (!token) throw new Error("__AUTH_REQUIRED__");
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers as Record<string, string>),
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+}
 
 // ─── API関数 ─────────────────────────────────────────────────────────────────
 
 async function fetchTenants(): Promise<Tenant[]> {
-  return MOCK_TENANTS;
+  const res = await authFetch(`${API_BASE}/v1/admin/tenants`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as { tenants?: Tenant[]; items?: Tenant[] };
+  return data.tenants ?? data.items ?? [];
 }
 
 async function createTenant(data: { name: string; slug: string; plan: string }): Promise<Tenant> {
-  const newTenant: Tenant = {
-    id: String(Date.now()),
-    name: data.name,
-    slug: data.slug,
-    plan: data.plan as "starter" | "pro",
-    status: "active",
-    apiKeyCount: 0,
-    createdAt: new Date().toISOString(),
-  };
-  return newTenant;
+  const res = await authFetch(`${API_BASE}/v1/admin/tenants`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = (await res.json()) as { tenant?: Tenant } | Tenant;
+  return ("tenant" in json ? json.tenant : json) as Tenant;
 }
 
 // ─── スタイル定数 ─────────────────────────────────────────────────────────────
@@ -267,6 +283,7 @@ export default function TenantsPage() {
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -278,15 +295,22 @@ export default function TenantsPage() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
         const data = await fetchTenants();
         setTenants(data);
+      } catch (err) {
+        if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+          navigate("/login", { replace: true });
+          return;
+        }
+        setError(t("tenants.load_error"));
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, []);
+  }, [navigate, t]);
 
   const handleCreateSuccess = (newTenant: Tenant) => {
     setTenants((prev) => [...prev, newTenant]);
@@ -386,6 +410,23 @@ export default function TenantsPage() {
         <span style={{ fontSize: 22 }}>＋</span>
         {t("tenants.add")}
       </button>
+
+      {/* エラー表示 */}
+      {error && (
+        <div
+          style={{
+            marginBottom: 20,
+            padding: "14px 18px",
+            borderRadius: 12,
+            background: "rgba(127,29,29,0.4)",
+            border: "1px solid rgba(248,113,113,0.3)",
+            color: "#fca5a5",
+            fontSize: 15,
+          }}
+        >
+          {error}
+        </div>
+      )}
 
       {/* テナント一覧 */}
       {loading ? (
