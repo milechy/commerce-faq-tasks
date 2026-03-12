@@ -6,6 +6,8 @@ import VoiceSettings from "../../components/admin/VoiceSettings";
 import { API_BASE } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import LangSwitcher from "../../components/LangSwitcher";
+import { useAuth } from "../../auth/useAuth";
+import { SuperAdminOnly } from "../../components/RoleGuard";
 
 interface DashboardStats {
   faqCount: number;
@@ -72,6 +74,7 @@ function StatCard({
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
+  const { user, isSuperAdmin, isClientAdmin, logout } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -134,8 +137,9 @@ export default function AdminDashboard() {
     fetchStats();
   }, [navigate, t]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem("supabaseSession");
+    await logout();
     navigate("/login", { replace: true });
   };
 
@@ -198,9 +202,29 @@ export default function AdminDashboard() {
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {user && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: isSuperAdmin ? "rgba(234,179,8,0.15)" : "rgba(59,130,246,0.15)",
+                  border: `1px solid ${isSuperAdmin ? "rgba(234,179,8,0.4)" : "rgba(59,130,246,0.4)"}`,
+                  color: isSuperAdmin ? "#fbbf24" : "#60a5fa",
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                {isSuperAdmin ? t("role.super_admin") : isClientAdmin ? (user.tenantName ?? t("role.client_admin")) : t("role.anonymous")}
+              </span>
+              <span style={{ fontSize: 13, color: "#6b7280", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {user.email}
+              </span>
+            </div>
+          )}
           <LangSwitcher />
           <button
-            onClick={handleLogout}
+            onClick={() => void handleLogout()}
             style={{
               padding: "10px 16px",
               minHeight: 44,
@@ -386,55 +410,87 @@ export default function AdminDashboard() {
                 {t("dashboard.add_faq")}
               </button>
 
-              <button
-                onClick={() => navigate("/admin/tenants")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
-              >
-                <span style={{ fontSize: 22 }}>🏢</span>
-                {t("dashboard.manage_tenants")}
-              </button>
+              <SuperAdminOnly>
+                <button
+                  onClick={() => navigate("/admin/tenants")}
+                  style={{
+                    flex: "1 1 200px",
+                    padding: "18px 20px",
+                    minHeight: 56,
+                    borderRadius: 12,
+                    border: "1px solid #1f2937",
+                    background: "rgba(15,23,42,0.8)",
+                    color: "#e5e7eb",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    transition: "border-color 0.15s",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
+                >
+                  <span style={{ fontSize: 22 }}>🏢</span>
+                  {t("dashboard.manage_tenants")}
+                </button>
+              </SuperAdminOnly>
 
-              <button
-                onClick={() => navigate("/admin/billing")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
-              >
-                <span style={{ fontSize: 22 }}>💰</span>
-                {t("dashboard.view_billing")}
-              </button>
+              <SuperAdminOnly>
+                <button
+                  onClick={() => navigate("/admin/billing")}
+                  style={{
+                    flex: "1 1 200px",
+                    padding: "18px 20px",
+                    minHeight: 56,
+                    borderRadius: 12,
+                    border: "1px solid #1f2937",
+                    background: "rgba(15,23,42,0.8)",
+                    color: "#e5e7eb",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    transition: "border-color 0.15s",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
+                >
+                  <span style={{ fontSize: 22 }}>💰</span>
+                  {t("dashboard.view_billing")}
+                </button>
+              </SuperAdminOnly>
+
+              {isClientAdmin && (
+                <button
+                  onClick={() => navigate("/admin/chat-test")}
+                  style={{
+                    flex: "1 1 200px",
+                    padding: "18px 20px",
+                    minHeight: 56,
+                    borderRadius: 12,
+                    border: "none",
+                    background: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 50%, #3b82f6 100%)",
+                    color: "#fff",
+                    fontSize: 16,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    boxShadow: "0 8px 25px rgba(59,130,246,0.3)",
+                    transition: "box-shadow 0.15s",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 10px 30px rgba(59,130,246,0.5)"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 25px rgba(59,130,246,0.3)"; }}
+                >
+                  <span style={{ fontSize: 22 }}>💬</span>
+                  {t("chat_test.button")}
+                </button>
+              )}
             </div>
           </section>
 

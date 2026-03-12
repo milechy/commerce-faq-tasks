@@ -214,6 +214,21 @@ const en: Record<TranslationKey, string> = {
   "billing.invoice_draft": "Draft",
   "billing.csv_header": "Date,Requests,Input Tokens,Output Tokens,Cost (JPY)",
 
+  // Role badges
+  "role.super_admin": "🔑 Super Admin",
+  "role.client_admin": "🏢 Client",
+  "role.anonymous": "Anonymous",
+
+  // Chat test page
+  "chat_test.button": "💬 Test Chat",
+  "chat_test.title": "Test Chat",
+  "chat_test.description": "Preview the chat your customers will see",
+  "chat_test.start": "Start Chat",
+  "chat_test.tenant_label": "Tenant",
+  "chat_test.widget_placeholder": "The chat widget will appear here once your widget is configured",
+  "chat_test.reset": "Reset",
+  "chat_test.no_access": "You do not have access to this feature",
+
   // FAQ Edit Modal
   "modal.edit_title": "Edit FAQ",
   "modal.create_title": "Add New FAQ",

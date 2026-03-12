@@ -212,6 +212,21 @@ const ja = {
   "billing.invoice_draft": "作成中",
   "billing.csv_header": "日付,リクエスト数,入力トークン,出力トークン,コスト(円)",
 
+  // Role badges
+  "role.super_admin": "🔑 管理者",
+  "role.client_admin": "🏢 クライアント",
+  "role.anonymous": "匿名",
+
+  // Chat test page
+  "chat_test.button": "💬 チャットをテストする",
+  "chat_test.title": "チャットをテストする",
+  "chat_test.description": "お客様に見える画面を確認できます",
+  "chat_test.start": "チャットを開始する",
+  "chat_test.tenant_label": "テナント",
+  "chat_test.widget_placeholder": "ウィジェットの設定が完了すると、ここにチャット画面が表示されます",
+  "chat_test.reset": "最初に戻る",
+  "chat_test.no_access": "この機能はご利用いただけません",
+
   // FAQ Edit Modal
   "modal.edit_title": "FAQを編集する",
   "modal.create_title": "FAQを新しく追加する",

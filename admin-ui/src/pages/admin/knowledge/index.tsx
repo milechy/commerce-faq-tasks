@@ -6,6 +6,7 @@ import { supabase } from "../../../lib/supabaseClient";
 import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../components/KnowledgeFaqEditModal";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
+import { SuperAdminOnly } from "../../../components/RoleGuard";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -1058,8 +1059,10 @@ export default function KnowledgePage() {
         </p>
       </header>
 
-      {/* PDFアップロード */}
-      <PdfSection />
+      {/* PDFアップロード — super_admin のみ */}
+      <SuperAdminOnly>
+        <PdfSection />
+      </SuperAdminOnly>
 
       {/* タブ */}
       <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid #1f2937" }}>
