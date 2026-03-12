@@ -8,6 +8,7 @@ import { groqClient } from "../../../agent/llm/groqClient";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
+import { encryptText } from "../../../lib/crypto/textEncrypt";
 
 const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
@@ -91,7 +92,7 @@ function insertEmbeddingAsync(
     .then((vec) =>
       db.query(
         "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata) VALUES ($1, $2, $3::vector, $4::jsonb)",
-        [tenantId, text, `[${vec.join(",")}]`, JSON.stringify(meta)]
+        [tenantId, encryptText(text), `[${vec.join(",")}]`, JSON.stringify(meta)]
       )
     )
     .catch((e) => console.warn("[knowledge] embedding insert failed", e));

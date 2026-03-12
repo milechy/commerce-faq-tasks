@@ -9,6 +9,12 @@
 ## 申請リスト
 （まだなし）
 
+## Security Fix: RAG暗号化 (fix/security-rag-excerpt-limit)
+- KNOWLEDGE_ENCRYPTION_KEY: faq_embeddings.text 暗号化キー（64文字hex = 256bit AES-256-GCM）
+  - 生成方法: `python3 -c "import secrets; print(secrets.token_hex(32))"`
+  - 未設定の場合は平文保存のままフォールバック（console.warnを出力）
+  - 既存データのマイグレーション: `DATABASE_URL=... KNOWLEDGE_ENCRYPTION_KEY=... tsx SCRIPTS/encrypt-existing-embeddings.ts`
+
 ## Phase32 (Stream A)
 - STRIPE_SECRET_KEY: Stripe APIシークレットキー（sk_live_xxx / sk_test_xxx） (Stream A, Phase32)
 - STRIPE_WEBHOOK_SECRET: Stripe Webhookエンドポイントシークレット（whsec_xxx） (Stream A, Phase32)

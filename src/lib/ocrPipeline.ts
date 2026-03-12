@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fromPath } from "pdf2pic";
 import { embedTextOpenAI } from "../agent/llm/openaiEmbeddingClient";
+import { encryptText } from "./crypto/textEncrypt";
 
 const CHUNK_SIZE = 500;
 const PAGE_DELAY_MS = 6000;
@@ -110,13 +111,14 @@ async function saveChunk(
 ): Promise<void> {
   const embedding = await embedTextOpenAI(params.chunkText);
   const embedLiteral = `[${embedding.join(",")}]`;
+  const encryptedText = encryptText(params.chunkText);
 
   await pool.query(
     `INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata)
      VALUES ($1, $2, $3::vector, $4)`,
     [
       params.tenantId,
-      params.chunkText,
+      encryptedText,
       embedLiteral,
       {
         source: "book:pdf:qwen-ocr",

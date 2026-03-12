@@ -2,6 +2,7 @@ import { Client as ES } from "@elastic/elasticsearch";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 // @ts-ignore - pg has no bundled types in this project, treat as any
 const { Pool } = require("pg") as { Pool: any };
+import { decryptText } from "../lib/crypto/textEncrypt";
 
 // Phase33 C: 言語別インデックス解決
 import { toSupportedLang, resolveFallbackIndices, DEFAULT_LANG, type SupportedLang } from "./langIndex";
@@ -116,7 +117,7 @@ export async function hybridSearch(
     esElapsedMs = tEs1 - tEs0;
     esHits = (esRes.hits?.hits || []).map((h: any) => ({
       id: h._id,
-      text: h._source?.text,
+      text: decryptText(h._source?.text ?? ""),
       score: h._score,
       source: "es" as const,
     }));
@@ -143,7 +144,7 @@ export async function hybridSearch(
         );
         esHits = (fbRes.hits?.hits || []).map((h: any) => ({
           id: h._id,
-          text: h._source?.text,
+          text: decryptText(h._source?.text ?? ""),
           score: h._score,
           source: "es" as const,
         }));
@@ -187,7 +188,7 @@ export async function hybridSearch(
       notes.push(`probe_ms=${probeMs}`);
       const probeHits = (probe.hits?.hits || []).map((h: any) => ({
         id: h._id,
-        text: h._source?.text,
+        text: decryptText(h._source?.text ?? ""),
         score: h._score,
         source: "es" as const,
       }));
