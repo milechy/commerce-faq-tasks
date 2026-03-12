@@ -92,7 +92,7 @@ export default function AdminDashboard() {
           fetch(`${API_BASE}/admin/faqs?tenantId=demo&limit=1&offset=0`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`${API_BASE}/admin/knowledge?tenantId=demo`, {
+          fetch(`${API_BASE}/v1/admin/knowledge?tenantId=demo`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);

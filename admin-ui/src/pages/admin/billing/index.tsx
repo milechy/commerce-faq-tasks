@@ -245,7 +245,7 @@ export default function BillingPage() {
     try {
       const [summaryRes, invoicesRes] = await Promise.allSettled([
         fetch(
-          `${API_BASE}/v1/admin/billing/summary?tenantId=${selectedTenantId}&month=${selectedMonth}`,
+          `${API_BASE}/v1/admin/billing/usage?tenantId=${selectedTenantId}&month=${selectedMonth}`,
           { headers: { Authorization: `Bearer ${token}` } }
         ),
         fetch(

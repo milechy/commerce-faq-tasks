@@ -37,6 +37,7 @@ import {
   type SalesPhase,
 } from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
+import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
@@ -491,6 +492,9 @@ app.get(
 );
 
 const port = Number(process.env.PORT || 3000);
+
+// Legacy FAQ admin routes (/admin/faqs)
+registerFaqAdminRoutes(app);
 
 // Phase29: ナレッジ管理API
 registerKnowledgeAdminRoutes(app);
