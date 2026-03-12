@@ -79,7 +79,8 @@ export function initAuthMiddleware(opts: AuthMiddlewareOptions = {}) {
       if (payload) {
         req.authUser = payload;
         // CLAUDE.md: tenantId は JWT payload からのみ取得
-        req.tenantId = payload.tenant_id ?? "demo";
+        // Supabase JWT は app_metadata 内に tenant_id を格納するため両方参照
+        req.tenantId = payload.app_metadata?.tenant_id ?? payload.tenant_id ?? "demo";
         return next();
       }
 

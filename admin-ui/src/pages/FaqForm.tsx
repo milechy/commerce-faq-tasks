@@ -1,7 +1,7 @@
 // admin-ui/src/pages/FaqForm.tsx
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { API_BASE } from "../lib/api";
+import { API_BASE, getTenantIdFromSession } from "../lib/api";
 
 type Mode = "create" | "edit";
 
@@ -66,8 +66,9 @@ export default function FaqForm({ mode }: Props) {
         setLoading(true);
         setError(null);
 
+        const tenantId = getTenantIdFromSession() ?? "";
         const res = await fetch(
-          `${API_BASE}/admin/faqs/${id}?tenantId=demo`,
+          `${API_BASE}/admin/faqs/${id}?tenantId=${tenantId}`,
           {
             headers: {
               Authorization: `Bearer ${accessToken}`,
@@ -137,8 +138,9 @@ export default function FaqForm({ mode }: Props) {
 
       let res: Response;
 
+      const tenantId = getTenantIdFromSession() ?? "";
       if (mode === "create") {
-        res = await fetch(`${API_BASE}/admin/faqs?tenantId=demo`, {
+        res = await fetch(`${API_BASE}/admin/faqs?tenantId=${tenantId}`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -149,7 +151,7 @@ export default function FaqForm({ mode }: Props) {
       } else {
         if (!id) throw new Error("Missing FAQ id");
         res = await fetch(
-          `${API_BASE}/admin/faqs/${id}?tenantId=demo`,
+          `${API_BASE}/admin/faqs/${id}?tenantId=${tenantId}`,
           {
             method: "PUT",
             headers: {

@@ -8,8 +8,15 @@ export type SupabaseJwtPayload = jwt.JwtPayload & {
   email?: string;
   role?: string;
 
-  // 将来カスタムクレームに tenant_id を入れる想定
+  // カスタムクレーム (top-level — 後方互換)
   tenant_id?: string;
+
+  // Supabase JWT は app_metadata をペイロードに含める
+  app_metadata?: {
+    role?: string;
+    tenant_id?: string;
+    [key: string]: unknown;
+  };
 };
 
 export function verifySupabaseJwt(

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { API_BASE } from "../../lib/api";
+import { API_BASE, getTenantIdFromSession } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import LangSwitcher from "../../components/LangSwitcher";
 import { useAuth } from "../../auth/useAuth";
@@ -88,11 +88,12 @@ export default function AdminDashboard() {
         setLoading(true);
         setError(null);
 
+        const tenantId = user?.tenantId ?? getTenantIdFromSession() ?? "";
         const [faqRes, bookRes] = await Promise.allSettled([
-          fetch(`${API_BASE}/admin/faqs?tenantId=demo&limit=1&offset=0`, {
+          fetch(`${API_BASE}/admin/faqs?tenantId=${tenantId}&limit=1&offset=0`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`${API_BASE}/v1/admin/knowledge?tenantId=demo`, {
+          fetch(`${API_BASE}/v1/admin/knowledge?tenant=${tenantId}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);
