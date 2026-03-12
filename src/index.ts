@@ -38,6 +38,12 @@ import {
 } from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
+import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
+import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
+import { initUsageTracker } from "./lib/billing/usageTracker";
+import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
+import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
+import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { hybridSearch } from "./search/hybrid";
 import {
   ceFlagFromRerankResult,
@@ -135,6 +141,7 @@ const apiStack = [
   authMiddleware,        // 2. Auth → tenantId
   tenantContext,         // 3. Load TenantConfig
   securityPolicy,        // 4. Per-tenant policy
+  langDetectMiddleware,  // 5. Phase33: Accept-Language → req.lang
 ] as express.RequestHandler[];
 
 logger.info({
@@ -474,6 +481,21 @@ const db = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : null;
 if (db) registerTenantAdminRoutes(app, db);
+
+// Phase32: 課金管理API
+if (db) initUsageTracker(db, logger);
+
+// Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
+app.post(
+  "/v1/billing/webhook",
+  express.raw({ type: "application/json" }),
+  createStripeWebhookHandler(db, logger)
+);
+
+// 課金管理API（Super Admin認証）
+if (db) {
+  registerBillingAdminRoutes(app, db, logger, [supabaseAuthMiddleware, superAdminMiddleware]);
+}
 
 async function startServer() {
   app.listen(port, () => {
