@@ -402,6 +402,31 @@ export default function AdminDashboard() {
                 <span style={{ fontSize: 22 }}>🏢</span>
                 テナントを管理する
               </button>
+
+              <button
+                onClick={() => navigate("/admin/billing")}
+                style={{
+                  flex: "1 1 200px",
+                  padding: "18px 20px",
+                  minHeight: 56,
+                  borderRadius: 12,
+                  border: "1px solid #1f2937",
+                  background: "rgba(15,23,42,0.8)",
+                  color: "#e5e7eb",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  transition: "border-color 0.15s",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
+              >
+                <span style={{ fontSize: 22 }}>💰</span>
+                請求・使用量を確認する
+              </button>
             </div>
           </section>
 
