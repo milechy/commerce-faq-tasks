@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../../lib/api";
 import UsageChart from "../../../components/UsageChart";
+import { useLang } from "../../../i18n/LangContext";
+import LangSwitcher from "../../../components/LangSwitcher";
 
 // ─── 型定義 ────────────────────────────────────────────────
 interface Tenant {
@@ -57,52 +59,8 @@ function fmtNum(n: number): string {
   return n.toLocaleString("ja-JP");
 }
 
-// ─── 請求ステータスバッジ ──────────────────────────────────
-function StatusBadge({ status }: { status: BillingSummary["billing_status"] }) {
-  const map: Record<
-    BillingSummary["billing_status"],
-    { label: string; bg: string; color: string }
-  > = {
-    pending: { label: "未請求", bg: "rgba(234,179,8,0.15)", color: "#fbbf24" },
-    invoiced: { label: "請求済み", bg: "rgba(34,197,94,0.15)", color: "#4ade80" },
-    error: { label: "エラー", bg: "rgba(239,68,68,0.15)", color: "#f87171" },
-  };
-  const s = map[status];
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "3px 12px",
-        borderRadius: 999,
-        fontSize: 13,
-        fontWeight: 600,
-        background: s.bg,
-        color: s.color,
-      }}
-    >
-      {s.label}
-    </span>
-  );
-}
-
-// ─── 請求書ステータスバッジ ────────────────────────────────
-function InvoiceStatusBadge({ status }: { status: Invoice["status"] }) {
-  const map: Record<Invoice["status"], { label: string; color: string }> = {
-    paid: { label: "支払い済み", color: "#4ade80" },
-    open: { label: "お支払い待ち", color: "#fbbf24" },
-    draft: { label: "作成中", color: "#9ca3af" },
-  };
-  const s = map[status];
-  return (
-    <span style={{ fontSize: 13, fontWeight: 600, color: s.color }}>
-      {s.label}
-    </span>
-  );
-}
-
 // ─── CSVエクスポート ───────────────────────────────────────
-function exportCsv(data: DailyUsage[], tenantName: string, month: string) {
-  const header = "日付,リクエスト数,入力トークン,出力トークン,コスト(円)";
+function exportCsv(data: DailyUsage[], tenantName: string, month: string, header: string) {
   const rows = data.map((d) =>
     [
       d.date,
@@ -211,6 +169,7 @@ const BTN_LINK: React.CSSProperties = {
 // ─── メインページ ─────────────────────────────────────────
 export default function BillingPage() {
   const navigate = useNavigate();
+  const { t } = useLang();
 
   const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -253,7 +212,6 @@ export default function BillingPage() {
             setSelectedTenantId(data.tenants[0].id);
           }
         } else {
-          // TODO: API実装後にモック削除
           const mocks: Tenant[] = [
             { id: "tenant_001", name: "サンプル株式会社" },
             { id: "tenant_002", name: "テストコーポレーション" },
@@ -296,7 +254,6 @@ export default function BillingPage() {
         ),
       ]);
 
-      // TODO: API実装後にモック削除
       const mockDaily = buildMockDaily(selectedMonth);
 
       if (summaryRes.status === "fulfilled" && summaryRes.value.ok) {
@@ -318,17 +275,64 @@ export default function BillingPage() {
         setInvoices(MOCK_INVOICES);
       }
     } catch {
-      setError("データの読み込みに失敗しました。しばらくしてからもう一度お試しください。");
+      setError(t("billing.load_error"));
     } finally {
       setLoadingData(false);
     }
-  }, [selectedTenantId, selectedMonth, navigate]);
+  }, [selectedTenantId, selectedMonth, navigate, t]);
 
   useEffect(() => {
     fetchBillingData();
   }, [fetchBillingData]);
 
   const selectedTenant = tenants.find((t) => t.id === selectedTenantId);
+
+  // 請求ステータスバッジ
+  const statusBadge = (status: BillingSummary["billing_status"]) => {
+    const map = {
+      pending: { label: t("billing.status_pending"), bg: "rgba(234,179,8,0.15)", color: "#fbbf24" },
+      invoiced: { label: t("billing.status_invoiced"), bg: "rgba(34,197,94,0.15)", color: "#4ade80" },
+      error: { label: t("billing.status_error"), bg: "rgba(239,68,68,0.15)", color: "#f87171" },
+    };
+    const s = map[status];
+    return (
+      <span
+        style={{
+          display: "inline-block",
+          padding: "3px 12px",
+          borderRadius: 999,
+          fontSize: 13,
+          fontWeight: 600,
+          background: s.bg,
+          color: s.color,
+        }}
+      >
+        {s.label}
+      </span>
+    );
+  };
+
+  // 請求書ステータスバッジ
+  const invoiceStatusBadge = (status: Invoice["status"]) => {
+    const map = {
+      paid: { label: t("billing.invoice_paid"), color: "#4ade80" },
+      open: { label: t("billing.invoice_open"), color: "#fbbf24" },
+      draft: { label: t("billing.invoice_draft"), color: "#9ca3af" },
+    };
+    const s = map[status];
+    return (
+      <span style={{ fontSize: 13, fontWeight: 600, color: s.color }}>
+        {s.label}
+      </span>
+    );
+  };
+
+  // 概要タイトル: "2026年03月 — テナント名 の概要"
+  const summaryTitle = (() => {
+    const [year, mon] = selectedMonth.split("-");
+    const monthLabel = `${year}/${mon}`;
+    return t("billing.summary_title", { month: monthLabel, tenant: selectedTenant?.name ?? "—" });
+  })();
 
   // ─── レンダリング ────────────────────────────────────────
   return (
@@ -364,15 +368,16 @@ export default function BillingPage() {
               color: "#9ca3af",
             }}
           >
-            ← 管理ダッシュボードへ戻る
+            {t("billing.back")}
           </button>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            💰 請求・使用量
+            {t("billing.title")}
           </h1>
           <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            テナントごとのご利用状況とお支払い情報
+            {t("billing.subtitle")}
           </p>
         </div>
+        <LangSwitcher />
       </header>
 
       {/* エラー */}
@@ -400,7 +405,7 @@ export default function BillingPage() {
               htmlFor="tenant-select"
               style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}
             >
-              テナントを選択
+              {t("billing.tenant_select")}
             </label>
             <select
               id="tenant-select"
@@ -418,9 +423,9 @@ export default function BillingPage() {
                 cursor: "pointer",
               }}
             >
-              {tenants.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              {tenants.map((tenant) => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
                 </option>
               ))}
             </select>
@@ -431,7 +436,7 @@ export default function BillingPage() {
               htmlFor="month-select"
               style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}
             >
-              対象月
+              {t("billing.month_select")}
             </label>
             <input
               id="month-select"
@@ -467,14 +472,14 @@ export default function BillingPage() {
           }}
         >
           <span style={{ marginRight: 8 }}>⏳</span>
-          情報を読み込んでいます...
+          {t("billing.loading")}
         </div>
       ) : summary ? (
         <>
           {/* 概要カード */}
           <section style={{ marginBottom: 20 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              {selectedMonth.replace("-", "年")}月 — {selectedTenant?.name ?? "—"} の概要
+              {summaryTitle}
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               {/* リクエスト数 */}
@@ -484,10 +489,10 @@ export default function BillingPage() {
                   {fmtNum(summary.total_requests)}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
-                  今月のリクエスト数
+                  {t("billing.total_requests")}
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  AI処理量: {fmtNum(summary.total_input_tokens + summary.total_output_tokens)} トークン
+                  {t("billing.ai_processing", { n: fmtNum(summary.total_input_tokens + summary.total_output_tokens) })}
                 </div>
               </div>
 
@@ -498,10 +503,10 @@ export default function BillingPage() {
                   {fmtCents(summary.cost_llm_cents)}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
-                  AIコスト（原価）
+                  {t("billing.ai_cost")}
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  Groq API利用料
+                  {t("billing.ai_cost_sub")}
                 </div>
               </div>
 
@@ -512,10 +517,10 @@ export default function BillingPage() {
                   {fmtCents(summary.cost_total_cents)}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
-                  今月の請求額
+                  {t("billing.total_amount")}
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  手数料・マージン含む
+                  {t("billing.total_amount_sub")}
                 </div>
               </div>
 
@@ -523,13 +528,13 @@ export default function BillingPage() {
               <div style={{ ...CARD, flex: "1 1 140px" }}>
                 <div style={{ fontSize: 26, marginBottom: 4 }}>💳</div>
                 <div style={{ marginTop: 4 }}>
-                  <StatusBadge status={summary.billing_status} />
+                  {statusBadge(summary.billing_status)}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 8 }}>
-                  お支払い状況
+                  {t("billing.payment_status")}
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  今月の請求ステータス
+                  {t("billing.payment_status_sub")}
                 </div>
               </div>
             </div>
@@ -539,7 +544,7 @@ export default function BillingPage() {
           <section style={{ ...CARD, marginBottom: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
-                日次使用量グラフ
+                {t("billing.chart_title")}
               </h2>
               <div style={{ display: "flex", gap: 8 }}>
                 <button
@@ -556,7 +561,7 @@ export default function BillingPage() {
                     cursor: "pointer",
                   }}
                 >
-                  リクエスト数
+                  {t("billing.requests")}
                 </button>
                 <button
                   onClick={() => setChartMode("cost")}
@@ -572,7 +577,7 @@ export default function BillingPage() {
                     cursor: "pointer",
                   }}
                 >
-                  コスト
+                  {t("billing.cost")}
                 </button>
               </div>
             </div>
@@ -583,12 +588,12 @@ export default function BillingPage() {
           <section style={{ ...CARD, marginBottom: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
-                日次使用量
+                {t("billing.daily_title")}
               </h2>
               <button
                 onClick={() => {
-                  exportCsv(daily, selectedTenant?.name ?? "tenant", selectedMonth);
-                  showToast("CSVをダウンロードしました");
+                  exportCsv(daily, selectedTenant?.name ?? "tenant", selectedMonth, t("billing.csv_header"));
+                  showToast(t("billing.csv_downloaded"));
                 }}
                 style={{
                   ...BTN_LINK,
@@ -597,7 +602,7 @@ export default function BillingPage() {
                   minHeight: 44,
                 }}
               >
-                📥 CSVダウンロード
+                {t("billing.csv_download")}
               </button>
             </div>
 
@@ -605,7 +610,7 @@ export default function BillingPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 480 }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid #1f2937" }}>
-                    {["日付", "リクエスト数", "AI処理量", "コスト"].map((h) => (
+                    {[t("billing.col_date"), t("billing.col_requests"), t("billing.col_ai"), t("billing.col_cost")].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -643,7 +648,7 @@ export default function BillingPage() {
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: "1px solid #374151" }}>
-                    <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>合計</td>
+                    <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>{t("billing.total")}</td>
                     <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>
                       {fmtNum(summary.total_requests)}
                     </td>
@@ -662,69 +667,73 @@ export default function BillingPage() {
           {/* 請求履歴 */}
           <section style={{ ...CARD, marginBottom: 32 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 16, margin: "0 0 16px" }}>
-              請求書履歴
+              {t("billing.invoice_title")}
             </h2>
 
             {invoices.length === 0 ? (
               <div style={{ textAlign: "center", padding: "24px", color: "#6b7280", fontSize: 14 }}>
-                請求書がまだありません
+                {t("billing.invoice_empty")}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {invoices.map((inv) => (
-                  <div
-                    key={inv.id}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      padding: "14px 16px",
-                      borderRadius: 10,
-                      border: "1px solid #1f2937",
-                      background: "rgba(0,0,0,0.2)",
-                      flexWrap: "wrap",
-                      gap: 12,
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb" }}>
-                        {inv.month.replace("-", "年")}月分
+                {invoices.map((inv) => {
+                  const [year, mon] = inv.month.split("-");
+                  const monthLabel = `${year}/${mon}`;
+                  return (
+                    <div
+                      key={inv.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "14px 16px",
+                        borderRadius: 10,
+                        border: "1px solid #1f2937",
+                        background: "rgba(0,0,0,0.2)",
+                        flexWrap: "wrap",
+                        gap: 12,
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb" }}>
+                          {t("billing.invoice_month", { month: monthLabel })}
+                        </div>
+                        <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 2 }}>
+                          {t("billing.invoice_amount", { amount: fmtCents(inv.amount_cents) })} &nbsp;|&nbsp;{" "}
+                          {invoiceStatusBadge(inv.status)}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 2 }}>
-                        請求額: {fmtCents(inv.amount_cents)} &nbsp;|&nbsp;{" "}
-                        <InvoiceStatusBadge status={inv.status} />
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <a
+                          href={inv.invoice_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            ...BTN_LINK,
+                            fontSize: 14,
+                            padding: "10px 16px",
+                          }}
+                        >
+                          {t("billing.view_invoice")}
+                        </a>
+                        <a
+                          href={inv.portal_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            ...BTN_LINK,
+                            fontSize: 14,
+                            padding: "10px 16px",
+                            borderColor: "#22c55e",
+                            color: "#4ade80",
+                          }}
+                        >
+                          {t("billing.change_payment")}
+                        </a>
                       </div>
                     </div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <a
-                        href={inv.invoice_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          ...BTN_LINK,
-                          fontSize: 14,
-                          padding: "10px 16px",
-                        }}
-                      >
-                        📄 請求書を見る
-                      </a>
-                      <a
-                        href={inv.portal_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          ...BTN_LINK,
-                          fontSize: 14,
-                          padding: "10px 16px",
-                          borderColor: "#22c55e",
-                          color: "#4ade80",
-                        }}
-                      >
-                        💳 支払い設定を変更
-                      </a>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

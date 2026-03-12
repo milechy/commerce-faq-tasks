@@ -4,6 +4,8 @@ import FileUpload from "../../../components/admin/FileUpload";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../components/KnowledgeFaqEditModal";
+import { useLang } from "../../../i18n/LangContext";
+import LangSwitcher from "../../../components/LangSwitcher";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -51,13 +53,6 @@ type Category = "inventory" | "campaign" | "coupon" | "store_info";
 
 const TENANT = "carnation";
 
-const CATEGORIES: { value: Category; label: string }[] = [
-  { value: "inventory", label: "在庫・車両情報" },
-  { value: "campaign", label: "キャンペーン・セール" },
-  { value: "coupon", label: "クーポン・割引" },
-  { value: "store_info", label: "店舗情報・アクセス" },
-];
-
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
 async function getAccessToken(): Promise<string | null> {
@@ -87,7 +82,6 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
   const res = await makeRequest(token);
 
   if (res.status === 401 || res.status === 403) {
-    // リフレッシュしてリトライ
     const { data } = await supabase.auth.refreshSession();
     const refreshedToken = data.session?.access_token ?? null;
     if (!refreshedToken) throw new Error("__AUTH_REQUIRED__");
@@ -97,8 +91,8 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
   return res;
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("ja-JP", {
+function formatDate(iso: string, locale: string): string {
+  return new Date(iso).toLocaleDateString(locale, {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -168,6 +162,16 @@ const SELECT_STYLE: React.CSSProperties = {
 
 function KnowledgeListTab() {
   const navigate = useNavigate();
+  const { t, lang } = useLang();
+  const locale = lang === "en" ? "en-US" : "ja-JP";
+
+  const CATEGORIES = [
+    { value: "inventory", label: t("category.inventory") },
+    { value: "campaign", label: t("category.campaign") },
+    { value: "coupon", label: t("category.coupon") },
+    { value: "store_info", label: t("category.store_info") },
+  ];
+
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -202,7 +206,7 @@ function KnowledgeListTab() {
       if (categoryFilter !== "all") params.set("category", categoryFilter);
 
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?${params}`);
-      if (!res.ok) throw new Error("読み込みに失敗しました。もう一度お試しください 🙏");
+      if (!res.ok) throw new Error(t("knowledge.load_error"));
       const data = (await res.json()) as { items: KnowledgeItem[] };
       setItems(data.items ?? []);
     } catch (err) {
@@ -210,11 +214,11 @@ function KnowledgeListTab() {
         navigate("/login", { replace: true });
         return;
       }
-      setError(err instanceof Error ? err.message : "エラーが発生しました");
+      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
     } finally {
       setLoading(false);
     }
-  }, [navigate, categoryFilter]);
+  }, [navigate, categoryFilter, t]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
@@ -227,7 +231,7 @@ function KnowledgeListTab() {
         `${API_BASE}/v1/admin/knowledge/${deleteTarget.id}?tenant=${TENANT}`,
         { method: "DELETE" }
       );
-      if (!res.ok) throw new Error("削除に失敗しました。もう一度お試しください 🙏");
+      if (!res.ok) throw new Error(t("knowledge.delete_error"));
       setDeleteTarget((prev) => prev ? { ...prev, state: "success" } : null);
       setItems((prev) => prev.filter((i) => i.id !== deleteTarget.id));
       setTimeout(() => setDeleteTarget(null), 2000);
@@ -237,14 +241,14 @@ function KnowledgeListTab() {
         return;
       }
       setDeleteTarget((prev) =>
-        prev ? { ...prev, state: "error", error: err instanceof Error ? err.message : "エラーが発生しました" } : null
+        prev ? { ...prev, state: "error", error: err instanceof Error ? err.message : t("knowledge.delete_error") } : null
       );
     }
   };
 
   const categoryLabel = (cat: string | null) => {
     const found = CATEGORIES.find((c) => c.value === cat);
-    return found ? found.label : cat ?? "未分類";
+    return found ? found.label : cat ?? t("knowledge.uncategorized");
   };
 
   return (
@@ -272,13 +276,13 @@ function KnowledgeListTab() {
         }}
       >
         <span style={{ fontSize: 22 }}>＋</span>
-        新しいFAQを追加する
+        {t("knowledge.add_faq")}
       </button>
 
       {/* フィルター */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ fontSize: 14, color: "#9ca3af" }}>カテゴリ絞り込み:</span>
-        {[{ value: "all", label: "すべて" }, ...CATEGORIES].map((c) => (
+        <span style={{ fontSize: 14, color: "#9ca3af" }}>{t("knowledge.category_filter")}</span>
+        {[{ value: "all", label: t("knowledge.all") }, ...CATEGORIES].map((c) => (
           <button
             key={c.value}
             onClick={() => setCategoryFilter(c.value)}
@@ -311,7 +315,7 @@ function KnowledgeListTab() {
             cursor: loading ? "default" : "pointer",
           }}
         >
-          {loading ? "読み込み中..." : "🔄 更新"}
+          {loading ? t("knowledge.refreshing") : t("common.refresh")}
         </button>
       </div>
 
@@ -324,22 +328,22 @@ function KnowledgeListTab() {
       {loading && items.length === 0 ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
-          読み込んでいます...
+          {t("knowledge.loading")}
         </div>
       ) : items.length === 0 ? (
         <div style={{ padding: 40, textAlign: "center", borderRadius: 14, border: "1px dashed #374151", background: "rgba(15,23,42,0.4)" }}>
           <span style={{ display: "block", fontSize: 40, marginBottom: 12 }}>📭</span>
           <p style={{ fontSize: 16, fontWeight: 600, color: "#d1d5db", margin: 0 }}>
-            まだナレッジが登録されていません
+            {t("knowledge.empty_title")}
           </p>
           <p style={{ fontSize: 13, color: "#6b7280", marginTop: 6, marginBottom: 0 }}>
-            「テキスト入力」または「URLから取得」タブで情報を登録してください
+            {t("knowledge.empty_sub")}
           </p>
         </div>
       ) : (
         <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "12px 18px", borderBottom: "1px solid #111827", fontSize: 13, color: "#6b7280" }}>
-            {items.length}件のナレッジ
+            {t("knowledge.count", { n: items.length })}
           </div>
           {items.map((item, idx) => (
             <div
@@ -366,7 +370,7 @@ function KnowledgeListTab() {
                   }}>
                     {categoryLabel(item.category)}
                   </span>
-                  <span style={{ fontSize: 11, color: "#6b7280" }}>{formatDate(item.created_at)}</span>
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>{formatDate(item.created_at, locale)}</span>
                 </div>
                 <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 4px", lineHeight: 1.4 }}>
                   Q: {item.question}
@@ -400,13 +404,13 @@ function KnowledgeListTab() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  ✏️ 編集
+                  {t("knowledge.edit")}
                 </button>
                 <button
                   onClick={() => setDeleteTarget({ id: item.id, question: item.question, state: "confirming" })}
                   style={BTN_DANGER}
                 >
-                  削除
+                  {t("knowledge.delete")}
                 </button>
               </div>
             </div>
@@ -467,14 +471,14 @@ function KnowledgeListTab() {
             {deleteTarget.state === "success" ? (
               <div style={{ textAlign: "center" }}>
                 <span style={{ fontSize: 48, display: "block", marginBottom: 12 }}>✅</span>
-                <p style={{ fontSize: 17, fontWeight: 600, color: "#4ade80", margin: 0 }}>削除しました</p>
+                <p style={{ fontSize: 17, fontWeight: 600, color: "#4ade80", margin: 0 }}>{t("knowledge.deleted")}</p>
               </div>
             ) : (
               <>
-                <h3 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>本当に削除しますか？</h3>
+                <h3 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>{t("knowledge.delete_confirm_title")}</h3>
                 <p style={{ fontSize: 14, color: "#d1d5db", margin: "0 0 6px" }}>Q: {deleteTarget.question}</p>
                 <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 20px", lineHeight: 1.6 }}>
-                  削除するとAIがこの情報を参照できなくなります。この操作は取り消せません。
+                  {t("knowledge.delete_confirm_body")}
                 </p>
                 {deleteTarget.state === "error" && deleteTarget.error && (
                   <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "rgba(127,29,29,0.4)", color: "#fca5a5", fontSize: 14 }}>
@@ -487,14 +491,14 @@ function KnowledgeListTab() {
                     disabled={deleteTarget.state === "deleting"}
                     style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 10, border: "1px solid #374151", background: "transparent", color: "#e5e7eb", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
                   >
-                    やめる
+                    {t("knowledge.cancel_delete")}
                   </button>
                   <button
                     onClick={handleDelete}
                     disabled={deleteTarget.state === "deleting"}
                     style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 10, border: "none", background: "linear-gradient(135deg, #991b1b, #dc2626)", color: "#fee2e2", fontSize: 15, fontWeight: 700, cursor: deleteTarget.state === "deleting" ? "not-allowed" : "pointer" }}
                   >
-                    {deleteTarget.state === "deleting" ? "削除中..." : "削除する"}
+                    {deleteTarget.state === "deleting" ? t("common.deleting") : t("knowledge.confirm_delete")}
                   </button>
                 </div>
               </>
@@ -510,6 +514,15 @@ function KnowledgeListTab() {
 
 function TextInputTab() {
   const navigate = useNavigate();
+  const { t } = useLang();
+
+  const CATEGORIES = [
+    { value: "inventory", label: t("category.inventory") },
+    { value: "campaign", label: t("category.campaign") },
+    { value: "coupon", label: t("category.coupon") },
+    { value: "store_info", label: t("category.store_info") },
+  ];
+
   const [text, setText] = useState("");
   const [category, setCategory] = useState<Category>("inventory");
   const [converting, setConverting] = useState(false);
@@ -520,7 +533,7 @@ function TextInputTab() {
 
   const handleConvert = async () => {
     if (text.trim().length < 10) {
-      setError("10文字以上のテキストを入力してください");
+      setError(t("knowledge.text_min_error"));
       return;
     }
 
@@ -536,14 +549,14 @@ function TextInputTab() {
         body: JSON.stringify({ text: text.trim(), category }),
       });
       const data = (await res.json()) as { ok?: boolean; preview?: FaqEntry[]; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "変換に失敗しました");
+      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
       setPreview(data.preview ?? []);
     } catch (err) {
       if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
         navigate("/login", { replace: true });
         return;
       }
-      setError(err instanceof Error ? err.message : "エラーが発生しました。もう一度お試しください 🙏");
+      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
     } finally {
       setConverting(false);
     }
@@ -561,8 +574,8 @@ function TextInputTab() {
         body: JSON.stringify({ faqs: preview, category }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "登録に失敗しました");
-      setSuccess(`✅ ${data.inserted}件のFAQをAIナレッジに登録しました！`);
+      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
+      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
       setPreview(null);
       setText("");
     } catch (err) {
@@ -570,7 +583,7 @@ function TextInputTab() {
         navigate("/login", { replace: true });
         return;
       }
-      setError(err instanceof Error ? err.message : "登録に失敗しました。もう一度お試しください 🙏");
+      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
     } finally {
       setCommitting(false);
     }
@@ -580,23 +593,22 @@ function TextInputTab() {
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={CARD_STYLE}>
         <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
-          情報を貼り付けてください
+          {t("knowledge.text_title")}
         </h3>
         <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px", lineHeight: 1.6 }}>
-          在庫情報・キャンペーン内容・クーポン情報など、AIに覚えさせたいテキストを貼り付けてください。
-          AIが自動でよくある質問と回答に変換します。
+          {t("knowledge.text_desc")}
         </p>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="例：2024年式 トヨタ プリウス 走行距離3万km、車体色シルバー、修復歴なし、車検2年付き、価格198万円..."
+          placeholder={t("knowledge.text_placeholder")}
           style={TEXTAREA_STYLE}
         />
       </div>
 
       <div style={CARD_STYLE}>
         <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}>
-          情報のカテゴリを選んでください
+          {t("knowledge.category_label")}
         </label>
         <select
           value={category}
@@ -631,18 +643,17 @@ function TextInputTab() {
             cursor: converting || text.trim().length < 10 ? "not-allowed" : "pointer",
           }}
         >
-          {converting ? "⏳ AIが変換中です..." : "🤖 AIで自動変換する"}
+          {converting ? t("knowledge.converting") : t("knowledge.convert")}
         </button>
       )}
 
-      {/* プレビュー */}
       {preview && preview.length > 0 && (
         <div>
           <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>
-            変換結果 — {preview.length}件のFAQが生成されました
+            {t("knowledge.preview_title", { n: preview.length })}
           </h3>
           <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px" }}>
-            内容を確認して「登録する」ボタンを押してください。
+            {t("knowledge.preview_desc")}
           </p>
           <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden", marginBottom: 16 }}>
             {preview.map((faq, idx) => (
@@ -667,14 +678,14 @@ function TextInputTab() {
               onClick={() => setPreview(null)}
               style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 12, border: "1px solid #374151", background: "transparent", color: "#e5e7eb", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
             >
-              やり直す
+              {t("common.retry")}
             </button>
             <button
               onClick={handleCommit}
               disabled={committing}
               style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: committing ? 0.6 : 1 }}
             >
-              {committing ? "⏳ 登録中..." : "✅ この内容で登録する"}
+              {committing ? t("knowledge.committing") : t("knowledge.commit")}
             </button>
           </div>
         </div>
@@ -687,6 +698,15 @@ function TextInputTab() {
 
 function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
   const navigate = useNavigate();
+  const { t } = useLang();
+
+  const CATEGORIES = [
+    { value: "inventory", label: t("category.inventory") },
+    { value: "campaign", label: t("category.campaign") },
+    { value: "coupon", label: t("category.coupon") },
+    { value: "store_info", label: t("category.store_info") },
+  ];
+
   const [urls, setUrls] = useState("");
   const [category, setCategory] = useState<Category>("store_info");
   const [loading, setLoading] = useState(false);
@@ -702,11 +722,11 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
       .filter((u) => u.length > 0);
 
     if (urlList.length === 0) {
-      setError("URLを1行に1つずつ入力してください");
+      setError(t("knowledge.url_required"));
       return;
     }
     if (urlList.length > 5) {
-      setError("一度に処理できるURLは最大5件です");
+      setError(t("knowledge.url_max"));
       return;
     }
 
@@ -726,14 +746,14 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
         return;
       }
       const data = (await res.json()) as { ok?: boolean; preview?: ScrapePreviewItem[]; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "取得に失敗しました");
+      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
       setPreview(data.preview ?? []);
     } catch (err) {
       if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
         navigate("/login", { replace: true });
         return;
       }
-      setError(err instanceof Error ? err.message : "エラーが発生しました。もう一度お試しください 🙏");
+      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
     } finally {
       setLoading(false);
     }
@@ -754,8 +774,8 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
         body: JSON.stringify({ items: validItems, category }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "登録に失敗しました");
-      setSuccess(`✅ ${data.inserted}件のFAQをAIナレッジに登録しました！`);
+      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
+      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
       setPreview(null);
       setUrls("");
       onCommitSuccess();
@@ -764,7 +784,7 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
         navigate("/login", { replace: true });
         return;
       }
-      setError(err instanceof Error ? err.message : "登録に失敗しました。もう一度お試しください 🙏");
+      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
     } finally {
       setCommitting(false);
     }
@@ -778,23 +798,22 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
         <>
           <div style={CARD_STYLE}>
             <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
-              WebサイトのURLを入力してください
+              {t("knowledge.scrape_title")}
             </h3>
             <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px", lineHeight: 1.6 }}>
-              1行に1つのURLを入力してください（最大5件）。
-              AIがページの内容を読み取り、FAQに変換します。
+              {t("knowledge.scrape_desc")}
             </p>
             <textarea
               value={urls}
               onChange={(e) => setUrls(e.target.value)}
-              placeholder={"https://example.com/campaign\nhttps://example.com/store"}
+              placeholder={t("knowledge.scrape_placeholder")}
               style={{ ...TEXTAREA_STYLE, minHeight: 120, fontFamily: "monospace" }}
             />
           </div>
 
           <div style={CARD_STYLE}>
             <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}>
-              情報のカテゴリを選んでください
+              {t("knowledge.category_label")}
             </label>
             <select
               value={category}
@@ -825,7 +844,7 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
         <div style={{ padding: "20px", textAlign: "center", ...CARD_STYLE }}>
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
           <p style={{ fontSize: 15, color: "#93c5fd", margin: 0 }}>
-            AIがページを読み取り中です... しばらくお待ちください
+            {t("knowledge.scraping")}
           </p>
         </div>
       )}
@@ -840,18 +859,17 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
             cursor: urls.trim().length === 0 ? "not-allowed" : "pointer",
           }}
         >
-          🌐 AIで内容を取得する
+          {t("knowledge.fetch")}
         </button>
       )}
 
-      {/* プレビュー */}
       {preview && preview.length > 0 && (
         <div>
           <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>
-            取得結果 — 合計{totalFaqs}件のFAQが生成されました
+            {t("knowledge.scrape_preview_title", { n: totalFaqs })}
           </h3>
           <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px" }}>
-            内容を確認して「登録する」ボタンを押してください。
+            {t("knowledge.scrape_preview_desc")}
           </p>
 
           {preview.map((item) => (
@@ -861,7 +879,7 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
               </div>
               {item.error ? (
                 <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 13 }}>
-                  ⚠️ 取得に失敗しました: {item.error}
+                  {t("knowledge.scrape_fetch_failed", { error: item.error })}
                 </div>
               ) : (
                 <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
@@ -891,14 +909,14 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
               onClick={() => { setPreview(null); setError(null); }}
               style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 12, border: "1px solid #374151", background: "transparent", color: "#e5e7eb", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
             >
-              やり直す
+              {t("common.retry")}
             </button>
             <button
               onClick={handleCommit}
               disabled={committing || totalFaqs === 0}
               style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: (committing || totalFaqs === 0) ? 0.6 : 1 }}
             >
-              {committing ? "⏳ 登録中..." : "✅ この内容で登録する"}
+              {committing ? t("knowledge.committing") : t("knowledge.commit")}
             </button>
           </div>
         </div>
@@ -910,6 +928,7 @@ function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
 // ─── PDFアップロードセクション（既存機能） ────────────────────────────────────
 
 function PdfSection() {
+  const { t } = useLang();
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<OcrJobStatus | null>(null);
@@ -923,7 +942,7 @@ function PdfSection() {
       const data = (await res.json()) as { items?: unknown[]; count?: number };
       setBooks((data.items ?? []) as BookMetadata[]);
     } catch {
-      // ignore (認証エラーを含む)
+      // ignore
     }
   }, []);
 
@@ -943,7 +962,7 @@ function PdfSection() {
           if (data.status === "done") fetchBooks();
         }
       } catch {
-        // ignore (認証エラーを含む)
+        // ignore
       }
     };
     void poll();
@@ -954,7 +973,7 @@ function PdfSection() {
   return (
     <div style={{ ...CARD_STYLE, marginBottom: 24 }}>
       <h3 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 12px" }}>
-        PDF資料のアップロード（OCR）
+        {t("knowledge.pdf_title")}
       </h3>
       <FileUpload
         uploadEndpoint="/v1/admin/knowledge/pdf"
@@ -966,7 +985,7 @@ function PdfSection() {
       />
       {uploadSuccess && (
         <div style={{ marginTop: 10, padding: "12px 16px", borderRadius: 10, background: "rgba(5,46,22,0.5)", border: "1px solid rgba(74,222,128,0.3)", color: "#86efac", fontSize: 14 }}>
-          ✅ 「{uploadSuccess}」を受け付けました！AIが内容の確認を開始しました。
+          {t("knowledge.pdf_accepted", { name: uploadSuccess })}
         </div>
       )}
       {jobStatus && (
@@ -976,14 +995,14 @@ function PdfSection() {
           background: jobStatus.status === "done" ? "rgba(5,46,22,0.5)" : jobStatus.status === "failed" ? "rgba(127,29,29,0.4)" : "rgba(23,37,84,0.5)",
           color: jobStatus.status === "done" ? "#86efac" : jobStatus.status === "failed" ? "#fca5a5" : "#93c5fd",
         }}>
-          {jobStatus.status === "processing" && "⏳ AIが書籍を読み込み中です..."}
-          {jobStatus.status === "done" && `✅ OCR完了！ ${jobStatus.pages}ページ / ${jobStatus.chunks}チャンク追加`}
-          {jobStatus.status === "failed" && `⚠️ 失敗しました。${jobStatus.error ?? "再試行してください。"}`}
+          {jobStatus.status === "processing" && t("knowledge.pdf_processing")}
+          {jobStatus.status === "done" && t("knowledge.pdf_done", { pages: jobStatus.pages ?? 0, chunks: jobStatus.chunks ?? 0 })}
+          {jobStatus.status === "failed" && t("knowledge.pdf_failed", { error: jobStatus.error ?? "" })}
         </div>
       )}
       {books.length > 0 && (
         <p style={{ fontSize: 12, color: "#6b7280", margin: "10px 0 0" }}>
-          登録済みPDF: {books.length}件
+          {t("knowledge.pdf_registered", { n: books.length })}
         </p>
       )}
     </div>
@@ -994,6 +1013,7 @@ function PdfSection() {
 
 export default function KnowledgePage() {
   const navigate = useNavigate();
+  const { t } = useLang();
   const [activeTab, setActiveTab] = useState<Tab>("list");
 
   useEffect(() => {
@@ -1004,9 +1024,9 @@ export default function KnowledgePage() {
   }, [navigate]);
 
   const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: "list", label: "ナレッジ一覧", icon: "📋" },
-    { id: "text", label: "テキスト入力", icon: "✏️" },
-    { id: "scrape", label: "URLから取得", icon: "🌐" },
+    { id: "list", label: t("knowledge.tab_list"), icon: "📋" },
+    { id: "text", label: t("knowledge.tab_text"), icon: "✏️" },
+    { id: "scrape", label: t("knowledge.tab_scrape"), icon: "🌐" },
   ];
 
   return (
@@ -1021,17 +1041,20 @@ export default function KnowledgePage() {
       }}
     >
       <header style={{ marginBottom: 28 }}>
-        <button
-          onClick={() => navigate("/admin")}
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 0", border: "none", background: "none", color: "#9ca3af", fontSize: 13, cursor: "pointer", marginBottom: 8 }}
-        >
-          ← ダッシュボードに戻る
-        </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+          <button
+            onClick={() => navigate("/admin")}
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 0", border: "none", background: "none", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+          >
+            {t("common.back_to_dashboard")}
+          </button>
+          <LangSwitcher />
+        </div>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-          ナレッジ管理
+          {t("knowledge.title")}
         </h1>
         <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-          在庫・キャンペーン・クーポン情報を登録してAIに覚えさせましょう
+          {t("knowledge.subtitle")}
         </p>
       </header>
 

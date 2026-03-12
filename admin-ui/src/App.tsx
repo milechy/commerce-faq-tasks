@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./App.css";
+import { LangProvider } from "./i18n/LangContext";
 import FaqList from "./pages/FaqList";
 import FaqForm from "./pages/FaqForm";
 import Login from "./pages/Login";
@@ -12,6 +13,7 @@ import BillingPage from "./pages/admin/billing/index";
 
 export default function App() {
   return (
+    <LangProvider>
     <BrowserRouter>
       <Routes>
         {/* ログイン画面 */}
@@ -47,5 +49,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
     </BrowserRouter>
+    </LangProvider>
   );
 }
