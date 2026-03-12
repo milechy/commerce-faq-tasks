@@ -8,6 +8,7 @@ import KnowledgePage from "./pages/admin/knowledge/index";
 import MonitoringPage from "./pages/admin/monitoring/index";
 import TenantsPage from "./pages/admin/tenants/index";
 import TenantDetailPage from "./pages/admin/tenants/[id]";
+import BillingPage from "./pages/admin/billing/index";
 
 export default function App() {
   return (
@@ -31,6 +32,9 @@ export default function App() {
         {/* テナント管理 */}
         <Route path="/admin/tenants" element={<TenantsPage />} />
         <Route path="/admin/tenants/:id" element={<TenantDetailPage />} />
+
+        {/* 請求・使用量 */}
+        <Route path="/admin/billing" element={<BillingPage />} />
 
         {/* FAQ 一覧 */}
         <Route path="/faqs" element={<FaqList />} />
