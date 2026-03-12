@@ -55,6 +55,8 @@ export interface ApiResponse<T> {
   error?: string;
   requestId: string;
   tenantId: string;
+  /** Phase33: レスポンス言語 */
+  lang?: string;
 }
 
 export interface TenantSla {
