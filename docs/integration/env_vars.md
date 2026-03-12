@@ -9,6 +9,14 @@
 ## 申請リスト
 （まだなし）
 
+## Phase32 (Stream A)
+- STRIPE_SECRET_KEY: Stripe APIシークレットキー（sk_live_xxx / sk_test_xxx） (Stream A, Phase32)
+- STRIPE_WEBHOOK_SECRET: Stripe Webhookエンドポイントシークレット（whsec_xxx） (Stream A, Phase32)
+- BILLING_PORTAL_RETURN_URL: Stripe Customer Portal からの返遷先URL / "https://example.com" (Stream A, Phase32)
+
+DBスキーマ変更: src/lib/billing/migration.sql を実行すること
+- 新規テーブル: stripe_subscriptions, usage_logs, stripe_usage_reports
+
 ## Phase31 (Stream A)
 - SUPER_ADMIN_BYPASS: development環境でSuper Admin認証をバイパス / "true" (Stream A, Phase31)
 - SUPABASE_JWT_SECRET: Supabase JWT検証シークレット（既存変数、Phase31で必須化）
