@@ -116,7 +116,12 @@ export function registerFaqAdminRoutes(app: Express) {
    */
   app.get("/admin/faqs", async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
-    if (!tenantId) {
+    const supabaseUser = (req as any).supabaseUser as
+      | { app_metadata?: { role?: string } }
+      | undefined;
+    const role = supabaseUser?.app_metadata?.role ?? "anonymous";
+
+    if (!tenantId && role !== "super_admin") {
       return res.status(400).json({ error: "tenantId is required" });
     }
 
@@ -127,26 +132,28 @@ export function registerFaqAdminRoutes(app: Express) {
     const offset = parseInt((req.query.offset as string) || "0", 10) || 0;
 
     try {
-      const result = await db.query<FaqRow>(
-        `
-        SELECT
-          id,
-          tenant_id,
-          question,
-          answer,
-          category,
-          es_doc_id,
-          tags,
-          is_published,
-          created_at,
-          updated_at
-        FROM faq_docs
-        WHERE tenant_id = $1
-        ORDER BY id DESC
-        LIMIT $2 OFFSET $3
-        `,
-        [tenantId, limit, offset]
-      );
+      const result = tenantId
+        ? await db.query<FaqRow>(
+            `
+            SELECT id, tenant_id, question, answer, category, es_doc_id,
+                   tags, is_published, created_at, updated_at
+            FROM faq_docs
+            WHERE tenant_id = $1
+            ORDER BY id DESC
+            LIMIT $2 OFFSET $3
+            `,
+            [tenantId, limit, offset]
+          )
+        : await db.query<FaqRow>(
+            `
+            SELECT id, tenant_id, question, answer, category, es_doc_id,
+                   tags, is_published, created_at, updated_at
+            FROM faq_docs
+            ORDER BY id DESC
+            LIMIT $1 OFFSET $2
+            `,
+            [limit, offset]
+          );
 
       return res.json({
         items: result.rows,

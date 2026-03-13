@@ -123,22 +123,28 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // -------------------------------------------------------------------------
   app.get("/v1/admin/knowledge", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
+    const user = (req as any).user as { role?: string } | undefined;
     const category = req.query.category as string | undefined;
 
-    if (!tenantId) {
+    if (!tenantId && user?.role !== "super_admin") {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
     }
 
     try {
-      const params: unknown[] = [tenantId];
-      let sql = `
-        SELECT id, tenant_id, question, answer, category, tags, created_at
-        FROM faq_docs
-        WHERE tenant_id = $1
-      `;
+      const params: unknown[] = [];
+      let sql = `SELECT id, tenant_id, question, answer, category, tags, created_at FROM faq_docs`;
+      const conditions: string[] = [];
+
+      if (tenantId) {
+        params.push(tenantId);
+        conditions.push(`tenant_id = $${params.length}`);
+      }
       if (category && category !== "all") {
         params.push(category);
-        sql += ` AND category = $${params.length}`;
+        conditions.push(`category = $${params.length}`);
+      }
+      if (conditions.length > 0) {
+        sql += ` WHERE ${conditions.join(" AND ")}`;
       }
       sql += " ORDER BY id DESC LIMIT 200";
 
