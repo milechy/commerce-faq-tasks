@@ -107,21 +107,11 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
   const db = pool;
 
-  // Supabase JWT 認証 + ロール付与を /v1/admin/knowledge 配下に適用
-  app.use("/v1/admin/knowledge", supabaseAuthMiddleware, roleAuthMiddleware);
-
-  // FAQ CRUD: super_admin と client_admin がアクセス可能（自テナント制限付き）
-  app.use(
-    "/v1/admin/knowledge/faq",
-    requireRole("super_admin", "client_admin"),
-    requireOwnTenant()
-  );
-
   // -------------------------------------------------------------------------
   // GET /v1/admin/knowledge
   // faq_docs からナレッジ一覧を返す
   // -------------------------------------------------------------------------
-  app.get("/v1/admin/knowledge", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.get("/v1/admin/knowledge", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     const user = (req as any).user as { role?: string } | undefined;
     const category = req.query.category as string | undefined;
@@ -161,7 +151,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // faq_docs + faq_embeddings + ES から削除（tenant_id 一致チェック必須）
   // global ナレッジは super_admin のみ削除可能
   // -------------------------------------------------------------------------
-  app.delete("/v1/admin/knowledge/:id", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.delete("/v1/admin/knowledge/:id", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     const id = Number(req.params.id);
 
@@ -222,7 +212,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text
   // テキスト → Groq でFAQ生成 → プレビュー用に返す（DB未挿入）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -259,7 +249,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text/commit
   // プレビュー済みFAQをDB（faq_docs + faq_embeddings）に投入
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text/commit", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text/commit", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -318,7 +308,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/scrape
   // URL取得 → テキスト抽出 → Groq FAQ化 → プレビューとして返す（DB未登録）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -367,7 +357,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/scrape/commit
   // プレビュー済みFAQ（スクレイプ結果）をDB登録
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape/commit", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape/commit", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });

@@ -5,6 +5,8 @@ import type { Express, Request, Response } from "express";
 import { Pool } from "pg";
 import { z } from "zod";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
+import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { roleAuthMiddleware, requireRole, requireOwnTenant } from "../../middleware/roleAuth";
 
 const CATEGORIES = ["inventory", "campaign", "coupon", "store_info"] as const;
 
@@ -82,7 +84,7 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
   // GET /v1/admin/knowledge/faq
   // FAQ一覧（ページネーション対応）
   // -------------------------------------------------------------------------
-  app.get("/v1/admin/knowledge/faq", async (req: Request, res: Response) => {
+  app.get("/v1/admin/knowledge/faq", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -138,7 +140,7 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
   // GET /v1/admin/knowledge/faq/:id
   // FAQ単体取得
   // -------------------------------------------------------------------------
-  app.get("/v1/admin/knowledge/faq/:id", async (req: Request, res: Response) => {
+  app.get("/v1/admin/knowledge/faq/:id", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -177,7 +179,7 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
   // POST /v1/admin/knowledge/faq
   // FAQ新規作成
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/faq", async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/faq", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -216,7 +218,7 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
   // PUT /v1/admin/knowledge/faq/:id
   // FAQ更新
   // -------------------------------------------------------------------------
-  app.put("/v1/admin/knowledge/faq/:id", async (req: Request, res: Response) => {
+  app.put("/v1/admin/knowledge/faq/:id", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -303,7 +305,7 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
   // DELETE /v1/admin/knowledge/faq/:id
   // FAQ削除
   // -------------------------------------------------------------------------
-  app.delete("/v1/admin/knowledge/faq/:id", async (req: Request, res: Response) => {
+  app.delete("/v1/admin/knowledge/faq/:id", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
