@@ -71,7 +71,7 @@ function StatCard({
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin, isClientAdmin, logout, previewMode, previewTenantName, exitPreview } = useAuth();
+  const { user, isSuperAdmin, isClientAdmin, logout, previewMode, previewTenantId, previewTenantName, exitPreview } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
