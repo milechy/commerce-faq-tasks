@@ -11,18 +11,12 @@ export default function Login() {
 
   // すでにログイン済みなら一覧へリダイレクト
   useEffect(() => {
-    const raw = localStorage.getItem("supabaseSession");
-    if (!raw) return;
-
-    try {
-      const session = JSON.parse(raw);
-      if (session?.access_token) {
+    void (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.access_token) {
         navigate("/faqs", { replace: true });
       }
-    } catch {
-      // セッションが壊れていたら削除しておく
-      localStorage.removeItem("supabaseSession");
-    }
+    })();
   }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -42,12 +36,7 @@ export default function Login() {
       return;
     }
 
-    // session を localStorage に保存（FaqList / FaqForm から access_token を使う）
-    if (data.session) {
-      localStorage.setItem("supabaseSession", JSON.stringify(data.session));
-    }
-
-    // ログイン成功したら FAQ リスト画面へ
+    // Supabase SDK がセッションを自動管理するため、手動保存は不要
     navigate("/");
   };
 

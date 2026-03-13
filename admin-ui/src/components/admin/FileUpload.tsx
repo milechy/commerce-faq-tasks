@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { API_BASE } from "../../lib/api";
+import { supabase } from "../../lib/supabaseClient";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const ACCEPTED_MIME = "application/pdf";
@@ -49,15 +50,8 @@ export default function FileUpload({
       setState({ status: "uploading", fileName: file.name, progress: 0 });
 
       try {
-        const token = (() => {
-          const raw = localStorage.getItem("supabaseSession");
-          if (!raw) return null;
-          try {
-            return (JSON.parse(raw) as { access_token?: string })?.access_token ?? null;
-          } catch {
-            return null;
-          }
-        })();
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token ?? null;
 
         const formData = new FormData();
         formData.append("file", file);

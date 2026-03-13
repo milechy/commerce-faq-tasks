@@ -1,7 +1,7 @@
 // admin-ui/src/pages/FaqForm.tsx
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { API_BASE, getTenantIdFromSession } from "../lib/api";
+import { API_BASE, authFetch } from "../lib/api";
 
 type Mode = "create" | "edit";
 
@@ -40,42 +40,12 @@ export default function FaqForm({ mode }: Props) {
       return;
     }
 
-    const raw = localStorage.getItem("supabaseSession");
-    if (!raw) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    let accessToken: string | null = null;
-    try {
-      const session = JSON.parse(raw);
-      accessToken = session?.access_token ?? null;
-    } catch {
-      localStorage.removeItem("supabaseSession");
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    if (!accessToken) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
     const fetchFaq = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const tenantId = getTenantIdFromSession() ?? "";
-        const res = await fetch(
-          `${API_BASE}/admin/faqs/${id}?tenantId=${tenantId}`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
+        const res = await authFetch(`${API_BASE}/admin/faqs/${id}`);
 
         if (!res.ok) {
           const text = await res.text();
@@ -91,6 +61,10 @@ export default function FaqForm({ mode }: Props) {
         setCategory(faq.category ?? "");
         setIsPublished(faq.is_published);
       } catch (err: unknown) {
+        if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+          navigate("/login", { replace: true });
+          return;
+        }
         console.error("[FaqForm] fetch error", err);
         setError(err instanceof Error ? err.message : "Failed to load FAQ");
       } finally {
@@ -98,32 +72,11 @@ export default function FaqForm({ mode }: Props) {
       }
     };
 
-    fetchFaq();
+    void fetchFaq();
   }, [mode, id, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    const raw = localStorage.getItem("supabaseSession");
-    if (!raw) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    let accessToken: string | null = null;
-    try {
-      const session = JSON.parse(raw);
-      accessToken = session?.access_token ?? null;
-    } catch {
-      localStorage.removeItem("supabaseSession");
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    if (!accessToken) {
-      navigate("/login", { replace: true });
-      return;
-    }
 
     try {
       setSaving(true);
@@ -138,29 +91,17 @@ export default function FaqForm({ mode }: Props) {
 
       let res: Response;
 
-      const tenantId = getTenantIdFromSession() ?? "";
       if (mode === "create") {
-        res = await fetch(`${API_BASE}/admin/faqs?tenantId=${tenantId}`, {
+        res = await authFetch(`${API_BASE}/admin/faqs`, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
           body: JSON.stringify(payload),
         });
       } else {
         if (!id) throw new Error("Missing FAQ id");
-        res = await fetch(
-          `${API_BASE}/admin/faqs/${id}?tenantId=${tenantId}`,
-          {
-            method: "PUT",
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          }
-        );
+        res = await authFetch(`${API_BASE}/admin/faqs/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
       }
 
       if (!res.ok) {
@@ -173,6 +114,10 @@ export default function FaqForm({ mode }: Props) {
       // 保存できたら一覧へ戻る
       navigate("/faqs");
     } catch (err: unknown) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       console.error("[FaqForm] save error", err);
       setError(err instanceof Error ? err.message : "Failed to save FAQ");
     } finally {

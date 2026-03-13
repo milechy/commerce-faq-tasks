@@ -1,7 +1,7 @@
 // admin-ui/src/pages/FaqList.tsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { API_BASE, getTenantIdFromSession } from "../lib/api";
+import { API_BASE, authFetch } from "../lib/api";
 
 type Faq = {
   id: number;
@@ -36,47 +36,16 @@ export default function FaqList() {
   const [showOnlyPublished, setShowOnlyPublished] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
-  const getAccessToken = (): string | null => {
-    const raw = localStorage.getItem("supabaseSession");
-    if (!raw) return null;
-    try {
-      const session = JSON.parse(raw);
-      return session?.access_token ?? null;
-    } catch {
-      localStorage.removeItem("supabaseSession");
-      return null;
-    }
-  };
-
   // FAQ 一覧取得
   useEffect(() => {
-    const accessToken = getAccessToken();
-    if (!accessToken) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
     const fetchFaqs = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const tenantId = getTenantIdFromSession() ?? "";
-        const res = await fetch(
-          `${API_BASE}/admin/faqs?tenantId=${tenantId}&limit=50&offset=0`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-            },
-          }
+        const res = await authFetch(
+          `${API_BASE}/admin/faqs?limit=50&offset=0`
         );
-
-        if (res.status === 401 || res.status === 403) {
-          localStorage.removeItem("supabaseSession");
-          navigate("/login", { replace: true });
-          return;
-        }
 
         if (!res.ok) {
           const text = await res.text();
@@ -92,6 +61,10 @@ export default function FaqList() {
         );
         setFaqs(sorted);
       } catch (err: unknown) {
+        if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+          navigate("/login", { replace: true });
+          return;
+        }
         console.error("[FaqList] fetch error", err);
         setError(err instanceof Error ? err.message : "Failed to load FAQs");
       } finally {
@@ -99,7 +72,7 @@ export default function FaqList() {
       }
     };
 
-    fetchFaqs();
+    void fetchFaqs();
   }, [navigate]);
 
   // 削除
@@ -109,30 +82,10 @@ export default function FaqList() {
     );
     if (!ok) return;
 
-    const accessToken = getAccessToken();
-    if (!accessToken) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
     try {
-      const tenantId = getTenantIdFromSession() ?? "";
-      const res = await fetch(
-        `${API_BASE}/admin/faqs/${faq.id}?tenantId=${tenantId}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      if (res.status === 401 || res.status === 403) {
-        localStorage.removeItem("supabaseSession");
-        navigate("/login", { replace: true });
-        return;
-      }
+      const res = await authFetch(`${API_BASE}/admin/faqs/${faq.id}`, {
+        method: "DELETE",
+      });
 
       if (!res.ok) {
         const text = await res.text();
@@ -143,6 +96,10 @@ export default function FaqList() {
 
       setFaqs((prev) => prev.filter((f) => f.id !== faq.id));
     } catch (err: unknown) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       console.error("[FaqList] delete error", err);
       alert(err instanceof Error ? err.message : "Failed to delete FAQ");
     }

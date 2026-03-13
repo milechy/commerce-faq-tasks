@@ -40,8 +40,13 @@ function resolveTenantId(req: Request): string | null {
     | undefined;
   const fromHeader =
     (req.headers["x-tenant-id"] as string | undefined) ?? undefined;
+  // JWT の app_metadata.tenant_id をフォールバックとして使用
+  const supabaseUser = (req as any).supabaseUser as
+    | { app_metadata?: { tenant_id?: string } }
+    | undefined;
+  const fromJwt = supabaseUser?.app_metadata?.tenant_id ?? undefined;
 
-  return fromQuery || fromHeader || null;
+  return fromQuery || fromHeader || fromJwt || null;
 }
 
 async function updateEsFaqDocument(row: FaqRow) {

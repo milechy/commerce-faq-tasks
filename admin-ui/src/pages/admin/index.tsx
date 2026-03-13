@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { API_BASE, getTenantIdFromSession } from "../../lib/api";
+import { API_BASE, authFetch } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import LangSwitcher from "../../components/LangSwitcher";
 import { useAuth } from "../../auth/useAuth";
@@ -13,16 +13,6 @@ interface DashboardStats {
   lastUpdated: string | null;
 }
 
-function getAccessToken(): string | null {
-  const raw = localStorage.getItem("supabaseSession");
-  if (!raw) return null;
-  try {
-    return (JSON.parse(raw) as { access_token?: string })?.access_token ?? null;
-  } catch {
-    localStorage.removeItem("supabaseSession");
-    return null;
-  }
-}
 
 function StatCard({
   icon,
@@ -77,12 +67,6 @@ export default function AdminDashboard() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
     const fetchStats = async () => {
       try {
         setLoading(true);
@@ -90,7 +74,7 @@ export default function AdminDashboard() {
 
         const effectiveTenantId = previewMode
           ? (previewTenantId ?? "")
-          : (user?.tenantId ?? getTenantIdFromSession() ?? "");
+          : (user?.tenantId ?? "");
 
         const faqParams = new URLSearchParams({ limit: "1", offset: "0" });
         if (effectiveTenantId) faqParams.set("tenantId", effectiveTenantId);
@@ -100,12 +84,8 @@ export default function AdminDashboard() {
           : `${API_BASE}/v1/admin/knowledge`;
 
         const [faqRes, bookRes] = await Promise.allSettled([
-          fetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch(knowledgeUrl, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
+          authFetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`),
+          authFetch(knowledgeUrl),
         ]);
 
         let faqCount = 0;
@@ -146,7 +126,6 @@ export default function AdminDashboard() {
   }, [navigate, t]);
 
   const handleLogout = async () => {
-    localStorage.removeItem("supabaseSession");
     await logout();
     navigate("/login", { replace: true });
   };
