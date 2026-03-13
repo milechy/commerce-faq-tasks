@@ -1,13 +1,12 @@
 // src/api/admin/knowledge/routes.ts
 // Phase29: カーネーション向けナレッジ管理API
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 // @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
+import jwt from "jsonwebtoken";
 import { groqClient } from "../../../agent/llm/groqClient";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
-import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { roleAuthMiddleware, requireRole, requireOwnTenant } from "../../middleware/roleAuth";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { encryptText } from "../../../lib/crypto/textEncrypt";
 
@@ -107,11 +106,94 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
   const db = pool;
 
+  // ── インライン認証スタック（モジュールキャッシュ問題を回避） ─────────────────
+  // JWT 検証 → req.supabaseUser / req.user をセット
+  function knowledgeAuth(req: Request, res: Response, next: NextFunction): void {
+    const authHeader = req.headers.authorization ?? "";
+
+    if (process.env.NODE_ENV === "development") {
+      // development: 署名検証なしでデコードし req.supabaseUser をセット
+      if (authHeader.startsWith("Bearer ")) {
+        try {
+          (req as any).supabaseUser = jwt.decode(authHeader.slice(7).trim());
+        } catch {
+          // decode 失敗は無視して通す
+        }
+        return setUserAndNext(req, next);
+      }
+      if (req.headers["x-api-key"]) return next();
+      res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
+      return;
+    }
+
+    const secret = process.env.SUPABASE_JWT_SECRET;
+    if (!secret) {
+      // SECRET 未設定時はスキップ（ステージング等）
+      return setUserAndNext(req, next);
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Missing Bearer token" });
+      return;
+    }
+    const token = authHeader.slice(7).trim();
+    try {
+      (req as any).supabaseUser = jwt.verify(token, secret);
+      return setUserAndNext(req, next);
+    } catch (err) {
+      console.warn("[knowledgeAuth] invalid token", err);
+      res.status(401).json({ error: "Invalid token" });
+    }
+  }
+
+  function setUserAndNext(req: Request, next: NextFunction): void {
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    (req as any).user = su
+      ? {
+          id: su.sub ?? su.id ?? "",
+          email: su.email ?? "",
+          role: su.app_metadata?.role ?? su.user_metadata?.role ?? "anonymous",
+          tenantId: su.app_metadata?.tenant_id ?? null,
+        }
+      : { id: "", email: "", role: "anonymous", tenantId: null };
+    next();
+  }
+
+  // role チェック（super_admin / client_admin のみ通過）
+  function requireKnowledgeRole(req: Request, res: Response, next: NextFunction): void {
+    const user = (req as any).user as { role?: string } | undefined;
+    if (!user || !["super_admin", "client_admin"].includes(user.role ?? "")) {
+      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
+      return;
+    }
+    next();
+  }
+
+  // テナント所有チェック（super_admin は全テナントにアクセス可）
+  function requireKnowledgeTenant(req: Request, res: Response, next: NextFunction): void {
+    const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+    if (user?.role === "super_admin") { next(); return; }
+
+    const requestedTenant =
+      (req.params.tenantId as string | undefined) ||
+      (req.query.tenant as string | undefined) ||
+      (req.query.tenant_id as string | undefined) ||
+      (req.headers["x-tenant-id"] as string | undefined);
+
+    if (requestedTenant && requestedTenant !== user?.tenantId) {
+      res.status(403).json({ error: "forbidden", message: "他のテナントのデータにはアクセスできません" });
+      return;
+    }
+    if (!requestedTenant && user?.tenantId) req.query.tenant = user.tenantId;
+    next();
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   // -------------------------------------------------------------------------
   // GET /v1/admin/knowledge
   // faq_docs からナレッジ一覧を返す
   // -------------------------------------------------------------------------
-  app.get("/v1/admin/knowledge", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.get("/v1/admin/knowledge", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     const user = (req as any).user as { role?: string } | undefined;
     const category = req.query.category as string | undefined;
@@ -151,7 +233,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // faq_docs + faq_embeddings + ES から削除（tenant_id 一致チェック必須）
   // global ナレッジは super_admin のみ削除可能
   // -------------------------------------------------------------------------
-  app.delete("/v1/admin/knowledge/:id", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.delete("/v1/admin/knowledge/:id", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     const id = Number(req.params.id);
 
@@ -212,7 +294,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text
   // テキスト → Groq でFAQ生成 → プレビュー用に返す（DB未挿入）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -249,7 +331,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text/commit
   // プレビュー済みFAQをDB（faq_docs + faq_embeddings）に投入
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text/commit", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text/commit", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -308,7 +390,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/scrape
   // URL取得 → テキスト抽出 → Groq FAQ化 → プレビューとして返す（DB未登録）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -357,7 +439,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/scrape/commit
   // プレビュー済みFAQ（スクレイプ結果）をDB登録
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape/commit", supabaseAuthMiddleware, roleAuthMiddleware, requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape/commit", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -427,7 +509,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     return res.status(201).json({ ok: true, inserted: totalInserted });
   });
 
-  registerFaqCrudRoutes(app, db);
+  registerFaqCrudRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
 
   console.log("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");
 }
