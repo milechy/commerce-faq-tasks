@@ -88,12 +88,22 @@ export default function AdminDashboard() {
         setLoading(true);
         setError(null);
 
-        const tenantId = user?.tenantId ?? getTenantIdFromSession() ?? "";
+        const effectiveTenantId = previewMode
+          ? (previewTenantId ?? "")
+          : (user?.tenantId ?? getTenantIdFromSession() ?? "");
+
+        const faqParams = new URLSearchParams({ limit: "1", offset: "0" });
+        if (effectiveTenantId) faqParams.set("tenantId", effectiveTenantId);
+
+        const knowledgeUrl = effectiveTenantId
+          ? `${API_BASE}/v1/admin/knowledge?tenant=${effectiveTenantId}`
+          : `${API_BASE}/v1/admin/knowledge`;
+
         const [faqRes, bookRes] = await Promise.allSettled([
-          fetch(`${API_BASE}/admin/faqs?tenantId=${tenantId}&limit=1&offset=0`, {
+          fetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`${API_BASE}/v1/admin/knowledge?tenant=${tenantId}`, {
+          fetch(knowledgeUrl, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);
