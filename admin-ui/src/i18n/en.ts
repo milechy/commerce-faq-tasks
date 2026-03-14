@@ -240,6 +240,15 @@ const en: Record<TranslationKey, string> = {
   "knowledge.global_label": "Register as Global Knowledge (shared across all tenants)",
   "tenants.load_error": "Failed to load tenant list",
 
+  // Knowledge tenant selector
+  "knowledge.select_tenant": "Select a tenant to manage",
+  "knowledge.global": "📚 Global Knowledge (shared across all tenants)",
+  "knowledge.global_desc": "Register partner books and materials here",
+  "knowledge.tenant_faqs": "{count} FAQs",
+  "knowledge.search_tenant": "Search by tenant name...",
+  "nav.back_dashboard": "← Back to Dashboard",
+  "nav.back_knowledge": "← Back to Knowledge",
+
   // FAQ Edit Modal
   "modal.edit_title": "Edit FAQ",
   "modal.create_title": "Add New FAQ",

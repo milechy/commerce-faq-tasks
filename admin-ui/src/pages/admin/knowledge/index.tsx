@@ -1,1098 +1,63 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import FileUpload from "../../../components/admin/FileUpload";
-import { API_BASE } from "../../../lib/api";
-import { supabase } from "../../../lib/supabaseClient";
-import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../components/KnowledgeFaqEditModal";
+import { useEffect, useState } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
+import { API_BASE, authFetch } from "../../../lib/api";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
-import { SuperAdminOnly } from "../../../components/RoleGuard";
 import { useAuth } from "../../../auth/useAuth";
 
-// ─── 型定義 ──────────────────────────────────────────────────────────────────
-
-interface BookMetadata {
+interface TenantSummary {
   id: string;
-  title: string;
-  author: string;
-  totalPages: number;
-  totalChunks: number;
-  uploadedAt: number;
+  name: string;
+  slug: string;
+  plan: "starter" | "pro";
+  status: "active" | "inactive";
+  faqCount?: number;
 }
 
-interface KnowledgeItem {
-  id: number;
-  tenant_id: string;
-  question: string;
-  answer: string;
-  category: string | null;
-  tags: string[] | null;
-  is_published?: boolean;
-  created_at: string;
-}
-
-interface FaqEntry {
-  question: string;
-  answer: string;
-}
-
-interface ScrapePreviewItem {
-  url: string;
-  faqs: FaqEntry[];
-  error?: string;
-}
-
-interface OcrJobStatus {
-  status: "processing" | "done" | "failed";
-  pages?: number;
-  chunks?: number;
-  error?: string;
-}
-
-type Tab = "list" | "text" | "scrape";
-type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
-type Category = "inventory" | "campaign" | "coupon" | "store_info";
-
-const TENANT = "carnation";
-
-// ─── ユーティリティ ───────────────────────────────────────────────────────────
-
-async function getAccessToken(): Promise<string | null> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error || !data.session) return null;
-  return data.session.access_token;
-}
-
-// 401時にリフレッシュ→リトライするfetchラッパー
-async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
-  let token = await getAccessToken();
-  if (!token) {
-    const { data } = await supabase.auth.refreshSession();
-    token = data.session?.access_token ?? null;
-  }
-  if (!token) throw new Error("__AUTH_REQUIRED__");
-
-  const makeRequest = (t: string) =>
-    fetch(url, {
-      ...options,
-      headers: {
-        ...(options.headers as Record<string, string>),
-        Authorization: `Bearer ${t}`,
-      },
-    });
-
-  const res = await makeRequest(token);
-
-  if (res.status === 401 || res.status === 403) {
-    const { data } = await supabase.auth.refreshSession();
-    const refreshedToken = data.session?.access_token ?? null;
-    if (!refreshedToken) throw new Error("__AUTH_REQUIRED__");
-    return makeRequest(refreshedToken);
-  }
-
-  return res;
-}
-
-function formatDate(iso: string, locale: string): string {
-  return new Date(iso).toLocaleDateString(locale, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// ─── スタイル定数 ─────────────────────────────────────────────────────────────
-
-const CARD_STYLE: React.CSSProperties = {
-  borderRadius: 14,
-  border: "1px solid #1f2937",
-  background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
-  padding: "20px 18px",
-};
-
-const BTN_PRIMARY: React.CSSProperties = {
-  padding: "16px 24px",
-  minHeight: 56,
-  borderRadius: 12,
-  border: "none",
-  background: "linear-gradient(135deg, #22c55e 0%, #4ade80 50%, #22c55e 100%)",
-  color: "#022c22",
-  fontSize: 17,
-  fontWeight: 700,
-  cursor: "pointer",
-  width: "100%",
-};
-
-const BTN_DANGER: React.CSSProperties = {
-  padding: "10px 16px",
-  minHeight: 44,
-  borderRadius: 10,
-  border: "1px solid #7f1d1d",
-  background: "rgba(127,29,29,0.2)",
-  color: "#fca5a5",
-  fontSize: 14,
-  cursor: "pointer",
-  fontWeight: 500,
-};
-
-const TEXTAREA_STYLE: React.CSSProperties = {
-  width: "100%",
-  minHeight: 180,
-  padding: "14px 16px",
-  borderRadius: 10,
-  border: "1px solid #374151",
-  background: "rgba(15,23,42,0.8)",
-  color: "#e5e7eb",
-  fontSize: 16,
-  fontFamily: "inherit",
-  resize: "vertical",
-  boxSizing: "border-box",
-};
-
-const SELECT_STYLE: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 10,
-  border: "1px solid #374151",
-  background: "rgba(15,23,42,0.8)",
-  color: "#e5e7eb",
-  fontSize: 16,
-  minHeight: 48,
-};
-
-// ─── タブ1: ナレッジ一覧 ────────────────────────────────────────────────────
-
-function KnowledgeListTab() {
+export default function KnowledgeIndexPage() {
   const navigate = useNavigate();
-  const { t, lang } = useLang();
-  const locale = lang === "en" ? "en-US" : "ja-JP";
+  const { t } = useLang();
+  const { user, isSuperAdmin, isClientAdmin, isLoading } = useAuth();
 
-  const CATEGORIES = [
-    { value: "inventory", label: t("category.inventory") },
-    { value: "campaign", label: t("category.campaign") },
-    { value: "coupon", label: t("category.coupon") },
-    { value: "store_info", label: t("category.store_info") },
-  ];
-
-  const [items, setItems] = useState<KnowledgeItem[]>([]);
+  const [tenants, setTenants] = useState<TenantSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [categoryFilter, setCategoryFilter] = useState<string>("all");
-  const [deleteTarget, setDeleteTarget] = useState<{
-    id: number;
-    question: string;
-    state: DeleteState;
-    error?: string;
-  } | null>(null);
-  const [editTarget, setEditTarget] = useState<KnowledgeFaqItem | null>(null);
-  const [createMode, setCreateMode] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3000);
-  };
-
-  const handleModalSuccess = (msg: string) => {
-    setEditTarget(null);
-    setCreateMode(false);
-    showToast(msg);
-    void fetchItems();
-  };
-
-  const fetchItems = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ tenant: TENANT });
-      if (categoryFilter !== "all") params.set("category", categoryFilter);
-
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?${params}`);
-      if (!res.ok) throw new Error(t("knowledge.load_error"));
-      const data = (await res.json()) as { items: KnowledgeItem[] };
-      setItems(data.items ?? []);
-    } catch (err) {
-      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
-        navigate("/login", { replace: true });
-        return;
-      }
-      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
-    } finally {
-      setLoading(false);
-    }
-  }, [navigate, categoryFilter, t]);
-
-  useEffect(() => { fetchItems(); }, [fetchItems]);
-
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-
-    setDeleteTarget((prev) => prev ? { ...prev, state: "deleting" } : null);
-    try {
-      const res = await fetchWithAuth(
-        `${API_BASE}/v1/admin/knowledge/${deleteTarget.id}?tenant=${TENANT}`,
-        { method: "DELETE" }
-      );
-      if (!res.ok) throw new Error(t("knowledge.delete_error"));
-      setDeleteTarget((prev) => prev ? { ...prev, state: "success" } : null);
-      setItems((prev) => prev.filter((i) => i.id !== deleteTarget.id));
-      setTimeout(() => setDeleteTarget(null), 2000);
-    } catch (err) {
-      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
-        navigate("/login", { replace: true });
-        return;
-      }
-      setDeleteTarget((prev) =>
-        prev ? { ...prev, state: "error", error: err instanceof Error ? err.message : t("knowledge.delete_error") } : null
-      );
-    }
-  };
-
-  const categoryLabel = (cat: string | null) => {
-    const found = CATEGORIES.find((c) => c.value === cat);
-    return found ? found.label : cat ?? t("knowledge.uncategorized");
-  };
-
-  return (
-    <div>
-      {/* 新規追加ボタン */}
-      <button
-        onClick={() => setCreateMode(true)}
-        style={{
-          width: "100%",
-          padding: "18px 24px",
-          minHeight: 60,
-          borderRadius: 14,
-          border: "none",
-          background: "linear-gradient(135deg, #22c55e 0%, #4ade80 50%, #22c55e 100%)",
-          color: "#022c22",
-          fontSize: 18,
-          fontWeight: 700,
-          cursor: "pointer",
-          marginBottom: 20,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 10,
-          boxShadow: "0 8px 24px rgba(34,197,94,0.25)",
-        }}
-      >
-        <span style={{ fontSize: 22 }}>＋</span>
-        {t("knowledge.add_faq")}
-      </button>
-
-      {/* フィルター */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ fontSize: 14, color: "#9ca3af" }}>{t("knowledge.category_filter")}</span>
-        {[{ value: "all", label: t("knowledge.all") }, ...CATEGORIES].map((c) => (
-          <button
-            key={c.value}
-            onClick={() => setCategoryFilter(c.value)}
-            style={{
-              padding: "6px 14px",
-              minHeight: 36,
-              borderRadius: 999,
-              border: `1px solid ${categoryFilter === c.value ? "#22c55e" : "#374151"}`,
-              background: categoryFilter === c.value ? "rgba(34,197,94,0.15)" : "transparent",
-              color: categoryFilter === c.value ? "#4ade80" : "#9ca3af",
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-          >
-            {c.label}
-          </button>
-        ))}
-        <button
-          onClick={fetchItems}
-          disabled={loading}
-          style={{
-            marginLeft: "auto",
-            padding: "6px 14px",
-            minHeight: 36,
-            borderRadius: 999,
-            border: "1px solid #374151",
-            background: "transparent",
-            color: "#9ca3af",
-            fontSize: 13,
-            cursor: loading ? "default" : "pointer",
-          }}
-        >
-          {loading ? t("knowledge.refreshing") : t("common.refresh")}
-        </button>
-      </div>
-
-      {error && (
-        <div style={{ marginBottom: 16, padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 15 }}>
-          {error}
-        </div>
-      )}
-
-      {loading && items.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
-          <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
-          {t("knowledge.loading")}
-        </div>
-      ) : items.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", borderRadius: 14, border: "1px dashed #374151", background: "rgba(15,23,42,0.4)" }}>
-          <span style={{ display: "block", fontSize: 40, marginBottom: 12 }}>📭</span>
-          <p style={{ fontSize: 16, fontWeight: 600, color: "#d1d5db", margin: 0 }}>
-            {t("knowledge.empty_title")}
-          </p>
-          <p style={{ fontSize: 13, color: "#6b7280", marginTop: 6, marginBottom: 0 }}>
-            {t("knowledge.empty_sub")}
-          </p>
-        </div>
-      ) : (
-        <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
-          <div style={{ padding: "12px 18px", borderBottom: "1px solid #111827", fontSize: 13, color: "#6b7280" }}>
-            {t("knowledge.count", { n: items.length })}
-          </div>
-          {items.map((item, idx) => (
-            <div
-              key={item.id}
-              style={{
-                padding: "16px 18px",
-                borderBottom: idx === items.length - 1 ? "none" : "1px solid #111827",
-                display: "flex",
-                gap: 14,
-                alignItems: "flex-start",
-                flexWrap: "wrap",
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
-                  <span style={{
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    background: "rgba(34,197,94,0.1)",
-                    border: "1px solid rgba(34,197,94,0.2)",
-                    color: "#4ade80",
-                    fontSize: 11,
-                    fontWeight: 600,
-                  }}>
-                    {categoryLabel(item.category)}
-                  </span>
-                  <span style={{ fontSize: 11, color: "#6b7280" }}>{formatDate(item.created_at, locale)}</span>
-                </div>
-                <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 4px", lineHeight: 1.4 }}>
-                  Q: {item.question}
-                </p>
-                <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                  A: {item.answer.slice(0, 120)}{item.answer.length > 120 ? "…" : ""}
-                </p>
-              </div>
-              <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
-                <button
-                  onClick={() =>
-                    setEditTarget({
-                      id: item.id,
-                      question: item.question,
-                      answer: item.answer,
-                      category: item.category,
-                      tags: item.tags,
-                      is_published: item.is_published,
-                    })
-                  }
-                  style={{
-                    padding: "10px 16px",
-                    minHeight: 44,
-                    borderRadius: 10,
-                    border: "1px solid #1d4ed8",
-                    background: "rgba(29,78,216,0.15)",
-                    color: "#93c5fd",
-                    fontSize: 14,
-                    cursor: "pointer",
-                    fontWeight: 500,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {t("knowledge.edit")}
-                </button>
-                <button
-                  onClick={() => setDeleteTarget({ id: item.id, question: item.question, state: "confirming" })}
-                  style={BTN_DANGER}
-                >
-                  {t("knowledge.delete")}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 編集モーダル */}
-      {editTarget && (
-        <KnowledgeFaqEditModal
-          mode="edit"
-          item={editTarget}
-          onClose={() => setEditTarget(null)}
-          onSuccess={handleModalSuccess}
-        />
-      )}
-
-      {/* 新規作成モーダル */}
-      {createMode && (
-        <KnowledgeFaqEditModal
-          mode="create"
-          onClose={() => setCreateMode(false)}
-          onSuccess={handleModalSuccess}
-        />
-      )}
-
-      {/* トースト通知 */}
-      {toast && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 32,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 2000,
-            padding: "16px 28px",
-            borderRadius: 12,
-            background: "rgba(5,46,22,0.95)",
-            border: "1px solid rgba(74,222,128,0.4)",
-            color: "#86efac",
-            fontSize: 16,
-            fontWeight: 600,
-            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {toast}
-        </div>
-      )}
-
-      {/* 削除確認ダイアログ */}
-      {deleteTarget && (
-        <div
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}
-          onClick={(e) => { if (e.target === e.currentTarget && deleteTarget.state !== "deleting") setDeleteTarget(null); }}
-        >
-          <div style={{ background: "#0f172a", border: "1px solid #1f2937", borderRadius: 16, padding: "28px 24px", maxWidth: 420, width: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.6)" }}>
-            {deleteTarget.state === "success" ? (
-              <div style={{ textAlign: "center" }}>
-                <span style={{ fontSize: 48, display: "block", marginBottom: 12 }}>✅</span>
-                <p style={{ fontSize: 17, fontWeight: 600, color: "#4ade80", margin: 0 }}>{t("knowledge.deleted")}</p>
-              </div>
-            ) : (
-              <>
-                <h3 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>{t("knowledge.delete_confirm_title")}</h3>
-                <p style={{ fontSize: 14, color: "#d1d5db", margin: "0 0 6px" }}>Q: {deleteTarget.question}</p>
-                <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 20px", lineHeight: 1.6 }}>
-                  {t("knowledge.delete_confirm_body")}
-                </p>
-                {deleteTarget.state === "error" && deleteTarget.error && (
-                  <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "rgba(127,29,29,0.4)", color: "#fca5a5", fontSize: 14 }}>
-                    {deleteTarget.error}
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 10 }}>
-                  <button
-                    onClick={() => setDeleteTarget(null)}
-                    disabled={deleteTarget.state === "deleting"}
-                    style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 10, border: "1px solid #374151", background: "transparent", color: "#e5e7eb", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
-                  >
-                    {t("knowledge.cancel_delete")}
-                  </button>
-                  <button
-                    onClick={handleDelete}
-                    disabled={deleteTarget.state === "deleting"}
-                    style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 10, border: "none", background: "linear-gradient(135deg, #991b1b, #dc2626)", color: "#fee2e2", fontSize: 15, fontWeight: 700, cursor: deleteTarget.state === "deleting" ? "not-allowed" : "pointer" }}
-                  >
-                    {deleteTarget.state === "deleting" ? t("common.deleting") : t("knowledge.confirm_delete")}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── タブ2: テキスト入力（LLM自動FAQ化） ────────────────────────────────────
-
-function TextInputTab() {
-  const navigate = useNavigate();
-  const { t } = useLang();
-  const { isSuperAdmin } = useAuth();
-
-  const CATEGORIES = [
-    { value: "inventory", label: t("category.inventory") },
-    { value: "campaign", label: t("category.campaign") },
-    { value: "coupon", label: t("category.coupon") },
-    { value: "store_info", label: t("category.store_info") },
-  ];
-
-  const [text, setText] = useState("");
-  const [category, setCategory] = useState<Category>("inventory");
-  const [isGlobal, setIsGlobal] = useState(false);
-  const [converting, setConverting] = useState(false);
-  const [preview, setPreview] = useState<FaqEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [committing, setCommitting] = useState(false);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  const handleConvert = async () => {
-    if (text.trim().length < 10) {
-      setError(t("knowledge.text_min_error"));
-      return;
-    }
-
-    setConverting(true);
-    setError(null);
-    setPreview(null);
-    setSuccess(null);
-
-    try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${TENANT}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), category, ...(isGlobal ? { target: "global" } : {}) }),
-      });
-      const data = (await res.json()) as { ok?: boolean; preview?: FaqEntry[]; error?: string };
-      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setPreview(data.preview ?? []);
-    } catch (err) {
-      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
-        navigate("/login", { replace: true });
-        return;
-      }
-      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
-    } finally {
-      setConverting(false);
-    }
-  };
-
-  const handleCommit = async () => {
-    if (!preview || preview.length === 0) return;
-
-    setCommitting(true);
-    setError(null);
-    try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${TENANT}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ faqs: preview, category, ...(isGlobal ? { target: "global" } : {}) }),
-      });
-      const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
-      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
-      setPreview(null);
-      setText("");
-    } catch (err) {
-      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
-        navigate("/login", { replace: true });
-        return;
-      }
-      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
-    } finally {
-      setCommitting(false);
-    }
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={CARD_STYLE}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
-          {t("knowledge.text_title")}
-        </h3>
-        <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px", lineHeight: 1.6 }}>
-          {t("knowledge.text_desc")}
-        </p>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder={t("knowledge.text_placeholder")}
-          style={TEXTAREA_STYLE}
-        />
-      </div>
-
-      <div style={CARD_STYLE}>
-        <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}>
-          {t("knowledge.category_label")}
-        </label>
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value as Category)}
-          style={SELECT_STYLE}
-        >
-          {CATEGORIES.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
-          ))}
-        </select>
-        {isSuperAdmin && (
-          <div style={{ marginTop: 16 }}>
-            <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
-          </div>
-        )}
-      </div>
-
-      {error && (
-        <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 15 }}>
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(5,46,22,0.6)", border: "1px solid rgba(74,222,128,0.3)", color: "#86efac", fontSize: 15 }}>
-          {success}
-        </div>
-      )}
-
-      {!preview && (
-        <button
-          onClick={handleConvert}
-          disabled={converting || text.trim().length < 10}
-          style={{
-            ...BTN_PRIMARY,
-            opacity: converting || text.trim().length < 10 ? 0.6 : 1,
-            cursor: converting || text.trim().length < 10 ? "not-allowed" : "pointer",
-          }}
-        >
-          {converting ? t("knowledge.converting") : t("knowledge.convert")}
-        </button>
-      )}
-
-      {preview && preview.length > 0 && (
-        <div>
-          <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>
-            {t("knowledge.preview_title", { n: preview.length })}
-          </h3>
-          <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px" }}>
-            {t("knowledge.preview_desc")}
-          </p>
-          <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden", marginBottom: 16 }}>
-            {preview.map((faq, idx) => (
-              <div
-                key={idx}
-                style={{
-                  padding: "16px 18px",
-                  borderBottom: idx === preview.length - 1 ? "none" : "1px solid #111827",
-                }}
-              >
-                <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                  Q: {faq.question}
-                </p>
-                <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                  A: {faq.answer}
-                </p>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={() => setPreview(null)}
-              style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 12, border: "1px solid #374151", background: "transparent", color: "#e5e7eb", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
-            >
-              {t("common.retry")}
-            </button>
-            <button
-              onClick={handleCommit}
-              disabled={committing}
-              style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: committing ? 0.6 : 1 }}
-            >
-              {committing ? t("knowledge.committing") : t("knowledge.commit")}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── タブ3: URLスクレイプ ────────────────────────────────────────────────────
-
-function ScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
-  const navigate = useNavigate();
-  const { t } = useLang();
-  const { isSuperAdmin } = useAuth();
-
-  const CATEGORIES = [
-    { value: "inventory", label: t("category.inventory") },
-    { value: "campaign", label: t("category.campaign") },
-    { value: "coupon", label: t("category.coupon") },
-    { value: "store_info", label: t("category.store_info") },
-  ];
-
-  const [urls, setUrls] = useState("");
-  const [category, setCategory] = useState<Category>("store_info");
-  const [isGlobal, setIsGlobal] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<ScrapePreviewItem[] | null>(null);
-  const [committing, setCommitting] = useState(false);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  const handleFetch = async () => {
-    const urlList = urls
-      .split("\n")
-      .map((u) => u.trim())
-      .filter((u) => u.length > 0);
-
-    if (urlList.length === 0) {
-      setError(t("knowledge.url_required"));
-      return;
-    }
-    if (urlList.length > 5) {
-      setError(t("knowledge.url_max"));
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setPreview(null);
-    setSuccess(null);
-
-    try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${TENANT}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls: urlList, category, ...(isGlobal ? { target: "global" } : {}) }),
-      });
-      if (res.status === 401 || res.status === 403) {
-        navigate("/login", { replace: true });
-        return;
-      }
-      const data = (await res.json()) as { ok?: boolean; preview?: ScrapePreviewItem[]; error?: string };
-      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setPreview(data.preview ?? []);
-    } catch (err) {
-      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
-        navigate("/login", { replace: true });
-        return;
-      }
-      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCommit = async () => {
-    if (!preview || preview.length === 0) return;
-    const validItems = preview.filter((p) => p.faqs.length > 0);
-    if (validItems.length === 0) return;
-
-    setCommitting(true);
-    setError(null);
-
-    try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${TENANT}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: validItems, category, ...(isGlobal ? { target: "global" } : {}) }),
-      });
-      const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
-      if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
-      setPreview(null);
-      setUrls("");
-      onCommitSuccess();
-    } catch (err) {
-      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
-        navigate("/login", { replace: true });
-        return;
-      }
-      setError(err instanceof Error ? err.message : t("knowledge.load_error"));
-    } finally {
-      setCommitting(false);
-    }
-  };
-
-  const totalFaqs = preview?.reduce((sum, p) => sum + p.faqs.length, 0) ?? 0;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      {!preview && (
-        <>
-          <div style={CARD_STYLE}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
-              {t("knowledge.scrape_title")}
-            </h3>
-            <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px", lineHeight: 1.6 }}>
-              {t("knowledge.scrape_desc")}
-            </p>
-            <textarea
-              value={urls}
-              onChange={(e) => setUrls(e.target.value)}
-              placeholder={t("knowledge.scrape_placeholder")}
-              style={{ ...TEXTAREA_STYLE, minHeight: 120, fontFamily: "monospace" }}
-            />
-          </div>
-
-          <div style={CARD_STYLE}>
-            <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}>
-              {t("knowledge.category_label")}
-            </label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value as Category)}
-              style={SELECT_STYLE}
-            >
-              {CATEGORIES.map((c) => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
-            </select>
-            {isSuperAdmin && (
-              <div style={{ marginTop: 16 }}>
-                <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
-              </div>
-            )}
-          </div>
-        </>
-      )}
-
-      {error && (
-        <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 15 }}>
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(5,46,22,0.6)", border: "1px solid rgba(74,222,128,0.3)", color: "#86efac", fontSize: 15 }}>
-          {success}
-        </div>
-      )}
-
-      {loading && (
-        <div style={{ padding: "20px", textAlign: "center", ...CARD_STYLE }}>
-          <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
-          <p style={{ fontSize: 15, color: "#93c5fd", margin: 0 }}>
-            {t("knowledge.scraping")}
-          </p>
-        </div>
-      )}
-
-      {!preview && !loading && (
-        <button
-          onClick={handleFetch}
-          disabled={urls.trim().length === 0}
-          style={{
-            ...BTN_PRIMARY,
-            opacity: urls.trim().length === 0 ? 0.6 : 1,
-            cursor: urls.trim().length === 0 ? "not-allowed" : "pointer",
-          }}
-        >
-          {t("knowledge.fetch")}
-        </button>
-      )}
-
-      {preview && preview.length > 0 && (
-        <div>
-          <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>
-            {t("knowledge.scrape_preview_title", { n: totalFaqs })}
-          </h3>
-          <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px" }}>
-            {t("knowledge.scrape_preview_desc")}
-          </p>
-
-          {preview.map((item) => (
-            <div key={item.url} style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                🔗 {item.url}
-              </div>
-              {item.error ? (
-                <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 13 }}>
-                  {t("knowledge.scrape_fetch_failed", { error: item.error })}
-                </div>
-              ) : (
-                <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
-                  {item.faqs.map((faq, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: "14px 18px",
-                        borderBottom: idx === item.faqs.length - 1 ? "none" : "1px solid #111827",
-                      }}
-                    >
-                      <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                        Q: {faq.question}
-                      </p>
-                      <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                        A: {faq.answer}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-
-          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-            <button
-              onClick={() => { setPreview(null); setError(null); }}
-              style={{ flex: 1, padding: "14px", minHeight: 56, borderRadius: 12, border: "1px solid #374151", background: "transparent", color: "#e5e7eb", fontSize: 15, fontWeight: 600, cursor: "pointer" }}
-            >
-              {t("common.retry")}
-            </button>
-            <button
-              onClick={handleCommit}
-              disabled={committing || totalFaqs === 0}
-              style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: (committing || totalFaqs === 0) ? 0.6 : 1 }}
-            >
-              {committing ? t("knowledge.committing") : t("knowledge.commit")}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── グローバルナレッジチェックボックス（Super Admin専用） ────────────────────
-
-function GlobalKnowledgeCheckbox({
-  isGlobal,
-  onChange,
-}: {
-  isGlobal: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  const { t } = useLang();
-  return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        cursor: "pointer",
-        padding: "12px 14px",
-        borderRadius: 10,
-        border: `1px solid ${isGlobal ? "rgba(234,179,8,0.4)" : "#374151"}`,
-        background: isGlobal ? "rgba(234,179,8,0.08)" : "rgba(0,0,0,0.2)",
-        marginBottom: 16,
-        fontSize: 14,
-        color: isGlobal ? "#fbbf24" : "#9ca3af",
-        fontWeight: isGlobal ? 600 : 400,
-        transition: "all 0.15s",
-        userSelect: "none",
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={isGlobal}
-        onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 18, height: 18, accentColor: "#fbbf24", cursor: "pointer" }}
-      />
-      📚 {t("knowledge.global_label")}
-    </label>
-  );
-}
-
-// ─── PDFアップロードセクション（既存機能） ────────────────────────────────────
-
-function PdfSection() {
-  const { t } = useLang();
-  const { isSuperAdmin } = useAuth();
-  const [isGlobal, setIsGlobal] = useState(false);
-  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
-  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
-  const [jobStatus, setJobStatus] = useState<OcrJobStatus | null>(null);
-  const [books, setBooks] = useState<BookMetadata[]>([]);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const fetchBooks = useCallback(async () => {
-    try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?tenant=${TENANT}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as { items?: unknown[]; count?: number };
-      setBooks((data.items ?? []) as BookMetadata[]);
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => { fetchBooks(); }, [fetchBooks]);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
-    if (!currentJobId) return;
-    const poll = async () => {
+    if (!isSuperAdmin) return;
+    const load = async () => {
+      setLoading(true);
+      setError(null);
       try {
-        const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/jobs/${currentJobId}`);
-        if (!res.ok) return;
-        const data = (await res.json()) as OcrJobStatus;
-        setJobStatus(data);
-        if (data.status === "done" || data.status === "failed") {
-          if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-          setCurrentJobId(null);
-          if (data.status === "done") fetchBooks();
+        const res = await authFetch(`${API_BASE}/v1/admin/tenants`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { tenants?: TenantSummary[]; items?: TenantSummary[] };
+        setTenants(data.tenants ?? data.items ?? []);
+      } catch (err) {
+        if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+          navigate("/login", { replace: true });
+          return;
         }
-      } catch {
-        // ignore
+        setError(t("tenants.load_error"));
+      } finally {
+        setLoading(false);
       }
     };
-    void poll();
-    pollingRef.current = setInterval(() => void poll(), 10_000);
-    return () => { if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; } };
-  }, [currentJobId, fetchBooks]);
+    void load();
+  }, [isSuperAdmin, navigate, t]);
 
-  const uploadEndpoint = isGlobal
-    ? `/v1/admin/knowledge/pdf?tenant=${TENANT}&target=global`
-    : `/v1/admin/knowledge/pdf?tenant=${TENANT}`;
-
-  return (
-    <div style={{ ...CARD_STYLE, marginBottom: 24 }}>
-      <h3 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 12px" }}>
-        {t("knowledge.pdf_title")}
-      </h3>
-      {isSuperAdmin && (
-        <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
-      )}
-      <FileUpload
-        uploadEndpoint={uploadEndpoint}
-        onUploadSuccess={(name) => { setUploadSuccess(name); setTimeout(() => setUploadSuccess(null), 5000); }}
-        onUploadResponse={(data) => {
-          const d = data as { jobId?: string } | null;
-          if (d?.jobId) { setJobStatus({ status: "processing" }); setCurrentJobId(d.jobId); }
-        }}
-      />
-      {uploadSuccess && (
-        <div style={{ marginTop: 10, padding: "12px 16px", borderRadius: 10, background: "rgba(5,46,22,0.5)", border: "1px solid rgba(74,222,128,0.3)", color: "#86efac", fontSize: 14 }}>
-          {t("knowledge.pdf_accepted", { name: uploadSuccess })}
-        </div>
-      )}
-      {jobStatus && (
-        <div style={{
-          marginTop: 10, padding: "12px 16px", borderRadius: 10, fontSize: 14,
-          border: `1px solid ${jobStatus.status === "done" ? "rgba(74,222,128,0.3)" : jobStatus.status === "failed" ? "rgba(248,113,113,0.3)" : "rgba(96,165,250,0.3)"}`,
-          background: jobStatus.status === "done" ? "rgba(5,46,22,0.5)" : jobStatus.status === "failed" ? "rgba(127,29,29,0.4)" : "rgba(23,37,84,0.5)",
-          color: jobStatus.status === "done" ? "#86efac" : jobStatus.status === "failed" ? "#fca5a5" : "#93c5fd",
-        }}>
-          {jobStatus.status === "processing" && t("knowledge.pdf_processing")}
-          {jobStatus.status === "done" && t("knowledge.pdf_done", { pages: jobStatus.pages ?? 0, chunks: jobStatus.chunks ?? 0 })}
-          {jobStatus.status === "failed" && t("knowledge.pdf_failed", { error: jobStatus.error ?? "" })}
-        </div>
-      )}
-      {books.length > 0 && (
-        <p style={{ fontSize: 12, color: "#6b7280", margin: "10px 0 0" }}>
-          {t("knowledge.pdf_registered", { n: books.length })}
-        </p>
-      )}
-    </div>
+  const filtered = tenants.filter((ten) =>
+    ten.name.toLowerCase().includes(search.toLowerCase()) ||
+    ten.slug.toLowerCase().includes(search.toLowerCase())
   );
-}
 
-// ─── メインページ ─────────────────────────────────────────────────────────────
+  // Client Admin → 自テナントに直接リダイレクト（hooks の後）
+  if (!isLoading && isClientAdmin && !isSuperAdmin && user?.tenantId) {
+    return <Navigate to={`/admin/knowledge/${user.tenantId}`} replace />;
+  }
 
-export default function KnowledgePage() {
-  const navigate = useNavigate();
-  const { t } = useLang();
-  const [activeTab, setActiveTab] = useState<Tab>("list");
-
-  useEffect(() => {
-    void (async () => {
-      const token = await getAccessToken();
-      if (!token) navigate("/login", { replace: true });
-    })();
-  }, [navigate]);
-
-  const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: "list", label: t("knowledge.tab_list"), icon: "📋" },
-    { id: "text", label: t("knowledge.tab_text"), icon: "✏️" },
-    { id: "scrape", label: t("knowledge.tab_scrape"), icon: "🌐" },
-  ];
+  if (isLoading) return null;
 
   return (
     <div
@@ -1109,9 +74,9 @@ export default function KnowledgePage() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
           <button
             onClick={() => navigate("/admin")}
-            style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 0", border: "none", background: "none", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "8px 14px", minHeight: 44, borderRadius: 999, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer", fontWeight: 500 }}
           >
-            {t("common.back_to_dashboard")}
+            {t("nav.back_dashboard")}
           </button>
           <LangSwitcher />
         </div>
@@ -1119,47 +84,141 @@ export default function KnowledgePage() {
           {t("knowledge.title")}
         </h1>
         <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-          {t("knowledge.subtitle")}
+          {t("knowledge.select_tenant")}
         </p>
       </header>
 
-      {/* PDFアップロード — super_admin のみ */}
-      <SuperAdminOnly>
-        <PdfSection />
-      </SuperAdminOnly>
+      {/* グローバルナレッジカード */}
+      <button
+        onClick={() => navigate("/admin/knowledge/global")}
+        style={{
+          width: "100%",
+          padding: "20px 24px",
+          minHeight: 72,
+          borderRadius: 14,
+          border: "1px solid rgba(234,179,8,0.3)",
+          background: "rgba(234,179,8,0.06)",
+          color: "#fbbf24",
+          fontSize: 16,
+          fontWeight: 700,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          marginBottom: 20,
+          textAlign: "left",
+        }}
+      >
+        <span style={{ fontSize: 28, flexShrink: 0 }}>📚</span>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#fbbf24" }}>
+            {t("knowledge.global")}
+          </div>
+          <div style={{ fontSize: 13, color: "#92400e", fontWeight: 400, marginTop: 2 }}>
+            {t("knowledge.global_desc")}
+          </div>
+        </div>
+        <span style={{ marginLeft: "auto", fontSize: 20, color: "#fbbf24", opacity: 0.5 }}>›</span>
+      </button>
 
-      {/* タブ */}
-      <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid #1f2937" }}>
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            style={{
-              padding: "12px 20px",
-              minHeight: 48,
-              border: "none",
-              borderBottom: `2px solid ${activeTab === tab.id ? "#22c55e" : "transparent"}`,
-              background: "transparent",
-              color: activeTab === tab.id ? "#4ade80" : "#9ca3af",
-              fontSize: 14,
-              fontWeight: activeTab === tab.id ? 700 : 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              transition: "color 0.15s",
-            }}
-          >
-            <span>{tab.icon}</span>
-            {tab.label}
-          </button>
-        ))}
+      {/* 検索バー */}
+      <div style={{ position: "relative", marginBottom: 16 }}>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={t("knowledge.search_tenant")}
+          style={{
+            width: "100%",
+            padding: "14px 44px 14px 16px",
+            borderRadius: 12,
+            border: "1px solid #374151",
+            background: "rgba(15,23,42,0.8)",
+            color: "#e5e7eb",
+            fontSize: 16,
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+        <span style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", color: "#6b7280", fontSize: 18 }}>
+          🔍
+        </span>
       </div>
 
-      {/* タブコンテンツ */}
-      {activeTab === "list" && <KnowledgeListTab />}
-      {activeTab === "text" && <TextInputTab />}
-      {activeTab === "scrape" && <ScrapeTab onCommitSuccess={() => setActiveTab("list")} />}
+      {/* エラー */}
+      {error && (
+        <div style={{ marginBottom: 16, padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 15 }}>
+          {error}
+        </div>
+      )}
+
+      {/* テナントリスト */}
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
+          <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
+          {t("common.loading")}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", borderRadius: 14, border: "1px dashed #374151", background: "rgba(15,23,42,0.4)", color: "#6b7280", fontSize: 15 }}>
+          {search ? `「${search}」に一致するテナントが見つかりません` : t("tenants.empty")}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {filtered.map((tenant) => (
+            <button
+              key={tenant.id}
+              onClick={() => navigate(`/admin/knowledge/${tenant.id}`)}
+              style={{
+                width: "100%",
+                padding: "16px 20px",
+                minHeight: 64,
+                borderRadius: 14,
+                border: "1px solid #1f2937",
+                background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+                color: "#e5e7eb",
+                fontSize: 15,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                textAlign: "left",
+              }}
+            >
+              <span style={{ fontSize: 24, flexShrink: 0 }}>🏢</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#f9fafb", marginBottom: 2 }}>
+                  {tenant.name}
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", fontFamily: "monospace" }}>
+                  {tenant.slug}
+                  {tenant.status === "inactive" && (
+                    <span style={{ marginLeft: 8, color: "#9ca3af", fontFamily: "inherit" }}>
+                      ({t("tenants.status_inactive")})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <span
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    background: tenant.plan === "pro" ? "rgba(59,130,246,0.15)" : "rgba(107,114,128,0.2)",
+                    color: tenant.plan === "pro" ? "#60a5fa" : "#9ca3af",
+                    border: `1px solid ${tenant.plan === "pro" ? "rgba(96,165,250,0.3)" : "rgba(107,114,128,0.3)"}`,
+                  }}
+                >
+                  {tenant.plan === "pro" ? "Pro" : "Starter"}
+                </span>
+                <span style={{ fontSize: 20, color: "#6b7280" }}>›</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

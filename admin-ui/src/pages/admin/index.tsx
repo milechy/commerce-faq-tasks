@@ -350,65 +350,12 @@ export default function AdminDashboard() {
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <button
-                onClick={() => navigate("/faqs")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
+                onClick={() => {
+                  const knowledgePath = isSuperAdmin
+                    ? "/admin/knowledge"
+                    : `/admin/knowledge/${previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "")}`;
+                  navigate(knowledgePath);
                 }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937";
-                }}
-              >
-                <span style={{ fontSize: 22 }}>💬</span>
-                {t("dashboard.manage_faq")}
-              </button>
-
-              <button
-                onClick={() => navigate("/admin/knowledge")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937";
-                }}
-              >
-                <span style={{ fontSize: 22 }}>📚</span>
-                {t("dashboard.manage_knowledge")}
-              </button>
-
-              <button
-                onClick={() => navigate("/faqs/new")}
                 style={{
                   flex: "1 1 200px",
                   padding: "18px 20px",
@@ -436,8 +383,8 @@ export default function AdminDashboard() {
                     "0 8px 25px rgba(34,197,94,0.25)";
                 }}
               >
-                <span style={{ fontSize: 22 }}>＋</span>
-                {t("dashboard.add_faq")}
+                <span style={{ fontSize: 22 }}>📚</span>
+                {t("dashboard.manage_knowledge")}
               </button>
 
               <SuperAdminOnly>

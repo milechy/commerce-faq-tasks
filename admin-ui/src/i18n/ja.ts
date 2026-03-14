@@ -238,6 +238,15 @@ const ja = {
   "knowledge.global_label": "グローバルナレッジとして登録（全テナント共通）",
   "tenants.load_error": "テナント一覧の読み込みに失敗しました",
 
+  // Knowledge tenant selector
+  "knowledge.select_tenant": "管理するテナントを選択してください",
+  "knowledge.global": "📚 グローバルナレッジ（全テナント共通）",
+  "knowledge.global_desc": "パートナーの書籍・資料はこちらから登録します",
+  "knowledge.tenant_faqs": "{count}件のFAQ",
+  "knowledge.search_tenant": "テナント名で検索...",
+  "nav.back_dashboard": "← ダッシュボードに戻る",
+  "nav.back_knowledge": "← ナレッジ管理に戻る",
+
   // FAQ Edit Modal
   "modal.edit_title": "FAQを編集する",
   "modal.create_title": "FAQを新しく追加する",
