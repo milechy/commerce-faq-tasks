@@ -335,7 +335,7 @@ export function registerFaqCrudRoutes(
   // DELETE /v1/admin/knowledge/faq/bulk
   // FAQ一括削除（最大100件）
   // -------------------------------------------------------------------------
-  app.delete("/v1/admin/knowledge/faq/bulk", async (req: Request, res: Response) => {
+  app.delete("/v1/admin/knowledge/faq/bulk", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -354,7 +354,8 @@ export function registerFaqCrudRoutes(
         `SELECT id FROM faq_docs WHERE id = ANY($1::int[]) AND tenant_id = $2`,
         [ids, tenantId]
       );
-      const ownedIds = (checkResult.rows as { id: number }[]).map((r) => r.id);
+      // BIGINT列はpgが文字列で返すため Number() で正規化して比較
+      const ownedIds = (checkResult.rows as { id: number | string }[]).map((r) => Number(r.id));
       const foreignIds = ids.filter((id) => !ownedIds.includes(id));
       if (foreignIds.length > 0) {
         return res.status(400).json({
