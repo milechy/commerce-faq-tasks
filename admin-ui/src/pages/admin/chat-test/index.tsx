@@ -295,22 +295,9 @@ export default function ChatTestPage() {
             {/* ウィジェット起動済み */}
             {token && !gettingToken && (
               <>
-                <div
-                  style={{
-                    width: "100%",
-                    maxWidth: 420,
-                    minHeight: 120,
-                    margin: "0 auto 16px",
-                    borderRadius: 12,
-                    border: "1px dashed #374151",
-                    padding: "20px",
-                    color: "#4b5563",
-                    fontSize: 13,
-                    textAlign: "center",
-                  }}
-                >
-                  <span>↘ {t("chat_test.widget_placeholder")}</span>
-                </div>
+                <p style={{ textAlign: "center", color: "#9ca3af", fontSize: 15, marginBottom: 16 }}>
+                  👇 右下のボタンからチャットを開けます
+                </p>
                 <div style={{ textAlign: "center" }}>
                   <button
                     onClick={handleReload}
