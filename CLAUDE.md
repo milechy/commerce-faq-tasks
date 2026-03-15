@@ -71,3 +71,35 @@ QWEN_API_KEY, OPENAI_API_KEY
 - Grafana + Prometheus: self-hosted $0-5
 - Slack Webhook: free
 - Groq API: usage-based (120B ratio ≤10%)
+
+## VPSデプロイ手順（必須）
+
+VPSは `dist/src/index.js`（TypeScriptコンパイル済みJS）をPM2で実行しています。
+TypeScriptの変更後は **必ず `pnpm build` が必要** です。
+
+### バックエンド変更時（src/ 配下）
+```bash
+cd ~/Documents/GitHub/commerce-faq-tasks
+git add -A && git commit -m "説明" && git push origin main
+ssh root@65.108.159.161 "cd /opt/rajiuce && git pull origin main && pnpm install && pnpm build && pm2 restart rajiuce-api"
+```
+
+### フロントエンド変更時（admin-ui/ 配下）
+```bash
+cd ~/Documents/GitHub/commerce-faq-tasks
+git add -A && git commit -m "説明" && git push origin main
+ssh root@65.108.159.161 "cd /opt/rajiuce && git pull origin main && cd admin-ui && pnpm build && pm2 restart rajiuce-admin"
+```
+
+### 両方変更時
+```bash
+cd ~/Documents/GitHub/commerce-faq-tasks
+git add -A && git commit -m "説明" && git push origin main
+ssh root@65.108.159.161 "cd /opt/rajiuce && git pull origin main && pnpm install && pnpm build && pm2 restart rajiuce-api && cd admin-ui && pnpm build && pm2 restart rajiuce-admin"
+```
+
+### 重要な注意事項
+- `pnpm build` を忘れるとTypeScriptの変更が反映されない
+- ecosystem.config.cjs の script は `dist/src/index.js`（`dist/index.js` ではない）
+- PM2は `.env` を自動で読まない。dotenv/config がsrc/index.tsの先頭でimportされている
+- Admin UIは `serve -s admin-ui/dist -l 5173` で静的ファイル配信
