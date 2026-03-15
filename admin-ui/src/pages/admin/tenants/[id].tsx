@@ -64,7 +64,7 @@ async function updateTenant(
   data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive" }
 ): Promise<TenantDetail> {
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
-    method: "PUT",
+    method: "PATCH",
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
