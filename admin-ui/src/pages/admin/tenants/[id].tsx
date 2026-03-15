@@ -55,21 +55,27 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
 async function fetchTenantDetail(tenantId: string): Promise<TenantDetail> {
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = (await res.json()) as { tenant?: TenantDetail } | TenantDetail;
-  return ("tenant" in data ? data.tenant : data) as TenantDetail;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = (await res.json()) as any;
+  const data = "tenant" in raw ? raw.tenant : raw;
+  // DB returns is_active: boolean; map to status: "active" | "inactive"
+  return { ...data, status: data.is_active ? "active" : "inactive" } as TenantDetail;
 }
 
 async function updateTenant(
   tenantId: string,
   data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive" }
 ): Promise<TenantDetail> {
+  // Backend expects is_active: boolean (not status string)
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
     method: "PATCH",
-    body: JSON.stringify(data),
+    body: JSON.stringify({ name: data.name, plan: data.plan, is_active: data.status === "active" }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = (await res.json()) as { tenant?: TenantDetail } | TenantDetail;
-  return ("tenant" in json ? json.tenant : json) as TenantDetail;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = (await res.json()) as any;
+  const json = "tenant" in raw ? raw.tenant : raw;
+  return { ...json, status: json.is_active ? "active" : "inactive" } as TenantDetail;
 }
 
 async function fetchApiKeys(tenantId: string): Promise<ApiKey[]> {
