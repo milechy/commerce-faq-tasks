@@ -61,6 +61,20 @@ function upsertToEsAsync(
   }).catch((e) => console.warn("[faqCrud] ES upsert failed", e));
 }
 
+const listQuerySchema = z.object({
+  tenant: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+  search: z.string().max(200).optional(),
+  sort: z.enum(["created_at", "updated_at", "category"]).default("created_at"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+  category: z.string().optional(),
+});
+
+const bulkDeleteSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(100),
+});
+
 const createSchema = z.object({
   question: z.string().min(1).max(500),
   answer: z.string().min(1).max(2000),
@@ -80,7 +94,7 @@ const updateSchema = z.object({
 export function registerFaqCrudRoutes(app: Express, db: Pool): void {
   // -------------------------------------------------------------------------
   // GET /v1/admin/knowledge/faq
-  // FAQ一覧（ページネーション対応）
+  // FAQ一覧（ページネーション・全文検索・ソート対応）
   // -------------------------------------------------------------------------
   app.get("/v1/admin/knowledge/faq", async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
@@ -88,17 +102,27 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
     }
 
-    const category = req.query.category as string | undefined;
-    const isPublishedRaw = req.query.is_published as string | undefined;
-    const limitRaw = Number(req.query.limit ?? 50);
-    const offsetRaw = Number(req.query.offset ?? 0);
+    const parsed = listQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
 
-    const limit = Math.min(isNaN(limitRaw) ? 50 : Math.max(1, limitRaw), 200);
-    const offset = isNaN(offsetRaw) ? 0 : Math.max(0, offsetRaw);
+    const { limit, offset, search, sort, order, category } = parsed.data;
+    const isPublishedRaw = req.query.is_published as string | undefined;
+
+    // sort は許可リストから直接埋め込み（SQLインジェクション対策済み）
+    const SORT_ALLOWLIST = ["created_at", "updated_at", "category"] as const;
+    const safeSortCol = SORT_ALLOWLIST.includes(sort as any) ? sort : "created_at";
+    const safeOrder = order === "asc" ? "ASC" : "DESC";
 
     try {
       const params: unknown[] = [tenantId];
       let whereClause = "WHERE tenant_id = $1";
+
+      if (search) {
+        params.push(`%${search}%`);
+        whereClause += ` AND (question ILIKE $${params.length} OR answer ILIKE $${params.length})`;
+      }
 
       if (category) {
         params.push(category);
@@ -122,12 +146,12 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
         `SELECT id, tenant_id, question, answer, category, tags, is_published, created_at, updated_at
          FROM faq_docs
          ${whereClause}
-         ORDER BY id DESC
+         ORDER BY ${safeSortCol} ${safeOrder}
          LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params
       );
 
-      return res.json({ items: itemsResult.rows, total, limit, offset });
+      return res.json({ faqs: itemsResult.rows, total, limit, offset });
     } catch (err) {
       console.warn("[GET /v1/admin/knowledge/faq]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });
@@ -296,6 +320,78 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
     } catch (err) {
       console.warn("[PUT /v1/admin/knowledge/faq/:id]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // DELETE /v1/admin/knowledge/faq/bulk
+  // FAQ一括削除（最大100件）
+  // -------------------------------------------------------------------------
+  app.delete("/v1/admin/knowledge/faq/bulk", async (req: Request, res: Response) => {
+    const tenantId = resolveTenantId(req);
+    if (!tenantId) {
+      return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
+    }
+
+    const parsed = bulkDeleteSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+
+    const { ids } = parsed.data;
+
+    try {
+      // 全IDが指定テナントに属することを確認
+      const checkResult = await db.query(
+        `SELECT id FROM faq_docs WHERE id = ANY($1::int[]) AND tenant_id = $2`,
+        [ids, tenantId]
+      );
+      const ownedIds = (checkResult.rows as { id: number }[]).map((r) => r.id);
+      const foreignIds = ids.filter((id) => !ownedIds.includes(id));
+      if (foreignIds.length > 0) {
+        return res.status(400).json({
+          error: "指定されたIDの一部がテナントに属していません",
+          foreign_ids: foreignIds,
+        });
+      }
+
+      // PostgreSQLトランザクション内で削除
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `DELETE FROM faq_embeddings
+           WHERE tenant_id = $1
+             AND (metadata->>'faq_id')::bigint = ANY($2::bigint[])`,
+          [tenantId, ids]
+        );
+        await client.query(
+          `DELETE FROM faq_docs WHERE id = ANY($1::int[]) AND tenant_id = $2`,
+          [ids, tenantId]
+        );
+        await client.query("COMMIT");
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
+
+      // ES削除（best-effort、トランザクション外）
+      let failed = 0;
+      for (const id of ids) {
+        try {
+          await deleteFromEs(`${id}_${tenantId}`);
+        } catch {
+          failed++;
+          console.warn(`[DELETE /v1/admin/knowledge/faq/bulk] ES delete failed for id=${id}`);
+        }
+      }
+
+      return res.json({ deleted: ids.length, failed });
+    } catch (err) {
+      console.warn("[DELETE /v1/admin/knowledge/faq/bulk]", err);
+      return res.status(500).json({ error: "一括削除に失敗しました" });
     }
   });
 
