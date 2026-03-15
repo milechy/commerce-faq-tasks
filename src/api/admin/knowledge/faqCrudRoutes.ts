@@ -72,7 +72,7 @@ const listQuerySchema = z.object({
 });
 
 const bulkDeleteSchema = z.object({
-  ids: z.array(z.number().int().positive()).min(1).max(100),
+  ids: z.array(z.coerce.number().int().positive()).min(1).max(100),
 });
 
 const createSchema = z.object({
