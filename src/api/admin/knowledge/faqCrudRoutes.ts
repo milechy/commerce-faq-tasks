@@ -151,7 +151,7 @@ export function registerFaqCrudRoutes(app: Express, db: Pool): void {
         params
       );
 
-      return res.json({ faqs: itemsResult.rows, total, limit, offset });
+      return res.json({ items: itemsResult.rows, total, limit, offset });
     } catch (err) {
       console.warn("[GET /v1/admin/knowledge/faq]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });
