@@ -235,6 +235,9 @@ const ja = {
   "chat_test.api_key_hint": "テナント設定で発行したAPIキーを貼り付けてください",
   "chat_test.launch": "チャットを起動する",
   "chat_test.checking": "確認中...",
+  "chat_test.getting_token": "トークン取得中...",
+  "chat_test.token_error": "トークンの取得に失敗しました。ページを再読み込みしてください。",
+  "chat_test.token_expired": "トークンが期限切れです。ページを再読み込みしてください。",
 
   // Preview mode
   "preview.mode_label": "👁 プレビューモード",

@@ -39,6 +39,7 @@ import {
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
+import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
@@ -519,6 +520,7 @@ if (db) {
 
 // Phase34: 認証情報API
 registerAuthRoutes(app, db);
+registerChatTestRoutes(app);
 
 async function startServer() {
   app.listen(port, () => {

@@ -237,6 +237,9 @@ const en: Record<TranslationKey, string> = {
   "chat_test.api_key_hint": "Paste the API key issued in tenant settings",
   "chat_test.launch": "Launch Chat",
   "chat_test.checking": "Checking...",
+  "chat_test.getting_token": "Getting token...",
+  "chat_test.token_error": "Failed to get token. Please reload the page.",
+  "chat_test.token_expired": "Token expired. Please reload the page.",
 
   // Preview mode
   "preview.mode_label": "👁 Preview Mode",
