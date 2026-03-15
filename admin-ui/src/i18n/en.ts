@@ -260,6 +260,23 @@ const en: Record<TranslationKey, string> = {
   "nav.back_dashboard": "← Back to Dashboard",
   "nav.back_knowledge": "← Back to Knowledge",
 
+  // Knowledge list search/sort/pagination/bulk
+  "knowledge.search_placeholder": "Search FAQs...",
+  "knowledge.sort_label": "Sort:",
+  "knowledge.sort_newest": "Newest",
+  "knowledge.sort_oldest": "Oldest",
+  "knowledge.sort_updated": "Recently Updated",
+  "knowledge.sort_category": "By Category",
+  "knowledge.select_all": "Select All",
+  "knowledge.selected_count": "{n} selected",
+  "knowledge.bulk_delete": "Delete {n} items",
+  "knowledge.clear_selection": "Clear",
+  "knowledge.showing": "Showing {from}–{to} of {total}",
+  "knowledge.page_of": "Page {current} of {total}",
+  "knowledge.per_page": "per page",
+  "knowledge.prev": "← Prev",
+  "knowledge.next": "Next →",
+
   // FAQ Edit Modal
   "modal.edit_title": "Edit FAQ",
   "modal.create_title": "Add New FAQ",

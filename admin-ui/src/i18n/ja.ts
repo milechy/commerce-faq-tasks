@@ -258,6 +258,23 @@ const ja = {
   "nav.back_dashboard": "← ダッシュボードに戻る",
   "nav.back_knowledge": "← ナレッジ管理に戻る",
 
+  // Knowledge list search/sort/pagination/bulk
+  "knowledge.search_placeholder": "FAQを検索...",
+  "knowledge.sort_label": "並び順:",
+  "knowledge.sort_newest": "新しい順",
+  "knowledge.sort_oldest": "古い順",
+  "knowledge.sort_updated": "更新日順",
+  "knowledge.sort_category": "カテゴリ順",
+  "knowledge.select_all": "全選択",
+  "knowledge.selected_count": "{n}件選択中",
+  "knowledge.bulk_delete": "{n}件を削除する",
+  "knowledge.clear_selection": "選択解除",
+  "knowledge.showing": "全{total}件中 {from}〜{to}件を表示",
+  "knowledge.page_of": "{current} / {total} ページ",
+  "knowledge.per_page": "件/ページ",
+  "knowledge.prev": "← 前へ",
+  "knowledge.next": "次へ →",
+
   // FAQ Edit Modal
   "modal.edit_title": "FAQを編集する",
   "modal.create_title": "FAQを新しく追加する",
