@@ -229,6 +229,14 @@ const en: Record<TranslationKey, string> = {
   "chat_test.reset": "Reset Conversation",
   "chat_test.no_access": "You do not have access to this feature",
   "chat_test.need_api_key": "An API key is required for this tenant",
+  "chat_test.select_tenant": "Select tenant to test",
+  "chat_test.no_api_key": "No API key has been issued for this tenant yet",
+  "chat_test.issue_api_key": "Issue API Key →",
+  "chat_test.api_key_label": "Enter API Key",
+  "chat_test.api_key_placeholder": "rjc_...",
+  "chat_test.api_key_hint": "Paste the API key issued in tenant settings",
+  "chat_test.launch": "Launch Chat",
+  "chat_test.checking": "Checking...",
 
   // Preview mode
   "preview.mode_label": "👁 Preview Mode",

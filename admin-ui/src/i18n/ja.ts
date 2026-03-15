@@ -227,6 +227,14 @@ const ja = {
   "chat_test.reset": "会話をリセット",
   "chat_test.no_access": "この機能はご利用いただけません",
   "chat_test.need_api_key": "このテナントのAPIキーが必要です",
+  "chat_test.select_tenant": "テスト対象のテナントを選択",
+  "chat_test.no_api_key": "このテナントのAPIキーがまだ発行されていません",
+  "chat_test.issue_api_key": "APIキーを発行する →",
+  "chat_test.api_key_label": "APIキーを入力してください",
+  "chat_test.api_key_placeholder": "rjc_...",
+  "chat_test.api_key_hint": "テナント設定で発行したAPIキーを貼り付けてください",
+  "chat_test.launch": "チャットを起動する",
+  "chat_test.checking": "確認中...",
 
   // Preview mode
   "preview.mode_label": "👁 プレビューモード",
