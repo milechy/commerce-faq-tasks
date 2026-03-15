@@ -29,6 +29,12 @@ rsync -avz --delete \
   --exclude '.git' \
   --exclude logs \
   --exclude '*.log' \
+  --exclude '*.zip' \
+  --exclude '_bundle' \
+  --exclude '.DS_Store' \
+  --exclude '.vscode' \
+  --exclude '.devcontainer' \
+  --exclude '__pycache__' \
   ./ "${VPS}:${REMOTE_DIR}/"
 
 echo "[2/6] Installing dependencies on VPS..."
