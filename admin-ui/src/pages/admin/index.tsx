@@ -464,7 +464,6 @@ export default function AdminDashboard() {
                   onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 10px 30px rgba(59,130,246,0.5)"; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 25px rgba(59,130,246,0.3)"; }}
                 >
-                  <span style={{ fontSize: 22 }}>💬</span>
                   {t("chat_test.button")}
                 </button>
               )}
