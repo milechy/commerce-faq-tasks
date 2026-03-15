@@ -1,12 +1,14 @@
 // src/api/admin/knowledge/routes.ts
 // Phase29: カーネーション向けナレッジ管理API
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 // @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
+import jwt from "jsonwebtoken";
 import { groqClient } from "../../../agent/llm/groqClient";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
-import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { registerFaqCrudRoutes } from "./faqCrudRoutes";
+import { encryptText } from "../../../lib/crypto/textEncrypt";
 
 const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
@@ -90,7 +92,7 @@ function insertEmbeddingAsync(
     .then((vec) =>
       db.query(
         "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata) VALUES ($1, $2, $3::vector, $4::jsonb)",
-        [tenantId, text, `[${vec.join(",")}]`, JSON.stringify(meta)]
+        [tenantId, encryptText(text), `[${vec.join(",")}]`, JSON.stringify(meta)]
       )
     )
     .catch((e) => console.warn("[knowledge] embedding insert failed", e));
@@ -104,31 +106,117 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
   const db = pool;
 
-  // Supabase JWT 認証を /v1/admin/knowledge 配下に適用
-  app.use("/v1/admin/knowledge", supabaseAuthMiddleware);
+  // ── インライン認証スタック（モジュールキャッシュ問題を回避） ─────────────────
+  // JWT 検証 → req.supabaseUser / req.user をセット
+  function knowledgeAuth(req: Request, res: Response, next: NextFunction): void {
+    const authHeader = req.headers.authorization ?? "";
+
+    if (process.env.NODE_ENV === "development") {
+      // development: 署名検証なしでデコードし req.supabaseUser をセット
+      if (authHeader.startsWith("Bearer ")) {
+        try {
+          (req as any).supabaseUser = jwt.decode(authHeader.slice(7).trim());
+        } catch {
+          // decode 失敗は無視して通す
+        }
+        return setUserAndNext(req, next);
+      }
+      if (req.headers["x-api-key"]) return next();
+      res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
+      return;
+    }
+
+    const secret = process.env.SUPABASE_JWT_SECRET;
+    if (!secret) {
+      // SECRET 未設定時はスキップ（ステージング等）
+      return setUserAndNext(req, next);
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Missing Bearer token" });
+      return;
+    }
+    const token = authHeader.slice(7).trim();
+    try {
+      (req as any).supabaseUser = jwt.verify(token, secret);
+      return setUserAndNext(req, next);
+    } catch (err) {
+      console.warn("[knowledgeAuth] invalid token", err);
+      res.status(401).json({ error: "Invalid token" });
+    }
+  }
+
+  function setUserAndNext(req: Request, next: NextFunction): void {
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    (req as any).user = su
+      ? {
+          id: su.sub ?? su.id ?? "",
+          email: su.email ?? "",
+          role: su.app_metadata?.role ?? su.user_metadata?.role ?? "anonymous",
+          tenantId: su.app_metadata?.tenant_id ?? null,
+        }
+      : { id: "", email: "", role: "anonymous", tenantId: null };
+    next();
+  }
+
+  // role チェック（super_admin / client_admin のみ通過）
+  function requireKnowledgeRole(req: Request, res: Response, next: NextFunction): void {
+    const user = (req as any).user as { role?: string } | undefined;
+    if (!user || !["super_admin", "client_admin"].includes(user.role ?? "")) {
+      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
+      return;
+    }
+    next();
+  }
+
+  // テナント所有チェック（super_admin は全テナントにアクセス可）
+  function requireKnowledgeTenant(req: Request, res: Response, next: NextFunction): void {
+    const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+    if (user?.role === "super_admin") { next(); return; }
+
+    const requestedTenant =
+      (req.params.tenantId as string | undefined) ||
+      (req.query.tenant as string | undefined) ||
+      (req.query.tenant_id as string | undefined) ||
+      (req.headers["x-tenant-id"] as string | undefined);
+
+    if (requestedTenant && requestedTenant !== user?.tenantId) {
+      res.status(403).json({ error: "forbidden", message: "他のテナントのデータにはアクセスできません" });
+      return;
+    }
+    if (!requestedTenant && user?.tenantId) req.query.tenant = user.tenantId;
+    next();
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   // -------------------------------------------------------------------------
   // GET /v1/admin/knowledge
   // faq_docs からナレッジ一覧を返す
   // -------------------------------------------------------------------------
-  app.get("/v1/admin/knowledge", async (req: Request, res: Response) => {
+  app.get("/v1/admin/knowledge", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
+    const user = (req as any).user as { role?: string } | undefined;
     const category = req.query.category as string | undefined;
 
-    if (!tenantId) {
+    if (!tenantId && user?.role !== "super_admin") {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
     }
 
     try {
-      const params: unknown[] = [tenantId];
-      let sql = `
-        SELECT id, tenant_id, question, answer, category, tags, created_at
-        FROM faq_docs
-        WHERE tenant_id = $1
-      `;
+      const params: unknown[] = [];
+      let sql = `SELECT id, tenant_id, question, answer, category, tags, created_at FROM faq_docs`;
+      const conditions: string[] = [];
+
+      if (tenantId) {
+        params.push(tenantId);
+        conditions.push(`tenant_id = $${params.length}`);
+      }
       if (category && category !== "all") {
         params.push(category);
-        sql += ` AND category = $${params.length}`;
+        conditions.push(`category = $${params.length}`);
+      }
+      if (conditions.length > 0) {
+        sql += ` WHERE ${conditions.join(" AND ")}`;
       }
       sql += " ORDER BY id DESC LIMIT 200";
 
@@ -143,8 +231,9 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // -------------------------------------------------------------------------
   // DELETE /v1/admin/knowledge/:id
   // faq_docs + faq_embeddings + ES から削除（tenant_id 一致チェック必須）
+  // global ナレッジは super_admin のみ削除可能
   // -------------------------------------------------------------------------
-  app.delete("/v1/admin/knowledge/:id", async (req: Request, res: Response) => {
+  app.delete("/v1/admin/knowledge/:id", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     const id = Number(req.params.id);
 
@@ -156,13 +245,22 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     try {
-      // tenant_id 一致チェック + es_doc_id 取得
+      // tenant_id 一致チェック + es_doc_id 取得（globalも対象に含める）
       const check = await db.query(
-        "SELECT id, es_doc_id FROM faq_docs WHERE id = $1 AND tenant_id = $2",
+        "SELECT id, es_doc_id, tenant_id FROM faq_docs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'global')",
         [id, tenantId]
       );
       if (check.rowCount === 0) {
         return res.status(404).json({ error: "ナレッジが見つかりません" });
+      }
+
+      // global ナレッジは super_admin のみ削除可能
+      const recordTenantId = check.rows[0].tenant_id as string;
+      if (recordTenantId === "global") {
+        const user = (req as any).user;
+        if (user?.role !== "super_admin") {
+          return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ削除可能です" });
+        }
       }
 
       const esDocId = check.rows[0].es_doc_id as string | null;
@@ -173,13 +271,13 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
          WHERE tenant_id = $1
            AND metadata->>'faq_id' IS NOT NULL
            AND (metadata->>'faq_id')::bigint = $2`,
-        [tenantId, id]
+        [recordTenantId, id]
       );
 
       // faq_docs 削除
       await db.query(
         "DELETE FROM faq_docs WHERE id = $1 AND tenant_id = $2",
-        [id, tenantId]
+        [id, recordTenantId]
       );
 
       // ES 削除（best-effort）
@@ -196,7 +294,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text
   // テキスト → Groq でFAQ生成 → プレビュー用に返す（DB未挿入）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text", async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -233,7 +331,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text/commit
   // プレビュー済みFAQをDB（faq_docs + faq_embeddings）に投入
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text/commit", async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text/commit", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -245,6 +343,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .min(1)
         .max(20),
       category: z.enum(CATEGORIES),
+      target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -253,7 +352,14 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { faqs, category } = parsed.data;
+    const { faqs, category, target: rawTarget } = parsed.data;
+    const target = rawTarget || tenantId;
+
+    // "global" は super_admin のみ許可
+    if (target === "global" && (req as any).user?.role !== "super_admin") {
+      return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+    }
+
     const inserted: number[] = [];
 
     for (const faq of faqs) {
@@ -262,13 +368,13 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
            VALUES ($1, $2, $3, $4, true)
            RETURNING id`,
-          [tenantId, faq.question.slice(0, 500), faq.answer.slice(0, 2000), category]
+          [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), category]
         );
         const faqId = r.rows[0].id as number;
         inserted.push(faqId);
 
         const embText = `${faq.question}\n${faq.answer}`;
-        insertEmbeddingAsync(db, tenantId, embText, faqId, {
+        insertEmbeddingAsync(db, target, embText, faqId, {
           source: "text",
           faq_id: faqId,
         });
@@ -284,7 +390,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/scrape
   // URL取得 → テキスト抽出 → Groq FAQ化 → プレビューとして返す（DB未登録）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape", async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -333,7 +439,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/scrape/commit
   // プレビュー済みFAQ（スクレイプ結果）をDB登録
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape/commit", async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape/commit", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -353,13 +459,21 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .min(1)
         .max(5),
       category: z.enum(CATEGORIES).default("store_info"),
+      target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { items, category } = parsed.data;
+    const { items, category, target: rawTarget } = parsed.data;
+    const target = rawTarget || tenantId;
+
+    // "global" は super_admin のみ許可
+    if (target === "global" && (req as any).user?.role !== "super_admin") {
+      return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+    }
+
     let totalInserted = 0;
 
     for (const item of items) {
@@ -370,7 +484,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
              VALUES ($1, $2, $3, $4, $5, true)
              RETURNING id`,
             [
-              tenantId,
+              target,
               faq.question.slice(0, 500),
               faq.answer.slice(0, 2000),
               category,
@@ -381,7 +495,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           totalInserted++;
 
           const embText = `${faq.question}\n${faq.answer}`;
-          insertEmbeddingAsync(db, tenantId, embText, faqId, {
+          insertEmbeddingAsync(db, target, embText, faqId, {
             source: "scrape",
             faq_id: faqId,
             url: item.url,
@@ -394,6 +508,8 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     return res.status(201).json({ ok: true, inserted: totalInserted });
   });
+
+  registerFaqCrudRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
 
   console.log("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");
 }

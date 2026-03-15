@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { API_BASE } from "../../../lib/api";
+import { API_BASE, authFetch } from "../../../lib/api";
+import { supabase } from "../../../lib/supabaseClient";
 import UsageChart from "../../../components/UsageChart";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
@@ -40,17 +41,6 @@ interface Invoice {
 }
 
 // ─── ユーティリティ ────────────────────────────────────────
-function getAccessToken(): string | null {
-  const raw = localStorage.getItem("supabaseSession");
-  if (!raw) return null;
-  try {
-    return (JSON.parse(raw) as { access_token?: string })?.access_token ?? null;
-  } catch {
-    localStorage.removeItem("supabaseSession");
-    return null;
-  }
-}
-
 function fmtCents(cents: number): string {
   return `¥${Math.round(cents / 100).toLocaleString("ja-JP")}`;
 }
@@ -194,17 +184,15 @@ export default function BillingPage() {
 
   // テナント一覧を取得
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) {
-      navigate("/login", { replace: true });
-      return;
-    }
+    void (async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        navigate("/login", { replace: true });
+        return;
+      }
 
-    (async () => {
       try {
-        const res = await fetch(`${API_BASE}/v1/admin/tenants`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await authFetch(`${API_BASE}/v1/admin/tenants`);
         if (res.ok) {
           const data = (await res.json()) as { tenants: Tenant[] };
           setTenants(data.tenants);
@@ -233,24 +221,17 @@ export default function BillingPage() {
   // 請求データを取得
   const fetchBillingData = useCallback(async () => {
     if (!selectedTenantId) return;
-    const token = getAccessToken();
-    if (!token) {
-      navigate("/login", { replace: true });
-      return;
-    }
 
     setLoadingData(true);
     setError(null);
 
     try {
       const [summaryRes, invoicesRes] = await Promise.allSettled([
-        fetch(
-          `${API_BASE}/v1/admin/billing/summary?tenantId=${selectedTenantId}&month=${selectedMonth}`,
-          { headers: { Authorization: `Bearer ${token}` } }
+        authFetch(
+          `${API_BASE}/v1/admin/billing/usage?tenantId=${selectedTenantId}&month=${selectedMonth}`
         ),
-        fetch(
-          `${API_BASE}/v1/admin/billing/invoices?tenantId=${selectedTenantId}`,
-          { headers: { Authorization: `Bearer ${token}` } }
+        authFetch(
+          `${API_BASE}/v1/admin/billing/invoices?tenantId=${selectedTenantId}`
         ),
       ]);
 

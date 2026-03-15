@@ -49,7 +49,7 @@ export function createCorsMiddleware(opts: CorsOptions = {}) {
     res.setHeader("Access-Control-Expose-Headers", EXPOSED_HEADERS);
     res.setHeader(
       "Access-Control-Allow-Methods",
-      "GET, POST, PUT, DELETE, OPTIONS"
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     );
     res.setHeader("Access-Control-Max-Age", "86400");
 

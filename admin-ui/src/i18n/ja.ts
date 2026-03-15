@@ -227,6 +227,17 @@ const ja = {
   "chat_test.reset": "会話をリセット",
   "chat_test.no_access": "この機能はご利用いただけません",
   "chat_test.need_api_key": "このテナントのAPIキーが必要です",
+  "chat_test.select_tenant": "テスト対象のテナントを選択",
+  "chat_test.no_api_key": "このテナントのAPIキーがまだ発行されていません",
+  "chat_test.issue_api_key": "APIキーを発行する →",
+  "chat_test.api_key_label": "APIキーを入力してください",
+  "chat_test.api_key_placeholder": "rjc_...",
+  "chat_test.api_key_hint": "テナント設定で発行したAPIキーを貼り付けてください",
+  "chat_test.launch": "チャットを起動する",
+  "chat_test.checking": "確認中...",
+  "chat_test.getting_token": "トークン取得中...",
+  "chat_test.token_error": "トークンの取得に失敗しました。ページを再読み込みしてください。",
+  "chat_test.token_expired": "トークンが期限切れです。ページを再読み込みしてください。",
 
   // Preview mode
   "preview.mode_label": "👁 プレビューモード",
@@ -237,6 +248,15 @@ const ja = {
   // Knowledge global
   "knowledge.global_label": "グローバルナレッジとして登録（全テナント共通）",
   "tenants.load_error": "テナント一覧の読み込みに失敗しました",
+
+  // Knowledge tenant selector
+  "knowledge.select_tenant": "管理するテナントを選択してください",
+  "knowledge.global": "📚 グローバルナレッジ（全テナント共通）",
+  "knowledge.global_desc": "パートナーの書籍・資料はこちらから登録します",
+  "knowledge.tenant_faqs": "{count}件のFAQ",
+  "knowledge.search_tenant": "テナント名で検索...",
+  "nav.back_dashboard": "← ダッシュボードに戻る",
+  "nav.back_knowledge": "← ナレッジ管理に戻る",
 
   // FAQ Edit Modal
   "modal.edit_title": "FAQを編集する",

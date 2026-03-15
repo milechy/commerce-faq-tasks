@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+// @ts-ignore
+import { Pool } from "pg";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import express from "express";
 import multer from "multer";
@@ -35,6 +37,17 @@ import {
   type SalesPhase,
 } from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
+import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
+import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
+import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
+import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
+import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
+import { initUsageTracker } from "./lib/billing/usageTracker";
+import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
+import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
+import { langDetectMiddleware } from "./api/middleware/langDetect";
+import { registerAuthRoutes } from "./api/auth/routes";
+import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
   ceFlagFromRerankResult,
@@ -46,6 +59,13 @@ import {
 const app = express();
 app.disable("x-powered-by");
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
+
+// ---------------------------------------------------------------------------
+// DB pool (shared across admin routes)
+// ---------------------------------------------------------------------------
+const db = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : null;
 
 // ---------------------------------------------------------------------------
 // Seed tenant registry (env / JSON) — must run before middleware init
@@ -132,6 +152,7 @@ const apiStack = [
   authMiddleware,        // 2. Auth → tenantId
   tenantContext,         // 3. Load TenantConfig
   securityPolicy,        // 4. Per-tenant policy
+  langDetectMiddleware,  // 5. Phase33: Accept-Language → req.lang
 ] as express.RequestHandler[];
 
 logger.info({
@@ -393,13 +414,23 @@ const pdfUpload = multer({
   },
 });
 
-// POST /v1/admin/knowledge/pdf — JWT 認証 → tenantId 取得 → バックグラウンド OCR
+// POST /v1/admin/knowledge/pdf — JWT 認証 → Super Admin専用 → tenantId 取得 → バックグラウンド OCR
 app.post(
   "/v1/admin/knowledge/pdf",
   ...apiStack,
+  supabaseAuthMiddleware,
+  roleAuthMiddleware,
+  requireRole("super_admin"),
   pdfUpload.single("file"),
   async (req: express.Request, res: express.Response): Promise<void> => {
     const tenantId = (req as AuthedRequest).tenantId;
+    const target: string = (req.body?.target as string | undefined) || tenantId;
+
+    // "global" は super_admin のみ許可
+    if (target === "global" && (req as any).user?.role !== "super_admin") {
+      res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+      return;
+    }
 
     if (!req.file) {
       res
@@ -427,14 +458,14 @@ app.post(
     // バックグラウンド実行 (fire-and-forget)
     void (async () => {
       try {
-        const result = await runOcrPipeline(pdfBuffer, tenantId);
+        const result = await runOcrPipeline(pdfBuffer, target);
         ocrJobs.set(jobId, { status: "done", ...result });
         scheduleOcrJobCleanup(jobId); // [P1-2] TTL 30分
-        logger.info({ jobId, tenantId, ...result }, "[ocr] pipeline completed");
+        logger.info({ jobId, tenantId, target, ...result }, "[ocr] pipeline completed");
       } catch (err) {
         const message =
           err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
-        logger.error({ jobId, tenantId, error: message }, "[ocr] pipeline failed");
+        logger.error({ jobId, tenantId, target, error: message }, "[ocr] pipeline failed");
         ocrJobs.set(jobId, { status: "failed", error: message });
         scheduleOcrJobCleanup(jobId); // [P1-2] TTL 30分
       }
@@ -463,8 +494,33 @@ app.get(
 
 const port = Number(process.env.PORT || 3000);
 
+// Legacy FAQ admin routes (/admin/faqs)
+registerFaqAdminRoutes(app);
+
 // Phase29: ナレッジ管理API
 registerKnowledgeAdminRoutes(app);
+
+// Phase31: テナント管理API
+if (db) registerTenantAdminRoutes(app, db);
+
+// Phase32: 課金管理API
+if (db) initUsageTracker(db, logger);
+
+// Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
+app.post(
+  "/v1/billing/webhook",
+  express.raw({ type: "application/json" }),
+  createStripeWebhookHandler(db, logger)
+);
+
+// 課金管理API（Super Admin認証）
+if (db) {
+  registerBillingAdminRoutes(app, db, logger, [supabaseAuthMiddleware, superAdminMiddleware]);
+}
+
+// Phase34: 認証情報API
+registerAuthRoutes(app, db);
+registerChatTestRoutes(app);
 
 async function startServer() {
   app.listen(port, () => {

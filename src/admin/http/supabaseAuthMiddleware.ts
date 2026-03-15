@@ -14,12 +14,21 @@ export function supabaseAuthMiddleware(
   res: Response,
   next: NextFunction
 ) {
-  // development: X-Api-Key または Bearer token で認証を通す
+  // development: 署名検証なしで JWT をデコードし req.supabaseUser をセットして通す
+  // （roleAuthMiddleware が role を正しく解決できるようにするため decode は必須）
   if (process.env.NODE_ENV === "development") {
+    const authHeader = req.headers.authorization ?? "";
+    if (authHeader.startsWith("Bearer ")) {
+      const token = authHeader.slice("Bearer ".length).trim();
+      try {
+        (req as any).supabaseUser = jwt.decode(token);
+      } catch {
+        // decode 失敗は無視して通す
+      }
+      return next();
+    }
     const apiKey = req.headers["x-api-key"];
     if (apiKey) return next();
-    const authHeader = req.headers.authorization ?? "";
-    if (authHeader.startsWith("Bearer ")) return next();
     return res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
   }
 

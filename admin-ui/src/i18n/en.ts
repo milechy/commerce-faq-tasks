@@ -229,6 +229,17 @@ const en: Record<TranslationKey, string> = {
   "chat_test.reset": "Reset Conversation",
   "chat_test.no_access": "You do not have access to this feature",
   "chat_test.need_api_key": "An API key is required for this tenant",
+  "chat_test.select_tenant": "Select tenant to test",
+  "chat_test.no_api_key": "No API key has been issued for this tenant yet",
+  "chat_test.issue_api_key": "Issue API Key →",
+  "chat_test.api_key_label": "Enter API Key",
+  "chat_test.api_key_placeholder": "rjc_...",
+  "chat_test.api_key_hint": "Paste the API key issued in tenant settings",
+  "chat_test.launch": "Launch Chat",
+  "chat_test.checking": "Checking...",
+  "chat_test.getting_token": "Getting token...",
+  "chat_test.token_error": "Failed to get token. Please reload the page.",
+  "chat_test.token_expired": "Token expired. Please reload the page.",
 
   // Preview mode
   "preview.mode_label": "👁 Preview Mode",
@@ -239,6 +250,15 @@ const en: Record<TranslationKey, string> = {
   // Knowledge global
   "knowledge.global_label": "Register as Global Knowledge (shared across all tenants)",
   "tenants.load_error": "Failed to load tenant list",
+
+  // Knowledge tenant selector
+  "knowledge.select_tenant": "Select a tenant to manage",
+  "knowledge.global": "📚 Global Knowledge (shared across all tenants)",
+  "knowledge.global_desc": "Register partner books and materials here",
+  "knowledge.tenant_faqs": "{count} FAQs",
+  "knowledge.search_tenant": "Search by tenant name...",
+  "nav.back_dashboard": "← Back to Dashboard",
+  "nav.back_knowledge": "← Back to Knowledge",
 
   // FAQ Edit Modal
   "modal.edit_title": "Edit FAQ",
