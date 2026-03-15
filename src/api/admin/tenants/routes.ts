@@ -61,7 +61,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
 
   function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
     const su = (req as any).supabaseUser as Record<string, any> | undefined;
-    const role = su?.app_metadata?.role ?? su?.user_metadata?.role ?? "anonymous";
+    const role = su?.app_metadata?.role ?? su?.user_metadata?.role ?? su?.role ?? "anonymous";
     if (role !== "super_admin") {
       res.status(403).json({ error: "forbidden", message: "スーパー管理者のみアクセスできます" });
       return;

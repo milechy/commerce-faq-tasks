@@ -25,8 +25,8 @@ async function issueApiKey(tenantId: string): Promise<string> {
     },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = (await res.json()) as { key?: string; apiKey?: string; plaintext?: string };
-  const key = json.key ?? json.apiKey ?? json.plaintext;
+  const json = (await res.json()) as { api_key?: string; key?: string; apiKey?: string; plaintext?: string };
+  const key = json.api_key ?? json.key ?? json.apiKey ?? json.plaintext;
   if (!key) throw new Error("APIキーが返されませんでした");
   return key;
 }

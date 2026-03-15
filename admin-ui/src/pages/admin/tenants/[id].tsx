@@ -75,8 +75,16 @@ async function updateTenant(
 async function fetchApiKeys(tenantId: string): Promise<ApiKey[]> {
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}/keys`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = (await res.json()) as { keys?: ApiKey[]; items?: ApiKey[] };
-  return data.keys ?? data.items ?? [];
+  const data = (await res.json()) as {
+    keys?: Array<{ id: string; key_prefix: string; prefix?: string; is_active: boolean; created_at: string; last_used_at: string | null }>;
+  };
+  return (data.keys ?? []).map((k) => ({
+    id: k.id,
+    maskedKey: k.prefix ?? (k.key_prefix + "****"),
+    status: k.is_active ? "active" : "revoked",
+    createdAt: k.created_at,
+    lastUsedAt: k.last_used_at,
+  }));
 }
 
 async function revokeApiKey(tenantId: string, keyId: string): Promise<void> {
