@@ -14,6 +14,19 @@
 ## 申請リスト
 （まだなし）
 
+## Phase38 Step6: Stream B への通知
+
+テナント設定画面（admin-ui）に以下のUI追加をお願いします:
+
+- テナント詳細ページ（/admin/tenants/:id）に `system_prompt` の textarea を追加
+- サイズ: 幅100%, 最低8行, placeholder: "あなたは〇〇のAIアシスタントです..."
+- 文字数制限: 5000文字（超過時にリアルタイムカウンター表示）
+- 保存: PATCH /v1/admin/tenants/:id に `{ system_prompt }` を含めて送信
+- 空文字送信でリセット可能
+- GET /v1/admin/tenants/:id のレスポンスに `system_prompt` フィールドが含まれます
+
+---
+
 ## Phase38: チューニングルールAPI (Stream A, Step4-BE)
 
 - GET /v1/admin/tuning-rules: ルール一覧（テナントフィルタ対応）(Stream A, Phase38)

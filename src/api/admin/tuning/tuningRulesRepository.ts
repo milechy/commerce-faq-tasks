@@ -208,6 +208,32 @@ export async function deleteRule(
 }
 
 // ---------------------------------------------------------------------------
+// テナント固有システムプロンプト取得
+// ---------------------------------------------------------------------------
+
+/**
+ * tenants.system_prompt を取得する。
+ * カラムが存在しない / 空の場合は null を返す。
+ * テーブルまたはカラムが存在しない場合は null を返す（migration未実行環境でも安全）。
+ */
+export async function getTenantSystemPrompt(
+  tenantId: string,
+): Promise<string | null> {
+  const pool = getPool();
+  try {
+    const result = await pool.query<{ system_prompt: string | null }>(
+      `SELECT system_prompt FROM tenants WHERE id = $1`,
+      [tenantId],
+    );
+    const raw = result.rows[0]?.system_prompt;
+    return raw && raw.trim() ? raw.trim() : null;
+  } catch {
+    // カラム未追加など（migration前のデプロイ）は null を返す
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // プロンプト注入用ユーティリティ
 // ---------------------------------------------------------------------------
 

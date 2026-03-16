@@ -6,6 +6,7 @@ import pino from "pino";
 import {
   getActiveRulesForTenant,
   buildTuningPromptSection,
+  getTenantSystemPrompt,
 } from "../../api/admin/tuning/tuningRulesRepository";
 
 import {
@@ -1745,7 +1746,7 @@ async function callAnswerLLM(
   const prompt = buildAnswerPrompt(payload);
   const maxTokens = payload.safeMode ? 320 : 256;
 
-  // Phase38 Step5: チューニングルールをシステムプロンプトに動的注入
+  // Phase38 Step5+6: テナント固有プロンプト + チューニングルールを動的注入
   // TODO: cache tuning rules per tenant (TTL 5min) for performance
   const BASE_ANSWER_SYSTEM =
     "You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.";
@@ -1753,14 +1754,17 @@ async function callAnswerLLM(
   try {
     const tenantId = payload.input.tenantId;
     if (tenantId) {
-      const rules = await getActiveRulesForTenant(tenantId);
+      // Phase38 Step6: テナント固有 system_prompt を優先使用
+      const [tenantPrompt, rules] = await Promise.all([
+        getTenantSystemPrompt(tenantId),
+        getActiveRulesForTenant(tenantId),
+      ]);
+      const basePrompt = tenantPrompt ?? BASE_ANSWER_SYSTEM;
       const tuningSection = buildTuningPromptSection(rules);
-      if (tuningSection) {
-        systemContent = `${BASE_ANSWER_SYSTEM}\n\n${tuningSection}`;
-      }
+      systemContent = tuningSection ? `${basePrompt}\n\n${tuningSection}` : basePrompt;
     }
   } catch (err) {
-    logger.warn({ err }, "[tuning] failed to load rules for LangGraph answer");
+    logger.warn({ err }, "[tuning] failed to load system prompt for LangGraph answer");
   }
 
   const start = Date.now();
