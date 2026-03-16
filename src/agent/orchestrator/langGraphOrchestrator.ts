@@ -3,11 +3,6 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import crypto from "crypto";
 import pino from "pino";
-import {
-  getActiveRulesForTenant,
-  buildTuningPromptSection,
-  getTenantSystemPrompt,
-} from "../../api/admin/tuning/tuningRulesRepository";
 
 import {
   defaultFlowBudgets,
@@ -1747,27 +1742,6 @@ async function callAnswerLLM(
   const prompt = buildAnswerPrompt(payload);
   const maxTokens = payload.safeMode ? 320 : 256;
 
-  // Phase38 Step5+6: テナント固有プロンプト + チューニングルールを動的注入
-  // TODO: cache tuning rules per tenant (TTL 5min) for performance
-  const BASE_ANSWER_SYSTEM =
-    "You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.";
-  let systemContent = BASE_ANSWER_SYSTEM;
-  try {
-    const tenantId = payload.input.tenantId;
-    if (tenantId) {
-      // Phase38 Step6: テナント固有 system_prompt を優先使用
-      const [tenantPrompt, rules] = await Promise.all([
-        getTenantSystemPrompt(tenantId),
-        getActiveRulesForTenant(tenantId),
-      ]);
-      const basePrompt = tenantPrompt ?? BASE_ANSWER_SYSTEM;
-      const tuningSection = buildTuningPromptSection(rules);
-      systemContent = tuningSection ? `${basePrompt}\n\n${tuningSection}` : basePrompt;
-    }
-  } catch (err) {
-    logger.warn({ err }, "[tuning] failed to load system prompt for LangGraph answer");
-  }
-
   const start = Date.now();
   const raw = await callGroqWith429Retry(
     {
@@ -1775,7 +1749,8 @@ async function callAnswerLLM(
       messages: [
         {
           role: "system",
-          content: systemContent,
+          content:
+            "You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.",
         },
         { role: "user", content: prompt },
       ],
