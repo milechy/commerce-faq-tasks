@@ -47,12 +47,13 @@ function upsertToEsAsync(
   tenantId: string,
   faqId: number,
   question: string,
-  answer: string
+  answer: string,
+  isPublished = true
 ): void {
   const esUrl = process.env.ES_URL;
   const index = process.env.ES_FAQ_INDEX || "faqs";
   if (!esUrl) return;
-  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId };
+  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: isPublished };
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${faqId}_${tenantId}`;
   fetch(url, {
     method: "PUT",
@@ -230,12 +231,12 @@ export function registerFaqCrudRoutes(
         [tenantId, question, answer, category ?? null, tags, is_published]
       );
 
-      const row = result.rows[0] as { id: number; question: string; answer: string };
+      const row = result.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
       const faqId = row.id;
       const embText = `${row.question}\n${row.answer}`;
 
       insertEmbeddingAsync(db, tenantId, embText, faqId, { source: "faq_crud", faq_id: faqId });
-      upsertToEsAsync(tenantId, faqId, row.question, row.answer);
+      upsertToEsAsync(tenantId, faqId, row.question, row.answer, row.is_published);
 
       return res.status(201).json(row);
     } catch (err) {
@@ -303,7 +304,7 @@ export function registerFaqCrudRoutes(
         ]
       );
 
-      const updated = updateResult.rows[0] as { id: number; question: string; answer: string };
+      const updated = updateResult.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
 
       // 古い embedding を削除し再挿入
       try {
@@ -322,7 +323,7 @@ export function registerFaqCrudRoutes(
         source: "faq_crud",
         faq_id: updated.id,
       });
-      upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer);
+      upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer, updated.is_published);
 
       return res.json(updated);
     } catch (err) {

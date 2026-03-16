@@ -233,6 +233,8 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [publishFilter, setPublishFilter] = useState<"all" | "published" | "draft">("all");
+  const [togglingId, setTogglingId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
     id: number;
     question: string;
@@ -261,6 +263,8 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     try {
       const params = new URLSearchParams({ tenant: tenantId });
       if (categoryFilter !== "all") params.set("category", categoryFilter);
+      if (publishFilter === "published") params.set("is_published", "true");
+      if (publishFilter === "draft") params.set("is_published", "false");
 
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?${params}`);
       if (!res.ok) throw new Error(t("knowledge.load_error"));
@@ -275,7 +279,7 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [navigate, tenantId, categoryFilter, t]);
+  }, [navigate, tenantId, categoryFilter, publishFilter, t]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
@@ -300,6 +304,34 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
       setDeleteTarget((prev) =>
         prev ? { ...prev, state: "error", error: err instanceof Error ? err.message : t("knowledge.delete_error") } : null
       );
+    }
+  };
+
+  const handleTogglePublish = async (item: KnowledgeItem) => {
+    setTogglingId(item.id);
+    try {
+      const newState = !item.is_published;
+      await fetchWithAuth(
+        `${API_BASE}/v1/admin/knowledge/faq/${item.id}?tenant=${tenantId}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: item.question,
+            answer: item.answer,
+            category: item.category ?? undefined,
+            tags: item.tags ?? [],
+            is_published: newState,
+          }),
+        }
+      );
+      setItems((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, is_published: newState } : i))
+      );
+    } catch {
+      // no-op
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -337,7 +369,7 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
       </button>
 
       {/* フィルター */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 14, color: "#9ca3af" }}>{t("knowledge.category_filter")}</span>
         {[{ value: "all", label: t("knowledge.all") }, ...CATEGORIES].map((c) => (
           <button
@@ -374,6 +406,31 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
         >
           {loading ? t("knowledge.refreshing") : t("common.refresh")}
         </button>
+      </div>
+      {/* 公開状態フィルター */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
+        {(["all", "published", "draft"] as const).map((v) => {
+          const label = v === "all" ? (lang === "en" ? "All" : "すべて") : v === "published" ? (lang === "en" ? "Published" : "公開中") : (lang === "en" ? "Draft" : "非公開");
+          const active = publishFilter === v;
+          return (
+            <button
+              key={v}
+              onClick={() => setPublishFilter(v)}
+              style={{
+                padding: "4px 12px",
+                minHeight: 32,
+                borderRadius: 999,
+                border: `1px solid ${active ? "#3b82f6" : "#374151"}`,
+                background: active ? "rgba(59,130,246,0.15)" : "transparent",
+                color: active ? "#93c5fd" : "#6b7280",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       {error && (
@@ -412,6 +469,8 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                 gap: 14,
                 alignItems: "flex-start",
                 flexWrap: "wrap",
+                opacity: item.is_published === false ? 0.55 : 1,
+                transition: "opacity 0.2s",
               }}
             >
               <div style={{ flex: 1, minWidth: 200 }}>
@@ -427,6 +486,19 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                   }}>
                     {categoryLabel(item.category)}
                   </span>
+                  <span style={{
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: item.is_published === false ? "rgba(75,85,99,0.3)" : "rgba(34,197,94,0.08)",
+                    border: `1px solid ${item.is_published === false ? "#4b5563" : "rgba(34,197,94,0.2)"}`,
+                    color: item.is_published === false ? "#6b7280" : "#86efac",
+                    fontSize: 11,
+                    fontWeight: 600,
+                  }}>
+                    {item.is_published === false
+                      ? (lang === "en" ? "⏸️ Draft" : "⏸️ 非公開")
+                      : (lang === "en" ? "✅ Published" : "✅ 公開中")}
+                  </span>
                   <span style={{ fontSize: 11, color: "#6b7280" }}>{formatDate(item.created_at, locale)}</span>
                 </div>
                 <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 4px", lineHeight: 1.4 }}>
@@ -436,7 +508,28 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                   A: {item.answer.slice(0, 120)}{item.answer.length > 120 ? "…" : ""}
                 </p>
               </div>
-              <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  onClick={() => handleTogglePublish(item)}
+                  disabled={togglingId === item.id}
+                  style={{
+                    padding: "10px 14px",
+                    minHeight: 44,
+                    borderRadius: 10,
+                    border: `1px solid ${item.is_published === false ? "rgba(34,197,94,0.4)" : "#4b5563"}`,
+                    background: item.is_published === false ? "rgba(34,197,94,0.1)" : "rgba(75,85,99,0.15)",
+                    color: item.is_published === false ? "#4ade80" : "#9ca3af",
+                    fontSize: 13,
+                    cursor: togglingId === item.id ? "default" : "pointer",
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                    opacity: togglingId === item.id ? 0.6 : 1,
+                  }}
+                >
+                  {item.is_published === false
+                    ? (lang === "en" ? "Publish" : "公開する")
+                    : (lang === "en" ? "Unpublish" : "非公開にする")}
+                </button>
                 <button
                   onClick={() =>
                     setEditTarget({

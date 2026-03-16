@@ -37,10 +37,38 @@ function resolveTenantId(req: Request): string | null {
   return fromQuery || fromHeader || null;
 }
 
-/** 重複チェック用の質問正規化（句読点・空白・大文字小文字を無視） */
+/** 重複チェック用の質問正規化（句読点・空白・大文字小文字・助詞末尾を無視） */
 function normalizeQuestion(q: string): string {
   return q.toLowerCase().replace(/[？?。、！!　\s]+/g, "").trim();
 }
+
+/** 文字バイグラムセットを生成 */
+function bigrams(s: string): Set<string> {
+  const r = new Set<string>();
+  for (let i = 0; i < s.length - 1; i++) r.add(s.slice(i, i + 2));
+  return r;
+}
+
+/**
+ * バイグラム包含度による類似度（0-1）
+ * 短い方の文字列のバイグラムが長い方に何割含まれるかを返す。
+ * 例: "営業時間は" vs "営業時間を教えてください" → 0.75
+ */
+function bigramSimilarity(a: string, b: string): number {
+  const na = normalizeQuestion(a);
+  const nb = normalizeQuestion(b);
+  if (na === nb) return 1.0;
+  const ba = bigrams(na);
+  const bb = bigrams(nb);
+  if (ba.size === 0 || bb.size === 0) return 0;
+  const [shorter, longer] = ba.size <= bb.size ? [ba, bb] : [bb, ba];
+  let inter = 0;
+  for (const g of shorter) if (longer.has(g)) inter++;
+  // containment: shorter の bigram が longer に何割含まれるか
+  return inter / shorter.size;
+}
+
+const DUPLICATE_THRESHOLD = 0.6;
 
 /**
  * テキスト→FAQ変換。
@@ -388,18 +416,20 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         return res.status(422).json({ error: "FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください。" });
       }
 
-      // 重複チェック: 生成されたFAQと既存FAQを正規化比較
-      const existingNorm = new Map<string, { question: string; answer: string }>(
-        existingRows.map((r) => [normalizeQuestion(r.question), r])
-      );
+      // 重複チェック: バイグラム類似度で既存FAQとのマッチを判定（同義表現も検出）
       const previewWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
-        const norm = normalizeQuestion(faq.question);
-        const match = existingNorm.get(norm);
+        let bestMatch: { question: string; answer: string } | null = null;
+        let bestScore = 0;
+        for (const row of existingRows) {
+          const score = bigramSimilarity(faq.question, row.question);
+          if (score > bestScore) { bestScore = score; bestMatch = row; }
+        }
         return {
           ...faq,
-          duplicate: match
-            ? { existingQuestion: match.question, existingAnswer: match.answer }
-            : null,
+          duplicate:
+            bestMatch && bestScore >= DUPLICATE_THRESHOLD
+              ? { existingQuestion: bestMatch.question, existingAnswer: bestMatch.answer }
+              : null,
         };
       });
 
@@ -445,23 +475,21 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
-    // コミット時の重複スキップ: 既存の質問と完全一致するものは登録しない
-    let existingNormAtCommit = new Set<string>();
+    // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ
+    let existingQuestionsAtCommit: string[] = [];
     try {
-      const r = await db.query(
-        "SELECT question FROM faq_docs WHERE tenant_id = $1",
-        [target]
-      );
-      existingNormAtCommit = new Set(
-        (r.rows as { question: string }[]).map((row) => normalizeQuestion(row.question))
-      );
+      const r = await db.query("SELECT question FROM faq_docs WHERE tenant_id = $1", [target]);
+      existingQuestionsAtCommit = (r.rows as { question: string }[]).map((row) => row.question);
     } catch { /* non-fatal */ }
 
     const inserted: number[] = [];
     let skipped = 0;
 
     for (const faq of faqs) {
-      if (existingNormAtCommit.has(normalizeQuestion(faq.question))) {
+      const isDuplicate = existingQuestionsAtCommit.some(
+        (q) => bigramSimilarity(faq.question, q) >= DUPLICATE_THRESHOLD
+      );
+      if (isDuplicate) {
         skipped++;
         continue;
       }
@@ -525,9 +553,6 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       } catch { /* non-fatal */ }
     }
     const existingQuestions = existingRows.map((r) => r.question);
-    const existingNorm = new Map<string, { question: string; answer: string }>(
-      existingRows.map((r) => [normalizeQuestion(r.question), r])
-    );
 
     for (const url of urls) {
       try {
@@ -551,13 +576,18 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
         const faqs = await textToFaqs(text, category || null, existingQuestions);
         const faqsWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
-          const norm = normalizeQuestion(faq.question);
-          const match = existingNorm.get(norm);
+          let bestMatch: { question: string; answer: string } | null = null;
+          let bestScore = 0;
+          for (const row of existingRows) {
+            const score = bigramSimilarity(faq.question, row.question);
+            if (score > bestScore) { bestScore = score; bestMatch = row; }
+          }
           return {
             ...faq,
-            duplicate: match
-              ? { existingQuestion: match.question, existingAnswer: match.answer }
-              : null,
+            duplicate:
+              bestMatch && bestScore >= DUPLICATE_THRESHOLD
+                ? { existingQuestion: bestMatch.question, existingAnswer: bestMatch.answer }
+                : null,
           };
         });
         results.push({ url, faqs: faqsWithDuplicate });
@@ -608,16 +638,11 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
-    // コミット時の重複スキップ
-    let existingNormAtCommit = new Set<string>();
+    // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ
+    let existingQuestionsAtScrapeCommit: string[] = [];
     try {
-      const r = await db.query(
-        "SELECT question FROM faq_docs WHERE tenant_id = $1",
-        [target]
-      );
-      existingNormAtCommit = new Set(
-        (r.rows as { question: string }[]).map((row) => normalizeQuestion(row.question))
-      );
+      const r = await db.query("SELECT question FROM faq_docs WHERE tenant_id = $1", [target]);
+      existingQuestionsAtScrapeCommit = (r.rows as { question: string }[]).map((row) => row.question);
     } catch { /* non-fatal */ }
 
     let totalInserted = 0;
@@ -625,7 +650,10 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     for (const item of items) {
       for (const faq of item.faqs) {
-        if (existingNormAtCommit.has(normalizeQuestion(faq.question))) {
+        const isDuplicate = existingQuestionsAtScrapeCommit.some(
+          (q) => bigramSimilarity(faq.question, q) >= DUPLICATE_THRESHOLD
+        );
+        if (isDuplicate) {
           totalSkipped++;
           continue;
         }

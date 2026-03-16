@@ -113,6 +113,17 @@ export async function hybridSearch(
                       { term: { tenant_id: "global" } },
                     ],
                     minimum_should_match: 1,
+                    must: [
+                      {
+                        bool: {
+                          should: [
+                            { term: { is_published: true } },
+                            { bool: { must_not: { exists: { field: "is_published" } } } },
+                          ],
+                          minimum_should_match: 1,
+                        },
+                      },
+                    ],
                   },
                 },
               },
