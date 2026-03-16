@@ -41,8 +41,10 @@ export function registerTuningRoutes(app: Express): void {
   // GET /v1/admin/tuning-rules
   // -----------------------------------------------------------------------
   app.get("/v1/admin/tuning-rules", async (req: Request, res: Response) => {
-    const jwtTenantId: string = (req as any).tenantId ?? "";
-    const isSuperAdmin: boolean = (req as any).role === "super_admin";
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+    const isSuperAdmin: boolean =
+      (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
     // super_admin: ?tenant= で絞り込み可（未指定 = 全テナント）
     // client_admin: 自テナント固有 + global のみ
@@ -63,9 +65,11 @@ export function registerTuningRoutes(app: Express): void {
   // POST /v1/admin/tuning-rules
   // -----------------------------------------------------------------------
   app.post("/v1/admin/tuning-rules", async (req: Request, res: Response) => {
-    const jwtTenantId: string = (req as any).tenantId ?? "";
-    const isSuperAdmin: boolean = (req as any).role === "super_admin";
-    const jwtEmail: string = (req as any).email ?? "";
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+    const isSuperAdmin: boolean =
+      (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+    const jwtEmail: string = su?.email ?? "";
 
     const parsed = createSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -106,8 +110,10 @@ export function registerTuningRoutes(app: Express): void {
   app.put(
     "/v1/admin/tuning-rules/:id",
     async (req: Request, res: Response) => {
-      const jwtTenantId: string = (req as any).tenantId ?? "";
-      const isSuperAdmin: boolean = (req as any).role === "super_admin";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
       const id = Number(req.params["id"]);
       if (!Number.isFinite(id) || id <= 0) {
@@ -145,8 +151,10 @@ export function registerTuningRoutes(app: Express): void {
   app.delete(
     "/v1/admin/tuning-rules/:id",
     async (req: Request, res: Response) => {
-      const jwtTenantId: string = (req as any).tenantId ?? "";
-      const isSuperAdmin: boolean = (req as any).role === "super_admin";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
       const id = Number(req.params["id"]);
       if (!Number.isFinite(id) || id <= 0) {
