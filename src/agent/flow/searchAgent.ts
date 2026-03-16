@@ -145,6 +145,8 @@ export async function runSearchAgent(
     query: q,
     items: rerankResult.items,
     maxChars: 450,
+    // Phase38 Step5: テナント固有のチューニングルールを注入
+    tenantId: effectiveTenantId,
   });
   const tSynth1 = performance.now();
   steps.push({

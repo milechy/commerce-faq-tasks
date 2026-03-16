@@ -3,6 +3,10 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import crypto from "crypto";
 import pino from "pino";
+import {
+  getActiveRulesForTenant,
+  buildTuningPromptSection,
+} from "../../api/admin/tuning/tuningRulesRepository";
 
 import {
   defaultFlowBudgets,
@@ -1741,6 +1745,24 @@ async function callAnswerLLM(
   const prompt = buildAnswerPrompt(payload);
   const maxTokens = payload.safeMode ? 320 : 256;
 
+  // Phase38 Step5: チューニングルールをシステムプロンプトに動的注入
+  // TODO: cache tuning rules per tenant (TTL 5min) for performance
+  const BASE_ANSWER_SYSTEM =
+    "You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.";
+  let systemContent = BASE_ANSWER_SYSTEM;
+  try {
+    const tenantId = payload.input.tenantId;
+    if (tenantId) {
+      const rules = await getActiveRulesForTenant(tenantId);
+      const tuningSection = buildTuningPromptSection(rules);
+      if (tuningSection) {
+        systemContent = `${BASE_ANSWER_SYSTEM}\n\n${tuningSection}`;
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "[tuning] failed to load rules for LangGraph answer");
+  }
+
   const start = Date.now();
   const raw = await callGroqWith429Retry(
     {
@@ -1748,8 +1770,7 @@ async function callAnswerLLM(
       messages: [
         {
           role: "system",
-          content:
-            "You are a commerce FAQ assistant. Answer clearly, in the user locale, and strictly follow any tool / RAG evidence.",
+          content: systemContent,
         },
         { role: "user", content: prompt },
       ],
