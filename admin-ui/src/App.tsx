@@ -13,11 +13,6 @@ import TenantsPage from "./pages/admin/tenants/index";
 import TenantDetailPage from "./pages/admin/tenants/[id]";
 import BillingPage from "./pages/admin/billing/index";
 import ChatTestPage from "./pages/admin/chat-test/index";
-<<<<<<< HEAD
-import ChatHistoryPage from "./pages/admin/chat-history/index";
-import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
-import TuningRulesPage from "./pages/admin/tuning/index";
-=======
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -60,7 +55,6 @@ function ConfigErrorScreen() {
     </div>
   );
 }
->>>>>>> origin/main
 
 export default function App() {
   // Supabase 未設定時はエラー画面を返す（真っ黒にならない）
@@ -103,13 +97,6 @@ export default function App() {
 
         {/* チャットテスト */}
         <Route path="/admin/chat-test" element={<RequireAuth><ChatTestPage /></RequireAuth>} />
-
-        {/* 会話履歴 */}
-        <Route path="/admin/chat-history" element={<RequireAuth><ChatHistoryPage /></RequireAuth>} />
-        <Route path="/admin/chat-history/:sessionId" element={<RequireAuth><ChatHistorySessionPage /></RequireAuth>} />
-
-        {/* チューニングルール */}
-        <Route path="/admin/tuning" element={<RequireAuth><TuningRulesPage /></RequireAuth>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />
