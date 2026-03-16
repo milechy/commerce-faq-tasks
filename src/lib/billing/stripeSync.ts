@@ -103,6 +103,29 @@ async function _reportTenantUsage(
   tenantId: string,
   periodYyyyMm: string
 ): Promise<void> {
+  // Phase39: billing_enabled / billing_free_from / billing_free_until チェック
+  const tenantRow = await db.query(
+    `SELECT billing_enabled, billing_free_from, billing_free_until FROM tenants WHERE id = $1`,
+    [tenantId]
+  );
+  if (tenantRow.rows.length > 0) {
+    const tenant = tenantRow.rows[0];
+    if (!tenant.billing_enabled) {
+      logger.info({ tenantId }, `[billing] ${tenantId}: billing not enabled, skipping Stripe report`);
+      return;
+    }
+    const now = new Date();
+    const freeFrom  = tenant.billing_free_from  ? new Date(tenant.billing_free_from)  : null;
+    const freeUntil = tenant.billing_free_until ? new Date(tenant.billing_free_until) : null;
+    if (freeFrom && freeUntil && now >= freeFrom && now <= freeUntil) {
+      logger.info(
+        { tenantId, freeFrom: tenant.billing_free_from, freeUntil: tenant.billing_free_until },
+        `[billing] ${tenantId}: free period ${tenant.billing_free_from} ~ ${tenant.billing_free_until}, skipping`
+      );
+      return;
+    }
+  }
+
   const { startDate, endDate } = periodToDateRange(periodYyyyMm);
 
   const aggResult = await db.query(

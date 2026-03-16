@@ -165,25 +165,25 @@ describe('calculateBillingAmountCents', () => {
   it('groq-70b (1M/500K): 大きなトークン数でマージン適用が正確', () => {
     // llmUSD  = 0.985
     // total   = 0.985 + 0.0001 = 0.9851 USD
-    // billing = Math.ceil(0.9851 * 2 * 100) = Math.ceil(197.02) = 198
+    // billing = Math.ceil(0.9851 * 5 * 100) = Math.ceil(492.55) = 493
     const result = calculateBillingAmountCents({
       model:        'llama-3.1-70b-versatile',
       inputTokens:  1_000_000,
       outputTokens: 500_000,
     });
-    expect(result).toBe(198);
+    expect(result).toBe(493);
   });
 
   it('groq-8b (1M/1M): 端数なしケースでも正確', () => {
     // llmUSD  = 0.13 (exact)
     // total   = 0.13 + 0.0001 = 0.1301 USD
-    // billing = Math.ceil(0.1301 * 2 * 100) = Math.ceil(26.02) = 27
+    // billing = Math.ceil(0.1301 * 5 * 100) = Math.ceil(65.05) = 66
     const result = calculateBillingAmountCents({
       model:        'llama-3.1-8b-instant',
       inputTokens:  1_000_000,
       outputTokens: 1_000_000,
     });
-    expect(result).toBe(27);
+    expect(result).toBe(66);
   });
 
   it('常に MARGIN_MULTIPLIER × 2 が適用される（サーバーコスト込み）', () => {
