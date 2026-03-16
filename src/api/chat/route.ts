@@ -2,9 +2,13 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { runDialogTurn } from "../../agent/dialog/dialogAgent";
+import { trackUsage } from "../../lib/billing/usageTracker";
 import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts";
 import { t } from "../i18n/messages";
 import type { Lang } from "../i18n/messages";
+
+// チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
+const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? "llama-3.3-70b-versatile";
 
 // ---------------------------------------------------------------------------
 // Zod スキーマ
@@ -159,6 +163,19 @@ export function createChatHandler(logger: Logger) {
       };
 
       res.status(200).json(response);
+
+      // fire-and-forget: 使用量記録（APIレスポンスをブロックしない）
+      const historyText = (body.history ?? []).map((m) => m.content).join("\n");
+      const inputTokens = Math.max(1, Math.round((body.message.length + historyText.length) / 4));
+      const outputTokens = Math.max(1, Math.round(content.length / 4));
+      trackUsage({
+        tenantId,
+        requestId,
+        model: CHAT_LLM_MODEL,
+        inputTokens,
+        outputTokens,
+        featureUsed: "chat",
+      });
     } catch (err) {
       logger.error(
         { requestId, tenantId, err },
