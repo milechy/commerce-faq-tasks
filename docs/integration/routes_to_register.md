@@ -14,6 +14,26 @@
 ## 申請リスト
 （まだなし）
 
+## Phase38: 会話履歴API (Stream A, Step2)
+
+- GET /v1/admin/chat-history/sessions: セッション一覧（ページネーション対応）(Stream A, Phase38)
+  - ファイル: src/api/admin/chat-history/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+  - 権限: super_admin=全テナント, client_admin=自テナントのみ
+
+- GET /v1/admin/chat-history/sessions/:sessionId/messages: セッション内メッセージ取得 (Stream A, Phase38)
+  - ファイル: src/api/admin/chat-history/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase38: 会話履歴API
+import { registerChatHistoryRoutes } from "./api/admin/chat-history/routes";
+
+// 既存の registerTenantAdminRoutes などの近くに追加
+registerChatHistoryRoutes(app);
+```
+
 ## Phase32: 課金管理API (Stream A)
 
 - GET /v1/admin/billing/usage: テナント別使用量集計（日次/月次） (Stream A, Phase32)
