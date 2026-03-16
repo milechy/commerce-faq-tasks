@@ -23,6 +23,13 @@ interface FaqEntry {
   category?: string;
 }
 
+interface FaqEntryWithDuplicate extends FaqEntry {
+  duplicate: {
+    existingQuestion: string;
+    existingAnswer: string;
+  } | null;
+}
+
 /** query/header からテナントIDを解決（bodyから取得禁止 — CLAUDE.md） */
 function resolveTenantId(req: Request): string | null {
   const fromQuery = (req.query.tenant || req.query.tenant_id) as string | undefined;
@@ -30,24 +37,52 @@ function resolveTenantId(req: Request): string | null {
   return fromQuery || fromHeader || null;
 }
 
+/** 重複チェック用の質問正規化（句読点・空白・大文字小文字を無視） */
+function normalizeQuestion(q: string): string {
+  return q.toLowerCase().replace(/[？?。、！!　\s]+/g, "").trim();
+}
+
 /**
  * テキスト→FAQ変換。
  * categoryOverride が指定された場合は全FAQのカテゴリをその値で上書き。
  * 未指定（null/undefined）の場合はAIがカテゴリを自動判定する。
+ * existingQuestions が指定された場合はプロンプトに組み込み重複生成を防止する。
  */
-async function textToFaqs(text: string, categoryOverride?: string | null): Promise<FaqEntry[]> {
+async function textToFaqs(
+  text: string,
+  categoryOverride?: string | null,
+  existingQuestions?: string[]
+): Promise<FaqEntry[]> {
   const model = process.env.GROQ_FAQ_GEN_MODEL ?? "llama-3.3-70b-versatile";
 
-  const prompt = `あなたはFAQ作成の専門家です。
-以下のテキストから、顧客が実際に質問しそうなFAQを生成してください。
+  const existingSection =
+    existingQuestions && existingQuestions.length > 0
+      ? `\n既にこのテナントに登録されているFAQの質問（重複禁止 — 以下と同じ内容は生成しないこと）:\n${existingQuestions
+          .slice(0, 40)
+          .map((q) => `- ${q}`)
+          .join("\n")}\n`
+      : "";
 
-ルール:
-* テキストに明示されている事実のみからFAQを作成する
-* 推測や補完でFAQを増やさない
-* 情報が少ない場合は少ない件数（1〜3個）で構わない
-* テキストと無関係な質問は絶対に生成しない
-* 各FAQに最も適切なカテゴリを自動で判定して付与する
+  const prompt = `あなたはセールス支援FAQの専門家です。
+以下のテキストから、お客様がこの商品・サービスについて質問しそうなFAQを網羅的に生成してください。
 
+重要な原則:
+* テキストに含まれる全ての事実情報をFAQとしてカバーすること
+* お客様の購入・利用判断に影響する情報は必ずFAQ化すること
+* 1つのFAQには1つのトピックのみ（複数の情報を1つにまとめない）
+* テキストに書かれていない情報は推測しないこと
+* 各FAQに最も適切なカテゴリを自動で判定して付与すること
+
+具体的にFAQ化すべき情報の例:
+* 商品のスペック・仕様（各項目を個別のFAQに）
+* 価格・料金
+* 状態・品質に関する情報
+* 付属品・オプション
+* 保証・アフターサービス
+* 予約・購入方法
+* 店舗情報・営業時間
+* キャンペーン・割引
+${existingSection}
 カテゴリの判定基準:
 * 商品・サービスの詳細情報 → "product_info"
 * 料金・価格・支払い方法 → "pricing"
@@ -58,22 +93,19 @@ async function textToFaqs(text: string, categoryOverride?: string | null): Promi
 * 予約・申し込み方法 → "booking"
 * 保証・アフターサービス → "warranty"
 * よくある質問・一般 → "general"
-* 上記に当てはまらない場合はテキストの内容から適切なカテゴリ名を英語スネークケースで付与する
+* 上記に当てはまらない場合 → 適切なカテゴリ名を英語スネークケースで生成
 
 テキスト:
-${text.slice(0, 3000)}
+${text.slice(0, 4000)}
 
-以下のJSON配列のみを出力してください（説明文・コードブロック記号は不要）:
-[
-  {"question": "質問1", "answer": "回答1", "category": "store_info"},
-  {"question": "質問2", "answer": "回答2", "category": "pricing"}
-]`;
+出力形式: JSON配列のみ（他のテキストは含めない）
+[{"question": "...", "answer": "...", "category": "..."}]`;
 
   const raw = await groqClient.call({
     model,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.2,
-    maxTokens: 2000,
+    maxTokens: 3000,
     tag: "knowledge-text-to-faq",
   });
 
@@ -338,11 +370,40 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const { text, category } = parsed.data;
 
     try {
-      const faqs = await textToFaqs(text, category || null);
+      // 既存FAQ質問を取得（重複防止のためプロンプトに渡す）
+      let existingRows: { question: string; answer: string }[] = [];
+      if (db) {
+        try {
+          const r = await db.query(
+            "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50",
+            [tenantId]
+          );
+          existingRows = r.rows as { question: string; answer: string }[];
+        } catch { /* non-fatal */ }
+      }
+      const existingQuestions = existingRows.map((r) => r.question);
+
+      const faqs = await textToFaqs(text, category || null, existingQuestions);
       if (faqs.length === 0) {
         return res.status(422).json({ error: "FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください。" });
       }
-      return res.json({ ok: true, preview: faqs, count: faqs.length });
+
+      // 重複チェック: 生成されたFAQと既存FAQを正規化比較
+      const existingNorm = new Map<string, { question: string; answer: string }>(
+        existingRows.map((r) => [normalizeQuestion(r.question), r])
+      );
+      const previewWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
+        const norm = normalizeQuestion(faq.question);
+        const match = existingNorm.get(norm);
+        return {
+          ...faq,
+          duplicate: match
+            ? { existingQuestion: match.question, existingAnswer: match.answer }
+            : null,
+        };
+      });
+
+      return res.json({ ok: true, preview: previewWithDuplicate, count: previewWithDuplicate.length });
     } catch (err) {
       console.error("[POST /v1/admin/knowledge/text]", err);
       return res
@@ -384,9 +445,26 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
+    // コミット時の重複スキップ: 既存の質問と完全一致するものは登録しない
+    let existingNormAtCommit = new Set<string>();
+    try {
+      const r = await db.query(
+        "SELECT question FROM faq_docs WHERE tenant_id = $1",
+        [target]
+      );
+      existingNormAtCommit = new Set(
+        (r.rows as { question: string }[]).map((row) => normalizeQuestion(row.question))
+      );
+    } catch { /* non-fatal */ }
+
     const inserted: number[] = [];
+    let skipped = 0;
 
     for (const faq of faqs) {
+      if (existingNormAtCommit.has(normalizeQuestion(faq.question))) {
+        skipped++;
+        continue;
+      }
       const faqCategory = categoryOverride || faq.category || "general";
       try {
         const r = await db.query(
@@ -408,7 +486,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       }
     }
 
-    return res.status(201).json({ ok: true, inserted: inserted.length });
+    return res.status(201).json({ ok: true, inserted: inserted.length, skipped });
   });
 
   // -------------------------------------------------------------------------
@@ -433,7 +511,23 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { urls, category } = parsed.data;
-    const results: { url: string; faqs: FaqEntry[]; error?: string }[] = [];
+    const results: { url: string; faqs: FaqEntryWithDuplicate[]; error?: string }[] = [];
+
+    // 既存FAQ質問を一度だけ取得（重複防止のためプロンプトに渡す）
+    let existingRows: { question: string; answer: string }[] = [];
+    if (db) {
+      try {
+        const r = await db.query(
+          "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50",
+          [tenantId]
+        );
+        existingRows = r.rows as { question: string; answer: string }[];
+      } catch { /* non-fatal */ }
+    }
+    const existingQuestions = existingRows.map((r) => r.question);
+    const existingNorm = new Map<string, { question: string; answer: string }>(
+      existingRows.map((r) => [normalizeQuestion(r.question), r])
+    );
 
     for (const url of urls) {
       try {
@@ -455,8 +549,18 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           continue;
         }
 
-        const faqs = await textToFaqs(text, category || null);
-        results.push({ url, faqs });
+        const faqs = await textToFaqs(text, category || null, existingQuestions);
+        const faqsWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
+          const norm = normalizeQuestion(faq.question);
+          const match = existingNorm.get(norm);
+          return {
+            ...faq,
+            duplicate: match
+              ? { existingQuestion: match.question, existingAnswer: match.answer }
+              : null,
+          };
+        });
+        results.push({ url, faqs: faqsWithDuplicate });
       } catch (err) {
         results.push({ url, faqs: [], error: String(err).slice(0, 200) });
       }
@@ -504,10 +608,27 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
+    // コミット時の重複スキップ
+    let existingNormAtCommit = new Set<string>();
+    try {
+      const r = await db.query(
+        "SELECT question FROM faq_docs WHERE tenant_id = $1",
+        [target]
+      );
+      existingNormAtCommit = new Set(
+        (r.rows as { question: string }[]).map((row) => normalizeQuestion(row.question))
+      );
+    } catch { /* non-fatal */ }
+
     let totalInserted = 0;
+    let totalSkipped = 0;
 
     for (const item of items) {
       for (const faq of item.faqs) {
+        if (existingNormAtCommit.has(normalizeQuestion(faq.question))) {
+          totalSkipped++;
+          continue;
+        }
         const faqCategory = categoryOverride || faq.category || "general";
         try {
           const r = await db.query(
@@ -537,7 +658,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       }
     }
 
-    return res.status(201).json({ ok: true, inserted: totalInserted });
+    return res.status(201).json({ ok: true, inserted: totalInserted, skipped: totalSkipped });
   });
 
   registerFaqCrudRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);

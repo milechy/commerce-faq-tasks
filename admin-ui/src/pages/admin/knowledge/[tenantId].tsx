@@ -35,6 +35,10 @@ interface FaqEntry {
   question: string;
   answer: string;
   category?: string;
+  duplicate?: {
+    existingQuestion: string;
+    existingAnswer: string;
+  } | null;
 }
 
 // カテゴリラベルマップ（未知のカテゴリはキーをそのまま表示）
@@ -806,11 +810,18 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
                       <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 8px", lineHeight: 1.5 }}>
                         A: {faq.answer}
                       </p>
-                      {faq.category && (
-                        <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>
-                          {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
-                        </span>
-                      )}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                        {faq.category && (
+                          <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600 }}>
+                            {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
+                          </span>
+                        )}
+                        {faq.duplicate && (
+                          <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(120,53,15,0.4)", border: "1px solid rgba(251,191,36,0.4)", color: "#fbbf24", fontSize: 11, fontWeight: 600 }}>
+                            ⚠️ 重複の可能性: 「{faq.duplicate.existingQuestion.slice(0, 30)}{faq.duplicate.existingQuestion.length > 30 ? "…" : ""}」
+                          </span>
+                        )}
+                      </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <button
                           onClick={() => handleStartEdit(idx, faq)}
@@ -1142,11 +1153,18 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
                           <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 8px", lineHeight: 1.5 }}>
                             A: {faq.answer}
                           </p>
-                          {faq.category && (
-                            <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>
-                              {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
-                            </span>
-                          )}
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                            {faq.category && (
+                              <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600 }}>
+                                {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
+                              </span>
+                            )}
+                            {faq.duplicate && (
+                              <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(120,53,15,0.4)", border: "1px solid rgba(251,191,36,0.4)", color: "#fbbf24", fontSize: 11, fontWeight: 600 }}>
+                                ⚠️ 重複の可能性: 「{faq.duplicate.existingQuestion.slice(0, 30)}{faq.duplicate.existingQuestion.length > 30 ? "…" : ""}」
+                              </span>
+                            )}
+                          </div>
                           <div style={{ display: "flex", gap: 8 }}>
                             <button
                               onClick={() => handleStartEdit(item.url, idx, faq)}
