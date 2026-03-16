@@ -26,6 +26,8 @@ export interface KnowledgeItem {
 export interface FaqEntry {
   question: string;
   answer: string;
+  category?: string;
+  duplicate?: { existingQuestion: string; existingAnswer: string } | null;
 }
 
 export interface ScrapePreviewItem {
@@ -42,7 +44,7 @@ export interface OcrJobStatus {
 }
 
 export type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
-export type Category = "inventory" | "campaign" | "coupon" | "store_info";
+export type Category = "" | "inventory" | "campaign" | "coupon" | "store_info" | "product_info" | "pricing" | "booking" | "warranty" | "general";
 export type Tab = "list" | "text" | "scrape";
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
@@ -148,4 +150,16 @@ export const SELECT_STYLE: CSSProperties = {
   color: "#e5e7eb",
   fontSize: 16,
   minHeight: 48,
+};
+
+export const CATEGORY_LABEL_MAP: Record<string, { ja: string; en: string }> = {
+  inventory:    { ja: "在庫・車両情報",         en: "Inventory / Vehicles" },
+  campaign:     { ja: "キャンペーン・セール",   en: "Campaigns / Sales" },
+  coupon:       { ja: "クーポン・割引",         en: "Coupons / Discounts" },
+  store_info:   { ja: "店舗情報・アクセス",     en: "Store Info / Access" },
+  product_info: { ja: "商品・サービス情報",     en: "Product / Service Info" },
+  pricing:      { ja: "料金・価格",             en: "Pricing / Payment" },
+  booking:      { ja: "予約・申し込み",         en: "Booking / Reservations" },
+  warranty:     { ja: "保証・アフターサービス", en: "Warranty / After-service" },
+  general:      { ja: "よくある質問・一般",     en: "General / FAQ" },
 };
