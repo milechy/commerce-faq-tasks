@@ -5,6 +5,7 @@ import { supabase } from "../../../lib/supabaseClient";
 import UsageChart from "../../../components/UsageChart";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
+import { useAuth } from "../../../auth/useAuth";
 
 // ─── 型定義 ────────────────────────────────────────────────
 interface Tenant {
@@ -36,7 +37,8 @@ interface Invoice {
   month: string;
   amount_cents: number;
   status: "paid" | "open" | "draft";
-  invoice_url: string;
+  hosted_invoice_url: string | null;
+  invoice_pdf: string | null;
   portal_url: string;
 }
 
@@ -115,6 +117,7 @@ const BTN_LINK: React.CSSProperties = {
 export default function BillingPage() {
   const navigate = useNavigate();
   const { t } = useLang();
+  const { isSuperAdmin, user } = useAuth();
 
   const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -138,7 +141,7 @@ export default function BillingPage() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // テナント一覧を取得
+  // テナント一覧を取得（Super Admin: 全テナント / Client Admin: 自テナントのみ）
   useEffect(() => {
     void (async () => {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -147,20 +150,30 @@ export default function BillingPage() {
         return;
       }
 
-      try {
-        const res = await authFetch(`${API_BASE}/v1/admin/tenants`);
-        if (res.ok) {
-          const data = (await res.json()) as { tenants: Tenant[] };
-          setTenants(data.tenants);
-          if (data.tenants.length > 0) {
-            setSelectedTenantId(data.tenants[0].id);
+      if (isSuperAdmin) {
+        try {
+          const res = await authFetch(`${API_BASE}/v1/admin/tenants`);
+          if (res.ok) {
+            const data = (await res.json()) as { tenants: Tenant[] };
+            setTenants(data.tenants);
+            if (data.tenants.length > 0) {
+              setSelectedTenantId(data.tenants[0].id);
+            }
           }
+        } catch {
+          // テナント取得失敗時は空のまま
         }
-      } catch {
-        // テナント取得失敗時は空のまま
+      } else {
+        // Client Admin: 自テナントのみ
+        const tenantId = user?.tenantId ?? "";
+        const tenantName = user?.tenantName ?? tenantId;
+        if (tenantId) {
+          setTenants([{ id: tenantId, name: tenantName }]);
+          setSelectedTenantId(tenantId);
+        }
       }
     })();
-  }, [navigate]);
+  }, [navigate, isSuperAdmin, user]);
 
   // 請求データを取得
   const fetchBillingData = useCallback(async () => {
@@ -272,6 +285,7 @@ export default function BillingPage() {
             periodStart: number;
             periodEnd: number;
             hostedInvoiceUrl: string | null;
+            invoicePdf: string | null;
             created: number;
           }>;
         };
@@ -285,7 +299,8 @@ export default function BillingPage() {
           status: (["paid", "open", "draft"].includes(inv.status)
             ? inv.status
             : "open") as Invoice["status"],
-          invoice_url: inv.hostedInvoiceUrl ?? "#",
+          hosted_invoice_url: inv.hostedInvoiceUrl ?? null,
+          invoice_pdf: inv.invoicePdf ?? null,
           portal_url: data.portalUrl ?? "#",
         }));
         setInvoices(mappedInvoices);
@@ -331,13 +346,39 @@ export default function BillingPage() {
   // 請求書ステータスバッジ
   const invoiceStatusBadge = (status: Invoice["status"]) => {
     const map = {
-      paid: { label: t("billing.invoice_paid"), color: "#4ade80" },
-      open: { label: t("billing.invoice_open"), color: "#fbbf24" },
-      draft: { label: t("billing.invoice_draft"), color: "#9ca3af" },
+      paid: {
+        label: t("billing.invoice_paid"),
+        bg: "rgba(34,197,94,0.15)",
+        color: "#4ade80",
+        border: "rgba(74,222,128,0.3)",
+      },
+      open: {
+        label: t("billing.invoice_open"),
+        bg: "rgba(234,179,8,0.15)",
+        color: "#fbbf24",
+        border: "rgba(234,179,8,0.3)",
+      },
+      draft: {
+        label: t("billing.invoice_draft"),
+        bg: "rgba(107,114,128,0.15)",
+        color: "#9ca3af",
+        border: "rgba(107,114,128,0.3)",
+      },
     };
     const s = map[status];
     return (
-      <span style={{ fontSize: 13, fontWeight: 600, color: s.color }}>
+      <span
+        style={{
+          display: "inline-block",
+          padding: "2px 10px",
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 700,
+          background: s.bg,
+          color: s.color,
+          border: `1px solid ${s.border}`,
+        }}
+      >
         {s.label}
       </span>
     );
@@ -416,36 +457,39 @@ export default function BillingPage() {
       {/* テナント・月 セレクター */}
       <section style={{ ...CARD, marginBottom: 20 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end" }}>
-          <div style={{ flex: "1 1 200px" }}>
-            <label
-              htmlFor="tenant-select"
-              style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}
-            >
-              {t("billing.tenant_select")}
-            </label>
-            <select
-              id="tenant-select"
-              value={selectedTenantId}
-              onChange={(e) => setSelectedTenantId(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                minHeight: 44,
-                borderRadius: 10,
-                border: "1px solid #374151",
-                background: "rgba(0,0,0,0.3)",
-                color: "#e5e7eb",
-                fontSize: 15,
-                cursor: "pointer",
-              }}
-            >
-              {tenants.map((tenant) => (
-                <option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Super Admin のみテナントフィルター表示 */}
+          {isSuperAdmin && (
+            <div style={{ flex: "1 1 200px" }}>
+              <label
+                htmlFor="tenant-select"
+                style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}
+              >
+                {t("billing.tenant_select")}
+              </label>
+              <select
+                id="tenant-select"
+                value={selectedTenantId}
+                onChange={(e) => setSelectedTenantId(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "12px 14px",
+                  minHeight: 44,
+                  borderRadius: 10,
+                  border: "1px solid #374151",
+                  background: "rgba(0,0,0,0.3)",
+                  color: "#e5e7eb",
+                  fontSize: 15,
+                  cursor: "pointer",
+                }}
+              >
+                {tenants.map((tenant) => (
+                  <option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div style={{ flex: "1 1 160px" }}>
             <label
@@ -739,20 +783,40 @@ export default function BillingPage() {
                           {invoiceStatusBadge(inv.status)}
                         </div>
                       </div>
-                      {inv.invoice_url && inv.invoice_url !== "#" && (
-                        <a
-                          href={inv.invoice_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            ...BTN_LINK,
-                            fontSize: 14,
-                            padding: "10px 16px",
-                          }}
-                        >
-                          {t("billing.view_invoice")}
-                        </a>
-                      )}
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {inv.invoice_pdf && (
+                          <a
+                            href={inv.invoice_pdf}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              ...BTN_LINK,
+                              fontSize: 13,
+                              padding: "8px 14px",
+                              borderColor: "#374151",
+                              color: "#d1d5db",
+                            }}
+                          >
+                            {t("billing.download_pdf")}
+                          </a>
+                        )}
+                        {inv.hosted_invoice_url && (
+                          <a
+                            href={inv.hosted_invoice_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              ...BTN_LINK,
+                              fontSize: 13,
+                              padding: "8px 14px",
+                              borderColor: "#22c55e",
+                              color: "#4ade80",
+                            }}
+                          >
+                            {t("billing.view_detail")}
+                          </a>
+                        )}
+                      </div>
                     </div>
                   );
                 })}

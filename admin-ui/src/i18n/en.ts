@@ -221,6 +221,8 @@ const en: Record<TranslationKey, string> = {
   "billing.invoice_month": "{month} Invoice",
   "billing.invoice_amount": "Amount: {amount}",
   "billing.view_invoice": "📄 View Invoice",
+  "billing.download_pdf": "📄 PDF",
+  "billing.view_detail": "🔗 Detail",
   "billing.change_payment": "💳 Change Payment Settings",
   "billing.status_pending": "Pending",
   "billing.status_invoiced": "Invoiced",

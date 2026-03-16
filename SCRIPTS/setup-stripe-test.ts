@@ -84,6 +84,7 @@ async function main() {
         customer: customerId,
         items: [{ price: priceId }],
         metadata: { tenant_id: TENANT_ID },
+        billing_thresholds: { amount_gte: 100000 },
       });
       subscriptionId = subscription.id;
       console.log(`新規 Stripe Subscription 作成: ${subscriptionId}`);
@@ -98,6 +99,7 @@ async function main() {
           customer: customerId,
           items: [{ price: priceId }],
           metadata: { tenant_id: TENANT_ID },
+          billing_thresholds: { amount_gte: 100000 },
         });
         subscriptionId = subscription.id;
         console.log(`新規 Stripe Subscription 作成: ${subscriptionId}`);

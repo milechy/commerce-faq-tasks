@@ -148,6 +148,7 @@ export function registerBillingAdminRoutes(
             periodStart:   inv.period_start,
             periodEnd:     inv.period_end,
             hostedInvoiceUrl: inv.hosted_invoice_url,
+            invoicePdf:    inv.invoice_pdf ?? null,
             created:       inv.created,
           })),
         });
