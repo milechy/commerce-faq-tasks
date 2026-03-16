@@ -7,10 +7,10 @@ import path from "path";
 // SQL ソースコード検証（静的解析）
 // ──────────────────────────────────────────────
 describe("pgvector global search — SQL source", () => {
-  it("pgvector.ts の SQL に OR tenant_id = 'global' が含まれる", () => {
+  it("pgvector.ts の SQL に OR fe.tenant_id = 'global' が含まれる", () => {
     const filePath = path.resolve(__dirname, "../../src/search/pgvector.ts");
     const source = fs.readFileSync(filePath, "utf8");
-    expect(source).toContain("OR tenant_id = 'global'");
+    expect(source).toContain("OR fe.tenant_id = 'global'");
   });
 
   it("pgvectorSearch.ts の SQL に OR tenant_id = 'global' が含まれる", () => {
