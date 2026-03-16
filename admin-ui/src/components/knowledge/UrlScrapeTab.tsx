@@ -13,23 +13,29 @@ import {
   BTN_PRIMARY,
   TEXTAREA_STYLE,
   SELECT_STYLE,
-  TENANT,
+  CATEGORY_LABEL_MAP,
 } from "./shared";
 
-export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
+export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSuccess: () => void }) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
 
   const CATEGORIES = [
+    { value: "", label: t("knowledge.category_auto") },
     { value: "inventory", label: t("category.inventory") },
     { value: "campaign", label: t("category.campaign") },
     { value: "coupon", label: t("category.coupon") },
     { value: "store_info", label: t("category.store_info") },
+    { value: "product_info", label: t("category.product_info") },
+    { value: "pricing", label: t("category.pricing") },
+    { value: "booking", label: t("category.booking") },
+    { value: "warranty", label: t("category.warranty") },
+    { value: "general", label: t("category.general") },
   ];
 
   const [urls, setUrls] = useState("");
-  const [category, setCategory] = useState<Category>("store_info");
+  const [category, setCategory] = useState<Category>("");
   const [isGlobal, setIsGlobal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,10 +64,10 @@ export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () 
     setSuccess(null);
 
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls: urlList, category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ urls: urlList, ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       if (res.status === 401 || res.status === 403) {
         navigate("/login", { replace: true });
@@ -90,10 +96,10 @@ export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () 
     setError(null);
 
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: validItems, category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ items: validItems, ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -146,6 +152,11 @@ export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () 
                 <option key={c.value} value={c.value}>{c.label}</option>
               ))}
             </select>
+            {category === "" && (
+              <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0", lineHeight: 1.5 }}>
+                {t("knowledge.category_auto_desc")}
+              </p>
+            )}
             {isSuperAdmin && (
               <div style={{ marginTop: 16 }}>
                 <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
@@ -210,22 +221,71 @@ export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () 
                 </div>
               ) : (
                 <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
-                  {item.faqs.map((faq: FaqEntry, idx: number) => (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: "14px 18px",
-                        borderBottom: idx === item.faqs.length - 1 ? "none" : "1px solid #111827",
-                      }}
-                    >
-                      <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                        Q: {faq.question}
-                      </p>
-                      <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                        A: {faq.answer}
-                      </p>
-                    </div>
-                  ))}
+                  {item.faqs.map((faq: FaqEntry, idx: number) => {
+                    const categoryLabel = faq.category ? CATEGORY_LABEL_MAP[faq.category]?.ja : null;
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: "14px 18px",
+                          borderBottom: idx === item.faqs.length - 1 ? "none" : "1px solid #111827",
+                        }}
+                      >
+                        <span style={{
+                          display: "inline-block",
+                          padding: "2px 8px",
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          background: "rgba(34,197,94,0.15)",
+                          color: "#4ade80",
+                          border: "1px solid rgba(34,197,94,0.3)",
+                          marginBottom: 4,
+                        }}>
+                          {categoryLabel || faq.category || "自動判定"}
+                        </span>
+                        <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
+                          Q: {faq.question}
+                        </p>
+                        <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
+                          A: {faq.answer}
+                        </p>
+                        <select
+                          value={faq.category || ""}
+                          onChange={(e) => {
+                            setPreview((prev) =>
+                              prev
+                                ? prev.map((p) =>
+                                    p.url === item.url
+                                      ? {
+                                          ...p,
+                                          faqs: p.faqs.map((f, i) =>
+                                            i === idx ? { ...f, category: e.target.value || undefined } : f
+                                          ),
+                                        }
+                                      : p
+                                  )
+                                : prev
+                            );
+                          }}
+                          style={{
+                            fontSize: 12,
+                            padding: "3px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #374151",
+                            background: "rgba(15,23,42,0.8)",
+                            color: "#9ca3af",
+                            marginTop: 6,
+                          }}
+                        >
+                          <option value="">🤖 AI自動判定</option>
+                          {CATEGORIES.filter((c) => c.value !== "").map((c) => (
+                            <option key={c.value} value={c.value}>{c.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

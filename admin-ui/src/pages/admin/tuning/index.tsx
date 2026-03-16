@@ -3,130 +3,60 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
+import { authFetch, API_BASE } from "../../../lib/api";
 import TuningRuleModal, {
   type TuningRule,
   type TuningRuleInput,
   type SourceConversation,
 } from "../../../components/tuning/TuningRuleModal";
 
-// ─── Mock data ────────────────────────────────────────────────────────────────
-const MOCK_RULES: TuningRule[] = [
-  {
-    id: 1,
-    tenant_id: "global",
-    trigger_pattern: "値引き, 割引, 安く",
-    expected_behavior:
-      "来店を促し、店長との直接相談をご案内してください。値引きの具体的な金額は提示しないでください。",
-    priority: 10,
-    is_active: true,
-    created_by: "admin@example.com",
-    created_at: "2026-03-16T10:00:00Z",
-  },
-  {
-    id: 2,
-    tenant_id: "carnation",
-    trigger_pattern: "在庫確認, 在庫はありますか, 何台",
-    expected_behavior:
-      "具体的な台数を回答した後、必ず「最新情報はお電話またはご来店でご確認ください」と添えてください。",
-    priority: 8,
-    is_active: true,
-    created_by: "admin@carnation.com",
-    created_at: "2026-03-15T09:30:00Z",
-  },
-  {
-    id: 3,
-    tenant_id: "carnation",
-    trigger_pattern: "",
-    expected_behavior:
-      "すべての返答の末尾に「ご不明な点はお気軽にお問い合わせください。」を追加してください。",
-    priority: 1,
-    is_active: true,
-    created_by: "admin@carnation.com",
-    created_at: "2026-03-14T14:00:00Z",
-  },
-  {
-    id: 4,
-    tenant_id: "demo-tenant",
-    trigger_pattern: "保証, 保証期間, 保証内容",
-    expected_behavior:
-      "保証内容の詳細は車種・年式によって異なるため、「担当スタッフにお問い合わせください」とご案内してください。具体的な保証内容は回答しないでください。",
-    priority: 7,
-    is_active: false,
-    created_by: "demo@example.com",
-    created_at: "2026-03-10T11:00:00Z",
-  },
-];
-
-// ─── Tenant options (mock) ────────────────────────────────────────────────────
+// ─── Tenant options (static — used for scope badge display) ───────────────────
 const MOCK_TENANTS = [
   { value: "carnation", label: "カーネーション自動車" },
   { value: "demo-tenant", label: "デモテナント" },
 ];
 
-// ─── API-ready fetch/save/delete ──────────────────────────────────────────────
+// ─── API functions ────────────────────────────────────────────────────────────
 async function fetchRules(tenantId?: string): Promise<TuningRule[]> {
-  // TODO: Replace with actual API call
-  // const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules?tenant=${tenantId}`);
-  // if (!res.ok) throw new Error("load_error");
-  // return (await res.json()).rules as TuningRule[];
-  void tenantId;
-  return MOCK_RULES;
+  const params = new URLSearchParams();
+  if (tenantId) params.set("tenant", tenantId);
+  const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules?${params}`);
+  if (!res.ok) throw new Error("load_error");
+  const data = await res.json();
+  return data.rules as TuningRule[];
 }
 
-let _nextId = MOCK_RULES.length + 1;
-
-async function createRule(
-  input: TuningRuleInput
-): Promise<TuningRule> {
-  // TODO: Replace with actual API call
-  // const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify(input),
-  // });
-  // if (!res.ok) throw new Error("save_error");
-  // return (await res.json()) as TuningRule;
-  await new Promise((r) => setTimeout(r, 0));
-  return {
-    ...input,
-    id: _nextId++,
-    created_by: "current_user@example.com",
-    created_at: new Date().toISOString(),
-  };
+async function createRule(input: TuningRuleInput): Promise<TuningRule> {
+  const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error("save_error");
+  return (await res.json()) as TuningRule;
 }
 
 async function updateRule(id: number, input: TuningRuleInput): Promise<TuningRule> {
-  // TODO: Replace with actual API call
-  // const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
-  //   method: "PUT",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify(input),
-  // });
-  // if (!res.ok) throw new Error("save_error");
-  // return (await res.json()) as TuningRule;
-  await new Promise((r) => setTimeout(r, 0));
-  const existing = MOCK_RULES.find((r) => r.id === id)!;
-  return { ...existing, ...input };
+  const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error("save_error");
+  return (await res.json()) as TuningRule;
 }
 
 async function deleteRule(id: number): Promise<void> {
-  // TODO: Replace with actual API call
-  // const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, { method: "DELETE" });
-  // if (!res.ok) throw new Error("delete_error");
-  await new Promise((r) => setTimeout(r, 0));
-  void id;
+  const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("delete_error");
 }
 
 async function toggleActive(id: number, is_active: boolean): Promise<void> {
-  // TODO: Replace with actual API call
-  // const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
-  //   method: "PATCH",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({ is_active }),
-  // });
-  // if (!res.ok) throw new Error("save_error");
-  await new Promise((r) => setTimeout(r, 0));
-  void id; void is_active;
+  const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ is_active }),
+  });
+  if (!res.ok) throw new Error("save_error");
 }
 
 // ─── Scope badge ──────────────────────────────────────────────────────────────
@@ -360,21 +290,6 @@ export default function TuningRulesPage() {
         </div>
         <LangSwitcher />
       </header>
-
-      {/* Mock notice */}
-      <div
-        style={{
-          marginBottom: 20,
-          padding: "10px 16px",
-          borderRadius: 10,
-          background: "rgba(234,179,8,0.1)",
-          border: "1px solid rgba(234,179,8,0.3)",
-          color: "#fbbf24",
-          fontSize: 13,
-        }}
-      >
-        {t("tuning.mock_notice")}
-      </div>
 
       {/* Add button */}
       <button

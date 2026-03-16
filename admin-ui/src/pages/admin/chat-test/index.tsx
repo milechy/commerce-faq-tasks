@@ -29,13 +29,12 @@ async function fetchChatTestToken(tenantId: string): Promise<ChatTestToken> {
 export default function ChatTestPage() {
   const navigate = useNavigate();
   const { t } = useLang();
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, previewTenantName } = useAuth();
 
   // テナント選択 (Super Admin 用)
   const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [selectedTenantId, setSelectedTenantId] = useState<string>(
-    isSuperAdmin ? "" : (user?.tenantId ?? "")
-  );
+  const [tenantFetchError, setTenantFetchError] = useState(false);
+  const [selectedTenantId, setSelectedTenantId] = useState<string>("");
 
   // トークン状態
   const [token, setToken] = useState<string | null>(null);
@@ -46,11 +45,13 @@ export default function ChatTestPage() {
   // ウィジェット
   const widgetScriptRef = useRef<HTMLScriptElement | null>(null);
 
-  const effectiveTenantId = isSuperAdmin ? selectedTenantId : (user?.tenantId ?? "");
-  const displayTenantName =
-    isSuperAdmin
-      ? (tenants.find((ten) => ten.id === selectedTenantId)?.name ?? selectedTenantId)
-      : (user?.tenantName ?? effectiveTenantId);
+  // プレビューモード中は previewTenantId を使用（super_admin の role が client_admin に上書きされるため）
+  const effectiveTenantId = isSuperAdmin
+    ? selectedTenantId
+    : (user?.tenantId ?? (previewMode ? (previewTenantId ?? "") : ""));
+  const displayTenantName = isSuperAdmin
+    ? (tenants.find((ten) => ten.id === selectedTenantId)?.name ?? selectedTenantId)
+    : (previewMode ? (previewTenantName ?? effectiveTenantId) : (user?.tenantName ?? effectiveTenantId));
 
   // ウィジェット cleanup
   const cleanupWidget = useCallback(() => {
@@ -65,12 +66,13 @@ export default function ChatTestPage() {
   // Super Admin: テナント一覧取得
   useEffect(() => {
     if (!isSuperAdmin) return;
+    setTenantFetchError(false);
     void authFetch(`${API_BASE}/v1/admin/tenants`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { tenants?: TenantOption[] } | null) => {
-        if (data?.tenants) setTenants(data.tenants);
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data: { tenants?: TenantOption[] }) => {
+        setTenants(data.tenants ?? []);
       })
-      .catch(() => {});
+      .catch(() => { setTenantFetchError(true); });
   }, [isSuperAdmin]);
 
   // テナントが確定したら自動でトークン取得
@@ -211,28 +213,34 @@ export default function ChatTestPage() {
             <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 8 }}>
               {t("chat_test.select_tenant")}
             </label>
-            <select
-              value={selectedTenantId}
-              onChange={(e) => handleTenantChange(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: 10,
-                border: "1px solid #374151",
-                background: "rgba(15,23,42,0.9)",
-                color: "#e5e7eb",
-                fontSize: 15,
-                outline: "none",
-                cursor: "pointer",
-              }}
-            >
-              <option value="">— テナントを選択 —</option>
-              {tenants.map((ten) => (
-                <option key={ten.id} value={ten.id}>
-                  {ten.name}
-                </option>
-              ))}
-            </select>
+            {tenantFetchError ? (
+              <div style={{ color: "#fca5a5", fontSize: 14, padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(248,113,113,0.3)", background: "rgba(127,29,29,0.3)" }}>
+                ⚠️ テナント一覧の取得に失敗しました。ページを再読み込みしてください。
+              </div>
+            ) : (
+              <select
+                value={selectedTenantId}
+                onChange={(e) => handleTenantChange(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #374151",
+                  background: "rgba(15,23,42,0.9)",
+                  color: "#e5e7eb",
+                  fontSize: 15,
+                  outline: "none",
+                  cursor: "pointer",
+                }}
+              >
+                <option value="">— テナントを選択 —</option>
+                {tenants.map((ten) => (
+                  <option key={ten.id} value={ten.id}>
+                    {ten.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         )}
 

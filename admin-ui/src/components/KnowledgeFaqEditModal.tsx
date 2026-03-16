@@ -4,8 +4,6 @@ import { supabase } from "../lib/supabaseClient";
 import { API_BASE } from "../lib/api";
 import { useLang } from "../i18n/LangContext";
 
-const TENANT = "carnation";
-
 export interface KnowledgeFaqItem {
   id: number;
   question: string;
@@ -17,6 +15,7 @@ export interface KnowledgeFaqItem {
 
 interface Props {
   mode: "create" | "edit";
+  tenantId: string;
   item?: KnowledgeFaqItem;
   onClose: () => void;
   onSuccess: (message: string) => void;
@@ -55,7 +54,7 @@ const LABEL_STYLE: React.CSSProperties = {
   marginBottom: 8,
 };
 
-export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }: Props) {
+export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, onSuccess }: Props) {
   const { t } = useLang();
   const [question, setQuestion] = useState(item?.question ?? "");
   const [answer, setAnswer] = useState(item?.answer ?? "");
@@ -109,8 +108,8 @@ export default function KnowledgeFaqEditModal({ mode, item, onClose, onSuccess }
     try {
       const url =
         mode === "edit"
-          ? `${API_BASE}/v1/admin/knowledge/faq/${item!.id}?tenant=${TENANT}`
-          : `${API_BASE}/v1/admin/knowledge/faq?tenant=${TENANT}`;
+          ? `${API_BASE}/v1/admin/knowledge/faq/${item!.id}?tenant=${tenantId}`
+          : `${API_BASE}/v1/admin/knowledge/faq?tenant=${tenantId}`;
 
       const res = await fetch(url, {
         method: mode === "edit" ? "PUT" : "POST",

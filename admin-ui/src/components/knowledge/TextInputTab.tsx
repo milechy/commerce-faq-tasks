@@ -12,23 +12,29 @@ import {
   BTN_PRIMARY,
   TEXTAREA_STYLE,
   SELECT_STYLE,
-  TENANT,
+  CATEGORY_LABEL_MAP,
 } from "./shared";
 
-export default function TextInputTab() {
+export default function TextInputTab({ tenantId }: { tenantId: string }) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
 
   const CATEGORIES = [
+    { value: "", label: t("knowledge.category_auto") },
     { value: "inventory", label: t("category.inventory") },
     { value: "campaign", label: t("category.campaign") },
     { value: "coupon", label: t("category.coupon") },
     { value: "store_info", label: t("category.store_info") },
+    { value: "product_info", label: t("category.product_info") },
+    { value: "pricing", label: t("category.pricing") },
+    { value: "booking", label: t("category.booking") },
+    { value: "warranty", label: t("category.warranty") },
+    { value: "general", label: t("category.general") },
   ];
 
   const [text, setText] = useState("");
-  const [category, setCategory] = useState<Category>("inventory");
+  const [category, setCategory] = useState<Category>("");
   const [isGlobal, setIsGlobal] = useState(false);
   const [converting, setConverting] = useState(false);
   const [preview, setPreview] = useState<FaqEntry[] | null>(null);
@@ -37,7 +43,7 @@ export default function TextInputTab() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const handleConvert = async () => {
-    if (text.trim().length < 10) {
+    if (text.trim().length < 50) {
       setError(t("knowledge.text_min_error"));
       return;
     }
@@ -48,10 +54,10 @@ export default function TextInputTab() {
     setSuccess(null);
 
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ text: text.trim(), ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; preview?: FaqEntry[]; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -73,10 +79,10 @@ export default function TextInputTab() {
     setCommitting(true);
     setError(null);
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ faqs: preview, category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ faqs: preview, ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -109,6 +115,17 @@ export default function TextInputTab() {
           placeholder={t("knowledge.text_placeholder")}
           style={TEXTAREA_STYLE}
         />
+        <div style={{ textAlign: "right", marginTop: 6, fontSize: 12 }}>
+          {text.trim().length < 50 ? (
+            <span style={{ color: "#fb923c" }}>
+              {t("knowledge.char_count_need", { n: 50 - text.trim().length })}
+            </span>
+          ) : (
+            <span style={{ color: "#6b7280" }}>
+              {t("knowledge.char_count_ok", { n: text.trim().length })}
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={CARD_STYLE}>
@@ -124,6 +141,11 @@ export default function TextInputTab() {
             <option key={c.value} value={c.value}>{c.label}</option>
           ))}
         </select>
+        {category === "" && (
+          <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0", lineHeight: 1.5 }}>
+            {t("knowledge.category_auto_desc")}
+          </p>
+        )}
         {isSuperAdmin && (
           <div style={{ marginTop: 16 }}>
             <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
@@ -146,11 +168,11 @@ export default function TextInputTab() {
       {!preview && (
         <button
           onClick={handleConvert}
-          disabled={converting || text.trim().length < 10}
+          disabled={converting || text.trim().length < 50}
           style={{
             ...BTN_PRIMARY,
-            opacity: converting || text.trim().length < 10 ? 0.6 : 1,
-            cursor: converting || text.trim().length < 10 ? "not-allowed" : "pointer",
+            opacity: converting || text.trim().length < 50 ? 0.6 : 1,
+            cursor: converting || text.trim().length < 50 ? "not-allowed" : "pointer",
           }}
         >
           {converting ? t("knowledge.converting") : t("knowledge.convert")}
@@ -166,22 +188,61 @@ export default function TextInputTab() {
             {t("knowledge.preview_desc")}
           </p>
           <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden", marginBottom: 16 }}>
-            {preview.map((faq, idx) => (
-              <div
-                key={idx}
-                style={{
-                  padding: "16px 18px",
-                  borderBottom: idx === preview.length - 1 ? "none" : "1px solid #111827",
-                }}
-              >
-                <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                  Q: {faq.question}
-                </p>
-                <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                  A: {faq.answer}
-                </p>
-              </div>
-            ))}
+            {preview.map((faq, idx) => {
+              const categoryLabel = faq.category ? CATEGORY_LABEL_MAP[faq.category]?.ja : null;
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    padding: "16px 18px",
+                    borderBottom: idx === preview.length - 1 ? "none" : "1px solid #111827",
+                  }}
+                >
+                  <span style={{
+                    display: "inline-block",
+                    padding: "2px 8px",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background: "rgba(34,197,94,0.15)",
+                    color: "#4ade80",
+                    border: "1px solid rgba(34,197,94,0.3)",
+                    marginBottom: 4,
+                  }}>
+                    {categoryLabel || faq.category || "自動判定"}
+                  </span>
+                  <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
+                    Q: {faq.question}
+                  </p>
+                  <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
+                    A: {faq.answer}
+                  </p>
+                  <select
+                    value={faq.category || ""}
+                    onChange={(e) => {
+                      const updated = preview.map((f, i) =>
+                        i === idx ? { ...f, category: e.target.value || undefined } : f
+                      );
+                      setPreview(updated);
+                    }}
+                    style={{
+                      fontSize: 12,
+                      padding: "3px 8px",
+                      borderRadius: 6,
+                      border: "1px solid #374151",
+                      background: "rgba(15,23,42,0.8)",
+                      color: "#9ca3af",
+                      marginTop: 6,
+                    }}
+                  >
+                    <option value="">🤖 AI自動判定</option>
+                    {CATEGORIES.filter((c) => c.value !== "").map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button

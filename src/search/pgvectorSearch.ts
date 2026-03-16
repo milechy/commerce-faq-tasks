@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 
 // @ts-ignore - pg has no bundled type declarations in this project
 import { Pool } from "pg";
+import { decryptText } from "../lib/crypto/textEncrypt";
 
 export type PgvectorSearchParams = {
   tenantId: string;
@@ -65,7 +66,7 @@ export async function searchPgVector(
 
     const items: PgvectorSearchItem[] = result.rows.map((row: any) => ({
       id: String(row.id),
-      text: row.text as string,
+      text: decryptText(row.text ?? ""),
       score: (() => {
         const s =
           typeof row.score === "number" ? row.score : Number(row.score) || 0;

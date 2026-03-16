@@ -9,10 +9,9 @@ import {
   type OcrJobStatus,
   fetchWithAuth,
   CARD_STYLE,
-  TENANT,
 } from "./shared";
 
-export default function PdfUploadSection() {
+export default function PdfUploadSection({ tenantId }: { tenantId: string }) {
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
   const [isGlobal, setIsGlobal] = useState(false);
@@ -24,7 +23,7 @@ export default function PdfUploadSection() {
 
   const fetchBooks = useCallback(async () => {
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?tenant=${TENANT}`);
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?tenant=${tenantId}`);
       if (!res.ok) return;
       const data = (await res.json()) as { items?: unknown[]; count?: number };
       setBooks((data.items ?? []) as BookMetadata[]);
@@ -58,8 +57,8 @@ export default function PdfUploadSection() {
   }, [currentJobId, fetchBooks]);
 
   const uploadEndpoint = isGlobal
-    ? `/v1/admin/knowledge/pdf?tenant=${TENANT}&target=global`
-    : `/v1/admin/knowledge/pdf?tenant=${TENANT}`;
+    ? `/v1/admin/knowledge/pdf?tenant=${tenantId}&target=global`
+    : `/v1/admin/knowledge/pdf?tenant=${tenantId}`;
 
   return (
     <div style={{ ...CARD_STYLE, marginBottom: 24 }}>

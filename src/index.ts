@@ -43,9 +43,11 @@ import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
+import { reportUsageToStripe } from "./lib/billing/stripeSync";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
+import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
@@ -106,6 +108,7 @@ const authMiddleware = initAuthMiddleware({
 });
 const tenantContext = createTenantContextMiddleware({ logger });
 const securityPolicy = createSecurityPolicyMiddleware({ logger });
+const originCheck = createOriginCheckMiddleware(db, { logger });
 
 // --- minimal internal UI (no auth required) ---
 const publicDir = path.resolve(process.cwd(), "public");
@@ -151,8 +154,9 @@ const apiStack = [
   globalRateLimiter,     // 1. Rate limit
   authMiddleware,        // 2. Auth → tenantId
   tenantContext,         // 3. Load TenantConfig
-  securityPolicy,        // 4. Per-tenant policy
-  langDetectMiddleware,  // 5. Phase33: Accept-Language → req.lang
+  securityPolicy,        // 4. Per-tenant policy (in-memory allowedOrigins)
+  originCheck,           // 5. DB-backed per-tenant Origin check
+  langDetectMiddleware,  // 6. Phase33: Accept-Language → req.lang
 ] as express.RequestHandler[];
 
 logger.info({
@@ -530,6 +534,17 @@ async function startServer() {
   // Phase23: AlertEngine — 60秒周期で KPI を評価し Slack アラートを送信
   alertEngine.start();
   logger.info("[startup] AlertEngine started");
+
+  // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）
+  if (db && process.env.STRIPE_SECRET_KEY) {
+    const STRIPE_REPORT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+    setInterval(() => {
+      reportUsageToStripe(db, logger).catch((err) => {
+        logger.error({ err }, "[billingScheduler] reportUsageToStripe failed");
+      });
+    }, STRIPE_REPORT_INTERVAL_MS);
+    logger.info("[startup] Stripe usage reporter scheduled (24h interval)");
+  }
 }
 
 startServer().catch((error) => {

@@ -47,12 +47,13 @@ function upsertToEsAsync(
   tenantId: string,
   faqId: number,
   question: string,
-  answer: string
+  answer: string,
+  isPublished = true
 ): void {
   const esUrl = process.env.ES_URL;
   const index = process.env.ES_FAQ_INDEX || "faqs";
   if (!esUrl) return;
-  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId };
+  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: isPublished };
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${faqId}_${tenantId}`;
   fetch(url, {
     method: "PUT",
@@ -72,7 +73,7 @@ const listQuerySchema = z.object({
 });
 
 const bulkDeleteSchema = z.object({
-  ids: z.array(z.number().int().positive()).min(1).max(100),
+  ids: z.array(z.coerce.number().int().positive()).min(1).max(100),
 });
 
 const createSchema = z.object({
@@ -159,7 +160,7 @@ export function registerFaqCrudRoutes(
         params
       );
 
-      return res.json({ faqs: itemsResult.rows, total, limit, offset });
+      return res.json({ items: itemsResult.rows, total, limit, offset });
     } catch (err) {
       console.warn("[GET /v1/admin/knowledge/faq]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });
@@ -230,12 +231,12 @@ export function registerFaqCrudRoutes(
         [tenantId, question, answer, category ?? null, tags, is_published]
       );
 
-      const row = result.rows[0] as { id: number; question: string; answer: string };
+      const row = result.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
       const faqId = row.id;
       const embText = `${row.question}\n${row.answer}`;
 
       insertEmbeddingAsync(db, tenantId, embText, faqId, { source: "faq_crud", faq_id: faqId });
-      upsertToEsAsync(tenantId, faqId, row.question, row.answer);
+      upsertToEsAsync(tenantId, faqId, row.question, row.answer, row.is_published);
 
       return res.status(201).json(row);
     } catch (err) {
@@ -303,7 +304,7 @@ export function registerFaqCrudRoutes(
         ]
       );
 
-      const updated = updateResult.rows[0] as { id: number; question: string; answer: string };
+      const updated = updateResult.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
 
       // 古い embedding を削除し再挿入
       try {
@@ -322,7 +323,7 @@ export function registerFaqCrudRoutes(
         source: "faq_crud",
         faq_id: updated.id,
       });
-      upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer);
+      upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer, updated.is_published);
 
       return res.json(updated);
     } catch (err) {
@@ -335,7 +336,7 @@ export function registerFaqCrudRoutes(
   // DELETE /v1/admin/knowledge/faq/bulk
   // FAQ一括削除（最大100件）
   // -------------------------------------------------------------------------
-  app.delete("/v1/admin/knowledge/faq/bulk", async (req: Request, res: Response) => {
+  app.delete("/v1/admin/knowledge/faq/bulk", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -354,7 +355,8 @@ export function registerFaqCrudRoutes(
         `SELECT id FROM faq_docs WHERE id = ANY($1::int[]) AND tenant_id = $2`,
         [ids, tenantId]
       );
-      const ownedIds = (checkResult.rows as { id: number }[]).map((r) => r.id);
+      // BIGINT列はpgが文字列で返すため Number() で正規化して比較
+      const ownedIds = (checkResult.rows as { id: number | string }[]).map((r) => Number(r.id));
       const foreignIds = ids.filter((id) => !ownedIds.includes(id));
       if (foreignIds.length > 0) {
         return res.status(400).json({

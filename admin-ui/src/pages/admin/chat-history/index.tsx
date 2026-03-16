@@ -1,70 +1,58 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
+import { authFetch, API_BASE } from "../../../lib/api";
+import { useAuth } from "../../../auth/useAuth";
 
 interface Session {
   id: string;
   tenant_id: string;
-  tenant_name: string;
   session_id: string;
   started_at: string;
-  ended_at: string | null;
+  last_message_at: string;
   message_count: number;
+  first_message_preview: string;
 }
 
-const MOCK_SESSIONS: Session[] = [
-  {
-    id: "mock-session-1",
-    tenant_id: "carnation",
-    tenant_name: "カーネーション自動車",
-    session_id: "abc-123",
-    started_at: "2026-03-14T10:30:00Z",
-    ended_at: "2026-03-14T10:45:00Z",
-    message_count: 6,
-  },
-  {
-    id: "mock-session-2",
-    tenant_id: "carnation",
-    tenant_name: "カーネーション自動車",
-    session_id: "def-456",
-    started_at: "2026-03-15T14:20:00Z",
-    ended_at: "2026-03-15T14:35:00Z",
-    message_count: 4,
-  },
-  {
-    id: "mock-session-3",
-    tenant_id: "demo-tenant",
-    tenant_name: "デモテナント",
-    session_id: "ghi-789",
-    started_at: "2026-03-16T09:00:00Z",
-    ended_at: null,
-    message_count: 2,
-  },
-  {
-    id: "mock-session-4",
-    tenant_id: "demo-tenant",
-    tenant_name: "デモテナント",
-    session_id: "jkl-012",
-    started_at: "2026-03-16T11:10:00Z",
-    ended_at: "2026-03-16T11:22:00Z",
-    message_count: 8,
-  },
-];
-
-// TODO: Replace with actual API call
-// const res = await fetch(`${apiBase}/v1/admin/chat-history/sessions?tenant=${tenantId}&limit=50`);
 async function fetchSessions(tenantId?: string): Promise<Session[]> {
-  void tenantId;
-  return MOCK_SESSIONS;
+  const params = new URLSearchParams();
+  if (tenantId) params.set("tenant", tenantId);
+  params.set("limit", "50");
+  const res = await authFetch(`${API_BASE}/v1/admin/chat-history/sessions?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch sessions");
+  const data = await res.json();
+  return data.sessions as Session[];
 }
 
 export default function ChatHistoryPage() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
-  const [sessions] = useState<Session[]>(MOCK_SESSIONS);
+  const { user, isSuperAdmin } = useAuth();
+
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
+  const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+
+  const loadSessions = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchSessions(tenantId);
+      setSessions(data);
+    } catch {
+      setError("データの取得に失敗しました");
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions]);
 
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleString(locale, {
@@ -73,9 +61,6 @@ export default function ChatHistoryPage() {
       hour: "2-digit",
       minute: "2-digit",
     });
-
-  // fetchSessions is used to signal future API integration
-  void fetchSessions;
 
   return (
     <div
@@ -125,28 +110,56 @@ export default function ChatHistoryPage() {
         <LangSwitcher />
       </header>
 
-      {/* Mock data notice */}
-      <div
-        style={{
-          marginBottom: 20,
-          padding: "10px 16px",
-          borderRadius: 10,
-          background: "rgba(234,179,8,0.1)",
-          border: "1px solid rgba(234,179,8,0.3)",
-          color: "#fbbf24",
-          fontSize: 13,
-        }}
-      >
-        {t("chat_history.mock_notice")}
-      </div>
+      {/* Error */}
+      {error && (
+        <div
+          style={{
+            marginBottom: 20,
+            padding: "14px 18px",
+            borderRadius: 12,
+            background: "rgba(127,29,29,0.4)",
+            border: "1px solid rgba(248,113,113,0.3)",
+            color: "#fca5a5",
+            fontSize: 15,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <span>{error}</span>
+          <button
+            onClick={() => void loadSessions()}
+            style={{
+              padding: "8px 16px",
+              minHeight: 36,
+              borderRadius: 8,
+              border: "1px solid rgba(248,113,113,0.4)",
+              background: "rgba(248,113,113,0.1)",
+              color: "#fca5a5",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
 
       {/* Section title */}
       <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
         {t("chat_history.sessions")}
       </h2>
 
-      {/* Session list */}
-      {sessions.length === 0 ? (
+      {/* Loading */}
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
+          <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
+          {t("chat_history.loading")}
+        </div>
+      ) : sessions.length === 0 ? (
         <div
           style={{
             padding: "48px 24px",
@@ -192,17 +205,33 @@ export default function ChatHistoryPage() {
                       fontWeight: 600,
                     }}
                   >
-                    {session.tenant_name}
+                    {session.tenant_id}
                   </span>
                   <span style={{ fontSize: 13, color: "#9ca3af", fontFamily: "monospace" }}>
                     {session.session_id}
                   </span>
                 </div>
 
+                {/* Preview */}
+                {session.first_message_preview && (
+                  <span
+                    style={{
+                      fontSize: 13,
+                      color: "#6b7280",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      maxWidth: 400,
+                    }}
+                  >
+                    {session.first_message_preview}
+                  </span>
+                )}
+
                 {/* Date + message count */}
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 13, color: "#6b7280" }}>
-                    🕐 {formatDate(session.started_at)}
+                    🕐 {formatDate(session.last_message_at)}
                   </span>
                   <span style={{ fontSize: 13, color: "#6b7280" }}>
                     💬{" "}
@@ -216,7 +245,7 @@ export default function ChatHistoryPage() {
 
               {/* Detail button */}
               <button
-                onClick={() => navigate(`/admin/chat-history/${session.id}`)}
+                onClick={() => navigate(`/admin/chat-history/${session.id}`, { state: { session } })}
                 style={{
                   padding: "10px 18px",
                   minHeight: 44,

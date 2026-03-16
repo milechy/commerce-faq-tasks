@@ -89,7 +89,12 @@ const ja = {
   "knowledge.preview_desc": "内容を確認して「登録する」ボタンを押してください。",
   "knowledge.committing": "⏳ 登録中...",
   "knowledge.commit": "✅ この内容で登録する",
-  "knowledge.text_min_error": "10文字以上のテキストを入力してください",
+  "knowledge.text_min_error": "50文字以上のテキストを入力してください",
+  "knowledge.char_count_need": "⚠️ あと{n}文字必要です（最低50文字）",
+  "knowledge.char_count_ok": "✓ {n}文字",
+  "knowledge.preview_edit_save": "保存",
+  "knowledge.preview_remove": "削除",
+  "knowledge.preview_empty": "FAQが0件です。テキストを変更して再変換してください。",
   "knowledge.committed": "✅ {n}件のFAQをAIナレッジに登録しました！",
 
   // Scrape tab
@@ -109,6 +114,13 @@ const ja = {
   "category.campaign": "キャンペーン・セール",
   "category.coupon": "クーポン・割引",
   "category.store_info": "店舗情報・アクセス",
+  "category.product_info": "商品・サービス情報",
+  "category.pricing": "料金・価格",
+  "category.booking": "予約・申し込み",
+  "category.warranty": "保証・アフターサービス",
+  "category.general": "よくある質問・一般",
+  "knowledge.category_auto": "🤖 AIが自動判定（推奨）",
+  "knowledge.category_auto_desc": "AIが内容を分析して最適なカテゴリを自動で判定します。手動で指定することもできます。",
 
   // Tenants page
   "tenants.title": "テナント管理",
@@ -169,6 +181,12 @@ const ja = {
   "tenant_detail.copy": "📋 コードをコピー",
   "tenant_detail.copied": "✅ コピーしました！",
   "tenant_detail.embed_hint": "💡 <strong>YOUR_API_KEY</strong> の部分は、「APIキー」タブで発行した実際のキーに置き換えてください。APIキーは発行時にのみ確認できます。",
+  "tenant_detail.allowed_origins_label": "許可ドメイン（Widgetを設置するURLを1行に1つ）",
+  "tenant_detail.allowed_origins_desc": "入力例: https://shop.example.com　空欄の場合は全ドメイン許可（開発用途のみ）",
+  "tenant_detail.allowed_origins_placeholder": "https://shop.example.com\nhttps://www.example.com",
+  "tenant_detail.embed_no_origins_warning": "⚠️ 許可ドメインが設定されていません。セキュリティのため、Widgetを設置するドメインを「設定」タブで登録してください。",
+  "tenant_detail.system_prompt_label": "システムプロンプト（AIの性格設定）",
+  "tenant_detail.system_prompt_placeholder": "テナント固有のAIの性格・口調を設定できます（空の場合はデフォルト使用）",
 
   // Billing page
   "billing.title": "💰 請求・使用量",

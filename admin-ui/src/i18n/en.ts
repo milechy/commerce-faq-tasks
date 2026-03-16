@@ -91,7 +91,12 @@ const en: Record<TranslationKey, string> = {
   "knowledge.preview_desc": "Review the content and click Register.",
   "knowledge.committing": "⏳ Registering...",
   "knowledge.commit": "✅ Register this content",
-  "knowledge.text_min_error": "Please enter at least 10 characters",
+  "knowledge.text_min_error": "Please enter at least 50 characters",
+  "knowledge.char_count_need": "⚠️ {n} more characters needed (min 50)",
+  "knowledge.char_count_ok": "✓ {n} characters",
+  "knowledge.preview_edit_save": "Save",
+  "knowledge.preview_remove": "Remove",
+  "knowledge.preview_empty": "No FAQs generated. Try editing the text and converting again.",
   "knowledge.committed": "✅ {n} FAQs registered to AI Knowledge!",
 
   // Scrape tab
@@ -111,6 +116,13 @@ const en: Record<TranslationKey, string> = {
   "category.campaign": "Campaigns / Sales",
   "category.coupon": "Coupons / Discounts",
   "category.store_info": "Store Info / Access",
+  "category.product_info": "Product / Service Info",
+  "category.pricing": "Pricing / Payment",
+  "category.booking": "Booking / Reservations",
+  "category.warranty": "Warranty / After-service",
+  "category.general": "General / FAQ",
+  "knowledge.category_auto": "🤖 AI auto-detect (recommended)",
+  "knowledge.category_auto_desc": "AI will analyze the content and determine the most appropriate category automatically. You can also specify manually.",
 
   // Tenants page
   "tenants.title": "Tenant Management",
@@ -171,6 +183,12 @@ const en: Record<TranslationKey, string> = {
   "tenant_detail.copy": "📋 Copy Code",
   "tenant_detail.copied": "✅ Copied!",
   "tenant_detail.embed_hint": "💡 Replace <strong>YOUR_API_KEY</strong> with the actual key issued in the API Keys tab. The key can only be viewed at the time of issuance.",
+  "tenant_detail.allowed_origins_label": "Allowed Domains (one URL per line where Widget is installed)",
+  "tenant_detail.allowed_origins_desc": "Example: https://shop.example.com  Leave empty to allow all domains (development only)",
+  "tenant_detail.allowed_origins_placeholder": "https://shop.example.com\nhttps://www.example.com",
+  "tenant_detail.embed_no_origins_warning": "⚠️ No allowed domains are configured. For security, please register the domains where the Widget is installed in the Settings tab.",
+  "tenant_detail.system_prompt_label": "System Prompt (AI Persona)",
+  "tenant_detail.system_prompt_placeholder": "Set the AI's personality and tone for this tenant (leave empty to use default)",
 
   // Billing page
   "billing.title": "💰 Billing & Usage",

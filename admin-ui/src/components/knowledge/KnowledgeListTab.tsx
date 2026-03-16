@@ -10,7 +10,6 @@ import {
   formatDate,
   CARD_STYLE,
   BTN_DANGER,
-  TENANT,
 } from "./shared";
 import FaqSearchBar from "./FaqSearchBar";
 import Pagination from "./Pagination";
@@ -18,7 +17,7 @@ import BulkActionBar from "./BulkActionBar";
 
 type SortKey = "created_at" | "updated_at" | "category";
 
-export default function KnowledgeListTab() {
+export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
   const navigate = useNavigate();
   const { t, lang } = useLang();
   const locale = lang === "en" ? "en-US" : "ja-JP";
@@ -76,7 +75,7 @@ export default function KnowledgeListTab() {
     setError(null);
     try {
       const params = new URLSearchParams({
-        tenant: TENANT,
+        tenant: tenantId,
         limit: String(pageLimit),
         offset: String(currentOffset),
         sort: sortKey,
@@ -163,7 +162,7 @@ export default function KnowledgeListTab() {
     setDeleteTarget((prev) => (prev ? { ...prev, state: "deleting" } : null));
     try {
       const res = await fetchWithAuth(
-        `${API_BASE}/v1/admin/knowledge/${deleteTarget.id}?tenant=${TENANT}`,
+        `${API_BASE}/v1/admin/knowledge/${deleteTarget.id}?tenant=${tenantId}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error(t("knowledge.delete_error"));
@@ -229,7 +228,7 @@ export default function KnowledgeListTab() {
     setIsBulkDeleting(true);
     try {
       const res = await fetchWithAuth(
-        `${API_BASE}/v1/admin/knowledge/faq/bulk?tenant=${TENANT}`,
+        `${API_BASE}/v1/admin/knowledge/faq/bulk?tenant=${tenantId}`,
         {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
@@ -644,6 +643,7 @@ export default function KnowledgeListTab() {
       {editTarget && (
         <KnowledgeFaqEditModal
           mode="edit"
+          tenantId={tenantId}
           item={editTarget}
           onClose={() => setEditTarget(null)}
           onSuccess={handleModalSuccess}
@@ -654,6 +654,7 @@ export default function KnowledgeListTab() {
       {createMode && (
         <KnowledgeFaqEditModal
           mode="create"
+          tenantId={tenantId}
           onClose={() => setCreateMode(false)}
           onSuccess={handleModalSuccess}
         />

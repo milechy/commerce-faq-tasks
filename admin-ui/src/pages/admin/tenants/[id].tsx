@@ -18,6 +18,8 @@ interface TenantDetail {
   createdAt: string;
   widgetTitle: string;
   widgetColor: string;
+  allowed_origins: string[];
+  system_prompt?: string | null;
 }
 
 interface ApiKey {
@@ -55,21 +57,37 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
 async function fetchTenantDetail(tenantId: string): Promise<TenantDetail> {
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = (await res.json()) as { tenant?: TenantDetail } | TenantDetail;
-  return ("tenant" in data ? data.tenant : data) as TenantDetail;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = (await res.json()) as any;
+  const data = "tenant" in raw ? raw.tenant : raw;
+  // DB returns is_active: boolean; map to status: "active" | "inactive"
+  return {
+    ...data,
+    status: data.is_active ? "active" : "inactive",
+    allowed_origins: data.allowed_origins ?? [],
+  } as TenantDetail;
 }
 
 async function updateTenant(
   tenantId: string,
-  data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive" }
+  data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }
 ): Promise<TenantDetail> {
+  // Backend expects is_active: boolean (not status string)
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
     method: "PATCH",
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      name: data.name,
+      plan: data.plan,
+      is_active: data.status === "active",
+      allowed_origins: data.allowed_origins,
+      system_prompt: data.system_prompt ?? "",
+    }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = (await res.json()) as { tenant?: TenantDetail } | TenantDetail;
-  return ("tenant" in json ? json.tenant : json) as TenantDetail;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = (await res.json()) as any;
+  const json = "tenant" in raw ? raw.tenant : raw;
+  return { ...json, status: json.is_active ? "active" : "inactive", allowed_origins: json.allowed_origins ?? [] } as TenantDetail;
 }
 
 async function fetchApiKeys(tenantId: string): Promise<ApiKey[]> {
@@ -130,21 +148,32 @@ function SettingsTab({
   onSave,
 }: {
   tenant: TenantDetail;
-  onSave: (data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive" }) => Promise<void>;
+  onSave: (data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }) => Promise<void>;
 }) {
   const { t } = useLang();
   const [name, setName] = useState(tenant.name);
   const [plan, setPlan] = useState<"starter" | "pro">(tenant.plan);
   const [status, setStatus] = useState<"active" | "inactive">(tenant.status);
+  const [originsText, setOriginsText] = useState((tenant.allowed_origins ?? []).join("\n"));
+  const [systemPrompt, setSystemPrompt] = useState(tenant.system_prompt ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const parseOrigins = (raw: string): string[] =>
+    raw.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    const allowed_origins = parseOrigins(originsText);
+    const invalid = allowed_origins.filter((u) => !u.startsWith("https://"));
+    if (invalid.length > 0) {
+      setError(`URLはhttps://で始まる必要があります: ${invalid[0]}`);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), plan, status });
+      await onSave({ name: name.trim(), plan, status, allowed_origins, system_prompt: systemPrompt });
     } catch {
       setError(t("tenant_detail.save_error"));
     } finally {
@@ -238,6 +267,45 @@ function SettingsTab({
               </button>
             ))}
           </div>
+        </div>
+
+        <div>
+          <label style={LABEL_STYLE}>{t("tenant_detail.allowed_origins_label")}</label>
+          <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 8px", lineHeight: 1.5 }}>
+            {t("tenant_detail.allowed_origins_desc")}
+          </p>
+          <textarea
+            value={originsText}
+            onChange={(e) => setOriginsText(e.target.value)}
+            placeholder={t("tenant_detail.allowed_origins_placeholder")}
+            rows={4}
+            style={{
+              ...INPUT_STYLE,
+              fontFamily: "monospace",
+              fontSize: 13,
+              resize: "vertical",
+            }}
+          />
+        </div>
+
+        <div>
+          <label style={LABEL_STYLE}>{t("tenant_detail.system_prompt_label")}</label>
+          <textarea
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            placeholder={t("tenant_detail.system_prompt_placeholder")}
+            rows={6}
+            maxLength={5000}
+            style={{
+              ...INPUT_STYLE,
+              fontSize: 14,
+              resize: "vertical",
+              lineHeight: 1.6,
+            }}
+          />
+          <p style={{ fontSize: 12, color: "#6b7280", margin: "4px 0 0", textAlign: "right" }}>
+            {systemPrompt.length} / 5000
+          </p>
         </div>
 
         <button
@@ -522,6 +590,22 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
 
   return (
     <div>
+      {(!tenant.allowed_origins || tenant.allowed_origins.length === 0) && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: "14px 16px",
+            borderRadius: 12,
+            background: "rgba(120,53,15,0.4)",
+            border: "1px solid rgba(251,191,36,0.3)",
+            color: "#fbbf24",
+            fontSize: 14,
+            lineHeight: 1.6,
+          }}
+        >
+          {t("tenant_detail.embed_no_origins_warning")}
+        </div>
+      )}
       <div style={CARD_STYLE}>
         <p style={{ fontSize: 14, color: "#9ca3af", marginBottom: 16, lineHeight: 1.6 }}>
           {t("tenant_detail.embed_desc")}
@@ -630,6 +714,8 @@ export default function TenantDetailPage() {
     name: string;
     plan: "starter" | "pro";
     status: "active" | "inactive";
+    allowed_origins: string[];
+    system_prompt?: string;
   }) => {
     const updated = await updateTenant(tenantId, data);
     setTenant(updated);
