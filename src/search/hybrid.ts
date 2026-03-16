@@ -105,7 +105,7 @@ export async function hybridSearch(
         query: tenantId
           ? {
               bool: {
-                must: { match: { text: q } },
+                must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
                 filter: {
                   bool: {
                     should: [
@@ -117,7 +117,7 @@ export async function hybridSearch(
                 },
               },
             }
-          : { match: { text: q } },
+          : { multi_match: { query: q, fields: ["question", "answer", "text"] } },
       },
       { requestTimeout: BUDGET }
     );
@@ -143,7 +143,7 @@ export async function hybridSearch(
             size: 50,
             query: {
               bool: {
-                must: { match: { text: q } },
+                must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
                 filter: { term: { tenant_id: tenantId } },
               },
             },
@@ -183,7 +183,7 @@ export async function hybridSearch(
           query: tenantId
             ? {
                 bool: {
-                  must: { match: { text: "返品 送料" } },
+                  must: { multi_match: { query: "返品 送料", fields: ["question", "answer", "text"] } },
                   filter: {
                     bool: {
                       should: [
@@ -195,7 +195,7 @@ export async function hybridSearch(
                   },
                 },
               }
-            : { match: { text: "返品 送料" } },
+            : { multi_match: { query: "返品 送料", fields: ["question", "answer", "text"] } },
         },
         { requestTimeout: BUDGET }
       );

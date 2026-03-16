@@ -48,7 +48,7 @@ export interface LangRouterParams {
 function buildEsQuery(q: string, tenantId: string, lang: SupportedLang) {
   return {
     bool: {
-      must: { match: { text: q } },
+      must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
       filter: [
         { term: { tenant_id: tenantId } },
         { term: { lang } },
@@ -60,7 +60,7 @@ function buildEsQuery(q: string, tenantId: string, lang: SupportedLang) {
 function buildEsFallbackQuery(q: string, tenantId: string) {
   return {
     bool: {
-      must: { match: { text: q } },
+      must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
       filter: { term: { tenant_id: tenantId } },
     },
   };

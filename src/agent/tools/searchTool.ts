@@ -2,7 +2,7 @@
 
 import { hybridSearch, type Hit } from '../../search/hybrid';
 import { searchPgVector } from '../../search/pgvector';
-const { embedText } = require("../llm/groqClient") as any;
+import { embedText } from '../llm/openaiEmbeddingClient';
 
 export interface SearchToolInput {
   query: string;
@@ -23,7 +23,7 @@ export async function searchTool(
 
   // 1) Try pgvector (Groq embeddings + pgvector)
   try {
-    const embedding = await embedText(query, { fast: true });
+    const embedding = await embedText(query);
     const vecResult = await searchPgVector({
       tenantId: effectiveTenantId,
       embedding,
