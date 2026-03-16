@@ -1,10 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>admin-ui</title>
+    <title>Admin UI</title>
+    <!-- 層3: JS致命的エラー時のフォールバック。Reactがマウントできない場合でも真っ黒にならない -->
+    <script>
+      window.addEventListener('error', function(e) {
+        var root = document.getElementById('root');
+        if (!root || root.children.length > 0) return; // Reactが描画済みなら何もしない
+        root.style.cssText = 'display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0f172a;color:#f9fafb;font-family:system-ui,sans-serif;padding:24px;text-align:center;';
+        root.innerHTML = '<div><div style="font-size:40px;margin-bottom:12px">⚠️</div><h1 style="font-size:20px;color:#fca5a5;margin-bottom:8px">起動エラー</h1><p style="color:#9ca3af;font-size:13px;max-width:400px">' + (e.message || 'JavaScriptの読み込みに失敗しました。') + '</p><p style="color:#6b7280;font-size:12px;margin-top:12px">ブラウザのコンソールで詳細を確認してください。</p></div>';
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>
