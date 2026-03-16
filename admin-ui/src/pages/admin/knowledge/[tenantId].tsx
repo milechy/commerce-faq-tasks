@@ -34,7 +34,21 @@ interface KnowledgeItem {
 interface FaqEntry {
   question: string;
   answer: string;
+  category?: string;
 }
+
+// カテゴリラベルマップ（未知のカテゴリはキーをそのまま表示）
+const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
+  product_info: { ja: "商品・サービス", en: "Product/Service" },
+  pricing: { ja: "料金・価格", en: "Pricing" },
+  store_info: { ja: "店舗情報", en: "Store Info" },
+  campaign: { ja: "キャンペーン", en: "Campaign" },
+  inventory: { ja: "在庫・車両", en: "Inventory" },
+  coupon: { ja: "クーポン", en: "Coupon" },
+  booking: { ja: "予約・申し込み", en: "Booking" },
+  warranty: { ja: "保証・サポート", en: "Warranty" },
+  general: { ja: "一般", en: "General" },
+};
 
 interface ScrapePreviewItem {
   url: string;
@@ -51,7 +65,7 @@ interface OcrJobStatus {
 
 type Tab = "list" | "text" | "scrape";
 type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
-type Category = "inventory" | "campaign" | "coupon" | "store_info";
+type Category = string;
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
@@ -555,14 +569,20 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
   const { isSuperAdmin } = useAuth();
 
   const CATEGORIES = [
+    { value: "", label: t("knowledge.category_auto") },
     { value: "inventory", label: t("category.inventory") },
     { value: "campaign", label: t("category.campaign") },
     { value: "coupon", label: t("category.coupon") },
     { value: "store_info", label: t("category.store_info") },
+    { value: "product_info", label: t("category.product_info") },
+    { value: "pricing", label: t("category.pricing") },
+    { value: "booking", label: t("category.booking") },
+    { value: "warranty", label: t("category.warranty") },
+    { value: "general", label: t("category.general") },
   ];
 
   const [text, setText] = useState("");
-  const [category, setCategory] = useState<Category>("inventory");
+  const [category, setCategory] = useState<Category>("");
   const [isGlobal, setIsGlobal] = useState(false);
   const [converting, setConverting] = useState(false);
   const [preview, setPreview] = useState<FaqEntry[] | null>(null);
@@ -572,16 +592,18 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editQuestion, setEditQuestion] = useState("");
   const [editAnswer, setEditAnswer] = useState("");
+  const [editCategory, setEditCategory] = useState<string>("");
 
   const handleStartEdit = (idx: number, faq: FaqEntry) => {
     setEditingIndex(idx);
     setEditQuestion(faq.question);
     setEditAnswer(faq.answer);
+    setEditCategory(faq.category ?? "");
   };
   const handleSaveEdit = () => {
     if (editingIndex === null || !preview) return;
     const updated = preview.map((f, i) =>
-      i === editingIndex ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim() } : f
+      i === editingIndex ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim(), category: editCategory || undefined } : f
     );
     setPreview(updated);
     setEditingIndex(null);
@@ -606,7 +628,7 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ text: text.trim(), ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; preview?: FaqEntry[]; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -631,7 +653,7 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ faqs: preview, category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ faqs: preview, ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -672,13 +694,18 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
         </label>
         <select
           value={category}
-          onChange={(e) => setCategory(e.target.value as Category)}
+          onChange={(e) => setCategory(e.target.value)}
           style={SELECT_STYLE}
         >
           {CATEGORIES.map((c) => (
             <option key={c.value} value={c.value}>{c.label}</option>
           ))}
         </select>
+        {category === "" && (
+          <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0", lineHeight: 1.5 }}>
+            {t("knowledge.category_auto_desc")}
+          </p>
+        )}
         {isSuperAdmin && (
           <div style={{ marginTop: 16 }}>
             <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
@@ -747,6 +774,15 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
                         rows={3}
                         style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#9ca3af", fontSize: 13, resize: "vertical" }}
                       />
+                      <select
+                        value={editCategory}
+                        onChange={(e) => setEditCategory(e.target.value)}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#d1d5db", fontSize: 13 }}
+                      >
+                        {CATEGORIES.map((c) => (
+                          <option key={c.value} value={c.value}>{c.label}</option>
+                        ))}
+                      </select>
                       <div style={{ display: "flex", gap: 8 }}>
                         <button
                           onClick={handleSaveEdit}
@@ -767,9 +803,14 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
                       <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
                         Q: {faq.question}
                       </p>
-                      <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 10px", lineHeight: 1.5 }}>
+                      <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 8px", lineHeight: 1.5 }}>
                         A: {faq.answer}
                       </p>
+                      {faq.category && (
+                        <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>
+                          {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
+                        </span>
+                      )}
                       <div style={{ display: "flex", gap: 8 }}>
                         <button
                           onClick={() => handleStartEdit(idx, faq)}
@@ -819,14 +860,20 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
   const { isSuperAdmin } = useAuth();
 
   const CATEGORIES = [
+    { value: "", label: t("knowledge.category_auto") },
     { value: "inventory", label: t("category.inventory") },
     { value: "campaign", label: t("category.campaign") },
     { value: "coupon", label: t("category.coupon") },
     { value: "store_info", label: t("category.store_info") },
+    { value: "product_info", label: t("category.product_info") },
+    { value: "pricing", label: t("category.pricing") },
+    { value: "booking", label: t("category.booking") },
+    { value: "warranty", label: t("category.warranty") },
+    { value: "general", label: t("category.general") },
   ];
 
   const [urls, setUrls] = useState("");
-  const [category, setCategory] = useState<Category>("store_info");
+  const [category, setCategory] = useState<Category>("");
   const [isGlobal, setIsGlobal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -836,17 +883,19 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
   const [editingKey, setEditingKey] = useState<{ url: string; idx: number } | null>(null);
   const [editQuestion, setEditQuestion] = useState("");
   const [editAnswer, setEditAnswer] = useState("");
+  const [editCategory, setEditCategory] = useState<string>("");
 
   const handleStartEdit = (url: string, idx: number, faq: FaqEntry) => {
     setEditingKey({ url, idx });
     setEditQuestion(faq.question);
     setEditAnswer(faq.answer);
+    setEditCategory(faq.category ?? "");
   };
   const handleSaveEdit = () => {
     if (!editingKey || !preview) return;
     setPreview(preview.map((item) =>
       item.url === editingKey.url
-        ? { ...item, faqs: item.faqs.map((f, i) => i === editingKey.idx ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim() } : f) }
+        ? { ...item, faqs: item.faqs.map((f, i) => i === editingKey.idx ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim(), category: editCategory || undefined } : f) }
         : item
     ));
     setEditingKey(null);
@@ -882,7 +931,7 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls: urlList, category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ urls: urlList, ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       if (res.status === 401 || res.status === 403) {
         navigate("/login", { replace: true });
@@ -914,7 +963,7 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: validItems, category, ...(isGlobal ? { target: "global" } : {}) }),
+        body: JSON.stringify({ items: validItems, ...(category ? { category } : {}), ...(isGlobal ? { target: "global" } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
@@ -960,13 +1009,18 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
             </label>
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value as Category)}
+              onChange={(e) => setCategory(e.target.value)}
               style={SELECT_STYLE}
             >
               {CATEGORIES.map((c) => (
                 <option key={c.value} value={c.value}>{c.label}</option>
               ))}
             </select>
+            {category === "" && (
+              <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0", lineHeight: 1.5 }}>
+                {t("knowledge.category_auto_desc")}
+              </p>
+            )}
             {isSuperAdmin && (
               <div style={{ marginTop: 16 }}>
                 <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
@@ -1056,6 +1110,15 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
                             rows={3}
                             style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#9ca3af", fontSize: 13, resize: "vertical" }}
                           />
+                          <select
+                            value={editCategory}
+                            onChange={(e) => setEditCategory(e.target.value)}
+                            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#d1d5db", fontSize: 13 }}
+                          >
+                            {CATEGORIES.map((c) => (
+                              <option key={c.value} value={c.value}>{c.label}</option>
+                            ))}
+                          </select>
                           <div style={{ display: "flex", gap: 8 }}>
                             <button
                               onClick={handleSaveEdit}
@@ -1076,9 +1139,14 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
                           <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
                             Q: {faq.question}
                           </p>
-                          <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 10px", lineHeight: 1.5 }}>
+                          <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 8px", lineHeight: 1.5 }}>
                             A: {faq.answer}
                           </p>
+                          {faq.category && (
+                            <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600, marginBottom: 8 }}>
+                              {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
+                            </span>
+                          )}
                           <div style={{ display: "flex", gap: 8 }}>
                             <button
                               onClick={() => handleStartEdit(item.url, idx, faq)}
