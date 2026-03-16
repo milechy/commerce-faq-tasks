@@ -114,6 +114,13 @@ const ja = {
   "category.campaign": "キャンペーン・セール",
   "category.coupon": "クーポン・割引",
   "category.store_info": "店舗情報・アクセス",
+  "category.product_info": "商品・サービス情報",
+  "category.pricing": "料金・価格",
+  "category.booking": "予約・申し込み",
+  "category.warranty": "保証・アフターサービス",
+  "category.general": "よくある質問・一般",
+  "knowledge.category_auto": "🤖 AIが自動判定（推奨）",
+  "knowledge.category_auto_desc": "AIが内容を分析して最適なカテゴリを自動で判定します。手動で指定することもできます。",
 
   // Tenants page
   "tenants.title": "テナント管理",

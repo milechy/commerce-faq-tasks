@@ -14,12 +14,13 @@ const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : null;
 
-const CATEGORIES = ["inventory", "campaign", "coupon", "store_info"] as const;
+const CATEGORIES = ["inventory", "campaign", "coupon", "store_info", "product_info", "pricing", "booking", "warranty", "general"] as const;
 type Category = (typeof CATEGORIES)[number];
 
 interface FaqEntry {
   question: string;
   answer: string;
+  category?: string;
 }
 
 /** query/header からテナントIDを解決（bodyから取得禁止 — CLAUDE.md） */
@@ -29,34 +30,43 @@ function resolveTenantId(req: Request): string | null {
   return fromQuery || fromHeader || null;
 }
 
-/** テキスト→FAQ変換 */
-async function textToFaqs(text: string, category: Category): Promise<FaqEntry[]> {
-  const categoryLabel: Record<Category, string> = {
-    inventory: "在庫・車両情報",
-    campaign: "キャンペーン・セール",
-    coupon: "クーポン・割引",
-    store_info: "店舗情報・アクセス",
-  };
-
+/**
+ * テキスト→FAQ変換。
+ * categoryOverride が指定された場合は全FAQのカテゴリをその値で上書き。
+ * 未指定（null/undefined）の場合はAIがカテゴリを自動判定する。
+ */
+async function textToFaqs(text: string, categoryOverride?: string | null): Promise<FaqEntry[]> {
   const model = process.env.GROQ_FAQ_GEN_MODEL ?? "llama-3.3-70b-versatile";
 
-  const prompt = `あなたは中古車販売店のFAQ作成の専門家です。
-以下のテキストを読んで、テキストの情報量に応じてお客様がよく聞きそうな質問と回答を生成してください。
-カテゴリ: ${categoryLabel[category]}
+  const prompt = `あなたはFAQ作成の専門家です。
+以下のテキストから、顧客が実際に質問しそうなFAQを生成してください。
 
-重要なルール:
-- テキストに明示されている事実のみからFAQを作成する
-- 推測や補完でFAQを増やさない
-- 情報が少ない場合は少ない件数（1〜3個）で構わない
-- テキストと無関係な質問は絶対に生成しない
+ルール:
+* テキストに明示されている事実のみからFAQを作成する
+* 推測や補完でFAQを増やさない
+* 情報が少ない場合は少ない件数（1〜3個）で構わない
+* テキストと無関係な質問は絶対に生成しない
+* 各FAQに最も適切なカテゴリを自動で判定して付与する
+
+カテゴリの判定基準:
+* 商品・サービスの詳細情報 → "product_info"
+* 料金・価格・支払い方法 → "pricing"
+* 店舗・アクセス・営業時間 → "store_info"
+* キャンペーン・セール・割引 → "campaign"
+* 在庫・車両情報 → "inventory"
+* クーポン・割引コード → "coupon"
+* 予約・申し込み方法 → "booking"
+* 保証・アフターサービス → "warranty"
+* よくある質問・一般 → "general"
+* 上記に当てはまらない場合はテキストの内容から適切なカテゴリ名を英語スネークケースで付与する
 
 テキスト:
 ${text.slice(0, 3000)}
 
 以下のJSON配列のみを出力してください（説明文・コードブロック記号は不要）:
 [
-  {"question": "質問1", "answer": "回答1"},
-  {"question": "質問2", "answer": "回答2"}
+  {"question": "質問1", "answer": "回答1", "category": "store_info"},
+  {"question": "質問2", "answer": "回答2", "category": "pricing"}
 ]`;
 
   const raw = await groqClient.call({
@@ -73,10 +83,16 @@ ${text.slice(0, 3000)}
   const parsed = JSON.parse(jsonMatch[0]) as unknown[];
   if (!Array.isArray(parsed)) throw new Error("JSON形式が不正です");
 
-  return parsed.filter(
+  const faqs = parsed.filter(
     (f): f is FaqEntry =>
       typeof (f as any).question === "string" && typeof (f as any).answer === "string"
   );
+
+  // カテゴリ強制上書き（手動指定の場合）
+  if (categoryOverride) {
+    return faqs.map((f) => ({ ...f, category: categoryOverride }));
+  }
+  return faqs;
 }
 
 /** ESインデックスからドキュメントを削除（best-effort） */
@@ -310,7 +326,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     const schema = z.object({
       text: z.string().min(50, "テキストは50文字以上入力してください").max(10000),
-      category: z.enum(CATEGORIES),
+      category: z.string().optional(), // 未指定 = AIが自動判定
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -322,7 +338,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const { text, category } = parsed.data;
 
     try {
-      const faqs = await textToFaqs(text, category);
+      const faqs = await textToFaqs(text, category || null);
       if (faqs.length === 0) {
         return res.status(422).json({ error: "FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください。" });
       }
@@ -347,10 +363,10 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     const schema = z.object({
       faqs: z
-        .array(z.object({ question: z.string(), answer: z.string() }))
+        .array(z.object({ question: z.string(), answer: z.string(), category: z.string().optional() }))
         .min(1)
         .max(20),
-      category: z.enum(CATEGORIES),
+      category: z.string().optional(), // 全FAQ共通の強制カテゴリ（未指定=各FAQの自動判定値を使用）
       target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
@@ -360,7 +376,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { faqs, category, target: rawTarget } = parsed.data;
+    const { faqs, category: categoryOverride, target: rawTarget } = parsed.data;
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
@@ -371,12 +387,13 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const inserted: number[] = [];
 
     for (const faq of faqs) {
+      const faqCategory = categoryOverride || faq.category || "general";
       try {
         const r = await db.query(
           `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
            VALUES ($1, $2, $3, $4, true)
            RETURNING id`,
-          [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), category]
+          [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), faqCategory]
         );
         const faqId = r.rows[0].id as number;
         inserted.push(faqId);
@@ -406,7 +423,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     const schema = z.object({
       urls: z.array(z.string().url()).min(1).max(5),
-      category: z.enum(CATEGORIES).default("store_info"),
+      category: z.string().optional(), // 未指定 = AIが自動判定
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -438,7 +455,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           continue;
         }
 
-        const faqs = await textToFaqs(text, category);
+        const faqs = await textToFaqs(text, category || null);
         results.push({ url, faqs });
       } catch (err) {
         results.push({ url, faqs: [], error: String(err).slice(0, 200) });
@@ -464,14 +481,14 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           z.object({
             url: z.string().url(),
             faqs: z
-              .array(z.object({ question: z.string(), answer: z.string() }))
+              .array(z.object({ question: z.string(), answer: z.string(), category: z.string().optional() }))
               .min(1)
               .max(20),
           })
         )
         .min(1)
         .max(5),
-      category: z.enum(CATEGORIES).default("store_info"),
+      category: z.string().optional(), // 全FAQ共通の強制カテゴリ（未指定=各FAQの自動判定値を使用）
       target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
@@ -479,7 +496,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { items, category, target: rawTarget } = parsed.data;
+    const { items, category: categoryOverride, target: rawTarget } = parsed.data;
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
@@ -491,6 +508,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     for (const item of items) {
       for (const faq of item.faqs) {
+        const faqCategory = categoryOverride || faq.category || "general";
         try {
           const r = await db.query(
             `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published)
@@ -500,7 +518,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
               target,
               faq.question.slice(0, 500),
               faq.answer.slice(0, 2000),
-              category,
+              faqCategory,
               [item.url],
             ]
           );

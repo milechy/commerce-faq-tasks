@@ -116,6 +116,13 @@ const en: Record<TranslationKey, string> = {
   "category.campaign": "Campaigns / Sales",
   "category.coupon": "Coupons / Discounts",
   "category.store_info": "Store Info / Access",
+  "category.product_info": "Product / Service Info",
+  "category.pricing": "Pricing / Payment",
+  "category.booking": "Booking / Reservations",
+  "category.warranty": "Warranty / After-service",
+  "category.general": "General / FAQ",
+  "knowledge.category_auto": "🤖 AI auto-detect (recommended)",
+  "knowledge.category_auto_desc": "AI will analyze the content and determine the most appropriate category automatically. You can also specify manually.",
 
   // Tenants page
   "tenants.title": "Tenant Management",
