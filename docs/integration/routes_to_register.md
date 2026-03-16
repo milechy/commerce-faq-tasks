@@ -14,6 +14,32 @@
 ## 申請リスト
 （まだなし）
 
+## Phase38: チューニングルールAPI (Stream A, Step4-BE)
+
+- GET /v1/admin/tuning-rules: ルール一覧（テナントフィルタ対応）(Stream A, Phase38)
+  - ファイル: src/api/admin/tuning/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+  - 権限: super_admin=全テナント, client_admin=自テナント+global
+
+- POST /v1/admin/tuning-rules: ルール作成 (Stream A, Phase38)
+  - client_admin は tenant_id = 自テナントのみ（global不可・403）
+
+- PUT /v1/admin/tuning-rules/:id: ルール更新 (Stream A, Phase38)
+  - テナント所有権を検証（super_admin は制限なし）
+
+- DELETE /v1/admin/tuning-rules/:id: ルール削除 (Stream A, Phase38)
+  - super_admin: 全ルール / client_admin: 自テナントのみ
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase38: チューニングルールAPI
+import { registerTuningRoutes } from "./api/admin/tuning/routes";
+
+registerTuningRoutes(app);
+```
+
+---
+
 ## Phase38: 会話履歴API (Stream A, Step2)
 
 - GET /v1/admin/chat-history/sessions: セッション一覧（ページネーション対応）(Stream A, Phase38)
