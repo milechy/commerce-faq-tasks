@@ -92,6 +92,8 @@ const en: Record<TranslationKey, string> = {
   "knowledge.committing": "⏳ Registering...",
   "knowledge.commit": "✅ Register this content",
   "knowledge.text_min_error": "Please enter at least 50 characters",
+  "knowledge.char_count_need": "⚠️ {n} more characters needed (min 50)",
+  "knowledge.char_count_ok": "✓ {n} characters",
   "knowledge.preview_edit_save": "Save",
   "knowledge.preview_remove": "Remove",
   "knowledge.preview_empty": "No FAQs generated. Try editing the text and converting again.",

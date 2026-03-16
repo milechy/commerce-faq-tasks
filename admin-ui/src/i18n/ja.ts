@@ -90,6 +90,8 @@ const ja = {
   "knowledge.committing": "⏳ 登録中...",
   "knowledge.commit": "✅ この内容で登録する",
   "knowledge.text_min_error": "50文字以上のテキストを入力してください",
+  "knowledge.char_count_need": "⚠️ あと{n}文字必要です（最低50文字）",
+  "knowledge.char_count_ok": "✓ {n}文字",
   "knowledge.preview_edit_save": "保存",
   "knowledge.preview_remove": "削除",
   "knowledge.preview_empty": "FAQが0件です。テキストを変更して再変換してください。",

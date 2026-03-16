@@ -36,7 +36,7 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
   const [success, setSuccess] = useState<string | null>(null);
 
   const handleConvert = async () => {
-    if (text.trim().length < 10) {
+    if (text.trim().length < 50) {
       setError(t("knowledge.text_min_error"));
       return;
     }
@@ -108,6 +108,17 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
           placeholder={t("knowledge.text_placeholder")}
           style={TEXTAREA_STYLE}
         />
+        <div style={{ textAlign: "right", marginTop: 6, fontSize: 12 }}>
+          {text.trim().length < 50 ? (
+            <span style={{ color: "#fb923c" }}>
+              {t("knowledge.char_count_need", { n: 50 - text.trim().length })}
+            </span>
+          ) : (
+            <span style={{ color: "#6b7280" }}>
+              {t("knowledge.char_count_ok", { n: text.trim().length })}
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={CARD_STYLE}>
@@ -145,11 +156,11 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
       {!preview && (
         <button
           onClick={handleConvert}
-          disabled={converting || text.trim().length < 10}
+          disabled={converting || text.trim().length < 50}
           style={{
             ...BTN_PRIMARY,
-            opacity: converting || text.trim().length < 10 ? 0.6 : 1,
-            cursor: converting || text.trim().length < 10 ? "not-allowed" : "pointer",
+            opacity: converting || text.trim().length < 50 ? 0.6 : 1,
+            cursor: converting || text.trim().length < 50 ? "not-allowed" : "pointer",
           }}
         >
           {converting ? t("knowledge.converting") : t("knowledge.convert")}
