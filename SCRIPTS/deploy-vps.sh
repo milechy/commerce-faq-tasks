@@ -45,13 +45,14 @@ ssh "${VPS}" "cd ${REMOTE_DIR} && pnpm build"
 
 echo "[4/6] Building Admin UI..."
 # Verify required env vars are present before building (prevents empty-string Supabase URL in bundle)
+# Use 'set -a; source; set +a' instead of xargs to handle values with spaces/special chars reliably
 ssh "${VPS}" "
   set -e
   cd ${REMOTE_DIR}/admin-ui
   if [ -f .env.local ]; then
-    source <(grep -v '^#' .env.local | xargs)
+    set -a; source .env.local; set +a
   elif [ -f .env ]; then
-    source <(grep -v '^#' .env | xargs)
+    set -a; source .env; set +a
   fi
   if [ -z \"\${VITE_SUPABASE_URL:-}\" ] || [ -z \"\${VITE_SUPABASE_ANON_KEY:-}\" ]; then
     echo '❌ ERROR: VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY が未設定です'
@@ -60,7 +61,12 @@ ssh "${VPS}" "
   fi
   pnpm install --frozen-lockfile
   pnpm build
-  echo '✅ Admin UI built with Supabase URL: '\$(grep -c 'supabase.co' dist/assets/*.js)' reference(s) in bundle'
+  BUNDLE_REFS=\$(grep -c 'supabase.co' dist/assets/*.js 2>/dev/null || echo 0)
+  if [ \"\${BUNDLE_REFS}\" = '0' ]; then
+    echo '❌ ERROR: バンドルにSupabase URLが含まれていません'
+    exit 1
+  fi
+  echo '✅ Admin UI built with Supabase URL verified in bundle'
 "
 
 echo "[5/6] Starting services with PM2..."
