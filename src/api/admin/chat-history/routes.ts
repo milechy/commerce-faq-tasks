@@ -32,8 +32,10 @@ export function registerChatHistoryRoutes(app: Express): void {
   app.get(
     "/v1/admin/chat-history/sessions",
     async (req: Request, res: Response) => {
-      const jwtTenantId: string = (req as any).tenantId ?? "";
-      const isSuperAdmin: boolean = (req as any).role === "super_admin";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
 
@@ -68,8 +70,10 @@ export function registerChatHistoryRoutes(app: Express): void {
     "/v1/admin/chat-history/sessions/:sessionId/messages",
     async (req: Request, res: Response) => {
       const sessionDbId: string = req.params["sessionId"] ?? "";
-      const jwtTenantId: string = (req as any).tenantId ?? "";
-      const isSuperAdmin: boolean = (req as any).role === "super_admin";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
       // テナント検証: super_admin は query ?tenant=xxx で指定、client_admin は自テナント
       const tenantId = isSuperAdmin

@@ -227,6 +227,9 @@ const ja = {
   "billing.invoice_open": "お支払い待ち",
   "billing.invoice_draft": "作成中",
   "billing.csv_header": "日付,リクエスト数,入力トークン,出力トークン,コスト(円)",
+  "billing.no_data": "この期間のデータはありません",
+  "billing.no_tenant": "テナントが見つかりません",
+  "billing.select_tenant": "テナントを選択してください",
 
   // Role badges
   "role.super_admin": "🔑 管理者",
@@ -316,6 +319,67 @@ const ja = {
   "modal.save_error": "❌ 保存できませんでした。もう一度お試しください。",
   "modal.saved": "✅ 保存しました！",
   "modal.added": "✅ 追加しました！",
+
+  // Dashboard Phase38 quick actions
+  "dashboard.chat_history": "会話履歴を確認する",
+  "dashboard.tuning_rules": "AIチューニングルールを管理する",
+
+  // Tenant detail — system prompt
+  "tenant_detail.system_prompt_label": "システムプロンプト（AIへの指示）",
+  "tenant_detail.system_prompt_placeholder": "例：あなたは丁寧な自動車販売アシスタントです。在庫情報を正確に伝え、必要に応じて来店を促してください。",
+
+  // Chat history
+  "chat_history.back": "← ダッシュボードに戻る",
+  "chat_history.back_to_list": "← 会話一覧に戻る",
+  "chat_history.title": "会話履歴",
+  "chat_history.subtitle": "お客様とAIの会話ログを確認できます",
+  "chat_history.sessions": "会話セッション",
+  "chat_history.loading": "読み込んでいます...",
+  "chat_history.no_sessions": "まだ会話履歴がありません",
+  "chat_history.message_count": "{n}件のメッセージ",
+  "chat_history.view_detail": "詳細を見る →",
+  "chat_history.user_message": "お客様",
+  "chat_history.assistant_message": "AI",
+  "chat_history.create_rule": "このAI回答からチューニングルールを作成",
+
+  // Tuning rules
+  "tuning.back": "← ダッシュボードに戻る",
+  "tuning.title": "AIチューニングルール",
+  "tuning.subtitle": "AIの回答スタイルや禁止事項をルールで細かく制御できます",
+  "tuning.add_rule": "新しいルールを追加する",
+  "tuning.load_error": "ルールの読み込みに失敗しました。もう一度お試しください 🙏",
+  "tuning.count": "{n}件のルール",
+  "tuning.no_rules": "チューニングルールがまだありません",
+  "tuning.no_rules_sub": "「新しいルールを追加する」から最初のルールを作成してください",
+  "tuning.is_active": "有効",
+  "tuning.is_inactive": "無効",
+  "tuning.toggle_active": "ルールの有効/無効を切り替えました",
+  "tuning.edit": "✏️ 編集",
+  "tuning.delete": "削除",
+  "tuning.deleted": "✅ ルールを削除しました",
+  "tuning.delete_error": "削除に失敗しました。もう一度お試しください 🙏",
+  "tuning.delete_confirm_title": "このルールを削除しますか？",
+  "tuning.delete_confirm_body": "削除するとAIへの適用が停止されます。この操作は取り消せません。",
+  "tuning.cancel_delete": "やめる",
+  "tuning.confirm_delete": "削除する",
+  "tuning.create_title": "🎛️ 新しいチューニングルール",
+  "tuning.edit_title": "🎛️ チューニングルールを編集",
+  "tuning.source_conversation": "元の会話",
+  "tuning.trigger_pattern": "トリガーパターン（キーワード）",
+  "tuning.trigger_pattern_hint": "このルールを適用するキーワードをカンマ区切りで入力してください。空欄の場合は常時適用されます。",
+  "tuning.trigger_pattern_placeholder": "例: 在庫, 価格, 保証",
+  "tuning.expected_behavior": "AIへの指示（期待する応答方針）",
+  "tuning.expected_behavior_placeholder": "例: 在庫に関する質問には、必ず最新の在庫台数を確認してから回答してください。不明な場合はスタッフへの問い合わせを促してください。",
+  "tuning.behavior_required": "AIへの指示を入力してください",
+  "tuning.scope": "適用範囲",
+  "tuning.scope_global": "🌐 全テナント共通（グローバル）",
+  "tuning.priority": "優先度",
+  "tuning.priority_hint": "数値が大きいほど優先度が高くなります（0〜10）",
+  "tuning.save": "💾 ルールを保存する",
+  "tuning.saving": "保存中...",
+  "tuning.save_error": "保存に失敗しました。もう一度お試しください 🙏",
+  "tuning.saved": "✅ ルールを更新しました",
+  "tuning.added": "✅ 新しいルールを追加しました",
 } as const;
 
 export type TranslationKey = keyof typeof ja;

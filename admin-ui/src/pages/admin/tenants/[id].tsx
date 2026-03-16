@@ -19,6 +19,7 @@ interface TenantDetail {
   widgetTitle: string;
   widgetColor: string;
   allowed_origins: string[];
+  system_prompt?: string | null;
 }
 
 interface ApiKey {
@@ -69,7 +70,7 @@ async function fetchTenantDetail(tenantId: string): Promise<TenantDetail> {
 
 async function updateTenant(
   tenantId: string,
-  data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[] }
+  data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }
 ): Promise<TenantDetail> {
   // Backend expects is_active: boolean (not status string)
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
@@ -79,6 +80,7 @@ async function updateTenant(
       plan: data.plan,
       is_active: data.status === "active",
       allowed_origins: data.allowed_origins,
+      system_prompt: data.system_prompt ?? "",
     }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -146,13 +148,14 @@ function SettingsTab({
   onSave,
 }: {
   tenant: TenantDetail;
-  onSave: (data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[] }) => Promise<void>;
+  onSave: (data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }) => Promise<void>;
 }) {
   const { t } = useLang();
   const [name, setName] = useState(tenant.name);
   const [plan, setPlan] = useState<"starter" | "pro">(tenant.plan);
   const [status, setStatus] = useState<"active" | "inactive">(tenant.status);
   const [originsText, setOriginsText] = useState((tenant.allowed_origins ?? []).join("\n"));
+  const [systemPrompt, setSystemPrompt] = useState(tenant.system_prompt ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -170,7 +173,7 @@ function SettingsTab({
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), plan, status, allowed_origins });
+      await onSave({ name: name.trim(), plan, status, allowed_origins, system_prompt: systemPrompt });
     } catch {
       setError(t("tenant_detail.save_error"));
     } finally {
@@ -283,6 +286,26 @@ function SettingsTab({
               resize: "vertical",
             }}
           />
+        </div>
+
+        <div>
+          <label style={LABEL_STYLE}>{t("tenant_detail.system_prompt_label")}</label>
+          <textarea
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            placeholder={t("tenant_detail.system_prompt_placeholder")}
+            rows={6}
+            maxLength={5000}
+            style={{
+              ...INPUT_STYLE,
+              fontSize: 14,
+              resize: "vertical",
+              lineHeight: 1.6,
+            }}
+          />
+          <p style={{ fontSize: 12, color: "#6b7280", margin: "4px 0 0", textAlign: "right" }}>
+            {systemPrompt.length} / 5000
+          </p>
         </div>
 
         <button
@@ -692,6 +715,7 @@ export default function TenantDetailPage() {
     plan: "starter" | "pro";
     status: "active" | "inactive";
     allowed_origins: string[];
+    system_prompt?: string;
   }) => {
     const updated = await updateTenant(tenantId, data);
     setTenant(updated);
