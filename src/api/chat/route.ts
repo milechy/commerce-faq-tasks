@@ -1,10 +1,12 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import { runDialogTurn } from "../../agent/dialog/dialogAgent";
 import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts";
 import { t } from "../i18n/messages";
 import type { Lang } from "../i18n/messages";
+import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
 
 // ---------------------------------------------------------------------------
 // Zod スキーマ
@@ -74,11 +76,15 @@ export function createChatHandler(logger: Logger) {
 
     const body = parsed.data;
 
+    // Phase38: セッションIDを確定（クライアント指定 → conversationId → 新規生成）
+    const sessionId: string =
+      body.sessionId ?? body.conversationId ?? randomUUID();
+
     logger.info(
       {
         requestId,
         tenantId,
-        sessionId: body.sessionId ?? body.conversationId,
+        sessionId,
         messageLength: body.message.length,
         hasHistory: (body.history?.length ?? 0) > 0,
         language: body.options?.language ?? "ja",
@@ -86,9 +92,19 @@ export function createChatHandler(logger: Logger) {
       "chat.request.received"
     );
 
+    // Phase38: ユーザーメッセージをDBに保存（fire-and-forget）
+    saveMessage({
+      tenantId,
+      sessionId,
+      role: "user",
+      content: body.message,
+    }).catch((err) =>
+      logger.warn({ err }, "[chat-history] save user message failed")
+    );
+
     try {
       const result = await runDialogTurn({
-        sessionId: body.sessionId ?? body.conversationId,
+        sessionId,
         tenantId,
         message: body.message,
         history: body.history,
@@ -159,6 +175,20 @@ export function createChatHandler(logger: Logger) {
       };
 
       res.status(200).json(response);
+
+      // Phase38: アシスタント応答をDBに保存（fire-and-forget、レスポンス後）
+      saveMessage({
+        tenantId,
+        sessionId,
+        role: "assistant",
+        content,
+        metadata: {
+          model: (result as any).meta?.route,
+          ragStats: (result as any).meta?.ragStats,
+        },
+      }).catch((err) =>
+        logger.warn({ err }, "[chat-history] save assistant message failed")
+      );
     } catch (err) {
       logger.error(
         { requestId, tenantId, err },
