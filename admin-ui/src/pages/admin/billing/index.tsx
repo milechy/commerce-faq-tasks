@@ -49,6 +49,21 @@ function fmtNum(n: number): string {
   return n.toLocaleString("ja-JP");
 }
 
+/** YYYY-MM → from/to の日付範囲を返す */
+function monthToDateRange(month: string): { from: string; to: string } {
+  const [year, mon] = month.split("-").map(Number);
+  const from = `${year}-${String(mon).padStart(2, "0")}-01`;
+  const nextMonth = mon === 12 ? new Date(year + 1, 0, 1) : new Date(year, mon, 1);
+  const to = nextMonth.toISOString().slice(0, 10);
+  return { from, to };
+}
+
+/** Unix timestamp (秒) → "YYYY-MM" */
+function tsToYearMonth(ts: number): string {
+  const d = new Date(ts * 1000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 // ─── CSVエクスポート ───────────────────────────────────────
 function exportCsv(data: DailyUsage[], tenantName: string, month: string, header: string) {
   const rows = data.map((d) =>
@@ -69,66 +84,6 @@ function exportCsv(data: DailyUsage[], tenantName: string, month: string, header
   a.click();
   URL.revokeObjectURL(url);
 }
-
-// ─── モックデータ生成 ─────────────────────────────────────
-function buildMockDaily(month: string): DailyUsage[] {
-  const [year, mon] = month.split("-").map(Number);
-  const days = new Date(year, mon, 0).getDate();
-  return Array.from({ length: days }, (_, i) => {
-    const day = i + 1;
-    const reqs = 200 + Math.floor(Math.random() * 300);
-    const inTok = reqs * 380;
-    const outTok = reqs * 150;
-    const cost = Math.round((inTok * 0.003 + outTok * 0.006) * 100);
-    return {
-      date: `${month}-${String(day).padStart(2, "0")}`,
-      requests: reqs,
-      input_tokens: inTok,
-      output_tokens: outTok,
-      cost_total_cents: cost,
-    };
-  });
-}
-
-function buildMockSummary(
-  tenantId: string,
-  month: string,
-  daily: DailyUsage[]
-): BillingSummary {
-  const total_requests = daily.reduce((s, d) => s + d.requests, 0);
-  const total_input_tokens = daily.reduce((s, d) => s + d.input_tokens, 0);
-  const total_output_tokens = daily.reduce((s, d) => s + d.output_tokens, 0);
-  const cost_llm_cents = daily.reduce((s, d) => s + d.cost_total_cents, 0);
-  return {
-    tenant_id: tenantId,
-    month,
-    total_requests,
-    total_input_tokens,
-    total_output_tokens,
-    cost_llm_cents,
-    cost_total_cents: Math.round(cost_llm_cents * 2),
-    billing_status: "pending",
-  };
-}
-
-const MOCK_INVOICES: Invoice[] = [
-  {
-    id: "inv_001",
-    month: "2026-02",
-    amount_cents: 85000,
-    status: "paid",
-    invoice_url: "#",
-    portal_url: "#",
-  },
-  {
-    id: "inv_002",
-    month: "2026-01",
-    amount_cents: 72000,
-    status: "paid",
-    invoice_url: "#",
-    portal_url: "#",
-  },
-];
 
 // ─── スタイル定数 ─────────────────────────────────────────
 const CARD: React.CSSProperties = {
@@ -170,6 +125,7 @@ export default function BillingPage() {
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [daily, setDaily] = useState<DailyUsage[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [portalUrl, setPortalUrl] = useState<string | null>(null);
 
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,21 +155,9 @@ export default function BillingPage() {
           if (data.tenants.length > 0) {
             setSelectedTenantId(data.tenants[0].id);
           }
-        } else {
-          const mocks: Tenant[] = [
-            { id: "tenant_001", name: "サンプル株式会社" },
-            { id: "tenant_002", name: "テストコーポレーション" },
-          ];
-          setTenants(mocks);
-          setSelectedTenantId(mocks[0].id);
         }
       } catch {
-        const mocks: Tenant[] = [
-          { id: "tenant_001", name: "サンプル株式会社" },
-          { id: "tenant_002", name: "テストコーポレーション" },
-        ];
-        setTenants(mocks);
-        setSelectedTenantId(mocks[0].id);
+        // テナント取得失敗時は空のまま
       }
     })();
   }, [navigate]);
@@ -224,43 +168,134 @@ export default function BillingPage() {
 
     setLoadingData(true);
     setError(null);
+    setSummary(null);
+    setDaily([]);
+    setInvoices([]);
+    setPortalUrl(null);
+
+    const { from, to } = monthToDateRange(selectedMonth);
 
     try {
-      const [summaryRes, invoicesRes] = await Promise.allSettled([
+      const [usageRes, invoicesRes] = await Promise.allSettled([
         authFetch(
-          `${API_BASE}/v1/admin/billing/usage?tenantId=${selectedTenantId}&month=${selectedMonth}`
+          `${API_BASE}/v1/admin/billing/usage?tenantId=${selectedTenantId}&from=${from}&to=${to}`
         ),
         authFetch(
           `${API_BASE}/v1/admin/billing/invoices?tenantId=${selectedTenantId}`
         ),
       ]);
 
-      const mockDaily = buildMockDaily(selectedMonth);
-
-      if (summaryRes.status === "fulfilled" && summaryRes.value.ok) {
-        const data = (await summaryRes.value.json()) as {
-          summary: BillingSummary;
-          daily: DailyUsage[];
+      // ─── 使用量データ ───────────────────────────────────────
+      if (usageRes.status === "fulfilled" && usageRes.value.ok) {
+        const data = (await usageRes.value.json()) as {
+          tenantId: string;
+          daily: Array<{
+            date: string;
+            total_requests: number;
+            dialog_requests: number;
+            search_requests: number;
+            cost_llm_cents: number;
+            cost_total_cents: number;
+            billing_status: string;
+          }>;
+          monthly: Array<{
+            month: string;
+            total_requests: number;
+            cost_llm_cents: number;
+            cost_total_cents: number;
+          }>;
         };
-        setSummary(data.summary);
-        setDaily(data.daily);
-      } else {
-        setSummary(buildMockSummary(selectedTenantId, selectedMonth, mockDaily));
-        setDaily(mockDaily);
+
+        // daily マッピング
+        const mappedDaily: DailyUsage[] = data.daily.map((d) => ({
+          date: d.date,
+          requests: d.total_requests,
+          input_tokens: 0,
+          output_tokens: 0,
+          cost_total_cents: d.cost_total_cents,
+        }));
+        setDaily(mappedDaily);
+
+        // summary を monthly から導出（選択月の行、なければ daily 集計）
+        const monthRow = data.monthly.find((m) => m.month === selectedMonth);
+        const totalRequests = monthRow?.total_requests
+          ?? mappedDaily.reduce((s, d) => s + d.requests, 0);
+        const costLlmCents = monthRow?.cost_llm_cents
+          ?? data.daily.reduce((s, d) => s + d.cost_llm_cents, 0);
+        const costTotalCents = monthRow?.cost_total_cents
+          ?? mappedDaily.reduce((s, d) => s + d.cost_total_cents, 0);
+
+        // billing_status: pending が1件でもあれば pending
+        const hasPending = data.daily.some((d) => d.billing_status === "pending");
+        const billingStatus: BillingSummary["billing_status"] = hasPending
+          ? "pending"
+          : data.daily.length > 0
+          ? "invoiced"
+          : "pending";
+
+        setSummary({
+          tenant_id: selectedTenantId,
+          month: selectedMonth,
+          total_requests: totalRequests,
+          total_input_tokens: 0,
+          total_output_tokens: 0,
+          cost_llm_cents: costLlmCents,
+          cost_total_cents: costTotalCents,
+          billing_status: billingStatus,
+        });
+      } else if (usageRes.status === "fulfilled") {
+        // APIが200以外を返した場合（no_active_subscription など）
+        setSummary({
+          tenant_id: selectedTenantId,
+          month: selectedMonth,
+          total_requests: 0,
+          total_input_tokens: 0,
+          total_output_tokens: 0,
+          cost_llm_cents: 0,
+          cost_total_cents: 0,
+          billing_status: "pending",
+        });
       }
 
+      // ─── 請求履歴 ─────────────────────────────────────────
       if (invoicesRes.status === "fulfilled" && invoicesRes.value.ok) {
-        const data = (await invoicesRes.value.json()) as { invoices: Invoice[] };
-        setInvoices(data.invoices);
-      } else {
-        setInvoices(MOCK_INVOICES);
+        const data = (await invoicesRes.value.json()) as {
+          tenantId: string;
+          customerId: string;
+          portalUrl: string;
+          invoices: Array<{
+            id: string;
+            status: string;
+            amountDue: number;
+            amountPaid: number;
+            currency: string;
+            periodStart: number;
+            periodEnd: number;
+            hostedInvoiceUrl: string | null;
+            created: number;
+          }>;
+        };
+
+        setPortalUrl(data.portalUrl ?? null);
+
+        const mappedInvoices: Invoice[] = data.invoices.map((inv) => ({
+          id: inv.id,
+          month: tsToYearMonth(inv.periodStart),
+          amount_cents: inv.amountDue,
+          status: (["paid", "open", "draft"].includes(inv.status)
+            ? inv.status
+            : "open") as Invoice["status"],
+          invoice_url: inv.hostedInvoiceUrl ?? "#",
+          portal_url: data.portalUrl ?? "#",
+        }));
+        setInvoices(mappedInvoices);
       }
     } catch {
       setError(t("billing.load_error"));
     } finally {
       setLoadingData(false);
     }
-  }, [selectedTenantId, selectedMonth, navigate, t]);
+  }, [selectedTenantId, selectedMonth, t]);
 
   useEffect(() => {
     fetchBillingData();
@@ -437,6 +472,23 @@ export default function BillingPage() {
               }}
             />
           </div>
+
+          {portalUrl && (
+            <a
+              href={portalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                ...BTN_LINK,
+                borderColor: "#22c55e",
+                color: "#4ade80",
+                fontSize: 14,
+                alignSelf: "flex-end",
+              }}
+            >
+              {t("billing.change_payment")}
+            </a>
+          )}
         </div>
       </section>
 
@@ -471,9 +523,6 @@ export default function BillingPage() {
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
                   {t("billing.total_requests")}
-                </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  {t("billing.ai_processing", { n: fmtNum(summary.total_input_tokens + summary.total_output_tokens) })}
                 </div>
               </div>
 
@@ -522,128 +571,134 @@ export default function BillingPage() {
           </section>
 
           {/* 使用量グラフ */}
-          <section style={{ ...CARD, marginBottom: 20 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
-                {t("billing.chart_title")}
-              </h2>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  onClick={() => setChartMode("requests")}
-                  style={{
-                    padding: "6px 14px",
-                    minHeight: 36,
-                    borderRadius: 8,
-                    border: "none",
-                    background: chartMode === "requests" ? "#22c55e" : "rgba(255,255,255,0.05)",
-                    color: chartMode === "requests" ? "#022c22" : "#9ca3af",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  {t("billing.requests")}
-                </button>
-                <button
-                  onClick={() => setChartMode("cost")}
-                  style={{
-                    padding: "6px 14px",
-                    minHeight: 36,
-                    borderRadius: 8,
-                    border: "none",
-                    background: chartMode === "cost" ? "#22c55e" : "rgba(255,255,255,0.05)",
-                    color: chartMode === "cost" ? "#022c22" : "#9ca3af",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  {t("billing.cost")}
-                </button>
+          {daily.length > 0 && (
+            <section style={{ ...CARD, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+                <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
+                  {t("billing.chart_title")}
+                </h2>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => setChartMode("requests")}
+                    style={{
+                      padding: "6px 14px",
+                      minHeight: 36,
+                      borderRadius: 8,
+                      border: "none",
+                      background: chartMode === "requests" ? "#22c55e" : "rgba(255,255,255,0.05)",
+                      color: chartMode === "requests" ? "#022c22" : "#9ca3af",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t("billing.requests")}
+                  </button>
+                  <button
+                    onClick={() => setChartMode("cost")}
+                    style={{
+                      padding: "6px 14px",
+                      minHeight: 36,
+                      borderRadius: 8,
+                      border: "none",
+                      background: chartMode === "cost" ? "#22c55e" : "rgba(255,255,255,0.05)",
+                      color: chartMode === "cost" ? "#022c22" : "#9ca3af",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {t("billing.cost")}
+                  </button>
+                </div>
               </div>
-            </div>
-            <UsageChart data={daily} mode={chartMode} />
-          </section>
+              <UsageChart data={daily} mode={chartMode} />
+            </section>
+          )}
 
           {/* 日次使用量テーブル */}
-          <section style={{ ...CARD, marginBottom: 20 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
-                {t("billing.daily_title")}
-              </h2>
-              <button
-                onClick={() => {
-                  exportCsv(daily, selectedTenant?.name ?? "tenant", selectedMonth, t("billing.csv_header"));
-                  showToast(t("billing.csv_downloaded"));
-                }}
-                style={{
-                  ...BTN_LINK,
-                  fontSize: 14,
-                  padding: "8px 16px",
-                  minHeight: 44,
-                }}
-              >
-                {t("billing.csv_download")}
-              </button>
-            </div>
+          {daily.length > 0 && (
+            <section style={{ ...CARD, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+                <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
+                  {t("billing.daily_title")}
+                </h2>
+                <button
+                  onClick={() => {
+                    exportCsv(daily, selectedTenant?.name ?? "tenant", selectedMonth, t("billing.csv_header"));
+                    showToast(t("billing.csv_downloaded"));
+                  }}
+                  style={{
+                    ...BTN_LINK,
+                    fontSize: 14,
+                    padding: "8px 16px",
+                    minHeight: 44,
+                  }}
+                >
+                  {t("billing.csv_download")}
+                </button>
+              </div>
 
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 480 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid #1f2937" }}>
-                    {[t("billing.col_date"), t("billing.col_requests"), t("billing.col_ai"), t("billing.col_cost")].map((h) => (
-                      <th
-                        key={h}
-                        style={{
-                          padding: "10px 12px",
-                          textAlign: "left",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: "#6b7280",
-                          whiteSpace: "nowrap",
-                        }}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 480 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #1f2937" }}>
+                      {[t("billing.col_date"), t("billing.col_requests"), t("billing.col_cost")].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            padding: "10px 12px",
+                            textAlign: "left",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: "#6b7280",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {daily.map((d) => (
+                      <tr
+                        key={d.date}
+                        style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}
                       >
-                        {h}
-                      </th>
+                        <td style={{ padding: "10px 12px", color: "#d1d5db" }}>{d.date}</td>
+                        <td style={{ padding: "10px 12px", color: "#f9fafb", fontWeight: 600 }}>
+                          {fmtNum(d.requests)}
+                        </td>
+                        <td style={{ padding: "10px 12px", color: "#4ade80", fontWeight: 600 }}>
+                          {fmtCents(d.cost_total_cents)}
+                        </td>
+                      </tr>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {daily.map((d) => (
-                    <tr
-                      key={d.date}
-                      style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}
-                    >
-                      <td style={{ padding: "10px 12px", color: "#d1d5db" }}>{d.date}</td>
-                      <td style={{ padding: "10px 12px", color: "#f9fafb", fontWeight: 600 }}>
-                        {fmtNum(d.requests)}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ borderTop: "1px solid #374151" }}>
+                      <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>{t("billing.total")}</td>
+                      <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>
+                        {fmtNum(summary.total_requests)}
                       </td>
-                      <td style={{ padding: "10px 12px", color: "#9ca3af" }}>
-                        {fmtNum(d.input_tokens + d.output_tokens)}
-                      </td>
-                      <td style={{ padding: "10px 12px", color: "#4ade80", fontWeight: 600 }}>
-                        {fmtCents(d.cost_total_cents)}
+                      <td style={{ padding: "12px", fontWeight: 700, color: "#4ade80" }}>
+                        {fmtCents(summary.cost_total_cents)}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr style={{ borderTop: "1px solid #374151" }}>
-                    <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>{t("billing.total")}</td>
-                    <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>
-                      {fmtNum(summary.total_requests)}
-                    </td>
-                    <td style={{ padding: "12px", fontWeight: 700, color: "#9ca3af" }}>
-                      {fmtNum(summary.total_input_tokens + summary.total_output_tokens)}
-                    </td>
-                    <td style={{ padding: "12px", fontWeight: 700, color: "#4ade80" }}>
-                      {fmtCents(summary.cost_total_cents)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </section>
+                  </tfoot>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* データなし */}
+          {daily.length === 0 && summary.total_requests === 0 && (
+            <section style={{ ...CARD, marginBottom: 20, textAlign: "center", padding: "32px 20px" }}>
+              <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
+              <div style={{ fontSize: 15, color: "#6b7280" }}>{t("billing.no_data")}</div>
+            </section>
+          )}
 
           {/* 請求履歴 */}
           <section style={{ ...CARD, marginBottom: 32 }}>
@@ -684,7 +739,7 @@ export default function BillingPage() {
                           {invoiceStatusBadge(inv.status)}
                         </div>
                       </div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {inv.invoice_url && inv.invoice_url !== "#" && (
                         <a
                           href={inv.invoice_url}
                           target="_blank"
@@ -697,21 +752,7 @@ export default function BillingPage() {
                         >
                           {t("billing.view_invoice")}
                         </a>
-                        <a
-                          href={inv.portal_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            ...BTN_LINK,
-                            fontSize: 14,
-                            padding: "10px 16px",
-                            borderColor: "#22c55e",
-                            color: "#4ade80",
-                          }}
-                        >
-                          {t("billing.change_payment")}
-                        </a>
-                      </div>
+                      )}
                     </div>
                   );
                 })}
@@ -719,6 +760,17 @@ export default function BillingPage() {
             )}
           </section>
         </>
+      ) : !loadingData && !error ? (
+        <div
+          style={{
+            textAlign: "center",
+            padding: "48px 20px",
+            color: "#6b7280",
+            fontSize: 15,
+          }}
+        >
+          {tenants.length === 0 ? t("billing.no_tenant") : t("billing.select_tenant")}
+        </div>
       ) : null}
 
       {/* トースト */}

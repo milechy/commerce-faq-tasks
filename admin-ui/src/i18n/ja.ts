@@ -227,6 +227,9 @@ const ja = {
   "billing.invoice_open": "お支払い待ち",
   "billing.invoice_draft": "作成中",
   "billing.csv_header": "日付,リクエスト数,入力トークン,出力トークン,コスト(円)",
+  "billing.no_data": "この期間のデータはありません",
+  "billing.no_tenant": "テナントが見つかりません",
+  "billing.select_tenant": "テナントを選択してください",
 
   // Role badges
   "role.super_admin": "🔑 管理者",

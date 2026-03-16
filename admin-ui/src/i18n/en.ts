@@ -229,6 +229,9 @@ const en: Record<TranslationKey, string> = {
   "billing.invoice_open": "Awaiting Payment",
   "billing.invoice_draft": "Draft",
   "billing.csv_header": "Date,Requests,Input Tokens,Output Tokens,Cost (JPY)",
+  "billing.no_data": "No data for this period",
+  "billing.no_tenant": "No tenants found",
+  "billing.select_tenant": "Please select a tenant",
 
   // Role badges
   "role.super_admin": "🔑 Super Admin",
