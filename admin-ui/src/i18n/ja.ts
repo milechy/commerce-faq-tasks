@@ -328,6 +328,31 @@ const ja = {
   "tenant_detail.system_prompt_label": "システムプロンプト（AIへの指示）",
   "tenant_detail.system_prompt_placeholder": "例：あなたは丁寧な自動車販売アシスタントです。在庫情報を正確に伝え、必要に応じて来店を促してください。",
 
+  // Tenant detail — 課金管理（Super Admin専用）
+  "billing_mgmt.title": "課金管理",
+  "billing_mgmt.status": "課金ステータス",
+  "billing_mgmt.enabled": "課金中",
+  "billing_mgmt.disabled": "未課金",
+  "billing_mgmt.enabled_desc": "使用量がStripeに送信されます",
+  "billing_mgmt.disabled_desc": "使用量は記録のみ",
+  "billing_mgmt.free_period": "無料期間",
+  "billing_mgmt.free_period_desc": "設定した期間中は使用量をStripeに送信しません",
+  "billing_mgmt.free_from_label": "開始日",
+  "billing_mgmt.free_until_label": "終了日",
+  "billing_mgmt.free_until": "{date}まで無料期間中",
+  "billing_mgmt.clear_free": "クリア",
+  "billing_mgmt.free_period_active": "⚠️ {from} 〜 {until} 無料期間中",
+  "billing_mgmt.free_period_scheduled": "📅 {from} 〜 {until} に無料期間を予約済み",
+  "billing_mgmt.save": "💾 課金設定を保存",
+  "billing_mgmt.saving": "保存中...",
+  "billing_mgmt.saved": "✅ 課金設定を保存しました",
+  "billing_mgmt.save_error": "保存に失敗しました。もう一度お試しください 🙏",
+
+  // Tenant list — billing badges
+  "tenants.billing_active": "課金中",
+  "tenants.billing_inactive": "未課金",
+  "tenants.billing_free": "無料期間中",
+
   // Chat history
   "chat_history.back": "← ダッシュボードに戻る",
   "chat_history.back_to_list": "← 会話一覧に戻る",

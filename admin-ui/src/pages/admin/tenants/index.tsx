@@ -15,6 +15,9 @@ interface Tenant {
   status: "active" | "inactive";
   apiKeyCount: number;
   createdAt: string;
+  billing_enabled?: boolean;
+  billing_free_from?: string | null;
+  billing_free_until?: string | null;
 }
 
 // ─── 認証ヘルパー ─────────────────────────────────────────────────────────────
@@ -503,6 +506,32 @@ export default function TenantsPage() {
                     >
                       {tenant.plan === "pro" ? "Pro" : "Starter"}
                     </span>
+                    {/* 課金バッジ */}
+                    {(() => {
+                      const now = new Date();
+                      const freeFrom  = tenant.billing_free_from  ? new Date(tenant.billing_free_from)  : null;
+                      const freeUntil = tenant.billing_free_until ? new Date(tenant.billing_free_until) : null;
+                      const isFreePeriod = freeFrom && freeUntil && now >= freeFrom && now <= freeUntil;
+                      if (isFreePeriod) {
+                        return (
+                          <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(234,179,8,0.15)", color: "#fbbf24", border: "1px solid rgba(234,179,8,0.3)" }}>
+                            {t("tenants.billing_free")}
+                          </span>
+                        );
+                      }
+                      if (tenant.billing_enabled) {
+                        return (
+                          <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(34,197,94,0.15)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.3)" }}>
+                            {t("tenants.billing_active")}
+                          </span>
+                        );
+                      }
+                      return (
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(107,114,128,0.15)", color: "#6b7280", border: "1px solid rgba(107,114,128,0.3)" }}>
+                          {t("tenants.billing_inactive")}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div style={{ fontSize: 13, color: "#6b7280" }}>
                     slug: <span style={{ fontFamily: "monospace", color: "#9ca3af" }}>{tenant.slug}</span>

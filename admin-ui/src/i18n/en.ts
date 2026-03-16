@@ -330,6 +330,31 @@ const en: Record<TranslationKey, string> = {
   "tenant_detail.system_prompt_label": "System Prompt (Instructions for AI)",
   "tenant_detail.system_prompt_placeholder": "e.g. You are a polite automotive sales assistant. Provide accurate inventory information and encourage store visits when appropriate.",
 
+  // Tenant detail — Billing Management (Super Admin only)
+  "billing_mgmt.title": "Billing Management",
+  "billing_mgmt.status": "Billing Status",
+  "billing_mgmt.enabled": "Billing Active",
+  "billing_mgmt.disabled": "Not Billing",
+  "billing_mgmt.enabled_desc": "Usage is sent to Stripe",
+  "billing_mgmt.disabled_desc": "Usage recorded only",
+  "billing_mgmt.free_period": "Free Period",
+  "billing_mgmt.free_period_desc": "Usage won't be sent to Stripe during this period",
+  "billing_mgmt.free_from_label": "Start Date",
+  "billing_mgmt.free_until_label": "End Date",
+  "billing_mgmt.free_until": "Free period until {date}",
+  "billing_mgmt.clear_free": "Clear",
+  "billing_mgmt.free_period_active": "⚠️ Free period active: {from} – {until}",
+  "billing_mgmt.free_period_scheduled": "📅 Free period scheduled: {from} – {until}",
+  "billing_mgmt.save": "💾 Save Billing Settings",
+  "billing_mgmt.saving": "Saving...",
+  "billing_mgmt.saved": "✅ Billing settings saved",
+  "billing_mgmt.save_error": "Failed to save. Please try again 🙏",
+
+  // Tenant list — billing badges
+  "tenants.billing_active": "Billing Active",
+  "tenants.billing_inactive": "Not Billing",
+  "tenants.billing_free": "Free Period",
+
   // Chat history
   "chat_history.back": "← Back to Dashboard",
   "chat_history.back_to_list": "← Back to Chat List",

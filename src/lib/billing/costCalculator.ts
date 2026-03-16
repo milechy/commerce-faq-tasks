@@ -20,8 +20,8 @@ export const LLM_COSTS: Record<ModelKey, ModelCost> = {
 /** サーバーコスト: $0.0001 / リクエスト（VPS按分） */
 export const SERVER_COST_PER_REQUEST_USD = 0.0001;
 
-/** マージン倍率 */
-export const MARGIN_MULTIPLIER = 2;
+/** マージン倍率（環境変数 MARGIN_RATE で変更可能、デフォルト5） */
+export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
 
 export interface UsageRecord {
   model: string;
