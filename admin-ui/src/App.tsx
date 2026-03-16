@@ -12,6 +12,9 @@ import TenantsPage from "./pages/admin/tenants/index";
 import TenantDetailPage from "./pages/admin/tenants/[id]";
 import BillingPage from "./pages/admin/billing/index";
 import ChatTestPage from "./pages/admin/chat-test/index";
+import ChatHistoryPage from "./pages/admin/chat-history/index";
+import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
+import TuningRulesPage from "./pages/admin/tuning/index";
 
 export default function App() {
   return (
@@ -49,6 +52,13 @@ export default function App() {
 
         {/* チャットテスト */}
         <Route path="/admin/chat-test" element={<RequireAuth><ChatTestPage /></RequireAuth>} />
+
+        {/* 会話履歴 */}
+        <Route path="/admin/chat-history" element={<RequireAuth><ChatHistoryPage /></RequireAuth>} />
+        <Route path="/admin/chat-history/:sessionId" element={<RequireAuth><ChatHistorySessionPage /></RequireAuth>} />
+
+        {/* チューニングルール */}
+        <Route path="/admin/tuning" element={<RequireAuth><TuningRulesPage /></RequireAuth>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />
