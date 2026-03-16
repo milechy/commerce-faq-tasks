@@ -37,9 +37,18 @@ import {
   type SalesPhase,
 } from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
+import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
-import { registerAuthRoutes } from "./api/auth/routes";
+import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
+import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
+import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
+import { initUsageTracker } from "./lib/billing/usageTracker";
+import { reportUsageToStripe } from "./lib/billing/stripeSync";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
+import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
+import { langDetectMiddleware } from "./api/middleware/langDetect";
+import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
+import { registerAuthRoutes } from "./api/auth/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -99,6 +108,7 @@ const authMiddleware = initAuthMiddleware({
 });
 const tenantContext = createTenantContextMiddleware({ logger });
 const securityPolicy = createSecurityPolicyMiddleware({ logger });
+const originCheck = createOriginCheckMiddleware(db, { logger });
 
 // --- minimal internal UI (no auth required) ---
 const publicDir = path.resolve(process.cwd(), "public");
@@ -144,7 +154,9 @@ const apiStack = [
   globalRateLimiter,     // 1. Rate limit
   authMiddleware,        // 2. Auth → tenantId
   tenantContext,         // 3. Load TenantConfig
-  securityPolicy,        // 4. Per-tenant policy
+  securityPolicy,        // 4. Per-tenant policy (in-memory allowedOrigins)
+  originCheck,           // 5. DB-backed per-tenant Origin check
+  langDetectMiddleware,  // 6. Phase33: Accept-Language → req.lang
 ] as express.RequestHandler[];
 
 logger.info({
@@ -486,14 +498,33 @@ app.get(
 
 const port = Number(process.env.PORT || 3000);
 
+// Legacy FAQ admin routes (/admin/faqs)
+registerFaqAdminRoutes(app);
+
 // Phase29: ナレッジ管理API
 registerKnowledgeAdminRoutes(app);
 
 // Phase31: テナント管理API
 if (db) registerTenantAdminRoutes(app, db);
 
+// Phase32: 課金管理API
+if (db) initUsageTracker(db, logger);
+
+// Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
+app.post(
+  "/v1/billing/webhook",
+  express.raw({ type: "application/json" }),
+  createStripeWebhookHandler(db, logger)
+);
+
+// 課金管理API（Super Admin認証）
+if (db) {
+  registerBillingAdminRoutes(app, db, logger, [supabaseAuthMiddleware, superAdminMiddleware]);
+}
+
 // Phase34: 認証情報API
 registerAuthRoutes(app, db);
+registerChatTestRoutes(app);
 
 async function startServer() {
   app.listen(port, () => {
@@ -503,6 +534,17 @@ async function startServer() {
   // Phase23: AlertEngine — 60秒周期で KPI を評価し Slack アラートを送信
   alertEngine.start();
   logger.info("[startup] AlertEngine started");
+
+  // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）
+  if (db && process.env.STRIPE_SECRET_KEY) {
+    const STRIPE_REPORT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+    setInterval(() => {
+      reportUsageToStripe(db, logger).catch((err) => {
+        logger.error({ err }, "[billingScheduler] reportUsageToStripe failed");
+      });
+    }, STRIPE_REPORT_INTERVAL_MS);
+    logger.info("[startup] Stripe usage reporter scheduled (24h interval)");
+  }
 }
 
 startServer().catch((error) => {

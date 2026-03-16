@@ -1,25 +1,33 @@
 // src/api/admin/knowledge/routes.ts
 // Phase29: カーネーション向けナレッジ管理API
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 // @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
+import jwt from "jsonwebtoken";
 import { groqClient } from "../../../agent/llm/groqClient";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
-import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { roleAuthMiddleware, requireRole, requireOwnTenant } from "../../middleware/roleAuth";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
+import { encryptText } from "../../../lib/crypto/textEncrypt";
 
 const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : null;
 
-const CATEGORIES = ["inventory", "campaign", "coupon", "store_info"] as const;
+const CATEGORIES = ["inventory", "campaign", "coupon", "store_info", "product_info", "pricing", "booking", "warranty", "general"] as const;
 type Category = (typeof CATEGORIES)[number];
 
 interface FaqEntry {
   question: string;
   answer: string;
+  category?: string;
+}
+
+interface FaqEntryWithDuplicate extends FaqEntry {
+  duplicate: {
+    existingQuestion: string;
+    existingAnswer: string;
+  } | null;
 }
 
 /** query/header からテナントIDを解決（bodyから取得禁止 — CLAUDE.md） */
@@ -29,33 +37,103 @@ function resolveTenantId(req: Request): string | null {
   return fromQuery || fromHeader || null;
 }
 
-/** テキスト→FAQ変換（Groq llama-3.1-8b-instant） */
-async function textToFaqs(text: string, category: Category): Promise<FaqEntry[]> {
-  const categoryLabel: Record<Category, string> = {
-    inventory: "在庫・車両情報",
-    campaign: "キャンペーン・セール",
-    coupon: "クーポン・割引",
-    store_info: "店舗情報・アクセス",
-  };
+/** 重複チェック用の質問正規化（句読点・空白・大文字小文字・助詞末尾を無視） */
+function normalizeQuestion(q: string): string {
+  return q.toLowerCase().replace(/[？?。、！!　\s]+/g, "").trim();
+}
 
-  const prompt = `あなたは中古車販売店のFAQ作成の専門家です。
-以下のテキストを読んで、お客様がよく聞きそうな質問とその回答を5〜10個生成してください。
-カテゴリ: ${categoryLabel[category]}
+/** 文字バイグラムセットを生成 */
+function bigrams(s: string): Set<string> {
+  const r = new Set<string>();
+  for (let i = 0; i < s.length - 1; i++) r.add(s.slice(i, i + 2));
+  return r;
+}
+
+/**
+ * バイグラム包含度による類似度（0-1）
+ * 短い方の文字列のバイグラムが長い方に何割含まれるかを返す。
+ * 例: "営業時間は" vs "営業時間を教えてください" → 0.75
+ */
+function bigramSimilarity(a: string, b: string): number {
+  const na = normalizeQuestion(a);
+  const nb = normalizeQuestion(b);
+  if (na === nb) return 1.0;
+  const ba = bigrams(na);
+  const bb = bigrams(nb);
+  if (ba.size === 0 || bb.size === 0) return 0;
+  const [shorter, longer] = ba.size <= bb.size ? [ba, bb] : [bb, ba];
+  let inter = 0;
+  for (const g of shorter) if (longer.has(g)) inter++;
+  // containment: shorter の bigram が longer に何割含まれるか
+  return inter / shorter.size;
+}
+
+const DUPLICATE_THRESHOLD = 0.6;
+
+/**
+ * テキスト→FAQ変換。
+ * categoryOverride が指定された場合は全FAQのカテゴリをその値で上書き。
+ * 未指定（null/undefined）の場合はAIがカテゴリを自動判定する。
+ * existingQuestions が指定された場合はプロンプトに組み込み重複生成を防止する。
+ */
+async function textToFaqs(
+  text: string,
+  categoryOverride?: string | null,
+  existingQuestions?: string[]
+): Promise<FaqEntry[]> {
+  const model = process.env.GROQ_FAQ_GEN_MODEL ?? "llama-3.3-70b-versatile";
+
+  const existingSection =
+    existingQuestions && existingQuestions.length > 0
+      ? `\n既にこのテナントに登録されているFAQの質問（重複禁止 — 以下と同じ内容は生成しないこと）:\n${existingQuestions
+          .slice(0, 40)
+          .map((q) => `- ${q}`)
+          .join("\n")}\n`
+      : "";
+
+  const prompt = `あなたはセールス支援FAQの専門家です。
+以下のテキストから、お客様がこの商品・サービスについて質問しそうなFAQを網羅的に生成してください。
+
+重要な原則:
+* テキストに含まれる全ての事実情報をFAQとしてカバーすること
+* お客様の購入・利用判断に影響する情報は必ずFAQ化すること
+* 1つのFAQには1つのトピックのみ（複数の情報を1つにまとめない）
+* テキストに書かれていない情報は推測しないこと
+* 各FAQに最も適切なカテゴリを自動で判定して付与すること
+
+具体的にFAQ化すべき情報の例:
+* 商品のスペック・仕様（各項目を個別のFAQに）
+* 価格・料金
+* 状態・品質に関する情報
+* 付属品・オプション
+* 保証・アフターサービス
+* 予約・購入方法
+* 店舗情報・営業時間
+* キャンペーン・割引
+${existingSection}
+カテゴリの判定基準:
+* 商品・サービスの詳細情報 → "product_info"
+* 料金・価格・支払い方法 → "pricing"
+* 店舗・アクセス・営業時間 → "store_info"
+* キャンペーン・セール・割引 → "campaign"
+* 在庫・車両情報 → "inventory"
+* クーポン・割引コード → "coupon"
+* 予約・申し込み方法 → "booking"
+* 保証・アフターサービス → "warranty"
+* よくある質問・一般 → "general"
+* 上記に当てはまらない場合 → 適切なカテゴリ名を英語スネークケースで生成
 
 テキスト:
-${text.slice(0, 3000)}
+${text.slice(0, 4000)}
 
-以下のJSON配列のみを出力してください（説明文・コードブロック記号は不要）:
-[
-  {"question": "質問1", "answer": "回答1"},
-  {"question": "質問2", "answer": "回答2"}
-]`;
+出力形式: JSON配列のみ（他のテキストは含めない）
+[{"question": "...", "answer": "...", "category": "..."}]`;
 
   const raw = await groqClient.call({
-    model: "llama-3.1-8b-instant",
+    model,
     messages: [{ role: "user", content: prompt }],
-    temperature: 0.3,
-    maxTokens: 2000,
+    temperature: 0.2,
+    maxTokens: 3000,
     tag: "knowledge-text-to-faq",
   });
 
@@ -65,10 +143,16 @@ ${text.slice(0, 3000)}
   const parsed = JSON.parse(jsonMatch[0]) as unknown[];
   if (!Array.isArray(parsed)) throw new Error("JSON形式が不正です");
 
-  return parsed.filter(
+  const faqs = parsed.filter(
     (f): f is FaqEntry =>
       typeof (f as any).question === "string" && typeof (f as any).answer === "string"
   );
+
+  // カテゴリ強制上書き（手動指定の場合）
+  if (categoryOverride) {
+    return faqs.map((f) => ({ ...f, category: categoryOverride }));
+  }
+  return faqs;
 }
 
 /** ESインデックスからドキュメントを削除（best-effort） */
@@ -92,7 +176,7 @@ function insertEmbeddingAsync(
     .then((vec) =>
       db.query(
         "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata) VALUES ($1, $2, $3::vector, $4::jsonb)",
-        [tenantId, text, `[${vec.join(",")}]`, JSON.stringify(meta)]
+        [tenantId, encryptText(text), `[${vec.join(",")}]`, JSON.stringify(meta)]
       )
     )
     .catch((e) => console.warn("[knowledge] embedding insert failed", e));
@@ -106,38 +190,117 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
   const db = pool;
 
-  // Supabase JWT 認証 + ロール付与を /v1/admin/knowledge 配下に適用
-  app.use("/v1/admin/knowledge", supabaseAuthMiddleware, roleAuthMiddleware);
+  // ── インライン認証スタック（モジュールキャッシュ問題を回避） ─────────────────
+  // JWT 検証 → req.supabaseUser / req.user をセット
+  function knowledgeAuth(req: Request, res: Response, next: NextFunction): void {
+    const authHeader = req.headers.authorization ?? "";
 
-  // FAQ CRUD: super_admin と client_admin がアクセス可能（自テナント制限付き）
-  app.use(
-    "/v1/admin/knowledge/faq",
-    requireRole("super_admin", "client_admin"),
-    requireOwnTenant()
-  );
+    if (process.env.NODE_ENV === "development") {
+      // development: 署名検証なしでデコードし req.supabaseUser をセット
+      if (authHeader.startsWith("Bearer ")) {
+        try {
+          (req as any).supabaseUser = jwt.decode(authHeader.slice(7).trim());
+        } catch {
+          // decode 失敗は無視して通す
+        }
+        return setUserAndNext(req, next);
+      }
+      if (req.headers["x-api-key"]) return next();
+      res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
+      return;
+    }
+
+    const secret = process.env.SUPABASE_JWT_SECRET;
+    if (!secret) {
+      // SECRET 未設定時はスキップ（ステージング等）
+      return setUserAndNext(req, next);
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Missing Bearer token" });
+      return;
+    }
+    const token = authHeader.slice(7).trim();
+    try {
+      (req as any).supabaseUser = jwt.verify(token, secret);
+      return setUserAndNext(req, next);
+    } catch (err) {
+      console.warn("[knowledgeAuth] invalid token", err);
+      res.status(401).json({ error: "Invalid token" });
+    }
+  }
+
+  function setUserAndNext(req: Request, next: NextFunction): void {
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    (req as any).user = su
+      ? {
+          id: su.sub ?? su.id ?? "",
+          email: su.email ?? "",
+          role: su.app_metadata?.role ?? su.user_metadata?.role ?? "anonymous",
+          tenantId: su.app_metadata?.tenant_id ?? null,
+        }
+      : { id: "", email: "", role: "anonymous", tenantId: null };
+    next();
+  }
+
+  // role チェック（super_admin / client_admin のみ通過）
+  function requireKnowledgeRole(req: Request, res: Response, next: NextFunction): void {
+    const user = (req as any).user as { role?: string } | undefined;
+    if (!user || !["super_admin", "client_admin"].includes(user.role ?? "")) {
+      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
+      return;
+    }
+    next();
+  }
+
+  // テナント所有チェック（super_admin は全テナントにアクセス可）
+  function requireKnowledgeTenant(req: Request, res: Response, next: NextFunction): void {
+    const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+    if (user?.role === "super_admin") { next(); return; }
+
+    const requestedTenant =
+      (req.params.tenantId as string | undefined) ||
+      (req.query.tenant as string | undefined) ||
+      (req.query.tenant_id as string | undefined) ||
+      (req.headers["x-tenant-id"] as string | undefined);
+
+    if (requestedTenant && requestedTenant !== user?.tenantId) {
+      res.status(403).json({ error: "forbidden", message: "他のテナントのデータにはアクセスできません" });
+      return;
+    }
+    if (!requestedTenant && user?.tenantId) req.query.tenant = user.tenantId;
+    next();
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   // -------------------------------------------------------------------------
   // GET /v1/admin/knowledge
   // faq_docs からナレッジ一覧を返す
   // -------------------------------------------------------------------------
-  app.get("/v1/admin/knowledge", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.get("/v1/admin/knowledge", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
+    const user = (req as any).user as { role?: string } | undefined;
     const category = req.query.category as string | undefined;
 
-    if (!tenantId) {
+    if (!tenantId && user?.role !== "super_admin") {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
     }
 
     try {
-      const params: unknown[] = [tenantId];
-      let sql = `
-        SELECT id, tenant_id, question, answer, category, tags, created_at
-        FROM faq_docs
-        WHERE tenant_id = $1
-      `;
+      const params: unknown[] = [];
+      let sql = `SELECT id, tenant_id, question, answer, category, tags, created_at FROM faq_docs`;
+      const conditions: string[] = [];
+
+      if (tenantId) {
+        params.push(tenantId);
+        conditions.push(`tenant_id = $${params.length}`);
+      }
       if (category && category !== "all") {
         params.push(category);
-        sql += ` AND category = $${params.length}`;
+        conditions.push(`category = $${params.length}`);
+      }
+      if (conditions.length > 0) {
+        sql += ` WHERE ${conditions.join(" AND ")}`;
       }
       sql += " ORDER BY id DESC LIMIT 200";
 
@@ -154,7 +317,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // faq_docs + faq_embeddings + ES から削除（tenant_id 一致チェック必須）
   // global ナレッジは super_admin のみ削除可能
   // -------------------------------------------------------------------------
-  app.delete("/v1/admin/knowledge/:id", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.delete("/v1/admin/knowledge/:id", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     const id = Number(req.params.id);
 
@@ -215,15 +378,15 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text
   // テキスト → Groq でFAQ生成 → プレビュー用に返す（DB未挿入）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
     }
 
     const schema = z.object({
-      text: z.string().min(10).max(10000),
-      category: z.enum(CATEGORIES),
+      text: z.string().min(50, "テキストは50文字以上入力してください").max(10000),
+      category: z.string().optional(), // 未指定 = AIが自動判定
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -235,11 +398,42 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const { text, category } = parsed.data;
 
     try {
-      const faqs = await textToFaqs(text, category);
+      // 既存FAQ質問を取得（重複防止のためプロンプトに渡す）
+      let existingRows: { question: string; answer: string }[] = [];
+      if (db) {
+        try {
+          const r = await db.query(
+            "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50",
+            [tenantId]
+          );
+          existingRows = r.rows as { question: string; answer: string }[];
+        } catch { /* non-fatal */ }
+      }
+      const existingQuestions = existingRows.map((r) => r.question);
+
+      const faqs = await textToFaqs(text, category || null, existingQuestions);
       if (faqs.length === 0) {
         return res.status(422).json({ error: "FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください。" });
       }
-      return res.json({ ok: true, preview: faqs, count: faqs.length });
+
+      // 重複チェック: バイグラム類似度で既存FAQとのマッチを判定（同義表現も検出）
+      const previewWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
+        let bestMatch: { question: string; answer: string } | null = null;
+        let bestScore = 0;
+        for (const row of existingRows) {
+          const score = bigramSimilarity(faq.question, row.question);
+          if (score > bestScore) { bestScore = score; bestMatch = row; }
+        }
+        return {
+          ...faq,
+          duplicate:
+            bestMatch && bestScore >= DUPLICATE_THRESHOLD
+              ? { existingQuestion: bestMatch.question, existingAnswer: bestMatch.answer }
+              : null,
+        };
+      });
+
+      return res.json({ ok: true, preview: previewWithDuplicate, count: previewWithDuplicate.length });
     } catch (err) {
       console.error("[POST /v1/admin/knowledge/text]", err);
       return res
@@ -252,7 +446,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/text/commit
   // プレビュー済みFAQをDB（faq_docs + faq_embeddings）に投入
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/text/commit", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/text/commit", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -260,10 +454,10 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     const schema = z.object({
       faqs: z
-        .array(z.object({ question: z.string(), answer: z.string() }))
+        .array(z.object({ question: z.string(), answer: z.string(), category: z.string().optional() }))
         .min(1)
         .max(20),
-      category: z.enum(CATEGORIES),
+      category: z.string().optional(), // 全FAQ共通の強制カテゴリ（未指定=各FAQの自動判定値を使用）
       target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
@@ -273,7 +467,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { faqs, category, target: rawTarget } = parsed.data;
+    const { faqs, category: categoryOverride, target: rawTarget } = parsed.data;
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
@@ -281,15 +475,31 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
+    // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ
+    let existingQuestionsAtCommit: string[] = [];
+    try {
+      const r = await db.query("SELECT question FROM faq_docs WHERE tenant_id = $1", [target]);
+      existingQuestionsAtCommit = (r.rows as { question: string }[]).map((row) => row.question);
+    } catch { /* non-fatal */ }
+
     const inserted: number[] = [];
+    let skipped = 0;
 
     for (const faq of faqs) {
+      const isDuplicate = existingQuestionsAtCommit.some(
+        (q) => bigramSimilarity(faq.question, q) >= DUPLICATE_THRESHOLD
+      );
+      if (isDuplicate) {
+        skipped++;
+        continue;
+      }
+      const faqCategory = categoryOverride || faq.category || "general";
       try {
         const r = await db.query(
           `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
            VALUES ($1, $2, $3, $4, true)
            RETURNING id`,
-          [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), category]
+          [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), faqCategory]
         );
         const faqId = r.rows[0].id as number;
         inserted.push(faqId);
@@ -304,14 +514,14 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       }
     }
 
-    return res.status(201).json({ ok: true, inserted: inserted.length });
+    return res.status(201).json({ ok: true, inserted: inserted.length, skipped });
   });
 
   // -------------------------------------------------------------------------
   // POST /v1/admin/knowledge/scrape
   // URL取得 → テキスト抽出 → Groq FAQ化 → プレビューとして返す（DB未登録）
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -319,7 +529,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     const schema = z.object({
       urls: z.array(z.string().url()).min(1).max(5),
-      category: z.enum(CATEGORIES).default("store_info"),
+      category: z.string().optional(), // 未指定 = AIが自動判定
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -329,7 +539,20 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { urls, category } = parsed.data;
-    const results: { url: string; faqs: FaqEntry[]; error?: string }[] = [];
+    const results: { url: string; faqs: FaqEntryWithDuplicate[]; error?: string }[] = [];
+
+    // 既存FAQ質問を一度だけ取得（重複防止のためプロンプトに渡す）
+    let existingRows: { question: string; answer: string }[] = [];
+    if (db) {
+      try {
+        const r = await db.query(
+          "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50",
+          [tenantId]
+        );
+        existingRows = r.rows as { question: string; answer: string }[];
+      } catch { /* non-fatal */ }
+    }
+    const existingQuestions = existingRows.map((r) => r.question);
 
     for (const url of urls) {
       try {
@@ -346,8 +569,28 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           .trim()
           .slice(0, 5000);
 
-        const faqs = await textToFaqs(text, category);
-        results.push({ url, faqs });
+        if (text.length < 50) {
+          results.push({ url, faqs: [], error: "ページからテキストを取得できませんでした" });
+          continue;
+        }
+
+        const faqs = await textToFaqs(text, category || null, existingQuestions);
+        const faqsWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
+          let bestMatch: { question: string; answer: string } | null = null;
+          let bestScore = 0;
+          for (const row of existingRows) {
+            const score = bigramSimilarity(faq.question, row.question);
+            if (score > bestScore) { bestScore = score; bestMatch = row; }
+          }
+          return {
+            ...faq,
+            duplicate:
+              bestMatch && bestScore >= DUPLICATE_THRESHOLD
+                ? { existingQuestion: bestMatch.question, existingAnswer: bestMatch.answer }
+                : null,
+          };
+        });
+        results.push({ url, faqs: faqsWithDuplicate });
       } catch (err) {
         results.push({ url, faqs: [], error: String(err).slice(0, 200) });
       }
@@ -360,7 +603,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // POST /v1/admin/knowledge/scrape/commit
   // プレビュー済みFAQ（スクレイプ結果）をDB登録
   // -------------------------------------------------------------------------
-  app.post("/v1/admin/knowledge/scrape/commit", requireRole("super_admin", "client_admin"), requireOwnTenant(), async (req: Request, res: Response) => {
+  app.post("/v1/admin/knowledge/scrape/commit", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -372,14 +615,14 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           z.object({
             url: z.string().url(),
             faqs: z
-              .array(z.object({ question: z.string(), answer: z.string() }))
+              .array(z.object({ question: z.string(), answer: z.string(), category: z.string().optional() }))
               .min(1)
               .max(20),
           })
         )
         .min(1)
         .max(5),
-      category: z.enum(CATEGORIES).default("store_info"),
+      category: z.string().optional(), // 全FAQ共通の強制カテゴリ（未指定=各FAQの自動判定値を使用）
       target: z.string().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
@@ -387,7 +630,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { items, category, target: rawTarget } = parsed.data;
+    const { items, category: categoryOverride, target: rawTarget } = parsed.data;
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
@@ -395,10 +638,26 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
+    // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ
+    let existingQuestionsAtScrapeCommit: string[] = [];
+    try {
+      const r = await db.query("SELECT question FROM faq_docs WHERE tenant_id = $1", [target]);
+      existingQuestionsAtScrapeCommit = (r.rows as { question: string }[]).map((row) => row.question);
+    } catch { /* non-fatal */ }
+
     let totalInserted = 0;
+    let totalSkipped = 0;
 
     for (const item of items) {
       for (const faq of item.faqs) {
+        const isDuplicate = existingQuestionsAtScrapeCommit.some(
+          (q) => bigramSimilarity(faq.question, q) >= DUPLICATE_THRESHOLD
+        );
+        if (isDuplicate) {
+          totalSkipped++;
+          continue;
+        }
+        const faqCategory = categoryOverride || faq.category || "general";
         try {
           const r = await db.query(
             `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published)
@@ -408,7 +667,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
               target,
               faq.question.slice(0, 500),
               faq.answer.slice(0, 2000),
-              category,
+              faqCategory,
               [item.url],
             ]
           );
@@ -427,10 +686,10 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       }
     }
 
-    return res.status(201).json({ ok: true, inserted: totalInserted });
+    return res.status(201).json({ ok: true, inserted: totalInserted, skipped: totalSkipped });
   });
 
-  registerFaqCrudRoutes(app, db);
+  registerFaqCrudRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
 
   console.log("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");
 }

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import TuningPanel from "../../components/admin/TuningPanel";
-import AvatarUpload from "../../components/admin/AvatarUpload";
-import VoiceSettings from "../../components/admin/VoiceSettings";
-import { API_BASE } from "../../lib/api";
+import { API_BASE, authFetch } from "../../lib/api";
+import { useLang } from "../../i18n/LangContext";
+import LangSwitcher from "../../components/LangSwitcher";
+import { useAuth } from "../../auth/useAuth";
+import { SuperAdminOnly } from "../../components/RoleGuard";
 
 interface DashboardStats {
   faqCount: number;
@@ -12,16 +13,6 @@ interface DashboardStats {
   lastUpdated: string | null;
 }
 
-function getAccessToken(): string | null {
-  const raw = localStorage.getItem("supabaseSession");
-  if (!raw) return null;
-  try {
-    return (JSON.parse(raw) as { access_token?: string })?.access_token ?? null;
-  } catch {
-    localStorage.removeItem("supabaseSession");
-    return null;
-  }
-}
 
 function StatCard({
   icon,
@@ -69,29 +60,32 @@ function StatCard({
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const { t, lang } = useLang();
+  const { user, isSuperAdmin, isClientAdmin, logout, previewMode, previewTenantId, previewTenantName, exitPreview } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
     const fetchStats = async () => {
       try {
         setLoading(true);
         setError(null);
 
+        const effectiveTenantId = previewMode
+          ? (previewTenantId ?? "")
+          : (user?.tenantId ?? "");
+
+        const faqParams = new URLSearchParams({ limit: "1", offset: "0" });
+        if (effectiveTenantId) faqParams.set("tenantId", effectiveTenantId);
+
+        const knowledgeUrl = effectiveTenantId
+          ? `${API_BASE}/v1/admin/knowledge?tenant=${effectiveTenantId}`
+          : `${API_BASE}/v1/admin/knowledge`;
+
         const [faqRes, bookRes] = await Promise.allSettled([
-          fetch(`${API_BASE}/admin/faqs?tenantId=demo&limit=1&offset=0`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch(`${API_BASE}/admin/knowledge?tenantId=demo`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
+          authFetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`),
+          authFetch(knowledgeUrl),
         ]);
 
         let faqCount = 0;
@@ -122,19 +116,21 @@ export default function AdminDashboard() {
 
         setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated });
       } catch {
-        setError("少し問題が起きました。もう一度試してみてください 🙏");
+        setError(t("dashboard.error"));
       } finally {
         setLoading(false);
       }
     };
 
     fetchStats();
-  }, [navigate]);
+  }, [navigate, t]);
 
-  const handleLogout = () => {
-    localStorage.removeItem("supabaseSession");
+  const handleLogout = async () => {
+    await logout();
     navigate("/login", { replace: true });
   };
+
+  const locale = lang === "en" ? "en-US" : "ja-JP";
 
   return (
     <div
@@ -148,6 +144,49 @@ export default function AdminDashboard() {
         margin: "0 auto",
       }}
     >
+      {previewMode && <div style={{ height: 44 }} />}
+      {/* プレビューモードバナー */}
+      {previewMode && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            background: "rgba(234,179,8,0.95)",
+            padding: "10px 20px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
+            fontSize: 14,
+            fontWeight: 600,
+            color: "#1c1917",
+            boxShadow: "0 2px 12px rgba(0,0,0,0.3)",
+          }}
+        >
+          <span>👁 {t("preview.mode_label")}</span>
+          <span style={{ color: "#78350f" }}>
+            {t("preview.viewing_as", { tenant: previewTenantName ?? "" })}
+          </span>
+          <button
+            onClick={exitPreview}
+            style={{
+              padding: "6px 14px",
+              borderRadius: 999,
+              border: "1px solid #78350f",
+              background: "rgba(0,0,0,0.15)",
+              color: "#1c1917",
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {t("preview.exit")}
+          </button>
+        </div>
+      )}
       <header
         style={{
           display: "flex",
@@ -182,32 +221,55 @@ export default function AdminDashboard() {
                 boxShadow: "0 0 6px #22c55e",
               }}
             />
-            接続中
+            {t("dashboard.connected")}
           </div>
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            管理ダッシュボード
+            {t("dashboard.title")}
           </h1>
           <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            FAQ・AIナレッジの管理と設定
+            {t("dashboard.subtitle")}
           </p>
         </div>
 
-        <button
-          onClick={handleLogout}
-          style={{
-            padding: "10px 16px",
-            minHeight: 44,
-            borderRadius: 999,
-            border: "1px solid #374151",
-            background: "transparent",
-            color: "#9ca3af",
-            fontSize: 14,
-            cursor: "pointer",
-            fontWeight: 500,
-          }}
-        >
-          ログアウト
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {user && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: isSuperAdmin ? "rgba(234,179,8,0.15)" : "rgba(59,130,246,0.15)",
+                  border: `1px solid ${isSuperAdmin ? "rgba(234,179,8,0.4)" : "rgba(59,130,246,0.4)"}`,
+                  color: isSuperAdmin ? "#fbbf24" : "#60a5fa",
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                {isSuperAdmin ? t("role.super_admin") : isClientAdmin ? (user.tenantName ?? t("role.client_admin")) : t("role.anonymous")}
+              </span>
+              <span style={{ fontSize: 13, color: "#6b7280", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {user.email}
+              </span>
+            </div>
+          )}
+          <LangSwitcher />
+          <button
+            onClick={() => void handleLogout()}
+            style={{
+              padding: "10px 16px",
+              minHeight: 44,
+              borderRadius: 999,
+              border: "1px solid #374151",
+              background: "transparent",
+              color: "#9ca3af",
+              fontSize: 14,
+              cursor: "pointer",
+              fontWeight: 500,
+            }}
+          >
+            {t("dashboard.logout")}
+          </button>
+        </div>
       </header>
 
       {error && (
@@ -238,115 +300,62 @@ export default function AdminDashboard() {
           }}
         >
           <span style={{ marginRight: 8 }}>⏳</span>
-          情報を読み込んでいます...
+          {t("dashboard.loading")}
         </div>
       ) : (
         <>
           <section style={{ marginBottom: 32 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              現在の状況
+              {t("dashboard.current_status")}
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <StatCard
                 icon="💬"
-                label="登録FAQ数"
+                label={t("dashboard.faq_count")}
                 value={stats?.faqCount ?? 0}
-                sub="公開中・下書きを含む"
+                sub={t("dashboard.faq_count_sub")}
               />
               <StatCard
                 icon="✅"
-                label="公開中のFAQ"
+                label={t("dashboard.published_faq")}
                 value={stats?.publishedFaqCount ?? 0}
                 accent="#4ade80"
-                sub="お客様に表示されています"
+                sub={t("dashboard.published_faq_sub")}
               />
               <StatCard
                 icon="📚"
-                label="登録ナレッジ"
+                label={t("dashboard.knowledge_count")}
                 value={stats?.bookCount ?? 0}
-                sub="AIが参照する書籍・資料"
+                sub={t("dashboard.knowledge_count_sub")}
               />
               <StatCard
                 icon="🕐"
-                label="最終更新"
+                label={t("dashboard.last_updated")}
                 value={
                   stats?.lastUpdated
-                    ? new Date(stats.lastUpdated).toLocaleDateString("ja-JP", {
+                    ? new Date(stats.lastUpdated).toLocaleDateString(locale, {
                         month: "short",
                         day: "numeric",
                       })
                     : "—"
                 }
-                sub={stats?.lastUpdated ? "FAQの最終更新日" : "まだ更新がありません"}
+                sub={stats?.lastUpdated ? t("dashboard.last_updated_sub") : t("dashboard.no_updates")}
               />
             </div>
           </section>
 
           <section style={{ marginBottom: 32 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              クイックアクション
+              {t("dashboard.quick_actions")}
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <button
-                onClick={() => navigate("/faqs")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
+                onClick={() => {
+                  const knowledgePath = isSuperAdmin
+                    ? "/admin/knowledge"
+                    : `/admin/knowledge/${previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "")}`;
+                  navigate(knowledgePath);
                 }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937";
-                }}
-              >
-                <span style={{ fontSize: 22 }}>💬</span>
-                FAQ を管理する
-              </button>
-
-              <button
-                onClick={() => navigate("/admin/knowledge")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937";
-                }}
-              >
-                <span style={{ fontSize: 22 }}>📚</span>
-                AIナレッジを管理する
-              </button>
-
-              <button
-                onClick={() => navigate("/faqs/new")}
                 style={{
                   flex: "1 1 200px",
                   padding: "18px 20px",
@@ -374,32 +383,93 @@ export default function AdminDashboard() {
                     "0 8px 25px rgba(34,197,94,0.25)";
                 }}
               >
-                <span style={{ fontSize: 22 }}>＋</span>
-                新しいFAQを追加する
+                <span style={{ fontSize: 22 }}>📚</span>
+                {t("dashboard.manage_knowledge")}
               </button>
+
+              <SuperAdminOnly>
+                <button
+                  onClick={() => navigate("/admin/tenants")}
+                  style={{
+                    flex: "1 1 200px",
+                    padding: "18px 20px",
+                    minHeight: 56,
+                    borderRadius: 12,
+                    border: "1px solid #1f2937",
+                    background: "rgba(15,23,42,0.8)",
+                    color: "#e5e7eb",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    transition: "border-color 0.15s",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
+                >
+                  <span style={{ fontSize: 22 }}>🏢</span>
+                  {t("dashboard.manage_tenants")}
+                </button>
+              </SuperAdminOnly>
+
+              <SuperAdminOnly>
+                <button
+                  onClick={() => navigate("/admin/billing")}
+                  style={{
+                    flex: "1 1 200px",
+                    padding: "18px 20px",
+                    minHeight: 56,
+                    borderRadius: 12,
+                    border: "1px solid #1f2937",
+                    background: "rgba(15,23,42,0.8)",
+                    color: "#e5e7eb",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    transition: "border-color 0.15s",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
+                >
+                  <span style={{ fontSize: 22 }}>💰</span>
+                  {t("dashboard.view_billing")}
+                </button>
+              </SuperAdminOnly>
+
+              {isClientAdmin && (
+                <button
+                  onClick={() => navigate("/admin/chat-test")}
+                  style={{
+                    flex: "1 1 200px",
+                    padding: "18px 20px",
+                    minHeight: 56,
+                    borderRadius: 12,
+                    border: "none",
+                    background: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 50%, #3b82f6 100%)",
+                    color: "#fff",
+                    fontSize: 16,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    boxShadow: "0 8px 25px rgba(59,130,246,0.3)",
+                    transition: "box-shadow 0.15s",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 10px 30px rgba(59,130,246,0.5)"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 25px rgba(59,130,246,0.3)"; }}
+                >
+                  {t("chat_test.button")}
+                </button>
+              )}
             </div>
           </section>
 
-          <section>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              AIの返答スタイルをカスタマイズ
-            </h2>
-            <TuningPanel tenantId="demo" />
-          </section>
-
-          <section style={{ marginTop: 24 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              会話アバターの設定
-            </h2>
-            <AvatarUpload />
-          </section>
-
-          <section style={{ marginTop: 24 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              声の設定
-            </h2>
-            <VoiceSettings />
-          </section>
         </>
       )}
     </div>

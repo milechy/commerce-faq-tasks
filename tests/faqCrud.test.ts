@@ -33,7 +33,10 @@ function buildApp(queryImpl: jest.Mock): Express {
   const app = express();
   app.use(express.json());
   const db = makeMockDb(queryImpl);
-  registerFaqCrudRoutes(app, db);
+  // テストではauth/role/tenantチェックをすべてパススルー
+  // テナント指定は x-tenant-id ヘッダー経由でルートハンドラが直接処理する
+  const noop = (_req: any, _res: any, next: any) => next();  // eslint-disable-line @typescript-eslint/no-explicit-any
+  registerFaqCrudRoutes(app, db, noop, noop, noop);
   return app;
 }
 

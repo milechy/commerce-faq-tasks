@@ -3,6 +3,7 @@
 // @ts-ignore - pg types are not bundled in this project, treat as any
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { Pool } = require("pg") as { Pool: any };
+import { decryptText } from "../lib/crypto/textEncrypt";
 
 const pgUrl = process.env.DATABASE_URL;
 const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
@@ -74,16 +75,20 @@ export async function searchPgVector(
   // pgvector 用に '[0.1,0.2,...]' 形式のリテラルを作る
   const embedLiteral = `[${embedding.join(",")}]`;
 
+  // faq_docs と LEFT JOIN して is_published = false のエントリを除外
+  // (metadata に faq_id がない古いエントリはそのまま返す)
   const sql = `
     select
-      id::text as id,
-      text,
-      metadata,
-      -- cosine 類似度に変換 (1 - 距離)
-      1 - (embedding <-> $2::vector) as score
-    from faq_embeddings
-    where tenant_id = $1 OR tenant_id = 'global'
-    order by embedding <-> $2::vector
+      fe.id::text as id,
+      fe.text,
+      fe.metadata,
+      1 - (fe.embedding <-> $2::vector) as score
+    from faq_embeddings fe
+    left join faq_docs fd
+      on fd.id = (fe.metadata->>'faq_id')::bigint
+    where (fe.tenant_id = $1 OR fe.tenant_id = 'global')
+      and (fd.is_published = true OR fd.id IS NULL)
+    order by fe.embedding <-> $2::vector
     limit $3;
   `;
 
@@ -93,7 +98,7 @@ export async function searchPgVector(
 
     const items: PgVectorHit[] = (res.rows || []).map((row: any) => ({
       id: String(row.id),
-      text: row.text,
+      text: decryptText(row.text ?? ""),
       metadata: row.metadata ?? undefined,
       score: typeof row.score === "number" ? row.score : 0,
     }));

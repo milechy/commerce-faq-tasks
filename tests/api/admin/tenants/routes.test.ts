@@ -1,32 +1,48 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 import { registerTenantAdminRoutes } from "../../../../src/api/admin/tenants/routes";
 import { generateApiKey, hashApiKey, maskApiKey, maskApiKeyPrefix } from "../../../../src/api/admin/tenants/apiKeyUtils";
 
-// supabaseAuthMiddleware をモック（super_admin としてパス）
-vi.mock("../../../../src/admin/http/supabaseAuthMiddleware", () => ({
-  supabaseAuthMiddleware: (req: any, _res: any, next: any) => {
-    req.supabaseUser = { sub: "admin-user-id", app_metadata: { role: "super_admin" } };
-    next();
-  },
+// tenant-context をモック
+jest.mock("../../../../src/lib/tenant-context", () => ({
+  registerTenant: jest.fn(),
 }));
 
-// registerTenant をモック
-vi.mock("../../../../src/lib/tenant-context", () => ({
-  registerTenant: vi.fn(),
+// supabaseClient をモック（招待API用 — テストでは不要）
+jest.mock("../../../../src/auth/supabaseClient", () => ({
+  supabaseAdmin: null,
 }));
+
+/**
+ * 開発モード用フェイクJWT（署名検証なし）
+ * tenantAuth は NODE_ENV=development のとき jwt.decode() のみ実行するため、
+ * 署名は任意の文字列で問題ない。
+ */
+function makeDevJwt(payload: object): string {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.devtest`;
+}
+
+const SUPER_ADMIN_TOKEN = makeDevJwt({
+  sub: "admin-user-id",
+  app_metadata: { role: "super_admin" },
+});
 
 describe("Tenant Admin Routes", () => {
   let app: express.Application;
   let mockDb: any;
+
+  beforeAll(() => {
+    process.env.NODE_ENV = "development";
+  });
 
   beforeEach(() => {
     app = express();
     app.use(express.json());
 
     mockDb = {
-      query: vi.fn(),
+      query: jest.fn(),
     };
 
     registerTenantAdminRoutes(app, mockDb);
@@ -37,7 +53,9 @@ describe("Tenant Admin Routes", () => {
       mockDb.query.mockResolvedValueOnce({
         rows: [{ id: "tenant1", name: "Test", plan: "starter", is_active: true, created_at: new Date(), updated_at: new Date() }],
       });
-      const res = await request(app).get("/v1/admin/tenants");
+      const res = await request(app)
+        .get("/v1/admin/tenants")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
       expect(res.body.tenants).toHaveLength(1);
     });
@@ -49,6 +67,7 @@ describe("Tenant Admin Routes", () => {
       mockDb.query.mockResolvedValueOnce({ rows: [newTenant], rowCount: 1 });
       const res = await request(app)
         .post("/v1/admin/tenants")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
         .send({ id: "test-tenant", name: "テストテナント", plan: "starter" });
       expect(res.status).toBe(201);
       expect(res.body.id).toBe("test-tenant");
@@ -57,6 +76,7 @@ describe("Tenant Admin Routes", () => {
     it("rejects invalid tenant id", async () => {
       const res = await request(app)
         .post("/v1/admin/tenants")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
         .send({ id: "Invalid ID!", name: "Test" });
       expect(res.status).toBe(400);
     });
@@ -65,6 +85,7 @@ describe("Tenant Admin Routes", () => {
       mockDb.query.mockRejectedValueOnce({ code: "23505" });
       const res = await request(app)
         .post("/v1/admin/tenants")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
         .send({ id: "dup-tenant", name: "重複テナント" });
       expect(res.status).toBe(409);
     });
@@ -78,7 +99,9 @@ describe("Tenant Admin Routes", () => {
           rows: [{ id: "key-uuid", tenant_id: "t1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null }],
           rowCount: 1,
         });
-      const res = await request(app).post("/v1/admin/tenants/t1/keys");
+      const res = await request(app)
+        .post("/v1/admin/tenants/t1/keys")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(201);
       expect(res.body.api_key).toMatch(/^rjc_/);
       expect(res.body.tenant_id).toBe("t1");
@@ -92,7 +115,9 @@ describe("Tenant Admin Routes", () => {
         .mockResolvedValueOnce({
           rows: [{ id: "k1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null, last_used_at: null }],
         });
-      const res = await request(app).get("/v1/admin/tenants/t1/keys");
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1/keys")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
       expect(res.body.keys[0].prefix).toMatch(/\*\*\*\*$/);
     });
@@ -101,14 +126,18 @@ describe("Tenant Admin Routes", () => {
   describe("DELETE /v1/admin/tenants/:id/keys/:keyId", () => {
     it("deactivates a key", async () => {
       mockDb.query.mockResolvedValueOnce({ rows: [{ id: "k1", tenant_id: "t1", is_active: false }], rowCount: 1 });
-      const res = await request(app).delete("/v1/admin/tenants/t1/keys/k1");
+      const res = await request(app)
+        .delete("/v1/admin/tenants/t1/keys/k1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
     });
 
     it("returns 404 for non-existent key", async () => {
       mockDb.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-      const res = await request(app).delete("/v1/admin/tenants/t1/keys/no-key");
+      const res = await request(app)
+        .delete("/v1/admin/tenants/t1/keys/no-key")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(404);
     });
   });

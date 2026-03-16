@@ -79,7 +79,8 @@ export function initAuthMiddleware(opts: AuthMiddlewareOptions = {}) {
       if (payload) {
         req.authUser = payload;
         // CLAUDE.md: tenantId は JWT payload からのみ取得
-        req.tenantId = payload.tenant_id ?? "demo";
+        // Supabase JWT は app_metadata 内に tenant_id を格納するため両方参照
+        req.tenantId = payload.app_metadata?.tenant_id ?? payload.tenant_id ?? "demo";
         return next();
       }
 
@@ -92,7 +93,21 @@ export function initAuthMiddleware(opts: AuthMiddlewareOptions = {}) {
     // --- Path 2: API Key (x-api-key) — hash verified ---
     const apiKeyHeader = req.header("x-api-key");
     if (apiKeyHeader) {
-      // 2a: Hash-based lookup (production path)
+      // 2a: JWT chat-test token (starts with "eyJ") — verify before hashing
+      if (apiKeyHeader.startsWith("eyJ")) {
+        const payload = verifySupabaseJwt(apiKeyHeader);
+        if (payload && (payload as any).purpose === "chat-test" && payload.tenant_id) {
+          req.tenantId = payload.tenant_id;
+          return next();
+        }
+        // Invalid JWT sent as api-key → reject immediately
+        return res.status(401).json({
+          error: "invalid_token",
+          message: "chat-test トークンが無効または期限切れです。",
+        });
+      }
+
+      // 2b: Hash-based lookup (production path)
       if (resolveByApiKeyHash) {
         const hash = hashApiKey(apiKeyHeader);
         const config = resolveByApiKeyHash(hash);

@@ -1,11 +1,10 @@
 // src/api/admin/tenants/routes.ts
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 // @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
-import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import jwt from "jsonwebtoken";
 import { registerTenant } from "../../../lib/tenant-context";
-import { superAdminMiddleware } from "./superAdminMiddleware";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 
@@ -21,19 +20,69 @@ const updateTenantSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   plan: z.enum(planValues).optional(),
   is_active: z.boolean().optional(),
+  allowed_origins: z
+    .array(
+      z.string().regex(/^https:\/\//, "URLはhttps://で始まる必要があります")
+    )
+    .max(20)
+    .optional(),
   // Phase38 Step6: テナント固有システムプロンプト（空文字でリセット可）
   system_prompt: z.string().max(5000).optional(),
 });
 
 export function registerTenantAdminRoutes(app: Express, db: Pool): void {
-  // Super Admin専用ミドルウェアを /v1/admin/tenants に適用
-  app.use("/v1/admin/tenants", supabaseAuthMiddleware, superAdminMiddleware);
+  // ── インライン認証スタック（knowledge/routes.ts と同パターン） ──────────────
+  function tenantAuth(req: Request, res: Response, next: NextFunction): void {
+    const authHeader = req.headers.authorization ?? "";
+
+    if (process.env.NODE_ENV === "development") {
+      if (authHeader.startsWith("Bearer ")) {
+        try {
+          (req as any).supabaseUser = jwt.decode(authHeader.slice(7).trim());
+        } catch {
+          // decode失敗は無視
+        }
+      }
+      next();
+      return;
+    }
+
+    const secret = process.env.SUPABASE_JWT_SECRET;
+    if (!secret) {
+      next();
+      return;
+    }
+
+    if (!authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Missing Bearer token" });
+      return;
+    }
+    const token = authHeader.slice(7).trim();
+    try {
+      (req as any).supabaseUser = jwt.verify(token, secret);
+      next();
+    } catch (err) {
+      console.warn("[tenantAuth] invalid token", err);
+      res.status(401).json({ error: "Invalid token" });
+    }
+  }
+
+  function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const role = su?.app_metadata?.role ?? su?.user_metadata?.role ?? su?.role ?? "anonymous";
+    if (role !== "super_admin") {
+      res.status(403).json({ error: "forbidden", message: "スーパー管理者のみアクセスできます" });
+      return;
+    }
+    next();
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   // GET /v1/admin/tenants
-  app.get("/v1/admin/tenants", async (_req: Request, res: Response) => {
+  app.get("/v1/admin/tenants", tenantAuth, requireSuperAdmin, async (_req: Request, res: Response) => {
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, system_prompt, created_at, updated_at FROM tenants ORDER BY created_at DESC`
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, created_at, updated_at FROM tenants ORDER BY created_at DESC`
       );
       return res.json({ tenants: result.rows, total: result.rows.length });
     } catch (err) {
@@ -43,7 +92,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // POST /v1/admin/tenants
-  app.post("/v1/admin/tenants", async (req: Request, res: Response) => {
+  app.post("/v1/admin/tenants", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const parsed = createTenantSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
@@ -83,11 +132,11 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // GET /v1/admin/tenants/:id
-  app.get("/v1/admin/tenants/:id", async (req: Request, res: Response) => {
+  app.get("/v1/admin/tenants/:id", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, system_prompt, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {
@@ -101,7 +150,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // PATCH /v1/admin/tenants/:id
-  app.patch("/v1/admin/tenants/:id", async (req: Request, res: Response) => {
+  app.patch("/v1/admin/tenants/:id", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     const parsed = updateTenantSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -122,12 +171,13 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.name !== undefined) { params.push(fields.name); setClauses.push(`name = $${params.length}`); }
       if (fields.plan !== undefined) { params.push(fields.plan); setClauses.push(`plan = $${params.length}`); }
       if (fields.is_active !== undefined) { params.push(fields.is_active); setClauses.push(`is_active = $${params.length}`); }
+      if (fields.allowed_origins !== undefined) { params.push(fields.allowed_origins); setClauses.push(`allowed_origins = $${params.length}`); }
       // Phase38 Step6: system_prompt の更新（空文字列による削除も許可）
       if (fields.system_prompt !== undefined) { params.push(fields.system_prompt); setClauses.push(`system_prompt = $${params.length}`); }
       setClauses.push(`updated_at = NOW()`);
       params.push(id);
       const result = await db.query(
-        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, system_prompt, created_at, updated_at`,
+        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, created_at, updated_at`,
         params
       );
       return res.json(result.rows[0]);
@@ -138,7 +188,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // POST /v1/admin/tenants/:id/keys — APIキー発行
-  app.post("/v1/admin/tenants/:id/keys", async (req: Request, res: Response) => {
+  app.post("/v1/admin/tenants/:id/keys", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     try {
       // テナント存在チェック
@@ -201,7 +251,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // GET /v1/admin/tenants/:id/keys — APIキー一覧（マスク表示）
-  app.get("/v1/admin/tenants/:id/keys", async (req: Request, res: Response) => {
+  app.get("/v1/admin/tenants/:id/keys", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     try {
       const tenantCheck = await db.query("SELECT id FROM tenants WHERE id = $1", [id]);
@@ -227,7 +277,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // DELETE /v1/admin/tenants/:id/keys/:keyId — APIキー無効化（論理削除）
-  app.delete("/v1/admin/tenants/:id/keys/:keyId", async (req: Request, res: Response) => {
+  app.delete("/v1/admin/tenants/:id/keys/:keyId", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id, keyId } = req.params;
     try {
       const result = await db.query(
@@ -248,7 +298,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // POST /v1/admin/tenants/:id/invite — client_adminユーザー招待（Super Admin専用）
-  app.post("/v1/admin/tenants/:id/invite", async (req: Request, res: Response) => {
+  app.post("/v1/admin/tenants/:id/invite", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
 
     const schema = z.object({

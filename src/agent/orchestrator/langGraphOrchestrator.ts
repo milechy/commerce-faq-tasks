@@ -35,6 +35,7 @@ import { logPhase22Event } from "../observability/phase22EventLogger";
 
 import { resolveSalesPipelineKind } from "./sales/pipelines/pipelineFactory";
 import { runSalesPipeline } from "./sales/salesPipeline";
+import { RAG_EXCERPT_MAX_CHARS, RAG_MAX_EXCERPTS } from "../config/ragLimits";
 
 const logger = pino();
 
@@ -1578,8 +1579,8 @@ function buildAnswerPrompt(payload: {
   const contextSnippet =
     docs.length > 0
       ? docs
-          .slice(0, 3)
-          .map((d, idx) => `${idx + 1}. ${d.text}`)
+          .slice(0, RAG_MAX_EXCERPTS)
+          .map((d, idx) => `${idx + 1}. ${d.text.slice(0, RAG_EXCERPT_MAX_CHARS)}`)
           .join("\n")
       : "(no retrieved documents)";
 

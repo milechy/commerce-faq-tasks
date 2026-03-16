@@ -4,7 +4,8 @@ import KpiCard from "../../../components/admin/KpiCard";
 import TenantSlaTable, {
   type TenantSlaRow,
 } from "../../../components/admin/TenantSlaTable";
-import { API_BASE } from "../../../lib/api";
+import { API_BASE, authFetch } from "../../../lib/api";
+import { supabase } from "../../../lib/supabaseClient";
 
 interface MonitoringKpis {
   completionRate: number;
@@ -41,17 +42,6 @@ interface MonitoringKpis {
 
 const POLL_INTERVAL_MS = 30_000;
 
-function getAccessToken(): string | null {
-  const raw = localStorage.getItem("supabaseSession");
-  if (!raw) return null;
-  try {
-    return (JSON.parse(raw) as { access_token?: string })?.access_token ?? null;
-  } catch {
-    localStorage.removeItem("supabaseSession");
-    return null;
-  }
-}
-
 function formatMs(ms: number): string {
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.round(ms)}ms`;
@@ -66,21 +56,8 @@ export default function MonitoringPage() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchKpis = useCallback(async () => {
-    const token = getAccessToken();
-    if (!token) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
     try {
-      const res = await fetch(`${API_BASE}/admin/monitoring/kpis`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        navigate("/login", { replace: true });
-        return;
-      }
+      const res = await authFetch(`${API_BASE}/admin/monitoring/kpis`);
 
       if (!res.ok) throw new Error("fetch failed");
 
@@ -88,7 +65,11 @@ export default function MonitoringPage() {
       setData(json);
       setError(false);
       setLastUpdated(new Date());
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+        navigate("/login", { replace: true });
+        return;
+      }
       setError(true);
     } finally {
       setLoading(false);
@@ -96,17 +77,15 @@ export default function MonitoringPage() {
   }, [navigate]);
 
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) {
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    fetchKpis();
-
-    timerRef.current = setInterval(() => {
-      fetchKpis();
-    }, POLL_INTERVAL_MS);
+    void (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      void fetchKpis();
+      timerRef.current = setInterval(() => { void fetchKpis(); }, POLL_INTERVAL_MS);
+    })();
 
     return () => {
       if (timerRef.current !== null) clearInterval(timerRef.current);

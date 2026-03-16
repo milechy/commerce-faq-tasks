@@ -2,6 +2,10 @@ import { Client as ES } from "@elastic/elasticsearch";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 // @ts-ignore - pg has no bundled types in this project, treat as any
 const { Pool } = require("pg") as { Pool: any };
+import { decryptText } from "../lib/crypto/textEncrypt";
+
+// Phase33 C: 言語別インデックス解決
+import { toSupportedLang, resolveFallbackIndices, DEFAULT_LANG, type SupportedLang } from "./langIndex";
 
 export interface Hit {
   id: string;
@@ -11,6 +15,8 @@ export interface Hit {
 }
 const BUDGET = Number(process.env.HYBRID_TIMEOUT_MS || 600);
 const ALLOW_MOCK = process.env.HYBRID_MOCK_ON_FAILURE === "1";
+// Phase33 C: フィーチャーフラグ（LANG_SEARCH_ENABLED=1 で有効化）
+const LANG_SEARCH_ENABLED = process.env.LANG_SEARCH_ENABLED === "1";
 const pgUrl = process.env.DATABASE_URL;
 const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
 
@@ -21,9 +27,18 @@ const normZ = (xs: number[]) => {
   return (x: number) => (x - m) / (s || 1);
 };
 
-export async function hybridSearch(q: string, tenantId?: string) {
+export async function hybridSearch(
+  q: string,
+  tenantId?: string,
+  lang?: unknown // Phase33 C: SupportedLang に変換（不正値は DEFAULT_LANG）
+) {
   const t0 = Date.now();
   const notes: string[] = [];
+
+  // Phase33 C: 言語別インデックス解決
+  const resolvedLang: SupportedLang = LANG_SEARCH_ENABLED
+    ? toSupportedLang(lang ?? DEFAULT_LANG)
+    : DEFAULT_LANG;
 
   const esUrl = process.env.ES_URL;
   const es = esUrl
@@ -76,14 +91,21 @@ export async function hybridSearch(q: string, tenantId?: string) {
   let pgHits: Hit[] = [];
   try {
     const tEs0 = Date.now();
+
+    // Phase33 C: 言語別インデックスにフォールバック付きで検索
+    const esIndices = LANG_SEARCH_ENABLED && tenantId
+      ? resolveFallbackIndices(tenantId, resolvedLang)
+      : [`faq_${tenantId ?? "demo"}`];
+    const esIndex = esIndices[0]; // まずプライマリを試す
+
     const esRes: any = await es.search(
       {
-        index: `faq_${tenantId ?? "demo"}`,
+        index: esIndex,
         size: 50,
         query: tenantId
           ? {
               bool: {
-                must: { match: { text: q } },
+                must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
                 filter: {
                   bool: {
                     should: [
@@ -91,11 +113,22 @@ export async function hybridSearch(q: string, tenantId?: string) {
                       { term: { tenant_id: "global" } },
                     ],
                     minimum_should_match: 1,
+                    must: [
+                      {
+                        bool: {
+                          should: [
+                            { term: { is_published: true } },
+                            { bool: { must_not: { exists: { field: "is_published" } } } },
+                          ],
+                          minimum_should_match: 1,
+                        },
+                      },
+                    ],
                   },
                 },
               },
             }
-          : { match: { text: q } },
+          : { multi_match: { query: q, fields: ["question", "answer", "text"] } },
       },
       { requestTimeout: BUDGET }
     );
@@ -103,12 +136,44 @@ export async function hybridSearch(q: string, tenantId?: string) {
     esElapsedMs = tEs1 - tEs0;
     esHits = (esRes.hits?.hits || []).map((h: any) => ({
       id: h._id,
-      text: h._source?.text,
+      text: decryptText(h._source?.text ?? ""),
       score: h._score,
       source: "es" as const,
     }));
   } catch (e: any) {
+    const esErrCode = (e as any)?.meta?.statusCode ?? (e as any)?.statusCode;
     notes.push(`es_error:${e.message || String(e)}`);
+
+    // Phase33 C: 言語別インデックスが存在しない場合（404）、旧インデックスにフォールバック
+    if (LANG_SEARCH_ENABLED && esErrCode === 404 && tenantId) {
+      const fallbackIndex = `faq_${tenantId}`;
+      try {
+        const fbRes: any = await es.search(
+          {
+            index: fallbackIndex,
+            size: 50,
+            query: {
+              bool: {
+                must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
+                filter: { term: { tenant_id: tenantId } },
+              },
+            },
+          },
+          { requestTimeout: BUDGET }
+        );
+        esHits = (fbRes.hits?.hits || []).map((h: any) => ({
+          id: h._id,
+          text: decryptText(h._source?.text ?? ""),
+          score: h._score,
+          source: "es" as const,
+        }));
+        if (esHits.length > 0) {
+          notes.push(`es_lang_fallback:${fallbackIndex} hits=${esHits.length}`);
+        }
+      } catch (fbErr: any) {
+        notes.push(`es_fallback_error:${fbErr.message || String(fbErr)}`);
+      }
+    }
   }
 
   // PG text search
@@ -129,7 +194,7 @@ export async function hybridSearch(q: string, tenantId?: string) {
           query: tenantId
             ? {
                 bool: {
-                  must: { match: { text: "返品 送料" } },
+                  must: { multi_match: { query: "返品 送料", fields: ["question", "answer", "text"] } },
                   filter: {
                     bool: {
                       should: [
@@ -141,7 +206,7 @@ export async function hybridSearch(q: string, tenantId?: string) {
                   },
                 },
               }
-            : { match: { text: "返品 送料" } },
+            : { multi_match: { query: "返品 送料", fields: ["question", "answer", "text"] } },
         },
         { requestTimeout: BUDGET }
       );
@@ -150,7 +215,7 @@ export async function hybridSearch(q: string, tenantId?: string) {
       notes.push(`probe_ms=${probeMs}`);
       const probeHits = (probe.hits?.hits || []).map((h: any) => ({
         id: h._id,
-        text: h._source?.text,
+        text: decryptText(h._source?.text ?? ""),
         score: h._score,
         source: "es" as const,
       }));
@@ -204,7 +269,8 @@ export async function hybridSearch(q: string, tenantId?: string) {
     `es_ms=${esElapsedMs ?? "na"}`,
     `es_hits=${esHits.length}`,
     `pg_hits=${pgHits.length}`,
-  ].join(" ");
+    LANG_SEARCH_ENABLED ? `lang=${resolvedLang}` : null,
+  ].filter(Boolean).join(" ");
 
   const noteJoined = [notes.join(" | "), metricsNote]
     .filter(Boolean)
