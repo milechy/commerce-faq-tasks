@@ -14,6 +14,65 @@
 ## 申請リスト
 （まだなし）
 
+## Phase38 Step6: Stream B への通知
+
+テナント設定画面（admin-ui）に以下のUI追加をお願いします:
+
+- テナント詳細ページ（/admin/tenants/:id）に `system_prompt` の textarea を追加
+- サイズ: 幅100%, 最低8行, placeholder: "あなたは〇〇のAIアシスタントです..."
+- 文字数制限: 5000文字（超過時にリアルタイムカウンター表示）
+- 保存: PATCH /v1/admin/tenants/:id に `{ system_prompt }` を含めて送信
+- 空文字送信でリセット可能
+- GET /v1/admin/tenants/:id のレスポンスに `system_prompt` フィールドが含まれます
+
+---
+
+## Phase38: チューニングルールAPI (Stream A, Step4-BE)
+
+- GET /v1/admin/tuning-rules: ルール一覧（テナントフィルタ対応）(Stream A, Phase38)
+  - ファイル: src/api/admin/tuning/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+  - 権限: super_admin=全テナント, client_admin=自テナント+global
+
+- POST /v1/admin/tuning-rules: ルール作成 (Stream A, Phase38)
+  - client_admin は tenant_id = 自テナントのみ（global不可・403）
+
+- PUT /v1/admin/tuning-rules/:id: ルール更新 (Stream A, Phase38)
+  - テナント所有権を検証（super_admin は制限なし）
+
+- DELETE /v1/admin/tuning-rules/:id: ルール削除 (Stream A, Phase38)
+  - super_admin: 全ルール / client_admin: 自テナントのみ
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase38: チューニングルールAPI
+import { registerTuningRoutes } from "./api/admin/tuning/routes";
+
+registerTuningRoutes(app);
+```
+
+---
+
+## Phase38: 会話履歴API (Stream A, Step2)
+
+- GET /v1/admin/chat-history/sessions: セッション一覧（ページネーション対応）(Stream A, Phase38)
+  - ファイル: src/api/admin/chat-history/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+  - 権限: super_admin=全テナント, client_admin=自テナントのみ
+
+- GET /v1/admin/chat-history/sessions/:sessionId/messages: セッション内メッセージ取得 (Stream A, Phase38)
+  - ファイル: src/api/admin/chat-history/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase38: 会話履歴API
+import { registerChatHistoryRoutes } from "./api/admin/chat-history/routes";
+
+// 既存の registerTenantAdminRoutes などの近くに追加
+registerChatHistoryRoutes(app);
+```
+
 ## Phase32: 課金管理API (Stream A)
 
 - GET /v1/admin/billing/usage: テナント別使用量集計（日次/月次） (Stream A, Phase32)

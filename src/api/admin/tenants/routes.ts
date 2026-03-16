@@ -26,6 +26,8 @@ const updateTenantSchema = z.object({
     )
     .max(20)
     .optional(),
+  // Phase38 Step6: テナント固有システムプロンプト（空文字でリセット可）
+  system_prompt: z.string().max(5000).optional(),
 });
 
 export function registerTenantAdminRoutes(app: Express, db: Pool): void {
@@ -80,7 +82,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   app.get("/v1/admin/tenants", tenantAuth, requireSuperAdmin, async (_req: Request, res: Response) => {
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, created_at, updated_at FROM tenants ORDER BY created_at DESC`
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, created_at, updated_at FROM tenants ORDER BY created_at DESC`
       );
       return res.json({ tenants: result.rows, total: result.rows.length });
     } catch (err) {
@@ -134,7 +136,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {
@@ -170,10 +172,12 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.plan !== undefined) { params.push(fields.plan); setClauses.push(`plan = $${params.length}`); }
       if (fields.is_active !== undefined) { params.push(fields.is_active); setClauses.push(`is_active = $${params.length}`); }
       if (fields.allowed_origins !== undefined) { params.push(fields.allowed_origins); setClauses.push(`allowed_origins = $${params.length}`); }
+      // Phase38 Step6: system_prompt の更新（空文字列による削除も許可）
+      if (fields.system_prompt !== undefined) { params.push(fields.system_prompt); setClauses.push(`system_prompt = $${params.length}`); }
       setClauses.push(`updated_at = NOW()`);
       params.push(id);
       const result = await db.query(
-        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, created_at, updated_at`,
+        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, created_at, updated_at`,
         params
       );
       return res.json(result.rows[0]);
