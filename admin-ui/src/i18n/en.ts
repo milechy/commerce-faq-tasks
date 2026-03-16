@@ -176,6 +176,10 @@ const en: Record<TranslationKey, string> = {
   "tenant_detail.copy": "📋 Copy Code",
   "tenant_detail.copied": "✅ Copied!",
   "tenant_detail.embed_hint": "💡 Replace <strong>YOUR_API_KEY</strong> with the actual key issued in the API Keys tab. The key can only be viewed at the time of issuance.",
+  "tenant_detail.allowed_origins_label": "Allowed Domains (one URL per line where Widget is installed)",
+  "tenant_detail.allowed_origins_desc": "Example: https://shop.example.com  Leave empty to allow all domains (development only)",
+  "tenant_detail.allowed_origins_placeholder": "https://shop.example.com\nhttps://www.example.com",
+  "tenant_detail.embed_no_origins_warning": "⚠️ No allowed domains are configured. For security, please register the domains where the Widget is installed in the Settings tab.",
 
   // Billing page
   "billing.title": "💰 Billing & Usage",

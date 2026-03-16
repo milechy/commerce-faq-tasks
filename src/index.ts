@@ -46,6 +46,7 @@ import { initUsageTracker } from "./lib/billing/usageTracker";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
+import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
@@ -106,6 +107,7 @@ const authMiddleware = initAuthMiddleware({
 });
 const tenantContext = createTenantContextMiddleware({ logger });
 const securityPolicy = createSecurityPolicyMiddleware({ logger });
+const originCheck = createOriginCheckMiddleware(db, { logger });
 
 // --- minimal internal UI (no auth required) ---
 const publicDir = path.resolve(process.cwd(), "public");
@@ -151,8 +153,9 @@ const apiStack = [
   globalRateLimiter,     // 1. Rate limit
   authMiddleware,        // 2. Auth → tenantId
   tenantContext,         // 3. Load TenantConfig
-  securityPolicy,        // 4. Per-tenant policy
-  langDetectMiddleware,  // 5. Phase33: Accept-Language → req.lang
+  securityPolicy,        // 4. Per-tenant policy (in-memory allowedOrigins)
+  originCheck,           // 5. DB-backed per-tenant Origin check
+  langDetectMiddleware,  // 6. Phase33: Accept-Language → req.lang
 ] as express.RequestHandler[];
 
 logger.info({

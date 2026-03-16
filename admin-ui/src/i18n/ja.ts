@@ -174,6 +174,10 @@ const ja = {
   "tenant_detail.copy": "📋 コードをコピー",
   "tenant_detail.copied": "✅ コピーしました！",
   "tenant_detail.embed_hint": "💡 <strong>YOUR_API_KEY</strong> の部分は、「APIキー」タブで発行した実際のキーに置き換えてください。APIキーは発行時にのみ確認できます。",
+  "tenant_detail.allowed_origins_label": "許可ドメイン（Widgetを設置するURLを1行に1つ）",
+  "tenant_detail.allowed_origins_desc": "入力例: https://shop.example.com　空欄の場合は全ドメイン許可（開発用途のみ）",
+  "tenant_detail.allowed_origins_placeholder": "https://shop.example.com\nhttps://www.example.com",
+  "tenant_detail.embed_no_origins_warning": "⚠️ 許可ドメインが設定されていません。セキュリティのため、Widgetを設置するドメインを「設定」タブで登録してください。",
 
   // Billing page
   "billing.title": "💰 請求・使用量",
