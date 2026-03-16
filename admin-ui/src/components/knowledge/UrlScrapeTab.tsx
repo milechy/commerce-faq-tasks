@@ -13,10 +13,9 @@ import {
   BTN_PRIMARY,
   TEXTAREA_STYLE,
   SELECT_STYLE,
-  TENANT,
 } from "./shared";
 
-export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () => void }) {
+export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSuccess: () => void }) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
@@ -58,7 +57,7 @@ export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () 
     setSuccess(null);
 
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ urls: urlList, category, ...(isGlobal ? { target: "global" } : {}) }),
@@ -90,7 +89,7 @@ export default function UrlScrapeTab({ onCommitSuccess }: { onCommitSuccess: () 
     setError(null);
 
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/scrape/commit?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: validItems, category, ...(isGlobal ? { target: "global" } : {}) }),

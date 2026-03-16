@@ -12,10 +12,9 @@ import {
   BTN_PRIMARY,
   TEXTAREA_STYLE,
   SELECT_STYLE,
-  TENANT,
 } from "./shared";
 
-export default function TextInputTab() {
+export default function TextInputTab({ tenantId }: { tenantId: string }) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
@@ -48,7 +47,7 @@ export default function TextInputTab() {
     setSuccess(null);
 
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: text.trim(), category, ...(isGlobal ? { target: "global" } : {}) }),
@@ -73,7 +72,7 @@ export default function TextInputTab() {
     setCommitting(true);
     setError(null);
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${TENANT}`, {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/text/commit?tenant=${tenantId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ faqs: preview, category, ...(isGlobal ? { target: "global" } : {}) }),

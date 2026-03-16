@@ -45,10 +45,6 @@ export type DeleteState = "idle" | "confirming" | "deleting" | "success" | "erro
 export type Category = "inventory" | "campaign" | "coupon" | "store_info";
 export type Tab = "list" | "text" | "scrape";
 
-// ─── 定数 ─────────────────────────────────────────────────────────────────────
-
-export const TENANT = "carnation";
-
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
 export async function getAccessToken(): Promise<string | null> {

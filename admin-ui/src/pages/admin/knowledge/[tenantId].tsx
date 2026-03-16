@@ -460,6 +460,7 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
       {editTarget && (
         <KnowledgeFaqEditModal
           mode="edit"
+          tenantId={tenantId}
           item={editTarget}
           onClose={() => setEditTarget(null)}
           onSuccess={handleModalSuccess}
@@ -469,6 +470,7 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
       {createMode && (
         <KnowledgeFaqEditModal
           mode="create"
+          tenantId={tenantId}
           onClose={() => setCreateMode(false)}
           onSuccess={handleModalSuccess}
         />
