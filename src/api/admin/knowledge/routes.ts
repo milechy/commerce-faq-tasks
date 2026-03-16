@@ -29,7 +29,7 @@ function resolveTenantId(req: Request): string | null {
   return fromQuery || fromHeader || null;
 }
 
-/** テキスト→FAQ変換（Groq llama-3.1-8b-instant） */
+/** テキスト→FAQ変換 */
 async function textToFaqs(text: string, category: Category): Promise<FaqEntry[]> {
   const categoryLabel: Record<Category, string> = {
     inventory: "在庫・車両情報",
@@ -38,9 +38,17 @@ async function textToFaqs(text: string, category: Category): Promise<FaqEntry[]>
     store_info: "店舗情報・アクセス",
   };
 
+  const model = process.env.GROQ_FAQ_GEN_MODEL ?? "llama-3.3-70b-versatile";
+
   const prompt = `あなたは中古車販売店のFAQ作成の専門家です。
-以下のテキストを読んで、お客様がよく聞きそうな質問とその回答を5〜10個生成してください。
+以下のテキストを読んで、テキストの情報量に応じてお客様がよく聞きそうな質問と回答を生成してください。
 カテゴリ: ${categoryLabel[category]}
+
+重要なルール:
+- テキストに明示されている事実のみからFAQを作成する
+- 推測や補完でFAQを増やさない
+- 情報が少ない場合は少ない件数（1〜3個）で構わない
+- テキストと無関係な質問は絶対に生成しない
 
 テキスト:
 ${text.slice(0, 3000)}
@@ -52,9 +60,9 @@ ${text.slice(0, 3000)}
 ]`;
 
   const raw = await groqClient.call({
-    model: "llama-3.1-8b-instant",
+    model,
     messages: [{ role: "user", content: prompt }],
-    temperature: 0.3,
+    temperature: 0.2,
     maxTokens: 2000,
     tag: "knowledge-text-to-faq",
   });
@@ -301,7 +309,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const schema = z.object({
-      text: z.string().min(10).max(10000),
+      text: z.string().min(50, "テキストは50文字以上入力してください").max(10000),
       category: z.enum(CATEGORIES),
     });
     const parsed = schema.safeParse(req.body ?? {});
@@ -424,6 +432,11 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           .replace(/\s+/g, " ")
           .trim()
           .slice(0, 5000);
+
+        if (text.length < 50) {
+          results.push({ url, faqs: [], error: "ページからテキストを取得できませんでした" });
+          continue;
+        }
 
         const faqs = await textToFaqs(text, category);
         results.push({ url, faqs });
