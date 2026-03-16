@@ -569,9 +569,30 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editQuestion, setEditQuestion] = useState("");
+  const [editAnswer, setEditAnswer] = useState("");
+
+  const handleStartEdit = (idx: number, faq: FaqEntry) => {
+    setEditingIndex(idx);
+    setEditQuestion(faq.question);
+    setEditAnswer(faq.answer);
+  };
+  const handleSaveEdit = () => {
+    if (editingIndex === null || !preview) return;
+    const updated = preview.map((f, i) =>
+      i === editingIndex ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim() } : f
+    );
+    setPreview(updated);
+    setEditingIndex(null);
+  };
+  const handleDeleteFaq = (idx: number) => {
+    if (!preview) return;
+    setPreview(preview.filter((_, i) => i !== idx));
+  };
 
   const handleConvert = async () => {
-    if (text.trim().length < 10) {
+    if (text.trim().length < 50) {
       setError(t("knowledge.text_min_error"));
       return;
     }
@@ -680,18 +701,18 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
       {!preview && (
         <button
           onClick={handleConvert}
-          disabled={converting || text.trim().length < 10}
+          disabled={converting || text.trim().length < 50}
           style={{
             ...BTN_PRIMARY,
-            opacity: converting || text.trim().length < 10 ? 0.6 : 1,
-            cursor: converting || text.trim().length < 10 ? "not-allowed" : "pointer",
+            opacity: converting || text.trim().length < 50 ? 0.6 : 1,
+            cursor: converting || text.trim().length < 50 ? "not-allowed" : "pointer",
           }}
         >
           {converting ? t("knowledge.converting") : t("knowledge.convert")}
         </button>
       )}
 
-      {preview && preview.length > 0 && (
+      {preview && (
         <div>
           <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>
             {t("knowledge.preview_title", { n: preview.length })}
@@ -699,24 +720,76 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
           <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px" }}>
             {t("knowledge.preview_desc")}
           </p>
-          <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden", marginBottom: 16 }}>
-            {preview.map((faq, idx) => (
-              <div
-                key={idx}
-                style={{
-                  padding: "16px 18px",
-                  borderBottom: idx === preview.length - 1 ? "none" : "1px solid #111827",
-                }}
-              >
-                <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                  Q: {faq.question}
-                </p>
-                <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                  A: {faq.answer}
-                </p>
-              </div>
-            ))}
-          </div>
+          {preview.length === 0 ? (
+            <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 14, marginBottom: 16 }}>
+              {t("knowledge.preview_empty")}
+            </div>
+          ) : (
+            <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden", marginBottom: 16 }}>
+              {preview.map((faq, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    padding: "16px 18px",
+                    borderBottom: idx === preview.length - 1 ? "none" : "1px solid #111827",
+                  }}
+                >
+                  {editingIndex === idx ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <input
+                        value={editQuestion}
+                        onChange={(e) => setEditQuestion(e.target.value)}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#f9fafb", fontSize: 14 }}
+                      />
+                      <textarea
+                        value={editAnswer}
+                        onChange={(e) => setEditAnswer(e.target.value)}
+                        rows={3}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#9ca3af", fontSize: 13, resize: "vertical" }}
+                      />
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={handleSaveEdit}
+                          style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                        >
+                          {t("knowledge.preview_edit_save")}
+                        </button>
+                        <button
+                          onClick={() => setEditingIndex(null)}
+                          style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+                        >
+                          {t("common.cancel")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
+                        Q: {faq.question}
+                      </p>
+                      <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 10px", lineHeight: 1.5 }}>
+                        A: {faq.answer}
+                      </p>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => handleStartEdit(idx, faq)}
+                          style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #374151", background: "transparent", color: "#93c5fd", fontSize: 12, cursor: "pointer" }}
+                        >
+                          {t("knowledge.edit")}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteFaq(idx)}
+                          style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid rgba(248,113,113,0.3)", background: "transparent", color: "#fca5a5", fontSize: 12, cursor: "pointer" }}
+                        >
+                          {t("knowledge.preview_remove")}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 10 }}>
             <button
               onClick={() => setPreview(null)}
@@ -726,8 +799,8 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
             </button>
             <button
               onClick={handleCommit}
-              disabled={committing}
-              style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: committing ? 0.6 : 1 }}
+              disabled={committing || preview.length === 0}
+              style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: (committing || preview.length === 0) ? 0.6 : 1, cursor: (committing || preview.length === 0) ? "not-allowed" : "pointer" }}
             >
               {committing ? t("knowledge.committing") : t("knowledge.commit")}
             </button>
@@ -760,6 +833,30 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
   const [preview, setPreview] = useState<ScrapePreviewItem[] | null>(null);
   const [committing, setCommitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<{ url: string; idx: number } | null>(null);
+  const [editQuestion, setEditQuestion] = useState("");
+  const [editAnswer, setEditAnswer] = useState("");
+
+  const handleStartEdit = (url: string, idx: number, faq: FaqEntry) => {
+    setEditingKey({ url, idx });
+    setEditQuestion(faq.question);
+    setEditAnswer(faq.answer);
+  };
+  const handleSaveEdit = () => {
+    if (!editingKey || !preview) return;
+    setPreview(preview.map((item) =>
+      item.url === editingKey.url
+        ? { ...item, faqs: item.faqs.map((f, i) => i === editingKey.idx ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim() } : f) }
+        : item
+    ));
+    setEditingKey(null);
+  };
+  const handleDeleteFaq = (url: string, idx: number) => {
+    if (!preview) return;
+    setPreview(preview.map((item) =>
+      item.url === url ? { ...item, faqs: item.faqs.filter((_, i) => i !== idx) } : item
+    ));
+  };
 
   const handleFetch = async () => {
     const urlList = urls
@@ -932,6 +1029,10 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
                 <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 13 }}>
                   {t("knowledge.scrape_fetch_failed", { error: item.error })}
                 </div>
+              ) : item.faqs.length === 0 ? (
+                <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 13 }}>
+                  {t("knowledge.preview_empty")}
+                </div>
               ) : (
                 <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
                   {item.faqs.map((faq, idx) => (
@@ -942,12 +1043,58 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
                         borderBottom: idx === item.faqs.length - 1 ? "none" : "1px solid #111827",
                       }}
                     >
-                      <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                        Q: {faq.question}
-                      </p>
-                      <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                        A: {faq.answer}
-                      </p>
+                      {editingKey?.url === item.url && editingKey?.idx === idx ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <input
+                            value={editQuestion}
+                            onChange={(e) => setEditQuestion(e.target.value)}
+                            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#f9fafb", fontSize: 14 }}
+                          />
+                          <textarea
+                            value={editAnswer}
+                            onChange={(e) => setEditAnswer(e.target.value)}
+                            rows={3}
+                            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#9ca3af", fontSize: 13, resize: "vertical" }}
+                          />
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              onClick={handleSaveEdit}
+                              style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                            >
+                              {t("knowledge.preview_edit_save")}
+                            </button>
+                            <button
+                              onClick={() => setEditingKey(null)}
+                              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+                            >
+                              {t("common.cancel")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
+                            Q: {faq.question}
+                          </p>
+                          <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 10px", lineHeight: 1.5 }}>
+                            A: {faq.answer}
+                          </p>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              onClick={() => handleStartEdit(item.url, idx, faq)}
+                              style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #374151", background: "transparent", color: "#93c5fd", fontSize: 12, cursor: "pointer" }}
+                            >
+                              {t("knowledge.edit")}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteFaq(item.url, idx)}
+                              style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid rgba(248,113,113,0.3)", background: "transparent", color: "#fca5a5", fontSize: 12, cursor: "pointer" }}
+                            >
+                              {t("knowledge.preview_remove")}
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>

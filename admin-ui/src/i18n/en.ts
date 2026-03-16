@@ -91,7 +91,10 @@ const en: Record<TranslationKey, string> = {
   "knowledge.preview_desc": "Review the content and click Register.",
   "knowledge.committing": "⏳ Registering...",
   "knowledge.commit": "✅ Register this content",
-  "knowledge.text_min_error": "Please enter at least 10 characters",
+  "knowledge.text_min_error": "Please enter at least 50 characters",
+  "knowledge.preview_edit_save": "Save",
+  "knowledge.preview_remove": "Remove",
+  "knowledge.preview_empty": "No FAQs generated. Try editing the text and converting again.",
   "knowledge.committed": "✅ {n} FAQs registered to AI Knowledge!",
 
   // Scrape tab

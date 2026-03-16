@@ -89,7 +89,10 @@ const ja = {
   "knowledge.preview_desc": "内容を確認して「登録する」ボタンを押してください。",
   "knowledge.committing": "⏳ 登録中...",
   "knowledge.commit": "✅ この内容で登録する",
-  "knowledge.text_min_error": "10文字以上のテキストを入力してください",
+  "knowledge.text_min_error": "50文字以上のテキストを入力してください",
+  "knowledge.preview_edit_save": "保存",
+  "knowledge.preview_remove": "削除",
+  "knowledge.preview_empty": "FAQが0件です。テキストを変更して再変換してください。",
   "knowledge.committed": "✅ {n}件のFAQをAIナレッジに登録しました！",
 
   // Scrape tab
