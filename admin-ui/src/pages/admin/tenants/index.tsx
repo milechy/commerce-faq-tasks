@@ -51,10 +51,10 @@ async function fetchTenants(): Promise<Tenant[]> {
   return data.tenants ?? data.items ?? [];
 }
 
-async function createTenant(data: { name: string; slug: string; plan: string }): Promise<Tenant> {
+async function createTenant(data: { name: string; slug: string }): Promise<Tenant> {
   const res = await authFetch(`${API_BASE}/v1/admin/tenants`, {
     method: "POST",
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, plan: "starter" }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = (await res.json()) as { tenant?: Tenant } | Tenant;
@@ -81,7 +81,6 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
   const { t } = useLang();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [plan, setPlan] = useState<"starter" | "pro">("starter");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -94,7 +93,7 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
     setLoading(true);
     setError(null);
     try {
-      const tenant = await createTenant({ name: name.trim(), slug, plan });
+      const tenant = await createTenant({ name: name.trim(), slug });
       onSuccess(tenant);
     } catch {
       setError(t("tenants.create_error"));
@@ -202,33 +201,6 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
                 {t("tenants.slug_invalid")}
               </p>
             )}
-          </div>
-
-          <div style={{ marginBottom: 28 }}>
-            <label style={labelStyle}>{t("tenants.plan_label")}</label>
-            <div style={{ display: "flex", gap: 12 }}>
-              {(["starter", "pro"] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setPlan(p)}
-                  style={{
-                    flex: 1,
-                    padding: "12px 16px",
-                    minHeight: 44,
-                    borderRadius: 10,
-                    border: plan === p ? "1px solid #4ade80" : "1px solid #374151",
-                    background: plan === p ? "rgba(34,197,94,0.15)" : "rgba(0,0,0,0.3)",
-                    color: plan === p ? "#4ade80" : "#9ca3af",
-                    fontSize: 15,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  {p === "starter" ? "Starter" : "Pro"}
-                </button>
-              ))}
-            </div>
           </div>
 
           <div style={{ display: "flex", gap: 12, flexDirection: "column" }}>
@@ -491,20 +463,6 @@ export default function TenantsPage() {
                       }}
                     >
                       {tenant.status === "active" ? t("tenants.status_active") : t("tenants.status_inactive")}
-                    </span>
-                    {/* プランバッジ */}
-                    <span
-                      style={{
-                        padding: "2px 8px",
-                        borderRadius: 999,
-                        fontSize: 11,
-                        fontWeight: 700,
-                        background: tenant.plan === "pro" ? "rgba(59,130,246,0.15)" : "rgba(107,114,128,0.2)",
-                        color: tenant.plan === "pro" ? "#60a5fa" : "#9ca3af",
-                        border: `1px solid ${tenant.plan === "pro" ? "rgba(96,165,250,0.3)" : "rgba(107,114,128,0.3)"}`,
-                      }}
-                    >
-                      {tenant.plan === "pro" ? "Pro" : "Starter"}
                     </span>
                     {/* 課金バッジ */}
                     {(() => {

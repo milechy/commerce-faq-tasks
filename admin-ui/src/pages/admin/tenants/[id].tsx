@@ -76,14 +76,13 @@ async function fetchTenantDetail(tenantId: string): Promise<TenantDetail> {
 
 async function updateTenant(
   tenantId: string,
-  data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }
+  data: { name: string; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }
 ): Promise<TenantDetail> {
   // Backend expects is_active: boolean (not status string)
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
     method: "PATCH",
     body: JSON.stringify({
       name: data.name,
-      plan: data.plan,
       is_active: data.status === "active",
       allowed_origins: data.allowed_origins,
       system_prompt: data.system_prompt ?? "",
@@ -423,12 +422,11 @@ function SettingsTab({
 }: {
   tenant: TenantDetail;
   isSuperAdmin: boolean;
-  onSave: (data: { name: string; plan: "starter" | "pro"; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }) => Promise<void>;
+  onSave: (data: { name: string; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }) => Promise<void>;
   onBillingUpdate: (updated: TenantDetail) => void;
 }) {
   const { t } = useLang();
   const [name, setName] = useState(tenant.name);
-  const [plan, setPlan] = useState<"starter" | "pro">(tenant.plan);
   const [status, setStatus] = useState<"active" | "inactive">(tenant.status);
   const [originsText, setOriginsText] = useState((tenant.allowed_origins ?? []).join("\n"));
   const [systemPrompt, setSystemPrompt] = useState(tenant.system_prompt ?? "");
@@ -449,7 +447,7 @@ function SettingsTab({
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), plan, status, allowed_origins, system_prompt: systemPrompt });
+      await onSave({ name: name.trim(), status, allowed_origins, system_prompt: systemPrompt });
     } catch {
       setError(t("tenant_detail.save_error"));
     } finally {
@@ -485,33 +483,6 @@ function SettingsTab({
             style={INPUT_STYLE}
             required
           />
-        </div>
-
-        <div>
-          <label style={LABEL_STYLE}>{t("tenant_detail.settings_plan_label")}</label>
-          <div style={{ display: "flex", gap: 12 }}>
-            {(["starter", "pro"] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPlan(p)}
-                style={{
-                  flex: 1,
-                  padding: "12px 16px",
-                  minHeight: 44,
-                  borderRadius: 10,
-                  border: plan === p ? "1px solid #4ade80" : "1px solid #374151",
-                  background: plan === p ? "rgba(34,197,94,0.15)" : "rgba(0,0,0,0.3)",
-                  color: plan === p ? "#4ade80" : "#9ca3af",
-                  fontSize: 15,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                {p === "starter" ? "Starter" : "Pro"}
-              </button>
-            ))}
-          </div>
         </div>
 
         <div>
@@ -993,7 +964,6 @@ export default function TenantDetailPage() {
 
   const handleSaveSettings = async (data: {
     name: string;
-    plan: "starter" | "pro";
     status: "active" | "inactive";
     allowed_origins: string[];
     system_prompt?: string;
