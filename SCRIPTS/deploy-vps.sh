@@ -76,6 +76,11 @@ ssh "${VPS}" "
   SUPABASE_URL=\$(grep 'VITE_SUPABASE_URL=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2- | tr -d '\"' | tr -d \"'\")
   echo \"✅ env check passed (\${ENV_FILE}): \${SUPABASE_URL}\"
 
+  # ── .env.local を明示的にシェルへexport（Viteが自動で読まない環境対策）──
+  set -a
+  . \"./\${ENV_FILE}\"
+  set +a
+
   # ── stale Viteキャッシュをクリア（env変数の埋め込み漏れを防止）──
   rm -rf dist node_modules/.vite
 
@@ -83,22 +88,10 @@ ssh "${VPS}" "
   pnpm build
 
   # ── ビルド後検証: 実際のSupabase URLがバンドルに埋め込まれたか確認 ──
-  # 注: grep -c はファイルが複数あると「file:count」形式になり '0' 比較が壊れる。
-  #     grep -ql を使い終了コードで判定する（正しい方法）。
   if ! grep -ql \"\${SUPABASE_URL}\" dist/assets/*.js 2>/dev/null; then
-    echo '❌ ERROR: Supabase URLがバンドルに含まれていません。再ビルドを試みます...'
-    rm -rf dist node_modules/.vite
-    # フォールバック: env変数を明示的にシェルにエクスポートして再ビルド
-    set -a
-    . \"./\${ENV_FILE}\"
-    set +a
-    pnpm build
-    if ! grep -ql \"\${SUPABASE_URL}\" dist/assets/*.js 2>/dev/null; then
-      echo '❌ FATAL: 再ビルドも失敗しました。.env.localの内容を確認してください:'
-      cat \"\${ENV_FILE}\"
-      exit 1
-    fi
-    echo '✅ Admin UI rebuilt successfully (fallback build used)'
+    echo '❌ FATAL: Supabase URLがバンドルに含まれていません。.env.localの内容を確認してください:'
+    cat \"\${ENV_FILE}\"
+    exit 1
   fi
   echo '✅ Admin UI built with Supabase URL verified in bundle'
 "
