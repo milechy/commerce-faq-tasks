@@ -356,38 +356,6 @@ export default function AdminDashboard() {
             </div>
           </section>
 
-          {/* ナレッジギャップ警告バナー */}
-          {(stats?.gapCount ?? 0) > 0 && (
-            <section style={{ marginBottom: 24 }}>
-              <button
-                onClick={() => navigate("/admin/knowledge-gaps")}
-                style={{
-                  width: "100%",
-                  padding: "14px 20px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(234,179,8,0.4)",
-                  background: "rgba(234,179,8,0.08)",
-                  color: "#fbbf24",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  textAlign: "left",
-                }}
-              >
-                <span style={{ fontSize: 20 }}>⚠️</span>
-                <span>
-                  {t("knowledge_gap.dashboard_alert")} —{" "}
-                  <strong>{stats?.gapCount}</strong>
-                  {lang === "ja" ? `件の${t("knowledge_gap.count")}` : ` ${t("knowledge_gap.count")}`}
-                </span>
-                <span style={{ marginLeft: "auto", fontSize: 18, opacity: 0.7 }}>→</span>
-              </button>
-            </section>
-          )}
-
           <section style={{ marginBottom: 32 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
               {t("dashboard.quick_actions")}
