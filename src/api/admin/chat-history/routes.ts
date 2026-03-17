@@ -75,15 +75,17 @@ export function registerChatHistoryRoutes(app: Express): void {
       const isSuperAdmin: boolean =
         (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
-      // テナント検証: super_admin は query ?tenant=xxx で指定、client_admin は自テナント
-      const tenantId = isSuperAdmin
-        ? ((req.query["tenant"] as string | undefined) ?? jwtTenantId)
+      // テナント検証:
+      //   super_admin: ?tenant=xxx があればそれを使う。なければ undefined (全セッション閲覧可)
+      //   client_admin: JWT 由来の自テナントのみ必須
+      const tenantId: string | undefined = isSuperAdmin
+        ? ((req.query["tenant"] as string | undefined) || undefined)
         : jwtTenantId;
 
       if (!sessionDbId) {
         return res.status(400).json({ error: "sessionId が必要です" });
       }
-      if (!tenantId) {
+      if (!isSuperAdmin && !tenantId) {
         return res.status(400).json({ error: "tenant が解決できません" });
       }
 

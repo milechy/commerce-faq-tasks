@@ -137,8 +137,8 @@ export async function getSessions(
 }
 
 export interface MessageListParams {
-  sessionDbId: string;  // chat_sessions.id (UUID)
-  tenantId: string;     // テナント検証用
+  sessionDbId: string;       // chat_sessions.id (UUID)
+  tenantId?: string;         // テナント検証用 (undefined = super_admin 無制限)
 }
 
 export interface ChatHistoryMessage {
@@ -158,19 +158,30 @@ export async function getMessages(
 ): Promise<ChatHistoryMessage[]> {
   const pool = getPool();
 
-  // テナント所有権を検証
-  const sessionResult = await pool.query<{ id: string }>(
-    `SELECT id FROM chat_sessions WHERE id = $1 AND tenant_id = $2`,
-    [params.sessionDbId, params.tenantId],
-  );
-  if (sessionResult.rows.length === 0) return [];
+  // テナント所有権を検証 (tenantId が undefined = super_admin → tenant チェック省略)
+  let verifiedSessionId: string;
+  if (params.tenantId) {
+    const sessionResult = await pool.query<{ id: string }>(
+      `SELECT id FROM chat_sessions WHERE id = $1 AND tenant_id = $2`,
+      [params.sessionDbId, params.tenantId],
+    );
+    if (sessionResult.rows.length === 0) return [];
+    verifiedSessionId = sessionResult.rows[0].id;
+  } else {
+    const sessionResult = await pool.query<{ id: string }>(
+      `SELECT id FROM chat_sessions WHERE id = $1`,
+      [params.sessionDbId],
+    );
+    if (sessionResult.rows.length === 0) return [];
+    verifiedSessionId = sessionResult.rows[0].id;
+  }
 
   const msgResult = await pool.query<ChatHistoryMessage>(
     `SELECT id, role, content, metadata, created_at
      FROM chat_messages
      WHERE session_id = $1
      ORDER BY created_at ASC`,
-    [params.sessionDbId],
+    [verifiedSessionId],
   );
 
   return msgResult.rows;
