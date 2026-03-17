@@ -145,6 +145,7 @@ export async function runSearchAgent(
     query: q,
     items: rerankResult.items,
     maxChars: 450,
+    tenantId: effectiveTenantId,
   });
   const tSynth1 = performance.now();
   steps.push({
