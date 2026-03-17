@@ -198,6 +198,7 @@ export async function runDialogTurn(
         false,
       clarifyingQuestions:
         orchestrated.clarifyingQuestions ?? multiStepPlan.clarifyingQuestions,
+      gapSignal: orchestrated.gapSignal,
     },
   };
 

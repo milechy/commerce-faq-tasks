@@ -25,6 +25,7 @@ export interface OrchestratorResult {
   needsClarification: boolean
   clarifyingQuestions?: string[]
   final: boolean
+  gapSignal?: { hitCount: number; topScore: number }
 }
 
 /**
@@ -104,5 +105,6 @@ export async function runDialogOrchestrator(
     ],
     needsClarification: false,
     final: true,
+    gapSignal: searchResult.gapSignal,
   }
 }

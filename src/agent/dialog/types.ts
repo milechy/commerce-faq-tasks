@@ -86,6 +86,8 @@ export interface DialogTurnMeta {
   needsClarification?: boolean;
   clarifyingQuestions?: string[];
   orchestrationSteps?: OrchestratorStep[];
+  /** ナレッジギャップ検出シグナル */
+  gapSignal?: { hitCount: number; topScore: number };
 }
 
 export interface DialogTurnResult {

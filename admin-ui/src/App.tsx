@@ -16,6 +16,7 @@ import ChatTestPage from "./pages/admin/chat-test/index";
 import ChatHistoryPage from "./pages/admin/chat-history/index";
 import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
+import KnowledgeGapsPage from "./pages/admin/knowledge-gaps/index";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -107,6 +108,9 @@ export default function App() {
 
         {/* チューニングルール */}
         <Route path="/admin/tuning" element={<RequireAuth><TuningPage /></RequireAuth>} />
+
+        {/* ナレッジギャップ */}
+        <Route path="/admin/knowledge-gaps" element={<RequireAuth><KnowledgeGapsPage /></RequireAuth>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />

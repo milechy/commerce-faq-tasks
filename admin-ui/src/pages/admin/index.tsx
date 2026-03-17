@@ -11,6 +11,7 @@ interface DashboardStats {
   bookCount: number;
   publishedFaqCount: number;
   lastUpdated: string | null;
+  gapCount: number;
 }
 
 
@@ -83,15 +84,21 @@ export default function AdminDashboard() {
           ? `${API_BASE}/v1/admin/knowledge?tenant=${effectiveTenantId}`
           : `${API_BASE}/v1/admin/knowledge`;
 
-        const [faqRes, bookRes] = await Promise.allSettled([
+        const gapCountUrl = effectiveTenantId
+          ? `${API_BASE}/v1/admin/knowledge/gaps/count?tenant=${effectiveTenantId}`
+          : `${API_BASE}/v1/admin/knowledge/gaps/count`;
+
+        const [faqRes, bookRes, gapRes] = await Promise.allSettled([
           authFetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`),
           authFetch(knowledgeUrl),
+          authFetch(gapCountUrl),
         ]);
 
         let faqCount = 0;
         let publishedFaqCount = 0;
         let bookCount = 0;
         let lastUpdated: string | null = null;
+        let gapCount = 0;
 
         if (faqRes.status === "fulfilled" && faqRes.value.ok) {
           const data = (await faqRes.value.json()) as {
@@ -114,7 +121,12 @@ export default function AdminDashboard() {
           bookCount = data.books?.length ?? 0;
         }
 
-        setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated });
+        if (gapRes.status === "fulfilled" && gapRes.value.ok) {
+          const data = (await gapRes.value.json()) as { count: number };
+          gapCount = data.count ?? 0;
+        }
+
+        setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated, gapCount });
       } catch {
         setError(t("dashboard.error"));
       } finally {
@@ -344,6 +356,38 @@ export default function AdminDashboard() {
             </div>
           </section>
 
+          {/* ナレッジギャップ警告バナー */}
+          {(stats?.gapCount ?? 0) > 0 && (
+            <section style={{ marginBottom: 24 }}>
+              <button
+                onClick={() => navigate("/admin/knowledge-gaps")}
+                style={{
+                  width: "100%",
+                  padding: "14px 20px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(234,179,8,0.4)",
+                  background: "rgba(234,179,8,0.08)",
+                  color: "#fbbf24",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ fontSize: 20 }}>⚠️</span>
+                <span>
+                  {t("knowledge_gap.dashboard_alert")} —{" "}
+                  <strong>{stats?.gapCount}</strong>
+                  {lang === "ja" ? `件の${t("knowledge_gap.count")}` : ` ${t("knowledge_gap.count")}`}
+                </span>
+                <span style={{ marginLeft: "auto", fontSize: 18, opacity: 0.7 }}>→</span>
+              </button>
+            </section>
+          )}
+
           <section style={{ marginBottom: 32 }}>
             <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
               {t("dashboard.quick_actions")}
@@ -516,6 +560,53 @@ export default function AdminDashboard() {
               >
                 <span style={{ fontSize: 22 }}>🎛️</span>
                 {t("dashboard.tuning_rules")}
+              </button>
+
+              <button
+                onClick={() => navigate("/admin/knowledge-gaps")}
+                style={{
+                  flex: "1 1 200px",
+                  padding: "18px 20px",
+                  minHeight: 56,
+                  borderRadius: 12,
+                  border: (stats?.gapCount ?? 0) > 0
+                    ? "1px solid rgba(234,179,8,0.4)"
+                    : "1px solid #1f2937",
+                  background: (stats?.gapCount ?? 0) > 0
+                    ? "rgba(234,179,8,0.06)"
+                    : "rgba(15,23,42,0.8)",
+                  color: (stats?.gapCount ?? 0) > 0 ? "#fbbf24" : "#e5e7eb",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  transition: "border-color 0.15s",
+                  position: "relative",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor =
+                    (stats?.gapCount ?? 0) > 0 ? "rgba(234,179,8,0.4)" : "#1f2937";
+                }}
+              >
+                <span style={{ fontSize: 22 }}>⚠️</span>
+                <span>{t("dashboard.knowledge_gaps")}</span>
+                {(stats?.gapCount ?? 0) > 0 && (
+                  <span style={{
+                    marginLeft: "auto",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: "rgba(234,179,8,0.25)",
+                    border: "1px solid rgba(234,179,8,0.4)",
+                    color: "#fbbf24",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}>
+                    {stats?.gapCount}
+                  </span>
+                )}
               </button>
             </div>
           </section>

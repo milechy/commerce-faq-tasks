@@ -406,6 +406,28 @@ const ja = {
   "tuning.save_error": "保存に失敗しました。もう一度お試しください 🙏",
   "tuning.saved": "✅ ルールを更新しました",
   "tuning.added": "✅ 新しいルールを追加しました",
+
+  // Knowledge gaps
+  "knowledge_gap.title": "未回答の質問",
+  "knowledge_gap.subtitle": "AIが回答できなかった質問を確認し、ナレッジを追加して改善しましょう",
+  "knowledge_gap.tab_title": "⚠️ 未回答の質問",
+  "knowledge_gap.count": "件の未回答",
+  "knowledge_gap.add_text": "📝 テキストでナレッジ追加",
+  "knowledge_gap.add_url": "🔗 URLで追加",
+  "knowledge_gap.dismiss": "✖ 無視",
+  "knowledge_gap.resolved": "✅ 解決済み",
+  "knowledge_gap.dismissed": "無視済み",
+  "knowledge_gap.rag_hits": "RAGヒット",
+  "knowledge_gap.no_gaps": "未回答の質問はありません",
+  "knowledge_gap.loading": "読み込んでいます...",
+  "knowledge_gap.load_error": "読み込みに失敗しました。もう一度お試しください 🙏",
+  "knowledge_gap.dashboard_alert": "回答できなかった質問があります",
+  "knowledge_gap.back": "← ダッシュボードに戻る",
+  "knowledge_gap.status_open": "未解決",
+  "knowledge_gap.status_filter": "表示:",
+  "knowledge_gap.dismiss_confirm": "この質問を無視しますか？",
+  "knowledge_gap.dismiss_error": "操作に失敗しました。もう一度お試しください 🙏",
+  "dashboard.knowledge_gaps": "⚠️ 未回答の質問を確認する",
 } as const;
 
 export type TranslationKey = keyof typeof ja;

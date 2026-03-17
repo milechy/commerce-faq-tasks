@@ -16,6 +16,8 @@ export interface SynthesisInput {
 
 export interface SynthesisOutput {
   answer: string;
+  /** ナレッジギャップ検出用シグナル */
+  gapSignal: { hitCount: number; topScore: number };
 }
 
 const DEFAULT_MAX_CHARS = 420;
@@ -51,6 +53,12 @@ function matchesTriggerPattern(query: string, triggerPattern: string): boolean {
 export async function synthesizeAnswer(input: SynthesisInput): Promise<SynthesisOutput> {
   const { query, items, maxChars = DEFAULT_MAX_CHARS, tenantId } = input;
 
+  // ギャップ検出用シグナル（常に計算）
+  const gapSignal = {
+    hitCount: items.length,
+    topScore: (items[0] as any)?.score ?? 0,
+  };
+
   // チューニングルールを取得（tenantId がある場合のみ）
   const tuningRules = tenantId
     ? await getActiveRulesForTenant(tenantId).catch(() => [])
@@ -66,14 +74,14 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     const msg =
       'ご質問の内容に完全に一致するFAQは見つかりませんでした。' +
       'キーワード（商品名・機能名・「返品」「送料」など）を含めて、もう一度お試しください。';
-    return { answer: truncate(msg, maxChars) };
+    return { answer: truncate(msg, maxChars), gapSignal };
   }
 
   // Groq APIキーがなければ即フォールバック（FAQ ヒットありの場合のみ）
   if (!process.env.GROQ_API_KEY) {
     if (!items.length) {
       // FAQ なし + チューニングルールあり だが LLM なし → ルール本文を直接返す
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars) };
+      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal };
     }
     return fallbackSynthesize(input);
   }
@@ -108,13 +116,13 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       tag: 'synthesis',
     });
 
-    return { answer: truncate(raw.trim(), maxChars) };
+    return { answer: truncate(raw.trim(), maxChars), gapSignal };
   } catch {
     // フォールバック: 箇条書き
     if (!items.length) {
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars) };
+      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal };
     }
-    return fallbackSynthesize(input);
+    return { ...fallbackSynthesize(input), gapSignal };
   }
 }
 
@@ -134,7 +142,10 @@ function fallbackSynthesize(input: SynthesisInput): SynthesisOutput {
 
   answer = truncate(answer, maxChars);
 
-  return { answer };
+  return {
+    answer,
+    gapSignal: { hitCount: items.length, topScore: (items[0] as any)?.score ?? 0 },
+  };
 }
 
 function truncate(s: string, maxChars: number): string {

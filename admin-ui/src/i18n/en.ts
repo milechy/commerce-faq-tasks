@@ -408,6 +408,28 @@ const en: Record<TranslationKey, string> = {
   "tuning.save_error": "Failed to save. Please try again 🙏",
   "tuning.saved": "✅ Rule updated",
   "tuning.added": "✅ New rule added",
+
+  // Knowledge gaps
+  "knowledge_gap.title": "Unanswered Questions",
+  "knowledge_gap.subtitle": "Review questions the AI couldn't answer and add knowledge to improve responses",
+  "knowledge_gap.tab_title": "⚠️ Unanswered questions",
+  "knowledge_gap.count": "unanswered",
+  "knowledge_gap.add_text": "📝 Add knowledge (text)",
+  "knowledge_gap.add_url": "🔗 Add from URL",
+  "knowledge_gap.dismiss": "✖ Dismiss",
+  "knowledge_gap.resolved": "✅ Resolved",
+  "knowledge_gap.dismissed": "Dismissed",
+  "knowledge_gap.rag_hits": "RAG hits",
+  "knowledge_gap.no_gaps": "No unanswered questions",
+  "knowledge_gap.loading": "Loading...",
+  "knowledge_gap.load_error": "Failed to load. Please try again 🙏",
+  "knowledge_gap.dashboard_alert": "There are unanswered questions",
+  "knowledge_gap.back": "← Back to dashboard",
+  "knowledge_gap.status_open": "Open",
+  "knowledge_gap.status_filter": "Show:",
+  "knowledge_gap.dismiss_confirm": "Dismiss this question?",
+  "knowledge_gap.dismiss_error": "Operation failed. Please try again 🙏",
+  "dashboard.knowledge_gaps": "⚠️ Review unanswered questions",
 };
 
 export default en;

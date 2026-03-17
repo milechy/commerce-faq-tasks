@@ -56,6 +56,7 @@ export interface AgentSearchResponse {
     totalMs?: number;
     rerankEngine?: string;
   };
+  gapSignal?: { hitCount: number; topScore: number };
   debug: AgentDebug;
 }
 

@@ -8,9 +8,33 @@ import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts
 import { t } from "../i18n/messages";
 import type { Lang } from "../i18n/messages";
 import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
+import { saveKnowledgeGap } from "../admin/knowledge/knowledgeGapRepository";
 
 // チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
 const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? "llama-3.3-70b-versatile";
+
+// ---------------------------------------------------------------------------
+// ナレッジギャップ検出
+// ---------------------------------------------------------------------------
+
+/** RAGシグナルに基づくギャップ判定 */
+function isKnowledgeGap(gapSignal?: { hitCount: number; topScore: number }): boolean {
+  if (!gapSignal) return false;
+  if (gapSignal.hitCount === 0) return true;
+  if (gapSignal.topScore < 0.3) return true;
+  return false;
+}
+
+/** LLM回答文言に基づくギャップ判定（フォールバック） */
+const GAP_PHRASES = [
+  "記載がありません", "お答えできません", "情報がありません",
+  "見つかりませんでした", "FAQに含まれていません",
+  "not found", "no information", "cannot answer",
+];
+
+function isResponseGap(content: string): boolean {
+  return GAP_PHRASES.some((phrase) => content.includes(phrase));
+}
 
 // ---------------------------------------------------------------------------
 // Zod スキーマ
@@ -180,6 +204,20 @@ export function createChatHandler(logger: Logger) {
 
       res.status(200).json(response);
 
+      // Phase38+: ナレッジギャップ検出 + 保存（fire-and-forget）
+      const gapSignal = result.meta?.gapSignal;
+      if (isKnowledgeGap(gapSignal) || isResponseGap(content)) {
+        saveKnowledgeGap({
+          tenantId,
+          userQuestion: body.message,
+          sessionId,
+          ragHitCount: gapSignal?.hitCount ?? 0,
+          ragTopScore: gapSignal?.topScore ?? 0,
+        }).catch((err) =>
+          logger.warn({ err }, "[knowledge-gap] save failed")
+        );
+      }
+
       // Phase38: アシスタント応答をDBに保存（fire-and-forget、レスポンス後）
       saveMessage({
         tenantId,
@@ -189,6 +227,9 @@ export function createChatHandler(logger: Logger) {
         metadata: {
           model: (result as any).meta?.route,
           ragStats: (result as any).meta?.ragStats,
+          rag_hit_count: gapSignal?.hitCount ?? 0,
+          rag_top_score: gapSignal?.topScore ?? 0,
+          knowledge_gap: isKnowledgeGap(gapSignal) || isResponseGap(content),
         },
       }).catch((err) =>
         logger.warn({ err }, "[chat-history] save assistant message failed")
