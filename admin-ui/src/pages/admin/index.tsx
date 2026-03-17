@@ -12,6 +12,7 @@ interface DashboardStats {
   publishedFaqCount: number;
   lastUpdated: string | null;
   gapCount: number;
+  feedbackUnread: number;
 }
 
 
@@ -88,10 +89,11 @@ export default function AdminDashboard() {
           ? `${API_BASE}/v1/admin/knowledge/gaps/count?tenant=${effectiveTenantId}`
           : `${API_BASE}/v1/admin/knowledge/gaps/count`;
 
-        const [faqRes, bookRes, gapRes] = await Promise.allSettled([
+        const [faqRes, bookRes, gapRes, feedbackRes] = await Promise.allSettled([
           authFetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`),
           authFetch(knowledgeUrl),
           authFetch(gapCountUrl),
+          authFetch(`${API_BASE}/v1/admin/feedback/unread-count`),
         ]);
 
         let faqCount = 0;
@@ -99,6 +101,7 @@ export default function AdminDashboard() {
         let bookCount = 0;
         let lastUpdated: string | null = null;
         let gapCount = 0;
+        let feedbackUnread = 0;
 
         if (faqRes.status === "fulfilled" && faqRes.value.ok) {
           const data = (await faqRes.value.json()) as {
@@ -126,7 +129,12 @@ export default function AdminDashboard() {
           gapCount = data.count ?? 0;
         }
 
-        setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated, gapCount });
+        if (feedbackRes.status === "fulfilled" && feedbackRes.value.ok) {
+          const data = (await feedbackRes.value.json()) as { count: number };
+          feedbackUnread = data.count ?? 0;
+        }
+
+        setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated, gapCount, feedbackUnread });
       } catch {
         setError(t("dashboard.error"));
       } finally {
@@ -576,6 +584,55 @@ export default function AdminDashboard() {
                   </span>
                 )}
               </button>
+
+              <SuperAdminOnly>
+                <button
+                  onClick={() => navigate("/admin/feedback")}
+                  style={{
+                    flex: "1 1 200px",
+                    padding: "18px 20px",
+                    minHeight: 56,
+                    borderRadius: 12,
+                    border: (stats?.feedbackUnread ?? 0) > 0
+                      ? "1px solid rgba(59,130,246,0.4)"
+                      : "1px solid #1f2937",
+                    background: (stats?.feedbackUnread ?? 0) > 0
+                      ? "rgba(59,130,246,0.06)"
+                      : "rgba(15,23,42,0.8)",
+                    color: (stats?.feedbackUnread ?? 0) > 0 ? "#60a5fa" : "#e5e7eb",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    transition: "border-color 0.15s",
+                    position: "relative",
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.borderColor =
+                      (stats?.feedbackUnread ?? 0) > 0 ? "rgba(59,130,246,0.4)" : "#1f2937";
+                  }}
+                >
+                  <span style={{ fontSize: 22 }}>📬</span>
+                  <span>{t("dashboard.feedback")}</span>
+                  {(stats?.feedbackUnread ?? 0) > 0 && (
+                    <span style={{
+                      marginLeft: "auto",
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: "rgba(59,130,246,0.25)",
+                      border: "1px solid rgba(59,130,246,0.4)",
+                      color: "#60a5fa",
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}>
+                      {stats?.feedbackUnread}
+                    </span>
+                  )}
+                </button>
+              </SuperAdminOnly>
             </div>
           </section>
 

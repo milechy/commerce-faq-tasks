@@ -2,7 +2,7 @@ import React from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
-import { AuthProvider } from "./auth/useAuth";
+import { AuthProvider, useAuth } from "./auth/useAuth";
 import { RequireAuth, SuperAdminRoute } from "./components/RoleGuard";
 import Login from "./pages/Login";
 import AdminDashboard from "./pages/admin/index";
@@ -17,6 +17,8 @@ import ChatHistoryPage from "./pages/admin/chat-history/index";
 import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
 import KnowledgeGapsPage from "./pages/admin/knowledge-gaps/index";
+import FeedbackPage from "./pages/admin/feedback/index";
+import FeedbackChat from "./components/feedback/FeedbackChat";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -60,17 +62,13 @@ function ConfigErrorScreen() {
   );
 }
 
-export default function App() {
-  // Supabase 未設定時はエラー画面を返す（真っ黒にならない）
-  if (!supabaseConfigured) {
-    return <ConfigErrorScreen />;
-  }
-
+function AppInner() {
+  const { user, isClientAdmin } = useAuth();
+  const tenantId = user?.tenantId ?? "";
   return (
-    <LangProvider>
-    <BrowserRouter>
-      <AuthProvider>
+    <>
       <Routes>
+
         {/* ログイン画面 */}
         <Route path="/login" element={<Login />} />
 
@@ -112,6 +110,9 @@ export default function App() {
         {/* ナレッジギャップ */}
         <Route path="/admin/knowledge-gaps" element={<RequireAuth><KnowledgeGapsPage /></RequireAuth>} />
 
+        {/* フィードバック — Super Admin専用 */}
+        <Route path="/admin/feedback" element={<SuperAdminRoute><FeedbackPage /></SuperAdminRoute>} />
+
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />
         <Route path="/faqs/*" element={<Navigate to="/admin" replace />} />
@@ -119,6 +120,23 @@ export default function App() {
         {/* それ以外のパスは管理ダッシュボードへ */}
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
+      {/* Client Admin用フローティングフィードバックチャット */}
+      {isClientAdmin && tenantId && <FeedbackChat tenantId={tenantId} />}
+    </>
+  );
+}
+
+export default function App() {
+  // Supabase 未設定時はエラー画面を返す（真っ黒にならない）
+  if (!supabaseConfigured) {
+    return <ConfigErrorScreen />;
+  }
+
+  return (
+    <LangProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppInner />
       </AuthProvider>
     </BrowserRouter>
     </LangProvider>

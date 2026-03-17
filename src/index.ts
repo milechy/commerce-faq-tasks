@@ -38,6 +38,7 @@ import {
 } from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerKnowledgeGapRoutes } from "./api/admin/knowledge/knowledgeGapRoutes";
+import { registerFeedbackRoutes } from "./api/admin/feedback/feedbackRoutes";
 import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
 import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
@@ -534,6 +535,8 @@ registerChatHistoryRoutes(app);
 registerTuningRoutes(app);
 // Phase38+: ナレッジギャップ検出 API
 registerKnowledgeGapRoutes(app);
+// フィードバックチャット API
+registerFeedbackRoutes(app);
 
 async function startServer() {
   app.listen(port, () => {

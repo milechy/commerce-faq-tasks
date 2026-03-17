@@ -432,6 +432,22 @@ const en: Record<TranslationKey, string> = {
   "knowledge_gap.all_tenants": "All tenants",
   "knowledge_gap.filter_tenant": "Filter by tenant",
   "dashboard.knowledge_gaps": "Review unanswered questions",
+  "dashboard.feedback": "View feedback",
+
+  // Feedback chat
+  "feedback.title": "Feedback",
+  "feedback.support_button": "Support",
+  "feedback.placeholder": "Share your feedback or questions",
+  "feedback.send": "Send",
+  "feedback.no_messages": "No messages yet",
+  "feedback.unread_count": "unread",
+  "feedback.threads": "Threads by tenant",
+  "feedback.mark_read": "Mark as read",
+  "feedback.sending": "Sending...",
+  "feedback.load_error": "Failed to load",
+  "feedback.send_error": "Failed to send",
+  "feedback.select_tenant": "Select a tenant",
+  "feedback.back": "← Back to dashboard",
 };
 
 export default en;

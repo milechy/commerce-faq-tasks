@@ -430,6 +430,22 @@ const ja = {
   "knowledge_gap.all_tenants": "全テナント",
   "knowledge_gap.filter_tenant": "テナントで絞り込み",
   "dashboard.knowledge_gaps": "未回答の質問を確認する",
+  "dashboard.feedback": "フィードバックを確認する",
+
+  // Feedback chat
+  "feedback.title": "フィードバック",
+  "feedback.support_button": "サポート",
+  "feedback.placeholder": "改善要望やご質問をどうぞ",
+  "feedback.send": "送信",
+  "feedback.no_messages": "メッセージはまだありません",
+  "feedback.unread_count": "件の未読",
+  "feedback.threads": "テナント別スレッド",
+  "feedback.mark_read": "既読にする",
+  "feedback.sending": "送信中...",
+  "feedback.load_error": "読み込みに失敗しました",
+  "feedback.send_error": "送信に失敗しました",
+  "feedback.select_tenant": "テナントを選択してください",
+  "feedback.back": "← ダッシュボードに戻る",
 } as const;
 
 export type TranslationKey = keyof typeof ja;
