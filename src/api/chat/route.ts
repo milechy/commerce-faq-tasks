@@ -9,6 +9,7 @@ import { t } from "../i18n/messages";
 import type { Lang } from "../i18n/messages";
 import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
 import { saveKnowledgeGap } from "../admin/knowledge/knowledgeGapRepository";
+import { sanitizeInput, sanitizeOutput, blockReasonToMessage } from "../../lib/security/inputSanitizer";
 
 // チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
 const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? "llama-3.3-70b-versatile";
@@ -104,6 +105,18 @@ export function createChatHandler(logger: Logger) {
 
     const body = parsed.data;
 
+    // セキュリティ: 入力サニタイズ（URL拒否 + XSS防止）
+    const inputCheck = sanitizeInput(body.message);
+    if (!inputCheck.safe) {
+      res.status(400).json({
+        data: {
+          role: "assistant",
+          content: blockReasonToMessage(inputCheck.reason ?? "blocked_content", lang),
+        },
+      });
+      return;
+    }
+
     // Phase38: セッションIDを確定（クライアント指定 → conversationId → 新規生成）
     const sessionId: string =
       body.sessionId ?? body.conversationId ?? randomUUID();
@@ -151,7 +164,7 @@ export function createChatHandler(logger: Logger) {
 
       let content: string;
       if (result.answer) {
-        content = result.answer;
+        content = sanitizeOutput(result.answer);
       } else if (
         result.needsClarification &&
         result.clarifyingQuestions &&

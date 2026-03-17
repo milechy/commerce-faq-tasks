@@ -11,6 +11,8 @@ import {
   markSuperAdminMessagesAsRead,
   getUnreadCount,
 } from "./feedbackRepository";
+import { generateFeedbackReply } from "./feedbackAI";
+import { sanitizeInput, blockReasonToMessage } from "../../../lib/security/inputSanitizer";
 
 const sendSchema = z.object({
   content: z.string().min(1).max(4000),
@@ -96,6 +98,14 @@ export function registerFeedbackRoutes(app: Express): void {
 
     const { content, tenant_id } = parsed.data;
 
+    // 入力サニタイズ（URL拒否 + XSS防止）
+    const inputCheck = sanitizeInput(content);
+    if (!inputCheck.safe) {
+      return res.status(400).json({
+        error: blockReasonToMessage(inputCheck.reason ?? "blocked_content"),
+      });
+    }
+
     // tenant_id の解決
     const resolvedTenantId = isSuperAdmin
       ? (tenant_id ?? "")
@@ -119,6 +129,23 @@ export function registerFeedbackRoutes(app: Express): void {
         senderEmail: email || undefined,
         content,
       });
+
+      // client_admin のメッセージに対してLLM自動返答（fire-and-forget）
+      if (!isSuperAdmin) {
+        generateFeedbackReply(content, resolvedTenantId)
+          .then(async (aiReply) => {
+            if (aiReply) {
+              await sendMessage({
+                tenantId: resolvedTenantId,
+                senderRole: "super_admin",
+                senderEmail: "ai-assistant",
+                content: aiReply,
+              });
+            }
+          })
+          .catch((err) => console.warn("[feedback] AI reply failed:", err));
+      }
+
       return res.status(201).json(msg);
     } catch (err) {
       console.warn("[POST /v1/admin/feedback]", err);
