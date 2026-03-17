@@ -1,7 +1,7 @@
 // admin-ui/src/pages/admin/knowledge-gaps/index.tsx
 // Phase38+: ナレッジギャップ管理ページ
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
@@ -34,8 +34,9 @@ export default function KnowledgeGapsPage() {
   const { t, lang } = useLang();
   const { user, isSuperAdmin } = useAuth();
 
-  const [gaps, setGaps] = useState<KnowledgeGap[]>([]);
-  const [total, setTotal] = useState(0);
+  // allGaps: テナントフィルターなしの全ギャップ（Super Admin用）
+  // clientGaps: Client Admin用（サーバー側テナント絞り込み済み）
+  const [allGaps, setAllGaps] = useState<KnowledgeGap[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
@@ -46,13 +47,10 @@ export default function KnowledgeGapsPage() {
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
 
-  // クエリパラメータからテナントを取得（super_admin）
-  const queryTenant = new URLSearchParams(location.search).get("tenant") ?? undefined;
-  const effectiveTenant = isSuperAdmin
-    ? (selectedTenant || queryTenant || undefined)
-    : tenantId;
+  // クエリパラメータからテナント初期値を取得（super_admin）
+  const queryTenant = new URLSearchParams(location.search).get("tenant") ?? "";
 
-  // Super Admin用: テナント一覧を取得
+  // Super Admin用: テナント名一覧を取得（名前解決のみに使用）
   useEffect(() => {
     if (!isSuperAdmin) return;
     authFetch(`${API_BASE}/v1/admin/tenants`)
@@ -61,23 +59,47 @@ export default function KnowledgeGapsPage() {
       .catch(() => {/* テナント取得失敗は無視 */});
   }, [isSuperAdmin]);
 
+  // クエリパラメータで初期テナントを設定
+  useEffect(() => {
+    if (queryTenant) setSelectedTenant(queryTenant);
+  }, [queryTenant]);
+
   const fetchGaps = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ status: statusFilter, limit: "50" });
-      if (effectiveTenant) params.set("tenant", effectiveTenant);
+      const params = new URLSearchParams({ status: statusFilter, limit: "200" });
+      // Super Admin: テナントフィルターなしで全取得 → クライアント側で絞り込む
+      // Client Admin: サーバー側でテナント絞り込み
+      if (!isSuperAdmin && tenantId) params.set("tenant", tenantId);
       const res = await authFetch(`${API_BASE}/v1/admin/knowledge/gaps?${params}`);
       if (!res.ok) throw new Error("fetch failed");
       const data = await res.json() as { gaps: KnowledgeGap[]; total: number };
-      setGaps(data.gaps);
-      setTotal(data.total);
+      setAllGaps(data.gaps);
     } catch {
       setError(t("knowledge_gap.load_error"));
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, effectiveTenant, t]);
+  }, [statusFilter, isSuperAdmin, tenantId, t]);
+
+  // Super Admin: allGapsからギャップが存在するテナントのみ抽出
+  const tenantsWithGaps = useMemo(() => {
+    if (!isSuperAdmin) return [];
+    const ids = [...new Set(allGaps.map((g) => g.tenant_id))];
+    return ids.map((id) => {
+      const found = tenants.find((t) => t.id === id);
+      return { id, name: found?.name ?? "", slug: found?.slug ?? id };
+    }).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  }, [allGaps, tenants, isSuperAdmin]);
+
+  // 表示用ギャップ: Super Adminはクライアント側でテナント絞り込み
+  const gaps = useMemo(() => {
+    if (!isSuperAdmin || !selectedTenant) return allGaps;
+    return allGaps.filter((g) => g.tenant_id === selectedTenant);
+  }, [allGaps, selectedTenant, isSuperAdmin]);
+
+  const total = gaps.length;
 
   useEffect(() => {
     void fetchGaps();
@@ -92,8 +114,7 @@ export default function KnowledgeGapsPage() {
         body: JSON.stringify({ status: "dismissed" }),
       });
       if (!res.ok) throw new Error("dismiss failed");
-      setGaps((prev) => prev.filter((g) => g.id !== id));
-      setTotal((prev) => Math.max(0, prev - 1));
+      setAllGaps((prev) => prev.filter((g) => g.id !== id));
     } catch {
       alert(t("knowledge_gap.dismiss_error"));
     } finally {
@@ -130,7 +151,7 @@ export default function KnowledgeGapsPage() {
     });
 
   const tenantName = (id: string) => {
-    const found = tenants.find((t) => t.id === id);
+    const found = tenants.find((ten) => ten.id === id);
     return found?.name ?? id;
   };
 
@@ -219,7 +240,7 @@ export default function KnowledgeGapsPage() {
               style={SELECT_STYLE}
             >
               <option value="">{t("knowledge_gap.all_tenants")}</option>
-              {tenants.map((ten) => (
+              {tenantsWithGaps.map((ten) => (
                 <option key={ten.id} value={ten.id}>{ten.name || ten.slug || ten.id}</option>
               ))}
             </select>
