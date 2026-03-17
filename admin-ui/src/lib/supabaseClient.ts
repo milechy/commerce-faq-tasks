@@ -16,11 +16,11 @@ if (!supabaseConfigured) {
   );
 }
 
-// 未設定時でもプレースホルダーで createClient() を呼ぶ。
-// createClient("", "") は例外を投げるため、有効なURL形式のダミー値を渡す。
+// 未設定時でもcreateClient()を呼ぶ（"" を渡すと例外が出るためダミー値を使用）。
 // supabaseConfigured=false の場合 App.tsx が設定エラー画面を返すので
 // 実際の Supabase API 呼び出しは発生しない。
+// NOTE: ダミー値に supabase.co ドメインを使わない（バンドル検証で誤検知を防ぐ）。
 export const supabase = createClient(
-  supabaseUrl || "https://placeholder-unconfigured.supabase.co",
-  supabaseAnonKey || "placeholder-anon-key-unconfigured-placeholder-00000000"
+  supabaseUrl || "https://not-configured.invalid",
+  supabaseAnonKey || "not-configured"
 );
