@@ -44,58 +44,7 @@ echo "[3/6] Building API server..."
 ssh "${VPS}" "cd ${REMOTE_DIR} && pnpm build"
 
 echo "[4/6] Building Admin UI..."
-ssh "${VPS}" "
-  set -e
-  cd ${REMOTE_DIR}/admin-ui
-
-  # ── env ファイル検出 ──────────────────────────────────────────
-  ENV_FILE=''
-  if [ -f .env.local ]; then
-    ENV_FILE='.env.local'
-  elif [ -f .env ]; then
-    ENV_FILE='.env'
-  fi
-  if [ -z \"\${ENV_FILE}\" ]; then
-    echo '❌ ERROR: admin-ui/.env.local が見つかりません'
-    echo '   /opt/rajiuce/admin-ui/.env.local を作成してください'
-    echo '   必須キー: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_API_BASE'
-    exit 1
-  fi
-
-  # ── キーの存在確認 ─────────────────────────────────────────────
-  if ! grep -q 'VITE_SUPABASE_URL=.' \"\${ENV_FILE}\"; then
-    echo \"❌ ERROR: \${ENV_FILE} に VITE_SUPABASE_URL が設定されていません\"
-    exit 1
-  fi
-  if ! grep -q 'VITE_SUPABASE_ANON_KEY=.' \"\${ENV_FILE}\"; then
-    echo \"❌ ERROR: \${ENV_FILE} に VITE_SUPABASE_ANON_KEY が設定されていません\"
-    exit 1
-  fi
-
-  # 実際のURLを取得（ビルド後の検証に使う）
-  SUPABASE_URL=\$(grep 'VITE_SUPABASE_URL=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2- | tr -d '\"' | tr -d \"'\")
-  echo \"✅ env check passed (\${ENV_FILE}): \${SUPABASE_URL}\"
-
-  # ── VITE_変数を個別にexport（SSH heredoc内でset -a/.が確実でないため）──
-  export VITE_SUPABASE_URL=\$(grep 'VITE_SUPABASE_URL=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2-)
-  export VITE_SUPABASE_ANON_KEY=\$(grep 'VITE_SUPABASE_ANON_KEY=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2-)
-  export VITE_API_BASE=\$(grep 'VITE_API_BASE=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2- 2>/dev/null || echo 'http://65.108.159.161:3100')
-  echo \"  VITE_SUPABASE_URL=\${VITE_SUPABASE_URL:0:30}...\"
-
-  # ── stale Viteキャッシュをクリア（env変数の埋め込み漏れを防止）──
-  rm -rf dist node_modules/.vite
-
-  pnpm install --frozen-lockfile
-  pnpm build
-
-  # ── ビルド後検証: 実際のSupabase URLがバンドルに埋め込まれたか確認 ──
-  if ! grep -ql \"\${SUPABASE_URL}\" dist/assets/*.js 2>/dev/null; then
-    echo '❌ FATAL: Supabase URLがバンドルに含まれていません。.env.localの内容を確認してください:'
-    cat \"\${ENV_FILE}\"
-    exit 1
-  fi
-  echo '✅ Admin UI built with Supabase URL verified in bundle'
-"
+ssh "${VPS}" "bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
 
 echo "[5/6] Starting services with PM2..."
 ssh "${VPS}" "cd ${REMOTE_DIR} && pm2 startOrRestart ecosystem.config.cjs --env production"
