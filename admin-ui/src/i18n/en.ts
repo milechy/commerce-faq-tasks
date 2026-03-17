@@ -429,7 +429,7 @@ const en: Record<TranslationKey, string> = {
   "knowledge_gap.status_filter": "Show:",
   "knowledge_gap.dismiss_confirm": "Dismiss this question?",
   "knowledge_gap.dismiss_error": "Operation failed. Please try again 🙏",
-  "dashboard.knowledge_gaps": "⚠️ Review unanswered questions",
+  "dashboard.knowledge_gaps": "Review unanswered questions",
 };
 
 export default en;

@@ -427,7 +427,7 @@ const ja = {
   "knowledge_gap.status_filter": "表示:",
   "knowledge_gap.dismiss_confirm": "この質問を無視しますか？",
   "knowledge_gap.dismiss_error": "操作に失敗しました。もう一度お試しください 🙏",
-  "dashboard.knowledge_gaps": "⚠️ 未回答の質問を確認する",
+  "dashboard.knowledge_gaps": "未回答の質問を確認する",
 } as const;
 
 export type TranslationKey = keyof typeof ja;
