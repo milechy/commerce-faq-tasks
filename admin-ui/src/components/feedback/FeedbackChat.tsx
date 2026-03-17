@@ -182,16 +182,15 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
             maxHeight: 360,
           }}>
             {/* ウェルカムメッセージ（常に先頭に表示） */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+            <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 4 }}>
               <div style={{
+                background: "rgba(75, 85, 99, 0.8)",
+                borderRadius: 12,
+                padding: "8px 12px",
                 maxWidth: "80%",
-                padding: "9px 13px",
-                borderRadius: "14px 14px 14px 4px",
-                background: "rgba(55,65,81,0.6)",
-                border: "1px solid #374151",
                 color: "#f9fafb",
-                fontSize: 14,
-                lineHeight: 1.5,
+                fontSize: 13,
+                lineHeight: 1.6,
               }}>
                 <p style={{ margin: 0 }}>こんにちは！RAJIUCE管理画面のサポートです。</p>
                 <p style={{ margin: "4px 0 0" }}>改善のご要望や使い方のご質問など、お気軽にどうぞ。</p>
