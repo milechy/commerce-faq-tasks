@@ -429,6 +429,8 @@ const en: Record<TranslationKey, string> = {
   "knowledge_gap.status_filter": "Show:",
   "knowledge_gap.dismiss_confirm": "Dismiss this question?",
   "knowledge_gap.dismiss_error": "Operation failed. Please try again 🙏",
+  "knowledge_gap.all_tenants": "All tenants",
+  "knowledge_gap.filter_tenant": "Filter by tenant",
   "dashboard.knowledge_gaps": "Review unanswered questions",
 };
 

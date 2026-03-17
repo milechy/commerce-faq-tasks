@@ -20,6 +20,12 @@ interface KnowledgeGap {
   created_at: string;
 }
 
+interface TenantOption {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 type StatusFilter = "open" | "resolved" | "dismissed";
 
 export default function KnowledgeGapsPage() {
@@ -34,13 +40,26 @@ export default function KnowledgeGapsPage() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
   const [dismissingId, setDismissingId] = useState<number | null>(null);
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [selectedTenant, setSelectedTenant] = useState<string>("");
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
 
   // クエリパラメータからテナントを取得（super_admin）
   const queryTenant = new URLSearchParams(location.search).get("tenant") ?? undefined;
-  const effectiveTenant = isSuperAdmin ? queryTenant : tenantId;
+  const effectiveTenant = isSuperAdmin
+    ? (selectedTenant || queryTenant || undefined)
+    : tenantId;
+
+  // Super Admin用: テナント一覧を取得
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    authFetch(`${API_BASE}/v1/admin/tenants`)
+      .then((res) => res.ok ? res.json() as Promise<{ tenants?: TenantOption[]; items?: TenantOption[] }> : Promise.reject())
+      .then((data) => setTenants(data.tenants ?? data.items ?? []))
+      .catch(() => {/* テナント取得失敗は無視 */});
+  }, [isSuperAdmin]);
 
   const fetchGaps = useCallback(async () => {
     setLoading(true);
@@ -110,7 +129,22 @@ export default function KnowledgeGapsPage() {
       minute: "2-digit",
     });
 
+  const tenantName = (id: string) => {
+    const found = tenants.find((t) => t.id === id);
+    return found?.name ?? id;
+  };
+
   const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
+  const SELECT_STYLE: React.CSSProperties = {
+    padding: "10px 14px",
+    minHeight: 40,
+    borderRadius: 10,
+    border: "1px solid #374151",
+    background: "rgba(15,23,42,0.8)",
+    color: "#e5e7eb",
+    fontSize: 13,
+    cursor: "pointer",
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 900, margin: "0 auto" }}>
@@ -141,34 +175,56 @@ export default function KnowledgeGapsPage() {
         </div>
       </header>
 
-      {/* Status filter tabs */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
-        {(["open", "resolved", "dismissed"] as StatusFilter[]).map((s) => (
-          <button
-            key={s}
-            onClick={() => setStatusFilter(s)}
-            style={{
-              padding: "8px 16px",
-              minHeight: 36,
-              borderRadius: 999,
-              border: `1px solid ${statusFilter === s ? "rgba(234,179,8,0.5)" : "#374151"}`,
-              background: statusFilter === s ? "rgba(234,179,8,0.12)" : "rgba(15,23,42,0.8)",
-              color: statusFilter === s ? "#fbbf24" : "#9ca3af",
-              fontSize: 13,
-              fontWeight: statusFilter === s ? 600 : 400,
-              cursor: "pointer",
-            }}
-          >
-            {s === "open" ? t("knowledge_gap.status_open")
-              : s === "resolved" ? t("knowledge_gap.resolved")
-              : t("knowledge_gap.dismissed")}
-            {s === statusFilter && total > 0 && (
-              <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, background: "rgba(234,179,8,0.25)", fontSize: 11, fontWeight: 700 }}>
-                {total}
-              </span>
-            )}
-          </button>
-        ))}
+      {/* Filters row */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        {/* Status filter tabs */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {(["open", "resolved", "dismissed"] as StatusFilter[]).map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              style={{
+                padding: "8px 16px",
+                minHeight: 36,
+                borderRadius: 999,
+                border: `1px solid ${statusFilter === s ? "rgba(234,179,8,0.5)" : "#374151"}`,
+                background: statusFilter === s ? "rgba(234,179,8,0.12)" : "rgba(15,23,42,0.8)",
+                color: statusFilter === s ? "#fbbf24" : "#9ca3af",
+                fontSize: 13,
+                fontWeight: statusFilter === s ? 600 : 400,
+                cursor: "pointer",
+              }}
+            >
+              {s === "open" ? t("knowledge_gap.status_open")
+                : s === "resolved" ? t("knowledge_gap.resolved")
+                : t("knowledge_gap.dismissed")}
+              {s === statusFilter && total > 0 && (
+                <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, background: "rgba(234,179,8,0.25)", fontSize: 11, fontWeight: 700 }}>
+                  {total}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Tenant filter — Super Admin only */}
+        {isSuperAdmin && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+            <span style={{ fontSize: 13, color: "#9ca3af", whiteSpace: "nowrap" }}>
+              {t("knowledge_gap.filter_tenant")}:
+            </span>
+            <select
+              value={selectedTenant}
+              onChange={(e) => setSelectedTenant(e.target.value)}
+              style={SELECT_STYLE}
+            >
+              <option value="">{t("knowledge_gap.all_tenants")}</option>
+              {tenants.map((ten) => (
+                <option key={ten.id} value={ten.id}>{ten.name || ten.slug || ten.id}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Error */}
@@ -205,15 +261,32 @@ export default function KnowledgeGapsPage() {
                 boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
               }}
             >
+              {/* Tenant badge — super_admin: 目立つサイズで表示 */}
+              {isSuperAdmin && (
+                <div style={{ marginBottom: 10 }}>
+                  <span style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "4px 12px",
+                    borderRadius: 999,
+                    background: "rgba(34,197,94,0.15)",
+                    border: "1px solid rgba(34,197,94,0.4)",
+                    color: "#4ade80",
+                    fontSize: 13,
+                    fontWeight: 700,
+                  }}>
+                    🏢 {tenantName(gap.tenant_id)}
+                    <span style={{ color: "#6b7280", fontWeight: 400, fontSize: 11 }}>
+                      ({gap.tenant_id})
+                    </span>
+                  </span>
+                </div>
+              )}
+
               {/* Question + metadata row */}
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  {/* Tenant badge (super_admin only) */}
-                  {isSuperAdmin && (
-                    <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 999, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#4ade80", fontSize: 11, fontWeight: 600, marginBottom: 6, marginRight: 6 }}>
-                      {gap.tenant_id}
-                    </span>
-                  )}
                   {/* Question text */}
                   <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#f9fafb", lineHeight: 1.5, wordBreak: "break-word" }}>
                     「{gap.user_question}」
