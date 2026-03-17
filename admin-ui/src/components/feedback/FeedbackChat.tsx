@@ -74,12 +74,17 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
       const res = await authFetch(`${API_BASE}/v1/admin/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, tenant_id: tenantId }),
+        body: JSON.stringify({ content }),
       });
-      if (!res.ok) return;
-      setInput("");
-      await fetchMessages();
-    } catch { /* silent */ } finally {
+      if (res.ok) {
+        setInput("");
+        void fetchMessages();
+      } else {
+        console.error("[feedback] send failed:", res.status);
+      }
+    } catch (err) {
+      console.error("[feedback] send error:", err);
+    } finally {
       setSending(false);
     }
   };
@@ -191,6 +196,7 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
                 color: "#f9fafb",
                 fontSize: 13,
                 lineHeight: 1.6,
+                textAlign: "left",
               }}>
                 <p style={{ margin: 0 }}>こんにちは！RAJIUCE管理画面のサポートです。</p>
                 <p style={{ margin: "4px 0 0" }}>改善のご要望や使い方のご質問など、お気軽にどうぞ。</p>
