@@ -76,10 +76,11 @@ ssh "${VPS}" "
   SUPABASE_URL=\$(grep 'VITE_SUPABASE_URL=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2- | tr -d '\"' | tr -d \"'\")
   echo \"✅ env check passed (\${ENV_FILE}): \${SUPABASE_URL}\"
 
-  # ── .env.local を明示的にシェルへexport（Viteが自動で読まない環境対策）──
-  set -a
-  . \"./\${ENV_FILE}\"
-  set +a
+  # ── VITE_変数を個別にexport（SSH heredoc内でset -a/.が確実でないため）──
+  export VITE_SUPABASE_URL=\$(grep 'VITE_SUPABASE_URL=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2-)
+  export VITE_SUPABASE_ANON_KEY=\$(grep 'VITE_SUPABASE_ANON_KEY=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2-)
+  export VITE_API_BASE=\$(grep 'VITE_API_BASE=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2- 2>/dev/null || echo 'http://65.108.159.161:3100')
+  echo \"  VITE_SUPABASE_URL=\${VITE_SUPABASE_URL:0:30}...\"
 
   # ── stale Viteキャッシュをクリア（env変数の埋め込み漏れを防止）──
   rm -rf dist node_modules/.vite
