@@ -38,7 +38,6 @@ interface Invoice {
   amount_cents: number;
   status: "paid" | "open" | "draft";
   hosted_invoice_url: string | null;
-  invoice_pdf: string | null;
   portal_url: string;
 }
 
@@ -300,7 +299,6 @@ export default function BillingPage() {
             ? inv.status
             : "open") as Invoice["status"],
           hosted_invoice_url: inv.hostedInvoiceUrl ?? null,
-          invoice_pdf: inv.invoicePdf ?? null,
           portal_url: data.portalUrl ?? "#",
         }));
         setInvoices(mappedInvoices);
@@ -784,22 +782,6 @@ export default function BillingPage() {
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {inv.invoice_pdf && (
-                          <a
-                            href={inv.invoice_pdf}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              ...BTN_LINK,
-                              fontSize: 13,
-                              padding: "8px 14px",
-                              borderColor: "#374151",
-                              color: "#d1d5db",
-                            }}
-                          >
-                            {t("billing.download_pdf")}
-                          </a>
-                        )}
                         {inv.hosted_invoice_url && (
                           <a
                             href={inv.hosted_invoice_url}

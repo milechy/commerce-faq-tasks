@@ -219,7 +219,6 @@ const ja = {
   "billing.invoice_month": "{month}月分",
   "billing.invoice_amount": "請求額: {amount}",
   "billing.view_invoice": "📄 請求書を見る",
-  "billing.download_pdf": "📄 PDF",
   "billing.view_detail": "🔗 請求書・領収書",
   "billing.change_payment": "💳 支払い設定を変更",
   "billing.status_pending": "未請求",
