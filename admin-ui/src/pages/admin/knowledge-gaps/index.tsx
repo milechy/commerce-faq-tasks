@@ -82,9 +82,23 @@ export default function KnowledgeGapsPage() {
     }
   };
 
-  const handleAddText = (question: string) => {
-    const params = new URLSearchParams({ create: "1", userMsg: question });
-    const tenantPath = effectiveTenant ? `/${effectiveTenant}` : "";
+  const handleAddText = (gap: KnowledgeGap) => {
+    const tenantPath = `/${gap.tenant_id}`;
+    const params = new URLSearchParams({
+      tab: "text",
+      gap_id: String(gap.id),
+      question: gap.user_question,
+    });
+    navigate(`/admin/knowledge${tenantPath}?${params}`);
+  };
+
+  const handleAddUrl = (gap: KnowledgeGap) => {
+    const tenantPath = `/${gap.tenant_id}`;
+    const params = new URLSearchParams({
+      tab: "scrape",
+      gap_id: String(gap.id),
+      question: gap.user_question,
+    });
     navigate(`/admin/knowledge${tenantPath}?${params}`);
   };
 
@@ -231,7 +245,7 @@ export default function KnowledgeGapsPage() {
               {statusFilter === "open" && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button
-                    onClick={() => handleAddText(gap.user_question)}
+                    onClick={() => handleAddText(gap)}
                     style={{
                       padding: "9px 16px",
                       minHeight: 44,
@@ -249,10 +263,7 @@ export default function KnowledgeGapsPage() {
                   </button>
 
                   <button
-                    onClick={() => {
-                      const tenantPath = effectiveTenant ? `/${effectiveTenant}` : "";
-                      navigate(`/admin/knowledge${tenantPath}`);
-                    }}
+                    onClick={() => handleAddUrl(gap)}
                     style={{
                       padding: "9px 16px",
                       minHeight: 44,
