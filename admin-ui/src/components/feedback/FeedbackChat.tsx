@@ -25,6 +25,7 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const locale = lang === "en" ? "en-US" : "ja-JP";
@@ -180,42 +181,52 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
             minHeight: 200,
             maxHeight: 360,
           }}>
-            {messages.length === 0 ? (
-              <p style={{ textAlign: "center", color: "#6b7280", fontSize: 13, marginTop: 40 }}>
-                {t("feedback.no_messages")}
-              </p>
-            ) : (
-              messages.map((msg) => {
-                const isMe = msg.sender_role === "client_admin";
-                return (
-                  <div
-                    key={msg.id}
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: isMe ? "flex-end" : "flex-start",
-                    }}
-                  >
-                    <div style={{
-                      maxWidth: "80%",
-                      padding: "9px 13px",
-                      borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                      background: isMe ? "rgba(59,130,246,0.25)" : "rgba(55,65,81,0.6)",
-                      border: isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
-                      color: "#f9fafb",
-                      fontSize: 14,
-                      lineHeight: 1.5,
-                      wordBreak: "break-word",
-                    }}>
-                      {msg.content}
-                    </div>
-                    <span style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
-                      {formatTime(msg.created_at)}
-                    </span>
+            {/* ウェルカムメッセージ（常に先頭に表示） */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+              <div style={{
+                maxWidth: "80%",
+                padding: "9px 13px",
+                borderRadius: "14px 14px 14px 4px",
+                background: "rgba(55,65,81,0.6)",
+                border: "1px solid #374151",
+                color: "#f9fafb",
+                fontSize: 14,
+                lineHeight: 1.5,
+              }}>
+                <p style={{ margin: 0 }}>こんにちは！RAJIUCE管理画面のサポートです。</p>
+                <p style={{ margin: "4px 0 0" }}>改善のご要望や使い方のご質問など、お気軽にどうぞ。</p>
+              </div>
+            </div>
+            {messages.map((msg) => {
+              const isMe = msg.sender_role === "client_admin";
+              return (
+                <div
+                  key={msg.id}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: isMe ? "flex-end" : "flex-start",
+                  }}
+                >
+                  <div style={{
+                    maxWidth: "80%",
+                    padding: "9px 13px",
+                    borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+                    background: isMe ? "rgba(59,130,246,0.25)" : "rgba(55,65,81,0.6)",
+                    border: isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
+                    color: "#f9fafb",
+                    fontSize: 14,
+                    lineHeight: 1.5,
+                    wordBreak: "break-word",
+                  }}>
+                    {msg.content}
                   </div>
-                );
-              })
-            )}
+                  <span style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                    {formatTime(msg.created_at)}
+                  </span>
+                </div>
+              );
+            })}
             <div ref={bottomRef} />
           </div>
 
@@ -229,8 +240,10 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onCompositionStart={() => setIsComposing(true)}
+              onCompositionEnd={() => setIsComposing(false)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (e.key === "Enter" && !e.shiftKey && !isComposing) {
                   e.preventDefault();
                   void handleSend();
                 }
