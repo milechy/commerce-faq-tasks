@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import FileUpload from "../../../components/admin/FileUpload";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
@@ -108,6 +108,15 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
   return res;
 }
 
+/** ナレッジギャップを「解決済み」に更新する（fire-and-forget 向け） */
+async function resolveKnowledgeGap(gapId: number): Promise<void> {
+  await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/gaps/${gapId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "resolved" }),
+  });
+}
+
 function formatDate(iso: string, locale: string): string {
   return new Date(iso).toLocaleDateString(locale, {
     year: "numeric",
@@ -174,6 +183,32 @@ const SELECT_STYLE: React.CSSProperties = {
   fontSize: 16,
   minHeight: 48,
 };
+
+// ─── ナレッジギャップバナー ────────────────────────────────────────────────────
+
+function GapQuestionBanner({ question }: { question: string }) {
+  return (
+    <div
+      style={{
+        padding: "14px 18px",
+        borderRadius: 12,
+        border: "1px solid rgba(234,179,8,0.4)",
+        background: "rgba(120,53,15,0.25)",
+        marginBottom: 4,
+      }}
+    >
+      <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 700, color: "#fbbf24" }}>
+        ❓ ユーザーの質問
+      </p>
+      <p style={{ margin: "0 0 6px", fontSize: 15, color: "#f9fafb", fontWeight: 600, lineHeight: 1.5 }}>
+        「{question}」
+      </p>
+      <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", lineHeight: 1.5 }}>
+        この質問に回答できる情報をナレッジに追加してください。登録後、未回答の質問が自動的に解決済みになります。
+      </p>
+    </div>
+  );
+}
 
 // ─── グローバルナレッジチェックボックス（Super Admin専用） ────────────────────
 
@@ -660,7 +695,15 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
 
 // ─── タブ2: テキスト入力（LLM自動FAQ化） ────────────────────────────────────
 
-function TextInputTab({ tenantId }: { tenantId: string }) {
+function TextInputTab({
+  tenantId,
+  gapQuestion,
+  gapId,
+}: {
+  tenantId: string;
+  gapQuestion?: string;
+  gapId?: number;
+}) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
@@ -754,7 +797,13 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      // ギャップが紐付いていれば自動解決
+      if (gapId) {
+        await resolveKnowledgeGap(gapId).catch(() => {/* silent */});
+        setSuccess("✅ ナレッジを追加し、未回答の質問を解決済みにしました");
+      } else {
+        setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      }
       setPreview(null);
       setText("");
     } catch (err) {
@@ -770,6 +819,7 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {gapQuestion && <GapQuestionBanner question={gapQuestion} />}
       <div style={CARD_STYLE}>
         <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
           {t("knowledge.text_title")}
@@ -780,7 +830,11 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={t("knowledge.text_placeholder")}
+          placeholder={
+            gapQuestion
+              ? `「${gapQuestion}」に回答できる情報を入力してください`
+              : t("knowledge.text_placeholder")
+          }
           style={TEXTAREA_STYLE}
         />
       </div>
@@ -958,7 +1012,17 @@ function TextInputTab({ tenantId }: { tenantId: string }) {
 
 // ─── タブ3: URLスクレイプ ────────────────────────────────────────────────────
 
-function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSuccess: () => void }) {
+function ScrapeTab({
+  tenantId,
+  onCommitSuccess,
+  gapQuestion,
+  gapId,
+}: {
+  tenantId: string;
+  onCommitSuccess: () => void;
+  gapQuestion?: string;
+  gapId?: number;
+}) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
@@ -1071,7 +1135,12 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      if (gapId) {
+        await resolveKnowledgeGap(gapId).catch(() => {/* silent */});
+        setSuccess("✅ ナレッジを追加し、未回答の質問を解決済みにしました");
+      } else {
+        setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      }
       setPreview(null);
       setUrls("");
       onCommitSuccess();
@@ -1090,6 +1159,7 @@ function ScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSu
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {gapQuestion && <GapQuestionBanner question={gapQuestion} />}
       {!preview && (
         <>
           <div style={CARD_STYLE}>
@@ -1402,10 +1472,19 @@ function PdfSection({ tenantId }: { tenantId: string }) {
 
 export default function TenantKnowledgePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { t } = useLang();
   const { tenantId } = useParams<{ tenantId: string }>();
   const { user, isSuperAdmin } = useAuth();
-  const [activeTab, setActiveTab] = useState<Tab>("list");
+
+  const searchParams = new URLSearchParams(location.search);
+  const tabParam = searchParams.get("tab") as Tab | null;
+  const gapId = searchParams.get("gap_id") ? Number(searchParams.get("gap_id")) : undefined;
+  const gapQuestion = searchParams.get("question") ?? undefined;
+
+  const [activeTab, setActiveTab] = useState<Tab>(
+    tabParam === "text" || tabParam === "scrape" ? tabParam : "list"
+  );
 
   // tenantId の解決: URL params → JWTのtenantId → フォールバック
   const resolvedTenantId = tenantId ?? user?.tenantId ?? "";
@@ -1496,8 +1575,8 @@ export default function TenantKnowledgePage() {
 
       {/* タブコンテンツ */}
       {activeTab === "list" && <KnowledgeListTab tenantId={resolvedTenantId} />}
-      {activeTab === "text" && <TextInputTab tenantId={resolvedTenantId} />}
-      {activeTab === "scrape" && <ScrapeTab tenantId={resolvedTenantId} onCommitSuccess={() => setActiveTab("list")} />}
+      {activeTab === "text" && <TextInputTab tenantId={resolvedTenantId} gapQuestion={gapQuestion} gapId={gapId} />}
+      {activeTab === "scrape" && <ScrapeTab tenantId={resolvedTenantId} onCommitSuccess={() => setActiveTab("list")} gapQuestion={gapQuestion} gapId={gapId} />}
     </div>
   );
 }
