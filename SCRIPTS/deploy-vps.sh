@@ -44,13 +44,11 @@ echo "[3/6] Building API server..."
 ssh "${VPS}" "cd ${REMOTE_DIR} && pnpm build"
 
 echo "[4/6] Building Admin UI..."
-# Vite reads .env.local natively during 'vite build' — no shell sourcing needed.
-# We only use grep to verify the keys exist before building (avoids sh/bash source incompatibility).
 ssh "${VPS}" "
   set -e
   cd ${REMOTE_DIR}/admin-ui
 
-  # Find env file (prefer .env.local over .env)
+  # ── env ファイル検出 ──────────────────────────────────────────
   ENV_FILE=''
   if [ -f .env.local ]; then
     ENV_FILE='.env.local'
@@ -64,7 +62,7 @@ ssh "${VPS}" "
     exit 1
   fi
 
-  # grep でキーの存在確認（sourcing不要 — Viteがビルド時に自動読み込みする）
+  # ── キーの存在確認 ─────────────────────────────────────────────
   if ! grep -q 'VITE_SUPABASE_URL=.' \"\${ENV_FILE}\"; then
     echo \"❌ ERROR: \${ENV_FILE} に VITE_SUPABASE_URL が設定されていません\"
     exit 1
@@ -73,18 +71,34 @@ ssh "${VPS}" "
     echo \"❌ ERROR: \${ENV_FILE} に VITE_SUPABASE_ANON_KEY が設定されていません\"
     exit 1
   fi
-  echo \"✅ env check passed (\${ENV_FILE})\"
+
+  # 実際のURLを取得（ビルド後の検証に使う）
+  SUPABASE_URL=\$(grep 'VITE_SUPABASE_URL=' \"\${ENV_FILE}\" | head -1 | cut -d'=' -f2- | tr -d '\"' | tr -d \"'\")
+  echo \"✅ env check passed (\${ENV_FILE}): \${SUPABASE_URL}\"
+
+  # ── stale Viteキャッシュをクリア（env変数の埋め込み漏れを防止）──
+  rm -rf dist node_modules/.vite
 
   pnpm install --frozen-lockfile
   pnpm build
 
-  # ビルド後検証: ViteがSupabase URLをバンドルに埋め込んだことを確認
-  BUNDLE_REFS=\$(grep -c 'supabase.co' dist/assets/*.js 2>/dev/null || echo 0)
-  if [ \"\${BUNDLE_REFS}\" = '0' ]; then
-    echo '❌ ERROR: バンドルにSupabase URLが含まれていません'
-    echo '   Viteが.env.localを読めていない可能性があります'
-    echo \"   確認: ls -la \${REMOTE_DIR}/admin-ui/.env.local\"
-    exit 1
+  # ── ビルド後検証: 実際のSupabase URLがバンドルに埋め込まれたか確認 ──
+  # 注: grep -c はファイルが複数あると「file:count」形式になり '0' 比較が壊れる。
+  #     grep -ql を使い終了コードで判定する（正しい方法）。
+  if ! grep -ql \"\${SUPABASE_URL}\" dist/assets/*.js 2>/dev/null; then
+    echo '❌ ERROR: Supabase URLがバンドルに含まれていません。再ビルドを試みます...'
+    rm -rf dist node_modules/.vite
+    # フォールバック: env変数を明示的にシェルにエクスポートして再ビルド
+    set -a
+    . \"./\${ENV_FILE}\"
+    set +a
+    pnpm build
+    if ! grep -ql \"\${SUPABASE_URL}\" dist/assets/*.js 2>/dev/null; then
+      echo '❌ FATAL: 再ビルドも失敗しました。.env.localの内容を確認してください:'
+      cat \"\${ENV_FILE}\"
+      exit 1
+    fi
+    echo '✅ Admin UI rebuilt successfully (fallback build used)'
   fi
   echo '✅ Admin UI built with Supabase URL verified in bundle'
 "
