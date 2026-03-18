@@ -78,7 +78,10 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
       });
       if (res.ok) {
         setInput("");
+        // 即時フェッチ（自分のメッセージを表示）
         void fetchMessages();
+        // AI返答はfire-and-forgetで非同期生成されるため4秒後に再フェッチ
+        setTimeout(() => { void fetchMessages(); }, 4000);
       } else {
         console.error("[feedback] send failed:", res.status);
       }
