@@ -33,10 +33,10 @@ const ja = {
   "dashboard.no_updates": "まだ更新がありません",
   "dashboard.quick_actions": "クイックアクション",
   "dashboard.manage_faq": "FAQ を管理する",
-  "dashboard.manage_knowledge": "AIナレッジを管理する",
-  "dashboard.add_faq": "新しいFAQを追加する",
-  "dashboard.manage_tenants": "テナントを管理する",
-  "dashboard.view_billing": "請求・使用量を確認する",
+  "dashboard.manage_knowledge": "AIナレッジ",
+  "dashboard.add_faq": "FAQ追加",
+  "dashboard.manage_tenants": "テナント管理",
+  "dashboard.view_billing": "請求・使用量",
   "dashboard.customize_ai": "AIの返答スタイルをカスタマイズ",
   "dashboard.avatar_settings": "会話アバターの設定",
   "dashboard.voice_settings": "声の設定",
@@ -322,8 +322,8 @@ const ja = {
   "modal.added": "✅ 追加しました！",
 
   // Dashboard Phase38 quick actions
-  "dashboard.chat_history": "会話履歴を確認する",
-  "dashboard.tuning_rules": "AIチューニングルールを管理する",
+  "dashboard.chat_history": "会話履歴",
+  "dashboard.tuning_rules": "AIチューニング",
 
   // Tenant detail — system prompt
   "tenant_detail.system_prompt_label": "システムプロンプト（AIへの指示）",
@@ -429,8 +429,8 @@ const ja = {
   "knowledge_gap.dismiss_error": "操作に失敗しました。もう一度お試しください 🙏",
   "knowledge_gap.all_tenants": "全テナント",
   "knowledge_gap.filter_tenant": "テナントで絞り込み",
-  "dashboard.knowledge_gaps": "未回答の質問を確認する",
-  "dashboard.feedback": "フィードバックを確認する",
+  "dashboard.knowledge_gaps": "未回答の質問",
+  "dashboard.feedback": "フィードバック",
 
   // Feedback chat
   "feedback.title": "フィードバック",

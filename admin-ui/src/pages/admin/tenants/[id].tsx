@@ -1070,7 +1070,7 @@ export default function TenantDetailPage() {
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "#f9fafb" }}>
           {loading ? t("tenant_detail.loading") : (tenant?.name ?? t("tenant_detail.not_found"))}
         </h1>
-        {tenant && (
+        {tenant && tenant.slug && (
           <p style={{ fontSize: 14, color: "#9ca3af", margin: 0 }}>
             slug: <span style={{ fontFamily: "monospace" }}>{tenant.slug}</span>
           </p>

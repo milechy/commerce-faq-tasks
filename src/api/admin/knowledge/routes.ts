@@ -305,7 +305,18 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       sql += " ORDER BY id DESC LIMIT 200";
 
       const result = await db.query(sql, params);
-      return res.json({ items: result.rows, count: result.rows.length });
+
+      // faq_embeddings のチャンク数も返す（PDF OCR コンテンツを含む）
+      let chunkCount = 0;
+      if (tenantId) {
+        const chunkRes = await db.query(
+          `SELECT COUNT(*)::int AS cnt FROM faq_embeddings WHERE tenant_id = $1`,
+          [tenantId]
+        );
+        chunkCount = chunkRes.rows[0]?.cnt ?? 0;
+      }
+
+      return res.json({ items: result.rows, count: result.rows.length, chunkCount });
     } catch (err) {
       console.error("[GET /v1/admin/knowledge]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });

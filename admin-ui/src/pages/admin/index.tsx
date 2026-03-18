@@ -120,8 +120,8 @@ export default function AdminDashboard() {
         }
 
         if (bookRes.status === "fulfilled" && bookRes.value.ok) {
-          const data = (await bookRes.value.json()) as { books?: unknown[] };
-          bookCount = data.books?.length ?? 0;
+          const data = (await bookRes.value.json()) as { count?: number; chunkCount?: number; items?: unknown[] };
+          bookCount = (data.count ?? data.items?.length ?? 0) + (data.chunkCount ?? 0);
         }
 
         if (gapRes.status === "fulfilled" && gapRes.value.ok) {

@@ -35,10 +35,10 @@ const en: Record<TranslationKey, string> = {
   "dashboard.no_updates": "No updates yet",
   "dashboard.quick_actions": "Quick Actions",
   "dashboard.manage_faq": "Manage FAQs",
-  "dashboard.manage_knowledge": "Manage AI Knowledge",
-  "dashboard.add_faq": "Add New FAQ",
-  "dashboard.manage_tenants": "Manage Tenants",
-  "dashboard.view_billing": "View Billing & Usage",
+  "dashboard.manage_knowledge": "AI Knowledge",
+  "dashboard.add_faq": "Add FAQ",
+  "dashboard.manage_tenants": "Tenants",
+  "dashboard.view_billing": "Billing & Usage",
   "dashboard.customize_ai": "Customize AI Response Style",
   "dashboard.avatar_settings": "Avatar Settings",
   "dashboard.voice_settings": "Voice Settings",
@@ -324,8 +324,8 @@ const en: Record<TranslationKey, string> = {
   "modal.added": "✅ Added!",
 
   // Dashboard Phase38 quick actions
-  "dashboard.chat_history": "View Chat History",
-  "dashboard.tuning_rules": "Manage AI Tuning Rules",
+  "dashboard.chat_history": "Chat History",
+  "dashboard.tuning_rules": "AI Tuning",
 
   // Tenant detail — system prompt
   "tenant_detail.system_prompt_label": "System Prompt (Instructions for AI)",
@@ -431,8 +431,8 @@ const en: Record<TranslationKey, string> = {
   "knowledge_gap.dismiss_error": "Operation failed. Please try again 🙏",
   "knowledge_gap.all_tenants": "All tenants",
   "knowledge_gap.filter_tenant": "Filter by tenant",
-  "dashboard.knowledge_gaps": "Review unanswered questions",
-  "dashboard.feedback": "View feedback",
+  "dashboard.knowledge_gaps": "Unanswered Questions",
+  "dashboard.feedback": "Feedback",
 
   // Feedback chat
   "feedback.title": "Feedback",
