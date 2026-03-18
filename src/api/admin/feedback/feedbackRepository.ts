@@ -25,6 +25,7 @@ export interface FeedbackMessage {
   sender_email: string | null;
   content: string;
   is_read: boolean;
+  flagged_for_improvement: boolean;
   created_at: string;
 }
 
@@ -45,27 +46,42 @@ export async function getMessages(params: {
   tenantId: string;
   limit?: number;
   offset?: number;
+  flaggedOnly?: boolean;
 }): Promise<{ messages: FeedbackMessage[]; total: number }> {
   const pool = getPool();
   const limit = params.limit ?? 50;
   const offset = params.offset ?? 0;
+  const flagClause = params.flaggedOnly ? " AND flagged_for_improvement = true" : "";
 
   const countRes = await pool.query(
-    `SELECT COUNT(*) AS cnt FROM feedback_messages WHERE tenant_id = $1`,
+    `SELECT COUNT(*) AS cnt FROM feedback_messages WHERE tenant_id = $1${flagClause}`,
     [params.tenantId]
   );
   const total = parseInt(countRes.rows[0]?.cnt ?? "0", 10);
 
   const res = await pool.query(
-    `SELECT id, tenant_id, sender_role, sender_email, content, is_read, created_at
+    `SELECT id, tenant_id, sender_role, sender_email, content, is_read, flagged_for_improvement, created_at
      FROM feedback_messages
-     WHERE tenant_id = $1
+     WHERE tenant_id = $1${flagClause}
      ORDER BY created_at ASC
      LIMIT $2 OFFSET $3`,
     [params.tenantId, limit, offset]
   );
 
   return { messages: res.rows as FeedbackMessage[], total };
+}
+
+/** 改善フラグのトグル（Super Admin専用） */
+export async function flagMessage(messageId: number, flagged: boolean): Promise<FeedbackMessage | null> {
+  const pool = getPool();
+  const res = await pool.query(
+    `UPDATE feedback_messages
+     SET flagged_for_improvement = $1
+     WHERE id = $2
+     RETURNING id, tenant_id, sender_role, sender_email, content, is_read, flagged_for_improvement, created_at`,
+    [flagged, messageId]
+  );
+  return (res.rows[0] as FeedbackMessage) ?? null;
 }
 
 /** メッセージ送信 */
@@ -79,7 +95,7 @@ export async function sendMessage(params: {
   const res = await pool.query(
     `INSERT INTO feedback_messages (tenant_id, sender_role, sender_email, content)
      VALUES ($1, $2, $3, $4)
-     RETURNING id, tenant_id, sender_role, sender_email, content, is_read, created_at`,
+     RETURNING id, tenant_id, sender_role, sender_email, content, is_read, flagged_for_improvement, created_at`,
     [params.tenantId, params.senderRole, params.senderEmail ?? null, params.content]
   );
   return res.rows[0] as FeedbackMessage;

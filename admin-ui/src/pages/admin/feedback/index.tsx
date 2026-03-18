@@ -14,6 +14,7 @@ interface Message {
   sender_email: string | null;
   content: string;
   is_read: boolean;
+  flagged_for_improvement: boolean;
   created_at: string;
 }
 
@@ -40,6 +41,8 @@ export default function FeedbackPage() {
   const [loadingThreads, setLoadingThreads] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [search, setSearch] = useState("");
+  const [flaggedFilter, setFlaggedFilter] = useState(false);
+  const [flagging, setFlagging] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const fetchThreads = useCallback(async () => {
@@ -54,17 +57,19 @@ export default function FeedbackPage() {
     }
   }, []);
 
-  const fetchMessages = useCallback(async (tenantId: string) => {
+  const fetchMessages = useCallback(async (tenantId: string, flaggedOnly = false) => {
     setLoadingMessages(true);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/feedback?tenant=${encodeURIComponent(tenantId)}`);
+      const url = `${API_BASE}/v1/admin/feedback?tenant=${encodeURIComponent(tenantId)}${flaggedOnly ? "&flagged=true" : ""}`;
+      const res = await authFetch(url);
       if (!res.ok) return;
       const data = await res.json() as { messages: Message[] };
       setMessages(data.messages ?? []);
-      // スレッドの未読をリセット
-      setThreads((prev) => prev.map((th) =>
-        th.tenant_id === tenantId ? { ...th, unread_count: 0 } : th
-      ));
+      if (!flaggedOnly) {
+        setThreads((prev) => prev.map((th) =>
+          th.tenant_id === tenantId ? { ...th, unread_count: 0 } : th
+        ));
+      }
     } catch { /* silent */ } finally {
       setLoadingMessages(false);
     }
@@ -73,8 +78,8 @@ export default function FeedbackPage() {
   useEffect(() => { void fetchThreads(); }, [fetchThreads]);
 
   useEffect(() => {
-    if (selectedTenant) void fetchMessages(selectedTenant);
-  }, [selectedTenant, fetchMessages]);
+    if (selectedTenant) void fetchMessages(selectedTenant, flaggedFilter);
+  }, [selectedTenant, flaggedFilter, fetchMessages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -91,9 +96,41 @@ export default function FeedbackPage() {
       });
       if (!res.ok) return;
       setInput("");
-      await fetchMessages(selectedTenant);
+      await fetchMessages(selectedTenant, flaggedFilter);
     } catch { /* silent */ } finally {
       setSending(false);
+    }
+  };
+
+  const handleFlag = async (msg: Message) => {
+    if (flagging === msg.id) return;
+    const nextFlagged = !msg.flagged_for_improvement;
+    setFlagging(msg.id);
+    // Optimistic update
+    setMessages((prev) => prev.map((m) =>
+      m.id === msg.id ? { ...m, flagged_for_improvement: nextFlagged } : m
+    ));
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/feedback/${msg.id}/flag`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flagged: nextFlagged }),
+      });
+      if (!res.ok) {
+        // Revert on failure
+        setMessages((prev) => prev.map((m) =>
+          m.id === msg.id ? { ...m, flagged_for_improvement: msg.flagged_for_improvement } : m
+        ));
+      } else if (flaggedFilter && !nextFlagged) {
+        // フィルター中にフラグ解除 → リストから除去
+        setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+      }
+    } catch {
+      setMessages((prev) => prev.map((m) =>
+        m.id === msg.id ? { ...m, flagged_for_improvement: msg.flagged_for_improvement } : m
+      ));
+    } finally {
+      setFlagging(null);
     }
   };
 
@@ -243,19 +280,38 @@ export default function FeedbackPage() {
           ) : (
             <>
               {/* チャットヘッダー */}
-              <div style={{ padding: "14px 18px", borderBottom: "1px solid #1f2937", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ padding: "14px 18px", borderBottom: "1px solid #1f2937", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb" }}>
                   🏢 {selectedThread?.tenant_name || selectedTenant}
                   <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
                     ({selectedTenant})
                   </span>
                 </span>
-                <button
-                  onClick={() => void fetchMessages(selectedTenant)}
-                  style={{ background: "none", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", fontSize: 12, cursor: "pointer", padding: "4px 10px" }}
-                >
-                  ↻
-                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {/* 改善フィルタートグル */}
+                  <button
+                    onClick={() => setFlaggedFilter((f) => !f)}
+                    style={{
+                      padding: "4px 12px",
+                      borderRadius: 8,
+                      border: flaggedFilter ? "1px solid #f59e0b" : "1px solid #374151",
+                      background: flaggedFilter ? "rgba(245,158,11,0.15)" : "none",
+                      color: flaggedFilter ? "#fbbf24" : "#9ca3af",
+                      fontSize: 12,
+                      fontWeight: flaggedFilter ? 700 : 400,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {lang === "ja" ? (flaggedFilter ? "★ 改善のみ" : "☆ 改善フィルター") : (flaggedFilter ? "★ Flagged only" : "☆ Filter flagged")}
+                  </button>
+                  <button
+                    onClick={() => void fetchMessages(selectedTenant, flaggedFilter)}
+                    style={{ background: "none", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", fontSize: 12, cursor: "pointer", padding: "4px 10px" }}
+                  >
+                    ↻
+                  </button>
+                </div>
               </div>
 
               {/* メッセージ一覧 */}
@@ -266,6 +322,7 @@ export default function FeedbackPage() {
                   <p style={{ textAlign: "center", color: "#6b7280", paddingTop: 40 }}>{t("feedback.no_messages")}</p>
                 ) : messages.map((msg) => {
                   const isMe = msg.sender_role === "super_admin";
+                  const isFlagged = msg.flagged_for_improvement;
                   return (
                     <div
                       key={msg.id}
@@ -276,13 +333,39 @@ export default function FeedbackPage() {
                           {msg.sender_email ?? "client_admin"}
                         </span>
                       )}
-                      <div style={{ display: "flex", justifyContent: isMe ? "flex-end" : "flex-start", width: "100%" }}>
+                      <div style={{ display: "flex", justifyContent: isMe ? "flex-end" : "flex-start", width: "100%", alignItems: "flex-end", gap: 6 }}>
+                        {/* クライアントメッセージ: 吹き出しの右にフラグボタン */}
+                        {!isMe && (
+                          <button
+                            onClick={() => void handleFlag(msg)}
+                            disabled={flagging === msg.id}
+                            title={lang === "ja" ? (isFlagged ? "改善マークを解除" : "改善としてマーク") : (isFlagged ? "Remove improvement flag" : "Mark for improvement")}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              cursor: flagging === msg.id ? "default" : "pointer",
+                              fontSize: 16,
+                              lineHeight: 1,
+                              padding: "4px 2px",
+                              opacity: flagging === msg.id ? 0.5 : 1,
+                              color: isFlagged ? "#f59e0b" : "#4b5563",
+                              flexShrink: 0,
+                              transition: "color 0.15s",
+                            }}
+                          >
+                            {isFlagged ? "★" : "☆"}
+                          </button>
+                        )}
                         <div style={{
                           maxWidth: "70%",
                           padding: "10px 14px",
                           borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                          background: isMe ? "rgba(59,130,246,0.2)" : "rgba(55,65,81,0.5)",
-                          border: isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
+                          background: isFlagged
+                            ? "rgba(245,158,11,0.12)"
+                            : isMe ? "rgba(59,130,246,0.2)" : "rgba(55,65,81,0.5)",
+                          border: isFlagged
+                            ? "1px solid rgba(245,158,11,0.5)"
+                            : isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
                           color: "#f9fafb",
                           fontSize: 14,
                           lineHeight: 1.6,
@@ -294,6 +377,11 @@ export default function FeedbackPage() {
                       </div>
                       <span style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>
                         {formatTime(msg.created_at)}
+                        {isFlagged && (
+                          <span style={{ marginLeft: 6, color: "#f59e0b", fontWeight: 600 }}>
+                            {lang === "ja" ? "★ 改善" : "★ Flagged"}
+                          </span>
+                        )}
                       </span>
                     </div>
                   );

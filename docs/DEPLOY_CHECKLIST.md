@@ -105,6 +105,18 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
         async></script>
 ```
 
+## DBマイグレーション一覧
+
+| ファイル | 内容 | 適用済み |
+|---|---|---|
+| `src/api/admin/feedback/migration_feedback.sql` | feedback_messages テーブル初期作成 | ✅ |
+| `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | 要適用 |
+
+```bash
+# VPS で実行:
+ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/api/admin/feedback/migration_feedback_flagged.sql"
+```
+
 ## トラブルシューティング
 
 | 症状 | 対処 |
