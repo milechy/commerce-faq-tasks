@@ -99,10 +99,11 @@ function resolveSafeStoragePath(storageRoot: string, storageKey: string): string
   ) {
     throw new Error("不正な保存先キーです。");
   }
-  const resolved = path.resolve(storageRoot, key);
-  const normalizedRoot = storageRoot.endsWith(path.sep)
-    ? storageRoot
-    : `${storageRoot}${path.sep}`;
+  const resolvedBase = path.resolve(storageRoot);
+  const resolved = path.resolve(resolvedBase, key);
+  const normalizedRoot = resolvedBase.endsWith(path.sep)
+    ? resolvedBase
+    : `${resolvedBase}${path.sep}`;
   if (!resolved.startsWith(normalizedRoot)) {
     throw new Error("不正な保存先キーです。");
   }

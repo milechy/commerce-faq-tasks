@@ -105,20 +105,21 @@ function parseArgs(argv: string[]): CliOptions {
 }
 
 function loadJsonArray<T>(filePath: string): T[] {
-  if (!fs.existsSync(filePath)) {
+  const safePath = path.resolve(filePath);
+  if (!fs.existsSync(safePath)) {
     // eslint-disable-next-line no-console
-    console.error(`[analyzeTemplateFallbacks] file not found: ${filePath}`);
+    console.error(`[analyzeTemplateFallbacks] file not found: ${safePath}`);
     process.exit(1);
   }
 
-  const raw = fs.readFileSync(filePath, "utf8");
+  const raw = fs.readFileSync(safePath, "utf8");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error(
-      `[analyzeTemplateFallbacks] failed to parse JSON: ${filePath}`,
+      `[analyzeTemplateFallbacks] failed to parse JSON: ${safePath}`,
       error
     );
     process.exit(1);
@@ -127,7 +128,7 @@ function loadJsonArray<T>(filePath: string): T[] {
   if (!Array.isArray(parsed)) {
     // eslint-disable-next-line no-console
     console.error(
-      `[analyzeTemplateFallbacks] JSON must be an array: ${filePath}`
+      `[analyzeTemplateFallbacks] JSON must be an array: ${safePath}`
     );
     process.exit(1);
   }

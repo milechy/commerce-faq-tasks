@@ -120,8 +120,8 @@ interface BertVocab {
 
 function loadBertVocab(vocabPath: string): BertVocab {
   const resolved = path.isAbsolute(vocabPath)
-    ? vocabPath
-    : path.join(process.cwd(), vocabPath);
+    ? path.normalize(vocabPath)
+    : path.normalize(path.join(process.cwd(), vocabPath));
   const content = fs.readFileSync(resolved, "utf8");
   const lines = content.split(/\r?\n/).filter((line) => line.length > 0);
 

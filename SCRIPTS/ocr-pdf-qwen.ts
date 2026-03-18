@@ -66,7 +66,8 @@ async function pdfToImages(
 }
 
 function imageToBase64(imagePath: string): string {
-  return fs.readFileSync(imagePath).toString("base64");
+  const safePath = path.resolve(imagePath);
+  return fs.readFileSync(safePath).toString("base64");
 }
 
 function cleanup(dir: string): void {

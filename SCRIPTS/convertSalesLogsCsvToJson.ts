@@ -73,13 +73,14 @@ function parseArgs(argv: string[]): CliOptions {
 }
 
 function loadCsv(filePath: string): string[] {
-  if (!fs.existsSync(filePath)) {
+  const safePath = path.resolve(filePath);
+  if (!fs.existsSync(safePath)) {
     // eslint-disable-next-line no-console
-    console.error(`[convertSalesLogsCsvToJson] file not found: ${filePath}`);
+    console.error(`[convertSalesLogsCsvToJson] file not found: ${safePath}`);
     process.exit(1);
   }
 
-  const raw = fs.readFileSync(filePath, "utf8");
+  const raw = fs.readFileSync(safePath, "utf8");
   return raw
     .split(/\r?\n/)
     .map((line) => line.trim())

@@ -69,13 +69,14 @@ function parseArgs(argv: string[]): CliOptions {
 }
 
 function loadCsv(filePath: string): string[] {
-  if (!fs.existsSync(filePath)) {
+  const safePath = path.resolve(filePath);
+  if (!fs.existsSync(safePath)) {
     // eslint-disable-next-line no-console
-    console.error(`[convertTemplateMatrixCsvToJson] file not found: ${filePath}`);
+    console.error(`[convertTemplateMatrixCsvToJson] file not found: ${safePath}`);
     process.exit(1);
   }
 
-  const raw = fs.readFileSync(filePath, "utf8");
+  const raw = fs.readFileSync(safePath, "utf8");
   return raw
     .split(/\r?\n/) // CRLF / LF
     .map((line) => line.trim())
