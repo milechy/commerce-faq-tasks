@@ -515,7 +515,7 @@ RAJIUCE統括アーキテクト / Repo: commerce-faq-tasks
 
 ### D. テスト HTML
 - `public/carnation-test.html` を作成
-- `data-tenant="carnation"` `data-api-key="secret-123"` を設定
+- `data-tenant="carnation"` `data-api-key="<YOUR_API_KEY>"` を設定
 - 白ベース + 赤アクセント、指定ウェルカム文、質問例3ボタンを配置
 
 ## 完了条件

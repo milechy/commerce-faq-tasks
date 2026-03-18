@@ -20,7 +20,7 @@
 - クライアントは `x-api-key` ヘッダで送信
 
 ```http
-x-api-key: secret-123
+x-api-key: <YOUR_API_KEY>
 ```
 
 Node 側ミドルウェア:
