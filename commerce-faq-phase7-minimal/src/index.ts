@@ -12,7 +12,21 @@ import { createAuthMiddleware } from './agent/http/middleware/auth'
 import { WebhookNotifier } from './integration/webhookNotifier'
 
 const app = express()
+app.disable('x-powered-by')
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
+
+// Security headers (applied globally before all routes)
+app.use((_req, res, next) => {
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('X-XSS-Protection', '0')
+  res.setHeader('Content-Security-Policy', "default-src 'none'")
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('Cache-Control', 'no-store')
+  res.removeHeader('X-Powered-By')
+  next()
+})
 
 const auth = createAuthMiddleware(logger)
 const webhookNotifier = new WebhookNotifier(logger)
