@@ -20,7 +20,7 @@
 HTTP ヘッダ例:
 
 ```http
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Authorization: Bearer <YOUR_JWT_TOKEN>
 ```
 
 ## リソース: FAQ

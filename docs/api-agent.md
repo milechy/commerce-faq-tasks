@@ -17,7 +17,7 @@
 POST /agent.search HTTP/1.1
 Host: localhost:3100
 Content-Type: application/json
-x-api-key: secret-123
+x-api-key: <YOUR_API_KEY>
 ```
 
 ### ボディ
@@ -134,7 +134,7 @@ x-api-key: secret-123
 ```bash
 curl -X POST 'http://localhost:3100/agent.search' \
   -H 'Content-Type: application/json' \
-  -H 'x-api-key: secret-123' \
+  -H 'x-api-key: <YOUR_API_KEY>' \
   -d '{
     "q": "送料について教えて",
     "topK": 5,
