@@ -1,3 +1,4 @@
+import { timingSafeEqual, createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import type { Logger } from "pino";
 import type { TenantConfig } from "../types/contracts";
@@ -18,12 +19,18 @@ export function getTenantConfig(
   return tenantStore.get(tenantId);
 }
 
+function safeCompare(a: string, b: string): boolean {
+  const hashA = createHash('sha256').update(a).digest();
+  const hashB = createHash('sha256').update(b).digest();
+  return timingSafeEqual(hashA, hashB);
+}
+
 export function getTenantByApiKeyHash(
   hash: string
 ): TenantConfig | undefined {
   const entries = Array.from(tenantStore.values());
   for (const cfg of entries) {
-    if (cfg.security.apiKeyHash === hash) return cfg;
+    if (safeCompare(cfg.security.apiKeyHash, hash)) return cfg;
   }
   return undefined;
 }
@@ -48,8 +55,6 @@ export function seedTenantsFromEnv(): void {
   }
 
   // Support API_KEY / API_KEY_TENANT_ID and API_KEY_2 / API_KEY_2_TENANT_ID ... API_KEY_10
-  const crypto = require("node:crypto") as typeof import("node:crypto");
-
   const keyEntries: Array<{ key: string; tenantId: string }> = [];
 
   // API_KEY (no suffix) with API_KEY_TENANT_ID
@@ -68,7 +73,7 @@ export function seedTenantsFromEnv(): void {
   }
 
   for (const { key, tenantId } of keyEntries) {
-    const hash = crypto.createHash("sha256").update(key).digest("hex");
+    const hash = createHash("sha256").update(key).digest("hex");
     registerTenant({
       tenantId,
       name: tenantId,
