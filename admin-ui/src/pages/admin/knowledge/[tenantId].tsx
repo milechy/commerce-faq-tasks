@@ -835,8 +835,12 @@ function TextInputTab({
               ? `「${gapQuestion}」に回答できる情報を入力してください`
               : t("knowledge.text_placeholder")
           }
+          maxLength={10000}
           style={TEXTAREA_STYLE}
         />
+        <p style={{ textAlign: "right", fontSize: 12, color: text.length > 9000 ? "#ef4444" : "#6b7280", marginTop: 4 }}>
+          {text.length.toLocaleString()} / 10,000
+        </p>
       </div>
 
       <div style={CARD_STYLE}>

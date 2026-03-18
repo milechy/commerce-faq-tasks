@@ -15,6 +15,8 @@ export interface TrackUsageParams {
   inputTokens: number;
   outputTokens: number;
   featureUsed: FeatureUsed;
+  /** マージン倍率の上書き（省略時は MARGIN_MULTIPLIER を使用） */
+  marginOverride?: number;
 }
 
 let _pool: any | null = null;
@@ -41,13 +43,13 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     return;
   }
 
-  const { tenantId, requestId, model, inputTokens, outputTokens, featureUsed } = params;
+  const { tenantId, requestId, model, inputTokens, outputTokens, featureUsed, marginOverride } = params;
 
   let costLlmCents = 0;
   let costTotalCents = 0;
   try {
     costLlmCents   = calculateLLMCostCents({ model, inputTokens, outputTokens });
-    costTotalCents = calculateBillingAmountCents({ model, inputTokens, outputTokens });
+    costTotalCents = calculateBillingAmountCents({ model, inputTokens, outputTokens, marginOverride });
   } catch (err) {
     _logger?.warn({ err, requestId }, '[usageTracker] cost calculation error, defaulting to 0');
   }

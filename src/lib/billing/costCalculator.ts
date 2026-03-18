@@ -27,6 +27,8 @@ export interface UsageRecord {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  /** マージン倍率の上書き（省略時は MARGIN_MULTIPLIER を使用） */
+  marginOverride?: number;
 }
 
 /**
@@ -94,7 +96,8 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
     );
   }
 
+  const margin   = usage.marginOverride ?? MARGIN_MULTIPLIER;
   const llmUSD   = _calculateLLMCostUSD(usage);
   const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD;
-  return Math.ceil(totalUSD * MARGIN_MULTIPLIER * 100);
+  return Math.ceil(totalUSD * margin * 100);
 }

@@ -76,6 +76,7 @@ export async function generateFeedbackReply(
       inputTokens: Math.ceil(userMessage.length / 4),
       outputTokens: Math.ceil(safe.length / 4),
       featureUsed: "chat",
+      marginOverride: 1, // フィードバックAIは実コストのみ（利益なし）
     });
 
     return safe;
