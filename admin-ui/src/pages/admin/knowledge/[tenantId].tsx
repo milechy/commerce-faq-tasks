@@ -215,9 +215,11 @@ function GapQuestionBanner({ question }: { question: string }) {
 function GlobalKnowledgeCheckbox({
   isGlobal,
   onChange,
+  disabled = false,
 }: {
   isGlobal: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   const { t } = useLang();
   return (
@@ -226,7 +228,7 @@ function GlobalKnowledgeCheckbox({
         display: "flex",
         alignItems: "center",
         gap: 10,
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
         padding: "12px 14px",
         borderRadius: 10,
         border: `1px solid ${isGlobal ? "rgba(234,179,8,0.4)" : "#374151"}`,
@@ -237,13 +239,15 @@ function GlobalKnowledgeCheckbox({
         fontWeight: isGlobal ? 600 : 400,
         transition: "all 0.15s",
         userSelect: "none",
+        opacity: disabled ? 0.85 : 1,
       }}
     >
       <input
         type="checkbox"
         checked={isGlobal}
         onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 18, height: 18, accentColor: "#fbbf24", cursor: "pointer" }}
+        disabled={disabled}
+        style={{ width: 18, height: 18, accentColor: "#fbbf24", cursor: disabled ? "default" : "pointer" }}
       />
       📚 {t("knowledge.global_label")}
     </label>
@@ -863,7 +867,7 @@ function TextInputTab({
         )}
         {isSuperAdmin && (
           <div style={{ marginTop: 16 }}>
-            <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+            <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} disabled={tenantId === "global"} />
           </div>
         )}
       </div>
@@ -1201,7 +1205,7 @@ function ScrapeTab({
             )}
             {isSuperAdmin && (
               <div style={{ marginTop: 16 }}>
-                <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+                <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} disabled={tenantId === "global"} />
               </div>
             )}
           </div>
@@ -1436,7 +1440,7 @@ function PdfSection({ tenantId }: { tenantId: string }) {
         {t("knowledge.pdf_title")}
       </h3>
       {isSuperAdmin && (
-        <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+        <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} disabled={tenantId === "global"} />
       )}
       <FileUpload
         uploadEndpoint={uploadEndpoint}
