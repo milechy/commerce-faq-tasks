@@ -53,6 +53,7 @@ import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { registerAuthRoutes } from "./api/auth/routes";
+import { registerAvatarConfigRoutes } from "./api/avatar/avatarConfigRoutes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -537,6 +538,9 @@ registerTuningRoutes(app);
 registerKnowledgeGapRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
+
+// Phase40: アバター設定・LiveKitトークン取得API
+registerAvatarConfigRoutes(app, apiStack);
 
 async function startServer() {
   app.listen(port, () => {

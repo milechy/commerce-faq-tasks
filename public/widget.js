@@ -298,6 +298,55 @@
     '}',
     '.send-btn:disabled { background: #cbd5e1; cursor: not-allowed; }',
     '.send-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+
+    /* アバターエリア（LiveKit映像 — avatar=trueのみ表示） */
+    '.avatar-area {',
+    '  width: calc(100% - 16px);',
+    '  height: 200px;',
+    '  margin: 8px;',
+    '  border-radius: 12px;',
+    '  background: #1a1a2e;',
+    '  position: relative;',
+    '  flex-shrink: 0;',
+    '  overflow: hidden;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '}',
+    '.avatar-area.hidden { display: none; }',
+    '.avatar-video {',
+    '  width: 100%;',
+    '  height: 100%;',
+    '  object-fit: cover;',
+    '  display: block;',
+    '  border-radius: 12px;',
+    '}',
+    '.avatar-status {',
+    '  position: absolute;',
+    '  bottom: 10px;',
+    '  left: 50%;',
+    '  transform: translateX(-50%);',
+    '  background: rgba(0,0,0,0.6);',
+    '  color: #e2e8f0;',
+    '  font-size: 12px;',
+    '  padding: 4px 12px;',
+    '  border-radius: 999px;',
+    '  white-space: nowrap;',
+    '  pointer-events: none;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  gap: 6px;',
+    '}',
+    '.avatar-status.hidden { display: none; }',
+    '@keyframes spin { to { transform: rotate(360deg); } }',
+    '.avatar-spinner {',
+    '  width: 10px;',
+    '  height: 10px;',
+    '  border: 2px solid rgba(255,255,255,0.3);',
+    '  border-top-color: #fff;',
+    '  border-radius: 50%;',
+    '}',
+    prefersReducedMotion ? '' : '.avatar-spinner { animation: spin 0.8s linear infinite; }',
   ].join('\n');
 
   shadow.appendChild(styleEl);
@@ -422,6 +471,33 @@
   errorBanner.style.display = 'none';
   panel.appendChild(errorBanner);
 
+  /* --- アバターエリア（avatar=trueのテナントのみ表示。初期は hidden） --- */
+  var avatarVideo = document.createElement('video');
+  avatarVideo.className = 'avatar-video';
+  avatarVideo.setAttribute('autoplay', '');
+  avatarVideo.setAttribute('playsinline', '');
+  avatarVideo.setAttribute('muted', '');        // ミュート（音声はテキストバブルで補完）
+  avatarVideo.setAttribute('aria-label', 'AIアバター映像');
+
+  var avatarSpinner = document.createElement('div');
+  avatarSpinner.className = 'avatar-spinner';
+
+  var avatarStatusText = document.createElement('span');
+  avatarStatusText.textContent = 'アバターに接続中...';
+
+  var avatarStatus = document.createElement('div');
+  avatarStatus.className = 'avatar-status';
+  avatarStatus.appendChild(avatarSpinner);
+  avatarStatus.appendChild(avatarStatusText);
+
+  var avatarArea = document.createElement('div');
+  avatarArea.className = 'avatar-area hidden';
+  avatarArea.setAttribute('aria-hidden', 'true');
+  avatarArea.appendChild(avatarVideo);
+  avatarArea.appendChild(avatarStatus);
+
+  panel.appendChild(avatarArea);
+
   /* --- メッセージエリア --- */
   var messagesArea = el('div', { className: 'messages', role: 'log', 'aria-live': 'polite', 'aria-label': 'チャット履歴' });
   var emptyStateEl = el('div', { className: 'empty-state' }, 'ご質問をどうぞ。お気軽にお聞きください。');
@@ -460,6 +536,12 @@
   var isOpen = false;
   var isLoading = false;
   var messages = [];
+
+  /* アバター状態 */
+  var avatarConfigCache = null;   // { enabled, livekit: { wsUrl, token, roomName } }
+  var avatarConfigFetched = false;
+  var livekitRoom = null;
+  var livekitSDKLoaded = false;
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
     var v = c === 'x' ? r : (r & 0x3 | 0x8);
@@ -503,6 +585,129 @@
 
   function scrollToBottom() {
     messagesArea.scrollTop = messagesArea.scrollHeight;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* アバター — LiveKit接続（Phase40）                                    */
+  /* ------------------------------------------------------------------ */
+
+  var LIVEKIT_CDN = 'https://cdn.jsdelivr.net/npm/livekit-client@2.6/dist/livekit-client.umd.min.js';
+
+  function loadLiveKitSDK(callback) {
+    if (livekitSDKLoaded && window.LivekitClient) { callback(null); return; }
+    var script = document.createElement('script');
+    script.src = LIVEKIT_CDN;
+    script.onload = function () {
+      livekitSDKLoaded = true;
+      callback(null);
+    };
+    script.onerror = function () {
+      callback(new Error('LiveKit SDK load failed'));
+    };
+    document.head.appendChild(script);
+  }
+
+  function hideAvatarArea() {
+    avatarArea.classList.add('hidden');
+    avatarArea.setAttribute('aria-hidden', 'true');
+    // videoのsrcObjectをクリア
+    try {
+      if (avatarVideo.srcObject) {
+        var tracks = avatarVideo.srcObject.getTracks ? avatarVideo.srcObject.getTracks() : [];
+        tracks.forEach(function (t) { t.stop(); });
+        avatarVideo.srcObject = null;
+      }
+    } catch (_e) {}
+  }
+
+  function showAvatarConnecting() {
+    avatarArea.classList.remove('hidden');
+    avatarArea.setAttribute('aria-hidden', 'false');
+    avatarStatus.classList.remove('hidden');
+    avatarStatusText.textContent = 'アバターに接続中...';
+    avatarSpinner.style.display = '';
+  }
+
+  function showAvatarConnected() {
+    avatarStatus.classList.add('hidden');
+  }
+
+  function connectToLiveKit(config) {
+    if (!window.LivekitClient) { hideAvatarArea(); return; }
+
+    var LK = window.LivekitClient;
+    var room = new LK.Room();
+    livekitRoom = room;
+
+    room.on(LK.RoomEvent.TrackSubscribed, function (track) {
+      if (track.kind === LK.Track.Kind.Video) {
+        // createElement で attach（innerHTML 禁止）
+        var existingEls = track.attachedElements ? track.attachedElements.slice() : [];
+        existingEls.forEach(function (e) { try { track.detach(e); } catch (_e2) {} });
+        track.attach(avatarVideo);
+        showAvatarConnected();
+      }
+    });
+
+    room.on(LK.RoomEvent.Disconnected, function () {
+      livekitRoom = null;
+      hideAvatarArea();
+    });
+
+    room.connect(config.wsUrl, config.token).catch(function () {
+      // 接続失敗 → テキストチャットにフォールバック（エラーは表示しない）
+      livekitRoom = null;
+      hideAvatarArea();
+    });
+  }
+
+  function initAvatar() {
+    if (!apiKey) return; // API keyなし → スキップ
+
+    // 設定取得済みの場合はキャッシュを使用
+    if (avatarConfigFetched) {
+      if (avatarConfigCache && avatarConfigCache.enabled) {
+        showAvatarConnecting();
+        loadLiveKitSDK(function (err) {
+          if (err) { hideAvatarArea(); return; }
+          connectToLiveKit(avatarConfigCache.livekit);
+        });
+      }
+      return;
+    }
+
+    fetch(apiBase + '/api/avatar/config', {
+      headers: { 'x-api-key': apiKey },
+    })
+      .then(function (res) { return res.ok ? res.json() : { enabled: false }; })
+      .then(function (config) {
+        avatarConfigFetched = true;
+        avatarConfigCache = config;
+
+        if (!config.enabled) return; // avatar無効 → 何もしない
+
+        showAvatarConnecting();
+        loadLiveKitSDK(function (err) {
+          if (err) { hideAvatarArea(); return; }
+          connectToLiveKit(config.livekit);
+        });
+      })
+      .catch(function () {
+        avatarConfigFetched = true;
+        avatarConfigCache = { enabled: false };
+        // ネットワークエラー → 無音でスキップ
+      });
+  }
+
+  function cleanupAvatar() {
+    if (livekitRoom) {
+      try { livekitRoom.disconnect(); } catch (_e) {}
+      livekitRoom = null;
+    }
+    hideAvatarArea();
+    // 次回open時に再接続できるよう config のみ保持（token は使い捨てなのでキャッシュリセット）
+    avatarConfigFetched = false;
+    avatarConfigCache = null;
   }
 
   function renderMessages() {
@@ -600,6 +805,8 @@
     fab.appendChild(CLOSE_SVG.cloneNode(true));
     textarea.focus();
     emitToHost('widget:opened', {});
+    // Phase40: アバター初期化（avatar=falseなら即リターン）
+    initAvatar();
   }
 
   function closePanel() {
@@ -612,6 +819,8 @@
     while (fab.firstChild) { fab.removeChild(fab.firstChild); }
     fab.appendChild(svgIcon(CHAT_SVG_PATH));
     emitToHost('widget:closed', {});
+    // Phase40: LiveKit切断（トークンは1回使い切り → 次回open時に再取得）
+    cleanupAvatar();
   }
 
   function togglePanel() {
