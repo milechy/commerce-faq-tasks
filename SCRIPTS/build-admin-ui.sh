@@ -45,7 +45,7 @@ fi
 echo "✅ env check passed (${ENV_FILE}): ${VITE_SUPABASE_URL}"
 
 # ── キャッシュクリア + ビルド ─────────────────────────────────
-rm -rf dist node_modules/.vite
+rm -rf dist node_modules/.vite node_modules/.cache .vite
 pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 pnpm build
 
