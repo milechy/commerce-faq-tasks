@@ -114,6 +114,8 @@ export async function getGaps(
   );
   const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
 
+  const limitPos = args.length + 1;
+  const offsetPos = args.length + 2;
   const listArgs = [...args, limit, offset];
   const listResult = await pool.query<KnowledgeGap>(
     `SELECT id, tenant_id, user_question, session_id, message_id,
@@ -121,7 +123,7 @@ export async function getGaps(
      FROM knowledge_gaps
      ${whereClause}
      ORDER BY created_at DESC
-     LIMIT $${args.length + 1} OFFSET $${args.length + 2}`,
+     LIMIT $${limitPos} OFFSET $${offsetPos}`,
     listArgs,
   );
 
