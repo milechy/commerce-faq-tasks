@@ -89,7 +89,7 @@ export default function UsageChart({ data, mode }: UsageChartProps) {
                   fontSize={9}
                   fill="#6b7280"
                 >
-                  {data[i].date.slice(8)}日
+                  {data[i].date.slice(8, 10)}日
                 </text>
               )}
             </g>

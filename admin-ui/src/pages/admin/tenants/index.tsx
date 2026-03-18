@@ -507,11 +507,17 @@ export default function TenantsPage() {
                   }}
                 >
                   <div>
-                    <span style={{ color: "#6b7280" }}>{t("tenants.api_keys", { n: tenant.apiKeyCount })}</span>
+                    <span style={{ color: "#6b7280" }}>{t("tenants.api_keys", { n: tenant.apiKeyCount ?? 0 })}</span>
                   </div>
                   <div>
                     <span style={{ color: "#6b7280" }}>
-                      {t("tenants.created_at", { date: new Date(tenant.createdAt).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" }) })}
+                      {(() => {
+                        const d = tenant.createdAt ? new Date(tenant.createdAt) : null;
+                        const dateStr = d && !isNaN(d.getTime())
+                          ? d.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" })
+                          : "-";
+                        return t("tenants.created_at", { date: dateStr });
+                      })()}
                     </span>
                   </div>
                 </div>

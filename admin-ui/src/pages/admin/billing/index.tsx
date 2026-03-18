@@ -50,6 +50,12 @@ function fmtNum(n: number): string {
   return n.toLocaleString("ja-JP");
 }
 
+function fmtDate(dateStr: string): string {
+  const s = dateStr.slice(0, 10); // normalize ISO to "YYYY-MM-DD"
+  const [y, m, d] = s.split("-");
+  return `${y}年${m}月${d}日`;
+}
+
 /** YYYY-MM → from/to の日付範囲を返す */
 function monthToDateRange(month: string): { from: string; to: string } {
   const [year, mon] = month.split("-").map(Number);
@@ -708,7 +714,7 @@ export default function BillingPage() {
                         key={d.date}
                         style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}
                       >
-                        <td style={{ padding: "10px 12px", color: "#d1d5db" }}>{d.date}</td>
+                        <td style={{ padding: "10px 12px", color: "#d1d5db" }}>{fmtDate(d.date)}</td>
                         <td style={{ padding: "10px 12px", color: "#f9fafb", fontWeight: 600 }}>
                           {fmtNum(d.requests)}
                         </td>
