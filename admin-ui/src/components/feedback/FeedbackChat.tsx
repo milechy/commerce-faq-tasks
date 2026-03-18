@@ -205,26 +205,26 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
             {messages.map((msg) => {
               const isMe = msg.sender_role === "client_admin";
               return (
-                <div
-                  key={msg.id}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: isMe ? "flex-end" : "flex-start",
-                  }}
-                >
+                <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start" }}>
                   <div style={{
-                    maxWidth: "80%",
-                    padding: "9px 13px",
-                    borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                    background: isMe ? "rgba(59,130,246,0.25)" : "rgba(55,65,81,0.6)",
-                    border: isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
-                    color: "#f9fafb",
-                    fontSize: 14,
-                    lineHeight: 1.5,
-                    wordBreak: "break-word",
+                    display: "flex",
+                    justifyContent: isMe ? "flex-end" : "flex-start",
+                    width: "100%",
                   }}>
-                    {msg.content}
+                    <div style={{
+                      maxWidth: "80%",
+                      padding: "9px 13px",
+                      borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+                      background: isMe ? "rgba(59,130,246,0.25)" : "rgba(75,85,99,0.8)",
+                      border: isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
+                      color: "#f9fafb",
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                      wordBreak: "break-word",
+                      textAlign: "left",
+                    }}>
+                      {msg.content}
+                    </div>
                   </div>
                   <span style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
                     {formatTime(msg.created_at)}
