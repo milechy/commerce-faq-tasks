@@ -723,7 +723,7 @@ function TextInputTab({
 
   const [text, setText] = useState("");
   const [category, setCategory] = useState<Category>("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [isGlobal, setIsGlobal] = useState(tenantId === "global");
   const [converting, setConverting] = useState(false);
   const [preview, setPreview] = useState<FaqEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1046,7 +1046,7 @@ function ScrapeTab({
 
   const [urls, setUrls] = useState("");
   const [category, setCategory] = useState<Category>("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [isGlobal, setIsGlobal] = useState(tenantId === "global");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ScrapePreviewItem[] | null>(null);
@@ -1381,7 +1381,7 @@ function ScrapeTab({
 function PdfSection({ tenantId }: { tenantId: string }) {
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [isGlobal, setIsGlobal] = useState(tenantId === "global");
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<OcrJobStatus | null>(null);
