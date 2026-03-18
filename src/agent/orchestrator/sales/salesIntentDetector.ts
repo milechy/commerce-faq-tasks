@@ -64,7 +64,7 @@ function loadRulesFromYaml(): SalesIntentRuleConfig | null {
   if (cachedRules) return cachedRules
 
   try {
-    const filePath = path.resolve(process.cwd(), 'config/salesIntentRules.yaml')
+    const filePath = path.resolve(process.cwd(), path.normalize('config/salesIntentRules.yaml'))
     const raw = fs.readFileSync(filePath, 'utf8')
     const parsed = yaml.load(raw) as SalesIntentRuleConfig | undefined
     if (!parsed) {

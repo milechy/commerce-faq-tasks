@@ -14,6 +14,7 @@
  */
 
 import fs from "node:fs";
+import path from "node:path";
 
 type Stage = "clarify" | "propose" | "recommend" | "close" | string;
 
@@ -67,17 +68,18 @@ function printHelpAndExit(): never {
   process.exit(0);
 }
 
-function loadLogs(path: string): SalesLogEntry[] {
-  if (!fs.existsSync(path)) {
-    throw new Error(`[analyzeSalesKpiFunnel] file not found: ${path}`);
+function loadLogs(filePath: string): SalesLogEntry[] {
+  const safePath = path.resolve(filePath);
+  if (!fs.existsSync(safePath)) {
+    throw new Error(`[analyzeSalesKpiFunnel] file not found: ${safePath}`);
   }
 
-  const raw = fs.readFileSync(path, "utf8");
+  const raw = fs.readFileSync(safePath, "utf8");
   const data = JSON.parse(raw);
 
   if (!Array.isArray(data)) {
     throw new Error(
-      `[analyzeSalesKpiFunnel] expected JSON array in ${path}, got ${typeof data}`
+      `[analyzeSalesKpiFunnel] expected JSON array in ${safePath}, got ${typeof data}`
     );
   }
 
