@@ -72,34 +72,24 @@ QWEN_API_KEY, OPENAI_API_KEY
 - Slack Webhook: free
 - Groq API: usage-based (120B ratio ≤10%)
 
-## VPSデプロイ手順（必須）
+## VPSデプロイルール（厳守）
 
-VPSは `dist/src/index.js`（TypeScriptコンパイル済みJS）をPM2で実行しています。
-TypeScriptの変更後は **必ず `pnpm build` が必要** です。
+⚠️ 以下のルールはClaude Code CLIが必ず従うこと。ユーザーへの提案時も同様。
 
-### バックエンド変更時（src/ 配下）
+### デプロイコマンド
+
 ```bash
-cd ~/Documents/GitHub/commerce-faq-tasks
-git add -A && git commit -m "説明" && git push origin main
-ssh root@65.108.159.161 "cd /opt/rajiuce && git pull origin main && pnpm install && pnpm build && pm2 restart rajiuce-api"
+bash SCRIPTS/deploy-vps.sh
 ```
 
-### フロントエンド変更時（admin-ui/ 配下）
-```bash
-cd ~/Documents/GitHub/commerce-faq-tasks
-git add -A && git commit -m "説明" && git push origin main
-ssh root@65.108.159.161 "cd /opt/rajiuce && git pull origin main && cd admin-ui && pnpm build && pm2 restart rajiuce-admin"
-```
+これが唯一のデプロイ手順。以下の個別コマンドは禁止:
+- ❌ `ssh root@... "git pull && pnpm build && pm2 restart"`
+- ❌ `ssh root@... "cd admin-ui && pnpm build"`
+- ❌ VPSで直接 `git pull` を実行
 
-### 両方変更時
-```bash
-cd ~/Documents/GitHub/commerce-faq-tasks
-git add -A && git commit -m "説明" && git push origin main
-ssh root@65.108.159.161 "cd /opt/rajiuce && git pull origin main && pnpm install && pnpm build && pm2 restart rajiuce-api && cd admin-ui && pnpm build && pm2 restart rajiuce-admin"
-```
+deploy-vps.sh は rsync + API build + Admin UI build（キャッシュクリア付き）+ バンドル検証 + PM2 restart を一括で行う。
 
 ### 重要な注意事項
-- `pnpm build` を忘れるとTypeScriptの変更が反映されない
 - ecosystem.config.cjs の script は `dist/src/index.js`（`dist/index.js` ではない）
-- PM2は `.env` を自動で読まない。dotenv/config がsrc/index.tsの先頭でimportされている
+- PM2は `.env` を自動で読まない。dotenv/config が src/index.ts の先頭でimportされている
 - Admin UIは `serve -s admin-ui/dist -l 5173` で静的ファイル配信
