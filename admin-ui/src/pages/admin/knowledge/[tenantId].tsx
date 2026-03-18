@@ -1497,8 +1497,11 @@ export default function TenantKnowledgePage() {
     tabParam === "text" || tabParam === "scrape" ? tabParam : "list"
   );
 
-  // tenantId の解決: URL params → JWTのtenantId → フォールバック
-  const resolvedTenantId = tenantId ?? user?.tenantId ?? "";
+  // tenantId の解決: URL params → pathnameの末尾 → JWTのtenantId
+  // /admin/knowledge/global のように固定パスの場合 useParams では undefined になるため
+  // pathname から取得するフォールバックを追加
+  const pathTenantId = tenantId ?? location.pathname.split("/").pop() ?? "";
+  const resolvedTenantId = pathTenantId || user?.tenantId || "";
 
   useEffect(() => {
     void (async () => {
