@@ -119,9 +119,13 @@ export function registerFaqCrudRoutes(
     const { limit, offset, search, sort, order, category } = parsed.data;
     const isPublishedRaw = req.query.is_published as string | undefined;
 
-    // sort は許可リストから直接埋め込み（SQLインジェクション対策済み）
-    const SORT_ALLOWLIST = ["created_at", "updated_at", "category"] as const;
-    const safeSortCol = SORT_ALLOWLIST.includes(sort as any) ? sort : "created_at";
+    // ORDER BY — Zodのenum検証済み値を明示的なマッピングで二重保護
+    const SORT_COLUMN_MAP: Record<string, string> = {
+      created_at: "created_at",
+      updated_at: "updated_at",
+      category: "category",
+    };
+    const safeSortCol = SORT_COLUMN_MAP[sort] ?? "created_at";
     const safeOrder = order === "asc" ? "ASC" : "DESC";
 
     try {
