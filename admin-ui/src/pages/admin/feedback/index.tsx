@@ -276,18 +276,21 @@ export default function FeedbackPage() {
                           {msg.sender_email ?? "client_admin"}
                         </span>
                       )}
-                      <div style={{
-                        maxWidth: "70%",
-                        padding: "10px 14px",
-                        borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                        background: isMe ? "rgba(59,130,246,0.2)" : "rgba(55,65,81,0.5)",
-                        border: isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
-                        color: "#f9fafb",
-                        fontSize: 14,
-                        lineHeight: 1.6,
-                        wordBreak: "break-word",
-                      }}>
-                        {msg.content}
+                      <div style={{ display: "flex", justifyContent: isMe ? "flex-end" : "flex-start", width: "100%" }}>
+                        <div style={{
+                          maxWidth: "70%",
+                          padding: "10px 14px",
+                          borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+                          background: isMe ? "rgba(59,130,246,0.2)" : "rgba(55,65,81,0.5)",
+                          border: isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
+                          color: "#f9fafb",
+                          fontSize: 14,
+                          lineHeight: 1.6,
+                          wordBreak: "break-word",
+                          textAlign: "left",
+                        }}>
+                          {msg.content}
+                        </div>
                       </div>
                       <span style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>
                         {formatTime(msg.created_at)}
