@@ -189,9 +189,9 @@ export async function runOcrPipeline(
       const base64 = fs.readFileSync(imagePaths[i]).toString("base64");
       const ocrText = await callQwenWithRetry(base64, pageNum, qwenApiKey);
 
-      // 書籍内容保護: ログには先頭30文字のみ出力
+      // 書籍内容保護: テキスト内容をログに含めない（Anti-Slopルール準拠）
       process.stdout.write(
-        `[ocrPipeline] page ${pageNum}/${totalPages}: ${ocrText.slice(0, 30)}...\n`
+        `[ocrPipeline] page ${pageNum}/${totalPages}: ${ocrText.length} chars extracted\n`
       );
 
       const chunks = splitIntoChunks(ocrText, CHUNK_SIZE);
