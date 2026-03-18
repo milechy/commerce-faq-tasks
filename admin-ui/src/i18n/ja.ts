@@ -238,7 +238,7 @@ const ja = {
   "role.anonymous": "匿名",
 
   // Chat test page
-  "chat_test.button": "💬 チャットをテストする",
+  "chat_test.button": "💬 チャットテスト",
   "chat_test.title": "チャットをテストする",
   "chat_test.description": "お客様に見える画面を確認できます",
   "chat_test.start": "チャットを開始する",

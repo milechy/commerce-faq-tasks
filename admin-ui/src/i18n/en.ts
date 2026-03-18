@@ -240,7 +240,7 @@ const en: Record<TranslationKey, string> = {
   "role.anonymous": "Anonymous",
 
   // Chat test page
-  "chat_test.button": "💬 Test Chat",
+  "chat_test.button": "💬 Chat Test",
   "chat_test.title": "Test Chat",
   "chat_test.description": "Preview the chat your customers will see",
   "chat_test.start": "Start Chat",
