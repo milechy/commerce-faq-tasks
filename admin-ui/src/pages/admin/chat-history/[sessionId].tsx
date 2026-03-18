@@ -231,9 +231,6 @@ export default function ChatHistorySessionPage() {
               >
                 {sessionInfo.tenant_id}
               </span>
-              <span style={{ fontSize: 13, color: "#9ca3af", fontFamily: "monospace" }}>
-                {sessionInfo.session_id}
-              </span>
               <span style={{ fontSize: 13, color: "#6b7280" }}>
                 🕐 {formatDateTime(sessionInfo.started_at)}
               </span>
@@ -246,6 +243,11 @@ export default function ChatHistorySessionPage() {
               String(messages.length)
             )}
           </span>
+          {sessionInfo && (
+            <span style={{ fontSize: 11, color: "#4b5563", fontFamily: "monospace", marginLeft: "auto" }}>
+              {sessionInfo.session_id.slice(0, 8)}…
+            </span>
+          )}
         </div>
       </header>
 

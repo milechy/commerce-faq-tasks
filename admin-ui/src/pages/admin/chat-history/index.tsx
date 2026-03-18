@@ -192,7 +192,7 @@ export default function ChatHistoryPage() {
               }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0 }}>
-                {/* Tenant badge + session ID */}
+                {/* Tenant badge */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span
                     style={{
@@ -207,29 +207,26 @@ export default function ChatHistoryPage() {
                   >
                     {session.tenant_id}
                   </span>
-                  <span style={{ fontSize: 13, color: "#9ca3af", fontFamily: "monospace" }}>
-                    {session.session_id}
-                  </span>
                 </div>
 
-                {/* Preview */}
+                {/* First question preview (primary) */}
                 {session.first_message_preview && (
                   <span
                     style={{
-                      fontSize: 13,
-                      color: "#6b7280",
+                      fontSize: 15,
+                      color: "#e5e7eb",
+                      fontWeight: 500,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      maxWidth: 400,
                     }}
                   >
                     {session.first_message_preview}
                   </span>
                 )}
 
-                {/* Date + message count */}
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                {/* Date + message count + UUID (auxiliary) */}
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={{ fontSize: 13, color: "#6b7280" }}>
                     🕐 {formatDate(session.last_message_at)}
                   </span>
@@ -239,6 +236,9 @@ export default function ChatHistoryPage() {
                       "{n}",
                       String(session.message_count)
                     )}
+                  </span>
+                  <span style={{ fontSize: 11, color: "#4b5563", fontFamily: "monospace" }}>
+                    {session.session_id.slice(0, 8)}…
                   </span>
                 </div>
               </div>
