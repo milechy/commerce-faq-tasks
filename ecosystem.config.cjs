@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: "rajiuce-api",
-      script: "dist/index.js",
+      script: "dist/src/index.js",
       cwd: __dirname,
       instances: 1,
       exec_mode: "fork",
