@@ -16,6 +16,12 @@ const createTenantSchema = z.object({
   plan: z.enum(planValues).default("starter"),
 });
 
+const featuresSchema = z.object({
+  avatar: z.boolean(),
+  voice: z.boolean(),
+  rag: z.boolean(),
+});
+
 const updateTenantSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   plan: z.enum(planValues).optional(),
@@ -32,6 +38,9 @@ const updateTenantSchema = z.object({
   billing_enabled: z.boolean().optional(),
   billing_free_from: z.string().datetime({ offset: true }).nullable().optional(),
   billing_free_until: z.string().datetime({ offset: true }).nullable().optional(),
+  // Phase40: アバター機能フラグ
+  features: featuresSchema.optional(),
+  lemonslice_agent_id: z.string().max(200).nullable().optional(),
 });
 
 export function registerTenantAdminRoutes(app: Express, db: Pool): void {
@@ -86,7 +95,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   app.get("/v1/admin/tenants", tenantAuth, requireSuperAdmin, async (_req: Request, res: Response) => {
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, created_at, updated_at FROM tenants ORDER BY created_at DESC`
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, created_at, updated_at FROM tenants ORDER BY created_at DESC`
       );
       return res.json({ tenants: result.rows, total: result.rows.length });
     } catch (err) {
@@ -140,7 +149,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {
@@ -182,10 +191,13 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.billing_enabled !== undefined) { params.push(fields.billing_enabled); setClauses.push(`billing_enabled = $${params.length}`); }
       if ('billing_free_from' in fields) { params.push(fields.billing_free_from ?? null); setClauses.push(`billing_free_from = $${params.length}`); }
       if ('billing_free_until' in fields) { params.push(fields.billing_free_until ?? null); setClauses.push(`billing_free_until = $${params.length}`); }
+      // Phase40: アバター機能フラグ
+      if (fields.features !== undefined) { params.push(JSON.stringify(fields.features)); setClauses.push(`features = $${params.length}::jsonb`); }
+      if ('lemonslice_agent_id' in fields) { params.push(fields.lemonslice_agent_id ?? null); setClauses.push(`lemonslice_agent_id = $${params.length}`); }
       setClauses.push(`updated_at = NOW()`);
       params.push(id);
       const result = await db.query(
-        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, created_at, updated_at`,
+        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, created_at, updated_at`,
         params
       );
       return res.json(result.rows[0]);
