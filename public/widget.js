@@ -573,6 +573,17 @@
     avatarArea.style.display = 'flex';
     avatarStatusText.style.display = '';
 
+    // SDK 既にロード済みならそのまま接続
+    if (window.LivekitClient) {
+      connectLiveKit();
+      return;
+    }
+
+    // スクリプトタグが既に DOM にある（ロード中）なら追加しない
+    if (document.querySelector('script[src="' + LIVEKIT_SDK_URL + '"]')) {
+      return;
+    }
+
     // LiveKit Client SDK を CDN から動的ロード（innerHTML 禁止 — createElement を使用）
     var script = document.createElement('script');
     script.src = LIVEKIT_SDK_URL;
@@ -586,6 +597,12 @@
 
   function connectLiveKit() {
     if (!avatarConfig || !window.LivekitClient) return;
+
+    // 既に接続済み（またはRoom再利用可能）なら再接続しない
+    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+      avatarArea.style.display = 'flex';
+      return;
+    }
 
     try {
       var LK = window.LivekitClient;
@@ -604,6 +621,9 @@
       room.on(LK.RoomEvent.Disconnected, function () {
         avatarArea.style.display = 'none';
         window.__rajiuceRoom = null;
+        // Room が切断されたら次のパネル開閉で再fetch可能にする
+        avatarConfigFetched = false;
+        avatarConfig = null;
       });
 
       room.connect(avatarConfig.livekitUrl, avatarConfig.token)
@@ -648,6 +668,8 @@
   }
 
   function cleanupLiveKit() {
+    // 明示的な完全終了用（ページ離脱など）
+    // 通常の closePanel() では呼ばない — Room は切断せず保持する
     try {
       if (window.__rajiuceRoom) {
         window.__rajiuceRoom.disconnect();
@@ -755,7 +777,12 @@
     fab.appendChild(CLOSE_SVG.cloneNode(true));
     textarea.focus();
     emitToHost('widget:opened', {});
-    fetchAvatarConfig();
+    // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
+    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+      avatarArea.style.display = 'flex';
+    } else {
+      fetchAvatarConfig();
+    }
   }
 
   function closePanel() {
@@ -768,7 +795,9 @@
     while (fab.firstChild) { fab.removeChild(fab.firstChild); }
     fab.appendChild(svgIcon(CHAT_SVG_PATH));
     emitToHost('widget:closed', {});
-    cleanupLiveKit();
+    // LiveKit Room は切断しない（Agentが Room 内で処理中のため）
+    // Room 切断は RoomEvent.Disconnected で自動的に処理される
+    avatarArea.style.display = 'none';
   }
 
   function togglePanel() {
