@@ -298,6 +298,27 @@
     '}',
     '.send-btn:disabled { background: #cbd5e1; cursor: not-allowed; }',
     '.send-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+
+    /* アバターエリア（avatar=true テナントのみ表示） */
+    '.avatar-area {',
+    '  width: calc(100% - 16px);',
+    '  height: 220px;',
+    '  margin: 8px;',
+    '  border-radius: 12px;',
+    '  background: #1a1a2e;',
+    '  overflow: hidden;',
+    '  position: relative;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '}',
+    '.avatar-status { color: #888; font-size: 13px; }',
+    '.avatar-video {',
+    '  width: 100%;',
+    '  height: 100%;',
+    '  object-fit: cover;',
+    '  border-radius: 12px;',
+    '}',
   ].join('\n');
 
   shadow.appendChild(styleEl);
@@ -422,6 +443,16 @@
   errorBanner.style.display = 'none';
   panel.appendChild(errorBanner);
 
+  /* --- アバターエリア（初期は非表示 — avatar=true テナントのみ使用） --- */
+  var avatarArea = document.createElement('div');
+  avatarArea.className = 'avatar-area';
+  avatarArea.style.display = 'none';
+  var avatarStatusText = document.createElement('div');
+  avatarStatusText.className = 'avatar-status';
+  avatarStatusText.textContent = 'アバターに接続中...';
+  avatarArea.appendChild(avatarStatusText);
+  panel.appendChild(avatarArea);
+
   /* --- メッセージエリア --- */
   var messagesArea = el('div', { className: 'messages', role: 'log', 'aria-live': 'polite', 'aria-label': 'チャット履歴' });
   var emptyStateEl = el('div', { className: 'empty-state' }, 'ご質問をどうぞ。お気軽にお聞きください。');
@@ -460,6 +491,10 @@
   var isOpen = false;
   var isLoading = false;
   var messages = [];
+
+  /* アバター状態 */
+  var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId }
+  var avatarConfigFetched = false;
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -504,6 +539,125 @@
 
   function scrollToBottom() {
     messagesArea.scrollTop = messagesArea.scrollHeight;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* アバター — LiveKit接続                                               */
+  /* ------------------------------------------------------------------ */
+
+  var LIVEKIT_SDK_URL = 'https://cdn.livekit.io/livekit-client/dist/livekit-client.umd.min.js';
+
+  function fetchAvatarConfig() {
+    if (avatarConfigFetched || !apiKey) return;
+    avatarConfigFetched = true;
+
+    fetch(apiBase + '/api/avatar/room-token', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey },
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.enabled) return;
+        avatarConfig = data;
+        initLiveKitAvatar();
+      })
+      .catch(function (e) {
+        console.warn('[FAQ Widget] Avatar config fetch failed:', e && e.message);
+      });
+  }
+
+  function initLiveKitAvatar() {
+    if (!avatarConfig) return;
+
+    // アバターエリアを表示（接続中テキスト付き）
+    avatarArea.style.display = 'flex';
+    avatarStatusText.style.display = '';
+
+    // LiveKit Client SDK を CDN から動的ロード（innerHTML 禁止 — createElement を使用）
+    var script = document.createElement('script');
+    script.src = LIVEKIT_SDK_URL;
+    script.onload = function () { connectLiveKit(); };
+    script.onerror = function () {
+      avatarArea.style.display = 'none';
+      console.warn('[FAQ Widget] LiveKit SDK load failed');
+    };
+    document.head.appendChild(script);
+  }
+
+  function connectLiveKit() {
+    if (!avatarConfig || !window.LivekitClient) return;
+
+    try {
+      var LK = window.LivekitClient;
+      var room = new LK.Room({ adaptiveStream: true, dynacast: true });
+
+      room.on(LK.RoomEvent.TrackSubscribed, function (track) {
+        if (track.kind !== 'video') return;
+        // createElement で video 要素を生成（innerHTML 禁止）
+        var videoEl = track.attach();
+        videoEl.className = 'avatar-video';
+        // ステータステキストを非表示にしてビデオを追加
+        avatarStatusText.style.display = 'none';
+        avatarArea.appendChild(videoEl);
+      });
+
+      room.on(LK.RoomEvent.Disconnected, function () {
+        avatarArea.style.display = 'none';
+        window.__rajiuceRoom = null;
+      });
+
+      room.connect(avatarConfig.livekitUrl, avatarConfig.token)
+        .then(function () {
+          console.log('[FAQ Widget] Connected to LiveKit room');
+
+          // LiveKit Data Channel 経由でウェルカムメッセージを送信
+          // （Python Agent がテキストを受信して LLM 処理 → TTS → アバター映像を返す）
+          try {
+            var encoder = new TextEncoder();
+            var localParticipant = room.localParticipant;
+            if (localParticipant) {
+              localParticipant.publishData(
+                encoder.encode(JSON.stringify({ type: 'widget_connected' })),
+                { reliable: true }
+              );
+            }
+          } catch (_e) {}
+        })
+        .catch(function (e) {
+          avatarArea.style.display = 'none';
+          console.warn('[FAQ Widget] LiveKit connect failed:', e && e.message);
+        });
+
+      window.__rajiuceRoom = room;
+    } catch (e) {
+      avatarArea.style.display = 'none';
+      console.warn('[FAQ Widget] LiveKit init failed:', e && e.message);
+    }
+  }
+
+  function sendToLiveKit(text) {
+    try {
+      var room = window.__rajiuceRoom;
+      if (!room || !room.localParticipant) return;
+      var encoder = new TextEncoder();
+      room.localParticipant.publishData(
+        encoder.encode(JSON.stringify({ type: 'chat', text: text })),
+        { reliable: true }
+      );
+    } catch (_e) {}
+  }
+
+  function cleanupLiveKit() {
+    try {
+      if (window.__rajiuceRoom) {
+        window.__rajiuceRoom.disconnect();
+        window.__rajiuceRoom = null;
+      }
+    } catch (_e) {}
+    avatarArea.style.display = 'none';
+    avatarStatusText.style.display = '';
+    avatarConfigFetched = false;
+    avatarConfig = null;
   }
 
   function renderMessages() {
@@ -601,6 +755,7 @@
     fab.appendChild(CLOSE_SVG.cloneNode(true));
     textarea.focus();
     emitToHost('widget:opened', {});
+    fetchAvatarConfig();
   }
 
   function closePanel() {
@@ -613,6 +768,7 @@
     while (fab.firstChild) { fab.removeChild(fab.firstChild); }
     fab.appendChild(svgIcon(CHAT_SVG_PATH));
     emitToHost('widget:closed', {});
+    cleanupLiveKit();
   }
 
   function togglePanel() {
@@ -645,6 +801,7 @@
     textarea.disabled = true;
 
     emitToHost('user:message', { messageLength: text.length });
+    sendToLiveKit(text.trim());
 
     if (currentAbortController) {
       currentAbortController.abort();
