@@ -27,16 +27,28 @@ module.exports = {
       merge_logs: true,
     },
     {
+      // serve の PATH 解決が不安定なため絶対パスで指定
       name: "rajiuce-admin",
-      script: "serve",
-      args: "-s admin-ui/dist -l 5173",
-      cwd: __dirname,
+      script: "/usr/bin/serve",
+      args: "-s /opt/rajiuce/admin-ui/dist -l 5173",
+      cwd: "/opt/rajiuce",
       interpreter: "none",
       env_production: {
         NODE_ENV: "production",
       },
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       merge_logs: true,
+    },
+    {
+      // slack_listener.py は SCRIPTS/deploy-slack-listener.sh でデプロイされる
+      name: "slack-listener",
+      script: "/opt/rajiuce/slack-listener/slack_listener.py",
+      interpreter: "python3",
+      cwd: "/opt/rajiuce/slack-listener",
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
+      merge_logs: true,
+      max_restarts: 10,
+      restart_delay: 5000,
     },
   ],
 };
