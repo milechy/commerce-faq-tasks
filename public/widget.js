@@ -618,6 +618,15 @@
         avatarArea.appendChild(videoEl);
       });
 
+      room.on(LK.RoomEvent.TrackUnsubscribed, function (track) {
+        if (track.kind !== 'video') return;
+        // アイドルタイムアウト等でビデオ track が消えたら video 要素を削除
+        var videos = avatarArea.querySelectorAll('.avatar-video');
+        for (var i = 0; i < videos.length; i++) { videos[i].remove(); }
+        // ステータステキストを再表示（接続中に戻す）
+        if (avatarStatusText) avatarStatusText.style.display = '';
+      });
+
       room.on(LK.RoomEvent.Disconnected, function () {
         avatarArea.style.display = 'none';
         window.__rajiuceRoom = null;

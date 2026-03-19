@@ -66,6 +66,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar = lemonslice.AvatarSession(
             agent_id=agent_id,
             agent_prompt=avatar_prompt,
+            idle_timeout=300,  # 5分（デフォルト60秒→300秒に延長）
         )
         await avatar.start(session, room=ctx.room)
         logger.info("=== LEMONSLICE AVATAR STARTED ===")
