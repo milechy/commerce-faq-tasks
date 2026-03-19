@@ -1,6 +1,8 @@
 """
-RAJIUCE Avatar Agent — 最小テスト構成
-Room接続確認のみ。Groq/Lemonslice/FishSpeech は全てコメントアウト。
+RAJIUCE Avatar Agent
+Groq LLM + Lemonslice Self-Managed Avatar orchestration via LiveKit Agents v1.4+.
+
+NOTE: Silero VAD は除外（VPS に GPU/CUDA/libva-drm がないため SIGABRT でクラッシュ）。
 """
 
 # ─── dotenv を全 import の前にロード ──────────────────────────────────────────
@@ -21,13 +23,22 @@ os.environ.setdefault("LIBVA_DRIVER_NAME", "dummy")
 import logging
 from livekit import agents
 from livekit.agents import Agent, AgentSession
+from livekit.plugins import lemonslice
+from livekit.plugins import openai as openai_plugin
 
 logger = logging.getLogger("rajiuce-avatar")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 logger.info(f"[module] LIVEKIT_URL={os.environ.get('LIVEKIT_URL', 'NOT SET')}")
 logger.info(f"[module] LIVEKIT_API_KEY={'SET' if os.environ.get('LIVEKIT_API_KEY') else 'NOT SET'}")
-logger.info(f"[module] LIVEKIT_API_SECRET={'SET' if os.environ.get('LIVEKIT_API_SECRET') else 'NOT SET'}")
+logger.info(f"[module] LEMONSLICE_API_KEY={'SET' if os.environ.get('LEMONSLICE_API_KEY') else 'NOT SET'}")
+
+# --- Groq LLM (OpenAI 互換 API 経由) ---
+groq_llm = openai_plugin.LLM(
+    model="llama-3.3-70b-versatile",
+    api_key=os.environ["GROQ_API_KEY"],
+    base_url="https://api.groq.com/openai/v1",
+)
 
 
 async def entrypoint(ctx: agents.JobContext) -> None:
@@ -39,26 +50,37 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     logger.info("=== ENTRYPOINT CALLED ===")
     logger.info(f"[entrypoint] room.name={ctx.room.name}")
-    logger.info(f"[entrypoint] LIVEKIT_URL={os.environ.get('LIVEKIT_URL', 'NOT SET')}")
-    logger.info(f"[entrypoint] LIVEKIT_API_KEY={'SET' if os.environ.get('LIVEKIT_API_KEY') else 'NOT SET'}")
-
-    # 接続前にJobInfoをダンプ（トークンが空かどうかを確認）
-    try:
-        info = ctx._info  # type: ignore[attr-defined]
-        logger.info(f"[job] url={getattr(info, 'url', 'N/A')}")
-        tok = getattr(info, 'token', '')
-        logger.info(f"[job] token_len={len(tok)} token_prefix={tok[:30] if tok else 'EMPTY'}")
-    except Exception as _e:
-        logger.warning(f"[job] could not read _info: {_e}")
 
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.SUBSCRIBE_ALL)
     logger.info("=== CONNECTED TO ROOM ===")
 
-    session = AgentSession()
+    session = AgentSession(llm=groq_llm)
+
+    # Lemonslice Avatar（失敗してもテキストチャットにフォールバック）
+    agent_id = os.environ.get("LEMONSLICE_AGENT_ID", "agent_aee377cb0fec68ea")
+    avatar_prompt = os.environ.get(
+        "AVATAR_PROMPT",
+        "Be friendly and professional. Smile naturally. Use gentle hand gestures when explaining.",
+    )
+    try:
+        avatar = lemonslice.AvatarSession(
+            agent_id=agent_id,
+            agent_prompt=avatar_prompt,
+        )
+        await avatar.start(session, room=ctx.room)
+        logger.info("=== LEMONSLICE AVATAR STARTED ===")
+    except Exception as e:
+        logger.warning(f"Lemonslice avatar failed (text-only fallback): {e}")
+
     await session.start(
         room=ctx.room,
         agent=Agent(
-            instructions="あなたはテスト用のAIアシスタントです。日本語で応答してください。",
+            instructions=(
+                "あなたはカーネーション自動車（BROSS新潟）の丁寧なAI営業アシスタントです。"
+                "在庫情報を正確に伝え、必要に応じて来店を促してください。"
+                "具体的な金額は提示せず、店長との直接相談をご案内してください。"
+                "日本語で応答してください。"
+            ),
         ),
     )
     logger.info("=== SESSION STARTED ===")
