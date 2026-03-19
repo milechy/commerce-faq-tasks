@@ -35,6 +35,7 @@ rsync -avz --delete \
   --exclude '.vscode' \
   --exclude '.devcontainer' \
   --exclude '__pycache__' \
+  --exclude 'avatar-agent/venv' \
   ./ "${VPS}:${REMOTE_DIR}/"
 
 echo "[2/6] Installing dependencies on VPS..."
