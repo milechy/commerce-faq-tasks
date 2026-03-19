@@ -53,18 +53,19 @@ export function registerLiveKitTokenRoutes(
   app: Express,
   apiStack: RequestHandler[]
 ): void {
-  if (!pool) {
-    console.warn("[livekitTokenRoutes] DATABASE_URL not set. Route disabled.");
-    return;
-  }
-
   /**
    * POST /api/avatar/room-token
    *
    * Widget から呼ばれる。apiStack（authMiddleware 済み）で保護されるため、
    * tenantId は req.tenantId から取得する（body/query から禁止）。
+   * pool null チェックはルート登録後にハンドラ内で行う（ルート未登録による 404 を防ぐ）。
    */
   app.post("/api/avatar/room-token", ...apiStack, async (req: Request, res: Response) => {
+    if (!pool) {
+      console.warn("[livekitTokenRoutes] DATABASE_URL not set.");
+      return res.json({ enabled: false });
+    }
+
     const tenantId = (req as AuthedRequest).tenantId;
 
     if (!tenantId) {
