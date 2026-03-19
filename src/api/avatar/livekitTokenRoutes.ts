@@ -3,7 +3,7 @@
 // POST /api/avatar/room-token
 //   認証: x-api-key (apiStack 経由 — authMiddleware で tenantId 解決済み)
 //   DBからテナントの features.avatar + lemonslice_agent_id を確認し、
-//   LiveKit Room接続用の一時トークンを発行して返す。
+//   LiveKit Room を Server API で作成・Agent Dispatch 後、Widget用JWTを返す。
 //
 // CLAUDE.md Anti-Slop:
 //   - tenantId は authMiddleware 解決済み req.tenantId から取得（body/query 禁止）
@@ -22,7 +22,7 @@ const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : null;
 
-// ─── LiveKit JWT 生成（livekit-server-sdk 不要、jsonwebtoken で手動生成） ──
+// ─── LiveKit JWT 生成 ─────────────────────────────────────────────────────────
 
 function generateLiveKitToken(params: {
   apiKey: string;
@@ -47,19 +47,78 @@ function generateLiveKitToken(params: {
   return jwt.sign(payload, params.apiSecret, { algorithm: "HS256" });
 }
 
+// ─── LiveKit Server API 用トークン（Room作成・Agent Dispatch権限） ────────────
+
+function generateServerToken(apiKey: string, apiSecret: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  return jwt.sign(
+    {
+      iss: apiKey,
+      nbf: now,
+      exp: now + 600,  // 10分（API呼び出し用の短命トークン）
+      video: {
+        roomCreate: true,
+        roomList: true,
+        roomAdmin: true,
+      },
+    },
+    apiSecret,
+    { algorithm: "HS256" }
+  );
+}
+
+// ─── LiveKit Server API 呼び出し（ベストエフォート） ─────────────────────────
+
+async function dispatchAgentToRoom(
+  livekitHttpUrl: string,
+  serverToken: string,
+  roomName: string
+): Promise<void> {
+  // 1. Room 作成（既存の場合は無害なエラー → 無視）
+  const createRes = await fetch(
+    `${livekitHttpUrl}/twirp/livekit.RoomService/CreateRoom`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serverToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: roomName }),
+    }
+  );
+  if (!createRes.ok) {
+    const body = await createRes.text();
+    console.warn(`[livekitTokenRoutes] CreateRoom failed (${createRes.status}): ${body}`);
+  } else {
+    console.log(`[livekitTokenRoutes] Room created: ${roomName}`);
+  }
+
+  // 2. Agent Dispatch（WorkerOptions で待機中の agent.py をこの Room に割り当て）
+  const dispatchRes = await fetch(
+    `${livekitHttpUrl}/twirp/livekit.AgentDispatchService/CreateDispatch`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serverToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ room_name: roomName, agent_name: "" }),
+    }
+  );
+  if (!dispatchRes.ok) {
+    const body = await dispatchRes.text();
+    console.warn(`[livekitTokenRoutes] AgentDispatch failed (${dispatchRes.status}): ${body}`);
+  } else {
+    console.log(`[livekitTokenRoutes] Agent dispatched to room: ${roomName}`);
+  }
+}
+
 // ─── ルート登録 ───────────────────────────────────────────────────────────────
 
 export function registerLiveKitTokenRoutes(
   app: Express,
   apiStack: RequestHandler[]
 ): void {
-  /**
-   * POST /api/avatar/room-token
-   *
-   * Widget から呼ばれる。apiStack（authMiddleware 済み）で保護されるため、
-   * tenantId は req.tenantId から取得する（body/query から禁止）。
-   * pool null チェックはルート登録後にハンドラ内で行う（ルート未登録による 404 を防ぐ）。
-   */
   console.log("[livekitTokenRoutes] POST /api/avatar/room-token registered");
   app.post("/api/avatar/room-token", ...apiStack, async (req: Request, res: Response) => {
     if (!pool) {
@@ -74,8 +133,6 @@ export function registerLiveKitTokenRoutes(
     }
 
     try {
-      // is_active チェックを外してテナント存在確認のみ行う。
-      // avatar 無効・テナント停止いずれも Widget には { enabled:false } で返す（404 にしない）。
       const result = await pool.query(
         `SELECT features, lemonslice_agent_id, is_active FROM tenants WHERE id = $1`,
         [tenantId]
@@ -103,7 +160,6 @@ export function registerLiveKitTokenRoutes(
       const avatarEnabled = row.features?.avatar === true;
       const agentId = row.lemonslice_agent_id?.trim() || null;
 
-      // avatar 無効 or Agent ID 未設定 → enabled: false（エラーにしない）
       if (!avatarEnabled || !agentId) {
         console.warn(`[livekitTokenRoutes] avatar disabled or agentId missing: avatarEnabled=${avatarEnabled} agentId=${agentId}`);
         return res.json({ enabled: false });
@@ -124,6 +180,13 @@ export function registerLiveKitTokenRoutes(
       const identity = `widget-${safeTenantId}-${crypto.randomBytes(4).toString("hex")}`;
       const token    = generateLiveKitToken({ apiKey, apiSecret, roomName, identity });
 
+      // Room 作成 + Agent Dispatch（ベストエフォート — 失敗してもトークンは返す）
+      const livekitHttpUrl = livekitUrl.replace(/^wss?:\/\//, "https://");
+      const serverToken = generateServerToken(apiKey, apiSecret);
+      dispatchAgentToRoom(livekitHttpUrl, serverToken, roomName).catch((err) => {
+        console.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
+      });
+
       return res.json({
         enabled: true,
         livekitUrl,
@@ -138,7 +201,6 @@ export function registerLiveKitTokenRoutes(
       } else {
         console.error("[POST /api/avatar/room-token]", err);
       }
-      // Widget への影響を最小化: エラー時も enabled: false で返す
       return res.json({ enabled: false });
     }
   });
