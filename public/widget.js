@@ -545,7 +545,7 @@
   /* アバター — LiveKit接続                                               */
   /* ------------------------------------------------------------------ */
 
-  var LIVEKIT_SDK_URL = 'https://cdn.livekit.io/livekit-client/dist/livekit-client.umd.min.js';
+  var LIVEKIT_SDK_URL = 'https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js';
 
   function fetchAvatarConfig() {
     if (avatarConfigFetched || !apiKey) return;

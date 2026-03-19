@@ -92,6 +92,9 @@ export function registerLiveKitTokenRoutes(
         is_active: boolean;
       };
 
+      // 診断ログ（問題特定後に削除可）
+      console.log(`[livekitTokenRoutes] tenant=${tenantId} is_active=${row.is_active} features=${JSON.stringify(row.features)} agentId=${row.lemonslice_agent_id}`);
+
       if (!row.is_active) {
         console.warn(`[livekitTokenRoutes] tenant inactive: ${tenantId}`);
         return res.json({ enabled: false });
@@ -102,6 +105,7 @@ export function registerLiveKitTokenRoutes(
 
       // avatar 無効 or Agent ID 未設定 → enabled: false（エラーにしない）
       if (!avatarEnabled || !agentId) {
+        console.warn(`[livekitTokenRoutes] avatar disabled or agentId missing: avatarEnabled=${avatarEnabled} agentId=${agentId}`);
         return res.json({ enabled: false });
       }
 
@@ -111,7 +115,7 @@ export function registerLiveKitTokenRoutes(
       const apiSecret  = process.env.LIVEKIT_API_SECRET?.trim();
 
       if (!livekitUrl || !apiKey || !apiSecret) {
-        console.warn("[livekitTokenRoutes] LiveKit env vars not set for tenant:", tenantId);
+        console.warn(`[livekitTokenRoutes] LiveKit env vars not set: LIVEKIT_URL=${!!livekitUrl} LIVEKIT_API_KEY=${!!apiKey} LIVEKIT_API_SECRET=${!!apiSecret}`);
         return res.json({ enabled: false });
       }
 
