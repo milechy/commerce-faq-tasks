@@ -123,6 +123,11 @@ app.use(
       "Content-Security-Policy",
       "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
     );
+    // widget.js はデプロイのたびに変わるため必ず再取得させる
+    if (_req.path === "/widget.js") {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+    }
     next();
   },
   express.static(publicDir)

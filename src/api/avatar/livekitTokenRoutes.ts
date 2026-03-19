@@ -60,6 +60,7 @@ export function registerLiveKitTokenRoutes(
    * tenantId は req.tenantId から取得する（body/query から禁止）。
    * pool null チェックはルート登録後にハンドラ内で行う（ルート未登録による 404 を防ぐ）。
    */
+  console.log("[livekitTokenRoutes] POST /api/avatar/room-token registered");
   app.post("/api/avatar/room-token", ...apiStack, async (req: Request, res: Response) => {
     if (!pool) {
       console.warn("[livekitTokenRoutes] DATABASE_URL not set.");
