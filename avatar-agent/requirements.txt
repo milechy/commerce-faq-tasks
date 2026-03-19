@@ -1,4 +1,4 @@
-livekit-agents[lemonslice,openai,silero]>=1.4.0
+livekit-agents[lemonslice,openai]>=1.4.0
 fish-audio-sdk>=1.0.0
 groq>=0.11.0
 httpx>=0.27.0

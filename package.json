@@ -105,6 +105,7 @@
     "express": "5.1.0",
     "js-yaml": "^4.1.1",
     "jsonwebtoken": "^9.0.2",
+    "livekit-server-sdk": "^2.15.0",
     "multer": "^2.1.1",
     "pdf2pic": "^3.2.0",
     "pg": "8.16.3",

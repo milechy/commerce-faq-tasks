@@ -14,6 +14,7 @@ import type { Express, Request, Response, RequestHandler } from "express";
 // @ts-ignore
 import { Pool } from "pg";
 import jwt from "jsonwebtoken";
+import { RoomServiceClient, AgentDispatchClient } from "livekit-server-sdk";
 import type { AuthedRequest } from "../../agent/http/authMiddleware";
 
 // ─── DB ──────────────────────────────────────────────────────────────────────
@@ -47,70 +48,32 @@ function generateLiveKitToken(params: {
   return jwt.sign(payload, params.apiSecret, { algorithm: "HS256" });
 }
 
-// ─── LiveKit Server API 用トークン（Room作成・Agent Dispatch権限） ────────────
 
-function generateServerToken(apiKey: string, apiSecret: string): string {
-  const now = Math.floor(Date.now() / 1000);
-  return jwt.sign(
-    {
-      iss: apiKey,
-      nbf: now,
-      exp: now + 600,  // 10分（API呼び出し用の短命トークン）
-      video: {
-        roomCreate: true,
-        roomList: true,
-        roomAdmin: true,
-      },
-    },
-    apiSecret,
-    { algorithm: "HS256" }
-  );
-}
-
-// ─── LiveKit Server API 呼び出し（ベストエフォート） ─────────────────────────
+// ─── LiveKit Server API 呼び出し（SDK 経由） ──────────────────────────────────
+// 手動 Twirp JSON では room_name フィールドが LiveKit Cloud で無視される問題があるため
+// livekit-server-sdk を使用してプロトバッファを正しく直列化する。
 
 async function dispatchAgentToRoom(
-  livekitHttpUrl: string,
-  serverToken: string,
+  livekitUrl: string,
+  apiKey: string,
+  apiSecret: string,
   roomName: string
 ): Promise<void> {
-  // 1. Room 作成（既存の場合は無害なエラー → 無視）
-  const createRes = await fetch(
-    `${livekitHttpUrl}/twirp/livekit.RoomService/CreateRoom`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serverToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ name: roomName }),
-    }
-  );
-  if (!createRes.ok) {
-    const body = await createRes.text();
-    console.warn(`[livekitTokenRoutes] CreateRoom failed (${createRes.status}): ${body}`);
-  } else {
+  const roomClient = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
+  const dispatchClient = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
+
+  // 1. Room 作成（既存の場合は無害 — SDK が例外を投げないよう catch する）
+  try {
+    await roomClient.createRoom({ name: roomName });
     console.log(`[livekitTokenRoutes] Room created: ${roomName}`);
+  } catch (err: any) {
+    // "already exists" は無害
+    console.warn(`[livekitTokenRoutes] CreateRoom warn: ${err?.message ?? err}`);
   }
 
-  // 2. Agent Dispatch（WorkerOptions で待機中の agent.py をこの Room に割り当て）
-  const dispatchRes = await fetch(
-    `${livekitHttpUrl}/twirp/livekit.AgentDispatchService/CreateDispatch`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serverToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ room_name: roomName, agent_name: "" }),
-    }
-  );
-  if (!dispatchRes.ok) {
-    const body = await dispatchRes.text();
-    console.warn(`[livekitTokenRoutes] AgentDispatch failed (${dispatchRes.status}): ${body}`);
-  } else {
-    console.log(`[livekitTokenRoutes] Agent dispatched to room: ${roomName}`);
-  }
+  // 2. Agent Dispatch
+  const dispatch = await dispatchClient.createDispatch(roomName, "rajiuce-avatar");
+  console.log(`[livekitTokenRoutes] Agent dispatched to room: ${roomName} id=${dispatch.id} room=${dispatch.room}`);
 }
 
 // ─── ルート登録 ───────────────────────────────────────────────────────────────
@@ -180,12 +143,12 @@ export function registerLiveKitTokenRoutes(
       const identity = `widget-${safeTenantId}-${crypto.randomBytes(4).toString("hex")}`;
       const token    = generateLiveKitToken({ apiKey, apiSecret, roomName, identity });
 
-      // Room 作成 + Agent Dispatch（ベストエフォート — 失敗してもトークンは返す）
-      const livekitHttpUrl = livekitUrl.replace(/^wss?:\/\//, "https://");
-      const serverToken = generateServerToken(apiKey, apiSecret);
-      dispatchAgentToRoom(livekitHttpUrl, serverToken, roomName).catch((err) => {
+      // Room 作成 + Agent Dispatch（SDK 経由 — await して結果をログ、失敗してもトークンは返す）
+      try {
+        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName);
+      } catch (err) {
         console.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
-      });
+      }
 
       return res.json({
         enabled: true,
