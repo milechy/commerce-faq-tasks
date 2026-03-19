@@ -73,19 +73,28 @@ export function registerLiveKitTokenRoutes(
     }
 
     try {
+      // is_active チェックを外してテナント存在確認のみ行う。
+      // avatar 無効・テナント停止いずれも Widget には { enabled:false } で返す（404 にしない）。
       const result = await pool.query(
-        `SELECT features, lemonslice_agent_id FROM tenants WHERE id = $1 AND is_active = true`,
+        `SELECT features, lemonslice_agent_id, is_active FROM tenants WHERE id = $1`,
         [tenantId]
       );
 
       if (result.rowCount === 0) {
-        return res.status(404).json({ error: "tenant_not_found" });
+        console.warn(`[livekitTokenRoutes] tenant not found in DB: ${tenantId}`);
+        return res.json({ enabled: false });
       }
 
       const row = result.rows[0] as {
         features: { avatar?: boolean; voice?: boolean; rag?: boolean } | null;
         lemonslice_agent_id: string | null;
+        is_active: boolean;
       };
+
+      if (!row.is_active) {
+        console.warn(`[livekitTokenRoutes] tenant inactive: ${tenantId}`);
+        return res.json({ enabled: false });
+      }
 
       const avatarEnabled = row.features?.avatar === true;
       const agentId = row.lemonslice_agent_id?.trim() || null;
@@ -117,8 +126,13 @@ export function registerLiveKitTokenRoutes(
         roomName,
         agentId,
       });
-    } catch (err) {
-      console.error("[POST /api/avatar/room-token]", err);
+    } catch (err: any) {
+      // カラム未存在エラー (42703) = マイグレーション未実行
+      if (err?.code === "42703") {
+        console.error("[livekitTokenRoutes] Missing DB column — run migration_tenant_features.sql:", err.message);
+      } else {
+        console.error("[POST /api/avatar/room-token]", err);
+      }
       // Widget への影響を最小化: エラー時も enabled: false で返す
       return res.json({ enabled: false });
     }
