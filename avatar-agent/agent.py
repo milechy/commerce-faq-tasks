@@ -49,6 +49,7 @@ class FishAudioTTS(agents_tts.TTS):
         )
         self._api_key = api_key
         self._reference_id = reference_id
+        logger.info(f"[TTS] FishAudioTTS initialized: ref={self._reference_id}")
 
     def synthesize(
         self,
@@ -178,12 +179,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         )
                     )
             elif msg_type == "widget_connected":
-                logger.info("[data_channel] widget_connected — sending greeting")
-                asyncio.create_task(
-                    session.generate_reply(
-                        instructions="ユーザーが接続しました。明るく丁寧に挨拶してください。"
-                    )
-                )
+                logger.info("[data_channel] widget_connected received")
+                # 挨拶は AgentSession が自動的に行うため、手動 generate_reply は不要
+                # （手動で呼ぶと SDK 自動挨拶と二重になり複数の声で長文が再生される）
         except Exception as e:
             logger.warning(f"[data_channel] parse error: {e}")
 
