@@ -430,7 +430,6 @@
     '  gap: 8px;',
     '  scrollbar-width: none;',
     '  -ms-overflow-style: none;',
-    '  pointer-events: none;',
     '}',
     '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
 
@@ -451,7 +450,6 @@
     '  border: 1px solid rgba(255,255,255,0.15);',
     '  border-radius: 16px 16px 4px 16px;',
     '}',
-    '.panel.avatar-active .msg-wrapper { pointer-events: auto; }',
     '.panel.avatar-active .ts { color: rgba(255,255,255,0.5); font-size: 10px; }',
 
     /* 入力エリア: 下部オーバーレイ */
