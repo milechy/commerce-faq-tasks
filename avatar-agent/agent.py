@@ -38,6 +38,46 @@ logger.info(f"[module] LIVEKIT_URL={os.environ.get('LIVEKIT_URL', 'NOT SET')}")
 logger.info(f"[module] LIVEKIT_API_KEY={'SET' if os.environ.get('LIVEKIT_API_KEY') else 'NOT SET'}")
 logger.info(f"[module] LEMONSLICE_API_KEY={'SET' if os.environ.get('LEMONSLICE_API_KEY') else 'NOT SET'}")
 
+# --- システムプロンプト ---
+SYSTEM_PROMPT = (
+    "あなたはカーネーション自動車（BROSS新潟）のAI営業アシスタントです。"
+    "必ず1〜2文の短い日本語で回答してください。長い説明は禁止。"
+    "在庫の詳細や金額は「店長にご相談ください」と案内してください。"
+)
+
+
+# --- Groq LLM 直接呼び出し ---
+async def call_groq_llm(user_text: str) -> str:
+    """Groq LLM を aiohttp で直接呼び出し、応答テキストを返す。"""
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_text},
+                    ],
+                    "max_tokens": 150,
+                    "temperature": 0.7,
+                },
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    logger.error(f"[Groq] error {resp.status}: {await resp.text()}")
+                    return "申し訳ございません。もう一度お尋ねください。"
+                data = await resp.json()
+                return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.error(f"[Groq] exception: {e}")
+        return "申し訳ございません。もう一度お尋ねください。"
+
+
 # --- Fish Audio TTS ---
 
 async def _report_tts_usage(tenant_id: str, tts_text_bytes: int) -> None:
@@ -157,7 +197,7 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
             logger.error(f"[TTS] Exception in _run: {type(e).__name__}: {e}")
 
 
-# --- Groq LLM (OpenAI 互換 API 経由) ---
+# --- Groq LLM (AgentSession 用 — session.say() のコンテキスト保持に使用) ---
 groq_llm = openai_plugin.LLM(
     model="llama-3.3-70b-versatile",
     api_key=os.environ["GROQ_API_KEY"],
@@ -206,17 +246,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
-    @session.on("conversation_item_added")
-    def on_conversation_item_added(event):
-        item = event.item
-        if hasattr(item, "role") and str(item.role) == "assistant":
-            text = item.text_content if hasattr(item, "text_content") else None
-            if text and ctx.room.local_participant:
-                payload = json.dumps({"type": "agent_reply", "text": text}).encode()
-                asyncio.ensure_future(
-                    ctx.room.local_participant.publish_data(payload, reliable=True)
-                )
-                logger.debug(f"[data_channel] agent_reply sent: {text[:60]!r}")
+    async def handle_chat(user_text: str) -> None:
+        """Groq LLM 直接呼び出し → session.say() でTTS再生 → Data Channel でWidget通知"""
+        try:
+            # 1. Groq LLM で応答生成
+            reply = await call_groq_llm(user_text)
+            logger.info(f"[Groq] reply: {reply[:80]!r}")
+
+            # 2. session.say() で FishAudio TTS パイプラインに渡す
+            session.say(reply)
+            logger.info(f"[say] sent to TTS: {reply[:60]!r}")
+
+            # 3. Data Channel 経由で Widget にもテキスト送信
+            if ctx.room.local_participant:
+                payload = json.dumps({"type": "agent_reply", "text": reply}).encode()
+                await ctx.room.local_participant.publish_data(payload, reliable=True)
+                logger.info("[data_channel] agent_reply sent to widget")
+        except Exception as e:
+            logger.error(f"[handle_chat] error: {e}")
 
     @ctx.room.on("data_received")
     def on_data_received(data_packet):
@@ -227,13 +274,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 text = msg.get("text", "").strip()
                 if text:
                     logger.info(f"[data_channel] chat received: {text[:80]}")
-                    session.generate_reply(
-                        instructions=f"ユーザーが「{text}」と言いました。適切に日本語で応答してください。"
-                    )
+                    asyncio.create_task(handle_chat(text))
             elif msg_type == "widget_connected":
                 logger.info("[data_channel] widget_connected received")
-                # 挨拶は AgentSession が自動的に行うため、手動 generate_reply は不要
-                # （手動で呼ぶと SDK 自動挨拶と二重になり複数の声で長文が再生される）
+                # 挨拶は AgentSession が自動的に行うため、手動呼び出し不要
         except Exception as e:
             logger.warning(f"[data_channel] parse error: {e}")
 
@@ -257,12 +301,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         room=ctx.room,
         agent=Agent(
-            instructions=(
-                "あなたはカーネーション自動車（BROSS新潟）の丁寧なAI営業アシスタントです。"
-                "在庫情報を正確に伝え、必要に応じて来店を促してください。"
-                "具体的な金額は提示せず、店長との直接相談をご案内してください。"
-                "日本語で応答してください。"
-            ),
+            instructions=SYSTEM_PROMPT,
         ),
     )
     logger.info("=== SESSION STARTED ===")
