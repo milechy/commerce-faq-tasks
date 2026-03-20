@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS stripe_usage_reports (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Phase40: TTS / Avatar追加コストカラム（既存DBへの追加マイグレーション）
+ALTER TABLE usage_logs
+  ADD COLUMN IF NOT EXISTS tts_text_bytes  INTEGER,
+  ADD COLUMN IF NOT EXISTS avatar_credits  INTEGER,
+  ADD COLUMN IF NOT EXISTS avatar_session_ms INTEGER;
+
 CREATE INDEX IF NOT EXISTS idx_usage_logs_tenant_id ON usage_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_billing_status ON usage_logs(billing_status);

@@ -40,8 +40,24 @@ logger.info(f"[module] LEMONSLICE_API_KEY={'SET' if os.environ.get('LEMONSLICE_A
 
 # --- Fish Audio TTS ---
 
+async def _report_tts_usage(tenant_id: str, tts_text_bytes: int) -> None:
+    """TTS使用量をRAJIUCE APIに非同期レポート（fire-and-forget）。"""
+    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            await http_session.post(
+                f"{api_url}/api/internal/usage",
+                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
+                json={"tenantId": tenant_id, "ttsTextBytes": tts_text_bytes},
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+        logger.debug(f"[usage] TTS usage reported: tenant={tenant_id} bytes={tts_text_bytes}")
+    except Exception as e:
+        logger.warning(f"[usage] TTS usage report failed (non-critical): {e}")
+
+
 class FishAudioTTS(agents_tts.TTS):
-    def __init__(self, api_key: str, reference_id: str | None = None):
+    def __init__(self, api_key: str, reference_id: str | None = None, tenant_id: str | None = None):
         super().__init__(
             capabilities=agents_tts.TTSCapabilities(streaming=False),
             sample_rate=44100,
@@ -49,7 +65,8 @@ class FishAudioTTS(agents_tts.TTS):
         )
         self._api_key = api_key
         self._reference_id = reference_id
-        logger.info(f"[TTS] FishAudioTTS initialized: ref={self._reference_id}")
+        self._tenant_id = tenant_id
+        logger.info(f"[TTS] FishAudioTTS initialized: ref={self._reference_id} tenant={self._tenant_id}")
 
     def synthesize(
         self,
@@ -63,6 +80,7 @@ class FishAudioTTS(agents_tts.TTS):
             conn_options=conn_options,
             api_key=self._api_key,
             reference_id=self._reference_id,
+            tenant_id=self._tenant_id,
         )
 
 
@@ -75,10 +93,12 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
         conn_options: APIConnectOptions,
         api_key: str,
         reference_id: str | None,
+        tenant_id: str | None = None,
     ):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._api_key = api_key
         self._reference_id = reference_id
+        self._tenant_id = tenant_id
 
     async def _run(self, output_emitter: agents_tts.AudioEmitter) -> None:
         # initialize() は _run() の先頭で必ず呼ぶ。
@@ -128,6 +148,11 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
             output_emitter.push(audio_bytes)
             output_emitter.flush()
             logger.info("[TTS] pushed to emitter OK")
+
+            # 使用量レポート（fire-and-forget）
+            if self._tenant_id:
+                tts_bytes = len(self._input_text.encode("utf-8"))
+                asyncio.ensure_future(_report_tts_usage(self._tenant_id, tts_bytes))
         except Exception as e:
             logger.error(f"[TTS] Exception in _run: {type(e).__name__}: {e}")
 
@@ -153,9 +178,26 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.SUBSCRIBE_ALL)
     logger.info("=== CONNECTED TO ROOM ===")
 
+    # room name から tenantId を復元: "rajiuce-{safeTenantId}-{16hex}"
+    def _extract_tenant_id(room_name: str) -> str | None:
+        prefix = "rajiuce-"
+        if not room_name.startswith(prefix):
+            return None
+        rest = room_name[len(prefix):]  # "{safeTenantId}-{16hex}"
+        if len(rest) < 18:              # 最低: 1文字 + "-" + 16hex
+            return None
+        # 末尾16文字 = hex、その前の"-"を除いたものが safeTenantId
+        if rest[-17:-16] != "-":
+            return None
+        return rest[:-17] or None
+
+    tenant_id = _extract_tenant_id(ctx.room.name)
+    logger.info(f"[entrypoint] extracted tenant_id={tenant_id!r} from room={ctx.room.name!r}")
+
     fish_tts = FishAudioTTS(
         api_key=os.environ["FISH_AUDIO_API_KEY"],
         reference_id=os.environ.get("FISH_AUDIO_REFERENCE_ID"),
+        tenant_id=tenant_id,
     )
 
     session = AgentSession(

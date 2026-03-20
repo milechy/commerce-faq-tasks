@@ -4,10 +4,14 @@
 import {
   calculateLLMCostCents,
   calculateBillingAmountCents,
+  calculateTTSCostCents,
+  calculateAvatarCostCents,
   normalizeModelKey,
   LLM_COSTS,
   SERVER_COST_PER_REQUEST_USD,
   MARGIN_MULTIPLIER,
+  FISH_AUDIO_COST_PER_BYTE_USD,
+  LEMONSLICE_COST_PER_CREDIT_USD,
 } from './costCalculator';
 
 // ---------------------------------------------------------------------------
@@ -213,6 +217,110 @@ describe('calculateBillingAmountCents', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase40: calculateTTSCostCents
+// ---------------------------------------------------------------------------
+describe('calculateTTSCostCents', () => {
+  it('0バイトは 0 を返す', () => {
+    expect(calculateTTSCostCents(0)).toBe(0);
+  });
+
+  it('1,000,000バイト = $15.00 = 1500 cents', () => {
+    // 1_000_000 * 15.0 / 1_000_000 * 100 = 1500 (exact)
+    expect(calculateTTSCostCents(1_000_000)).toBe(1500);
+  });
+
+  it('300バイト（日本語100文字相当）→ Math.ceil', () => {
+    // 300 * 15.0 / 1_000_000 * 100 = 0.045 cents → Math.ceil = 1
+    expect(calculateTTSCostCents(300)).toBe(1);
+  });
+
+  it('整数を返す', () => {
+    expect(Number.isInteger(calculateTTSCostCents(12345))).toBe(true);
+  });
+
+  it('負の値は例外を投げる', () => {
+    expect(() => calculateTTSCostCents(-1)).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase40: calculateAvatarCostCents
+// ---------------------------------------------------------------------------
+describe('calculateAvatarCostCents', () => {
+  it('0クレジットは 0 を返す', () => {
+    expect(calculateAvatarCostCents(0)).toBe(0);
+  });
+
+  it('1000クレジット = $7.00 = 700 cents', () => {
+    // 1000 * 7.0 / 1000 * 100 = 700 (exact)
+    expect(calculateAvatarCostCents(1000)).toBe(700);
+  });
+
+  it('6クレジット → Math.ceil', () => {
+    // 6 * 7.0 / 1000 * 100 = 4.2 cents → Math.ceil = 5
+    expect(calculateAvatarCostCents(6)).toBe(5);
+  });
+
+  it('整数を返す', () => {
+    expect(Number.isInteger(calculateAvatarCostCents(57))).toBe(true);
+  });
+
+  it('負の値は例外を投げる', () => {
+    expect(() => calculateAvatarCostCents(-1)).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase40: calculateBillingAmountCents with TTS/Avatar
+// ---------------------------------------------------------------------------
+describe('calculateBillingAmountCents with TTS/Avatar', () => {
+  it('ttsTextBytes のみ追加: コストが増加する', () => {
+    const base = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+    });
+    const withTTS = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      ttsTextBytes: 1_000_000,
+    });
+    expect(withTTS).toBeGreaterThan(base);
+  });
+
+  it('avatarCredits のみ追加: コストが増加する', () => {
+    const base = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+    });
+    const withAvatar = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      avatarCredits: 100,
+    });
+    expect(withAvatar).toBeGreaterThan(base);
+  });
+
+  it('ttsTextBytes=0, avatarCredits=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 100, outputTokens: 50,
+    });
+    const withZero = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 100, outputTokens: 50,
+      ttsTextBytes: 0, avatarCredits: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('マージンが TTS/Avatarコストにも適用される', () => {
+    // 1M TTSバイト = $15.00 USD、margin=5 → $75 = 7500 cents
+    // + SERVER_COST (0.0001 * 5 * 100 = 0.05 → ceil=1)
+    // total = Math.ceil((15.0 + 0.0001) * 5 * 100) = Math.ceil(7500.05) = 7501
+    const result = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      ttsTextBytes: 1_000_000,
+    });
+    expect(result).toBeGreaterThanOrEqual(7500);
+    expect(Number.isInteger(result)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 定数の整合性チェック
 // ---------------------------------------------------------------------------
 describe('定数', () => {
@@ -231,5 +339,13 @@ describe('定数', () => {
 
   it('MARGIN_MULTIPLIER >= 1', () => {
     expect(MARGIN_MULTIPLIER).toBeGreaterThanOrEqual(1);
+  });
+
+  it('FISH_AUDIO_COST_PER_BYTE_USD は $15/1M バイト', () => {
+    expect(FISH_AUDIO_COST_PER_BYTE_USD).toBeCloseTo(15.0 / 1_000_000);
+  });
+
+  it('LEMONSLICE_COST_PER_CREDIT_USD は $7/1000 クレジット', () => {
+    expect(LEMONSLICE_COST_PER_CREDIT_USD).toBeCloseTo(7.0 / 1_000);
   });
 });

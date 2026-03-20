@@ -54,6 +54,7 @@ import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
+import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -546,6 +547,9 @@ registerFeedbackRoutes(app);
 
 // Avatar: Widget → LiveKit Room トークン発行 API
 registerLiveKitTokenRoutes(app, apiStack);
+
+// Internal: avatar-agent → TTS/Avatar使用量レポート（X-Internal-Request: 1 認証）
+registerInternalUsageRoutes(app);
 
 async function startServer() {
   app.listen(port, () => {

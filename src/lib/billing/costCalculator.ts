@@ -23,12 +23,24 @@ export const SERVER_COST_PER_REQUEST_USD = 0.0001;
 /** マージン倍率（環境変数 MARGIN_RATE で変更可能、デフォルト5） */
 export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
 
+/** Phase40: Fish Audio TTS単価: $15.00 / 1M UTF-8バイト */
+export const FISH_AUDIO_COST_PER_BYTE_USD = 15.0 / 1_000_000;
+
+/** Phase40: Lemonslice単価: $7.00 / 1000クレジット */
+export const LEMONSLICE_COST_PER_CREDIT_USD = 7.0 / 1_000;
+
 export interface UsageRecord {
   model: string;
   inputTokens: number;
   outputTokens: number;
   /** マージン倍率の上書き（省略時は MARGIN_MULTIPLIER を使用） */
   marginOverride?: number;
+  /** Phase40: Fish Audio TTSに送ったテキストのUTF-8バイト数 */
+  ttsTextBytes?: number;
+  /** Phase40: Lemonsliceのクレジット消費量 */
+  avatarCredits?: number;
+  /** Phase40: LiveKitセッション時間（ミリ秒） */
+  avatarSessionMs?: number;
 }
 
 /**
@@ -81,9 +93,29 @@ export function calculateLLMCostCents(usage: UsageRecord): number {
 }
 
 /**
+ * Phase40: Fish Audio TTS コストをセント単位（整数）で返す。
+ * $15.00 / 1M UTF-8バイト。切り上げ。
+ */
+export function calculateTTSCostCents(ttsTextBytes: number): number {
+  if (ttsTextBytes < 0) throw new Error(`Invalid ttsTextBytes: ${ttsTextBytes}`);
+  if (ttsTextBytes === 0) return 0;
+  return Math.ceil(ttsTextBytes * FISH_AUDIO_COST_PER_BYTE_USD * 100);
+}
+
+/**
+ * Phase40: Lemonslice Avatar コストをセント単位（整数）で返す。
+ * $7.00 / 1000クレジット。切り上げ。
+ */
+export function calculateAvatarCostCents(credits: number): number {
+  if (credits < 0) throw new Error(`Invalid credits: ${credits}`);
+  if (credits === 0) return 0;
+  return Math.ceil(credits * LEMONSLICE_COST_PER_CREDIT_USD * 100);
+}
+
+/**
  * 1リクエストの課金金額をセント単位（整数）で返す。
  *
- * 計算式: Math.ceil((LLMコスト[USD] + SERVER_COST_PER_REQUEST_USD) × MARGIN_MULTIPLIER × 100)
+ * 計算式: Math.ceil((LLMコスト + サーバーコスト + TTSコスト + Avatarコスト)[USD] × MARGIN_MULTIPLIER × 100)
  *
  * 中間丸めを避けるため USD のまま合算してから最後に変換する。
  *
@@ -98,6 +130,8 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
 
   const margin   = usage.marginOverride ?? MARGIN_MULTIPLIER;
   const llmUSD   = _calculateLLMCostUSD(usage);
-  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD;
+  const ttsUSD   = (usage.ttsTextBytes  ?? 0) * FISH_AUDIO_COST_PER_BYTE_USD;
+  const avtrUSD  = (usage.avatarCredits ?? 0) * LEMONSLICE_COST_PER_CREDIT_USD;
+  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD;
   return Math.ceil(totalUSD * margin * 100);
 }
