@@ -121,8 +121,8 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
                     audio_bytes = await resp.read()
 
             logger.info(f"[TTS] got {len(audio_bytes)} bytes, first4={audio_bytes[:4]!r}")
-            if len(audio_bytes) == 0:
-                logger.error("[TTS] Fish Audio returned empty audio")
+            if len(audio_bytes) < 1000:
+                logger.warning(f"[TTS] Fish Audio returned suspiciously small audio ({len(audio_bytes)} bytes), skipping (will retry)")
                 return
 
             output_emitter.push(audio_bytes)
@@ -173,10 +173,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 text = msg.get("text", "").strip()
                 if text:
                     logger.info(f"[data_channel] chat received: {text[:80]}")
-                    asyncio.create_task(
-                        session.generate_reply(
-                            instructions=f"ユーザーが「{text}」と言いました。適切に日本語で応答してください。"
-                        )
+                    session.generate_reply(
+                        instructions=f"ユーザーが「{text}」と言いました。適切に日本語で応答してください。"
                     )
             elif msg_type == "widget_connected":
                 logger.info("[data_channel] widget_connected received")
