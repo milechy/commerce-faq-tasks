@@ -378,6 +378,128 @@
 
     /* モバイル最適化 */
     '@media (max-width: 390px) { .avatar-area { height: 180px; } }',
+
+    /* ───── avatar-active: Lemonslice風フルスクリーン ───── */
+    '.panel.avatar-active { background: #000; }',
+    '.panel.avatar-active .header { display: none; }',
+
+    /* アバターエリア: パネル全体を覆う */
+    '.panel.avatar-active .avatar-area {',
+    '  position: absolute;',
+    '  top: 0; left: 0;',
+    '  width: 100%; height: 100%;',
+    '  margin: 0;',
+    '  border-radius: 0;',
+    '  z-index: 1;',
+    '}',
+    '.panel.avatar-active .avatar-video { border-radius: 0; }',
+
+    /* 閉じるボタン: 右上フローティング */
+    '.avatar-close-btn {',
+    '  position: absolute;',
+    '  top: 12px; right: 12px;',
+    '  z-index: 10;',
+    '  min-width: 40px; min-height: 40px;',
+    '  width: 40px; height: 40px;',
+    '  border-radius: 50%;',
+    '  border: none;',
+    '  background: rgba(0,0,0,0.4);',
+    '  color: #fff;',
+    '  cursor: pointer;',
+    '  display: flex; align-items: center; justify-content: center;',
+    '  padding: 0;',
+    '  -webkit-backdrop-filter: blur(4px);',
+    '  backdrop-filter: blur(4px);',
+    '}',
+    '.avatar-close-btn:hover { background: rgba(0,0,0,0.6); }',
+    '.avatar-close-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+
+    /* メッセージエリア: アバター映像の上にオーバーレイ */
+    '.panel.avatar-active .messages {',
+    '  position: absolute;',
+    '  top: 0; left: 0; right: 0;',
+    '  bottom: 68px;',
+    '  z-index: 5;',
+    '  background: transparent;',
+    '  padding: 56px 12px 12px;',
+    '  overflow-y: auto;',
+    '  scrollbar-width: none;',
+    '  -ms-overflow-style: none;',
+    '}',
+    '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
+
+    /* チャットバブル: 半透明 */
+    '.panel.avatar-active .bubble.assistant {',
+    '  background: rgba(0,0,0,0.6);',
+    '  color: #fff;',
+    '  -webkit-backdrop-filter: blur(8px);',
+    '  backdrop-filter: blur(8px);',
+    '  border-radius: 16px 16px 16px 4px;',
+    '}',
+    '.panel.avatar-active .bubble.user {',
+    '  background: rgba(37,99,235,0.8);',
+    '  color: #fff;',
+    '  -webkit-backdrop-filter: blur(8px);',
+    '  backdrop-filter: blur(8px);',
+    '  border-radius: 16px 16px 4px 16px;',
+    '}',
+    '.panel.avatar-active .ts { color: rgba(255,255,255,0.6); }',
+
+    /* 入力エリア: 下部オーバーレイ */
+    '.panel.avatar-active .input-area {',
+    '  position: absolute;',
+    '  bottom: 0; left: 0; right: 0;',
+    '  z-index: 10;',
+    '  background: rgba(0,0,0,0.5);',
+    '  -webkit-backdrop-filter: blur(8px);',
+    '  backdrop-filter: blur(8px);',
+    '  border-top: 1px solid rgba(255,255,255,0.1);',
+    '  padding: 10px 12px;',
+    '  border-radius: 0 0 16px 16px;',
+    '}',
+    '.panel.avatar-active textarea {',
+    '  background: rgba(255,255,255,0.15);',
+    '  border-color: rgba(255,255,255,0.2);',
+    '  color: #fff;',
+    '}',
+    '.panel.avatar-active textarea::placeholder { color: rgba(255,255,255,0.5); }',
+    '.panel.avatar-active textarea:focus {',
+    '  background: rgba(255,255,255,0.2);',
+    '  border-color: rgba(255,255,255,0.4);',
+    '}',
+
+    /* ミュートボタン: static化して入力バーに収まる */
+    '.panel.avatar-active .avatar-mute-btn {',
+    '  position: static;',
+    '  background: rgba(255,255,255,0.15);',
+    '  width: 40px; height: 40px;',
+    '  min-width: 40px; min-height: 40px;',
+    '  flex-shrink: 0;',
+    '}',
+    '.panel.avatar-active .avatar-mute-btn:hover { background: rgba(255,255,255,0.25); }',
+
+    /* マイクボタン: ダークテーマ */
+    '.panel.avatar-active .mic-btn { background: rgba(255,255,255,0.15); color: #fff; }',
+    '.panel.avatar-active .mic-btn:hover { background: rgba(255,255,255,0.25); color: #fff; }',
+    '.panel.avatar-active .mic-btn.recording { background: rgba(220,38,38,0.6); color: #fff; }',
+
+    /* 送信ボタン: ダークテーマ */
+    '.panel.avatar-active .send-btn { background: rgba(37,99,235,0.8); }',
+    '.panel.avatar-active .send-btn:disabled { background: rgba(255,255,255,0.2); cursor: not-allowed; }',
+
+    /* エラーバナー: 最上部オーバーレイ */
+    '.panel.avatar-active .error-banner {',
+    '  position: absolute;',
+    '  top: 0; left: 0; right: 0;',
+    '  z-index: 15;',
+    '  background: rgba(220,38,38,0.9);',
+    '  color: #fff;',
+    '  border-bottom: none;',
+    '}',
+
+    /* 不要要素: 非表示 */
+    '.panel.avatar-active .voice-mode-indicator { display: none; }',
+    '.panel.avatar-active .empty-state { display: none; }',
   ].join('\n');
 
   shadow.appendChild(styleEl);
@@ -791,6 +913,15 @@
       });
 
       room.on(LK.RoomEvent.Disconnected, function () {
+        // フルスクリーンモード解除
+        panel.classList.remove('avatar-active');
+        // 閉じるボタンを削除
+        var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
+        for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }
+        // ミュートボタンをavatarAreaに戻す
+        if (avatarMuteBtn && avatarMuteBtn.parentNode !== avatarArea) {
+          avatarArea.appendChild(avatarMuteBtn);
+        }
         avatarArea.style.display = 'none';
         voiceModeIndicator.style.display = 'none';
         window.__rajiuceRoom = null;
@@ -803,6 +934,22 @@
         .then(function () {
           console.log('[FAQ Widget] Connected to LiveKit room');
           voiceModeIndicator.style.display = '';
+
+          // フルスクリーンアバターUIへ切り替え
+          panel.classList.add('avatar-active');
+
+          // 右上フローティング閉じるボタンを生成
+          var avatarCloseBtn = el('button', {
+            className: 'avatar-close-btn',
+            type: 'button',
+            'aria-label': 'チャットを閉じる',
+          });
+          avatarCloseBtn.appendChild(CLOSE_SVG.cloneNode(true));
+          avatarCloseBtn.addEventListener('click', closePanel);
+          avatarArea.appendChild(avatarCloseBtn);
+
+          // ミュートボタンを入力バー左端に移動
+          inputArea.insertBefore(avatarMuteBtn, inputArea.firstChild);
 
           // LiveKit Data Channel 経由でウェルカムメッセージを送信
           // （Python Agent がテキストを受信して LLM 処理 → TTS → アバター映像を返す）
@@ -860,6 +1007,9 @@
         window.__rajiuceRoom = null;
       }
     } catch (_e) {}
+    panel.classList.remove('avatar-active');
+    var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
+    for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }
     avatarArea.style.display = 'none';
     avatarStatusText.style.display = '';
     avatarConfigFetched = false;
@@ -964,6 +1114,7 @@
     // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
     if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
       avatarArea.style.display = 'flex';
+      panel.classList.add('avatar-active');
     } else {
       fetchAvatarConfig();
     }
@@ -981,6 +1132,7 @@
     emitToHost('widget:closed', {});
     // LiveKit Room は切断しない（Agentが Room 内で処理中のため）
     // Room 切断は RoomEvent.Disconnected で自動的に処理される
+    panel.classList.remove('avatar-active');
     avatarArea.style.display = 'none';
   }
 
