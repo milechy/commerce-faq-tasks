@@ -299,6 +299,28 @@
     '.send-btn:disabled { background: #cbd5e1; cursor: not-allowed; }',
     '.send-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
 
+    /* マイクボタン */
+    '.mic-btn {',
+    '  min-width: 44px;',
+    '  min-height: 44px;',
+    '  width: 44px;',
+    '  height: 44px;',
+    '  border-radius: 50%;',
+    '  border: none;',
+    '  background: #f1f5f9;',
+    '  color: #64748b;',
+    '  cursor: pointer;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '  flex-shrink: 0;',
+    '  padding: 0;',
+    '  transition: background-color 0.15s, color 0.15s;',
+    '}',
+    '.mic-btn:hover { background: #e2e8f0; color: #2563eb; }',
+    '.mic-btn.recording { background: #fef2f2; color: #dc2626; }',
+    '.mic-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+
     /* アバターエリア（avatar=true テナントのみ表示） */
     '.avatar-area {',
     '  width: calc(100% - 16px);',
@@ -493,7 +515,7 @@
   /* --- 音声モードインジケーター（アバター有効時のみ表示） --- */
   var voiceModeIndicator = document.createElement('div');
   voiceModeIndicator.className = 'voice-mode-indicator';
-  voiceModeIndicator.textContent = '🔊 音声で応答中';
+  voiceModeIndicator.textContent = '🔇 音声ミュート中';
   voiceModeIndicator.style.display = 'none';
   panel.appendChild(voiceModeIndicator);
 
@@ -510,9 +532,36 @@
     maxlength: '2000',
     'aria-label': 'メッセージ',
   });
+
+  /* --- マイクボタン（Web Speech API 非対応ブラウザでは非表示） --- */
+  var micBtn = el('button', { className: 'mic-btn', type: 'button', 'aria-label': '音声入力' });
+  (function () {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('width', '20'); svg.setAttribute('height', '20');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    var p1 = document.createElementNS(ns, 'path');
+    p1.setAttribute('d', 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z');
+    var p2 = document.createElementNS(ns, 'path');
+    p2.setAttribute('d', 'M19 10v2a7 7 0 0 1-14 0v-2');
+    var p3 = document.createElementNS(ns, 'path');
+    p3.setAttribute('d', 'M12 19v4 M8 23h8');
+    svg.appendChild(p1); svg.appendChild(p2); svg.appendChild(p3);
+    micBtn.appendChild(svg);
+  })();
+
+  // Web Speech API 非対応ブラウザでは非表示
+  var SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognitionAPI) {
+    micBtn.style.display = 'none';
+  }
+
   var sendBtn = el('button', { className: 'send-btn', type: 'button', 'aria-label': '送信', disabled: 'true' });
   sendBtn.appendChild(SEND_SVG.cloneNode(true));
-  var inputArea = el('div', { className: 'input-area', role: 'form', 'aria-label': 'メッセージ入力フォーム' }, [textarea, sendBtn]);
+  var inputArea = el('div', { className: 'input-area', role: 'form', 'aria-label': 'メッセージ入力フォーム' }, [textarea, micBtn, sendBtn]);
   panel.appendChild(inputArea);
 
   shadow.appendChild(panel);
@@ -539,7 +588,7 @@
   /* アバター状態 */
   var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId }
   var avatarConfigFetched = false;
-  var avatarMuted = false;      // 音声ミュート状態
+  var avatarMuted = true;       // 音声ミュート状態（デフォルト: ミュート）
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -658,7 +707,7 @@
       avatarMuteBtn.className = 'avatar-mute-btn';
       avatarMuteBtn.setAttribute('type', 'button');
       avatarMuteBtn.setAttribute('aria-label', '音声ミュート切替');
-      avatarMuteBtn.setAttribute('aria-pressed', 'false');
+      avatarMuteBtn.setAttribute('aria-pressed', 'true');
 
       function _speakerSvg() {
         var ns = 'http://www.w3.org/2000/svg';
@@ -698,7 +747,7 @@
         return svg;
       }
 
-      avatarMuteBtn.appendChild(_speakerSvg());
+      avatarMuteBtn.appendChild(_muteSvg());   // デフォルトミュート → ミュートアイコンで初期化
       avatarArea.appendChild(avatarMuteBtn);
 
       avatarMuteBtn.addEventListener('click', function () {
@@ -1069,6 +1118,61 @@
   fab.addEventListener('click', togglePanel);
   closeBtn.addEventListener('click', closePanel);
   dismissBtn.addEventListener('click', hideError);
+
+  /* --- マイクボタン: Web Speech API 音声入力 --- */
+  if (SpeechRecognitionAPI) {
+    var isRecording = false;
+    var currentRecognition = null;
+
+    micBtn.addEventListener('click', function () {
+      if (isRecording) {
+        if (currentRecognition) { currentRecognition.stop(); }
+        return;
+      }
+
+      var recognition = new SpeechRecognitionAPI();
+      recognition.lang = 'ja-JP';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      currentRecognition = recognition;
+
+      recognition.onstart = function () {
+        isRecording = true;
+        micBtn.classList.add('recording');
+        micBtn.setAttribute('aria-label', '録音中 — タップで停止');
+      };
+
+      recognition.onresult = function (event) {
+        var text = event.results[0][0].transcript;
+        if (text.trim()) {
+          textarea.value = text;
+          autoResizeTextarea();
+          updateSendButton();
+          sendMessage(text);
+          textarea.value = '';
+          textarea.style.height = 'auto';
+          updateSendButton();
+        }
+      };
+
+      recognition.onend = function () {
+        isRecording = false;
+        currentRecognition = null;
+        micBtn.classList.remove('recording');
+        micBtn.setAttribute('aria-label', '音声入力');
+      };
+
+      recognition.onerror = function (event) {
+        console.warn('[FAQ Widget] Speech recognition error:', event && event.error);
+        isRecording = false;
+        currentRecognition = null;
+        micBtn.classList.remove('recording');
+        micBtn.setAttribute('aria-label', '音声入力');
+      };
+
+      recognition.start();
+    });
+  }
 
   textarea.addEventListener('input', function () {
     autoResizeTextarea();
