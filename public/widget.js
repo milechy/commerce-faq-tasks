@@ -427,7 +427,6 @@
     '  overflow-y: auto;',
     '  display: flex;',
     '  flex-direction: column;',
-    '  justify-content: flex-end;',
     '  gap: 8px;',
     '  scrollbar-width: none;',
     '  -ms-overflow-style: none;',
@@ -436,6 +435,8 @@
     '  touch-action: pan-y;',
     '}',
     '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
+    /* メッセージが少ない時は下寄せ (justify-content:flex-end の代替でスクロール可能) */
+    '.panel.avatar-active .messages > :first-child { margin-top: auto; }',
 
     /* チャットバブル: 半透明 */
     '.panel.avatar-active .bubble.assistant {',
@@ -911,11 +912,11 @@
         voiceModeIndicator.textContent = avatarMuted ? '🔇 音声ミュート中' : '🔊 音声で応答中';
       });
 
-      // Agent からのテキスト応答をチャットバブルとして表示
+      // Agent からのテキスト応答をチャットバブルとして表示（ミュート時のみ）
       room.on(LK.RoomEvent.DataReceived, function (data) {
         try {
           var msg = JSON.parse(new TextDecoder().decode(data));
-          if (msg.type === 'agent_reply' && msg.text) {
+          if (msg.type === 'agent_reply' && msg.text && avatarMuted) {
             var assistantMsg = {
               id: generateMsgId(),
               role: 'assistant',
