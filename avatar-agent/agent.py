@@ -83,6 +83,16 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
         self._reference_id = reference_id
 
     async def _run(self, output_emitter: agents_tts.AudioEmitter) -> None:
+        # initialize() は _run() の先頭で必ず呼ぶ。
+        # 呼ばずに return/例外で抜けると _main_task の end_input() が
+        # "AudioEmitter isn't started" RuntimeError を投げるため。
+        output_emitter.initialize(
+            request_id=f"fish-audio-{id(self)}",
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type="audio/pcm",
+            stream=False,
+        )
         try:
             request_body = {
                 "text": self._input_text,
@@ -113,17 +123,8 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
 
             wav_io = io.BytesIO(audio_bytes)
             with wave.open(wav_io, "rb") as wav_file:
-                sample_rate = wav_file.getframerate()
-                num_channels = wav_file.getnchannels()
                 pcm_data = wav_file.readframes(wav_file.getnframes())
 
-            output_emitter.initialize(
-                request_id="fish-audio",
-                sample_rate=sample_rate,
-                num_channels=num_channels,
-                mime_type="audio/pcm",
-                stream=False,
-            )
             output_emitter.push(pcm_data)
             output_emitter.flush()
         except Exception as e:
