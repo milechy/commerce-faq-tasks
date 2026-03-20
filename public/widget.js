@@ -414,17 +414,23 @@
     '.avatar-close-btn:hover { background: rgba(0,0,0,0.6); }',
     '.avatar-close-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
 
-    /* メッセージエリア: アバター映像の上にオーバーレイ */
+    /* メッセージエリア: 入力バーの直上にオーバーレイ（下から積み上げ） */
     '.panel.avatar-active .messages {',
     '  position: absolute;',
-    '  top: 0; left: 0; right: 0;',
-    '  bottom: 68px;',
+    '  bottom: 64px;',
+    '  left: 0; right: 0;',
+    '  max-height: 160px;',
     '  z-index: 5;',
     '  background: transparent;',
-    '  padding: 56px 12px 12px;',
+    '  padding: 8px 16px;',
     '  overflow-y: auto;',
+    '  display: flex;',
+    '  flex-direction: column;',
+    '  justify-content: flex-end;',
+    '  gap: 8px;',
     '  scrollbar-width: none;',
     '  -ms-overflow-style: none;',
+    '  pointer-events: none;',
     '}',
     '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
 
@@ -443,7 +449,8 @@
     '  backdrop-filter: blur(8px);',
     '  border-radius: 16px 16px 4px 16px;',
     '}',
-    '.panel.avatar-active .ts { color: rgba(255,255,255,0.6); }',
+    '.panel.avatar-active .msg-wrapper { pointer-events: auto; }',
+    '.panel.avatar-active .ts { color: rgba(255,255,255,0.5); font-size: 10px; }',
 
     /* 入力エリア: 下部オーバーレイ */
     '.panel.avatar-active .input-area {',
@@ -1315,11 +1322,15 @@
       };
 
       recognition.onerror = function (event) {
-        console.warn('[FAQ Widget] Speech recognition error:', event && event.error);
+        var errCode = event && event.error;
+        console.warn('[FAQ Widget] Speech recognition error:', errCode);
         isRecording = false;
         currentRecognition = null;
         micBtn.classList.remove('recording');
         micBtn.setAttribute('aria-label', '音声入力');
+        if (errCode === 'not-allowed') {
+          micBtn.setAttribute('title', 'マイク権限が必要です（HTTPS環境でのみ利用可能）');
+        }
       };
 
       recognition.start();
