@@ -24,9 +24,6 @@ import asyncio
 import json
 import logging
 import aiohttp
-import struct
-import io
-import wave
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession
 from livekit.agents import tts as agents_tts
@@ -86,26 +83,27 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
         # initialize() は _run() の先頭で必ず呼ぶ。
         # 呼ばずに return/例外で抜けると _main_task の end_input() が
         # "AudioEmitter isn't started" RuntimeError を投げるため。
+        # mime_type="audio/mpeg" → AudioEmitter が PyAV 経由で MP3 → PCM デコードする。
         output_emitter.initialize(
             request_id=f"fish-audio-{id(self)}",
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            mime_type="audio/pcm",
+            mime_type="audio/mpeg",
             stream=False,
         )
         try:
             request_body = {
                 "text": self._input_text,
-                "format": "wav",
+                "format": "mp3",   # Fish Audio デフォルト形式。WAV より確実。
                 "normalize": True,
                 "latency": "normal",
             }
             if self._reference_id:
                 request_body["reference_id"] = self._reference_id
 
-            logger.info(f"[TTS] Fish Audio request: {self._input_text[:60]}...")
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
+            logger.info(f"[TTS] requesting Fish Audio: text={self._input_text[:60]!r} ref={self._reference_id}")
+            async with aiohttp.ClientSession() as http_session:
+                async with http_session.post(
                     "https://api.fish.audio/v1/tts",
                     headers={
                         "Authorization": f"Bearer {self._api_key}",
@@ -114,21 +112,23 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
                     json=request_body,
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
+                    logger.info(f"[TTS] Fish Audio response: status={resp.status} content-type={resp.content_type}")
                     if resp.status != 200:
                         error_text = await resp.text()
-                        logger.error(f"[TTS] Fish Audio error {resp.status}: {error_text[:200]}")
+                        logger.error(f"[TTS] Fish Audio error {resp.status}: {error_text[:300]}")
                         return
                     audio_bytes = await resp.read()
-                    logger.info(f"[TTS] Got {len(audio_bytes)} bytes from Fish Audio")
 
-            wav_io = io.BytesIO(audio_bytes)
-            with wave.open(wav_io, "rb") as wav_file:
-                pcm_data = wav_file.readframes(wav_file.getnframes())
+            logger.info(f"[TTS] got {len(audio_bytes)} bytes, first4={audio_bytes[:4]!r}")
+            if len(audio_bytes) == 0:
+                logger.error("[TTS] Fish Audio returned empty audio")
+                return
 
-            output_emitter.push(pcm_data)
+            output_emitter.push(audio_bytes)
             output_emitter.flush()
+            logger.info("[TTS] pushed to emitter OK")
         except Exception as e:
-            logger.error(f"[TTS] Exception: {e}")
+            logger.error(f"[TTS] Exception in _run: {type(e).__name__}: {e}")
 
 
 # --- Groq LLM (OpenAI 互換 API 経由) ---
