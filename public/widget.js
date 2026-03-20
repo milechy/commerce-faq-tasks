@@ -380,7 +380,7 @@
     '@media (max-width: 390px) { .avatar-area { height: 180px; } }',
 
     /* ───── avatar-active: Lemonslice風フルスクリーン ───── */
-    '.panel.avatar-active { background: #000; }',
+    '.panel.avatar-active { background: #000; overscroll-behavior: contain; touch-action: none; }',
     '.panel.avatar-active .header { display: none; }',
 
     /* アバターエリア: パネル全体を覆う */
@@ -430,6 +430,9 @@
     '  gap: 8px;',
     '  scrollbar-width: none;',
     '  -ms-overflow-style: none;',
+    '  overscroll-behavior: contain;',
+    '  -webkit-overflow-scrolling: touch;',
+    '  touch-action: pan-y;',
     '}',
     '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
 
@@ -892,6 +895,23 @@
         voiceModeIndicator.textContent = avatarMuted ? '🔇 音声ミュート中' : '🔊 音声で応答中';
       });
 
+      // Agent からのテキスト応答をチャットバブルとして表示
+      room.on(LK.RoomEvent.DataReceived, function (data) {
+        try {
+          var msg = JSON.parse(new TextDecoder().decode(data));
+          if (msg.type === 'agent_reply' && msg.text) {
+            var assistantMsg = {
+              id: generateMsgId(),
+              role: 'assistant',
+              content: String(msg.text),
+              timestamp: Date.now(),
+            };
+            messages.push(assistantMsg);
+            renderMessages();
+          }
+        } catch (_e) {}
+      });
+
       room.on(LK.RoomEvent.TrackSubscribed, function (track) {
         if (track.kind === 'video') {
           var videoEl = track.attach();
@@ -1279,6 +1299,11 @@
   fab.addEventListener('click', togglePanel);
   closeBtn.addEventListener('click', closePanel);
   dismissBtn.addEventListener('click', hideError);
+
+  // メッセージエリアのスクロールをページに伝播させない
+  messagesArea.addEventListener('touchmove', function (e) {
+    e.stopPropagation();
+  }, { passive: true });
 
   /* --- マイクボタン: Web Speech API 音声入力 --- */
   if (SpeechRecognitionAPI) {

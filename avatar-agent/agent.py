@@ -206,6 +206,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(event):
+        item = event.item
+        if hasattr(item, "role") and str(item.role) == "assistant":
+            text = item.text_content if hasattr(item, "text_content") else None
+            if text and ctx.room.local_participant:
+                payload = json.dumps({"type": "agent_reply", "text": text}).encode()
+                asyncio.ensure_future(
+                    ctx.room.local_participant.publish_data(payload, reliable=True)
+                )
+                logger.debug(f"[data_channel] agent_reply sent: {text[:60]!r}")
+
     @ctx.room.on("data_received")
     def on_data_received(data_packet):
         try:
