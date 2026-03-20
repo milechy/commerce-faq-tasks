@@ -41,8 +41,9 @@ function generateLiveKitToken(params: {
     video: {
       roomJoin: true,
       room: params.roomName,
-      canSubscribe: true,  // Widget viewer: 映像受信
-      canPublish: false,   // Widget viewer: 映像送信なし
+      canSubscribe: true,    // Widget viewer: 映像受信
+      canPublish: false,     // Widget viewer: 映像送信なし
+      canPublishData: true,  // Data Channel送信を許可（映像・音声送信は不要だがデータは必要）
     },
   };
   return jwt.sign(payload, params.apiSecret, { algorithm: "HS256" });

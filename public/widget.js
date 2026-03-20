@@ -674,13 +674,23 @@
   function sendToLiveKit(text) {
     try {
       var room = window.__rajiuceRoom;
-      if (!room || !room.localParticipant) return;
+      if (!room || !room.localParticipant) {
+        console.warn('[FAQ Widget] sendToLiveKit: no room or participant');
+        return;
+      }
       var encoder = new TextEncoder();
-      room.localParticipant.publishData(
-        encoder.encode(JSON.stringify({ type: 'chat', text: text })),
-        { reliable: true }
-      );
-    } catch (_e) {}
+      var payload = encoder.encode(JSON.stringify({ type: 'chat', text: text }));
+      var result = room.localParticipant.publishData(payload, { reliable: true });
+      if (result && typeof result.then === 'function') {
+        result.then(function() {
+          console.log('[FAQ Widget] sendToLiveKit: data published successfully');
+        }).catch(function(err) {
+          console.error('[FAQ Widget] sendToLiveKit: publishData failed:', err && err.message);
+        });
+      }
+    } catch (e) {
+      console.error('[FAQ Widget] sendToLiveKit error:', e && e.message);
+    }
   }
 
   function cleanupLiveKit() {
