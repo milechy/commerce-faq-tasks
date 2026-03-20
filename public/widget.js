@@ -319,6 +319,43 @@
     '  object-fit: cover;',
     '  border-radius: 12px;',
     '}',
+
+    /* アバターミュートボタン */
+    '.avatar-mute-btn {',
+    '  position: absolute;',
+    '  bottom: 10px;',
+    '  right: 10px;',
+    '  min-width: 36px;',
+    '  min-height: 36px;',
+    '  width: 36px;',
+    '  height: 36px;',
+    '  border-radius: 50%;',
+    '  border: none;',
+    '  background: rgba(0,0,0,0.5);',
+    '  color: #fff;',
+    '  cursor: pointer;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '  padding: 0;',
+    '  z-index: 10;',
+    '}',
+    '.avatar-mute-btn:hover { background: rgba(0,0,0,0.75); }',
+    '.avatar-mute-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+
+    /* 音声モード表示 */
+    '.voice-mode-indicator {',
+    '  padding: 4px 12px;',
+    '  background: #eff6ff;',
+    '  color: #2563eb;',
+    '  font-size: 12px;',
+    '  text-align: center;',
+    '  border-bottom: 1px solid #dbeafe;',
+    '  flex-shrink: 0;',
+    '}',
+
+    /* モバイル最適化 */
+    '@media (max-width: 390px) { .avatar-area { height: 180px; } }',
   ].join('\n');
 
   shadow.appendChild(styleEl);
@@ -453,6 +490,13 @@
   avatarArea.appendChild(avatarStatusText);
   panel.appendChild(avatarArea);
 
+  /* --- 音声モードインジケーター（アバター有効時のみ表示） --- */
+  var voiceModeIndicator = document.createElement('div');
+  voiceModeIndicator.className = 'voice-mode-indicator';
+  voiceModeIndicator.textContent = '🔊 音声で応答中';
+  voiceModeIndicator.style.display = 'none';
+  panel.appendChild(voiceModeIndicator);
+
   /* --- メッセージエリア --- */
   var messagesArea = el('div', { className: 'messages', role: 'log', 'aria-live': 'polite', 'aria-label': 'チャット履歴' });
   var emptyStateEl = el('div', { className: 'empty-state' }, 'ご質問をどうぞ。お気軽にお聞きください。');
@@ -495,6 +539,7 @@
   /* アバター状態 */
   var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId }
   var avatarConfigFetched = false;
+  var avatarMuted = false;      // 音声ミュート状態
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -608,6 +653,67 @@
       var LK = window.LivekitClient;
       var room = new LK.Room({ adaptiveStream: true, dynacast: true });
 
+      // ミュートボタンを生成（SVGは createElement で — innerHTML 禁止）
+      var avatarMuteBtn = document.createElement('button');
+      avatarMuteBtn.className = 'avatar-mute-btn';
+      avatarMuteBtn.setAttribute('type', 'button');
+      avatarMuteBtn.setAttribute('aria-label', '音声ミュート切替');
+      avatarMuteBtn.setAttribute('aria-pressed', 'false');
+
+      function _speakerSvg() {
+        var ns = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
+        svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        var body = document.createElementNS(ns, 'polygon');
+        body.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+        var w1 = document.createElementNS(ns, 'path');
+        w1.setAttribute('d', 'M15.54 8.46a5 5 0 0 1 0 7.07');
+        var w2 = document.createElementNS(ns, 'path');
+        w2.setAttribute('d', 'M19.07 4.93a10 10 0 0 1 0 14.14');
+        svg.appendChild(body); svg.appendChild(w1); svg.appendChild(w2);
+        return svg;
+      }
+
+      function _muteSvg() {
+        var ns = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
+        svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        var body = document.createElementNS(ns, 'polygon');
+        body.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+        var x1 = document.createElementNS(ns, 'line');
+        x1.setAttribute('x1', '23'); x1.setAttribute('y1', '9');
+        x1.setAttribute('x2', '17'); x1.setAttribute('y2', '15');
+        var x2 = document.createElementNS(ns, 'line');
+        x2.setAttribute('x1', '17'); x2.setAttribute('y1', '9');
+        x2.setAttribute('x2', '23'); x2.setAttribute('y2', '15');
+        svg.appendChild(body); svg.appendChild(x1); svg.appendChild(x2);
+        return svg;
+      }
+
+      avatarMuteBtn.appendChild(_speakerSvg());
+      avatarArea.appendChild(avatarMuteBtn);
+
+      avatarMuteBtn.addEventListener('click', function () {
+        avatarMuted = !avatarMuted;
+        // 全 audio 要素にミュートを反映
+        var audios = avatarArea.querySelectorAll('audio');
+        for (var i = 0; i < audios.length; i++) { audios[i].muted = avatarMuted; }
+        // アイコン更新
+        while (avatarMuteBtn.firstChild) { avatarMuteBtn.removeChild(avatarMuteBtn.firstChild); }
+        avatarMuteBtn.appendChild(avatarMuted ? _muteSvg() : _speakerSvg());
+        avatarMuteBtn.setAttribute('aria-pressed', String(avatarMuted));
+        // インジケーター更新
+        voiceModeIndicator.textContent = avatarMuted ? '🔇 音声ミュート中' : '🔊 音声で応答中';
+      });
+
       room.on(LK.RoomEvent.TrackSubscribed, function (track) {
         if (track.kind === 'video') {
           var videoEl = track.attach();
@@ -618,6 +724,7 @@
           // Agent TTS からの音声トラックを再生（innerHTML 禁止 — attach() で要素生成）
           var audioEl = track.attach();
           audioEl.style.display = 'none';
+          audioEl.muted = avatarMuted;  // 現在のミュート状態を反映
           avatarArea.appendChild(audioEl);
           console.log('[FAQ Widget] Audio track subscribed — avatar voice enabled');
         }
@@ -636,6 +743,7 @@
 
       room.on(LK.RoomEvent.Disconnected, function () {
         avatarArea.style.display = 'none';
+        voiceModeIndicator.style.display = 'none';
         window.__rajiuceRoom = null;
         // Room が切断されたら次のパネル開閉で再fetch可能にする
         avatarConfigFetched = false;
@@ -645,6 +753,7 @@
       room.connect(avatarConfig.livekitUrl, avatarConfig.token)
         .then(function () {
           console.log('[FAQ Widget] Connected to LiveKit room');
+          voiceModeIndicator.style.display = '';
 
           // LiveKit Data Channel 経由でウェルカムメッセージを送信
           // （Python Agent がテキストを受信して LLM 処理 → TTS → アバター映像を返す）
