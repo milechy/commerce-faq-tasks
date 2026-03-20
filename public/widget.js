@@ -436,17 +436,19 @@
 
     /* チャットバブル: 半透明 */
     '.panel.avatar-active .bubble.assistant {',
-    '  background: rgba(0,0,0,0.6);',
+    '  background: rgba(0,0,0,0.4);',
     '  color: #fff;',
-    '  -webkit-backdrop-filter: blur(8px);',
-    '  backdrop-filter: blur(8px);',
+    '  -webkit-backdrop-filter: blur(12px);',
+    '  backdrop-filter: blur(12px);',
+    '  border: 1px solid rgba(255,255,255,0.1);',
     '  border-radius: 16px 16px 16px 4px;',
     '}',
     '.panel.avatar-active .bubble.user {',
-    '  background: rgba(37,99,235,0.8);',
+    '  background: rgba(37,99,235,0.5);',
     '  color: #fff;',
-    '  -webkit-backdrop-filter: blur(8px);',
-    '  backdrop-filter: blur(8px);',
+    '  -webkit-backdrop-filter: blur(12px);',
+    '  backdrop-filter: blur(12px);',
+    '  border: 1px solid rgba(255,255,255,0.15);',
     '  border-radius: 16px 16px 4px 16px;',
     '}',
     '.panel.avatar-active .msg-wrapper { pointer-events: auto; }',
@@ -922,6 +924,7 @@
       room.on(LK.RoomEvent.Disconnected, function () {
         // フルスクリーンモード解除
         panel.classList.remove('avatar-active');
+        textarea.setAttribute('placeholder', 'メッセージを入力… (Shift+Enterで改行)');
         // 閉じるボタンを削除
         var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
         for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }
@@ -944,6 +947,7 @@
 
           // フルスクリーンアバターUIへ切り替え
           panel.classList.add('avatar-active');
+          textarea.setAttribute('placeholder', 'メッセージを入力…');
 
           // 右上フローティング閉じるボタンを生成
           var avatarCloseBtn = el('button', {
