@@ -858,6 +858,16 @@
     emitToHost('user:message', { messageLength: text.length });
     sendToLiveKit(text.trim());
 
+    // アバター有効（LiveKit Room接続中）→ REST APIをスキップし音声応答のみ
+    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+      isLoading = false;
+      textarea.disabled = false;
+      renderMessages();
+      updateSendButton();
+      textarea.focus();
+      return;
+    }
+
     if (currentAbortController) {
       currentAbortController.abort();
     }
