@@ -42,9 +42,17 @@ logger.info(f"[module] LEMONSLICE_API_KEY={'SET' if os.environ.get('LEMONSLICE_A
 FALLBACK_MSG = "申し訳ございません。もう一度お尋ねください。"
 
 SYSTEM_PROMPT = (
-    "あなたはカーネーション自動車（BROSS新潟）のAI営業アシスタントです。"
-    "必ず1〜2文の短い日本語で回答してください。長い説明は禁止。"
-    "在庫の詳細や金額は「店長にご相談ください」と案内してください。"
+    "あなたはカーネーション自動車（BROSS新潟）のAI営業アシスタントです。\n"
+    "以下のルールに従って、お客様に日本語で応答してください。\n\n"
+    "【回答ルール】\n"
+    "- 必ず1〜2文の短い日本語で回答してください。\n"
+    "- 知っている情報は積極的に答えてください。「店長に相談」は最終手段です。\n"
+    "- 具体的な在庫状況・値引き額・ローン審査結果は不明なので、その場合のみ来店を案内してください。\n\n"
+    "【店舗情報】\n"
+    "- 店名: カーネーション自動車（BROSS新潟）\n"
+    "- 営業時間: 平日・土曜 9:00〜18:00、日曜・祝日 定休日\n"
+    "- 取扱メーカー: トヨタ、日産、ホンダ、マツダ等の中古車全般\n"
+    "- 特徴: 全車両整備済み・保証付き、ファイナンス相談可能\n"
 )
 
 
@@ -247,14 +255,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
-    # 接続プーリング: TCP ハンドシェイクを省略してレイテンシを削減
-    groq_http = aiohttp.ClientSession()
-
     async def handle_chat(user_text: str) -> None:
         """Groq LLM 直接呼び出し → session.say() でTTS再生 → Data Channel でWidget通知"""
         try:
-            # 1. Groq LLM で応答生成
-            reply = await call_groq_llm(user_text, groq_http)
+            # 1. Groq LLM で応答生成（毎回新しいSessionで "Session is closed" を回避）
+            async with aiohttp.ClientSession() as http:
+                reply = await call_groq_llm(user_text, http)
             logger.info(f"[Groq] reply: {reply[:80]!r}")
 
             # 2. session.say() で FishAudio TTS パイプラインに渡す
@@ -302,16 +308,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     except Exception as e:
         logger.warning(f"Lemonslice avatar failed (text-only fallback): {e}")
 
-    try:
-        await session.start(
-            room=ctx.room,
-            agent=Agent(
-                instructions=SYSTEM_PROMPT,
-            ),
-        )
-        logger.info("=== SESSION STARTED ===")
-    finally:
-        await groq_http.close()
+    await session.start(
+        room=ctx.room,
+        agent=Agent(
+            instructions=SYSTEM_PROMPT,
+        ),
+    )
+    logger.info("=== SESSION STARTED ===")
 
 
 if __name__ == "__main__":
