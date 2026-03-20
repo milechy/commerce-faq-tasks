@@ -335,6 +335,7 @@
     '  justify-content: center;',
     '}',
     '.avatar-status { color: #888; font-size: 13px; }',
+    '.panel.avatar-active .avatar-status { color: rgba(255,255,255,0.7); }',
     '.avatar-video {',
     '  width: 100%;',
     '  height: 100%;',
@@ -763,8 +764,16 @@
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
   }
 
-  function scrollToBottom() {
-    messagesArea.scrollTop = messagesArea.scrollHeight;
+  function scrollToBottom(force) {
+    if (force) {
+      messagesArea.scrollTop = messagesArea.scrollHeight;
+      return;
+    }
+    // ユーザーが最下部付近（50px以内）にいる場合のみ自動スクロール
+    var isNearBottom = (messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight) < 50;
+    if (isNearBottom) {
+      messagesArea.scrollTop = messagesArea.scrollHeight;
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -783,8 +792,15 @@
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        // sessionStorage にキャッシュ（次回パネル開閉で即ダークUI適用するため）
+        try { sessionStorage.setItem(avatarCacheKey, data.enabled ? 'true' : 'false'); } catch (_e) {}
         if (!data.enabled) return;
         avatarConfig = data;
+        // fetch完了時点でパネルが開いていればダークUIに先行切り替え（白UIフラッシュ防止）
+        if (isOpen) {
+          avatarArea.style.display = 'flex';
+          panel.classList.add('avatar-active');
+        }
         initLiveKitAvatar();
       })
       .catch(function (e) {
@@ -1129,6 +1145,8 @@
   /* 9. パネル開閉                                                         */
   /* ------------------------------------------------------------------ */
 
+  var avatarCacheKey = 'rajiuce-avatar-' + tenantId;
+
   function openPanel() {
     isOpen = true;
     panel.classList.add('open');
@@ -1145,6 +1163,13 @@
       avatarArea.style.display = 'flex';
       panel.classList.add('avatar-active');
     } else {
+      // 前回セッションでアバター有効だった場合、APIレスポンス前に即ダークUI適用
+      try {
+        if (sessionStorage.getItem(avatarCacheKey) === 'true') {
+          avatarArea.style.display = 'flex';
+          panel.classList.add('avatar-active');
+        }
+      } catch (_e) {}
       fetchAvatarConfig();
     }
   }
@@ -1191,6 +1216,7 @@
     messages.push(userMsg);
     isLoading = true;
     renderMessages();
+    scrollToBottom(true);  // ユーザー送信時は強制スクロール
     updateSendButton();
     textarea.disabled = true;
 

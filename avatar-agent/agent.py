@@ -38,7 +38,9 @@ logger.info(f"[module] LIVEKIT_URL={os.environ.get('LIVEKIT_URL', 'NOT SET')}")
 logger.info(f"[module] LIVEKIT_API_KEY={'SET' if os.environ.get('LIVEKIT_API_KEY') else 'NOT SET'}")
 logger.info(f"[module] LEMONSLICE_API_KEY={'SET' if os.environ.get('LEMONSLICE_API_KEY') else 'NOT SET'}")
 
-# --- システムプロンプト ---
+# --- 定数 ---
+FALLBACK_MSG = "申し訳ございません。もう一度お尋ねください。"
+
 SYSTEM_PROMPT = (
     "あなたはカーネーション自動車（BROSS新潟）のAI営業アシスタントです。"
     "必ず1〜2文の短い日本語で回答してください。長い説明は禁止。"
@@ -47,35 +49,34 @@ SYSTEM_PROMPT = (
 
 
 # --- Groq LLM 直接呼び出し ---
-async def call_groq_llm(user_text: str) -> str:
+async def call_groq_llm(user_text: str, http: aiohttp.ClientSession) -> str:
     """Groq LLM を aiohttp で直接呼び出し、応答テキストを返す。"""
     try:
-        async with aiohttp.ClientSession() as http:
-            async with http.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_text},
-                    ],
-                    "max_tokens": 150,
-                    "temperature": 0.7,
-                },
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    logger.error(f"[Groq] error {resp.status}: {await resp.text()}")
-                    return "申し訳ございません。もう一度お尋ねください。"
-                data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+        async with http.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 100,
+                "temperature": 0.7,
+            },
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                logger.error(f"[Groq] error {resp.status}: {await resp.text()}")
+                return FALLBACK_MSG
+            data = await resp.json()
+            return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         logger.error(f"[Groq] exception: {e}")
-        return "申し訳ございません。もう一度お尋ねください。"
+        return FALLBACK_MSG
 
 
 # --- Fish Audio TTS ---
@@ -157,7 +158,7 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
                 "text": self._input_text,
                 "format": "mp3",   # Fish Audio デフォルト形式。WAV より確実。
                 "normalize": True,
-                "latency": "normal",
+                "latency": "balanced",
             }
             if self._reference_id:
                 request_body["reference_id"] = self._reference_id
@@ -246,19 +247,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
+    # 接続プーリング: TCP ハンドシェイクを省略してレイテンシを削減
+    groq_http = aiohttp.ClientSession()
+
     async def handle_chat(user_text: str) -> None:
         """Groq LLM 直接呼び出し → session.say() でTTS再生 → Data Channel でWidget通知"""
         try:
             # 1. Groq LLM で応答生成
-            reply = await call_groq_llm(user_text)
+            reply = await call_groq_llm(user_text, groq_http)
             logger.info(f"[Groq] reply: {reply[:80]!r}")
 
             # 2. session.say() で FishAudio TTS パイプラインに渡す
             session.say(reply)
             logger.info(f"[say] sent to TTS: {reply[:60]!r}")
 
-            # 3. Data Channel 経由で Widget にもテキスト送信
-            if ctx.room.local_participant:
+            # 3. Data Channel 経由で Widget にもテキスト送信（フォールバックメッセージはスキップ）
+            if reply != FALLBACK_MSG and ctx.room.local_participant:
                 payload = json.dumps({"type": "agent_reply", "text": reply}).encode()
                 await ctx.room.local_participant.publish_data(payload, reliable=True)
                 logger.info("[data_channel] agent_reply sent to widget")
@@ -298,13 +302,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     except Exception as e:
         logger.warning(f"Lemonslice avatar failed (text-only fallback): {e}")
 
-    await session.start(
-        room=ctx.room,
-        agent=Agent(
-            instructions=SYSTEM_PROMPT,
-        ),
-    )
-    logger.info("=== SESSION STARTED ===")
+    try:
+        await session.start(
+            room=ctx.room,
+            agent=Agent(
+                instructions=SYSTEM_PROMPT,
+            ),
+        )
+        logger.info("=== SESSION STARTED ===")
+    finally:
+        await groq_http.close()
 
 
 if __name__ == "__main__":
