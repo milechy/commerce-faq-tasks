@@ -64,7 +64,11 @@ async function dispatchAgentToRoom(
 
   // 1. Room 作成（既存の場合は無害 — SDK が例外を投げないよう catch する）
   try {
-    await roomClient.createRoom({ name: roomName });
+    await roomClient.createRoom({
+      name: roomName,
+      emptyTimeout: 1800,    // 30分（デフォルト5分→延長）
+      maxParticipants: 3,    // widget + agent + lemonslice
+    });
     console.log(`[livekitTokenRoutes] Room created: ${roomName}`);
   } catch (err: any) {
     // "already exists" は無害

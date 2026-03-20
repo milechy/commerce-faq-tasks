@@ -609,22 +609,29 @@
       var room = new LK.Room({ adaptiveStream: true, dynacast: true });
 
       room.on(LK.RoomEvent.TrackSubscribed, function (track) {
-        if (track.kind !== 'video') return;
-        // createElement で video 要素を生成（innerHTML 禁止）
-        var videoEl = track.attach();
-        videoEl.className = 'avatar-video';
-        // ステータステキストを非表示にしてビデオを追加
-        avatarStatusText.style.display = 'none';
-        avatarArea.appendChild(videoEl);
+        if (track.kind === 'video') {
+          var videoEl = track.attach();
+          videoEl.className = 'avatar-video';
+          avatarStatusText.style.display = 'none';
+          avatarArea.appendChild(videoEl);
+        } else if (track.kind === 'audio') {
+          // Agent TTS からの音声トラックを再生（innerHTML 禁止 — attach() で要素生成）
+          var audioEl = track.attach();
+          audioEl.style.display = 'none';
+          avatarArea.appendChild(audioEl);
+          console.log('[FAQ Widget] Audio track subscribed — avatar voice enabled');
+        }
       });
 
       room.on(LK.RoomEvent.TrackUnsubscribed, function (track) {
-        if (track.kind !== 'video') return;
-        // アイドルタイムアウト等でビデオ track が消えたら video 要素を削除
-        var videos = avatarArea.querySelectorAll('.avatar-video');
-        for (var i = 0; i < videos.length; i++) { videos[i].remove(); }
-        // ステータステキストを再表示（接続中に戻す）
-        if (avatarStatusText) avatarStatusText.style.display = '';
+        if (track.kind === 'video') {
+          var videos = avatarArea.querySelectorAll('.avatar-video');
+          for (var i = 0; i < videos.length; i++) { videos[i].remove(); }
+          if (avatarStatusText) avatarStatusText.style.display = '';
+        } else if (track.kind === 'audio') {
+          var attached = track.detach();
+          for (var j = 0; j < attached.length; j++) { attached[j].remove(); }
+        }
       });
 
       room.on(LK.RoomEvent.Disconnected, function () {
@@ -991,7 +998,13 @@
   });
 
   /* ------------------------------------------------------------------ */
-  /* 13. 公開 API（window.FaqWidget）                                     */
+  /* 13. ページ離脱時にLiveKit Roomを切断                                  */
+  /* ------------------------------------------------------------------ */
+
+  window.addEventListener('beforeunload', function () { cleanupLiveKit(); });
+
+  /* ------------------------------------------------------------------ */
+  /* 14. 公開 API（window.FaqWidget）                                     */
   /* ------------------------------------------------------------------ */
 
   window.FaqWidget = {
