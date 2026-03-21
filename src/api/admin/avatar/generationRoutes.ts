@@ -11,7 +11,7 @@ import { trackUsage } from "../../../lib/billing/usageTracker";
 // ---------------------------------------------------------------------------
 
 async function callGroqLLM(system: string, user: string): Promise<string> {
-  const apiKey = process.env.QWEN_API_KEY || process.env.GROQ_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("Groq API key not configured");
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -85,7 +85,15 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
       try {
         // Step 1: Groq LLM で DALL-E 用英語プロンプト生成
         const dallePrompt = await callGroqLLM(
-          "You are an expert prompt engineer for DALL-E 3. Convert the user's description into a detailed English prompt for generating a professional avatar image. Return only the prompt text.",
+          `ユーザーの描写をDALL-E 3用のプロンプトに変換してください。
+以下のルールに従ってください：
+- 必ず "photorealistic portrait photo" から始めること
+- "studio lighting, professional headshot, shallow depth of field, 85mm lens" を含めること
+- "illustration", "cartoon", "anime", "3D render", "painting" は絶対に使わないこと
+- 背景は "soft blurred neutral background" にすること
+- 表情や服装はユーザーの描写に従うこと
+- 英語で出力すること
+プロンプトのみを出力し、説明は不要です。`,
           description
         );
 
@@ -111,7 +119,8 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
                 prompt: dallePrompt,
                 n: 1,
                 size: "1024x1024",
-                quality: "standard",
+                quality: "hd",
+                style: "natural",
               }),
             }
           );

@@ -19,6 +19,8 @@ import TuningPage from "./pages/admin/tuning/index";
 import KnowledgeGapsPage from "./pages/admin/knowledge-gaps/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import FeedbackChat from "./components/feedback/FeedbackChat";
+import AvatarListPage from "./pages/admin/avatar/index";
+import AvatarStudioPage from "./pages/admin/avatar/studio";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -112,6 +114,11 @@ function AppInner() {
 
         {/* フィードバック — Super Admin専用 */}
         <Route path="/admin/feedback" element={<SuperAdminRoute><FeedbackPage /></SuperAdminRoute>} />
+
+        {/* アバターカスタマイズスタジオ */}
+        <Route path="/admin/avatar" element={<RequireAuth><AvatarListPage /></RequireAuth>} />
+        <Route path="/admin/avatar/studio" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
+        <Route path="/admin/avatar/studio/:id" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />

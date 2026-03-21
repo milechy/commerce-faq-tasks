@@ -585,6 +585,31 @@ export default function AdminDashboard() {
                 )}
               </button>
 
+              <button
+                onClick={() => navigate("/admin/avatar")}
+                style={{
+                  flex: "1 1 200px",
+                  padding: "18px 20px",
+                  minHeight: 56,
+                  borderRadius: 12,
+                  border: "1px solid rgba(99,102,241,0.3)",
+                  background: "rgba(99,102,241,0.06)",
+                  color: "#a5b4fc",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  transition: "border-color 0.15s",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,102,241,0.6)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,102,241,0.3)"; }}
+              >
+                <span style={{ fontSize: 22 }}>🎭</span>
+                {t("dashboard.avatar_settings")}
+              </button>
+
               <SuperAdminOnly>
                 <button
                   onClick={() => navigate("/admin/feedback")}
