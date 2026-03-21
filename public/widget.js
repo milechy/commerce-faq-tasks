@@ -955,15 +955,34 @@
         voiceModeIndicator.textContent = avatarMuted ? '🔇 音声ミュート中' : '🔊 音声で応答中';
       });
 
-      // video要素を生成（Anam SDKがstreamToVideoElementに使用）
-      var videoEl = document.createElement('video');
-      videoEl.className = 'avatar-video';
-      videoEl.setAttribute('autoplay', '');
-      videoEl.setAttribute('playsinline', '');
-      videoEl.setAttribute('muted', '');
+      // Anam SDKはdocument.getElementById()でvideo要素を探すためShadow DOM外に作成
+      // Shadow DOM内のdisplay用videoにはsrcObjectでミラーする
       var videoId = 'anam-video-' + Date.now();
-      videoEl.id = videoId;
-      avatarArea.appendChild(videoEl);
+      var outerVideoEl = document.createElement('video');
+      outerVideoEl.id = videoId;
+      outerVideoEl.setAttribute('autoplay', '');
+      outerVideoEl.setAttribute('playsinline', '');
+      outerVideoEl.setAttribute('muted', '');
+      outerVideoEl.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+      document.body.appendChild(outerVideoEl);
+      window.__anamOuterVideo = outerVideoEl;
+
+      // Shadow DOM内の表示用video要素
+      var shadowVideoEl = document.createElement('video');
+      shadowVideoEl.className = 'avatar-video';
+      shadowVideoEl.setAttribute('autoplay', '');
+      shadowVideoEl.setAttribute('playsinline', '');
+      shadowVideoEl.setAttribute('muted', '');
+      avatarArea.appendChild(shadowVideoEl);
+
+      // outerVideoにストリームが来たらshadowVideoにsrcObjectをミラー
+      outerVideoEl.addEventListener('loadedmetadata', function () {
+        if (outerVideoEl.srcObject) {
+          shadowVideoEl.srcObject = outerVideoEl.srcObject;
+          shadowVideoEl.play().catch(function () {});
+          avatarStatusText.style.display = 'none';
+        }
+      });
 
       anamClient = window.__anamCreateClient(sessionToken, {
         avatarModel: 'CARA-3',
@@ -1015,6 +1034,13 @@
         client.stopStreaming();
       }
     } catch (_e) {}
+    // Shadow DOM外に作成したvideo要素を削除
+    try {
+      if (window.__anamOuterVideo && window.__anamOuterVideo.parentNode) {
+        window.__anamOuterVideo.parentNode.removeChild(window.__anamOuterVideo);
+      }
+    } catch (_e) {}
+    window.__anamOuterVideo = null;
     anamClient = null;
     window.__anamClient = null;
     panel.classList.remove('avatar-active');
