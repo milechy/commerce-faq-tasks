@@ -30,7 +30,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
     try {
       // アクティブなavatar_configを取得
       const result = await pool.query(
-        `SELECT name, personality_prompt, anam_avatar_id, anam_voice_id, anam_llm_id, avatar_provider
+        `SELECT name, personality_prompt, anam_avatar_id, anam_voice_id, anam_llm_id, anam_persona_id, avatar_provider
          FROM avatar_configs
          WHERE tenant_id = $1 AND is_active = true
          LIMIT 1`,
@@ -47,6 +47,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
         anam_avatar_id: string | null;
         anam_voice_id: string | null;
         anam_llm_id: string | null;
+        anam_persona_id: string | null;
         avatar_provider: string;
       };
 
@@ -63,13 +64,18 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
       }
 
       // Anam API: セッショントークン取得
-      const personaConfig: Record<string, string> = {
-        name: config.name || 'AI Assistant',
-      };
-      if (config.anam_avatar_id) personaConfig['avatarId'] = config.anam_avatar_id;
-      if (config.anam_voice_id)  personaConfig['voiceId']  = config.anam_voice_id;
-      if (config.anam_llm_id)    personaConfig['llmId']    = config.anam_llm_id;
-      if (config.personality_prompt) personaConfig['systemPrompt'] = config.personality_prompt;
+      // personaId が設定されている場合は方式A（personaId指定）を優先
+      // それ以外はインラインpersonaConfig（方式B）を使用
+      let personaConfig: Record<string, string>;
+      if (config.anam_persona_id) {
+        personaConfig = { personaId: config.anam_persona_id };
+      } else {
+        personaConfig = { name: config.name || 'AI Assistant' };
+        if (config.anam_avatar_id) personaConfig['avatarId'] = config.anam_avatar_id;
+        if (config.anam_voice_id)  personaConfig['voiceId']  = config.anam_voice_id;
+        if (config.anam_llm_id)    personaConfig['llmId']    = config.anam_llm_id;
+        if (config.personality_prompt) personaConfig['systemPrompt'] = config.personality_prompt;
+      }
 
       const anamRes = await fetch(`${ANAM_API_BASE}/v1/auth/session-token`, {
         method: 'POST',
