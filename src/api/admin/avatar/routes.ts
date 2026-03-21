@@ -21,6 +21,11 @@ const createSchema = z.object({
   behavior_description: z.string().optional(),
   emotion_tags: z.array(z.string()).optional(),
   lemonslice_agent_id: z.string().optional(),
+  anam_avatar_id: z.string().optional(),
+  anam_voice_id: z.string().optional(),
+  anam_persona_id: z.string().optional(),
+  anam_llm_id: z.string().optional(),
+  avatar_provider: z.enum(['lemonslice', 'anam']).optional(),
 });
 
 const updateSchema = z.object({
@@ -33,6 +38,11 @@ const updateSchema = z.object({
   behavior_description: z.string().optional(),
   emotion_tags: z.array(z.string()).optional(),
   lemonslice_agent_id: z.string().optional(),
+  anam_avatar_id: z.string().optional(),
+  anam_voice_id: z.string().optional(),
+  anam_persona_id: z.string().optional(),
+  anam_llm_id: z.string().optional(),
+  avatar_provider: z.enum(['lemonslice', 'anam']).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -112,14 +122,20 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       behavior_description,
       emotion_tags,
       lemonslice_agent_id,
+      anam_avatar_id,
+      anam_voice_id,
+      anam_persona_id,
+      anam_llm_id,
+      avatar_provider,
     } = parsed.data;
 
     try {
       const result = await db.query(
         `INSERT INTO avatar_configs
           (tenant_id, name, image_url, image_prompt, voice_id, voice_description,
-           personality_prompt, behavior_description, emotion_tags, lemonslice_agent_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           personality_prompt, behavior_description, emotion_tags, lemonslice_agent_id,
+           anam_avatar_id, anam_voice_id, anam_persona_id, anam_llm_id, avatar_provider)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING *`,
         [
           tenantId,
@@ -132,6 +148,11 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
           behavior_description ?? null,
           JSON.stringify(emotion_tags ?? []),
           lemonslice_agent_id ?? null,
+          anam_avatar_id ?? null,
+          anam_voice_id ?? null,
+          anam_persona_id ?? null,
+          anam_llm_id ?? null,
+          avatar_provider ?? 'lemonslice',
         ]
       );
       return res.status(201).json(result.rows[0]);

@@ -723,6 +723,8 @@
   var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId }
   var avatarConfigFetched = false;
   var avatarMuted = true;       // 音声ミュート状態（デフォルト: ミュート）
+  var anamClient = null;         // Anam SDK クライアント
+  var avatarProvider = null;     // 'anam' | 'lemonslice' | null
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -787,26 +789,241 @@
     if (avatarConfigFetched || !apiKey) return;
     avatarConfigFetched = true;
 
-    fetch(apiBase + '/api/avatar/room-token', {
+    // まず Anam セッションを試みる
+    fetch(apiBase + '/api/avatar/anam-session', {
       method: 'POST',
       headers: { 'x-api-key': apiKey },
     })
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        // sessionStorage にキャッシュ（次回パネル開閉で即ダークUI適用するため）
-        try { sessionStorage.setItem(avatarCacheKey, data.enabled ? 'true' : 'false'); } catch (_e) {}
-        if (!data.enabled) return;
-        avatarConfig = data;
-        // fetch完了時点でパネルが開いていればダークUIに先行切り替え（白UIフラッシュ防止）
-        if (isOpen) {
-          avatarArea.style.display = 'flex';
-          panel.classList.add('avatar-active');
+        if (data.enabled && data.avatarProvider === 'anam' && data.sessionToken) {
+          // Anam フロー
+          avatarProvider = 'anam';
+          try { sessionStorage.setItem(avatarCacheKey, 'true'); } catch (_e) {}
+          if (isOpen) {
+            avatarArea.style.display = 'flex';
+            panel.classList.add('avatar-active');
+          }
+          initAnamAvatar(data.sessionToken);
+          return;
         }
-        initLiveKitAvatar();
+        // Lemonslice フォールバック: 既存の room-token フロー
+        avatarProvider = 'lemonslice';
+        fetch(apiBase + '/api/avatar/room-token', {
+          method: 'POST',
+          headers: { 'x-api-key': apiKey },
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (lkData) {
+            try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
+            if (!lkData.enabled) return;
+            avatarConfig = lkData;
+            if (isOpen) {
+              avatarArea.style.display = 'flex';
+              panel.classList.add('avatar-active');
+            }
+            initLiveKitAvatar();
+          })
+          .catch(function (e) {
+            console.warn('[FAQ Widget] LiveKit config fetch failed:', e && e.message);
+          });
       })
       .catch(function (e) {
-        console.warn('[FAQ Widget] Avatar config fetch failed:', e && e.message);
+        // anam-session 失敗時は既存フローへ
+        console.warn('[FAQ Widget] Anam session fetch failed, falling back to LiveKit:', e && e.message);
+        avatarProvider = 'lemonslice';
+        fetch(apiBase + '/api/avatar/room-token', {
+          method: 'POST',
+          headers: { 'x-api-key': apiKey },
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (lkData) {
+            try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
+            if (!lkData.enabled) return;
+            avatarConfig = lkData;
+            if (isOpen) {
+              avatarArea.style.display = 'flex';
+              panel.classList.add('avatar-active');
+            }
+            initLiveKitAvatar();
+          })
+          .catch(function () {});
       });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* アバター — Anam.ai接続                                               */
+  /* ------------------------------------------------------------------ */
+
+  var ANAM_SDK_URL = 'https://esm.sh/@anam-ai/js-sdk@latest';
+
+  function initAnamAvatar(sessionToken) {
+    avatarArea.style.display = 'flex';
+    avatarStatusText.style.display = '';
+
+    // ESM dynamic import で Anam SDK をロード
+    var loadScript = document.createElement('script');
+    loadScript.type = 'module';
+    loadScript.textContent = [
+      'import { createClient } from "' + ANAM_SDK_URL + '";',
+      'window.__anamCreateClient = createClient;',
+      'window.dispatchEvent(new CustomEvent("anam-sdk-loaded"));',
+    ].join('\n');
+    document.head.appendChild(loadScript);
+
+    function onAnamSdkLoaded() {
+      window.removeEventListener('anam-sdk-loaded', onAnamSdkLoaded);
+      connectAnam(sessionToken);
+    }
+
+    if (window.__anamCreateClient) {
+      connectAnam(sessionToken);
+    } else {
+      window.addEventListener('anam-sdk-loaded', onAnamSdkLoaded);
+    }
+  }
+
+  function connectAnam(sessionToken) {
+    if (!window.__anamCreateClient) {
+      console.warn('[FAQ Widget] Anam SDK not loaded');
+      avatarArea.style.display = 'none';
+      return;
+    }
+
+    try {
+      // ミュートボタンを生成（既存の LiveKit フローと同じ構造）
+      var avatarMuteBtn = document.createElement('button');
+      avatarMuteBtn.className = 'avatar-mute-btn';
+      avatarMuteBtn.setAttribute('type', 'button');
+      avatarMuteBtn.setAttribute('aria-label', '音声ミュート切替');
+      avatarMuteBtn.setAttribute('aria-pressed', 'true');
+
+      function _anamMuteSvg() {
+        var ns = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
+        svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        var body = document.createElementNS(ns, 'polygon');
+        body.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+        var x1 = document.createElementNS(ns, 'line');
+        x1.setAttribute('x1', '23'); x1.setAttribute('y1', '9');
+        x1.setAttribute('x2', '17'); x1.setAttribute('y2', '15');
+        var x2 = document.createElementNS(ns, 'line');
+        x2.setAttribute('x1', '17'); x2.setAttribute('y1', '9');
+        x2.setAttribute('x2', '23'); x2.setAttribute('y2', '15');
+        svg.appendChild(body); svg.appendChild(x1); svg.appendChild(x2);
+        return svg;
+      }
+      function _anamSpeakerSvg() {
+        var ns = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('width', '16'); svg.setAttribute('height', '16');
+        svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        var body = document.createElementNS(ns, 'polygon');
+        body.setAttribute('points', '11 5 6 9 2 9 2 15 6 15 11 19 11 5');
+        var w1 = document.createElementNS(ns, 'path');
+        w1.setAttribute('d', 'M15.54 8.46a5 5 0 0 1 0 7.07');
+        var w2 = document.createElementNS(ns, 'path');
+        w2.setAttribute('d', 'M19.07 4.93a10 10 0 0 1 0 14.14');
+        svg.appendChild(body); svg.appendChild(w1); svg.appendChild(w2);
+        return svg;
+      }
+
+      avatarMuteBtn.appendChild(_anamMuteSvg());
+      avatarArea.appendChild(avatarMuteBtn);
+
+      avatarMuteBtn.addEventListener('click', function () {
+        avatarMuted = !avatarMuted;
+        if (anamClient) {
+          try {
+            if (avatarMuted) {
+              anamClient.muteOutputAudio();
+            } else {
+              anamClient.unmuteOutputAudio();
+            }
+          } catch (_e) {}
+        }
+        while (avatarMuteBtn.firstChild) { avatarMuteBtn.removeChild(avatarMuteBtn.firstChild); }
+        avatarMuteBtn.appendChild(avatarMuted ? _anamMuteSvg() : _anamSpeakerSvg());
+        avatarMuteBtn.setAttribute('aria-pressed', String(avatarMuted));
+        voiceModeIndicator.textContent = avatarMuted ? '🔇 音声ミュート中' : '🔊 音声で応答中';
+      });
+
+      // video要素を生成（Anam SDKがstreamToVideoElementに使用）
+      var videoEl = document.createElement('video');
+      videoEl.className = 'avatar-video';
+      videoEl.setAttribute('autoplay', '');
+      videoEl.setAttribute('playsinline', '');
+      videoEl.setAttribute('muted', '');
+      var videoId = 'anam-video-' + Date.now();
+      videoEl.id = videoId;
+      avatarArea.appendChild(videoEl);
+
+      anamClient = window.__anamCreateClient(sessionToken, {
+        avatarModel: 'CARA-3',
+      });
+
+      // デフォルトミュート
+      try { anamClient.muteOutputAudio(); } catch (_e) {}
+
+      anamClient.streamToVideoElement(videoId)
+        .then(function () {
+          console.log('[FAQ Widget] Anam avatar streaming started');
+          avatarStatusText.style.display = 'none';
+          voiceModeIndicator.style.display = '';
+
+          panel.classList.add('avatar-active');
+          textarea.setAttribute('placeholder', 'メッセージを入力…');
+
+          // 右上フローティング閉じるボタン
+          var avatarCloseBtn = el('button', {
+            className: 'avatar-close-btn',
+            type: 'button',
+            'aria-label': 'チャットを閉じる',
+          });
+          avatarCloseBtn.appendChild(CLOSE_SVG.cloneNode(true));
+          avatarCloseBtn.addEventListener('click', closePanel);
+          avatarArea.appendChild(avatarCloseBtn);
+
+          // ミュートボタンを入力バー左端に移動
+          inputArea.insertBefore(avatarMuteBtn, inputArea.firstChild);
+
+          window.__anamClient = anamClient;
+        })
+        .catch(function (e) {
+          console.warn('[FAQ Widget] Anam stream failed:', e && e.message);
+          avatarArea.style.display = 'none';
+          panel.classList.remove('avatar-active');
+        });
+
+    } catch (e) {
+      console.warn('[FAQ Widget] Anam init failed:', e && e.message);
+      avatarArea.style.display = 'none';
+    }
+  }
+
+  function cleanupAnam() {
+    try {
+      if (anamClient || window.__anamClient) {
+        var client = anamClient || window.__anamClient;
+        client.stopStreaming();
+      }
+    } catch (_e) {}
+    anamClient = null;
+    window.__anamClient = null;
+    panel.classList.remove('avatar-active');
+    var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
+    for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }
+    avatarArea.style.display = 'none';
+    avatarStatusText.style.display = '';
+    avatarConfigFetched = false;
+    avatarProvider = null;
   }
 
   function initLiveKitAvatar() {
@@ -1192,6 +1409,13 @@
     emitToHost('widget:closed', {});
     // LiveKit Room は切断しない（Agentが Room 内で処理中のため）
     // Room 切断は RoomEvent.Disconnected で自動的に処理される
+    // Anam: パネルを閉じてもセッションは維持（LiveKitと同じ考え方）
+    if (avatarProvider === 'anam' && (anamClient || window.__anamClient)) {
+      try {
+        var _ac = anamClient || window.__anamClient;
+        _ac.stopStreaming();
+      } catch (_e) {}
+    }
     panel.classList.remove('avatar-active');
     avatarArea.style.display = 'none';
     document.body.style.overflow = '';
@@ -1228,6 +1452,21 @@
     textarea.disabled = true;
 
     emitToHost('user:message', { messageLength: text.length });
+
+    // Anam アバター有効時 → talk() で音声応答、REST APIをスキップ
+    if (avatarProvider === 'anam' && (anamClient || window.__anamClient)) {
+      var _ac = anamClient || window.__anamClient;
+      try { _ac.talk(text.trim()); } catch (_e) {
+        try { _ac.speak(text.trim()); } catch (_e2) {}
+      }
+      isLoading = false;
+      textarea.disabled = false;
+      renderMessages();
+      updateSendButton();
+      textarea.focus();
+      return;
+    }
+
     sendToLiveKit(text.trim());
 
     // アバター有効（LiveKit Room接続中）→ REST APIをスキップし音声応答のみ

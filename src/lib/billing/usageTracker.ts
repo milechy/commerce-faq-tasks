@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import type pino from 'pino';
 import { calculateLLMCostCents, calculateBillingAmountCents } from './costCalculator';
 
-export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test';
+export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session';
 
 export interface TrackUsageParams {
   tenantId: string;
@@ -23,6 +23,8 @@ export interface TrackUsageParams {
   avatarCredits?: number;
   /** Phase40: LiveKitセッション時間（ミリ秒） */
   avatarSessionMs?: number;
+  /** Phase42: Anamセッション時間（秒） */
+  anam_session_seconds?: number;
 }
 
 let _pool: any | null = null;

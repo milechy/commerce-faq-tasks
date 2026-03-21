@@ -55,6 +55,7 @@ import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
+import { registerAnamRoutes } from "./api/avatar/anamRoutes";
 import { registerAvatarGenerationRoutes } from "./api/admin/avatar/generationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
@@ -77,6 +78,9 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 const db = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : null;
+
+// Phase42: anamRoutes が app.locals.db 経由で pool を参照する
+app.locals.db = db;
 
 // ---------------------------------------------------------------------------
 // Seed tenant registry (env / JSON) — must run before middleware init
@@ -550,6 +554,9 @@ registerFeedbackRoutes(app);
 
 // Avatar: Widget → LiveKit Room トークン発行 API
 registerLiveKitTokenRoutes(app, apiStack);
+
+// Phase42: Avatar → Anam.ai セッショントークン発行 API
+registerAnamRoutes(app, apiStack);
 
 // Internal: avatar-agent → TTS/Avatar使用量レポート（X-Internal-Request: 1 認証）
 registerInternalUsageRoutes(app);

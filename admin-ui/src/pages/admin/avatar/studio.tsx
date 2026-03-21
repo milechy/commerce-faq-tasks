@@ -18,6 +18,11 @@ interface AvatarConfig {
   emotion_tags: string[];
   lemonslice_agent_id: string | null;
   is_active: boolean;
+  avatar_provider: 'lemonslice' | 'anam' | null;
+  anam_avatar_id: string | null;
+  anam_voice_id: string | null;
+  anam_persona_id: string | null;
+  anam_llm_id: string | null;
 }
 
 interface VoiceRecommendation {
@@ -98,6 +103,11 @@ export default function AvatarStudioPage() {
   // フォーム状態
   const [name, setName] = useState("");
   const [lemonsliceAgentId, setLemonsliceAgentId] = useState("");
+  const [avatarProvider, setAvatarProvider] = useState<'lemonslice' | 'anam'>('lemonslice');
+  const [anamAvatarId, setAnamAvatarId] = useState('');
+  const [anamVoiceId, setAnamVoiceId] = useState('');
+  const [anamPersonaId, setAnamPersonaId] = useState('');
+  const [anamLlmId, setAnamLlmId] = useState('');
   const [imageUrl, setImageUrl] = useState("");
   const [voiceId, setVoiceId] = useState("");
   const [voiceDescription, setVoiceDescription] = useState("");
@@ -145,6 +155,11 @@ export default function AvatarStudioPage() {
         setPersonalityPrompt(found.personality_prompt ?? "");
         setBehaviorDescription(found.behavior_description ?? "");
         setEmotionTags(found.emotion_tags ?? []);
+        setAvatarProvider((found.avatar_provider as 'lemonslice' | 'anam') || 'lemonslice');
+        setAnamAvatarId(found.anam_avatar_id ?? '');
+        setAnamVoiceId(found.anam_voice_id ?? '');
+        setAnamPersonaId(found.anam_persona_id ?? '');
+        setAnamLlmId(found.anam_llm_id ?? '');
       }
     } catch { /* silent */ } finally {
       setLoadingEdit(false);
@@ -256,6 +271,11 @@ export default function AvatarStudioPage() {
       behavior_description: behaviorDescription || undefined,
       emotion_tags: emotionTags.length > 0 ? emotionTags : undefined,
       lemonslice_agent_id: lemonsliceAgentId || undefined,
+      avatar_provider: avatarProvider,
+      anam_avatar_id: anamAvatarId || undefined,
+      anam_voice_id: anamVoiceId || undefined,
+      anam_persona_id: anamPersonaId || undefined,
+      anam_llm_id: anamLlmId || undefined,
     };
     try {
       const url = isEdit
@@ -338,16 +358,68 @@ export default function AvatarStudioPage() {
             style={INPUT_STYLE}
           />
         </div>
-        <div>
-          <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
-          <input
-            type="text"
-            value={lemonsliceAgentId}
-            onChange={(e) => setLemonsliceAgentId(e.target.value)}
-            placeholder="agent_xxxxxxxxxx"
-            style={INPUT_STYLE}
-          />
+        {/* プロバイダー選択 */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={LABEL_STYLE}>{lang === 'ja' ? 'アバタープロバイダー' : 'Avatar Provider'}</label>
+          <div style={{ display: 'flex', gap: 10 }}>
+            {(['lemonslice', 'anam'] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setAvatarProvider(p)}
+                style={{
+                  padding: '8px 18px',
+                  minHeight: 44,
+                  borderRadius: 10,
+                  border: avatarProvider === p ? '2px solid #3b82f6' : '1px solid #374151',
+                  background: avatarProvider === p ? 'rgba(59,130,246,0.15)' : 'transparent',
+                  color: avatarProvider === p ? '#93c5fd' : '#9ca3af',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {p === 'anam'
+                  ? (lang === 'ja' ? 'Anam (推奨)' : 'Anam (Recommended)')
+                  : (lang === 'ja' ? 'Lemonslice (レガシー)' : 'Lemonslice (Legacy)')}
+              </button>
+            ))}
+          </div>
         </div>
+        {avatarProvider === 'anam' && (
+          <div style={{ marginTop: 14, padding: '14px 16px', borderRadius: 10, border: '1px solid rgba(59,130,246,0.2)', background: 'rgba(59,130,246,0.05)' }}>
+            <p style={{ fontSize: 12, color: '#60a5fa', fontWeight: 600, margin: '0 0 12px' }}>
+              Anam.ai 設定
+            </p>
+            <div style={{ marginBottom: 10 }}>
+              <label style={LABEL_STYLE}>Avatar ID</label>
+              <input type="text" value={anamAvatarId} onChange={(e) => setAnamAvatarId(e.target.value)}
+                placeholder="CARA-3 など" style={INPUT_STYLE} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={LABEL_STYLE}>Voice ID</label>
+              <input type="text" value={anamVoiceId} onChange={(e) => setAnamVoiceId(e.target.value)}
+                placeholder="Anam Voice ID" style={INPUT_STYLE} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={LABEL_STYLE}>Persona ID</label>
+              <input type="text" value={anamPersonaId} onChange={(e) => setAnamPersonaId(e.target.value)}
+                placeholder="Anam Persona ID（任意）" style={INPUT_STYLE} />
+            </div>
+            <div>
+              <label style={LABEL_STYLE}>LLM ID</label>
+              <input type="text" value={anamLlmId} onChange={(e) => setAnamLlmId(e.target.value)}
+                placeholder="Anam LLM ID（任意）" style={INPUT_STYLE} />
+            </div>
+          </div>
+        )}
+        {avatarProvider === 'lemonslice' && (
+          <div>
+            <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
+            <input type="text" value={lemonsliceAgentId} onChange={(e) => setLemonsliceAgentId(e.target.value)}
+              placeholder="agent_xxxxxxxxxx" style={INPUT_STYLE} />
+          </div>
+        )}
       </div>
 
       {/* 2. 画像生成 */}

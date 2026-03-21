@@ -20,6 +20,7 @@ interface AvatarConfig {
   lemonslice_agent_id: string | null;
   is_active: boolean;
   created_at: string;
+  avatar_provider: string | null;
 }
 
 const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
@@ -244,6 +245,23 @@ export default function AvatarListPage() {
                       {lang === "ja" ? "アクティブ" : "Active"}
                     </span>
                   )}
+                  {/* Providerバッジ */}
+                  <span style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: cfg.avatar_provider === 'anam'
+                      ? 'rgba(59,130,246,0.15)'
+                      : 'rgba(107,114,128,0.15)',
+                    border: cfg.avatar_provider === 'anam'
+                      ? '1px solid rgba(59,130,246,0.4)'
+                      : '1px solid rgba(107,114,128,0.3)',
+                    color: cfg.avatar_provider === 'anam' ? '#93c5fd' : '#9ca3af',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    flexShrink: 0,
+                  }}>
+                    {cfg.avatar_provider === 'anam' ? 'Anam' : 'Lemonslice'}
+                  </span>
                 </div>
 
                 {/* 作成日 */}
