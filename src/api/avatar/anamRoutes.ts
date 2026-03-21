@@ -63,19 +63,22 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
         return res.json({ enabled: false, avatarProvider: 'lemonslice' });
       }
 
-      // Anam API: セッショントークン取得
-      // personaId が設定されている場合は方式A（personaId指定）を優先
-      // それ以外はインラインpersonaConfig（方式B）を使用
-      let personaConfig: Record<string, string>;
-      if (config.anam_persona_id) {
-        personaConfig = { personaId: config.anam_persona_id };
-      } else {
-        personaConfig = { name: config.name || 'AI Assistant' };
-        if (config.anam_avatar_id) personaConfig['avatarId'] = config.anam_avatar_id;
-        if (config.anam_voice_id)  personaConfig['voiceId']  = config.anam_voice_id;
-        if (config.anam_llm_id)    personaConfig['llmId']    = config.anam_llm_id;
-        if (config.personality_prompt) personaConfig['systemPrompt'] = config.personality_prompt;
-      }
+      // Anam API: セッショントークン取得（インラインpersonaConfig方式）
+      const personaConfig: Record<string, unknown> = {
+        name: config.name || 'Sales Assistant',
+        avatarId: config.anam_avatar_id,
+        voiceId: config.anam_voice_id,
+        avatarModel: 'cara-3',
+        languageCode: 'ja',
+        systemPrompt: config.personality_prompt
+          || 'あなたはAI営業アシスタントです。ネイティブの自然な日本語で1〜2文で応答してください。',
+        voiceGenerationOptions: {
+          stability: 0.5,
+          similarityBoost: 0.8,
+          speed: 1.0,
+        },
+      };
+      if (config.anam_llm_id) personaConfig['llmId'] = config.anam_llm_id;
 
       const anamRes = await fetch(`${ANAM_API_BASE}/v1/auth/session-token`, {
         method: 'POST',
