@@ -57,7 +57,27 @@ SYSTEM_PROMPT = (
 
 
 # --- Groq LLM 直接呼び出し ---
-async def call_groq_llm(user_text: str, http: aiohttp.ClientSession) -> str:
+async def fetch_avatar_config(tenant_id: str, api_url: str) -> dict | None:
+    """テナント別アバター設定を内部APIから取得。失敗時はNoneを返す。"""
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(
+                f"{api_url}/api/internal/avatar-config",
+                params={"tenantId": tenant_id},
+                headers={"X-Internal-Request": "1"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[avatar-config] API returned {resp.status}")
+                    return None
+                data = await resp.json()
+                return data.get("config")
+    except Exception as e:
+        logger.warning(f"[avatar-config] fetch failed (using defaults): {e}")
+        return None
+
+
+async def call_groq_llm(user_text: str, http: aiohttp.ClientSession, system_prompt: str = SYSTEM_PROMPT) -> str:
     """Groq LLM を aiohttp で直接呼び出し、応答テキストを返す。"""
     try:
         async with http.post(
@@ -69,7 +89,7 @@ async def call_groq_llm(user_text: str, http: aiohttp.ClientSession) -> str:
             json={
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_text},
                 ],
                 "max_tokens": 100,
@@ -243,9 +263,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     tenant_id = _extract_tenant_id(ctx.room.name)
     logger.info(f"[entrypoint] extracted tenant_id={tenant_id!r} from room={ctx.room.name!r}")
 
+    # アバター設定を動的取得
+    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
+    avatar_config = None
+    if tenant_id:
+        avatar_config = await fetch_avatar_config(tenant_id, api_url)
+
+    # 設定を適用（fallback: 環境変数のデフォルト）
+    effective_system_prompt = (
+        avatar_config.get("personality_prompt") if avatar_config and avatar_config.get("personality_prompt")
+        else SYSTEM_PROMPT
+    )
+    effective_reference_id = (
+        avatar_config.get("voice_id") if avatar_config and avatar_config.get("voice_id")
+        else os.environ.get("FISH_AUDIO_REFERENCE_ID")
+    )
+    effective_agent_id = (
+        avatar_config.get("lemonslice_agent_id") if avatar_config and avatar_config.get("lemonslice_agent_id")
+        else os.environ.get("LEMONSLICE_AGENT_ID", "agent_aee377cb0fec68ea")
+    )
+
+    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}")
+
     fish_tts = FishAudioTTS(
         api_key=os.environ["FISH_AUDIO_API_KEY"],
-        reference_id=os.environ.get("FISH_AUDIO_REFERENCE_ID"),
+        reference_id=effective_reference_id,
         tenant_id=tenant_id,
     )
 
@@ -260,7 +302,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         try:
             # 1. Groq LLM で応答生成（毎回新しいSessionで "Session is closed" を回避）
             async with aiohttp.ClientSession() as http:
-                reply = await call_groq_llm(user_text, http)
+                reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt)
             logger.info(f"[Groq] reply: {reply[:80]!r}")
 
             # 2. session.say() で FishAudio TTS パイプラインに渡す
@@ -292,14 +334,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             logger.warning(f"[data_channel] parse error: {e}")
 
     # Lemonslice Avatar（失敗してもテキストチャットにフォールバック）
-    agent_id = os.environ.get("LEMONSLICE_AGENT_ID", "agent_aee377cb0fec68ea")
     avatar_prompt = os.environ.get(
         "AVATAR_PROMPT",
         "Be friendly and professional. Smile naturally. Use gentle hand gestures when explaining.",
     )
     try:
         avatar = lemonslice.AvatarSession(
-            agent_id=agent_id,
+            agent_id=effective_agent_id,
             agent_prompt=avatar_prompt,
             idle_timeout=300,  # 5分（デフォルト60秒→300秒に延長）
         )
@@ -311,7 +352,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await session.start(
         room=ctx.room,
         agent=Agent(
-            instructions=SYSTEM_PROMPT,
+            instructions=effective_system_prompt,
         ),
     )
     logger.info("=== SESSION STARTED ===")

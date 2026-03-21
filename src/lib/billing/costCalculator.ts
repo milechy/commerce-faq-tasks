@@ -29,6 +29,9 @@ export const FISH_AUDIO_COST_PER_BYTE_USD = 15.0 / 1_000_000;
 /** Phase40: Lemonslice単価: $7.00 / 1000クレジット */
 export const LEMONSLICE_COST_PER_CREDIT_USD = 7.0 / 1_000;
 
+/** Phase41: DALL-E 3 画像生成単価: $0.04/枚 */
+export const IMAGE_GENERATION_COST_USD = 0.04;
+
 export interface UsageRecord {
   model: string;
   inputTokens: number;

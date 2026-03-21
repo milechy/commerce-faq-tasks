@@ -44,6 +44,7 @@ import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
 import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
 import { registerChatHistoryRoutes } from "./api/admin/chat-history/routes";
 import { registerTuningRoutes } from "./api/admin/tuning/routes";
+import { registerAvatarConfigRoutes } from "./api/admin/avatar/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
@@ -54,7 +55,9 @@ import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
+import { registerAvatarGenerationRoutes } from "./api/admin/avatar/generationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
+import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -550,6 +553,15 @@ registerLiveKitTokenRoutes(app, apiStack);
 
 // Internal: avatar-agent → TTS/Avatar使用量レポート（X-Internal-Request: 1 認証）
 registerInternalUsageRoutes(app);
+
+// Internal: avatar-agent → テナント別アバター設定取得（X-Internal-Request: 1 認証）
+registerInternalAvatarConfigRoutes(app);
+
+// Phase41: Avatar Customization Studio — Admin CRUD API
+if (db) registerAvatarConfigRoutes(app, db);
+
+// Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
+if (db) registerAvatarGenerationRoutes(app, db);
 
 async function startServer() {
   app.listen(port, () => {

@@ -959,6 +959,7 @@
       room.on(LK.RoomEvent.Disconnected, function () {
         // フルスクリーンモード解除
         panel.classList.remove('avatar-active');
+        document.body.style.overflow = '';
         textarea.setAttribute('placeholder', 'メッセージを入力… (Shift+Enterで改行)');
         // 閉じるボタンを削除
         var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
@@ -1163,14 +1164,18 @@
     if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
       avatarArea.style.display = 'flex';
       panel.classList.add('avatar-active');
+      document.body.style.overflow = 'hidden';
     } else {
-      // 前回セッションでアバター有効だった場合、APIレスポンス前に即ダークUI適用
-      try {
-        if (sessionStorage.getItem(avatarCacheKey) === 'true') {
-          avatarArea.style.display = 'flex';
-          panel.classList.add('avatar-active');
-        }
-      } catch (_e) {}
+      // avatarConfig が事前取得済み、またはセッションキャッシュがあれば即ダークUI適用
+      var shouldDark = avatarConfig !== null;
+      if (!shouldDark) {
+        try { shouldDark = sessionStorage.getItem(avatarCacheKey) === 'true'; } catch (_e) {}
+      }
+      if (shouldDark) {
+        avatarArea.style.display = 'flex';
+        panel.classList.add('avatar-active');
+        document.body.style.overflow = 'hidden';
+      }
       fetchAvatarConfig();
     }
   }
@@ -1189,6 +1194,7 @@
     // Room 切断は RoomEvent.Disconnected で自動的に処理される
     panel.classList.remove('avatar-active');
     avatarArea.style.display = 'none';
+    document.body.style.overflow = '';
   }
 
   function togglePanel() {
@@ -1463,5 +1469,8 @@
     toggle: togglePanel,
     getTenantId: function () { return tenantId; },
   };
+
+  // アバター設定を事前取得（パネルを開く前に完了させ、FABクリック時のフラッシュを防止）
+  if (apiKey) { fetchAvatarConfig(); }
 
 })();

@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import type pino from 'pino';
 import { calculateLLMCostCents, calculateBillingAmountCents } from './costCalculator';
 
-export type FeatureUsed = 'chat' | 'avatar' | 'voice';
+export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test';
 
 export interface TrackUsageParams {
   tenantId: string;
