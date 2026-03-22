@@ -720,11 +720,12 @@
   var messages = [];
 
   /* アバター状態 */
-  var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId }
+  var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId, imageUrl }
   var avatarConfigFetched = false;
   var avatarMuted = true;       // 音声ミュート状態（デフォルト: ミュート）
   var anamClient = null;         // Anam SDK クライアント
   var avatarProvider = null;     // 'anam' | 'lemonslice' | null
+  var avatarPlaceholderImg = null; // LiveKit接続前のアバター画像プレースホルダー
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -785,6 +786,31 @@
 
   var LIVEKIT_SDK_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.9.1/dist/livekit-client.umd.min.js';
 
+  function showAvatarPlaceholder(imageUrl) {
+    if (!imageUrl || typeof imageUrl !== 'string') return;
+    if (avatarPlaceholderImg) return; // 既に表示中
+    var img = document.createElement('img');
+    img.src = imageUrl;
+    img.className = 'avatar-video';  // .avatar-video と同じスタイルを使用
+    img.alt = 'アバター画像';
+    img.style.objectFit = 'cover';
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.position = 'absolute';
+    img.style.top = '0';
+    img.style.left = '0';
+    avatarPlaceholderImg = img;
+    avatarArea.appendChild(img);
+    avatarStatusText.style.display = 'none';
+  }
+
+  function removeAvatarPlaceholder() {
+    if (avatarPlaceholderImg && avatarPlaceholderImg.parentNode) {
+      avatarPlaceholderImg.parentNode.removeChild(avatarPlaceholderImg);
+    }
+    avatarPlaceholderImg = null;
+  }
+
   function fetchAvatarConfig() {
     if (avatarConfigFetched || !apiKey) return;
     avatarConfigFetched = true;
@@ -822,6 +848,7 @@
               avatarArea.style.display = 'flex';
               panel.classList.add('avatar-active');
             }
+            showAvatarPlaceholder(lkData.imageUrl);
             initLiveKitAvatar();
           })
           .catch(function (e) {
@@ -845,6 +872,7 @@
               avatarArea.style.display = 'flex';
               panel.classList.add('avatar-active');
             }
+            showAvatarPlaceholder(lkData.imageUrl);
             initLiveKitAvatar();
           })
           .catch(function () {});
@@ -865,8 +893,9 @@
     var loadScript = document.createElement('script');
     loadScript.type = 'module';
     loadScript.textContent = [
-      'import { createClient } from "' + ANAM_SDK_URL + '";',
+      'import { createClient, AnamEvent } from "' + ANAM_SDK_URL + '";',
       'window.__anamCreateClient = createClient;',
+      'window.__AnamEvent = AnamEvent;',
       'window.dispatchEvent(new CustomEvent("anam-sdk-loaded"));',
     ].join('\n');
     document.head.appendChild(loadScript);
@@ -880,6 +909,90 @@
       connectAnam(sessionToken);
     } else {
       window.addEventListener('anam-sdk-loaded', onAnamSdkLoaded);
+    }
+  }
+
+  // Phase42: Anam映像 + Fish Audio TTS
+  // Anam内蔵TTSはカタコト（Kaoriのみ）のため回避。Fish Audioで自然な日本語音声を再生。
+  // messageHistory: [{ role: 'user'|'assistant', content: string }]
+  async function handleAnamMessageUpdate(messageHistory) {
+    if (!messageHistory || !messageHistory.length) return;
+    var lastMsg = messageHistory[messageHistory.length - 1];
+    if (lastMsg.role !== 'user') return;
+    if (!anamClient) return;
+
+    try {
+      // 1. Groq LLMでテキスト生成
+      var chatStreamUrl = apiBase.replace(/\/$/, '') + '/api/avatar/chat-stream';
+      var response = await fetch(chatStreamUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify({
+          messages: messageHistory.map(function (m) {
+            return { role: m.role, content: m.content };
+          }),
+        }),
+      });
+
+      if (!response.ok) throw new Error('chat-stream ' + response.status);
+
+      // 全文バッファリング
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var fullText = '';
+
+      while (true) {
+        var result = await reader.read();
+        if (result.done) break;
+        var text = decoder.decode(result.value);
+        var lines = text.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line) continue;
+          try {
+            var data = JSON.parse(line);
+            if (data.content) fullText += data.content;
+          } catch (_e) { /* malformed JSON — skip */ }
+        }
+      }
+
+      if (!fullText) return;
+
+      // 2. Anamにテキスト送信（リップシンク用、音声はミュート済み）
+      if (anamClient && typeof anamClient.talk === 'function') {
+        try { anamClient.talk(fullText); } catch (_e) {
+          console.warn('[FAQ Widget] anamClient.talk failed:', _e && _e.message);
+        }
+      }
+
+      // 3. Fish Audio TTSで自然な日本語音声を取得して再生
+      var ttsUrl = apiBase.replace(/\/$/, '') + '/api/avatar/tts';
+      try {
+        var ttsResponse = await fetch(ttsUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          body: JSON.stringify({ text: fullText }),
+        });
+
+        if (ttsResponse.ok) {
+          var audioBlob = await ttsResponse.blob();
+          var audioUrl = URL.createObjectURL(audioBlob);
+          var audio = new Audio(audioUrl);
+          audio.onended = function () {
+            URL.revokeObjectURL(audioUrl);
+          };
+          audio.play().catch(function (err) {
+            console.warn('[FAQ Widget] Audio play failed (autoplay policy?):', err);
+          });
+        } else {
+          console.error('[FAQ Widget] TTS failed:', ttsResponse.status);
+        }
+      } catch (ttsErr) {
+        console.warn('[FAQ Widget] TTS error:', ttsErr && ttsErr.message);
+      }
+
+    } catch (e) {
+      console.error('[FAQ Widget] Custom LLM error:', e && e.message);
     }
   }
 
@@ -943,9 +1056,18 @@
         if (anamClient) {
           try {
             if (avatarMuted) {
-              anamClient.muteOutputAudio();
+              // muteAudio() を優先、フォールバックで muteOutputAudio()
+              if (typeof anamClient.muteAudio === 'function') {
+                anamClient.muteAudio();
+              } else {
+                anamClient.muteOutputAudio();
+              }
             } else {
-              anamClient.unmuteOutputAudio();
+              if (typeof anamClient.unmuteAudio === 'function') {
+                anamClient.unmuteAudio();
+              } else {
+                anamClient.unmuteOutputAudio();
+              }
             }
           } catch (_e) {}
         }
@@ -988,8 +1110,14 @@
         avatarModel: 'CARA-3',
       });
 
-      // デフォルトミュート
-      try { anamClient.muteOutputAudio(); } catch (_e) {}
+      // デフォルトミュート (muteAudio優先、フォールバックでmuteOutputAudio)
+      try {
+        if (typeof anamClient.muteAudio === 'function') {
+          anamClient.muteAudio();
+        } else {
+          anamClient.muteOutputAudio();
+        }
+      } catch (_e) {}
 
       anamClient.streamToVideoElement(videoId)
         .then(function () {
@@ -1012,6 +1140,12 @@
 
           // ミュートボタンを入力バー左端に移動
           inputArea.insertBefore(avatarMuteBtn, inputArea.firstChild);
+
+          // Client-Side Custom LLM: 音声入力完了時に Groq で応答生成
+          var AnamEvent = window.__AnamEvent;
+          if (AnamEvent && AnamEvent.MESSAGE_HISTORY_UPDATED) {
+            anamClient.addListener(AnamEvent.MESSAGE_HISTORY_UPDATED, handleAnamMessageUpdate);
+          }
 
           window.__anamClient = anamClient;
         })
@@ -1174,6 +1308,7 @@
 
       room.on(LK.RoomEvent.TrackSubscribed, function (track) {
         if (track.kind === 'video') {
+          removeAvatarPlaceholder();
           var videoEl = track.attach();
           videoEl.className = 'avatar-video';
           avatarStatusText.style.display = 'none';
@@ -1200,6 +1335,7 @@
       });
 
       room.on(LK.RoomEvent.Disconnected, function () {
+        removeAvatarPlaceholder();
         // フルスクリーンモード解除
         panel.classList.remove('avatar-active');
         document.body.style.overflow = '';
@@ -1479,12 +1615,12 @@
 
     emitToHost('user:message', { messageLength: text.length });
 
-    // Anam アバター有効時 → talk() で音声応答、REST APIをスキップ
+    // Anam アバター有効時 → Client-Side Custom LLM (Groq) で応答生成してTTSへ
     if (avatarProvider === 'anam' && (anamClient || window.__anamClient)) {
-      var _ac = anamClient || window.__anamClient;
-      try { _ac.talk(text.trim()); } catch (_e) {
-        try { _ac.speak(text.trim()); } catch (_e2) {}
-      }
+      // messages配列をそのまま渡してGroq→Anam TTSパイプラインへ
+      handleAnamMessageUpdate(messages.map(function (m) {
+        return { role: m.role, content: m.content };
+      }));
       isLoading = false;
       textarea.disabled = false;
       renderMessages();

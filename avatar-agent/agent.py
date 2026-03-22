@@ -282,8 +282,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar_config.get("lemonslice_agent_id") if avatar_config and avatar_config.get("lemonslice_agent_id")
         else os.environ.get("LEMONSLICE_AGENT_ID", "agent_aee377cb0fec68ea")
     )
+    effective_image_url = (
+        avatar_config.get("image_url") if avatar_config and avatar_config.get("image_url")
+        else None
+    )
 
-    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}")
+    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}")
 
     fish_tts = FishAudioTTS(
         api_key=os.environ["FISH_AUDIO_API_KEY"],
@@ -339,11 +343,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         "Be friendly and professional. Smile naturally. Use gentle hand gestures when explaining.",
     )
     try:
-        avatar = lemonslice.AvatarSession(
-            agent_id=effective_agent_id,
-            agent_prompt=avatar_prompt,
-            idle_timeout=300,  # 5分（デフォルト60秒→300秒に延長）
-        )
+        avatar_kwargs = {
+            "agent_id": effective_agent_id,
+            "agent_prompt": avatar_prompt,
+            "idle_timeout": 300,  # 5分（デフォルト60秒→300秒に延長）
+        }
+        if effective_image_url:
+            avatar_kwargs["agent_image_url"] = effective_image_url
+            logger.info(f"[lemonslice] passing agent_image_url: {effective_image_url[:80]!r}")
+        avatar = lemonslice.AvatarSession(**avatar_kwargs)
         await avatar.start(session, room=ctx.room)
         logger.info("=== LEMONSLICE AVATAR STARTED ===")
     except Exception as e:

@@ -6,6 +6,63 @@ import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 // @ts-ignore
 import { Pool } from "pg";
+import { supabaseAdmin } from "../../../auth/supabaseClient";
+
+// ---------------------------------------------------------------------------
+// Supabase Storage: base64 data URL → 公開 HTTP URL
+// ---------------------------------------------------------------------------
+
+const AVATAR_BUCKET = "avatar-images";
+
+async function ensureBucketExists(): Promise<void> {
+  if (!supabaseAdmin) return;
+  const { error } = await supabaseAdmin.storage.createBucket(AVATAR_BUCKET, {
+    public: true,
+    allowedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
+    fileSizeLimit: 5 * 1024 * 1024,
+  });
+  if (error && !error.message.toLowerCase().includes("already exists")) {
+    console.warn("[avatar-storage] bucket create warn:", error.message);
+  }
+}
+
+async function uploadBase64ToStorage(
+  dataUrl: string,
+  tenantId: string,
+  filename: string
+): Promise<string | null> {
+  if (!supabaseAdmin) {
+    console.warn("[avatar-storage] supabaseAdmin not initialized — image_url stored as-is");
+    return null;
+  }
+
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+
+  const mimeType = match[1] as string;
+  const base64Data = match[2] as string;
+  const buffer = Buffer.from(base64Data, "base64");
+
+  const ext =
+    mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+  const filePath = `${tenantId}/${filename}.${ext}`;
+
+  await ensureBucketExists();
+
+  const { error } = await supabaseAdmin.storage
+    .from(AVATAR_BUCKET)
+    .upload(filePath, buffer, { contentType: mimeType, upsert: true });
+
+  if (error) {
+    console.warn("[avatar-storage] upload failed:", error.message);
+    return null;
+  }
+
+  const { data: urlData } = supabaseAdmin.storage
+    .from(AVATAR_BUCKET)
+    .getPublicUrl(filePath);
+  return urlData?.publicUrl ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // Zod スキーマ
@@ -130,6 +187,17 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
     } = parsed.data;
 
     try {
+      // base64 data URL → Supabase Storage HTTP URL に変換
+      let resolvedImageUrl = image_url ?? null;
+      if (resolvedImageUrl?.startsWith("data:")) {
+        const uploaded = await uploadBase64ToStorage(
+          resolvedImageUrl,
+          tenantId,
+          `avatar-${Date.now()}`
+        );
+        resolvedImageUrl = uploaded ?? resolvedImageUrl;
+      }
+
       const result = await db.query(
         `INSERT INTO avatar_configs
           (tenant_id, name, image_url, image_prompt, voice_id, voice_description,
@@ -140,7 +208,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         [
           tenantId,
           name,
-          image_url ?? null,
+          resolvedImageUrl,
           image_prompt ?? null,
           voice_id ?? null,
           voice_description ?? null,
@@ -179,6 +247,17 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       }
 
       const data = parsed.data;
+
+      // base64 data URL → Supabase Storage HTTP URL に変換
+      if (data.image_url?.startsWith("data:")) {
+        const uploaded = await uploadBase64ToStorage(
+          data.image_url,
+          tenantId,
+          `avatar-${id}-${Date.now()}`
+        );
+        if (uploaded) data.image_url = uploaded;
+      }
+
       const setClauses: string[] = [];
       const values: any[] = [];
       let idx = 1;
