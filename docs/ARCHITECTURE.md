@@ -142,3 +142,43 @@ Notion 等との連携は Phase8 以降で拡張していく前提です。
 3. 月次で n8n フローが `usage_logs` を元に Stripe UsageRecord / Invoice draft を作成する。
 4. Stripe の Webhook 成功時に、Invoice URL / Status を Notion Billing Summary またはアプリ DB に反映する。
 5. 管理 UI の「Billing / Usage」タブから、`usage_logs` と Stripe / Notion の情報を組み合わせて利用状況・請求状況を閲覧できるようにする。
+
+## Avatar アーキテクチャ（Phase40-41）
+
+### 現行構成（Lemonslice + Fish Audio + LiveKit）
+
+```
+Widget (widget.js)
+  └─ POST /api/avatar/room-token
+       └─ LiveKit Room 作成 + Agent Dispatch
+            └─ avatar-agent/agent.py (LiveKit Agents v1.4+)
+                 ├─ Groq LLM (llama-3.3-70b-versatile)
+                 ├─ Fish Audio TTS (language=ja、reference_id で声指定)
+                 └─ Lemonslice AvatarSession (agent_id または agent_image_url)
+```
+
+### Avatar設定管理
+
+- `avatar_configs` テーブルでテナント別アバター設定を管理
+- Admin UI `/admin/avatar/studio` で設定（画像生成・声マッチング・プロンプト生成）
+- 画像: Leonardo.ai で生成 → Supabase Storage にアップロード → HTTP URL を保存
+- 声: Fish Audio (language=ja フィルタ) で検索・選択
+- `is_active = true` の設定が `/api/internal/avatar-config` 経由で agent.py に渡される
+
+### avatar_provider フィールド
+
+`avatar_configs.avatar_provider` は将来のプロバイダー切り替えに備えたフィールド。
+**現在は全テナント `lemonslice` を使用。**
+
+`anam_*` カラム（`anam_avatar_id`, `anam_voice_id`, `anam_persona_id`, `anam_llm_id`）は
+Phase42 (Anam.ai移行試み) で追加したが、**Phase42は中止**となり現在は使用していない。
+後方互換のためカラムは残存しており、将来 Anam.ai の日本語品質が改善した際に再検討可能。
+
+### Phase42（Anam.ai移行）中止について
+
+Phase42 では Lemonslice から Anam.ai への一本化を試みたが、以下の理由で中止した:
+
+- **中止理由**: Anam の日本語 TTS が不十分（カタコト・不自然な発音）
+- **検証結果**: CARA-3 モデルの画像品質は合格だったが、日本語音声品質が本番利用に耐えない
+- **現状**: Lemonslice + Fish Audio + LiveKit の現行構成を維持
+- **成果の継承**: Leonardo.ai 画像生成統合（DALL-E 置き換え）は Phase41 に取り込み済み
