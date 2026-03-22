@@ -343,14 +343,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         "Be friendly and professional. Smile naturally. Use gentle hand gestures when explaining.",
     )
     try:
-        avatar_kwargs = {
-            "agent_id": effective_agent_id,
-            "agent_prompt": avatar_prompt,
-            "idle_timeout": 300,  # 5分（デフォルト60秒→300秒に延長）
-        }
+        # agent_id と agent_image_url は排他的（両方渡すとエラー）
         if effective_image_url:
-            avatar_kwargs["agent_image_url"] = effective_image_url
-            logger.info(f"[lemonslice] passing agent_image_url: {effective_image_url[:80]!r}")
+            logger.info(f"[lemonslice] using agent_image_url: {effective_image_url[:80]!r}")
+            avatar_kwargs = {
+                "agent_image_url": effective_image_url,
+                "agent_prompt": avatar_prompt,
+                "idle_timeout": 300,
+            }
+        else:
+            avatar_kwargs = {
+                "agent_id": effective_agent_id,
+                "agent_prompt": avatar_prompt,
+                "idle_timeout": 300,
+            }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)
         await avatar.start(session, room=ctx.room)
         logger.info("=== LEMONSLICE AVATAR STARTED ===")
