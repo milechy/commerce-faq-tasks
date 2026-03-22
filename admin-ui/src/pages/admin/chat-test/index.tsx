@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { useAuth } from "../../../auth/useAuth";
 import { API_BASE, authFetch } from "../../../lib/api";
@@ -30,11 +30,18 @@ export default function ChatTestPage() {
   const navigate = useNavigate();
   const { t } = useLang();
   const { user, isSuperAdmin, previewMode, previewTenantId, previewTenantName } = useAuth();
+  const [searchParams] = useSearchParams();
+
+  // URLクエリパラメータ（アバター一覧からの遷移）
+  const queryTenantId = searchParams.get("tenantId") ?? "";
+  const queryAvatarConfigId = searchParams.get("avatarConfigId") ?? "";
 
   // テナント選択 (Super Admin 用)
   const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [tenantFetchError, setTenantFetchError] = useState(false);
-  const [selectedTenantId, setSelectedTenantId] = useState<string>("");
+  const [selectedTenantId, setSelectedTenantId] = useState<string>(
+    isSuperAdmin && queryTenantId ? queryTenantId : ""
+  );
 
   // トークン状態
   const [token, setToken] = useState<string | null>(null);
@@ -63,7 +70,7 @@ export default function ChatTestPage() {
     }
   }, []);
 
-  // Super Admin: テナント一覧取得
+  // Super Admin: テナント一覧取得 + URLパラメータからの初期テナント選択
   useEffect(() => {
     if (!isSuperAdmin) return;
     setTenantFetchError(false);
@@ -71,8 +78,13 @@ export default function ChatTestPage() {
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data: { tenants?: TenantOption[] }) => {
         setTenants(data.tenants ?? []);
+        // URLパラメータにtenantIdがある場合は自動選択
+        if (queryTenantId) {
+          setSelectedTenantId(queryTenantId);
+        }
       })
       .catch(() => { setTenantFetchError(true); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin]);
 
   // テナントが確定したら自動でトークン取得
@@ -254,10 +266,31 @@ export default function ChatTestPage() {
         {/* ─── テナント選択済み ─── */}
         {effectiveTenantId && (
           <>
-            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 20 }}>
+            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: queryAvatarConfigId ? 8 : 20 }}>
               {t("chat_test.tenant_label")}:{" "}
               <strong style={{ color: "#9ca3af" }}>{displayTenantName}</strong>
             </p>
+            {/* アバター設定ID表示（アバター一覧からの遷移時） */}
+            {queryAvatarConfigId && (
+              <div style={{
+                marginBottom: 20,
+                padding: "10px 14px",
+                borderRadius: 8,
+                background: "rgba(59,130,246,0.1)",
+                border: "1px solid rgba(59,130,246,0.3)",
+                fontSize: 13,
+                color: "#93c5fd",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}>
+                <span>🎭</span>
+                <span>
+                  {t ? "アバター設定をテスト中: " : "Testing avatar config: "}
+                  <code style={{ fontFamily: "monospace", fontSize: 11, opacity: 0.8 }}>{queryAvatarConfigId}</code>
+                </span>
+              </div>
+            )}
 
             {/* トークン取得中 */}
             {gettingToken && (

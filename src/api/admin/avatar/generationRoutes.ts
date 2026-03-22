@@ -11,7 +11,7 @@ import { trackUsage } from "../../../lib/billing/usageTracker";
 // ---------------------------------------------------------------------------
 
 async function callGroqLLM(system: string, user: string): Promise<string> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) throw new Error("Groq API key not configured");
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -83,70 +83,103 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
         (req as any).requestId ?? crypto.randomUUID();
 
       try {
-        // Step 1: Groq LLM で DALL-E 用英語プロンプト生成
-        const dallePrompt = await callGroqLLM(
-          `ユーザーの描写をDALL-E 3用のプロンプトに変換してください。
-以下のルールに従ってください：
-- 必ず "photorealistic portrait photo" から始めること
-- "studio lighting, professional headshot, shallow depth of field, 85mm lens" を含めること
-- "illustration", "cartoon", "anime", "3D render", "painting" は絶対に使わないこと
-- 背景は "soft blurred neutral background" にすること
-- 表情や服装はユーザーの描写に従うこと
-- 英語で出力すること
-プロンプトのみを出力し、説明は不要です。`,
+        // Step 1: Groq LLM で Leonardo.ai 用英語プロンプト生成
+        const leonardoPrompt = await callGroqLLM(
+          `Convert the user's description into an English prompt for AI image generation.
+The prompt must describe a photorealistic professional headshot portrait.
+Include these elements:
+- "professional headshot portrait photograph"
+- specific physical features mentioned by the user (age, gender, hair, clothing)
+- "natural studio lighting, soft shadows"
+- "looking directly at camera, neutral or office background"
+- "high resolution, detailed skin texture"
+Do NOT include any anime, cartoon, or illustration-related terms.
+Output ONLY the English prompt, nothing else.`,
           description
         );
 
-        // Step 2: DALL-E 3 で4枚生成（n=1 を4回並列）
-        const openaiKey = process.env.OPENAI_API_KEY;
-        if (!openaiKey) {
+        // Step 2: Leonardo.ai で4枚生成（2段階: POST生成 → GETポーリング）
+        const leonardoKey = process.env.LEONARDO_API_KEY?.trim();
+        if (!leonardoKey) {
           return res
             .status(500)
-            .json({ error: "OpenAI API key not configured" });
+            .json({ error: "Leonardo API key not configured" });
         }
 
-        const generateOne = async (): Promise<string> => {
-          const dalleRes = await fetch(
-            "https://api.openai.com/v1/images/generations",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${openaiKey}`,
-              },
-              body: JSON.stringify({
-                model: "dall-e-3",
-                prompt: dallePrompt,
-                n: 1,
-                size: "1024x1024",
-                quality: "hd",
-                style: "natural",
-              }),
+        const LEONARDO_BASE = "https://cloud.leonardo.ai/api/rest/v1";
+
+        // 2a. 生成ジョブ作成
+        const genRes = await fetch(`${LEONARDO_BASE}/generations`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${leonardoKey}`,
+          },
+          body: JSON.stringify({
+            prompt: leonardoPrompt,
+            negative_prompt:
+              "anime, cartoon, illustration, CGI, 3D render, painting, drawing, sketch, deformed face, extra fingers, blurry, watermark, text, logo",
+            sd_version: "PHOENIX",
+            presetStyle: "PHOTOGRAPHY",
+            alchemy: true,
+            num_images: 4,
+            width: 512,
+            height: 768,
+            public: false,
+            enhancePrompt: false,
+          }),
+        });
+
+        if (!genRes.ok) {
+          const text = await genRes.text();
+          throw new Error(`Leonardo generation error ${genRes.status}: ${text.slice(0, 200)}`);
+        }
+
+        const genData = (await genRes.json()) as any;
+        const generationId: string =
+          genData?.sdGenerationJob?.generationId ??
+          genData?.generations_by_pk?.id ??
+          genData?.id ?? "";
+
+        if (!generationId) {
+          throw new Error("Leonardo: generationId not found in response");
+        }
+
+        // 2b. ポーリング（最大30秒、2秒間隔）
+        const pollUntilComplete = async (): Promise<string[]> => {
+          const maxAttempts = 15;
+          for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await new Promise((r) => setTimeout(r, 2000));
+            const pollRes = await fetch(`${LEONARDO_BASE}/generations/${generationId}`, {
+              headers: { Authorization: `Bearer ${leonardoKey}` },
+            });
+            if (!pollRes.ok) continue;
+            const pollData = (await pollRes.json()) as any;
+            const gen =
+              pollData?.generations_by_pk ??
+              pollData?.generation ??
+              pollData;
+            if (gen?.status === "COMPLETE") {
+              const imgs: string[] = (gen?.generated_images ?? [])
+                .map((img: any) => img?.url ?? "")
+                .filter(Boolean);
+              return imgs;
             }
-          );
-
-          if (!dalleRes.ok) {
-            const text = await dalleRes.text();
-            throw new Error(`DALL-E API error ${dalleRes.status}: ${text}`);
+            if (gen?.status === "FAILED") {
+              throw new Error("Leonardo generation failed");
+            }
           }
-
-          const dalleData = (await dalleRes.json()) as any;
-          return dalleData.data?.[0]?.url ?? "";
+          throw new Error("Leonardo generation timed out");
         };
 
-        const images = await Promise.all([
-          generateOne(),
-          generateOne(),
-          generateOne(),
-          generateOne(),
-        ]);
+        const images = await pollUntilComplete();
 
         // Step 3: Usage tracking
         trackUsage({
           tenantId,
           requestId,
-          featureUsed: "avatar_config_image",
-          model: "dall-e-3",
+          featureUsed: "avatar",
+          model: "leonardo-photorealistic",
           inputTokens: 0,
           outputTokens: 0,
         });
@@ -182,28 +215,28 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
         (req as any).requestId ?? crypto.randomUUID();
 
       try {
-        // Step 1: Groq LLM でキーワード抽出
+        // Step 1: Groq LLM でキーワード抽出（日本語優先）
         const keyword = await callGroqLLM(
-          "Extract 1-2 English keywords that best describe the voice characteristics from the user's description. Return only the keywords, nothing else.",
+          `ユーザーの声の説明から、Fish Audio APIの検索に使う日本語キーワードを1〜2語抽出してください。
+例: 「若い女性」「落ち着いた男性」「明るい」「プロフェッショナル」など。
+日本語のキーワードのみ返してください。説明や英語は不要です。`,
           description
         );
 
-        // Step 2: Fish Audio API で検索
-        const fishApiKey = process.env.FISH_AUDIO_API_KEY;
+        // Step 2: Fish Audio API で検索（language=ja フィルタ付き）
+        const fishApiKey = process.env.FISH_AUDIO_API_KEY?.trim();
         if (!fishApiKey) {
           return res
             .status(500)
             .json({ error: "Fish Audio API key not configured" });
         }
 
+        const FISH_BASE = "https://api.fish.audio/model";
         const encodedKeyword = encodeURIComponent(keyword.trim());
+
         const fishRes = await fetch(
-          `https://api.fish.audio/model?page_size=10&title=${encodedKeyword}`,
-          {
-            headers: {
-              Authorization: `Bearer ${fishApiKey}`,
-            },
-          }
+          `${FISH_BASE}?page_size=10&page_number=1&sort_by=score&language=ja&title=${encodedKeyword}`,
+          { headers: { Authorization: `Bearer ${fishApiKey}` } }
         );
 
         if (!fishRes.ok) {
@@ -212,14 +245,37 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
         }
 
         const fishData = (await fishRes.json()) as any;
-        const models = fishData.items ?? fishData.data ?? fishData ?? [];
+        let models: Array<any> = fishData.items ?? fishData.data ?? (Array.isArray(fishData) ? fishData : []);
+
+        // Step 2b: キーワード検索が0件 → language=ja の人気順トップにフォールバック
+        if (models.length === 0) {
+          console.log(`[match-voice] keyword "${keyword}" returned 0 results, falling back to language=ja top models`);
+          const fallbackRes = await fetch(
+            `${FISH_BASE}?page_size=10&page_number=1&sort_by=score&language=ja`,
+            { headers: { Authorization: `Bearer ${fishApiKey}` } }
+          );
+          if (fallbackRes.ok) {
+            const fallbackData = (await fallbackRes.json()) as any;
+            models = fallbackData.items ?? fallbackData.data ?? (Array.isArray(fallbackData) ? fallbackData : []);
+          }
+        }
 
         // Step 3: Groq LLM でランキング + 日本語推薦コメント
+        // Groqに渡す前に必要フィールドのみ抽出（トークン節約）
+        const modelSummaries = models.slice(0, 10).map((m: any) => ({
+          id: m._id ?? m.id ?? "",
+          title: m.title ?? m.name ?? "",
+          description: m.description ?? "",
+          tags: m.tags ?? [],
+          languages: m.languages ?? [],
+        }));
+
         const rankingResult = await callGroqLLM(
-          `あなたは音声モデルの専門家です。以下のFish Audioの音声モデルリストから、ユーザーの要望に最も合うものをランキングしてください。
-JSON配列で返してください: [{"id": "モデルID", "title": "モデル名", "description": "日本語での推薦コメント", "score": 0.0-1.0}]
+          `あなたは音声モデルの専門家です。以下のFish Audioの音声モデルリストから、ユーザーの要望に最も合うものをTop5でランキングしてください。
+モデルの "_id" フィールドをそのまま "id" として使用してください。
+JSON配列で返してください: [{"id": "モデルの_id値", "title": "モデル名", "description": "日本語での推薦コメント（30字以内）", "score": 0.0-1.0}]
 JSONのみ返してください。`,
-          `ユーザーの要望: ${description}\n\nモデルリスト:\n${JSON.stringify(models, null, 2)}`
+          `ユーザーの要望: ${description}\n\nモデルリスト:\n${JSON.stringify(modelSummaries, null, 2)}`
         );
 
         let recommendations: Array<{
@@ -250,7 +306,7 @@ JSONのみ返してください。`,
         trackUsage({
           tenantId,
           requestId,
-          featureUsed: "avatar_config_voice",
+          featureUsed: "avatar",
           model: "llama-3.3-70b-versatile",
           inputTokens: 0,
           outputTokens: 0,
@@ -313,7 +369,7 @@ JSONのみ返してください。`,
         trackUsage({
           tenantId,
           requestId,
-          featureUsed: "avatar_config_prompt",
+          featureUsed: "avatar",
           model: "llama-3.3-70b-versatile",
           inputTokens: 0,
           outputTokens: 0,
