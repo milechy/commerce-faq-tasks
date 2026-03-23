@@ -219,6 +219,7 @@ export default function AdminAIChat() {
                   lineHeight: 1.6,
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
+                  textAlign: "left",
                 }}>
                   {msg.content}
                   {msg.role === "assistant" && msg.intent === "business_faq" && !msg.unanswered && (
