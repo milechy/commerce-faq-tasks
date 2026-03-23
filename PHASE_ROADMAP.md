@@ -95,13 +95,19 @@ Status: ✅ Completed (2026-03-17)
 
 ---
 
-## Phase38 – Knowledge Gap Detection（完了）
+## Phase38 – 会話履歴 + チューニングルール（完了）
 
-- 未回答クエリの自動検出・記録
-- Knowledge Gap一覧API + Admin UI
-- テナント別ギャップ分析
+- Step1: chat_sessions / chat_messages テーブル作成 + チャット保存
+- Step2: 会話履歴API（GET /v1/admin/chat-history/sessions）
+- Step3: 会話履歴Admin UI（一覧・詳細ページ）
+- Step4: tuning_rules CRUD（BE: routes.ts / FE: tuning/index.tsx）
+- Step5: LLMプロンプト注入（synthesisTool.ts でチューニングルール適用）
+- Step6: テナント別システムプロンプト（tenants.system_prompt カラム + LLM注入）
+- Step7: テスト + VPSデプロイ完了
 
-Status: ✅ Completed (2026-03-18)
+Status: ✅ Completed (2026-03-24)
+
+詳細: [docs/PHASE38_COMPLETION.md](docs/PHASE38_COMPLETION.md)
 
 ---
 

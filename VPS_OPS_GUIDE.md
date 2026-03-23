@@ -80,6 +80,9 @@ ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.
 | `src/api/admin/knowledge/migration_knowledge_gaps.sql` | `knowledge_gaps` | Phase 38 |
 | `src/api/admin/feedback/migration_feedback.sql` | `feedback_messages` (CREATE) | Phase 38 |
 | `src/api/admin/feedback/migration_feedback_flagged.sql` | `feedback_messages` (ALTER) | Phase 38+ |
+| `src/api/admin/chat-history/migration.sql` | `chat_sessions` / `chat_messages` | Phase 38 |
+| `src/api/admin/tuning/migration.sql` | `tuning_rules` | Phase 38 |
+| `src/api/admin/tuning/migration_system_prompt.sql` | `tenants.system_prompt` カラム追加（ALTER TABLE） | Phase 38 |
 
 > 新しいマイグレーションを追加した場合は、このテーブルを更新すること。
 
@@ -301,3 +304,4 @@ ssh root@65.108.159.161 "grep 'slice(0' /opt/rajiuce/dist/src/lib/ocrPipeline.js
 |---|---|
 | 2026-03-18 | 初版作成。Supabase 未設定/GraphicsMagick エラー/knowledge_gaps マイグレーション漏れのインシデントから |
 | 2026-03-18 | v2: `.env.production` → `.env.local` に修正。`build-admin-ui.sh` が `.env.local` を読むのが正。`VITE_API_BASE` 漏れの注意を追加 |
+| 2026-03-24 | Phase38完了: chat_sessions / chat_messages / tuning_rules / tenants.system_prompt のマイグレーション一覧に追加 |
