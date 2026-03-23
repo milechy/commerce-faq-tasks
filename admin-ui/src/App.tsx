@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
 import { AuthProvider, useAuth } from "./auth/useAuth";
@@ -19,6 +19,7 @@ import TuningPage from "./pages/admin/tuning/index";
 import KnowledgeGapsPage from "./pages/admin/knowledge-gaps/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import FeedbackChat from "./components/feedback/FeedbackChat";
+import AdminAIChat from "./components/AdminAIChat";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import { supabaseConfigured } from "./lib/supabaseClient";
@@ -65,8 +66,10 @@ function ConfigErrorScreen() {
 }
 
 function AppInner() {
-  const { user, isClientAdmin } = useAuth();
+  const { user, isClientAdmin, isSuperAdmin } = useAuth();
   const tenantId = user?.tenantId ?? "";
+  const location = useLocation();
+  const showAIChat = !!user && location.pathname !== "/admin/chat-test";
   return (
     <>
       <Routes>
@@ -129,6 +132,8 @@ function AppInner() {
       </Routes>
       {/* Client Admin用フローティングフィードバックチャット */}
       {isClientAdmin && tenantId && <FeedbackChat tenantId={tenantId} />}
+      {/* 管理AIチャット — ログイン済み全ロール、chat-testページを除く */}
+      {showAIChat && <AdminAIChat />}
     </>
   );
 }

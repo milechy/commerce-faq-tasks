@@ -40,6 +40,7 @@ import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerKnowledgeGapRoutes } from "./api/admin/knowledge/knowledgeGapRoutes";
 import { registerFeedbackRoutes } from "./api/admin/feedback/feedbackRoutes";
 import { registerAdminFeedbackManagementRoutes } from "./api/admin/feedback/routes";
+import { registerAdminAiAssistRoutes } from "./api/admin/ai-assist/routes";
 import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
 import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
@@ -554,6 +555,7 @@ registerTuningRoutes(app);
 registerKnowledgeGapRoutes(app);
 // Phase43: admin_feedback チケット管理 API（feedbackRoutes.ts より前に登録）
 registerAdminFeedbackManagementRoutes(app);
+registerAdminAiAssistRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
 
