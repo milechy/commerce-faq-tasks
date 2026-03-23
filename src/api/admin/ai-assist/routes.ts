@@ -124,8 +124,18 @@ async function callGroq70b(userMessage: string, ragContext: string): Promise<str
   if (!apiKey) throw new Error("GROQ_API_KEY not configured");
 
   const systemPrompt = ragContext
-    ? `あなたはビジネスAIアシスタントです。以下のナレッジベースの情報を基に、質問に日本語で簡潔に回答してください。ナレッジベースに情報がない場合は「その情報はまだ登録されていません。管理画面のFAQ管理から追加できます。」と回答してください。\n\nナレッジベース:\n${ragContext}`
-    : `あなたはビジネスAIアシスタントです。「その情報はまだ登録されていません。管理画面のFAQ管理から追加できます。」と回答してください。`;
+    ? `あなたはこの会社のAIアシスタントです。
+以下のナレッジベースの情報を参考にして、お客様の質問に日本語で親切に回答してください。
+
+回答ルール:
+- ナレッジベースの情報を活用して、できるだけ具体的に回答してください
+- ナレッジベースに直接的な回答がなくても、関連する情報があればそれを基に回答してください
+- 回答は1〜3文で簡潔にしてください
+- ナレッジベースに全く関連する情報がない場合のみ「申し訳ございません、その情報はまだ登録されていないようです。」と回答してください
+
+ナレッジベース:
+${ragContext}`
+    : `あなたはこの会社のAIアシスタントです。「申し訳ございません、その情報はまだ登録されていないようです。」と回答してください。`;
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -200,6 +210,7 @@ async function buildBusinessFaqAnswer(
       .join("\n\n");
 
     console.log(`[ai-assist] ragContext length: ${ragContext.length}`);
+    console.log(`[ai-assist] ragContext preview: ${ragContext.slice(0, 100)}`);
 
     const answer = await callGroq70b(message, ragContext);
     const aiAnswered = rows.length > 0 && !isUnanswered(answer);
