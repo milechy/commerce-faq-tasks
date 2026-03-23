@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build-widget.sh — Widget ビルド・最適化・バージョニング (Phase33 Stream D)
+# build-widget.sh — Widget ビルド・最適化・難読化・バージョニング
 #
 # 使い方:
 #   bash SCRIPTS/build-widget.sh [VERSION]
@@ -8,16 +8,17 @@
 # 引数:
 #   VERSION  バージョン文字列（省略時: "1.0.0"）
 #
-# 出力 (dist/widget/):
-#   widget.js                 — オリジナルをそのままコピー（開発用）
-#   widget.v<VERSION>.js      — バージョン付きコピー
-#   widget.v<VERSION>.min.js  — Minify版
-#   widget.v<VERSION>.min.js.gz — gzip事前圧縮版
-#   widget.latest.min.js      — 最新版へのシンボリックリンク（or コピー）
+# 出力:
+#   public/widget.min.js          — 難読化済みプロダクションビルド
+#   dist/widget/widget.js         — オリジナルコピー（開発用）
+#   dist/widget/widget.v<VER>.js  — バージョン付きコピー
+#   dist/widget/widget.v<VER>.min.js — Minify版
+#   dist/widget/widget.v<VER>.min.js.gz — gzip事前圧縮版
+#   dist/widget/widget.latest.min.js — 最新版へのシンボリックリンク
 #
-# 依存ツール（いずれかが必要）:
-#   - terser (推奨): pnpm add -D terser
-#   - uglify-js (代替): pnpm add -D uglify-js
+# 依存ツール:
+#   - terser: pnpm add -D terser
+#   - javascript-obfuscator: pnpm add -D javascript-obfuscator
 #   - gzip: 標準ツール
 # =============================================================================
 
@@ -46,14 +47,14 @@ mkdir -p "${DIST}"
 # ---------------------------------------------------------------------------
 
 cp "${SRC}" "${DIST}/widget.js"
-echo "[1/4] コピー完了: ${DIST}/widget.js"
+echo "[1/5] コピー完了: ${DIST}/widget.js"
 
 # ---------------------------------------------------------------------------
 # 2. バージョン付きコピー
 # ---------------------------------------------------------------------------
 
 cp "${SRC}" "${DIST}/widget.v${VERSION}.js"
-echo "[2/4] バージョン付きコピー: ${DIST}/widget.v${VERSION}.js"
+echo "[2/5] バージョン付きコピー: ${DIST}/widget.v${VERSION}.js"
 
 # ---------------------------------------------------------------------------
 # 3. Minify（terser → uglify-js の順でフォールバック）
@@ -65,7 +66,7 @@ MINIFIED="${DIST}/widget.v${VERSION}.min.js"
 BANNER="/* RAJIUCE FAQ Widget v${VERSION} | (c) $(date +%Y) RAJIUCE | MIT */"
 
 if command -v terser &>/dev/null; then
-  echo "[3/4] Minify (terser)..."
+  echo "[3/5] Minify (terser)..."
   terser "${SRC}" \
     --compress \
       drop_console=false,pure_getters=true,unsafe=false \
@@ -80,7 +81,7 @@ if command -v terser &>/dev/null; then
   echo "    → terser 完了"
 
 elif command -v uglifyjs &>/dev/null; then
-  echo "[3/4] Minify (uglify-js)..."
+  echo "[3/5] Minify (uglify-js)..."
   uglifyjs "${SRC}" \
     --compress \
     --mangle \
@@ -89,7 +90,7 @@ elif command -v uglifyjs &>/dev/null; then
   echo "    → uglify-js 完了"
 
 else
-  echo "[3/4] WARNING: terser も uglify-js も見つかりません。コピーのみ実行します。"
+  echo "[3/5] WARNING: terser も uglify-js も見つかりません。コピーのみ実行します。"
   echo "      インストール: pnpm add -D terser"
   cp "${SRC}" "${MINIFIED}"
 fi
@@ -97,15 +98,45 @@ fi
 echo "    Minified: ${MINIFIED}"
 
 # ---------------------------------------------------------------------------
-# 4. gzip 事前圧縮
+# 4. 難読化 (javascript-obfuscator) → public/widget.min.js
 # ---------------------------------------------------------------------------
 
-echo "[4/4] gzip 事前圧縮..."
+echo "[4/5] Obfuscation (javascript-obfuscator)..."
+
+# Step 4a: console除去 + minify (terser)
+npx terser public/widget.js \
+  --compress drop_console=true,drop_debugger=true \
+  --mangle \
+  --output public/widget.terser.js
+
+# Step 4b: 難読化 (javascript-obfuscator)
+npx javascript-obfuscator public/widget.terser.js \
+  --output public/widget.min.js \
+  --compact true \
+  --control-flow-flattening true \
+  --control-flow-flattening-threshold 0.5 \
+  --dead-code-injection true \
+  --dead-code-injection-threshold 0.2 \
+  --string-array true \
+  --string-array-encoding rc4 \
+  --self-defending true \
+  --disable-console-output true
+
+# cleanup
+rm -f public/widget.terser.js
+
+echo "    → 難読化完了: public/widget.min.js ($(wc -c < public/widget.min.js) bytes)"
+
+# ---------------------------------------------------------------------------
+# 5. gzip 事前圧縮
+# ---------------------------------------------------------------------------
+
+echo "[5/5] gzip 事前圧縮..."
 gzip -9 -k -f "${MINIFIED}"
 echo "    gzip: ${MINIFIED}.gz"
 
 # ---------------------------------------------------------------------------
-# 5. latest シンボリックリンク（or コピー）
+# latest シンボリックリンク（or コピー）
 # ---------------------------------------------------------------------------
 
 LATEST="${DIST}/widget.latest.min.js"
@@ -130,12 +161,14 @@ echo ""
 ORIG_SIZE=$(wc -c < "${SRC}" | tr -d ' ')
 MIN_SIZE=$(wc -c < "${MINIFIED}" | tr -d ' ')
 GZ_SIZE=$(wc -c < "${MINIFIED}.gz" | tr -d ' ')
+OBF_SIZE=$(wc -c < "public/widget.min.js" | tr -d ' ')
 RATIO=$((100 - GZ_SIZE * 100 / ORIG_SIZE))
 
 echo "圧縮率サマリー:"
 echo "  オリジナル:     ${ORIG_SIZE} bytes"
 echo "  Minified:       ${MIN_SIZE} bytes ($(( MIN_SIZE * 100 / ORIG_SIZE ))% of original)"
 echo "  gzip:           ${GZ_SIZE} bytes (${RATIO}% 削減)"
+echo "  難読化:         ${OBF_SIZE} bytes → public/widget.min.js"
 echo ""
 echo "CDN配信 URL 例:"
 echo "  開発: http://65.108.159.161:3100/widget.js"

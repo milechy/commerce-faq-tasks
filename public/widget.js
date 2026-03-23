@@ -100,6 +100,23 @@
     '.fab:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(37,99,235,0.5); }',
     '.fab:active { transform: scale(0.95); }',
     '.fab:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }',
+    /* FABアバターメディアコンテナ */
+    '.fab { overflow: hidden; position: relative; }',
+    '.fab-media-container {',
+    '  position: absolute;',
+    '  top: 0; left: 0;',
+    '  width: 100%;',
+    '  height: 100%;',
+    '  border-radius: 50%;',
+    '  overflow: hidden;',
+    '  pointer-events: none;',
+    '}',
+    '.fab-media-container img,',
+    '.fab-media-container video {',
+    '  width: 100%;',
+    '  height: 100%;',
+    '  object-fit: cover;',
+    '}',
 
     /* チャットパネル */
     '.panel {',
@@ -726,6 +743,8 @@
   var anamClient = null;         // Anam SDK クライアント
   var avatarProvider = null;     // 'anam' | 'lemonslice' | null
   var avatarPlaceholderImg = null; // LiveKit接続前のアバター画像プレースホルダー
+  var fabMediaContainer = null;  // FABメディアコンテナ（アバター映像/静止画）
+  var fabVideoEl = null;         // LiveKitビデオ要素（FAB↔avatarAreaで移動）
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -802,6 +821,14 @@
     avatarPlaceholderImg = img;
     avatarArea.appendChild(img);
     avatarStatusText.style.display = 'none';
+    // FABにも静止画を表示（パネル展開前のプレビュー）
+    if (!fabVideoEl) {
+      var fabPreviewImg = document.createElement('img');
+      fabPreviewImg.src = imageUrl;
+      fabPreviewImg.alt = 'アバター';
+      fabPreviewImg.onerror = function () { resetFabIcon(); };
+      showFabMedia(fabPreviewImg);
+    }
   }
 
   function removeAvatarPlaceholder() {
@@ -809,6 +836,36 @@
       avatarPlaceholderImg.parentNode.removeChild(avatarPlaceholderImg);
     }
     avatarPlaceholderImg = null;
+  }
+
+  function ensureFabMediaContainer() {
+    if (fabMediaContainer) return;
+    fabMediaContainer = document.createElement('div');
+    fabMediaContainer.className = 'fab-media-container';
+  }
+
+  /**
+   * FABにメディア要素（video/img）を表示する。
+   * isOpen=true（パネル展開中）の場合は何もしない（FABはcloseアイコン表示中）。
+   */
+  function showFabMedia(mediaEl) {
+    ensureFabMediaContainer();
+    while (fabMediaContainer.firstChild) {
+      fabMediaContainer.removeChild(fabMediaContainer.firstChild);
+    }
+    fabMediaContainer.appendChild(mediaEl);
+    if (!isOpen) {
+      while (fab.firstChild) { fab.removeChild(fab.firstChild); }
+      fab.appendChild(fabMediaContainer);
+    }
+  }
+
+  /**
+   * FABをデフォルトのチャットアイコンに戻す。
+   */
+  function resetFabIcon() {
+    while (fab.firstChild) { fab.removeChild(fab.firstChild); }
+    fab.appendChild(svgIcon(CHAT_SVG_PATH));
   }
 
   function fetchAvatarConfig() {
@@ -1312,7 +1369,14 @@
           var videoEl = track.attach();
           videoEl.className = 'avatar-video';
           avatarStatusText.style.display = 'none';
-          avatarArea.appendChild(videoEl);
+          fabVideoEl = videoEl;
+          if (isOpen) {
+            // パネル展開中: avatarAreaに直接追加
+            avatarArea.appendChild(videoEl);
+          } else {
+            // パネル閉鎖中: FABにビデオを表示（アイドルモーション表示）
+            showFabMedia(videoEl);
+          }
         } else if (track.kind === 'audio') {
           // Agent TTS からの音声トラックを再生（innerHTML 禁止 — attach() で要素生成）
           var audioEl = track.attach();
@@ -1353,6 +1417,10 @@
         // Room が切断されたら次のパネル開閉で再fetch可能にする
         avatarConfigFetched = false;
         avatarConfig = null;
+        // FABをリセット
+        fabVideoEl = null;
+        fabMediaContainer = null;
+        resetFabIcon();
       });
 
       room.connect(avatarConfig.livekitUrl, avatarConfig.token)
@@ -1440,6 +1508,9 @@
     avatarStatusText.style.display = '';
     avatarConfigFetched = false;
     avatarConfig = null;
+    fabVideoEl = null;
+    fabMediaContainer = null;
+    resetFabIcon();
   }
 
   function renderMessages() {
@@ -1537,6 +1608,16 @@
     // SVG を閉じるアイコンに交換
     while (fab.firstChild) { fab.removeChild(fab.firstChild); }
     fab.appendChild(CLOSE_SVG.cloneNode(true));
+    // アバタービデオをFABからavatarAreaへ移動
+    if (fabVideoEl) {
+      if (fabVideoEl.parentNode && fabVideoEl.parentNode !== avatarArea) {
+        fabVideoEl.parentNode.removeChild(fabVideoEl);
+      }
+      if (fabVideoEl.parentNode !== avatarArea) {
+        avatarArea.appendChild(fabVideoEl);
+        if (avatarStatusText) avatarStatusText.style.display = 'none';
+      }
+    }
     textarea.focus();
     emitToHost('widget:opened', {});
     // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
@@ -1565,9 +1646,18 @@
     panel.setAttribute('aria-hidden', 'true');
     fab.setAttribute('aria-label', 'チャットを開く');
     fab.setAttribute('aria-expanded', 'false');
-    // SVG をチャットアイコンに交換
-    while (fab.firstChild) { fab.removeChild(fab.firstChild); }
-    fab.appendChild(svgIcon(CHAT_SVG_PATH));
+    // アバタービデオをavatarAreaからFABへ移動（またはチャットアイコン表示）
+    if (fabVideoEl) {
+      // ビデオをavatarAreaから取り出してFABへ
+      if (fabVideoEl.parentNode && fabVideoEl.parentNode !== fabMediaContainer) {
+        fabVideoEl.parentNode.removeChild(fabVideoEl);
+      }
+      showFabMedia(fabVideoEl);
+    } else {
+      // アバターなし: チャットアイコン
+      while (fab.firstChild) { fab.removeChild(fab.firstChild); }
+      fab.appendChild(svgIcon(CHAT_SVG_PATH));
+    }
     emitToHost('widget:closed', {});
     // LiveKit Room は切断しない（Agentが Room 内で処理中のため）
     // Room 切断は RoomEvent.Disconnected で自動的に処理される
