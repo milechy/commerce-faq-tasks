@@ -162,13 +162,25 @@ async function buildBusinessFaqAnswer(
   tenantId: string
 ): Promise<{ answer: string; aiAnswered: boolean }> {
   // テナントFAQをhybrid検索（ES BM25 + pgvector）
-  const { items } = await hybridSearch(message, tenantId, "ja");
+  console.log("[ai-assist] searching FAQs for tenant:", tenantId, "query:", message);
+
+  let items: Awaited<ReturnType<typeof hybridSearch>>["items"] = [];
+  try {
+    ({ items } = await hybridSearch(message, tenantId, "ja"));
+  } catch (e) {
+    console.error("[ai-assist] hybridSearch error:", e);
+    // 検索失敗時はitems=[]のまま70bにコンテキストなしで回答させる
+  }
+
+  console.log("[ai-assist] search results:", items.length, "hits");
 
   // RAG excerpt: 上位3件、各200文字以内（CLAUDE.mdルール）
   const ragContext = items
     .slice(0, 3)
     .map((hit) => hit.text.slice(0, 200))
     .join("\n\n");
+
+  console.log("[ai-assist] ragContext length:", ragContext.length);
 
   const answer = await callGroq70b(message, ragContext);
 
