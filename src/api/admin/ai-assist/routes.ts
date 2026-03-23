@@ -164,6 +164,35 @@ ${ragContext}`
 }
 
 // ---------------------------------------------------------------------------
+// 日本語対応キーワード抽出
+// ---------------------------------------------------------------------------
+
+function extractKeywords(message: string): string[] {
+  // 句読点・記号除去
+  const cleaned = message.replace(/[？?！!。、\s　「」『』（）()・]/g, "");
+
+  // 助詞・助動詞を長い順に除去
+  const stopWords = [
+    "ませんか", "ですか", "ますか", "ている", "でした", "ました",
+    "から", "まで", "より", "って", "った", "ない", "てる",
+    "は", "が", "の", "を", "に", "で", "と", "も", "か",
+    "ます", "です",
+  ];
+  let text = cleaned;
+  for (const sw of stopWords.sort((a, b) => b.length - a.length)) {
+    text = text.replace(new RegExp(sw, "g"), " ");
+  }
+
+  // スペース分割後2文字以上の語
+  const chunks = text.split(/\s+/).filter((w) => w.length >= 2);
+
+  // 漢字・カタカナの連続2文字以上も抽出
+  const kanjiMatches = cleaned.match(/[\u4E00-\u9FFF\u30A0-\u30FF]{2,}/g) ?? [];
+
+  return [...new Set([...chunks, ...kanjiMatches])].slice(0, 5);
+}
+
+// ---------------------------------------------------------------------------
 // business_faq モード: RAG検索 + 70b回答生成
 // ---------------------------------------------------------------------------
 
@@ -174,8 +203,9 @@ async function buildBusinessFaqAnswer(
   try {
     const pool = getPool();
 
-    // キーワード抽出（句読点除去 + 2文字以上の語）
-    const keywords = message.replace(/[？?！!。、]/g, "").split(/\s+/).filter((w) => w.length > 1);
+    // 日本語対応キーワード抽出
+    const keywords = extractKeywords(message);
+    console.log(`[ai-assist] extracted keywords: ${keywords.join(", ")}`);
 
     let rows: Array<{ question: string; answer: string }> = [];
 
