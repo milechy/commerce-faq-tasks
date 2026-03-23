@@ -18,7 +18,6 @@ import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
 import KnowledgeGapsPage from "./pages/admin/knowledge-gaps/index";
 import FeedbackPage from "./pages/admin/feedback/index";
-import FeedbackChat from "./components/feedback/FeedbackChat";
 import AdminAIChat from "./components/AdminAIChat";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
@@ -66,8 +65,7 @@ function ConfigErrorScreen() {
 }
 
 function AppInner() {
-  const { user, isClientAdmin, isSuperAdmin } = useAuth();
-  const tenantId = user?.tenantId ?? "";
+  const { isClientAdmin, isSuperAdmin } = useAuth();
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
   return (
@@ -130,9 +128,7 @@ function AppInner() {
         {/* それ以外のパスは管理ダッシュボードへ */}
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
-      {/* Client Admin用フローティングフィードバックチャット */}
-      {isClientAdmin && tenantId && <FeedbackChat tenantId={tenantId} />}
-      {/* 管理AIチャット — ログイン済み全ロール、chat-testページを除く */}
+      {/* 管理AIチャット — Client Admin、chat-testページを除く */}
       {showAIChat && <AdminAIChat />}
     </>
   );
