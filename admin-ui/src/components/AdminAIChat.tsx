@@ -25,7 +25,6 @@ export default function AdminAIChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -46,13 +45,6 @@ export default function AdminAIChat() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
-
-  // トーストを3秒後に消す
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 3000);
-    return () => clearTimeout(t);
-  }, [toast]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -83,12 +75,6 @@ export default function AdminAIChat() {
         { role: "assistant", content: data.answer, unanswered: !data.ai_answered, intent: data.intent },
       ]);
 
-      if (!data.ai_answered) {
-        const toastMsg = data.intent === "business_faq"
-          ? "この質問はまだナレッジに登録されていません。管理者に報告しました。"
-          : "フィードバックとして記録しました";
-        setToast(toastMsg);
-      }
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -328,24 +314,6 @@ export default function AdminAIChat() {
         </div>
       )}
 
-      {/* トースト */}
-      {toast && (
-        <div style={{
-          position: "fixed",
-          bottom: 90,
-          right: PANEL_RIGHT,
-          background: "rgba(249,115,22,0.15)",
-          border: "1px solid rgba(249,115,22,0.4)",
-          color: "#fb923c",
-          fontSize: 13,
-          padding: "8px 14px",
-          borderRadius: 8,
-          zIndex: 950,
-          pointerEvents: "none",
-        }}>
-          {toast}
-        </div>
-      )}
     </>
   );
 }
