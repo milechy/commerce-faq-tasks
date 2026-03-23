@@ -12,6 +12,10 @@ interface Message {
 
 const PANEL_W = 320;
 const PANEL_H = 420;
+// FeedbackChat が bottom:24 right:24 (56px幅) に固定されているため
+// AdminAIChat はその左隣に配置する (24 + 56 + 8 = 88)
+const FAB_RIGHT = 88;
+const PANEL_RIGHT = 88;
 
 export default function AdminAIChat() {
   const [open, setOpen] = useState(false);
@@ -106,7 +110,7 @@ export default function AdminAIChat() {
         style={{
           position: "fixed",
           bottom: 24,
-          right: 24,
+          right: FAB_RIGHT,
           width: 52,
           height: 52,
           borderRadius: "50%",
@@ -135,7 +139,7 @@ export default function AdminAIChat() {
           style={{
             position: "fixed",
             bottom: 88,
-            right: 24,
+            right: PANEL_RIGHT,
             width: PANEL_W,
             height: PANEL_H,
             borderRadius: 16,
@@ -309,7 +313,7 @@ export default function AdminAIChat() {
         <div style={{
           position: "fixed",
           bottom: 90,
-          right: 90,
+          right: PANEL_RIGHT,
           background: "rgba(249,115,22,0.15)",
           border: "1px solid rgba(249,115,22,0.4)",
           color: "#fb923c",
