@@ -7,12 +7,35 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 // @ts-ignore
 import { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
+import multer from 'multer';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
 // ---------------------------------------------------------------------------
 
 const AVATAR_BUCKET = "avatar-images";
+const DEFAULT_AVATARS_BUCKET = "avatar-defaults";
+
+const DEFAULT_AVATARS = [
+  { id: 'default_01', name: 'さくら', personality: '明るく元気な営業アシスタント' },
+  { id: 'default_02', name: 'あおい', personality: '落ち着いた丁寧なカスタマーサポート' },
+  { id: 'default_03', name: 'ひなた', personality: '親しみやすいフレンドリーな案内役' },
+  { id: 'default_04', name: 'みずき', personality: '知的で信頼感のあるコンサルタント' },
+  { id: 'default_05', name: 'りん', personality: 'テキパキした効率的なアドバイザー' },
+  { id: 'default_06', name: 'かえで', personality: '温かみのある相談しやすいスタッフ' },
+  { id: 'default_07', name: 'すずな', personality: '誠実で安心感のある対応スタッフ' },
+  { id: 'default_08', name: 'つむぎ', personality: '柔らかく寄り添うサポートスタッフ' },
+];
+
+export { DEFAULT_AVATARS };
+
+function getDefaultAvatarImageUrl(templateId: string): string | null {
+  if (!supabaseAdmin) return null;
+  const { data } = supabaseAdmin.storage
+    .from(DEFAULT_AVATARS_BUCKET)
+    .getPublicUrl(`${templateId}.png`);
+  return data?.publicUrl ?? null;
+}
 
 async function ensureBucketExists(): Promise<void> {
   if (!supabaseAdmin) return;
@@ -122,6 +145,58 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   if (!db) return;
 
   app.use("/v1/admin/avatar", supabaseAuthMiddleware);
+
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+  // POST /v1/admin/avatar/defaults/upload — Super Adminのみ: デフォルトアバター画像をStorageにアップロード
+  app.post(
+    "/v1/admin/avatar/defaults/upload",
+    upload.single("file"),
+    async (req: Request, res: Response) => {
+      const { isSuperAdmin } = extractAuth(req);
+      if (!isSuperAdmin) {
+        return res.status(403).json({ error: 'Super Admin権限が必要です' });
+      }
+      if (!supabaseAdmin) {
+        return res.status(503).json({ error: 'Supabase Storage が利用できません' });
+      }
+
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) {
+        return res.status(400).json({ error: 'ファイルが必要です' });
+      }
+
+      const templateId = (req.body?.template_id as string | undefined)?.trim();
+      if (!templateId || !templateId.match(/^default_0[1-8]$/)) {
+        return res.status(400).json({ error: 'template_id は default_01〜default_08 で指定してください' });
+      }
+
+      const ext = file.mimetype === 'image/png' ? 'png' : file.mimetype === 'image/webp' ? 'webp' : 'jpg';
+      const filePath = `${templateId}.${ext}`;
+
+      // avatar-defaults バケットを作成（なければ）
+      await supabaseAdmin.storage.createBucket(DEFAULT_AVATARS_BUCKET, {
+        public: true,
+        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
+        fileSizeLimit: 5 * 1024 * 1024,
+      }).catch(() => {}); // already exists は無視
+
+      const { error } = await supabaseAdmin.storage
+        .from(DEFAULT_AVATARS_BUCKET)
+        .upload(filePath, file.buffer, { contentType: file.mimetype, upsert: true });
+
+      if (error) {
+        console.warn('[POST /v1/admin/avatar/defaults/upload] upload error:', error.message);
+        return res.status(500).json({ error: 'アップロードに失敗しました' });
+      }
+
+      const { data: urlData } = supabaseAdmin.storage
+        .from(DEFAULT_AVATARS_BUCKET)
+        .getPublicUrl(filePath);
+
+      return res.json({ url: urlData?.publicUrl ?? null });
+    }
+  );
 
   // -----------------------------------------------------------------------
   // GET /v1/admin/avatar/configs — テナント一覧
@@ -247,6 +322,17 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       }
 
       const data = parsed.data;
+
+      // is_default=true の場合は image_url の変更を禁止
+      if (data.image_url !== undefined) {
+        const checkResult = await db.query(
+          "SELECT is_default FROM avatar_configs WHERE id = $1",
+          [id]
+        );
+        if (checkResult.rows[0]?.is_default === true) {
+          return res.status(400).json({ error: 'デフォルトアバターの画像は変更できません' });
+        }
+      }
 
       // base64 data URL → Supabase Storage HTTP URL に変換
       if (data.image_url?.startsWith("data:")) {
@@ -386,6 +472,52 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         return res.status(500).json({ error: "アバター設定の有効化に失敗しました" });
       } finally {
         client.release();
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/avatar/configs/:id/reset-to-default — デフォルト値にリセット
+  // -----------------------------------------------------------------------
+  app.post(
+    "/v1/admin/avatar/configs/:id/reset-to-default",
+    async (req: Request, res: Response) => {
+      const { tenantId, isSuperAdmin } = extractAuth(req);
+      const id = req.params["id"];
+
+      try {
+        let checkQuery = "SELECT * FROM avatar_configs WHERE id = $1";
+        const checkValues: any[] = [id];
+        if (!isSuperAdmin) {
+          checkQuery += " AND tenant_id = $2";
+          checkValues.push(tenantId);
+        }
+
+        const existing = await db.query(checkQuery, checkValues);
+        if (existing.rows.length === 0) {
+          return res.status(404).json({ error: '設定が見つからないかアクセス権限がありません' });
+        }
+
+        const config = existing.rows[0];
+        if (!config.is_default) {
+          return res.status(404).json({ error: 'デフォルトアバターではありません' });
+        }
+
+        const result = await db.query(
+          `UPDATE avatar_configs
+           SET voice_id = default_voice_id,
+               personality_prompt = default_personality_prompt,
+               name = default_name,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [id]
+        );
+
+        return res.json(result.rows[0]);
+      } catch (err) {
+        console.warn('[POST /v1/admin/avatar/configs/:id/reset-to-default]', err);
+        return res.status(500).json({ error: 'リセットに失敗しました' });
       }
     }
   );

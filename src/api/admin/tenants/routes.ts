@@ -7,6 +7,7 @@ import jwt from "jsonwebtoken";
 import { registerTenant } from "../../../lib/tenant-context";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
+import { DEFAULT_AVATARS } from "../avatar/routes";
 
 const planValues = ["starter", "growth", "enterprise"] as const;
 
@@ -134,6 +135,38 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         },
         enabled: tenant.is_active,
       });
+
+      // Phase44: デフォルト8体のアバターをバックグラウンドで作成
+      (async () => {
+        try {
+          for (const avatar of DEFAULT_AVATARS) {
+            const imageUrl = supabaseAdmin
+              ? supabaseAdmin.storage.from("avatar-defaults").getPublicUrl(`${avatar.id}.png`).data?.publicUrl ?? null
+              : null;
+
+            await db.query(
+              `INSERT INTO avatar_configs
+                (tenant_id, name, image_url, personality_prompt, is_default,
+                 default_template_id, default_name, default_personality_prompt,
+                 default_voice_id, is_active, avatar_provider)
+               VALUES ($1, $2, $3, $4, true, $5, $6, $7, null, false, 'lemonslice')
+               ON CONFLICT (tenant_id, default_template_id) WHERE default_template_id IS NOT NULL DO NOTHING`,
+              [
+                tenant.id,
+                avatar.name,
+                imageUrl,
+                avatar.personality,
+                avatar.id,
+                avatar.name,
+                avatar.personality,
+              ]
+            );
+          }
+        } catch (seedErr) {
+          console.warn('[POST /v1/admin/tenants] デフォルトアバター生成エラー:', seedErr);
+        }
+      })();
+
       return res.status(201).json(tenant);
     } catch (err: any) {
       if (err?.code === "23505") {
