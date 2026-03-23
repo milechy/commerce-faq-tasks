@@ -4,10 +4,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { authFetch, API_BASE } from "../lib/api";
 
+type Intent = "admin_guide" | "business_faq";
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   unanswered?: boolean;
+  intent?: Intent;
 }
 
 const PANEL_W = 320;
@@ -74,14 +77,17 @@ export default function AdminAIChat() {
         return;
       }
 
-      const data = await res.json() as { answer: string; ai_answered: boolean; feedback_id: string | null };
+      const data = await res.json() as { answer: string; ai_answered: boolean; feedback_id: string | null; intent?: Intent };
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.answer, unanswered: !data.ai_answered },
+        { role: "assistant", content: data.answer, unanswered: !data.ai_answered, intent: data.intent },
       ]);
 
       if (!data.ai_answered) {
-        setToast("フィードバックとして記録しました");
+        const toastMsg = data.intent === "business_faq"
+          ? "この質問はまだナレッジに登録されていません。管理者に報告しました。"
+          : "フィードバックとして記録しました";
+        setToast(toastMsg);
       }
     } catch {
       setMessages((prev) => [
@@ -216,8 +222,12 @@ export default function AdminAIChat() {
                   borderRadius: msg.role === "user" ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
                   background: msg.role === "user"
                     ? "linear-gradient(135deg, #3b82f6, #6366f1)"
+                    : msg.intent === "business_faq"
+                    ? "rgba(16,57,40,0.9)"
                     : "rgba(30,41,59,0.9)",
-                  border: msg.role === "assistant" ? "1px solid #1f2937" : "none",
+                  border: msg.role === "assistant"
+                    ? msg.intent === "business_faq" ? "1px solid rgba(34,197,94,0.25)" : "1px solid #1f2937"
+                    : "none",
                   color: "#f9fafb",
                   fontSize: 14,
                   lineHeight: 1.6,

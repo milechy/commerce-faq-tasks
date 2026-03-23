@@ -1,5 +1,5 @@
 // src/api/admin/ai-assist/routes.ts
-// Phase43 P1: 管理画面サポートAI チャットAPI
+// Phase43 P2: インテント振り分け + RAG統合
 // POST /v1/admin/ai-assist/chat
 
 import type { Express, Request, Response } from "express";
@@ -8,6 +8,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 // @ts-ignore
 import { Pool } from "pg";
 import { ADMIN_AI_SYSTEM_PROMPT, isUnanswered } from "./systemPrompt";
+import { hybridSearch } from "../../../search/hybrid";
 
 // ---------------------------------------------------------------------------
 // DB プール
@@ -25,6 +26,13 @@ function getPool(): InstanceType<typeof Pool> {
 }
 
 // ---------------------------------------------------------------------------
+// 型
+// ---------------------------------------------------------------------------
+
+type Intent = "admin_guide" | "business_faq";
+type FeedbackCategory = "operation_guide" | "knowledge_gap" | "other";
+
+// ---------------------------------------------------------------------------
 // ヘルパー
 // ---------------------------------------------------------------------------
 
@@ -37,7 +45,44 @@ function extractAuth(req: Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Groq LLM 呼び出し（llama-3.1-8b-instant）
+// インテント判定（Groq 8b — 軽量）
+// ---------------------------------------------------------------------------
+
+async function detectIntent(message: string): Promise<Intent> {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) return "admin_guide";
+
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "user",
+            content: `以下のメッセージが「管理画面の操作方法の質問」か「ビジネス・商品に関する質問」か判定してください。"admin_guide" または "business_faq" のみ返答してください。\nメッセージ: ${message}`,
+          },
+        ],
+        temperature: 0,
+        max_tokens: 20,
+      }),
+    });
+
+    if (!res.ok) return "admin_guide";
+    const data = (await res.json()) as any;
+    const raw: string = data.choices?.[0]?.message?.content?.trim() ?? "";
+    return raw.includes("business_faq") ? "business_faq" : "admin_guide";
+  } catch {
+    return "admin_guide"; // fail-safe
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Groq LLM 呼び出し（llama-3.1-8b-instant）— admin_guide モード
 // ---------------------------------------------------------------------------
 
 async function callGroq8b(userMessage: string): Promise<string> {
@@ -71,6 +116,68 @@ async function callGroq8b(userMessage: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Groq LLM 呼び出し（llama-3.3-70b-versatile）— business_faq モード
+// ---------------------------------------------------------------------------
+
+async function callGroq70b(userMessage: string, ragContext: string): Promise<string> {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) throw new Error("GROQ_API_KEY not configured");
+
+  const systemPrompt = ragContext
+    ? `あなたはビジネスAIアシスタントです。以下のナレッジベースの情報を基に、質問に日本語で簡潔に回答してください。ナレッジベースに情報がない場合は「その情報はまだ登録されていません。管理画面のFAQ管理から追加できます。」と回答してください。\n\nナレッジベース:\n${ragContext}`
+    : `あなたはビジネスAIアシスタントです。「その情報はまだ登録されていません。管理画面のFAQ管理から追加できます。」と回答してください。`;
+
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      temperature: 0.3,
+      max_tokens: 400,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Groq API error ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  const data = (await res.json()) as any;
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
+// ---------------------------------------------------------------------------
+// business_faq モード: RAG検索 + 70b回答生成
+// ---------------------------------------------------------------------------
+
+async function buildBusinessFaqAnswer(
+  message: string,
+  tenantId: string
+): Promise<{ answer: string; aiAnswered: boolean }> {
+  // テナントFAQをhybrid検索（ES BM25 + pgvector）
+  const { items } = await hybridSearch(message, tenantId, "ja");
+
+  // RAG excerpt: 上位3件、各200文字以内（CLAUDE.mdルール）
+  const ragContext = items
+    .slice(0, 3)
+    .map((hit) => hit.text.slice(0, 200))
+    .join("\n\n");
+
+  const answer = await callGroq70b(message, ragContext);
+
+  // ナレッジが存在し、かつ非定型フレーズなら回答済とみなす
+  const aiAnswered = items.length > 0 && !isUnanswered(answer);
+  return { answer, aiAnswered };
+}
+
+// ---------------------------------------------------------------------------
 // admin_feedback テーブルに記録
 // ---------------------------------------------------------------------------
 
@@ -80,27 +187,38 @@ async function recordFeedback(params: {
   message: string;
   aiResponse: string;
   aiAnswered: boolean;
+  category: FeedbackCategory;
 }): Promise<string | null> {
+  // NOT NULL 制約対策: 空文字列は 'unknown' にフォールバック
+  const safeTenantId = params.tenantId || "unknown";
+
   try {
     const pool = getPool();
     const result = await pool.query(
       `INSERT INTO admin_feedback
          (tenant_id, user_email, message, ai_response, ai_answered, category)
-       VALUES ($1, $2, $3, $4, $5, 'operation_guide')
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id`,
       [
-        params.tenantId,
+        safeTenantId,
         params.email || null,
         params.message,
         params.aiResponse,
         params.aiAnswered,
+        params.category,
       ]
     );
-    return result.rows[0]?.id ?? null;
+    const id = result.rows[0]?.id ?? null;
+    console.log(
+      `[ai-assist] feedback recorded: id=${id} tenant=${safeTenantId} category=${params.category} ai_answered=${params.aiAnswered}`
+    );
+    return id;
   } catch (err: any) {
-    // admin_feedback テーブル未作成の場合は無視
-    if (err?.code !== "42P01") {
-      console.warn("[ai-assist] feedback recording failed:", err?.message);
+    // テーブル未作成 (42P01) はスキップ、それ以外は必ずエラーログを出す
+    if (err?.code === "42P01") {
+      console.warn("[ai-assist] admin_feedback table not found — run migration_admin_feedback.sql");
+    } else {
+      console.error("[ai-assist] feedback INSERT failed:", err?.code, err?.message);
     }
     return null;
   }
@@ -143,25 +261,46 @@ export function registerAdminAiAssistRoutes(app: Express): void {
       const { message } = parsed.data;
 
       try {
-        // 1. Groq 8b で回答生成
-        const answer = await callGroq8b(message);
+        // 1. インテント判定（tenantId がある場合のみ business_faq を試みる）
+        const intent: Intent =
+          tenantId ? await detectIntent(message) : "admin_guide";
+
+        // 2. インテント別回答生成
+        let answer: string;
+        let aiAnswered: boolean;
+
+        if (intent === "business_faq") {
+          ({ answer, aiAnswered } = await buildBusinessFaqAnswer(message, tenantId));
+        } else {
+          answer = await callGroq8b(message);
+          aiAnswered = answer ? !isUnanswered(answer) : false;
+        }
 
         if (!answer) {
           return res.status(500).json({ error: "AI応答の生成に失敗しました" });
         }
 
-        // 2. 回答できたか判定
-        const aiAnswered = !isUnanswered(answer);
+        // 3. カテゴリ決定
+        // admin_guide → operation_guide
+        // business_faq + 回答済み → other
+        // business_faq + 未回答 → knowledge_gap
+        const category: FeedbackCategory =
+          intent === "admin_guide"
+            ? "operation_guide"
+            : aiAnswered
+            ? "other"
+            : "knowledge_gap";
 
-        // 3. admin_feedback テーブルに記録（tenantId がある場合のみ）
+        // 4. admin_feedback テーブルに記録（tenantId がある場合のみ）
         const feedbackId = tenantId
-          ? await recordFeedback({ tenantId, email, message, aiResponse: answer, aiAnswered })
+          ? await recordFeedback({ tenantId, email, message, aiResponse: answer, aiAnswered, category })
           : null;
 
         return res.json({
           answer,
           ai_answered: aiAnswered,
           feedback_id: feedbackId,
+          intent,
         });
       } catch (err) {
         console.warn("[POST /v1/admin/ai-assist/chat]", err);
