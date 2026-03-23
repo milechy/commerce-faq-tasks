@@ -7,6 +7,33 @@ import {
   buildTuningPromptSection,
 } from '../../api/admin/tuning/tuningRulesRepository';
 
+// @ts-ignore
+import { Pool } from 'pg';
+
+let _pool: InstanceType<typeof Pool> | null = null;
+function getPool(): InstanceType<typeof Pool> {
+  if (!_pool) {
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error('DATABASE_URL is not set');
+    _pool = new Pool({ connectionString: url });
+  }
+  return _pool;
+}
+
+async function getTenantsSystemPrompt(tenantId: string): Promise<string | null> {
+  try {
+    const pool = getPool();
+    const result = await pool.query<{ system_prompt: string | null }>(
+      'SELECT system_prompt FROM tenants WHERE id = $1',
+      [tenantId],
+    );
+    const val = result.rows[0]?.system_prompt;
+    return val && val.trim() ? val.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface SynthesisInput {
   query: string;
   items: RerankItem[];
@@ -64,6 +91,11 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     ? await getActiveRulesForTenant(tenantId).catch(() => [])
     : [];
 
+  // テナント固有のシステムプロンプトを取得（tenantId がある場合のみ）
+  const tenantSystemPrompt = tenantId
+    ? await getTenantsSystemPrompt(tenantId)
+    : null;
+
   // クエリにマッチするルールを絞り込む
   const matchedRules = tuningRules.filter((r) =>
     matchesTriggerPattern(query, r.trigger_pattern),
@@ -89,9 +121,14 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   try {
     // チューニングルールをシステムプロンプトに注入
     const tuningSection = buildTuningPromptSection(matchedRules);
-    const systemPrompt = tuningSection
-      ? `${BASE_SYSTEM_PROMPT}\n\n${tuningSection}`
-      : BASE_SYSTEM_PROMPT;
+    const systemPromptParts = [BASE_SYSTEM_PROMPT];
+    if (tenantSystemPrompt) {
+      systemPromptParts.push(`--- テナント固有の指示 ---\n${tenantSystemPrompt}`);
+    }
+    if (tuningSection) {
+      systemPromptParts.push(tuningSection);
+    }
+    const systemPrompt = systemPromptParts.join('\n\n');
 
     // FAQ コンテキスト（ヒットがある場合）
     const faqContext = items.length
