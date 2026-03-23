@@ -161,32 +161,56 @@ async function buildBusinessFaqAnswer(
   message: string,
   tenantId: string
 ): Promise<{ answer: string; aiAnswered: boolean }> {
-  // テナントFAQをhybrid検索（ES BM25 + pgvector）
-  console.log("[ai-assist] searching FAQs for tenant:", tenantId, "query:", message);
-
-  let items: Awaited<ReturnType<typeof hybridSearch>>["items"] = [];
   try {
-    ({ items } = await hybridSearch(message, tenantId, "ja"));
+    const pool = getPool();
+
+    // キーワード抽出（句読点除去 + 2文字以上の語）
+    const keywords = message.replace(/[？?！!。、]/g, "").split(/\s+/).filter((w) => w.length > 1);
+
+    let rows: Array<{ question: string; answer: string }> = [];
+
+    if (keywords.length > 0) {
+      // ILIKE 部分一致検索
+      const likeConditions = keywords
+        .map((_, i) => `(question ILIKE $${i + 2} OR answer ILIKE $${i + 2})`)
+        .join(" OR ");
+      const likeParams = keywords.map((k) => `%${k}%`);
+
+      const result = await pool.query<{ question: string; answer: string }>(
+        `SELECT question, answer FROM faq_docs WHERE tenant_id = $1 AND (${likeConditions}) LIMIT 5`,
+        [tenantId, ...likeParams]
+      );
+      rows = result.rows;
+    }
+
+    // フォールバック: ヒットなしなら最新5件
+    if (rows.length === 0) {
+      const result = await pool.query<{ question: string; answer: string }>(
+        "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 5",
+        [tenantId]
+      );
+      rows = result.rows;
+    }
+
+    console.log(`[ai-assist] FAQ search: ${rows.length} hits for tenant=${tenantId}`);
+
+    // RAGコンテキスト構築（各200文字以内）
+    const ragContext = rows
+      .map((row) => `Q: ${row.question}\nA: ${row.answer}`.slice(0, 200))
+      .join("\n\n");
+
+    console.log(`[ai-assist] ragContext length: ${ragContext.length}`);
+
+    const answer = await callGroq70b(message, ragContext);
+    const aiAnswered = rows.length > 0 && !isUnanswered(answer);
+    return { answer, aiAnswered };
   } catch (e) {
-    console.error("[ai-assist] hybridSearch error:", e);
-    // 検索失敗時はitems=[]のまま70bにコンテキストなしで回答させる
+    console.error("[ai-assist] buildBusinessFaqAnswer error:", e);
+    return {
+      answer: "現在FAQの検索ができません。しばらくしてから再度お試しください。",
+      aiAnswered: false,
+    };
   }
-
-  console.log("[ai-assist] search results:", items.length, "hits");
-
-  // RAG excerpt: 上位3件、各200文字以内（CLAUDE.mdルール）
-  const ragContext = items
-    .slice(0, 3)
-    .map((hit) => hit.text.slice(0, 200))
-    .join("\n\n");
-
-  console.log("[ai-assist] ragContext length:", ragContext.length);
-
-  const answer = await callGroq70b(message, ragContext);
-
-  // ナレッジが存在し、かつ非定型フレーズなら回答済とみなす
-  const aiAnswered = items.length > 0 && !isUnanswered(answer);
-  return { answer, aiAnswered };
 }
 
 // ---------------------------------------------------------------------------
