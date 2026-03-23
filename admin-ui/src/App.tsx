@@ -69,7 +69,7 @@ function AppInner() {
   const { user, isClientAdmin, isSuperAdmin } = useAuth();
   const tenantId = user?.tenantId ?? "";
   const location = useLocation();
-  const showAIChat = !!user && location.pathname !== "/admin/chat-test";
+  const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
   return (
     <>
       <Routes>

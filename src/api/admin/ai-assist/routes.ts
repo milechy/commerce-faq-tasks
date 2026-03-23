@@ -32,7 +32,8 @@ function extractAuth(req: Request) {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
   const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
   const email: string = su?.email ?? "";
-  return { tenantId, email };
+  const authenticated: boolean = !!su;
+  return { tenantId, email, authenticated };
 }
 
 // ---------------------------------------------------------------------------
@@ -125,10 +126,11 @@ export function registerAdminAiAssistRoutes(app: Express): void {
     "/v1/admin/ai-assist/chat",
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const { tenantId, email } = extractAuth(req);
+      const { tenantId, email, authenticated } = extractAuth(req);
 
-      if (!tenantId) {
-        return res.status(403).json({ error: "テナント情報が取得できません" });
+      // JWT 検証済みであれば通す（super_admin は tenant_id を持たないため tenantId 必須にしない）
+      if (!authenticated) {
+        return res.status(403).json({ error: "認証情報が取得できません" });
       }
 
       const parsed = chatSchema.safeParse(req.body ?? {});
@@ -151,14 +153,10 @@ export function registerAdminAiAssistRoutes(app: Express): void {
         // 2. 回答できたか判定
         const aiAnswered = !isUnanswered(answer);
 
-        // 3. admin_feedback テーブルに記録（fire-and-forget）
-        const feedbackId = await recordFeedback({
-          tenantId,
-          email,
-          message,
-          aiResponse: answer,
-          aiAnswered,
-        });
+        // 3. admin_feedback テーブルに記録（tenantId がある場合のみ）
+        const feedbackId = tenantId
+          ? await recordFeedback({ tenantId, email, message, aiResponse: answer, aiAnswered })
+          : null;
 
         return res.json({
           answer,
