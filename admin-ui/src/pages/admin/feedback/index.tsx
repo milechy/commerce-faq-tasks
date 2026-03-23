@@ -1,442 +1,707 @@
 // admin-ui/src/pages/admin/feedback/index.tsx
-// Super Admin: テナント別フィードバック一覧 + チャット
+// Phase43: AdminFeedback management — list, filter, detail modal, PATCH/DELETE
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
+import { useAuth } from "../../../auth/useAuth";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
 
-interface Message {
-  id: number;
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface AdminFeedback {
+  id: string;
   tenant_id: string;
-  sender_role: "client_admin" | "super_admin";
-  sender_email: string | null;
-  content: string;
-  is_read: boolean;
-  flagged_for_improvement: boolean;
+  user_email: string | null;
+  message: string;
+  ai_response: string | null;
+  ai_answered: boolean;
+  status: "new" | "reviewed" | "needs_improvement" | "resolved";
+  category: "operation_guide" | "feature_request" | "bug_report" | "knowledge_gap" | "other";
+  priority: "low" | "normal" | "high";
+  admin_notes: string | null;
+  linked_knowledge_gap_id: string | null;
   created_at: string;
+  updated_at: string;
 }
 
-interface Thread {
-  tenant_id: string;
-  tenant_name: string;
-  last_message: string;
-  last_message_at: string;
-  unread_count: number;
-}
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
 
-export default function FeedbackPage() {
-  const navigate = useNavigate();
-  const { t, lang } = useLang();
+const STATUS_COLORS: Record<AdminFeedback["status"], { bg: string; border: string; text: string; label_ja: string; label_en: string }> = {
+  new: { bg: "rgba(59,130,246,0.15)", border: "rgba(59,130,246,0.45)", text: "#60a5fa", label_ja: "未対応", label_en: "New" },
+  reviewed: { bg: "rgba(107,114,128,0.15)", border: "rgba(107,114,128,0.45)", text: "#9ca3af", label_ja: "確認済", label_en: "Reviewed" },
+  needs_improvement: { bg: "rgba(249,115,22,0.15)", border: "rgba(249,115,22,0.45)", text: "#fb923c", label_ja: "要改善", label_en: "Needs Improvement" },
+  resolved: { bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.45)", text: "#4ade80", label_ja: "解決済", label_en: "Resolved" },
+};
+
+const PRIORITY_COLORS: Record<AdminFeedback["priority"], { bg: string; border: string; text: string; label_ja: string; label_en: string }> = {
+  low: { bg: "rgba(107,114,128,0.12)", border: "rgba(107,114,128,0.35)", text: "#9ca3af", label_ja: "低", label_en: "Low" },
+  normal: { bg: "rgba(59,130,246,0.12)", border: "rgba(59,130,246,0.35)", text: "#60a5fa", label_ja: "通常", label_en: "Normal" },
+  high: { bg: "rgba(239,68,68,0.15)", border: "rgba(239,68,68,0.45)", text: "#f87171", label_ja: "高", label_en: "High" },
+};
+
+const CATEGORY_LABELS: Record<AdminFeedback["category"], { ja: string; en: string }> = {
+  operation_guide: { ja: "操作ガイド", en: "Operation Guide" },
+  feature_request: { ja: "機能要望", en: "Feature Request" },
+  bug_report: { ja: "バグ報告", en: "Bug Report" },
+  knowledge_gap: { ja: "知識ギャップ", en: "Knowledge Gap" },
+  other: { ja: "その他", en: "Other" },
+};
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function Badge({ color }: { color: { bg: string; border: string; text: string } & { label_ja?: string; label_en?: string } }) {
+  return null; // placeholder — badges rendered inline below
+}
+void Badge; // suppress unused warning
+
+function StatusBadge({ status, lang }: { status: AdminFeedback["status"]; lang: string }) {
+  const c = STATUS_COLORS[status];
+  return (
+    <span style={{
+      display: "inline-block",
+      padding: "2px 8px",
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 700,
+      background: c.bg,
+      border: `1px solid ${c.border}`,
+      color: c.text,
+      whiteSpace: "nowrap",
+    }}>
+      {lang === "ja" ? c.label_ja : c.label_en}
+    </span>
+  );
+}
+
+function PriorityBadge({ priority, lang }: { priority: AdminFeedback["priority"]; lang: string }) {
+  const c = PRIORITY_COLORS[priority];
+  return (
+    <span style={{
+      display: "inline-block",
+      padding: "2px 8px",
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 700,
+      background: c.bg,
+      border: `1px solid ${c.border}`,
+      color: c.text,
+      whiteSpace: "nowrap",
+    }}>
+      {lang === "ja" ? c.label_ja : c.label_en}
+    </span>
+  );
+}
+
+const selectStyle: React.CSSProperties = {
+  padding: "8px 12px",
+  minHeight: 44,
+  borderRadius: 8,
+  border: "1px solid #374151",
+  background: "rgba(15,23,42,0.9)",
+  color: "#e5e7eb",
+  fontSize: 14,
+  cursor: "pointer",
+  outline: "none",
+  appearance: "none" as const,
+  WebkitAppearance: "none" as const,
+  backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M6 8L1 3h10z'/%3E%3C/svg%3E\")",
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 10px center",
+  paddingRight: 32,
+};
+
+// ─── Detail Modal ─────────────────────────────────────────────────────────────
+
+interface DetailModalProps {
+  item: AdminFeedback;
+  lang: string;
+  isSuperAdmin: boolean;
+  onClose: () => void;
+  onSaved: (updated: AdminFeedback) => void;
+  onDeleted: (id: string) => void;
+}
+
+function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: DetailModalProps) {
   const locale = lang === "en" ? "en-US" : "ja-JP";
+  const [status, setStatus] = useState<AdminFeedback["status"]>(item.status);
+  const [priority, setPriority] = useState<AdminFeedback["priority"]>(item.priority);
+  const [adminNotes, setAdminNotes] = useState(item.admin_notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [threads, setThreads] = useState<Thread[]>([]);
-  const [selectedTenant, setSelectedTenant] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [loadingThreads, setLoadingThreads] = useState(true);
-  const [loadingMessages, setLoadingMessages] = useState(false);
-  const [search, setSearch] = useState("");
-  const [flaggedFilter, setFlaggedFilter] = useState(false);
-  const [flagging, setFlagging] = useState<number | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  const fetchThreads = useCallback(async () => {
-    setLoadingThreads(true);
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/feedback/threads`);
-      if (!res.ok) return;
-      const data = await res.json() as { threads: Thread[] };
-      setThreads(data.threads ?? []);
-    } catch { /* silent */ } finally {
-      setLoadingThreads(false);
-    }
-  }, []);
-
-  const fetchMessages = useCallback(async (tenantId: string, flaggedOnly = false) => {
-    setLoadingMessages(true);
-    try {
-      const url = `${API_BASE}/v1/admin/feedback?tenant=${encodeURIComponent(tenantId)}${flaggedOnly ? "&flagged=true" : ""}`;
-      const res = await authFetch(url);
-      if (!res.ok) return;
-      const data = await res.json() as { messages: Message[] };
-      setMessages(data.messages ?? []);
-      if (!flaggedOnly) {
-        setThreads((prev) => prev.map((th) =>
-          th.tenant_id === tenantId ? { ...th, unread_count: 0 } : th
-        ));
-      }
-    } catch { /* silent */ } finally {
-      setLoadingMessages(false);
-    }
-  }, []);
-
-  useEffect(() => { void fetchThreads(); }, [fetchThreads]);
-
-  useEffect(() => {
-    if (selectedTenant) void fetchMessages(selectedTenant, flaggedFilter);
-  }, [selectedTenant, flaggedFilter, fetchMessages]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleSend = async () => {
-    if (!selectedTenant || !input.trim() || sending) return;
-    setSending(true);
-    try {
-      const res = await authFetch(`${API_BASE}/v1/admin/feedback`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: input.trim(), tenant_id: selectedTenant }),
-      });
-      if (!res.ok) return;
-      setInput("");
-      await fetchMessages(selectedTenant, flaggedFilter);
-    } catch { /* silent */ } finally {
-      setSending(false);
-    }
-  };
-
-  const handleFlag = async (msg: Message) => {
-    if (flagging === msg.id) return;
-    const nextFlagged = !msg.flagged_for_improvement;
-    setFlagging(msg.id);
-    // Optimistic update
-    setMessages((prev) => prev.map((m) =>
-      m.id === msg.id ? { ...m, flagged_for_improvement: nextFlagged } : m
-    ));
-    try {
-      const res = await authFetch(`${API_BASE}/v1/admin/feedback/${msg.id}/flag`, {
+      const res = await authFetch(`${API_BASE}/v1/admin/feedback/${item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flagged: nextFlagged }),
+        body: JSON.stringify({ status, priority, admin_notes: adminNotes }),
       });
       if (!res.ok) {
-        // Revert on failure
-        setMessages((prev) => prev.map((m) =>
-          m.id === msg.id ? { ...m, flagged_for_improvement: msg.flagged_for_improvement } : m
-        ));
-      } else if (flaggedFilter && !nextFlagged) {
-        // フィルター中にフラグ解除 → リストから除去
-        setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+        setError(lang === "ja" ? "保存に失敗しました" : "Failed to save");
+        return;
       }
+      const data = await res.json() as { feedback?: AdminFeedback } | AdminFeedback;
+      const updated = ("feedback" in data && data.feedback) ? data.feedback : { ...item, status, priority, admin_notes: adminNotes };
+      onSaved(updated as AdminFeedback);
     } catch {
-      setMessages((prev) => prev.map((m) =>
-        m.id === msg.id ? { ...m, flagged_for_improvement: msg.flagged_for_improvement } : m
-      ));
+      setError(lang === "ja" ? "ネットワークエラー" : "Network error");
     } finally {
-      setFlagging(null);
+      setSaving(false);
     }
   };
 
-  const formatTime = (iso: string) =>
+  const handleDelete = async () => {
+    if (!confirmDelete) { setConfirmDelete(true); return; }
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/feedback/${item.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        setError(lang === "ja" ? "削除に失敗しました" : "Failed to delete");
+        setDeleting(false);
+        return;
+      }
+      onDeleted(item.id);
+    } catch {
+      setError(lang === "ja" ? "ネットワークエラー" : "Network error");
+      setDeleting(false);
+    }
+  };
+
+  const catLabel = CATEGORY_LABELS[item.category];
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "20px 16px",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 640,
+          maxHeight: "90vh",
+          overflowY: "auto",
+          borderRadius: 16,
+          border: "1px solid #1f2937",
+          background: "rgba(15,23,42,0.98)",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+          padding: "24px 24px 20px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 18,
+        }}
+      >
+        {/* Modal header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            <StatusBadge status={status} lang={lang} />
+            <PriorityBadge priority={priority} lang={lang} />
+            <span style={{ fontSize: 12, color: "#6b7280" }}>
+              {lang === "ja" ? catLabel.ja : catLabel.en}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "1px solid #374151",
+              borderRadius: 8,
+              color: "#9ca3af",
+              fontSize: 18,
+              cursor: "pointer",
+              padding: "4px 10px",
+              lineHeight: 1,
+              minHeight: 36,
+              flexShrink: 0,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Meta */}
+        <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <span>{new Date(item.created_at).toLocaleString(locale, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+          {item.user_email && <span>{item.user_email}</span>}
+          <span style={{ fontFamily: "monospace", opacity: 0.6 }}>{item.id.slice(0, 8)}…</span>
+        </div>
+
+        {/* Message */}
+        <div>
+          <p style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>
+            {lang === "ja" ? "メッセージ" : "Message"}
+          </p>
+          <div style={{
+            padding: "12px 14px",
+            borderRadius: 10,
+            border: "1px solid #1f2937",
+            background: "rgba(0,0,0,0.25)",
+            fontSize: 14,
+            color: "#f9fafb",
+            lineHeight: 1.7,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}>
+            {item.message}
+          </div>
+        </div>
+
+        {/* AI response */}
+        {item.ai_response && (
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>
+              {lang === "ja" ? "AI回答" : "AI Response"}
+              {item.ai_answered && (
+                <span style={{ marginLeft: 8, color: "#4ade80", fontSize: 11 }}>
+                  {lang === "ja" ? "✓ 回答済" : "✓ Answered"}
+                </span>
+              )}
+            </p>
+            <div style={{
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1px solid rgba(34,197,94,0.2)",
+              background: "rgba(34,197,94,0.05)",
+              fontSize: 13,
+              color: "#d1fae5",
+              lineHeight: 1.7,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}>
+              {item.ai_response}
+            </div>
+          </div>
+        )}
+
+        {/* Status + Priority editors */}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 180px" }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", display: "block", marginBottom: 6 }}>
+              {lang === "ja" ? "ステータス" : "Status"}
+            </label>
+            <select value={status} onChange={(e) => setStatus(e.target.value as AdminFeedback["status"])} style={{ ...selectStyle, width: "100%" }}>
+              <option value="new">{lang === "ja" ? "未対応" : "New"}</option>
+              <option value="reviewed">{lang === "ja" ? "確認済" : "Reviewed"}</option>
+              <option value="needs_improvement">{lang === "ja" ? "要改善" : "Needs Improvement"}</option>
+              <option value="resolved">{lang === "ja" ? "解決済" : "Resolved"}</option>
+            </select>
+          </div>
+          <div style={{ flex: "1 1 140px" }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", display: "block", marginBottom: 6 }}>
+              {lang === "ja" ? "優先度" : "Priority"}
+            </label>
+            <select value={priority} onChange={(e) => setPriority(e.target.value as AdminFeedback["priority"])} style={{ ...selectStyle, width: "100%" }}>
+              <option value="low">{lang === "ja" ? "低" : "Low"}</option>
+              <option value="normal">{lang === "ja" ? "通常" : "Normal"}</option>
+              <option value="high">{lang === "ja" ? "高" : "High"}</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Quick action: needs_improvement */}
+        {status !== "needs_improvement" && (
+          <button
+            onClick={() => setStatus("needs_improvement")}
+            style={{
+              padding: "8px 16px",
+              minHeight: 44,
+              borderRadius: 8,
+              border: "1px solid rgba(249,115,22,0.45)",
+              background: "rgba(249,115,22,0.08)",
+              color: "#fb923c",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              alignSelf: "flex-start",
+            }}
+          >
+            {lang === "ja" ? "⚠ 要改善にセット" : "⚠ Mark as Needs Improvement"}
+          </button>
+        )}
+
+        {/* Admin notes */}
+        <div>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", display: "block", marginBottom: 6 }}>
+            {lang === "ja" ? "管理者メモ" : "Admin Notes"}
+          </label>
+          <textarea
+            value={adminNotes}
+            onChange={(e) => setAdminNotes(e.target.value)}
+            placeholder={lang === "ja" ? "内部メモを入力..." : "Internal notes..."}
+            rows={4}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid #374151",
+              background: "rgba(0,0,0,0.3)",
+              color: "#e5e7eb",
+              fontSize: 14,
+              fontFamily: "inherit",
+              lineHeight: 1.6,
+              resize: "vertical",
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div style={{
+            padding: "10px 14px",
+            borderRadius: 8,
+            background: "rgba(127,29,29,0.4)",
+            border: "1px solid rgba(248,113,113,0.3)",
+            color: "#fca5a5",
+            fontSize: 13,
+          }}>
+            {error}
+          </div>
+        )}
+
+        {/* Action row */}
+        <div style={{ display: "flex", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
+          {/* Delete (super admin only) */}
+          {isSuperAdmin && (
+            <button
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+              style={{
+                padding: "10px 16px",
+                minHeight: 44,
+                borderRadius: 8,
+                border: confirmDelete ? "1px solid rgba(239,68,68,0.7)" : "1px solid #374151",
+                background: confirmDelete ? "rgba(239,68,68,0.15)" : "transparent",
+                color: confirmDelete ? "#f87171" : "#6b7280",
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: deleting ? "not-allowed" : "pointer",
+                opacity: deleting ? 0.6 : 1,
+              }}
+            >
+              {deleting ? "..." : confirmDelete ? (lang === "ja" ? "本当に削除" : "Confirm Delete") : (lang === "ja" ? "削除" : "Delete")}
+            </button>
+          )}
+
+          <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
+            <button
+              onClick={onClose}
+              style={{
+                padding: "10px 20px",
+                minHeight: 44,
+                borderRadius: 8,
+                border: "1px solid #374151",
+                background: "transparent",
+                color: "#9ca3af",
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {lang === "ja" ? "キャンセル" : "Cancel"}
+            </button>
+            <button
+              onClick={() => void handleSave()}
+              disabled={saving}
+              style={{
+                padding: "10px 24px",
+                minHeight: 44,
+                borderRadius: 8,
+                border: "none",
+                background: saving
+                  ? "rgba(59,130,246,0.4)"
+                  : "linear-gradient(135deg, #3b82f6, #6366f1)",
+                color: "#fff",
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: saving ? "not-allowed" : "pointer",
+                opacity: saving ? 0.7 : 1,
+              }}
+            >
+              {saving ? (lang === "ja" ? "保存中..." : "Saving...") : (lang === "ja" ? "保存" : "Save")}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
+export default function FeedbackPage() {
+  const navigate = useNavigate();
+  const { lang } = useLang();
+  const { isSuperAdmin } = useAuth();
+  const locale = lang === "en" ? "en-US" : "ja-JP";
+
+  const [items, setItems] = useState<AdminFeedback[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [sortBy, setSortBy] = useState<"created_at" | "priority">("created_at");
+  const [selected, setSelected] = useState<AdminFeedback | null>(null);
+
+  const fetchItems = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      let url = `${API_BASE}/v1/admin/feedback?limit=50&offset=0`;
+      if (statusFilter) url += `&status=${statusFilter}`;
+      if (categoryFilter) url += `&category=${categoryFilter}`;
+      if (sortBy === "priority") url += `&sort_by=priority`;
+      const res = await authFetch(url);
+      if (!res.ok) {
+        setError(lang === "ja" ? "取得に失敗しました" : "Failed to load feedback");
+        return;
+      }
+      const data = await res.json() as { items?: AdminFeedback[]; feedback?: AdminFeedback[] } | AdminFeedback[];
+      if (Array.isArray(data)) {
+        setItems(data);
+      } else if ("items" in data && Array.isArray(data.items)) {
+        setItems(data.items);
+      } else if ("feedback" in data && Array.isArray(data.feedback)) {
+        setItems(data.feedback);
+      } else {
+        setItems([]);
+      }
+    } catch {
+      setError(lang === "ja" ? "ネットワークエラー" : "Network error");
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter, categoryFilter, sortBy, lang]);
+
+  useEffect(() => { void fetchItems(); }, [fetchItems]);
+
+  const handleSaved = (updated: AdminFeedback) => {
+    setItems((prev) => prev.map((it) => it.id === updated.id ? updated : it));
+    setSelected(updated);
+  };
+
+  const handleDeleted = (id: string) => {
+    setItems((prev) => prev.filter((it) => it.id !== id));
+    setSelected(null);
+  };
+
+  const formatDate = (iso: string) =>
     new Date(iso).toLocaleString(locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-
-  const filteredThreads = threads.filter((th) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return th.tenant_name.toLowerCase().includes(q) || th.tenant_id.toLowerCase().includes(q);
-  });
-
-  const selectedThread = threads.find((th) => th.tenant_id === selectedTenant);
 
   return (
     <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 1100, margin: "0 auto" }}>
-      {/* ヘッダー */}
+      {/* Header */}
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
           <button
             onClick={() => navigate("/admin")}
             style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 8, display: "block" }}
           >
-            {t("feedback.back")}
+            ← {lang === "ja" ? "管理画面に戻る" : "Back to Dashboard"}
           </button>
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            📬 {t("feedback.title")}
+            {lang === "ja" ? "フィードバック管理" : "Feedback Management"}
           </h1>
         </div>
-        <LangSwitcher />
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <LangSwitcher />
+        </div>
       </header>
 
-      {/* 2カラムレイアウト */}
-      <div style={{ display: "flex", gap: 16, height: "calc(100vh - 160px)", minHeight: 400 }}>
-        {/* 左: スレッド一覧 */}
+      {/* Error banner */}
+      {error && (
         <div style={{
-          width: 280,
-          flexShrink: 0,
-          borderRadius: 14,
-          border: "1px solid #1f2937",
-          background: "rgba(15,23,42,0.95)",
+          marginBottom: 20,
+          padding: "12px 16px",
+          borderRadius: 10,
+          background: "rgba(127,29,29,0.4)",
+          border: "1px solid rgba(248,113,113,0.3)",
+          color: "#fca5a5",
+          fontSize: 14,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+        }}>
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            style={{ background: "none", border: "none", color: "#fca5a5", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Filter bar */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20, alignItems: "center" }}>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
+          <option value="">{lang === "ja" ? "全ステータス" : "All Statuses"}</option>
+          <option value="new">{lang === "ja" ? "未対応" : "New"}</option>
+          <option value="reviewed">{lang === "ja" ? "確認済" : "Reviewed"}</option>
+          <option value="needs_improvement">{lang === "ja" ? "要改善" : "Needs Improvement"}</option>
+          <option value="resolved">{lang === "ja" ? "解決済" : "Resolved"}</option>
+        </select>
+
+        <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} style={selectStyle}>
+          <option value="">{lang === "ja" ? "全カテゴリ" : "All Categories"}</option>
+          <option value="operation_guide">{lang === "ja" ? "操作ガイド" : "Operation Guide"}</option>
+          <option value="feature_request">{lang === "ja" ? "機能要望" : "Feature Request"}</option>
+          <option value="bug_report">{lang === "ja" ? "バグ報告" : "Bug Report"}</option>
+          <option value="knowledge_gap">{lang === "ja" ? "知識ギャップ" : "Knowledge Gap"}</option>
+          <option value="other">{lang === "ja" ? "その他" : "Other"}</option>
+        </select>
+
+        <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "created_at" | "priority")} style={selectStyle}>
+          <option value="created_at">{lang === "ja" ? "新着順" : "Newest First"}</option>
+          <option value="priority">{lang === "ja" ? "優先度順" : "By Priority"}</option>
+        </select>
+
+        <button
+          onClick={() => void fetchItems()}
+          style={{
+            padding: "8px 16px",
+            minHeight: 44,
+            borderRadius: 8,
+            border: "1px solid #374151",
+            background: "transparent",
+            color: "#9ca3af",
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          ↻ {lang === "ja" ? "更新" : "Refresh"}
+        </button>
+
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280" }}>
+          {!loading && `${items.length} ${lang === "ja" ? "件" : "items"}`}
+        </span>
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 160, color: "#6b7280", fontSize: 15 }}>
+          <span style={{ marginRight: 8 }}>⏳</span>
+          {lang === "ja" ? "読み込み中..." : "Loading..."}
+        </div>
+      ) : items.length === 0 ? (
+        <div style={{
           display: "flex",
           flexDirection: "column",
-          overflow: "hidden",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: 200,
+          color: "#6b7280",
+          fontSize: 15,
+          gap: 8,
         }}>
-          <div style={{ padding: "12px 14px", borderBottom: "1px solid #1f2937" }}>
-            <p style={{ fontSize: 13, fontWeight: 600, color: "#9ca3af", margin: "0 0 8px" }}>
-              {t("feedback.threads")}
-            </p>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={lang === "ja" ? "テナントを検索..." : "Search tenants..."}
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid #374151",
-                background: "rgba(0,0,0,0.3)",
-                color: "#e5e7eb",
-                fontSize: 13,
-                boxSizing: "border-box",
-                outline: "none",
-              }}
-            />
-          </div>
-
-          <div style={{ flex: 1, overflowY: "auto" }}>
-            {loadingThreads ? (
-              <p style={{ textAlign: "center", color: "#6b7280", padding: 20, fontSize: 13 }}>⏳</p>
-            ) : filteredThreads.length === 0 ? (
-              <p style={{ textAlign: "center", color: "#6b7280", padding: 20, fontSize: 13 }}>
-                {t("feedback.no_messages")}
-              </p>
-            ) : filteredThreads.map((th) => (
+          <span style={{ fontSize: 36 }}>📭</span>
+          <span>{lang === "ja" ? "フィードバックがありません" : "No feedback items found"}</span>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {items.map((item) => {
+            const catLabel = CATEGORY_LABELS[item.category];
+            return (
               <button
-                key={th.tenant_id}
-                onClick={() => setSelectedTenant(th.tenant_id)}
+                key={item.id}
+                onClick={() => setSelected(item)}
                 style={{
                   width: "100%",
-                  padding: "12px 14px",
-                  border: "none",
-                  borderBottom: "1px solid #1f2937",
-                  background: selectedTenant === th.tenant_id
-                    ? "rgba(59,130,246,0.12)"
-                    : "transparent",
-                  borderLeft: selectedTenant === th.tenant_id
-                    ? "3px solid #3b82f6"
-                    : "3px solid transparent",
+                  padding: "14px 16px",
+                  minHeight: 44,
+                  borderRadius: 12,
+                  border: "1px solid #1f2937",
+                  background: "rgba(15,23,42,0.95)",
                   cursor: "pointer",
                   textAlign: "left",
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
+                  alignItems: "flex-start",
+                  gap: 14,
+                  transition: "border-color 0.15s, background 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#374151";
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(15,23,42,1)";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937";
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(15,23,42,0.95)";
                 }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: "#f9fafb" }}>
-                    {th.tenant_name || th.tenant_id}
+                {/* Date column */}
+                <div style={{ flexShrink: 0, minWidth: 90, paddingTop: 2 }}>
+                  <span style={{ fontSize: 12, color: "#6b7280" }}>{formatDate(item.created_at)}</span>
+                </div>
+
+                {/* Badges */}
+                <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: 4, paddingTop: 2, minWidth: 96 }}>
+                  <StatusBadge status={item.status} lang={lang} />
+                  <PriorityBadge priority={item.priority} lang={lang} />
+                </div>
+
+                {/* Category */}
+                <div style={{ flexShrink: 0, paddingTop: 4, minWidth: 80 }}>
+                  <span style={{ fontSize: 12, color: "#9ca3af", fontWeight: 500 }}>
+                    {lang === "ja" ? catLabel.ja : catLabel.en}
                   </span>
-                  {th.unread_count > 0 && (
-                    <span style={{
-                      padding: "2px 7px",
-                      borderRadius: 999,
-                      background: "#ef4444",
-                      color: "#fff",
-                      fontSize: 11,
-                      fontWeight: 700,
-                    }}>
-                      {th.unread_count}
-                    </span>
+                </div>
+
+                {/* Message preview + email */}
+                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{
+                    fontSize: 14,
+                    color: "#f9fafb",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    display: "block",
+                  }}>
+                    {item.message.slice(0, 60)}{item.message.length > 60 ? "…" : ""}
+                  </span>
+                  {item.user_email && (
+                    <span style={{ fontSize: 12, color: "#6b7280" }}>{item.user_email}</span>
                   )}
                 </div>
-                <span style={{
-                  fontSize: 12,
-                  color: "#6b7280",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  display: "block",
-                  maxWidth: 230,
-                }}>
-                  {th.last_message}
-                </span>
-                <span style={{ fontSize: 11, color: "#4b5563" }}>
-                  {formatTime(th.last_message_at)}
-                </span>
+
+                {/* Arrow */}
+                <div style={{ flexShrink: 0, color: "#4b5563", fontSize: 16, paddingTop: 2 }}>›</div>
               </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
+      )}
 
-        {/* 右: チャット */}
-        <div style={{
-          flex: 1,
-          borderRadius: 14,
-          border: "1px solid #1f2937",
-          background: "rgba(15,23,42,0.95)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}>
-          {!selectedTenant ? (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", fontSize: 15 }}>
-              {t("feedback.select_tenant")}
-            </div>
-          ) : (
-            <>
-              {/* チャットヘッダー */}
-              <div style={{ padding: "14px 18px", borderBottom: "1px solid #1f2937", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb" }}>
-                  🏢 {selectedThread?.tenant_name || selectedTenant}
-                  <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
-                    ({selectedTenant})
-                  </span>
-                </span>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  {/* 改善フィルタートグル */}
-                  <button
-                    onClick={() => setFlaggedFilter((f) => !f)}
-                    style={{
-                      padding: "4px 12px",
-                      borderRadius: 8,
-                      border: flaggedFilter ? "1px solid #f59e0b" : "1px solid #374151",
-                      background: flaggedFilter ? "rgba(245,158,11,0.15)" : "none",
-                      color: flaggedFilter ? "#fbbf24" : "#9ca3af",
-                      fontSize: 12,
-                      fontWeight: flaggedFilter ? 700 : 400,
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {lang === "ja" ? (flaggedFilter ? "★ 改善のみ" : "☆ 改善フィルター") : (flaggedFilter ? "★ Flagged only" : "☆ Filter flagged")}
-                  </button>
-                  <button
-                    onClick={() => void fetchMessages(selectedTenant, flaggedFilter)}
-                    style={{ background: "none", border: "1px solid #374151", borderRadius: 8, color: "#9ca3af", fontSize: 12, cursor: "pointer", padding: "4px 10px" }}
-                  >
-                    ↻
-                  </button>
-                </div>
-              </div>
-
-              {/* メッセージ一覧 */}
-              <div style={{ flex: 1, overflowY: "auto", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-                {loadingMessages ? (
-                  <p style={{ textAlign: "center", color: "#6b7280", paddingTop: 40 }}>⏳</p>
-                ) : messages.length === 0 ? (
-                  <p style={{ textAlign: "center", color: "#6b7280", paddingTop: 40 }}>{t("feedback.no_messages")}</p>
-                ) : messages.map((msg) => {
-                  const isMe = msg.sender_role === "super_admin";
-                  const isFlagged = msg.flagged_for_improvement;
-                  return (
-                    <div
-                      key={msg.id}
-                      style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start" }}
-                    >
-                      {!isMe && (
-                        <span style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>
-                          {msg.sender_email ?? "client_admin"}
-                        </span>
-                      )}
-                      <div style={{ display: "flex", justifyContent: isMe ? "flex-end" : "flex-start", width: "100%", alignItems: "flex-end", gap: 6 }}>
-                        {/* クライアントメッセージ: 吹き出しの右にフラグボタン */}
-                        {!isMe && (
-                          <button
-                            onClick={() => void handleFlag(msg)}
-                            disabled={flagging === msg.id}
-                            title={lang === "ja" ? (isFlagged ? "改善マークを解除" : "改善としてマーク") : (isFlagged ? "Remove improvement flag" : "Mark for improvement")}
-                            style={{
-                              background: "none",
-                              border: "none",
-                              cursor: flagging === msg.id ? "default" : "pointer",
-                              fontSize: 16,
-                              lineHeight: 1,
-                              padding: "4px 2px",
-                              opacity: flagging === msg.id ? 0.5 : 1,
-                              color: isFlagged ? "#f59e0b" : "#4b5563",
-                              flexShrink: 0,
-                              transition: "color 0.15s",
-                            }}
-                          >
-                            {isFlagged ? "★" : "☆"}
-                          </button>
-                        )}
-                        <div style={{
-                          maxWidth: "70%",
-                          padding: "10px 14px",
-                          borderRadius: isMe ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                          background: isFlagged
-                            ? "rgba(245,158,11,0.12)"
-                            : isMe ? "rgba(59,130,246,0.2)" : "rgba(55,65,81,0.5)",
-                          border: isFlagged
-                            ? "1px solid rgba(245,158,11,0.5)"
-                            : isMe ? "1px solid rgba(59,130,246,0.4)" : "1px solid #374151",
-                          color: "#f9fafb",
-                          fontSize: 14,
-                          lineHeight: 1.6,
-                          wordBreak: "break-word",
-                          textAlign: "left",
-                        }}>
-                          {msg.content}
-                        </div>
-                      </div>
-                      <span style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>
-                        {formatTime(msg.created_at)}
-                        {isFlagged && (
-                          <span style={{ marginLeft: 6, color: "#f59e0b", fontWeight: 600 }}>
-                            {lang === "ja" ? "★ 改善" : "★ Flagged"}
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  );
-                })}
-                <div ref={bottomRef} />
-              </div>
-
-              {/* 返信入力 */}
-              <div style={{ padding: "12px 16px", borderTop: "1px solid #1f2937", display: "flex", gap: 10 }}>
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend(); }
-                  }}
-                  placeholder={t("feedback.placeholder")}
-                  rows={2}
-                  style={{
-                    flex: 1,
-                    padding: "10px 12px",
-                    borderRadius: 10,
-                    border: "1px solid #374151",
-                    background: "rgba(0,0,0,0.3)",
-                    color: "#e5e7eb",
-                    fontSize: 14,
-                    fontFamily: "inherit",
-                    resize: "none",
-                    outline: "none",
-                  }}
-                />
-                <button
-                  onClick={() => void handleSend()}
-                  disabled={!input.trim() || sending}
-                  style={{
-                    padding: "10px 18px",
-                    minHeight: 44,
-                    borderRadius: 10,
-                    border: "none",
-                    background: input.trim() && !sending
-                      ? "linear-gradient(135deg, #3b82f6, #6366f1)"
-                      : "rgba(59,130,246,0.3)",
-                    color: "#fff",
-                    fontSize: 14,
-                    fontWeight: 700,
-                    cursor: input.trim() && !sending ? "pointer" : "not-allowed",
-                    alignSelf: "flex-end",
-                  }}
-                >
-                  {sending ? "..." : t("feedback.send")}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+      {/* Detail Modal */}
+      {selected && (
+        <DetailModal
+          item={selected}
+          lang={lang}
+          isSuperAdmin={isSuperAdmin}
+          onClose={() => setSelected(null)}
+          onSaved={handleSaved}
+          onDeleted={handleDeleted}
+        />
+      )}
     </div>
   );
 }

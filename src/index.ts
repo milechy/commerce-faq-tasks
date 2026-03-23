@@ -39,6 +39,7 @@ import {
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerKnowledgeGapRoutes } from "./api/admin/knowledge/knowledgeGapRoutes";
 import { registerFeedbackRoutes } from "./api/admin/feedback/feedbackRoutes";
+import { registerAdminFeedbackManagementRoutes } from "./api/admin/feedback/routes";
 import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
 import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
@@ -56,6 +57,8 @@ import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
 import { registerAnamRoutes } from "./api/avatar/anamRoutes";
+import { registerAnamChatStreamRoutes } from "./api/avatar/anamChatStreamRoutes";
+import { registerFishTtsRoutes } from "./api/avatar/fishTtsRoutes";
 import { registerAvatarGenerationRoutes } from "./api/admin/avatar/generationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
@@ -549,6 +552,8 @@ registerChatHistoryRoutes(app);
 registerTuningRoutes(app);
 // Phase38+: ナレッジギャップ検出 API
 registerKnowledgeGapRoutes(app);
+// Phase43: admin_feedback チケット管理 API（feedbackRoutes.ts より前に登録）
+registerAdminFeedbackManagementRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
 
@@ -557,6 +562,10 @@ registerLiveKitTokenRoutes(app, apiStack);
 
 // Phase42: Avatar → Anam.ai セッショントークン発行 API
 registerAnamRoutes(app, apiStack);
+// Phase42: Avatar → Anam Client-Side Custom LLM (Groqストリーミング)
+registerAnamChatStreamRoutes(app, apiStack);
+// Phase42: Fish Audio TTS (Anam内蔵TTS回避 — 自然な日本語音声)
+registerFishTtsRoutes(app, apiStack);
 
 // Internal: avatar-agent → TTS/Avatar使用量レポート（X-Internal-Request: 1 認証）
 registerInternalUsageRoutes(app);
