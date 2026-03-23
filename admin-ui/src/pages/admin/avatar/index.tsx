@@ -19,6 +19,7 @@ interface AvatarConfig {
   emotion_tags: string[];
   lemonslice_agent_id: string | null;
   is_active: boolean;
+  is_default: boolean;
   created_at: string;
   avatar_provider: string | null;
 }
@@ -243,6 +244,20 @@ export default function AvatarListPage() {
                       flexShrink: 0,
                     }}>
                       {lang === "ja" ? "アクティブ" : "Active"}
+                    </span>
+                  )}
+                  {cfg.is_default && (
+                    <span style={{
+                      background: '#dbeafe',
+                      color: '#1d4ed8',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      marginLeft: '8px',
+                      flexShrink: 0,
+                    }}>
+                      {lang === "ja" ? "デフォルト" : "Default"}
                     </span>
                   )}
                 </div>

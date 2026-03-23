@@ -1,7 +1,7 @@
 // admin-ui/src/pages/admin/avatar/studio.tsx
 // Phase41: Avatar Customization Studio — 新規作成 / 編集
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
@@ -18,11 +18,8 @@ interface AvatarConfig {
   emotion_tags: string[];
   lemonslice_agent_id: string | null;
   is_active: boolean;
-  avatar_provider: 'lemonslice' | 'anam' | null;
-  anam_avatar_id: string | null;
-  anam_voice_id: string | null;
-  anam_persona_id: string | null;
-  anam_llm_id: string | null;
+  is_default: boolean;
+  avatar_provider: string | null;
 }
 
 interface VoiceRecommendation {
@@ -103,11 +100,6 @@ export default function AvatarStudioPage() {
   // フォーム状態
   const [name, setName] = useState("");
   const [lemonsliceAgentId, setLemonsliceAgentId] = useState("");
-  const [avatarProvider, setAvatarProvider] = useState<'lemonslice' | 'anam'>('lemonslice');
-  const [anamAvatarId, setAnamAvatarId] = useState('');
-  const [anamVoiceId, setAnamVoiceId] = useState('');
-  const [anamPersonaId, setAnamPersonaId] = useState('');
-  const [anamLlmId, setAnamLlmId] = useState('');
   const [imageUrl, setImageUrl] = useState("");
   const [voiceId, setVoiceId] = useState("");
   const [voiceDescription, setVoiceDescription] = useState("");
@@ -115,11 +107,21 @@ export default function AvatarStudioPage() {
   const [behaviorDescription, setBehaviorDescription] = useState("");
   const [emotionTags, setEmotionTags] = useState<string[]>([]);
 
-  // 画像生成
+  // 画像タブ
+  const [imageTab, setImageTab] = useState<'generate' | 'upload'>('generate');
+
+  // 画像生成（AIタブ）
   const [imageDesc, setImageDesc] = useState("");
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
   const [generatingImage, setGeneratingImage] = useState(false);
   const [selectedImageIdx, setSelectedImageIdx] = useState<number | null>(null);
+
+  // 写真アップロード（アップロードタブ）
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadPreview, setUploadPreview] = useState<string | null>(null);
+  const [uploadConfirmed, setUploadConfirmed] = useState(false);
+  void uploadFile; // 将来Supabase Storage連携で使用
 
   // 声マッチング
   const [voiceDesc, setVoiceDesc] = useState("");
@@ -130,6 +132,10 @@ export default function AvatarStudioPage() {
   // プロンプト生成
   const [promptRules, setPromptRules] = useState("");
   const [generatingPrompt, setGeneratingPrompt] = useState(false);
+
+  // デフォルトアバターフラグ
+  const [isDefault, setIsDefault] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   // 保存
   const [saving, setSaving] = useState(false);
@@ -155,11 +161,7 @@ export default function AvatarStudioPage() {
         setPersonalityPrompt(found.personality_prompt ?? "");
         setBehaviorDescription(found.behavior_description ?? "");
         setEmotionTags(found.emotion_tags ?? []);
-        setAvatarProvider((found.avatar_provider as 'lemonslice' | 'anam') || 'lemonslice');
-        setAnamAvatarId(found.anam_avatar_id ?? '');
-        setAnamVoiceId(found.anam_voice_id ?? '');
-        setAnamPersonaId(found.anam_persona_id ?? '');
-        setAnamLlmId(found.anam_llm_id ?? '');
+        setIsDefault(found.is_default ?? false);
       }
     } catch { /* silent */ } finally {
       setLoadingEdit(false);
@@ -186,8 +188,13 @@ export default function AvatarStudioPage() {
       const data = await res.json() as { images: string[] };
       setGeneratedImages(data.images ?? []);
       setSelectedImageIdx(null);
-    } catch {
-      setError(lang === "ja" ? "ネットワークエラーが発生しました" : "Network error");
+    } catch (e) {
+      console.error("[handleGenerateImage]", e);
+      if (e instanceof Error && e.message === "__AUTH_REQUIRED__") {
+        setError(lang === "ja" ? "セッションが切れました。ページを再読み込みしてください" : "Session expired. Please reload the page.");
+      } else {
+        setError(lang === "ja" ? "ネットワークエラーが発生しました" : "Network error");
+      }
     } finally {
       setGeneratingImage(false);
     }
@@ -196,7 +203,39 @@ export default function AvatarStudioPage() {
   const handleSelectImage = (idx: number) => {
     setSelectedImageIdx(idx);
     setImageUrl(generatedImages[idx] ?? "");
+    // AI生成画像選択時はアップロード確定状態をリセット
+    setUploadConfirmed(false);
+    setUploadPreview(null);
+    setUploadFile(null);
   };
+
+  function handleFileUpload(file: File) {
+    if (file.size > 5 * 1024 * 1024) {
+      alert(lang === "ja" ? "ファイルサイズは5MB以下にしてください" : "File size must be 5MB or less");
+      return;
+    }
+    setUploadFile(file);
+    setUploadConfirmed(false);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setUploadPreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleConfirmUpload() {
+    if (!uploadPreview) return;
+    setImageUrl(uploadPreview);
+    setUploadConfirmed(true);
+  }
+
+  function handleResetUpload() {
+    setUploadFile(null);
+    setUploadPreview(null);
+    setUploadConfirmed(false);
+    if (imageUrl.startsWith("data:")) setImageUrl("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   const handleMatchVoice = async () => {
     if (!voiceDesc.trim() || matchingVoice) return;
@@ -216,8 +255,13 @@ export default function AvatarStudioPage() {
       const data = await res.json() as { recommendations: VoiceRecommendation[] };
       setVoiceRecs(data.recommendations ?? []);
       setSelectedVoiceId(null);
-    } catch {
-      setError(lang === "ja" ? "ネットワークエラーが発生しました" : "Network error");
+    } catch (e) {
+      console.error("[handleMatchVoice]", e);
+      if (e instanceof Error && e.message === "__AUTH_REQUIRED__") {
+        setError(lang === "ja" ? "セッションが切れました。ページを再読み込みしてください" : "Session expired. Please reload the page.");
+      } else {
+        setError(lang === "ja" ? "ネットワークエラーが発生しました" : "Network error");
+      }
     } finally {
       setMatchingVoice(false);
     }
@@ -247,10 +291,57 @@ export default function AvatarStudioPage() {
       const data = await res.json() as { system_prompt: string; emotion_tags: string[] };
       setPersonalityPrompt(data.system_prompt ?? "");
       setEmotionTags(data.emotion_tags ?? []);
-    } catch {
-      setError(lang === "ja" ? "ネットワークエラーが発生しました" : "Network error");
+    } catch (e) {
+      console.error("[handleGeneratePrompt]", e);
+      if (e instanceof Error && e.message === "__AUTH_REQUIRED__") {
+        setError(lang === "ja" ? "セッションが切れました。ページを再読み込みしてください" : "Session expired. Please reload the page.");
+      } else {
+        setError(lang === "ja" ? "ネットワークエラーが発生しました" : "Network error");
+      }
     } finally {
       setGeneratingPrompt(false);
+    }
+  };
+
+  const handleResetToDefault = async () => {
+    if (!id || resetting) return;
+    const confirmed = window.confirm(
+      lang === "ja"
+        ? "声・性格・名前をデフォルト設定に戻しますか？"
+        : "Reset voice, personality, and name to default settings?"
+    );
+    if (!confirmed) return;
+    setResetting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar-configs/${id}/reset-to-default`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const d = await res.json() as { error?: string };
+        setError(d.error ?? (lang === "ja" ? "リセットに失敗しました" : "Reset failed"));
+        return;
+      }
+      const data = await res.json() as { config?: AvatarConfig };
+      if (data.config) {
+        setName(data.config.name);
+        setVoiceId(data.config.voice_id ?? "");
+        setVoiceDescription(data.config.voice_description ?? "");
+        setPersonalityPrompt(data.config.personality_prompt ?? "");
+        setBehaviorDescription(data.config.behavior_description ?? "");
+        setEmotionTags(data.config.emotion_tags ?? []);
+      }
+      setSuccess(lang === "ja" ? "デフォルト設定に戻しました" : "Reset to default settings");
+    } catch (e) {
+      console.error("[handleResetToDefault]", e);
+      if (e instanceof Error && e.message === "__AUTH_REQUIRED__") {
+        setError(lang === "ja" ? "セッションが切れました。ページを再読み込みしてください" : "Session expired. Please reload the page.");
+      } else {
+        setError(lang === "ja" ? "ネットワークエラーが発生しました" : "Network error");
+      }
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -271,11 +362,7 @@ export default function AvatarStudioPage() {
       behavior_description: behaviorDescription || undefined,
       emotion_tags: emotionTags.length > 0 ? emotionTags : undefined,
       lemonslice_agent_id: lemonsliceAgentId || undefined,
-      avatar_provider: avatarProvider,
-      anam_avatar_id: anamAvatarId || undefined,
-      anam_voice_id: anamVoiceId || undefined,
-      anam_persona_id: anamPersonaId || undefined,
-      anam_llm_id: anamLlmId || undefined,
+      avatar_provider: 'lemonslice' as const,
     };
     try {
       const url = isEdit
@@ -358,132 +445,234 @@ export default function AvatarStudioPage() {
             style={INPUT_STYLE}
           />
         </div>
-        {/* プロバイダー選択 */}
-        <div style={{ marginBottom: 14 }}>
-          <label style={LABEL_STYLE}>{lang === 'ja' ? 'アバタープロバイダー' : 'Avatar Provider'}</label>
-          <div style={{ display: 'flex', gap: 10 }}>
-            {(['lemonslice', 'anam'] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setAvatarProvider(p)}
-                style={{
-                  padding: '8px 18px',
-                  minHeight: 44,
-                  borderRadius: 10,
-                  border: avatarProvider === p ? '2px solid #3b82f6' : '1px solid #374151',
-                  background: avatarProvider === p ? 'rgba(59,130,246,0.15)' : 'transparent',
-                  color: avatarProvider === p ? '#93c5fd' : '#9ca3af',
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                {p === 'anam'
-                  ? (lang === 'ja' ? 'Anam (推奨)' : 'Anam (Recommended)')
-                  : (lang === 'ja' ? 'Lemonslice (レガシー)' : 'Lemonslice (Legacy)')}
-              </button>
-            ))}
-          </div>
+        <div>
+          <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
+          <input type="text" value={lemonsliceAgentId} onChange={(e) => setLemonsliceAgentId(e.target.value)}
+            placeholder="agent_xxxxxxxxxx" style={INPUT_STYLE} />
         </div>
-        {avatarProvider === 'anam' && (
-          <div style={{ marginTop: 14, padding: '14px 16px', borderRadius: 10, border: '1px solid rgba(59,130,246,0.2)', background: 'rgba(59,130,246,0.05)' }}>
-            <p style={{ fontSize: 12, color: '#60a5fa', fontWeight: 600, margin: '0 0 12px' }}>
-              Anam.ai 設定
-            </p>
-            <div style={{ marginBottom: 10 }}>
-              <label style={LABEL_STYLE}>Avatar ID</label>
-              <input type="text" value={anamAvatarId} onChange={(e) => setAnamAvatarId(e.target.value)}
-                placeholder="CARA-3 など" style={INPUT_STYLE} />
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <label style={LABEL_STYLE}>Voice ID</label>
-              <input type="text" value={anamVoiceId} onChange={(e) => setAnamVoiceId(e.target.value)}
-                placeholder="Anam Voice ID" style={INPUT_STYLE} />
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <label style={LABEL_STYLE}>Persona ID</label>
-              <input type="text" value={anamPersonaId} onChange={(e) => setAnamPersonaId(e.target.value)}
-                placeholder="Anam Persona ID（任意）" style={INPUT_STYLE} />
-            </div>
-            <div>
-              <label style={LABEL_STYLE}>LLM ID</label>
-              <input type="text" value={anamLlmId} onChange={(e) => setAnamLlmId(e.target.value)}
-                placeholder="Anam LLM ID（任意）" style={INPUT_STYLE} />
-            </div>
-          </div>
-        )}
-        {avatarProvider === 'lemonslice' && (
-          <div>
-            <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
-            <input type="text" value={lemonsliceAgentId} onChange={(e) => setLemonsliceAgentId(e.target.value)}
-              placeholder="agent_xxxxxxxxxx" style={INPUT_STYLE} />
-          </div>
-        )}
       </div>
 
-      {/* 2. 画像生成 */}
+      {/* 2. アバター画像 */}
       <div style={SECTION_STYLE}>
         <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
-          {lang === "ja" ? "2. 画像生成" : "2. Image Generation"}
+          {lang === "ja" ? "2. アバター画像" : "2. Avatar Image"}
         </h2>
-        <div style={{ marginBottom: 12 }}>
-          <label style={LABEL_STYLE}>{lang === "ja" ? "アバターの説明" : "Avatar Description"}</label>
-          <textarea
-            value={imageDesc}
-            onChange={(e) => setImageDesc(e.target.value)}
-            placeholder={lang === "ja"
-              ? "例: 20代の女性、笑顔、プロフェッショナルな服装、白背景"
-              : "e.g. Young woman, smiling, professional attire, white background"}
-            style={TEXTAREA_STYLE}
-          />
-        </div>
-        <button
-          onClick={() => void handleGenerateImage()}
-          disabled={generatingImage || !imageDesc.trim()}
-          style={{
-            ...BTN_PRIMARY,
-            opacity: generatingImage || !imageDesc.trim() ? 0.5 : 1,
-            cursor: generatingImage || !imageDesc.trim() ? "not-allowed" : "pointer",
-          }}
-        >
-          {generatingImage
-            ? (lang === "ja" ? "生成中..." : "Generating...")
-            : (lang === "ja" ? "画像を生成する (4枚)" : "Generate Images (4)")}
-        </button>
 
-        {generatedImages.length > 0 && (
-          <div style={{ marginTop: 16 }}>
-            <p style={{ fontSize: 13, color: "#9ca3af", marginBottom: 10 }}>
-              {lang === "ja" ? "使用する画像を選択してください" : "Select an image to use"}
+        {/* デフォルトアバターは画像変更不可 */}
+        {isDefault ? (
+          <div style={{
+            padding: "14px 16px",
+            borderRadius: 10,
+            background: "rgba(59,130,246,0.08)",
+            border: "1px solid rgba(59,130,246,0.3)",
+            color: "#93c5fd",
+            fontSize: 14,
+            marginBottom: 8,
+          }}>
+            {lang === "ja"
+              ? "デフォルトアバターの画像は変更できません"
+              : "Default avatar images cannot be changed"}
+            {imageUrl && (
+              <div style={{ marginTop: 12, textAlign: "center" }}>
+                <img
+                  src={imageUrl}
+                  alt="avatar"
+                  style={{ maxHeight: 160, borderRadius: 10, display: "block", margin: "0 auto" }}
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+        {/* タブ切り替え */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          {(['generate', 'upload'] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setImageTab(tab)}
+              style={{
+                padding: "8px 18px",
+                minHeight: 44,
+                borderRadius: 10,
+                border: imageTab === tab ? "2px solid #3b82f6" : "1px solid #374151",
+                background: imageTab === tab ? "rgba(59,130,246,0.15)" : "transparent",
+                color: imageTab === tab ? "#93c5fd" : "#9ca3af",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {tab === 'generate'
+                ? (lang === "ja" ? "AIで生成" : "Generate with AI")
+                : (lang === "ja" ? "写真をアップロード" : "Upload Photo")}
+            </button>
+          ))}
+        </div>
+
+        {/* AIで生成タブ */}
+        {imageTab === 'generate' && (
+          <>
+            <div style={{ marginBottom: 12 }}>
+              <label style={LABEL_STYLE}>{lang === "ja" ? "アバターの説明" : "Avatar Description"}</label>
+              <textarea
+                value={imageDesc}
+                onChange={(e) => setImageDesc(e.target.value)}
+                placeholder={lang === "ja"
+                  ? "例: 30代の日本人女性、ショートヘア、紺色のジャケット、笑顔"
+                  : "e.g. Japanese woman in 30s, short hair, navy jacket, smiling"}
+                style={TEXTAREA_STYLE}
+              />
+            </div>
+            <button
+              onClick={() => void handleGenerateImage()}
+              disabled={generatingImage || !imageDesc.trim()}
+              style={{
+                ...BTN_PRIMARY,
+                opacity: generatingImage || !imageDesc.trim() ? 0.5 : 1,
+                cursor: generatingImage || !imageDesc.trim() ? "not-allowed" : "pointer",
+              }}
+            >
+              {generatingImage
+                ? (lang === "ja" ? "生成中..." : "Generating...")
+                : (lang === "ja" ? "画像を生成する (4枚)" : "Generate Images (4)")}
+            </button>
+
+            {generatedImages.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 13, color: "#9ca3af", marginBottom: 10 }}>
+                  {lang === "ja" ? "使用する画像を選択してください" : "Select an image to use"}
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+                  {generatedImages.map((url, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => handleSelectImage(idx)}
+                      style={{
+                        borderRadius: 10,
+                        overflow: "hidden",
+                        border: selectedImageIdx === idx ? "2px solid #3b82f6" : "2px solid transparent",
+                        cursor: "pointer",
+                        aspectRatio: "1",
+                        background: "#111827",
+                      }}
+                    >
+                      <img
+                        src={url}
+                        alt={`Generated ${idx + 1}`}
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* 写真をアップロードタブ */}
+        {imageTab === 'upload' && (
+          <div>
+            <p style={{ color: "#9ca3af", marginBottom: 12 }}>
+              {lang === "ja" ? "顔がはっきり写った正面の写真が最適です" : "A clear front-facing photo works best"}
             </p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
-              {generatedImages.map((url, idx) => (
+
+            {/* 確定済み: プレビュー + 差し替えリンク */}
+            {uploadConfirmed && uploadPreview ? (
+              <div style={{ textAlign: "center" }}>
+                <img
+                  src={uploadPreview}
+                  alt="selected"
+                  style={{ maxHeight: 300, borderRadius: 10, display: "block", margin: "0 auto 12px" }}
+                />
+                <button
+                  type="button"
+                  onClick={handleResetUpload}
+                  style={{ background: "none", border: "none", color: "#6b7280", fontSize: 13, cursor: "pointer", textDecoration: "underline" }}
+                >
+                  {lang === "ja" ? "別の画像を選ぶ" : "Choose a different image"}
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* ドラッグ&ドロップエリア */}
                 <div
-                  key={idx}
-                  onClick={() => handleSelectImage(idx)}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const file = e.dataTransfer.files[0];
+                    if (file && file.type.startsWith("image/")) handleFileUpload(file);
+                  }}
+                  onClick={() => fileInputRef.current?.click()}
                   style={{
-                    borderRadius: 10,
-                    overflow: "hidden",
-                    border: selectedImageIdx === idx
-                      ? "2px solid #3b82f6"
-                      : "2px solid transparent",
+                    border: "2px dashed #4b5563",
+                    borderRadius: 12,
+                    padding: 40,
+                    textAlign: "center",
                     cursor: "pointer",
-                    aspectRatio: "1",
-                    background: "#111827",
+                    minHeight: 200,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
-                  <img
-                    src={url}
-                    alt={`Generated ${idx + 1}`}
-                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  />
+                  {uploadPreview ? (
+                    <img src={uploadPreview} alt="preview" style={{ maxHeight: 300, borderRadius: 8 }} />
+                  ) : (
+                    <>
+                      <p style={{ fontSize: 18, color: "white", margin: "0 0 8px" }}>
+                        {lang === "ja" ? "ここに画像をドラッグ" : "Drag image here"}
+                      </p>
+                      <p style={{ color: "#9ca3af", margin: "0 0 8px" }}>
+                        {lang === "ja" ? "または クリックしてファイルを選択" : "or click to select a file"}
+                      </p>
+                      <p style={{ color: "#6b7280", fontSize: 14, margin: 0 }}>
+                        JPG, PNG{lang === "ja" ? "（最大5MB）" : " (max 5MB)"}
+                      </p>
+                    </>
+                  )}
                 </div>
-              ))}
-            </div>
+
+                {/* 「この画像を使う」確定ボタン */}
+                {uploadPreview && !uploadConfirmed && (
+                  <button
+                    type="button"
+                    onClick={handleConfirmUpload}
+                    style={{
+                      marginTop: 16,
+                      padding: "14px 32px",
+                      background: "#4f46e5",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 8,
+                      fontSize: 16,
+                      cursor: "pointer",
+                      width: "100%",
+                    }}
+                  >
+                    {lang === "ja" ? "この画像を使う" : "Use this image"}
+                  </button>
+                )}
+              </>
+            )}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFileUpload(file);
+              }}
+            />
           </div>
         )}
 
+        {/* 選択中の画像URL（両タブ共通） */}
         {imageUrl && (
           <div style={{ marginTop: 14 }}>
             <label style={LABEL_STYLE}>{lang === "ja" ? "選択中の画像URL" : "Selected Image URL"}</label>
@@ -494,6 +683,8 @@ export default function AvatarStudioPage() {
               style={INPUT_STYLE}
             />
           </div>
+        )}
+          </>
         )}
       </div>
 
@@ -655,7 +846,23 @@ export default function AvatarStudioPage() {
       </div>
 
       {/* 保存ボタン */}
-      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
+        {isEdit && isDefault && (
+          <button
+            onClick={() => void handleResetToDefault()}
+            disabled={resetting}
+            style={{
+              ...BTN_SECONDARY,
+              opacity: resetting ? 0.6 : 1,
+              cursor: resetting ? "not-allowed" : "pointer",
+              marginRight: "auto",
+            }}
+          >
+            {resetting
+              ? (lang === "ja" ? "リセット中..." : "Resetting...")
+              : (lang === "ja" ? "デフォルトに戻す" : "Reset to Default")}
+          </button>
+        )}
         <button
           onClick={() => navigate("/admin/avatar")}
           style={BTN_SECONDARY}
