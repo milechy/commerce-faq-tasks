@@ -235,7 +235,17 @@ export default function AdminAIChat() {
                   wordBreak: "break-word",
                 }}>
                   {msg.content}
-                  {msg.unanswered && (
+                  {msg.role === "assistant" && msg.intent === "business_faq" && !msg.unanswered && (
+                    <div style={{ fontSize: 11, color: "rgba(209,250,229,0.7)", marginTop: 4, fontStyle: "italic" }}>
+                      ※ ご登録のFAQを参照し回答しています
+                    </div>
+                  )}
+                  {msg.role === "assistant" && msg.intent === "business_faq" && msg.unanswered && (
+                    <div style={{ fontSize: 11, color: "rgba(249,115,22,0.7)", marginTop: 4, fontStyle: "italic" }}>
+                      ※ この質問に該当するFAQが見つかりませんでした
+                    </div>
+                  )}
+                  {msg.intent !== "business_faq" && msg.unanswered && (
                     <div style={{ fontSize: 11, color: "#f97316", marginTop: 4 }}>
                       ※ フィードバックとして記録しました
                     </div>
