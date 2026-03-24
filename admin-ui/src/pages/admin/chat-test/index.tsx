@@ -42,6 +42,7 @@ export default function ChatTestPage() {
   // URLクエリパラメータ（アバター一覧からの遷移）
   const queryTenantId = searchParams.get("tenantId") ?? "";
   const queryAvatarConfigId = searchParams.get("avatarConfigId") ?? "";
+  const scopeGlobal = searchParams.get("scope") === "global";
 
   // テナント選択 (Super Admin 用)
   const [tenants, setTenants] = useState<TenantOption[]>([]);
@@ -60,12 +61,17 @@ export default function ChatTestPage() {
   const widgetScriptRef = useRef<HTMLScriptElement | null>(null);
 
   // プレビューモード中は previewTenantId を使用（super_admin の role が client_admin に上書きされるため）
-  const effectiveTenantId = isSuperAdmin
-    ? selectedTenantId
-    : (user?.tenantId ?? (previewMode ? (previewTenantId ?? "") : ""));
-  const displayTenantName = isSuperAdmin
-    ? (tenants.find((ten) => ten.id === selectedTenantId)?.name ?? selectedTenantId)
-    : (previewMode ? (previewTenantName ?? effectiveTenantId) : (user?.tenantName ?? effectiveTenantId));
+  // scope=global の場合は特殊値 'global' を使用
+  const effectiveTenantId = scopeGlobal
+    ? "global"
+    : isSuperAdmin
+      ? selectedTenantId
+      : (user?.tenantId ?? (previewMode ? (previewTenantId ?? "") : ""));
+  const displayTenantName = scopeGlobal
+    ? "グローバルナレッジ"
+    : isSuperAdmin
+      ? (tenants.find((ten) => ten.id === selectedTenantId)?.name ?? selectedTenantId)
+      : (previewMode ? (previewTenantName ?? effectiveTenantId) : (user?.tenantName ?? effectiveTenantId));
 
   // ウィジェット cleanup
   const cleanupWidget = useCallback(() => {
@@ -306,8 +312,28 @@ export default function ChatTestPage() {
           padding: "32px 24px",
         }}
       >
+        {/* ─── グローバルナレッジモードバナー ─── */}
+        {scopeGlobal && (
+          <div style={{
+            marginBottom: 24,
+            padding: "14px 18px",
+            borderRadius: 12,
+            background: "rgba(34,197,94,0.15)",
+            border: "1px solid rgba(34,197,94,0.4)",
+            color: "#4ade80",
+            fontSize: 14,
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}>
+            <span>🌐</span>
+            <span>グローバルナレッジでテスト中</span>
+          </div>
+        )}
+
         {/* ─── Super Admin: テナント選択ドロップダウン ─── */}
-        {isSuperAdmin && (
+        {isSuperAdmin && !scopeGlobal && (
           <div style={{ marginBottom: 24 }}>
             <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 8 }}>
               {t("chat_test.select_tenant")}
@@ -344,7 +370,7 @@ export default function ChatTestPage() {
         )}
 
         {/* ─── テナント未選択 ─── */}
-        {!effectiveTenantId && (
+        {!effectiveTenantId && !scopeGlobal && (
           <p style={{ textAlign: "center", color: "#6b7280", fontSize: 15, padding: "32px 0" }}>
             {t("chat_test.select_tenant")}
           </p>
