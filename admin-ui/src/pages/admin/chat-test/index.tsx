@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { useAuth } from "../../../auth/useAuth";
@@ -8,7 +8,7 @@ interface AdminChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  checked: boolean;
+  checked: boolean; // user メッセージのみ有効
 }
 
 interface TenantOption {
@@ -20,6 +20,11 @@ interface ChatTestToken {
   token: string;
   tenantId: string;
   expiresIn: number;
+}
+
+interface QAPair {
+  question: AdminChatMessage;
+  answer: AdminChatMessage | null;
 }
 
 async function fetchChatTestToken(tenantId: string): Promise<ChatTestToken> {
@@ -60,8 +65,6 @@ export default function ChatTestPage() {
   // ウィジェット
   const widgetScriptRef = useRef<HTMLScriptElement | null>(null);
 
-  // プレビューモード中は previewTenantId を使用（super_admin の role が client_admin に上書きされるため）
-  // scope=global の場合は特殊値 'global' を使用
   const effectiveTenantId = scopeGlobal
     ? "global"
     : isSuperAdmin
@@ -73,7 +76,6 @@ export default function ChatTestPage() {
       ? (tenants.find((ten) => ten.id === selectedTenantId)?.name ?? selectedTenantId)
       : (previewMode ? (previewTenantName ?? effectiveTenantId) : (user?.tenantName ?? effectiveTenantId));
 
-  // ウィジェット cleanup
   const cleanupWidget = useCallback(() => {
     const host = document.getElementById("faq-chat-widget-host");
     if (host) host.remove();
@@ -83,7 +85,6 @@ export default function ChatTestPage() {
     }
   }, []);
 
-  // Super Admin: テナント一覧取得 + URLパラメータからの初期テナント選択
   useEffect(() => {
     if (!isSuperAdmin) return;
     setTenantFetchError(false);
@@ -91,20 +92,14 @@ export default function ChatTestPage() {
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data: { tenants?: TenantOption[] }) => {
         setTenants(data.tenants ?? []);
-        // URLパラメータにtenantIdがある場合は自動選択
-        if (queryTenantId) {
-          setSelectedTenantId(queryTenantId);
-        }
+        if (queryTenantId) setSelectedTenantId(queryTenantId);
       })
       .catch(() => { setTenantFetchError(true); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin]);
 
-  // テナントが確定したら自動でトークン取得
   useEffect(() => {
     if (!effectiveTenantId) return;
-
-    // クリーンアップ
     cleanupWidget();
     setToken(null);
     setTokenError(null);
@@ -115,7 +110,6 @@ export default function ChatTestPage() {
       .then((result) => {
         setToken(result.token);
         setGettingToken(false);
-        // 期限切れタイマー（expiresIn 秒後に警告）
         tokenExpiryRef.current = setTimeout(() => {
           setToken(null);
           setTokenError(t("chat_test.token_expired"));
@@ -133,12 +127,9 @@ export default function ChatTestPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTenantId]);
 
-  // トークン取得後にウィジェット起動
   useEffect(() => {
     if (!token || !effectiveTenantId) return;
-
     cleanupWidget();
-
     const script = document.createElement("script");
     script.src = `${API_BASE}/widget.js`;
     script.setAttribute("data-tenant", effectiveTenantId);
@@ -146,11 +137,9 @@ export default function ChatTestPage() {
     script.async = true;
     widgetScriptRef.current = script;
     document.body.appendChild(script);
-
     return cleanupWidget;
   }, [token, effectiveTenantId, cleanupWidget]);
 
-  // アンマウント時クリーンアップ
   useEffect(() => {
     return () => {
       cleanupWidget();
@@ -158,22 +147,42 @@ export default function ChatTestPage() {
     };
   }, [cleanupWidget]);
 
-  // ── Admin Chat (direct API call with checkboxes) ──────────────────────────
+  // ── Admin Chat ──────────────────────────────────────────────────────────
   const [adminChatOpen, setAdminChatOpen] = useState(false);
   const [adminMessages, setAdminMessages] = useState<AdminChatMessage[]>([]);
   const [adminInput, setAdminInput] = useState("");
   const [adminSending, setAdminSending] = useState(false);
   const [adminSessionId] = useState(() => `admin-chat-${Date.now()}`);
 
-  // チューニングルール作成モーダル
+  // ── チューニングモーダル状態 ────────────────────────────────────────────
   const [tuningModalOpen, setTuningModalOpen] = useState(false);
-  const [tuningPattern, setTuningPattern] = useState("");
-  const [tuningBehavior, setTuningBehavior] = useState("");
+  const [saveMode, setSaveMode] = useState<"combined" | "individual">("combined");
+  const [combinedRuleName, setCombinedRuleName] = useState("");
+  const [combinedBehavior, setCombinedBehavior] = useState("");
+  const [pairRules, setPairRules] = useState<{ ruleName: string; behavior: string }[]>([]);
   const [tuningSaving, setTuningSaving] = useState(false);
   const [tuningSuccess, setTuningSuccess] = useState<string | null>(null);
   const [tuningError, setTuningError] = useState<string | null>(null);
 
-  const checkedMessages = adminMessages.filter((m) => m.checked);
+  // ── 選択済みQ&Aペア（ユーザーメッセージ.checked=true のものとその直後のAI返答） ──
+  const checkedPairs = useMemo<QAPair[]>(() => {
+    const pairs: QAPair[] = [];
+    for (let i = 0; i < adminMessages.length; i++) {
+      const msg = adminMessages[i];
+      if (msg.role === "user" && msg.checked) {
+        const next = adminMessages[i + 1];
+        pairs.push({ question: msg, answer: next?.role === "assistant" ? next : null });
+      }
+    }
+    return pairs;
+  }, [adminMessages]);
+
+  // アシスタントメッセージが自動連動ハイライト対象かどうか
+  const isAutoIncluded = useCallback((idx: number) => {
+    if (idx === 0) return false;
+    const prev = adminMessages[idx - 1];
+    return prev?.role === "user" && prev.checked;
+  }, [adminMessages]);
 
   const handleAdminSend = async () => {
     if (!adminInput.trim() || adminSending || !token) return;
@@ -199,35 +208,80 @@ export default function ChatTestPage() {
     }
   };
 
+  // ユーザーメッセージのチェックをトグル（AI返答は自動連動）
   const toggleCheck = (id: string) => {
-    setAdminMessages((prev) => prev.map((m) => m.id === id ? { ...m, checked: !m.checked } : m));
+    setAdminMessages((prev) => prev.map((m) => m.id === id && m.role === "user" ? { ...m, checked: !m.checked } : m));
   };
 
   const openTuningModal = () => {
-    const selectedText = checkedMessages.map((m) => `[${m.role === "user" ? "ユーザー" : "AI"}] ${m.content}`).join("\n");
-    setTuningPattern(checkedMessages.find((m) => m.role === "user")?.content ?? "");
-    setTuningBehavior(`以下の会話を参考に、適切な応答をしてください:\n\n${selectedText}`);
+    const pairs = checkedPairs;
+    if (pairs.length === 0) return;
+    const firstQ = pairs[0].question.content;
+    setCombinedRuleName(firstQ.slice(0, 20) + "への対応");
+    setCombinedBehavior("");
+    setPairRules(pairs.map((p) => ({
+      ruleName: p.question.content.slice(0, 20) + "への対応",
+      behavior: "",
+    })));
+    setSaveMode("combined");
     setTuningSuccess(null);
     setTuningError(null);
     setTuningModalOpen(true);
   };
 
   const handleTuningSave = async () => {
-    if (!tuningPattern.trim() || !tuningBehavior.trim() || tuningSaving) return;
+    if (tuningSaving) return;
     setTuningSaving(true);
     setTuningError(null);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tenant_id: effectiveTenantId, trigger_pattern: tuningPattern, expected_behavior: tuningBehavior }),
-      });
-      if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        setTuningError(d.error ?? "保存に失敗しました");
-        return;
+      if (saveMode === "combined") {
+        if (!combinedRuleName.trim() || !combinedBehavior.trim()) {
+          setTuningError("ルール名と内容を入力してください");
+          return;
+        }
+        const context = checkedPairs.map((p) =>
+          `Q: ${p.question.content}\nA: ${p.answer?.content ?? "(返答なし)"}`
+        ).join("\n\n");
+        const behavior = `${combinedBehavior.trim()}\n\n【参考会話】\n${context}`;
+        const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tenant_id: effectiveTenantId, trigger_pattern: combinedRuleName.trim(), expected_behavior: behavior }),
+        });
+        if (!res.ok) {
+          const d = await res.json() as { error?: string };
+          setTuningError(d.error ?? "保存に失敗しました");
+          return;
+        }
+      } else {
+        // 個別保存
+        const errors: string[] = [];
+        for (let i = 0; i < checkedPairs.length; i++) {
+          const pair = checkedPairs[i];
+          const rule = pairRules[i];
+          if (!rule?.ruleName.trim() || !rule?.behavior.trim()) {
+            errors.push(`ペア${i + 1}: ルール名と内容を入力してください`);
+            continue;
+          }
+          const context = `Q: ${pair.question.content}\nA: ${pair.answer?.content ?? "(返答なし)"}`;
+          const behavior = `${rule.behavior.trim()}\n\n【参考会話】\n${context}`;
+          const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tenant_id: effectiveTenantId, trigger_pattern: rule.ruleName.trim(), expected_behavior: behavior }),
+          });
+          if (!res.ok) {
+            const d = await res.json() as { error?: string };
+            errors.push(`ペア${i + 1}: ${d.error ?? "保存に失敗"}`);
+          }
+        }
+        if (errors.length > 0) {
+          setTuningError(errors.join(" / "));
+          return;
+        }
       }
-      setTuningSuccess("✅ チューニングルールを追加しました");
+
+      setTuningSuccess("✅ AIの回答ルールを保存しました");
       setAdminMessages((prev) => prev.map((m) => ({ ...m, checked: false })));
       setTimeout(() => { setTuningModalOpen(false); setTuningSuccess(null); }, 1500);
     } catch {
@@ -267,77 +321,32 @@ export default function ChatTestPage() {
   };
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
-        padding: "24px 20px",
-        maxWidth: 900,
-        margin: "0 auto",
-      }}
-    >
+    <div style={{ minHeight: "100vh", background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)", color: "#e5e7eb", padding: "24px 20px", maxWidth: 900, margin: "0 auto" }}>
       <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32, flexWrap: "wrap" }}>
         <button
           onClick={() => navigate("/admin")}
-          style={{
-            padding: "10px 16px",
-            minHeight: 44,
-            borderRadius: 999,
-            border: "1px solid #374151",
-            background: "transparent",
-            color: "#9ca3af",
-            fontSize: 14,
-            cursor: "pointer",
-            fontWeight: 500,
-          }}
+          style={{ padding: "10px 16px", minHeight: 44, borderRadius: 999, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer", fontWeight: 500 }}
         >
           {t("common.back_to_dashboard")}
         </button>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            {t("chat_test.title")}
-          </h1>
-          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            {t("chat_test.description")}
-          </p>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb" }}>{t("chat_test.title")}</h1>
+          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>{t("chat_test.description")}</p>
         </div>
       </header>
 
-      <section
-        style={{
-          borderRadius: 16,
-          border: "1px solid #1f2937",
-          background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
-          padding: "32px 24px",
-        }}
-      >
-        {/* ─── グローバルナレッジモードバナー ─── */}
+      <section style={{ borderRadius: 16, border: "1px solid #1f2937", background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))", padding: "32px 24px" }}>
+        {/* グローバルナレッジバナー */}
         {scopeGlobal && (
-          <div style={{
-            marginBottom: 24,
-            padding: "14px 18px",
-            borderRadius: 12,
-            background: "rgba(34,197,94,0.15)",
-            border: "1px solid rgba(34,197,94,0.4)",
-            color: "#4ade80",
-            fontSize: 14,
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}>
-            <span>🌐</span>
-            <span>グローバルナレッジでテスト中</span>
+          <div style={{ marginBottom: 24, padding: "14px 18px", borderRadius: 12, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.4)", color: "#4ade80", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>🌐</span><span>グローバルナレッジでテスト中</span>
           </div>
         )}
 
-        {/* ─── Super Admin: テナント選択ドロップダウン ─── */}
+        {/* Super Admin: テナント選択 */}
         {isSuperAdmin && !scopeGlobal && (
           <div style={{ marginBottom: 24 }}>
-            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 8 }}>
-              {t("chat_test.select_tenant")}
-            </label>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 8 }}>{t("chat_test.select_tenant")}</label>
             {tenantFetchError ? (
               <div style={{ color: "#fca5a5", fontSize: 14, padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(248,113,113,0.3)", background: "rgba(127,29,29,0.3)" }}>
                 ⚠️ テナント一覧の取得に失敗しました。ページを再読み込みしてください。
@@ -346,66 +355,31 @@ export default function ChatTestPage() {
               <select
                 value={selectedTenantId}
                 onChange={(e) => handleTenantChange(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "12px 14px",
-                  borderRadius: 10,
-                  border: "1px solid #374151",
-                  background: "rgba(15,23,42,0.9)",
-                  color: "#e5e7eb",
-                  fontSize: 15,
-                  outline: "none",
-                  cursor: "pointer",
-                }}
+                style={{ width: "100%", padding: "12px 14px", borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#e5e7eb", fontSize: 15, outline: "none", cursor: "pointer" }}
               >
                 <option value="">— テナントを選択 —</option>
-                {tenants.map((ten) => (
-                  <option key={ten.id} value={ten.id}>
-                    {ten.name}
-                  </option>
-                ))}
+                {tenants.map((ten) => <option key={ten.id} value={ten.id}>{ten.name}</option>)}
               </select>
             )}
           </div>
         )}
 
-        {/* ─── テナント未選択 ─── */}
         {!effectiveTenantId && !scopeGlobal && (
-          <p style={{ textAlign: "center", color: "#6b7280", fontSize: 15, padding: "32px 0" }}>
-            {t("chat_test.select_tenant")}
-          </p>
+          <p style={{ textAlign: "center", color: "#6b7280", fontSize: 15, padding: "32px 0" }}>{t("chat_test.select_tenant")}</p>
         )}
 
-        {/* ─── テナント選択済み ─── */}
         {effectiveTenantId && (
           <>
             <p style={{ fontSize: 14, color: "#6b7280", marginBottom: queryAvatarConfigId ? 8 : 20 }}>
-              {t("chat_test.tenant_label")}:{" "}
-              <strong style={{ color: "#9ca3af" }}>{displayTenantName}</strong>
+              {t("chat_test.tenant_label")}: <strong style={{ color: "#9ca3af" }}>{displayTenantName}</strong>
             </p>
-            {/* アバター設定ID表示（アバター一覧からの遷移時） */}
             {queryAvatarConfigId && (
-              <div style={{
-                marginBottom: 20,
-                padding: "10px 14px",
-                borderRadius: 8,
-                background: "rgba(59,130,246,0.1)",
-                border: "1px solid rgba(59,130,246,0.3)",
-                fontSize: 13,
-                color: "#93c5fd",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}>
+              <div style={{ marginBottom: 20, padding: "10px 14px", borderRadius: 8, background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", fontSize: 13, color: "#93c5fd", display: "flex", alignItems: "center", gap: 8 }}>
                 <span>🎭</span>
-                <span>
-                  {t ? "アバター設定をテスト中: " : "Testing avatar config: "}
-                  <code style={{ fontFamily: "monospace", fontSize: 11, opacity: 0.8 }}>{queryAvatarConfigId}</code>
-                </span>
+                <span>アバター設定をテスト中: <code style={{ fontFamily: "monospace", fontSize: 11, opacity: 0.8 }}>{queryAvatarConfigId}</code></span>
               </div>
             )}
 
-            {/* トークン取得中 */}
             {gettingToken && (
               <div style={{ textAlign: "center", padding: "32px 0", color: "#6b7280", fontSize: 15 }}>
                 <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
@@ -413,59 +387,20 @@ export default function ChatTestPage() {
               </div>
             )}
 
-            {/* エラー（期限切れ含む） */}
             {tokenError && (
-              <div
-                style={{
-                  marginBottom: 20,
-                  padding: "16px 20px",
-                  borderRadius: 12,
-                  background: "rgba(127,29,29,0.4)",
-                  border: "1px solid rgba(248,113,113,0.3)",
-                  color: "#fca5a5",
-                  fontSize: 14,
-                }}
-              >
+              <div style={{ marginBottom: 20, padding: "16px 20px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 14 }}>
                 <div style={{ marginBottom: 12 }}>⚠️ {tokenError}</div>
-                <button
-                  onClick={handleReload}
-                  style={{
-                    padding: "10px 18px",
-                    minHeight: 44,
-                    borderRadius: 8,
-                    border: "1px solid rgba(248,113,113,0.4)",
-                    background: "rgba(248,113,113,0.1)",
-                    color: "#fca5a5",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
+                <button onClick={handleReload} style={{ padding: "10px 18px", minHeight: 44, borderRadius: 8, border: "1px solid rgba(248,113,113,0.4)", background: "rgba(248,113,113,0.1)", color: "#fca5a5", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
                   🔄 {t("common.retry")}
                 </button>
               </div>
             )}
 
-            {/* ウィジェット起動済み */}
             {token && !gettingToken && (
               <>
-                <p style={{ textAlign: "center", color: "#9ca3af", fontSize: 15, marginBottom: 16 }}>
-                  👇 右下のボタンからチャットを開けます
-                </p>
+                <p style={{ textAlign: "center", color: "#9ca3af", fontSize: 15, marginBottom: 16 }}>👇 右下のボタンからチャットを開けます</p>
                 <div style={{ textAlign: "center" }}>
-                  <button
-                    onClick={handleReload}
-                    style={{
-                      padding: "12px 24px",
-                      minHeight: 44,
-                      borderRadius: 10,
-                      border: "1px solid #374151",
-                      background: "transparent",
-                      color: "#9ca3af",
-                      fontSize: 14,
-                      cursor: "pointer",
-                    }}
-                  >
+                  <button onClick={handleReload} style={{ padding: "12px 24px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer" }}>
                     {t("chat_test.reset")}
                   </button>
                 </div>
@@ -475,50 +410,74 @@ export default function ChatTestPage() {
         )}
       </section>
 
-      {/* ── Admin Chat Panel (チェックボックス付き) ── */}
+      {/* ── Admin Chat Panel ── */}
       {token && effectiveTenantId && (
         <section style={{ marginTop: 24, borderRadius: 16, border: "1px solid #1f2937", background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))", padding: "20px 24px" }}>
           <button
             onClick={() => setAdminChatOpen((v) => !v)}
             style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: "#9ca3af", fontSize: 15, fontWeight: 600, cursor: "pointer", padding: 0 }}
           >
-            💬 管理者チャット（メッセージ選択→チューニング追加）
+            💬 管理者チャット（会話を選択→AIの回答を改善）
             <span style={{ fontSize: 12, color: "#6b7280" }}>{adminChatOpen ? "▲ 閉じる" : "▼ 開く"}</span>
           </button>
 
           {adminChatOpen && (
             <div style={{ marginTop: 16 }}>
+              {/* 使い方ヒント */}
+              <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, margin: "0 0 10px" }}>
+                💡 質問の左にあるチェックボックスを選ぶと、その質問とAIの返答がセットで選択されます
+              </p>
+
               {/* メッセージ一覧 */}
               <div style={{ minHeight: 100, maxHeight: 360, overflowY: "auto", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
                 {adminMessages.length === 0 && (
                   <p style={{ color: "#6b7280", fontSize: 14, textAlign: "center", padding: "24px 0" }}>メッセージを送信して会話を始めてください</p>
                 )}
-                {adminMessages.map((msg) => (
-                  <label
-                    key={msg.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      gap: 10,
-                      padding: "10px 12px",
-                      borderRadius: 10,
-                      border: msg.checked ? "1px solid rgba(59,130,246,0.5)" : "1px solid #1f2937",
-                      background: msg.checked ? "rgba(59,130,246,0.08)" : (msg.role === "user" ? "rgba(37,99,235,0.1)" : "rgba(30,41,59,0.6)"),
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={msg.checked}
-                      onChange={() => toggleCheck(msg.id)}
-                      style={{ width: 20, height: 20, minWidth: 20, minHeight: 20, marginTop: 2, cursor: "pointer", accentColor: "#3b82f6" }}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>{msg.role === "user" ? "あなた" : "AI"}</div>
-                      <div style={{ fontSize: 14, color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
+                {adminMessages.map((msg, idx) => {
+                  const autoHighlight = msg.role === "assistant" && isAutoIncluded(idx);
+                  const isChecked = msg.role === "user" && msg.checked;
+                  const highlighted = isChecked || autoHighlight;
+                  return (
+                    <div
+                      key={msg.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 10,
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        border: highlighted ? "1px solid rgba(59,130,246,0.5)" : "1px solid #1f2937",
+                        background: highlighted
+                          ? "rgba(59,130,246,0.08)"
+                          : (msg.role === "user" ? "rgba(37,99,235,0.1)" : "rgba(30,41,59,0.6)"),
+                        cursor: msg.role === "user" ? "pointer" : "default",
+                      }}
+                      onClick={() => { if (msg.role === "user") toggleCheck(msg.id); }}
+                    >
+                      {/* チェックボックス: ユーザーメッセージのみ */}
+                      {msg.role === "user" ? (
+                        <input
+                          type="checkbox"
+                          checked={msg.checked}
+                          onChange={() => toggleCheck(msg.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ width: 20, height: 20, minWidth: 20, minHeight: 20, marginTop: 2, cursor: "pointer", accentColor: "#3b82f6", flexShrink: 0 }}
+                        />
+                      ) : (
+                        /* AI返答: チェックボックスなし、連動インジケーター */
+                        <div style={{ width: 20, minWidth: 20, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 4, flexShrink: 0 }}>
+                          {autoHighlight && (
+                            <span style={{ fontSize: 10, color: "#3b82f6", fontWeight: 700 }} title="選択した質問とセット">↳</span>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>{msg.role === "user" ? "あなた" : "AI"}</div>
+                        <div style={{ fontSize: 14, color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
+                      </div>
                     </div>
-                  </label>
-                ))}
+                  );
+                })}
                 {adminSending && (
                   <div style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #1f2937", background: "rgba(30,41,59,0.6)", color: "#6b7280", fontSize: 14 }}>AI応答中...</div>
                 )}
@@ -548,8 +507,8 @@ export default function ChatTestPage() {
         </section>
       )}
 
-      {/* ── フローティングバー（チェック時） ── */}
-      {checkedMessages.length > 0 && (
+      {/* ── フローティングバー（Q&Aペア選択時） ── */}
+      {checkedPairs.length > 0 && (
         <div style={{
           position: "fixed",
           bottom: 24,
@@ -566,12 +525,14 @@ export default function ChatTestPage() {
           zIndex: 1000,
           minHeight: 56,
         }}>
-          <span style={{ color: "#93c5fd", fontSize: 14, fontWeight: 600 }}>{checkedMessages.length}件選択中</span>
+          <span style={{ color: "#93c5fd", fontSize: 14, fontWeight: 600 }}>
+            {checkedPairs.length}組の会話を選択中
+          </span>
           <button
             onClick={openTuningModal}
             style={{ padding: "8px 20px", minHeight: 44, borderRadius: 999, border: "none", background: "linear-gradient(135deg, #3b82f6, #6366f1)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}
           >
-            チューニングに追加
+            AIの回答を改善
           </button>
           <button
             onClick={() => setAdminMessages((prev) => prev.map((m) => ({ ...m, checked: false })))}
@@ -582,40 +543,121 @@ export default function ChatTestPage() {
         </div>
       )}
 
-      {/* ── チューニングルール作成モーダル ── */}
+      {/* ── AIの回答改善モーダル ── */}
       {tuningModalOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-          <div style={{ width: "100%", maxWidth: 560, borderRadius: 16, background: "#0f172a", border: "1px solid #1f2937", padding: "24px 24px", maxHeight: "80vh", overflowY: "auto" }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>チューニングルールを追加</h2>
+          <div style={{ width: "100%", maxWidth: 580, borderRadius: 16, background: "#0f172a", border: "1px solid #1f2937", padding: "24px", maxHeight: "85vh", overflowY: "auto" }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 4px" }}>AIの回答を改善</h2>
+            <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 16px" }}>選択した会話をもとに、AIの応答ルールを登録します</p>
 
-            {/* 参考メッセージ */}
-            <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.2)", fontSize: 13, color: "#93c5fd" }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>参考メッセージ ({checkedMessages.length}件):</div>
-              {checkedMessages.map((m) => (
-                <div key={m.id} style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
-                  <span style={{ color: "#9ca3af" }}>[{m.role === "user" ? "ユーザー" : "AI"}]</span> {m.content.slice(0, 80)}{m.content.length > 80 ? "…" : ""}
+            {/* 選択ペアのプレビュー */}
+            <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, background: "rgba(59,130,246,0.07)", border: "1px solid rgba(59,130,246,0.2)", fontSize: 13 }}>
+              <div style={{ fontWeight: 600, color: "#93c5fd", marginBottom: 8 }}>
+                選択した会話 ({checkedPairs.length}組):
+              </div>
+              {checkedPairs.map((pair, i) => (
+                <div key={pair.question.id} style={{ marginBottom: i < checkedPairs.length - 1 ? 10 : 0 }}>
+                  <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 2 }}>
+                    <span style={{ background: "rgba(59,130,246,0.2)", borderRadius: 4, padding: "1px 6px", marginRight: 6 }}>Q</span>
+                    {pair.question.content.slice(0, 80)}{pair.question.content.length > 80 ? "…" : ""}
+                  </div>
+                  {pair.answer && (
+                    <div style={{ color: "#6b7280", fontSize: 12, paddingLeft: 8 }}>
+                      <span style={{ background: "rgba(34,197,94,0.15)", borderRadius: 4, padding: "1px 6px", marginRight: 6, color: "#4ade80" }}>A</span>
+                      {pair.answer.content.slice(0, 80)}{pair.answer.content.length > 80 ? "…" : ""}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
 
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>トリガーパターン（どんな質問に適用するか）</label>
-              <input
-                type="text"
-                value={tuningPattern}
-                onChange={(e) => setTuningPattern(e.target.value)}
-                style={{ width: "100%", padding: "10px 12px", minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", boxSizing: "border-box" }}
-              />
-            </div>
-            <div style={{ marginBottom: 20 }}>
-              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>期待される動作（AIへの指示）</label>
-              <textarea
-                value={tuningBehavior}
-                onChange={(e) => setTuningBehavior(e.target.value)}
-                rows={5}
-                style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
-              />
-            </div>
+            {/* 複数ペア時: 保存モード切り替え */}
+            {checkedPairs.length > 1 && (
+              <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
+                {(["combined", "individual"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setSaveMode(mode)}
+                    style={{
+                      padding: "8px 16px",
+                      minHeight: 44,
+                      borderRadius: 8,
+                      border: saveMode === mode ? "1px solid rgba(99,102,241,0.6)" : "1px solid #374151",
+                      background: saveMode === mode ? "rgba(99,102,241,0.15)" : "transparent",
+                      color: saveMode === mode ? "#a5b4fc" : "#9ca3af",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {mode === "combined" ? "1つのルールにまとめる" : "ペアごとに個別保存"}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* 保存フォーム: まとめて */}
+            {saveMode === "combined" && (
+              <>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>ルール名</label>
+                  <input
+                    type="text"
+                    value={combinedRuleName}
+                    onChange={(e) => setCombinedRuleName(e.target.value)}
+                    style={{ width: "100%", padding: "10px 12px", minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>AIへの改善指示</label>
+                  <textarea
+                    value={combinedBehavior}
+                    onChange={(e) => setCombinedBehavior(e.target.value)}
+                    rows={4}
+                    placeholder="この質問にAIがどう答えるべきか書いてください"
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
+                  />
+                </div>
+              </>
+            )}
+
+            {/* 保存フォーム: 個別 */}
+            {saveMode === "individual" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 20 }}>
+                {checkedPairs.map((pair, i) => (
+                  <div key={pair.question.id} style={{ padding: "14px", borderRadius: 10, border: "1px solid #1f2937", background: "rgba(30,41,59,0.4)" }}>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+                      ペア {i + 1}: {pair.question.content.slice(0, 40)}{pair.question.content.length > 40 ? "…" : ""}
+                    </div>
+                    <div style={{ marginBottom: 10 }}>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>ルール名</label>
+                      <input
+                        type="text"
+                        value={pairRules[i]?.ruleName ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setPairRules((prev) => prev.map((r, ri) => ri === i ? { ...r, ruleName: v } : r));
+                        }}
+                        style={{ width: "100%", padding: "8px 10px", minHeight: 40, borderRadius: 8, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#f9fafb", fontSize: 13, outline: "none", boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>AIへの改善指示</label>
+                      <textarea
+                        value={pairRules[i]?.behavior ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setPairRules((prev) => prev.map((r, ri) => ri === i ? { ...r, behavior: v } : r));
+                        }}
+                        rows={3}
+                        placeholder="この質問にAIがどう答えるべきか書いてください"
+                        style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#f9fafb", fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {tuningSuccess && <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(34,197,94,0.1)", color: "#4ade80", fontSize: 14 }}>{tuningSuccess}</div>}
             {tuningError && <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(239,68,68,0.1)", color: "#fca5a5", fontSize: 14 }}>{tuningError}</div>}
@@ -629,10 +671,10 @@ export default function ChatTestPage() {
               </button>
               <button
                 onClick={() => void handleTuningSave()}
-                disabled={tuningSaving || !tuningPattern.trim() || !tuningBehavior.trim()}
+                disabled={tuningSaving}
                 style={{ padding: "10px 24px", minHeight: 44, borderRadius: 10, border: "none", background: "linear-gradient(135deg, #3b82f6, #6366f1)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: tuningSaving ? "not-allowed" : "pointer", opacity: tuningSaving ? 0.6 : 1 }}
               >
-                {tuningSaving ? "保存中..." : "保存"}
+                {tuningSaving ? "保存中..." : "保存する"}
               </button>
             </div>
           </div>
