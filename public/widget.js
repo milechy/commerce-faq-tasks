@@ -703,7 +703,7 @@
 
   /* --- 入力エリア --- */
   var textarea = el('textarea', {
-    placeholder: 'メッセージを入力… (Shift+Enterで改行)',
+    placeholder: 'メッセージを入力…',
     rows: '1',
     maxlength: '2000',
     'aria-label': 'メッセージ',
@@ -1444,7 +1444,7 @@
         // フルスクリーンモード解除
         panel.classList.remove('avatar-active');
         document.body.style.overflow = '';
-        textarea.setAttribute('placeholder', 'メッセージを入力… (Shift+Enterで改行)');
+        textarea.setAttribute('placeholder', 'メッセージを入力…');
         // 閉じるボタンを削除
         var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
         for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }

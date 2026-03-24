@@ -346,7 +346,7 @@ export default function AvatarListPage() {
                   <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {cfg.name}
                   </span>
-                  {cfg.is_active && (
+                  {cfg.is_active && avatarEnabled ? (
                     <span style={{
                       padding: "2px 9px",
                       borderRadius: 999,
@@ -359,7 +359,20 @@ export default function AvatarListPage() {
                     }}>
                       {lang === "ja" ? "アクティブ" : "Active"}
                     </span>
-                  )}
+                  ) : cfg.is_active && !avatarEnabled ? (
+                    <span style={{
+                      padding: "2px 9px",
+                      borderRadius: 999,
+                      background: "rgba(107,114,128,0.15)",
+                      border: "1px solid rgba(107,114,128,0.4)",
+                      color: "#9ca3af",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      flexShrink: 0,
+                    }}>
+                      {lang === "ja" ? "無効" : "Inactive"}
+                    </span>
+                  ) : null}
                   {cfg.is_default && (
                     <span style={{
                       background: '#dbeafe',
@@ -423,9 +436,11 @@ export default function AvatarListPage() {
                   </button>
                   {/* テストチャットボタン */}
                   <button
-                    onClick={() => navigate(
+                    onClick={() => avatarEnabled && navigate(
                       `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
                     )}
+                    disabled={!avatarEnabled}
+                    title={!avatarEnabled ? (lang === "ja" ? "アバター機能をONにしてください" : "Enable avatar feature first") : undefined}
                     style={{
                       padding: "8px 14px",
                       minHeight: 44,
@@ -435,7 +450,8 @@ export default function AvatarListPage() {
                       color: "#fff",
                       fontSize: 12,
                       fontWeight: 700,
-                      cursor: "pointer",
+                      cursor: avatarEnabled ? "pointer" : "not-allowed",
+                      opacity: avatarEnabled ? 1 : 0.5,
                     }}
                   >
                     {lang === "ja" ? "テストチャット" : "Test Chat"}
