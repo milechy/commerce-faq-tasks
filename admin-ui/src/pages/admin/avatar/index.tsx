@@ -1,7 +1,7 @@
 // admin-ui/src/pages/admin/avatar/index.tsx
 // Avatar Customization Studio — config list page
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
@@ -10,6 +10,7 @@ import { useAuth } from "../../../auth/useAuth";
 interface AvatarConfig {
   id: string;
   tenant_id: string;
+  tenant_name?: string;
   name: string;
   image_url: string | null;
   image_prompt: string | null;
@@ -25,13 +26,17 @@ interface AvatarConfig {
   avatar_provider: string | null;
 }
 
+type SortKey = "tenant_asc" | "created_desc" | "created_asc" | "active_first" | "inactive_first" | "default_first";
+type TypeFilter = "all" | "default" | "custom";
+type StatusFilter = "all" | "active" | "inactive";
+
 const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
 
 export default function AvatarListPage() {
   const navigate = useNavigate();
   const { lang } = useLang();
   const locale = lang === "en" ? "en-US" : "ja-JP";
-  const { user } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
 
   const [configs, setConfigs] = useState<AvatarConfig[]>([]);
   const [total, setTotal] = useState(0);
@@ -40,7 +45,13 @@ export default function AvatarListPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // ── アバター機能 ON/OFF トグル ──────────────────────────────────────────────
+  // ── Sort & Filter state ─────────────────────────────────────────────────
+  const [sortKey, setSortKey] = useState<SortKey>("tenant_asc");
+  const [tenantFilter, setTenantFilter] = useState<string>("all");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+
+  // ── アバター機能 ON/OFF トグル（Client Adminのみ）─────────────────────────
   const [avatarEnabled, setAvatarEnabled] = useState<boolean>(false);
   const [toggleLoading, setToggleLoading] = useState(false);
   const [toggleToast, setToggleToast] = useState<string | null>(null);
@@ -52,7 +63,7 @@ export default function AvatarListPage() {
   };
 
   useEffect(() => {
-    if (!user?.tenantId) return;
+    if (!user?.tenantId || isSuperAdmin) return;
     authFetch(`${API_BASE}/v1/admin/my-tenant`)
       .then((r) => r.json())
       .then((data: { features?: { avatar?: boolean; voice?: boolean; rag?: boolean } }) => {
@@ -61,7 +72,7 @@ export default function AvatarListPage() {
         setAvatarEnabled(f.avatar);
       })
       .catch(() => {});
-  }, [user?.tenantId]);
+  }, [user?.tenantId, isSuperAdmin]);
 
   const handleAvatarToggle = async () => {
     if (!user?.tenantId || !tenantFeatures || toggleLoading) return;
@@ -93,7 +104,10 @@ export default function AvatarListPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs`);
+      const url = isSuperAdmin
+        ? `${API_BASE}/v1/admin/avatar/configs/all`
+        : `${API_BASE}/v1/admin/avatar/configs`;
+      const res = await authFetch(url);
       if (!res.ok) {
         setError(lang === "ja" ? "設定の読み込みに失敗しました" : "Failed to load configs");
         return;
@@ -106,9 +120,60 @@ export default function AvatarListPage() {
     } finally {
       setLoading(false);
     }
-  }, [lang]);
+  }, [lang, isSuperAdmin]);
 
   useEffect(() => { void fetchConfigs(); }, [fetchConfigs]);
+
+  // ── テナント一覧（フィルタ用）──────────────────────────────────────────
+  const tenantList = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { id: string; name: string }[] = [];
+    for (const c of configs) {
+      if (!seen.has(c.tenant_id)) {
+        seen.add(c.tenant_id);
+        list.push({ id: c.tenant_id, name: c.tenant_name ?? c.tenant_id });
+      }
+    }
+    return list.sort((a, b) => a.name.localeCompare(b.name));
+  }, [configs]);
+
+  // ── フィルタ + ソート済みリスト ──────────────────────────────────────
+  const displayedConfigs = useMemo(() => {
+    let result = [...configs];
+
+    // テナントフィルタ
+    if (tenantFilter !== "all") {
+      result = result.filter((c) => c.tenant_id === tenantFilter);
+    }
+    // タイプフィルタ
+    if (typeFilter === "default") result = result.filter((c) => c.is_default);
+    if (typeFilter === "custom") result = result.filter((c) => !c.is_default);
+    // ステータスフィルタ
+    if (statusFilter === "active") result = result.filter((c) => c.is_active);
+    if (statusFilter === "inactive") result = result.filter((c) => !c.is_active);
+
+    // ソート
+    result.sort((a, b) => {
+      switch (sortKey) {
+        case "tenant_asc":
+          return (a.tenant_name ?? a.tenant_id).localeCompare(b.tenant_name ?? b.tenant_id) || new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        case "created_desc":
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        case "created_asc":
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        case "active_first":
+          return (b.is_active ? 1 : 0) - (a.is_active ? 1 : 0);
+        case "inactive_first":
+          return (a.is_active ? 1 : 0) - (b.is_active ? 1 : 0);
+        case "default_first":
+          return (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0);
+        default:
+          return 0;
+      }
+    });
+
+    return result;
+  }, [configs, tenantFilter, typeFilter, statusFilter, sortKey]);
 
   const handleActivate = async (id: string) => {
     if (activating) return;
@@ -162,6 +227,19 @@ export default function AvatarListPage() {
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
 
+  const toggleBtnStyle = (active: boolean) => ({
+    padding: "8px 14px",
+    minHeight: 44,
+    borderRadius: 8,
+    border: active ? "1px solid rgba(99,102,241,0.6)" : "1px solid #374151",
+    background: active ? "rgba(99,102,241,0.2)" : "transparent",
+    color: active ? "#a5b4fc" : "#9ca3af",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  });
+
   return (
     <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 960, margin: "0 auto" }}>
       {/* ヘッダー */}
@@ -179,31 +257,129 @@ export default function AvatarListPage() {
             </h1>
             {!loading && (
               <p style={{ fontSize: 13, color: "#6b7280", margin: "4px 0 0" }}>
-                {lang === "ja" ? `${total}件の設定` : `${total} config${total !== 1 ? "s" : ""}`}
+                {isSuperAdmin
+                  ? (lang === "ja" ? `全テナント: ${displayedConfigs.length}/${total}件` : `All tenants: ${displayedConfigs.length}/${total}`)
+                  : (lang === "ja" ? `${total}件の設定` : `${total} config${total !== 1 ? "s" : ""}`)
+                }
               </p>
             )}
           </div>
-          <button
-            onClick={() => navigate("/admin/avatar/studio")}
-            style={{
-              padding: "10px 20px",
-              minHeight: 44,
-              borderRadius: 10,
-              border: "none",
-              background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-              color: "#fff",
-              fontSize: 14,
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
-            {lang === "ja" ? "+ 新規作成" : "+ New Config"}
-          </button>
+          {!isSuperAdmin && (
+            <button
+              onClick={() => navigate("/admin/avatar/studio")}
+              style={{
+                padding: "10px 20px",
+                minHeight: 44,
+                borderRadius: 10,
+                border: "none",
+                background: "linear-gradient(135deg, #3b82f6, #6366f1)",
+                color: "#fff",
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {lang === "ja" ? "+ 新規作成" : "+ New Config"}
+            </button>
+          )}
         </div>
       </header>
 
-      {/* ── アバター機能 ON/OFF トグル ──────────────────────────────── */}
-      {user?.tenantId && (
+      {/* ── Super Admin: ソート / フィルタパネル ─────────────────────────────── */}
+      {isSuperAdmin && !loading && (
+        <div style={{
+          marginBottom: 24,
+          padding: "16px 20px",
+          borderRadius: 14,
+          border: "1px solid rgba(99,102,241,0.3)",
+          background: "rgba(15,23,42,0.8)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}>
+          {/* ソート */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+              {lang === "ja" ? "ソート:" : "Sort:"}
+            </span>
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              style={{
+                padding: "8px 12px",
+                minHeight: 44,
+                borderRadius: 8,
+                border: "1px solid #374151",
+                background: "#111827",
+                color: "#e5e7eb",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              <option value="tenant_asc">{lang === "ja" ? "テナント名順 (A→Z)" : "Tenant (A→Z)"}</option>
+              <option value="created_desc">{lang === "ja" ? "作成日 (新しい順)" : "Created (newest)"}</option>
+              <option value="created_asc">{lang === "ja" ? "作成日 (古い順)" : "Created (oldest)"}</option>
+              <option value="active_first">{lang === "ja" ? "アクティブ優先" : "Active first"}</option>
+              <option value="inactive_first">{lang === "ja" ? "無効優先" : "Inactive first"}</option>
+              <option value="default_first">{lang === "ja" ? "デフォルト優先" : "Default first"}</option>
+            </select>
+          </div>
+
+          {/* フィルタ: テナント */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+              {lang === "ja" ? "テナント:" : "Tenant:"}
+            </span>
+            <select
+              value={tenantFilter}
+              onChange={(e) => setTenantFilter(e.target.value)}
+              style={{
+                padding: "8px 12px",
+                minHeight: 44,
+                borderRadius: 8,
+                border: "1px solid #374151",
+                background: "#111827",
+                color: "#e5e7eb",
+                fontSize: 13,
+                cursor: "pointer",
+                maxWidth: 220,
+              }}
+            >
+              <option value="all">{lang === "ja" ? "全テナント" : "All tenants"}</option>
+              {tenantList.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* フィルタ: タイプ */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+              {lang === "ja" ? "タイプ:" : "Type:"}
+            </span>
+            {(["all", "default", "custom"] as TypeFilter[]).map((v) => (
+              <button key={v} onClick={() => setTypeFilter(v)} style={toggleBtnStyle(typeFilter === v)}>
+                {v === "all" ? (lang === "ja" ? "全て" : "All") : v === "default" ? (lang === "ja" ? "デフォルト" : "Default") : (lang === "ja" ? "カスタム" : "Custom")}
+              </button>
+            ))}
+          </div>
+
+          {/* フィルタ: ステータス */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+              {lang === "ja" ? "状態:" : "Status:"}
+            </span>
+            {(["all", "active", "inactive"] as StatusFilter[]).map((v) => (
+              <button key={v} onClick={() => setStatusFilter(v)} style={toggleBtnStyle(statusFilter === v)}>
+                {v === "all" ? (lang === "ja" ? "全て" : "All") : v === "active" ? (lang === "ja" ? "アクティブ" : "Active") : (lang === "ja" ? "無効" : "Inactive")}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── アバター機能 ON/OFF トグル（Client Adminのみ）─────────────────────────────── */}
+      {!isSuperAdmin && user?.tenantId && (
         <div style={{
           marginBottom: 24,
           padding: "20px 24px",
@@ -285,7 +461,7 @@ export default function AvatarListPage() {
         <div style={{ textAlign: "center", color: "#6b7280", paddingTop: 60, fontSize: 15 }}>
           {lang === "ja" ? "読み込み中..." : "Loading..."}
         </div>
-      ) : configs.length === 0 ? (
+      ) : displayedConfigs.length === 0 ? (
         <div style={{
           textAlign: "center",
           padding: "60px 20px",
@@ -294,13 +470,16 @@ export default function AvatarListPage() {
           color: "#6b7280",
           fontSize: 15,
         }}>
-          {lang === "ja"
-            ? "アバター設定がまだありません。「新規作成」から始めましょう。"
-            : "No avatar configs yet. Click \"New Config\" to get started."}
+          {configs.length === 0
+            ? (lang === "ja"
+              ? "アバター設定がまだありません。「新規作成」から始めましょう。"
+              : "No avatar configs yet. Click \"New Config\" to get started.")
+            : (lang === "ja" ? "フィルタ条件に一致する設定がありません" : "No configs match the current filters")
+          }
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
-          {configs.map((cfg) => (
+          {displayedConfigs.map((cfg) => (
             <div
               key={cfg.id}
               style={{
@@ -310,8 +489,32 @@ export default function AvatarListPage() {
                 overflow: "hidden",
                 display: "flex",
                 flexDirection: "column",
+                position: "relative",
               }}
             >
+              {/* テナント名バッジ（Super Adminのみ） */}
+              {isSuperAdmin && cfg.tenant_name && (
+                <div style={{
+                  position: "absolute",
+                  top: 8,
+                  left: 8,
+                  zIndex: 10,
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.75)",
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  color: "#d1d5db",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  maxWidth: 140,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}>
+                  {cfg.tenant_name}
+                </div>
+              )}
+
               {/* サムネイル */}
               {cfg.image_url ? (
                 <div style={{ width: "100%", height: 160, overflow: "hidden", background: "#111827" }}>
@@ -346,7 +549,7 @@ export default function AvatarListPage() {
                   <span style={{ fontSize: 16, fontWeight: 700, color: cfg.name ? "#f9fafb" : "#6b7280", fontStyle: cfg.name ? "normal" : "italic", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {cfg.name || (lang === "ja" ? "名前なし" : "Unnamed")}
                   </span>
-                  {cfg.is_active && avatarEnabled ? (
+                  {cfg.is_active && (isSuperAdmin || avatarEnabled) ? (
                     <span style={{
                       padding: "2px 9px",
                       borderRadius: 999,
@@ -359,7 +562,7 @@ export default function AvatarListPage() {
                     }}>
                       {lang === "ja" ? "アクティブ" : "Active"}
                     </span>
-                  ) : cfg.is_active && !avatarEnabled ? (
+                  ) : cfg.is_active && !avatarEnabled && !isSuperAdmin ? (
                     <span style={{
                       padding: "2px 9px",
                       borderRadius: 999,
@@ -396,7 +599,7 @@ export default function AvatarListPage() {
 
                 {/* アクションボタン */}
                 <div style={{ display: "flex", gap: 8, marginTop: "auto", flexWrap: "wrap" }}>
-                  {!cfg.is_active && (
+                  {!isSuperAdmin && !cfg.is_active && (
                     <button
                       onClick={() => void handleActivate(cfg.id)}
                       disabled={activating === cfg.id}
@@ -418,45 +621,70 @@ export default function AvatarListPage() {
                         : (lang === "ja" ? "有効化" : "Activate")}
                     </button>
                   )}
-                  <button
-                    onClick={() => navigate(`/admin/avatar/studio/${cfg.id}`)}
-                    style={{
-                      padding: "8px 14px",
-                      minHeight: 36,
-                      borderRadius: 8,
-                      border: "1px solid #374151",
-                      background: "transparent",
-                      color: "#9ca3af",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {lang === "ja" ? "編集" : "Edit"}
-                  </button>
+                  {!isSuperAdmin && (
+                    <button
+                      onClick={() => navigate(`/admin/avatar/studio/${cfg.id}`)}
+                      style={{
+                        padding: "8px 14px",
+                        minHeight: 36,
+                        borderRadius: 8,
+                        border: "1px solid #374151",
+                        background: "transparent",
+                        color: "#9ca3af",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {lang === "ja" ? "編集" : "Edit"}
+                    </button>
+                  )}
                   {/* テストチャットボタン */}
-                  <button
-                    onClick={() => avatarEnabled && navigate(
-                      `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
-                    )}
-                    disabled={!avatarEnabled}
-                    title={!avatarEnabled ? (lang === "ja" ? "アバター機能をONにしてください" : "Enable avatar feature first") : undefined}
-                    style={{
-                      padding: "8px 14px",
-                      minHeight: 44,
-                      borderRadius: 8,
-                      border: "none",
-                      background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-                      color: "#fff",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: avatarEnabled ? "pointer" : "not-allowed",
-                      opacity: avatarEnabled ? 1 : 0.5,
-                    }}
-                  >
-                    {lang === "ja" ? "テストチャット" : "Test Chat"}
-                  </button>
-                  {!cfg.is_active && (
+                  {!isSuperAdmin && (
+                    <button
+                      onClick={() => avatarEnabled && navigate(
+                        `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
+                      )}
+                      disabled={!avatarEnabled}
+                      title={!avatarEnabled ? (lang === "ja" ? "アバター機能をONにしてください" : "Enable avatar feature first") : undefined}
+                      style={{
+                        padding: "8px 14px",
+                        minHeight: 44,
+                        borderRadius: 8,
+                        border: "none",
+                        background: "linear-gradient(135deg, #3b82f6, #6366f1)",
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: avatarEnabled ? "pointer" : "not-allowed",
+                        opacity: avatarEnabled ? 1 : 0.5,
+                      }}
+                    >
+                      {lang === "ja" ? "テストチャット" : "Test Chat"}
+                    </button>
+                  )}
+                  {/* Super Admin: テストチャットボタン */}
+                  {isSuperAdmin && (
+                    <button
+                      onClick={() => navigate(
+                        `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
+                      )}
+                      style={{
+                        padding: "8px 14px",
+                        minHeight: 44,
+                        borderRadius: 8,
+                        border: "none",
+                        background: "linear-gradient(135deg, #3b82f6, #6366f1)",
+                        color: "#fff",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      💬 {lang === "ja" ? "テスト" : "Test"}
+                    </button>
+                  )}
+                  {!isSuperAdmin && !cfg.is_active && (
                     <button
                       onClick={() => void handleDelete(cfg.id)}
                       disabled={deleting === cfg.id}

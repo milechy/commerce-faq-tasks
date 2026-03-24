@@ -199,6 +199,28 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   );
 
   // -----------------------------------------------------------------------
+  // GET /v1/admin/avatar/configs/all — Super Admin: 全テナント横断一覧 (tenant_name付き)
+  // -----------------------------------------------------------------------
+  app.get("/v1/admin/avatar/configs/all", async (req: Request, res: Response) => {
+    const { isSuperAdmin } = extractAuth(req);
+    if (!isSuperAdmin) {
+      return res.status(403).json({ error: "Super Admin権限が必要です" });
+    }
+    try {
+      const result = await db.query(
+        `SELECT ac.*, COALESCE(t.name, ac.tenant_id) AS tenant_name
+         FROM avatar_configs ac
+         LEFT JOIN tenants t ON t.id = ac.tenant_id
+         ORDER BY t.name ASC, ac.created_at DESC`
+      );
+      return res.json({ configs: result.rows, total: result.rows.length });
+    } catch (err) {
+      console.warn("[GET /v1/admin/avatar/configs/all]", err);
+      return res.status(500).json({ error: "アバター設定の取得に失敗しました" });
+    }
+  });
+
+  // -----------------------------------------------------------------------
   // GET /v1/admin/avatar/configs — テナント一覧
   // -----------------------------------------------------------------------
   app.get("/v1/admin/avatar/configs", async (req: Request, res: Response) => {
