@@ -92,7 +92,7 @@ async def call_groq_llm(user_text: str, http: aiohttp.ClientSession, system_prom
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_text},
                 ],
-                "max_tokens": 100,
+                "max_tokens": 300,
                 "temperature": 0.7,
             },
             timeout=aiohttp.ClientTimeout(total=15),
@@ -307,15 +307,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # 1. Groq LLM で応答生成（毎回新しいSessionで "Session is closed" を回避）
             async with aiohttp.ClientSession() as http:
                 reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt)
-            logger.info(f"[Groq] reply: {reply[:80]!r}")
+            logger.info(f"[Groq] reply ({len(reply)} chars): {reply!r}")
 
             # 2. session.say() で FishAudio TTS パイプラインに渡す
             session.say(reply)
-            logger.info(f"[say] sent to TTS: {reply[:60]!r}")
+            logger.debug(f"[say] sent to TTS: {reply!r}")
 
             # 3. Data Channel 経由で Widget にもテキスト送信（フォールバックメッセージはスキップ）
             if reply != FALLBACK_MSG and ctx.room.local_participant:
                 payload = json.dumps({"type": "agent_reply", "text": reply}).encode()
+                logger.debug(f"[data_channel] payload size={len(payload)} bytes, text={reply!r}")
                 await ctx.room.local_participant.publish_data(payload, reliable=True)
                 logger.info("[data_channel] agent_reply sent to widget")
         except Exception as e:
