@@ -437,7 +437,7 @@
     '  position: absolute;',
     '  bottom: 64px;',
     '  left: 0; right: 0;',
-    '  max-height: 160px;',
+    '  max-height: 240px;',
     '  z-index: 5;',
     '  background: transparent;',
     '  padding: 8px 16px;',
@@ -1359,6 +1359,8 @@
             };
             messages.push(assistantMsg);
             renderMessages();
+            // アバター返答は常に最新テキストが全文表示されるよう強制スクロール
+            scrollToBottom(true);
           }
         } catch (_e) {}
       });
