@@ -76,34 +76,54 @@ export default function KnowledgePage() {
       </header>
 
       {/* グローバルナレッジカード（super_admin のみ） */}
-      <button
-        onClick={() => navigate("/admin/knowledge/global")}
-        style={{
-          width: "100%",
-          padding: "20px 18px",
-          marginBottom: 12,
-          borderRadius: 14,
-          border: "1px solid rgba(234,179,8,0.3)",
-          background: "linear-gradient(145deg, rgba(120,53,15,0.3), rgba(15,23,42,0.7))",
-          color: "#fbbf24",
-          fontSize: 16,
-          fontWeight: 700,
-          cursor: "pointer",
-          textAlign: "left",
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
-        <span style={{ fontSize: 24 }}>🌐</span>
-        <div>
-          <div>グローバルナレッジ</div>
-          <div style={{ fontSize: 13, fontWeight: 400, color: "#d97706", marginTop: 2 }}>
-            全テナント共通のナレッジを管理
+      <div style={{ display: "flex", gap: 8, alignItems: "stretch", marginBottom: 12 }}>
+        <button
+          onClick={() => navigate("/admin/knowledge/global")}
+          style={{
+            flex: 1,
+            padding: "20px 18px",
+            borderRadius: 14,
+            border: "1px solid rgba(234,179,8,0.3)",
+            background: "linear-gradient(145deg, rgba(120,53,15,0.3), rgba(15,23,42,0.7))",
+            color: "#fbbf24",
+            fontSize: 16,
+            fontWeight: 700,
+            cursor: "pointer",
+            textAlign: "left",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <span style={{ fontSize: 24 }}>🌐</span>
+          <div>
+            <div>グローバルナレッジ</div>
+            <div style={{ fontSize: 13, fontWeight: 400, color: "#d97706", marginTop: 2 }}>
+              全テナント共通のナレッジを管理
+            </div>
           </div>
-        </div>
-        <span style={{ marginLeft: "auto", fontSize: 18, color: "#d97706" }}>›</span>
-      </button>
+          <span style={{ marginLeft: "auto", fontSize: 18, color: "#d97706" }}>›</span>
+        </button>
+        <button
+          onClick={() => navigate("/admin/chat-test?scope=global")}
+          style={{
+            padding: "12px 16px",
+            minHeight: 44,
+            borderRadius: 14,
+            border: "1px solid rgba(59,130,246,0.3)",
+            background: "rgba(59,130,246,0.08)",
+            color: "#93c5fd",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+          }}
+          title="グローバルナレッジのテストチャットを開く"
+        >
+          💬 テスト
+        </button>
+      </div>
 
       {/* テナント一覧 */}
       {error && (
