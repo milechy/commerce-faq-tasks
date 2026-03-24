@@ -500,6 +500,9 @@
     '  border-radius: 16px 16px 4px 16px;',
     '}',
     '.panel.avatar-active .ts { color: rgba(255,255,255,0.5); font-size: 10px; }',
+    /* アバター名ラベル */
+    '.avatar-name-label { font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 2px; padding-left: 2px; }',
+    '.panel.avatar-active .avatar-name-label { color: rgba(255,255,255,0.6); }',
 
     /* 入力エリア: 下部オーバーレイ */
     '.panel.avatar-active .input-area {',
@@ -765,11 +768,12 @@
   var messages = [];
 
   /* アバター状態 */
-  var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId, imageUrl }
+  var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId, imageUrl, avatarName }
   var avatarConfigFetched = false;
   var avatarMuted = true;       // 音声ミュート状態（デフォルト: ミュート）
   var anamClient = null;         // Anam SDK クライアント
   var avatarProvider = null;     // 'anam' | 'lemonslice' | null
+  var currentAvatarName = null;  // アバター名（未設定時は null）
   var avatarPlaceholderImg = null; // LiveKit接続前のアバター画像プレースホルダー
   var fabMediaContainer = null;  // FABメディアコンテナ（アバター映像/静止画）
   var fabVideoEl = null;         // LiveKitビデオ要素（FAB↔avatarAreaで移動）
@@ -916,6 +920,7 @@
         if (data.enabled && data.avatarProvider === 'anam' && data.sessionToken) {
           // Anam フロー
           avatarProvider = 'anam';
+          currentAvatarName = data.avatarName || null;
           try { sessionStorage.setItem(avatarCacheKey, 'true'); } catch (_e) {}
           startFabLoading();
           if (isOpen) {
@@ -936,6 +941,7 @@
             try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
             if (!lkData.enabled) return;
             avatarConfig = lkData;
+            currentAvatarName = lkData.avatarName || null;
             startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
@@ -962,6 +968,7 @@
             try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
             if (!lkData.enabled) return;
             avatarConfig = lkData;
+            currentAvatarName = lkData.avatarName || null;
             startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
@@ -1574,6 +1581,12 @@
     messages.forEach(function (msg) {
       var wrapper = el('div', { className: 'msg-wrapper ' + msg.role });
       var inner = el('div', {});
+      // アバターモード時にassistantバブルの上に名前を表示
+      if (msg.role === 'assistant' && avatarProvider) {
+        var nameLabel = el('div', { className: 'avatar-name-label' });
+        nameLabel.textContent = currentAvatarName || 'AIアシスタント';
+        inner.appendChild(nameLabel);
+      }
       var bubble = el('div', { className: 'bubble ' + msg.role });
       // textContent を使用（innerHTML 禁止）
       bubble.textContent = msg.content;

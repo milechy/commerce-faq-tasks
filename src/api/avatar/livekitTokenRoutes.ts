@@ -148,14 +148,16 @@ export function registerLiveKitTokenRoutes(
       const identity = `widget-${safeTenantId}-${crypto.randomBytes(4).toString("hex")}`;
       const token    = generateLiveKitToken({ apiKey, apiSecret, roomName, identity });
 
-      // アクティブなavatar_configのimage_urlを取得
+      // アクティブなavatar_configのimage_urlとnameを取得
       let imageUrl: string | null = null;
+      let avatarName: string | null = null;
       try {
         const avatarConfigResult = await pool.query(
-          "SELECT image_url FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+          "SELECT image_url, name FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
           [tenantId]
         );
         imageUrl = (avatarConfigResult.rows[0]?.image_url as string | null) ?? null;
+        avatarName = (avatarConfigResult.rows[0]?.name as string | null) ?? null;
       } catch (avatarErr: any) {
         // avatar_configs テーブルが存在しない場合は無視
         if (avatarErr?.code !== "42P01") {
@@ -177,6 +179,7 @@ export function registerLiveKitTokenRoutes(
         roomName,
         agentId,
         imageUrl,
+        avatarName,
       });
     } catch (err: any) {
       // カラム未存在エラー (42703) = マイグレーション未実行

@@ -343,8 +343,8 @@ export default function AvatarListPage() {
               <div style={{ padding: "14px 16px", flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
                 {/* 名前 + バッジ */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {cfg.name}
+                  <span style={{ fontSize: 16, fontWeight: 700, color: cfg.name ? "#f9fafb" : "#6b7280", fontStyle: cfg.name ? "normal" : "italic", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {cfg.name || (lang === "ja" ? "名前なし" : "Unnamed")}
                   </span>
                   {cfg.is_active && avatarEnabled ? (
                     <span style={{

@@ -64,21 +64,22 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
       }
 
       // Anam API: セッショントークン取得（インラインpersonaConfig方式）
+      // Client-Side Custom LLM: llmId='CUSTOMER_CLIENT_V1' でAnam内蔵AI無効化
+      // LLM処理はRAJIUCE側（Groq）が担当し、Anamはアバター映像+TTSのみ担当
       const personaConfig: Record<string, unknown> = {
         name: config.name || 'Sales Assistant',
         avatarId: config.anam_avatar_id,
         voiceId: config.anam_voice_id,
         avatarModel: 'cara-3',
         languageCode: 'ja',
-        systemPrompt: config.personality_prompt
-          || 'あなたはAI営業アシスタントです。ネイティブの自然な日本語で1〜2文で応答してください。',
+        llmId: 'CUSTOMER_CLIENT_V1',
         voiceGenerationOptions: {
           stability: 0.5,
           similarityBoost: 0.8,
           speed: 1.0,
         },
       };
-      if (config.anam_llm_id) personaConfig['llmId'] = config.anam_llm_id;
+      // systemPromptはRAJIUCE側のchat-streamで制御するためAnamには渡さない
 
       const anamRes = await fetch(`${ANAM_API_BASE}/v1/auth/session-token`, {
         method: 'POST',
@@ -107,6 +108,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
         enabled: true,
         avatarProvider: 'anam',
         sessionToken,
+        avatarName: config.name || null,
       });
 
     } catch (err: any) {
