@@ -92,6 +92,62 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   }
   // ─────────────────────────────────────────────────────────────────────────
 
+  // GET /v1/admin/my-tenant — Client Admin専用: JWTのtenant_idで自分のテナント情報を返す
+  app.get("/v1/admin/my-tenant", tenantAuth, async (req: Request, res: Response) => {
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+    try {
+      const result = await db.query(
+        `SELECT id, name, features, lemonslice_agent_id FROM tenants WHERE id = $1`,
+        [tenantId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
+      }
+      return res.json(result.rows[0]);
+    } catch (err) {
+      console.warn("[GET /v1/admin/my-tenant]", err);
+      return res.status(500).json({ error: "取得に失敗しました" });
+    }
+  });
+
+  // PATCH /v1/admin/my-tenant — Client Admin専用: featuresのavatar/voiceのみ更新可
+  app.patch("/v1/admin/my-tenant", tenantAuth, async (req: Request, res: Response) => {
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+    const bodySchema = z.object({
+      features: z.object({
+        avatar: z.boolean(),
+        voice: z.boolean(),
+        rag: z.boolean(),
+      }),
+    });
+    const parsed = bodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+    try {
+      const result = await db.query(
+        `UPDATE tenants SET features = $1::jsonb, updated_at = NOW() WHERE id = $2
+         RETURNING id, name, features, lemonslice_agent_id`,
+        [JSON.stringify(parsed.data.features), tenantId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
+      }
+      return res.json(result.rows[0]);
+    } catch (err) {
+      console.warn("[PATCH /v1/admin/my-tenant]", err);
+      return res.status(500).json({ error: "更新に失敗しました" });
+    }
+  });
+
   // GET /v1/admin/tenants
   app.get("/v1/admin/tenants", tenantAuth, requireSuperAdmin, async (_req: Request, res: Response) => {
     try {

@@ -53,7 +53,7 @@ export default function AvatarListPage() {
 
   useEffect(() => {
     if (!user?.tenantId) return;
-    authFetch(`${API_BASE}/v1/admin/tenants/${user.tenantId}`)
+    authFetch(`${API_BASE}/v1/admin/my-tenant`)
       .then((r) => r.json())
       .then((data: { features?: { avatar?: boolean; voice?: boolean; rag?: boolean } }) => {
         const f = { avatar: data.features?.avatar ?? false, voice: data.features?.voice ?? false, rag: data.features?.rag ?? true };
@@ -68,7 +68,7 @@ export default function AvatarListPage() {
     const next = !avatarEnabled;
     setToggleLoading(true);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/tenants/${user.tenantId}`, {
+      const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ features: { ...tenantFeatures, avatar: next } }),
