@@ -89,6 +89,8 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
 The prompt must describe a photorealistic professional headshot portrait.
 Include these elements:
 - "professional headshot portrait photograph"
+- "single person, one face, solo portrait"
+- "front facing, looking at camera, centered face, passport photo style"
 - specific physical features mentioned by the user (age, gender, hair, clothing)
 - "natural studio lighting, soft shadows"
 - "looking directly at camera, neutral or office background"
@@ -118,7 +120,7 @@ Output ONLY the English prompt, nothing else.`,
           body: JSON.stringify({
             prompt: leonardoPrompt,
             negative_prompt:
-              "anime, cartoon, illustration, CGI, 3D render, painting, drawing, sketch, deformed face, extra fingers, blurry, watermark, text, logo",
+              "anime, cartoon, illustration, CGI, 3D render, painting, drawing, sketch, deformed face, extra fingers, blurry, watermark, text, logo, multiple faces, two faces, duplicate face, side view, profile view, turned head, looking away, three-quarter view",
             sd_version: "PHOENIX",
             presetStyle: "PHOTOGRAPHY",
             alchemy: true,
