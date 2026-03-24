@@ -12,6 +12,23 @@ interface OriginCheckOptions {
   logger?: Logger;
 }
 
+/**
+ * ワイルドカードパターンにOriginが一致するか確認。
+ * 例: "https://*.example.com" → https://sub.example.com にマッチ
+ */
+function matchesPattern(origin: string, pattern: string): boolean {
+  if (pattern === origin) return true;
+  if (pattern.includes("*")) {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp(`^${escaped}$`).test(origin);
+  }
+  return false;
+}
+
+export function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
+  return allowedOrigins.some((pattern) => matchesPattern(origin, pattern));
+}
+
 export function createOriginCheckMiddleware(
   db: { query: (sql: string, params: unknown[]) => Promise<{ rows: any[] }> } | null,
   opts: OriginCheckOptions = {}
@@ -41,14 +58,14 @@ export function createOriginCheckMiddleware(
 
       if (allowedOrigins.length > 0) {
         const origin = req.headers.origin;
-        if (origin && !allowedOrigins.includes(origin)) {
+        if (origin && !isOriginAllowed(origin, allowedOrigins)) {
           opts.logger?.warn(
             { tenantId, origin, allowedOrigins },
             "origin_rejected_db"
           );
           res.status(403).json({
             error: "origin_not_allowed",
-            message: "このオリジンからのアクセスは許可されていません。",
+            message: "このドメインからのアクセスは許可されていません。",
           });
           return;
         }
