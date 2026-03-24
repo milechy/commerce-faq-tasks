@@ -1609,6 +1609,8 @@
     panel.setAttribute('aria-hidden', 'false');
     fab.setAttribute('aria-label', 'チャットを閉じる');
     fab.setAttribute('aria-expanded', 'true');
+    // パネル表示中はFABを非表示（パネル内の閉じるボタンで代替）
+    fab.style.display = 'none';
     // SVG を閉じるアイコンに交換
     while (fab.firstChild) { fab.removeChild(fab.firstChild); }
     fab.appendChild(CLOSE_SVG.cloneNode(true));
@@ -1650,6 +1652,8 @@
     panel.setAttribute('aria-hidden', 'true');
     fab.setAttribute('aria-label', 'チャットを開く');
     fab.setAttribute('aria-expanded', 'false');
+    // パネルを閉じたらFABを再表示
+    fab.style.display = '';
     // アバタービデオをavatarAreaからFABへ移動（またはチャットアイコン表示）
     if (fabVideoEl) {
       // ビデオをavatarAreaから取り出してFABへ
