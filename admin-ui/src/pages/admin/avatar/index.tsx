@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { useAuth } from "../../../auth/useAuth";
 
 interface AvatarConfig {
   id: string;
@@ -30,6 +31,7 @@ export default function AvatarListPage() {
   const navigate = useNavigate();
   const { lang } = useLang();
   const locale = lang === "en" ? "en-US" : "ja-JP";
+  const { user } = useAuth();
 
   const [configs, setConfigs] = useState<AvatarConfig[]>([]);
   const [total, setTotal] = useState(0);
@@ -37,6 +39,55 @@ export default function AvatarListPage() {
   const [activating, setActivating] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // ── アバター機能 ON/OFF トグル ──────────────────────────────────────────────
+  const [avatarEnabled, setAvatarEnabled] = useState<boolean>(false);
+  const [toggleLoading, setToggleLoading] = useState(false);
+  const [toggleToast, setToggleToast] = useState<string | null>(null);
+  const [tenantFeatures, setTenantFeatures] = useState<{ avatar: boolean; voice: boolean; rag: boolean } | null>(null);
+
+  const showToggleToast = (msg: string) => {
+    setToggleToast(msg);
+    setTimeout(() => setToggleToast(null), 3000);
+  };
+
+  useEffect(() => {
+    if (!user?.tenantId) return;
+    authFetch(`${API_BASE}/v1/admin/tenants/${user.tenantId}`)
+      .then((r) => r.json())
+      .then((data: { features?: { avatar?: boolean; voice?: boolean; rag?: boolean } }) => {
+        const f = { avatar: data.features?.avatar ?? false, voice: data.features?.voice ?? false, rag: data.features?.rag ?? true };
+        setTenantFeatures(f);
+        setAvatarEnabled(f.avatar);
+      })
+      .catch(() => {});
+  }, [user?.tenantId]);
+
+  const handleAvatarToggle = async () => {
+    if (!user?.tenantId || !tenantFeatures || toggleLoading) return;
+    const next = !avatarEnabled;
+    setToggleLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/tenants/${user.tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ features: { ...tenantFeatures, avatar: next } }),
+      });
+      if (!res.ok) {
+        showToggleToast("❌ 保存に失敗しました。もう一度お試しください。");
+        return;
+      }
+      const updated = await res.json() as { features?: { avatar?: boolean; voice?: boolean; rag?: boolean } };
+      const f = { avatar: updated.features?.avatar ?? next, voice: updated.features?.voice ?? tenantFeatures.voice, rag: updated.features?.rag ?? tenantFeatures.rag };
+      setTenantFeatures(f);
+      setAvatarEnabled(f.avatar);
+      showToggleToast(f.avatar ? "✅ アバター機能をONにしました" : "✅ アバター機能をOFFにしました");
+    } catch {
+      showToggleToast("❌ 保存に失敗しました。もう一度お試しください。");
+    } finally {
+      setToggleLoading(false);
+    }
+  };
 
   const fetchConfigs = useCallback(async () => {
     setLoading(true);
@@ -150,6 +201,69 @@ export default function AvatarListPage() {
           </button>
         </div>
       </header>
+
+      {/* ── アバター機能 ON/OFF トグル ──────────────────────────────── */}
+      {user?.tenantId && (
+        <div style={{
+          marginBottom: 24,
+          padding: "20px 24px",
+          borderRadius: 14,
+          border: avatarEnabled
+            ? "1px solid rgba(74,222,128,0.35)"
+            : "1px solid rgba(107,114,128,0.3)",
+          background: avatarEnabled
+            ? "rgba(34,197,94,0.07)"
+            : "rgba(255,255,255,0.03)",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "#f9fafb" }}>🤖 AIアバター機能</h2>
+              <p style={{ fontSize: 14, color: "#9ca3af", margin: "6px 0 0" }}>
+                ONにすると、チャットウィジェットにAIアバターが表示されます
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { void handleAvatarToggle(); }}
+              disabled={toggleLoading || tenantFeatures === null}
+              style={{
+                padding: "12px 28px",
+                minHeight: 48,
+                minWidth: 120,
+                borderRadius: 10,
+                border: avatarEnabled
+                  ? "1px solid rgba(74,222,128,0.5)"
+                  : "1px solid rgba(107,114,128,0.4)",
+                background: avatarEnabled
+                  ? "rgba(34,197,94,0.22)"
+                  : "rgba(107,114,128,0.18)",
+                color: avatarEnabled ? "#4ade80" : "#9ca3af",
+                fontSize: 16,
+                fontWeight: 700,
+                cursor: toggleLoading || tenantFeatures === null ? "not-allowed" : "pointer",
+                opacity: toggleLoading || tenantFeatures === null ? 0.6 : 1,
+                transition: "all 0.15s",
+              }}
+            >
+              {toggleLoading ? "保存中..." : avatarEnabled ? "✅ ON" : "⏸️ OFF"}
+            </button>
+          </div>
+          {toggleToast && (
+            <div style={{
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: 8,
+              background: toggleToast.startsWith("❌")
+                ? "rgba(239,68,68,0.12)"
+                : "rgba(34,197,94,0.12)",
+              color: toggleToast.startsWith("❌") ? "#fca5a5" : "#86efac",
+              fontSize: 14,
+            }}>
+              {toggleToast}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* エラーメッセージ */}
       {error && (
