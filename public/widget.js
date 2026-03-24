@@ -101,6 +101,29 @@
     '.fab:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(37,99,235,0.5); }',
     '.fab:active { transform: scale(0.95); }',
     '.fab:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }',
+    /* FABアバター接続中ローディング状態 */
+    '.fab.avatar-loading {',
+    '  background: #94a3b8;',
+    '  animation: fab-pulse 1.5s ease-in-out infinite;',
+    '  pointer-events: auto;',
+    '}',
+    '.fab.avatar-loading::after {',
+    '  content: "";',
+    '  display: block;',
+    '  width: 24px;',
+    '  height: 24px;',
+    '  border: 3px solid rgba(255,255,255,0.4);',
+    '  border-top-color: #fff;',
+    '  border-radius: 50%;',
+    '  animation: fab-spin 0.8s linear infinite;',
+    '}',
+    '@keyframes fab-pulse {',
+    '  0%, 100% { opacity: 0.7; }',
+    '  50% { opacity: 1; }',
+    '}',
+    '@keyframes fab-spin {',
+    '  to { transform: rotate(360deg); }',
+    '}',
     /* FABアバターメディアコンテナ */
     '.fab-media-container {',
     '  position: absolute;',
@@ -866,8 +889,14 @@
    * FABをデフォルトのチャットアイコンに戻す。
    */
   function resetFabIcon() {
+    fab.classList.remove('avatar-loading');
     while (fab.firstChild) { fab.removeChild(fab.firstChild); }
     fab.appendChild(svgIcon(CHAT_SVG_PATH));
+  }
+
+  function startFabLoading() {
+    fab.classList.add('avatar-loading');
+    while (fab.firstChild) { fab.removeChild(fab.firstChild); }
   }
 
   function fetchAvatarConfig() {
@@ -885,6 +914,7 @@
           // Anam フロー
           avatarProvider = 'anam';
           try { sessionStorage.setItem(avatarCacheKey, 'true'); } catch (_e) {}
+          startFabLoading();
           if (isOpen) {
             avatarArea.style.display = 'flex';
             panel.classList.add('avatar-active');
@@ -903,6 +933,7 @@
             try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
             if (!lkData.enabled) return;
             avatarConfig = lkData;
+            startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
               panel.classList.add('avatar-active');
@@ -912,6 +943,7 @@
           })
           .catch(function (e) {
             console.warn('[FAQ Widget] LiveKit config fetch failed:', e && e.message);
+            resetFabIcon();
           });
       })
       .catch(function (e) {
@@ -927,6 +959,7 @@
             try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
             if (!lkData.enabled) return;
             avatarConfig = lkData;
+            startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
               panel.classList.add('avatar-active');
@@ -934,7 +967,7 @@
             showAvatarPlaceholder(lkData.imageUrl);
             initLiveKitAvatar();
           })
-          .catch(function () {});
+          .catch(function () { resetFabIcon(); });
       });
   }
 
@@ -1181,6 +1214,7 @@
       anamClient.streamToVideoElement(videoId)
         .then(function () {
           console.log('[FAQ Widget] Anam avatar streaming started');
+          fab.classList.remove('avatar-loading');
           avatarStatusText.style.display = 'none';
           voiceModeIndicator.style.display = '';
 
@@ -1210,12 +1244,14 @@
         })
         .catch(function (e) {
           console.warn('[FAQ Widget] Anam stream failed:', e && e.message);
+          resetFabIcon();
           avatarArea.style.display = 'none';
           panel.classList.remove('avatar-active');
         });
 
     } catch (e) {
       console.warn('[FAQ Widget] Anam init failed:', e && e.message);
+      resetFabIcon();
       avatarArea.style.display = 'none';
     }
   }
@@ -1373,6 +1409,7 @@
           var videoEl = track.attach();
           videoEl.className = 'avatar-video';
           avatarStatusText.style.display = 'none';
+          fab.classList.remove('avatar-loading');
           fabVideoEl = videoEl;
           if (isOpen) {
             // パネル展開中: avatarAreaに直接追加
