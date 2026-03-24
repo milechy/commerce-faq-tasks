@@ -360,6 +360,8 @@
     '.mic-btn:hover { background: #e2e8f0; color: #2563eb; }',
     '.mic-btn.recording { background: #fef2f2; color: #dc2626; }',
     '.mic-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+    '@keyframes mic-shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-4px)} 40%{transform:translateX(4px)} 60%{transform:translateX(-4px)} 80%{transform:translateX(4px)} }',
+    '.mic-btn.error { animation: mic-shake 0.4s ease; background: #fef2f2; color: #dc2626; }',
 
     /* アバターエリア（avatar=true テナントのみ表示） */
     '.avatar-area {',
@@ -536,6 +538,7 @@
     '.panel.avatar-active .mic-btn { background: rgba(255,255,255,0.15); color: #fff; }',
     '.panel.avatar-active .mic-btn:hover { background: rgba(255,255,255,0.25); color: #fff; }',
     '.panel.avatar-active .mic-btn.recording { background: rgba(220,38,38,0.6); color: #fff; }',
+    '.panel.avatar-active .mic-btn.error { background: rgba(220,38,38,0.4); color: #fff; }',
 
     /* 送信ボタン: ダークテーマ */
     '.panel.avatar-active .send-btn { background: rgba(37,99,235,0.8); }',
@@ -1900,13 +1903,11 @@
       recognition.onresult = function (event) {
         var text = event.results[0][0].transcript;
         if (text.trim()) {
-          textarea.value = text;
+          // テキストを入力欄に反映（auto-sendしない — ユーザーが確認後に送信）
+          textarea.value = (textarea.value ? textarea.value + ' ' : '') + text;
           autoResizeTextarea();
           updateSendButton();
-          sendMessage(text);
-          textarea.value = '';
-          textarea.style.height = 'auto';
-          updateSendButton();
+          textarea.focus();
         }
       };
 
@@ -1923,13 +1924,29 @@
         isRecording = false;
         currentRecognition = null;
         micBtn.classList.remove('recording');
+        micBtn.classList.add('error');
+        setTimeout(function () { micBtn.classList.remove('error'); }, 500);
         micBtn.setAttribute('aria-label', '音声入力');
-        if (errCode === 'not-allowed') {
-          micBtn.setAttribute('title', 'マイク権限が必要です（HTTPS環境でのみ利用可能）');
-        }
+        var errMsg = errCode === 'not-allowed' || errCode === 'service-not-allowed'
+          ? 'マイク権限が必要です（HTTPSが必要な場合があります）'
+          : errCode === 'audio-capture'
+            ? 'マイクが見つかりません'
+            : errCode === 'network'
+              ? 'ネットワークエラーが発生しました'
+              : '音声認識に失敗しました';
+        micBtn.setAttribute('title', errMsg);
       };
 
-      recognition.start();
+      try {
+        recognition.start();
+      } catch (e) {
+        console.warn('[FAQ Widget] recognition.start() failed:', e && e.message);
+        isRecording = false;
+        currentRecognition = null;
+        micBtn.classList.add('error');
+        setTimeout(function () { micBtn.classList.remove('error'); }, 500);
+        micBtn.setAttribute('title', '音声認識を開始できませんでした');
+      }
     });
   }
 
