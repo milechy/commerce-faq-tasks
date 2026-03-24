@@ -221,7 +221,7 @@ const LABEL_STYLE: React.CSSProperties = {
   marginBottom: 6,
 };
 
-// ─── タブ: アバター設定（Super Admin専用） ────────────────────────────────────
+// ─── タブ: アバター設定 ────────────────────────────────────────────────────────
 
 function AvatarTab({
   tenant,
@@ -1209,7 +1209,7 @@ export default function TenantDetailPage() {
     { id: "settings", label: t("tenant_detail.tab_settings") },
     { id: "apikeys", label: t("tenant_detail.tab_apikeys") },
     { id: "embed", label: t("tenant_detail.tab_embed") },
-    ...(isSuperAdmin ? [{ id: "avatar" as const, label: "🤖 アバター" }] : []),
+    { id: "avatar" as const, label: "🤖 アバター" },
   ];
 
   return (
@@ -1370,7 +1370,7 @@ export default function TenantDetailPage() {
           {activeTab === "embed" && (
             <EmbedCodeTab tenant={tenant} apiKeys={apiKeys} />
           )}
-          {activeTab === "avatar" && isSuperAdmin && (
+          {activeTab === "avatar" && (
             <AvatarTab
               tenant={tenant}
               onUpdate={(updated) => { setTenant(updated); showToast("✅ アバター設定を保存しました"); }}
