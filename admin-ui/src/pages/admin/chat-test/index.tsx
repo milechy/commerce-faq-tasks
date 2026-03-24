@@ -188,8 +188,8 @@ export default function ChatTestPage() {
         body: JSON.stringify({ message: userMsg.content, sessionId: adminSessionId }),
       });
       if (res.ok) {
-        const data = await res.json() as { reply?: string; message?: string };
-        const reply = data.reply ?? data.message ?? "";
+        const data = await res.json() as { data?: { content?: string }; reply?: string; message?: string };
+        const reply = data.data?.content ?? data.reply ?? data.message ?? "";
         if (reply) {
           setAdminMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: "assistant", content: reply, checked: false }]);
         }
