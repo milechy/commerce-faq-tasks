@@ -1558,6 +1558,9 @@
   }
 
   function renderMessages() {
+    // DOM再構築でscrollTopがリセットされるため、クリア前に最下部付近かどうかを保存
+    var wasNearBottom = (messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight) < 50;
+
     // 既存のノードをすべて削除
     while (messagesArea.firstChild) {
       messagesArea.removeChild(messagesArea.firstChild);
@@ -1618,7 +1621,10 @@
       messagesArea.appendChild(loadingWrapper);
     }
 
-    scrollToBottom();
+    // DOM再構築後はscrollTopが0にリセットされるため、クリア前の状態に応じて強制スクロール
+    if (wasNearBottom) {
+      scrollToBottom(true);
+    }
   }
 
   /* ------------------------------------------------------------------ */
