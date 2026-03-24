@@ -431,6 +431,8 @@
     '}',
     '.avatar-close-btn:hover { background: rgba(0,0,0,0.6); }',
     '.avatar-close-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+    /* アバターモード時: ヘッダーの従来閉じるボタンを非表示（avatar-close-btnのみ使用） */
+    '.panel.avatar-active .close-btn { display: none; }',
 
     /* メッセージエリア: 入力バーの直上にオーバーレイ（下から積み上げ） */
     '.panel.avatar-active .messages {',
