@@ -95,13 +95,13 @@
     '  align-items: center;',
     '  justify-content: center;',
     '  padding: 0;',
+    '  overflow: hidden;',
     '  transition: ' + (prefersReducedMotion ? 'none' : 'transform 0.15s, box-shadow 0.15s') + ';',
     '}',
     '.fab:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(37,99,235,0.5); }',
     '.fab:active { transform: scale(0.95); }',
     '.fab:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }',
     /* FABアバターメディアコンテナ */
-    '.fab { overflow: hidden; position: relative; }',
     '.fab-media-container {',
     '  position: absolute;',
     '  top: 0; left: 0;',
@@ -432,7 +432,7 @@
     '.avatar-close-btn:hover { background: rgba(0,0,0,0.6); }',
     '.avatar-close-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
     /* アバターモード時: ヘッダーの従来閉じるボタンを非表示（avatar-close-btnのみ使用） */
-    '.panel.avatar-active .close-btn { display: none; }',
+    '.panel.avatar-active .close-btn { display: none !important; }',
 
     /* メッセージエリア: 入力バーの直上にオーバーレイ（下から積み上げ） */
     '.panel.avatar-active .messages {',
