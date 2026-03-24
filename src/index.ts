@@ -55,6 +55,7 @@ import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
+import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
 import { registerAnamRoutes } from "./api/avatar/anamRoutes";
@@ -580,6 +581,9 @@ if (db) registerAvatarConfigRoutes(app, db);
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 if (db) registerAvatarGenerationRoutes(app, db);
+
+// Security Level 4: Dynamic per-tenant widget JS delivery
+registerWidgetRoutes(app, db);
 
 async function startServer() {
   app.listen(port, () => {
