@@ -4,6 +4,13 @@ import { useLang } from "../../../i18n/LangContext";
 import { useAuth } from "../../../auth/useAuth";
 import { API_BASE, authFetch } from "../../../lib/api";
 
+interface AdminChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  checked: boolean;
+}
+
 interface TenantOption {
   id: string;
   name: string;
@@ -145,8 +152,88 @@ export default function ChatTestPage() {
     };
   }, [cleanupWidget]);
 
+  // ── Admin Chat (direct API call with checkboxes) ──────────────────────────
+  const [adminChatOpen, setAdminChatOpen] = useState(false);
+  const [adminMessages, setAdminMessages] = useState<AdminChatMessage[]>([]);
+  const [adminInput, setAdminInput] = useState("");
+  const [adminSending, setAdminSending] = useState(false);
+  const [adminSessionId] = useState(() => `admin-chat-${Date.now()}`);
+
+  // チューニングルール作成モーダル
+  const [tuningModalOpen, setTuningModalOpen] = useState(false);
+  const [tuningPattern, setTuningPattern] = useState("");
+  const [tuningBehavior, setTuningBehavior] = useState("");
+  const [tuningSaving, setTuningSaving] = useState(false);
+  const [tuningSuccess, setTuningSuccess] = useState<string | null>(null);
+  const [tuningError, setTuningError] = useState<string | null>(null);
+
+  const checkedMessages = adminMessages.filter((m) => m.checked);
+
+  const handleAdminSend = async () => {
+    if (!adminInput.trim() || adminSending || !token) return;
+    const userMsg: AdminChatMessage = { id: Date.now().toString(), role: "user", content: adminInput.trim(), checked: false };
+    setAdminMessages((prev) => [...prev, userMsg]);
+    setAdminInput("");
+    setAdminSending(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": token },
+        body: JSON.stringify({ message: userMsg.content, sessionId: adminSessionId }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { reply?: string; message?: string };
+        const reply = data.reply ?? data.message ?? "";
+        if (reply) {
+          setAdminMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: "assistant", content: reply, checked: false }]);
+        }
+      }
+    } catch { /* ignore */ } finally {
+      setAdminSending(false);
+    }
+  };
+
+  const toggleCheck = (id: string) => {
+    setAdminMessages((prev) => prev.map((m) => m.id === id ? { ...m, checked: !m.checked } : m));
+  };
+
+  const openTuningModal = () => {
+    const selectedText = checkedMessages.map((m) => `[${m.role === "user" ? "ユーザー" : "AI"}] ${m.content}`).join("\n");
+    setTuningPattern(checkedMessages.find((m) => m.role === "user")?.content ?? "");
+    setTuningBehavior(`以下の会話を参考に、適切な応答をしてください:\n\n${selectedText}`);
+    setTuningSuccess(null);
+    setTuningError(null);
+    setTuningModalOpen(true);
+  };
+
+  const handleTuningSave = async () => {
+    if (!tuningPattern.trim() || !tuningBehavior.trim() || tuningSaving) return;
+    setTuningSaving(true);
+    setTuningError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenant_id: effectiveTenantId, trigger_pattern: tuningPattern, expected_behavior: tuningBehavior }),
+      });
+      if (!res.ok) {
+        const d = await res.json() as { error?: string };
+        setTuningError(d.error ?? "保存に失敗しました");
+        return;
+      }
+      setTuningSuccess("✅ チューニングルールを追加しました");
+      setAdminMessages((prev) => prev.map((m) => ({ ...m, checked: false })));
+      setTimeout(() => { setTuningModalOpen(false); setTuningSuccess(null); }, 1500);
+    } catch {
+      setTuningError("ネットワークエラーが発生しました");
+    } finally {
+      setTuningSaving(false);
+    }
+  };
+
   const handleTenantChange = (newTenantId: string) => {
     setSelectedTenantId(newTenantId);
+    setAdminMessages([]);
   };
 
   const handleReload = () => {
@@ -361,6 +448,170 @@ export default function ChatTestPage() {
           </>
         )}
       </section>
+
+      {/* ── Admin Chat Panel (チェックボックス付き) ── */}
+      {token && effectiveTenantId && (
+        <section style={{ marginTop: 24, borderRadius: 16, border: "1px solid #1f2937", background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))", padding: "20px 24px" }}>
+          <button
+            onClick={() => setAdminChatOpen((v) => !v)}
+            style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: "#9ca3af", fontSize: 15, fontWeight: 600, cursor: "pointer", padding: 0 }}
+          >
+            💬 管理者チャット（メッセージ選択→チューニング追加）
+            <span style={{ fontSize: 12, color: "#6b7280" }}>{adminChatOpen ? "▲ 閉じる" : "▼ 開く"}</span>
+          </button>
+
+          {adminChatOpen && (
+            <div style={{ marginTop: 16 }}>
+              {/* メッセージ一覧 */}
+              <div style={{ minHeight: 100, maxHeight: 360, overflowY: "auto", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                {adminMessages.length === 0 && (
+                  <p style={{ color: "#6b7280", fontSize: 14, textAlign: "center", padding: "24px 0" }}>メッセージを送信して会話を始めてください</p>
+                )}
+                {adminMessages.map((msg) => (
+                  <label
+                    key={msg.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 10,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      border: msg.checked ? "1px solid rgba(59,130,246,0.5)" : "1px solid #1f2937",
+                      background: msg.checked ? "rgba(59,130,246,0.08)" : (msg.role === "user" ? "rgba(37,99,235,0.1)" : "rgba(30,41,59,0.6)"),
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={msg.checked}
+                      onChange={() => toggleCheck(msg.id)}
+                      style={{ width: 20, height: 20, minWidth: 20, minHeight: 20, marginTop: 2, cursor: "pointer", accentColor: "#3b82f6" }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>{msg.role === "user" ? "あなた" : "AI"}</div>
+                      <div style={{ fontSize: 14, color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
+                    </div>
+                  </label>
+                ))}
+                {adminSending && (
+                  <div style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #1f2937", background: "rgba(30,41,59,0.6)", color: "#6b7280", fontSize: 14 }}>AI応答中...</div>
+                )}
+              </div>
+
+              {/* 入力欄 */}
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="text"
+                  value={adminInput}
+                  onChange={(e) => setAdminInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleAdminSend(); } }}
+                  placeholder="メッセージを入力..."
+                  disabled={adminSending}
+                  style={{ flex: 1, padding: "10px 14px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#e5e7eb", fontSize: 14, outline: "none" }}
+                />
+                <button
+                  onClick={() => void handleAdminSend()}
+                  disabled={adminSending || !adminInput.trim()}
+                  style={{ padding: "10px 20px", minHeight: 44, borderRadius: 10, border: "none", background: "linear-gradient(135deg, #3b82f6, #6366f1)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: adminSending || !adminInput.trim() ? "not-allowed" : "pointer", opacity: adminSending || !adminInput.trim() ? 0.5 : 1 }}
+                >
+                  送信
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ── フローティングバー（チェック時） ── */}
+      {checkedMessages.length > 0 && (
+        <div style={{
+          position: "fixed",
+          bottom: 24,
+          left: "50%",
+          transform: "translateX(-50%)",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "12px 20px",
+          borderRadius: 999,
+          background: "rgba(15,23,42,0.95)",
+          border: "1px solid rgba(59,130,246,0.5)",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+          zIndex: 1000,
+          minHeight: 56,
+        }}>
+          <span style={{ color: "#93c5fd", fontSize: 14, fontWeight: 600 }}>{checkedMessages.length}件選択中</span>
+          <button
+            onClick={openTuningModal}
+            style={{ padding: "8px 20px", minHeight: 44, borderRadius: 999, border: "none", background: "linear-gradient(135deg, #3b82f6, #6366f1)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}
+          >
+            チューニングに追加
+          </button>
+          <button
+            onClick={() => setAdminMessages((prev) => prev.map((m) => ({ ...m, checked: false })))}
+            style={{ padding: "8px 14px", minHeight: 44, borderRadius: 999, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+          >
+            解除
+          </button>
+        </div>
+      )}
+
+      {/* ── チューニングルール作成モーダル ── */}
+      {tuningModalOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ width: "100%", maxWidth: 560, borderRadius: 16, background: "#0f172a", border: "1px solid #1f2937", padding: "24px 24px", maxHeight: "80vh", overflowY: "auto" }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>チューニングルールを追加</h2>
+
+            {/* 参考メッセージ */}
+            <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.2)", fontSize: 13, color: "#93c5fd" }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>参考メッセージ ({checkedMessages.length}件):</div>
+              {checkedMessages.map((m) => (
+                <div key={m.id} style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
+                  <span style={{ color: "#9ca3af" }}>[{m.role === "user" ? "ユーザー" : "AI"}]</span> {m.content.slice(0, 80)}{m.content.length > 80 ? "…" : ""}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>トリガーパターン（どんな質問に適用するか）</label>
+              <input
+                type="text"
+                value={tuningPattern}
+                onChange={(e) => setTuningPattern(e.target.value)}
+                style={{ width: "100%", padding: "10px 12px", minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", boxSizing: "border-box" }}
+              />
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>期待される動作（AIへの指示）</label>
+              <textarea
+                value={tuningBehavior}
+                onChange={(e) => setTuningBehavior(e.target.value)}
+                rows={5}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
+              />
+            </div>
+
+            {tuningSuccess && <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(34,197,94,0.1)", color: "#4ade80", fontSize: 14 }}>{tuningSuccess}</div>}
+            {tuningError && <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: "rgba(239,68,68,0.1)", color: "#fca5a5", fontSize: 14 }}>{tuningError}</div>}
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setTuningModalOpen(false)}
+                style={{ padding: "10px 20px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer" }}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => void handleTuningSave()}
+                disabled={tuningSaving || !tuningPattern.trim() || !tuningBehavior.trim()}
+                style={{ padding: "10px 24px", minHeight: 44, borderRadius: 10, border: "none", background: "linear-gradient(135deg, #3b82f6, #6366f1)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: tuningSaving ? "not-allowed" : "pointer", opacity: tuningSaving ? 0.6 : 1 }}
+              >
+                {tuningSaving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
