@@ -16,11 +16,19 @@ interface PsychPrinciple {
   effectiveness_rate: number;
 }
 
+interface RuleEvidence {
+  evaluationIds?: number[];
+  effectivePrinciples?: string[];
+  failedPrinciples?: string[];
+  avgScore?: number;
+}
+
 interface SuggestedRule {
   id: string;
   trigger: string;
   response: string;
   reason: string;
+  evidence?: RuleEvidence | null;
 }
 
 interface CustomerReaction {
@@ -370,6 +378,42 @@ function SuggestedRulesList({
             <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.5, fontStyle: "italic" }}>
               💡 {rule.reason}
             </p>
+            {rule.evidence && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  background: "rgba(37,99,235,0.08)",
+                  border: "1px solid rgba(96,165,250,0.2)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  alignItems: "center",
+                }}
+              >
+                {rule.evidence.avgScore !== undefined && (
+                  <span style={{ fontSize: 12, color: "#93c5fd", fontWeight: 700 }}>
+                    📊 平均スコア {rule.evidence.avgScore}
+                  </span>
+                )}
+                {rule.evidence.effectivePrinciples && rule.evidence.effectivePrinciples.length > 0 && (
+                  <span style={{ fontSize: 11, color: "#4ade80" }}>
+                    ✅ {rule.evidence.effectivePrinciples.join("・")}
+                  </span>
+                )}
+                {rule.evidence.failedPrinciples && rule.evidence.failedPrinciples.length > 0 && (
+                  <span style={{ fontSize: 11, color: "#f87171" }}>
+                    ❌ {rule.evidence.failedPrinciples.join("・")}
+                  </span>
+                )}
+                {rule.evidence.evaluationIds && (
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>
+                    {rule.evidence.evaluationIds.length}件の会話を分析
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button
