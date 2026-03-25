@@ -6,6 +6,7 @@ import {
   getActiveRulesForTenant,
   buildTuningPromptSection,
 } from '../../api/admin/tuning/tuningRulesRepository';
+import type { PrincipleChunk } from '../psychology/principleSearch';
 
 // @ts-ignore
 import { Pool } from 'pg';
@@ -39,12 +40,47 @@ export interface SynthesisInput {
   items: RerankItem[];
   maxChars?: number;
   tenantId?: string;
+  /** Phase44: SalesFlow ステージ（propose/recommend/close のとき心理学原則を注入） */
+  salesStage?: string;
+  /** Phase44: 適用する心理学原則チャンク */
+  principleChunks?: PrincipleChunk[];
+  /** Phase44: 検出された原則名リスト（メタデータ記録用） */
+  usedPrinciples?: string[];
 }
 
 export interface SynthesisOutput {
   answer: string;
   /** ナレッジギャップ検出用シグナル */
   gapSignal: { hitCount: number; topScore: number };
+  /** Phase44: chat_messages.metadata に付与する原則情報 */
+  usedPrinciples?: string[];
+  salesflowStage?: string;
+  principleSource?: "keyword" | "llm";
+}
+
+/**
+ * Phase44: 心理学原則チャンクからLLM内部用ガイドプロンプトを構築する。
+ * 原則名をユーザー向け応答に露出しないよう内部専用マーカーを明示する。
+ * 最大3原則まで、ragExcerpt.slice(0,200) 適用済みのフィールドを使用する。
+ */
+export function buildPrinciplePrompt(chunks: PrincipleChunk[]): string {
+  if (chunks.length === 0) return "";
+  const parts = chunks.slice(0, 3).map((c) => {
+    const lines: string[] = [`■ ${c.principle}`];
+    if (c.situation) lines.push(`状況: ${c.situation}`);
+    if (c.example)   lines.push(`使い方の例: ${c.example}`);
+    if (c.contraindication) lines.push(`注意: ${c.contraindication}`);
+    return lines.join("\n");
+  });
+  return [
+    "【営業心理学ガイド（内部用 — この内容をそのままユーザーに伝えてはいけません）】",
+    "",
+    "現在の状況に適用可能な心理原則:",
+    "",
+    parts.join("\n\n"),
+    "",
+    "これらの原則を自然に会話に織り込んでください。原則名を直接言及しないでください。",
+  ].join("\n");
 }
 
 const DEFAULT_MAX_CHARS = 420;
@@ -77,8 +113,18 @@ function matchesTriggerPattern(query: string, triggerPattern: string): boolean {
  * tenantId が指定された場合、アクティブなチューニングルールをシステムプロンプトに注入する。
  * APIキー未設定・エラー時は箇条書きフォールバックを返す。
  */
+const PRINCIPLE_STAGES = new Set(["propose", "recommend", "close"]);
+
 export async function synthesizeAnswer(input: SynthesisInput): Promise<SynthesisOutput> {
-  const { query, items, maxChars = DEFAULT_MAX_CHARS, tenantId } = input;
+  const {
+    query,
+    items,
+    maxChars = DEFAULT_MAX_CHARS,
+    tenantId,
+    salesStage,
+    principleChunks = [],
+    usedPrinciples = [],
+  } = input;
 
   // ギャップ検出用シグナル（常に計算）
   const gapSignal = {
@@ -109,6 +155,10 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     return { answer: truncate(msg, maxChars), gapSignal };
   }
 
+  // Phase44: SalesFlow ステージが propose/recommend/close の場合のみ原則注入を準備
+  const shouldInjectPrinciples =
+    salesStage !== undefined && PRINCIPLE_STAGES.has(salesStage) && principleChunks.length > 0;
+
   // Groq APIキーがなければ即フォールバック（FAQ ヒットありの場合のみ）
   if (!process.env.GROQ_API_KEY) {
     if (!items.length) {
@@ -127,6 +177,13 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     }
     if (tuningSection) {
       systemPromptParts.push(tuningSection);
+    }
+    // Phase44: チューニングルール注入の後に心理学原則を追加（propose/recommend/close のみ）
+    if (shouldInjectPrinciples) {
+      const principleSection = buildPrinciplePrompt(principleChunks);
+      if (principleSection) {
+        systemPromptParts.push(principleSection);
+      }
     }
     const systemPrompt = systemPromptParts.join('\n\n');
 
@@ -153,7 +210,17 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       tag: 'synthesis',
     });
 
-    return { answer: truncate(raw.trim(), maxChars), gapSignal };
+    // Phase44: 原則メタデータを出力に付与（chat_messages.metadata 記録用）
+    return {
+      answer: truncate(raw.trim(), maxChars),
+      gapSignal,
+      ...(shouldInjectPrinciples && usedPrinciples.length > 0
+        ? {
+            usedPrinciples,
+            salesflowStage: salesStage,
+          }
+        : {}),
+    };
   } catch {
     // フォールバック: 箇条書き
     if (!items.length) {
