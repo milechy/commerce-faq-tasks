@@ -5,6 +5,15 @@ import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
 
+type OutcomeValue = "replied" | "appointment" | "lost" | "unknown";
+
+const OUTCOME_LABELS: Record<OutcomeValue, string> = {
+  replied: "📩 返信あり",
+  appointment: "📅 アポ取得",
+  lost: "❌ 失注",
+  unknown: "❓ 不明",
+};
+
 interface Message {
   id: number;
   role: "user" | "assistant";
@@ -49,6 +58,9 @@ export default function ChatHistorySessionPage() {
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(sessionFromState);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<OutcomeValue | null>(null);
+  const [outcomeSubmitting, setOutcomeSubmitting] = useState(false);
+  const [outcomeToast, setOutcomeToast] = useState<string | null>(null);
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
@@ -96,6 +108,25 @@ export default function ChatHistorySessionPage() {
       hour: "2-digit",
       minute: "2-digit",
     });
+
+  const handleOutcome = async (value: OutcomeValue) => {
+    if (!sessionId) return;
+    setOutcomeSubmitting(true);
+    try {
+      await authFetch(`${API_BASE}/v1/admin/evaluations/${sessionId}/outcome`, {
+        method: "PUT",
+        body: JSON.stringify({ outcome: value }),
+      });
+      setOutcome(value);
+      setOutcomeToast(`✅ 「${OUTCOME_LABELS[value]}」として記録しました`);
+      setTimeout(() => setOutcomeToast(null), 3000);
+    } catch {
+      setOutcomeToast("保存に失敗しました。もう一度お試しください 🙏");
+      setTimeout(() => setOutcomeToast(null), 3000);
+    } finally {
+      setOutcomeSubmitting(false);
+    }
+  };
 
   const handleCreateRule = (assistantMsg: Message) => {
     const msgIndex = messages.findIndex((m) => m.id === assistantMsg.id);
@@ -251,6 +282,30 @@ export default function ChatHistorySessionPage() {
         </div>
       </header>
 
+      {/* 営業結果トースト */}
+      {outcomeToast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "14px 24px",
+            borderRadius: 12,
+            background: "rgba(15,23,42,0.98)",
+            border: "1px solid #22c55e",
+            color: "#4ade80",
+            fontSize: 15,
+            fontWeight: 600,
+            zIndex: 2000,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {outcomeToast}
+        </div>
+      )}
+
       {/* Loading */}
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
@@ -391,6 +446,66 @@ export default function ChatHistorySessionPage() {
               </div>
             </div>
           ))}
+          {/* 営業結果入力 */}
+          <div
+            style={{
+              marginTop: 8,
+              padding: "20px 18px",
+              borderRadius: 14,
+              border: "1px solid #1f2937",
+              background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+            }}
+          >
+            <p
+              style={{
+                margin: "0 0 14px",
+                fontSize: 15,
+                fontWeight: 700,
+                color: "#e5e7eb",
+              }}
+            >
+              この会話の営業結果を記録
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, 1fr)",
+                gap: 10,
+              }}
+            >
+              {(Object.entries(OUTCOME_LABELS) as [OutcomeValue, string][]).map(
+                ([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => void handleOutcome(value)}
+                    disabled={outcomeSubmitting}
+                    style={{
+                      padding: "14px 12px",
+                      minHeight: 52,
+                      borderRadius: 10,
+                      border:
+                        outcome === value
+                          ? "1px solid rgba(74,222,128,0.5)"
+                          : "1px solid #374151",
+                      background:
+                        outcome === value
+                          ? "rgba(34,197,94,0.2)"
+                          : "rgba(31,41,55,0.5)",
+                      color: outcome === value ? "#4ade80" : "#9ca3af",
+                      fontSize: 15,
+                      fontWeight: outcome === value ? 700 : 500,
+                      cursor: outcomeSubmitting ? "not-allowed" : "pointer",
+                      opacity: outcomeSubmitting && outcome !== value ? 0.6 : 1,
+                      transition: "all 0.15s",
+                      width: "100%",
+                    }}
+                  >
+                    {label}
+                  </button>
+                )
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

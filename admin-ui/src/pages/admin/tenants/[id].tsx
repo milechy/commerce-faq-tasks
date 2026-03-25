@@ -6,6 +6,7 @@ import LangSwitcher from "../../../components/LangSwitcher";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 import { useAuth } from "../../../auth/useAuth";
+import AIReportTab from "../../../components/admin/AIReportTab";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -1145,7 +1146,7 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
 
 // ─── メインページ ─────────────────────────────────────────────────────────────
 
-type TabId = "settings" | "apikeys" | "embed" | "avatar";
+type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report";
 
 export default function TenantDetailPage() {
   const navigate = useNavigate();
@@ -1210,6 +1211,7 @@ export default function TenantDetailPage() {
     { id: "apikeys", label: t("tenant_detail.tab_apikeys") },
     { id: "embed", label: t("tenant_detail.tab_embed") },
     { id: "avatar" as const, label: "🤖 アバター" },
+    { id: "ai-report" as const, label: "📊 AI改善レポート" },
   ];
 
   return (
@@ -1375,6 +1377,9 @@ export default function TenantDetailPage() {
               tenant={tenant}
               onUpdate={(updated) => { setTenant(updated); showToast("✅ アバター設定を保存しました"); }}
             />
+          )}
+          {activeTab === "ai-report" && (
+            <AIReportTab tenantId={tenantId} />
           )}
         </>
       ) : (
