@@ -35,6 +35,7 @@ interface CustomerReaction {
   positive: number;
   neutral: number;
   negative: number;
+  unknown?: number;
 }
 
 interface KpiSummary {
@@ -269,6 +270,7 @@ function ReactionBar({ reactions }: { reactions: CustomerReaction }) {
     { label: "肯定的", value: reactions.positive, color: "#4ade80" },
     { label: "中立", value: reactions.neutral, color: "#fbbf24" },
     { label: "否定的", value: reactions.negative, color: "#f87171" },
+    ...(reactions.unknown ? [{ label: "不明", value: reactions.unknown, color: "#6b7280" }] : []),
   ];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -511,6 +513,7 @@ export default function AIReportTab({ tenantId }: { tenantId: string }) {
                 positive: (raw.reaction_distribution as Record<string, number>).positive ?? 0,
                 neutral: (raw.reaction_distribution as Record<string, number>).neutral ?? 0,
                 negative: (raw.reaction_distribution as Record<string, number>).negative ?? 0,
+                unknown: (raw.reaction_distribution as Record<string, number>).unknown ?? 0,
               }
             : mock.customer_reactions;
 
