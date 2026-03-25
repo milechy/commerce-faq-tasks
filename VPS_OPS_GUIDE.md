@@ -83,6 +83,7 @@ ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.
 | `src/api/admin/chat-history/migration.sql` | `chat_sessions` / `chat_messages` | Phase 38 |
 | `src/api/admin/tuning/migration.sql` | `tuning_rules` | Phase 38 |
 | `src/api/admin/tuning/migration_system_prompt.sql` | `tenants.system_prompt` カラム追加（ALTER TABLE） | Phase 38 |
+| `src/api/admin/knowledge/migration_book_uploads.sql` | `book_uploads` | Phase 44 |
 
 > 新しいマイグレーションを追加した場合は、このテーブルを更新すること。
 

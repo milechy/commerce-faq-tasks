@@ -9,6 +9,13 @@
 ## 申請リスト
 （まだなし）
 
+## Phase44 (Stream A)
+- SUPABASE_URL: 確認のみ（Phase41追加済み）
+- SUPABASE_SERVICE_ROLE_KEY: 確認のみ（Phase41追加済み）
+- KNOWLEDGE_ENCRYPTION_KEY: 書籍暗号化に流用（Security Fix追加済み、未設定時は平文フォールバック）
+
+Supabase Storage: book-pdfs バケット（private）を Supabase Dashboard で手動作成すること
+
 ## Security Fix: RAG暗号化 (fix/security-rag-excerpt-limit)
 - KNOWLEDGE_ENCRYPTION_KEY: faq_embeddings.text 暗号化キー（64文字hex = 256bit AES-256-GCM）
   - 生成方法: `python3 -c "import secrets; print(secrets.token_hex(32))"`

@@ -8,6 +8,7 @@ import jwt from "jsonwebtoken";
 import { groqClient } from "../../../agent/llm/groqClient";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
+import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { encryptText } from "../../../lib/crypto/textEncrypt";
 
 const pool = process.env.DATABASE_URL
@@ -701,6 +702,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   });
 
   registerFaqCrudRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
+  registerBookPdfRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
 
   console.log("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");
 }
