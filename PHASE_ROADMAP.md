@@ -161,3 +161,26 @@ Status: ✅ Completed (2026-03-23)
 - DB: `avatar_configs` に `anam_*` カラムは追加済み（後方互換、将来再検討時に使用可能）
 
 Status: ❌ Cancelled (2026-03-22)
+
+---
+
+## Phase43 – 管理画面 AI アシスタント（完了）
+
+- `admin_feedback` テーブル CRUD API（フィードバックチケット管理）
+- `POST /v1/admin/ai-assist/chat` — インテント振り分け + RAG 統合
+- 管理画面サポート AI システムプロンプト（RAJIUCE 知識ベース）
+
+Status: ✅ Completed (2026-03-25)
+
+---
+
+## Phase44 – 心理学 RAG 基盤（完了）
+
+- 書籍 PDF アップロード API（AES-256-GCM 暗号化保存、Supabase Storage `book-pdfs`）
+- チャンク構造化パイプライン（pdf-parse → 500–1000 文字分割 → Groq llama-3.1-8b-instant 6 フィールド構造化 → Embedding + faq_embeddings）
+- パートナー向け書籍管理 UI（ドラッグ&ドロップアップロード、処理進捗表示）
+- 心理学原則 RAG 検索統合（principleDetector → SalesFlow 注入）
+- DBマイグレーション: `book_uploads` テーブル + `faq_embeddings` metadata インデックス
+- Supabase Storage: `book-pdfs` バケット（private）
+
+Status: ✅ Completed (2026-04-05)

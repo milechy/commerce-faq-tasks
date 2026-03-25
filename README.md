@@ -720,3 +720,17 @@ A/Bテスト
 	2.	両方失敗→静的FAQ
 	3.	API失敗→CFキャッシュ/エラーバナー
 	4.	緊急→Circuit Breaker + Ops通知
+
+---
+
+## Phase 進捗
+
+| Phase | 内容 | Status |
+|---|---|---|
+| Phase38 | RAG + Hybrid Search + Chat History + Tuning | ✅ Completed |
+| Phase39 | Widget Shadow DOM + CORS + Rate Limit | ✅ Completed |
+| Phase40 | Billing (Stripe) + Usage Tracking | ✅ Completed |
+| Phase41 | Avatar Customization Studio (Leonardo.ai + Fish Audio) | ✅ Completed |
+| Phase42 | Anam.ai 移行 | ❌ Cancelled |
+| Phase43 | 管理画面 AI アシスタント + admin_feedback | ✅ Completed |
+| Phase44 | 心理学 RAG 基盤 (書籍 PDF + パイプライン + UI) | ✅ Completed (2026-04-05) |
