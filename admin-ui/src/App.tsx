@@ -22,6 +22,7 @@ import AdminAIChat from "./components/AdminAIChat";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarDefaultsPage from "./pages/admin/avatar-defaults/index";
+import BooksPage from "./pages/admin/knowledge/books";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -124,6 +125,9 @@ function AppInner() {
 
         {/* デフォルトアバター管理 — Super Admin専用 */}
         <Route path="/admin/avatar-defaults" element={<SuperAdminRoute><AvatarDefaultsPage /></SuperAdminRoute>} />
+
+        {/* 書籍管理 */}
+        <Route path="/admin/knowledge/books" element={<RequireAuth><BooksPage /></RequireAuth>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />
