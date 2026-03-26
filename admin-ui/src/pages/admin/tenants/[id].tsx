@@ -6,6 +6,9 @@ import LangSwitcher from "../../../components/LangSwitcher";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 import { useAuth } from "../../../auth/useAuth";
+import AIReportTab from "../../../components/admin/AIReportTab";
+import ABTestTab from "../../../components/admin/ABTestTab";
+import ObjectionPatternsTab from "../../../components/admin/ObjectionPatternsTab";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -1145,7 +1148,7 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
 
 // ─── メインページ ─────────────────────────────────────────────────────────────
 
-type TabId = "settings" | "apikeys" | "embed" | "avatar";
+type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns";
 
 export default function TenantDetailPage() {
   const navigate = useNavigate();
@@ -1159,6 +1162,7 @@ export default function TenantDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("settings");
   const [toast, setToast] = useState<string | null>(null);
+  const [unreadReportCount, setUnreadReportCount] = useState(0);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -1205,12 +1209,68 @@ export default function TenantDetailPage() {
     navigate("/admin");
   };
 
-  const TABS: { id: TabId; label: string }[] = [
+  // 未読レポート数の取得
+  useEffect(() => {
+    const fetchUnread = async () => {
+      try {
+        const token = await getToken();
+        if (!token) return;
+        const res = await fetch(`${API_BASE}/v1/admin/reports/unread-count?tenantId=${tenantId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const data = (await res.json()) as any;
+          setUnreadReportCount(data.count ?? 0);
+        }
+      } catch {
+        // API未実装の場合はモック値
+        setUnreadReportCount(1);
+      }
+    };
+    void fetchUnread();
+  }, [tenantId]);
+
+  const aiReportLabel = (
+    <span style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 4 }}>
+      📊 AI改善レポート
+      {unreadReportCount > 0 && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: 18,
+            height: 18,
+            borderRadius: 999,
+            background: "#ef4444",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 700,
+            padding: "0 4px",
+          }}
+        >
+          {unreadReportCount}
+        </span>
+      )}
+    </span>
+  );
+
+  const baseTabs: { id: TabId; label: React.ReactNode }[] = [
     { id: "settings", label: t("tenant_detail.tab_settings") },
     { id: "apikeys", label: t("tenant_detail.tab_apikeys") },
     { id: "embed", label: t("tenant_detail.tab_embed") },
-    { id: "avatar" as const, label: "🤖 アバター" },
+    { id: "avatar", label: "🤖 アバター" },
+    { id: "ai-report", label: aiReportLabel },
   ];
+
+  const TABS: { id: TabId; label: React.ReactNode }[] = isSuperAdmin
+    ? [
+        ...baseTabs,
+        { id: "ab-test", label: "🔬 A/Bテスト" },
+        { id: "objection-patterns", label: "💬 反論パターン" },
+      ]
+    : baseTabs;
 
   return (
     <div
@@ -1323,36 +1383,38 @@ export default function TenantDetailPage() {
           {/* タブナビゲーション */}
           <div
             style={{
-              display: "flex",
-              gap: 4,
+              overflowX: "auto",
               marginBottom: 24,
               background: "rgba(15,23,42,0.8)",
               border: "1px solid #1f2937",
               borderRadius: 12,
               padding: 4,
+              WebkitOverflowScrolling: "touch" as const,
             }}
           >
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  flex: 1,
-                  padding: "12px 16px",
-                  minHeight: 44,
-                  borderRadius: 10,
-                  border: "none",
-                  background: activeTab === tab.id ? "rgba(34,197,94,0.15)" : "transparent",
-                  color: activeTab === tab.id ? "#4ade80" : "#9ca3af",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "all 0.15s",
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
+            <div style={{ display: "flex", gap: 4, minWidth: "max-content" }}>
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  style={{
+                    padding: "12px 16px",
+                    minHeight: 44,
+                    whiteSpace: "nowrap",
+                    borderRadius: 10,
+                    border: "none",
+                    background: activeTab === tab.id ? "rgba(34,197,94,0.15)" : "transparent",
+                    color: activeTab === tab.id ? "#4ade80" : "#9ca3af",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* タブコンテンツ */}
@@ -1375,6 +1437,15 @@ export default function TenantDetailPage() {
               tenant={tenant}
               onUpdate={(updated) => { setTenant(updated); showToast("✅ アバター設定を保存しました"); }}
             />
+          )}
+          {activeTab === "ai-report" && (
+            <AIReportTab tenantId={tenantId} />
+          )}
+          {activeTab === "ab-test" && isSuperAdmin && (
+            <ABTestTab tenantId={tenantId} />
+          )}
+          {activeTab === "objection-patterns" && isSuperAdmin && (
+            <ObjectionPatternsTab tenantId={tenantId} />
           )}
         </>
       ) : (

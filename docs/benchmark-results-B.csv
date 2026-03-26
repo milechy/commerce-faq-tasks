@@ -1,0 +1,31 @@
+id,scenario,difficulty,expectedOutcome,actualStages,judgeScore,usedPrinciples,success,tokenEstimate
+conv_001,"在庫確認 — シンプルな問い合わせ",easy,replied,"clarify",50,"",true,10
+conv_002,"基本スペック質問 — 燃費確認",easy,replied,"clarify → recommend",60,"",false,10
+conv_003,"問い合わせ — 試乗の申し込み",easy,appointment,"clarify",55,"返報性",false,10
+conv_004,"シンプルな新車問い合わせ",easy,replied,"clarify",50,"",true,14
+conv_005,"中古車 — 走行距離確認",easy,replied,"clarify",50,"",true,16
+conv_006,"保証内容の確認",easy,replied,"clarify → propose → recommend",75,"返報性",false,14
+conv_007,"カラーバリエーション確認",easy,replied,"clarify",55,"社会的証明",true,10
+conv_008,"オプション装備の質問",easy,replied,"clarify",50,"",true,9
+conv_009,"納期確認",easy,replied,"clarify",55,"希少性",true,13
+conv_010,"価格交渉 — 他社比較あり",medium,appointment,"clarify → propose → recommend",80,"アンカリング効果, 損失回避",true,14
+conv_011,"ローン相談 — 月々の支払い重視",medium,appointment,"clarify → recommend",70,"アンカリング効果, フレーミング効果",true,18
+conv_012,"下取り交渉 — 査定額への不満",medium,appointment,"clarify",60,"アンカリング効果, 損失回避",false,19
+conv_013,"即決促し — 期間限定キャンペーン",medium,appointment,"clarify → close",70,"希少性, 損失回避",true,16
+conv_014,"中古車 — 年式と価格のバランス",medium,appointment,"propose → clarify",70,"アンカリング効果, フレーミング効果",true,17
+conv_015,"商談 — 複数車種の比較検討",medium,appointment,"clarify → propose",70,"フレーミング効果, 社会的証明",true,17
+conv_016,"法人購入 — 経費処理の相談",medium,appointment,"clarify → close",70,"返報性, アンカリング効果",true,17
+conv_017,"EVの購入検討 — 補助金確認",medium,appointment,"clarify → propose",70,"アンカリング効果, 損失回避",true,17
+conv_018,"下取りなし — 新車乗り換え",medium,appointment,"clarify → propose → recommend",80,"アンカリング効果, 希少性",true,18
+conv_019,"輸入車 — 維持費の懸念",medium,appointment,"recommend → clarify",70,"フレーミング効果, 社会的証明",true,16
+conv_020,"ファミリーカー — 安全性重視",medium,appointment,"clarify → propose",70,"損失回避, 社会的証明",true,18
+conv_021,"値引き交渉 — 強硬姿勢",medium,appointment,"clarify",60,"アンカリング効果, 損失回避",false,18
+conv_022,"リピーター — 信頼関係あり",medium,appointment,"clarify",60,"社会的証明, コミットメントと一貫性",false,17
+conv_023,"オンライン問い合わせ — 来店誘導",medium,appointment,"clarify",60,"返報性, コミットメントと一貫性",false,16
+conv_024,"強い拒絶後の巻き返し — 予算不足",medium,appointment,"propose → clarify",75,"アンカリング効果, 損失回避, フレーミング効果",true,17
+conv_025,"複合反論 — 価格+他社+必要性",hard,appointment,"clarify → recommend",80,"損失回避, アンカリング効果, 社会的証明, フレーミング効果",true,19
+conv_026,"決断保留の長期化 — 配偶者の説得が必要",hard,appointment,"recommend → clarify",75,"コミットメントと一貫性, 社会的証明, 希少性",true,18
+conv_027,"強い拒絶 — 過去のトラブル経験",hard,appointment,"clarify",65,"社会的証明, 返報性, コミットメントと一貫性",false,22
+conv_028,"複合反論 — 電気自動車への根強い懸念",hard,appointment,"clarify",65,"フレーミング効果, 社会的証明, 損失回避",false,20
+conv_029,"長期保留 — 買い替えタイミングの迷い",hard,appointment,"recommend → clarify",75,"希少性, 損失回避, コミットメントと一貫性",true,22
+conv_030,"強い拒絶後の巻き返し — 競合での成約寸前",hard,appointment,"close → clarify",80,"アンカリング効果, 損失回避, 希少性, フレーミング効果",true,21

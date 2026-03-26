@@ -7,6 +7,7 @@ import {
   buildTuningPromptSection,
 } from '../../api/admin/tuning/tuningRulesRepository';
 import type { PrincipleChunk } from '../psychology/principleSearch';
+import { selectVariant, type PromptVariant } from '../ab-test/variantSelector';
 
 // @ts-ignore
 import { Pool } from 'pg';
@@ -35,6 +36,37 @@ async function getTenantsSystemPrompt(tenantId: string): Promise<string | null> 
   }
 }
 
+async function getTenantsPromptWithVariant(tenantId: string): Promise<{
+  prompt: string | null;
+  variantId: string | null;
+  variantName: string | null;
+}> {
+  try {
+    const pool = getPool();
+    const result = await pool.query<{
+      system_prompt: string | null;
+      system_prompt_variants: PromptVariant[] | null;
+    }>(
+      'SELECT system_prompt, system_prompt_variants FROM tenants WHERE id = $1',
+      [tenantId],
+    );
+    const row = result.rows[0];
+    if (!row) return { prompt: null, variantId: null, variantName: null };
+
+    const variants = row.system_prompt_variants ?? [];
+    const fallback = row.system_prompt?.trim() ?? '';
+
+    const selection = selectVariant(variants, fallback);
+    return {
+      prompt: selection.prompt || null,
+      variantId: selection.variantId,
+      variantName: selection.variantName,
+    };
+  } catch {
+    return { prompt: null, variantId: null, variantName: null };
+  }
+}
+
 export interface SynthesisInput {
   query: string;
   items: RerankItem[];
@@ -46,6 +78,9 @@ export interface SynthesisInput {
   principleChunks?: PrincipleChunk[];
   /** Phase44: 検出された原則名リスト（メタデータ記録用） */
   usedPrinciples?: string[];
+  /** Phase46: A/Bテスト variant記録用 */
+  variantId?: string | null;
+  variantName?: string | null;
 }
 
 export interface SynthesisOutput {
@@ -56,6 +91,9 @@ export interface SynthesisOutput {
   usedPrinciples?: string[];
   salesflowStage?: string;
   principleSource?: "keyword" | "llm";
+  /** Phase46: 選択されたvariant情報 */
+  variantId?: string | null;
+  variantName?: string | null;
 }
 
 /**
@@ -137,10 +175,13 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     ? await getActiveRulesForTenant(tenantId).catch(() => [])
     : [];
 
-  // テナント固有のシステムプロンプトを取得（tenantId がある場合のみ）
-  const tenantSystemPrompt = tenantId
-    ? await getTenantsSystemPrompt(tenantId)
-    : null;
+  // テナント固有のシステムプロンプトをA/Bバリアント込みで取得（tenantId がある場合のみ）
+  const promptResult = tenantId
+    ? await getTenantsPromptWithVariant(tenantId)
+    : { prompt: null, variantId: null, variantName: null };
+  const tenantSystemPrompt = promptResult.prompt;
+  const selectedVariantId = promptResult.variantId;
+  const selectedVariantName = promptResult.variantName;
 
   // クエリにマッチするルールを絞り込む
   const matchedRules = tuningRules.filter((r) =>
@@ -211,9 +252,12 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     });
 
     // Phase44: 原則メタデータを出力に付与（chat_messages.metadata 記録用）
+    // Phase46: A/Bバリアント情報を付与
     return {
       answer: truncate(raw.trim(), maxChars),
       gapSignal,
+      variantId: selectedVariantId,
+      variantName: selectedVariantName,
       ...(shouldInjectPrinciples && usedPrinciples.length > 0
         ? {
             usedPrinciples,
