@@ -4,6 +4,7 @@
 
 // @ts-ignore
 import { Pool } from 'pg';
+import { getPool as _getDefaultPool } from '../../lib/db';
 
 export interface PrincipleChunk {
   principle: string;
@@ -12,17 +13,8 @@ export interface PrincipleChunk {
   contraindication: string; // slice(0, 200) 適用済み
 }
 
-// lazy singleton: DATABASE_URL から Pool を一度だけ作成
-let _pool: InstanceType<typeof Pool> | null = null;
-
 function getPool(db?: InstanceType<typeof Pool>): InstanceType<typeof Pool> {
-  if (db) return db;
-  if (!_pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error('DATABASE_URL is not set');
-    _pool = new Pool({ connectionString: url });
-  }
-  return _pool;
+  return db ?? _getDefaultPool();
 }
 
 /**

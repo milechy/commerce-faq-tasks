@@ -3,6 +3,7 @@
 
 // @ts-ignore
 import { Pool } from 'pg';
+import { getPool as _getDefaultPool } from '../../lib/db';
 
 export interface EvaluationAxes {
   principle_appropriateness: number; // 0-100
@@ -58,23 +59,11 @@ function rowToEvaluation(row: DbRow): ConversationEvaluation {
   };
 }
 
-// lazy singleton Pool
-let _pool: InstanceType<typeof Pool> | null = null;
-
-function getDefaultPool(): InstanceType<typeof Pool> {
-  if (!_pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error('DATABASE_URL is not set');
-    _pool = new Pool({ connectionString: url });
-  }
-  return _pool;
-}
-
 export function createEvaluationRepository(pool?: InstanceType<typeof Pool>) {
   // pool resolution is deferred to actual DB calls to allow module-level initialization
   // without DATABASE_URL (e.g. test environments)
   function getPool(): InstanceType<typeof Pool> {
-    return pool ?? getDefaultPool();
+    return pool ?? _getDefaultPool();
   }
 
   return {

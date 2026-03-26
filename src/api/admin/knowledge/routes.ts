@@ -1,9 +1,10 @@
 // src/api/admin/knowledge/routes.ts
 // Phase29: カーネーション向けナレッジ管理API
 import type { Express, NextFunction, Request, Response } from "express";
-// @ts-ignore
-import { Pool } from "pg";
+// @ts-ignore - pg has no bundled type declarations in this project
+import type { Pool } from "pg";
 import { z } from "zod";
+import { pool } from "../../../lib/db";
 import jwt from "jsonwebtoken";
 import { groqClient } from "../../../agent/llm/groqClient";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
@@ -11,9 +12,6 @@ import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { encryptText } from "../../../lib/crypto/textEncrypt";
 
-const pool = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL })
-  : null;
 
 const CATEGORIES = ["inventory", "campaign", "coupon", "store_info", "product_info", "pricing", "booking", "warranty", "general"] as const;
 type Category = (typeof CATEGORIES)[number];

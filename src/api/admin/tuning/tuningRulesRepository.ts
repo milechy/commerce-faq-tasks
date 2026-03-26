@@ -1,20 +1,7 @@
 // src/api/admin/tuning/tuningRulesRepository.ts
 // Phase38 Step4-BE: チューニングルール DB リポジトリ
 
-// @ts-ignore
-import { Pool } from "pg";
-
-// lazy singleton Pool
-let _pool: InstanceType<typeof Pool> | null = null;
-
-function getPool(): InstanceType<typeof Pool> {
-  if (!_pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL is not set");
-    _pool = new Pool({ connectionString: url });
-  }
-  return _pool;
-}
+import { getPool } from "../../../lib/db";
 
 // ---------------------------------------------------------------------------
 // 型定義

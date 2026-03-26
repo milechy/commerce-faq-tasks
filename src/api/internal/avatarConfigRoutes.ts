@@ -4,21 +4,9 @@
 //   認証: X-Internal-Request: 1
 //   テナント別アバター設定を返す。avatar-agent/agent.py から呼び出される。
 
-// @ts-ignore
-import { Pool } from "pg";
 import type { Express, Request, Response } from "express";
 import { INTERNAL_REQUEST_HEADER } from "../../lib/metrics/kpiDefinitions";
-
-let _pool: InstanceType<typeof Pool> | null = null;
-
-function getPool(): InstanceType<typeof Pool> {
-  if (!_pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL is not set");
-    _pool = new Pool({ connectionString: url });
-  }
-  return _pool;
-}
+import { getPool } from "../../lib/db";
 
 export function registerInternalAvatarConfigRoutes(app: Express): void {
   app.get("/api/internal/avatar-config", async (req: Request, res: Response) => {

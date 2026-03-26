@@ -1,12 +1,7 @@
 // src/search/pgvector.ts
 
-// @ts-ignore - pg types are not bundled in this project, treat as any
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { Pool } = require("pg") as { Pool: any };
 import { decryptText } from "../lib/crypto/textEncrypt";
-
-const pgUrl = process.env.DATABASE_URL;
-const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
+import { pool as pg } from "../lib/db";
 
 export interface PgVectorHit {
   id: string;

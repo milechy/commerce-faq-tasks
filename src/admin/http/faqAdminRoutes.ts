@@ -1,17 +1,9 @@
 // src/admin/http/faqAdminRoutes.ts
 import express, { type Express, type Request, type Response } from "express";
-// @ts-ignore - pg has no bundled type declarations in this project
-import { Pool } from "pg";
 import { embedText } from "../../agent/llm/openaiEmbeddingClient";
+import { pool } from "../../lib/db";
 import { supabaseAuthMiddleware } from "./supabaseAuthMiddleware";
 
-const databaseUrl = process.env.DATABASE_URL;
-
-const pool = databaseUrl
-  ? new Pool({
-      connectionString: databaseUrl,
-    })
-  : null;
 
 type FaqRow = {
   id: number;
@@ -97,7 +89,7 @@ async function updateEsFaqDocument(row: FaqRow) {
 }
 
 export function registerFaqAdminRoutes(app: Express) {
-  if (!databaseUrl || !pool) {
+  if (!pool) {
     console.warn(
       "[faqAdminRoutes] DATABASE_URL is not set. Admin FAQ API will be disabled."
     );

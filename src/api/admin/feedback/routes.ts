@@ -5,23 +5,7 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-// @ts-ignore
-import { Pool } from "pg";
-
-// ---------------------------------------------------------------------------
-// DB プール
-// ---------------------------------------------------------------------------
-
-let _pool: InstanceType<typeof Pool> | null = null;
-
-function getPool(): InstanceType<typeof Pool> {
-  if (!_pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL is not set");
-    _pool = new Pool({ connectionString: url });
-  }
-  return _pool;
-}
+import { getPool } from "../../../lib/db";
 
 // ---------------------------------------------------------------------------
 // ヘルパー

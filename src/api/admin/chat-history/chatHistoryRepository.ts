@@ -1,20 +1,7 @@
 // src/api/admin/chat-history/chatHistoryRepository.ts
 // Phase38: 会話履歴DB永続化リポジトリ（Step1: 保存 / Step2: 取得）
 
-// @ts-ignore
-import { Pool } from "pg";
-
-// lazy singleton: DATABASE_URL から Pool を一度だけ作成
-let _pool: InstanceType<typeof Pool> | null = null;
-
-function getPool(): InstanceType<typeof Pool> {
-  if (!_pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL is not set");
-    _pool = new Pool({ connectionString: url });
-  }
-  return _pool;
-}
+import { getPool } from "../../../lib/db";
 
 export interface SaveMessageParams {
   tenantId: string;

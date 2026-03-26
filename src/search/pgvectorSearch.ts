@@ -1,8 +1,7 @@
 import { performance } from "node:perf_hooks";
 
-// @ts-ignore - pg has no bundled type declarations in this project
-import { Pool } from "pg";
 import { decryptText } from "../lib/crypto/textEncrypt";
+import { pool } from "../lib/db";
 
 export type PgvectorSearchParams = {
   tenantId: string;
@@ -22,13 +21,6 @@ export type PgvectorSearchResult = {
   ms: number;
 };
 
-const databaseUrl = process.env.DATABASE_URL;
-
-const pool = databaseUrl
-  ? new Pool({
-      connectionString: databaseUrl,
-    })
-  : null;
 
 export async function searchPgVector(
   params: PgvectorSearchParams
@@ -36,7 +28,7 @@ export async function searchPgVector(
   const { tenantId, embedding, topK = 5 } = params;
   const t0 = performance.now();
 
-  if (!databaseUrl || !pool) {
+  if (!pool) {
     return { items: [], ms: 0 };
   }
 

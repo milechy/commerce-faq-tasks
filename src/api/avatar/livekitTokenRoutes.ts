@@ -11,17 +11,10 @@
 
 import crypto from "crypto";
 import type { Express, Request, Response, RequestHandler } from "express";
-// @ts-ignore
-import { Pool } from "pg";
 import jwt from "jsonwebtoken";
+import { pool } from "../../lib/db";
 import { RoomServiceClient, AgentDispatchClient } from "livekit-server-sdk";
 import type { AuthedRequest } from "../../agent/http/authMiddleware";
-
-// ─── DB ──────────────────────────────────────────────────────────────────────
-
-const pool = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL })
-  : null;
 
 // ─── LiveKit JWT 生成 ─────────────────────────────────────────────────────────
 

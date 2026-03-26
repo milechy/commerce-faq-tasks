@@ -1,7 +1,7 @@
 import "dotenv/config";
+import "./config/env";
 
-// @ts-ignore
-import { Pool } from "pg";
+import { pool as db } from "./lib/db";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import express from "express";
 import multer from "multer";
@@ -80,13 +80,6 @@ import {
 const app = express();
 app.disable("x-powered-by");
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
-
-// ---------------------------------------------------------------------------
-// DB pool (shared across admin routes)
-// ---------------------------------------------------------------------------
-const db = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL })
-  : null;
 
 // Phase42: anamRoutes が app.locals.db 経由で pool を参照する
 app.locals.db = db;

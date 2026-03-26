@@ -6,8 +6,7 @@
 // pgvector 検索も lang でフィルタする。
 
 import { Client as ES } from "@elastic/elasticsearch";
-// @ts-ignore - pg has no bundled types in this project
-const { Pool } = require("pg") as { Pool: any };
+import { pool as pg } from "../lib/db";
 
 import {
   SupportedLang,
@@ -19,8 +18,6 @@ import {
 export type { SupportedLang };
 
 const BUDGET = Number(process.env.HYBRID_TIMEOUT_MS || 600);
-const pgUrl = process.env.DATABASE_URL;
-const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
 
 export interface LangRouterHit {
   id: string;

@@ -1,8 +1,6 @@
 import { Client as ES } from "@elastic/elasticsearch";
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-// @ts-ignore - pg has no bundled types in this project, treat as any
-const { Pool } = require("pg") as { Pool: any };
 import { decryptText } from "../lib/crypto/textEncrypt";
+import { pool as pg } from "../lib/db";
 
 // Phase33 C: 言語別インデックス解決
 import { toSupportedLang, resolveFallbackIndices, DEFAULT_LANG, type SupportedLang } from "./langIndex";
@@ -17,8 +15,6 @@ const BUDGET = Number(process.env.HYBRID_TIMEOUT_MS || 600);
 const ALLOW_MOCK = process.env.HYBRID_MOCK_ON_FAILURE === "1";
 // Phase33 C: フィーチャーフラグ（LANG_SEARCH_ENABLED=1 で有効化）
 const LANG_SEARCH_ENABLED = process.env.LANG_SEARCH_ENABLED === "1";
-const pgUrl = process.env.DATABASE_URL;
-const pg = pgUrl ? new Pool({ connectionString: pgUrl }) : null;
 
 const normZ = (xs: number[]) => {
   const m = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
