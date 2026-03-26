@@ -7,6 +7,7 @@ import crypto from "crypto";
 // @ts-ignore
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
+import { runBookPipeline } from "../../../lib/book-pipeline/pipeline";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -352,6 +353,71 @@ export function registerBookPdfRoutes(
           err instanceof Error ? err.message : String(err)
         );
         return res.status(500).json({ error: "削除に失敗しました" });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/knowledge/book-pdf/:id/process
+  // チャンク構造化パイプライン トリガー
+  // 非同期処理: 202 Accepted を即返し、バックグラウンドで pipeline 実行
+  // -----------------------------------------------------------------------
+  app.post(
+    "/v1/admin/knowledge/book-pdf/:id/process",
+    knowledgeAuth,
+    requireKnowledgeRole,
+    async (req: Request, res: Response) => {
+      const user = (req as any).user as
+        | { role?: string; tenantId?: string | null }
+        | undefined;
+      const isSuperAdmin = user?.role === "super_admin";
+
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "無効なIDです" });
+      }
+
+      try {
+        const lookup = await db.query(
+          "SELECT id, tenant_id, status FROM book_uploads WHERE id = $1",
+          [id]
+        );
+        if (lookup.rows.length === 0) {
+          return res.status(404).json({ error: "書籍が見つかりません" });
+        }
+
+        const book = lookup.rows[0] as { id: number; tenant_id: string; status: string };
+        if (!isSuperAdmin && book.tenant_id !== user?.tenantId) {
+          return res.status(403).json({ error: "他のテナントのデータにはアクセスできません" });
+        }
+
+        // 既に処理中 / 完了済みの場合は 409
+        if (book.status === "processing") {
+          return res.status(409).json({ error: "既に処理中です" });
+        }
+        if (book.status === "embedded") {
+          return res.status(409).json({ error: "既に処理済みです" });
+        }
+
+        // 202 を即返してバックグラウンド実行
+        res.status(202).json({ ok: true, bookId: id, message: "処理を開始しました" });
+
+        // バックグラウンド実行（エラーはログのみ）
+        runBookPipeline(id, { db }).catch((err: unknown) => {
+          console.error(
+            "[book-pdf] pipeline error book_id=%d:",
+            id,
+            err instanceof Error ? err.message : String(err)
+          );
+        });
+
+        return;
+      } catch (err: unknown) {
+        console.error(
+          "[book-pdf] POST process error:",
+          err instanceof Error ? err.message : String(err)
+        );
+        return res.status(500).json({ error: "処理の開始に失敗しました" });
       }
     }
   );
