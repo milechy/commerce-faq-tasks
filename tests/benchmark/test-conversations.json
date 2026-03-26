@@ -1,0 +1,424 @@
+[
+  {
+    "id": "conv_001",
+    "scenario": "在庫確認 — シンプルな問い合わせ",
+    "customer_messages": [
+      "プリウスの在庫はありますか？",
+      "シルバーはありますか？",
+      "ありがとうございます"
+    ],
+    "expected_principles": [],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_002",
+    "scenario": "基本スペック質問 — 燃費確認",
+    "customer_messages": [
+      "ヤリスクロスの燃費を教えてください",
+      "ハイブリッドはどうですか？",
+      "わかりました、検討します"
+    ],
+    "expected_principles": [],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_003",
+    "scenario": "問い合わせ — 試乗の申し込み",
+    "customer_messages": [
+      "アルファードの試乗ができますか？",
+      "今週末は空いていますか？",
+      "土曜日の午後でお願いします"
+    ],
+    "expected_principles": ["返報性"],
+    "expected_stage_progression": "clarify → propose → close",
+    "expected_outcome": "appointment",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_004",
+    "scenario": "シンプルな新車問い合わせ",
+    "customer_messages": [
+      "新車でSUVを探しています",
+      "家族で使いたいんですが",
+      "4人家族です",
+      "ありがとうございます、パンフレットもらえますか？"
+    ],
+    "expected_principles": [],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_005",
+    "scenario": "中古車 — 走行距離確認",
+    "customer_messages": [
+      "この中古のランドクルーザー、走行距離はどれくらいですか？",
+      "5万キロですか、それは多いですか少ないですか？",
+      "なるほど、わかりました"
+    ],
+    "expected_principles": [],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_006",
+    "scenario": "保証内容の確認",
+    "customer_messages": [
+      "中古車の保証はどうなっていますか？",
+      "1年保証ですね、延長保証はありますか？",
+      "費用はいくらですか？",
+      "検討してみます"
+    ],
+    "expected_principles": ["返報性"],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_007",
+    "scenario": "カラーバリエーション確認",
+    "customer_messages": [
+      "このノートはどんな色がありますか？",
+      "白と黒はどちらが人気ですか？",
+      "白にしようかな"
+    ],
+    "expected_principles": ["社会的証明"],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_008",
+    "scenario": "オプション装備の質問",
+    "customer_messages": [
+      "ナビはついていますか？",
+      "社外品でもいいです",
+      "費用はどのくらいかかりますか？"
+    ],
+    "expected_principles": [],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_009",
+    "scenario": "納期確認",
+    "customer_messages": [
+      "ヴォクシーを注文したら何ヶ月待ちますか？",
+      "3ヶ月ですか、それは長いですね",
+      "もっと早く手に入る車はありますか？"
+    ],
+    "expected_principles": ["希少性"],
+    "expected_stage_progression": "clarify → propose",
+    "expected_outcome": "replied",
+    "difficulty": "easy"
+  },
+  {
+    "id": "conv_010",
+    "scenario": "価格交渉 — 他社比較あり",
+    "customer_messages": [
+      "SUVを探しているんですが",
+      "予算は500万くらいで",
+      "他社だと480万で同じグレードがあるんですけど",
+      "うーん、考えます"
+    ],
+    "expected_principles": ["アンカリング効果", "損失回避"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_011",
+    "scenario": "ローン相談 — 月々の支払い重視",
+    "customer_messages": [
+      "月々の支払いを5万円以内に抑えたいんですが",
+      "頭金は100万円用意できます",
+      "金利はどのくらいですか？",
+      "他のローン会社と比べてどうですか？",
+      "少し考えてみます"
+    ],
+    "expected_principles": ["アンカリング効果", "フレーミング効果"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_012",
+    "scenario": "下取り交渉 — 査定額への不満",
+    "customer_messages": [
+      "今乗っているフィットを下取りに出したいんですが",
+      "5年で8万キロです",
+      "査定額が50万円とのことですが、もう少し高くなりませんか？",
+      "他社では55万円と言われています"
+    ],
+    "expected_principles": ["アンカリング効果", "損失回避"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_013",
+    "scenario": "即決促し — 期間限定キャンペーン",
+    "customer_messages": [
+      "このセレナ、いいなと思っているんですが",
+      "キャンペーンが今月末までとのことですが",
+      "あと2日しかないんですね",
+      "家族と相談してから決めます"
+    ],
+    "expected_principles": ["希少性", "損失回避"],
+    "expected_stage_progression": "propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_014",
+    "scenario": "中古車 — 年式と価格のバランス",
+    "customer_messages": [
+      "予算200万円でハリアーを探しています",
+      "2020年式はどのくらいしますか？",
+      "230万円ですか、予算オーバーです",
+      "2018年式だとどうですか？"
+    ],
+    "expected_principles": ["アンカリング効果", "フレーミング効果"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_015",
+    "scenario": "商談 — 複数車種の比較検討",
+    "customer_messages": [
+      "カローラとシビックで迷っているんですが",
+      "維持費はどちらが安いですか？",
+      "デザインはシビックの方が好きなんですが",
+      "価格差は10万円ですね"
+    ],
+    "expected_principles": ["フレーミング効果", "社会的証明"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_016",
+    "scenario": "法人購入 — 経費処理の相談",
+    "customer_messages": [
+      "会社用の車を探しています",
+      "リースと購入どちらが得ですか？",
+      "5台まとめて購入する場合は値引きできますか？",
+      "見積もりを出してもらえますか？"
+    ],
+    "expected_principles": ["返報性", "アンカリング効果"],
+    "expected_stage_progression": "clarify → propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_017",
+    "scenario": "EVの購入検討 — 補助金確認",
+    "customer_messages": [
+      "電気自動車に興味があるんですが",
+      "補助金はどのくらいもらえますか？",
+      "充電設備の設置費用はどのくらいかかりますか？",
+      "実質いくらになりますか？"
+    ],
+    "expected_principles": ["アンカリング効果", "損失回避"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_018",
+    "scenario": "下取りなし — 新車乗り換え",
+    "customer_messages": [
+      "今の車は売らずに2台持ちにしたいんですが",
+      "軽自動車でいいんですが安いのはありますか？",
+      "Nボックスはいくらですか？",
+      "もう少し安くなりませんか？",
+      "考えてみます"
+    ],
+    "expected_principles": ["アンカリング効果", "希少性"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_019",
+    "scenario": "輸入車 — 維持費の懸念",
+    "customer_messages": [
+      "BMWの3シリーズを検討しているんですが",
+      "維持費が心配で",
+      "修理代が高いと聞いたんですが実際どうですか？",
+      "国産車と比べてどうですか？"
+    ],
+    "expected_principles": ["フレーミング効果", "社会的証明"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_020",
+    "scenario": "ファミリーカー — 安全性重視",
+    "customer_messages": [
+      "子どもが生まれたので安全な車に乗り換えたいです",
+      "衝突安全性の評価はどうですか？",
+      "シートベルトの装着確認機能はありますか？",
+      "予算は400万円以内で"
+    ],
+    "expected_principles": ["損失回避", "社会的証明"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_021",
+    "scenario": "値引き交渉 — 強硬姿勢",
+    "customer_messages": [
+      "このクラウン、もっと値引きしてください",
+      "50万円引きにしてくれないと買いません",
+      "他のディーラーはもっと引いてくれます",
+      "それなら他に行きます"
+    ],
+    "expected_principles": ["アンカリング効果", "損失回避"],
+    "expected_stage_progression": "propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_022",
+    "scenario": "リピーター — 信頼関係あり",
+    "customer_messages": [
+      "前回もこちらで買ったんですが、また来ました",
+      "今回はミニバンを探しています",
+      "アルファードかヴェルファイアで迷っています",
+      "おすすめはどちらですか？"
+    ],
+    "expected_principles": ["社会的証明", "コミットメントと一貫性"],
+    "expected_stage_progression": "clarify → propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_023",
+    "scenario": "オンライン問い合わせ — 来店誘導",
+    "customer_messages": [
+      "ホームページで見たフォレスターについて聞きたいです",
+      "写真で見た内装が気になっています",
+      "実物を見てみたいんですが",
+      "今週末は空いていますか？"
+    ],
+    "expected_principles": ["返報性", "コミットメントと一貫性"],
+    "expected_stage_progression": "clarify → propose → close",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_024",
+    "scenario": "強い拒絶後の巻き返し — 予算不足",
+    "customer_messages": [
+      "やっぱり予算的に無理です、諦めます",
+      "どうせ高いでしょ",
+      "安くできるなら聞きますよ",
+      "本当にそんな値段があるんですか",
+      "まあ、一度話だけ聞いてみます"
+    ],
+    "expected_principles": ["アンカリング効果", "損失回避", "フレーミング効果"],
+    "expected_stage_progression": "clarify → propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "medium"
+  },
+  {
+    "id": "conv_025",
+    "scenario": "複合反論 — 価格+他社+必要性",
+    "customer_messages": [
+      "正直、車は今すぐ必要じゃないんです",
+      "他社の方が安いですし",
+      "今の車もまだ走りますから",
+      "それにローンは組みたくないんです",
+      "どうしてもということであれば聞きますが"
+    ],
+    "expected_principles": ["損失回避", "アンカリング効果", "社会的証明", "フレーミング効果"],
+    "expected_stage_progression": "clarify → propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "hard"
+  },
+  {
+    "id": "conv_026",
+    "scenario": "決断保留の長期化 — 配偶者の説得が必要",
+    "customer_messages": [
+      "気に入ったんですが、妻に相談しないと",
+      "前回も同じ理由で断りました",
+      "妻が乗り気じゃなくて",
+      "妻も同席できる機会はありますか？",
+      "次の週末、一緒に来てみます"
+    ],
+    "expected_principles": ["コミットメントと一貫性", "社会的証明", "希少性"],
+    "expected_stage_progression": "propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "hard"
+  },
+  {
+    "id": "conv_027",
+    "scenario": "強い拒絶 — 過去のトラブル経験",
+    "customer_messages": [
+      "前に別のディーラーで嫌な思いをしたんで",
+      "強引に売られた経験があって",
+      "信頼できる販売店かどうかわからない",
+      "ここは違うとどうやって証明できますか？",
+      "少し話を聞いてみてもいいかもしれません"
+    ],
+    "expected_principles": ["社会的証明", "返報性", "コミットメントと一貫性"],
+    "expected_stage_progression": "clarify → propose → recommend",
+    "expected_outcome": "appointment",
+    "difficulty": "hard"
+  },
+  {
+    "id": "conv_028",
+    "scenario": "複合反論 — 電気自動車への根強い懸念",
+    "customer_messages": [
+      "EVは充電が面倒でしょ",
+      "走行距離も短いですよね",
+      "充電スタンドが少ないのも不安",
+      "高速で長距離は無理でしょ",
+      "そんなに変わったんですか？もう少し話を聞かせてください"
+    ],
+    "expected_principles": ["フレーミング効果", "社会的証明", "損失回避"],
+    "expected_stage_progression": "clarify → propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "hard"
+  },
+  {
+    "id": "conv_029",
+    "scenario": "長期保留 — 買い替えタイミングの迷い",
+    "customer_messages": [
+      "3年前から買い替えを検討しているんですが",
+      "もう少し待てば良い車が出るかもと思って",
+      "でも今の車も古くなってきて",
+      "決断できない自分が嫌になります",
+      "今が買い時という根拠を教えてもらえますか？"
+    ],
+    "expected_principles": ["希少性", "損失回避", "コミットメントと一貫性"],
+    "expected_stage_progression": "clarify → propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "hard"
+  },
+  {
+    "id": "conv_030",
+    "scenario": "強い拒絶後の巻き返し — 競合での成約寸前",
+    "customer_messages": [
+      "実は他社でほぼ決めているんですが",
+      "契約書にはまだサインしていないんです",
+      "ここに来たのは念のためです",
+      "こちらで何か決め手があれば",
+      "それは知らなかった、もう少し具体的に教えてください"
+    ],
+    "expected_principles": ["アンカリング効果", "損失回避", "希少性", "フレーミング効果"],
+    "expected_stage_progression": "propose → recommend → close",
+    "expected_outcome": "appointment",
+    "difficulty": "hard"
+  }
+]

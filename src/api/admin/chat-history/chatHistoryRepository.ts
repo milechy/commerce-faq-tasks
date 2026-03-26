@@ -22,6 +22,9 @@ export interface SaveMessageParams {
   role: "user" | "assistant";
   content: string;
   metadata?: Record<string, unknown>;
+  /** Phase46: A/Bテスト variant記録 */
+  promptVariantId?: string | null;
+  promptVariantName?: string | null;
 }
 
 /**
@@ -32,14 +35,16 @@ export interface SaveMessageParams {
 export async function saveMessage(params: SaveMessageParams): Promise<void> {
   const pool = getPool();
 
-  // 1. chat_sessions を upsert
+  // 1. chat_sessions を upsert（Phase46: variant情報も記録）
   await pool.query(
-    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count)
-     VALUES ($1, $2, NOW(), 1)
+    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count, prompt_variant_id, prompt_variant_name)
+     VALUES ($1, $2, NOW(), 1, $3, $4)
      ON CONFLICT (tenant_id, session_id) DO UPDATE SET
        last_message_at = NOW(),
-       message_count = chat_sessions.message_count + 1`,
-    [params.tenantId, params.sessionId],
+       message_count = chat_sessions.message_count + 1,
+       prompt_variant_id = COALESCE(chat_sessions.prompt_variant_id, EXCLUDED.prompt_variant_id),
+       prompt_variant_name = COALESCE(chat_sessions.prompt_variant_name, EXCLUDED.prompt_variant_name)`,
+    [params.tenantId, params.sessionId, params.promptVariantId ?? null, params.promptVariantName ?? null],
   );
 
   // 2. chat_sessions の UUID を取得

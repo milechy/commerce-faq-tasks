@@ -14,6 +14,95 @@
 ## 申請リスト
 （まだなし）
 
+---
+
+## Phase46: Variant CRUD + Objection Patterns + Weekly Reports API (Stream A)
+
+- GET /v1/admin/variants: バリアント一覧（tenants.system_prompt_variants JSONB）(Stream A, Phase46)
+  - ファイル: src/api/admin/variants/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+  - 権限: super_admin=全テナントor絞り込み, client_admin=自テナントのみ
+
+- PUT /v1/admin/variants: バリアント一括更新（weight合計=100 バリデーション）(Stream A, Phase46)
+
+- GET /v1/admin/variants/stats: バリアント別Judge スコア統計（chat_sessions + conversation_evaluations JOIN）(Stream A, Phase46)
+
+- GET /v1/admin/objection-patterns: 反論パターン一覧（success_rate降順）(Stream A, Phase46)
+  - ファイル: src/api/admin/objection-patterns/routes.ts
+
+- GET /v1/admin/objection-patterns/:id: 反論パターン詳細 (Stream A, Phase46)
+
+- DELETE /v1/admin/objection-patterns/:id: 反論パターン削除 (Stream A, Phase46)
+
+- GET /v1/admin/reports: 週次レポート一覧（最新順）(Stream A, Phase46)
+  - ファイル: src/api/admin/reports/routes.ts
+
+- GET /v1/admin/reports/:id: 週次レポート詳細 (Stream A, Phase46)
+
+- GET /v1/admin/reports/unread-count: 未読レポート数（read_at IS NULL）(Stream A, Phase46)
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase46: Variant CRUD + Objection Patterns + Weekly Reports API
+import { registerVariantRoutes } from "./api/admin/variants/routes";
+import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/routes";
+import { registerReportRoutes } from "./api/admin/reports/routes";
+
+registerVariantRoutes(app);
+registerObjectionPatternRoutes(app);
+registerReportRoutes(app);
+```
+
+マイグレーション (デプロイ前に VPS で実行):
+```sql
+-- tenants テーブルへのカラム追加
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS system_prompt_variants JSONB DEFAULT '[]'::jsonb;
+
+-- chat_sessions テーブルへのカラム追加
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS prompt_variant_id TEXT;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS prompt_variant_name TEXT;
+
+-- objection_patterns テーブル作成（0yhphpm8 が別途定義）
+-- weekly_reports テーブル作成（0yhphpm8 が別途定義）
+-- weekly_reports.read_at カラムが必要（NULL = 未読）
+```
+
+---
+
+## Phase45: 評価API + KPI API (Stream A)
+
+- GET /v1/admin/evaluations: 評価一覧（tenantId, days, limit, offset）(Stream A, Phase45)
+  - ファイル: src/api/admin/evaluations/routes.ts
+  - 認証: supabaseAuthMiddleware（ルート内部で適用済み）
+  - 権限: super_admin=全テナントor絞り込み, client_admin=自テナントのみ
+
+- GET /v1/admin/evaluations/stats: 詳細統計（avg_score, principle_stats, reaction_distribution, stage_progression_rate）(Stream A, Phase45)
+
+- GET /v1/admin/evaluations/kpi-stats: KPI統計（total_conversations, outcomes, rates, avg_score_by_outcome）(Stream A, Phase45)
+
+- GET /v1/admin/evaluations/:sessionId: セッション別評価詳細 (Stream A, Phase45)
+
+- PUT /v1/admin/evaluations/:id/outcome: 営業結果記録（outcome: replied/appointment/lost/unknown）(Stream A, Phase45)
+
+- PUT /v1/admin/tuning/:id/approve: チューニングルール承認（status→active, approved_at=NOW()）(Stream A, Phase45)
+
+- PUT /v1/admin/tuning/:id/reject: チューニングルール却下（status→rejected, rejected_at=NOW()）(Stream A, Phase45)
+
+登録コード (src/index.ts に追加してもらう):
+```typescript
+// Phase45: 評価API + KPI API
+import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
+
+registerEvaluationRoutes(app);
+```
+
+マイグレーション (デプロイ前に VPS で実行):
+```sql
+-- src/api/admin/evaluations/migration_kpi_outcome.sql
+-- conversation_evaluations: outcome/outcome_updated_by/outcome_updated_at カラム追加
+-- tuning_rules: status/approved_at/rejected_at カラム追加
+```
+
 ## Phase38 Step6: Stream B への通知
 
 テナント設定画面（admin-ui）に以下のUI追加をお願いします:

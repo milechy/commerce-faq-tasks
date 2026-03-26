@@ -31,8 +31,13 @@ import { logPhase22Event } from "../observability/phase22EventLogger";
 import { resolveSalesPipelineKind } from "./sales/pipelines/pipelineFactory";
 import { runSalesPipeline } from "./sales/salesPipeline";
 import { RAG_EXCERPT_MAX_CHARS, RAG_MAX_EXCERPTS } from "../config/ragLimits";
+import { evaluateConversation } from "../judge/conversationJudge";
+import { createEvaluationRepository } from "../judge/evaluationRepository";
 
 const logger = pino();
+
+// module-level で初期化（DB poolは遅延初期化）
+const evaluationRepo = createEvaluationRepository();
 
 /**
  * /agent.dialog の入力ペイロードのサマリ型。
@@ -745,6 +750,28 @@ export async function runDialogGraph(
       { event: "flow.terminal_reached", meta: { flow: next } },
       "phase22.flow.terminal_reached"
     );
+    // setImmediate で非同期fire-and-forget (メインレスポンスをブロックしない)
+    setImmediate(() => {
+      evaluateConversation({
+        tenantId: input.tenantId,
+        sessionId: input.conversationId,
+        history: input.history,
+        usedPrinciples: [],
+        salesStages: [],
+      })
+        .then((result) => evaluationRepo.saveEvaluation({
+          tenantId: input.tenantId,
+          sessionId: input.conversationId,
+          score: result.score,
+          usedPrinciples: [],
+          effectivePrinciples: result.effectivePrinciples,
+          failedPrinciples: result.failedPrinciples,
+          evaluationAxes: result.evaluationAxes,
+          notes: result.notes,
+          modelUsed: result.modelUsed,
+        }))
+        .catch((err) => logger.error({ err }, 'judge.evaluation.failed'));
+    });
     return {
       text: buildTerminalText(input.locale, "aborted_budget"),
       route: "20b",
@@ -782,6 +809,28 @@ export async function runDialogGraph(
         { event: "flow.terminal_reached", meta: { flow: next } },
         "phase22.flow.terminal_reached"
       );
+      // setImmediate で非同期fire-and-forget (メインレスポンスをブロックしない)
+      setImmediate(() => {
+        evaluateConversation({
+          tenantId: input.tenantId,
+          sessionId: input.conversationId,
+          history: input.history,
+          usedPrinciples: [],
+          salesStages: [],
+        })
+          .then((result) => evaluationRepo.saveEvaluation({
+            tenantId: input.tenantId,
+            sessionId: input.conversationId,
+            score: result.score,
+            usedPrinciples: [],
+            effectivePrinciples: result.effectivePrinciples,
+            failedPrinciples: result.failedPrinciples,
+            evaluationAxes: result.evaluationAxes,
+            notes: result.notes,
+            modelUsed: result.modelUsed,
+          }))
+          .catch((err) => logger.error({ err }, 'judge.evaluation.failed'));
+      });
       return {
         text: buildTerminalText(input.locale, "aborted_user"),
         route: "20b",
@@ -802,6 +851,28 @@ export async function runDialogGraph(
         { event: "flow.terminal_reached", meta: { flow: next } },
         "phase22.flow.terminal_reached"
       );
+      // setImmediate で非同期fire-and-forget (メインレスポンスをブロックしない)
+      setImmediate(() => {
+        evaluateConversation({
+          tenantId: input.tenantId,
+          sessionId: input.conversationId,
+          history: input.history,
+          usedPrinciples: [],
+          salesStages: [],
+        })
+          .then((result) => evaluationRepo.saveEvaluation({
+            tenantId: input.tenantId,
+            sessionId: input.conversationId,
+            score: result.score,
+            usedPrinciples: [],
+            effectivePrinciples: result.effectivePrinciples,
+            failedPrinciples: result.failedPrinciples,
+            evaluationAxes: result.evaluationAxes,
+            notes: result.notes,
+            modelUsed: result.modelUsed,
+          }))
+          .catch((err) => logger.error({ err }, 'judge.evaluation.failed'));
+      });
       return {
         text: buildTerminalText(input.locale, "completed"),
         route: "20b",
@@ -823,6 +894,28 @@ export async function runDialogGraph(
         { event: "flow.terminal_reached", meta: { flow: next } },
         "phase22.flow.terminal_reached"
       );
+      // setImmediate で非同期fire-and-forget (メインレスポンスをブロックしない)
+      setImmediate(() => {
+        evaluateConversation({
+          tenantId: input.tenantId,
+          sessionId: input.conversationId,
+          history: input.history,
+          usedPrinciples: [],
+          salesStages: [],
+        })
+          .then((result) => evaluationRepo.saveEvaluation({
+            tenantId: input.tenantId,
+            sessionId: input.conversationId,
+            score: result.score,
+            usedPrinciples: [],
+            effectivePrinciples: result.effectivePrinciples,
+            failedPrinciples: result.failedPrinciples,
+            evaluationAxes: result.evaluationAxes,
+            notes: result.notes,
+            modelUsed: result.modelUsed,
+          }))
+          .catch((err) => logger.error({ err }, 'judge.evaluation.failed'));
+      });
       return {
         text: buildTerminalText(input.locale, "aborted_user"),
         route: "20b",
@@ -845,6 +938,28 @@ export async function runDialogGraph(
         { event: "flow.terminal_reached", meta: { flow: next } },
         "phase22.flow.terminal_reached"
       );
+      // setImmediate で非同期fire-and-forget (メインレスポンスをブロックしない)
+      setImmediate(() => {
+        evaluateConversation({
+          tenantId: input.tenantId,
+          sessionId: input.conversationId,
+          history: input.history,
+          usedPrinciples: [],
+          salesStages: [],
+        })
+          .then((result) => evaluationRepo.saveEvaluation({
+            tenantId: input.tenantId,
+            sessionId: input.conversationId,
+            score: result.score,
+            usedPrinciples: [],
+            effectivePrinciples: result.effectivePrinciples,
+            failedPrinciples: result.failedPrinciples,
+            evaluationAxes: result.evaluationAxes,
+            notes: result.notes,
+            modelUsed: result.modelUsed,
+          }))
+          .catch((err) => logger.error({ err }, 'judge.evaluation.failed'));
+      });
       return {
         text: buildTerminalText(input.locale, "aborted_budget"),
         route: "20b",
@@ -1150,6 +1265,28 @@ function applyPhase22FlowAfterGeneration(params: {
       "phase22.flow.terminal_reached"
     );
 
+    // setImmediate で非同期fire-and-forget (メインレスポンスをブロックしない)
+    setImmediate(() => {
+      evaluateConversation({
+        tenantId: input.tenantId,
+        sessionId: input.conversationId,
+        history: input.history,
+        usedPrinciples: [],
+        salesStages: [],
+      })
+        .then((result) => evaluationRepo.saveEvaluation({
+          tenantId: input.tenantId,
+          sessionId: input.conversationId,
+          score: result.score,
+          usedPrinciples: [],
+          effectivePrinciples: result.effectivePrinciples,
+          failedPrinciples: result.failedPrinciples,
+          evaluationAxes: result.evaluationAxes,
+          notes: result.notes,
+          modelUsed: result.modelUsed,
+        }))
+        .catch((err) => logger.error({ err }, 'judge.evaluation.failed'));
+    });
     const text = buildTerminalText(input.locale, "aborted_loop_detected");
     return {
       textWithConfirm: text,
@@ -1189,6 +1326,28 @@ function applyPhase22FlowAfterGeneration(params: {
       "phase22.flow.terminal_reached"
     );
 
+    // setImmediate で非同期fire-and-forget (メインレスポンスをブロックしない)
+    setImmediate(() => {
+      evaluateConversation({
+        tenantId: input.tenantId,
+        sessionId: input.conversationId,
+        history: input.history,
+        usedPrinciples: [],
+        salesStages: [],
+      })
+        .then((result) => evaluationRepo.saveEvaluation({
+          tenantId: input.tenantId,
+          sessionId: input.conversationId,
+          score: result.score,
+          usedPrinciples: [],
+          effectivePrinciples: result.effectivePrinciples,
+          failedPrinciples: result.failedPrinciples,
+          evaluationAxes: result.evaluationAxes,
+          notes: result.notes,
+          modelUsed: result.modelUsed,
+        }))
+        .catch((err) => logger.error({ err }, 'judge.evaluation.failed'));
+    });
     const text = buildTerminalText(input.locale, "aborted_budget");
     return {
       textWithConfirm: text,
