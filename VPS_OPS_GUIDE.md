@@ -83,7 +83,7 @@ ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.
 | `src/api/admin/chat-history/migration.sql` | `chat_sessions` / `chat_messages` | Phase 38 |
 | `src/api/admin/tuning/migration.sql` | `tuning_rules` | Phase 38 |
 | `src/api/admin/tuning/migration_system_prompt.sql` | `tenants.system_prompt` カラム追加（ALTER TABLE） | Phase 38 |
-| `src/api/admin/knowledge/migration_book_uploads.sql` | `book_uploads` | Phase 44 |
+| `src/api/admin/knowledge/migration_book_uploads.sql` | `book_uploads` + `faq_embeddings` インデックス (source/principle/book_id) | Phase 44 |
 
 > 新しいマイグレーションを追加した場合は、このテーブルを更新すること。
 
@@ -299,6 +299,70 @@ ssh root@65.108.159.161 "grep 'slice(0' /opt/rajiuce/dist/src/lib/ocrPipeline.js
 
 ---
 
+## 6. Phase44 セットアップ
+
+### 6.1 Supabase Storage: book-pdfs バケット作成
+
+Supabase Dashboard → Storage → New Bucket:
+
+| 設定項目 | 値 |
+|---|---|
+| バケット名 | `book-pdfs` |
+| Public | **OFF**（private必須） |
+| File size limit | 50 MB |
+| Allowed MIME types | `application/pdf, application/octet-stream` |
+
+> ⚠️ バケットは `git pull` / `deploy-vps.sh` では作成されない。Supabase Dashboard で手動作成が必要。
+
+### 6.2 Phase44 環境変数チェック（VPSで実行）
+
+```bash
+# 3変数が設定されているか確認（1以上の数値が出ること）
+ssh root@65.108.159.161 "grep -c 'KNOWLEDGE_ENCRYPTION_KEY' /opt/rajiuce/.env"
+ssh root@65.108.159.161 "grep -c 'SUPABASE_URL' /opt/rajiuce/.env"
+ssh root@65.108.159.161 "grep -c 'SUPABASE_SERVICE_ROLE_KEY' /opt/rajiuce/.env"
+```
+
+**KNOWLEDGE_ENCRYPTION_KEY が未設定の場合:**
+
+```bash
+# 64文字 hex キーを生成
+python3 -c "import secrets; print(secrets.token_hex(32))"
+# 出力された値を VPS の .env に追加
+ssh root@65.108.159.161 "echo 'KNOWLEDGE_ENCRYPTION_KEY=<生成した値>' >> /opt/rajiuce/.env"
+# PM2 再起動
+ssh root@65.108.159.161 "pm2 restart rajiuce-api"
+```
+
+### 6.3 Phase44 DBマイグレーション（VPSで実行）
+
+```bash
+# migration_book_uploads.sql を実行（book_uploads テーブル + faq_embeddings インデックス）
+ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/src/api/admin/knowledge/migration_book_uploads.sql"
+
+# テーブル確認
+ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -c '\dt book_uploads'"
+
+# インデックス確認
+ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -c '\di idx_faq_embeddings_*'"
+```
+
+### 6.4 Phase44 デプロイ後確認
+
+```bash
+# API ヘルスチェック
+curl -s http://65.108.159.161:3100/health | jq .status
+# → "ok"
+
+# 書籍タブ: Admin UI でナレッジ管理 → 「書籍」タブが表示されるか確認
+# テストPDF: 任意のPDFをアップロードし status=uploaded → processing になるか確認
+
+# エラーログ確認
+ssh root@65.108.159.161 "pm2 logs rajiuce-api --lines 20 --nostream 2>&1 | grep -i 'error\|book'"
+```
+
+---
+
 ## 変更履歴
 
 | 日付 | 内容 |
@@ -306,3 +370,4 @@ ssh root@65.108.159.161 "grep 'slice(0' /opt/rajiuce/dist/src/lib/ocrPipeline.js
 | 2026-03-18 | 初版作成。Supabase 未設定/GraphicsMagick エラー/knowledge_gaps マイグレーション漏れのインシデントから |
 | 2026-03-18 | v2: `.env.production` → `.env.local` に修正。`build-admin-ui.sh` が `.env.local` を読むのが正。`VITE_API_BASE` 漏れの注意を追加 |
 | 2026-03-24 | Phase38完了: chat_sessions / chat_messages / tuning_rules / tenants.system_prompt のマイグレーション一覧に追加 |
+| 2026-04-05 | Phase44完了: book_uploads マイグレーション + faq_embeddings インデックス + Supabase book-pdfs バケット手順追加 |

@@ -22,3 +22,15 @@ CREATE TABLE IF NOT EXISTS book_uploads (
 CREATE INDEX IF NOT EXISTS idx_book_uploads_tenant_id ON book_uploads(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_book_uploads_status ON book_uploads(status);
 CREATE INDEX IF NOT EXISTS idx_book_uploads_tenant_status ON book_uploads(tenant_id, status);
+
+-- Phase44: faq_embeddings.metadata への検索インデックス
+-- metadata->>'source' = 'book' / 'principle' での絞り込みを高速化
+CREATE INDEX IF NOT EXISTS idx_faq_embeddings_source
+  ON faq_embeddings ((metadata->>'source'));
+
+CREATE INDEX IF NOT EXISTS idx_faq_embeddings_principle
+  ON faq_embeddings ((metadata->>'principle'));
+
+CREATE INDEX IF NOT EXISTS idx_faq_embeddings_book_id
+  ON faq_embeddings ((metadata->>'book_id'))
+  WHERE metadata->>'book_id' IS NOT NULL;
