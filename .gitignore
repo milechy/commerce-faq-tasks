@@ -27,6 +27,7 @@ logs/
 commerce-faq-tasks@0.1.0
 data/
 reports/
+!src/**/reports/
 
 # local generated context
 .context/
