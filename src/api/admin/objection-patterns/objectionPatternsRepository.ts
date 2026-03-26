@@ -22,10 +22,10 @@ function getPool(): InstanceType<typeof Pool> {
 export interface ObjectionPattern {
   id: number;
   tenant_id: string;
-  pattern: string;
-  response_template: string | null;
+  trigger_phrase: string;
+  response_strategy: string | null;
   success_rate: number;
-  occurrence_count: number;
+  sample_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -37,16 +37,16 @@ export interface ObjectionPattern {
 export async function listObjectionPatterns(tenantId: string): Promise<ObjectionPattern[]> {
   const pool = getPool();
   const result = await pool.query<ObjectionPattern>(
-    `SELECT id, tenant_id, pattern, response_template, success_rate, occurrence_count, created_at, updated_at
+    `SELECT id, tenant_id, trigger_phrase, response_strategy, success_rate, sample_count, created_at, updated_at
      FROM objection_patterns
      WHERE tenant_id = $1
-     ORDER BY success_rate DESC, occurrence_count DESC`,
+     ORDER BY success_rate DESC, sample_count DESC`,
     [tenantId],
   );
   return result.rows.map((r: ObjectionPattern) => ({
     ...r,
     success_rate: parseFloat(String(r.success_rate)),
-    occurrence_count: parseInt(String(r.occurrence_count), 10),
+    sample_count: parseInt(String(r.sample_count), 10),
   }));
 }
 
@@ -68,7 +68,7 @@ export async function getObjectionPattern(
   }
 
   const result = await pool.query<ObjectionPattern>(
-    `SELECT id, tenant_id, pattern, response_template, success_rate, occurrence_count, created_at, updated_at
+    `SELECT id, tenant_id, trigger_phrase, response_strategy, success_rate, sample_count, created_at, updated_at
      FROM objection_patterns ${where}`,
     args,
   );
@@ -77,7 +77,7 @@ export async function getObjectionPattern(
   return {
     ...r,
     success_rate: parseFloat(String(r.success_rate)),
-    occurrence_count: parseInt(String(r.occurrence_count), 10),
+    sample_count: parseInt(String(r.sample_count), 10),
   };
 }
 

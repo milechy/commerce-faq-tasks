@@ -64,6 +64,10 @@ import { registerFishTtsRoutes } from "./api/avatar/fishTtsRoutes";
 import { registerAvatarGenerationRoutes } from "./api/admin/avatar/generationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
+import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
+import { registerVariantRoutes } from "./api/admin/variants/routes";
+import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/routes";
+import { registerReportRoutes } from "./api/admin/reports/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -557,6 +561,13 @@ registerKnowledgeGapRoutes(app);
 // Phase43: admin_feedback チケット管理 API（feedbackRoutes.ts より前に登録）
 registerAdminFeedbackManagementRoutes(app);
 registerAdminAiAssistRoutes(app);
+
+// Phase45: 評価API + KPI API
+registerEvaluationRoutes(app);
+// Phase46: Variant CRUD + Objection Patterns + Weekly Reports API
+registerVariantRoutes(app);
+registerObjectionPatternRoutes(app);
+registerReportRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
 

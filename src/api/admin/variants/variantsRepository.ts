@@ -96,7 +96,7 @@ export async function getVariantStats(
        COALESCE(AVG(e.score), 0) AS avg_score,
        COUNT(DISTINCT cs.id) AS conversation_count
      FROM chat_sessions cs
-     LEFT JOIN conversation_evaluations e ON e.session_id = cs.id::text
+     LEFT JOIN conversation_evaluations e ON e.session_id = cs.session_id
      WHERE cs.tenant_id = $1
        AND cs.created_at >= NOW() - INTERVAL '${days} days'
        AND cs.prompt_variant_id IS NOT NULL
