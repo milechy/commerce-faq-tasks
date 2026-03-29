@@ -184,3 +184,55 @@ Status: ✅ Completed (2026-03-25)
 - Supabase Storage: `book-pdfs` バケット（private）
 
 Status: ✅ Completed (2026-04-05)
+
+---
+
+## Phase45 – Judge評価ループ（完了）
+
+- Gemini 2.5 Flash をJudge（評価者）として実装（Generator: Groq と別モデルファミリで自己評価バイアス回避）
+- 4軸スコアリング: `psychology_fit` 30% / `customer_reaction` 25% / `stage_progress` 25% / `taboo_violation` 20%
+- `conversation_evaluations` テーブル + CRUD API (`/v1/admin/evaluations/*`)
+- 低スコア時のチューニングルール自動提案（`suggested_rules` → `tuning_rules` にdraft挿入）
+- Admin UI: 評価ダッシュボード + KPI推移表示
+- few-shot calibration 例をJudgeプロンプトに含める（スコアドリフト防止）
+- `src/lib/gemini/client.ts`: Gemini APIクライアント
+
+Status: ✅ Completed
+
+---
+
+## Phase46 – Knowledge Gap検出（完了）
+
+- 4トリガーによるギャップ検出: `no_rag`（RAG結果なし）, `low_confidence`（低信頼度）, `fallback`（フォールバック応答）, `judge_low`（Judge低スコア）
+- `knowledge_gaps` テーブル + CRUD API (`/v1/admin/knowledge-gaps/*`)
+- Gemini搭載推薦エンジン: ギャップからFAQ/チューニングルールの追加候補を自動生成
+- Admin UI: ギャップ一覧 + インライン知識追加機能
+
+Status: ✅ Completed
+
+---
+
+## Phase47 – Psychology Book RAG構造化（完了）
+
+- PDF書籍を6フィールド構造化チャンクに分解: `situation`, `resistance`, `principle`, `contraindication`, `example`, `failure_example`
+- `bookStructurizer.ts` + `bookChunker.ts`: Gemini 2.5 Flash で構造化 → pgvector + ES に保存
+- Admin UI: PDF書籍管理 (`/admin/knowledge/books`)
+- `metadata.source = 'book'` で書籍チャンクを識別、`metadata.principle` で心理原則フィルタ
+- `ragExcerpt.slice(0, 200)` 厳守（書籍内容保護）
+- `SCRIPTS/structurize-existing-books.ts`: 既存書籍の再構造化スクリプト
+
+Status: ✅ Completed
+
+---
+
+## Phase48 – LLM防御レイヤー L5-L8（進行中）
+
+- **L5: Input Sanitizer** (`src/middleware/inputSanitizer.ts`) — ユーザー入力の前処理・無害化
+- **L6: Prompt Firewall** (`src/middleware/promptFirewall.ts`) — プロンプトインジェクション検出・ブロック
+- **L7: Topic Guard** (`src/middleware/topicGuard.ts`) — 話題逸脱検出（営業文脈外の話題をブロック）
+- **L8: Output Guard** (`src/middleware/outputGuard.ts`) — LLM出力の後処理・有害内容フィルタ
+- 既知の未解決課題:
+  - E2Eテスト未完了
+  - src/index.ts へのミドルウェア統合が未コミット
+
+Status: 🔧 In Progress (E2E incomplete)
