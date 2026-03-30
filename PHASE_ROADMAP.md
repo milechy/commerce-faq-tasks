@@ -225,14 +225,15 @@ Status: ✅ Completed
 
 ---
 
-## Phase48 – LLM防御レイヤー L5-L8（進行中）
+## Phase48 – LLM防御レイヤー L5-L8
 
 - **L5: Input Sanitizer** (`src/middleware/inputSanitizer.ts`) — ユーザー入力の前処理・無害化
 - **L6: Prompt Firewall** (`src/middleware/promptFirewall.ts`) — プロンプトインジェクション検出・ブロック
 - **L7: Topic Guard** (`src/middleware/topicGuard.ts`) — 話題逸脱検出（営業文脈外の話題をブロック）
 - **L8: Output Guard** (`src/middleware/outputGuard.ts`) — LLM出力の後処理・有害内容フィルタ
-- 既知の未解決課題:
-  - E2Eテスト未完了
-  - src/index.ts へのミドルウェア統合が未コミット
+- E2E Bug修正:
+  - Bug-1: SHA-256 hashApiKey 一貫性テスト + Input Sanitizer 共存テスト追加
+  - Bug-2: features.avatar=false テナントへのアバター開通を 403 でブロック
+  - Bug-3: client_admin の avatar configs 取得で自テナント外が見えるバグ修正
 
-Status: 🔧 In Progress (E2E incomplete)
+Status: ✅ Completed
