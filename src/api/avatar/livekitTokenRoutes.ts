@@ -121,8 +121,13 @@ export function registerLiveKitTokenRoutes(
       const avatarEnabled = row.features?.avatar === true;
       const agentId = row.lemonslice_agent_id?.trim() || null;
 
-      if (!avatarEnabled || !agentId) {
-        console.warn(`[livekitTokenRoutes] avatar disabled or agentId missing: avatarEnabled=${avatarEnabled} agentId=${agentId}`);
+      if (!avatarEnabled) {
+        console.warn(`[livekitTokenRoutes] avatar feature disabled for tenant: ${tenantId}`);
+        return res.status(403).json({ error: 'Avatar not enabled for this tenant' });
+      }
+
+      if (!agentId) {
+        console.warn(`[livekitTokenRoutes] lemonslice_agent_id missing for tenant: ${tenantId}`);
         return res.json({ enabled: false });
       }
 

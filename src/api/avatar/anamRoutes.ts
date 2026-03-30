@@ -2,6 +2,7 @@
 // Phase42: Anam.ai — セッショントークン取得エンドポイント
 // POST /api/avatar/anam-session
 //   認証: apiStack (authMiddleware → tenantId)
+//   テナントの features.avatar を確認し、無効なら 403 を返す。
 //   active な avatar_config の avatar_provider を確認し、
 //   'anam' なら Anam API セッショントークンを取得して返す。
 //   'lemonslice' または未設定なら { enabled: false, avatarProvider: 'lemonslice' } を返す。
@@ -10,6 +11,7 @@ import type { Express, Request, Response, RequestHandler } from 'express';
 // @ts-ignore
 import { Pool } from 'pg';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
+import { pool as globalPool } from '../../lib/db';
 
 const ANAM_API_BASE = 'https://api.anam.ai';
 
@@ -22,12 +24,25 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
       return res.status(401).json({ error: 'unauthorized' });
     }
 
-    const pool = (req as any).app.locals.db as any;
+    const pool = (req as any).app.locals.db as any ?? globalPool;
     if (!pool) {
       return res.json({ enabled: false, avatarProvider: 'lemonslice' });
     }
 
     try {
+      // テナントの features.avatar フラグを確認 — 無効なら 403
+      const tenantResult = await pool.query(
+        `SELECT features, is_active FROM tenants WHERE id = $1`,
+        [tenantId]
+      );
+      if (tenantResult.rowCount === 0 || !tenantResult.rows[0].is_active) {
+        return res.json({ enabled: false, avatarProvider: 'lemonslice' });
+      }
+      if (tenantResult.rows[0].features?.avatar !== true) {
+        console.warn(`[anamRoutes] avatar feature disabled for tenant: ${tenantId}`);
+        return res.status(403).json({ error: 'Avatar not enabled for this tenant' });
+      }
+
       // アクティブなavatar_configを取得
       const result = await pool.query(
         `SELECT name, personality_prompt, anam_avatar_id, anam_voice_id, anam_llm_id, anam_persona_id, avatar_provider

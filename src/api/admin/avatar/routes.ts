@@ -226,9 +226,16 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   app.get("/v1/admin/avatar/configs", async (req: Request, res: Response) => {
     const { tenantId, isSuperAdmin } = extractAuth(req);
 
+    // Bug-3 fix: client_admin は tenantId が空でも JWT から取得済みの tenantId を必ず使う。
+    // isSuperAdmin の場合のみ query パラメータによるテナント絞り込みを許可する。
     const filterTenantId = isSuperAdmin
       ? ((req.query["tenant"] as string | undefined) || undefined)
-      : tenantId || undefined;
+      : (tenantId || undefined);
+
+    // client_admin で tenantId が取れない場合は 403 を返す（全件公開を防ぐ）
+    if (!isSuperAdmin && !filterTenantId) {
+      return res.status(403).json({ error: "テナント情報が取得できません" });
+    }
 
     try {
       let result;
