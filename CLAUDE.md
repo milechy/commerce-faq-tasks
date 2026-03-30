@@ -111,6 +111,10 @@ SLACK_WEBHOOK_URL
 - Admin UI API base: `VITE_API_BASE` 環境変数 (default: localhost:3100)
 - Deploy: `bash SCRIPTS/deploy-vps.sh [user@host]`
 - Checklist: `docs/DEPLOY_CHECKLIST.md`
+- Public URLs (Phase49):
+  - API: https://api.r2c.biz (Nginx → PM2 port 3100)
+  - Admin UI: https://admin.r2c.biz (Nginx → serve port 5173)
+  - SSL: Let's Encrypt (certbot --nginx, auto-renew)
 - PM2 processes (ecosystem.config.cjs):
   1. `rajiuce-api` — `dist/src/index.js` (port 3100)
   2. `rajiuce-avatar` — `avatar-agent/agent.py` (LiveKit Agent)

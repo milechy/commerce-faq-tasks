@@ -377,6 +377,31 @@ ssh root@65.108.159.161 "pm2 logs rajiuce-api --lines 20 --nostream 2>&1 | grep 
 
 ---
 
+## Nginx管理 (Phase49)
+
+SSL/Nginx は certbot --nginx で設定済み。
+
+```bash
+# 設定ファイル
+/etc/nginx/sites-available/rajiuce
+
+# SSL証明書
+/etc/letsencrypt/live/api.r2c.biz/
+
+# 手動証明書更新
+certbot renew
+
+# 設定テストとリロード
+nginx -t && systemctl reload nginx
+```
+
+| ドメイン | プロキシ先 |
+|---|---|
+| https://api.r2c.biz | localhost:3100 (rajiuce-api) |
+| https://admin.r2c.biz | localhost:5173 (rajiuce-admin) |
+
+---
+
 ## 変更履歴
 
 | 日付 | 内容 |
@@ -385,3 +410,4 @@ ssh root@65.108.159.161 "pm2 logs rajiuce-api --lines 20 --nostream 2>&1 | grep 
 | 2026-03-18 | v2: `.env.production` → `.env.local` に修正。`build-admin-ui.sh` が `.env.local` を読むのが正。`VITE_API_BASE` 漏れの注意を追加 |
 | 2026-03-24 | Phase38完了: chat_sessions / chat_messages / tuning_rules / tenants.system_prompt のマイグレーション一覧に追加 |
 | 2026-04-05 | Phase44完了: book_uploads マイグレーション + faq_embeddings インデックス + Supabase book-pdfs バケット手順追加 |
+| 2026-03-30 | Phase49完了: Nginx + Let's Encrypt SSL (api.r2c.biz / admin.r2c.biz) |

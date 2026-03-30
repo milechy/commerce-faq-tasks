@@ -99,7 +99,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 ## Widget 埋め込み例
 
 ```html
-<script src="http://65.108.159.161:3100/widget.js"
+<script src="https://api.r2c.biz/widget.js"
         data-tenant="partner"
         data-api-key="<generated-uuid>"
         async></script>

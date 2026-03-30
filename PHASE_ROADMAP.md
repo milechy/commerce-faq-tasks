@@ -237,3 +237,15 @@ Status: ✅ Completed
   - Bug-3: client_admin の avatar configs 取得で自テナント外が見えるバグ修正
 
 Status: ✅ Completed
+
+---
+
+## Phase49 – HTTPS/SSL設定（完了）
+
+- r2c.biz ドメイン取得（Cloudflare Registrar）
+- Nginx reverse proxy: `api.r2c.biz` → `:3100`、`admin.r2c.biz` → `:5173`
+- Let's Encrypt SSL（certbot --nginx、自動更新）
+- CORS / ALLOWED_ORIGINS の HTTPS 対応
+- Widget 埋め込み URL の HTTPS 化（`https://api.r2c.biz/widget.js`）
+
+Status: ✅ Completed

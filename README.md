@@ -346,10 +346,15 @@ Phase3 の詳細な設計・API 例・シーケンス図は `docs/PHASE3_MULTIST
 - JWT（Supabase発行）による管理画面アクセス
 
 ### 🖥 Admin UI
-- React + Supabase Auth  
-- FAQ作成 / 編集（ES同期 + Embedding同期）  
-- テナント切替  
+- React + Supabase Auth
+- FAQ作成 / 編集（ES同期 + Embedding同期）
+- テナント切替
 - フィールド：question / answer / category / tags / is_published
+
+### 🔒 SSL/Proxy
+| 用途 | 構成 |
+|---|---|
+| SSL/Proxy | Nginx + Let's Encrypt (api.r2c.biz / admin.r2c.biz) |
 
 ---
 
@@ -738,3 +743,4 @@ A/Bテスト
 | Phase46 | Knowledge Gap検出 | ✅ Completed |
 | Phase47 | Psychology Book RAG構造化 | ✅ Completed |
 | Phase48 | LLM防御レイヤー L5-L8 | ✅ Completed |
+| Phase49 | HTTPS/SSL設定 (r2c.biz) | ✅ Completed |
