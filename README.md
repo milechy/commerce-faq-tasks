@@ -734,3 +734,7 @@ A/Bテスト
 | Phase42 | Anam.ai 移行 | ❌ Cancelled |
 | Phase43 | 管理画面 AI アシスタント + admin_feedback | ✅ Completed |
 | Phase44 | 心理学 RAG 基盤 (書籍 PDF + パイプライン + UI) | ✅ Completed (2026-04-05) |
+| Phase45 | Judge評価ループ (Gemini 2.5 Flash) | ✅ Completed |
+| Phase46 | Knowledge Gap検出 | ✅ Completed |
+| Phase47 | Psychology Book RAG構造化 | ✅ Completed |
+| Phase48 | LLM防御レイヤー L5-L8 | 🔧 In Progress |
