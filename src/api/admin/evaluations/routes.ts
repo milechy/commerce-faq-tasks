@@ -4,6 +4,7 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { superAdminMiddleware } from "../tenants/superAdminMiddleware";
 import {
   listEvaluations,
   getDetailedStats,
@@ -12,6 +13,10 @@ import {
   getKpiStats,
   approveTuningRule,
   rejectTuningRule,
+  getEvaluationById,
+  checkAlreadyEvaluated,
+  updateSuggestedRuleStatus,
+  insertTuningRuleFromSuggestion,
 } from "./evaluationsRepository";
 
 // ---------------------------------------------------------------------------
@@ -74,8 +79,13 @@ export function registerEvaluationRoutes(app: Express): void {
     const limit = parseLimit(req.query["limit"]);
     const offset = parseOffset(req.query["offset"]);
 
+    const rawMinScore = req.query["min_score"];
+    const rawMaxScore = req.query["max_score"];
+    const min_score = rawMinScore !== undefined ? Number(rawMinScore) : undefined;
+    const max_score = rawMaxScore !== undefined ? Number(rawMaxScore) : undefined;
+
     try {
-      const result = await listEvaluations({ tenantId, days, limit, offset });
+      const result = await listEvaluations({ tenantId, days, limit, offset, min_score, max_score });
       return res.json(result);
     } catch (err) {
       console.warn("[GET /v1/admin/evaluations]", err);
@@ -126,6 +136,125 @@ export function registerEvaluationRoutes(app: Express): void {
       return res.status(500).json({ error: "KPIデータの取得に失敗しました" });
     }
   });
+
+  // -------------------------------------------------------------------------
+  // POST /v1/admin/evaluations/trigger
+  // 指定セッションの評価を手動トリガー（未評価の場合のみ）
+  // -------------------------------------------------------------------------
+  app.post("/v1/admin/evaluations/trigger", async (req: Request, res: Response) => {
+    const { session_id } = (req.body ?? {}) as Record<string, unknown>;
+    if (!session_id || typeof session_id !== "string") {
+      return res.status(400).json({ error: "session_id is required" });
+    }
+
+    try {
+      const alreadyDone = await checkAlreadyEvaluated(session_id);
+      if (alreadyDone) {
+        return res.status(409).json({ error: "already_evaluated" });
+      }
+
+      // Dynamic import to avoid circular deps
+      const { evaluateSession } = await import("../../../agent/judge/judgeEvaluator");
+      const result = await evaluateSession(session_id);
+      if (!result) {
+        return res.status(500).json({ error: "evaluation_failed" });
+      }
+      return res.json({ evaluation: result });
+    } catch (err) {
+      console.warn("[POST /v1/admin/evaluations/trigger]", err);
+      return res.status(500).json({ error: "評価の実行に失敗しました" });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/evaluations/by-id/:id
+  // 数値 ID による評価詳細取得（メッセージ付き）
+  // NOTE: /:sessionId の catch-all より前に登録する必要あり
+  // -------------------------------------------------------------------------
+  app.get("/v1/admin/evaluations/by-id/:id", async (req: Request, res: Response) => {
+    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const id = Number(req.params["id"]);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: "id must be a positive integer" });
+    }
+
+    const tenantId = isSuperAdmin ? undefined : jwtTenantId || undefined;
+
+    try {
+      const data = await getEvaluationById(id, tenantId);
+      if (!data) {
+        return res.status(404).json({ error: "評価データが見つかりません" });
+      }
+      return res.json(data);
+    } catch (err) {
+      console.warn("[GET /v1/admin/evaluations/by-id/:id]", err);
+      return res.status(500).json({ error: "評価データの取得に失敗しました" });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // PATCH /v1/admin/evaluations/:id/rules/:ruleIndex
+  // suggested_rules の approve / reject（super_admin 専用）
+  // -------------------------------------------------------------------------
+  app.patch(
+    "/v1/admin/evaluations/:id/rules/:ruleIndex",
+    supabaseAuthMiddleware,
+    superAdminMiddleware,
+    async (req: Request, res: Response) => {
+      const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+      const id = Number(req.params["id"]);
+      const ruleIndex = Number(req.params["ruleIndex"]);
+      const { action } = (req.body ?? {}) as Record<string, unknown>;
+
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ error: "id must be positive integer" });
+      }
+      if (!Number.isFinite(ruleIndex) || ruleIndex < 0) {
+        return res.status(400).json({ error: "ruleIndex must be non-negative integer" });
+      }
+      if (action !== "approve" && action !== "reject") {
+        return res.status(400).json({ error: "action must be approve or reject" });
+      }
+
+      const tenantId = isSuperAdmin ? undefined : jwtTenantId || undefined;
+
+      try {
+        if (action === "approve") {
+          // Fetch the evaluation to get the rule text
+          const data = await getEvaluationById(id, tenantId);
+          if (!data) {
+            return res.status(404).json({ error: "評価データが見つかりません" });
+          }
+          const rules = (data.evaluation as any).suggested_rules as Array<{ rule_text?: string; status?: string }> | null;
+          const rule = Array.isArray(rules) ? rules[ruleIndex] : undefined;
+          if (!rule) {
+            return res.status(404).json({ error: "指定されたルールが見つかりません" });
+          }
+          const ruleText = rule.rule_text ?? "";
+          if (ruleText) {
+            await insertTuningRuleFromSuggestion(data.evaluation.tenant_id, ruleText);
+          }
+        }
+
+        const updated = await updateSuggestedRuleStatus(
+          id,
+          ruleIndex,
+          action === "approve" ? "approved" : "rejected",
+          tenantId,
+        );
+        if (!updated) {
+          return res.status(404).json({ error: "評価データが見つかりません" });
+        }
+        return res.json({ ok: true, evaluation: updated });
+      } catch (err: unknown) {
+        if (err instanceof RangeError) {
+          return res.status(400).json({ error: err.message });
+        }
+        console.warn("[PATCH /v1/admin/evaluations/:id/rules/:ruleIndex]", err);
+        return res.status(500).json({ error: "ルール更新に失敗しました" });
+      }
+    },
+  );
 
   // -------------------------------------------------------------------------
   // GET /v1/admin/evaluations/:sessionId

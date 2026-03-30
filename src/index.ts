@@ -68,6 +68,7 @@ import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
 import { registerVariantRoutes } from "./api/admin/variants/routes";
 import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/routes";
 import { registerReportRoutes } from "./api/admin/reports/routes";
+import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -551,6 +552,8 @@ registerChatHistoryRoutes(app);
 registerTuningRoutes(app);
 // Phase38+: ナレッジギャップ検出 API
 registerKnowledgeGapRoutes(app);
+// Phase46 Stream B: Knowledge Gap 推薦・ナレッジ追加 API
+registerKnowledgeGapPhase46Routes(app);
 // Phase43: admin_feedback チケット管理 API（feedbackRoutes.ts より前に登録）
 registerAdminFeedbackManagementRoutes(app);
 registerAdminAiAssistRoutes(app);

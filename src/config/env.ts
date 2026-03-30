@@ -137,6 +137,16 @@ const envSchema = z.object({
   N8N_WEBHOOK_AUTH_HEADER: z.string().optional(),
   N8N_WEBHOOK_TIMEOUT_MS: numEnv,
 
+  // ── Phase48: LLM Defense L5-L8 ───────────────────────────────────────
+  INPUT_SANITIZER_ENABLED: z.string().optional(),
+  INPUT_MAX_LENGTH: z.string().optional(),
+  TOPIC_GUARD_ENABLED: z.string().optional(),
+  TOPIC_GUARD_LLM_ENABLED: z.string().optional(),
+  PROMPT_FIREWALL_ENABLED: z.string().optional(),
+  OUTPUT_GUARD_ENABLED: z.string().optional(),
+  SESSION_ABUSE_LIMIT: z.string().optional(),
+  SESSION_REPEAT_LIMIT: z.string().optional(),
+
   // ── Misc ──────────────────────────────────────────────────────────────
   KNOWLEDGE_ENCRYPTION_KEY: z.string().optional(),
   LOGS_DIR: z.string().optional(),

@@ -699,6 +699,134 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     return res.status(201).json({ ok: true, inserted: totalInserted, skipped: totalSkipped });
   });
 
+  // ─── Phase47 Stream B: 構造化ステータス ─────────────────────────────────
+  app.get(
+    '/v1/admin/knowledge/structurize-status',
+    knowledgeAuth,
+    requireKnowledgeRole,
+    async (req: Request, res: Response) => {
+      const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+      const tenantId = resolveTenantId(req);
+
+      // client_admin はテナントIDが必須
+      if (!tenantId && user?.role !== 'super_admin') {
+        return res.status(403).json({ error: 'テナント情報が取得できません' });
+      }
+
+      try {
+        if (tenantId) {
+          // テナント指定あり（super_admin も client_admin も同じクエリ）
+          const totalResult = await db.query<{ cnt: string }>(
+            `SELECT COUNT(*) AS cnt FROM faq_docs WHERE tenant_id = $1 AND is_published = true`,
+            [tenantId],
+          );
+          const total_docs = parseInt(totalResult.rows[0]?.cnt ?? '0', 10);
+
+          const structResult = await db.query<{ cnt: string }>(
+            `SELECT COUNT(*) AS cnt
+             FROM faq_embeddings
+             WHERE tenant_id = $1
+               AND metadata->>'source' = 'book'
+               AND metadata->>'principle' IS NOT NULL`,
+            [tenantId],
+          );
+          const structured_count = parseInt(structResult.rows[0]?.cnt ?? '0', 10);
+          const unstructured_count = Math.max(0, total_docs - structured_count);
+
+          return res.json({ tenant_id: tenantId, total_docs, structured_count, unstructured_count });
+        } else {
+          // super_admin かつ tenant_id 未指定 → 全テナント集計
+          const totalResult = await db.query<{ cnt: string }>(
+            `SELECT COUNT(*) AS cnt FROM faq_docs WHERE is_published = true`,
+          );
+          const total_docs = parseInt(totalResult.rows[0]?.cnt ?? '0', 10);
+
+          const structResult = await db.query<{ cnt: string }>(
+            `SELECT COUNT(*) AS cnt
+             FROM faq_embeddings
+             WHERE metadata->>'source' = 'book'
+               AND metadata->>'principle' IS NOT NULL`,
+          );
+          const structured_count = parseInt(structResult.rows[0]?.cnt ?? '0', 10);
+          const unstructured_count = Math.max(0, total_docs - structured_count);
+
+          return res.json({ tenant_id: null, total_docs, structured_count, unstructured_count });
+        }
+      } catch (err: unknown) {
+        console.error('[structurize-status] error:', err instanceof Error ? err.message : String(err));
+        return res.status(500).json({ error: '構造化ステータスの取得に失敗しました' });
+      }
+    },
+  );
+
+  // ─── Phase47 Stream B: 構造化トリガー（super_admin） ────────────────────
+  app.post(
+    '/v1/admin/knowledge/structurize-trigger',
+    knowledgeAuth,
+    requireKnowledgeRole,
+    async (req: Request, res: Response) => {
+      const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+      if (user?.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Super Adminのみ実行できます' });
+      }
+
+      const tenantId = resolveTenantId(req);
+      if (!tenantId) return res.status(403).json({ error: 'テナント情報が取得できません' });
+
+      try {
+        // 未構造化の書籍を取得
+        const booksResult = await db.query<{ id: number; storage_path: string; encryption_iv: string | null }>(
+          `SELECT bu.id, bu.storage_path, bu.encryption_iv
+           FROM book_uploads bu
+           WHERE bu.tenant_id = $1
+             AND bu.status = 'embedded'
+             AND NOT EXISTS (
+               SELECT 1 FROM faq_embeddings fe
+               WHERE fe.tenant_id = $1
+                 AND fe.metadata->>'source' = 'book'
+                 AND fe.metadata->>'book_id' = bu.id::text
+                 AND fe.metadata->>'principle' IS NOT NULL
+             )`,
+          [tenantId],
+        );
+
+        const targetCount = booksResult.rows.length;
+
+        if (targetCount === 0) {
+          return res.json({ message: '構造化対象の書籍がありません', target_count: 0 });
+        }
+
+        // fire-and-forget
+        setImmediate(() => {
+          import('./bookPdfRoutes').then(() =>
+            import('../../../agent/knowledge/bookStructurizer').then(({ structurizeBook }) => {
+              const { supabaseAdmin } = require('../../auth/supabaseClient');
+              const { extractPdfText } = require('../../lib/book-pipeline/pdfExtractor');
+              const processNext = async () => {
+                for (const book of booksResult.rows) {
+                  try {
+                    if (!supabaseAdmin) continue;
+                    const { pages } = await extractPdfText({ supabase: supabaseAdmin }, book.storage_path, book.encryption_iv);
+                    const fullText = pages.map((p: { text: string }) => p.text).join('\n\n');
+                    await structurizeBook(tenantId, book.id, fullText);
+                  } catch (err) {
+                    console.warn('[structurize-trigger] book_id=%d failed:', book.id, err instanceof Error ? err.message : String(err));
+                  }
+                }
+              };
+              processNext().catch(() => {});
+            })
+          ).catch(() => {});
+        });
+
+        return res.json({ message: `構造化を開始しました`, target_count: targetCount });
+      } catch (err: unknown) {
+        console.error('[structurize-trigger] error:', err instanceof Error ? err.message : String(err));
+        return res.status(500).json({ error: '構造化トリガーに失敗しました' });
+      }
+    },
+  );
+
   registerFaqCrudRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
   registerBookPdfRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
 

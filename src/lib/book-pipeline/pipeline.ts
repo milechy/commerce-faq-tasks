@@ -125,6 +125,21 @@ export async function runBookPipeline(
     };
     await embedAndStore(book.tenant_id, bookId, structuredChunks, embedDeps);
 
+    // Phase47 Stream B: Gemini心理原則構造化（fire-and-forget、既存パイプラインをブロックしない）
+    if (process.env['BOOK_STRUCTURIZE_ENABLED'] === 'true') {
+      const fullText = pages.map((p: { text: string }) => p.text).join('\n\n');
+      setImmediate(() => {
+        import('../../agent/knowledge/bookStructurizer')
+          .then(({ structurizeBook }) => structurizeBook(book.tenant_id, bookId, fullText))
+          .catch((err: unknown) => {
+            console.warn(
+              '[book-pipeline] structurizeBook failed (non-blocking):',
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+      });
+    }
+
     // 8. status → embedded
     await setStatus(db, bookId, "embedded", {
       chunk_count: chunks.length,

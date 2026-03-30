@@ -10,6 +10,10 @@ import type { Lang } from "../i18n/messages";
 import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
 import { saveKnowledgeGap } from "../admin/knowledge/knowledgeGapRepository";
 import { sanitizeInput, sanitizeOutput, blockReasonToMessage } from "../../lib/security/inputSanitizer";
+import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from "../../middleware/inputSanitizer";
+import { applyPromptFirewall } from "../../middleware/promptFirewall";
+import { checkTopic } from "../../middleware/topicGuard";
+import { guardOutput } from "../../middleware/outputGuard";
 
 // チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
 const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? "llama-3.3-70b-versatile";
@@ -121,6 +125,33 @@ export function createChatHandler(logger: Logger) {
     const sessionId: string =
       body.sessionId ?? body.conversationId ?? randomUUID();
 
+    // L5: Input Sanitizer (Phase48)
+    const sanitizeResult = l5SanitizeInput(body.message, body.conversationId ?? 'anon', sessionHistoryStore);
+    if (!sanitizeResult.allowed) {
+      if (sanitizeResult.shouldTerminateSession) {
+        res.status(403).json({ error: sanitizeResult.userFacingMessage ?? 'セッションが終了しました。' });
+      } else {
+        res.status(400).json({ error: sanitizeResult.userFacingMessage ?? 'メッセージを確認してください。' });
+      }
+      return;
+    }
+    const sanitizedMessage = sanitizeResult.sanitizedMessage ?? body.message;
+
+    // L7: Prompt Firewall (Phase48)
+    const firewallResult = applyPromptFirewall(sanitizedMessage);
+    if (!firewallResult.allowed) {
+      res.status(400).json({ error: firewallResult.userFacingMessage ?? 'その質問にはお答えできません。' });
+      return;
+    }
+
+    // L6: Topic Guard (Phase48)
+    const topicResult = await checkTopic(firewallResult.sanitizedMessage, tenantId, body.conversationId ?? 'anon');
+    if (!topicResult.allowed) {
+      const status = topicResult.shouldTerminateSession ? 403 : 400;
+      res.status(status).json({ error: topicResult.userFacingMessage ?? 'ご質問の内容が対応範囲外です。' });
+      return;
+    }
+
     logger.info(
       {
         requestId,
@@ -147,7 +178,7 @@ export function createChatHandler(logger: Logger) {
       const result = await runDialogTurn({
         sessionId,
         tenantId,
-        message: body.message,
+        message: firewallResult.sanitizedMessage,
         history: body.history,
         options: body.options
           ? {
@@ -162,9 +193,13 @@ export function createChatHandler(logger: Logger) {
           : undefined,
       });
 
+      // L8: Output Guard (Phase48)
+      const outputResult = guardOutput(result.answer ?? '');
+      const guardedAnswer = result.answer ? outputResult.sanitizedResponse : result.answer;
+
       let content: string;
-      if (result.answer) {
-        content = sanitizeOutput(result.answer);
+      if (guardedAnswer) {
+        content = sanitizeOutput(guardedAnswer);
       } else if (
         result.needsClarification &&
         result.clarifyingQuestions &&

@@ -19,13 +19,14 @@ export interface ConversationEvaluation {
   id: number;
   tenant_id: string;
   session_id: string;
-  score: number;                        // 0–100
+  overall_score: number;                // 0–100 (aliased from DB column `score`)
   used_principles: string[];
   effective_principles: string[];
   failed_principles: string[];
   evaluation_axes: EvaluationAxes | null;
   notes: string | null;
   model_used: string | null;
+  judge_model: string | null;
   evaluated_at: string;
   outcome: string;                      // 'replied' | 'appointment' | 'lost' | 'unknown'
   outcome_updated_by: string | null;
@@ -76,6 +77,8 @@ export interface ListEvaluationsParams {
   days?: number;
   limit?: number;
   offset?: number;
+  min_score?: number;
+  max_score?: number;
 }
 
 export async function listEvaluations(
@@ -95,6 +98,16 @@ export async function listEvaluations(
     args.push(params.tenantId);
   }
 
+  if (params.min_score !== undefined) {
+    conditions.push(`score >= $${idx++}`);
+    args.push(params.min_score);
+  }
+
+  if (params.max_score !== undefined) {
+    conditions.push(`score <= $${idx++}`);
+    args.push(params.max_score);
+  }
+
   const where = `WHERE ${conditions.join(" AND ")}`;
 
   const countResult = await pool.query<{ count: string; avg_score: string }>(
@@ -107,11 +120,11 @@ export async function listEvaluations(
 
   const listArgs = [...args, limit, offset];
   const listResult = await pool.query<ConversationEvaluation>(
-    `SELECT id, tenant_id, session_id, score,
+    `SELECT id, tenant_id, session_id, score AS overall_score,
             COALESCE(used_principles, '{}') AS used_principles,
             COALESCE(effective_principles, '{}') AS effective_principles,
             COALESCE(failed_principles, '{}') AS failed_principles,
-            evaluation_axes, notes, model_used, evaluated_at,
+            evaluation_axes, notes, model_used, judge_model, evaluated_at,
             COALESCE(outcome, 'unknown') AS outcome,
             outcome_updated_by, outcome_updated_at
      FROM conversation_evaluations
@@ -255,7 +268,7 @@ export async function getEvaluationsBySession(
   }
 
   const result = await pool.query<ConversationEvaluation>(
-    `SELECT id, tenant_id, session_id, score,
+    `SELECT id, tenant_id, session_id, score AS overall_score,
             COALESCE(used_principles, '{}') AS used_principles,
             COALESCE(effective_principles, '{}') AS effective_principles,
             COALESCE(failed_principles, '{}') AS failed_principles,
@@ -295,7 +308,7 @@ export async function updateOutcome(
          outcome_updated_by = $2,
          outcome_updated_at = NOW()
      ${where}
-     RETURNING id, tenant_id, session_id, score,
+     RETURNING id, tenant_id, session_id, score AS overall_score,
                COALESCE(used_principles, '{}') AS used_principles,
                COALESCE(effective_principles, '{}') AS effective_principles,
                COALESCE(failed_principles, '{}') AS failed_principles,
@@ -476,4 +489,152 @@ export async function rejectTuningRule(
     args,
   );
   return result.rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// ID による評価詳細取得（メッセージ付き）- Stream B
+// ---------------------------------------------------------------------------
+
+export async function getEvaluationById(
+  id: number,
+  tenantId: string | undefined,
+): Promise<{
+  evaluation: ConversationEvaluation;
+  messages: Array<{ role: string; content: string; created_at: string }>;
+} | null> {
+  const pool = getPool();
+  const args: unknown[] = [id];
+  let where = "WHERE id = $1";
+
+  if (tenantId) {
+    where += " AND tenant_id = $2";
+    args.push(tenantId);
+  }
+
+  const evalResult = await pool.query<ConversationEvaluation>(
+    `SELECT id, tenant_id, session_id, score AS overall_score,
+            COALESCE(used_principles, '{}') AS used_principles,
+            COALESCE(effective_principles, '{}') AS effective_principles,
+            COALESCE(failed_principles, '{}') AS failed_principles,
+            evaluation_axes, notes, model_used, evaluated_at,
+            COALESCE(outcome, 'unknown') AS outcome,
+            outcome_updated_by, outcome_updated_at
+     FROM conversation_evaluations
+     ${where}`,
+    args,
+  );
+
+  const evaluation = evalResult.rows[0];
+  if (!evaluation) return null;
+
+  const msgResult = await pool.query<{ role: string; content: string; created_at: string }>(
+    `SELECT role, content, created_at
+     FROM chat_messages
+     WHERE session_id = $1
+     ORDER BY created_at ASC`,
+    [evaluation.session_id],
+  );
+
+  const messages = msgResult.rows.map((m: { role: string; content: string; created_at: string }) => ({
+    role: m.role,
+    content: m.content.slice(0, 200),
+    created_at: m.created_at,
+  }));
+
+  return { evaluation, messages };
+}
+
+// ---------------------------------------------------------------------------
+// セッション評価済みチェック - Stream B
+// ---------------------------------------------------------------------------
+
+export async function checkAlreadyEvaluated(sessionId: string): Promise<boolean> {
+  const pool = getPool();
+  const result = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM conversation_evaluations WHERE session_id = $1`,
+    [sessionId],
+  );
+  return parseInt(result.rows[0]?.count ?? "0", 10) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// suggested_rules[ruleIndex].status 更新 - Stream B
+// ---------------------------------------------------------------------------
+
+export async function updateSuggestedRuleStatus(
+  evaluationId: number,
+  ruleIndex: number,
+  status: "approved" | "rejected",
+  tenantId: string | undefined,
+): Promise<ConversationEvaluation | null> {
+  const pool = getPool();
+
+  // Validate ruleIndex is within bounds
+  const boundsArgs: unknown[] = [evaluationId];
+  let boundsWhere = "WHERE id = $1";
+  if (tenantId) {
+    boundsWhere += " AND tenant_id = $2";
+    boundsArgs.push(tenantId);
+  }
+
+  const boundsResult = await pool.query<{ suggested_rules: unknown }>(
+    `SELECT suggested_rules FROM conversation_evaluations ${boundsWhere}`,
+    boundsArgs,
+  );
+  const row = boundsResult.rows[0];
+  if (!row) return null;
+
+  const rules = Array.isArray(row.suggested_rules) ? row.suggested_rules : [];
+  if (ruleIndex < 0 || ruleIndex >= rules.length) {
+    throw new RangeError(`ruleIndex ${ruleIndex} out of bounds (length=${rules.length})`);
+  }
+
+  const updateArgs: unknown[] = [
+    `{${ruleIndex},status}`,
+    JSON.stringify(status),
+    evaluationId,
+  ];
+  let updateWhere = "WHERE id = $3";
+  if (tenantId) {
+    updateWhere += " AND tenant_id = $4";
+    updateArgs.push(tenantId);
+  }
+
+  const result = await pool.query<ConversationEvaluation>(
+    `UPDATE conversation_evaluations
+     SET suggested_rules = jsonb_set(
+       COALESCE(suggested_rules, '[]'::jsonb),
+       $1::text[],
+       $2::jsonb,
+       true
+     )
+     ${updateWhere}
+     RETURNING id, tenant_id, session_id, score AS overall_score,
+               COALESCE(used_principles, '{}') AS used_principles,
+               COALESCE(effective_principles, '{}') AS effective_principles,
+               COALESCE(failed_principles, '{}') AS failed_principles,
+               evaluation_axes, notes, model_used, evaluated_at,
+               COALESCE(outcome, 'unknown') AS outcome,
+               outcome_updated_by, outcome_updated_at`,
+    updateArgs,
+  );
+  return result.rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// suggested_rules から tuning_rules へ挿入 - Stream B
+// ---------------------------------------------------------------------------
+
+export async function insertTuningRuleFromSuggestion(
+  tenantId: string,
+  ruleText: string,
+): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO tuning_rules
+       (tenant_id, trigger_pattern, expected_behavior, priority, is_active)
+     VALUES ($1, $2, $2, 0, true)
+     ON CONFLICT DO NOTHING`,
+    [tenantId, ruleText],
+  );
 }

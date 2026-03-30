@@ -70,6 +70,8 @@ export interface SynthesisInput {
   /** Phase46: A/Bテスト variant記録用 */
   variantId?: string | null;
   variantName?: string | null;
+  /** Phase46: Gap Detection 用セッションID */
+  sessionId?: string;
 }
 
 export interface SynthesisOutput {
@@ -158,6 +160,27 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     hitCount: items.length,
     topScore: (items[0] as any)?.score ?? 0,
   };
+
+  // Phase46: Knowledge Gap Detection（fire-and-forget、チャットフローをブロックしない）
+  if (tenantId && process.env['GAP_DETECTION_ENABLED'] !== 'false') {
+    const _sid = input.sessionId ?? '';
+    const _msg = query;
+    const _hitCount = gapSignal.hitCount;
+    const _topScore = gapSignal.topScore;
+    setImmediate(() => {
+      import('../gap/gapDetector').then(({ detectGap }) =>
+        detectGap({
+          tenantId: tenantId,
+          sessionId: _sid,
+          userMessage: _msg,
+          ragResultCount: _hitCount,
+          topRerankScore: _topScore > 0 ? _topScore : undefined,
+        })
+      ).catch((_err: unknown) => {
+        // silent — non-blocking
+      });
+    });
+  }
 
   // チューニングルールを取得（tenantId がある場合のみ）
   const tuningRules = tenantId
