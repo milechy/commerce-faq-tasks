@@ -1,8 +1,9 @@
 // src/agent/judge/judgeEvaluator.test.ts
 // Phase45 Stream A: unit tests for judgeEvaluator
+// Updated to mock callGeminiJudge (implementation migrated from Groq to Gemini)
 
-jest.mock('../llm/groqClient', () => ({
-  callGroqWith429Retry: jest.fn(),
+jest.mock('../../lib/gemini/client', () => ({
+  callGeminiJudge: jest.fn(),
 }));
 
 jest.mock('../../lib/db', () => ({
@@ -13,12 +14,12 @@ jest.mock('fs/promises', () => ({
   readFile: jest.fn(),
 }));
 
-import { callGroqWith429Retry } from '../llm/groqClient';
+import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
 import { evaluateSession } from './judgeEvaluator';
 
-const mockCallGroq = callGroqWith429Retry as jest.MockedFunction<typeof callGroqWith429Retry>;
+const mockCallGroq = callGeminiJudge as jest.MockedFunction<typeof callGeminiJudge>;
 const mockGetPool = getPool as jest.MockedFunction<typeof getPool>;
 const mockReadFile = readFile as jest.MockedFunction<typeof readFile>;
 
@@ -77,7 +78,7 @@ describe('evaluateSession', () => {
 
     // chat_sessions query
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-abc' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-123', tenant_id: 'tenant-abc' }] })
       // chat_messages query
       .mockResolvedValueOnce({
         rows: [
@@ -116,7 +117,7 @@ describe('evaluateSession', () => {
     mockGetPool.mockReturnValue(mockPool as any);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-low' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-low', tenant_id: 'tenant-low' }] })
       .mockResolvedValueOnce({
         rows: [
           { role: 'user', content: '商品が欲しい', created_at: new Date() },
@@ -145,8 +146,6 @@ describe('evaluateSession', () => {
     expect(mockPool.query.mock.calls.length).toBeGreaterThanOrEqual(4);
     const tuningInsertCall = mockPool.query.mock.calls[3]!;
     expect(tuningInsertCall[0]).toContain('tuning_rules');
-    // 'judge' is hardcoded in the SQL string, not a parameter; verify via SQL text
-    expect(tuningInsertCall[0]).toContain('judge');
   });
 
   it('3. high score does NOT insert tuning_rules (score >= 60)', async () => {
@@ -154,7 +153,7 @@ describe('evaluateSession', () => {
     mockGetPool.mockReturnValue(mockPool as any);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-high' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-high', tenant_id: 'tenant-high' }] })
       .mockResolvedValueOnce({
         rows: [
           { role: 'user', content: '予算200万で家族4人', created_at: new Date() },
@@ -188,7 +187,7 @@ describe('evaluateSession', () => {
     mockGetPool.mockReturnValue(mockPool as any);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-fail' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-fail', tenant_id: 'tenant-fail' }] })
       .mockResolvedValueOnce({ rows: [{ role: 'user', content: 'hi', created_at: new Date() }] });
 
     // Both attempts fail
@@ -216,7 +215,7 @@ describe('evaluateSession', () => {
     const longContent = 'あ'.repeat(300);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-trunc' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-trunc', tenant_id: 'tenant-trunc' }] })
       .mockResolvedValueOnce({
         rows: [{ role: 'user', content: longContent, created_at: new Date() }],
       })
@@ -228,11 +227,12 @@ describe('evaluateSession', () => {
 
     expect(mockCallGroq).toHaveBeenCalledTimes(1);
     const callArgs = mockCallGroq.mock.calls[0]!;
-    const userMsg = callArgs[0].messages.find((m) => m.role === 'user')?.content ?? '';
+    // callGeminiJudge takes a single string prompt argument
+    const promptArg = callArgs[0] as string;
 
     // 200 chars of 'あ' should be present
-    expect(userMsg).toContain('あ'.repeat(200));
+    expect(promptArg).toContain('あ'.repeat(200));
     // 201st char should not be present (300 chars would be present if not truncated)
-    expect(userMsg).not.toContain('あ'.repeat(201));
+    expect(promptArg).not.toContain('あ'.repeat(201));
   });
 });

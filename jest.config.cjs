@@ -42,4 +42,7 @@ module.exports = {
   ],
 
   moduleFileExtensions: ["ts", "js", "json", "node"],
+
+  // Force-exit after all tests complete to avoid hanging on open DB/async handles
+  forceExit: true,
 };
