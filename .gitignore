@@ -40,3 +40,6 @@ admin-ui/.env.local
 
 # Admin UI build output
 admin-ui/dist/
+
+# Claude Code local settings (may contain credentials)
+.claude/settings.local.json

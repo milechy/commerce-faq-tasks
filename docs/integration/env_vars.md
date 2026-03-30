@@ -36,3 +36,33 @@ DBスキーマ変更: src/lib/billing/migration.sql を実行すること
 
 DBスキーマ変更: src/api/admin/tenants/migration.sql を実行すること
 - 新規テーブル: tenants, tenant_api_keys
+
+## Phase45 (Stream A)
+- JUDGE_AUTO_EVALUATE: 会話完了時の自動Judge評価 / "true" (Phase45)
+- JUDGE_SCORE_THRESHOLD: 自動ルール提案のスコア閾値 / "60" (Phase45)
+
+## Phase46 (Stream A)
+- GAP_DETECTION_ENABLED: Knowledge Gap自動検出 / "true" (Phase46)
+- GAP_CONFIDENCE_THRESHOLD: rerankスコアのGap判定閾値 / "0.3" (Phase46)
+- `GEMINI_API_KEY`: Google AI Studio APIキー（gapRecommender.ts で使用）
+- `GEMINI_MODEL`: Gemini モデル名（省略時: `gemini-2.5-flash-preview-04-17`）
+
+## Phase47 (Stream A)
+- `BOOK_STRUCTURIZE_ENABLED`: 書籍テキスト構造化パイプライン有効化 / `"true"` — 未設定または `"true"` 以外の場合は `structurizeBook()` が即時返却 (Phase47)
+- `GEMINI_API_KEY`: Phase46で追加済み。bookStructurizer.ts も同一キーを使用
+- `GEMINI_MODEL`: Phase46で追加済み。bookStructurizer.ts も同一モデルを使用
+- `OPENAI_API_KEY`: Phase47で embedding 生成（text-embedding-3-small）に使用。既存変数
+- `ES_FAQ_INDEX`: ESインデックス名（省略時: `faqs`）。既存変数
+
+## Phase48: LLM防御 L5-L8
+
+| 変数 | 説明 / デフォルト | Phase |
+|---|---|---|
+| INPUT_SANITIZER_ENABLED | 入力サニタイザー有効化 / true | Phase48 |
+| INPUT_MAX_LENGTH | 最大メッセージ長 / 500 | Phase48 |
+| PROMPT_FIREWALL_ENABLED | プロンプトファイアウォール有効化 / true | Phase48 |
+| TOPIC_GUARD_ENABLED | トピックガード有効化 / true | Phase48 |
+| TOPIC_GUARD_LLM_ENABLED | トピックガードLLM判定 / false | Phase48 |
+| OUTPUT_GUARD_ENABLED | 出力ガード有効化 / true | Phase48 |
+| SESSION_ABUSE_LIMIT | セッション終了までの違反回数 / 3 | Phase48 |
+| SESSION_REPEAT_LIMIT | 同一メッセージ反復ブロック回数 / 3 | Phase48 |

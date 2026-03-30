@@ -84,8 +84,22 @@ ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.
 | `src/api/admin/tuning/migration.sql` | `tuning_rules` | Phase 38 |
 | `src/api/admin/tuning/migration_system_prompt.sql` | `tenants.system_prompt` カラム追加（ALTER TABLE） | Phase 38 |
 | `src/api/admin/knowledge/migration_book_uploads.sql` | `book_uploads` + `faq_embeddings` インデックス (source/principle/book_id) | Phase 44 |
+| `src/agent/judge/migration_conversation_evaluations.sql` | `conversation_evaluations` | Phase 45 |
+| `src/agent/judge/migration_evaluations.sql` | ALTER `conversation_evaluations` (add axis columns) | Phase 45 Stream A |
+| `src/agent/judge/migration_tuning_rules_judge.sql` | ALTER `tuning_rules` (judge columns) | Phase 45 |
+| `src/agent/gap/migration_gap_detection.sql` | ALTER `knowledge_gaps` (frequency/detection_source columns) | Phase 46 |
+| `src/agent/gap/migration_gap_detection_v2.sql` | ALTER `knowledge_gaps` (suggested_answer column) | Phase 46B |
+| `src/agent/judge/migration_cleanup_zero_scores.sql` | DELETE 不完全レコード from `conversation_evaluations` (score=0, feedback=NULL) | Phase 45 E2E修正 |
 
 > 新しいマイグレーションを追加した場合は、このテーブルを更新すること。
+
+### migration_cleanup_zero_scores.sql
+Phase45 E2E修正: Geminiエラー時に作られた不完全レコード（score=0, feedback=NULL）を削除。
+
+実行方法:
+```bash
+ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/src/agent/judge/migration_cleanup_zero_scores.sql"
+```
 
 ---
 
