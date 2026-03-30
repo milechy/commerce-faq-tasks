@@ -301,6 +301,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
+    @session.on("error")
+    async def on_session_error(ev) -> None:
+        """LemonSlice Production Best Practices: pipeline error handling."""
+        err = ev.error if hasattr(ev, 'error') else ev
+        error_type = type(err).__name__
+        is_recoverable = getattr(err, 'recoverable', True)
+        inner_error = getattr(err, 'error', None)
+
+        if not is_recoverable:
+            logger.error(
+                f"[FATAL] Non-recoverable pipeline error ({error_type}): {err}",
+                exc_info=inner_error,
+            )
+        else:
+            logger.warning(
+                f"[RECOVERABLE] Pipeline error ({error_type}): {err}",
+                exc_info=inner_error,
+            )
+
     async def handle_chat(user_text: str) -> None:
         """Groq LLM 直接呼び出し → session.say() でTTS再生 → Data Channel でWidget通知"""
         try:
@@ -351,12 +370,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "agent_image_url": effective_image_url,
                 "agent_prompt": avatar_prompt,
                 "idle_timeout": 300,
+                "response_done_timeout": 0.5,
+                "agent_idle_prompt": os.getenv("AVATAR_IDLE_PROMPT", "a friendly person smiling and nodding gently"),
             }
         else:
             avatar_kwargs = {
                 "agent_id": effective_agent_id,
                 "agent_prompt": avatar_prompt,
                 "idle_timeout": 300,
+                "response_done_timeout": 0.5,
+                "agent_idle_prompt": os.getenv("AVATAR_IDLE_PROMPT", "a friendly person smiling and nodding gently"),
             }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)
         await avatar.start(session, room=ctx.room)
