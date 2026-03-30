@@ -825,6 +825,7 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
   const [showModal, setShowModal] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [copiedPrefixId, setCopiedPrefixId] = useState<string | null>(null);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -972,16 +973,48 @@ function ApiKeysTab({ tenantId }: { tenantId: string }) {
             >
               <div style={{ flex: "1 1 200px", minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span
+                  <button
+                    title="プレフィックスをコピー（識別用）"
+                    onClick={() => {
+                      const prefix = key.maskedKey;
+                      const doCopy = async () => {
+                        let ok = false;
+                        try {
+                          await navigator.clipboard.writeText(prefix);
+                          ok = true;
+                        } catch {
+                          try {
+                            const inp = document.createElement("input");
+                            inp.value = prefix;
+                            inp.style.position = "fixed";
+                            inp.style.opacity = "0";
+                            document.body.appendChild(inp);
+                            inp.select();
+                            ok = document.execCommand("copy");
+                            document.body.removeChild(inp);
+                          } catch { /* ignore */ }
+                        }
+                        if (ok) {
+                          setCopiedPrefixId(key.id);
+                          setTimeout(() => setCopiedPrefixId(null), 2000);
+                        }
+                      };
+                      void doCopy();
+                    }}
                     style={{
                       fontFamily: "monospace",
                       fontSize: 14,
-                      color: "#86efac",
+                      color: copiedPrefixId === key.id ? "#4ade80" : "#86efac",
                       wordBreak: "break-all",
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "copy",
+                      textAlign: "left",
                     }}
                   >
-                    {key.maskedKey}
-                  </span>
+                    {copiedPrefixId === key.id ? "✅ コピー済み" : key.maskedKey}
+                  </button>
                   <span
                     style={{
                       padding: "2px 8px",

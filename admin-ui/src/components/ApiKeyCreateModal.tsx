@@ -8,6 +8,31 @@ interface Props {
   onSuccess: (newKey: string) => void;
 }
 
+async function copyToClipboard(text: string): Promise<boolean> {
+  // 1. Clipboard API（HTTPS環境）
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {}
+  }
+
+  // 2. execCommandフォールバック（HTTP環境）
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const result = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return result;
+  } catch {
+    return false;
+  }
+}
+
 async function issueApiKey(tenantId: string): Promise<string> {
   const { data } = await supabase.auth.getSession();
   let token = data.session?.access_token ?? null;
@@ -53,12 +78,10 @@ export default function ApiKeyCreateModal({ tenantId, onClose, onSuccess }: Prop
   };
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(newKey);
+    const success = await copyToClipboard(newKey);
+    if (success) {
       setCopied(true);
-      setTimeout(() => setCopied(false), 3000);
-    } catch {
-      // clipboard API not available
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -197,6 +220,8 @@ export default function ApiKeyCreateModal({ tenantId, onClose, onSuccess }: Prop
                 borderRadius: 10,
                 padding: "16px",
                 marginBottom: 20,
+                userSelect: "text",
+                cursor: "text",
               }}
             >
               {newKey}

@@ -115,6 +115,10 @@ export default function BooksPage() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [titleError, setTitleError] = useState<string | null>(null);
 
+  // 構造化ステータス
+  const [structStatus, setStructStatus] = useState<{ total_docs: number; structured_count: number; unstructured_count: number } | null>(null);
+  const [structTriggering, setStructTriggering] = useState(false);
+
   // ポーリング
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -153,6 +157,20 @@ export default function BooksPage() {
 
   const effectiveTenantId = isSuperAdmin ? selectedTenantId : (user?.tenantId ?? "");
 
+  // ─── 構造化ステータス取得 ─────────────────────────────────────────────────
+
+  const fetchStructStatus = useCallback(async () => {
+    if (!effectiveTenantId) return;
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/knowledge/structurize-status?tenant_id=${encodeURIComponent(effectiveTenantId)}`);
+      if (!res.ok) return;
+      const data = await res.json() as { total_docs: number; structured_count: number; unstructured_count: number };
+      setStructStatus(data);
+    } catch {
+      // ignore
+    }
+  }, [effectiveTenantId]);
+
   // ─── 書籍リスト取得 ───────────────────────────────────────────────────────
 
   const fetchBooks = useCallback(async () => {
@@ -175,6 +193,12 @@ export default function BooksPage() {
       void fetchBooks();
     }
   }, [authLoading, effectiveTenantId, fetchBooks]);
+
+  useEffect(() => {
+    if (!authLoading && effectiveTenantId) {
+      void fetchStructStatus();
+    }
+  }, [authLoading, effectiveTenantId, fetchStructStatus]);
 
   // ─── ポーリング（processing中の書籍がある場合） ──────────────────────────
 
@@ -301,6 +325,26 @@ export default function BooksPage() {
     }
   };
 
+  // ─── 構造化トリガー（super_admin） ───────────────────────────────────────
+
+  const handleStructurizeTrigger = async () => {
+    setStructTriggering(true);
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/knowledge/structurize-trigger?tenant_id=${encodeURIComponent(effectiveTenantId)}`,
+        { method: 'POST' },
+      );
+      if (!res.ok) throw new Error('trigger failed');
+      const data = await res.json() as { message: string; target_count: number };
+      showToast(`${data.message}（${data.target_count}件対象）`, true);
+      setTimeout(() => void fetchStructStatus(), 2000);
+    } catch {
+      showToast('構造化の開始に失敗しました', false);
+    } finally {
+      setStructTriggering(false);
+    }
+  };
+
   // ─── ロード中 ─────────────────────────────────────────────────────────────
 
   if (authLoading) return null;
@@ -347,7 +391,7 @@ export default function BooksPage() {
       <header style={{ marginBottom: 28 }}>
         <button
           onClick={() => navigate("/admin/knowledge")}
-          style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, display: "block", minHeight: 44, display: "flex", alignItems: "center" } as React.CSSProperties}
+          style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, minHeight: 44, display: "flex", alignItems: "center" } as React.CSSProperties}
         >
           ← ナレッジ管理に戻る
         </button>
@@ -358,6 +402,47 @@ export default function BooksPage() {
           PDFをアップロードしてAIの営業トークを強化しましょう
         </p>
       </header>
+
+      {/* Phase47 Stream B: 構造化ステータスバッジ */}
+      {structStatus && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12,
+          marginBottom: 20,
+          padding: '12px 16px',
+          borderRadius: 10,
+          border: '1px solid rgba(99,102,241,0.2)',
+          background: 'rgba(99,102,241,0.06)',
+        }}>
+          <span style={{ fontSize: 14, color: '#d1d5db' }}>
+            📚 ナレッジ: 合計 <strong style={{ color: '#f9fafb' }}>{structStatus.total_docs}</strong>件
+            &ensp;|&ensp;構造化済み: <strong style={{ color: '#4ade80' }}>{structStatus.structured_count}</strong>件
+            &ensp;|&ensp;未構造化: <strong style={{ color: '#fbbf24' }}>{structStatus.unstructured_count}</strong>件
+          </span>
+          {isSuperAdmin && structStatus.unstructured_count > 0 && (
+            <button
+              onClick={() => void handleStructurizeTrigger()}
+              disabled={structTriggering}
+              style={{
+                padding: '8px 18px',
+                minHeight: 44,
+                borderRadius: 8,
+                border: '1px solid rgba(99,102,241,0.4)',
+                background: structTriggering ? 'rgba(99,102,241,0.08)' : 'rgba(99,102,241,0.15)',
+                color: '#a5b4fc',
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: structTriggering ? 'not-allowed' : 'pointer',
+                opacity: structTriggering ? 0.6 : 1,
+              }}
+            >
+              {structTriggering ? '⏳ 実行中...' : '✨ 構造化を実行'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Super Admin: テナントセレクタ */}
       {isSuperAdmin && (

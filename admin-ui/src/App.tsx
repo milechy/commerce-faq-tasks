@@ -23,6 +23,8 @@ import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarDefaultsPage from "./pages/admin/avatar-defaults/index";
 import BooksPage from "./pages/admin/knowledge/books";
+import EvaluationsPage from "./pages/admin/evaluations/index";
+import EvaluationDetailPage from "./pages/admin/evaluations/[id]";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -128,6 +130,10 @@ function AppInner() {
 
         {/* 書籍管理 */}
         <Route path="/admin/knowledge/books" element={<RequireAuth><BooksPage /></RequireAuth>} />
+
+        {/* Phase45: AI評価 */}
+        <Route path="/admin/evaluations" element={<RequireAuth><EvaluationsPage /></RequireAuth>} />
+        <Route path="/admin/evaluations/:id" element={<RequireAuth><EvaluationDetailPage /></RequireAuth>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />
