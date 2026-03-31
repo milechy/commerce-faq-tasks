@@ -9,6 +9,7 @@ import { t } from "../i18n/messages";
 import type { Lang } from "../i18n/messages";
 import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
 import { saveKnowledgeGap } from "../admin/knowledge/knowledgeGapRepository";
+import { analyzeSentiment } from "../../lib/sentiment/client";
 import { sanitizeInput, sanitizeOutput, blockReasonToMessage } from "../../lib/security/inputSanitizer";
 import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from "../../middleware/inputSanitizer";
 import { applyPromptFirewall } from "../../middleware/promptFirewall";
@@ -173,6 +174,27 @@ export function createChatHandler(logger: Logger) {
     }).catch((err) =>
       logger.warn({ err }, "[chat-history] save user message failed")
     );
+
+    // Phase51: sentiment分析（fire-and-forget、レスポンスをブロックしない）
+    analyzeSentiment(body.message).then(async (result) => {
+      if (!result) return;
+      try {
+        const { getPool } = await import("../../lib/db");
+        const db = getPool();
+        await db.query(
+          `UPDATE chat_messages SET sentiment = $1
+           WHERE id = (
+             SELECT m.id FROM chat_messages m
+             JOIN chat_sessions s ON s.id = m.session_id
+             WHERE s.session_id = $2 AND m.role = 'user'
+             ORDER BY m.created_at DESC LIMIT 1
+           )`,
+          [JSON.stringify(result), sessionId]
+        );
+      } catch {
+        // silent — non-blocking
+      }
+    }).catch(() => {});
 
     try {
       const result = await runDialogTurn({

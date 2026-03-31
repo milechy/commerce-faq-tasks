@@ -249,3 +249,34 @@ Status: ✅ Completed
 - Widget 埋め込み URL の HTTPS 化（`https://api.r2c.biz/widget.js`）
 
 Status: ✅ Completed
+
+---
+
+## Phase50 – 会話分析ダッシュボード（完了）
+
+- Analytics集計API 3エンドポイント: summary / trends / evaluations
+- Admin UI ダッシュボードページ（/admin/analytics）
+- KPIカード4枚（総会話数、Judgeスコア、Knowledge Gap、アバター利用率）
+- chart.js折れ線（会話数トレンド）、ドーナツ（スコア分布）、レーダー（4軸平均）
+- 低スコア会話テーブル（session_idリンク付き）
+- 期間フィルター（7d/30d/90d）+ テナントセレクター（super_admin用）
+- RBAC: super_admin=全テナント、client_admin=自テナント強制
+- DBマイグレーション不要（既存テーブルへのSELECTのみ）
+
+Status: ✅ Completed
+
+---
+
+## Phase51 – 日本語BERTセンチメント分析（完了）
+
+- Python Sentiment Service（FastAPI :8200 + koheiduck/bert-japanese-finetuned-sentiment）
+- PM2管理: rajiuce-sentiment（CPU推論、メモリ約500MB）
+- 非同期sentiment分析: customerメッセージ保存後にfire-and-forget
+- `chat_messages.sentiment` JSONBカラム追加（label/score/raw_label）
+- LLMヒント注入: 直近3メッセージのsentimentからトーン調整ヒントを生成
+- Analytics API拡張: sentiment_distribution + 日次sentiment推移
+- ダッシュボードUI: センチメントKPIカード + スタックバーチャート + パイチャート
+- 依存: fugashi + unidic-lite + ipadic（MeCab日本語トークナイザー）
+
+Status: ✅ Completed
+

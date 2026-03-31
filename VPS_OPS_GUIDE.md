@@ -90,6 +90,7 @@ ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.
 | `src/agent/gap/migration_gap_detection.sql` | ALTER `knowledge_gaps` (frequency/detection_source columns) | Phase 46 |
 | `src/agent/gap/migration_gap_detection_v2.sql` | ALTER `knowledge_gaps` (suggested_answer column) | Phase 46B |
 | `src/agent/judge/migration_cleanup_zero_scores.sql` | DELETE 不完全レコード from `conversation_evaluations` (score=0, feedback=NULL) | Phase 45 E2E修正 |
+| `src/api/admin/analytics/migration_sentiment.sql` | `chat_messages.sentiment` JSONB カラム追加 | Phase 51 |
 
 > 新しいマイグレーションを追加した場合は、このテーブルを更新すること。
 
@@ -112,9 +113,11 @@ ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.
 ssh root@65.108.159.161 "pm2 list"
 
 # 期待:
-# rajiuce-api     (id: 0)
-# rajiuce-admin   (id: 1)
-# slack-listener  (id: 2)
+# rajiuce-api       (id: 0)
+# rajiuce-admin     (id: 2)
+# rajiuce-avatar    (id: 5)
+# rajiuce-sentiment (id: 6) — Python FastAPI、port 8200 (Phase51)
+# slack-listener    (id: ?)
 ```
 
 プロセス名でコマンドが失敗する場合は ID で代用:

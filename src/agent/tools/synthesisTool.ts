@@ -10,6 +10,7 @@ import type { PrincipleChunk } from '../psychology/principleSearch';
 import { selectVariant, type PromptVariant } from '../ab-test/variantSelector';
 
 import { getPool } from '../../lib/db';
+import { buildSentimentHint } from '../../lib/sentiment/hint';
 
 async function getTenantsSystemPrompt(tenantId: string): Promise<string | null> {
   try {
@@ -230,6 +231,13 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     }
     if (tuningSection) {
       systemPromptParts.push(tuningSection);
+    }
+    // Phase51: sentiment hint — チューニングルール注入の後に追加
+    if (input.sessionId) {
+      const sentimentHint = await buildSentimentHint(input.sessionId);
+      if (sentimentHint) {
+        systemPromptParts.push(sentimentHint);
+      }
     }
     // Phase44: チューニングルール注入の後に心理学原則を追加（propose/recommend/close のみ）
     if (shouldInjectPrinciples) {

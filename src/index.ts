@@ -68,6 +68,7 @@ import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
 import { registerVariantRoutes } from "./api/admin/variants/routes";
 import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/routes";
 import { registerReportRoutes } from "./api/admin/reports/routes";
+import { registerAnalyticsRoutes } from "./api/admin/analytics/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
@@ -564,6 +565,7 @@ registerEvaluationRoutes(app);
 registerVariantRoutes(app);
 registerObjectionPatternRoutes(app);
 registerReportRoutes(app);
+registerAnalyticsRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
 
