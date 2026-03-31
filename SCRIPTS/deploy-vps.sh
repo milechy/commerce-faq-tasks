@@ -90,16 +90,19 @@ else
   echo "  ✅ Bundle integrity confirmed (hash unchanged)"
 fi
 
-echo "[6/6] Health check..."
+echo "[6/6] Reloading Nginx..."
+ssh "${VPS}" "nginx -t && systemctl reload nginx && echo ' Nginx reloaded OK' || echo ' Nginx reload FAILED'"
+
+echo "[7/7] Health check..."
 sleep 3
 ssh "${VPS}" "curl -sf http://localhost:3100/health && echo ' API OK' || echo ' API FAILED'"
 ssh "${VPS}" "curl -sf http://localhost:5173/ | grep -q 'root' && echo ' Admin UI OK' || echo ' Admin UI FAILED'"
 
 echo ""
 echo "=== Deploy complete ==="
-echo "API:      http://65.108.159.161:3100/health"
-echo "Admin UI: http://65.108.159.161:5173/"
-echo "Widget:   http://65.108.159.161:3100/widget.js"
+echo "API:      https://api.r2c.biz/health"
+echo "Admin UI: https://admin.r2c.biz/"
+echo "Widget:   https://api.r2c.biz/widget.js"
 echo ""
 echo "NOTE: VPS env files are preserved by rsync (never overwritten)."
 echo "  To update secrets: ssh root@65.108.159.161 'nano /opt/rajiuce/admin-ui/.env.local'"
