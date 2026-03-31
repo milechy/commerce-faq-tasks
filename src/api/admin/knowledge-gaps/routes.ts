@@ -9,6 +9,7 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { superAdminMiddleware } from '../tenants/superAdminMiddleware';
 import { embedText } from '../../../agent/llm/openaiEmbeddingClient';
 import { generateRecommendations } from '../../../agent/gap/gapRecommender';
+import { callGeminiJudge } from '../../../lib/gemini/client';
 
 const logger = pino();
 
@@ -133,10 +134,34 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       const validStatuses = ['open', 'resolved', 'dismissed'];
       const status = validStatuses.includes(statusParam) ? statusParam : 'open';
 
-      const sortParam = (req.query['sort'] as string | undefined) ?? 'frequency';
-      const orderBy = sortParam === 'created_at' ? 'created_at DESC' : 'COALESCE(frequency,1) DESC, COALESCE(last_detected_at, created_at) DESC';
+      // Phase52b: sort_by, sort_order, trigger_type, period, search
+      const validSortBy = ['occurrence_count', 'created_at', 'status', 'trigger_type'];
+      const sortByParam = (req.query['sort_by'] as string | undefined) ?? 'occurrence_count';
+      const sortBy = validSortBy.includes(sortByParam) ? sortByParam : 'occurrence_count';
 
-      const limit = Math.max(1, Math.min(parseInt((req.query['limit'] as string) ?? '50', 10) || 50, 200));
+      const sortOrderParam = (req.query['sort_order'] as string | undefined) ?? 'desc';
+      const sortOrder = sortOrderParam === 'asc' ? 'ASC' : 'DESC';
+
+      const triggerTypeParam = req.query['trigger_type'] as string | undefined;
+      const validTriggerTypes = ['no_rag', 'low_confidence', 'fallback', 'judge_low'];
+      const triggerType = triggerTypeParam && validTriggerTypes.includes(triggerTypeParam) ? triggerTypeParam : undefined;
+
+      const periodParam = req.query['period'] as string | undefined;
+      const validPeriods = ['7', '30', '90'];
+      const period = periodParam && validPeriods.includes(periodParam) ? parseInt(periodParam, 10) : null;
+
+      const searchParam = (req.query['search'] as string | undefined)?.trim() ?? '';
+
+      const orderBy = (() => {
+        switch (sortBy) {
+          case 'created_at': return `created_at ${sortOrder}`;
+          case 'status': return `status ${sortOrder}`;
+          case 'trigger_type': return `COALESCE(detection_source, '') ${sortOrder}`;
+          default: return `COALESCE(frequency,0) ${sortOrder}, COALESCE(last_detected_at, created_at) DESC`;
+        }
+      })();
+
+      const limit = Math.max(1, Math.min(parseInt((req.query['limit'] as string) ?? '20', 10) || 20, 200));
       const offset = Math.max(0, parseInt((req.query['offset'] as string) ?? '0', 10) || 0);
 
       try {
@@ -147,6 +172,20 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
         if (tenantFilter) {
           conditions.push(`tenant_id = $${args.length + 1}`);
           args.push(tenantFilter);
+        }
+
+        if (triggerType) {
+          conditions.push(`detection_source = $${args.length + 1}`);
+          args.push(triggerType);
+        }
+
+        if (period !== null) {
+          conditions.push(`COALESCE(last_detected_at, created_at) >= NOW() - INTERVAL '${period} days'`);
+        }
+
+        if (searchParam) {
+          conditions.push(`user_question ILIKE $${args.length + 1}`);
+          args.push(`%${searchParam}%`);
         }
 
         const where = `WHERE ${conditions.join(' AND ')}`;
@@ -180,7 +219,7 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
           });
         }
 
-        return res.json({ gaps: listResult.rows, total, limit, offset });
+        return res.json({ items: listResult.rows, gaps: listResult.rows, total, limit, offset });
       } catch (err) {
         logger.warn({ err }, 'GET /knowledge-gaps failed');
         return res.status(500).json({ error: '一覧の取得に失敗しました' });
@@ -343,6 +382,105 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       } catch (err) {
         logger.warn({ err, id }, 'POST /knowledge-gaps/:id/add-knowledge failed');
         return res.status(500).json({ error: 'ナレッジ追加に失敗しました' });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // POST /v1/admin/knowledge-gaps/:id/suggest-answer
+  // Phase52d: Gemini AI による回答案自動生成
+  // -------------------------------------------------------------------------
+  app.post(
+    '/v1/admin/knowledge-gaps/:id/suggest-answer',
+    supabaseAuthMiddleware,
+    async (req: Request, res: Response) => {
+      const id = parseInt(req.params['id'] ?? '', 10);
+      if (isNaN(id)) return res.status(400).json({ error: 'id が不正です' });
+
+      const { jwtTenantId, isSuperAdmin, isClientAdmin } = resolveJwt(req);
+      if (!isSuperAdmin && !isClientAdmin) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+
+      try {
+        const pool = getPool();
+
+        // 1. knowledge_gaps レコード取得
+        const gapResult = await pool.query<{
+          id: number;
+          tenant_id: string;
+          user_question: string;
+          frequency: number | null;
+        }>(
+          `SELECT id, tenant_id, user_question, frequency
+           FROM knowledge_gaps
+           WHERE id = $1`,
+          [id],
+        );
+
+        if (gapResult.rows.length === 0) {
+          return res.status(404).json({ error: 'ギャップが見つかりません' });
+        }
+
+        const gap = gapResult.rows[0]!;
+
+        // テナント検証: client_admin は自テナントのみ
+        if (!isSuperAdmin && gap.tenant_id !== jwtTenantId) {
+          return res.status(403).json({ error: 'forbidden' });
+        }
+
+        // 2. テナントの system_prompt 取得
+        const tenantResult = await pool.query<{ system_prompt: string | null }>(
+          `SELECT system_prompt FROM tenants WHERE id = $1`,
+          [gap.tenant_id],
+        );
+        const systemPrompt = tenantResult.rows[0]?.system_prompt ?? '（テナント情報なし）';
+
+        // 3. faq_docs から関連ナレッジを取得（上位3件、Anti-Slop: 200文字以内）
+        const faqResult = await pool.query<{ question: string; answer: string }>(
+          `SELECT question, answer FROM faq_docs
+           WHERE tenant_id = $1 AND is_published = true
+           ORDER BY created_at DESC
+           LIMIT 3`,
+          [gap.tenant_id],
+        );
+        const relatedDocs = faqResult.rows;
+        const relatedText = relatedDocs.length > 0
+          ? relatedDocs
+              .map((f: { question: string; answer: string }) => `Q: ${f.question.slice(0, 100)}\nA: ${f.answer.slice(0, 200)}`)
+              .join('\n\n')
+          : '（関連ナレッジなし）';
+        const sources = relatedDocs.map((f: { question: string; answer: string }) => f.question.slice(0, 80));
+
+        // 4. Gemini で回答案生成
+        const occurrenceCount = gap.frequency ?? 1;
+        const prompt = `あなたはBtoB営業サイトのFAQナレッジライターです。
+以下の顧客質問に対する回答を作成してください。
+
+【質問】${gap.user_question}
+【テナント情報】${systemPrompt.slice(0, 500)}
+【関連する既存ナレッジ】
+${relatedText}
+【この質問が聞かれた回数】${occurrenceCount}回
+
+要件:
+- 顧客が知りたい情報を簡潔に回答（200文字以内）
+- 専門用語を避け、わかりやすい言葉で
+- 嘘や推測は含めない。不明な部分は「詳しくはお問い合わせください」
+- コンバージョンにつながる一言を最後に添える（例:「お気軽にご相談ください」）
+
+回答のみを出力してください。前置きや説明は不要です。`;
+
+        const suggestedAnswer = await callGeminiJudge(prompt);
+
+        return res.json({
+          suggested_answer: suggestedAnswer.trim().slice(0, 500),
+          sources,
+          question: gap.user_question,
+        });
+      } catch (err) {
+        logger.warn({ err, id }, 'POST /knowledge-gaps/:id/suggest-answer failed');
+        return res.status(500).json({ error: 'AI回答案の生成に失敗しました。しばらく経ってから再試行してください。' });
       }
     },
   );

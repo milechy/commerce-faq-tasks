@@ -6,6 +6,11 @@ import { useNavigate } from "react-router-dom";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
 import LangSwitcher from "../../../components/LangSwitcher";
+import { Pagination } from "../../../components/common/Pagination";
+import { SortableHeader } from "../../../components/common/SortableHeader";
+import { PeriodFilter } from "../../../components/common/PeriodFilter";
+import type { PeriodValue } from "../../../components/common/PeriodFilter";
+import { SearchBox } from "../../../components/common/SearchBox";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +39,14 @@ interface KnowledgeGap {
 }
 
 type FilterTab = "all" | "pending" | "approved" | "resolved";
+type SortByGap = "occurrence_count" | "created_at" | "status" | "trigger_type";
+const TRIGGER_TYPES = [
+  { value: "", label: "すべてのトリガー" },
+  { value: "no_rag", label: "RAG検索なし" },
+  { value: "low_confidence", label: "低信頼度" },
+  { value: "fallback", label: "フォールバック" },
+  { value: "judge_low", label: "Judge低評価" },
+];
 
 // ---------------------------------------------------------------------------
 // Badge helpers
@@ -110,8 +123,11 @@ function AddKnowledgeModal({ gap, onClose, onSuccess, onDismiss }: ModalProps) {
   const [dismissing, setDismissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [suggestionSources, setSuggestionSources] = useState<string[]>([]);
+  const [isSuggested, setIsSuggested] = useState(false);
 
-  const INPUT_STYLE = {
+  const INPUT_STYLE: React.CSSProperties = {
     width: "100%",
     padding: "11px 14px",
     borderRadius: 10,
@@ -170,6 +186,26 @@ function AddKnowledgeModal({ gap, onClose, onSuccess, onDismiss }: ModalProps) {
     } catch {
       setError("却下できませんでした。もう一度お試しください。");
       setDismissing(false);
+    }
+  };
+
+  const handleSuggestAnswer = async () => {
+    setIsSuggesting(true);
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/knowledge-gaps/${gap.id}/suggest-answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) throw new Error("回答案の生成に失敗しました");
+      const data = await res.json() as { suggested_answer: string; sources: string[] };
+      setAnswerText(data.suggested_answer);
+      setSuggestionSources(data.sources ?? []);
+      setIsSuggested(true);
+    } catch {
+      setError("回答案の生成に失敗しました。手動で入力してください。");
+    } finally {
+      setIsSuggesting(false);
     }
   };
 
@@ -260,8 +296,66 @@ function AddKnowledgeModal({ gap, onClose, onSuccess, onDismiss }: ModalProps) {
             onChange={(e) => setAnswerText(e.target.value)}
             placeholder="この質問に対して、AIにどう答えてほしいですか？"
             rows={5}
-            style={{ ...INPUT_STYLE, resize: "vertical", lineHeight: 1.6 }}
+            style={{
+              ...INPUT_STYLE,
+              resize: "vertical",
+              lineHeight: 1.6,
+              border: isSuggested ? "1px solid rgba(59,130,246,0.6)" : "1px solid #374151",
+              transition: "border-color 0.2s",
+            }}
           />
+          {/* AI suggestion notice */}
+          {isSuggested && (
+            <div style={{ marginTop: 8 }}>
+              <p style={{ margin: "0 0 4px", fontSize: 12, color: "#6b7280" }}>
+                ℹ️ AI提案です。内容を確認・編集してから追加してください。
+              </p>
+              {suggestionSources.length > 0 && (
+                <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  参照ナレッジ: {suggestionSources.map((s, i) => (
+                    <span key={i} style={{ color: "#60a5fa" }}>「{s}」{i < suggestionSources.length - 1 ? " " : ""}</span>
+                  ))}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* AI suggest button */}
+        <div style={{ marginBottom: 20 }}>
+          <button
+            onClick={() => void handleSuggestAnswer()}
+            disabled={isSuggesting || saving || success}
+            style={{
+              width: "100%",
+              padding: "13px 20px",
+              minHeight: 48,
+              borderRadius: 12,
+              border: "1px solid rgba(251,191,36,0.4)",
+              background: isSuggesting
+                ? "rgba(251,191,36,0.08)"
+                : "rgba(251,191,36,0.12)",
+              color: "#fbbf24",
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: isSuggesting || saving || success ? "not-allowed" : "pointer",
+              opacity: isSuggesting || saving || success ? 0.7 : 1,
+              transition: "opacity 0.15s",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+            }}
+          >
+            {isSuggesting ? (
+              <>
+                <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>⏳</span>
+                生成中...
+              </>
+            ) : (
+              <>✨ AIに回答案を生成させる</>
+            )}
+          </button>
         </div>
 
         {/* Category select */}
@@ -365,7 +459,7 @@ const SELECT_STYLE = {
 
 export default function KnowledgeGapsPage() {
   const navigate = useNavigate();
-  const { user, isSuperAdmin, isClientAdmin } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
 
   const [gaps, setGaps] = useState<KnowledgeGap[]>([]);
   const [total, setTotal] = useState(0);
@@ -378,6 +472,22 @@ export default function KnowledgeGapsPage() {
   const [generating, setGenerating] = useState(false);
   const [genToast, setGenToast] = useState<string | null>(null);
   const [selectedGap, setSelectedGap] = useState<KnowledgeGap | null>(null);
+  // Phase52b: sort/filter state
+  const [sortBy, setSortBy] = useState<SortByGap>("occurrence_count");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [triggerType, setTriggerType] = useState("");
+  const [period, setPeriod] = useState<PeriodValue>("all");
+  const [search, setSearch] = useState("");
+
+  const handleSort = (key: string) => {
+    if (key === sortBy) {
+      setSortOrder((o) => (o === "desc" ? "asc" : "desc"));
+    } else {
+      setSortBy(key as SortByGap);
+      setSortOrder("desc");
+    }
+    setOffset(0);
+  };
 
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
 
@@ -397,25 +507,34 @@ export default function KnowledgeGapsPage() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ status: apiStatus, sort: "frequency", limit: "100", offset: String(offset) });
+      const params = new URLSearchParams({
+        status: apiStatus,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+        limit: "20",
+        offset: String(offset),
+      });
       if (effectiveTenant) params.set("tenant_id", effectiveTenant);
+      if (triggerType) params.set("trigger_type", triggerType);
+      if (period !== "all") params.set("period", period);
+      if (search) params.set("search", search);
       const res = await authFetch(`${API_BASE}/v1/admin/knowledge-gaps?${params}`);
       if (!res.ok) throw new Error("fetch failed");
-      const data = await res.json() as { gaps: KnowledgeGap[]; total: number };
-      setGaps(data.gaps ?? []);
+      const data = await res.json() as { items?: KnowledgeGap[]; gaps?: KnowledgeGap[]; total: number };
+      setGaps(data.items ?? data.gaps ?? []);
       setTotal(data.total ?? 0);
     } catch {
       setError("データの取得に失敗しました。再試行してください。");
     } finally {
       setLoading(false);
     }
-  }, [apiStatus, effectiveTenant, offset]);
+  }, [apiStatus, effectiveTenant, offset, sortBy, sortOrder, triggerType, period, search]);
 
   useEffect(() => {
     void fetchGaps();
   }, [fetchGaps]);
 
-  // Client-side filter by recommendation_status
+  // Client-side filter by recommendation_status (for pending/approved tabs within open status)
   const filteredGaps = useMemo(() => {
     if (activeTab === "all" || activeTab === "resolved") return gaps;
     return gaps.filter((g) => (g.recommendation_status ?? "pending") === activeTab);
@@ -513,8 +632,8 @@ export default function KnowledgeGapsPage() {
         </div>
       </header>
 
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+      {/* Filters row 1: status tabs + tenant */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         {/* Status tabs */}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {FILTER_TABS.map((tab) => {
@@ -565,6 +684,32 @@ export default function KnowledgeGapsPage() {
             </select>
           </div>
         )}
+      </div>
+
+      {/* Filters row 2: trigger_type + period + search */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <select
+          value={triggerType}
+          onChange={(e) => { setTriggerType(e.target.value); setOffset(0); }}
+          style={{ ...SELECT_STYLE, minWidth: 150 }}
+        >
+          {TRIGGER_TYPES.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+        <PeriodFilter value={period} onChange={(v) => { setPeriod(v); setOffset(0); }} />
+        <SearchBox
+          value={search}
+          onChange={(v) => { setSearch(v); setOffset(0); }}
+          placeholder="質問を検索..."
+        />
+        {/* Sort controls */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: "auto", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>並び替え:</span>
+          <SortableHeader label="頻度" sortKey="occurrence_count" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+          <SortableHeader label="登録日" sortKey="created_at" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+          <SortableHeader label="トリガー" sortKey="trigger_type" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+        </div>
       </div>
 
       {/* Stats bar */}
@@ -643,11 +788,21 @@ export default function KnowledgeGapsPage() {
 
                 {/* Right: stats */}
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
-                  {(gap.frequency ?? 0) > 0 && (
-                    <span style={{ padding: "3px 10px", borderRadius: 999, background: "rgba(251,191,36,0.12)", border: "1px solid rgba(251,191,36,0.3)", color: "#fbbf24", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
-                      🔁 {gap.frequency}回
-                    </span>
-                  )}
+                  {(gap.frequency ?? 0) > 0 && (() => {
+                    const freq = gap.frequency ?? 0;
+                    const isHigh = freq >= 5;
+                    return (
+                      <span style={{
+                        padding: "3px 10px", borderRadius: 999,
+                        background: isHigh ? "rgba(248,113,113,0.12)" : "rgba(251,191,36,0.12)",
+                        border: `1px solid ${isHigh ? "rgba(248,113,113,0.4)" : "rgba(251,191,36,0.3)"}`,
+                        color: isHigh ? "#f87171" : "#fbbf24",
+                        fontSize: 12, fontWeight: 700, whiteSpace: "nowrap",
+                      }}>
+                        🔁 {freq}回
+                      </span>
+                    );
+                  })()}
                   <span style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}>
                     {formatDate(gap.last_detected_at ?? gap.created_at)}
                   </span>
@@ -659,27 +814,7 @@ export default function KnowledgeGapsPage() {
       )}
 
       {/* Pagination */}
-      {total > 100 && (
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 24 }}>
-          <button
-            onClick={() => setOffset(Math.max(0, offset - 100))}
-            disabled={offset === 0}
-            style={{ padding: "10px 20px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.8)", color: offset === 0 ? "#374151" : "#9ca3af", cursor: offset === 0 ? "not-allowed" : "pointer", fontSize: 13 }}
-          >
-            ← 前へ
-          </button>
-          <span style={{ display: "flex", alignItems: "center", fontSize: 13, color: "#6b7280", padding: "0 12px" }}>
-            {offset + 1}–{Math.min(offset + 100, total)} / {total}
-          </span>
-          <button
-            onClick={() => setOffset(offset + 100)}
-            disabled={offset + 100 >= total}
-            style={{ padding: "10px 20px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.8)", color: offset + 100 >= total ? "#374151" : "#9ca3af", cursor: offset + 100 >= total ? "not-allowed" : "pointer", fontSize: 13 }}
-          >
-            次へ →
-          </button>
-        </div>
-      )}
+      <Pagination total={total} limit={20} offset={offset} onPageChange={setOffset} />
 
       {/* Modal */}
       {selectedGap && (
