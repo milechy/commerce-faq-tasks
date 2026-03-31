@@ -27,20 +27,29 @@ interface Evaluation {
   model_used?: string;
 }
 
+const AXIS_META = [
+  { key: "psychology_fit_score" as const, label: "心理対応力", weight: 30, tooltip: "顧客の心理状態に合わせた適切な対応力" },
+  { key: "customer_reaction_score" as const, label: "顧客対応力", weight: 25, tooltip: "顧客の反応を引き出す力" },
+  { key: "stage_progress_score" as const, label: "商談進行力", weight: 25, tooltip: "商談を次のステージへ進める力" },
+  { key: "taboo_violation_score" as const, label: "NG行為チェック", weight: 20, tooltip: "タブーや禁止事項への違反チェック" },
+] as const;
+
+function scoreConfig(score: number) {
+  if (score >= 80) return { bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.3)", color: "#4ade80", label: "優秀" };
+  if (score >= 60) return { bg: "rgba(251,191,36,0.15)", border: "rgba(251,191,36,0.3)", color: "#fbbf24", label: "良好" };
+  if (score >= 40) return { bg: "rgba(251,146,60,0.15)", border: "rgba(251,146,60,0.3)", color: "#fb923c", label: "改善の余地あり" };
+  return { bg: "rgba(248,113,113,0.15)", border: "rgba(248,113,113,0.3)", color: "#f87171", label: "改善が必要です" };
+}
+
 function ScoreBadge({ score }: { score: number }) {
-  const cfg =
-    score >= 80
-      ? { bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.3)", color: "#4ade80", label: "良好" }
-      : score >= 60
-      ? { bg: "rgba(251,191,36,0.15)", border: "rgba(251,191,36,0.3)", color: "#fbbf24", label: "許容" }
-      : { bg: "rgba(248,113,113,0.15)", border: "rgba(248,113,113,0.3)", color: "#f87171", label: "要改善" };
+  const cfg = scoreConfig(score);
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
-        padding: "3px 10px",
+        gap: 6,
+        padding: "4px 12px",
         borderRadius: 999,
         fontSize: 12,
         fontWeight: 700,
@@ -50,7 +59,7 @@ function ScoreBadge({ score }: { score: number }) {
         whiteSpace: "nowrap",
       }}
     >
-      {score} <span style={{ fontSize: 10, opacity: 0.8 }}>{cfg.label}</span>
+      総合スコア {score}/100 <span style={{ fontSize: 10, opacity: 0.8 }}>{cfg.label}</span>
     </span>
   );
 }
@@ -64,6 +73,7 @@ export default function EvaluationsPage() {
 
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [total, setTotal] = useState(0);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [minScore, setMinScore] = useState<number | "">("");
@@ -99,7 +109,10 @@ export default function EvaluationsPage() {
       const res = await authFetch(`${API_BASE}/v1/admin/evaluations?${params}`);
       if (!res.ok) throw new Error("Failed to fetch evaluations");
       const data = (await res.json()) as { evaluations: Evaluation[]; total: number };
-      setEvaluations(data.evaluations ?? []);
+      const validEvaluations = (data.evaluations ?? []).filter(
+        (e) => (e.overall_score ?? e.score) > 0
+      );
+      setEvaluations(validEvaluations);
       setTotal(data.total ?? 0);
     } catch {
       setError("データの取得に失敗しました");
@@ -172,10 +185,10 @@ export default function EvaluationsPage() {
             ← 管理画面へ戻る
           </button>
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            AI評価一覧
+            AI品質レポート
           </h1>
           <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            会話品質の自動評価結果
+            AIの接客品質を自動採点し、改善ポイントを提案します
           </p>
         </div>
         <LangSwitcher />
@@ -399,6 +412,13 @@ export default function EvaluationsPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {evaluations.map((ev) => {
             const displayScore = ev.overall_score ?? ev.score;
+            const isExpanded = expandedId === ev.id;
+            const cfg = scoreConfig(displayScore);
+            const hasAxisScores =
+              ev.psychology_fit_score != null ||
+              ev.customer_reaction_score != null ||
+              ev.stage_progress_score != null ||
+              ev.taboo_violation_score != null;
             return (
               <div
                 key={ev.id}
@@ -406,68 +426,152 @@ export default function EvaluationsPage() {
                   borderRadius: 14,
                   border: "1px solid #1f2937",
                   background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
-                  padding: "18px 20px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  flexWrap: "wrap",
-                  gap: 12,
                   boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+                  overflow: "hidden",
                 }}
               >
-                {/* Left */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span
-                      style={{
-                        padding: "3px 10px",
-                        borderRadius: 999,
-                        background: "rgba(34,197,94,0.15)",
-                        border: "1px solid rgba(34,197,94,0.3)",
-                        color: "#4ade80",
-                        fontSize: 12,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {ev.tenant_id}
+                {/* Main row */}
+                <div
+                  style={{
+                    padding: "18px 20px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: 12,
+                    cursor: hasAxisScores ? "pointer" : "default",
+                  }}
+                  onClick={() => hasAxisScores && setExpandedId(isExpanded ? null : ev.id)}
+                >
+                  {/* Left */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span
+                        style={{
+                          padding: "3px 10px",
+                          borderRadius: 999,
+                          background: "rgba(34,197,94,0.15)",
+                          border: "1px solid rgba(34,197,94,0.3)",
+                          color: "#4ade80",
+                          fontSize: 12,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {ev.tenant_id}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 13, color: "#9ca3af", fontFamily: "monospace" }}>
+                      {ev.session_id.slice(0, 16)}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#6b7280" }}>
+                      {formatDate(ev.evaluated_at)}
                     </span>
                   </div>
-                  <span
-                    style={{ fontSize: 13, color: "#9ca3af", fontFamily: "monospace" }}
-                  >
-                    {ev.session_id.slice(0, 16)}
-                  </span>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
-                    {formatDate(ev.evaluated_at)}
-                  </span>
+
+                  {/* Center */}
+                  <div style={{ fontSize: 13, color: "#9ca3af" }}>
+                    {ev.judge_model ?? ev.model_used ?? "AI審査員"}
+                  </div>
+
+                  {/* Right */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <ScoreBadge score={displayScore} />
+                    {hasAxisScores && (
+                      <span style={{ color: "#6b7280", fontSize: 12 }}>
+                        {isExpanded ? "▲" : "▼"}
+                      </span>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); navigate(`/admin/evaluations/${ev.id}`); }}
+                      style={{
+                        padding: "8px 16px",
+                        minHeight: 44,
+                        borderRadius: 8,
+                        border: "1px solid #374151",
+                        background: "rgba(15,23,42,0.8)",
+                        color: "#e5e7eb",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      詳細→
+                    </button>
+                  </div>
                 </div>
 
-                {/* Center */}
-                <div style={{ fontSize: 13, color: "#9ca3af" }}>
-                  {ev.judge_model ?? ev.model_used ?? "AI審査員"}
-                </div>
-
-                {/* Right */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <ScoreBadge score={displayScore} />
-                  <button
-                    onClick={() => navigate(`/admin/evaluations/${ev.id}`)}
+                {/* Expanded: 4-axis breakdown */}
+                {isExpanded && hasAxisScores && (
+                  <div
                     style={{
-                      padding: "8px 16px",
-                      minHeight: 44,
-                      borderRadius: 8,
-                      border: "1px solid #374151",
-                      background: "rgba(15,23,42,0.8)",
-                      color: "#e5e7eb",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
+                      padding: "16px 20px",
+                      borderTop: "1px solid #1f2937",
+                      background: "rgba(0,0,0,0.2)",
                     }}
                   >
-                    詳細→
-                  </button>
-                </div>
+                    <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 12px 0", fontWeight: 600 }}>
+                      4軸スコア内訳
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {AXIS_META.map(({ key, label, weight, tooltip }) => {
+                        const axisScore = ev[key] ?? 0;
+                        const axisCfg = scoreConfig(axisScore);
+                        return (
+                          <div key={key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span
+                              title={tooltip}
+                              style={{
+                                fontSize: 12,
+                                color: "#9ca3af",
+                                width: 110,
+                                flexShrink: 0,
+                                cursor: "help",
+                                borderBottom: "1px dotted #4b5563",
+                              }}
+                            >
+                              {label}
+                            </span>
+                            <div
+                              style={{
+                                flex: 1,
+                                height: 8,
+                                borderRadius: 4,
+                                background: "rgba(255,255,255,0.06)",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${axisScore}%`,
+                                  height: "100%",
+                                  background: axisCfg.color,
+                                  borderRadius: 4,
+                                  transition: "width 0.3s ease",
+                                }}
+                              />
+                            </div>
+                            <span
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: axisCfg.color,
+                                width: 32,
+                                textAlign: "right",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {axisScore}
+                            </span>
+                            <span style={{ fontSize: 11, color: "#4b5563", width: 40, flexShrink: 0 }}>
+                              ({weight}%)
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

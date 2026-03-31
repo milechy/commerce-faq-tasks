@@ -89,7 +89,10 @@ export async function listEvaluations(
   const limit = Math.min(params.limit ?? 50, 200);
   const offset = params.offset ?? 0;
 
-  const conditions: string[] = [`evaluated_at >= NOW() - INTERVAL '${days} days'`];
+  const conditions: string[] = [
+    `evaluated_at >= NOW() - INTERVAL '${days} days'`,
+    `score > 0`,
+  ];
   const args: unknown[] = [];
   let idx = 1;
 

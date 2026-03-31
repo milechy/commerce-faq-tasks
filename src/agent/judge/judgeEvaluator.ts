@@ -143,6 +143,12 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
     );
     const messages = msgResult.rows;
 
+    // 2b. Skip evaluation for empty/single-message sessions
+    if (messages.length <= 1) {
+      logger.warn({ sessionId, messageCount: messages.length }, 'judgeEvaluator: skipping empty/single-message session');
+      return null;
+    }
+
     // 3. Build conversation log — content sliced to 200 chars (Anti-Slop rule)
     const conversationLog = (messages as ChatMessageRow[])
       .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)

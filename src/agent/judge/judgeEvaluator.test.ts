@@ -188,7 +188,12 @@ describe('evaluateSession', () => {
 
     mockPool.query
       .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-fail', tenant_id: 'tenant-fail' }] })
-      .mockResolvedValueOnce({ rows: [{ role: 'user', content: 'hi', created_at: new Date() }] });
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: 'hi', created_at: new Date() },
+          { role: 'assistant', content: 'hello', created_at: new Date() },
+        ],
+      });
 
     // Both attempts fail
     mockCallGroq
@@ -217,7 +222,10 @@ describe('evaluateSession', () => {
     mockPool.query
       .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-trunc', tenant_id: 'tenant-trunc' }] })
       .mockResolvedValueOnce({
-        rows: [{ role: 'user', content: longContent, created_at: new Date() }],
+        rows: [
+          { role: 'user', content: longContent, created_at: new Date() },
+          { role: 'assistant', content: '承知しました。', created_at: new Date() },
+        ],
       })
       .mockResolvedValueOnce({ rows: [] });
 

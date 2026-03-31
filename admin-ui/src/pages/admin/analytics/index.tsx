@@ -89,61 +89,6 @@ interface AnalyticsEvaluationsResponse {
   }>;
 }
 
-// === Mock Data ===
-const MOCK_SUMMARY: AnalyticsSummaryResponse = {
-  period: "30d",
-  tenant_id: null,
-  total_sessions: 342,
-  avg_judge_score: 72.5,
-  total_knowledge_gaps: 18,
-  avg_messages_per_session: 6.3,
-  avatar_session_count: 89,
-  avatar_rate: 0.26,
-  prev_total_sessions: 298,
-  sessions_change_pct: 14.8,
-  sentiment_distribution: {
-    positive: 156,
-    negative: 42,
-    neutral: 98,
-    total: 296,
-  },
-};
-
-const MOCK_TRENDS: AnalyticsTrendsResponse = {
-  period: "30d",
-  tenant_id: null,
-  daily: Array.from({ length: 30 }, (_, i) => ({
-    date: new Date(Date.now() - (29 - i) * 86400000).toISOString().split("T")[0],
-    sessions: Math.floor(Math.random() * 20) + 5,
-    avg_score: Math.floor(Math.random() * 30) + 55,
-    knowledge_gaps: Math.floor(Math.random() * 3),
-    sentiment_positive: Math.floor(Math.random() * 10) + 3,
-    sentiment_negative: Math.floor(Math.random() * 4),
-    sentiment_neutral: Math.floor(Math.random() * 6) + 1,
-  })),
-};
-
-const MOCK_EVALUATIONS: AnalyticsEvaluationsResponse = {
-  period: "30d",
-  tenant_id: null,
-  score_distribution: [
-    { range: "0-20", count: 3 },
-    { range: "20-40", count: 8 },
-    { range: "40-60", count: 25 },
-    { range: "60-80", count: 45 },
-    { range: "80-100", count: 19 },
-  ],
-  axis_averages: {
-    psychology_fit: 68,
-    customer_reaction: 74,
-    stage_progress: 71,
-    taboo_violation: 85,
-  },
-  low_score_sessions: [
-    { session_id: "abc-123", score: 32, evaluated_at: "2026-03-30T10:00:00Z", message_count: 4, feedback_summary: "心理学的アプローチが不適切" },
-    { session_id: "def-456", score: 41, evaluated_at: "2026-03-29T15:30:00Z", message_count: 8, feedback_summary: "ステージ進行が停滞" },
-  ],
-};
 
 interface Tenant {
   id: string;
@@ -218,24 +163,15 @@ export default function AnalyticsDashboardPage() {
         authFetch(`${API_BASE}/v1/admin/analytics/evaluations?${params}`),
       ]);
 
-      const summaryData = summaryRes.ok
-        ? ((await summaryRes.json()) as AnalyticsSummaryResponse)
-        : MOCK_SUMMARY;
-      const trendsData = trendsRes.ok
-        ? ((await trendsRes.json()) as AnalyticsTrendsResponse)
-        : MOCK_TRENDS;
-      const evalsData = evalsRes.ok
-        ? ((await evalsRes.json()) as AnalyticsEvaluationsResponse)
-        : MOCK_EVALUATIONS;
+      if (!summaryRes.ok || !trendsRes.ok || !evalsRes.ok) {
+        throw new Error("データの読み込みに失敗しました");
+      }
 
-      setSummary(summaryData);
-      setTrends(trendsData);
-      setEvaluations(evalsData);
+      setSummary((await summaryRes.json()) as AnalyticsSummaryResponse);
+      setTrends((await trendsRes.json()) as AnalyticsTrendsResponse);
+      setEvaluations((await evalsRes.json()) as AnalyticsEvaluationsResponse);
     } catch {
-      // API未実装時はモックにフォールバック
-      setSummary(MOCK_SUMMARY);
-      setTrends(MOCK_TRENDS);
-      setEvaluations(MOCK_EVALUATIONS);
+      setError("データの読み込みに失敗しました");
     } finally {
       setLoading(false);
     }

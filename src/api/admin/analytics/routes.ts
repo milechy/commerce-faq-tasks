@@ -165,6 +165,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           `SELECT AVG(score) AS avg_judge_score
            FROM conversation_evaluations
            WHERE evaluated_at >= NOW() - $1::interval
+             AND score > 0
            ${evalTenantClause}`,
           evalParams,
         );
@@ -348,6 +349,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              SELECT date_trunc('day', e.evaluated_at)::date AS day, AVG(e.score) AS avg_score
              FROM conversation_evaluations e
              WHERE e.evaluated_at >= NOW() - $1::interval
+               AND e.score > 0
              ${evalTenantClause}
              GROUP BY day
            ) e_avg ON e_avg.day = d.date
@@ -460,6 +462,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              COUNT(*) AS count
            FROM conversation_evaluations
            WHERE evaluated_at >= NOW() - $1::interval
+             AND score > 0
            ${tenantClause}
            GROUP BY range
            ORDER BY range`,
@@ -475,6 +478,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              COALESCE(AVG(taboo_violation_score), 0)   AS taboo_violation
            FROM conversation_evaluations
            WHERE evaluated_at >= NOW() - $1::interval
+             AND score > 0
            ${tenantClause}`,
           params,
         );
@@ -498,6 +502,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              GROUP BY session_id
            ) msg_counts ON msg_counts.session_id = e.session_id
            WHERE e.evaluated_at >= NOW() - $1::interval
+             AND e.score > 0
              AND e.score < 40
            ${lowTenantClause}
            ORDER BY e.score ASC
