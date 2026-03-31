@@ -31,6 +31,10 @@ export interface ConversationEvaluation {
   outcome: string;                      // 'replied' | 'appointment' | 'lost' | 'unknown'
   outcome_updated_by: string | null;
   outcome_updated_at: string | null;
+  psychology_fit_score: number | null;
+  customer_reaction_score: number | null;
+  stage_progress_score: number | null;
+  taboo_violation_score: number | null;
 }
 
 export interface EvaluationStats {
@@ -129,7 +133,9 @@ export async function listEvaluations(
             COALESCE(failed_principles, '{}') AS failed_principles,
             evaluation_axes, notes, model_used, judge_model, evaluated_at,
             COALESCE(outcome, 'unknown') AS outcome,
-            outcome_updated_by, outcome_updated_at
+            outcome_updated_by, outcome_updated_at,
+            psychology_fit_score, customer_reaction_score,
+            stage_progress_score, taboo_violation_score
      FROM conversation_evaluations
      ${where}
      ORDER BY evaluated_at DESC

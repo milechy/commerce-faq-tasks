@@ -139,7 +139,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         const sessionsResult = await pool.query(
           `SELECT COUNT(*) AS total_sessions
            FROM chat_sessions s
-           WHERE s.created_at >= NOW() - $1::interval
+           WHERE s.started_at >= NOW() - $1::interval
            ${tenantClause}`,
           params,
         );
@@ -151,8 +151,8 @@ export function registerAnalyticsRoutes(app: Express): void {
         const prevSessionsResult = await pool.query(
           `SELECT COUNT(*) AS prev_total_sessions
            FROM chat_sessions s
-           WHERE s.created_at >= NOW() - 2 * ($1::interval)
-             AND s.created_at < NOW() - $1::interval
+           WHERE s.started_at >= NOW() - 2 * ($1::interval)
+             AND s.started_at < NOW() - $1::interval
            ${prevTenantClause}`,
           prevParams,
         );
@@ -190,8 +190,8 @@ export function registerAnalyticsRoutes(app: Express): void {
            FROM (
              SELECT s.session_id, COUNT(m.id) AS msg_count
              FROM chat_sessions s
-             LEFT JOIN chat_messages m ON m.session_id = s.session_id
-             WHERE s.created_at >= NOW() - $1::interval
+             LEFT JOIN chat_messages m ON m.session_id = s.id
+             WHERE s.started_at >= NOW() - $1::interval
              ${msgTenantClause}
              GROUP BY s.session_id
            ) sub`,
@@ -205,8 +205,8 @@ export function registerAnalyticsRoutes(app: Express): void {
         const avatarResult = await pool.query(
           `SELECT COUNT(DISTINCT s.session_id) AS avatar_session_count
            FROM chat_sessions s
-           JOIN chat_messages m ON m.session_id = s.session_id
-           WHERE s.created_at >= NOW() - $1::interval
+           JOIN chat_messages m ON m.session_id = s.id
+           WHERE s.started_at >= NOW() - $1::interval
              AND (m.content ILIKE '%livekit%' OR m.content ILIKE '%avatar%')
            ${avatarTenantClause}`,
           avatarParams,
@@ -339,9 +339,9 @@ export function registerAnalyticsRoutes(app: Express): void {
              )::date AS date
            ) d
            LEFT JOIN (
-             SELECT date_trunc('day', s.created_at)::date AS day, COUNT(*) AS sessions
+             SELECT date_trunc('day', s.started_at)::date AS day, COUNT(*) AS sessions
              FROM chat_sessions s
-             WHERE s.created_at >= NOW() - $1::interval
+             WHERE s.started_at >= NOW() - $1::interval
              ${tenantClause}
              GROUP BY day
            ) s_count ON s_count.day = d.date
@@ -500,7 +500,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              SELECT session_id, COUNT(*) AS message_count
              FROM chat_messages
              GROUP BY session_id
-           ) msg_counts ON msg_counts.session_id = e.session_id
+           ) msg_counts ON msg_counts.session_id::text = e.session_id
            WHERE e.evaluated_at >= NOW() - $1::interval
              AND e.score > 0
              AND e.score < 40

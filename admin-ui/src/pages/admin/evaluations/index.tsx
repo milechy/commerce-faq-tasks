@@ -439,9 +439,9 @@ export default function EvaluationsPage() {
                     justifyContent: "space-between",
                     flexWrap: "wrap",
                     gap: 12,
-                    cursor: hasAxisScores ? "pointer" : "default",
+                    cursor: "pointer",
                   }}
-                  onClick={() => hasAxisScores && setExpandedId(isExpanded ? null : ev.id)}
+                  onClick={() => setExpandedId(isExpanded ? null : ev.id)}
                 >
                   {/* Left */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0 }}>
@@ -476,11 +476,9 @@ export default function EvaluationsPage() {
                   {/* Right */}
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <ScoreBadge score={displayScore} />
-                    {hasAxisScores && (
-                      <span style={{ color: "#6b7280", fontSize: 12 }}>
-                        {isExpanded ? "▲" : "▼"}
-                      </span>
-                    )}
+                    <span style={{ color: "#6b7280", fontSize: 12 }}>
+                      {isExpanded ? "▲" : "▼"}
+                    </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); navigate(`/admin/evaluations/${ev.id}`); }}
                       style={{
@@ -502,7 +500,7 @@ export default function EvaluationsPage() {
                 </div>
 
                 {/* Expanded: 4-axis breakdown */}
-                {isExpanded && hasAxisScores && (
+                {isExpanded && (
                   <div
                     style={{
                       padding: "16px 20px",
@@ -513,6 +511,11 @@ export default function EvaluationsPage() {
                     <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 12px 0", fontWeight: 600 }}>
                       4軸スコア内訳
                     </p>
+                    {!hasAxisScores ? (
+                      <p style={{ fontSize: 13, color: "#4b5563", margin: 0 }}>
+                        詳細スコアはありません
+                      </p>
+                    ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                       {AXIS_META.map(({ key, label, weight, tooltip }) => {
                         const axisScore = ev[key] ?? 0;
@@ -570,6 +573,7 @@ export default function EvaluationsPage() {
                         );
                       })}
                     </div>
+                    )}
                   </div>
                 )}
               </div>
