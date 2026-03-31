@@ -97,6 +97,8 @@ export default function EvaluationDetailPage() {
   const [actionStatus, setActionStatus] = useState<
     Record<number, "approving" | "rejecting" | "done" | null>
   >({});
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
+  const [editedText, setEditedText] = useState<string>("");
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
 
@@ -120,17 +122,24 @@ export default function EvaluationDetailPage() {
     void load();
   }, [id]);
 
-  async function handleRuleAction(ruleIndex: number, action: "approve" | "reject") {
+  async function handleRuleAction(
+    ruleIndex: number,
+    action: "approve" | "reject",
+    editedTextParam?: string,
+  ) {
     setActionStatus((prev) => ({
       ...prev,
       [ruleIndex]: action === "approve" ? "approving" : "rejecting",
     }));
     try {
+      const body: Record<string, unknown> = { action };
+      if (editedTextParam) body.edited_text = editedTextParam;
+
       const res = await authFetch(
         `${API_BASE}/v1/admin/evaluations/${id}/rules/${ruleIndex}`,
         {
           method: "PATCH",
-          body: JSON.stringify({ action }),
+          body: JSON.stringify(body),
         }
       );
       if (res.ok) {
@@ -147,6 +156,7 @@ export default function EvaluationDetailPage() {
             : prev
         );
         setActionStatus((prev) => ({ ...prev, [ruleIndex]: "done" }));
+        setEditingRuleId(null);
       }
     } catch {
       // silent
@@ -521,44 +531,132 @@ export default function EvaluationDetailPage() {
                           却下済み ✗
                         </span>
                       ) : isSuperAdmin ? (
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button
-                            onClick={() => void handleRuleAction(ruleIndex, "approve")}
-                            disabled={currentAction != null}
-                            style={{
-                              padding: "8px 16px",
-                              minHeight: 40,
-                              borderRadius: 8,
-                              border: "1px solid rgba(34,197,94,0.3)",
-                              background: "rgba(34,197,94,0.15)",
-                              color: "#4ade80",
-                              fontSize: 13,
-                              fontWeight: 600,
-                              cursor: currentAction != null ? "not-allowed" : "pointer",
-                              opacity: currentAction != null ? 0.6 : 1,
-                            }}
-                          >
-                            {currentAction === "approving" ? "処理中..." : "承認する ✓"}
-                          </button>
-                          <button
-                            onClick={() => void handleRuleAction(ruleIndex, "reject")}
-                            disabled={currentAction != null}
-                            style={{
-                              padding: "8px 16px",
-                              minHeight: 40,
-                              borderRadius: 8,
-                              border: "1px solid rgba(248,113,113,0.3)",
-                              background: "rgba(248,113,113,0.08)",
-                              color: "#f87171",
-                              fontSize: 13,
-                              fontWeight: 600,
-                              cursor: currentAction != null ? "not-allowed" : "pointer",
-                              opacity: currentAction != null ? 0.6 : 1,
-                            }}
-                          >
-                            {currentAction === "rejecting" ? "処理中..." : "却下する ✗"}
-                          </button>
-                        </div>
+                        editingRuleId === ruleIndex ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                            <textarea
+                              value={editedText}
+                              onChange={(e) => setEditedText(e.target.value)}
+                              placeholder="提案内容を編集してください"
+                              style={{
+                                width: "100%",
+                                minHeight: 80,
+                                padding: "10px 12px",
+                                borderRadius: 8,
+                                border: "1px solid rgba(59,130,246,0.5)",
+                                background: "rgba(15,23,42,0.8)",
+                                color: "#e5e7eb",
+                                fontSize: 14,
+                                lineHeight: 1.6,
+                                resize: "vertical",
+                                boxSizing: "border-box",
+                              }}
+                            />
+                            <div style={{ display: "flex", gap: 8 }}>
+                              <button
+                                onClick={() =>
+                                  void handleRuleAction(ruleIndex, "approve", editedText.trim())
+                                }
+                                disabled={currentAction != null || editedText.trim() === ""}
+                                style={{
+                                  padding: "8px 16px",
+                                  minHeight: 40,
+                                  borderRadius: 8,
+                                  border: "1px solid rgba(34,197,94,0.3)",
+                                  background: "rgba(34,197,94,0.15)",
+                                  color: "#4ade80",
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  cursor:
+                                    currentAction != null || editedText.trim() === ""
+                                      ? "not-allowed"
+                                      : "pointer",
+                                  opacity:
+                                    currentAction != null || editedText.trim() === "" ? 0.6 : 1,
+                                }}
+                              >
+                                {currentAction === "approving" ? "処理中..." : "保存して承認 ✓"}
+                              </button>
+                              <button
+                                onClick={() => setEditingRuleId(null)}
+                                disabled={currentAction != null}
+                                style={{
+                                  padding: "8px 16px",
+                                  minHeight: 40,
+                                  borderRadius: 8,
+                                  border: "1px solid rgba(107,114,128,0.3)",
+                                  background: "rgba(107,114,128,0.1)",
+                                  color: "#9ca3af",
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  cursor: currentAction != null ? "not-allowed" : "pointer",
+                                  opacity: currentAction != null ? 0.6 : 1,
+                                }}
+                              >
+                                キャンセル
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              onClick={() => void handleRuleAction(ruleIndex, "approve")}
+                              disabled={currentAction != null}
+                              style={{
+                                padding: "8px 16px",
+                                minHeight: 40,
+                                borderRadius: 8,
+                                border: "1px solid rgba(34,197,94,0.3)",
+                                background: "rgba(34,197,94,0.15)",
+                                color: "#4ade80",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                cursor: currentAction != null ? "not-allowed" : "pointer",
+                                opacity: currentAction != null ? 0.6 : 1,
+                              }}
+                            >
+                              {currentAction === "approving" ? "処理中..." : "承認する ✓"}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingRuleId(ruleIndex);
+                                setEditedText(rule.rule_text);
+                              }}
+                              disabled={currentAction != null}
+                              style={{
+                                padding: "8px 16px",
+                                minHeight: 40,
+                                borderRadius: 8,
+                                border: "1px solid rgba(59,130,246,0.3)",
+                                background: "rgba(59,130,246,0.08)",
+                                color: "#60a5fa",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                cursor: currentAction != null ? "not-allowed" : "pointer",
+                                opacity: currentAction != null ? 0.6 : 1,
+                              }}
+                            >
+                              編集して承認 ✏️
+                            </button>
+                            <button
+                              onClick={() => void handleRuleAction(ruleIndex, "reject")}
+                              disabled={currentAction != null}
+                              style={{
+                                padding: "8px 16px",
+                                minHeight: 40,
+                                borderRadius: 8,
+                                border: "1px solid rgba(248,113,113,0.3)",
+                                background: "rgba(248,113,113,0.08)",
+                                color: "#f87171",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                cursor: currentAction != null ? "not-allowed" : "pointer",
+                                opacity: currentAction != null ? 0.6 : 1,
+                              }}
+                            >
+                              {currentAction === "rejecting" ? "処理中..." : "却下する ✗"}
+                            </button>
+                          </div>
+                        )
                       ) : null}
                     </div>
                   );

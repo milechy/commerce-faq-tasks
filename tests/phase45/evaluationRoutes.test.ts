@@ -263,6 +263,7 @@ describe("3. PATCH /v1/admin/evaluations/:id/rules/:ruleIndex", () => {
     expect(insertTuningRuleFromSuggestion).toHaveBeenCalledWith(
       "tenant-a",
       "Always greet warmly",
+      expect.objectContaining({ editedText: undefined }),
     );
     expect(updateSuggestedRuleStatus).toHaveBeenCalledWith(1, 0, "approved", undefined);
   });

@@ -201,10 +201,10 @@ export function registerEvaluationRoutes(app: Express): void {
     supabaseAuthMiddleware,
     superAdminMiddleware,
     async (req: Request, res: Response) => {
-      const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+      const { jwtTenantId, isSuperAdmin, email } = resolveAuth(req);
       const id = Number(req.params["id"]);
       const ruleIndex = Number(req.params["ruleIndex"]);
-      const { action } = (req.body ?? {}) as Record<string, unknown>;
+      const { action, edited_text } = (req.body ?? {}) as Record<string, unknown>;
 
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ error: "id must be positive integer" });
@@ -214,6 +214,9 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       if (action !== "approve" && action !== "reject") {
         return res.status(400).json({ error: "action must be approve or reject" });
+      }
+      if (edited_text !== undefined && (typeof edited_text !== "string" || edited_text.trim() === "")) {
+        return res.status(400).json({ error: "edited_text must be a non-empty string" });
       }
 
       const tenantId = isSuperAdmin ? undefined : jwtTenantId || undefined;
@@ -232,7 +235,10 @@ export function registerEvaluationRoutes(app: Express): void {
           }
           const ruleText = rule.rule_text ?? "";
           if (ruleText) {
-            await insertTuningRuleFromSuggestion(data.evaluation.tenant_id, ruleText);
+            await insertTuningRuleFromSuggestion(data.evaluation.tenant_id, ruleText, {
+              editedText: typeof edited_text === "string" ? edited_text : undefined,
+              editedBy: email || undefined,
+            });
           }
         }
 

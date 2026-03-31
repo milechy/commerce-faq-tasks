@@ -640,13 +640,30 @@ export async function updateSuggestedRuleStatus(
 export async function insertTuningRuleFromSuggestion(
   tenantId: string,
   ruleText: string,
+  options?: { editedText?: string; editedBy?: string },
 ): Promise<void> {
   const pool = getPool();
-  await pool.query(
-    `INSERT INTO tuning_rules
-       (tenant_id, trigger_pattern, expected_behavior, priority, is_active)
-     VALUES ($1, $2, $2, 0, true)
-     ON CONFLICT DO NOTHING`,
-    [tenantId, ruleText],
-  );
+  const finalText = options?.editedText ?? ruleText;
+  const originalText = options?.editedText ? ruleText : null;
+  const editedBy = options?.editedText ? (options.editedBy ?? null) : null;
+  const editedAt = options?.editedText ? "NOW()" : null;
+
+  if (editedAt) {
+    await pool.query(
+      `INSERT INTO tuning_rules
+         (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
+          original_text, edited_by, edited_at)
+       VALUES ($1, $2, $2, 0, true, $3, $4, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenantId, finalText, originalText, editedBy],
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO tuning_rules
+         (tenant_id, trigger_pattern, expected_behavior, priority, is_active)
+       VALUES ($1, $2, $2, 0, true)
+       ON CONFLICT DO NOTHING`,
+      [tenantId, finalText],
+    );
+  }
 }
