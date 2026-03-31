@@ -717,38 +717,78 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         if (tenantId) {
           // テナント指定あり（super_admin も client_admin も同じクエリ）
           const totalResult = await db.query<{ cnt: string }>(
-            `SELECT COUNT(*) AS cnt FROM faq_docs WHERE tenant_id = $1 AND is_published = true`,
+            `SELECT COUNT(*) AS cnt FROM book_uploads WHERE tenant_id = $1`,
             [tenantId],
           );
           const total_docs = parseInt(totalResult.rows[0]?.cnt ?? '0', 10);
 
+          // 構造化済み: book_uploads.status='embedded' かつ structured embedding が存在する
           const structResult = await db.query<{ cnt: string }>(
             `SELECT COUNT(*) AS cnt
-             FROM faq_embeddings
-             WHERE tenant_id = $1
-               AND metadata->>'source' = 'book'
-               AND metadata->>'principle' IS NOT NULL`,
+             FROM book_uploads bu
+             WHERE bu.tenant_id = $1
+               AND bu.status = 'embedded'
+               AND EXISTS (
+                 SELECT 1 FROM faq_embeddings fe
+                 WHERE fe.tenant_id = $1
+                   AND fe.metadata->>'source' = 'book'
+                   AND fe.metadata->>'book_id' = bu.id::text
+                   AND fe.metadata->>'principle' IS NOT NULL
+               )`,
             [tenantId],
           );
           const structured_count = parseInt(structResult.rows[0]?.cnt ?? '0', 10);
-          const unstructured_count = Math.max(0, total_docs - structured_count);
+
+          // 未構造化: status='embedded' だが structured embedding が存在しない（= trigger対象と同一条件）
+          const unstructResult = await db.query<{ cnt: string }>(
+            `SELECT COUNT(*) AS cnt
+             FROM book_uploads bu
+             WHERE bu.tenant_id = $1
+               AND bu.status = 'embedded'
+               AND NOT EXISTS (
+                 SELECT 1 FROM faq_embeddings fe
+                 WHERE fe.tenant_id = $1
+                   AND fe.metadata->>'source' = 'book'
+                   AND fe.metadata->>'book_id' = bu.id::text
+                   AND fe.metadata->>'principle' IS NOT NULL
+               )`,
+            [tenantId],
+          );
+          const unstructured_count = parseInt(unstructResult.rows[0]?.cnt ?? '0', 10);
 
           return res.json({ tenant_id: tenantId, total_docs, structured_count, unstructured_count });
         } else {
           // super_admin かつ tenant_id 未指定 → 全テナント集計
           const totalResult = await db.query<{ cnt: string }>(
-            `SELECT COUNT(*) AS cnt FROM faq_docs WHERE is_published = true`,
+            `SELECT COUNT(*) AS cnt FROM book_uploads`,
           );
           const total_docs = parseInt(totalResult.rows[0]?.cnt ?? '0', 10);
 
           const structResult = await db.query<{ cnt: string }>(
             `SELECT COUNT(*) AS cnt
-             FROM faq_embeddings
-             WHERE metadata->>'source' = 'book'
-               AND metadata->>'principle' IS NOT NULL`,
+             FROM book_uploads bu
+             WHERE bu.status = 'embedded'
+               AND EXISTS (
+                 SELECT 1 FROM faq_embeddings fe
+                 WHERE fe.metadata->>'source' = 'book'
+                   AND fe.metadata->>'book_id' = bu.id::text
+                   AND fe.metadata->>'principle' IS NOT NULL
+               )`,
           );
           const structured_count = parseInt(structResult.rows[0]?.cnt ?? '0', 10);
-          const unstructured_count = Math.max(0, total_docs - structured_count);
+
+          const unstructResult = await db.query<{ cnt: string }>(
+            `SELECT COUNT(*) AS cnt
+             FROM book_uploads bu
+             WHERE bu.status = 'embedded'
+               AND NOT EXISTS (
+                 SELECT 1 FROM faq_embeddings fe
+                 WHERE fe.metadata->>'source' = 'book'
+                   AND fe.metadata->>'book_id' = bu.id::text
+                   AND fe.metadata->>'principle' IS NOT NULL
+               )`,
+          );
+          const unstructured_count = parseInt(unstructResult.rows[0]?.cnt ?? '0', 10);
 
           return res.json({ tenant_id: null, total_docs, structured_count, unstructured_count });
         }

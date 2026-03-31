@@ -516,7 +516,10 @@ export async function getEvaluationById(
             COALESCE(used_principles, '{}') AS used_principles,
             COALESCE(effective_principles, '{}') AS effective_principles,
             COALESCE(failed_principles, '{}') AS failed_principles,
-            evaluation_axes, notes, model_used, evaluated_at,
+            evaluation_axes, notes, model_used, judge_model, evaluated_at,
+            psychology_fit_score, customer_reaction_score,
+            stage_progress_score, taboo_violation_score,
+            feedback, suggested_rules,
             COALESCE(outcome, 'unknown') AS outcome,
             outcome_updated_by, outcome_updated_at
      FROM conversation_evaluations

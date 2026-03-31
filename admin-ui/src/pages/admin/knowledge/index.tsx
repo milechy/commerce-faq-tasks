@@ -190,7 +190,7 @@ export default function KnowledgePage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ color: "#f9fafb" }}>{tenant.name}</div>
                   <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                    {tenant.slug} · {tenant.plan === "pro" ? "プロ" : "スターター"} · {tenant.status === "active" ? "✅ 有効" : "⏸ 停止中"}
+                    {tenant.slug ? `${tenant.slug} · ` : ""}{tenant.plan === "pro" ? "プロ" : "スターター"} · {tenant.status === "active" ? "✅ 有効" : "⏸ 停止中"}
                   </div>
                 </div>
                 <span style={{ fontSize: 18, color: "#6b7280" }}>›</span>

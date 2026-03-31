@@ -465,7 +465,7 @@ export default function BooksPage() {
           >
             <option value="">テナントを選択してください</option>
             {tenants.map((t) => (
-              <option key={t.id} value={t.id}>{t.name} ({t.slug})</option>
+              <option key={t.id} value={t.id}>{t.name}{t.slug ? ` (${t.slug})` : ""}</option>
             ))}
           </select>
         </div>
