@@ -11,6 +11,11 @@ import LangSwitcher from "../../../components/LangSwitcher";
 // Types
 // ---------------------------------------------------------------------------
 
+interface Tenant {
+  id: string;
+  name: string;
+}
+
 interface KnowledgeGap {
   id: number;
   tenant_id: string;
@@ -368,12 +373,21 @@ export default function KnowledgeGapsPage() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<FilterTab>("pending");
   const [tenantFilter, setTenantFilter] = useState("");
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [offset, setOffset] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [genToast, setGenToast] = useState<string | null>(null);
   const [selectedGap, setSelectedGap] = useState<KnowledgeGap | null>(null);
 
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    authFetch(`${API_BASE}/v1/admin/tenants`)
+      .then((res) => res.json() as Promise<{ tenants?: Tenant[]; items?: Tenant[] }>)
+      .then((data) => setTenants(data.tenants ?? data.items ?? []))
+      .catch(() => {/* テナント一覧取得失敗は無視 */});
+  }, [isSuperAdmin]);
   const effectiveTenant = isSuperAdmin ? (tenantFilter || undefined) : tenantId;
 
   // Map filter tab to API status param
@@ -536,13 +550,19 @@ export default function KnowledgeGapsPage() {
         {isSuperAdmin && (
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 13, color: "#9ca3af", whiteSpace: "nowrap" }}>テナント:</span>
-            <input
-              type="text"
+            <select
               value={tenantFilter}
               onChange={(e) => { setTenantFilter(e.target.value); setOffset(0); }}
-              placeholder="tenant_id で絞り込み"
               style={{ ...SELECT_STYLE, width: 200 }}
-            />
+            >
+              <option value="">全テナント</option>
+              {tenants
+                .slice()
+                .sort((a, b) => a.name.localeCompare(b.name, "ja"))
+                .map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+            </select>
           </div>
         )}
       </div>

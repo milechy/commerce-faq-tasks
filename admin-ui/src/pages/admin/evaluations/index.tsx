@@ -5,6 +5,11 @@ import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
 
+interface Tenant {
+  id: string;
+  name: string;
+}
+
 interface Evaluation {
   id: number;
   tenant_id: string;
@@ -65,10 +70,19 @@ export default function EvaluationsPage() {
   const [maxScore, setMaxScore] = useState<number | "">("");
   const [days, setDays] = useState(30);
   const [tenantFilter, setTenantFilter] = useState("");
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [offset, setOffset] = useState(0);
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    authFetch(`${API_BASE}/v1/admin/tenants`)
+      .then((res) => res.json() as Promise<{ tenants?: Tenant[]; items?: Tenant[] }>)
+      .then((data) => setTenants(data.tenants ?? data.items ?? []))
+      .catch(() => {/* テナント一覧取得失敗は無視 */});
+  }, [isSuperAdmin]);
 
   const loadEvaluations = useCallback(async () => {
     setLoading(true);
@@ -224,11 +238,9 @@ export default function EvaluationsPage() {
             <label style={{ fontSize: 12, color: "#9ca3af", fontWeight: 600 }}>
               テナント絞り込み
             </label>
-            <input
-              type="text"
+            <select
               value={tenantFilter}
               onChange={(e) => setTenantFilter(e.target.value)}
-              placeholder="tenant_id"
               style={{
                 padding: "8px 12px",
                 borderRadius: 8,
@@ -238,8 +250,17 @@ export default function EvaluationsPage() {
                 fontSize: 14,
                 minWidth: 160,
                 minHeight: 44,
+                cursor: "pointer",
               }}
-            />
+            >
+              <option value="">全テナント</option>
+              {tenants
+                .slice()
+                .sort((a, b) => a.name.localeCompare(b.name, "ja"))
+                .map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+            </select>
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
