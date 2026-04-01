@@ -4,6 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/useAuth";
+import { NotificationBell } from "./common/NotificationBell";
 
 interface NavItem {
   label: string;
@@ -271,6 +272,9 @@ export function AdminNavBar() {
         })}
       </div>
 
+      {/* Notification Bell */}
+      {user && <NotificationBell />}
+
       {/* User area */}
       {user && (
         <div
@@ -279,7 +283,6 @@ export function AdminNavBar() {
             alignItems: "center",
             gap: 8,
             flexShrink: 0,
-            marginLeft: "auto",
           }}
         >
           <span

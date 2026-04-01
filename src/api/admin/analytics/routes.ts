@@ -4,6 +4,7 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { pool } from "../../../lib/db";
+import { createNotification, notificationExists } from "../../../lib/notifications";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -725,7 +726,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           }
         }
 
-        return res.json({
+        const responseData = {
           summary: {
             total_sessions: total,
             recorded_outcomes: recorded,
@@ -735,7 +736,92 @@ export function registerAnalyticsRoutes(app: Express): void {
           conversion_rate_trend: conversionRateTrend,
           technique_effectiveness: techniqueEffectiveness,
           stage_dropout: stageDropout,
-        });
+        };
+
+        // Phase52h: Triggers 6/7/8 — コンバージョン通知（fire-and-forget）
+        const today = new Date().toISOString().slice(0, 10);
+        const week = (() => {
+          const d = new Date();
+          const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+          const day = utc.getUTCDay() || 7;
+          utc.setUTCDate(utc.getUTCDate() + 4 - day);
+          const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+          const wk = Math.ceil((((utc.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+          return `${utc.getUTCFullYear()}-W${String(wk).padStart(2, '0')}`;
+        })();
+
+        void (async () => {
+          try {
+            // Trigger 6: CVR前週比±20%以上変動
+            const now = Date.now();
+            const oneDay = 86400000;
+            const currentWeekItems = conversionRateTrend.filter(
+              (r) => now - new Date(r.date).getTime() <= 7 * oneDay,
+            );
+            const prevWeekItems = conversionRateTrend.filter((r) => {
+              const age = now - new Date(r.date).getTime();
+              return age > 7 * oneDay && age <= 14 * oneDay;
+            });
+            if (currentWeekItems.length > 0 && prevWeekItems.length > 0) {
+              const avg = (items: typeof conversionRateTrend) =>
+                items.reduce((s, r) => s + r.rate, 0) / items.length;
+              const curr = avg(currentWeekItems);
+              const prev = avg(prevWeekItems);
+              if (prev > 0 && Math.abs(curr - prev) / prev >= 0.2) {
+                const exists = await notificationExists('conversion_rate_change', 'week', week);
+                if (!exists) {
+                  const dir = curr > prev ? '上昇' : '下降';
+                  void createNotification({
+                    recipientRole: 'super_admin',
+                    type: 'conversion_rate_change',
+                    title: `コンバージョン率が大きく${dir}しました`,
+                    message: `今週 ${curr.toFixed(1)}% / 先週 ${prev.toFixed(1)}%`,
+                    link: '/admin/analytics',
+                    metadata: { week, current: curr, previous: prev },
+                  });
+                }
+              }
+            }
+
+            // Trigger 7: 未記録セッション10件以上（client_admin宛）
+            if (tenantId && total - recorded >= 10) {
+              const exists = await notificationExists('outcome_reminder', 'date', today);
+              if (!exists) {
+                void createNotification({
+                  recipientRole: 'client_admin',
+                  recipientTenantId: tenantId,
+                  type: 'outcome_reminder',
+                  title: '結果未記録の会話があります',
+                  message: `${total - recorded}件の会話の結果がまだ記録されていません`,
+                  link: '/admin/chat-history',
+                  metadata: { date: today, unrecorded: total - recorded },
+                });
+              }
+            }
+
+            // Trigger 8: 高CVRパターン（80%超 + 5件以上）
+            for (const tech of techniqueEffectiveness) {
+              if (tech.conversion_rate >= 80 && tech.sessions_used >= 5) {
+                const techWeekKey = `${tech.technique}_${week}`;
+                const exists = await notificationExists('high_conversion_pattern', 'technique_week', techWeekKey);
+                if (!exists) {
+                  void createNotification({
+                    recipientRole: 'super_admin',
+                    type: 'high_conversion_pattern',
+                    title: '高コンバージョンのパターンを発見',
+                    message: `「${tech.technique}」のコンバージョン率が${tech.conversion_rate}%です`,
+                    link: '/admin/analytics',
+                    metadata: { week, technique_week: techWeekKey, technique: tech.technique, rate: tech.conversion_rate },
+                  });
+                }
+              }
+            }
+          } catch {
+            // silent — non-critical
+          }
+        })();
+
+        return res.json(responseData);
       } catch (err) {
         console.warn("[GET /v1/admin/analytics/conversions]", err);
         return res.status(500).json({ error: "コンバージョン分析の取得に失敗しました" });

@@ -9,6 +9,7 @@ import pino from 'pino';
 
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
+import { createNotification } from '../../lib/notifications';
 
 const logger = pino();
 
@@ -230,6 +231,30 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
           logger.warn({ err: ruleErr, sessionId, rule: rule.rule_text }, 'judgeEvaluator: failed to insert tuning rule');
         }
       }
+    }
+
+    // Phase52h: Trigger 1 — AI提案ルール通知
+    if (result.suggested_rules.length > 0) {
+      void createNotification({
+        recipientRole: 'super_admin',
+        type: 'ai_rule_suggested',
+        title: '新しいAI提案ルールがあります',
+        message: `${result.suggested_rules.length}件のチューニングルールが提案されました（スコア: ${result.overall_score}）`,
+        link: '/admin/evaluations',
+        metadata: { sessionId, score: result.overall_score, ruleCount: result.suggested_rules.length },
+      });
+    }
+
+    // Phase52h: Trigger 3 — 低スコアアラート（30未満）
+    if (result.overall_score < 30) {
+      void createNotification({
+        recipientRole: 'super_admin',
+        type: 'low_score_alert',
+        title: '品質問題: 低スコアの会話があります',
+        message: `スコア ${result.overall_score} の会話が検出されました`,
+        link: '/admin/evaluations',
+        metadata: { sessionId, score: result.overall_score },
+      });
     }
 
     // Phase46: judge_low Gap Detection — if score is low, detect gap from first user message

@@ -70,6 +70,7 @@ import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/r
 import { registerReportRoutes } from "./api/admin/reports/routes";
 import { registerAnalyticsRoutes } from "./api/admin/analytics/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
+import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -566,6 +567,8 @@ registerVariantRoutes(app);
 registerObjectionPatternRoutes(app);
 registerReportRoutes(app);
 registerAnalyticsRoutes(app);
+// Phase52h: In-App通知センター API
+registerNotificationRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
 

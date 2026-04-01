@@ -14,6 +14,11 @@ jest.mock('fs/promises', () => ({
   readFile: jest.fn(),
 }));
 
+// Phase52h: Notification側の副作用をテスト内で切り離す
+jest.mock('../../lib/notifications', () => ({
+  createNotification: jest.fn().mockResolvedValue(undefined),
+}));
+
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';

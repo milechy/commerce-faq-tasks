@@ -6,6 +6,7 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
+import { createNotification } from "../../../lib/notifications";
 
 // ---------------------------------------------------------------------------
 // ヘルパー
@@ -172,6 +173,15 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
             priority,
           ]
         );
+        // Phase52h: Trigger 4 — フィードバック受信通知
+        void createNotification({
+          recipientRole: 'super_admin',
+          type: 'feedback_received',
+          title: '新しいお客様の声が届きました',
+          message: `カテゴリ「${category}」のフィードバックが届きました`,
+          link: '/admin/feedback',
+          metadata: { feedbackId: result.rows[0]?.id, tenantId, category },
+        });
         return res.status(201).json(result.rows[0]);
       } catch (err) {
         console.warn("[POST /v1/admin/feedback]", err);

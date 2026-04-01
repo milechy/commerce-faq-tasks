@@ -3,6 +3,7 @@
 
 import pino from 'pino';
 import { getPool } from '../../lib/db';
+import { createNotification } from '../../lib/notifications';
 
 const logger = pino();
 
@@ -80,14 +81,30 @@ async function upsertGap(
     if (existing.rows.length > 0) {
       const gapId = existing.rows[0]!.id;
       // Increment frequency and update last_detected_at
-      await pool.query(
+      const updateResult = await pool.query<{ frequency: number; user_question: string }>(
         `UPDATE knowledge_gaps
          SET frequency = COALESCE(frequency, 1) + 1,
              last_detected_at = NOW(),
              detection_source = $2
-         WHERE id = $1`,
+         WHERE id = $1
+         RETURNING frequency, user_question`,
         [gapId, source],
       );
+      const updatedFreq: number = updateResult.rows[0]?.frequency ?? 0;
+      const updatedQuestion: string = updateResult.rows[0]?.user_question ?? question;
+
+      // Phase52h: Trigger 2 — 頻出未回答質問通知（5回以上）
+      if (updatedFreq >= 5) {
+        void createNotification({
+          recipientRole: 'super_admin',
+          type: 'knowledge_gap_frequent',
+          title: 'よく聞かれる未回答質問があります',
+          message: `「${updatedQuestion.slice(0, 50)}」が${updatedFreq}回聞かれています`,
+          link: '/admin/knowledge-gaps',
+          metadata: { gapId },
+        });
+      }
+
       return { detected: true, source, gapId };
     }
 

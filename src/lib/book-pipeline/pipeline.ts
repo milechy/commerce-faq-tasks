@@ -11,6 +11,7 @@ import { structurizeChunks } from "./structurizer";
 import { embedAndStore } from "./embedAndStore";
 import type { EmbedAndStoreDeps } from "./embedAndStore";
 import type { StructurizerDeps } from "./structurizer";
+import { createNotification } from "../notifications";
 
 export interface PipelineDeps {
   db: Pool;
@@ -144,6 +145,17 @@ export async function runBookPipeline(
     await setStatus(db, bookId, "embedded", {
       chunk_count: chunks.length,
       page_count: pageCount,
+    });
+
+    // Phase52h: Trigger 9 — PDF処理完了通知
+    void createNotification({
+      recipientRole: 'client_admin',
+      recipientTenantId: book!.tenant_id,
+      type: 'pdf_processed',
+      title: 'PDFの処理が完了しました',
+      message: `${chunks.length}チャンク、${pageCount}ページの処理が完了しました`,
+      link: '/admin/knowledge',
+      metadata: { bookId, chunkCount: chunks.length, pageCount },
     });
 
     return { chunkCount: chunks.length, pageCount };

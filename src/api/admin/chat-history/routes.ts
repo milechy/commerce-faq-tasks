@@ -5,6 +5,7 @@ import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
 import { getSessions, getMessages } from "./chatHistoryRepository";
+import { createNotification } from "../../../lib/notifications";
 
 /**
  * テナントIDをリクエストから解決する。
@@ -199,6 +200,16 @@ export function registerChatHistoryRoutes(app: Express): void {
            WHERE id = $3`,
           [outcomeValue, email || null, sessionDbId],
         );
+
+        // Phase52h: Trigger 5 — outcome記録通知
+        void createNotification({
+          recipientRole: 'super_admin',
+          type: 'outcome_recorded',
+          title: 'コンバージョン結果が記録されました',
+          message: `「${outcomeValue}」が記録されました`,
+          link: '/admin/analytics',
+          metadata: { sessionId: sessionDbId, outcome: outcomeValue, tenantId: session!.tenant_id },
+        });
 
         return res.json({
           sessionId: sessionDbId,
