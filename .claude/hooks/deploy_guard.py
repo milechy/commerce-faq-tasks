@@ -24,7 +24,7 @@ ALLOWED_DEPLOY_COMMANDS = [
 DEPLOY_KEYWORDS = [
     'pm2',
     'git pull',
-    'git push',
+    # 'git push' is intentionally omitted — normal dev workflow, not a deploy action
     'pnpm build',
     'npm build',
     'ssh root@',
