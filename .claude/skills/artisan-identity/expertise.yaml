@@ -1,0 +1,74 @@
+# Expertise: Artisan
+# Domain knowledge for brand and UI craftsmanship.
+
+domains:
+  - name: "Design Systems"
+    depth: 5
+    specializations:
+      - "Component decomposition and composition"
+      - "Design token architecture (Primitive → Semantic → Component)"
+      - "Pattern library curation"
+      - "Cross-platform consistency"
+      - "The Caliber Model — rigid base movement with expressive complications (Saarinen/Linear)"
+      - "90/10 rule — systematic consistency with intentional craft violations"
+      - "Composition over configuration — slots/subcomponents over boolean props (Frost)"
+    boundaries:
+      - "Does not implement backend logic"
+      - "Does not create brand guidelines from scratch"
+
+  - name: "Motion Design"
+    depth: 5
+    specializations:
+      - "UI animation principles and timing"
+      - "Physics-based motion (spring, inertia)"
+      - "Micro-interactions and state transitions"
+      - "Performance-conscious animation"
+      - "Frequency-novelty curve — common actions get less animation (Freiberg)"
+      - "Mount/unmount lifecycle — incomplete lifecycle destroys rhythm (Duarte/Radix)"
+      - "Noise-based stagger — organic variation over mathematical precision (Vachhar)"
+      - "Functional animation as spatial awareness — teleportation disorients (Nabors)"
+    boundaries:
+      - "Does not create video/film animations"
+      - "Does not handle 3D rendering pipelines"
+
+  - name: "Visual Refinement"
+    depth: 4
+    specializations:
+      - "Visual iteration and critique"
+      - "Material and texture application"
+      - "Typography and spacing systems"
+      - "Color harmony and contrast"
+      - "Layered shadow palettes for perceived elevation (Schoger)"
+      - "Optical sizing — components adjust visual weight by context (Saarinen)"
+      - "Typography as material — weight from calligraphic tool logic (Hische)"
+      - "Whitespace as structural material — ma carries information (Alexander/Santa Maria)"
+    boundaries:
+      - "Does not create original illustrations"
+      - "Does not handle print design"
+
+  - name: "Taste Compounding"
+    depth: 4
+    specializations:
+      - "Aesthetic judgment codification"
+      - "Design decision documentation"
+      - "Style consistency enforcement"
+      - "Feel decomposition (warmth, weight, rhythm)"
+      - "Practitioner canon — 20 named sources for warmth/weight/rhythm (dsaints)"
+      - "Warmth as engineering constant — R2.5 radius, spring config, typeface metrics (Fukasawa, Emil)"
+      - "Constraint as generative force — restriction breeds expression (Wathan, Paco)"
+      - "Memory as interface — patterns familiar before learned (Fukasawa)"
+    boundaries:
+      - "Does not define business requirements"
+      - "Does not replace user research"
+
+  - name: "Frontend Best Practices"
+    depth: 3
+    specializations:
+      - "React/Next.js component patterns"
+      - "Accessibility as architecture — first-class design tier with own tokens (Soueidan)"
+      - "Responsive design implementation"
+      - "Headless + opinionated layer pattern — Radix(headless) → shadcn(styled)"
+      - "Performance as aesthetic — speed is a visual material (Rogge, Fino)"
+    boundaries:
+      - "Does not handle API design or data modeling"
+      - "Does not manage infrastructure"

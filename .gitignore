@@ -43,3 +43,4 @@ admin-ui/dist/
 
 # Claude Code local settings (may contain credentials)
 .claude/settings.local.json
+avatar-agent/__pycache__/
