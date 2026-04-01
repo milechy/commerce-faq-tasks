@@ -25,8 +25,8 @@ DEPLOY_KEYWORDS = [
     'pm2',
     'git pull',
     # 'git push' is intentionally omitted — normal dev workflow, not a deploy action
-    'pnpm build',
-    'npm build',
+    # 'pnpm build' / 'npm build' are omitted — local builds are normal dev workflow;
+    # VPS builds are already caught via 'ssh root@' keyword
     'ssh root@',
     'rsync',
     'systemctl restart',
@@ -34,10 +34,20 @@ DEPLOY_KEYWORDS = [
 ]
 
 
+def strip_quoted_strings(cmd: str) -> str:
+    """Remove single- and double-quoted string content so commit messages
+    and other string literals don't trigger keyword matches."""
+    # Remove content between double quotes (non-greedy)
+    cmd = re.sub(r'"[^"]*"', '""', cmd)
+    # Remove content between single quotes (non-greedy)
+    cmd = re.sub(r"'[^']*'", "''", cmd)
+    return cmd
+
+
 def is_deploy_command(cmd: str) -> bool:
-    """Return True if cmd contains any deploy-related keyword."""
-    cmd_lower = cmd.lower()
-    return any(kw in cmd_lower for kw in DEPLOY_KEYWORDS)
+    """Return True if cmd (outside quoted strings) contains a deploy keyword."""
+    cmd_unquoted = strip_quoted_strings(cmd).lower()
+    return any(kw in cmd_unquoted for kw in DEPLOY_KEYWORDS)
 
 
 def is_allowed_deploy(cmd: str) -> bool:

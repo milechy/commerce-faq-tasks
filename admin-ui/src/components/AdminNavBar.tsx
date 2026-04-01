@@ -167,7 +167,6 @@ export function AdminNavBar() {
           alignItems: "center",
           gap: 2,
           flex: 1,
-          overflow: "hidden",
         }}
         className="desktop-nav"
       >
