@@ -62,8 +62,14 @@ export async function saveMessage(params: SaveMessageParams): Promise<void> {
 
 export interface SessionListParams {
   tenantId?: string;  // 指定なし = 全テナント（super_admin 用）
-  limit?: number;     // デフォルト 50
+  limit?: number;     // デフォルト 20
   offset?: number;    // デフォルト 0
+  // Phase52b: sort/filter
+  sort_by?: 'last_message_at' | 'message_count' | 'score';
+  sort_order?: 'asc' | 'desc';
+  period?: '7' | '30' | '90' | 'all';
+  search?: string;
+  sentiment?: 'positive' | 'negative' | 'neutral';
 }
 
 export interface SessionSummary {
@@ -77,30 +83,62 @@ export interface SessionSummary {
 }
 
 /**
- * セッション一覧を取得する（last_message_at DESC）。
- * first_message_preview は LATERAL JOIN で一括取得する。
+ * セッション一覧を取得する。
+ * Phase52b: sort/filter/search/sentiment に対応。
  */
 export async function getSessions(
   params: SessionListParams,
 ): Promise<{ sessions: SessionSummary[]; total: number }> {
   const pool = getPool();
-  const limit = Math.min(params.limit ?? 50, 200);
+  const limit = Math.min(params.limit ?? 20, 200);
   const offset = params.offset ?? 0;
+  const sortOrder = (params.sort_order ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
+  const sortBy = params.sort_by ?? 'last_message_at';
 
-  // WHERE 句はテナント指定の有無で分岐
-  const whereClause = params.tenantId ? `WHERE s.tenant_id = $1` : "";
-  const countArgs: unknown[] = params.tenantId ? [params.tenantId] : [];
-  const listArgs: unknown[] = params.tenantId
-    ? [params.tenantId, limit, offset]
-    : [limit, offset];
-  const limitPlaceholder = params.tenantId ? "$2" : "$1";
-  const offsetPlaceholder = params.tenantId ? "$3" : "$2";
+  const conditions: string[] = [];
+  const args: unknown[] = [];
+
+  if (params.tenantId) {
+    args.push(params.tenantId);
+    conditions.push(`s.tenant_id = $${args.length}`);
+  }
+
+  if (params.period && params.period !== 'all') {
+    conditions.push(`s.started_at >= NOW() - INTERVAL '${params.period} days'`);
+  }
+
+  if (params.search?.trim()) {
+    args.push(`%${params.search.trim()}%`);
+    conditions.push(`EXISTS (SELECT 1 FROM chat_messages WHERE session_id = s.id AND role = 'user' AND content ILIKE $${args.length})`);
+  }
+
+  if (params.sentiment === 'positive') {
+    conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score >= 70)`);
+  } else if (params.sentiment === 'negative') {
+    conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score > 0 AND score < 60)`);
+  } else if (params.sentiment === 'neutral') {
+    conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score >= 60 AND score < 70)`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const orderByClause = (() => {
+    if (sortBy === 'score') {
+      return `(SELECT score FROM conversation_evaluations WHERE session_id = s.session_id AND score > 0 ORDER BY evaluated_at DESC LIMIT 1) ${sortOrder} NULLS LAST`;
+    }
+    if (sortBy === 'message_count') return `s.message_count ${sortOrder}`;
+    return `s.last_message_at ${sortOrder}`;
+  })();
 
   const countResult = await pool.query<{ count: string }>(
     `SELECT COUNT(*) AS count FROM chat_sessions s ${whereClause}`,
-    countArgs,
+    args,
   );
   const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+  const listArgs = [...args, limit, offset];
+  const limitPlaceholder = `$${args.length + 1}`;
+  const offsetPlaceholder = `$${args.length + 2}`;
 
   const listResult = await pool.query<SessionSummary>(
     `SELECT
@@ -120,7 +158,7 @@ export async function getSessions(
        LIMIT 1
      ) m ON TRUE
      ${whereClause}
-     ORDER BY s.last_message_at DESC
+     ORDER BY ${orderByClause}
      LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
     listArgs,
   );

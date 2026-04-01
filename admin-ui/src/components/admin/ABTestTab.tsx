@@ -195,7 +195,7 @@ function VariantModal({
 // ─── A/Bテストタブ ────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export default function ABTestTab({ tenantId }: { tenantId: string }) {
+export default function ABTestTab({ tenantId: _tenantId }: { tenantId: string }) {
   const [variants, setVariants] = useState<Variant[]>(MOCK_VARIANTS);
   const [editTarget, setEditTarget] = useState<Variant | null | "new">(null);
   const [toast, setToast] = useState<string | null>(null);

@@ -75,31 +75,6 @@ export default function KnowledgePage() {
         </p>
       </header>
 
-      {/* 書籍管理へのリンク */}
-      <div style={{ marginBottom: 16 }}>
-        <button
-          onClick={() => navigate("/admin/knowledge/books")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "12px 20px",
-            minHeight: 44,
-            borderRadius: 12,
-            border: "1px solid rgba(139,92,246,0.35)",
-            background: "rgba(139,92,246,0.08)",
-            color: "#c4b5fd",
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          <span style={{ fontSize: 18 }}>📚</span>
-          書籍管理
-          <span style={{ fontSize: 13, fontWeight: 400, color: "#a78bfa" }}>PDFをアップロードしてAIを強化</span>
-          <span style={{ fontSize: 16, color: "#7c3aed", marginLeft: 4 }}>›</span>
-        </button>
-      </div>
 
       {/* グローバルナレッジカード（super_admin のみ） */}
       <div style={{ display: "flex", gap: 8, alignItems: "stretch", marginBottom: 12 }}>

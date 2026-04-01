@@ -53,7 +53,7 @@ const CATEGORY_LABELS: Record<AdminFeedback["category"], { ja: string; en: strin
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function Badge({ color }: { color: { bg: string; border: string; text: string } & { label_ja?: string; label_en?: string } }) {
+function Badge(_props: { color: { bg: string; border: string; text: string } & { label_ja?: string; label_en?: string } }) {
   return null; // placeholder — badges rendered inline below
 }
 void Badge; // suppress unused warning

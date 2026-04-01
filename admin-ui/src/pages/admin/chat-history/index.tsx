@@ -4,6 +4,11 @@ import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
+import { Pagination } from "../../../components/common/Pagination";
+import { SortableHeader } from "../../../components/common/SortableHeader";
+import { PeriodFilter } from "../../../components/common/PeriodFilter";
+import type { PeriodValue } from "../../../components/common/PeriodFilter";
+import { SearchBox } from "../../../components/common/SearchBox";
 
 interface Session {
   id: string;
@@ -15,6 +20,9 @@ interface Session {
   first_message_preview: string;
   overallScore?: number;
 }
+
+type SortBySession = "last_message_at" | "message_count" | "score";
+type SentimentFilter = "" | "positive" | "negative" | "neutral";
 
 function ScoreBadge({ score }: { score: number }) {
   const cfg =
@@ -45,41 +53,55 @@ function ScoreBadge({ score }: { score: number }) {
   );
 }
 
-async function fetchSessions(tenantId?: string): Promise<Session[]> {
-  const params = new URLSearchParams();
-  if (tenantId) params.set("tenant", tenantId);
-  params.set("limit", "50");
-  const res = await authFetch(`${API_BASE}/v1/admin/chat-history/sessions?${params}`);
-  if (!res.ok) throw new Error("Failed to fetch sessions");
-  const data = await res.json();
-  return data.sessions as Session[];
-}
-
 export default function ChatHistoryPage() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
   const { user, isSuperAdmin } = useAuth();
 
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Phase52b: sort/filter state
+  const [sortBy, setSortBy] = useState<SortBySession>("last_message_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [period, setPeriod] = useState<PeriodValue>("all");
+  const [sentiment, setSentiment] = useState<SentimentFilter>("");
+  const [search, setSearch] = useState("");
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+
+  const handleSort = (key: string) => {
+    if (key === sortBy) {
+      setSortOrder((o) => (o === "desc" ? "asc" : "desc"));
+    } else {
+      setSortBy(key as SortBySession);
+      setSortOrder("desc");
+    }
+    setOffset(0);
+  };
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchSessions(tenantId);
-      setSessions(data);
+      const params = new URLSearchParams({ limit: "20", offset: String(offset), sort_by: sortBy, sort_order: sortOrder });
+      if (tenantId) params.set("tenant", tenantId);
+      if (period !== "all") params.set("period", period);
+      if (sentiment) params.set("sentiment", sentiment);
+      if (search) params.set("search", search);
+      const res = await authFetch(`${API_BASE}/v1/admin/chat-history/sessions?${params}`);
+      if (!res.ok) throw new Error("Failed to fetch sessions");
+      const data = await res.json() as { sessions: Session[]; total: number };
+      const rawSessions = data.sessions ?? [];
+      setTotal(data.total ?? 0);
 
       // Fetch evaluations to get scores for badge display
-      const params = new URLSearchParams();
-      if (tenantId) params.set("tenant_id", tenantId);
-      params.set("days", "365");
-      params.set("limit", "200");
-      const evalRes = await authFetch(`${API_BASE}/v1/admin/evaluations?${params}`);
+      const evalParams = new URLSearchParams({ days: "365", limit: "200" });
+      if (tenantId) evalParams.set("tenant_id", tenantId);
+      const evalRes = await authFetch(`${API_BASE}/v1/admin/evaluations?${evalParams}`);
       if (evalRes.ok) {
         const evalData = (await evalRes.json()) as {
           evaluations?: Array<{ session_id?: string; overall_score?: number; score: number }>;
@@ -88,16 +110,16 @@ export default function ChatHistoryPage() {
         for (const ev of evalData.evaluations ?? []) {
           if (ev.session_id) scoreMap.set(ev.session_id, ev.overall_score ?? ev.score);
         }
-        setSessions((prev) =>
-          prev.map((s) => ({ ...s, overallScore: scoreMap.get(s.session_id) }))
-        );
+        setSessions(rawSessions.map((s) => ({ ...s, overallScore: scoreMap.get(s.session_id) })));
+      } else {
+        setSessions(rawSessions);
       }
     } catch {
       setError("データの取得に失敗しました");
     } finally {
       setLoading(false);
     }
-  }, [tenantId]);
+  }, [tenantId, offset, sortBy, sortOrder, period, sentiment, search]);
 
   useEffect(() => {
     void loadSessions();
@@ -196,6 +218,41 @@ export default function ChatHistoryPage() {
           </button>
         </div>
       )}
+
+      {/* Filter bar */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <PeriodFilter value={period} onChange={(v) => { setPeriod(v); setOffset(0); }} />
+        <select
+          value={sentiment}
+          onChange={(e) => { setSentiment(e.target.value as SentimentFilter); setOffset(0); }}
+          style={{
+            padding: "8px 12px", minHeight: 38, borderRadius: 10,
+            border: "1px solid #374151", background: "rgba(15,23,42,0.8)",
+            color: "#e5e7eb", fontSize: 13, cursor: "pointer",
+          }}
+        >
+          <option value="">すべての感情</option>
+          <option value="positive">ポジティブ (スコア≥70)</option>
+          <option value="neutral">中立 (60-69)</option>
+          <option value="negative">ネガティブ (スコア&lt;60)</option>
+        </select>
+        <SearchBox
+          value={search}
+          onChange={(v) => { setSearch(v); setOffset(0); }}
+          placeholder="会話を検索..."
+        />
+      </div>
+
+      {/* Sort bar */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#6b7280" }}>並び替え:</span>
+        <SortableHeader label="最終メッセージ" sortKey="last_message_at" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+        <SortableHeader label="メッセージ数" sortKey="message_count" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+        <SortableHeader label="スコア" sortKey="score" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280" }}>
+          合計 <span style={{ color: "#d1d5db", fontWeight: 700 }}>{total}</span> 件
+        </span>
+      </div>
 
       {/* Section title */}
       <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
@@ -328,6 +385,9 @@ export default function ChatHistoryPage() {
           ))}
         </div>
       )}
+
+      {/* Pagination */}
+      <Pagination total={total} limit={20} offset={offset} onPageChange={setOffset} />
     </div>
   );
 }

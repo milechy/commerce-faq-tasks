@@ -1,24 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
-import FileUpload from "../../../components/admin/FileUpload";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../components/KnowledgeFaqEditModal";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
-import { SuperAdminOnly } from "../../../components/RoleGuard";
 import { useAuth } from "../../../auth/useAuth";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
-
-interface BookMetadata {
-  id: string;
-  title: string;
-  author: string;
-  totalPages: number;
-  totalChunks: number;
-  uploadedAt: number;
-}
 
 interface KnowledgeItem {
   id: number;
@@ -28,6 +17,7 @@ interface KnowledgeItem {
   category: string | null;
   tags: string[] | null;
   is_published?: boolean;
+  is_global?: boolean;
   created_at: string;
 }
 
@@ -60,14 +50,7 @@ interface ScrapePreviewItem {
   error?: string;
 }
 
-interface OcrJobStatus {
-  status: "processing" | "done" | "failed";
-  pages?: number;
-  chunks?: number;
-  error?: string;
-}
-
-type Tab = "list" | "text" | "scrape";
+type Tab = "list" | "text" | "scrape" | "pdf";
 type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
 type Category = string;
 
@@ -273,6 +256,7 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [publishFilter, setPublishFilter] = useState<"all" | "published" | "draft">("all");
+  const [globalFilter, setGlobalFilter] = useState<"all" | "global" | "tenant">("all");
   const [togglingId, setTogglingId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
     id: number;
@@ -304,6 +288,8 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
       if (categoryFilter !== "all") params.set("category", categoryFilter);
       if (publishFilter === "published") params.set("is_published", "true");
       if (publishFilter === "draft") params.set("is_published", "false");
+      if (globalFilter === "global") params.set("is_global", "true");
+      if (globalFilter === "tenant") params.set("is_global", "false");
 
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?${params}`);
       if (!res.ok) throw new Error(t("knowledge.load_error"));
@@ -318,7 +304,7 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [navigate, tenantId, categoryFilter, publishFilter, t]);
+  }, [navigate, tenantId, categoryFilter, publishFilter, globalFilter, t]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
@@ -447,7 +433,7 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
         </button>
       </div>
       {/* 公開状態フィルター */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
         {(["all", "published", "draft"] as const).map((v) => {
           const label = v === "all" ? (lang === "en" ? "All" : "すべて") : v === "published" ? (lang === "en" ? "Published" : "公開中") : (lang === "en" ? "Draft" : "非公開");
           const active = publishFilter === v;
@@ -462,6 +448,34 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                 border: `1px solid ${active ? "#3b82f6" : "#374151"}`,
                 background: active ? "rgba(59,130,246,0.15)" : "transparent",
                 color: active ? "#93c5fd" : "#6b7280",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {/* グローバルナレッジフィルター */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
+        {([
+          { v: "all", label: "全て" },
+          { v: "tenant", label: "テナント別" },
+          { v: "global", label: "⭐ グローバルのみ" },
+        ] as const).map(({ v, label }) => {
+          const active = globalFilter === v;
+          return (
+            <button
+              key={v}
+              onClick={() => setGlobalFilter(v)}
+              style={{
+                padding: "4px 12px",
+                minHeight: 32,
+                borderRadius: 999,
+                border: `1px solid ${active ? "rgba(234,179,8,0.5)" : "#374151"}`,
+                background: active ? "rgba(234,179,8,0.1)" : "transparent",
+                color: active ? "#fbbf24" : "#6b7280",
                 fontSize: 12,
                 cursor: "pointer",
               }}
@@ -538,6 +552,14 @@ function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                       ? (lang === "en" ? "⏸️ Draft" : "⏸️ 非公開")
                       : (lang === "en" ? "✅ Published" : "✅ 公開中")}
                   </span>
+                  {item.is_global && (
+                    <span style={{
+                      padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+                      background: "rgba(234,179,8,0.12)", border: "1px solid rgba(234,179,8,0.3)", color: "#fbbf24",
+                    }}>
+                      ⭐ グローバル
+                    </span>
+                  )}
                   <span style={{ fontSize: 11, color: "#6b7280" }}>{formatDate(item.created_at, locale)}</span>
                 </div>
                 <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 4px", lineHeight: 1.4 }}>
@@ -1382,98 +1404,286 @@ function ScrapeTab({
   );
 }
 
-// ─── PDFアップロードセクション（Super Admin専用） ────────────────────────────
+// ─── PDFアップロードタブ ──────────────────────────────────────────────────────
 
-function PdfSection({ tenantId }: { tenantId: string }) {
-  const { t } = useLang();
+const MAX_BOOK_PDF_SIZE = 10 * 1024 * 1024; // 10MB フロントエンド制限
+
+interface BookUpload {
+  id: number;
+  tenant_id: string;
+  title: string;
+  original_filename: string;
+  status: "uploaded" | "processing" | "chunked" | "embedded" | "failed";
+  page_count: number | null;
+  chunk_count: number | null;
+  file_size_bytes: number | null;
+  created_at: string;
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  uploaded: "アップロード済",
+  processing: "処理中",
+  chunked: "分割完了",
+  embedded: "埋め込み完了",
+  failed: "失敗",
+};
+const STATUS_COLOR: Record<string, string> = {
+  uploaded: "#9ca3af",
+  processing: "#60a5fa",
+  chunked: "#a78bfa",
+  embedded: "#4ade80",
+  failed: "#f87171",
+};
+
+function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const { isSuperAdmin } = useAuth();
-  const [isGlobal, setIsGlobal] = useState(tenantId === "global");
-  useEffect(() => { setIsGlobal(tenantId === "global"); }, [tenantId]);
-  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
-  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
-  const [jobStatus, setJobStatus] = useState<OcrJobStatus | null>(null);
-  const [books, setBooks] = useState<BookMetadata[]>([]);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [books, setBooks] = useState<BookUpload[]>([]);
+  const [loadingBooks, setLoadingBooks] = useState(false);
+  const [title, setTitle] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [structurizing, setStructurizing] = useState(false);
+  const [structurizeResult, setStructurizeResult] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const listUrl = isSuperAdmin
+    ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
+    : `${API_BASE}/v1/admin/knowledge/book-pdf`;
 
   const loadBooks = useCallback(async () => {
+    setLoadingBooks(true);
     try {
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?tenant=${tenantId}`);
+      const res = await fetchWithAuth(listUrl);
       if (!res.ok) return;
-      const data = (await res.json()) as { items?: unknown[]; count?: number };
-      setBooks((data.items ?? []) as BookMetadata[]);
+      const data = (await res.json()) as { books?: BookUpload[] };
+      setBooks(data.books ?? []);
     } catch {
       // ignore
+    } finally {
+      setLoadingBooks(false);
     }
-  }, [tenantId]);
+  }, [listUrl]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadBooks();
-  }, [tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadBooks(); }, [loadBooks]);
 
-  useEffect(() => {
-    if (!currentJobId) return;
-    const poll = async () => {
-      try {
-        const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/jobs/${currentJobId}`);
-        if (!res.ok) return;
-        const data = (await res.json()) as OcrJobStatus;
-        setJobStatus(data);
-        if (data.status === "done" || data.status === "failed") {
-          if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-          setCurrentJobId(null);
-          if (data.status === "done") void loadBooks();
-        }
-      } catch {
-        // ignore
+  const showToast = (msg: string, ok: boolean) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const dropped = e.dataTransfer.files[0];
+    if (!dropped) return;
+    if (dropped.type !== "application/pdf") { showToast("PDFファイルのみアップロードできます", false); return; }
+    if (dropped.size > MAX_BOOK_PDF_SIZE) { showToast("ファイルサイズが10MBを超えています", false); return; }
+    setFile(dropped);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (!selected) return;
+    if (selected.type !== "application/pdf") { showToast("PDFファイルのみアップロードできます", false); return; }
+    if (selected.size > MAX_BOOK_PDF_SIZE) { showToast("ファイルサイズが10MBを超えています", false); return; }
+    setFile(selected);
+  };
+
+  const handleUpload = async () => {
+    if (!file) { showToast("ファイルを選択してください", false); return; }
+    if (!title.trim()) { showToast("タイトルを入力してください", false); return; }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("title", title.trim());
+      const uploadUrl = isSuperAdmin
+        ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
+        : `${API_BASE}/v1/admin/knowledge/book-pdf`;
+      const res = await fetchWithAuth(uploadUrl, { method: "POST", body: form });
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        showToast(err.error ?? "アップロードに失敗しました", false);
+        return;
       }
-    };
-    void poll();
-    pollingRef.current = setInterval(() => void poll(), 10_000);
-    return () => { if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; } };
-  }, [currentJobId, loadBooks]);
+      showToast("✓ アップロードしました。処理中です...", true);
+      setTitle("");
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      void loadBooks();
+    } catch {
+      showToast("アップロードに失敗しました", false);
+    } finally {
+      setUploading(false);
+    }
+  };
 
-  const uploadEndpoint = isGlobal
-    ? `/v1/admin/knowledge/pdf?tenant=${tenantId}&target=global`
-    : `/v1/admin/knowledge/pdf?tenant=${tenantId}`;
+  const handleStructurize = async () => {
+    setStructurizing(true);
+    setStructurizeResult(null);
+    try {
+      const res = await fetchWithAuth(structurizeUrl, { method: "POST" });
+      const data = (await res.json()) as { target_count?: number; message?: string };
+      const cnt = data.target_count ?? 0;
+      setStructurizeResult(
+        data.message ?? (cnt > 0 ? `${cnt}件の構造化を開始しました` : "構造化対象がありません")
+      );
+      // fire-and-forgetなので少し遅延してから書籍一覧を再取得
+      setTimeout(() => { void loadBooks(); }, 3000);
+    } catch {
+      setStructurizeResult("構造化に失敗しました");
+    } finally {
+      setStructurizing(false);
+    }
+  };
+
+  const embeddedCount = books.filter((b) => b.status === "embedded").length;
+  // structurize-trigger はsuper_adminのみ、常にtenantを渡す
+  const structurizeUrl = `${API_BASE}/v1/admin/knowledge/structurize-trigger?tenant=${encodeURIComponent(tenantId)}`;
 
   return (
-    <div style={{ ...CARD_STYLE, marginBottom: 24 }}>
-      <h3 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 12px" }}>
-        {t("knowledge.pdf_title")}
-      </h3>
-      {isSuperAdmin && (
-        <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} disabled={tenantId === "global"} />
-      )}
-      <FileUpload
-        uploadEndpoint={uploadEndpoint}
-        onUploadSuccess={(name) => { setUploadSuccess(name); setTimeout(() => setUploadSuccess(null), 5000); }}
-        onUploadResponse={(data) => {
-          const d = data as { jobId?: string } | null;
-          if (d?.jobId) { setJobStatus({ status: "processing" }); setCurrentJobId(d.jobId); }
-        }}
-      />
-      {uploadSuccess && (
-        <div style={{ marginTop: 10, padding: "12px 16px", borderRadius: 10, background: "rgba(5,46,22,0.5)", border: "1px solid rgba(74,222,128,0.3)", color: "#86efac", fontSize: 14 }}>
-          {t("knowledge.pdf_accepted", { name: uploadSuccess })}
-        </div>
-      )}
-      {jobStatus && (
+    <div>
+      {/* トースト */}
+      {toast && (
         <div style={{
-          marginTop: 10, padding: "12px 16px", borderRadius: 10, fontSize: 14,
-          border: `1px solid ${jobStatus.status === "done" ? "rgba(74,222,128,0.3)" : jobStatus.status === "failed" ? "rgba(248,113,113,0.3)" : "rgba(96,165,250,0.3)"}`,
-          background: jobStatus.status === "done" ? "rgba(5,46,22,0.5)" : jobStatus.status === "failed" ? "rgba(127,29,29,0.4)" : "rgba(23,37,84,0.5)",
-          color: jobStatus.status === "done" ? "#86efac" : jobStatus.status === "failed" ? "#fca5a5" : "#93c5fd",
+          position: "fixed", top: 20, right: 20, zIndex: 9999,
+          padding: "12px 20px", borderRadius: 10, fontSize: 14, fontWeight: 600,
+          background: toast.ok ? "rgba(5,46,22,0.95)" : "rgba(127,29,29,0.95)",
+          border: `1px solid ${toast.ok ? "rgba(74,222,128,0.4)" : "rgba(248,113,113,0.4)"}`,
+          color: toast.ok ? "#86efac" : "#fca5a5",
         }}>
-          {jobStatus.status === "processing" && t("knowledge.pdf_processing")}
-          {jobStatus.status === "done" && t("knowledge.pdf_done", { pages: jobStatus.pages ?? 0, chunks: jobStatus.chunks ?? 0 })}
-          {jobStatus.status === "failed" && t("knowledge.pdf_failed", { error: jobStatus.error ?? "" })}
+          {toast.msg}
         </div>
       )}
-      {books.length > 0 && (
-        <p style={{ fontSize: 12, color: "#6b7280", margin: "10px 0 0" }}>
-          {t("knowledge.pdf_registered", { n: books.length })}
-        </p>
+
+      {/* アップロードフォーム */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>書籍タイトル</label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="例: 2024年度製品カタログ"
+            style={{
+              width: "100%", padding: "10px 14px", borderRadius: 8,
+              border: "1px solid #374151", background: "rgba(255,255,255,0.05)",
+              color: "#f9fafb", fontSize: 14, boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        {/* ドラッグ＆ドロップゾーン */}
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          style={{
+            border: `2px dashed ${dragOver ? "#60a5fa" : file ? "rgba(74,222,128,0.5)" : "#374151"}`,
+            borderRadius: 12, padding: "28px 20px", textAlign: "center",
+            background: dragOver ? "rgba(96,165,250,0.06)" : "rgba(255,255,255,0.02)",
+            cursor: "pointer", transition: "all 0.15s", marginBottom: 12,
+          }}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf"
+            style={{ display: "none" }}
+            onChange={handleFileChange}
+          />
+          {file ? (
+            <div>
+              <div style={{ fontSize: 22, marginBottom: 6 }}>📄</div>
+              <div style={{ fontSize: 14, color: "#4ade80", fontWeight: 600 }}>{file.name}</div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                {(file.size / 1024 / 1024).toFixed(2)} MB
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+              <div style={{ fontSize: 14, color: "#9ca3af" }}>PDFをここにドラッグ＆ドロップ</div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>またはクリックして選択（上限10MB）</div>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={handleUpload}
+          disabled={uploading || !file || !title.trim()}
+          style={{
+            width: "100%", minHeight: 48, borderRadius: 10,
+            border: "none", background: uploading || !file || !title.trim() ? "#1f2937" : "#1d4ed8",
+            color: uploading || !file || !title.trim() ? "#6b7280" : "#fff",
+            fontSize: 15, fontWeight: 700, cursor: uploading || !file || !title.trim() ? "not-allowed" : "pointer",
+          }}
+        >
+          {uploading ? "アップロード中..." : "📤 アップロード"}
+        </button>
+      </div>
+
+      {/* 構造化トリガー（super_adminのみ） */}
+      {isSuperAdmin && embeddedCount > 0 && (
+        <div style={{ marginBottom: 24, padding: "14px 16px", borderRadius: 10, border: "1px solid rgba(167,139,250,0.25)", background: "rgba(109,40,217,0.08)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 14, color: "#a78bfa" }}>
+              埋め込み完了: {embeddedCount}件 — 構造化でAI精度が向上します
+            </div>
+            <button
+              onClick={handleStructurize}
+              disabled={structurizing}
+              style={{
+                minHeight: 44, padding: "0 18px", borderRadius: 8,
+                border: "1px solid rgba(167,139,250,0.4)", background: "rgba(139,92,246,0.15)",
+                color: "#c4b5fd", fontSize: 13, fontWeight: 600, cursor: structurizing ? "not-allowed" : "pointer",
+              }}
+            >
+              {structurizing ? "処理中..." : "✨ 構造化を実行"}
+            </button>
+          </div>
+          {structurizeResult && (
+            <div style={{ marginTop: 10, fontSize: 13, color: "#86efac" }}>{structurizeResult}</div>
+          )}
+        </div>
+      )}
+
+      {/* 書籍一覧 */}
+      {loadingBooks ? (
+        <div style={{ color: "#6b7280", fontSize: 14 }}>読み込み中...</div>
+      ) : books.length === 0 ? (
+        <div style={{ color: "#6b7280", fontSize: 14 }}>書籍がまだ登録されていません</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {books.map((book) => (
+            <div key={book.id} style={{
+              padding: "12px 16px", borderRadius: 10,
+              border: "1px solid #1f2937", background: "rgba(255,255,255,0.02)",
+              display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
+            }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#f9fafb" }}>{book.title}</div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                  {book.original_filename}
+                  {book.page_count != null && ` · ${book.page_count}ページ`}
+                  {book.chunk_count != null && ` · ${book.chunk_count}チャンク`}
+                  {book.file_size_bytes != null && ` · ${(book.file_size_bytes / 1024 / 1024).toFixed(1)}MB`}
+                </div>
+              </div>
+              <span style={{
+                padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                background: "rgba(0,0,0,0.3)", color: STATUS_COLOR[book.status] ?? "#9ca3af",
+                border: `1px solid ${STATUS_COLOR[book.status] ?? "#374151"}22`,
+                whiteSpace: "nowrap",
+              }}>
+                {STATUS_LABEL[book.status] ?? book.status}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1494,7 +1704,7 @@ export default function TenantKnowledgePage() {
   const gapQuestion = searchParams.get("question") ?? undefined;
 
   const [activeTab, setActiveTab] = useState<Tab>(
-    tabParam === "text" || tabParam === "scrape" ? tabParam : "list"
+    tabParam === "text" || tabParam === "scrape" || tabParam === "pdf" ? tabParam : "list"
   );
 
   // tenantId の解決: URL params → pathnameの末尾 → JWTのtenantId
@@ -1514,6 +1724,7 @@ export default function TenantKnowledgePage() {
     { id: "list", label: t("knowledge.tab_list"), icon: "📋" },
     { id: "text", label: t("knowledge.tab_text"), icon: "✏️" },
     { id: "scrape", label: t("knowledge.tab_scrape"), icon: "🌐" },
+    { id: "pdf", label: "PDFアップロード", icon: "📚" },
   ];
 
   const isGlobalTenant = resolvedTenantId === "global";
@@ -1554,11 +1765,6 @@ export default function TenantKnowledgePage() {
         </p>
       </header>
 
-      {/* PDFアップロード — super_admin のみ */}
-      <SuperAdminOnly>
-        <PdfSection tenantId={resolvedTenantId} />
-      </SuperAdminOnly>
-
       {/* タブ */}
       <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid #1f2937" }}>
         {tabs.map((tab) => (
@@ -1591,6 +1797,7 @@ export default function TenantKnowledgePage() {
       {activeTab === "list" && <KnowledgeListTab tenantId={resolvedTenantId} />}
       {activeTab === "text" && <TextInputTab tenantId={resolvedTenantId} gapQuestion={gapQuestion} gapId={gapId} />}
       {activeTab === "scrape" && <ScrapeTab tenantId={resolvedTenantId} onCommitSuccess={() => setActiveTab("list")} gapQuestion={gapQuestion} gapId={gapId} />}
+      {activeTab === "pdf" && <PdfUploadTab tenantId={resolvedTenantId} />}
     </div>
   );
 }

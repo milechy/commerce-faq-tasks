@@ -68,7 +68,7 @@ const BTN_DANGER: React.CSSProperties = {
 // ─── 反論パターンタブ ─────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export default function ObjectionPatternsTab({ tenantId }: { tenantId: string }) {
+export default function ObjectionPatternsTab({ tenantId: _tenantId }: { tenantId: string }) {
   const [patterns, setPatterns] = useState<ObjectionPattern[]>(MOCK_PATTERNS);
   const [toast, setToast] = useState<string | null>(null);
 

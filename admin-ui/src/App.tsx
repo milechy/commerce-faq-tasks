@@ -70,7 +70,7 @@ function ConfigErrorScreen() {
 }
 
 function AppInner() {
-  const { isClientAdmin, isSuperAdmin } = useAuth();
+  const { isClientAdmin } = useAuth();
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
   return (

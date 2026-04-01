@@ -39,14 +39,42 @@ export function registerChatHistoryRoutes(app: Express): void {
 
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
 
-      const limit = Math.max(1, Math.min(parseInt((req.query["limit"] as string) ?? "50", 10) || 50, 200));
+      const limit = Math.max(1, Math.min(parseInt((req.query["limit"] as string) ?? "20", 10) || 20, 200));
       const offset = Math.max(0, parseInt((req.query["offset"] as string) ?? "0", 10) || 0);
+
+      // Phase52b: sort/filter params
+      const validSortBy = ["last_message_at", "message_count", "score"] as const;
+      const sortByParam = req.query["sort_by"] as string | undefined;
+      const sort_by = validSortBy.includes(sortByParam as typeof validSortBy[number])
+        ? (sortByParam as typeof validSortBy[number])
+        : undefined;
+      const sortOrderParam = req.query["sort_order"] as string | undefined;
+      const sort_order = sortOrderParam === "asc" ? "asc" : sortOrderParam === "desc" ? "desc" : undefined;
+
+      const validPeriods = ["7", "30", "90", "all"] as const;
+      const periodParam = req.query["period"] as string | undefined;
+      const period = validPeriods.includes(periodParam as typeof validPeriods[number])
+        ? (periodParam as typeof validPeriods[number])
+        : undefined;
+
+      const validSentiments = ["positive", "negative", "neutral"] as const;
+      const sentimentParam = req.query["sentiment"] as string | undefined;
+      const sentiment = validSentiments.includes(sentimentParam as typeof validSentiments[number])
+        ? (sentimentParam as typeof validSentiments[number])
+        : undefined;
+
+      const search = (req.query["search"] as string | undefined)?.trim() ?? undefined;
 
       try {
         const result = await getSessions({
           tenantId: tenantFilter,
           limit,
           offset,
+          sort_by,
+          sort_order,
+          period,
+          sentiment,
+          search,
         });
 
         return res.json({

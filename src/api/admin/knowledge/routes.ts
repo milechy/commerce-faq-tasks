@@ -280,6 +280,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const tenantId = resolveTenantId(req);
     const user = (req as any).user as { role?: string } | undefined;
     const category = req.query.category as string | undefined;
+    const isGlobalParam = req.query.is_global as string | undefined;
 
     if (!tenantId && user?.role !== "super_admin") {
       return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
@@ -287,7 +288,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     try {
       const params: unknown[] = [];
-      let sql = `SELECT id, tenant_id, question, answer, category, tags, created_at FROM faq_docs`;
+      let sql = `SELECT id, tenant_id, question, answer, category, tags, is_global, created_at FROM faq_docs`;
       const conditions: string[] = [];
 
       if (tenantId) {
@@ -297,6 +298,11 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       if (category && category !== "all") {
         params.push(category);
         conditions.push(`category = $${params.length}`);
+      }
+      if (isGlobalParam === "true") {
+        conditions.push(`is_global = true`);
+      } else if (isGlobalParam === "false") {
+        conditions.push(`is_global = false OR is_global IS NULL`);
       }
       if (conditions.length > 0) {
         sql += ` WHERE ${conditions.join(" AND ")}`;

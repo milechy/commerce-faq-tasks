@@ -494,7 +494,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              e.score,
              e.evaluated_at,
              COALESCE(msg_counts.message_count, 0)::int AS message_count,
-             SUBSTRING(COALESCE(e.feedback, ''), 1, 100) AS feedback_summary
+             SUBSTRING(COALESCE(e.feedback::text, ''), 1, 100) AS feedback_summary
            FROM conversation_evaluations e
            LEFT JOIN (
              SELECT session_id, COUNT(*) AS message_count

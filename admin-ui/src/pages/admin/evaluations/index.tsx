@@ -413,7 +413,6 @@ export default function EvaluationsPage() {
           {evaluations.map((ev) => {
             const displayScore = ev.overall_score ?? ev.score;
             const isExpanded = expandedId === ev.id;
-            const cfg = scoreConfig(displayScore);
             const hasAxisScores =
               ev.psychology_fit_score != null ||
               ev.customer_reaction_score != null ||
