@@ -554,4 +554,192 @@ export function registerAnalyticsRoutes(app: Express): void {
       }
     },
   );
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/conversions
+  // Phase52f: コンバージョントラッキング集計
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/conversions",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+
+      const period = (req.query["period"] as string | undefined) ?? "30d";
+      const interval = periodToInterval(period);
+      const tenantId = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
+
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      try {
+        const tenantClause = tenantId ? "AND s.tenant_id = $2" : "";
+        const params: (string | number)[] = [`${interval}`];
+        if (tenantId) params.push(tenantId);
+
+        // サマリー: 合計セッション、記録済み件数、outcome別内訳
+        const summaryResult = await pool.query(
+          `SELECT
+             COUNT(*) AS total_sessions,
+             COUNT(s.outcome) AS recorded_outcomes,
+             s.outcome,
+             COUNT(s.outcome) AS outcome_count
+           FROM chat_sessions s
+           WHERE s.started_at >= NOW() - $1::interval
+           ${tenantClause}
+           GROUP BY s.outcome`,
+          params,
+        );
+
+        const totalSessions = summaryResult.rows.reduce((acc: number, row: any) => acc + parseInt(row.total_sessions, 10), 0);
+        // Dedup: get total from a separate count
+        const totalCountResult = await pool.query(
+          `SELECT COUNT(*) AS total FROM chat_sessions s
+           WHERE s.started_at >= NOW() - $1::interval ${tenantClause}`,
+          params,
+        );
+        const total = parseInt(totalCountResult.rows[0]?.total ?? "0", 10);
+        const recordedResult = await pool.query(
+          `SELECT COUNT(*) AS recorded FROM chat_sessions s
+           WHERE s.started_at >= NOW() - $1::interval ${tenantClause} AND s.outcome IS NOT NULL`,
+          params,
+        );
+        const recorded = parseInt(recordedResult.rows[0]?.recorded ?? "0", 10);
+
+        // outcome別内訳
+        const outcomeBreakdownResult = await pool.query(
+          `SELECT s.outcome, COUNT(*) AS cnt
+           FROM chat_sessions s
+           WHERE s.started_at >= NOW() - $1::interval ${tenantClause}
+             AND s.outcome IS NOT NULL
+           GROUP BY s.outcome
+           ORDER BY cnt DESC`,
+          params,
+        );
+        const outcomes: Record<string, number> = {};
+        for (const row of outcomeBreakdownResult.rows as Array<{ outcome: string; cnt: string }>) {
+          outcomes[row.outcome] = parseInt(row.cnt, 10);
+        }
+
+        const recordingRate = total > 0 ? Math.round((recorded / total) * 1000) / 10 : 0;
+
+        // 日別コンバージョン率推移
+        const trendResult = await pool.query(
+          `SELECT
+             DATE(s.started_at) AS date,
+             COUNT(*) AS total,
+             COUNT(CASE WHEN s.outcome IS NOT NULL AND s.outcome NOT IN ('離脱', '不明') THEN 1 END) AS converted
+           FROM chat_sessions s
+           WHERE s.started_at >= NOW() - $1::interval ${tenantClause}
+           GROUP BY DATE(s.started_at)
+           ORDER BY date ASC`,
+          params,
+        );
+        const conversionRateTrend = (trendResult.rows as Array<{ date: string; total: string; converted: string }>).map((row) => {
+          const t2 = parseInt(row.total, 10);
+          const c = parseInt(row.converted, 10);
+          return {
+            date: row.date,
+            total: t2,
+            converted: c,
+            rate: t2 > 0 ? Math.round((c / t2) * 1000) / 10 : 0,
+          };
+        });
+
+        // テクニック別効果（評価フィードバックからキーワード抽出 × outcome）
+        const TECHNIQUE_KEYWORDS = [
+          "アンカリング", "損失回避", "社会的証明", "希少性", "返報性", "コミットメント", "権威", "好意",
+        ];
+        const techniqueParams: (string | number)[] = [`${interval}`];
+        if (tenantId) techniqueParams.push(tenantId);
+        const techTenantClause = tenantId ? `AND s.tenant_id = $${techniqueParams.length}` : "";
+
+        const techResult = await pool.query(
+          `SELECT
+             ce.feedback,
+             s.outcome
+           FROM conversation_evaluations ce
+           JOIN chat_sessions s ON s.session_id = ce.session_id
+           WHERE ce.evaluated_at >= NOW() - $1::interval
+             ${techTenantClause}
+             AND ce.feedback IS NOT NULL`,
+          techniqueParams,
+        );
+
+        const techniqueMap: Record<string, { sessions_used: number; converted: number }> = {};
+        for (const row of techResult.rows as Array<{ feedback: unknown; outcome: string | null }>) {
+          const feedbackStr = typeof row.feedback === "string"
+            ? row.feedback
+            : JSON.stringify(row.feedback ?? "");
+          for (const kw of TECHNIQUE_KEYWORDS) {
+            if (feedbackStr.includes(kw)) {
+              if (!techniqueMap[kw]) techniqueMap[kw] = { sessions_used: 0, converted: 0 };
+              techniqueMap[kw].sessions_used++;
+              if (row.outcome && !["離脱", "不明"].includes(row.outcome)) {
+                techniqueMap[kw].converted++;
+              }
+            }
+          }
+        }
+        const techniqueEffectiveness = Object.entries(techniqueMap)
+          .map(([technique, data]) => ({
+            technique,
+            sessions_used: data.sessions_used,
+            converted: data.converted,
+            conversion_rate: data.sessions_used > 0
+              ? Math.round((data.converted / data.sessions_used) * 1000) / 10
+              : 0,
+          }))
+          .sort((a, b) => b.conversion_rate - a.conversion_rate);
+
+        // ステージ別離脱分析（最終メッセージのstate from metadata）
+        const stageParams: (string | number)[] = [`${interval}`];
+        if (tenantId) stageParams.push(tenantId);
+        const stageTenantClause = tenantId ? `AND s.tenant_id = $${stageParams.length}` : "";
+
+        const stageResult = await pool.query(
+          `SELECT
+             cm.metadata->>'state' AS state,
+             COUNT(DISTINCT s.id) AS cnt
+           FROM chat_sessions s
+           JOIN LATERAL (
+             SELECT metadata FROM chat_messages
+             WHERE session_id = s.id
+             ORDER BY created_at DESC LIMIT 1
+           ) cm ON TRUE
+           WHERE s.started_at >= NOW() - $1::interval
+             ${stageTenantClause}
+             AND (s.outcome IS NULL OR s.outcome IN ('離脱', '不明'))
+             AND cm.metadata->>'state' IS NOT NULL
+           GROUP BY cm.metadata->>'state'`,
+          stageParams,
+        );
+        const stageDropout: Record<string, number> = { clarify: 0, answer: 0, confirm: 0, terminal: 0 };
+        for (const row of stageResult.rows as Array<{ state: string; cnt: string }>) {
+          const state = row.state;
+          if (state in stageDropout) {
+            stageDropout[state] = parseInt(row.cnt, 10);
+          }
+        }
+
+        return res.json({
+          summary: {
+            total_sessions: total,
+            recorded_outcomes: recorded,
+            recording_rate: recordingRate,
+            outcomes,
+          },
+          conversion_rate_trend: conversionRateTrend,
+          technique_effectiveness: techniqueEffectiveness,
+          stage_dropout: stageDropout,
+        });
+      } catch (err) {
+        console.warn("[GET /v1/admin/analytics/conversions]", err);
+        return res.status(500).json({ error: "コンバージョン分析の取得に失敗しました" });
+      }
+    },
+  );
 }

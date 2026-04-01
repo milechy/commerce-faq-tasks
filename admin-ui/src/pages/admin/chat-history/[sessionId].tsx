@@ -5,14 +5,7 @@ import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
 
-type OutcomeValue = "replied" | "appointment" | "lost" | "unknown";
-
-const OUTCOME_LABELS: Record<OutcomeValue, string> = {
-  replied: "📩 返信あり",
-  appointment: "📅 アポ取得",
-  lost: "❌ 失注",
-  unknown: "❓ 不明",
-};
+const DEFAULT_CONVERSION_TYPES = ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
 
 interface Message {
   id: number;
@@ -58,7 +51,10 @@ export default function ChatHistorySessionPage() {
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(sessionFromState);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState<OutcomeValue | null>(null);
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [outcomeRecordedAt, setOutcomeRecordedAt] = useState<string | null>(null);
+  const [outcomeRecordedBy, setOutcomeRecordedBy] = useState<string | null>(null);
+  const [conversionTypes, setConversionTypes] = useState<string[]>(DEFAULT_CONVERSION_TYPES);
   const [outcomeSubmitting, setOutcomeSubmitting] = useState(false);
   const [outcomeToast, setOutcomeToast] = useState<string | null>(null);
 
@@ -95,6 +91,36 @@ export default function ChatHistorySessionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // テナントのconversion_typesを取得
+  useEffect(() => {
+    const fetchConversionTypes = async () => {
+      try {
+        const endpoint = isSuperAdmin && sessionInfo?.tenant_id
+          ? `${API_BASE}/v1/admin/tenants/${sessionInfo.tenant_id}`
+          : `${API_BASE}/v1/admin/my-tenant`;
+        const res = await authFetch(endpoint);
+        if (!res.ok) return;
+        const data = (await res.json()) as { conversion_types?: string[] };
+        if (Array.isArray(data.conversion_types) && data.conversion_types.length > 0) {
+          setConversionTypes(data.conversion_types);
+        }
+      } catch {
+        // フォールバック: デフォルトを使用
+      }
+    };
+    void fetchConversionTypes();
+  }, [isSuperAdmin, sessionInfo?.tenant_id]);
+
+  // sessionFromStateにoutcome情報があれば復元
+  useEffect(() => {
+    const s = sessionFromState as (typeof sessionFromState & { outcome?: string | null; outcome_recorded_at?: string | null; outcome_recorded_by?: string | null }) | null;
+    if (s?.outcome) {
+      setOutcome(s.outcome);
+      setOutcomeRecordedAt(s.outcome_recorded_at ?? null);
+      setOutcomeRecordedBy(s.outcome_recorded_by ?? null);
+    }
+  }, []);
+
   const formatTime = (iso: string) =>
     new Date(iso).toLocaleTimeString(locale, {
       hour: "2-digit",
@@ -109,16 +135,24 @@ export default function ChatHistorySessionPage() {
       minute: "2-digit",
     });
 
-  const handleOutcome = async (value: OutcomeValue) => {
+  const handleOutcome = async (value: string) => {
     if (!sessionId) return;
     setOutcomeSubmitting(true);
     try {
-      await authFetch(`${API_BASE}/v1/admin/evaluations/${sessionId}/outcome`, {
-        method: "PUT",
-        body: JSON.stringify({ outcome: value }),
-      });
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/chat-history/sessions/${sessionId}/outcome`,
+        { method: "PATCH", body: JSON.stringify({ outcome: value }) },
+      );
+      const data = (await res.json()) as { outcome?: string; recorded_at?: string; recorded_by?: string; error?: string };
+      if (!res.ok) {
+        setOutcomeToast(data.error ?? "保存に失敗しました。もう一度お試しください 🙏");
+        setTimeout(() => setOutcomeToast(null), 3000);
+        return;
+      }
       setOutcome(value);
-      setOutcomeToast(`✅ 「${OUTCOME_LABELS[value]}」として記録しました`);
+      setOutcomeRecordedAt(data.recorded_at ?? new Date().toISOString());
+      setOutcomeRecordedBy(data.recorded_by ?? null);
+      setOutcomeToast(`✅ 「${value}」として記録しました`);
       setTimeout(() => setOutcomeToast(null), 3000);
     } catch {
       setOutcomeToast("保存に失敗しました。もう一度お試しください 🙏");
@@ -466,6 +500,19 @@ export default function ChatHistorySessionPage() {
             >
               この会話の営業結果を記録
             </p>
+            {/* 記録済み情報 */}
+            {outcome && outcomeRecordedAt && (
+              <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, background: "rgba(5,46,22,0.4)", border: "1px solid rgba(74,222,128,0.2)", fontSize: 12, color: "#86efac" }}>
+                ✓ 記録済み: {new Date(outcomeRecordedAt).toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                {outcomeRecordedBy && ` by ${outcomeRecordedBy}`}
+                <button
+                  onClick={() => { setOutcome(null); setOutcomeRecordedAt(null); setOutcomeRecordedBy(null); }}
+                  style={{ marginLeft: 8, background: "none", border: "none", color: "#4ade80", fontSize: 11, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                >
+                  変更
+                </button>
+              </div>
+            )}
             <div
               style={{
                 display: "grid",
@@ -473,37 +520,35 @@ export default function ChatHistorySessionPage() {
                 gap: 10,
               }}
             >
-              {(Object.entries(OUTCOME_LABELS) as [OutcomeValue, string][]).map(
-                ([value, label]) => (
-                  <button
-                    key={value}
-                    onClick={() => void handleOutcome(value)}
-                    disabled={outcomeSubmitting}
-                    style={{
-                      padding: "14px 12px",
-                      minHeight: 52,
-                      borderRadius: 10,
-                      border:
-                        outcome === value
-                          ? "1px solid rgba(74,222,128,0.5)"
-                          : "1px solid #374151",
-                      background:
-                        outcome === value
-                          ? "rgba(34,197,94,0.2)"
-                          : "rgba(31,41,55,0.5)",
-                      color: outcome === value ? "#4ade80" : "#9ca3af",
-                      fontSize: 15,
-                      fontWeight: outcome === value ? 700 : 500,
-                      cursor: outcomeSubmitting ? "not-allowed" : "pointer",
-                      opacity: outcomeSubmitting && outcome !== value ? 0.6 : 1,
-                      transition: "all 0.15s",
-                      width: "100%",
-                    }}
-                  >
-                    {label}
-                  </button>
-                )
-              )}
+              {conversionTypes.map((value) => (
+                <button
+                  key={value}
+                  onClick={() => void handleOutcome(value)}
+                  disabled={outcomeSubmitting}
+                  style={{
+                    padding: "14px 12px",
+                    minHeight: 52,
+                    borderRadius: 10,
+                    border:
+                      outcome === value
+                        ? "1px solid rgba(74,222,128,0.5)"
+                        : "1px solid #374151",
+                    background:
+                      outcome === value
+                        ? "rgba(34,197,94,0.2)"
+                        : "rgba(31,41,55,0.5)",
+                    color: outcome === value ? "#4ade80" : "#9ca3af",
+                    fontSize: 15,
+                    fontWeight: outcome === value ? 700 : 500,
+                    cursor: outcomeSubmitting ? "not-allowed" : "pointer",
+                    opacity: outcomeSubmitting && outcome !== value ? 0.6 : 1,
+                    transition: "all 0.15s",
+                    width: "100%",
+                  }}
+                >
+                  {outcome === value ? `✓ ${value}` : value}
+                </button>
+              ))}
             </div>
           </div>
         </div>

@@ -80,6 +80,9 @@ export interface SessionSummary {
   last_message_at: string;
   message_count: number;
   first_message_preview: string;  // 最初のユーザーメッセージ先頭 50 文字
+  // Phase52f: コンバージョン記録
+  outcome: string | null;
+  outcome_recorded_at: string | null;
 }
 
 /**
@@ -148,6 +151,8 @@ export async function getSessions(
        s.started_at,
        s.last_message_at,
        s.message_count,
+       s.outcome,
+       s.outcome_recorded_at,
        COALESCE(LEFT(m.content, 50), '') AS first_message_preview
      FROM chat_sessions s
      LEFT JOIN LATERAL (

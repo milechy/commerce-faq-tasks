@@ -3,6 +3,7 @@
 
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { getPool } from "../../../lib/db";
 import { getSessions, getMessages } from "./chatHistoryRepository";
 
 /**
@@ -130,6 +131,84 @@ export function registerChatHistoryRoutes(app: Express): void {
       } catch (err) {
         console.warn("[GET /v1/admin/chat-history/sessions/:id/messages]", err);
         return res.status(500).json({ error: "メッセージの取得に失敗しました" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // PATCH /v1/admin/chat-history/sessions/:sessionId/outcome
+  // Phase52f: コンバージョン結果を chat_sessions に記録
+  // :sessionId = chat_sessions.id (UUID)
+  // Body: { outcome: string }
+  // -----------------------------------------------------------------------
+  app.patch(
+    "/v1/admin/chat-history/sessions/:sessionId/outcome",
+    async (req: Request, res: Response) => {
+      const pool = getPool();
+      const sessionDbId: string = req.params["sessionId"] ?? "";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const email: string = su?.email ?? su?.app_metadata?.email ?? "";
+
+      if (!sessionDbId) {
+        return res.status(400).json({ error: "sessionId が必要です" });
+      }
+
+      const { outcome } = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof outcome !== "string" || !outcome.trim()) {
+        return res.status(400).json({ error: "outcome は必須の文字列です" });
+      }
+      const outcomeValue = outcome.trim();
+
+      try {
+        // セッション取得 + テナント確認
+        const sessionResult = await pool.query<{ id: string; tenant_id: string }>(
+          `SELECT id, tenant_id FROM chat_sessions WHERE id = $1`,
+          [sessionDbId],
+        );
+        if (sessionResult.rows.length === 0) {
+          return res.status(404).json({ error: "セッションが見つかりません" });
+        }
+        const session = sessionResult.rows[0];
+
+        // テナント分離チェック
+        if (!isSuperAdmin && session.tenant_id !== jwtTenantId) {
+          return res.status(403).json({ error: "このセッションへのアクセス権がありません" });
+        }
+
+        // テナントの conversion_types でバリデーション
+        const tenantResult = await pool.query<{ conversion_types: string[] | null }>(
+          `SELECT conversion_types FROM tenants WHERE id = $1`,
+          [session.tenant_id],
+        );
+        const conversionTypes: string[] = tenantResult.rows[0]?.conversion_types ??
+          ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
+        if (!conversionTypes.includes(outcomeValue)) {
+          return res.status(400).json({
+            error: "指定されたoutcomeはこのテナントのconversion_typesに含まれていません",
+            valid_outcomes: conversionTypes,
+          });
+        }
+
+        // 記録
+        await pool.query(
+          `UPDATE chat_sessions
+           SET outcome = $1, outcome_recorded_at = NOW(), outcome_recorded_by = $2
+           WHERE id = $3`,
+          [outcomeValue, email || null, sessionDbId],
+        );
+
+        return res.json({
+          sessionId: sessionDbId,
+          outcome: outcomeValue,
+          recorded_at: new Date().toISOString(),
+          recorded_by: email || null,
+        });
+      } catch (err) {
+        console.warn("[PATCH /v1/admin/chat-history/sessions/:id/outcome]", err);
+        return res.status(500).json({ error: "結果の記録に失敗しました" });
       }
     },
   );
