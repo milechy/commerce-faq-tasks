@@ -1,10 +1,12 @@
+// admin-ui/src/pages/admin/index.tsx
+// Phase52g: ダッシュボード — 4セクション構成 + KPIサマリー
+
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, authFetch } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import LangSwitcher from "../../components/LangSwitcher";
 import { useAuth } from "../../auth/useAuth";
-import { SuperAdminOnly } from "../../components/RoleGuard";
 
 interface DashboardStats {
   faqCount: number;
@@ -15,22 +17,24 @@ interface DashboardStats {
   feedbackUnread: number;
 }
 
-
 function StatCard({
   icon,
   label,
   value,
   sub,
   accent,
+  onClick,
 }: {
   icon: string;
   label: string;
   value: string | number;
   sub?: string;
   accent?: string;
+  onClick?: () => void;
 }) {
   return (
     <div
+      onClick={onClick}
       style={{
         flex: "1 1 140px",
         borderRadius: 14,
@@ -41,17 +45,14 @@ function StatCard({
         flexDirection: "column",
         gap: 6,
         boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+        cursor: onClick ? "pointer" : "default",
+        transition: "border-color 0.15s",
       }}
+      onMouseEnter={(e) => { if (onClick) (e.currentTarget as HTMLDivElement).style.borderColor = "#374151"; }}
+      onMouseLeave={(e) => { if (onClick) (e.currentTarget as HTMLDivElement).style.borderColor = "#1f2937"; }}
     >
       <span style={{ fontSize: 28 }}>{icon}</span>
-      <span
-        style={{
-          fontSize: 28,
-          fontWeight: 700,
-          color: accent ?? "#f9fafb",
-          lineHeight: 1,
-        }}
-      >
+      <span style={{ fontSize: 28, fontWeight: 700, color: accent ?? "#f9fafb", lineHeight: 1 }}>
         {value}
       </span>
       <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>{label}</span>
@@ -60,10 +61,106 @@ function StatCard({
   );
 }
 
+interface NavSectionItem {
+  label: string;
+  desc: string;
+  path: string;
+  badge?: number;
+  badgeColor?: string;
+}
+
+interface NavSection {
+  icon: string;
+  title: string;
+  color: string;
+  items: NavSectionItem[];
+}
+
+function SectionCard({ section, navigate }: { section: NavSection; navigate: (path: string) => void }) {
+  return (
+    <div
+      style={{
+        flex: "1 1 240px",
+        borderRadius: 14,
+        border: "1px solid #1f2937",
+        background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+        overflow: "hidden",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+      }}
+    >
+      {/* Section header */}
+      <div
+        style={{
+          padding: "14px 18px",
+          borderBottom: "1px solid #1f2937",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <span style={{ fontSize: 20 }}>{section.icon}</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: "#f9fafb" }}>{section.title}</span>
+      </div>
+
+      {/* Items */}
+      <div>
+        {section.items.map((item) => (
+          <button
+            key={item.path}
+            onClick={() => navigate(item.path)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              width: "100%",
+              textAlign: "left",
+              padding: "12px 18px",
+              background: "none",
+              border: "none",
+              borderBottom: "1px solid rgba(31,41,55,0.4)",
+              cursor: "pointer",
+              minHeight: 52,
+              gap: 8,
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.03)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.background = "none";
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#e5e7eb" }}>{item.label}</div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{item.desc}</div>
+            </div>
+            {item.badge != null && item.badge > 0 && (
+              <span
+                style={{
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  background: item.badgeColor ? `${item.badgeColor}25` : "rgba(59,130,246,0.2)",
+                  border: `1px solid ${item.badgeColor ? `${item.badgeColor}55` : "rgba(59,130,246,0.4)"}`,
+                  color: item.badgeColor ?? "#60a5fa",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  flexShrink: 0,
+                }}
+              >
+                {item.badge}
+              </span>
+            )}
+            <span style={{ color: "#4b5563", fontSize: 14, flexShrink: 0 }}>→</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin, isClientAdmin, logout, previewMode, previewTenantId, previewTenantName, exitPreview } = useAuth();
+  const { user, isSuperAdmin, logout, previewMode, previewTenantId, previewTenantName, exitPreview } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,10 +208,7 @@ export default function AdminDashboard() {
           faqCount = data.pagination?.count ?? 0;
           if (data.items) {
             publishedFaqCount = data.items.filter((f) => f.is_published).length;
-            const latest = data.items
-              .map((f) => f.updated_at)
-              .sort()
-              .reverse()[0];
+            const latest = data.items.map((f) => f.updated_at).sort().reverse()[0];
             if (latest) lastUpdated = latest;
           }
         }
@@ -152,25 +246,78 @@ export default function AdminDashboard() {
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
 
+  const knowledgePath = isSuperAdmin
+    ? "/admin/knowledge"
+    : `/admin/knowledge/${previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "")}`;
+
+  // 4-section nav definition (role-filtered)
+  const navSections: NavSection[] = [
+    {
+      icon: "💬",
+      title: "会話",
+      color: "#60a5fa",
+      items: [
+        { label: "会話履歴", desc: "お客様との全チャットログを確認", path: "/admin/chat-history" },
+        { label: "AI品質レポート", desc: "Judgeによる会話評価・スコア一覧", path: "/admin/evaluations" },
+        ...(isSuperAdmin
+          ? [{ label: "お客様の声", desc: `フィードバック管理${(stats?.feedbackUnread ?? 0) > 0 ? "" : ""}`, path: "/admin/feedback", badge: stats?.feedbackUnread, badgeColor: "#60a5fa" }]
+          : []),
+      ],
+    },
+    {
+      icon: "📚",
+      title: "ナレッジ",
+      color: "#4ade80",
+      items: [
+        { label: "ナレッジ管理", desc: "AIが使う回答データを管理します", path: knowledgePath },
+        { label: "未回答質問", desc: "AIが答えられなかった質問を管理", path: "/admin/knowledge-gaps", badge: stats?.gapCount, badgeColor: "#fbbf24" },
+      ],
+    },
+    {
+      icon: "📈",
+      title: "分析",
+      color: "#a78bfa",
+      items: [
+        { label: "会話分析ダッシュボード", desc: "KPI・トレンド・コンバージョン分析", path: "/admin/analytics" },
+      ],
+    },
+    {
+      icon: "⚙️",
+      title: "設定",
+      color: "#9ca3af",
+      items: [
+        { label: "アバター設定", desc: "AIアバターの見た目と声を設定", path: "/admin/avatar" },
+        { label: "チューニングルール", desc: "AIの回答を改善するルールを設定", path: "/admin/tuning" },
+        { label: "テストチャット", desc: "AIの回答をリアルタイムにテスト", path: "/admin/chat-test" },
+        ...(isSuperAdmin
+          ? [
+              { label: "テナント管理", desc: "登録テナントの設定と管理", path: "/admin/tenants" },
+              { label: "請求・使用量", desc: "API使用量と請求情報を確認", path: "/admin/billing" },
+            ]
+          : []),
+      ],
+    },
+  ];
+
   return (
     <div
       style={{
         minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
+        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
         color: "#e5e7eb",
         padding: "24px 20px",
-        maxWidth: 900,
+        maxWidth: 960,
         margin: "0 auto",
       }}
     >
       {previewMode && <div style={{ height: 44 }} />}
+
       {/* プレビューモードバナー */}
       {previewMode && (
         <div
           style={{
             position: "fixed",
-            top: 0,
+            top: 52,
             left: 0,
             right: 0,
             zIndex: 9999,
@@ -207,82 +354,65 @@ export default function AdminDashboard() {
           </button>
         </div>
       )}
+
+      {/* Page header */}
       <header
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "flex-start",
-          marginBottom: 32,
+          marginBottom: 28,
           flexWrap: "wrap",
           gap: 12,
         }}
       >
         <div>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "3px 10px",
-              borderRadius: 999,
-              background: "rgba(15,23,42,0.9)",
-              border: "1px solid #1f2937",
-              fontSize: 12,
-              color: "#9ca3af",
-              marginBottom: 8,
-            }}
-          >
-            <span
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: "50%",
-                background: "#22c55e",
-                boxShadow: "0 0 6px #22c55e",
-              }}
-            />
-            {t("dashboard.connected")}
-          </div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            {t("dashboard.title")}
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
+            📊 {t("dashboard.title")}
           </h1>
           <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            {t("dashboard.subtitle")}
+            全体の状況をひと目で確認できます
           </p>
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {user && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "3px 10px",
+                borderRadius: 999,
+                background: "rgba(15,23,42,0.9)",
+                border: "1px solid #1f2937",
+                fontSize: 12,
+                color: "#9ca3af",
+              }}
+            >
               <span
                 style={{
-                  padding: "4px 10px",
-                  borderRadius: 999,
-                  background: isSuperAdmin ? "rgba(234,179,8,0.15)" : "rgba(59,130,246,0.15)",
-                  border: `1px solid ${isSuperAdmin ? "rgba(234,179,8,0.4)" : "rgba(59,130,246,0.4)"}`,
-                  color: isSuperAdmin ? "#fbbf24" : "#60a5fa",
-                  fontSize: 12,
-                  fontWeight: 600,
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: "#22c55e",
+                  boxShadow: "0 0 6px #22c55e",
                 }}
-              >
-                {isSuperAdmin ? t("role.super_admin") : isClientAdmin ? (user.tenantName ?? t("role.client_admin")) : t("role.anonymous")}
-              </span>
-              <span style={{ fontSize: 13, color: "#6b7280", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {user.email}
-              </span>
+              />
+              {t("dashboard.connected")}
             </div>
           )}
           <LangSwitcher />
           <button
             onClick={() => void handleLogout()}
             style={{
-              padding: "10px 16px",
-              minHeight: 44,
-              borderRadius: 999,
+              padding: "8px 14px",
+              minHeight: 36,
+              borderRadius: 8,
               border: "1px solid #374151",
               background: "transparent",
               color: "#9ca3af",
-              fontSize: 14,
+              fontSize: 13,
               cursor: "pointer",
               fontWeight: 500,
             }}
@@ -309,24 +439,16 @@ export default function AdminDashboard() {
       )}
 
       {loading ? (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minHeight: 120,
-            color: "#9ca3af",
-            fontSize: 15,
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 120, color: "#9ca3af", fontSize: 15 }}>
           <span style={{ marginRight: 8 }}>⏳</span>
           {t("dashboard.loading")}
         </div>
       ) : (
         <>
+          {/* KPI Cards */}
           <section style={{ marginBottom: 32 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              {t("dashboard.current_status")}
+            <h2 style={{ fontSize: 13, fontWeight: 600, color: "#6b7280", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              現在の状況
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <StatCard
@@ -334,6 +456,7 @@ export default function AdminDashboard() {
                 label={t("dashboard.faq_count")}
                 value={stats?.faqCount ?? 0}
                 sub={t("dashboard.faq_count_sub")}
+                onClick={() => navigate(knowledgePath)}
               />
               <StatCard
                 icon="✅"
@@ -341,22 +464,22 @@ export default function AdminDashboard() {
                 value={stats?.publishedFaqCount ?? 0}
                 accent="#4ade80"
                 sub={t("dashboard.published_faq_sub")}
+                onClick={() => navigate(knowledgePath)}
               />
               <StatCard
-                icon="📚"
-                label={t("dashboard.knowledge_count")}
-                value={stats?.bookCount ?? 0}
-                sub={t("dashboard.knowledge_count_sub")}
+                icon="🔍"
+                label="未回答質問"
+                value={stats?.gapCount ?? 0}
+                accent={(stats?.gapCount ?? 0) > 0 ? "#fbbf24" : undefined}
+                sub="AIが答えられなかった質問数"
+                onClick={() => navigate("/admin/knowledge-gaps")}
               />
               <StatCard
                 icon="🕐"
                 label={t("dashboard.last_updated")}
                 value={
                   stats?.lastUpdated
-                    ? new Date(stats.lastUpdated).toLocaleDateString(locale, {
-                        month: "short",
-                        day: "numeric",
-                      })
+                    ? new Date(stats.lastUpdated).toLocaleDateString(locale, { month: "short", day: "numeric" })
                     : "—"
                 }
                 sub={stats?.lastUpdated ? t("dashboard.last_updated_sub") : t("dashboard.no_updates")}
@@ -364,353 +487,111 @@ export default function AdminDashboard() {
             </div>
           </section>
 
+          {/* 4-section navigation */}
           <section style={{ marginBottom: 32 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
-              {t("dashboard.quick_actions")}
+            <h2 style={{ fontSize: 13, fontWeight: 600, color: "#6b7280", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              メニュー
             </h2>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
+              {navSections.map((section) => (
+                <SectionCard key={section.title} section={section} navigate={navigate} />
+              ))}
+            </div>
+          </section>
+
+          {/* Quick Actions */}
+          <section>
+            <h2 style={{ fontSize: 13, fontWeight: 600, color: "#6b7280", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              クイックアクション
+            </h2>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
               <button
-                onClick={() => {
-                  const knowledgePath = isSuperAdmin
-                    ? "/admin/knowledge"
-                    : `/admin/knowledge/${previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "")}`;
-                  navigate(knowledgePath);
-                }}
+                onClick={() => navigate("/admin/chat-test")}
                 style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
+                  flex: "1 1 180px",
+                  padding: "14px 18px",
+                  minHeight: 48,
+                  borderRadius: 10,
                   border: "none",
-                  background:
-                    "linear-gradient(135deg, #22c55e 0%, #4ade80 50%, #22c55e 100%)",
-                  color: "#022c22",
-                  fontSize: 16,
+                  background: "linear-gradient(135deg, #3b82f6, #60a5fa)",
+                  color: "#fff",
+                  fontSize: 14,
                   fontWeight: 700,
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  boxShadow: "0 8px 25px rgba(34,197,94,0.25)",
-                  transition: "box-shadow 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.boxShadow =
-                    "0 10px 30px rgba(34,197,94,0.4)";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.boxShadow =
-                    "0 8px 25px rgba(34,197,94,0.25)";
+                  gap: 8,
+                  boxShadow: "0 4px 16px rgba(59,130,246,0.3)",
                 }}
               >
-                <span style={{ fontSize: 22 }}>📚</span>
-                {t("dashboard.manage_knowledge")}
-              </button>
-
-              <SuperAdminOnly>
-                <button
-                  onClick={() => navigate("/admin/tenants")}
-                  style={{
-                    flex: "1 1 200px",
-                    padding: "18px 20px",
-                    minHeight: 56,
-                    borderRadius: 12,
-                    border: "1px solid #1f2937",
-                    background: "rgba(15,23,42,0.8)",
-                    color: "#e5e7eb",
-                    fontSize: 16,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    transition: "border-color 0.15s",
-                  }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
-                >
-                  <span style={{ fontSize: 22 }}>🏢</span>
-                  {t("dashboard.manage_tenants")}
-                </button>
-              </SuperAdminOnly>
-
-              <SuperAdminOnly>
-                <button
-                  onClick={() => navigate("/admin/billing")}
-                  style={{
-                    flex: "1 1 200px",
-                    padding: "18px 20px",
-                    minHeight: 56,
-                    borderRadius: 12,
-                    border: "1px solid #1f2937",
-                    background: "rgba(15,23,42,0.8)",
-                    color: "#e5e7eb",
-                    fontSize: 16,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    transition: "border-color 0.15s",
-                  }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
-                >
-                  <span style={{ fontSize: 22 }}>💰</span>
-                  {t("dashboard.view_billing")}
-                </button>
-              </SuperAdminOnly>
-
-              {isClientAdmin && (
-                <button
-                  onClick={() => navigate("/admin/chat-test")}
-                  style={{
-                    flex: "1 1 200px",
-                    padding: "18px 20px",
-                    minHeight: 56,
-                    borderRadius: 12,
-                    border: "none",
-                    background: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 50%, #3b82f6 100%)",
-                    color: "#fff",
-                    fontSize: 16,
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    boxShadow: "0 8px 25px rgba(59,130,246,0.3)",
-                    transition: "box-shadow 0.15s",
-                  }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 10px 30px rgba(59,130,246,0.5)"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 25px rgba(59,130,246,0.3)"; }}
-                >
-                  {t("chat_test.button")}
-                </button>
-              )}
-
-              <button
-                onClick={() => navigate("/admin/chat-history")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
-              >
-                <span style={{ fontSize: 22 }}>💬</span>
-                {t("dashboard.chat_history")}
+                <span>🧪</span> テストチャット
               </button>
 
               <button
-                onClick={() => navigate("/admin/evaluations")}
+                onClick={() => navigate(knowledgePath)}
                 style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
+                  flex: "1 1 180px",
+                  padding: "14px 18px",
+                  minHeight: 48,
+                  borderRadius: 10,
+                  border: "none",
+                  background: "linear-gradient(135deg, #22c55e, #4ade80)",
+                  color: "#022c22",
+                  fontSize: 14,
+                  fontWeight: 700,
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
+                  gap: 8,
+                  boxShadow: "0 4px 16px rgba(34,197,94,0.25)",
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
               >
-                <span style={{ fontSize: 22 }}>⭐</span>
-                AI評価
-              </button>
-
-              <button
-                onClick={() => navigate("/admin/analytics")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
-              >
-                <span style={{ fontSize: 22 }}>📊</span>
-                会話分析
+                <span>📚</span> ナレッジ追加
               </button>
 
               <button
                 onClick={() => navigate("/admin/tuning")}
                 style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid #1f2937",
+                  flex: "1 1 180px",
+                  padding: "14px 18px",
+                  minHeight: 48,
+                  borderRadius: 10,
+                  border: "1px solid #374151",
                   background: "rgba(15,23,42,0.8)",
                   color: "#e5e7eb",
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: 600,
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
+                  gap: 8,
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937"; }}
               >
-                <span style={{ fontSize: 22 }}>🎛️</span>
-                {t("dashboard.tuning_rules")}
+                <span>⚙️</span> ルール確認
               </button>
 
               <button
-                onClick={() => navigate("/admin/knowledge-gaps")}
+                onClick={() => navigate("/admin/analytics")}
                 style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: (stats?.gapCount ?? 0) > 0
-                    ? "1px solid rgba(234,179,8,0.4)"
-                    : "1px solid #1f2937",
-                  background: (stats?.gapCount ?? 0) > 0
-                    ? "rgba(234,179,8,0.06)"
-                    : "rgba(15,23,42,0.8)",
-                  color: (stats?.gapCount ?? 0) > 0 ? "#fbbf24" : "#e5e7eb",
-                  fontSize: 16,
+                  flex: "1 1 180px",
+                  padding: "14px 18px",
+                  minHeight: 48,
+                  borderRadius: 10,
+                  border: "1px solid #374151",
+                  background: "rgba(15,23,42,0.8)",
+                  color: "#e5e7eb",
+                  fontSize: 14,
                   fontWeight: 600,
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                  position: "relative",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    (stats?.gapCount ?? 0) > 0 ? "rgba(234,179,8,0.4)" : "#1f2937";
+                  gap: 8,
                 }}
               >
-                <span style={{ fontSize: 22 }}>⚠️</span>
-                <span>{t("dashboard.knowledge_gaps")}</span>
-                {(stats?.gapCount ?? 0) > 0 && (
-                  <span style={{
-                    marginLeft: "auto",
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    background: "rgba(234,179,8,0.25)",
-                    border: "1px solid rgba(234,179,8,0.4)",
-                    color: "#fbbf24",
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}>
-                    {stats?.gapCount}
-                  </span>
-                )}
+                <span>📈</span> 分析を見る
               </button>
-
-              <button
-                onClick={() => navigate("/admin/avatar")}
-                style={{
-                  flex: "1 1 200px",
-                  padding: "18px 20px",
-                  minHeight: 56,
-                  borderRadius: 12,
-                  border: "1px solid rgba(99,102,241,0.3)",
-                  background: "rgba(99,102,241,0.06)",
-                  color: "#a5b4fc",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  transition: "border-color 0.15s",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,102,241,0.6)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,102,241,0.3)"; }}
-              >
-                <span style={{ fontSize: 22 }}>🎭</span>
-                {t("dashboard.avatar_settings")}
-              </button>
-
-              <SuperAdminOnly>
-                <button
-                  onClick={() => navigate("/admin/feedback")}
-                  style={{
-                    flex: "1 1 200px",
-                    padding: "18px 20px",
-                    minHeight: 56,
-                    borderRadius: 12,
-                    border: (stats?.feedbackUnread ?? 0) > 0
-                      ? "1px solid rgba(59,130,246,0.4)"
-                      : "1px solid #1f2937",
-                    background: (stats?.feedbackUnread ?? 0) > 0
-                      ? "rgba(59,130,246,0.06)"
-                      : "rgba(15,23,42,0.8)",
-                    color: (stats?.feedbackUnread ?? 0) > 0 ? "#60a5fa" : "#e5e7eb",
-                    fontSize: 16,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    transition: "border-color 0.15s",
-                    position: "relative",
-                  }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4b5563"; }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor =
-                      (stats?.feedbackUnread ?? 0) > 0 ? "rgba(59,130,246,0.4)" : "#1f2937";
-                  }}
-                >
-                  <span style={{ fontSize: 22 }}>📬</span>
-                  <span>{t("dashboard.feedback")}</span>
-                  {(stats?.feedbackUnread ?? 0) > 0 && (
-                    <span style={{
-                      marginLeft: "auto",
-                      padding: "2px 8px",
-                      borderRadius: 999,
-                      background: "rgba(59,130,246,0.25)",
-                      border: "1px solid rgba(59,130,246,0.4)",
-                      color: "#60a5fa",
-                      fontSize: 12,
-                      fontWeight: 700,
-                    }}>
-                      {stats?.feedbackUnread}
-                    </span>
-                  )}
-                </button>
-              </SuperAdminOnly>
             </div>
           </section>
-
         </>
       )}
     </div>

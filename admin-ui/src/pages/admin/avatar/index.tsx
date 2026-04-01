@@ -252,8 +252,8 @@ export default function AvatarListPage() {
         </button>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-              {lang === "ja" ? "アバター設定" : "Avatar Configs"}
+            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
+              🎭 {lang === "ja" ? "アバター設定" : "Avatar Configs"}
             </h1>
             {!loading && (
               <p style={{ fontSize: 13, color: "#6b7280", margin: "4px 0 0" }}>

@@ -1,5 +1,6 @@
 import React from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { AdminNavBar } from "./components/AdminNavBar";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
 import { AuthProvider, useAuth } from "./auth/useAuth";
@@ -73,8 +74,12 @@ function AppInner() {
   const { isClientAdmin } = useAuth();
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
+  const isAdmin = location.pathname.startsWith("/admin") || location.pathname === "/";
   return (
     <>
+      {isAdmin && <AdminNavBar />}
+      {/* ナビバー分の余白 (admin pages) */}
+      {isAdmin && <div style={{ height: 52 }} />}
       <Routes>
 
         {/* ログイン画面 */}

@@ -441,16 +441,16 @@ export default function AnalyticsDashboardPage() {
           >
             ← 管理画面へ戻る
           </button>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            会話分析
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            📈 会話分析ダッシュボード
             {isSuperAdmin && (
               <span style={{ fontSize: 16, fontWeight: 400, color: "#9ca3af", marginLeft: 10 }}>
                 — {selectedTenantName}
               </span>
             )}
           </h1>
-          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            会話品質・トレンド・評価の分析ダッシュボード
+          <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+            KPI・トレンド・センチメントを可視化します
           </p>
         </div>
 

@@ -594,11 +594,11 @@ export default function KnowledgeGapsPage() {
           >
             ← ダッシュボードに戻る
           </button>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            📋 ナレッジの穴
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
+            🔍 未回答質問
           </h1>
-          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-            AIが答えられなかった質問を管理し、ナレッジベースを強化します
+          <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+            AIが答えられなかった質問を管理し、ナレッジを強化します
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

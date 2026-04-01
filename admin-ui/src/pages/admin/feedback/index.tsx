@@ -1,12 +1,16 @@
 // admin-ui/src/pages/admin/feedback/index.tsx
 // Phase43: AdminFeedback management — list, filter, detail modal, PATCH/DELETE
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { useAuth } from "../../../auth/useAuth";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { Pagination } from "../../../components/common/Pagination";
+import { PeriodFilter } from "../../../components/common/PeriodFilter";
+import type { PeriodValue } from "../../../components/common/PeriodFilter";
+import { SearchBox } from "../../../components/common/SearchBox";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -461,12 +465,16 @@ export default function FeedbackPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>("");
   const [sortBy, setSortBy] = useState<"created_at" | "priority">("created_at");
   const [selected, setSelected] = useState<AdminFeedback | null>(null);
+  const [searchText, setSearchText] = useState("");
+  const [period, setPeriod] = useState<PeriodValue>("all");
+  const [displayOffset, setDisplayOffset] = useState(0);
+  const DISPLAY_LIMIT = 20;
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      let url = `${API_BASE}/v1/admin/feedback?limit=50&offset=0`;
+      let url = `${API_BASE}/v1/admin/feedback?limit=200&offset=0`;
       if (statusFilter) url += `&status=${statusFilter}`;
       if (categoryFilter) url += `&category=${categoryFilter}`;
       if (sortBy === "priority") url += `&sort_by=priority`;
@@ -494,6 +502,30 @@ export default function FeedbackPage() {
 
   useEffect(() => { void fetchItems(); }, [fetchItems]);
 
+  // Client-side: search + period filter
+  const filteredItems = useMemo(() => {
+    let result = items;
+    if (searchText.trim()) {
+      const q = searchText.trim().toLowerCase();
+      result = result.filter(
+        (it) =>
+          it.message.toLowerCase().includes(q) ||
+          (it.ai_response ?? "").toLowerCase().includes(q) ||
+          (it.admin_notes ?? "").toLowerCase().includes(q),
+      );
+    }
+    if (period !== "all") {
+      const days = parseInt(period, 10);
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      result = result.filter((it) => new Date(it.created_at) >= cutoff);
+    }
+    return result;
+  }, [items, searchText, period]);
+
+  // Reset page when filters change
+  useEffect(() => { setDisplayOffset(0); }, [searchText, period, statusFilter, categoryFilter]);
+
   const handleSaved = (updated: AdminFeedback) => {
     setItems((prev) => prev.map((it) => it.id === updated.id ? updated : it));
     setSelected(updated);
@@ -518,9 +550,12 @@ export default function FeedbackPage() {
           >
             ← {lang === "ja" ? "管理画面に戻る" : "Back to Dashboard"}
           </button>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
-            {lang === "ja" ? "フィードバック管理" : "Feedback Management"}
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
+            📝 {lang === "ja" ? "お客様の声" : "Customer Feedback"}
           </h1>
+          <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+            {lang === "ja" ? "チャット中にお客様が送ったフィードバックを管理します" : "Manage feedback submitted by customers during chat"}
+          </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <LangSwitcher />
@@ -553,7 +588,35 @@ export default function FeedbackPage() {
       )}
 
       {/* Filter bar */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
+        <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+          <SearchBox
+            value={searchText}
+            onChange={setSearchText}
+            placeholder={lang === "ja" ? "フィードバック内容を検索..." : "Search feedback..."}
+          />
+        </div>
+        <PeriodFilter value={period} onChange={setPeriod} />
+        <button
+          onClick={() => void fetchItems()}
+          style={{
+            padding: "6px 14px",
+            minHeight: 36,
+            borderRadius: 8,
+            border: "1px solid #374151",
+            background: "transparent",
+            color: "#9ca3af",
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+        >
+          ↻ {lang === "ja" ? "更新" : "Refresh"}
+        </button>
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280" }}>
+          {!loading && `${filteredItems.length} ${lang === "ja" ? "件" : "items"}`}
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20, alignItems: "center" }}>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
           <option value="">{lang === "ja" ? "全ステータス" : "All Statuses"}</option>
           <option value="new">{lang === "ja" ? "未対応" : "New"}</option>
@@ -575,26 +638,6 @@ export default function FeedbackPage() {
           <option value="created_at">{lang === "ja" ? "新着順" : "Newest First"}</option>
           <option value="priority">{lang === "ja" ? "優先度順" : "By Priority"}</option>
         </select>
-
-        <button
-          onClick={() => void fetchItems()}
-          style={{
-            padding: "8px 16px",
-            minHeight: 44,
-            borderRadius: 8,
-            border: "1px solid #374151",
-            background: "transparent",
-            color: "#9ca3af",
-            fontSize: 14,
-            cursor: "pointer",
-          }}
-        >
-          ↻ {lang === "ja" ? "更新" : "Refresh"}
-        </button>
-
-        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280" }}>
-          {!loading && `${items.length} ${lang === "ja" ? "件" : "items"}`}
-        </span>
       </div>
 
       {/* List */}
@@ -603,7 +646,7 @@ export default function FeedbackPage() {
           <span style={{ marginRight: 8 }}>⏳</span>
           {lang === "ja" ? "読み込み中..." : "Loading..."}
         </div>
-      ) : items.length === 0 ? (
+      ) : filteredItems.length === 0 ? (
         <div style={{
           display: "flex",
           flexDirection: "column",
@@ -619,7 +662,7 @@ export default function FeedbackPage() {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {items.map((item) => {
+          {filteredItems.slice(displayOffset, displayOffset + DISPLAY_LIMIT).map((item) => {
             const catLabel = CATEGORY_LABELS[item.category];
             return (
               <button
@@ -690,6 +733,14 @@ export default function FeedbackPage() {
           })}
         </div>
       )}
+
+      {/* Pagination */}
+      <Pagination
+        total={filteredItems.length}
+        limit={DISPLAY_LIMIT}
+        offset={displayOffset}
+        onPageChange={setDisplayOffset}
+      />
 
       {/* Detail Modal */}
       {selected && (
