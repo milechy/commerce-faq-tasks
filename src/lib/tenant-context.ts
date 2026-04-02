@@ -35,9 +35,6 @@ export function getTenantByApiKeyHash(
   return undefined;
 }
 
-export function listTenants(): TenantConfig[] {
-  return Array.from(tenantStore.values());
-}
 
 // ---------------------------------------------------------------------------
 // Seed from environment (TENANT_CONFIGS_JSON or individual vars)

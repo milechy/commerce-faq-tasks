@@ -64,13 +64,3 @@ export function createNotionSalesTemplateProvider(
   };
 }
 
-/**
- * Register provider during runtime.
- * - Call this from app bootstrap after loading templates from repository.
- */
-export function registerNotionSalesTemplateProvider(
-  templates: NotionTuningTemplate[]
-) {
-  const provider = createNotionSalesTemplateProvider(templates);
-  setSalesTemplateProvider(provider);
-}

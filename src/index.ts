@@ -28,14 +28,6 @@ import {
   getTenantByApiKeyHash,
   seedTenantsFromEnv,
 } from "./lib/tenant-context";
-import {
-  buildClarifyPrompt,
-  type ClarifyIntent,
-} from "./agent/orchestrator/sales/clarifyPromptBuilder";
-import {
-  getSalesTemplate,
-  type SalesPhase,
-} from "./agent/orchestrator/sales/salesRules";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerKnowledgeGapRoutes } from "./api/admin/knowledge/knowledgeGapRoutes";
 import { registerFeedbackRoutes } from "./api/admin/feedback/feedbackRoutes";
@@ -336,66 +328,6 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
   }
 });
 
-// --- sales template debug endpoint ---
-app.post("/sales/debug/template", ...apiStack, (req, res) => {
-  const schema = z.object({
-    phase: z.enum(["clarify", "propose", "recommend", "close"]),
-    intent: z.string().optional(),
-    personaTags: z.array(z.string()).optional(),
-  });
-
-  const parsed = schema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res
-      .status(400)
-      .json({ error: "invalid_request", details: parsed.error.issues });
-  }
-
-  const { phase, intent, personaTags } = parsed.data as {
-    phase: SalesPhase;
-    intent?: string;
-    personaTags?: string[];
-  };
-
-  const tmpl = getSalesTemplate({ phase, intent, personaTags });
-
-  if (!tmpl) {
-    return res.status(404).json({ found: false });
-  }
-
-  return res.json({
-    found: true,
-    template: tmpl,
-  });
-});
-
-// --- clarify prompt debug endpoint (uses Notion + fallback) ---
-app.post("/sales/debug/clarify", ...apiStack, (req, res) => {
-  const schema = z.object({
-    intent: z.enum(["level_diagnosis", "goal_setting"]),
-    personaTags: z.array(z.string()).optional(),
-  });
-
-  const parsed = schema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res
-      .status(400)
-      .json({ error: "invalid_request", details: parsed.error.issues });
-  }
-
-  const { intent, personaTags } = parsed.data as {
-    intent: ClarifyIntent;
-    personaTags?: string[];
-  };
-
-  const prompt = buildClarifyPrompt({ intent, personaTags });
-
-  return res.json({
-    intent,
-    personaTags: personaTags ?? [],
-    prompt,
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Admin: PDF OCR upload (v1)

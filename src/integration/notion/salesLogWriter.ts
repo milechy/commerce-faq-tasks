@@ -88,8 +88,3 @@ export class SalesLogWriter {
 // Global writer reference (set at app startup in src/index.ts)
 export let globalSalesLogWriter: SalesLogWriter | undefined;
 
-export function setGlobalSalesLogWriter(
-  writer: SalesLogWriter | undefined,
-): void {
-  globalSalesLogWriter = writer;
-}

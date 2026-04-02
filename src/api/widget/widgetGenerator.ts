@@ -30,19 +30,6 @@ export function generateWidgetToken(tenantId: string): string {
   );
 }
 
-/** Verify a widget session token, returning tenantId or null */
-export function verifyWidgetToken(token: string): string | null {
-  const secret = process.env.SUPABASE_JWT_SECRET ?? process.env.WIDGET_JWT_SECRET ?? "widget-secret-dev";
-  try {
-    const payload = jwt.verify(token, secret) as { sub?: string; purpose?: string };
-    if (payload.purpose === "widget-session" && payload.sub) {
-      return payload.sub;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 /** Build a randomised variable name prefix for obfuscation */
 function randomPrefix(): string {

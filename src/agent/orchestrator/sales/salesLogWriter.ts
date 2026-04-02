@@ -129,22 +129,6 @@ export class SalesLogWriter {
 
 let globalWriter: SalesLogWriter | undefined;
 
-/**
- * Set global SalesLogWriter used by orchestrator-level helpers.
- * This is typically configured at process startup.
- */
-export function setGlobalSalesLogWriter(
-  writer: SalesLogWriter | undefined
-): void {
-  globalWriter = writer;
-}
-
-/**
- * Get the current global SalesLogWriter, if any.
- */
-export function getGlobalSalesLogWriter(): SalesLogWriter | undefined {
-  return globalWriter;
-}
 
 /**
  * Convenience helper for writing via the global writer.

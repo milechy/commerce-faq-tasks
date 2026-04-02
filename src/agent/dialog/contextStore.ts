@@ -15,19 +15,6 @@ export function getSessionHistory(sessionId: SessionId): DialogMessage[] {
   return sessions.get(sessionId) ?? []
 }
 
-export function overwriteSessionHistory(
-  sessionId: SessionId,
-  history: DialogMessage[],
-): void {
-  if (history.length > MAX_HISTORY_LENGTH) {
-    sessions.set(
-      sessionId,
-      history.slice(history.length - MAX_HISTORY_LENGTH),
-    )
-  } else {
-    sessions.set(sessionId, history)
-  }
-}
 
 export function appendToSessionHistory(
   sessionId: SessionId,

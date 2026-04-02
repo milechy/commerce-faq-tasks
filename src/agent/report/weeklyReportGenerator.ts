@@ -333,43 +333,6 @@ export async function postReportToSlack(
   }
 }
 
-/**
- * 全処理を一括実行するメインエントリーポイント。
- * periodStart/periodEndが省略された場合は直近7日間を使用。
- */
-export async function runWeeklyReport(
-  tenantId: string,
-  pool: InstanceType<typeof Pool>,
-  periodStart?: Date,
-  periodEnd?: Date,
-): Promise<{ reportText: string; slackPosted: boolean }> {
-  const end = periodEnd ?? new Date();
-  const start = periodStart ?? (() => {
-    const d = new Date(end);
-    d.setDate(d.getDate() - 7);
-    return d;
-  })();
-
-  logger.info({ tenantId, periodStart: start, periodEnd: end }, 'weeklyReport.run.start');
-
-  const metrics = await collectWeeklyMetrics(tenantId, pool, start, end);
-  const reportText = await generateReportText(metrics, start, end);
-  const slackPosted = await postReportToSlack(reportText, start, end);
-
-  await saveWeeklyReport({
-    tenantId,
-    reportText,
-    periodStart: start,
-    periodEnd: end,
-    metrics,
-    slackPosted,
-    pool,
-  });
-
-  logger.info({ tenantId, slackPosted }, 'weeklyReport.run.done');
-
-  return { reportText, slackPosted };
-}
 
 // ユーティリティ
 

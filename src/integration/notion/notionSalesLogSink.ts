@@ -19,7 +19,7 @@ export type NotionSalesLogSinkOptions = {
  *
  * 呼び出し側は、初期化時に `notion` クライアントと `databaseId` を渡すだけでよい。
  */
-export function createNotionSalesLogSink(
+function createNotionSalesLogSink(
   options: NotionSalesLogSinkOptions,
 ): SalesLogSink {
   const { notion, databaseId } = options

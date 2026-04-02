@@ -22,10 +22,3 @@ const systemPrompts: Record<Lang, Record<string, string>> = {
   },
 };
 
-/**
- * 指定したキーのシステムプロンプトを返す。
- * キーが存在しない場合はja版にフォールバックする。
- */
-export function getSystemPrompt(key: string, lang: Lang): string {
-  return systemPrompts[lang]?.[key] ?? systemPrompts.ja[key] ?? key;
-}
