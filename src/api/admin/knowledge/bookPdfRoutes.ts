@@ -101,6 +101,16 @@ export function registerBookPdfRoutes(
           return res.status(400).json({ error: "ファイルを選択してください" });
         }
 
+        // multerはContent-Dispositionのfilenameをlatin1でデコードするため、
+        // 日本語ファイル名はlatin1→utf8で再デコードが必要
+        let originalFilename = file.originalname;
+        try {
+          originalFilename = Buffer.from(file.originalname, "latin1").toString("utf8");
+        } catch {
+          // デコード失敗時はそのまま使用
+          originalFilename = file.originalname;
+        }
+
         const title = ((req.body as Record<string, unknown>)?.title as string | undefined)?.trim();
         if (!title) {
           return res.status(400).json({ error: "書籍のタイトルを入力してください" });
@@ -162,13 +172,24 @@ export function registerBookPdfRoutes(
           [
             tenantId,
             title,
-            file.originalname,
+            originalFilename,
             storagePath,
             file.size,
             encryptionIv,
             userId || null,
           ]
         );
+
+        const bookId = result.rows[0].id;
+
+        // バックグラウンドでパイプライン自動実行（レスポンスはブロックしない）
+        runBookPipeline(bookId, { db }).catch((pipelineErr: unknown) => {
+          console.error(
+            "[book-pdf] auto-pipeline error book_id=%d:",
+            bookId,
+            pipelineErr instanceof Error ? pipelineErr.message : String(pipelineErr)
+          );
+        });
 
         // storage_path はレスポンスに含めない（セキュリティ）
         return res.status(201).json(result.rows[0]);

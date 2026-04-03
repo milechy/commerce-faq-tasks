@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
@@ -1435,6 +1435,164 @@ const STATUS_COLOR: Record<string, string> = {
   failed: "#f87171",
 };
 
+// ─── BookUploadsSection: グローバルナレッジページ用書籍一覧 ───────────────────
+
+function BookUploadsSection({ tenantId }: { tenantId: string }) {
+  const [books, setBooks] = useState<BookUpload[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [processing, setProcessing] = useState<number | null>(null);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  const showToast = (msg: string, ok: boolean) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const loadBooks = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetchWithAuth(
+        `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { books?: BookUpload[] };
+      setBooks(data.books ?? []);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => { void loadBooks(); }, [loadBooks]);
+
+  const handleProcess = async (bookId: number) => {
+    setProcessing(bookId);
+    try {
+      const res = await fetchWithAuth(
+        `${API_BASE}/v1/admin/knowledge/book-pdf/${bookId}/process`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        showToast(err.error ?? "処理の開始に失敗しました", false);
+        return;
+      }
+      showToast("処理を開始しました", true);
+      setTimeout(() => { void loadBooks(); }, 2000);
+    } catch {
+      showToast("処理の開始に失敗しました", false);
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const statusBadgeStyle = (status: string): CSSProperties => {
+    const colors: Record<string, { bg: string; color: string }> = {
+      uploaded:   { bg: "rgba(156,163,175,0.15)", color: "#9ca3af" },
+      processing: { bg: "rgba(251,191,36,0.15)",  color: "#fbbf24" },
+      chunked:    { bg: "rgba(167,139,250,0.15)", color: "#a78bfa" },
+      embedded:   { bg: "rgba(74,222,128,0.15)",  color: "#4ade80" },
+      failed:     { bg: "rgba(248,113,113,0.15)", color: "#f87171" },
+    };
+    const c = colors[status] ?? colors["uploaded"]!;
+    return {
+      display: "inline-block",
+      padding: "2px 8px",
+      borderRadius: 999,
+      fontSize: 12,
+      fontWeight: 600,
+      background: c.bg,
+      color: c.color,
+    };
+  };
+
+  return (
+    <div style={{ marginTop: 32 }}>
+      {toast && (
+        <div style={{
+          position: "fixed", top: 20, right: 20, zIndex: 9999,
+          padding: "12px 20px", borderRadius: 10, fontSize: 14, fontWeight: 600,
+          background: toast.ok ? "rgba(5,46,22,0.95)" : "rgba(127,29,29,0.95)",
+          border: `1px solid ${toast.ok ? "rgba(74,222,128,0.4)" : "rgba(248,113,113,0.4)"}`,
+          color: toast.ok ? "#86efac" : "#fca5a5",
+        }}>
+          {toast.msg}
+        </div>
+      )}
+
+      <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+        📚 アップロード済み書籍
+      </h2>
+
+      {loading ? (
+        <div style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>読み込み中...</div>
+      ) : books.length === 0 ? (
+        <div style={{ padding: 24, textAlign: "center", borderRadius: 12, border: "1px dashed #374151", color: "#6b7280", fontSize: 14 }}>
+          書籍PDFがありません
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {books.map((book) => (
+            <div key={book.id} style={{
+              padding: "14px 16px", borderRadius: 12,
+              border: "1px solid #1f2937",
+              background: "rgba(15,23,42,0.6)",
+              display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#f9fafb", marginBottom: 4, wordBreak: "break-word" }}>
+                  {book.title}
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  <span style={statusBadgeStyle(book.status)}>
+                    {STATUS_LABEL[book.status] ?? book.status}
+                  </span>
+                  {book.chunk_count != null && (
+                    <span>{book.chunk_count}チャンク</span>
+                  )}
+                  {book.page_count != null && (
+                    <span>{book.page_count}ページ</span>
+                  )}
+                  <span>{new Date(book.created_at).toLocaleDateString("ja-JP")}</span>
+                </div>
+                {book.status === "failed" && (
+                  <div style={{ fontSize: 12, color: "#f87171", marginTop: 4 }}>
+                    エラーが発生しました
+                  </div>
+                )}
+                {book.status === "embedded" && (
+                  <div style={{ fontSize: 12, color: "#4ade80", marginTop: 4 }}>
+                    ✅ {book.chunk_count ?? 0}チャンク埋め込み完了
+                  </div>
+                )}
+              </div>
+              {(book.status === "uploaded" || book.status === "failed") && (
+                <button
+                  onClick={() => { void handleProcess(book.id); }}
+                  disabled={processing === book.id}
+                  style={{
+                    padding: "8px 14px", minHeight: 44, borderRadius: 8,
+                    border: "none",
+                    background: processing === book.id ? "#1f2937" : book.status === "failed" ? "#7f1d1d" : "#1d4ed8",
+                    color: processing === book.id ? "#6b7280" : "#fff",
+                    fontSize: 13, fontWeight: 600,
+                    cursor: processing === book.id ? "not-allowed" : "pointer",
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
+                  }}
+                >
+                  {processing === book.id ? "処理中..." : book.status === "failed" ? "再処理" : "処理開始"}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const { isSuperAdmin } = useAuth();
   const [books, setBooks] = useState<BookUpload[]>([]);
@@ -1794,7 +1952,12 @@ export default function TenantKnowledgePage() {
       </div>
 
       {/* タブコンテンツ */}
-      {activeTab === "list" && <KnowledgeListTab tenantId={resolvedTenantId} />}
+      {activeTab === "list" && (
+        <>
+          <KnowledgeListTab tenantId={resolvedTenantId} />
+          {isGlobalTenant && <BookUploadsSection tenantId={resolvedTenantId} />}
+        </>
+      )}
       {activeTab === "text" && <TextInputTab tenantId={resolvedTenantId} gapQuestion={gapQuestion} gapId={gapId} />}
       {activeTab === "scrape" && <ScrapeTab tenantId={resolvedTenantId} onCommitSuccess={() => setActiveTab("list")} gapQuestion={gapQuestion} gapId={gapId} />}
       {activeTab === "pdf" && <PdfUploadTab tenantId={resolvedTenantId} />}
