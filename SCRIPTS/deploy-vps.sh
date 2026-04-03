@@ -64,31 +64,13 @@ if [ "${BUNDLE_OK}" = "0" ]; then
 fi
 echo "  ✅ Admin UI bundle verified (Supabase URL present)"
 
-# ── PM2 restart前のバンドルハッシュを記録 ──
-BUNDLE_HASH=$(ssh "${VPS}" "md5sum ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null | awk '{print \$1}' | sort | tr -d '\n' || echo ''")
-echo "  Bundle hash (pre-PM2): ${BUNDLE_HASH}"
+echo "  Reloading Nginx to serve new Admin UI build..."
+ssh "${VPS}" "nginx -s reload && echo '  ✅ Nginx reloaded' || echo '  ⚠️  Nginx reload failed (non-fatal)'"
 
 echo "[5/6] Starting services with PM2..."
-ssh "${VPS}" "cd ${REMOTE_DIR} && pm2 startOrRestart ecosystem.config.cjs --env production"
+# rajiuce-admin は Nginx が直接配信するため除外。slack-listener はスクリプト不在のため除外。
+ssh "${VPS}" "cd ${REMOTE_DIR} && pm2 startOrRestart ecosystem.config.cjs --env production --only rajiuce-api,rajiuce-avatar"
 ssh "${VPS}" "pm2 save"
-
-# ── PM2 restart後もバンドルが同一か検証 ──
-echo "  Verifying bundle integrity post-PM2 restart..."
-BUNDLE_HASH_AFTER=$(ssh "${VPS}" "md5sum ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null | awk '{print \$1}' | sort | tr -d '\n' || echo ''")
-if [ "${BUNDLE_HASH}" != "${BUNDLE_HASH_AFTER}" ]; then
-  echo "  ⚠️  Bundle changed after PM2 restart! Rebuilding..."
-  ssh "${VPS}" "cd ${REMOTE_DIR}/admin-ui && rm -rf dist node_modules/.vite node_modules/.cache .vite && bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
-  BUNDLE_OK3=$(ssh "${VPS}" "grep -c 'rpqrwi' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
-  if [ "${BUNDLE_OK3}" = "0" ]; then
-    echo "  ❌ FATAL: Admin UI rebuild after PM2 restart failed. Aborting."
-    exit 1
-  fi
-  ssh "${VPS}" "pm2 restart rajiuce-admin"
-  ssh "${VPS}" "pm2 save"
-  echo "  ✅ Bundle rebuilt and service restarted"
-else
-  echo "  ✅ Bundle integrity confirmed (hash unchanged)"
-fi
 
 echo "[6/6] Reloading Nginx..."
 ssh "${VPS}" "nginx -t && systemctl reload nginx && echo ' Nginx reloaded OK' || echo ' Nginx reload FAILED'"
