@@ -7,7 +7,7 @@ import crypto from "crypto";
 // @ts-ignore
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
-import { runBookPipeline } from "../../../lib/book-pipeline/pipeline";
+import { pipelineQueue } from "../../../lib/book-pipeline/pipelineQueue";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -182,14 +182,8 @@ export function registerBookPdfRoutes(
 
         const bookId = result.rows[0].id;
 
-        // バックグラウンドでパイプライン自動実行（レスポンスはブロックしない）
-        runBookPipeline(bookId, { db }).catch((pipelineErr: unknown) => {
-          console.error(
-            "[book-pdf] auto-pipeline error book_id=%d:",
-            bookId,
-            pipelineErr instanceof Error ? pipelineErr.message : String(pipelineErr)
-          );
-        });
+        // バックグラウンドでパイプライン自動実行（順次キュー経由）
+        void pipelineQueue.enqueue(bookId, { db });
 
         // storage_path はレスポンスに含めない（セキュリティ）
         return res.status(201).json(result.rows[0]);
@@ -379,6 +373,277 @@ export function registerBookPdfRoutes(
   );
 
   // -----------------------------------------------------------------------
+  // GET /v1/admin/knowledge/book-pdf/:id/chunks
+  // 書籍IDに紐づくチャンク一覧
+  // -----------------------------------------------------------------------
+  app.get(
+    "/v1/admin/knowledge/book-pdf/:id/chunks",
+    knowledgeAuth,
+    requireKnowledgeRole,
+    async (req: Request, res: Response) => {
+      const user = (req as any).user as
+        | { role?: string; tenantId?: string | null }
+        | undefined;
+      const isSuperAdmin = user?.role === "super_admin";
+
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "無効なIDです" });
+      }
+
+      try {
+        // 書籍の存在とテナント確認
+        const bookResult = await db.query(
+          "SELECT id, tenant_id, title FROM book_uploads WHERE id = $1",
+          [id]
+        );
+        if (bookResult.rows.length === 0) {
+          return res.status(404).json({ error: "書籍が見つかりません" });
+        }
+
+        const book = bookResult.rows[0] as {
+          id: number;
+          tenant_id: string;
+          title: string;
+        };
+        if (!isSuperAdmin && book.tenant_id !== user?.tenantId) {
+          return res
+            .status(403)
+            .json({ error: "他のテナントのデータにはアクセスできません" });
+        }
+
+        // チャンク取得（embeddingベクトルは除外）
+        const chunksResult = await db.query(
+          `SELECT id, text, metadata, created_at
+           FROM faq_embeddings
+           WHERE metadata->>'source' = 'book' AND metadata->>'book_id' = $1::text
+           ORDER BY (metadata->>'page_number')::int ASC NULLS LAST, id ASC`,
+          [id]
+        );
+
+        const STRUCTURED_FIELDS = [
+          "situation",
+          "resistance",
+          "principle",
+          "contraindication",
+          "example",
+          "failure_example",
+        ] as const;
+
+        const chunks = chunksResult.rows.map(
+          (row: {
+            id: number;
+            text: string;
+            metadata: Record<string, unknown>;
+            created_at: string;
+          }) => {
+            const meta = row.metadata ?? {};
+            const isStructured = STRUCTURED_FIELDS.some(
+              (f) => meta[f] != null && meta[f] !== ""
+            );
+            return {
+              id: row.id,
+              text: String(row.text ?? "").slice(0, 200),
+              metadata: {
+                source: meta.source,
+                book_id: meta.book_id,
+                page_number: meta.page_number ?? null,
+                situation: meta.situation ?? null,
+                resistance: meta.resistance ?? null,
+                principle: meta.principle ?? null,
+                contraindication: meta.contraindication ?? null,
+                example: meta.example ?? null,
+                failure_example: meta.failure_example ?? null,
+              },
+              is_structured: isStructured,
+              created_at: row.created_at,
+            };
+          }
+        );
+
+        return res.json({
+          bookId: id,
+          title: book.title,
+          chunks,
+          total: chunks.length,
+        });
+      } catch (err: unknown) {
+        console.error(
+          "[book-pdf] GET chunks error:",
+          err instanceof Error ? err.message : String(err)
+        );
+        return res.status(500).json({ error: "チャンク一覧の取得に失敗しました" });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId
+  // チャンクのメタデータ（構造化6フィールド）を編集
+  // -----------------------------------------------------------------------
+  app.put(
+    "/v1/admin/knowledge/book-pdf/chunks/:chunkId",
+    knowledgeAuth,
+    requireKnowledgeRole,
+    async (req: Request, res: Response) => {
+      const user = (req as any).user as
+        | { role?: string; tenantId?: string | null }
+        | undefined;
+      const isSuperAdmin = user?.role === "super_admin";
+
+      const chunkId = parseInt(req.params.chunkId, 10);
+      if (isNaN(chunkId)) {
+        return res.status(400).json({ error: "無効なチャンクIDです" });
+      }
+
+      const ALLOWED_FIELDS = [
+        "situation",
+        "resistance",
+        "principle",
+        "contraindication",
+        "example",
+        "failure_example",
+      ] as const;
+
+      type AllowedField = (typeof ALLOWED_FIELDS)[number];
+
+      try {
+        // チャンク取得（book_idからbook_uploadsのtenant_idを確認）
+        const chunkResult = await db.query(
+          `SELECT fe.id, fe.metadata, bu.tenant_id
+           FROM faq_embeddings fe
+           JOIN book_uploads bu ON bu.id = (fe.metadata->>'book_id')::int
+           WHERE fe.id = $1 AND fe.metadata->>'source' = 'book'`,
+          [chunkId]
+        );
+        if (chunkResult.rows.length === 0) {
+          return res.status(404).json({ error: "チャンクが見つかりません" });
+        }
+
+        const chunk = chunkResult.rows[0] as {
+          id: number;
+          metadata: Record<string, unknown>;
+          tenant_id: string;
+        };
+        if (!isSuperAdmin && chunk.tenant_id !== user?.tenantId) {
+          return res
+            .status(403)
+            .json({ error: "他のテナントのデータにはアクセスできません" });
+        }
+
+        // ホワイトリスト方式でフィールド抽出・バリデーション
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const patch: Partial<Record<AllowedField, string | null>> = {};
+        for (const field of ALLOWED_FIELDS) {
+          if (Object.prototype.hasOwnProperty.call(body, field)) {
+            const val = body[field];
+            if (val !== null && typeof val !== "string") {
+              return res
+                .status(400)
+                .json({ error: `${field} は文字列またはnullで指定してください` });
+            }
+            patch[field] = val as string | null;
+          }
+        }
+
+        if (Object.keys(patch).length === 0) {
+          return res.status(400).json({ error: "更新するフィールドがありません" });
+        }
+
+        const updateResult = await db.query(
+          `UPDATE faq_embeddings
+           SET metadata = metadata || $1::jsonb,
+               updated_at = NOW()
+           WHERE id = $2
+           RETURNING id, metadata, updated_at`,
+          [JSON.stringify(patch), chunkId]
+        );
+
+        return res.json(updateResult.rows[0]);
+      } catch (err: unknown) {
+        console.error(
+          "[book-pdf] PUT chunk error:",
+          err instanceof Error ? err.message : String(err)
+        );
+        return res.status(500).json({ error: "チャンクの更新に失敗しました" });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // DELETE /v1/admin/knowledge/book-pdf/chunks/:chunkId
+  // チャンクを削除し、book_uploads.chunk_count をデクリメント
+  // -----------------------------------------------------------------------
+  app.delete(
+    "/v1/admin/knowledge/book-pdf/chunks/:chunkId",
+    knowledgeAuth,
+    requireKnowledgeRole,
+    async (req: Request, res: Response) => {
+      const user = (req as any).user as
+        | { role?: string; tenantId?: string | null }
+        | undefined;
+      const isSuperAdmin = user?.role === "super_admin";
+
+      const chunkId = parseInt(req.params.chunkId, 10);
+      if (isNaN(chunkId)) {
+        return res.status(400).json({ error: "無効なチャンクIDです" });
+      }
+
+      try {
+        // チャンク取得（book_idからbook_uploadsのtenant_idを確認）
+        const chunkResult = await db.query(
+          `SELECT fe.id, (fe.metadata->>'book_id')::int AS book_id, bu.tenant_id
+           FROM faq_embeddings fe
+           JOIN book_uploads bu ON bu.id = (fe.metadata->>'book_id')::int
+           WHERE fe.id = $1 AND fe.metadata->>'source' = 'book'`,
+          [chunkId]
+        );
+        if (chunkResult.rows.length === 0) {
+          return res.status(404).json({ error: "チャンクが見つかりません" });
+        }
+
+        const chunk = chunkResult.rows[0] as {
+          id: number;
+          book_id: number;
+          tenant_id: string;
+        };
+        if (!isSuperAdmin && chunk.tenant_id !== user?.tenantId) {
+          return res
+            .status(403)
+            .json({ error: "他のテナントのデータにはアクセスできません" });
+        }
+
+        // チャンク削除
+        const deleteResult = await db.query(
+          `DELETE FROM faq_embeddings
+           WHERE id = $1 AND metadata->>'source' = 'book'
+           RETURNING id`,
+          [chunkId]
+        );
+        if (deleteResult.rows.length === 0) {
+          return res.status(404).json({ error: "チャンクが見つかりません" });
+        }
+
+        // chunk_count デクリメント（0未満にはしない）
+        await db.query(
+          `UPDATE book_uploads
+           SET chunk_count = GREATEST(chunk_count - 1, 0)
+           WHERE id = $1`,
+          [chunk.book_id]
+        );
+
+        return res.json({ ok: true, deleted: chunkId });
+      } catch (err: unknown) {
+        console.error(
+          "[book-pdf] DELETE chunk error:",
+          err instanceof Error ? err.message : String(err)
+        );
+        return res.status(500).json({ error: "チャンクの削除に失敗しました" });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
   // POST /v1/admin/knowledge/book-pdf/:id/process
   // チャンク構造化パイプライン トリガー
   // 非同期処理: 202 Accepted を即返し、バックグラウンドで pipeline 実行
@@ -423,14 +688,8 @@ export function registerBookPdfRoutes(
         // 202 を即返してバックグラウンド実行
         res.status(202).json({ ok: true, bookId: id, message: "処理を開始しました" });
 
-        // バックグラウンド実行（エラーはログのみ）
-        runBookPipeline(id, { db }).catch((err: unknown) => {
-          console.error(
-            "[book-pdf] pipeline error book_id=%d:",
-            id,
-            err instanceof Error ? err.message : String(err)
-          );
-        });
+        // パイプライン実行（順次キュー経由）
+        void pipelineQueue.enqueue(id, { db });
 
         return;
       } catch (err: unknown) {

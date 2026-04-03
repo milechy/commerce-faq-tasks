@@ -6,6 +6,7 @@ import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../component
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
+import BookChunksPanel from "./BookChunksPanel";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -1442,6 +1443,7 @@ function BookUploadsSection({ tenantId }: { tenantId: string }) {
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState<number | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [selectedBook, setSelectedBook] = useState<BookUpload | null>(null);
 
   const showToast = (msg: string, ok: boolean) => {
     setToast({ msg, ok });
@@ -1521,6 +1523,17 @@ function BookUploadsSection({ tenantId }: { tenantId: string }) {
         </div>
       )}
 
+      {selectedBook && (
+        <BookChunksPanel
+          bookId={selectedBook.id}
+          bookTitle={selectedBook.title}
+          bookStatus={selectedBook.status}
+          tenantId={tenantId}
+          onClose={() => setSelectedBook(null)}
+          onChunkDeleted={() => { void loadBooks(); }}
+        />
+      )}
+
       <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
         📚 アップロード済み書籍
       </h2>
@@ -1549,7 +1562,7 @@ function BookUploadsSection({ tenantId }: { tenantId: string }) {
                     {STATUS_LABEL[book.status] ?? book.status}
                   </span>
                   {book.chunk_count != null && (
-                    <span>{book.chunk_count}チャンク</span>
+                    <span>{book.chunk_count}件の分割テキスト</span>
                   )}
                   {book.page_count != null && (
                     <span>{book.page_count}ページ</span>
@@ -1563,28 +1576,45 @@ function BookUploadsSection({ tenantId }: { tenantId: string }) {
                 )}
                 {book.status === "embedded" && (
                   <div style={{ fontSize: 12, color: "#4ade80", marginTop: 4 }}>
-                    ✅ {book.chunk_count ?? 0}チャンク埋め込み完了
+                    ✅ {book.chunk_count ?? 0}件の分割テキスト埋め込み完了
                   </div>
                 )}
               </div>
-              {(book.status === "uploaded" || book.status === "failed") && (
-                <button
-                  onClick={() => { void handleProcess(book.id); }}
-                  disabled={processing === book.id}
-                  style={{
-                    padding: "8px 14px", minHeight: 44, borderRadius: 8,
-                    border: "none",
-                    background: processing === book.id ? "#1f2937" : book.status === "failed" ? "#7f1d1d" : "#1d4ed8",
-                    color: processing === book.id ? "#6b7280" : "#fff",
-                    fontSize: 13, fontWeight: 600,
-                    cursor: processing === book.id ? "not-allowed" : "pointer",
-                    whiteSpace: "nowrap",
-                    flexShrink: 0,
-                  }}
-                >
-                  {processing === book.id ? "処理中..." : book.status === "failed" ? "再処理" : "処理開始"}
-                </button>
-              )}
+              <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
+                {(book.status === "chunked" || book.status === "embedded") && (
+                  <button
+                    onClick={() => setSelectedBook(book)}
+                    style={{
+                      padding: "8px 14px", minHeight: 44, borderRadius: 8,
+                      border: "1px solid rgba(96,165,250,0.4)",
+                      background: "rgba(96,165,250,0.08)",
+                      color: "#60a5fa",
+                      fontSize: 13, fontWeight: 600,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    詳細
+                  </button>
+                )}
+                {(book.status === "uploaded" || book.status === "failed") && (
+                  <button
+                    onClick={() => { void handleProcess(book.id); }}
+                    disabled={processing === book.id}
+                    style={{
+                      padding: "8px 14px", minHeight: 44, borderRadius: 8,
+                      border: "none",
+                      background: processing === book.id ? "#1f2937" : book.status === "failed" ? "#7f1d1d" : "#1d4ed8",
+                      color: processing === book.id ? "#6b7280" : "#fff",
+                      fontSize: 13, fontWeight: 600,
+                      cursor: processing === book.id ? "not-allowed" : "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {processing === book.id ? "処理中..." : book.status === "failed" ? "再処理" : "処理開始"}
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -1593,22 +1623,57 @@ function BookUploadsSection({ tenantId }: { tenantId: string }) {
   );
 }
 
+// B-2: 複数PDFアップロード用の型
+type FileUploadStatus = "pending" | "uploading" | "processing" | "embedded" | "error";
+
+interface QueuedFile {
+  id: string; // ローカル管理用ユニークID
+  file: File;
+  title: string;
+  status: FileUploadStatus;
+  uploadedBookId?: number;
+  errorMsg?: string;
+}
+
+const FILE_STATUS_ICON: Record<FileUploadStatus, string> = {
+  pending: "⏳",
+  uploading: "📤",
+  processing: "⚙️",
+  embedded: "✅",
+  error: "❌",
+};
+
+const FILE_STATUS_LABEL: Record<FileUploadStatus, string> = {
+  pending: "待機中",
+  uploading: "アップロード中",
+  processing: "処理中",
+  embedded: "完了",
+  error: "エラー",
+};
+
 function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const { isSuperAdmin } = useAuth();
   const [books, setBooks] = useState<BookUpload[]>([]);
   const [loadingBooks, setLoadingBooks] = useState(false);
-  const [title, setTitle] = useState("");
-  const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [queue, setQueue] = useState<QueuedFile[]>([]);
+  const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [structurizing, setStructurizing] = useState(false);
   const [structurizeResult, setStructurizeResult] = useState<string | null>(null);
+  const [selectedBook, setSelectedBook] = useState<BookUpload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const listUrl = isSuperAdmin
     ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
     : `${API_BASE}/v1/admin/knowledge/book-pdf`;
+
+  const uploadUrl = isSuperAdmin
+    ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
+    : `${API_BASE}/v1/admin/knowledge/book-pdf`;
+
+  const structurizeUrl = `${API_BASE}/v1/admin/knowledge/structurize-trigger?tenant=${encodeURIComponent(tenantId)}`;
 
   const loadBooks = useCallback(async () => {
     setLoadingBooks(true);
@@ -1626,55 +1691,165 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
 
   useEffect(() => { void loadBooks(); }, [loadBooks]);
 
+  // キュー内のuploadedBookIdと照合してstatusを更新するポーリング
+  const startPolling = useCallback(() => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(() => {
+      void (async () => {
+        try {
+          const res = await fetchWithAuth(listUrl);
+          if (!res.ok) return;
+          const data = (await res.json()) as { books?: BookUpload[] };
+          const serverBooks = data.books ?? [];
+          setBooks(serverBooks);
+          setQueue((prev) => {
+            const updated = prev.map((q) => {
+              if (!q.uploadedBookId) return q;
+              const serverBook = serverBooks.find((b) => b.id === q.uploadedBookId);
+              if (!serverBook) return q;
+              if (serverBook.status === "embedded") return { ...q, status: "embedded" as FileUploadStatus };
+              if (serverBook.status === "failed") return { ...q, status: "error" as FileUploadStatus, errorMsg: "処理に失敗しました" };
+              return { ...q, status: "processing" as FileUploadStatus };
+            });
+            // 全件が embedded or error になったらポーリング停止
+            const allDone = updated
+              .filter((q) => q.uploadedBookId)
+              .every((q) => q.status === "embedded" || q.status === "error");
+            if (allDone && pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            return updated;
+          });
+        } catch {
+          // ignore
+        }
+      })();
+    }, 5000);
+  }, [listUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
+
   const showToast = (msg: string, ok: boolean) => {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 3500);
   };
 
+  const validateAndAddFiles = (files: FileList | File[]) => {
+    const arr = Array.from(files);
+    const newEntries: QueuedFile[] = [];
+    for (const f of arr) {
+      if (f.type !== "application/pdf") {
+        showToast(`${f.name}: PDFファイルのみアップロードできます`, false);
+        continue;
+      }
+      if (f.size > MAX_BOOK_PDF_SIZE) {
+        showToast(`${f.name}: ファイルサイズが10MBを超えています`, false);
+        continue;
+      }
+      // デフォルトタイトル: ファイル名から拡張子除去
+      const defaultTitle = f.name.replace(/\.pdf$/i, "");
+      newEntries.push({
+        id: `${Date.now()}-${Math.random()}`,
+        file: f,
+        title: defaultTitle,
+        status: "pending",
+      });
+    }
+    if (newEntries.length > 0) {
+      setQueue((prev) => [...prev, ...newEntries]);
+    }
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const dropped = e.dataTransfer.files[0];
-    if (!dropped) return;
-    if (dropped.type !== "application/pdf") { showToast("PDFファイルのみアップロードできます", false); return; }
-    if (dropped.size > MAX_BOOK_PDF_SIZE) { showToast("ファイルサイズが10MBを超えています", false); return; }
-    setFile(dropped);
+    validateAndAddFiles(e.dataTransfer.files);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0];
-    if (!selected) return;
-    if (selected.type !== "application/pdf") { showToast("PDFファイルのみアップロードできます", false); return; }
-    if (selected.size > MAX_BOOK_PDF_SIZE) { showToast("ファイルサイズが10MBを超えています", false); return; }
-    setFile(selected);
+    if (e.target.files && e.target.files.length > 0) {
+      validateAndAddFiles(e.target.files);
+      e.target.value = "";
+    }
   };
 
-  const handleUpload = async () => {
-    if (!file) { showToast("ファイルを選択してください", false); return; }
-    if (!title.trim()) { showToast("タイトルを入力してください", false); return; }
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("title", title.trim());
-      const uploadUrl = isSuperAdmin
-        ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
-        : `${API_BASE}/v1/admin/knowledge/book-pdf`;
-      const res = await fetchWithAuth(uploadUrl, { method: "POST", body: form });
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string };
-        showToast(err.error ?? "アップロードに失敗しました", false);
-        return;
+  const removeFromQueue = (id: string) => {
+    setQueue((prev) => prev.filter((q) => q.id !== id));
+  };
+
+  const updateTitle = (id: string, title: string) => {
+    setQueue((prev) => prev.map((q) => q.id === id ? { ...q, title } : q));
+  };
+
+  // 順次アップロード実行
+  const handleUploadAll = async () => {
+    const pendingItems = queue.filter((q) => q.status === "pending");
+    if (pendingItems.length === 0) return;
+    if (pendingItems.some((q) => !q.title.trim())) {
+      showToast("全ファイルにタイトルを入力してください", false);
+      return;
+    }
+
+    setRunning(true);
+    let anyUploaded = false;
+
+    for (const item of pendingItems) {
+      // statusを「uploading」に更新
+      setQueue((prev) =>
+        prev.map((q) => q.id === item.id ? { ...q, status: "uploading" } : q)
+      );
+
+      try {
+        const form = new FormData();
+        form.append("file", item.file);
+        form.append("title", item.title.trim());
+        const res = await fetchWithAuth(uploadUrl, { method: "POST", body: form });
+
+        if (!res.ok) {
+          const err = (await res.json()) as { error?: string };
+          setQueue((prev) =>
+            prev.map((q) =>
+              q.id === item.id
+                ? { ...q, status: "error", errorMsg: err.error ?? "アップロードに失敗しました" }
+                : q
+            )
+          );
+          continue;
+        }
+
+        const created = (await res.json()) as { id?: number };
+        setQueue((prev) =>
+          prev.map((q) =>
+            q.id === item.id
+              ? { ...q, status: "processing", uploadedBookId: created.id }
+              : q
+          )
+        );
+        anyUploaded = true;
+      } catch {
+        setQueue((prev) =>
+          prev.map((q) =>
+            q.id === item.id
+              ? { ...q, status: "error", errorMsg: "アップロードに失敗しました" }
+              : q
+          )
+        );
       }
-      showToast("✓ アップロードしました。処理中です...", true);
-      setTitle("");
-      setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+
+    setRunning(false);
+
+    if (anyUploaded) {
       void loadBooks();
-    } catch {
-      showToast("アップロードに失敗しました", false);
-    } finally {
-      setUploading(false);
+      startPolling();
     }
   };
 
@@ -1688,7 +1863,6 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
       setStructurizeResult(
         data.message ?? (cnt > 0 ? `${cnt}件の構造化を開始しました` : "構造化対象がありません")
       );
-      // fire-and-forgetなので少し遅延してから書籍一覧を再取得
       setTimeout(() => { void loadBooks(); }, 3000);
     } catch {
       setStructurizeResult("構造化に失敗しました");
@@ -1698,8 +1872,8 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
   };
 
   const embeddedCount = books.filter((b) => b.status === "embedded").length;
-  // structurize-trigger はsuper_adminのみ、常にtenantを渡す
-  const structurizeUrl = `${API_BASE}/v1/admin/knowledge/structurize-trigger?tenant=${encodeURIComponent(tenantId)}`;
+  const pendingCount = queue.filter((q) => q.status === "pending").length;
+  const hasQueue = queue.length > 0;
 
   return (
     <div>
@@ -1716,33 +1890,28 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
         </div>
       )}
 
-      {/* アップロードフォーム */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>書籍タイトル</label>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="例: 2024年度製品カタログ"
-            style={{
-              width: "100%", padding: "10px 14px", borderRadius: 8,
-              border: "1px solid #374151", background: "rgba(255,255,255,0.05)",
-              color: "#f9fafb", fontSize: 14, boxSizing: "border-box",
-            }}
-          />
-        </div>
+      {selectedBook && (
+        <BookChunksPanel
+          bookId={selectedBook.id}
+          bookTitle={selectedBook.title}
+          bookStatus={selectedBook.status}
+          tenantId={tenantId}
+          onClose={() => setSelectedBook(null)}
+          onChunkDeleted={() => { void loadBooks(); }}
+        />
+      )}
 
-        {/* ドラッグ＆ドロップゾーン */}
+      {/* ドラッグ＆ドロップゾーン（複数ファイル対応） */}
+      <div style={{ marginBottom: 20 }}>
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
           style={{
-            border: `2px dashed ${dragOver ? "#60a5fa" : file ? "rgba(74,222,128,0.5)" : "#374151"}`,
+            border: `2px dashed ${dragOver ? "#60a5fa" : "#374151"}`,
             borderRadius: 12, padding: "28px 20px", textAlign: "center",
             background: dragOver ? "rgba(96,165,250,0.06)" : "rgba(255,255,255,0.02)",
-            cursor: "pointer", transition: "all 0.15s", marginBottom: 12,
+            cursor: "pointer", transition: "all 0.15s",
           }}
           onClick={() => fileInputRef.current?.click()}
         >
@@ -1750,39 +1919,144 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
             ref={fileInputRef}
             type="file"
             accept="application/pdf"
+            multiple
             style={{ display: "none" }}
             onChange={handleFileChange}
           />
-          {file ? (
-            <div>
-              <div style={{ fontSize: 22, marginBottom: 6 }}>📄</div>
-              <div style={{ fontSize: 14, color: "#4ade80", fontWeight: 600 }}>{file.name}</div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                {(file.size / 1024 / 1024).toFixed(2)} MB
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+          <div style={{ fontSize: 14, color: "#9ca3af" }}>
+            PDFをここにドラッグ＆ドロップ（複数可）
+          </div>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+            またはクリックして選択（各ファイル上限10MB）
+          </div>
+        </div>
+      </div>
+
+      {/* キュー表示 + タイトル入力 */}
+      {hasQueue && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, color: "#9ca3af", marginBottom: 8, fontWeight: 600 }}>
+            アップロード予定のファイル（{queue.length}件）
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {queue.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: `1px solid ${
+                    item.status === "error" ? "rgba(248,113,113,0.3)"
+                    : item.status === "embedded" ? "rgba(74,222,128,0.3)"
+                    : "#1f2937"
+                  }`,
+                  background: item.status === "error"
+                    ? "rgba(127,29,29,0.15)"
+                    : item.status === "embedded"
+                    ? "rgba(5,46,22,0.15)"
+                    : "rgba(15,23,42,0.5)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: item.status === "pending" ? 8 : 4 }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>
+                    {FILE_STATUS_ICON[item.status]}
+                  </span>
+                  <span style={{ fontSize: 13, color: "#d1d5db", flex: 1, minWidth: 0, wordBreak: "break-word" }}>
+                    {item.file.name}
+                  </span>
+                  <span style={{
+                    fontSize: 11, fontWeight: 600,
+                    color: item.status === "error" ? "#fca5a5"
+                      : item.status === "embedded" ? "#4ade80"
+                      : item.status === "processing" ? "#fbbf24"
+                      : item.status === "uploading" ? "#60a5fa"
+                      : "#9ca3af",
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
+                  }}>
+                    {FILE_STATUS_LABEL[item.status]}
+                  </span>
+                  {item.status === "pending" && !running && (
+                    <button
+                      onClick={() => removeFromQueue(item.id)}
+                      style={{
+                        padding: "4px 8px", minHeight: 28,
+                        borderRadius: 6, border: "1px solid #374151",
+                        background: "transparent", color: "#6b7280",
+                        fontSize: 12, cursor: "pointer", flexShrink: 0,
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* タイトル入力（pendingのみ） */}
+                {item.status === "pending" && (
+                  <input
+                    type="text"
+                    value={item.title}
+                    onChange={(e) => updateTitle(item.id, e.target.value)}
+                    placeholder="書籍タイトルを入力"
+                    disabled={running}
+                    style={{
+                      width: "100%", padding: "8px 12px",
+                      borderRadius: 7, border: "1px solid #374151",
+                      background: "rgba(255,255,255,0.05)",
+                      color: "#f9fafb", fontSize: 13,
+                      boxSizing: "border-box",
+                    }}
+                  />
+                )}
+
+                {item.status === "error" && item.errorMsg && (
+                  <div style={{ fontSize: 12, color: "#fca5a5", marginTop: 4 }}>
+                    {item.errorMsg}
+                  </div>
+                )}
               </div>
-            </div>
-          ) : (
-            <div>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
-              <div style={{ fontSize: 14, color: "#9ca3af" }}>PDFをここにドラッグ＆ドロップ</div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>またはクリックして選択（上限10MB）</div>
-            </div>
+            ))}
+          </div>
+
+          {/* アップロードボタン */}
+          {pendingCount > 0 && (
+            <button
+              onClick={() => { void handleUploadAll(); }}
+              disabled={running}
+              style={{
+                marginTop: 12,
+                width: "100%", minHeight: 48, borderRadius: 10,
+                border: "none",
+                background: running ? "#1f2937" : "#1d4ed8",
+                color: running ? "#6b7280" : "#fff",
+                fontSize: 15, fontWeight: 700,
+                cursor: running ? "not-allowed" : "pointer",
+              }}
+            >
+              {running
+                ? "アップロード中..."
+                : `📤 ${pendingCount}件をアップロード`}
+            </button>
+          )}
+
+          {/* キュークリアボタン（全件完了後） */}
+          {!running && queue.every((q) => q.status === "embedded" || q.status === "error") && (
+            <button
+              onClick={() => setQueue([])}
+              style={{
+                marginTop: 8,
+                width: "100%", minHeight: 44, borderRadius: 10,
+                border: "1px solid #374151", background: "transparent",
+                color: "#9ca3af", fontSize: 14, fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              リストをクリア
+            </button>
           )}
         </div>
-
-        <button
-          onClick={handleUpload}
-          disabled={uploading || !file || !title.trim()}
-          style={{
-            width: "100%", minHeight: 48, borderRadius: 10,
-            border: "none", background: uploading || !file || !title.trim() ? "#1f2937" : "#1d4ed8",
-            color: uploading || !file || !title.trim() ? "#6b7280" : "#fff",
-            fontSize: 15, fontWeight: 700, cursor: uploading || !file || !title.trim() ? "not-allowed" : "pointer",
-          }}
-        >
-          {uploading ? "アップロード中..." : "📤 アップロード"}
-        </button>
-      </div>
+      )}
 
       {/* 構造化トリガー（super_adminのみ） */}
       {isSuperAdmin && embeddedCount > 0 && (
@@ -1822,23 +2096,41 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
               border: "1px solid #1f2937", background: "rgba(255,255,255,0.02)",
               display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
             }}>
-              <div>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: "#f9fafb" }}>{book.title}</div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
                   {book.original_filename}
                   {book.page_count != null && ` · ${book.page_count}ページ`}
-                  {book.chunk_count != null && ` · ${book.chunk_count}チャンク`}
+                  {book.chunk_count != null && ` · ${book.chunk_count}件の分割テキスト`}
                   {book.file_size_bytes != null && ` · ${(book.file_size_bytes / 1024 / 1024).toFixed(1)}MB`}
                 </div>
               </div>
-              <span style={{
-                padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
-                background: "rgba(0,0,0,0.3)", color: STATUS_COLOR[book.status] ?? "#9ca3af",
-                border: `1px solid ${STATUS_COLOR[book.status] ?? "#374151"}22`,
-                whiteSpace: "nowrap",
-              }}>
-                {STATUS_LABEL[book.status] ?? book.status}
-              </span>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                {(book.status === "chunked" || book.status === "embedded") && (
+                  <button
+                    onClick={() => setSelectedBook(book)}
+                    style={{
+                      padding: "6px 12px", minHeight: 36, borderRadius: 8,
+                      border: "1px solid rgba(96,165,250,0.4)",
+                      background: "rgba(96,165,250,0.08)",
+                      color: "#60a5fa",
+                      fontSize: 12, fontWeight: 600,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    詳細
+                  </button>
+                )}
+                <span style={{
+                  padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                  background: "rgba(0,0,0,0.3)", color: STATUS_COLOR[book.status] ?? "#9ca3af",
+                  border: `1px solid ${STATUS_COLOR[book.status] ?? "#374151"}22`,
+                  whiteSpace: "nowrap",
+                }}>
+                  {STATUS_LABEL[book.status] ?? book.status}
+                </span>
+              </div>
             </div>
           ))}
         </div>

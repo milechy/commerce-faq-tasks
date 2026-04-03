@@ -47,7 +47,15 @@ function buildEsQuery(q: string, tenantId: string, lang: SupportedLang) {
     bool: {
       must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
       filter: [
-        { term: { tenant_id: tenantId } },
+        {
+          bool: {
+            should: [
+              { term: { tenant_id: tenantId } },
+              { term: { tenant_id: "global" } },
+            ],
+            minimum_should_match: 1,
+          },
+        },
         { term: { lang } },
       ],
     },
@@ -58,7 +66,15 @@ function buildEsFallbackQuery(q: string, tenantId: string) {
   return {
     bool: {
       must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
-      filter: { term: { tenant_id: tenantId } },
+      filter: {
+        bool: {
+          should: [
+            { term: { tenant_id: tenantId } },
+            { term: { tenant_id: "global" } },
+          ],
+          minimum_should_match: 1,
+        },
+      },
     },
   };
 }
@@ -163,7 +179,7 @@ export async function langRouterSearch(
           COALESCE(lang, $3) AS lang,
           1 - (embedding <-> $1::vector) AS score
         FROM faq_embeddings
-        WHERE tenant_id = $2
+        WHERE (tenant_id = $2 OR tenant_id = 'global')
           AND (lang = $3 OR lang IS NULL)
         ORDER BY embedding <-> $1::vector
         LIMIT $4;
