@@ -465,17 +465,8 @@ export function registerBookPdfRoutes(
               text_restricted_reason: !isUploader
                 ? "このコンテンツはアップロード者のみ閲覧できます"
                 : undefined,
-              metadata: {
-                source: meta.source,
-                book_id: meta.book_id,
-                page_number: meta.page_number ?? null,
-                situation: meta.situation ?? null,
-                resistance: meta.resistance ?? null,
-                principle: meta.principle ?? null,
-                contraindication: meta.contraindication ?? null,
-                example: meta.example ?? null,
-                failure_example: meta.failure_example ?? null,
-              },
+              // faq_embeddings.metadata をそのまま返す（動的スキーマフィールドを含む）
+              metadata: meta,
               is_structured: isStructured,
             };
           }
