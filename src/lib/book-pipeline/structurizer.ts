@@ -148,6 +148,7 @@ export async function structurizeChunks(
       if (parsed) {
         structured = parsed;
       } else {
+        console.warn("[structurizer] parse failed chunk=%d, raw length=%d", i, raw.length);
         // パース失敗: フォールバック
         structured = {
           category: "その他",
@@ -158,7 +159,9 @@ export async function structurizeChunks(
           confidence: 0,
         };
       }
-    } catch {
+    } catch (groqErr) {
+      console.error("[structurizer] Groq call failed chunk=%d:", i,
+        groqErr instanceof Error ? groqErr.message : String(groqErr));
       // API エラー: フォールバック
       structured = {
         category: "その他",
