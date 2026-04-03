@@ -11,6 +11,7 @@ import { structurizeChunks } from "./structurizer";
 import { embedAndStore } from "./embedAndStore";
 import type { EmbedAndStoreDeps } from "./embedAndStore";
 import type { StructurizerDeps } from "./structurizer";
+import { analyzeContentType } from "./contentAnalyzer";
 import { createNotification } from "../notifications";
 
 export interface PipelineDeps {
@@ -23,6 +24,7 @@ export interface PipelineDeps {
 interface BookRow {
   id: number;
   tenant_id: string;
+  title: string;
   storage_path: string;
   encryption_iv: string | null;
   status: string;
@@ -80,7 +82,7 @@ export async function runBookPipeline(
 
   // 1. レコード取得
   const lookup = await db.query<BookRow>(
-    "SELECT id, tenant_id, storage_path, encryption_iv, status FROM book_uploads WHERE id = $1",
+    "SELECT id, tenant_id, title, storage_path, encryption_iv, status FROM book_uploads WHERE id = $1",
     [bookId]
   );
   if (lookup.rows.length === 0) {
@@ -113,11 +115,42 @@ export async function runBookPipeline(
       chunk_count: chunks.length,
     });
 
+    // 5.5. コンテンツ種類判定（best-effort: 失敗してもパイプラインを止めない）
+    let contentSchema: import("./contentAnalyzer").SchemaField[] | undefined;
+    try {
+      const analysis = await analyzeContentType(pages, book.title ?? "");
+      console.log(
+        "[pipeline] content analysis: type=%s confidence=%s",
+        analysis.content_type,
+        analysis.confidence.toFixed(2)
+      );
+      contentSchema = analysis.suggested_schema;
+      await db.query(
+        `UPDATE book_uploads
+         SET content_type = $1, content_type_label = $2,
+             suggested_schema = $3, schema_confidence = $4, schema_reasoning = $5
+         WHERE id = $6`,
+        [
+          analysis.content_type,
+          analysis.content_type_label,
+          JSON.stringify(analysis.suggested_schema),
+          analysis.confidence,
+          analysis.reasoning,
+          bookId,
+        ]
+      );
+    } catch (analysisErr) {
+      console.warn(
+        "[pipeline] content analysis failed (non-blocking):",
+        analysisErr instanceof Error ? analysisErr.message : String(analysisErr)
+      );
+    }
+
     // 6. Groq 8b 構造化
-    const structuredChunks = await structurizeChunks(
-      chunks,
-      deps.structurizer ?? {}
-    );
+    const structuredChunks = await structurizeChunks(chunks, {
+      ...(deps.structurizer ?? {}),
+      schema: contentSchema,
+    });
 
     // 7. Embedding + 保存 + ES sync
     const embedDeps: EmbedAndStoreDeps = {

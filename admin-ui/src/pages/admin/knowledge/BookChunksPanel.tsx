@@ -26,10 +26,25 @@ interface ChunkMetadata {
 
 interface BookChunk {
   id: number;
-  text: string; // ≤200文字（API側でslice済み）
+  text: string | null; // アップロード者のみ復号テキスト（≤200文字）。非アップロード者はnull
+  text_restricted?: boolean;
+  text_restricted_reason?: string;
   metadata: ChunkMetadata;
   is_structured: boolean;
-  created_at: string;
+}
+
+interface SchemaFieldInfo {
+  key: string;
+  label: string;
+  description: string;
+}
+
+interface BookDetail {
+  content_type?: string | null;
+  content_type_label?: string | null;
+  suggested_schema?: SchemaFieldInfo[] | null;
+  schema_confidence?: number | null;
+  schema_reasoning?: string | null;
 }
 
 interface Props {
@@ -129,6 +144,7 @@ export default function BookChunksPanel({
   onChunkDeleted,
 }: Props) {
   const [chunks, setChunks] = useState<BookChunk[]>([]);
+  const [bookDetail, setBookDetail] = useState<BookDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -162,16 +178,22 @@ export default function BookChunksPanel({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchWithAuth(
-        `${API_BASE}/v1/admin/knowledge/book-pdf/${bookId}/chunks`
-      );
-      if (!res.ok) {
-        const d = (await res.json()) as { error?: string };
+      const [chunksRes, detailRes] = await Promise.all([
+        fetchWithAuth(`${API_BASE}/v1/admin/knowledge/book-pdf/${bookId}/chunks`),
+        fetchWithAuth(`${API_BASE}/v1/admin/knowledge/book-pdf/${bookId}`),
+      ]);
+      if (!chunksRes.ok) {
+        const d = (await chunksRes.json()) as { error?: string };
         setError(d.error ?? "分割テキストの取得に失敗しました");
         return;
       }
-      const data = (await res.json()) as { chunks?: BookChunk[] };
+      const data = (await chunksRes.json()) as { chunks?: BookChunk[] };
       setChunks(data.chunks ?? []);
+
+      if (detailRes.ok) {
+        const detail = (await detailRes.json()) as BookDetail;
+        setBookDetail(detail);
+      }
     } catch {
       setError("分割テキストの取得に失敗しました");
     } finally {
@@ -325,6 +347,26 @@ export default function BookChunksPanel({
                 </span>
               )}
             </div>
+            {bookDetail?.content_type_label && (
+              <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "rgba(96,165,250,0.08)", border: "1px solid rgba(96,165,250,0.2)", fontSize: 12 }}>
+                <div style={{ color: "#60a5fa", marginBottom: 2 }}>
+                  📊 コンテンツ種類: {bookDetail.content_type_label}
+                  {bookDetail.schema_confidence != null && (
+                    <span style={{ color: "#6b7280", marginLeft: 6 }}>
+                      （確信度: {(bookDetail.schema_confidence * 100).toFixed(0)}%）
+                    </span>
+                  )}
+                </div>
+                {bookDetail.schema_reasoning && (
+                  <div style={{ color: "#9ca3af", marginBottom: 2 }}>💡 {bookDetail.schema_reasoning}</div>
+                )}
+                {bookDetail.suggested_schema && bookDetail.suggested_schema.length > 0 && (
+                  <div style={{ color: "#9ca3af" }}>
+                    📋 構造化フィールド: {bookDetail.suggested_schema.map((f) => f.label).join(" / ")}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -468,17 +510,39 @@ function ChunkCard({
       >
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* テキストプレビュー（≤200文字、展開不可） */}
-          <div
-            style={{
-              fontSize: 13,
-              color: "#d1d5db",
-              lineHeight: 1.6,
-              wordBreak: "break-word",
-              marginBottom: 8,
-            }}
-          >
-            {chunk.text}
-          </div>
+          {chunk.text_restricted ? (
+            <div
+              style={{
+                fontSize: 13,
+                color: "#6b7280",
+                lineHeight: 1.6,
+                marginBottom: 8,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "8px 10px",
+                borderRadius: 6,
+                background: "rgba(107,114,128,0.08)",
+                border: "1px solid rgba(107,114,128,0.2)",
+              }}
+            >
+              <span style={{ fontSize: 14 }}>🔒</span>
+              <span>{chunk.text_restricted_reason ?? "このコンテンツはアップロード者のみ閲覧できます"}</span>
+            </div>
+          ) : (
+            <div
+              style={{
+                fontSize: 13,
+                color: chunk.text == null ? "#6b7280" : "#d1d5db",
+                lineHeight: 1.6,
+                wordBreak: "break-word",
+                marginBottom: 8,
+                fontStyle: chunk.text == null ? "italic" : "normal",
+              }}
+            >
+              {chunk.text ?? "（テキストを復号できませんでした）"}
+            </div>
+          )}
 
           {/* バッジ行 */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>

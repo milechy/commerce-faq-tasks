@@ -63,7 +63,7 @@ export async function embedAndStore(
     // faq_embeddings.text に保存するテキスト（暗号化）
     const storedText = encryptText(embeddingSource);
 
-    const metadata = {
+    const metadata: Record<string, unknown> = {
       source: "book",
       book_id: bookId,
       chunk_index: chunk.chunkIndex,
@@ -72,6 +72,11 @@ export async function embedAndStore(
       keywords: chunk.keywords,
       confidence: chunk.confidence,
     };
+
+    // スキーマフィールドがある場合はメタデータに追加
+    if (chunk.schemaFields) {
+      Object.assign(metadata, chunk.schemaFields);
+    }
 
     const result = await db.query<{ id: number }>(
       `INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata)

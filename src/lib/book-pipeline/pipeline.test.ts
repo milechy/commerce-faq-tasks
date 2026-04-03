@@ -16,6 +16,18 @@ jest.mock("./pdfExtractor", () => ({
 import { extractPdfText } from "./pdfExtractor";
 const mockExtractPdfText = extractPdfText as jest.MockedFunction<typeof extractPdfText>;
 
+// contentAnalyzer をモック（Gemini 外部呼び出しを防ぐ）
+jest.mock("./contentAnalyzer", () => ({
+  analyzeContentType: jest.fn().mockResolvedValue({
+    content_type: "general_report",
+    content_type_label: "一般レポート",
+    suggested_schema: [],
+    confidence: 0.5,
+    reasoning: "テスト用モック",
+  }),
+  KNOWN_SCHEMAS: {},
+}));
+
 // Groq クライアントをモック
 jest.mock("../../agent/llm/groqClient", () => ({
   groqClient: {

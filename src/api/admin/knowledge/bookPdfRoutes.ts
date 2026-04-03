@@ -8,6 +8,7 @@ import crypto from "crypto";
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { pipelineQueue } from "../../../lib/book-pipeline/pipelineQueue";
+import { decryptText } from "../../../lib/crypto/textEncrypt";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -272,7 +273,9 @@ export function registerBookPdfRoutes(
       try {
         const result = await db.query(
           `SELECT id, tenant_id, title, original_filename, status, page_count,
-                  chunk_count, file_size_bytes, error_message, uploaded_by, created_at, updated_at
+                  chunk_count, file_size_bytes, error_message, uploaded_by,
+                  content_type, content_type_label, suggested_schema,
+                  schema_confidence, schema_reasoning, created_at, updated_at
            FROM book_uploads WHERE id = $1`,
           [id]
         );
@@ -394,7 +397,7 @@ export function registerBookPdfRoutes(
       try {
         // 書籍の存在とテナント確認
         const bookResult = await db.query(
-          "SELECT id, tenant_id, title FROM book_uploads WHERE id = $1",
+          "SELECT id, tenant_id, title, uploaded_by FROM book_uploads WHERE id = $1",
           [id]
         );
         if (bookResult.rows.length === 0) {
@@ -405,12 +408,17 @@ export function registerBookPdfRoutes(
           id: number;
           tenant_id: string;
           title: string;
+          uploaded_by: string | null;
         };
         if (!isSuperAdmin && book.tenant_id !== user?.tenantId) {
           return res
             .status(403)
             .json({ error: "他のテナントのデータにはアクセスできません" });
         }
+
+        // アップロード者本人かどうか判定
+        const currentUserId = ((req as any).user as { id?: string } | undefined)?.id ?? "";
+        const isUploader = Boolean(currentUserId && book.uploaded_by && book.uploaded_by === currentUserId);
 
         // チャンク取得（embeddingベクトルは除外）
         const chunksResult = await db.query(
@@ -440,9 +448,23 @@ export function registerBookPdfRoutes(
             const isStructured = STRUCTURED_FIELDS.some(
               (f) => meta[f] != null && meta[f] !== ""
             );
+
+            let chunkText: string | null = null;
+            if (isUploader) {
+              try {
+                chunkText = decryptText(String(row.text ?? "")).slice(0, 200);
+              } catch {
+                chunkText = null;
+              }
+            }
+
             return {
               id: row.id,
-              text: String(row.text ?? "").slice(0, 200),
+              text: chunkText,
+              text_restricted: !isUploader,
+              text_restricted_reason: !isUploader
+                ? "このコンテンツはアップロード者のみ閲覧できます"
+                : undefined,
               metadata: {
                 source: meta.source,
                 book_id: meta.book_id,
