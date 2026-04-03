@@ -1,0 +1,394 @@
+DEAD CODE DETECTION REPORT
+Generated: 2026-04-02 12:06:50
+Project: /Users/hkobayashi/Documents/GitHub/commerce-faq-tasks
+
+============================================================
+=== CHECK 1: TypeScript未使用export (ts-prune) === [HIGH]
+============================================================
+Running ts-prune on src/ ...
+lib/embeddings.ts:40 - embed
+lib/embeddings.ts:55 - embedBatch (used in module)
+lib/embeddings.ts:16 - EmbedResult (used in module)
+lib/embeddings.ts:22 - EmbedBatchResult (used in module)
+lib/embeddings.ts:119 - EmbedError (used in module)
+lib/embeddings.ts:130 - EMBEDDING_MODEL
+lib/embeddings.ts:131 - EMBEDDING_DIMENSIONS
+lib/groq.ts:30 - resolveGroqModel (used in module)
+lib/groq.ts:79 - callGroq
+lib/groq.ts:169 - estimateComplexity
+lib/groq.ts:13 - GROQ_MODEL_FAST (used in module)
+lib/groq.ts:14 - GROQ_MODEL_QUALITY (used in module)
+lib/groq.ts:19 - GroqRouteResult (used in module)
+lib/groq.ts:49 - GroqChatMessage (used in module)
+lib/groq.ts:54 - GroqCallOptions (used in module)
+lib/groq.ts:64 - GroqCallResult (used in module)
+lib/groq.ts:137 - GroqRoutingError (used in module)
+lib/pinecone.ts:54 - searchPinecone
+lib/pinecone.ts:142 - upsertPinecone
+lib/pinecone.ts:12 - PineconeHit (used in module)
+lib/pinecone.ts:20 - PineconeSearchResult (used in module)
+lib/pinecone.ts:26 - PineconeSearchParams (used in module)
+lib/pinecone.ts:132 - PineconeUpsertItem (used in module)
+convex/knowledge.ts:66 - encryptText (used in module)
+convex/knowledge.ts:89 - decryptText (used in module)
+convex/knowledge.ts:164 - storeBookChunk
+convex/knowledge.ts:199 - getRagExcerpt
+convex/knowledge.ts:219 - getBookRagExcerpts
+convex/knowledge.ts:246 - registerBook
+convex/knowledge.ts:254 - listBooks
+convex/knowledge.ts:263 - getBook
+convex/knowledge.ts:275 - deleteBook
+convex/knowledge.ts:53 - EncryptedPayload (used in module)
+convex/knowledge.ts:117 - BookChunk (used in module)
+convex/knowledge.ts:136 - BookMetadata (used in module)
+convex/knowledge.ts:310 - KnowledgeEncryptionError (used in module)
+convex/knowledge.ts:317 - KnowledgeTenantError
+types/contracts.ts:1 - TenantConfig
+types/contracts.ts:16 - ChatMessage
+types/contracts.ts:25 - ChatAction (used in module)
+types/contracts.ts:31 - RagContextItem
+types/contracts.ts:35 - RAGResult
+types/contracts.ts:41 - ApiResponse
+types/contracts.ts:48 - TenantSla (used in module)
+src/agent/types.ts:6 - AgentStepType (used in module)
+src/agent/types.ts:26 - AgentDebug (used in module)
+src/agent/types.ts:64 - Hit (used in module)
+src/agent/types.ts:64 - RerankResult (used in module)
+src/agent/types.ts:66 - AgentSearchOptions
+src/agent/types.ts:81 - PlannerRoute (used in module)
+src/agent/types.ts:83 - DialogTurnInput
+src/agent/types.ts:94 - DialogOrchestratorMode (used in module)
+src/agent/types.ts:96 - DialogAgentStep (used in module)
+src/agent/types.ts:105 - DialogAgentResponse
+src/agent/types.ts:112 - DialogAgentMeta (used in module)
+src/integration/webhookNotifier.ts:4 - RagStats (used in module)
+src/integration/webhookNotifier.ts:13 - AgentWebhookEvent (used in module)
+src/lib/cors.ts:4 - CorsOptions (used in module)
+src/lib/ocrPipeline.ts:24 - splitIntoChunks (used in module)
+src/lib/ocrPipeline.ts:18 - OcrPipelineResult (used in module)
+src/lib/pathValidator.ts:8 - safePath
+src/lib/rate-limit.ts:56 - RateLimitOptions (used in module)
+src/lib/security-policy.ts:5 - SecurityPolicyOptions (used in module)
+src/lib/tenant-context.ts:94 - TenantContextOptions (used in module)
+src/llm/modelRouter.ts:3 - SafetyTag (used in module)
+src/llm/modelRouter.ts:29 - RoutedModel (used in module)
+src/middleware/inputSanitizer.ts:36 - evictExpiredSessions (used in module)
+src/middleware/inputSanitizer.ts:4 - SanitizeResult (used in module)
+src/middleware/outputGuard.ts:4 - OutputGuardResult (used in module)
+src/middleware/promptFirewall.ts:4 - FirewallResult (used in module)
+src/middleware/topicGuard.ts:20 - evictExpiredTopicSessions (used in module)
+src/middleware/topicGuard.ts:4 - TopicGuardResult (used in module)
+src/middleware/topicGuard.ts:18 - sessionAbuseCounts (used in module)
+src/search/langEmbedding.ts:23 - detectLangFromText (used in module)
+src/search/langEmbedding.ts:40 - resolveFaqLang
+src/search/langEmbedding.ts:70 - MIGRATION_ADD_LANG_COLUMN
+src/search/langIndex.ts:16 - resolveEsIndex
+src/search/langRouter.ts:76 - langRouterSearch
+src/search/langRouter.ts:18 - SupportedLang (used in module)
+src/search/langRouter.ts:22 - LangRouterHit (used in module)
+src/search/langRouter.ts:30 - LangRouterResult (used in module)
+src/search/langRouter.ts:37 - LangRouterParams (used in module)
+src/search/pgvector.ts:6 - PgVectorHit (used in module)
+src/search/pgvector.ts:13 - PgVectorSearchResult (used in module)
+src/search/pgvector.ts:19 - PgVectorSearchParams (used in module)
+src/search/pgvectorSearch.ts:6 - PgvectorSearchParams (used in module)
+src/search/pgvectorSearch.ts:12 - PgvectorSearchItem (used in module)
+src/search/pgvectorSearch.ts:19 - PgvectorSearchResult (used in module)
+src/search/rerank.ts:16 - __resetCeForTests
+src/search/rerank.ts:107 - CeFlag (used in module)
+src/types/agentDialog.ts:18 - AgentDialogMeta (used in module)
+src/types/agentDialog.ts:23 - AgentDialogResponse
+src/types/contracts.ts:37 - GroqModel (used in module)
+src/types/contracts.ts:41 - RagContextItem
+src/types/contracts.ts:46 - RAGResult
+src/types/contracts.ts:62 - TenantSla (used in module)
+src/agent/ab-test/variantSelector.ts:10 - VariantSelectionResult (used in module)
+src/agent/avatar/avatarPolicy.ts:5 - AvatarProvider (used in module)
+src/agent/avatar/avatarPolicy.ts:7 - AvatarDecisionStatus (used in module)
+src/agent/avatar/avatarPolicy.ts:16 - AvatarDisableReason (used in module)
+src/agent/avatar/avatarPolicy.ts:23 - AvatarPolicyInput (used in module)
+src/agent/avatar/avatarPolicy.ts:43 - AvatarPolicyDecision (used in module)
+src/agent/avatar/piiRouteDetector.ts:3 - PiiRouteReason (used in module)
+src/agent/config/ragLimits.ts:11 - RAG_TOTAL_MAX_CHARS
+src/agent/crew/CrewGraph.ts:18 - CrewGraphPhase (used in module)
+src/agent/crew/CrewGraph.ts:54 - CrewNodeKind (used in module)
+src/agent/crew/CrewTask.ts:5 - CrewTask
+src/agent/dialog/flowContextStore.ts:15 - FlowBudgets (used in module)
+src/agent/dialog/flowContextStore.ts:23 - FlowSessionMeta (used in module)
+src/agent/dialog/flowContextStore.ts:38 - FlowSessionKey (used in module)
+src/agent/dialog/salesContextStore.ts:3 - SalesSessionMeta (used in module)
+src/agent/dialog/types.ts:9 - PlanStepType (used in module)
+src/agent/dialog/types.ts:11 - BasePlanStep (used in module)
+src/agent/dialog/types.ts:29 - FollowupSearchStep (used in module)
+src/agent/dialog/types.ts:36 - AnswerStep (used in module)
+src/agent/dialog/types.ts:58 - DialogMessageRole (used in module)
+src/agent/dialog/types.ts:82 - DialogTurnMeta (used in module)
+src/agent/dialog/types.ts:132 - DialogOrchestratorMode (used in module)
+src/agent/dialog/types.ts:140 - AdapterProvider (used in module)
+src/agent/dialog/types.ts:142 - AdapterStatus (used in module)
+src/agent/dialog/types.ts:161 - DialogAgentStep
+src/agent/flow/dialogOrchestrator.ts:11 - OrchestratorInput (used in module)
+src/agent/flow/dialogOrchestrator.ts:22 - OrchestratorResult (used in module)
+src/agent/flow/llmMultiStepPlannerRuntime.ts:8 - LlmMultiStepPlannerOptions (used in module)
+src/agent/flow/loopDetector.ts:5 - LoopType
+src/agent/flow/queryPlanner.ts:31 - QueryPlanner (used in module)
+src/agent/flow/queryPlanner.ts:41 - RuleBasedQueryPlanner (used in module)
+src/agent/flow/queryPlanner.ts:291 - LlmQueryPlannerConfig (used in module)
+src/agent/flow/userSignals.ts:3 - YesNo (used in module)
+src/agent/gap/gapRecommender.ts:11 - GapRecommendation (used in module)
+src/agent/http/AgentDialogOrchestrator.ts:10 - AgentDialogOrchestratorRunInput (used in module)
+src/agent/http/agentDialogRoute.ts:7 - AgentDialogDeps (used in module)
+src/agent/http/authMiddleware.ts:32 - TenantConfigResolver
+src/agent/http/authMiddleware.ts:35 - ApiKeyTenantResolver (used in module)
+src/agent/http/authMiddleware.ts:39 - AuthMiddlewareOptions (used in module)
+src/agent/judge/conversationJudge.ts:19 - JudgeResult (used in module)
+src/agent/judge/evaluationAnalyzer.ts:14 - SuggestedRule (used in module)
+src/agent/judge/evaluationRepository.ts:8 - EvaluationAxes (used in module)
+src/agent/knowledge/bookChunker.ts:4 - BookChunk (used in module)
+src/agent/llm/index.ts:5 - OpenAiLlmClientConfig
+src/agent/llm/index.ts:35 - OpenAiLlmClient
+src/agent/llm/modelRouter.ts:189 - routePlannerModel (used in module)
+src/agent/llm/modelRouter.ts:17 - RouteContext (used in module)
+src/agent/llm/openaiEmbeddingClient.ts:90 - routePlannerModelV2 (used in module)
+src/agent/llm/openaiEmbeddingClient.ts:54 - PlannerRoute (used in module)
+src/agent/llm/openaiEmbeddingClient.ts:64 - RouteContextV2 (used in module)
+src/agent/llm/openaiEmbeddingClient.ts:76 - PlannerRoutingDecision (used in module)
+src/agent/llm/openaiEmbeddingClient.ts:148 - PlannerRoutingDecisionV2
+src/agent/llm/openaiEmbeddingClient.ts:149 - RouteContext
+src/agent/llm/openaiEmbeddingClient.ts:150 - routePlannerModel
+src/agent/objection/objectionDetector.ts:15 - POSITIVE_KEYWORDS (used in module)
+src/agent/objection/objectionDetector.ts:23 - DetectedPattern (used in module)
+src/agent/observability/phase22EventLogger.ts:5 - Phase22EventName (used in module)
+src/agent/openclaw/rewardBridge.ts:15 - RewardPayload (used in module)
+src/agent/orchestrator/AgentDialogOrchestrator.ts:10 - AgentDialogOrchestratorRunInput (used in module)
+src/agent/orchestrator/createAgentDialogHandler.ts:18 - createAgentDialogHandler
+src/agent/orchestrator/createAgentDialogHandler.ts:13 - AgentDialogDeps (used in module)
+src/agent/orchestrator/langGraphOrchestrator.ts:63 - DialogOutput (used in module)
+src/agent/orchestrator/langGraphOrchestrator.ts:168 - DialogGraphState (used in module)
+src/agent/orchestrator/modelRouter.ts:40 - routePlannerModelV2 (used in module)
+src/agent/orchestrator/modelRouter.ts:14 - RouteContextV2 (used in module)
+src/agent/orchestrator/modelRouter.ts:26 - PlannerRoutingDecision (used in module)
+src/agent/orchestrator/modelRouter.ts:98 - PlannerRoutingDecisionV2
+src/agent/orchestrator/modelRouter.ts:99 - RouteContext
+src/agent/orchestrator/modelRouter.ts:100 - routePlannerModel
+src/agent/psychology/principleDetector.ts:19 - PrincipleDetectionResult (used in module)
+src/agent/psychology/principleSearch.ts:25 - searchPrincipleChunks
+src/agent/report/weeklyReportGenerator.ts:26 - collectWeeklyMetrics
+src/agent/tools/rerankTool.ts:6 - RerankToolInput (used in module)
+src/agent/tools/rerankTool.ts:12 - RerankToolOutput (used in module)
+src/agent/tools/searchTool.ts:7 - SearchToolInput (used in module)
+src/agent/tools/searchTool.ts:12 - SearchToolOutput (used in module)
+src/agent/tools/synthesisTool.ts:60 - SynthesisInput (used in module)
+src/agent/tools/synthesisTool.ts:78 - SynthesisOutput (used in module)
+src/api/chat/route.ts:65 - ChatRequestSchema (used in module)
+src/api/chat/route.ts:76 - ChatRequest
+src/api/contracts/agentDialog.ts:3 - AdapterProvider (used in module)
+src/api/contracts/agentDialog.ts:5 - AdapterStatus (used in module)
+src/api/contracts/agentDialog.ts:13 - AdapterMeta (used in module)
+src/api/contracts/agentDialog.ts:25 - AgentDialogResponse
+src/api/contracts/agentDialog.ts:34 - DialogAgentMeta
+src/api/middleware/originCheck.ts:28 - isOriginAllowed (used in module)
+src/api/middleware/roleAuth.ts:5 - UserRole (used in module)
+src/api/widget/widgetGenerator.ts:20 - generateWidgetToken (used in module)
+src/api/widget/widgetGenerator.ts:10 - TenantWidgetConfig (used in module)
+src/integration/notion/notionSalesLogSink.ts:12 - NotionSalesLogSinkOptions (used in module)
+src/integration/notion/salesLogWriter.ts:15 - SalesLogPhase (used in module)
+src/integration/notion/salesLogWriter.ts:22 - SalesLogTemplateSource (used in module)
+src/integration/notion/salesLogWriter.ts:28 - SalesLogInput (used in module)
+src/integration/notion/salesLogWriter.ts:64 - SalesLogWriter (used in module)
+src/integration/notion/salesLogWriter.ts:89 - globalSalesLogWriter
+src/integrations/notion/clarifyLogWriter.ts:4 - ClarifyLogInput (used in module)
+src/integrations/notion/clarifyLogWriter.ts:12 - ClarifyLogWriter
+src/integrations/notion/notionClient.ts:4 - QueryDatabaseArgs (used in module)
+src/integrations/notion/notionClient.ts:16 - NotionClientConfig (used in module)
+src/integrations/notion/notionSyncService.ts:17 - NotionSyncService
+src/lib/alerts/alertEngine.ts:206 - computeSnapshot (used in module)
+src/lib/alerts/alertEngine.ts:300 - AlertEngine (used in module)
+src/lib/alerts/alertRules.ts:10 - AlertLevel (used in module)
+src/lib/alerts/slackNotifier.ts:10 - AlertLevel (used in module)
+src/lib/alerts/slackNotifier.ts:11 - AlertStatus (used in module)
+src/lib/alerts/slackNotifier.ts:13 - AlertMessage (used in module)
+src/lib/avatar/avatarStorage.ts:146 - storeAvatarImageEncrypted
+src/lib/avatar/avatarStorage.ts:197 - decryptStoredAvatarImage
+src/lib/avatar/avatarStorage.ts:14 - JwtTenantContext (used in module)
+src/lib/avatar/avatarStorage.ts:18 - StoreAvatarImageInput (used in module)
+src/lib/avatar/lemonsliceAvatarApi.ts:73 - registerAvatarToLemonslice
+src/lib/avatar/lemonsliceAvatarApi.ts:3 - JwtTenantContext (used in module)
+src/lib/avatar/lemonsliceAvatarApi.ts:7 - RegisterLemonsliceAvatarInput (used in module)
+src/lib/avatar/lemonsliceAvatarApi.ts:13 - LemonsliceAvatarRegistrationResult (used in module)
+src/lib/avatar/voiceSettings.ts:37 - normalizeVoiceSettings
+src/lib/avatar/voiceSettings.ts:55 - validateVoiceSettings
+src/lib/avatar/voiceSettings.ts:1 - VoiceType (used in module)
+src/lib/avatar/voiceSettings.ts:3 - VoiceSettings (used in module)
+src/lib/avatar/voiceSettings.ts:9 - VoiceSettingsInput (used in module)
+src/lib/avatar/voiceSettings.ts:15 - DEFAULT_VOICE_SETTINGS (used in module)
+src/lib/avatar/voiceSettings.ts:21 - VOICE_RATE_MIN (used in module)
+src/lib/avatar/voiceSettings.ts:22 - VOICE_RATE_MAX (used in module)
+src/lib/avatar/voiceSettings.ts:23 - VOICE_PITCH_MIN (used in module)
+src/lib/avatar/voiceSettings.ts:24 - VOICE_PITCH_MAX (used in module)
+src/lib/billing/costCalculator.ts:39 - calculateAnamSessionCostCents
+src/lib/billing/costCalculator.ts:4 - ModelKey (used in module)
+src/lib/billing/costCalculator.ts:6 - ModelCost (used in module)
+src/lib/billing/costCalculator.ts:33 - ANAM_COST_PER_MINUTE_USD (used in module)
+src/lib/billing/costCalculator.ts:47 - IMAGE_GENERATION_COST_USD
+src/lib/billing/costCalculator.ts:49 - UsageRecord (used in module)
+src/lib/billing/usageTracker.ts:9 - FeatureUsed (used in module)
+src/lib/billing/usageTracker.ts:11 - TrackUsageParams (used in module)
+src/lib/book-pipeline/pdfExtractor.ts:26 - PdfExtractorDeps (used in module)
+src/lib/book-pipeline/pipeline.ts:16 - PipelineDeps (used in module)
+src/lib/metrics/kpiDefinitions.ts:16 - KpiMetricName
+src/lib/metrics/metricsCollector.ts:32 - ConversationTerminalInput (used in module)
+src/lib/metrics/metricsCollector.ts:37 - LoopDetectedInput (used in module)
+src/lib/metrics/metricsCollector.ts:41 - AvatarRequestInput (used in module)
+src/lib/metrics/metricsCollector.ts:46 - RagDurationInput (used in module)
+src/lib/metrics/metricsCollector.ts:52 - HttpErrorInput (used in module)
+src/lib/metrics/metricsCollector.ts:57 - KillSwitchInput (used in module)
+src/lib/metrics/metricsCollector.ts:62 - SessionCountInput (used in module)
+src/lib/metrics/metricsCollector.ts:71 - metricsCollector
+src/lib/security/inputSanitizer.ts:17 - SanitizeResult (used in module)
+src/search/openviking/index.ts:22 - isOpenVikingEnabled
+src/search/openviking/index.ts:13 - searchPrincipleChunksViaOpenViking
+src/search/openviking/index.ts:14 - ovSearch
+src/search/openviking/index.ts:14 - ovProgressiveLoad
+src/search/openviking/openVikingClient.ts:8 - ContextLevel (used in module)
+src/search/openviking/openVikingClient.ts:10 - OVSearchResult (used in module)
+src/search/openviking/openVikingClient.ts:17 - OVSearchParams (used in module)
+src/ui/adapter/adapterTypes.ts:7 - AdapterProvider (used in module)
+src/ui/adapter/adapterTypes.ts:13 - AdapterStatus (used in module)
+src/ui/adapter/adapterTypes.ts:23 - AdapterUIMode
+src/ui/adapter/adapterTypes.ts:35 - AdapterMeta
+src/ui/adapter/adapterUIMode.ts:5 - AvatarUIMode (used in module)
+src/ui/avatar/resolveAvatarUiMode.ts:11 - resolveAvatarUiMode
+src/ui/avatar/resolveAvatarUiMode.ts:5 - AvatarUiMode (used in module)
+src/agent/http/middleware/auth.ts:34 - createAuthMiddleware
+src/agent/http/presentation/lemonSliceAdapter.ts:7 - LemonSliceProbeInput (used in module)
+src/agent/orchestrator/crew/crewClient.ts:9 - CrewOrchestratorClientOptions (used in module)
+src/agent/orchestrator/crew/crewClient.ts:20 - CrewOrchestratorClient
+src/agent/orchestrator/sales/clarifyPromptBuilder.ts:19 - buildClarifyPrompt
+src/agent/orchestrator/sales/clarifyPromptBuilder.ts:10 - ClarifyIntent (used in module)
+src/agent/orchestrator/sales/closePromptBuilder.ts:27 - buildClosePrompt (used in module)
+src/agent/orchestrator/sales/dbSalesRulesLoader.ts:15 - DbSalesRulesLoaderDeps (used in module)
+src/agent/orchestrator/sales/dbSalesRulesLoader.ts:19 - DbSalesRulesLoader
+src/agent/orchestrator/sales/notionSalesRulesLoader.ts:10 - NotionSalesRulesLoaderConfig (used in module)
+src/agent/orchestrator/sales/notionSalesRulesLoader.ts:19 - NotionSalesRulesLoader
+src/agent/orchestrator/sales/notionSalesTemplatesProvider.ts:32 - createNotionSalesTemplateProvider
+src/agent/orchestrator/sales/proposePromptBuilder.ts:44 - buildProposePrompt (used in module)
+src/agent/orchestrator/sales/recommendPromptBuilder.ts:30 - buildRecommendPrompt (used in module)
+src/agent/orchestrator/sales/rulesLoader.ts:18 - SalesRulesLoadOptions (used in module)
+src/agent/orchestrator/sales/rulesLoader.ts:44 - DefaultSalesRulesLoader (used in module)
+src/agent/orchestrator/sales/salesIntentDetector.ts:23 - SalesIntentDetectionInput (used in module)
+src/agent/orchestrator/sales/salesLogWriter.ts:29 - SalesLogRecord (used in module)
+src/agent/orchestrator/sales/salesLogWriter.ts:50 - SalesLogSink (used in module)
+src/agent/orchestrator/sales/salesLogWriter.ts:55 - SalesLogContext (used in module)
+src/agent/orchestrator/sales/salesLogWriter.ts:116 - SalesLogWriter (used in module)
+src/agent/orchestrator/sales/salesOrchestrator.ts:33 - ExtendedSalesMeta (used in module)
+src/agent/orchestrator/sales/salesStageMachine.ts:45 - SalesStageSignals (used in module)
+src/api/admin/ai-assist/systemPrompt.ts:24 - UNANSWERED_PHRASES (used in module)
+src/api/admin/chat-history/chatHistoryRepository.ts:6 - SaveMessageParams (used in module)
+src/api/admin/chat-history/chatHistoryRepository.ts:63 - SessionListParams (used in module)
+src/api/admin/chat-history/chatHistoryRepository.ts:75 - SessionSummary (used in module)
+src/api/admin/chat-history/chatHistoryRepository.ts:174 - MessageListParams (used in module)
+src/api/admin/chat-history/chatHistoryRepository.ts:179 - ChatHistoryMessage (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:11 - EvaluationAxes (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:18 - ConversationEvaluation (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:40 - EvaluationStats (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:45 - PrincipleStat (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:50 - ScoreTrendPoint (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:55 - DetailedStats (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:63 - KpiStats (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:79 - ListEvaluationsParams (used in module)
+src/api/admin/evaluations/evaluationsRepository.ts:442 - TuningRuleWithStatus (used in module)
+src/api/admin/feedback/feedbackRepository.ts:9 - FeedbackMessage (used in module)
+src/api/admin/feedback/feedbackRepository.ts:20 - FeedbackThread (used in module)
+src/api/admin/knowledge/knowledgeGapRepository.ts:10 - KnowledgeGap (used in module)
+src/api/admin/knowledge/knowledgeGapRepository.ts:23 - SaveGapParams (used in module)
+src/api/admin/knowledge/knowledgeGapRepository.ts:74 - GetGapsParams (used in module)
+src/api/admin/objection-patterns/objectionPatternsRepository.ts:10 - ObjectionPattern (used in module)
+src/api/admin/reports/reportsRepository.ts:10 - WeeklyReport (used in module)
+src/api/admin/tenants/apiKeyUtils.ts:24 - maskApiKey
+src/api/admin/tuning/tuningRulesRepository.ts:206 - getTenantSystemPrompt
+src/api/admin/tuning/tuningRulesRepository.ts:10 - TuningRule (used in module)
+src/api/admin/tuning/tuningRulesRepository.ts:23 - CreateRuleParams (used in module)
+src/api/admin/tuning/tuningRulesRepository.ts:32 - UpdateRuleParams (used in module)
+src/api/admin/variants/variantsRepository.ts:11 - SystemPromptVariant (used in module)
+src/api/admin/variants/variantsRepository.ts:18 - VariantStatRow (used in module)
+src/agent/orchestrator/sales/pipelines/ecPipeline.ts:4 - IndustryPipeline (used in module)
+src/agent/orchestrator/sales/pipelines/pipelineFactory.ts:56 - getSalesPipelineConfig
+src/agent/orchestrator/sales/pipelines/pipelineFactory.ts:72 - inferPipelineKindFromTenant (used in module)
+src/agent/orchestrator/sales/pipelines/pipelineFactory.ts:19 - SalesPipelineConfig (used in module)
+src/agent/orchestrator/sales/pipelines/reservationPipeline.ts:4 - IndustryPipeline (used in module)
+src/agent/orchestrator/sales/pipelines/saasPipeline.ts:4 - IndustryPipeline (used in module)
+
+============================================================
+=== CHECK 2: Admin UI未使用コンポーネント === [MEDIUM]
+============================================================
+(no unused components found)
+
+============================================================
+=== CHECK 3: 未使用npm依存 (depcheck) === [MEDIUM]
+============================================================
+--- Root package.json ---
+[SKIP] depcheck failed for root package.json
+
+--- admin-ui/package.json ---
+(no unused dependencies in admin-ui)
+
+============================================================
+=== CHECK 4: 未到達APIエンドポイント === [CRITICAL]
+============================================================
+Backend routes found: 69
+Frontend call paths found: 46
+
+Potentially unreachable backend endpoints (not called from admin-ui or widget):
+  UNREACHABLE: /agent.search
+  UNREACHABLE: /agent/search
+  UNREACHABLE: /api/internal/avatar-config
+  UNREACHABLE: /api/internal/usage
+  UNREACHABLE: /dialog/turn
+  UNREACHABLE: /search
+  UNREACHABLE: /search.v1
+  UNREACHABLE: /v1/admin/evaluations/trigger
+  UNREACHABLE: /v1/admin/feedback/read
+  UNREACHABLE: /v1/admin/feedback/threads
+  UNREACHABLE: /v1/admin/objection-patterns
+  UNREACHABLE: /v1/admin/objection-patterns/:id
+  UNREACHABLE: /v1/admin/variants
+  UNREACHABLE: /v1/admin/variants/stats
+
+============================================================
+=== CHECK 5: 孤立テストファイル === [LOW]
+============================================================
+ORPHANED: tests/benchmark/run-benchmark.test.ts
+ORPHANED: tests/phase48/avatarConfigConsistency.test.ts
+ORPHANED: tests/phase48/avatarFeatureFlag.test.ts
+ORPHANED: tests/phase48/apiKeyAuth.test.ts
+ORPHANED: tests/phase47/pdfUploadStructurize.test.ts
+ORPHANED: tests/integration/wiring-check.test.ts
+ORPHANED: tests/phase38/chat-history-api.test.ts
+ORPHANED: tests/phase38/tuning-rules-api.test.ts
+ORPHANED: tests/phase38/tenant-system-prompt.test.ts
+ORPHANED: tests/agent/observability/phase22Logging.test.ts
+ORPHANED: tests/agent/avatar/avatarIntegration.test.ts
+ORPHANED: tests/agent/avatar/killSwitch.test.ts
+ORPHANED: tests/agent/flow/flowStateMachine.test.ts
+ORPHANED: tests/phase52/knowledge-gaps-filter.test.ts
+ORPHANED: tests/phase52/gap-suggest-answer.test.ts
+ORPHANED: tests/phase52/conversion-tracking.test.ts
+ORPHANED: tests/phase52/judge-empty-session.test.ts
+ORPHANED: tests/phase52/notifications-api.test.ts
+ORPHANED: tests/phase52/conversion-type-api.test.ts
+ORPHANED: tests/phase52/chat-history-filter.test.ts
+ORPHANED: tests/phase52/rule-edit-approve.test.ts
+ORPHANED: tests/phase52/analytics-api.test.ts
+ORPHANED: tests/phase45/evaluationRoutes.test.ts
+ORPHANED: tests/phase50/analytics.test.ts
+ORPHANED: tests/phase35/globalRag.test.ts
+ORPHANED: tests/phase51/sentiment.test.ts
+
+============================================================
+=== SUMMARY ===
+============================================================
+CRITICAL (未到達エンドポイント): 14
+HIGH     (未使用export):        312
+MEDIUM   (未使用依存/コンポーネント): 0
+LOW      (孤立テスト):          26
