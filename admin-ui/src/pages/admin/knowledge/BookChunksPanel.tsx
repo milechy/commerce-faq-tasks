@@ -438,7 +438,6 @@ export default function BookChunksPanel({
                 />
                 );
               })}
-              ))}
             </div>
           )}
         </div>
