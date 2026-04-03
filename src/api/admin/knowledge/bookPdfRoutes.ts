@@ -414,7 +414,7 @@ export function registerBookPdfRoutes(
 
         // チャンク取得（embeddingベクトルは除外）
         const chunksResult = await db.query(
-          `SELECT id, text, metadata, created_at
+          `SELECT id, text, metadata
            FROM faq_embeddings
            WHERE metadata->>'source' = 'book' AND metadata->>'book_id' = $1::text
            ORDER BY (metadata->>'page_number')::int ASC NULLS LAST, id ASC`,
@@ -435,7 +435,6 @@ export function registerBookPdfRoutes(
             id: number;
             text: string;
             metadata: Record<string, unknown>;
-            created_at: string;
           }) => {
             const meta = row.metadata ?? {};
             const isStructured = STRUCTURED_FIELDS.some(
@@ -456,7 +455,6 @@ export function registerBookPdfRoutes(
                 failure_example: meta.failure_example ?? null,
               },
               is_structured: isStructured,
-              created_at: row.created_at,
             };
           }
         );
