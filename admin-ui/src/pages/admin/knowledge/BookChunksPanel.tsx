@@ -1,7 +1,7 @@
 // admin-ui/src/pages/admin/knowledge/BookChunksPanel.tsx
 // B-1: 書籍チャンク詳細パネル（モーダル）
 // - チャンク一覧表示（カード形式、スクロール可能）
-// - 6フィールドインライン編集
+// - 動的スキーマに基づくインライン編集（suggested_schema がなければ心理学6フィールドにフォールバック）
 // - 削除（確認ダイアログ付き）
 // Anti-Slop: テキストは200文字上限（API側で保証済み）、console.logにチャンク内容を含めない
 
@@ -12,16 +12,10 @@ import { API_BASE } from "../../../lib/api";
 
 // ─── 型定義 ────────────────────────────────────────────────────────────────────
 
-interface ChunkMetadata {
+interface ChunkMetadata extends Record<string, unknown> {
   source?: string;
   book_id?: string | number;
   page_number?: number | null;
-  situation?: string | null;
-  resistance?: string | null;
-  principle?: string | null;
-  contraindication?: string | null;
-  example?: string | null;
-  failure_example?: string | null;
 }
 
 interface BookChunk {
@@ -58,24 +52,15 @@ interface Props {
 
 // ─── 定数 ──────────────────────────────────────────────────────────────────────
 
-const ALLOWED_FIELDS = [
-  "situation",
-  "resistance",
-  "principle",
-  "contraindication",
-  "example",
-  "failure_example",
-] as const;
-type AllowedField = (typeof ALLOWED_FIELDS)[number];
-
-const FIELD_LABELS: Record<AllowedField, string> = {
-  situation: "状況",
-  resistance: "抵抗",
-  principle: "原則",
-  contraindication: "禁忌",
-  example: "例",
-  failure_example: "失敗例",
-};
+// suggested_schema がない場合（古いデータ）のデフォルトフォールバック
+const DEFAULT_SCHEMA: SchemaFieldInfo[] = [
+  { key: "situation", label: "状況", description: "この知識が適用される状況" },
+  { key: "resistance", label: "抵抗", description: "顧客の心理的抵抗" },
+  { key: "principle", label: "原則", description: "適用すべき心理学原則" },
+  { key: "contraindication", label: "禁忌", description: "使ってはいけない状況" },
+  { key: "example", label: "例", description: "具体的な成功例" },
+  { key: "failure_example", label: "失敗例", description: "失敗するケース" },
+];
 
 const STATUS_LABEL: Record<string, string> = {
   uploaded: "アップロード済",
@@ -148,16 +133,9 @@ export default function BookChunksPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 編集状態
+  // 編集状態（動的スキーマ対応: Record<string, string>）
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editFields, setEditFields] = useState<Record<AllowedField, string>>({
-    situation: "",
-    resistance: "",
-    principle: "",
-    contraindication: "",
-    example: "",
-    failure_example: "",
-  });
+  const [editFields, setEditFields] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   // 削除状態
@@ -171,6 +149,12 @@ export default function BookChunksPanel({
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 3000);
   };
+
+  // 現在有効なスキーマ（suggested_schema があればそれを使い、なければデフォルト）
+  const activeSchema: SchemaFieldInfo[] =
+    bookDetail?.suggested_schema && bookDetail.suggested_schema.length > 0
+      ? bookDetail.suggested_schema
+      : DEFAULT_SCHEMA;
 
   // ─── チャンク読み込み ────────────────────────────────────────────────────────
 
@@ -208,9 +192,9 @@ export default function BookChunksPanel({
   // ─── 編集 ───────────────────────────────────────────────────────────────────
 
   const startEdit = (chunk: BookChunk) => {
-    const fields = {} as Record<AllowedField, string>;
-    for (const f of ALLOWED_FIELDS) {
-      fields[f] = (chunk.metadata[f] as string | null | undefined) ?? "";
+    const fields: Record<string, string> = {};
+    for (const f of activeSchema) {
+      fields[f.key] = (chunk.metadata[f.key] as string | null | undefined) ?? "";
     }
     setEditFields(fields);
     setEditingId(chunk.id);
@@ -224,8 +208,8 @@ export default function BookChunksPanel({
     setSaving(true);
     try {
       const body: Record<string, string | null> = {};
-      for (const f of ALLOWED_FIELDS) {
-        body[f] = editFields[f].trim() || null;
+      for (const f of activeSchema) {
+        body[f.key] = editFields[f.key]?.trim() || null;
       }
       const res = await fetchWithAuth(
         `${API_BASE}/v1/admin/knowledge/book-pdf/chunks/${chunkId}`,
@@ -360,9 +344,9 @@ export default function BookChunksPanel({
                 {bookDetail.schema_reasoning && (
                   <div style={{ color: "#9ca3af", marginBottom: 2 }}>💡 {bookDetail.schema_reasoning}</div>
                 )}
-                {bookDetail.suggested_schema && bookDetail.suggested_schema.length > 0 && (
+                {activeSchema.length > 0 && (
                   <div style={{ color: "#9ca3af" }}>
-                    📋 構造化フィールド: {bookDetail.suggested_schema.map((f) => f.label).join(" / ")}
+                    📋 構造化フィールド: {activeSchema.map((f) => f.label).join(" / ")}
                   </div>
                 )}
               </div>
@@ -428,6 +412,7 @@ export default function BookChunksPanel({
                 <ChunkCard
                   key={chunk.id}
                   chunk={chunk}
+                  activeSchema={activeSchema}
                   isEditing={editingId === chunk.id}
                   editFields={editFields}
                   saving={saving}
@@ -435,8 +420,8 @@ export default function BookChunksPanel({
                   deleting={deleting}
                   onStartEdit={() => startEdit(chunk)}
                   onCancelEdit={cancelEdit}
-                  onEditFieldChange={(field, val) =>
-                    setEditFields((prev) => ({ ...prev, [field]: val }))
+                  onEditFieldChange={(key, val) =>
+                    setEditFields((prev) => ({ ...prev, [key]: val }))
                   }
                   onSave={() => void handleSave(chunk.id)}
                   onDeleteRequest={() => setDeletingId(chunk.id)}
@@ -456,14 +441,15 @@ export default function BookChunksPanel({
 
 interface ChunkCardProps {
   chunk: BookChunk;
+  activeSchema: SchemaFieldInfo[];
   isEditing: boolean;
-  editFields: Record<AllowedField, string>;
+  editFields: Record<string, string>;
   saving: boolean;
   deletingId: number | null;
   deleting: boolean;
   onStartEdit: () => void;
   onCancelEdit: () => void;
-  onEditFieldChange: (field: AllowedField, val: string) => void;
+  onEditFieldChange: (key: string, val: string) => void;
   onSave: () => void;
   onDeleteRequest: () => void;
   onDeleteCancel: () => void;
@@ -472,6 +458,7 @@ interface ChunkCardProps {
 
 function ChunkCard({
   chunk,
+  activeSchema,
   isEditing,
   editFields,
   saving,
@@ -486,6 +473,11 @@ function ChunkCard({
   onDeleteConfirm,
 }: ChunkCardProps) {
   const isDeleting = deletingId === chunk.id;
+
+  // 構造化ステータスを動的スキーマキーで判定
+  const isStructured = activeSchema.some(
+    (f) => chunk.metadata[f.key] != null && chunk.metadata[f.key] !== ""
+  );
 
   return (
     <div
@@ -558,7 +550,7 @@ function ChunkCard({
                   color: "#60a5fa",
                 }}
               >
-                p.{chunk.metadata.page_number}
+                p.{chunk.metadata.page_number as number}
               </span>
             )}
             <span
@@ -567,14 +559,14 @@ function ChunkCard({
                 borderRadius: 999,
                 fontSize: 11,
                 fontWeight: 600,
-                background: chunk.is_structured
+                background: isStructured
                   ? "rgba(74,222,128,0.1)"
                   : "rgba(107,114,128,0.15)",
-                border: `1px solid ${chunk.is_structured ? "rgba(74,222,128,0.3)" : "rgba(107,114,128,0.3)"}`,
-                color: chunk.is_structured ? "#4ade80" : "#9ca3af",
+                border: `1px solid ${isStructured ? "rgba(74,222,128,0.3)" : "rgba(107,114,128,0.3)"}`,
+                color: isStructured ? "#4ade80" : "#9ca3af",
               }}
             >
-              {chunk.is_structured ? "✅ 構造化済み" : "⬜ 未構造化"}
+              {isStructured ? "✅ 構造化済み" : "⬜ 未構造化"}
             </span>
           </div>
         </div>
@@ -675,7 +667,7 @@ function ChunkCard({
         </div>
       )}
 
-      {/* 6フィールド編集フォーム */}
+      {/* 動的スキーマ編集フォーム */}
       {isEditing && (
         <div style={{ marginTop: 4 }}>
           <div
@@ -686,8 +678,8 @@ function ChunkCard({
               marginBottom: 12,
             }}
           >
-            {ALLOWED_FIELDS.map((field) => (
-              <div key={field}>
+            {activeSchema.map((field) => (
+              <div key={field.key}>
                 <label
                   style={{
                     display: "block",
@@ -697,12 +689,13 @@ function ChunkCard({
                     fontWeight: 600,
                   }}
                 >
-                  {FIELD_LABELS[field]}
+                  {field.label}
                 </label>
                 <textarea
                   rows={2}
-                  value={editFields[field]}
-                  onChange={(e) => onEditFieldChange(field, e.target.value)}
+                  value={editFields[field.key] ?? ""}
+                  placeholder={field.description}
+                  onChange={(e) => onEditFieldChange(field.key, e.target.value)}
                   disabled={saving}
                   style={{
                     ...TEXTAREA_SM,

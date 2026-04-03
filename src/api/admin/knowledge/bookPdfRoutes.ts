@@ -516,13 +516,16 @@ export function registerBookPdfRoutes(
         return res.status(400).json({ error: "無効なチャンクIDです" });
       }
 
+      // 全スキーマ種別のフィールドキーをホワイトリスト化（動的スキーマ対応）
       const ALLOWED_FIELDS = [
-        "situation",
-        "resistance",
-        "principle",
-        "contraindication",
-        "example",
-        "failure_example",
+        // psychology_book
+        "situation", "resistance", "principle", "contraindication", "example", "failure_example",
+        // sales_manual
+        "target_customer", "problem", "solution", "benefit", "objection_handling",
+        // product_catalog
+        "product_name", "spec", "price_range", "target", "comparison",
+        // business_document / general_report
+        "topic", "key_finding", "data_point", "implication",
       ] as const;
 
       type AllowedField = (typeof ALLOWED_FIELDS)[number];
