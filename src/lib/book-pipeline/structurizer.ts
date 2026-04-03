@@ -159,9 +159,10 @@ export async function structurizeChunks(
           confidence: 0,
         };
       }
-    } catch (groqErr) {
-      console.error("[structurizer] Groq call failed chunk=%d:", i,
-        groqErr instanceof Error ? groqErr.message : String(groqErr));
+    } catch (groqErr: unknown) {
+      const errMsg = groqErr instanceof Error ? groqErr.message : String(groqErr);
+      const bodySnippet = (groqErr as any)?.bodySnippet ?? '';
+      console.error("[structurizer] Groq call failed chunk=%d: %s %s", i, errMsg, bodySnippet);
       // API エラー: フォールバック
       structured = {
         category: "その他",
