@@ -136,6 +136,7 @@ export default function BookChunksPanel({
   // 編集状態（動的スキーマ対応: Record<string, string>）
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editFields, setEditFields] = useState<Record<string, string>>({});
+  const [initialFields, setInitialFields] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   // 削除状態
@@ -197,6 +198,7 @@ export default function BookChunksPanel({
       fields[f.key] = (chunk.metadata[f.key] as string | null | undefined) ?? "";
     }
     setEditFields(fields);
+    setInitialFields(fields);
     setEditingId(chunk.id);
   };
 
@@ -408,13 +410,19 @@ export default function BookChunksPanel({
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {chunks.map((chunk) => (
+              {chunks.map((chunk) => {
+                const isEditing = editingId === chunk.id;
+                const hasChanges = isEditing && activeSchema.some(
+                  (f) => (editFields[f.key] ?? "") !== (initialFields[f.key] ?? "")
+                );
+                return (
                 <ChunkCard
                   key={chunk.id}
                   chunk={chunk}
                   activeSchema={activeSchema}
-                  isEditing={editingId === chunk.id}
+                  isEditing={isEditing}
                   editFields={editFields}
+                  hasChanges={hasChanges}
                   saving={saving}
                   deletingId={deletingId}
                   deleting={deleting}
@@ -428,6 +436,8 @@ export default function BookChunksPanel({
                   onDeleteCancel={() => setDeletingId(null)}
                   onDeleteConfirm={() => void confirmDelete(chunk.id)}
                 />
+                );
+              })}
               ))}
             </div>
           )}
@@ -444,6 +454,7 @@ interface ChunkCardProps {
   activeSchema: SchemaFieldInfo[];
   isEditing: boolean;
   editFields: Record<string, string>;
+  hasChanges: boolean;
   saving: boolean;
   deletingId: number | null;
   deleting: boolean;
@@ -461,6 +472,7 @@ function ChunkCard({
   activeSchema,
   isEditing,
   editFields,
+  hasChanges,
   saving,
   deletingId,
   deleting,
@@ -727,20 +739,21 @@ function ChunkCard({
             </button>
             <button
               onClick={onSave}
-              disabled={saving}
+              disabled={saving || !hasChanges}
               style={{
                 flex: 2,
                 padding: "12px",
                 minHeight: 44,
                 borderRadius: 8,
                 border: "none",
-                background: saving
+                background: saving || !hasChanges
                   ? "#1f2937"
                   : "linear-gradient(135deg, #22c55e, #4ade80)",
-                color: saving ? "#6b7280" : "#022c22",
+                color: saving || !hasChanges ? "#6b7280" : "#022c22",
                 fontSize: 14,
                 fontWeight: 700,
-                cursor: saving ? "not-allowed" : "pointer",
+                cursor: saving || !hasChanges ? "not-allowed" : "pointer",
+                opacity: !hasChanges && !saving ? 0.5 : 1,
               }}
             >
               {saving ? "保存中..." : "保存"}

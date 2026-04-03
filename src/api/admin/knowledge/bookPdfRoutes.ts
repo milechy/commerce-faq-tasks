@@ -566,10 +566,9 @@ export function registerBookPdfRoutes(
 
         const updateResult = await db.query(
           `UPDATE faq_embeddings
-           SET metadata = metadata || $1::jsonb,
-               updated_at = NOW()
+           SET metadata = metadata || $1::jsonb
            WHERE id = $2
-           RETURNING id, metadata, updated_at`,
+           RETURNING id, metadata`,
           [JSON.stringify(patch), chunkId]
         );
 
