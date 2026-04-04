@@ -4,7 +4,7 @@ import { AdminNavBar } from "./components/AdminNavBar";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
 import { AuthProvider, useAuth } from "./auth/useAuth";
-import { RequireAuth, SuperAdminRoute } from "./components/RoleGuard";
+import { RequireAuth, SuperAdminRoute, AdminRoute } from "./components/RoleGuard";
 import Login from "./pages/Login";
 import AdminDashboard from "./pages/admin/index";
 import KnowledgeIndexPage from "./pages/admin/knowledge/index";
@@ -108,7 +108,7 @@ function AppInner() {
         <Route path="/admin/tenants/:id" element={<SuperAdminRoute><TenantDetailPage /></SuperAdminRoute>} />
 
         {/* 請求・使用量 — super_admin 専用 */}
-        <Route path="/admin/billing" element={<SuperAdminRoute><BillingPage /></SuperAdminRoute>} />
+        <Route path="/admin/billing" element={<AdminRoute><BillingPage /></AdminRoute>} />
 
         {/* チャットテスト */}
         <Route path="/admin/chat-test" element={<RequireAuth><ChatTestPage /></RequireAuth>} />

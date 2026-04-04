@@ -25,3 +25,11 @@ export function SuperAdminRoute({ children }: { children: React.ReactNode }) {
   if (!isSuperAdmin) return <Navigate to="/admin" replace />;
   return <>{children}</>;
 }
+
+/** super_admin + client_admin 共通ルート。未ログインは /login へ */
+export function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
