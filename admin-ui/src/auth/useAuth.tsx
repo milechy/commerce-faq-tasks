@@ -61,10 +61,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // TODO: Replace with GET /v1/auth/me when Stream A API is available
       const supaUser = session.user;
-      const meta = (supaUser.app_metadata ?? {}) as Record<string, unknown>;
-      const role = parseRole(meta);
-      const tenantId = (meta.tenant_id as string | undefined) ?? null;
-      const tenantName = (meta.tenant_name as string | undefined) ?? null;
+      const appMeta = (supaUser.app_metadata ?? {}) as Record<string, unknown>;
+      const userMeta = (supaUser.user_metadata ?? {}) as Record<string, unknown>;
+      const role = parseRole(appMeta);
+      const tenantId =
+        (appMeta.tenant_id as string | undefined) ??
+        (userMeta.tenant_id as string | undefined) ??
+        null;
+      const tenantName =
+        (appMeta.tenant_name as string | undefined) ??
+        (userMeta.tenant_name as string | undefined) ??
+        null;
 
       setUser({
         id: supaUser.id,

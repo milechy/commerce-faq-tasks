@@ -38,7 +38,9 @@ export function roleAuthMiddleware(
     "anonymous";
 
   const tenantId: string | null =
-    supabaseUser.app_metadata?.tenant_id || null;
+    supabaseUser.app_metadata?.tenant_id ||
+    supabaseUser.user_metadata?.tenant_id ||
+    null;
 
   (req as any).user = {
     id: supabaseUser.sub || supabaseUser.id || "",

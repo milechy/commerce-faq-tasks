@@ -82,6 +82,24 @@ describe("roleAuthMiddleware", () => {
     expect(user.role).toBe("client_admin");
     expect(user.tenantId).toBe("tenant-abc");
   });
+
+  it("falls back to user_metadata.tenant_id when app_metadata.tenant_id is absent", () => {
+    const req = mockReq({
+      supabaseUser: {
+        sub: "user-003",
+        email: "client2@example.com",
+        app_metadata: { role: "client_admin" },
+        user_metadata: { tenant_id: "tenant-from-user-meta" },
+      },
+    });
+    const res = mockRes();
+    roleAuthMiddleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    const user: AuthenticatedUser = (req as any).user;
+    expect(user.role).toBe("client_admin");
+    expect(user.tenantId).toBe("tenant-from-user-meta");
+  });
 });
 
 // ---------------------------------------------------------------------------
