@@ -1659,8 +1659,6 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
-  const [structurizing, setStructurizing] = useState(false);
-  const [structurizeResult, setStructurizeResult] = useState<string | null>(null);
   const [selectedBook, setSelectedBook] = useState<BookUpload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1672,8 +1670,6 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const uploadUrl = isSuperAdmin
     ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
     : `${API_BASE}/v1/admin/knowledge/book-pdf`;
-
-  const structurizeUrl = `${API_BASE}/v1/admin/knowledge/structurize-trigger?tenant=${encodeURIComponent(tenantId)}`;
 
   const loadBooks = useCallback(async () => {
     setLoadingBooks(true);
@@ -1853,25 +1849,6 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
     }
   };
 
-  const handleStructurize = async () => {
-    setStructurizing(true);
-    setStructurizeResult(null);
-    try {
-      const res = await fetchWithAuth(structurizeUrl, { method: "POST" });
-      const data = (await res.json()) as { target_count?: number; message?: string };
-      const cnt = data.target_count ?? 0;
-      setStructurizeResult(
-        data.message ?? (cnt > 0 ? `${cnt}件の構造化を開始しました` : "構造化対象がありません")
-      );
-      setTimeout(() => { void loadBooks(); }, 3000);
-    } catch {
-      setStructurizeResult("構造化に失敗しました");
-    } finally {
-      setStructurizing(false);
-    }
-  };
-
-  const embeddedCount = books.filter((b) => b.status === "embedded").length;
   const pendingCount = queue.filter((q) => q.status === "pending").length;
   const hasQueue = queue.length > 0;
 
@@ -2054,31 +2031,6 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
             >
               リストをクリア
             </button>
-          )}
-        </div>
-      )}
-
-      {/* 構造化トリガー（super_adminのみ） */}
-      {isSuperAdmin && embeddedCount > 0 && (
-        <div style={{ marginBottom: 24, padding: "14px 16px", borderRadius: 10, border: "1px solid rgba(167,139,250,0.25)", background: "rgba(109,40,217,0.08)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ fontSize: 14, color: "#a78bfa" }}>
-              埋め込み完了: {embeddedCount}件 — 構造化でAI精度が向上します
-            </div>
-            <button
-              onClick={handleStructurize}
-              disabled={structurizing}
-              style={{
-                minHeight: 44, padding: "0 18px", borderRadius: 8,
-                border: "1px solid rgba(167,139,250,0.4)", background: "rgba(139,92,246,0.15)",
-                color: "#c4b5fd", fontSize: 13, fontWeight: 600, cursor: structurizing ? "not-allowed" : "pointer",
-              }}
-            >
-              {structurizing ? "処理中..." : "✨ 構造化を実行"}
-            </button>
-          </div>
-          {structurizeResult && (
-            <div style={{ marginTop: 10, fontSize: 13, color: "#86efac" }}>{structurizeResult}</div>
           )}
         </div>
       )}
