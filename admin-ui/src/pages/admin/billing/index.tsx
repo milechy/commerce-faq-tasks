@@ -141,7 +141,7 @@ const BTN_LINK: React.CSSProperties = {
 export default function BillingPage() {
   const navigate = useNavigate();
   const { t } = useLang();
-  const { isSuperAdmin, user } = useAuth();
+  const { isSuperAdmin, user, previewMode, previewTenantId, previewTenantName } = useAuth();
 
   const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -190,16 +190,20 @@ export default function BillingPage() {
           // テナント取得失敗時は空のまま
         }
       } else {
-        // Client Admin: 自テナントのみ
-        const tenantId = user?.tenantId ?? "";
-        const tenantName = user?.tenantName ?? tenantId;
+        // Client Admin（本人またはプレビューモード）: 自テナントのみ
+        const tenantId = previewMode
+          ? (previewTenantId ?? "")
+          : (user?.tenantId ?? "");
+        const tenantName = previewMode
+          ? (previewTenantName ?? tenantId)
+          : (user?.tenantName ?? tenantId);
         if (tenantId) {
           setTenants([{ id: tenantId, name: tenantName }]);
           setSelectedTenantId(tenantId);
         }
       }
     })();
-  }, [navigate, isSuperAdmin, user]);
+  }, [navigate, isSuperAdmin, user, previewMode, previewTenantId, previewTenantName]);
 
   // 請求データを取得
   const fetchBillingData = useCallback(async () => {
