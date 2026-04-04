@@ -4,7 +4,6 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { superAdminMiddleware } from "../tenants/superAdminMiddleware";
 import {
   listEvaluations,
   getDetailedStats,
@@ -26,7 +25,8 @@ import {
 function resolveAuth(req: Request): { jwtTenantId: string; isSuperAdmin: boolean; email: string } {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
   return {
-    jwtTenantId: su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "",
+    jwtTenantId:
+      su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "",
     isSuperAdmin: (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin",
     email: su?.email ?? "",
   };
@@ -199,9 +199,16 @@ export function registerEvaluationRoutes(app: Express): void {
   app.patch(
     "/v1/admin/evaluations/:id/rules/:ruleIndex",
     supabaseAuthMiddleware,
-    superAdminMiddleware,
     async (req: Request, res: Response) => {
       const { jwtTenantId, isSuperAdmin, email } = resolveAuth(req);
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      if (!su) {
+        return res.status(401).json({ error: "unauthorized", message: "認証が必要です。" });
+      }
+      const role = su.app_metadata?.role ?? su.user_metadata?.role ?? "";
+      if (role !== "super_admin" && role !== "client_admin") {
+        return res.status(403).json({ error: "forbidden", message: "権限がありません。" });
+      }
       const id = Number(req.params["id"]);
       const ruleIndex = Number(req.params["ruleIndex"]);
       const { action, edited_text } = (req.body ?? {}) as Record<string, unknown>;

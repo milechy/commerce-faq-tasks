@@ -43,7 +43,7 @@ import { registerEvaluationRoutes } from "../../src/api/admin/evaluations/routes
 // App factory
 // ---------------------------------------------------------------------------
 
-type Role = "super_admin" | "client_admin";
+type Role = "super_admin" | "client_admin" | "anonymous";
 
 function makeApp(role: Role = "client_admin", tenantId = "tenant-a") {
   const app = express();
@@ -290,12 +290,26 @@ describe("3. PATCH /v1/admin/evaluations/:id/rules/:ruleIndex", () => {
     expect(res.body.error).toBe("action must be approve or reject");
   });
 
-  it("returns 403 for non-super_admin", async () => {
-    const res = await request(makeApp("client_admin"))
+  it("returns 403 for anonymous user", async () => {
+    const res = await request(makeApp("anonymous"))
       .patch("/v1/admin/evaluations/1/rules/0")
       .send({ action: "approve" });
 
     expect(res.status).toBe(403);
+  });
+
+  it("client_admin can approve rules for own tenant", async () => {
+    (getEvaluationById as jest.Mock).mockResolvedValue(evalWithRules);
+    (insertTuningRuleFromSuggestion as jest.Mock).mockResolvedValue(undefined);
+    (updateSuggestedRuleStatus as jest.Mock).mockResolvedValue(EVAL_ROW);
+
+    const res = await request(makeApp("client_admin", "tenant-a"))
+      .patch("/v1/admin/evaluations/1/rules/0")
+      .send({ action: "approve" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(updateSuggestedRuleStatus).toHaveBeenCalledWith(1, 0, "approved", "tenant-a");
   });
 
   it("returns 400 for negative ruleIndex", async () => {

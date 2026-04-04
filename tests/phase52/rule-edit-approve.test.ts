@@ -36,7 +36,7 @@ import { registerEvaluationRoutes } from "../../src/api/admin/evaluations/routes
 // App factory
 // ---------------------------------------------------------------------------
 
-function makeApp(role: "super_admin" | "client_admin" = "super_admin", tenantId = "tenant-a") {
+function makeApp(role: "super_admin" | "client_admin" | "anonymous" = "super_admin", tenantId = "tenant-a") {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res: any, next: any) => {
@@ -155,9 +155,9 @@ describe("4. バリデーション — edited_text が空文字列 → 400", () 
 // ---------------------------------------------------------------------------
 // 5. 未認証 — super_admin 以外は403
 // ---------------------------------------------------------------------------
-describe("5. client_admin → 403", () => {
-  it("super_admin 以外はアクセス不可", async () => {
-    const res = await request(makeApp("client_admin"))
+describe("5. anonymous → 403", () => {
+  it("anonymous ユーザーはアクセス不可", async () => {
+    const res = await request(makeApp("anonymous"))
       .patch("/v1/admin/evaluations/1/rules/0")
       .send({ action: "approve" });
 

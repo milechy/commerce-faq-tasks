@@ -88,7 +88,7 @@ export default function EvaluationDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { lang } = useLang();
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, isClientAdmin } = useAuth();
 
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -530,7 +530,7 @@ export default function EvaluationDetailPage() {
                         >
                           却下済み ✗
                         </span>
-                      ) : isSuperAdmin ? (
+                      ) : (isSuperAdmin || isClientAdmin) ? (
                         editingRuleId === ruleIndex ? (
                           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                             <textarea
