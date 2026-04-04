@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLang } from "../../i18n/LangContext";
+import { authFetch, API_BASE } from "../../lib/api";
 
 export interface TuningRule {
   id: number;
@@ -86,6 +87,51 @@ export default function TuningRuleModal({
   const [isActive, setIsActive] = useState(initialData?.is_active ?? true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [aiSuggested, setAiSuggested] = useState(false);
+  const [suggestReason, setSuggestReason] = useState<string | null>(null);
+
+  // AI提案: モーダルが開いた時点でsourceConversationがあれば自動実行
+  useEffect(() => {
+    if (mode !== "create" || !sourceConversation) return;
+    let cancelled = false;
+
+    const suggest = async () => {
+      setSuggesting(true);
+      try {
+        const res = await authFetch(`${API_BASE}/v1/admin/tuning/suggest-rule`, {
+          method: "POST",
+          body: JSON.stringify({
+            userMessage: sourceConversation.userMsg,
+            aiMessage: sourceConversation.assistantMsg,
+          }),
+        });
+        if (cancelled) return;
+        if (!res.ok) return; // 失敗時は手動入力にフォールバック
+        const data = (await res.json()) as {
+          trigger_pattern: string;
+          instruction: string;
+          priority: number;
+          reason: string;
+        };
+        if (data.trigger_pattern || data.instruction) {
+          setTriggerPattern(data.trigger_pattern ?? "");
+          setExpectedBehavior(data.instruction ?? "");
+          setPriority(data.priority ?? 0);
+          setSuggestReason(data.reason ?? null);
+          setAiSuggested(true);
+        }
+      } catch {
+        // 失敗時は空欄のまま（手動入力）
+      } finally {
+        if (!cancelled) setSuggesting(false);
+      }
+    };
+
+    void suggest();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const title =
     mode === "edit" ? t("tuning.edit_title") : t("tuning.create_title");
@@ -230,6 +276,85 @@ export default function TuningRuleModal({
             </div>
           )}
 
+          {/* AI提案バナー */}
+          {suggesting && (
+            <div
+              style={{
+                padding: "12px 16px",
+                borderRadius: 10,
+                background: "rgba(37,99,235,0.08)",
+                border: "1px solid rgba(59,130,246,0.3)",
+                color: "#93c5fd",
+                fontSize: 14,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              <span
+                style={{
+                  width: 16,
+                  height: 16,
+                  border: "2px solid rgba(147,197,253,0.4)",
+                  borderTopColor: "#93c5fd",
+                  borderRadius: "50%",
+                  display: "inline-block",
+                  animation: "spin 0.8s linear infinite",
+                  flexShrink: 0,
+                }}
+              />
+              🤖 AIがルール提案を生成中...
+            </div>
+          )}
+          {aiSuggested && !suggesting && (
+            <div
+              style={{
+                padding: "12px 16px",
+                borderRadius: 10,
+                background: "rgba(37,99,235,0.08)",
+                border: "1px solid rgba(59,130,246,0.3)",
+                color: "#93c5fd",
+                fontSize: 14,
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <span>
+                🤖 AIが提案を作成しました。内容を確認して、必要に応じて編集してください。
+                {suggestReason && (
+                  <span style={{ display: "block", fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                    理由: {suggestReason}
+                  </span>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setTriggerPattern("");
+                  setExpectedBehavior("");
+                  setPriority(0);
+                  setSuggestReason(null);
+                  setAiSuggested(false);
+                }}
+                style={{
+                  flexShrink: 0,
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(107,114,128,0.4)",
+                  background: "transparent",
+                  color: "#6b7280",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                リセット
+              </button>
+            </div>
+          )}
+
           {/* 元の会話（会話履歴から作成時のみ） */}
           {sourceConversation && (
             <div
@@ -329,13 +454,29 @@ export default function TuningRuleModal({
           <div>
             <label style={LABEL_STYLE}>{t("tuning.trigger_pattern")}</label>
             <p style={HINT_STYLE}>{t("tuning.trigger_pattern_hint")}</p>
-            <input
-              type="text"
-              value={triggerPattern}
-              onChange={(e) => setTriggerPattern(e.target.value)}
-              placeholder={t("tuning.trigger_pattern_placeholder")}
-              style={INPUT_STYLE}
-            />
+            {suggesting ? (
+              <div
+                style={{
+                  ...INPUT_STYLE,
+                  minHeight: 52,
+                  background: "rgba(37,99,235,0.08)",
+                  border: "1px solid rgba(59,130,246,0.2)",
+                }}
+              />
+            ) : (
+              <input
+                type="text"
+                value={triggerPattern}
+                onChange={(e) => setTriggerPattern(e.target.value)}
+                placeholder={t("tuning.trigger_pattern_placeholder")}
+                style={{
+                  ...INPUT_STYLE,
+                  ...(aiSuggested && triggerPattern
+                    ? { background: "rgba(37,99,235,0.08)", border: "1px solid rgba(59,130,246,0.35)" }
+                    : {}),
+                }}
+              />
+            )}
           </div>
 
           {/* 期待する応答方針 */}
@@ -344,14 +485,30 @@ export default function TuningRuleModal({
               {t("tuning.expected_behavior")}
               <span style={{ color: "#ef4444", marginLeft: 4 }}>*</span>
             </label>
-            <textarea
-              required
-              value={expectedBehavior}
-              onChange={(e) => setExpectedBehavior(e.target.value)}
-              rows={4}
-              placeholder={t("tuning.expected_behavior_placeholder")}
-              style={TEXTAREA_STYLE}
-            />
+            {suggesting ? (
+              <div
+                style={{
+                  ...TEXTAREA_STYLE,
+                  minHeight: 100,
+                  background: "rgba(37,99,235,0.08)",
+                  border: "1px solid rgba(59,130,246,0.2)",
+                }}
+              />
+            ) : (
+              <textarea
+                required
+                value={expectedBehavior}
+                onChange={(e) => setExpectedBehavior(e.target.value)}
+                rows={4}
+                placeholder={t("tuning.expected_behavior_placeholder")}
+                style={{
+                  ...TEXTAREA_STYLE,
+                  ...(aiSuggested && expectedBehavior
+                    ? { background: "rgba(37,99,235,0.08)", border: "1px solid rgba(59,130,246,0.35)" }
+                    : {}),
+                }}
+              />
+            )}
           </div>
 
           {/* 適用範囲 */}

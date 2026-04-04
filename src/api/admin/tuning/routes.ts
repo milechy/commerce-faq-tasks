@@ -12,6 +12,82 @@ import {
 } from "./tuningRulesRepository";
 
 // ---------------------------------------------------------------------------
+// Groq 8b: ルール提案
+// ---------------------------------------------------------------------------
+
+export interface SuggestRuleResponse {
+  trigger_pattern: string;
+  instruction: string;
+  priority: number;
+  reason: string;
+}
+
+async function callGroq8bSuggest(
+  userMsg: string,
+  aiMsg: string,
+): Promise<SuggestRuleResponse> {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) {
+    return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+  }
+
+  const prompt = `以下のAIチャットの会話を分析して、AIの応答を改善するためのチューニングルールを1つ提案してください。
+
+【顧客の質問】
+${userMsg.slice(0, 500)}
+
+【AIの回答】
+${aiMsg.slice(0, 500)}
+
+以下のJSON形式のみで回答してください（説明不要）:
+{
+  "trigger_pattern": "このルールが適用されるキーワードや状況（例: 価格について聞かれた場合）",
+  "instruction": "AIへの具体的な指示（例: 料金プランの詳細を案内し、無料トライアルを提案する）",
+  "priority": 会話の改善緊急度（0〜10の整数）,
+  "reason": "このルールが必要な理由（1〜2文）"
+}`;
+
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL_8B ?? "llama-3.1-8b-instant",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.4,
+        max_tokens: 400,
+      }),
+    });
+
+    if (!res.ok) {
+      return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+    }
+
+    const data = (await res.json()) as any;
+    const raw: string = data.choices?.[0]?.message?.content?.trim() ?? "";
+
+    // JSON部分を抽出（markdown code block 対応）
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    return {
+      trigger_pattern: String(parsed["trigger_pattern"] ?? "").slice(0, 500),
+      instruction: String(parsed["instruction"] ?? "").slice(0, 2000),
+      priority: Math.max(0, Math.min(10, Number(parsed["priority"]) || 0)),
+      reason: String(parsed["reason"] ?? "").slice(0, 500),
+    };
+  } catch {
+    return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Zod スキーマ
 // ---------------------------------------------------------------------------
 
@@ -36,6 +112,37 @@ const updateSchema = z.object({
 
 export function registerTuningRoutes(app: Express): void {
   app.use("/v1/admin/tuning-rules", supabaseAuthMiddleware);
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/tuning/suggest-rule
+  // Groq 8b で会話内容からチューニングルールを提案する
+  // super_admin + client_admin のみアクセス可
+  // -----------------------------------------------------------------------
+  app.post(
+    "/v1/admin/tuning/suggest-rule",
+    supabaseAuthMiddleware,
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      if (!su) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+      const role = su.app_metadata?.role ?? su.user_metadata?.role ?? "";
+      if (role !== "super_admin" && role !== "client_admin") {
+        return res.status(403).json({ error: "forbidden" });
+      }
+
+      const { userMessage, aiMessage } = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof userMessage !== "string" || typeof aiMessage !== "string") {
+        return res.status(400).json({ error: "userMessage and aiMessage are required strings" });
+      }
+      if (!userMessage.trim() || !aiMessage.trim()) {
+        return res.status(400).json({ error: "userMessage and aiMessage must not be empty" });
+      }
+
+      const suggestion = await callGroq8bSuggest(userMessage.trim(), aiMessage.trim());
+      return res.json(suggestion);
+    },
+  );
 
   // -----------------------------------------------------------------------
   // GET /v1/admin/tuning-rules
