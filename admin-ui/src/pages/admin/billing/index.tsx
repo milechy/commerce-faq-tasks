@@ -38,7 +38,26 @@ interface Invoice {
   amount_cents: number;
   status: "paid" | "open" | "draft";
   hosted_invoice_url: string | null;
+  invoice_pdf: string | null;
   portal_url: string;
+}
+
+interface CostBreakdownItem {
+  label: string;
+  cost_yen: number;
+  request_count: number;
+  percentage: number;
+}
+
+interface CostBreakdown {
+  total_yen: number;
+  breakdown: Record<string, CostBreakdownItem>;
+}
+
+interface CrossTenantRow {
+  tenant_id: string;
+  total_requests: number;
+  cost_total_cents: number;
 }
 
 // ─── ユーティリティ ────────────────────────────────────────
@@ -134,6 +153,8 @@ export default function BillingPage() {
   const [daily, setDaily] = useState<DailyUsage[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [portalUrl, setPortalUrl] = useState<string | null>(null);
+  const [costBreakdown, setCostBreakdown] = useState<CostBreakdown | null>(null);
+  const [crossTenantRows, setCrossTenantRows] = useState<CrossTenantRow[]>([]);
 
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,17 +211,25 @@ export default function BillingPage() {
     setDaily([]);
     setInvoices([]);
     setPortalUrl(null);
+    setCostBreakdown(null);
+    setCrossTenantRows([]);
 
     const { from, to } = monthToDateRange(selectedMonth);
 
     try {
-      const [usageRes, invoicesRes] = await Promise.allSettled([
+      const [usageRes, invoicesRes, breakdownRes, crossTenantRes] = await Promise.allSettled([
         authFetch(
           `${API_BASE}/v1/admin/billing/usage?tenantId=${selectedTenantId}&from=${from}&to=${to}`
         ),
         authFetch(
           `${API_BASE}/v1/admin/billing/invoices?tenantId=${selectedTenantId}`
         ),
+        authFetch(
+          `${API_BASE}/v1/admin/billing/cost-breakdown?tenantId=${selectedTenantId}&from=${from}&to=${to}`
+        ),
+        ...(isSuperAdmin
+          ? [authFetch(`${API_BASE}/v1/admin/billing/usage?group_by=tenant&from=${from}&to=${to}`)]
+          : []),
       ]);
 
       // ─── 使用量データ ───────────────────────────────────────
@@ -210,15 +239,19 @@ export default function BillingPage() {
           daily: Array<{
             date: string;
             total_requests: number;
-            dialog_requests: number;
-            search_requests: number;
+            chat_requests: number;
+            avatar_requests: number;
+            voice_requests: number;
+            input_tokens: number;
+            output_tokens: number;
             cost_llm_cents: number;
             cost_total_cents: number;
-            billing_status: string;
           }>;
           monthly: Array<{
             month: string;
             total_requests: number;
+            input_tokens: number;
+            output_tokens: number;
             cost_llm_cents: number;
             cost_total_cents: number;
           }>;
@@ -228,8 +261,8 @@ export default function BillingPage() {
         const mappedDaily: DailyUsage[] = data.daily.map((d) => ({
           date: d.date,
           requests: d.total_requests,
-          input_tokens: 0,
-          output_tokens: 0,
+          input_tokens: d.input_tokens ?? 0,
+          output_tokens: d.output_tokens ?? 0,
           cost_total_cents: d.cost_total_cents,
         }));
         setDaily(mappedDaily);
@@ -242,24 +275,20 @@ export default function BillingPage() {
           ?? data.daily.reduce((s, d) => s + d.cost_llm_cents, 0);
         const costTotalCents = monthRow?.cost_total_cents
           ?? mappedDaily.reduce((s, d) => s + d.cost_total_cents, 0);
-
-        // billing_status: pending が1件でもあれば pending
-        const hasPending = data.daily.some((d) => d.billing_status === "pending");
-        const billingStatus: BillingSummary["billing_status"] = hasPending
-          ? "pending"
-          : data.daily.length > 0
-          ? "invoiced"
-          : "pending";
+        const totalInputTokens = monthRow?.input_tokens
+          ?? mappedDaily.reduce((s, d) => s + d.input_tokens, 0);
+        const totalOutputTokens = monthRow?.output_tokens
+          ?? mappedDaily.reduce((s, d) => s + d.output_tokens, 0);
 
         setSummary({
           tenant_id: selectedTenantId,
           month: selectedMonth,
           total_requests: totalRequests,
-          total_input_tokens: 0,
-          total_output_tokens: 0,
+          total_input_tokens: totalInputTokens,
+          total_output_tokens: totalOutputTokens,
           cost_llm_cents: costLlmCents,
           cost_total_cents: costTotalCents,
-          billing_status: billingStatus,
+          billing_status: costTotalCents > 0 ? "invoiced" : "pending",
         });
       } else if (usageRes.status === "fulfilled") {
         // APIが200以外を返した場合（no_active_subscription など）
@@ -305,16 +334,37 @@ export default function BillingPage() {
             ? inv.status
             : "open") as Invoice["status"],
           hosted_invoice_url: inv.hostedInvoiceUrl ?? null,
+          invoice_pdf: inv.invoicePdf ?? null,
           portal_url: data.portalUrl ?? "#",
         }));
         setInvoices(mappedInvoices);
+      }
+
+      // ─── コスト内訳 ───────────────────────────────────────
+      if (breakdownRes.status === "fulfilled" && breakdownRes.value.ok) {
+        const bd = (await breakdownRes.value.json()) as CostBreakdown;
+        setCostBreakdown(bd);
+      }
+
+      // ─── Super Admin: テナント横断 ──────────────────────
+      if (
+        isSuperAdmin &&
+        crossTenantRes !== undefined &&
+        crossTenantRes.status === "fulfilled" &&
+        crossTenantRes.value.ok
+      ) {
+        const ct = (await crossTenantRes.value.json()) as {
+          group_by: string;
+          tenants: CrossTenantRow[];
+        };
+        setCrossTenantRows(ct.tenants ?? []);
       }
     } catch {
       setError(t("billing.load_error"));
     } finally {
       setLoadingData(false);
     }
-  }, [selectedTenantId, selectedMonth, t]);
+  }, [selectedTenantId, selectedMonth, isSuperAdmin, t]);
 
   useEffect(() => {
     fetchBillingData();
@@ -574,6 +624,28 @@ export default function BillingPage() {
                 </div>
               </div>
 
+              {/* AI処理量 */}
+              <div style={{ ...CARD, flex: "1 1 140px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 26 }}>🤖</span>
+                  <span
+                    title="AIが文章を読み書きした量です"
+                    style={{ fontSize: 13, color: "#6b7280", cursor: "help" }}
+                  >
+                    (?)
+                  </span>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#a78bfa", lineHeight: 1 }}>
+                  {fmtNum(summary.total_input_tokens + summary.total_output_tokens)}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
+                  AIの処理量
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                  AIが文章を読み書きした量
+                </div>
+              </div>
+
               {/* LLMコスト（原価） */}
               <div style={{ ...CARD, flex: "1 1 140px" }}>
                 <div style={{ fontSize: 26, marginBottom: 4 }}>💹</div>
@@ -661,6 +733,44 @@ export default function BillingPage() {
                 </div>
               </div>
               <UsageChart data={daily} mode={chartMode} />
+            </section>
+          )}
+
+          {/* コスト内訳 */}
+          {costBreakdown && costBreakdown.total_yen > 0 && (
+            <section style={{ ...CARD, marginBottom: 20 }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 16px" }}>
+                コスト内訳
+              </h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {Object.entries(costBreakdown.breakdown).map(([feature, item]) => {
+                  const colors: Record<string, string> = {
+                    chat:   "#60a5fa",
+                    avatar: "#f472b6",
+                    voice:  "#4ade80",
+                  };
+                  const color = colors[feature] ?? "#9ca3af";
+                  return (
+                    <div key={feature}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13 }}>
+                        <span style={{ color: "#d1d5db", fontWeight: 600 }}>{item.label}</span>
+                        <span style={{ color }}>¥{item.cost_yen.toLocaleString("ja-JP")} ({item.percentage}%)</span>
+                      </div>
+                      <div style={{ height: 8, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
+                        <div
+                          style={{
+                            height: "100%",
+                            width: `${item.percentage}%`,
+                            borderRadius: 4,
+                            background: color,
+                            transition: "width 0.4s ease",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </section>
           )}
 
@@ -804,6 +914,23 @@ export default function BillingPage() {
                             {t("billing.view_detail")}
                           </a>
                         )}
+                        {inv.invoice_pdf && (
+                          <a
+                            href={inv.invoice_pdf}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download
+                            style={{
+                              ...BTN_LINK,
+                              fontSize: 13,
+                              padding: "8px 14px",
+                              borderColor: "#374151",
+                              color: "#9ca3af",
+                            }}
+                          >
+                            📥 PDF
+                          </a>
+                        )}
                       </div>
                     </div>
                   );
@@ -811,6 +938,55 @@ export default function BillingPage() {
               </div>
             )}
           </section>
+          {/* Super Admin: テナント横断利用状況 */}
+          {isSuperAdmin && crossTenantRows.length > 0 && (
+            <section style={{ ...CARD, marginBottom: 32 }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 16px" }}>
+                テナント別利用状況（今月）
+              </h2>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 400 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #1f2937" }}>
+                      {["テナントID", "リクエスト数", "今月のご利用額"].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            padding: "10px 12px",
+                            textAlign: "left",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: "#6b7280",
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {crossTenantRows.map((row) => (
+                      <tr
+                        key={row.tenant_id}
+                        style={{ borderBottom: "1px solid rgba(31,41,55,0.5)", cursor: "pointer" }}
+                        onClick={() => setSelectedTenantId(row.tenant_id)}
+                      >
+                        <td style={{ padding: "10px 12px", color: "#60a5fa", fontWeight: 600 }}>
+                          {row.tenant_id}
+                        </td>
+                        <td style={{ padding: "10px 12px", color: "#f9fafb" }}>
+                          {fmtNum(row.total_requests)}
+                        </td>
+                        <td style={{ padding: "10px 12px", color: "#4ade80", fontWeight: 600 }}>
+                          {fmtCents(row.cost_total_cents)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
         </>
       ) : !loadingData && !error ? (
         <div

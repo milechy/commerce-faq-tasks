@@ -57,7 +57,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "チューニングルール", path: "/admin/tuning", desc: "AI回答の改善ルール" },
       { label: "テストチャット", path: "/admin/chat-test", desc: "AIの回答をテスト" },
       { label: "テナント管理", path: "/admin/tenants", desc: "テナント設定と管理", superAdminOnly: true },
-      { label: "請求・使用量", path: "/admin/billing", desc: "使用量と請求情報", superAdminOnly: true },
+      { label: "ご利用状況", path: "/admin/billing", desc: "使用量と請求情報" },
     ],
   },
 ];

@@ -472,9 +472,10 @@ app.post(
   createStripeWebhookHandler(db, logger)
 );
 
-// 課金管理API（Super Admin認証）
+// 課金管理API（super_admin / client_admin）
+// ロール検査は registerBillingAdminRoutes 内部で行うため supabaseAuthMiddleware のみ渡す
 if (db) {
-  registerBillingAdminRoutes(app, db, logger, [supabaseAuthMiddleware, superAdminMiddleware]);
+  registerBillingAdminRoutes(app, db, logger, [supabaseAuthMiddleware]);
 }
 
 // Phase34: 認証情報API
