@@ -145,7 +145,7 @@ const sentimentKpiColor = (positiveRate: number) => {
 
 export default function AnalyticsDashboardPage() {
   const navigate = useNavigate();
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId } = useAuth();
 
   const [period, setPeriod] = useState<string>("30d");
   const [tenantFilter, setTenantFilter] = useState<string>("");
@@ -160,7 +160,9 @@ export default function AnalyticsDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+  const tenantId = isSuperAdmin && !previewMode
+    ? undefined
+    : (previewMode ? (previewTenantId ?? undefined) : (user?.tenantId ?? undefined));
 
   useEffect(() => {
     if (!isSuperAdmin) return;

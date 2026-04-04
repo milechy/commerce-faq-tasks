@@ -116,7 +116,7 @@ export function registerAnalyticsRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
       const isSuperAdmin: boolean =
         (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
         "super_admin";
@@ -239,9 +239,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         // Sentiment distribution
         const sentParams: (string | number)[] = [`${interval}`];
-        const sentTenantClause = tenantId
-          ? "AND session_id IN (SELECT session_id FROM chat_sessions WHERE tenant_id = $2)"
-          : "";
+        const sentTenantClause = tenantId ? "AND tenant_id = $2" : "";
         if (tenantId) sentParams.push(tenantId);
         const sentimentResult = await pool.query(
           `SELECT sentiment->>'label' AS label, COUNT(*)::int AS count
@@ -303,7 +301,7 @@ export function registerAnalyticsRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
       const isSuperAdmin: boolean =
         (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
         "super_admin";
@@ -367,10 +365,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         // Sentiment trends per day
         const sentTrendsParams: (string | number)[] = [`${interval}`];
-        const sentTrendsTenantJoin = tenantId
-          ? "JOIN chat_sessions cs ON cm.session_id = cs.session_id"
-          : "";
-        const sentTrendsTenantClause = tenantId ? "AND cs.tenant_id = $2" : "";
+        const sentTrendsTenantClause = tenantId ? "AND cm.tenant_id = $2" : "";
         if (tenantId) sentTrendsParams.push(tenantId);
 
         const sentTrendsResult = await pool.query(
@@ -380,7 +375,6 @@ export function registerAnalyticsRoutes(app: Express): void {
              COUNT(*) FILTER (WHERE cm.sentiment->>'label' = 'negative')::int AS negative,
              COUNT(*) FILTER (WHERE cm.sentiment->>'label' = 'neutral')::int AS neutral
            FROM chat_messages cm
-           ${sentTrendsTenantJoin}
            WHERE cm.sentiment IS NOT NULL
              AND cm.created_at >= NOW() - $1::interval
            ${sentTrendsTenantClause}
@@ -432,7 +426,7 @@ export function registerAnalyticsRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
       const isSuperAdmin: boolean =
         (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
         "super_admin";
@@ -564,7 +558,7 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/conversions",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
       const isSuperAdmin: boolean =
         (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
