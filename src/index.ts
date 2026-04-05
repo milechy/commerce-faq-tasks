@@ -63,6 +63,7 @@ import { registerReportRoutes } from "./api/admin/reports/routes";
 import { registerAnalyticsRoutes } from "./api/admin/analytics/routes";
 import { registerEventAnalyticsRoutes } from "./api/admin/analytics/eventAnalyticsRoutes";
 import { registerEventRoutes } from "./api/events/eventRoutes";
+import { registerEngagementRoutes } from "./api/engagement/engagementRoutes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
@@ -536,6 +537,9 @@ registerWidgetRoutes(app, db);
 
 // Phase55: 行動イベント受信 API (Widget → Server)
 if (db) registerEventRoutes(app, apiStack, db);
+
+// Phase56: プロアクティブエンゲージメント CRUD + Widget API
+registerEngagementRoutes(app, apiStack, db);
 
 // Phase55: Widget features check (event_tracking フラグ取得)
 app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: express.Response) => {

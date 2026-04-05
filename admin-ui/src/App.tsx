@@ -27,6 +27,7 @@ import BooksPage from "./pages/admin/knowledge/books";
 import EvaluationsPage from "./pages/admin/evaluations/index";
 import EvaluationDetailPage from "./pages/admin/evaluations/[id]";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
+import EngagementPage from "./pages/admin/engagement/index";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -143,6 +144,7 @@ function AppInner() {
 
         {/* Phase50: 会話分析ダッシュボード */}
         <Route path="/admin/analytics" element={<RequireAuth><AnalyticsDashboardPage /></RequireAuth>} />
+        <Route path="/admin/engagement" element={<RequireAuth><EngagementPage /></RequireAuth>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />

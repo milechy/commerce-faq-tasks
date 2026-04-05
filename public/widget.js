@@ -2182,8 +2182,99 @@
     window.addEventListener('beforeunload', function () { self.flush(); });
   };
 
+  // Phase56: TriggerEngine — プロアクティブエンゲージメント（LLM不使用）
+  function TriggerEngine(tracker) {
+    this.tracker = tracker;
+    this.rules = [];
+    this.firedRuleIds = new Set();
+    this.suppressedUntil = 0;
+  }
+
+  TriggerEngine.prototype.loadRules = function () {
+    var self = this;
+    try {
+      var cached = sessionStorage.getItem('r2c_rules');
+      var cacheTs = sessionStorage.getItem('r2c_rules_ts');
+      if (cached && cacheTs && Date.now() - Number(cacheTs) < 300000) {
+        self.rules = JSON.parse(cached);
+        return Promise.resolve();
+      }
+    } catch (_e) {}
+    return fetch(self.tracker.apiBase + '/api/engagement/rules', {
+      headers: { 'x-api-key': self.tracker.apiKey },
+    })
+      .then(function (r) { return r.ok ? r.json() : { rules: [] }; })
+      .then(function (data) {
+        self.rules = data.rules || [];
+        try {
+          sessionStorage.setItem('r2c_rules', JSON.stringify(self.rules));
+          sessionStorage.setItem('r2c_rules_ts', String(Date.now()));
+        } catch (_e) {}
+      })
+      .catch(function () { /* ignore */ });
+  };
+
+  TriggerEngine.prototype.checkRules = function (context) {
+    if (Date.now() < this.suppressedUntil) return null;
+    for (var i = 0; i < this.rules.length; i++) {
+      var rule = this.rules[i];
+      if (this.firedRuleIds.has(rule.id)) continue;
+      var matched = false;
+      switch (rule.trigger_type) {
+        case 'scroll_depth':
+          matched = context.scroll_depth >= rule.trigger_config.threshold;
+          break;
+        case 'idle_time':
+          matched = context.idle_seconds >= rule.trigger_config.seconds;
+          break;
+        case 'exit_intent':
+          matched = !!context.is_exit_intent;
+          break;
+        case 'page_url_match':
+          matched = this._matchUrl(window.location.href, rule.trigger_config.pattern);
+          break;
+      }
+      if (matched) {
+        this.firedRuleIds.add(rule.id);
+        return rule;
+      }
+    }
+    return null;
+  };
+
+  TriggerEngine.prototype._matchUrl = function (url, pattern) {
+    try {
+      var pathname = new URL(url).pathname;
+      var regex = new RegExp('^' + pattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$');
+      return regex.test(pathname);
+    } catch (_e) { return false; }
+  };
+
+  TriggerEngine.prototype.onRuleFired = function (rule) {
+    if (this.tracker) {
+      this.tracker.track('chat_open', { trigger: 'proactive', trigger_rule_id: rule.id });
+      this.tracker.flush();
+    }
+    // ウィジェットを自動オープン
+    if (!isOpen) openPanel();
+    // プロアクティブメッセージをアシスタントバブルとして挿入
+    var proactiveMsg = {
+      id: 'proactive-' + rule.id,
+      role: 'assistant',
+      content: rule.message_template,
+      timestamp: Date.now(),
+    };
+    messages.push(proactiveMsg);
+    renderMessages();
+  };
+
+  TriggerEngine.prototype.onWidgetClosed = function () {
+    this.suppressedUntil = Date.now() + 30 * 60 * 1000;
+  };
+
   // Phase55: features.event_tracking が true のテナントのみ有効化
   var _tracker = null;
+  var _triggerEngine = null;
   if (apiKey) {
     fetch(apiBase + '/api/widget/features', {
       headers: { 'x-api-key': apiKey },
@@ -2193,6 +2284,25 @@
         if (!cfg.event_tracking) return;
         _tracker = new EventTracker(apiKey, apiBase);
         _tracker.start();
+
+        // TriggerEngine 初期化
+        _triggerEngine = new TriggerEngine(_tracker);
+        _triggerEngine.loadRules().then(function () {
+          // page_url_match: ルール読み込み後すぐにチェック
+          if (_triggerEngine.rules.length > 0) {
+            var matchedRule = _triggerEngine.checkRules({
+              scroll_depth: 0,
+              idle_seconds: 0,
+              is_exit_intent: false,
+            });
+            if (matchedRule) _triggerEngine.onRuleFired(matchedRule);
+          }
+        });
+
+        // close ボタンに suppressionフック
+        closeBtn.addEventListener('click', function () {
+          if (_triggerEngine) _triggerEngine.onWidgetClosed();
+        });
 
         // chat_open / chat_message イベントをwidgetに紐付け
         var _origOpen = window.FaqWidget.open;
@@ -2205,6 +2315,46 @@
           if (_tracker) _tracker.track('chat_open', { page_url: window.location.href.slice(0, 2048) });
           return _origOpenPanel.apply(this, arguments);
         };
+
+        // scroll/idle/exit イベント時にトリガーチェック（_startAutoTracking後に追加）
+        var _scrollDepthCurrent = 0;
+        var _idleSecondsCurrent = 0;
+        window.addEventListener('scroll', function () {
+          _scrollDepthCurrent = Math.round(
+            (window.scrollY + window.innerHeight) / document.documentElement.scrollHeight * 100
+          );
+          if (_triggerEngine && _triggerEngine.rules.length > 0) {
+            var rule = _triggerEngine.checkRules({
+              scroll_depth: _scrollDepthCurrent,
+              idle_seconds: _idleSecondsCurrent,
+              is_exit_intent: false,
+            });
+            if (rule) _triggerEngine.onRuleFired(rule);
+          }
+        }, { passive: true });
+
+        setInterval(function () {
+          _idleSecondsCurrent++;
+          if (_triggerEngine && _triggerEngine.rules.length > 0) {
+            var rule = _triggerEngine.checkRules({
+              scroll_depth: _scrollDepthCurrent,
+              idle_seconds: _idleSecondsCurrent,
+              is_exit_intent: false,
+            });
+            if (rule) _triggerEngine.onRuleFired(rule);
+          }
+        }, 1000);
+
+        document.addEventListener('mouseout', function (e) {
+          if (e.clientY <= 0 && _triggerEngine && _triggerEngine.rules.length > 0) {
+            var rule = _triggerEngine.checkRules({
+              scroll_depth: _scrollDepthCurrent,
+              idle_seconds: _idleSecondsCurrent,
+              is_exit_intent: true,
+            });
+            if (rule) _triggerEngine.onRuleFired(rule);
+          }
+        });
       })
       .catch(function () { /* feature check失敗は無視 */ });
   }

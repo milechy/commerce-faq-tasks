@@ -446,6 +446,30 @@ const ja = {
   "feedback.send_error": "送信に失敗しました",
   "feedback.select_tenant": "テナントを選択してください",
   "feedback.back": "← ダッシュボードに戻る",
+
+  // Engagement (Phase56)
+  "engagement.title": "お客様への声がけ設定",
+  "engagement.description": "お客様の行動に合わせて自動的に声をかけます",
+  "engagement.empty": "まだ声がけルールがありません。最初のルールを作りましょう！",
+  "engagement.create": "新しいルールを作る",
+  "engagement.preview": "お客様にはこう表示されます",
+  "engagement.active": "有効",
+  "engagement.inactive": "無効",
+  "engagement.trigger_scroll": "ページをスクロールした時",
+  "engagement.trigger_idle": "ページに一定時間滞在した時",
+  "engagement.trigger_exit": "ページを離れようとした時",
+  "engagement.trigger_url": "特定のページを見ている時",
+  "engagement.save": "保存する",
+  "engagement.delete_confirm": "このルールを削除しますか？",
+  "engagement.save_success": "ルールを保存しました",
+  "engagement.delete_success": "ルールを削除しました",
+  "engagement.save_error": "保存に失敗しました。もう一度お試しください 🙏",
+  "engagement.delete_error": "削除に失敗しました。もう一度お試しください 🙏",
+  "engagement.step1_label": "きっかけを選ぶ",
+  "engagement.step2_label": "条件を設定する",
+  "engagement.step3_label": "メッセージを書く",
+  "engagement.message_placeholder": "例: 「何かお手伝いできることはありますか？」",
+  "engagement.back": "← 声がけ設定に戻る",
 } as const;
 
 export type TranslationKey = keyof typeof ja;

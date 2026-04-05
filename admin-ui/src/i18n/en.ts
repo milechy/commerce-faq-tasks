@@ -448,6 +448,30 @@ const en: Record<TranslationKey, string> = {
   "feedback.send_error": "Failed to send",
   "feedback.select_tenant": "Select a tenant",
   "feedback.back": "← Back to dashboard",
+
+  // Engagement (Phase56)
+  "engagement.title": "Customer Engagement",
+  "engagement.description": "Automatically reach out to customers based on their behavior",
+  "engagement.empty": "No engagement rules yet. Create your first rule!",
+  "engagement.create": "Create a new rule",
+  "engagement.preview": "This is how it appears to customers",
+  "engagement.active": "Active",
+  "engagement.inactive": "Inactive",
+  "engagement.trigger_scroll": "When customer scrolls the page",
+  "engagement.trigger_idle": "When customer stays on the page for a while",
+  "engagement.trigger_exit": "When customer is about to leave",
+  "engagement.trigger_url": "When customer views a specific page",
+  "engagement.save": "Save",
+  "engagement.delete_confirm": "Delete this rule?",
+  "engagement.save_success": "Rule saved successfully",
+  "engagement.delete_success": "Rule deleted successfully",
+  "engagement.save_error": "Failed to save. Please try again 🙏",
+  "engagement.delete_error": "Failed to delete. Please try again 🙏",
+  "engagement.step1_label": "Choose a trigger",
+  "engagement.step2_label": "Set conditions",
+  "engagement.step3_label": "Write a message",
+  "engagement.message_placeholder": "e.g. \"Can I help you with anything?\"",
+  "engagement.back": "← Back to engagement",
 };
 
 export default en;

@@ -49,6 +49,14 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: "engagement",
+    icon: "💬",
+    label: "声がけ",
+    items: [
+      { label: "声がけ設定", path: "/admin/engagement", desc: "お客様への自動メッセージ設定" },
+    ],
+  },
+  {
     id: "settings",
     icon: "⚙️",
     label: "設定",
