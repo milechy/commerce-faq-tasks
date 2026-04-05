@@ -57,6 +57,14 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: "conversion",
+    icon: "📈",
+    label: "成果管理",
+    items: [
+      { label: "コンバージョン分析", path: "/admin/conversion", desc: "CVの成果・A/Bテスト・AIからの改善提案" },
+    ],
+  },
+  {
     id: "settings",
     icon: "⚙️",
     label: "設定",

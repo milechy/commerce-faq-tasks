@@ -472,6 +472,24 @@ const en: Record<TranslationKey, string> = {
   "engagement.step3_label": "Write a message",
   "engagement.message_placeholder": "e.g. \"Can I help you with anything?\"",
   "engagement.back": "← Back to engagement",
+
+  // Conversion (Phase58)
+  "conversion.title": "Conversion Analytics",
+  "conversion.summary": "Results Summary",
+  "conversion.effectiveness": "Most Effective Psychology Approaches",
+  "conversion.ab_tests": "A/B Tests",
+  "conversion.suggestions": "AI Improvement Suggestions",
+  "conversion.apply": "Apply this suggestion",
+  "conversion.total": "Total Conversions",
+  "conversion.avg_temp": "Avg. Intent Score",
+  "conversion.top_principle": "Top Psychology Principle",
+  "conversion.no_data": "No data yet",
+  "conversion.no_suggestions": "No suggestions at this time",
+  "conversion.back": "← Back to conversion",
+  "conversion.ab_status_draft": "Draft",
+  "conversion.ab_status_running": "Running",
+  "conversion.ab_status_completed": "Completed",
+  "conversion.ab_status_cancelled": "Cancelled",
 };
 
 export default en;

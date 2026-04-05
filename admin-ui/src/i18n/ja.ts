@@ -470,6 +470,24 @@ const ja = {
   "engagement.step3_label": "メッセージを書く",
   "engagement.message_placeholder": "例: 「何かお手伝いできることはありますか？」",
   "engagement.back": "← 声がけ設定に戻る",
+
+  // Conversion (Phase58)
+  "conversion.title": "コンバージョン分析",
+  "conversion.summary": "成果のまとめ",
+  "conversion.effectiveness": "効果が高い心理アプローチ",
+  "conversion.ab_tests": "A/Bテスト",
+  "conversion.suggestions": "AIからの改善提案",
+  "conversion.apply": "この提案を適用する",
+  "conversion.total": "合計CV数",
+  "conversion.avg_temp": "平均温度感スコア",
+  "conversion.top_principle": "トップ心理原則",
+  "conversion.no_data": "まだデータがありません",
+  "conversion.no_suggestions": "現在、改善提案はありません",
+  "conversion.back": "← コンバージョン分析に戻る",
+  "conversion.ab_status_draft": "準備中",
+  "conversion.ab_status_running": "実施中",
+  "conversion.ab_status_completed": "完了",
+  "conversion.ab_status_cancelled": "中止",
 } as const;
 
 export type TranslationKey = keyof typeof ja;
