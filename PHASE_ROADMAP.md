@@ -280,3 +280,81 @@ Status: ✅ Completed
 
 Status: ✅ Completed
 
+---
+
+## Phase52 – Widget L1-L4 セキュリティ強化（完了）
+
+- L1: Rate Limiter（IPベース、テナント別設定）
+- L2: API Key 認証強化（SHA-256ハッシュ検証、定数時間比較）
+- L3: Tenant Context Loader（JWTからtenantId抽出、body禁止）
+- L4: Security Policy Enforcer（CORS、CSP、XSS防御）
+- Widget Shadow DOM セキュリティ強化
+
+Status: ✅ Completed (2026-03-24)
+
+---
+
+## Phase53 – 書籍ナレッジPDFパイプライン（完了）
+
+- PDF → 6フィールド構造化チャンク（Gemini 2.5 Flash）
+- pgvector + Elasticsearch への保存
+- Admin UI: 書籍管理ページ（ドラッグ&ドロップ、処理進捗）
+- `metadata.source = 'book'` による書籍チャンク識別
+- `ragExcerpt.slice(0, 200)` 厳守（書籍内容保護）
+
+Status: ✅ Completed (2026-04-03)
+
+---
+
+## Phase54 – 従量課金（完了）
+
+- Stripe metered billing 統合強化
+- テナント別使用量トラッキング精度向上
+- 請求ダッシュボード Admin UI
+- Usage Alert（閾値超過時Slack通知）
+
+Status: ✅ Completed (2026-04-04)
+
+---
+
+## Phase55 – 行動イベントレイヤー（完了）
+
+- `behavioral_events` テーブル + イベント収集API
+- Widget側: scroll / time_on_page / page_transition イベント送信
+- テンポラリースコア算出ロジック（スクロール深度 × 滞在時間 × 訪問ページ数）
+- イベントストリーム集計 + Analytics API拡張
+
+Status: ✅ Completed (2026-04-04)
+
+---
+
+## Phase56 – プロアクティブエンゲージメント（完了）
+
+- テンポラリースコア閾値によるプロアクティブ介入トリガー
+- 介入タイミング最適化（離脱意図検出、高関心検出）
+- A/Bテスト対応（介入メッセージのバリアント管理）
+- Widget: プロアクティブメッセージ表示UI
+
+Status: ✅ Completed (2026-04-04)
+
+---
+
+## Phase57 – コンテキストアウェア・セールスエージェント（完了）
+
+- 行動イベント × 心理学RAG × SalesFlow の統合
+- 訪問者コンテキスト（デバイス・ページ・スコア）を LLM プロンプトに注入
+- 心理原則のリアルタイム選択（Judge評価フィードバック反映）
+- セールスステージ追跡（clarify → propose → recommend → close）
+
+Status: ✅ Completed (2026-04-04)
+
+---
+
+## Phase58 – コンバージョン最適化ループ（完了）
+
+- Judge評価 × A/Bテスト × コンバージョントラッキングの自動ループ
+- 低スコアパターン自動検出 → チューニングルール提案
+- コンバージョンファネル分析ダッシュボード
+- 週次レポート自動生成（Slack通知付き）
+
+Status: ✅ Completed (2026-04-04)
