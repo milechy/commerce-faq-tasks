@@ -104,7 +104,7 @@ export function registerConversionRoutes(
       const params: unknown[] = [days];
       const tenantClause = tenantId ? `AND tenant_id = $${params.push(tenantId)}` : '';
 
-      const [listResult, summaryResult] = await Promise.all([
+      const [listResult, summaryResult, avgResult] = await Promise.all([
         db.query(
           `SELECT id, tenant_id, session_id, conversion_type, conversion_value,
                   psychology_principle_used, trigger_type, temp_score_at_conversion,
@@ -116,26 +116,29 @@ export function registerConversionRoutes(
           params,
         ),
         db.query(
-          `SELECT
-             COUNT(*) AS total,
-             ROUND(AVG(temp_score_at_conversion)::numeric, 1) AS avg_temp_score,
-             conversion_type,
-             COUNT(*) AS type_count
+          `SELECT conversion_type, COUNT(*) AS type_count
            FROM conversion_attributions
            WHERE created_at >= NOW() - INTERVAL '1 day' * $1 ${tenantClause}
            GROUP BY conversion_type`,
           params,
         ),
+        // Compute overall avg_temp_score across ALL conversions (not per-group)
+        db.query(
+          `SELECT
+             COUNT(*) AS total,
+             ROUND(AVG(temp_score_at_conversion)::numeric, 1) AS avg_temp_score
+           FROM conversion_attributions
+           WHERE created_at >= NOW() - INTERVAL '1 day' * $1 ${tenantClause}`,
+          params,
+        ),
       ]);
 
       const byType: Record<string, number> = {};
-      let total = 0;
-      let avgTempScore: number | null = null;
+      let total = Number(avgResult.rows[0]?.total ?? 0);
+      const avgTempScore = Math.round(Number(avgResult.rows[0]?.avg_temp_score ?? 0));
 
       for (const row of summaryResult.rows) {
         byType[row.conversion_type] = Number(row.type_count);
-        total += Number(row.type_count);
-        if (avgTempScore === null) avgTempScore = Number(row.avg_temp_score ?? 0);
       }
 
       // 心理原則別集計
@@ -160,7 +163,7 @@ export function registerConversionRoutes(
           total,
           by_type: byType,
           by_principle: byPrinciple,
-          avg_temp_score: avgTempScore ?? 0,
+          avg_temp_score: avgTempScore,
         },
       });
     } catch {

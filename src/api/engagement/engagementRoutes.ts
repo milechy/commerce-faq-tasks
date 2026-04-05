@@ -19,21 +19,39 @@ import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware'
 import { roleAuthMiddleware, requireRole } from '../middleware/roleAuth';
 import type { AuthenticatedUser } from '../middleware/roleAuth';
 
-const TriggerConfigSchema = z.union([
-  z.object({ threshold: z.number().int().min(1).max(100) }).strict(),        // scroll_depth
-  z.object({ seconds: z.number().int().min(1).max(3600) }).strict(),          // idle_time
-  z.object({ pattern: z.string().min(1), match_type: z.literal('glob') }).strict(), // page_url_match
-  z.object({}).strict(),                                                       // exit_intent (last — matches any remaining)
-]);
-
-const TriggerRuleSchema = z.object({
-  trigger_type: z.enum(['scroll_depth', 'idle_time', 'exit_intent', 'page_url_match']),
-  trigger_config: TriggerConfigSchema,
+const COMMON_FIELDS = {
   message_template: z.string().min(1).max(500),
   is_active: z.boolean().optional().default(true),
   priority: z.number().int().min(0).max(100).optional().default(0),
   tenant_id: z.string().min(1).optional(),
-});
+};
+
+// Discriminated union: trigger_type determines which trigger_config is valid
+const TriggerRuleSchema = z.discriminatedUnion('trigger_type', [
+  z.object({
+    trigger_type: z.literal('scroll_depth'),
+    trigger_config: z.object({ threshold: z.number().int().min(1).max(100) }).strict(),
+    ...COMMON_FIELDS,
+  }),
+  z.object({
+    trigger_type: z.literal('idle_time'),
+    trigger_config: z.object({ seconds: z.number().int().min(1).max(3600) }).strict(),
+    ...COMMON_FIELDS,
+  }),
+  z.object({
+    trigger_type: z.literal('exit_intent'),
+    trigger_config: z.object({}).strict(),
+    ...COMMON_FIELDS,
+  }),
+  z.object({
+    trigger_type: z.literal('page_url_match'),
+    trigger_config: z.object({
+      pattern: z.string().min(1),
+      match_type: z.enum(['glob', 'regex']).optional().default('glob'),
+    }).strict(),
+    ...COMMON_FIELDS,
+  }),
+]);
 
 const ADMIN_AUTH = [supabaseAuthMiddleware, roleAuthMiddleware, requireRole('super_admin', 'client_admin')];
 

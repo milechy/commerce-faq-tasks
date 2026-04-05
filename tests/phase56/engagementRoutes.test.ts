@@ -131,6 +131,41 @@ describe('Admin CRUD: /v1/admin/engagement/rules', () => {
       expect(res.status).toBe(400);
     });
 
+    // P1: discriminated union — mismatch between trigger_type and trigger_config
+    it('P1: scroll_depth + 空config ({}) → 400', async () => {
+      const { app } = makeApp({});
+      const res = await request(app)
+        .post('/v1/admin/engagement/rules')
+        .send({ trigger_type: 'scroll_depth', trigger_config: {}, message_template: 'test' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+    });
+
+    it('P1: scroll_depth + 正しいconfig → 201', async () => {
+      const { app } = makeApp({ rows: [{ id: 2, trigger_type: 'scroll_depth', trigger_config: { threshold: 75 }, message_template: 'test', is_active: true, priority: 0 }] });
+      const res = await request(app)
+        .post('/v1/admin/engagement/rules')
+        .send({ trigger_type: 'scroll_depth', trigger_config: { threshold: 75 }, message_template: 'test' });
+      expect(res.status).toBe(201);
+    });
+
+    it('P1: page_url_match + 空config ({}) → 400', async () => {
+      const { app } = makeApp({});
+      const res = await request(app)
+        .post('/v1/admin/engagement/rules')
+        .send({ trigger_type: 'page_url_match', trigger_config: {}, message_template: 'test' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+    });
+
+    it('P1: page_url_match + patternあり → 201', async () => {
+      const { app } = makeApp({ rows: [{ id: 3, trigger_type: 'page_url_match', trigger_config: { pattern: '/products/*', match_type: 'glob' }, message_template: 'test', is_active: true, priority: 0 }] });
+      const res = await request(app)
+        .post('/v1/admin/engagement/rules')
+        .send({ trigger_type: 'page_url_match', trigger_config: { pattern: '/products/*' }, message_template: 'test' });
+      expect(res.status).toBe(201);
+    });
+
     it('client_admin 他テナント指定 → 403', async () => {
       const { app } = makeApp({ role: 'client_admin', tenantId: 'tenant-a' });
       const res = await request(app)

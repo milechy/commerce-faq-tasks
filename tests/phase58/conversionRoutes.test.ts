@@ -96,12 +96,14 @@ describe('POST /api/conversion/attribute', () => {
 });
 
 describe('GET /v1/admin/conversion/attributions', () => {
+  // Query order: [1] list, [2] by-type summary, [3] overall avg+total, [4] principles
   it('Super Admin → 全テナント 200', async () => {
     const { app } = makeApp({
       role: 'super_admin',
       queryResponses: [
         { rows: [{ id: 1, conversion_type: 'purchase', psychology_principle_used: ['損失回避'] }] },
-        { rows: [{ total: 1, avg_temp_score: 75, conversion_type: 'purchase', type_count: 1 }] },
+        { rows: [{ conversion_type: 'purchase', type_count: 1 }] },
+        { rows: [{ total: '1', avg_temp_score: '75.0' }] },
         { rows: [{ principle: '損失回避', cnt: 1 }] },
       ],
     });
@@ -111,10 +113,32 @@ describe('GET /v1/admin/conversion/attributions', () => {
     expect(res.body.summary).toBeDefined();
   });
 
+  it('avg_temp_score は全体平均 (複数typeでも単一値)', async () => {
+    const { app } = makeApp({
+      role: 'super_admin',
+      queryResponses: [
+        { rows: [] },
+        // 2 conversion types with different per-group avgs
+        { rows: [
+          { conversion_type: 'purchase', type_count: 3 },
+          { conversion_type: 'inquiry', type_count: 7 },
+        ]},
+        // Overall average across ALL 10 records
+        { rows: [{ total: '10', avg_temp_score: '62.5' }] },
+        { rows: [] },
+      ],
+    });
+    const res = await request(app).get('/v1/admin/conversion/attributions');
+    expect(res.status).toBe(200);
+    // Must be overall avg (62.5→63), not just first group's value
+    expect(res.body.summary.avg_temp_score).toBe(63);
+    expect(res.body.summary.total).toBe(10);
+  });
+
   it('Client Admin → 自テナント 200', async () => {
     const { app } = makeApp({
       role: 'client_admin',
-      queryResponses: [{ rows: [] }, { rows: [] }, { rows: [] }],
+      queryResponses: [{ rows: [] }, { rows: [] }, { rows: [{ total: '0', avg_temp_score: null }] }, { rows: [] }],
     });
     const res = await request(app).get('/v1/admin/conversion/attributions');
     expect(res.status).toBe(200);

@@ -233,11 +233,11 @@ export default function ConversionDashboardPage() {
       </div>
 
       {/* A/B Tests */}
-      <div style={CARD}>
+      <div id="ab-section" style={CARD}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div style={SECTION_TITLE}>🔬 {t("conversion.ab_tests")}</div>
           <button
-            onClick={() => navigate('/admin/conversion/ab')}
+            onClick={() => document.getElementById('ab-section')?.scrollIntoView({ behavior: 'smooth' })}
             style={{ padding: "8px 16px", minHeight: 36, borderRadius: 8, border: "1px solid #3b82f6", background: "none", color: "#60a5fa", fontSize: 13, cursor: "pointer" }}
           >
             管理
