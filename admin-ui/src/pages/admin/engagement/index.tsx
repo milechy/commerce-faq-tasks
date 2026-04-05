@@ -350,7 +350,7 @@ function WidgetPreview({ message }: { message: string }) {
 // ------------------------------------------------------------------ //
 export default function EngagementPage() {
   const { t } = useLang();
-  const { isSuperAdmin, user } = useAuth();
+  const { isSuperAdmin, user, previewMode, previewTenantId } = useAuth();
 
   const [rules, setRules] = useState<TriggerRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -410,6 +410,14 @@ export default function EngagementPage() {
 
   const handleSave = async () => {
     if (!modal.triggerType || !modal.messageTemplate.trim()) return;
+    // Effective tenant: preview mode uses previewTenantId, client_admin uses own tenantId
+    // Super_admin without preview has no tenant context → block
+    const effectiveTenantId = previewMode ? previewTenantId : user?.tenantId;
+    const isTrueSuperAdmin = user?.role === 'super_admin' && !previewMode;
+    if (!isTrueSuperAdmin && !effectiveTenantId) {
+      showToast("テナントが特定できません。もう一度ログインしてください。", "error");
+      return;
+    }
     setSaving(true);
     try {
       const body = {
@@ -418,7 +426,7 @@ export default function EngagementPage() {
         message_template: modal.messageTemplate,
         priority: modal.priority,
         is_active: true,
-        ...(isSuperAdmin ? {} : { tenant_id: user?.tenantId }),
+        ...(isTrueSuperAdmin ? {} : { tenant_id: effectiveTenantId }),
       };
       let res: Response;
       if (modal.editId) {

@@ -20,10 +20,10 @@ import { roleAuthMiddleware, requireRole } from '../middleware/roleAuth';
 import type { AuthenticatedUser } from '../middleware/roleAuth';
 
 const TriggerConfigSchema = z.union([
-  z.object({ threshold: z.number().int().min(1).max(100) }),        // scroll_depth
-  z.object({ seconds: z.number().int().min(1).max(3600) }),          // idle_time
-  z.object({}),                                                       // exit_intent
-  z.object({ pattern: z.string().min(1), match_type: z.literal('glob') }), // page_url_match
+  z.object({ threshold: z.number().int().min(1).max(100) }).strict(),        // scroll_depth
+  z.object({ seconds: z.number().int().min(1).max(3600) }).strict(),          // idle_time
+  z.object({ pattern: z.string().min(1), match_type: z.literal('glob') }).strict(), // page_url_match
+  z.object({}).strict(),                                                       // exit_intent (last — matches any remaining)
 ]);
 
 const TriggerRuleSchema = z.object({
@@ -77,7 +77,9 @@ export function registerEngagementRoutes(app: Express, apiStack: any[], db: Pool
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
     const user = (req as any).user as AuthenticatedUser;
-    const parsed = TriggerRuleSchema.safeParse(req.body);
+    // null tenant_id (sent when super_admin is in preview mode) → treat as undefined
+    const bodyNormalized = { ...req.body, tenant_id: req.body.tenant_id ?? undefined };
+    const parsed = TriggerRuleSchema.safeParse(bodyNormalized);
     if (!parsed.success) {
       return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
     }
@@ -118,7 +120,8 @@ export function registerEngagementRoutes(app: Express, apiStack: any[], db: Pool
       return res.status(400).json({ error: 'invalid_id' });
     }
 
-    const parsed = TriggerRuleSchema.safeParse(req.body);
+    const bodyNormalized = { ...req.body, tenant_id: req.body.tenant_id ?? undefined };
+    const parsed = TriggerRuleSchema.safeParse(bodyNormalized);
     if (!parsed.success) {
       return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
     }
