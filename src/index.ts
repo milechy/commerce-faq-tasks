@@ -61,6 +61,8 @@ import { registerVariantRoutes } from "./api/admin/variants/routes";
 import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/routes";
 import { registerReportRoutes } from "./api/admin/reports/routes";
 import { registerAnalyticsRoutes } from "./api/admin/analytics/routes";
+import { registerEventAnalyticsRoutes } from "./api/admin/analytics/eventAnalyticsRoutes";
+import { registerEventRoutes } from "./api/events/eventRoutes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
@@ -500,6 +502,8 @@ registerVariantRoutes(app);
 registerObjectionPatternRoutes(app);
 registerReportRoutes(app);
 registerAnalyticsRoutes(app);
+// Phase55: 行動イベント分析 API
+registerEventAnalyticsRoutes(app);
 // Phase52h: In-App通知センター API
 registerNotificationRoutes(app);
 // フィードバックチャット API
@@ -529,6 +533,27 @@ if (db) registerAvatarGenerationRoutes(app, db);
 
 // Security Level 4: Dynamic per-tenant widget JS delivery
 registerWidgetRoutes(app, db);
+
+// Phase55: 行動イベント受信 API (Widget → Server)
+if (db) registerEventRoutes(app, apiStack, db);
+
+// Phase55: Widget features check (event_tracking フラグ取得)
+app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: express.Response) => {
+  const tenantId: string = (req as any).tenantId ?? '';
+  if (!db || !tenantId) {
+    return res.json({ event_tracking: false });
+  }
+  try {
+    const result = await db.query(
+      'SELECT features FROM tenants WHERE id = $1 AND is_active = true',
+      [tenantId],
+    );
+    const features = result.rows[0]?.features ?? {};
+    return res.json({ event_tracking: !!features.event_tracking });
+  } catch {
+    return res.json({ event_tracking: false });
+  }
+});
 
 async function startServer() {
   app.listen(port, () => {

@@ -2045,4 +2045,168 @@
   // アバター設定を事前取得（パネルを開く前に完了させ、FABクリック時のフラッシュを防止）
   if (apiKey) { fetchAvatarConfig(); }
 
+  /* ------------------------------------------------------------------ */
+  /* 15. Phase55: 行動イベントトラッカー                                   */
+  /* ------------------------------------------------------------------ */
+
+  // EventTracker: バッファリング＆バッチ送信（5秒間隔）
+  function EventTracker(apiKeyArg, apiBaseArg) {
+    this.apiKey = apiKeyArg;
+    this.apiBase = apiBaseArg;
+    this.buffer = [];
+    this.active = false;
+    this.visitorId = this._getOrCreateVisitorId();
+    this.sessionId = this._getOrCreateSessionId();
+    this._flushTimer = null;
+  }
+
+  EventTracker.prototype._getOrCreateVisitorId = function () {
+    try {
+      var id = localStorage.getItem('r2c_vid');
+      if (!id) { id = crypto.randomUUID(); localStorage.setItem('r2c_vid', id); }
+      return id;
+    } catch (_e) { return crypto.randomUUID(); }
+  };
+
+  EventTracker.prototype._getOrCreateSessionId = function () {
+    try {
+      var id = sessionStorage.getItem('r2c_sid');
+      if (!id) { id = crypto.randomUUID(); sessionStorage.setItem('r2c_sid', id); }
+      return id;
+    } catch (_e) { return crypto.randomUUID(); }
+  };
+
+  EventTracker.prototype.track = function (eventType, eventData) {
+    if (!this.active) return;
+    this.buffer.push({
+      event_type: eventType,
+      event_data: eventData || {},
+      page_url: window.location.href.slice(0, 2048),
+      referrer: (document.referrer || '').slice(0, 2048),
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  EventTracker.prototype.flush = function () {
+    if (!this.active || this.buffer.length === 0) return;
+    var events = this.buffer.slice(0, 50);
+    this.buffer = this.buffer.slice(50);
+    var self = this;
+    fetch(self.apiBase + '/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': self.apiKey },
+      body: JSON.stringify({
+        visitor_id: self.visitorId,
+        session_id: self.sessionId,
+        events: events,
+      }),
+      keepalive: true,
+    }).catch(function () { /* fire-and-forget */ });
+  };
+
+  EventTracker.prototype.start = function () {
+    this.active = true;
+    var self = this;
+    this._flushTimer = setInterval(function () { self.flush(); }, 5000);
+    this._startAutoTracking();
+  };
+
+  EventTracker.prototype._startAutoTracking = function () {
+    var self = this;
+
+    // page_view
+    this.track('page_view', {
+      url: window.location.href,
+      referrer: document.referrer,
+      utm_source: new URL(window.location.href).searchParams.get('utm_source'),
+      utm_medium: new URL(window.location.href).searchParams.get('utm_medium'),
+      utm_campaign: new URL(window.location.href).searchParams.get('utm_campaign'),
+    });
+
+    // scroll_depth (25%, 50%, 75%, 100%)
+    var firedScrollThresholds = {};
+    window.addEventListener('scroll', function () {
+      var depth = Math.round(
+        (window.scrollY + window.innerHeight) / document.documentElement.scrollHeight * 100
+      );
+      [25, 50, 75, 100].forEach(function (t) {
+        if (depth >= t && !firedScrollThresholds[t]) {
+          firedScrollThresholds[t] = true;
+          self.track('scroll_depth', { depth_percent: t, page_url: window.location.href.slice(0, 2048) });
+        }
+      });
+    }, { passive: true });
+
+    // idle_time (10s, 30s, 60s)
+    var idleSeconds = 0;
+    var firedIdleThresholds = {};
+    setInterval(function () {
+      idleSeconds++;
+      [10, 30, 60].forEach(function (t) {
+        if (idleSeconds >= t && !firedIdleThresholds[t]) {
+          firedIdleThresholds[t] = true;
+          self.track('idle_time', { seconds: t, page_url: window.location.href.slice(0, 2048) });
+        }
+      });
+    }, 1000);
+
+    // exit_intent (マウスがブラウザ上端)
+    var exitFired = false;
+    document.addEventListener('mouseout', function (e) {
+      if (e.clientY <= 0 && !exitFired) {
+        exitFired = true;
+        self.track('exit_intent', {
+          page_url: window.location.href.slice(0, 2048),
+          time_on_page_sec: idleSeconds,
+        });
+        self.flush(); // 離脱前に即送信
+      }
+    });
+
+    // product_view (JSON-LD自動抽出)
+    var jsonLd = document.querySelector('script[type="application/ld+json"]');
+    if (jsonLd) {
+      try {
+        var ldData = JSON.parse(jsonLd.textContent);
+        if (ldData['@type'] === 'Product') {
+          this.track('product_view', {
+            product_name: (ldData.name || '').slice(0, 256),
+            price: ldData.offers ? ldData.offers.price : undefined,
+            category: (ldData.category || '').slice(0, 128),
+          });
+        }
+      } catch (_e) { /* ignore */ }
+    }
+
+    // ページ離脱時にflush
+    window.addEventListener('beforeunload', function () { self.flush(); });
+  };
+
+  // Phase55: features.event_tracking が true のテナントのみ有効化
+  var _tracker = null;
+  if (apiKey) {
+    fetch(apiBase + '/api/widget/features', {
+      headers: { 'x-api-key': apiKey },
+    })
+      .then(function (r) { return r.ok ? r.json() : { event_tracking: false }; })
+      .then(function (cfg) {
+        if (!cfg.event_tracking) return;
+        _tracker = new EventTracker(apiKey, apiBase);
+        _tracker.start();
+
+        // chat_open / chat_message イベントをwidgetに紐付け
+        var _origOpen = window.FaqWidget.open;
+        window.FaqWidget.open = function () {
+          if (_tracker) _tracker.track('chat_open', { page_url: window.location.href.slice(0, 2048) });
+          return _origOpen.apply(this, arguments);
+        };
+        var _origOpenPanel = openPanel;
+        openPanel = function () {
+          if (_tracker) _tracker.track('chat_open', { page_url: window.location.href.slice(0, 2048) });
+          return _origOpenPanel.apply(this, arguments);
+        };
+      })
+      .catch(function () { /* feature check失敗は無視 */ });
+  }
+
 })();

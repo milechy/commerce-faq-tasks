@@ -6,7 +6,7 @@ export interface TenantConfig {
   tenantId: string;
   name: string;
   plan: "starter" | "growth" | "enterprise";
-  features: { avatar: boolean; voice: boolean; rag: boolean };
+  features: { avatar: boolean; voice: boolean; rag: boolean; event_tracking?: boolean };
   security: {
     apiKeyHash: string;
     hashAlgorithm: "sha256";
