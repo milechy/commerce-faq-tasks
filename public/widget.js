@@ -1811,6 +1811,8 @@
       message: text.trim(),
       conversationId: conversationId,
       history: historyForApi,
+      // Phase57: 行動コンテキスト注入のためvisitor_idを送信
+      visitor_id: (_tracker && _tracker.visitorId) ? _tracker.visitorId : undefined,
     });
 
     var headers = {

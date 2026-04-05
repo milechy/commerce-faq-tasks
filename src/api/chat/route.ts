@@ -71,6 +71,8 @@ export const ChatRequestSchema = z.object({
   sessionId: z.string().max(128).optional(),
   history: z.array(DialogMessageSchema).max(50).optional(),
   options: ChatOptionsSchema.optional(),
+  /** Phase57: Widget の EventTracker が生成した visitor_id */
+  visitor_id: z.string().max(128).optional(),
 });
 
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
@@ -202,17 +204,20 @@ export function createChatHandler(logger: Logger) {
         tenantId,
         message: firewallResult.sanitizedMessage,
         history: body.history,
-        options: body.options
-          ? {
-              language: body.options.language,
-              topK: body.options.topK,
-              useLlmPlanner: body.options.useLlmPlanner,
-              useMultiStepPlanner: body.options.useMultiStepPlanner,
-              mode: body.options.mode,
-              personaTags: body.options.personaTags,
-              debug: body.options.debug,
-            }
-          : undefined,
+        options: {
+          ...(body.options
+            ? {
+                language: body.options.language,
+                topK: body.options.topK,
+                useLlmPlanner: body.options.useLlmPlanner,
+                useMultiStepPlanner: body.options.useMultiStepPlanner,
+                mode: body.options.mode,
+                personaTags: body.options.personaTags,
+                debug: body.options.debug,
+              }
+            : {}),
+          visitorId: body.visitor_id || undefined,
+        },
       });
 
       // L8: Output Guard (Phase48)

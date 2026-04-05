@@ -8,6 +8,9 @@ import {
 } from '../../api/admin/tuning/tuningRulesRepository';
 import type { PrincipleChunk } from '../psychology/principleSearch';
 import { selectVariant, type PromptVariant } from '../ab-test/variantSelector';
+import type { BehaviorContext } from '../../api/events/behaviorContext';
+import { formatBehaviorContextForPrompt } from '../../api/events/behaviorContext';
+import type { SimilarPattern } from '../../api/events/similarUserMatcher';
 
 import { getPool } from '../../lib/db';
 import { buildSentimentHint } from '../../lib/sentiment/hint';
@@ -73,6 +76,10 @@ export interface SynthesisInput {
   variantName?: string | null;
   /** Phase46: Gap Detection 用セッションID */
   sessionId?: string;
+  /** Phase57: 訪問者行動コンテキスト */
+  behaviorContext?: BehaviorContext | null;
+  /** Phase57: 類似コンバージョンパターン */
+  similarPatterns?: SimilarPattern[];
 }
 
 export interface SynthesisOutput {
@@ -247,6 +254,22 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       if (principleSection) {
         systemPromptParts.push(principleSection);
       }
+    }
+    // Phase57: 訪問者行動コンテキスト注入
+    if (input.behaviorContext) {
+      systemPromptParts.push(formatBehaviorContextForPrompt(input.behaviorContext));
+    }
+    // Phase57: 類似コンバージョンパターン注入
+    if (input.similarPatterns && input.similarPatterns.length > 0) {
+      const patternLines = ['## 類似お客様の成功パターン'];
+      for (const p of input.similarPatterns) {
+        let line = `- 類似度${Math.round(p.similarity * 100)}%のお客様: ${p.conversionType}でコンバージョン`;
+        if (p.principlesUsed.length > 0) {
+          line += `（使用原則: ${p.principlesUsed.join('、')}）`;
+        }
+        patternLines.push(line);
+      }
+      systemPromptParts.push(patternLines.join('\n'));
     }
     const systemPrompt = systemPromptParts.join('\n\n');
 

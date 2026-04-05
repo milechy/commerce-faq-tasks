@@ -34,15 +34,37 @@ export interface LangRouterResult {
   note?: string;
 }
 
+export interface LangRouterPsychologyHints {
+  principleKeywords: string[];
+  situationKeywords: string[];
+}
+
 export interface LangRouterParams {
   query: string;
   tenantId: string;
   lang?: unknown; // SupportedLang に変換する（不正値は DEFAULT_LANG）
   embedding?: number[]; // pgvector 検索用
   topK?: number;
+  /** Phase57: 心理原則ヒント — ES bool.should に追加してリランクを誘導 */
+  psychologyHints?: LangRouterPsychologyHints;
 }
 
-function buildEsQuery(q: string, tenantId: string, lang: SupportedLang) {
+function buildPsychologyShouldClauses(hints: LangRouterPsychologyHints): object[] {
+  const clauses: object[] = [];
+  for (const kw of hints.principleKeywords) {
+    clauses.push({ match: { "metadata.principle": { query: kw, boost: 1.5 } } });
+    clauses.push({ match_phrase: { text: { query: kw, boost: 1.2 } } });
+  }
+  for (const kw of hints.situationKeywords) {
+    clauses.push({ match: { "metadata.situation": { query: kw, boost: 1.0 } } });
+  }
+  return clauses;
+}
+
+function buildEsQuery(q: string, tenantId: string, lang: SupportedLang, hints?: LangRouterPsychologyHints) {
+  const shouldBoosts = hints && hints.principleKeywords.length > 0
+    ? buildPsychologyShouldClauses(hints)
+    : [];
   return {
     bool: {
       must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
@@ -58,11 +80,15 @@ function buildEsQuery(q: string, tenantId: string, lang: SupportedLang) {
         },
         { term: { lang } },
       ],
+      ...(shouldBoosts.length > 0 ? { should: shouldBoosts } : {}),
     },
   };
 }
 
-function buildEsFallbackQuery(q: string, tenantId: string) {
+function buildEsFallbackQuery(q: string, tenantId: string, hints?: LangRouterPsychologyHints) {
+  const shouldBoosts = hints && hints.principleKeywords.length > 0
+    ? buildPsychologyShouldClauses(hints)
+    : [];
   return {
     bool: {
       must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
@@ -75,6 +101,7 @@ function buildEsFallbackQuery(q: string, tenantId: string) {
           minimum_should_match: 1,
         },
       },
+      ...(shouldBoosts.length > 0 ? { should: shouldBoosts } : {}),
     },
   };
 }
@@ -93,7 +120,7 @@ export async function langRouterSearch(
   params: LangRouterParams
 ): Promise<LangRouterResult> {
   const t0 = Date.now();
-  const { query: q, tenantId, embedding, topK = 20 } = params;
+  const { query: q, tenantId, embedding, topK = 20, psychologyHints } = params;
   const lang = toSupportedLang(params.lang);
   const notes: string[] = [];
 
@@ -120,8 +147,8 @@ export async function langRouterSearch(
       try {
         const isLangIndex = index === `faq_${tenantId}_${lang}`;
         const esQuery = isLangIndex
-          ? buildEsQuery(q, tenantId, lang)
-          : buildEsFallbackQuery(q, tenantId);
+          ? buildEsQuery(q, tenantId, lang, psychologyHints)
+          : buildEsFallbackQuery(q, tenantId, psychologyHints);
 
         const esRes: any = await es.search(
           { index, size: topK * 2, query: esQuery },

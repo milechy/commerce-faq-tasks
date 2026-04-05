@@ -43,6 +43,8 @@ export interface AgentSearchParams {
   debug?: boolean;
   useLlmPlanner?: boolean;
   tenantId?: string;
+  /** Phase57: visitor_id (行動コンテキスト注入用) */
+  visitorId?: string;
 }
 
 export interface AgentSearchResponse {

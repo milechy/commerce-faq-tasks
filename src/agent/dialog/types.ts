@@ -76,6 +76,8 @@ export interface DialogTurnInput {
     personaTags?: string[];
     debug?: boolean;
     piiMode?: boolean;
+    /** Phase57: Widget の EventTracker が生成した visitor_id */
+    visitorId?: string;
   };
 }
 

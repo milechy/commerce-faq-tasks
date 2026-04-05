@@ -156,6 +156,7 @@ export async function runDialogTurn(
     options: {
       topK: options?.topK,
       debug: options?.debug,
+      visitorId: options?.visitorId,
     },
   });
 

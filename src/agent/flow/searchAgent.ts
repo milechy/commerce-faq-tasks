@@ -12,6 +12,9 @@ import type {
 } from "../types";
 import { planQueryWithLlmAsync } from "./llmPlannerRuntime";
 import { planQuery } from "./queryPlanner";
+import { getBehaviorContext } from "../../api/events/behaviorContext";
+import { findSimilarPatterns } from "../../api/events/similarUserMatcher";
+import { pool } from "../../lib/db";
 
 /**
  * /agent.search から呼ばれるメイン関数
@@ -19,7 +22,7 @@ import { planQuery } from "./queryPlanner";
 export async function runSearchAgent(
   params: AgentSearchParams
 ): Promise<AgentSearchResponse> {
-  const { q, topK, debug = true, useLlmPlanner, tenantId } = params;
+  const { q, topK, debug = true, useLlmPlanner, tenantId, visitorId } = params;
   const effectiveTenantId = tenantId ?? "demo";
   const steps: AgentStep[] = [];
 
@@ -139,6 +142,16 @@ export async function runSearchAgent(
     elapsed_ms: Math.round(tRerank1 - tRerank0),
   });
 
+  // Phase57: 行動コンテキスト + 類似パターンを非同期で取得（エラー時はnull）
+  const [behaviorContext, similarPatterns] = await Promise.all([
+    visitorId ? getBehaviorContext(effectiveTenantId, visitorId) : Promise.resolve(null),
+    visitorId && pool
+      ? getBehaviorContext(effectiveTenantId, visitorId).then((ctx) =>
+          ctx ? findSimilarPatterns(pool, effectiveTenantId, ctx) : [],
+        ).catch(() => [])
+      : Promise.resolve([]),
+  ]).catch(() => [null, []] as [null, []]);
+
   // 4) Answer Synthesis
   const tSynth0 = performance.now();
   const synth = await synthesizeAnswer({
@@ -146,6 +159,8 @@ export async function runSearchAgent(
     items: rerankResult.items,
     maxChars: 450,
     tenantId: effectiveTenantId,
+    behaviorContext,
+    similarPatterns: similarPatterns ?? [],
   });
   const tSynth1 = performance.now();
   steps.push({

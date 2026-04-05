@@ -16,6 +16,8 @@ export interface OrchestratorInput {
   options?: {
     topK?: number
     debug?: boolean
+    /** Phase57: Widget の visitor_id */
+    visitorId?: string
   }
 }
 
@@ -46,6 +48,7 @@ export async function runDialogOrchestrator(
   input: OrchestratorInput,
 ): Promise<OrchestratorResult> {
   const { plan, options, tenantId } = input
+  const visitorId = options?.visitorId
   const debug = options?.debug ?? false
 
   // 1) Clarification branch
@@ -91,6 +94,7 @@ export async function runDialogOrchestrator(
     debug,
     useLlmPlanner: false,
     tenantId,
+    visitorId,
   })
 
   // 4) Return orchestrated result
