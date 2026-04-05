@@ -172,6 +172,7 @@ export async function runSearchAgent(
     steps,
     ragStats,
     gapSignal: synth.gapSignal,
+    llmUsage: synth.llmUsage,
     debug: {
       query: {
         original: q,

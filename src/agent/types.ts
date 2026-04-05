@@ -57,6 +57,8 @@ export interface AgentSearchResponse {
     rerankEngine?: string;
   };
   gapSignal?: { hitCount: number; topScore: number };
+  /** Phase53: Groq API実トークン数 */
+  llmUsage?: { prompt_tokens: number; completion_tokens: number };
   debug: AgentDebug;
 }
 

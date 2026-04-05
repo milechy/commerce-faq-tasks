@@ -23,6 +23,12 @@ export const SERVER_COST_PER_REQUEST_USD = 0.0001;
 /** マージン倍率（環境変数 MARGIN_RATE で変更可能、デフォルト5） */
 export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
 
+/**
+ * エンドユーザーが直接使う機能（マージン × MARGIN_RATE を適用）。
+ * それ以外の管理者・運用向け機能は原価のみ（× 1）。
+ */
+export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar', 'voice']);
+
 /** Phase40: Fish Audio TTS単価: $15.00 / 1M UTF-8バイト */
 export const FISH_AUDIO_COST_PER_BYTE_USD = 15.0 / 1_000_000;
 
@@ -58,6 +64,13 @@ export interface UsageRecord {
   avatarCredits?: number;
   /** Phase40: LiveKitセッション時間（ミリ秒） */
   avatarSessionMs?: number;
+  /**
+   * Phase53: 使用機能名（END_USER_FEATURES に含まれる場合のみ MARGIN_RATE 適用）。
+   * 省略時は後方互換のため MARGIN_MULTIPLIER を適用する。
+   */
+  featureUsed?: string;
+  /** Phase53: 生成画像枚数（DALL-E / Leonardo 等）。原価のみ。 */
+  imageCount?: number;
 }
 
 /**
@@ -132,7 +145,9 @@ export function calculateAvatarCostCents(credits: number): number {
 /**
  * 1リクエストの課金金額をセント単位（整数）で返す。
  *
- * 計算式: Math.ceil((LLMコスト + サーバーコスト + TTSコスト + Avatarコスト)[USD] × MARGIN_MULTIPLIER × 100)
+ * - エンドユーザー向け機能（chat/avatar/voice）: MARGIN_MULTIPLIER 適用
+ * - 管理者・運用向け機能: × 1（原価のみ）
+ * - featureUsed 未指定時は後方互換のため MARGIN_MULTIPLIER を適用
  *
  * 中間丸めを避けるため USD のまま合算してから最後に変換する。
  *
@@ -145,10 +160,12 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
     );
   }
 
-  const margin   = usage.marginOverride ?? MARGIN_MULTIPLIER;
+  const isEndUser = usage.featureUsed === undefined || END_USER_FEATURES.has(usage.featureUsed);
+  const margin   = usage.marginOverride ?? (isEndUser ? MARGIN_MULTIPLIER : 1);
   const llmUSD   = _calculateLLMCostUSD(usage);
   const ttsUSD   = (usage.ttsTextBytes  ?? 0) * FISH_AUDIO_COST_PER_BYTE_USD;
   const avtrUSD  = (usage.avatarCredits ?? 0) * LEMONSLICE_COST_PER_CREDIT_USD;
-  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD;
+  const imgUSD   = (usage.imageCount    ?? 0) * IMAGE_GENERATION_COST_USD;
+  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD;
   return Math.ceil(totalUSD * margin * 100);
 }

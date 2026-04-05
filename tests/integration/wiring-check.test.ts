@@ -11,7 +11,7 @@ jest.mock("../../src/lib/db", () => ({ getPool: jest.fn(), pool: null }));
 
 // LLM / external service mocks (factory mocks so jest.fn() is always set up)
 jest.mock("../../src/agent/llm/groqClient", () => ({
-  groqClient: { call: jest.fn() },
+  groqClient: { call: jest.fn(), callWithUsage: jest.fn() },
 }));
 jest.mock("../../src/lib/gemini/client", () => ({
   callGeminiJudge: jest.fn(),
@@ -374,7 +374,10 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
       "getActiveRulesForTenant"
     ).mockResolvedValueOnce([MOCK_TUNING_RULE]);
 
-    (groqClient.call as jest.Mock).mockResolvedValueOnce("返品は7日以内です。");
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: "返品は7日以内です。",
+      usage: { prompt_tokens: 100, completion_tokens: 50 },
+    });
 
     const result = await synthesizeAnswer({
       query: "返品について教えてください",
@@ -385,12 +388,14 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
     // Wiring: getActiveRulesForTenant must have been called for the tenant
     expect(getActiveRulesSpy).toHaveBeenCalledWith("test-tenant");
     // Wiring: Groq must have been called with an LLM prompt
-    expect(groqClient.call).toHaveBeenCalledTimes(1);
-    const groqCallArgs = (groqClient.call as jest.Mock).mock.calls[0][0];
+    expect(groqClient.callWithUsage).toHaveBeenCalledTimes(1);
+    const groqCallArgs = (groqClient.callWithUsage as jest.Mock).mock.calls[0][0];
     // The tuning rule must be injected into the system prompt
     expect(groqCallArgs.messages[0].content).toContain("応答ルール");
     // Result must be the LLM answer
     expect(result.answer).toBe("返品は7日以内です。");
+    // Phase53: llmUsage が返ってくること
+    expect(result.llmUsage).toEqual({ prompt_tokens: 100, completion_tokens: 50 });
 
     delete process.env["GROQ_API_KEY"];
   });
@@ -406,7 +411,9 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
       rowCount: 1,
     });
 
-    (groqClient.call as jest.Mock).mockResolvedValueOnce("在庫あります。");
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: "在庫あります。",
+    });
 
     const result = await synthesizeAnswer({
       query: "在庫について",

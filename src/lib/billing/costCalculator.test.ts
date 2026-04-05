@@ -12,6 +12,8 @@ import {
   MARGIN_MULTIPLIER,
   FISH_AUDIO_COST_PER_BYTE_USD,
   LEMONSLICE_COST_PER_CREDIT_USD,
+  IMAGE_GENERATION_COST_USD,
+  END_USER_FEATURES,
 } from './costCalculator';
 
 // ---------------------------------------------------------------------------
@@ -317,6 +319,132 @@ describe('calculateBillingAmountCents with TTS/Avatar', () => {
     });
     expect(result).toBeGreaterThanOrEqual(7500);
     expect(Number.isInteger(result)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase53: feature-based margin（END_USER_FEATURES vs admin features）
+// ---------------------------------------------------------------------------
+describe('calculateBillingAmountCents: feature-based margin', () => {
+  const baseParams = {
+    model: 'llama-3.1-8b-instant',
+    inputTokens: 1_000_000,
+    outputTokens: 1_000_000,
+  };
+
+  it('featureUsed 未指定 → 後方互換: MARGIN_MULTIPLIER 適用', () => {
+    const result = calculateBillingAmountCents(baseParams);
+    // 既存テストと同じ: llmUSD=0.13, total=0.1301, billing=Math.ceil(0.1301 * 5 * 100) = 66
+    expect(result).toBe(66);
+  });
+
+  it('featureUsed: chat → エンドユーザー = MARGIN_MULTIPLIER 適用', () => {
+    const withFeature = calculateBillingAmountCents({ ...baseParams, featureUsed: 'chat' });
+    const withoutFeature = calculateBillingAmountCents(baseParams);
+    expect(withFeature).toBe(withoutFeature);
+  });
+
+  it('featureUsed: avatar → エンドユーザー = MARGIN_MULTIPLIER 適用', () => {
+    const withFeature = calculateBillingAmountCents({ ...baseParams, featureUsed: 'avatar' });
+    const withoutFeature = calculateBillingAmountCents(baseParams);
+    expect(withFeature).toBe(withoutFeature);
+  });
+
+  it('featureUsed: feedback_ai → 管理機能 = margin × 1（原価のみ）', () => {
+    const adminResult = calculateBillingAmountCents({ ...baseParams, featureUsed: 'feedback_ai' });
+    const endUserResult = calculateBillingAmountCents({ ...baseParams, featureUsed: 'chat' });
+    // 管理機能は margin=1、エンドユーザー機能は MARGIN_MULTIPLIER（デフォルト5）
+    expect(adminResult).toBeLessThan(endUserResult);
+    // adminResult ≈ llmUSD + serverCost = 0.13 + 0.0001 = 0.1301 USD → Math.ceil(13.01) = 14 cents
+    expect(adminResult).toBe(14);
+  });
+
+  it('featureUsed: avatar_config_image → 管理機能 = margin × 1', () => {
+    const result = calculateBillingAmountCents({ ...baseParams, featureUsed: 'avatar_config_image' });
+    expect(result).toBe(14); // 原価のみ
+  });
+
+  it('featureUsed: book_structurize → 管理機能 = margin × 1', () => {
+    const result = calculateBillingAmountCents({ ...baseParams, featureUsed: 'book_structurize' });
+    expect(result).toBe(14);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase53: imageCount コスト組み込み
+// ---------------------------------------------------------------------------
+describe('calculateBillingAmountCents: imageCount', () => {
+  it('imageCount=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+    });
+    const withZero = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0, imageCount: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('imageCount=1: $0.04 の画像コストが加算される', () => {
+    // featureUsed=avatar_config_image（管理機能=×1）
+    // serverCost=0.0001, imageCost=0.04 → total=0.0401 USD → Math.ceil(4.01) = 5 cents
+    const result = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'avatar_config_image', imageCount: 1,
+    });
+    expect(result).toBe(5);
+  });
+
+  it('imageCount=4: 4枚分のコストが加算される', () => {
+    // serverCost=0.0001, imageCost=4*0.04=0.16 → total=0.1601 USD → Math.ceil(16.01) = 17 cents
+    const result = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'avatar_config_image', imageCount: 4,
+    });
+    expect(result).toBe(17);
+  });
+
+  it('imageCount 未指定は undefined と同じ（コスト0）', () => {
+    const a = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 100, outputTokens: 50,
+    });
+    const b = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 100, outputTokens: 50, imageCount: undefined,
+    });
+    expect(a).toBe(b);
+  });
+
+  it('整数を返す', () => {
+    const result = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      imageCount: 3,
+    });
+    expect(Number.isInteger(result)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase53: END_USER_FEATURES 定数チェック
+// ---------------------------------------------------------------------------
+describe('END_USER_FEATURES', () => {
+  it('chat / avatar / voice が含まれる', () => {
+    expect(END_USER_FEATURES.has('chat')).toBe(true);
+    expect(END_USER_FEATURES.has('avatar')).toBe(true);
+    expect(END_USER_FEATURES.has('voice')).toBe(true);
+  });
+
+  it('管理機能は含まれない', () => {
+    expect(END_USER_FEATURES.has('feedback_ai')).toBe(false);
+    expect(END_USER_FEATURES.has('avatar_config_image')).toBe(false);
+    expect(END_USER_FEATURES.has('book_structurize')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase53: IMAGE_GENERATION_COST_USD 定数チェック
+// ---------------------------------------------------------------------------
+describe('IMAGE_GENERATION_COST_USD', () => {
+  it('$0.04/枚 であること', () => {
+    expect(IMAGE_GENERATION_COST_USD).toBeCloseTo(0.04);
   });
 });
 

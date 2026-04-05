@@ -88,6 +88,8 @@ export interface DialogTurnMeta {
   orchestrationSteps?: OrchestratorStep[];
   /** ナレッジギャップ検出シグナル */
   gapSignal?: { hitCount: number; topScore: number };
+  /** Phase53: Groq API実トークン数 */
+  llmUsage?: { prompt_tokens: number; completion_tokens: number };
 }
 
 export interface DialogTurnResult {

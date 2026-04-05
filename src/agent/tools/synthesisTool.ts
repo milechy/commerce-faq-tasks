@@ -1,7 +1,7 @@
 // src/agent/tools/synthesisTool.ts
 
 import type { RerankItem } from '../types';
-import { groqClient } from '../llm/groqClient';
+import { groqClient, type GroqUsage } from '../llm/groqClient';
 import {
   getActiveRulesForTenant,
   buildTuningPromptSection,
@@ -86,6 +86,8 @@ export interface SynthesisOutput {
   /** Phase46: 選択されたvariant情報 */
   variantId?: string | null;
   variantName?: string | null;
+  /** Phase53: Groq API実トークン数（取得できた場合のみ） */
+  llmUsage?: GroqUsage;
 }
 
 /**
@@ -260,7 +262,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       ? `お客様の質問: ${query}\n参考FAQ:\n${faqContext}\n上記のFAQ情報をもとに、お客様の質問に自然な日本語で回答してください。`
       : `お客様の質問: ${query}\n上記の応答ルールに従って、お客様の質問に自然な日本語で回答してください。`;
 
-    const raw = await groqClient.call({
+    const synthResult = await groqClient.callWithUsage({
       model: 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -274,8 +276,9 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     // Phase44: 原則メタデータを出力に付与（chat_messages.metadata 記録用）
     // Phase46: A/Bバリアント情報を付与
     return {
-      answer: truncate(raw.trim(), maxChars),
+      answer: truncate(synthResult.content.trim(), maxChars),
       gapSignal,
+      llmUsage: synthResult.usage,
       variantId: selectedVariantId,
       variantName: selectedVariantName,
       ...(shouldInjectPrinciples && usedPrinciples.length > 0

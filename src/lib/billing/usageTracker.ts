@@ -25,6 +25,8 @@ export interface TrackUsageParams {
   avatarSessionMs?: number;
   /** Phase42: Anamセッション時間（秒） */
   anam_session_seconds?: number;
+  /** Phase53: 生成画像枚数 */
+  imageCount?: number;
 }
 
 let _pool: any | null = null;
@@ -53,7 +55,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
 
   const {
     tenantId, requestId, model, inputTokens, outputTokens,
-    featureUsed, marginOverride, ttsTextBytes, avatarCredits, avatarSessionMs,
+    featureUsed, marginOverride, ttsTextBytes, avatarCredits, avatarSessionMs, imageCount,
   } = params;
 
   let costLlmCents = 0;
@@ -63,6 +65,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     costTotalCents = calculateBillingAmountCents({
       model, inputTokens, outputTokens, marginOverride,
       ttsTextBytes, avatarCredits, avatarSessionMs,
+      featureUsed, imageCount,
     });
   } catch (err) {
     _logger?.warn({ err, requestId }, '[usageTracker] cost calculation error, defaulting to 0');

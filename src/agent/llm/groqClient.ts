@@ -73,6 +73,17 @@ export class GroqBadRequestError extends GroqApiError {
   }
 }
 
+/** Groq API の usage フィールド */
+export interface GroqUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
+export interface GroqCallWithUsageResult {
+  content: string;
+  usage?: GroqUsage;
+}
+
 /**
  * Groq クライアントインターフェース。
  *
@@ -85,6 +96,11 @@ export interface GroqClient {
    * Chat completion API を叩き、生成されたテキストのみを返す。
    */
   call(params: GroqCallParams): Promise<string>
+
+  /**
+   * Chat completion API を叩き、テキストと usage を返す。
+   */
+  callWithUsage(params: GroqCallParams): Promise<GroqCallWithUsageResult>
 }
 
 /**
@@ -148,6 +164,57 @@ export const groqClient: GroqClient = {
     }
 
     return content
+  },
+
+  async callWithUsage({ model, messages, temperature, maxTokens }: GroqCallParams): Promise<GroqCallWithUsageResult> {
+    const apiKey = process.env.GROQ_API_KEY
+    if (!apiKey) {
+      throw new Error('GROQ_API_KEY is not set')
+    }
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: temperature ?? 0,
+        max_tokens: maxTokens ?? 512,
+      }),
+    })
+
+    if (!response.ok) {
+      const text = await response.text();
+      const bodySnippet = text.length > 500 ? `${text.slice(0, 500)}...` : text;
+      const retryAfterHeader = response.headers.get('retry-after');
+      let retryAfterMs: number | undefined;
+      if (retryAfterHeader) {
+        const retryAfterSeconds = Number(retryAfterHeader);
+        if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds >= 0) {
+          retryAfterMs = retryAfterSeconds * 1000;
+        }
+      }
+      if (response.status === 429) throw new GroqRateLimitError(response.status, bodySnippet, retryAfterMs);
+      if (response.status >= 500) throw new GroqServerError(response.status, bodySnippet);
+      throw new GroqBadRequestError(response.status, bodySnippet);
+    }
+
+    const json: any = await response.json()
+    const content = json?.choices?.[0]?.message?.content
+    if (typeof content !== 'string') {
+      throw new Error('Groq API response has no message content')
+    }
+
+    const rawUsage = json?.usage;
+    const usage: GroqUsage | undefined =
+      typeof rawUsage?.prompt_tokens === 'number' && typeof rawUsage?.completion_tokens === 'number'
+        ? { prompt_tokens: rawUsage.prompt_tokens, completion_tokens: rawUsage.completion_tokens }
+        : undefined;
+
+    return { content, usage };
   },
 }
 

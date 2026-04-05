@@ -306,9 +306,12 @@ export function createChatHandler(logger: Logger) {
       );
 
       // fire-and-forget: 使用量記録（APIレスポンスをブロックしない）
+      const llmUsage = result.meta?.llmUsage;
       const historyText = (body.history ?? []).map((m) => m.content).join("\n");
-      const inputTokens = Math.max(1, Math.round((body.message.length + historyText.length) / 4));
-      const outputTokens = Math.max(1, Math.round(content.length / 4));
+      const inputTokens = llmUsage?.prompt_tokens
+        ?? Math.max(1, Math.round((body.message.length + historyText.length) / 4));
+      const outputTokens = llmUsage?.completion_tokens
+        ?? Math.max(1, Math.round(content.length / 4));
       trackUsage({
         tenantId,
         requestId,

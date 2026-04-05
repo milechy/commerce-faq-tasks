@@ -77,7 +77,12 @@ async def fetch_avatar_config(tenant_id: str, api_url: str) -> dict | None:
         return None
 
 
-async def call_groq_llm(user_text: str, http: aiohttp.ClientSession, system_prompt: str = SYSTEM_PROMPT) -> str:
+async def call_groq_llm(
+    user_text: str,
+    http: aiohttp.ClientSession,
+    system_prompt: str = SYSTEM_PROMPT,
+    tenant_id: str | None = None,
+) -> str:
     """Groq LLM を aiohttp で直接呼び出し、応答テキストを返す。"""
     try:
         async with http.post(
@@ -101,10 +106,46 @@ async def call_groq_llm(user_text: str, http: aiohttp.ClientSession, system_prom
                 logger.error(f"[Groq] error {resp.status}: {await resp.text()}")
                 return FALLBACK_MSG
             data = await resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            content = data["choices"][0]["message"]["content"].strip()
+            # Phase53: トークン数を非同期レポート（fire-and-forget）
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            if tenant_id and (prompt_tokens > 0 or completion_tokens > 0):
+                asyncio.ensure_future(
+                    _report_groq_usage(tenant_id, prompt_tokens, completion_tokens)
+                )
+            return content
     except Exception as e:
         logger.error(f"[Groq] exception: {e}")
         return FALLBACK_MSG
+
+
+async def _report_groq_usage(
+    tenant_id: str, prompt_tokens: int, completion_tokens: int
+) -> None:
+    """Avatar内Groqトークン使用量をRAJIUCE APIに非同期レポート（fire-and-forget）。"""
+    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            await http_session.post(
+                f"{api_url}/api/internal/usage",
+                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
+                json={
+                    "tenantId": tenant_id,
+                    "inputTokens": prompt_tokens,
+                    "outputTokens": completion_tokens,
+                    "model": "llama-3.3-70b-versatile",
+                    "featureUsed": "avatar",
+                },
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+        logger.debug(
+            f"[usage] Groq token usage reported: tenant={tenant_id} "
+            f"prompt={prompt_tokens} completion={completion_tokens}"
+        )
+    except Exception as e:
+        logger.warning(f"[usage] Groq token usage report failed (non-critical): {e}")
 
 
 # --- Fish Audio TTS ---
@@ -325,7 +366,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         try:
             # 1. Groq LLM で応答生成（毎回新しいSessionで "Session is closed" を回避）
             async with aiohttp.ClientSession() as http:
-                reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt)
+                reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt, tenant_id=tenant_id)
             logger.info(f"[Groq] reply ({len(reply)} chars): {reply!r}")
 
             # 2. session.say() で FishAudio TTS パイプラインに渡す

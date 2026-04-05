@@ -180,10 +180,11 @@ Output ONLY the English prompt, nothing else.`,
         trackUsage({
           tenantId,
           requestId,
-          featureUsed: "avatar",
+          featureUsed: "avatar_config_image",
           model: "leonardo-photorealistic",
           inputTokens: 0,
           outputTokens: 0,
+          imageCount: images.length,
         });
 
         return res.json({ images });
@@ -308,7 +309,7 @@ JSONのみ返してください。`,
         trackUsage({
           tenantId,
           requestId,
-          featureUsed: "avatar",
+          featureUsed: "avatar_config_voice",
           model: "llama-3.3-70b-versatile",
           inputTokens: 0,
           outputTokens: 0,
@@ -371,7 +372,7 @@ JSONのみ返してください。`,
         trackUsage({
           tenantId,
           requestId,
-          featureUsed: "avatar",
+          featureUsed: "avatar_config_prompt",
           model: "llama-3.3-70b-versatile",
           inputTokens: 0,
           outputTokens: 0,

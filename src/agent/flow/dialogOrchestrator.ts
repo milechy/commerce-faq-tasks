@@ -26,6 +26,8 @@ export interface OrchestratorResult {
   clarifyingQuestions?: string[]
   final: boolean
   gapSignal?: { hitCount: number; topScore: number }
+  /** Phase53: Groq API実トークン数 */
+  llmUsage?: { prompt_tokens: number; completion_tokens: number }
 }
 
 /**
@@ -106,5 +108,6 @@ export async function runDialogOrchestrator(
     needsClarification: false,
     final: true,
     gapSignal: searchResult.gapSignal,
+    llmUsage: searchResult.llmUsage,
   }
 }
