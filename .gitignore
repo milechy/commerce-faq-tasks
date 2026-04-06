@@ -52,3 +52,8 @@ CLAUDE.md.backup-pre-openwolf
 # Playwright
 test-results/
 playwright-report/
+.mcp.json
+Thumbs.db
+
+# TestSprite generated tests
+admin-ui/testsprite_tests/
