@@ -48,3 +48,7 @@ avatar-agent/__pycache__/
 # OpenWolf
 .wolf/
 CLAUDE.md.backup-pre-openwolf
+
+# Playwright
+test-results/
+playwright-report/

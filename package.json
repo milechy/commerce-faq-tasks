@@ -17,6 +17,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest --runInBand",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "security-scan": "bash SCRIPTS/security-scan.sh",
     "verify": "pnpm typecheck && pnpm test && (test -f SCRIPTS/security-scan.sh && bash SCRIPTS/security-scan.sh || true)",
     "sync:notion": "ts-node SCRIPTS/sync-notion.ts",
@@ -125,6 +127,7 @@
     "zod": "4.1.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/express": "5.0.5",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
