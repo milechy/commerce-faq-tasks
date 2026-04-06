@@ -473,6 +473,10 @@ gh issue create -R <owner>/<repo> \
 - [`ARCHITECTURE.md`](ARCHITECTURE.md)
   - システム全体構成（クライアント〜API〜RAG〜LLM〜Billing〜Monitoring）
   - LangGraph / CrewAI 連携を見据えた Orchestrator 構成
+- [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md)
+  - システム全体図（C4 Context）
+  - チャットリクエストフロー（Sequence）
+  - 行動データ → コンバージョン最適化データフロー（Phase55-58）
 
 ### API 仕様
 - [`docs/api-agent.md`](docs/api-agent.md)
