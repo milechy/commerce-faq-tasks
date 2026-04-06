@@ -1,9 +1,11 @@
 // src/api/admin/notifications/routes.ts
+
 // Phase52h: In-App通知センター API
 
 import type { Express, Request, Response } from 'express';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';
 import { getPool } from '../../../lib/db';
+import { logger } from '../../../lib/logger';
 
 function extractAuth(req: Request) {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
@@ -76,7 +78,7 @@ export function registerNotificationRoutes(app: Express): void {
       if (err?.code === '42P01') {
         return res.json({ items: [], unread_count: 0, total: 0 });
       }
-      console.warn('[GET /v1/admin/notifications]', err);
+      logger.warn('[GET /v1/admin/notifications]', err);
       return res.status(500).json({ error: '通知の取得に失敗しました' });
     }
   });
@@ -110,7 +112,7 @@ export function registerNotificationRoutes(app: Express): void {
       return res.json({ ok: true });
     } catch (err: any) {
       if (err?.code === '42P01') return res.json({ ok: true });
-      console.warn('[PATCH /v1/admin/notifications/read-all]', err);
+      logger.warn('[PATCH /v1/admin/notifications/read-all]', err);
       return res.status(500).json({ error: '既読処理に失敗しました' });
     }
   });
@@ -147,7 +149,7 @@ export function registerNotificationRoutes(app: Express): void {
       return res.json({ ok: true });
     } catch (err: any) {
       if (err?.code === '42P01') return res.json({ ok: true });
-      console.warn('[PATCH /v1/admin/notifications/:id/read]', err);
+      logger.warn('[PATCH /v1/admin/notifications/:id/read]', err);
       return res.status(500).json({ error: '既読処理に失敗しました' });
     }
   });

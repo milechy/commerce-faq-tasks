@@ -1,4 +1,5 @@
 // src/api/admin/knowledge/knowledgeGapRoutes.ts
+
 // Phase38+: ナレッジギャップ管理 API
 
 import type { Express, Request, Response } from "express";
@@ -9,6 +10,7 @@ import {
   getGapCount,
   updateGapStatus,
 } from "./knowledgeGapRepository";
+import { logger } from '../../../lib/logger';
 
 function resolveJwtTenantId(req: Request): { jwtTenantId: string; isSuperAdmin: boolean } {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
@@ -44,7 +46,7 @@ export function registerKnowledgeGapRoutes(app: Express): void {
       const count = await getGapCount(tenantFilter);
       return res.json({ count });
     } catch (err) {
-      console.warn("[GET /knowledge/gaps/count]", err);
+      logger.warn("[GET /knowledge/gaps/count]", err);
       return res.status(500).json({ error: "件数の取得に失敗しました" });
     }
   });
@@ -75,7 +77,7 @@ export function registerKnowledgeGapRoutes(app: Express): void {
       const result = await getGaps({ tenantId: tenantFilter, status, limit, offset });
       return res.json({ gaps: result.gaps, total: result.total, limit, offset });
     } catch (err) {
-      console.warn("[GET /knowledge/gaps]", err);
+      logger.warn("[GET /knowledge/gaps]", err);
       return res.status(500).json({ error: "ギャップ一覧の取得に失敗しました" });
     }
   });
@@ -113,7 +115,7 @@ export function registerKnowledgeGapRoutes(app: Express): void {
       }
       return res.json({ ok: true });
     } catch (err) {
-      console.warn("[PATCH /knowledge/gaps/:id]", err);
+      logger.warn("[PATCH /knowledge/gaps/:id]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
     }
   });

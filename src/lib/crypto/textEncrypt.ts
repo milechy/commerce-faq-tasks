@@ -1,4 +1,5 @@
 // src/lib/crypto/textEncrypt.ts
+
 // 書籍著作権保護: faq_embeddings.text の AES-256-GCM 暗号化ユーティリティ
 //
 // 環境変数:
@@ -9,6 +10,7 @@
 //   python3 -c "import secrets; print(secrets.token_hex(32))"
 
 import crypto from "crypto";
+import { logger } from '../logger';
 
 const ALGORITHM = "aes-256-gcm";
 const IV_BYTES = 12;
@@ -35,7 +37,7 @@ function getEncryptionKey(): Buffer | null {
 export function encryptText(plaintext: string): string {
   const key = getEncryptionKey();
   if (!key) {
-    console.warn(
+    logger.warn(
       "[textEncrypt] KNOWLEDGE_ENCRYPTION_KEY is not set. Storing plaintext. " +
         "Set this variable to enable encryption."
     );

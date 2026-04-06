@@ -1,5 +1,5 @@
 // SaaS 業種向け SalesPipeline テンプレ定義
-import type { SalesPipelineKind } from "../salesPipeline";
+import type { SalesPipelineKind } from "../../../dialog/types";
 
 export interface IndustryPipeline {
   kind: SalesPipelineKind;

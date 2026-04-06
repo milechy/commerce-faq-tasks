@@ -1,7 +1,9 @@
 // src/lib/notifications.ts
+
 // Phase52h: In-App通知ヘルパー（fire-and-forget）
 
 import { getPool } from './db';
+import { logger } from './logger';
 
 export async function createNotification(params: {
   recipientRole: 'super_admin' | 'client_admin';
@@ -28,7 +30,7 @@ export async function createNotification(params: {
       ],
     );
   } catch (e) {
-    console.error('[Notification] Failed to create:', e);
+    logger.error('[Notification] Failed to create:', e);
   }
 }
 

@@ -1,12 +1,10 @@
 // src/agent/flow/dialogOrchestrator.ts
 
-import type { DialogMessage, MultiStepQueryPlan } from '../dialog/types'
+import type { DialogMessage, MultiStepQueryPlan, OrchestratorStep } from '../dialog/types'
 import { runSearchAgent } from './searchAgent'
 
-export type OrchestratorStep =
-  | { type: 'clarify_plan'; questions: string[] }
-  | { type: 'search_executed'; query: string; topK: number; source: 'searchAgent' }
-  | MultiStepQueryPlan['steps'][number]
+// Re-exported for backward compatibility — definition lives in dialog/types.ts
+export type { OrchestratorStep } from '../dialog/types'
 
 export interface OrchestratorInput {
   plan: MultiStepQueryPlan

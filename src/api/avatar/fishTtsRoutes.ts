@@ -1,4 +1,5 @@
 // Phase42: Fish Audio TTS エンドポイント
+
 // POST /api/avatar/tts
 //   body: { text: string }
 //   認証: apiStack
@@ -6,11 +7,12 @@
 
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
+import { logger } from '../../lib/logger';
 
 const FISH_AUDIO_API = 'https://api.fish.audio/v1/tts';
 
 export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]): void {
-  console.log('[fishTts] POST /api/avatar/tts registered');
+  logger.info('[fishTts] POST /api/avatar/tts registered');
 
   app.post('/api/avatar/tts', ...apiStack, async (req: Request, res: Response) => {
     const tenantId = (req as AuthedRequest).tenantId;
@@ -46,7 +48,7 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
 
       if (!fishRes.ok) {
         const errText = await fishRes.text();
-        console.error(`[fishTts] Fish Audio error ${fishRes.status}: ${errText.slice(0, 200)}`);
+        logger.error(`[fishTts] Fish Audio error ${fishRes.status}: ${errText.slice(0, 200)}`);
         return res.status(502).json({ error: 'TTS error' });
       }
 
@@ -67,7 +69,7 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
       res.end();
 
     } catch (err) {
-      console.error('[fishTts] Error:', err);
+      logger.error('[fishTts] Error:', err);
       res.status(500).json({ error: 'TTS failed' });
     }
   });

@@ -1,4 +1,5 @@
 // src/api/avatar/livekitTokenRoutes.ts
+
 //
 // POST /api/avatar/room-token
 //   認証: x-api-key (apiStack 経由 — authMiddleware で tenantId 解決済み)
@@ -15,6 +16,7 @@ import jwt from "jsonwebtoken";
 import { pool } from "../../lib/db";
 import { RoomServiceClient, AgentDispatchClient } from "livekit-server-sdk";
 import type { AuthedRequest } from "../../agent/http/authMiddleware";
+import { logger } from '../../lib/logger';
 
 // ─── LiveKit JWT 生成 ─────────────────────────────────────────────────────────
 
@@ -63,15 +65,15 @@ async function dispatchAgentToRoom(
       emptyTimeout: 1800,    // 30分（デフォルト5分→延長）
       maxParticipants: 3,    // widget + agent + lemonslice
     });
-    console.log(`[livekitTokenRoutes] Room created: ${roomName}`);
+    logger.info(`[livekitTokenRoutes] Room created: ${roomName}`);
   } catch (err: any) {
     // "already exists" は無害
-    console.warn(`[livekitTokenRoutes] CreateRoom warn: ${err?.message ?? err}`);
+    logger.warn(`[livekitTokenRoutes] CreateRoom warn: ${err?.message ?? err}`);
   }
 
   // 2. Agent Dispatch
   const dispatch = await dispatchClient.createDispatch(roomName, "rajiuce-avatar");
-  console.log(`[livekitTokenRoutes] Agent dispatched to room: ${roomName} id=${dispatch.id} room=${dispatch.room}`);
+  logger.info(`[livekitTokenRoutes] Agent dispatched to room: ${roomName} id=${dispatch.id} room=${dispatch.room}`);
 }
 
 // ─── ルート登録 ───────────────────────────────────────────────────────────────
@@ -80,10 +82,10 @@ export function registerLiveKitTokenRoutes(
   app: Express,
   apiStack: RequestHandler[]
 ): void {
-  console.log("[livekitTokenRoutes] POST /api/avatar/room-token registered");
+  logger.info("[livekitTokenRoutes] POST /api/avatar/room-token registered");
   app.post("/api/avatar/room-token", ...apiStack, async (req: Request, res: Response) => {
     if (!pool) {
-      console.warn("[livekitTokenRoutes] DATABASE_URL not set.");
+      logger.warn("[livekitTokenRoutes] DATABASE_URL not set.");
       return res.json({ enabled: false });
     }
 
@@ -100,7 +102,7 @@ export function registerLiveKitTokenRoutes(
       );
 
       if (result.rowCount === 0) {
-        console.warn(`[livekitTokenRoutes] tenant not found in DB: ${tenantId}`);
+        logger.warn(`[livekitTokenRoutes] tenant not found in DB: ${tenantId}`);
         return res.json({ enabled: false });
       }
 
@@ -111,10 +113,10 @@ export function registerLiveKitTokenRoutes(
       };
 
       // 診断ログ（問題特定後に削除可）
-      console.log(`[livekitTokenRoutes] tenant=${tenantId} is_active=${row.is_active} features=${JSON.stringify(row.features)} agentId=${row.lemonslice_agent_id}`);
+      logger.info(`[livekitTokenRoutes] tenant=${tenantId} is_active=${row.is_active} features=${JSON.stringify(row.features)} agentId=${row.lemonslice_agent_id}`);
 
       if (!row.is_active) {
-        console.warn(`[livekitTokenRoutes] tenant inactive: ${tenantId}`);
+        logger.warn(`[livekitTokenRoutes] tenant inactive: ${tenantId}`);
         return res.json({ enabled: false });
       }
 
@@ -122,12 +124,12 @@ export function registerLiveKitTokenRoutes(
       const agentId = row.lemonslice_agent_id?.trim() || null;
 
       if (!avatarEnabled) {
-        console.warn(`[livekitTokenRoutes] avatar feature disabled for tenant: ${tenantId}`);
+        logger.warn(`[livekitTokenRoutes] avatar feature disabled for tenant: ${tenantId}`);
         return res.status(403).json({ error: 'Avatar not enabled for this tenant' });
       }
 
       if (!agentId) {
-        console.warn(`[livekitTokenRoutes] lemonslice_agent_id missing for tenant: ${tenantId}`);
+        logger.warn(`[livekitTokenRoutes] lemonslice_agent_id missing for tenant: ${tenantId}`);
         return res.json({ enabled: false });
       }
 
@@ -137,7 +139,7 @@ export function registerLiveKitTokenRoutes(
       const apiSecret  = process.env.LIVEKIT_API_SECRET?.trim();
 
       if (!livekitUrl || !apiKey || !apiSecret) {
-        console.warn(`[livekitTokenRoutes] LiveKit env vars not set: LIVEKIT_URL=${!!livekitUrl} LIVEKIT_API_KEY=${!!apiKey} LIVEKIT_API_SECRET=${!!apiSecret}`);
+        logger.warn(`[livekitTokenRoutes] LiveKit env vars not set: LIVEKIT_URL=${!!livekitUrl} LIVEKIT_API_KEY=${!!apiKey} LIVEKIT_API_SECRET=${!!apiSecret}`);
         return res.json({ enabled: false });
       }
 
@@ -159,7 +161,7 @@ export function registerLiveKitTokenRoutes(
       } catch (avatarErr: any) {
         // avatar_configs テーブルが存在しない場合は無視
         if (avatarErr?.code !== "42P01") {
-          console.warn("[livekitTokenRoutes] avatar_configs query warn:", avatarErr?.message);
+          logger.warn("[livekitTokenRoutes] avatar_configs query warn:", avatarErr?.message);
         }
       }
 
@@ -167,7 +169,7 @@ export function registerLiveKitTokenRoutes(
       try {
         await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName);
       } catch (err) {
-        console.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
+        logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
       }
 
       return res.json({
@@ -182,9 +184,9 @@ export function registerLiveKitTokenRoutes(
     } catch (err: any) {
       // カラム未存在エラー (42703) = マイグレーション未実行
       if (err?.code === "42703") {
-        console.error("[livekitTokenRoutes] Missing DB column — run migration_tenant_features.sql:", err.message);
+        logger.error("[livekitTokenRoutes] Missing DB column — run migration_tenant_features.sql:", err.message);
       } else {
-        console.error("[POST /api/avatar/room-token]", err);
+        logger.error("[POST /api/avatar/room-token]", err);
       }
       return res.json({ enabled: false });
     }

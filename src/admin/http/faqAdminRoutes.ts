@@ -3,6 +3,8 @@ import express, { type Express, type Request, type Response } from "express";
 import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { pool } from "../../lib/db";
 import { supabaseAuthMiddleware } from "./supabaseAuthMiddleware";
+import { logger } from '../../lib/logger';
+
 
 
 type FaqRow = {
@@ -47,11 +49,11 @@ async function updateEsFaqDocument(row: FaqRow) {
     const esFaqIndex = process.env.ES_FAQ_INDEX || "faqs";
 
     if (!esUrl) {
-      console.warn("[updateEsFaqDocument] ES_URL is not set");
+      logger.warn("[updateEsFaqDocument] ES_URL is not set");
       return;
     }
     if (!row.es_doc_id) {
-      console.warn(
+      logger.warn(
         "[updateEsFaqDocument] es_doc_id is not set for FAQ id",
         row.id
       );
@@ -79,18 +81,18 @@ async function updateEsFaqDocument(row: FaqRow) {
 
     if (!response.ok) {
       const text = await response.text();
-      console.warn(
+      logger.warn(
         `[updateEsFaqDocument] Failed to update ES document ${row.es_doc_id}: status ${response.status}, response: ${text}`
       );
     }
   } catch (err) {
-    console.warn("[updateEsFaqDocument] error", err);
+    logger.warn("[updateEsFaqDocument] error", err);
   }
 }
 
 export function registerFaqAdminRoutes(app: Express) {
   if (!pool) {
-    console.warn(
+    logger.warn(
       "[faqAdminRoutes] DATABASE_URL is not set. Admin FAQ API will be disabled."
     );
     return;
@@ -157,7 +159,7 @@ export function registerFaqAdminRoutes(app: Express) {
         pagination: { limit, offset, count: result.rows.length },
       });
     } catch (err) {
-      console.error("[GET /admin/faqs] error", err);
+      logger.error("[GET /admin/faqs] error", err);
       return res
         .status(500)
         .json({ error: "Failed to fetch FAQs", detail: String(err) });
@@ -205,7 +207,7 @@ export function registerFaqAdminRoutes(app: Express) {
 
       return res.json(result.rows[0]);
     } catch (err) {
-      console.error("[GET /admin/faqs/:id] error", err);
+      logger.error("[GET /admin/faqs/:id] error", err);
       return res
         .status(500)
         .json({ error: "Failed to fetch FAQ", detail: String(err) });
@@ -286,12 +288,12 @@ export function registerFaqAdminRoutes(app: Express) {
           ]
         );
       } catch (err) {
-        console.warn("[POST /admin/faqs] failed to insert embedding", err);
+        logger.warn("[POST /admin/faqs] failed to insert embedding", err);
       }
 
       return res.status(201).json(row);
     } catch (err) {
-      console.error("[POST /admin/faqs] error", err);
+      logger.error("[POST /admin/faqs] error", err);
       return res
         .status(500)
         .json({ error: "Failed to create FAQ", detail: String(err) });
@@ -359,7 +361,7 @@ export function registerFaqAdminRoutes(app: Express) {
       try {
         await updateEsFaqDocument(row);
       } catch (err) {
-        console.warn("[PUT /admin/faqs/:id] failed to update ES", err);
+        logger.warn("[PUT /admin/faqs/:id] failed to update ES", err);
       }
 
       try {
@@ -391,12 +393,12 @@ export function registerFaqAdminRoutes(app: Express) {
           ]
         );
       } catch (err) {
-        console.warn("[PUT /admin/faqs/:id] failed to upsert embedding", err);
+        logger.warn("[PUT /admin/faqs/:id] failed to upsert embedding", err);
       }
 
       return res.json(row);
     } catch (err) {
-      console.error("[PUT /admin/faqs/:id] error", err);
+      logger.error("[PUT /admin/faqs/:id] error", err);
       return res
         .status(500)
         .json({ error: "Failed to update FAQ", detail: String(err) });
@@ -436,12 +438,12 @@ export function registerFaqAdminRoutes(app: Express) {
 
       return res.json({ ok: true, id });
     } catch (err) {
-      console.error("[DELETE /admin/faqs/:id] error", err);
+      logger.error("[DELETE /admin/faqs/:id] error", err);
       return res
         .status(500)
         .json({ error: "Failed to delete FAQ", detail: String(err) });
     }
   });
 
-  console.log("[faqAdminRoutes] /admin/faqs routes registered");
+  logger.info("[faqAdminRoutes] /admin/faqs routes registered");
 }

@@ -1,8 +1,10 @@
 // src/lib/book-pipeline/contentAnalyzer.ts
+
 // Phase50: PDF コンテンツ種類判定 — Gemini 2.5 Flash で種類・スキーマを自動提案
 // CLAUDE.md: 書籍内容をログに出力しない（サンプルテキストはログに出さない）
 
 import { callGeminiJudge } from "../gemini/client";
+import { logger } from '../logger';
 
 export interface SchemaField {
   key: string;
@@ -137,7 +139,7 @@ ${sampleText}
         typeof parsed.reasoning === "string" ? parsed.reasoning : "自動判定",
     };
   } catch (err) {
-    console.error(
+    logger.error(
       "[contentAnalyzer] Gemini error:",
       err instanceof Error ? err.message : String(err)
     );

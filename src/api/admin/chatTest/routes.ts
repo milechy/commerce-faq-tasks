@@ -1,6 +1,8 @@
 // src/api/admin/chatTest/routes.ts
 import type { Express, NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import { logger } from '../../../lib/logger';
+
 
 export function registerChatTestRoutes(app: Express): void {
   // ── インライン認証スタック (knowledge/routes.ts と同パターン) ──────────────
@@ -29,7 +31,7 @@ export function registerChatTestRoutes(app: Express): void {
       (req as any).supabaseUser = jwt.verify(token, secret);
       next();
     } catch (err) {
-      console.warn("[chatTestAuth] invalid token", err);
+      logger.warn("[chatTestAuth] invalid token", err);
       res.status(401).json({ error: "Invalid token" });
     }
   }
@@ -86,5 +88,5 @@ export function registerChatTestRoutes(app: Express): void {
     return res.json({ token, tenantId: requestedTenantId, expiresIn });
   });
 
-  console.log("[chatTestRoutes] /v1/admin/chat-test/token registered");
+  logger.info("[chatTestRoutes] /v1/admin/chat-test/token registered");
 }

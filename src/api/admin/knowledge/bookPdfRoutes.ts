@@ -1,4 +1,5 @@
 // src/api/admin/knowledge/bookPdfRoutes.ts
+
 // Phase44: 書籍PDFアップロードAPI — AES-256-GCM暗号化 + Supabase Storage
 
 import type { Express, NextFunction, Request, Response } from "express";
@@ -9,6 +10,7 @@ import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { pipelineQueue } from "../../../lib/book-pipeline/pipelineQueue";
 import { decryptText } from "../../../lib/crypto/textEncrypt";
+import { logger } from '../../../lib/logger';
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -136,7 +138,7 @@ export function registerBookPdfRoutes(
           uploadBuffer = result.encrypted;
           encryptionIv = result.iv;
         } else {
-          console.warn(
+          logger.warn(
             "[book-pdf] KNOWLEDGE_ENCRYPTION_KEY未設定: 平文保存フォールバック"
           );
         }
@@ -158,7 +160,7 @@ export function registerBookPdfRoutes(
           });
 
         if (storageError) {
-          console.error("[book-pdf] Storage error:", storageError.message);
+          logger.error("[book-pdf] Storage error:", storageError.message);
           return res.status(500).json({
             error: "アップロードに失敗しました。もう一度お試しください",
           });
@@ -189,7 +191,7 @@ export function registerBookPdfRoutes(
         // storage_path はレスポンスに含めない（セキュリティ）
         return res.status(201).json(result.rows[0]);
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] POST error:",
           err instanceof Error ? err.message : String(err)
         );
@@ -242,7 +244,7 @@ export function registerBookPdfRoutes(
         const result = await db.query(sql, params);
         return res.json({ books: result.rows, total: result.rows.length });
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] GET error:",
           err instanceof Error ? err.message : String(err)
         );
@@ -292,7 +294,7 @@ export function registerBookPdfRoutes(
 
         return res.json(book);
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] GET/:id error:",
           err instanceof Error ? err.message : String(err)
         );
@@ -347,7 +349,7 @@ export function registerBookPdfRoutes(
             .from("book-pdfs")
             .remove([book.storage_path]);
           if (storageErr) {
-            console.warn(
+            logger.warn(
               "[book-pdf] Storage delete warning:",
               storageErr.message
             );
@@ -366,7 +368,7 @@ export function registerBookPdfRoutes(
 
         return res.json({ ok: true, deleted: id });
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] DELETE error:",
           err instanceof Error ? err.message : String(err)
         );
@@ -479,7 +481,7 @@ export function registerBookPdfRoutes(
           total: chunks.length,
         });
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] GET chunks error:",
           err instanceof Error ? err.message : String(err)
         );
@@ -574,7 +576,7 @@ export function registerBookPdfRoutes(
 
         return res.json(updateResult.rows[0]);
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] PUT chunk error:",
           err instanceof Error ? err.message : String(err)
         );
@@ -647,7 +649,7 @@ export function registerBookPdfRoutes(
 
         return res.json({ ok: true, deleted: chunkId });
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] DELETE chunk error:",
           err instanceof Error ? err.message : String(err)
         );
@@ -706,7 +708,7 @@ export function registerBookPdfRoutes(
 
         return;
       } catch (err: unknown) {
-        console.error(
+        logger.error(
           "[book-pdf] POST process error:",
           err instanceof Error ? err.message : String(err)
         );

@@ -1,8 +1,10 @@
 // src/api/admin/feedback/feedbackAI.ts
+
 // フィードバックチャット LLM 自動返答
 
 import { sanitizeOutput } from "../../../lib/security/inputSanitizer";
 import { trackUsage } from "../../../lib/billing/usageTracker";
+import { logger } from '../../../lib/logger';
 
 const FEEDBACK_AI_MODEL = process.env.FEEDBACK_AI_MODEL ?? "llama-3.1-8b-instant";
 
@@ -54,7 +56,7 @@ export async function generateFeedbackReply(
     });
 
     if (!response.ok) {
-      console.warn("[feedbackAI] Groq API error:", response.status);
+      logger.warn("[feedbackAI] Groq API error:", response.status);
       return null;
     }
 
@@ -81,7 +83,7 @@ export async function generateFeedbackReply(
 
     return safe;
   } catch (err) {
-    console.error("[feedbackAI] generation failed:", err);
+    logger.error("[feedbackAI] generation failed:", err);
     return null;
   }
 }

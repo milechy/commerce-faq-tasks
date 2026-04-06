@@ -1,10 +1,12 @@
 // src/api/admin/analytics/routes.ts
+
 // Phase50 Stream A: Analytics集計API
 
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { pool } from "../../../lib/db";
 import { createNotification, notificationExists } from "../../../lib/notifications";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -287,7 +289,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         return res.json(response);
       } catch (err) {
-        console.warn("[GET /v1/admin/analytics/summary]", err);
+        logger.warn("[GET /v1/admin/analytics/summary]", err);
         return res.status(500).json({ error: "サマリーの取得に失敗しました" });
       }
     },
@@ -412,7 +414,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         return res.json(response);
       } catch (err) {
-        console.warn("[GET /v1/admin/analytics/trends]", err);
+        logger.warn("[GET /v1/admin/analytics/trends]", err);
         return res.status(500).json({ error: "トレンドの取得に失敗しました" });
       }
     },
@@ -544,7 +546,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         return res.json(response);
       } catch (err) {
-        console.warn("[GET /v1/admin/analytics/evaluations]", err);
+        logger.warn("[GET /v1/admin/analytics/evaluations]", err);
         return res.status(500).json({ error: "評価分析の取得に失敗しました" });
       }
     },
@@ -817,7 +819,7 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         return res.json(responseData);
       } catch (err) {
-        console.warn("[GET /v1/admin/analytics/conversions]", err);
+        logger.warn("[GET /v1/admin/analytics/conversions]", err);
         return res.status(500).json({ error: "コンバージョン分析の取得に失敗しました" });
       }
     },

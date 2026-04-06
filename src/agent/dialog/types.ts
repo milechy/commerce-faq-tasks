@@ -1,9 +1,9 @@
 // src/agent/dialog/types.ts
 
-import type { OrchestratorStep } from "../flow/dialogOrchestrator";
 import type { PlannerRoute } from "../orchestrator/modelRouter";
-import type { DetectedSalesIntents } from "../orchestrator/sales/salesIntentDetector";
-import type { SalesMeta } from "../orchestrator/sales/salesPipeline";
+import type { ProposeIntent } from "../orchestrator/sales/proposePromptBuilder";
+import type { RecommendIntent } from "../orchestrator/sales/recommendPromptBuilder";
+import type { CloseIntent } from "../orchestrator/sales/closePromptBuilder";
 import type { AgentStep } from "../types";
 
 export type PlanStepType = "clarify" | "search" | "followup_search" | "answer";
@@ -54,6 +54,28 @@ export interface MultiStepQueryPlan {
   language?: "ja" | "en" | "other";
   raw?: unknown;
 }
+
+// --- Moved here to break circular deps (was in dialogOrchestrator / salesPipeline / salesIntentDetector) ---
+
+export type OrchestratorStep =
+  | { type: 'clarify_plan'; questions: string[] }
+  | { type: 'search_executed'; query: string; topK: number; source: 'searchAgent' }
+  | MultiStepQueryPlan['steps'][number]
+
+export type SalesPipelineKind = "generic" | "saas" | "ec" | "reservation";
+
+export type SalesMeta = {
+  pipelineKind?: SalesPipelineKind;
+  upsellTriggered?: boolean;
+  ctaTriggered?: boolean;
+  notes?: string[];
+};
+
+export type DetectedSalesIntents = {
+  proposeIntent?: ProposeIntent;
+  recommendIntent?: RecommendIntent;
+  closeIntent?: CloseIntent;
+};
 
 export type DialogMessageRole = "user" | "assistant" | "system";
 

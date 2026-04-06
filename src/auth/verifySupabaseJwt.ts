@@ -1,4 +1,6 @@
 import jwt from "jsonwebtoken";
+import { logger } from '../lib/logger';
+
 
 const jwtSecret = process.env.SUPABASE_JWT_SECRET;
 
@@ -27,7 +29,7 @@ export function verifySupabaseJwt(
   try {
     return jwt.verify(token, jwtSecret) as SupabaseJwtPayload;
   } catch (err) {
-    console.warn("[verifySupabaseJwt] invalid token:", (err as Error).message);
+    logger.warn("[verifySupabaseJwt] invalid token:", (err as Error).message);
     return null;
   }
 }

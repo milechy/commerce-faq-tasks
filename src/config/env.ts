@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { logger } from '../lib/logger';
+
 
 // Boolean env var: accepts "true"/"false"/"1"/"0"
 const boolEnv = z.enum(["true", "false", "1", "0"]).optional();
@@ -165,10 +167,10 @@ function validateEnv(): Env {
     const message = `[env] Invalid environment variables:\n${issues}`;
 
     if (process.env.NODE_ENV === "production") {
-      console.error(message);
+      logger.error(message);
       process.exit(1);
     } else {
-      console.warn(message);
+      logger.warn(message);
     }
 
     // Return a best-effort object in non-production so the process can still start

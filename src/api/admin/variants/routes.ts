@@ -1,10 +1,12 @@
 // src/api/admin/variants/routes.ts
+
 // Phase46: Variant CRUD API（Stream A）
 
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { listVariants, upsertVariants, getVariantStats } from "./variantsRepository";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // ユーティリティ
@@ -67,7 +69,7 @@ export function registerVariantRoutes(app: Express): void {
       const variants = await listVariants(tenantId);
       return res.json({ variants });
     } catch (err) {
-      console.warn("[GET /v1/admin/variants]", err);
+      logger.warn("[GET /v1/admin/variants]", err);
       return res.status(500).json({ error: "バリエーションの取得に失敗しました" });
     }
   });
@@ -96,7 +98,7 @@ export function registerVariantRoutes(app: Express): void {
       const variants = await getVariantStats(tenantId, days);
       return res.json({ variants });
     } catch (err) {
-      console.warn("[GET /v1/admin/variants/stats]", err);
+      logger.warn("[GET /v1/admin/variants/stats]", err);
       return res.status(500).json({ error: "バリエーション統計の取得に失敗しました" });
     }
   });
@@ -129,7 +131,7 @@ export function registerVariantRoutes(app: Express): void {
       const updated = await upsertVariants(tenantId, variants);
       return res.json({ ok: true, variants: updated });
     } catch (err) {
-      console.warn("[PUT /v1/admin/variants]", err);
+      logger.warn("[PUT /v1/admin/variants]", err);
       return res.status(500).json({ error: "バリエーションの更新に失敗しました" });
     }
   });

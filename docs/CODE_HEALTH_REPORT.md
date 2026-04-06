@@ -191,3 +191,56 @@ SUPABASE_STORAGE_URL
 ---
 
 *このレポートは `SCRIPTS/dead-code-check.sh` と `SCRIPTS/env-check.sh` で自動更新可能*
+
+---
+
+## 2026-04-06 — コード品質改善セッション
+
+### 変更サマリー
+
+| 項目 | 変更前 | 変更後 |
+|---|---|---|
+| 循環依存 | 7 chains | **0** ✅ |
+| console.* 呼び出し (非テスト) | 226 | **1** (コメント内のみ) ✅ |
+| .env.example 未登録変数 | 79 | **0** ✅ |
+| .env.example stale変数 | 11 | **0** ✅ |
+| pnpm test | 970/970 | **970/970** ✅ |
+| pnpm typecheck | 0 errors | **0 errors** ✅ |
+
+### B1: 循環依存解消 (7 → 0)
+
+**根本原因:** `src/agent/dialog/types.ts` が実装ファイル (`dialogOrchestrator.ts`, `salesIntentDetector.ts`, `salesPipeline.ts`) を import していたため双方向参照が発生。
+
+**解決策:** 以下の型定義を `dialog/types.ts` に集約し、元ファイルは re-export のみに変更:
+- `OrchestratorStep` (from `dialogOrchestrator.ts`)
+- `SalesPipelineKind`, `SalesMeta` (from `salesPipeline.ts`)
+- `DetectedSalesIntents` (from `salesIntentDetector.ts`)
+- `SalesPipelineKind` を `pipelines/*.ts` も直接 `dialog/types.ts` から import するよう変更 → chains 4-7 解消
+
+**変更ファイル:**
+- `src/agent/dialog/types.ts` — 4 imports 削除、5 型定義追加
+- `src/agent/flow/dialogOrchestrator.ts` — OrchestratorStep re-export
+- `src/agent/orchestrator/sales/salesIntentDetector.ts` — DetectedSalesIntents re-export
+- `src/agent/orchestrator/sales/salesPipeline.ts` — SalesPipelineKind/SalesMeta re-export
+- `src/agent/orchestrator/sales/pipelines/*.ts` (4ファイル) — import path変更
+
+### B2: .env.example 再構築 (79 missing + 11 stale → 0)
+
+全 106 変数を以下のカテゴリで整理:
+Core / Database / Elasticsearch / Cross-encoder / Auth / Supabase / LLM-Groq / LLM-Alternate / Embeddings / Judge / Phase22 Flow / Avatar / Storage / Billing / Monitoring / Knowledge / Notion / n8n / Search
+
+### B4: console.* → logger (pino) 移行 (226 → 1)
+
+- `src/lib/logger.ts` を新規作成 (console互換の `AppLogger` インターface)
+- 47 ファイルの `console.log/error/warn/info/debug` を `logger.*` に置換
+- テスト2件 (`bookPdfRoutes.test.ts`, `pipelineQueue.test.ts`) の logger spy を更新
+
+### 未対応項目 (将来タスク)
+
+| 項目 | 現状 | 優先度 |
+|---|---|---|
+| Dead exports | 56件 | P2 — 静的解析false positiveを含む |
+| `: any` 型 | 130件 | P2 |
+| `as any` キャスト | 188件 | P2 |
+| `@ts-ignore` | 25件 | P3 |
+| `langGraphOrchestrator.ts` 1,849行 | 分割未着手 | P3 |

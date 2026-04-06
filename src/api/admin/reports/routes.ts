@@ -1,9 +1,11 @@
 // src/api/admin/reports/routes.ts
+
 // Phase46: 週次レポート API（Stream A）
 
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { listReports, getReport, getUnreadCount } from "./reportsRepository";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // ユーティリティ
@@ -46,7 +48,7 @@ export function registerReportRoutes(app: Express): void {
       const reports = await listReports(tenantId);
       return res.json({ reports });
     } catch (err) {
-      console.warn("[GET /v1/admin/reports]", err);
+      logger.warn("[GET /v1/admin/reports]", err);
       return res.status(500).json({ error: "レポートの取得に失敗しました" });
     }
   });
@@ -74,7 +76,7 @@ export function registerReportRoutes(app: Express): void {
       const count = await getUnreadCount(tenantId);
       return res.json({ count });
     } catch (err) {
-      console.warn("[GET /v1/admin/reports/unread-count]", err);
+      logger.warn("[GET /v1/admin/reports/unread-count]", err);
       return res.status(500).json({ error: "未読数の取得に失敗しました" });
     }
   });
@@ -99,7 +101,7 @@ export function registerReportRoutes(app: Express): void {
       }
       return res.json({ report });
     } catch (err) {
-      console.warn("[GET /v1/admin/reports/:id]", err);
+      logger.warn("[GET /v1/admin/reports/:id]", err);
       return res.status(500).json({ error: "レポートの取得に失敗しました" });
     }
   });

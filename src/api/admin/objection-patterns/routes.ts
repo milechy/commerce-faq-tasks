@@ -1,4 +1,5 @@
 // src/api/admin/objection-patterns/routes.ts
+
 // Phase46: 反論パターン API（Stream A）
 
 import type { Express, Request, Response } from "express";
@@ -8,6 +9,7 @@ import {
   getObjectionPattern,
   deleteObjectionPattern,
 } from "./objectionPatternsRepository";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // ユーティリティ
@@ -50,7 +52,7 @@ export function registerObjectionPatternRoutes(app: Express): void {
       const patterns = await listObjectionPatterns(tenantId);
       return res.json({ patterns });
     } catch (err) {
-      console.warn("[GET /v1/admin/objection-patterns]", err);
+      logger.warn("[GET /v1/admin/objection-patterns]", err);
       return res.status(500).json({ error: "パターンの取得に失敗しました" });
     }
   });
@@ -75,7 +77,7 @@ export function registerObjectionPatternRoutes(app: Express): void {
       }
       return res.json({ pattern });
     } catch (err) {
-      console.warn("[GET /v1/admin/objection-patterns/:id]", err);
+      logger.warn("[GET /v1/admin/objection-patterns/:id]", err);
       return res.status(500).json({ error: "パターンの取得に失敗しました" });
     }
   });
@@ -100,7 +102,7 @@ export function registerObjectionPatternRoutes(app: Express): void {
       }
       return res.json({ ok: true });
     } catch (err) {
-      console.warn("[DELETE /v1/admin/objection-patterns/:id]", err);
+      logger.warn("[DELETE /v1/admin/objection-patterns/:id]", err);
       return res.status(500).json({ error: "パターンの削除に失敗しました" });
     }
   });

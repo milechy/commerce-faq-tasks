@@ -1,9 +1,11 @@
 // src/agent/flow/llmPlannerRuntime.ts
 
+
 import { OpenAiLlmClient } from '../llm/openAiLlmClient'
 import type { QueryPlan } from '../types'
 import type { PlanOptions } from './queryPlanner'
 import { LlmQueryPlanner, planQueryAsync } from './queryPlanner'
+import { logger } from '../../lib/logger';
 
 let initialized = false
 let planner: LlmQueryPlanner | null = null
@@ -21,7 +23,7 @@ function initPlanner(): LlmQueryPlanner | null {
   const model = process.env.AGENT_PLANNER_MODEL ?? 'gpt-4o-mini'
 
   if (!apiKey) {
-    console.warn(
+    logger.warn(
       '[llmPlannerRuntime] AGENT_PLANNER_LLM_ENABLED=1 ですが OPENAI_API_KEY が設定されていません。Rule-based にフォールバックします。',
     )
     return (planner = null)
@@ -55,7 +57,7 @@ export async function planQueryWithLlmAsync(
   try {
     return await p.planAsync(input, options)
   } catch (err) {
-    console.warn(
+    logger.warn(
       '[llmPlannerRuntime] LLM planner failed, falling back to rule-based planner:',
       err,
     )

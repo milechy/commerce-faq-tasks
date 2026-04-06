@@ -1,5 +1,7 @@
 // src/integrations/notion/clarifyLogWriter.ts
 import { Client, isNotionClientError } from "@notionhq/client";
+import { logger } from '../../lib/logger';
+
 
 export interface ClarifyLogInput {
   originalQuestion: string;
@@ -93,7 +95,7 @@ export class ClarifyLogWriter {
       });
     } catch (err: any) {
       if (isNotionClientError(err)) {
-        console.error(
+        logger.error(
           "[ClarifyLogWriter] Notion API error",
           JSON.stringify(
             {
@@ -105,7 +107,7 @@ export class ClarifyLogWriter {
           )
         );
       } else {
-        console.error("[ClarifyLogWriter] Unknown error", err);
+        logger.error("[ClarifyLogWriter] Unknown error", err);
       }
       throw err;
     }

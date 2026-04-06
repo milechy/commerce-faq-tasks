@@ -1,5 +1,6 @@
 // src/api/admin/tenants/routes.ts
 import type { Express, NextFunction, Request, Response } from "express";
+
 // @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
@@ -8,6 +9,7 @@ import { registerTenant } from "../../../lib/tenant-context";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { DEFAULT_AVATARS } from "../avatar/routes";
+import { logger } from '../../../lib/logger';
 
 const planValues = ["starter", "growth", "enterprise"] as const;
 
@@ -78,7 +80,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       (req as any).supabaseUser = jwt.verify(token, secret);
       next();
     } catch (err) {
-      console.warn("[tenantAuth] invalid token", err);
+      logger.warn("[tenantAuth] invalid token", err);
       res.status(401).json({ error: "Invalid token" });
     }
   }
@@ -111,7 +113,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       }
       return res.json(result.rows[0]);
     } catch (err) {
-      console.warn("[GET /v1/admin/my-tenant]", err);
+      logger.warn("[GET /v1/admin/my-tenant]", err);
       return res.status(500).json({ error: "取得に失敗しました" });
     }
   });
@@ -145,7 +147,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       }
       return res.json(result.rows[0]);
     } catch (err) {
-      console.warn("[PATCH /v1/admin/my-tenant]", err);
+      logger.warn("[PATCH /v1/admin/my-tenant]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
     }
   });
@@ -158,7 +160,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       );
       return res.json({ tenants: result.rows, total: result.rows.length });
     } catch (err) {
-      console.warn("[GET /v1/admin/tenants]", err);
+      logger.warn("[GET /v1/admin/tenants]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });
     }
   });
@@ -221,7 +223,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
             );
           }
         } catch (seedErr) {
-          console.warn('[POST /v1/admin/tenants] デフォルトアバター生成エラー:', seedErr);
+          logger.warn('[POST /v1/admin/tenants] デフォルトアバター生成エラー:', seedErr);
         }
       })();
 
@@ -230,7 +232,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (err?.code === "23505") {
         return res.status(409).json({ error: "conflict", message: "このIDのテナントはすでに存在します。" });
       }
-      console.warn("[POST /v1/admin/tenants]", err);
+      logger.warn("[POST /v1/admin/tenants]", err);
       return res.status(500).json({ error: "作成に失敗しました" });
     }
   });
@@ -248,7 +250,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       }
       return res.json(result.rows[0]);
     } catch (err) {
-      console.warn("[GET /v1/admin/tenants/:id]", err);
+      logger.warn("[GET /v1/admin/tenants/:id]", err);
       return res.status(500).json({ error: "取得に失敗しました" });
     }
   });
@@ -294,7 +296,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       );
       return res.json(result.rows[0]);
     } catch (err) {
-      console.warn("[PATCH /v1/admin/tenants/:id]", err);
+      logger.warn("[PATCH /v1/admin/tenants/:id]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
     }
   });
@@ -357,7 +359,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         id: row.id,
       });
     } catch (err) {
-      console.warn("[POST /v1/admin/tenants/:id/keys]", err);
+      logger.warn("[POST /v1/admin/tenants/:id/keys]", err);
       return res.status(500).json({ error: "APIキー発行に失敗しました" });
     }
   });
@@ -383,7 +385,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       }));
       return res.json({ keys, total: keys.length });
     } catch (err) {
-      console.warn("[GET /v1/admin/tenants/:id/keys]", err);
+      logger.warn("[GET /v1/admin/tenants/:id/keys]", err);
       return res.status(500).json({ error: "APIキー一覧の取得に失敗しました" });
     }
   });
@@ -404,7 +406,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       }
       return res.json({ ok: true, id: keyId, is_active: false });
     } catch (err) {
-      console.warn("[DELETE /v1/admin/tenants/:id/keys/:keyId]", err);
+      logger.warn("[DELETE /v1/admin/tenants/:id/keys/:keyId]", err);
       return res.status(500).json({ error: "APIキー無効化に失敗しました" });
     }
   });
@@ -432,7 +434,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         return res.status(403).json({ error: "tenant_disabled", message: "無効なテナントにはユーザーを招待できません。" });
       }
     } catch (err) {
-      console.warn("[POST /v1/admin/tenants/:id/invite] tenant check failed", err);
+      logger.warn("[POST /v1/admin/tenants/:id/invite] tenant check failed", err);
       return res.status(500).json({ error: "テナント確認に失敗しました" });
     }
 
@@ -448,7 +450,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       );
 
       if (inviteError) {
-        console.warn("[POST /v1/admin/tenants/:id/invite] invite error", inviteError);
+        logger.warn("[POST /v1/admin/tenants/:id/invite] invite error", inviteError);
         return res.status(400).json({
           error: "invite_failed",
           message: inviteError.message || "招待メールの送信に失敗しました。",
@@ -466,7 +468,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       });
 
       if (updateError) {
-        console.warn("[POST /v1/admin/tenants/:id/invite] app_metadata update error", updateError);
+        logger.warn("[POST /v1/admin/tenants/:id/invite] app_metadata update error", updateError);
         // 招待は成功しているが app_metadata の更新に失敗した場合も通知
         return res.status(500).json({
           error: "metadata_update_failed",
@@ -482,10 +484,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         role: "client_admin",
       });
     } catch (err) {
-      console.warn("[POST /v1/admin/tenants/:id/invite]", err);
+      logger.warn("[POST /v1/admin/tenants/:id/invite]", err);
       return res.status(500).json({ error: "招待処理に失敗しました" });
     }
   });
 
-  console.log("[tenantAdminRoutes] /v1/admin/tenants routes registered");
+  logger.info("[tenantAdminRoutes] /v1/admin/tenants routes registered");
 }

@@ -17,7 +17,14 @@ jest.mock("../../../auth/supabaseClient", () => ({
   },
 }));
 
+// logger をモック（console spy から pino logger spy に移行）
+jest.mock("../../../lib/logger", () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  createLogger: jest.fn(() => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() })),
+}));
+
 import { supabaseAdmin } from "../../../auth/supabaseClient";
+import { logger } from "../../../lib/logger";
 
 // ── テスト用 Express アプリ生成 ───────────────────────────────────────────
 function makeApp(opts: {
@@ -247,9 +254,10 @@ describe("DELETE /v1/admin/knowledge/book-pdf/:id", () => {
 // ─── 暗号化フォールバックテスト ─────────────────────────────────────────────
 
 describe("KNOWLEDGE_ENCRYPTION_KEY 暗号化", () => {
-  it("9. KNOWLEDGE_ENCRYPTION_KEY 未設定 → 平文保存 + console.warn", async () => {
+  it("9. KNOWLEDGE_ENCRYPTION_KEY 未設定 → 平文保存 + logger.warn", async () => {
     delete process.env.KNOWLEDGE_ENCRYPTION_KEY;
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const warnMock = logger.warn as jest.MockedFunction<typeof logger.warn>;
+    warnMock.mockClear();
 
     const now = new Date().toISOString();
     const { app, db } = makeApp({
@@ -262,7 +270,7 @@ describe("KNOWLEDGE_ENCRYPTION_KEY 暗号化", () => {
       .attach("file", PDF_BUFFER, { filename: "test.pdf", contentType: "application/pdf" });
 
     expect(res.status).toBe(201);
-    expect(warnSpy).toHaveBeenCalledWith(
+    expect(warnMock).toHaveBeenCalledWith(
       expect.stringContaining("KNOWLEDGE_ENCRYPTION_KEY未設定")
     );
 
@@ -272,8 +280,6 @@ describe("KNOWLEDGE_ENCRYPTION_KEY 暗号化", () => {
     );
     const params = insertCall[1] as unknown[];
     expect(params[5]).toBeNull(); // encryption_iv = null
-
-    warnSpy.mockRestore();
   });
 
   it("9b. KNOWLEDGE_ENCRYPTION_KEY 設定済み → 暗号化保存 + encryption_iv あり", async () => {

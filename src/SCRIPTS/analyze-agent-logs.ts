@@ -1,4 +1,5 @@
 // SCRIPTS/analyze-agent-logs.ts
+
 // Simple CLI to compute basic latency stats (p50, p95) from pino JSON logs.
 //
 // Usage:
@@ -11,6 +12,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
+import { logger } from '../lib/logger';
 
 function percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null;
@@ -21,7 +23,7 @@ function percentile(values: number[], p: number): number | null {
 
 function summarize(name: string, values: number[]) {
   if (values.length === 0) {
-    console.log(`\n[${name}] no data`);
+    logger.info(`\n[${name}] no data`);
     return;
   }
 
@@ -31,18 +33,18 @@ function summarize(name: string, values: number[]) {
   const p50 = percentile(sorted, 0.5);
   const p95 = percentile(sorted, 0.95);
 
-  console.log(`\n[${name}]`);
-  console.log(`  count: ${values.length}`);
-  console.log(`  min:   ${min.toFixed(1)} ms`);
-  console.log(`  p50:   ${p50?.toFixed(1)} ms`);
-  console.log(`  p95:   ${p95?.toFixed(1)} ms`);
-  console.log(`  max:   ${max.toFixed(1)} ms`);
+  logger.info(`\n[${name}]`);
+  logger.info(`  count: ${values.length}`);
+  logger.info(`  min:   ${min.toFixed(1)} ms`);
+  logger.info(`  p50:   ${p50?.toFixed(1)} ms`);
+  logger.info(`  p95:   ${p95?.toFixed(1)} ms`);
+  logger.info(`  max:   ${max.toFixed(1)} ms`);
 }
 
 async function main() {
   const rawInput = process.argv[2];
   if (!rawInput) {
-    console.error(
+    logger.error(
       "Usage: node dist/SCRIPTS/analyze-agent-logs.js /path/to/log.jsonl"
     );
     process.exit(1);
@@ -52,17 +54,17 @@ async function main() {
   const allowedBase = path.resolve(process.env.LOGS_DIR ?? process.cwd());
 
   if (!filePath.startsWith(allowedBase + path.sep) && filePath !== allowedBase) {
-    console.error(`Error: Log file must be within the allowed directory: ${allowedBase}`);
+    logger.error(`Error: Log file must be within the allowed directory: ${allowedBase}`);
     process.exit(1);
   }
 
   if (path.extname(filePath) !== ".jsonl") {
-    console.error("Error: Only .jsonl files are supported.");
+    logger.error("Error: Only .jsonl files are supported.");
     process.exit(1);
   }
 
   if (!fs.existsSync(filePath)) {
-    console.error(`File not found: ${filePath}`);
+    logger.error(`File not found: ${filePath}`);
     process.exit(1);
   }
 
@@ -171,7 +173,7 @@ async function main() {
     }
   }
 
-  console.log("=== Agent latency stats (from logs) ===");
+  logger.info("=== Agent latency stats (from logs) ===");
   summarize("RAG totalMs (dialog.rag.finished)", ragLatencies);
   summarize("Planner latencyMs (tag=planner)", plannerLatencies);
   summarize(
@@ -183,56 +185,56 @@ async function main() {
     return den > 0 ? ((num / den) * 100).toFixed(1) : "0.0";
   }
 
-  console.log("\n=== Planner Metrics (Phase12) ===");
-  console.log(`total dialogs            : ${plannerMetrics.totalDialogs}`);
-  console.log(
+  logger.info("\n=== Planner Metrics (Phase12) ===");
+  logger.info(`total dialogs            : ${plannerMetrics.totalDialogs}`);
+  logger.info(
     `rule-based planner used  : ${plannerMetrics.ruleBasedCount} (${pct(
       plannerMetrics.ruleBasedCount,
       plannerMetrics.totalDialogs,
     )}%)`,
   );
-  console.log(
+  logger.info(
     `planner LLM calls        : ${plannerMetrics.plannerLlmCount} (${pct(
       plannerMetrics.plannerLlmCount,
       plannerMetrics.totalDialogs,
     )}%)`,
   );
-  console.log(
+  logger.info(
     `fast-path answers        : ${plannerMetrics.fastPathCount} (${pct(
       plannerMetrics.fastPathCount,
       plannerMetrics.totalDialogs,
     )}%)`,
   );
 
-  console.log("\n- Rule-based by intent:");
+  logger.info("\n- Rule-based by intent:");
   for (const [intent, count] of Object.entries(plannerMetrics.ruleBasedByIntent)) {
-    console.log(`  ${intent}: ${count} (${pct(count, plannerMetrics.ruleBasedCount)}%)`);
+    logger.info(`  ${intent}: ${count} (${pct(count, plannerMetrics.ruleBasedCount)}%)`);
   }
 
-  console.log("\n- Planner LLM by route:");
+  logger.info("\n- Planner LLM by route:");
   for (const [route, count] of Object.entries(plannerMetrics.plannerLlmByRoute)) {
-    console.log(`  ${route}: ${count} (${pct(count, plannerMetrics.plannerLlmCount)}%)`);
+    logger.info(`  ${route}: ${count} (${pct(count, plannerMetrics.plannerLlmCount)}%)`);
   }
 
   if (plannerLlmCalls.length > 0) {
-    console.log("\n- Planner LLM call samples:");
+    logger.info("\n- Planner LLM call samples:");
     plannerLlmCalls.forEach((c, idx) => {
       const msgPreview = c.userMessagePreview
         ? c.userMessagePreview.replace(/\s+/g, " ")
         : "(no preview)";
-      console.log(
+      logger.info(
         `  ${idx + 1}. route=${c.route}, model=${c.model ?? "unknown"}, conversationId=${c.conversationId ?? "n/a"}`,
       );
-      console.log(`     userMessage="${msgPreview.slice(0, 80)}"`);
+      logger.info(`     userMessage="${msgPreview.slice(0, 80)}"`);
     });
   } else {
-    console.log("\n- Planner LLM call samples: (none)");
+    logger.info("\n- Planner LLM call samples: (none)");
   }
 
-  console.log("=================================\n");
+  logger.info("=================================\n");
 }
 
 main().catch((err) => {
-  console.error(err);
+  logger.error(err);
   process.exit(1);
 });

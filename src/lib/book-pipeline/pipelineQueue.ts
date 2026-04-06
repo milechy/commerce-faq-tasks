@@ -1,9 +1,11 @@
 // src/lib/book-pipeline/pipelineQueue.ts
+
 // Phase47 Stream C: in-memory パイプラインキュー（外部依存なし）
 // 同時実行を1に制限し、複数PDFアップロード時のレート制限・メモリ問題を防ぐ
 
 import { runBookPipeline } from "./pipeline";
 import type { PipelineDeps } from "./pipeline";
+import { logger } from '../logger';
 
 class PipelineQueue {
   private queue: Array<{ bookId: number; deps: PipelineDeps }> = [];
@@ -27,7 +29,7 @@ class PipelineQueue {
     try {
       await runBookPipeline(job.bookId, job.deps);
     } catch (err) {
-      console.error(
+      logger.error(
         "[pipelineQueue] error book_id=%d:",
         job.bookId,
         err instanceof Error ? err.message : String(err)

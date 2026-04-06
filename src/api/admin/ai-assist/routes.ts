@@ -1,4 +1,5 @@
 // src/api/admin/ai-assist/routes.ts
+
 // Phase43 P2: インテント振り分け + RAG統合
 // POST /v1/admin/ai-assist/chat
 
@@ -8,6 +9,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { ADMIN_AI_SYSTEM_PROMPT, isUnanswered } from "./systemPrompt";
 import { getPool } from "../../../lib/db";
 import { hybridSearch } from "../../../search/hybrid";
+import { logger } from '../../../lib/logger';
 
 
 // ---------------------------------------------------------------------------
@@ -190,7 +192,7 @@ async function buildBusinessFaqAnswer(
 
     // 日本語対応キーワード抽出
     const keywords = extractKeywords(message);
-    console.log(`[ai-assist] extracted keywords: ${keywords.join(", ")}`);
+    logger.info(`[ai-assist] extracted keywords: ${keywords.join(", ")}`);
 
     let rows: Array<{ question: string; answer: string }> = [];
 
@@ -217,21 +219,21 @@ async function buildBusinessFaqAnswer(
       rows = result.rows;
     }
 
-    console.log(`[ai-assist] FAQ search: ${rows.length} hits for tenant=${tenantId}`);
+    logger.info(`[ai-assist] FAQ search: ${rows.length} hits for tenant=${tenantId}`);
 
     // RAGコンテキスト構築（各200文字以内）
     const ragContext = rows
       .map((row) => `Q: ${row.question}\nA: ${row.answer}`.slice(0, 200))
       .join("\n\n");
 
-    console.log(`[ai-assist] ragContext length: ${ragContext.length}`);
-    console.log(`[ai-assist] ragContext preview: ${ragContext.slice(0, 100)}`);
+    logger.info(`[ai-assist] ragContext length: ${ragContext.length}`);
+    logger.info(`[ai-assist] ragContext preview: ${ragContext.slice(0, 100)}`);
 
     const answer = await callGroq70b(message, ragContext);
     const aiAnswered = rows.length > 0 && !isUnanswered(answer);
     return { answer, aiAnswered };
   } catch (e) {
-    console.error("[ai-assist] buildBusinessFaqAnswer error:", e);
+    logger.error("[ai-assist] buildBusinessFaqAnswer error:", e);
     return {
       answer: "現在FAQの検索ができません。しばらくしてから再度お試しください。",
       aiAnswered: false,
@@ -271,16 +273,16 @@ async function recordFeedback(params: {
       ]
     );
     const id = result.rows[0]?.id ?? null;
-    console.log(
+    logger.info(
       `[ai-assist] feedback recorded: id=${id} tenant=${safeTenantId} category=${params.category} ai_answered=${params.aiAnswered}`
     );
     return id;
   } catch (err: any) {
     // テーブル未作成 (42P01) はスキップ、それ以外は必ずエラーログを出す
     if (err?.code === "42P01") {
-      console.warn("[ai-assist] admin_feedback table not found — run migration_admin_feedback.sql");
+      logger.warn("[ai-assist] admin_feedback table not found — run migration_admin_feedback.sql");
     } else {
-      console.error("[ai-assist] feedback INSERT failed:", err?.code, err?.message);
+      logger.error("[ai-assist] feedback INSERT failed:", err?.code, err?.message);
     }
     return null;
   }
@@ -365,7 +367,7 @@ export function registerAdminAiAssistRoutes(app: Express): void {
           intent,
         });
       } catch (err) {
-        console.warn("[POST /v1/admin/ai-assist/chat]", err);
+        logger.warn("[POST /v1/admin/ai-assist/chat]", err);
         return res.status(500).json({ error: "AI応答の生成に失敗しました" });
       }
     }

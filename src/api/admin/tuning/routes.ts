@@ -1,4 +1,5 @@
 // src/api/admin/tuning/routes.ts
+
 // Phase38 Step4-BE: チューニングルール CRUD API
 
 import type { Express, Request, Response } from "express";
@@ -10,6 +11,7 @@ import {
   updateRule,
   deleteRule,
 } from "./tuningRulesRepository";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // Groq 8b: ルール提案
@@ -163,7 +165,7 @@ export function registerTuningRoutes(app: Express): void {
       const rules = await listRules(tenantFilter);
       return res.json({ rules, total: rules.length });
     } catch (err) {
-      console.warn("[GET /v1/admin/tuning-rules]", err);
+      logger.warn("[GET /v1/admin/tuning-rules]", err);
       return res.status(500).json({ error: "ルール一覧の取得に失敗しました" });
     }
   });
@@ -206,7 +208,7 @@ export function registerTuningRoutes(app: Express): void {
       });
       return res.status(201).json(rule);
     } catch (err) {
-      console.warn("[POST /v1/admin/tuning-rules]", err);
+      logger.warn("[POST /v1/admin/tuning-rules]", err);
       return res.status(500).json({ error: "ルールの作成に失敗しました" });
     }
   });
@@ -246,7 +248,7 @@ export function registerTuningRoutes(app: Express): void {
         }
         return res.json(updated);
       } catch (err) {
-        console.warn("[PUT /v1/admin/tuning-rules/:id]", err);
+        logger.warn("[PUT /v1/admin/tuning-rules/:id]", err);
         return res.status(500).json({ error: "ルールの更新に失敗しました" });
       }
     },
@@ -280,7 +282,7 @@ export function registerTuningRoutes(app: Express): void {
         }
         return res.json({ ok: true, id });
       } catch (err) {
-        console.warn("[DELETE /v1/admin/tuning-rules/:id]", err);
+        logger.warn("[DELETE /v1/admin/tuning-rules/:id]", err);
         return res.status(500).json({ error: "ルールの削除に失敗しました" });
       }
     },

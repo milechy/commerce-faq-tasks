@@ -2,7 +2,7 @@
 
 // src/agent/orchestrator/sales/pipelines/pipelineFactory.ts
 
-import type { SalesPipelineKind } from "../salesPipeline";
+import type { SalesPipelineKind } from "../../../dialog/types";
 import { saasPipeline } from "./saasPipeline";
 import { ecPipeline } from "./ecPipeline";
 import { reservationPipeline } from "./reservationPipeline";

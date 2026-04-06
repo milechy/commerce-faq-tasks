@@ -1,10 +1,12 @@
 // src/api/admin/avatar/generationRoutes.ts
+
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { trackUsage } from "../../../lib/billing/usageTracker";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // Groq LLM helper
@@ -189,7 +191,7 @@ Output ONLY the English prompt, nothing else.`,
 
         return res.json({ images });
       } catch (err) {
-        console.warn("[POST /v1/admin/avatar/generate-image]", err);
+        logger.warn("[POST /v1/admin/avatar/generate-image]", err);
         return res
           .status(500)
           .json({ error: "画像生成に失敗しました" });
@@ -252,7 +254,7 @@ Output ONLY the English prompt, nothing else.`,
 
         // Step 2b: キーワード検索が0件 → language=ja の人気順トップにフォールバック
         if (models.length === 0) {
-          console.log(`[match-voice] keyword "${keyword}" returned 0 results, falling back to language=ja top models`);
+          logger.info(`[match-voice] keyword "${keyword}" returned 0 results, falling back to language=ja top models`);
           const fallbackRes = await fetch(
             `${FISH_BASE}?page_size=10&page_number=1&sort_by=score&language=ja`,
             { headers: { Authorization: `Bearer ${fishApiKey}` } }
@@ -317,7 +319,7 @@ JSONのみ返してください。`,
 
         return res.json({ recommendations });
       } catch (err) {
-        console.warn("[POST /v1/admin/avatar/match-voice]", err);
+        logger.warn("[POST /v1/admin/avatar/match-voice]", err);
         return res
           .status(500)
           .json({ error: "声マッチングに失敗しました" });
@@ -383,7 +385,7 @@ JSONのみ返してください。`,
           emotion_tags: parsed_result.emotion_tags,
         });
       } catch (err) {
-        console.warn("[POST /v1/admin/avatar/generate-prompt]", err);
+        logger.warn("[POST /v1/admin/avatar/generate-prompt]", err);
         return res
           .status(500)
           .json({ error: "プロンプト生成に失敗しました" });

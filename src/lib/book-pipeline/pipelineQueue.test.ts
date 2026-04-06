@@ -2,7 +2,12 @@
 // Phase47 Stream C: pipelineQueue テスト
 
 jest.mock("./pipeline");
+jest.mock("../logger", () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  createLogger: jest.fn(() => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() })),
+}));
 import { runBookPipeline } from "./pipeline";
+import { logger } from "../logger";
 
 const mockRunBookPipeline = runBookPipeline as jest.MockedFunction<typeof runBookPipeline>;
 
@@ -10,9 +15,14 @@ const mockRunBookPipeline = runBookPipeline as jest.MockedFunction<typeof runBoo
 async function freshQueue() {
   jest.resetModules();
   jest.mock("./pipeline");
+  jest.mock("../logger", () => ({
+    logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+    createLogger: jest.fn(() => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() })),
+  }));
   const { runBookPipeline: rp } = await import("./pipeline");
   const { pipelineQueue: q } = await import("./pipelineQueue");
-  return { q, rp: rp as jest.MockedFunction<typeof runBookPipeline> };
+  const { logger: logMock } = await import("../logger");
+  return { q, rp: rp as jest.MockedFunction<typeof runBookPipeline>, logMock };
 }
 
 const DUMMY_DEPS = { db: {} as any };
@@ -60,8 +70,7 @@ describe("pipelineQueue", () => {
   });
 
   test("2: エラーが発生しても次のジョブが処理される", async () => {
-    const { q, rp } = await freshQueue();
-    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { q, rp, logMock } = await freshQueue();
 
     // 1つ目: エラーを投げる
     rp.mockRejectedValueOnce(new Error("pipeline failed"));
@@ -81,12 +90,10 @@ describe("pipelineQueue", () => {
     expect(rp).toHaveBeenNthCalledWith(2, 20, DUMMY_DEPS);
 
     // エラーログが出たこと（書籍内容は含まれない）
-    expect(errorSpy).toHaveBeenCalledWith(
+    expect(logMock.error as jest.Mock).toHaveBeenCalledWith(
       expect.stringContaining("[pipelineQueue] error book_id=%d:"),
       10,
       "pipeline failed"
     );
-
-    errorSpy.mockRestore();
   });
 });

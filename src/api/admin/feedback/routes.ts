@@ -1,4 +1,5 @@
 // src/api/admin/feedback/routes.ts
+
 // Phase43: admin_feedback テーブル CRUD API
 // チケットスタイルのフィードバック管理（既存のチャット系 feedbackRoutes.ts とは別）
 
@@ -7,6 +8,7 @@ import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
 import { createNotification } from "../../../lib/notifications";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // ヘルパー
@@ -127,7 +129,7 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
         if (err?.code === "42P01") {
           return res.json({ items: [], total: 0, limit, offset });
         }
-        console.warn("[GET /v1/admin/feedback]", err);
+        logger.warn("[GET /v1/admin/feedback]", err);
         return res.status(500).json({ error: "フィードバック一覧の取得に失敗しました" });
       }
     }
@@ -184,7 +186,7 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
         });
         return res.status(201).json(result.rows[0]);
       } catch (err) {
-        console.warn("[POST /v1/admin/feedback]", err);
+        logger.warn("[POST /v1/admin/feedback]", err);
         return res.status(500).json({ error: "フィードバックの投稿に失敗しました" });
       }
     }
@@ -254,7 +256,7 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
         }
         return res.json(result.rows[0]);
       } catch (err) {
-        console.warn("[PATCH /v1/admin/feedback/:id]", err);
+        logger.warn("[PATCH /v1/admin/feedback/:id]", err);
         return res.status(500).json({ error: "フィードバックの更新に失敗しました" });
       }
     }
@@ -289,7 +291,7 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
         }
         return res.json({ ok: true, id });
       } catch (err) {
-        console.warn("[DELETE /v1/admin/feedback/:id]", err);
+        logger.warn("[DELETE /v1/admin/feedback/:id]", err);
         return res.status(500).json({ error: "フィードバックの削除に失敗しました" });
       }
     }

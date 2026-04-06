@@ -1,4 +1,5 @@
 // src/api/admin/evaluations/routes.ts
+
 // Phase45: 評価API + KPI API（Stream A）
 
 import type { Express, Request, Response } from "express";
@@ -17,6 +18,7 @@ import {
   updateSuggestedRuleStatus,
   insertTuningRuleFromSuggestion,
 } from "./evaluationsRepository";
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // ユーティリティ
@@ -88,7 +90,7 @@ export function registerEvaluationRoutes(app: Express): void {
       const result = await listEvaluations({ tenantId, days, limit, offset, min_score, max_score });
       return res.json(result);
     } catch (err) {
-      console.warn("[GET /v1/admin/evaluations]", err);
+      logger.warn("[GET /v1/admin/evaluations]", err);
       return res.status(500).json({ error: "評価データの取得に失敗しました" });
     }
   });
@@ -110,7 +112,7 @@ export function registerEvaluationRoutes(app: Express): void {
       const stats = await getDetailedStats(tenantId, days);
       return res.json(stats);
     } catch (err) {
-      console.warn("[GET /v1/admin/evaluations/stats]", err);
+      logger.warn("[GET /v1/admin/evaluations/stats]", err);
       return res.status(500).json({ error: "統計データの取得に失敗しました" });
     }
   });
@@ -132,7 +134,7 @@ export function registerEvaluationRoutes(app: Express): void {
       const kpi = await getKpiStats(tenantId, days);
       return res.json(kpi);
     } catch (err) {
-      console.warn("[GET /v1/admin/evaluations/kpi-stats]", err);
+      logger.warn("[GET /v1/admin/evaluations/kpi-stats]", err);
       return res.status(500).json({ error: "KPIデータの取得に失敗しました" });
     }
   });
@@ -161,7 +163,7 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json({ evaluation: result });
     } catch (err) {
-      console.warn("[POST /v1/admin/evaluations/trigger]", err);
+      logger.warn("[POST /v1/admin/evaluations/trigger]", err);
       return res.status(500).json({ error: "評価の実行に失敗しました" });
     }
   });
@@ -187,7 +189,7 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json(data);
     } catch (err) {
-      console.warn("[GET /v1/admin/evaluations/by-id/:id]", err);
+      logger.warn("[GET /v1/admin/evaluations/by-id/:id]", err);
       return res.status(500).json({ error: "評価データの取得に失敗しました" });
     }
   });
@@ -263,7 +265,7 @@ export function registerEvaluationRoutes(app: Express): void {
         if (err instanceof RangeError) {
           return res.status(400).json({ error: err.message });
         }
-        console.warn("[PATCH /v1/admin/evaluations/:id/rules/:ruleIndex]", err);
+        logger.warn("[PATCH /v1/admin/evaluations/:id/rules/:ruleIndex]", err);
         return res.status(500).json({ error: "ルール更新に失敗しました" });
       }
     },
@@ -291,7 +293,7 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json({ evaluations, total: evaluations.length });
     } catch (err) {
-      console.warn("[GET /v1/admin/evaluations/:sessionId]", err);
+      logger.warn("[GET /v1/admin/evaluations/:sessionId]", err);
       return res.status(500).json({ error: "評価データの取得に失敗しました" });
     }
   });
@@ -323,7 +325,7 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json({ ok: true, message: "営業結果を記録しました", evaluation: updated });
     } catch (err) {
-      console.warn("[PUT /v1/admin/evaluations/:id/outcome]", err);
+      logger.warn("[PUT /v1/admin/evaluations/:id/outcome]", err);
       return res.status(500).json({ error: "営業結果の更新に失敗しました" });
     }
   });
@@ -349,7 +351,7 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json({ ok: true, rule: updated });
     } catch (err) {
-      console.warn("[PUT /v1/admin/tuning/:id/approve]", err);
+      logger.warn("[PUT /v1/admin/tuning/:id/approve]", err);
       return res.status(500).json({ error: "承認処理に失敗しました" });
     }
   });
@@ -375,7 +377,7 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json({ ok: true, rule: updated });
     } catch (err) {
-      console.warn("[PUT /v1/admin/tuning/:id/reject]", err);
+      logger.warn("[PUT /v1/admin/tuning/:id/reject]", err);
       return res.status(500).json({ error: "却下処理に失敗しました" });
     }
   });

@@ -1,8 +1,10 @@
 // src/repositories/tuningTemplateRepository.ts
+
 // Phase13 MVP: In-memory repository for TuningTemplates
 // ------------------------------------------------------
 
 import type { NotionTuningTemplate } from "../integrations/notion/notionSchemas";
+import { logger } from '../lib/logger';
 
 /**
  * Phase13 では DB 永続化は行わず、メモリ上に保持する。
@@ -19,7 +21,7 @@ export class TuningTemplateRepository {
   async bulkUpsert(rows: NotionTuningTemplate[]): Promise<void> {
     this.templates = rows;
     // eslint-disable-next-line no-console
-    console.log("[TuningTemplateRepository] bulkUpsert", rows.length);
+    logger.info("[TuningTemplateRepository] bulkUpsert", rows.length);
   }
 
   /**

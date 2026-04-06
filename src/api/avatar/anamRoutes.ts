@@ -1,4 +1,5 @@
 // src/api/avatar/anamRoutes.ts
+
 // Phase42: Anam.ai — セッショントークン取得エンドポイント
 // POST /api/avatar/anam-session
 //   認証: apiStack (authMiddleware → tenantId)
@@ -12,11 +13,12 @@ import type { Express, Request, Response, RequestHandler } from 'express';
 import { Pool } from 'pg';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { pool as globalPool } from '../../lib/db';
+import { logger } from '../../lib/logger';
 
 const ANAM_API_BASE = 'https://api.anam.ai';
 
 export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): void {
-  console.log('[anamRoutes] POST /api/avatar/anam-session registered');
+  logger.info('[anamRoutes] POST /api/avatar/anam-session registered');
 
   app.post('/api/avatar/anam-session', ...apiStack, async (req: Request, res: Response) => {
     const tenantId = (req as AuthedRequest).tenantId;
@@ -39,7 +41,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
         return res.json({ enabled: false, avatarProvider: 'lemonslice' });
       }
       if (tenantResult.rows[0].features?.avatar !== true) {
-        console.warn(`[anamRoutes] avatar feature disabled for tenant: ${tenantId}`);
+        logger.warn(`[anamRoutes] avatar feature disabled for tenant: ${tenantId}`);
         return res.status(403).json({ error: 'Avatar not enabled for this tenant' });
       }
 
@@ -74,7 +76,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
       // Anam APIキー確認
       const anamApiKey = process.env.ANAM_API_KEY?.trim();
       if (!anamApiKey) {
-        console.warn('[anamRoutes] ANAM_API_KEY not set');
+        logger.warn('[anamRoutes] ANAM_API_KEY not set');
         return res.json({ enabled: false, avatarProvider: 'lemonslice' });
       }
 
@@ -107,7 +109,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
 
       if (!anamRes.ok) {
         const errText = await anamRes.text();
-        console.error(`[anamRoutes] Anam API error ${anamRes.status}: ${errText.slice(0, 200)}`);
+        logger.error(`[anamRoutes] Anam API error ${anamRes.status}: ${errText.slice(0, 200)}`);
         return res.status(502).json({ error: 'Anam APIエラー', enabled: false });
       }
 
@@ -115,7 +117,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
       const sessionToken = anamData.sessionToken ?? anamData.token ?? '';
 
       if (!sessionToken) {
-        console.error('[anamRoutes] Anam API returned no session token');
+        logger.error('[anamRoutes] Anam API returned no session token');
         return res.status(502).json({ error: 'セッショントークンが取得できませんでした', enabled: false });
       }
 
@@ -131,7 +133,7 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
         // マイグレーション未実行 — lemonsliceフォールバック
         return res.json({ enabled: false, avatarProvider: 'lemonslice' });
       }
-      console.error('[POST /api/avatar/anam-session]', err);
+      logger.error('[POST /api/avatar/anam-session]', err);
       return res.json({ enabled: false, avatarProvider: 'lemonslice' });
     }
   });

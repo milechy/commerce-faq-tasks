@@ -1,4 +1,5 @@
 // src/lib/book-pipeline/pipeline.ts
+
 // Phase44: 書籍チャンク構造化パイプライン オーケストレーター
 // status 遷移: uploaded → processing → chunked → embedded / error
 
@@ -13,6 +14,7 @@ import type { EmbedAndStoreDeps } from "./embedAndStore";
 import type { StructurizerDeps } from "./structurizer";
 import { analyzeContentType } from "./contentAnalyzer";
 import { createNotification } from "../notifications";
+import { logger } from '../logger';
 
 export interface PipelineDeps {
   db: Pool;
@@ -119,7 +121,7 @@ export async function runBookPipeline(
     let contentSchema: import("./contentAnalyzer").SchemaField[] | undefined;
     try {
       const analysis = await analyzeContentType(pages, book.title ?? "");
-      console.log(
+      logger.info(
         "[pipeline] content analysis: type=%s confidence=%s",
         analysis.content_type,
         analysis.confidence.toFixed(2)
@@ -140,7 +142,7 @@ export async function runBookPipeline(
         ]
       );
     } catch (analysisErr) {
-      console.warn(
+      logger.warn(
         "[pipeline] content analysis failed (non-blocking):",
         analysisErr instanceof Error ? analysisErr.message : String(analysisErr)
       );

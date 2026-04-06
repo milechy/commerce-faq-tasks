@@ -1,3 +1,5 @@
+import { logger } from '../logger';
+
 interface SentimentResult {
   label: "positive" | "negative" | "neutral";
   score: number;
@@ -21,7 +23,7 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult | 
     if (!res.ok) return null;
     return (await res.json()) as SentimentResult;
   } catch (err) {
-    console.error("[sentiment] analysis failed:", (err as Error).message);
+    logger.error("[sentiment] analysis failed:", (err as Error).message);
     return null;
   }
 }

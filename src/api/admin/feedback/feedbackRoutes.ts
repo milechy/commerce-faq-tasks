@@ -1,5 +1,6 @@
 // src/api/admin/feedback/feedbackRoutes.ts
 
+
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
@@ -14,6 +15,7 @@ import {
 } from "./feedbackRepository";
 import { generateFeedbackReply } from "./feedbackAI";
 import { sanitizeInput, blockReasonToMessage } from "../../../lib/security/inputSanitizer";
+import { logger } from '../../../lib/logger';
 
 const sendSchema = z.object({
   content: z.string().min(1).max(4000),
@@ -40,7 +42,7 @@ export function registerFeedbackRoutes(app: Express): void {
       const threads = await getThreads();
       return res.json({ threads });
     } catch (err) {
-      console.warn("[GET /v1/admin/feedback/threads]", err);
+      logger.warn("[GET /v1/admin/feedback/threads]", err);
       return res.status(500).json({ error: "スレッド一覧の取得に失敗しました" });
     }
   });
@@ -78,7 +80,7 @@ export function registerFeedbackRoutes(app: Express): void {
 
       return res.json(result);
     } catch (err) {
-      console.warn("[GET /v1/admin/feedback]", err);
+      logger.warn("[GET /v1/admin/feedback]", err);
       return res.status(500).json({ error: "メッセージ一覧の取得に失敗しました" });
     }
   });
@@ -145,12 +147,12 @@ export function registerFeedbackRoutes(app: Express): void {
               });
             }
           })
-          .catch((err) => console.warn("[feedback] AI reply failed:", err));
+          .catch((err) => logger.warn("[feedback] AI reply failed:", err));
       }
 
       return res.status(201).json(msg);
     } catch (err) {
-      console.warn("[POST /v1/admin/feedback]", err);
+      logger.warn("[POST /v1/admin/feedback]", err);
       return res.status(500).json({ error: "メッセージの送信に失敗しました" });
     }
   });
@@ -184,7 +186,7 @@ export function registerFeedbackRoutes(app: Express): void {
       }
       return res.json({ id: updated.id, flagged_for_improvement: updated.flagged_for_improvement, updated_at: updated.created_at });
     } catch (err) {
-      console.warn("[PATCH /v1/admin/feedback/:messageId/flag]", err);
+      logger.warn("[PATCH /v1/admin/feedback/:messageId/flag]", err);
       return res.status(500).json({ error: "改善マークの更新に失敗しました" });
     }
   });
@@ -214,7 +216,7 @@ export function registerFeedbackRoutes(app: Express): void {
       }
       return res.json({ ok: true });
     } catch (err) {
-      console.warn("[PATCH /v1/admin/feedback/read]", err);
+      logger.warn("[PATCH /v1/admin/feedback/read]", err);
       return res.status(500).json({ error: "既読処理に失敗しました" });
     }
   });
@@ -240,7 +242,7 @@ export function registerFeedbackRoutes(app: Express): void {
         return res.json({ count });
       }
     } catch (err) {
-      console.warn("[GET /v1/admin/feedback/unread-count]", err);
+      logger.warn("[GET /v1/admin/feedback/unread-count]", err);
       return res.json({ count: 0 });
     }
   });

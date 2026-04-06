@@ -1,7 +1,9 @@
 // src/search/ceEngine.ts
 
+
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { logger } from '../lib/logger';
 
 export type CeEngineName = "dummy" | "onnx" | "remote";
 
@@ -79,7 +81,7 @@ function resolveEngineNameFromEnv(): CeEngineName {
   // CE_ENGINE の解決状況をログに出しておくと、ローカル検証時に原因調査しやすい
   // ※本番でノイズになるようであれば、log レベルや出力先を調整すること
   // eslint-disable-next-line no-console
-  console.log("[CeEngine] resolveEngineNameFromEnv", {
+  logger.info("[CeEngine] resolveEngineNameFromEnv", {
     CE_ENGINE: process.env.CE_ENGINE,
     raw,
   });
@@ -457,7 +459,7 @@ class OnnxCeEngine implements CeEngine {
     }
 
     // eslint-disable-next-line no-console
-    console.log("[CeEngine] ONNX IO resolved", {
+    logger.info("[CeEngine] ONNX IO resolved", {
       inputNames,
       outputNames,
       inputIdsName: this.inputIdsName,
@@ -743,7 +745,7 @@ export function getCeEngine(): CeEngine {
   // CE 関連の環境変数を起動時に一度だけログに出しておく
   // CE_ENGINE が dummy になってしまう / モデルパスがずれている等のトラブル調査用。
   // eslint-disable-next-line no-console
-  console.log("[CeEngine] initializing", {
+  logger.info("[CeEngine] initializing", {
     resolvedEngine: name,
     CE_ENGINE: process.env.CE_ENGINE,
     CE_MODEL_PATH: process.env.CE_MODEL_PATH,

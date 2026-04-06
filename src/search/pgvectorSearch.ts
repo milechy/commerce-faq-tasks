@@ -1,7 +1,9 @@
 import { performance } from "node:perf_hooks";
 
+
 import { decryptText } from "../lib/crypto/textEncrypt";
 import { pool } from "../lib/db";
+import { logger } from '../lib/logger';
 
 export type PgvectorSearchParams = {
   tenantId: string;
@@ -73,7 +75,7 @@ export async function searchPgVector(
     };
   } catch (err) {
     const t1 = performance.now();
-    console.error("[pgvectorSearch] query failed", err);
+    logger.error("[pgvectorSearch] query failed", err);
     return {
       items: [],
       ms: Math.round(t1 - t0),

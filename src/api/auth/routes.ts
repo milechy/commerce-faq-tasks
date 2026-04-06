@@ -1,10 +1,12 @@
 // src/api/auth/routes.ts
+
 // Phase34: 認証情報API
 import type { Express, Request, Response } from "express";
 // @ts-ignore
 import { Pool } from "pg";
 import { supabaseAuthMiddleware } from "../../admin/http/supabaseAuthMiddleware";
 import { roleAuthMiddleware, type AuthenticatedUser } from "../middleware/roleAuth";
+import { logger } from '../../lib/logger';
 
 export function registerAuthRoutes(app: Express, db: Pool | null): void {
   // GET /v1/auth/me — ログイン中ユーザー情報を返す
@@ -28,7 +30,7 @@ export function registerAuthRoutes(app: Express, db: Pool | null): void {
           );
           tenantName = result.rows[0]?.name ?? null;
         } catch (err) {
-          console.warn("[GET /v1/auth/me] tenant lookup failed", err);
+          logger.warn("[GET /v1/auth/me] tenant lookup failed", err);
         }
       }
 

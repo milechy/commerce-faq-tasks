@@ -1,24 +1,23 @@
 // src/agent/orchestrator/sales/salesIntentDetector.ts
+
 // Phase14+: SalesFlow intent detector.
 // ルールは config/salesIntentRules.yaml から読み込み、
 // 取得できなかった場合は従来のハードコード判定にフォールバックする。
 
 import fs from 'node:fs'
 import path from 'node:path'
-import type { DialogMessage } from '../../dialog/types'
+import type { DialogMessage, DetectedSalesIntents } from '../../dialog/types'
 import type { ProposeIntent } from './proposePromptBuilder'
 import type { RecommendIntent } from './recommendPromptBuilder'
 import type { CloseIntent } from './closePromptBuilder'
+import { logger } from '../../../lib/logger';
 
 // js-yaml は CJS 環境なので require で読み込む
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const yaml = require('js-yaml') as typeof import('js-yaml')
 
-export type DetectedSalesIntents = {
-  proposeIntent?: ProposeIntent
-  recommendIntent?: RecommendIntent
-  closeIntent?: CloseIntent
-}
+// Re-exported for backward compatibility — definition lives in dialog/types.ts
+export type { DetectedSalesIntents } from '../../dialog/types'
 
 export type SalesIntentDetectionInput = {
   userMessage: string
@@ -76,7 +75,7 @@ function loadRulesFromYaml(): SalesIntentRuleConfig | null {
     if (!rulesLoadErrorLogged) {
       // ログ基盤には依存せず、最低限の警告だけ出す
       // eslint-disable-next-line no-console
-      console.warn(
+      logger.warn(
         '[salesIntentDetector] failed to load config/salesIntentRules.yaml. falling back to built-in rules.',
         err,
       )

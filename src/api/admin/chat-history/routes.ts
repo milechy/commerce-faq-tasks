@@ -1,4 +1,5 @@
 // src/api/admin/chat-history/routes.ts
+
 // Phase38 Step2: 会話履歴取得API
 
 import type { Express, Request, Response } from "express";
@@ -6,6 +7,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { getPool } from "../../../lib/db";
 import { getSessions, getMessages } from "./chatHistoryRepository";
 import { createNotification } from "../../../lib/notifications";
+import { logger } from '../../../lib/logger';
 
 /**
  * テナントIDをリクエストから解決する。
@@ -86,7 +88,7 @@ export function registerChatHistoryRoutes(app: Express): void {
           offset,
         });
       } catch (err) {
-        console.warn("[GET /v1/admin/chat-history/sessions]", err);
+        logger.warn("[GET /v1/admin/chat-history/sessions]", err);
         return res.status(500).json({ error: "セッション一覧の取得に失敗しました" });
       }
     },
@@ -130,7 +132,7 @@ export function registerChatHistoryRoutes(app: Express): void {
 
         return res.json({ messages, total: messages.length });
       } catch (err) {
-        console.warn("[GET /v1/admin/chat-history/sessions/:id/messages]", err);
+        logger.warn("[GET /v1/admin/chat-history/sessions/:id/messages]", err);
         return res.status(500).json({ error: "メッセージの取得に失敗しました" });
       }
     },
@@ -218,7 +220,7 @@ export function registerChatHistoryRoutes(app: Express): void {
           recorded_by: email || null,
         });
       } catch (err) {
-        console.warn("[PATCH /v1/admin/chat-history/sessions/:id/outcome]", err);
+        logger.warn("[PATCH /v1/admin/chat-history/sessions/:id/outcome]", err);
         return res.status(500).json({ error: "結果の記録に失敗しました" });
       }
     },

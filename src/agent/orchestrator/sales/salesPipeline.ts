@@ -1,21 +1,12 @@
 // src/agent/orchestrator/sales/salesPipeline.ts
 
 import { PlannerPlan } from "../../dialog/types";
+import type { SalesPipelineKind, SalesMeta } from "../../dialog/types";
 import { getSalesRules, type SalesRules } from "./salesRules";
 import { getIndustryPipelineByKind } from "./pipelines/pipelineFactory";
 
-export type SalesPipelineKind = "generic" | "saas" | "ec" | "reservation";
-
-export type SalesMeta = {
-  /**
-   * このセッションで適用されている SalesPipeline の種別。
-   * Phase9 では、業種別テンプレ (SaaS / EC / 予約 など) を識別するために利用する。
-   */
-  pipelineKind?: SalesPipelineKind;
-  upsellTriggered?: boolean;
-  ctaTriggered?: boolean;
-  notes?: string[];
-};
+// Re-exported for backward compatibility — definitions live in dialog/types.ts
+export type { SalesPipelineKind, SalesMeta } from "../../dialog/types";
 
 export type SalesDetectionContext = {
   userMessage: string;

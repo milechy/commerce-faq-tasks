@@ -1,4 +1,5 @@
 // src/api/avatar/anamChatStreamRoutes.ts
+
 // Phase42: Anam Client-Side Custom LLM — Groqストリーミング応答
 // POST /api/avatar/chat-stream
 //   認証: apiStack (authMiddleware → tenantId)
@@ -7,11 +8,12 @@
 
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
+import { logger } from '../../lib/logger';
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 
 export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHandler[]): void {
-  console.log('[anamChatStream] POST /api/avatar/chat-stream registered');
+  logger.info('[anamChatStream] POST /api/avatar/chat-stream registered');
 
   app.post('/api/avatar/chat-stream', ...apiStack, async (req: Request, res: Response) => {
     const tenantId = (req as AuthedRequest).tenantId;
@@ -26,7 +28,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
 
     const groqApiKey = process.env.GROQ_API_KEY?.trim();
     if (!groqApiKey) {
-      console.error('[anamChatStream] GROQ_API_KEY not set');
+      logger.error('[anamChatStream] GROQ_API_KEY not set');
       return res.status(500).json({ error: 'LLM not configured' });
     }
 
@@ -45,7 +47,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
           personalityPrompt = configResult.rows[0].personality_prompt;
         }
       } catch (err) {
-        console.warn('[anamChatStream] Failed to load personality_prompt:', err);
+        logger.warn('[anamChatStream] Failed to load personality_prompt:', err);
       }
     }
 
@@ -89,7 +91,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
 
       if (!groqRes.ok) {
         const errText = await groqRes.text();
-        console.error(`[anamChatStream] Groq API error ${groqRes.status}: ${errText.slice(0, 200)}`);
+        logger.error(`[anamChatStream] Groq API error ${groqRes.status}: ${errText.slice(0, 200)}`);
         res.write(JSON.stringify({ error: 'LLM error' }) + '\n');
         return res.end();
       }
@@ -134,7 +136,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       res.end();
 
     } catch (err) {
-      console.error('[anamChatStream] Stream error:', err);
+      logger.error('[anamChatStream] Stream error:', err);
       if (!res.headersSent) {
         res.status(500).json({ error: 'Stream failed' });
       } else {

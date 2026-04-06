@@ -1,5 +1,6 @@
 // src/agent/flow/searchAgent.ts
 
+
 import { searchPgVector } from "../../search/pgvectorSearch";
 import { embedTextOpenAI } from "../llm/openaiEmbeddingClient";
 import { rerankTool } from "../tools/rerankTool";
@@ -15,6 +16,7 @@ import { planQuery } from "./queryPlanner";
 import { getBehaviorContext } from "../../api/events/behaviorContext";
 import { findSimilarPatterns } from "../../api/events/similarUserMatcher";
 import { pool } from "../../lib/db";
+import { logger } from '../../lib/logger';
 
 /**
  * /agent.search から呼ばれるメイン関数
@@ -69,7 +71,7 @@ export async function runSearchAgent(
   } catch (err) {
     pgVectorError = true;
     // pgvector が失敗しても致命的ではないため、ここでは握りつぶす
-    console.error("[runSearchAgent] pgvector search failed", err);
+    logger.error("[runSearchAgent] pgvector search failed", err);
   }
 
   // 3) Hybrid Search (ES)

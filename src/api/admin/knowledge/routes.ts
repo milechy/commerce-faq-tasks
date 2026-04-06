@@ -1,4 +1,5 @@
 // src/api/admin/knowledge/routes.ts
+
 // Phase29: カーネーション向けナレッジ管理API
 import type { Express, NextFunction, Request, Response } from "express";
 // @ts-ignore - pg has no bundled type declarations in this project
@@ -11,6 +12,7 @@ import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { encryptText } from "../../../lib/crypto/textEncrypt";
+import { logger } from '../../../lib/logger';
 
 
 const CATEGORIES = ["inventory", "campaign", "coupon", "store_info", "product_info", "pricing", "booking", "warranty", "general"] as const;
@@ -178,12 +180,12 @@ function insertEmbeddingAsync(
         [tenantId, encryptText(text), `[${vec.join(",")}]`, JSON.stringify(meta)]
       )
     )
-    .catch((e) => console.warn("[knowledge] embedding insert failed", e));
+    .catch((e) => logger.warn("[knowledge] embedding insert failed", e));
 }
 
 export function registerKnowledgeAdminRoutes(app: Express): void {
   if (!pool) {
-    console.warn("[knowledgeAdminRoutes] DATABASE_URL not set. Routes disabled.");
+    logger.warn("[knowledgeAdminRoutes] DATABASE_URL not set. Routes disabled.");
     return;
   }
 
@@ -224,7 +226,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       (req as any).supabaseUser = jwt.verify(token, secret);
       return setUserAndNext(req, next);
     } catch (err) {
-      console.warn("[knowledgeAuth] invalid token", err);
+      logger.warn("[knowledgeAuth] invalid token", err);
       res.status(401).json({ error: "Invalid token" });
     }
   }
@@ -323,7 +325,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
       return res.json({ items: result.rows, count: result.rows.length, chunkCount });
     } catch (err) {
-      console.error("[GET /v1/admin/knowledge]", err);
+      logger.error("[GET /v1/admin/knowledge]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });
     }
   });
@@ -385,7 +387,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
       return res.json({ ok: true, id });
     } catch (err) {
-      console.error("[DELETE /v1/admin/knowledge/:id]", err);
+      logger.error("[DELETE /v1/admin/knowledge/:id]", err);
       return res.status(500).json({ error: "削除に失敗しました" });
     }
   });
@@ -451,7 +453,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
       return res.json({ ok: true, preview: previewWithDuplicate, count: previewWithDuplicate.length });
     } catch (err) {
-      console.error("[POST /v1/admin/knowledge/text]", err);
+      logger.error("[POST /v1/admin/knowledge/text]", err);
       return res
         .status(500)
         .json({ error: "AI変換に失敗しました。しばらく経ってから再度お試しください。" });
@@ -526,7 +528,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           faq_id: faqId,
         });
       } catch (err) {
-        console.error("[commit] insert failed for faq:", faq.question, err);
+        logger.error("[commit] insert failed for faq:", faq.question, err);
       }
     }
 
@@ -697,7 +699,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
             url: item.url,
           });
         } catch (err) {
-          console.error("[scrape/commit] insert failed", err);
+          logger.error("[scrape/commit] insert failed", err);
         }
       }
     }
@@ -799,7 +801,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           return res.json({ tenant_id: null, total_docs, structured_count, unstructured_count });
         }
       } catch (err: unknown) {
-        console.error('[structurize-status] error:', err instanceof Error ? err.message : String(err));
+        logger.error('[structurize-status] error:', err instanceof Error ? err.message : String(err));
         return res.status(500).json({ error: '構造化ステータスの取得に失敗しました' });
       }
     },
@@ -856,7 +858,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
                     const fullText = pages.map((p: { text: string }) => p.text).join('\n\n');
                     await structurizeBook(tenantId, book.id, fullText);
                   } catch (err) {
-                    console.warn('[structurize-trigger] book_id=%d failed:', book.id, err instanceof Error ? err.message : String(err));
+                    logger.warn('[structurize-trigger] book_id=%d failed:', book.id, err instanceof Error ? err.message : String(err));
                   }
                 }
               };
@@ -867,7 +869,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
         return res.json({ message: `構造化を開始しました`, target_count: targetCount });
       } catch (err: unknown) {
-        console.error('[structurize-trigger] error:', err instanceof Error ? err.message : String(err));
+        logger.error('[structurize-trigger] error:', err instanceof Error ? err.message : String(err));
         return res.status(500).json({ error: '構造化トリガーに失敗しました' });
       }
     },
@@ -876,5 +878,5 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   registerFaqCrudRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
   registerBookPdfRoutes(app, db, knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant);
 
-  console.log("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");
+  logger.info("[knowledgeAdminRoutes] /v1/admin/knowledge routes registered");
 }

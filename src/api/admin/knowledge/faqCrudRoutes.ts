@@ -1,10 +1,12 @@
 // src/api/admin/knowledge/faqCrudRoutes.ts
+
 // Phase30: FAQ CRUD API (Stream A)
 import type { Express, NextFunction, Request, Response } from "express";
 // @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
+import { logger } from '../../../lib/logger';
 
 const CATEGORIES = ["inventory", "campaign", "coupon", "store_info"] as const;
 
@@ -39,7 +41,7 @@ function insertEmbeddingAsync(
         [tenantId, text, `[${vec.join(",")}]`, JSON.stringify(meta)]
       )
     )
-    .catch((e) => console.warn("[faqCrud] embedding insert failed", e));
+    .catch((e) => logger.warn("[faqCrud] embedding insert failed", e));
 }
 
 /** ESにドキュメントをupsert（fire-and-forget） */
@@ -59,7 +61,7 @@ function upsertToEsAsync(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(doc),
-  }).catch((e) => console.warn("[faqCrud] ES upsert failed", e));
+  }).catch((e) => logger.warn("[faqCrud] ES upsert failed", e));
 }
 
 const listQuerySchema = z.object({
@@ -166,7 +168,7 @@ export function registerFaqCrudRoutes(
 
       return res.json({ items: itemsResult.rows, total, limit, offset });
     } catch (err) {
-      console.warn("[GET /v1/admin/knowledge/faq]", err);
+      logger.warn("[GET /v1/admin/knowledge/faq]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });
     }
   });
@@ -205,7 +207,7 @@ export function registerFaqCrudRoutes(
 
       return res.json(row);
     } catch (err) {
-      console.warn("[GET /v1/admin/knowledge/faq/:id]", err);
+      logger.warn("[GET /v1/admin/knowledge/faq/:id]", err);
       return res.status(500).json({ error: "取得に失敗しました" });
     }
   });
@@ -244,7 +246,7 @@ export function registerFaqCrudRoutes(
 
       return res.status(201).json(row);
     } catch (err) {
-      console.warn("[POST /v1/admin/knowledge/faq]", err);
+      logger.warn("[POST /v1/admin/knowledge/faq]", err);
       return res.status(500).json({ error: "作成に失敗しました" });
     }
   });
@@ -319,7 +321,7 @@ export function registerFaqCrudRoutes(
           [tenantId, id]
         );
       } catch (syncErr) {
-        console.warn("[faqCrud] embedding delete failed", syncErr);
+        logger.warn("[faqCrud] embedding delete failed", syncErr);
       }
 
       const embText = `${updated.question}\n${updated.answer}`;
@@ -331,7 +333,7 @@ export function registerFaqCrudRoutes(
 
       return res.json(updated);
     } catch (err) {
-      console.warn("[PUT /v1/admin/knowledge/faq/:id]", err);
+      logger.warn("[PUT /v1/admin/knowledge/faq/:id]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
     }
   });
@@ -398,13 +400,13 @@ export function registerFaqCrudRoutes(
           await deleteFromEs(`${id}_${tenantId}`);
         } catch {
           failed++;
-          console.warn(`[DELETE /v1/admin/knowledge/faq/bulk] ES delete failed for id=${id}`);
+          logger.warn(`[DELETE /v1/admin/knowledge/faq/bulk] ES delete failed for id=${id}`);
         }
       }
 
       return res.json({ deleted: ids.length, failed });
     } catch (err) {
-      console.warn("[DELETE /v1/admin/knowledge/faq/bulk]", err);
+      logger.warn("[DELETE /v1/admin/knowledge/faq/bulk]", err);
       return res.status(500).json({ error: "一括削除に失敗しました" });
     }
   });
@@ -459,7 +461,7 @@ export function registerFaqCrudRoutes(
 
       return res.json({ ok: true, id });
     } catch (err) {
-      console.warn("[DELETE /v1/admin/knowledge/faq/:id]", err);
+      logger.warn("[DELETE /v1/admin/knowledge/faq/:id]", err);
       return res.status(500).json({ error: "削除に失敗しました" });
     }
   });

@@ -1,6 +1,8 @@
 // src/admin/http/supabaseAuthMiddleware.ts
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import { logger } from '../../lib/logger';
+
 
 const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 
@@ -34,7 +36,7 @@ export function supabaseAuthMiddleware(
 
   // SUPABASE_JWT_SECRET 未設定時はスキップ（非 production 環境向け）
   if (!SUPABASE_JWT_SECRET) {
-    console.warn(
+    logger.warn(
       "[supabaseAuthMiddleware] SUPABASE_JWT_SECRET が設定されていないため、認証をスキップします。"
     );
     return next();
@@ -51,13 +53,13 @@ export function supabaseAuthMiddleware(
     const decoded = jwt.verify(token, SUPABASE_JWT_SECRET);
 
     // 必要ならここでロールチェック (e.g. decoded["role"] === "service_role" など)
-    // console.log("[supabaseAuth] decoded =", decoded);
+    // logger.info("[supabaseAuth] decoded =", decoded);
 
     // 型を拡張してないので any でぶら下げる
     (req as any).supabaseUser = decoded;
     return next();
   } catch (err) {
-    console.warn("[supabaseAuthMiddleware] invalid token", err);
+    logger.warn("[supabaseAuthMiddleware] invalid token", err);
     return res.status(401).json({ error: "Invalid token" });
   }
 }

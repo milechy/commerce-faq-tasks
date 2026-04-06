@@ -1,4 +1,5 @@
 // src/api/admin/avatar/routes.ts
+
 // Phase41: Avatar Customization Studio — CRUD API
 
 import type { Express, Request, Response } from "express";
@@ -8,6 +9,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import multer from 'multer';
+import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
@@ -45,7 +47,7 @@ async function ensureBucketExists(): Promise<void> {
     fileSizeLimit: 5 * 1024 * 1024,
   });
   if (error && !error.message.toLowerCase().includes("already exists")) {
-    console.warn("[avatar-storage] bucket create warn:", error.message);
+    logger.warn("[avatar-storage] bucket create warn:", error.message);
   }
 }
 
@@ -55,7 +57,7 @@ async function uploadBase64ToStorage(
   filename: string
 ): Promise<string | null> {
   if (!supabaseAdmin) {
-    console.warn("[avatar-storage] supabaseAdmin not initialized — image_url stored as-is");
+    logger.warn("[avatar-storage] supabaseAdmin not initialized — image_url stored as-is");
     return null;
   }
 
@@ -77,7 +79,7 @@ async function uploadBase64ToStorage(
     .upload(filePath, buffer, { contentType: mimeType, upsert: true });
 
   if (error) {
-    console.warn("[avatar-storage] upload failed:", error.message);
+    logger.warn("[avatar-storage] upload failed:", error.message);
     return null;
   }
 
@@ -186,7 +188,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         .upload(filePath, file.buffer, { contentType: file.mimetype, upsert: true });
 
       if (error) {
-        console.warn('[POST /v1/admin/avatar/defaults/upload] upload error:', error.message);
+        logger.warn('[POST /v1/admin/avatar/defaults/upload] upload error:', error.message);
         return res.status(500).json({ error: 'アップロードに失敗しました' });
       }
 
@@ -215,7 +217,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       );
       return res.json({ configs: result.rows, total: result.rows.length });
     } catch (err) {
-      console.warn("[GET /v1/admin/avatar/configs/all]", err);
+      logger.warn("[GET /v1/admin/avatar/configs/all]", err);
       return res.status(500).json({ error: "アバター設定の取得に失敗しました" });
     }
   });
@@ -251,7 +253,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       }
       return res.json({ configs: result.rows, total: result.rows.length });
     } catch (err) {
-      console.warn("[GET /v1/admin/avatar/configs]", err);
+      logger.warn("[GET /v1/admin/avatar/configs]", err);
       return res.status(500).json({ error: "アバター設定の取得に失敗しました" });
     }
   });
@@ -329,7 +331,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       );
       return res.status(201).json(result.rows[0]);
     } catch (err) {
-      console.warn("[POST /v1/admin/avatar/configs]", err);
+      logger.warn("[POST /v1/admin/avatar/configs]", err);
       return res.status(500).json({ error: "アバター設定の作成に失敗しました" });
     }
   });
@@ -411,7 +413,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         }
         return res.json(result.rows[0]);
       } catch (err) {
-        console.warn("[PATCH /v1/admin/avatar/configs/:id]", err);
+        logger.warn("[PATCH /v1/admin/avatar/configs/:id]", err);
         return res.status(500).json({ error: "アバター設定の更新に失敗しました" });
       }
     }
@@ -451,7 +453,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         await db.query("DELETE FROM avatar_configs WHERE id = $1", [id]);
         return res.json({ ok: true, id });
       } catch (err) {
-        console.warn("[DELETE /v1/admin/avatar/configs/:id]", err);
+        logger.warn("[DELETE /v1/admin/avatar/configs/:id]", err);
         return res.status(500).json({ error: "アバター設定の削除に失敗しました" });
       }
     }
@@ -497,7 +499,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         return res.json(result.rows[0]);
       } catch (err) {
         await client.query("ROLLBACK");
-        console.warn("[POST /v1/admin/avatar/configs/:id/activate]", err);
+        logger.warn("[POST /v1/admin/avatar/configs/:id/activate]", err);
         return res.status(500).json({ error: "アバター設定の有効化に失敗しました" });
       } finally {
         client.release();
@@ -545,7 +547,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
 
         return res.json(result.rows[0]);
       } catch (err) {
-        console.warn('[POST /v1/admin/avatar/configs/:id/reset-to-default]', err);
+        logger.warn('[POST /v1/admin/avatar/configs/:id/reset-to-default]', err);
         return res.status(500).json({ error: 'リセットに失敗しました' });
       }
     }

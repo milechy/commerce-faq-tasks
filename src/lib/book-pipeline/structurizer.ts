@@ -1,10 +1,12 @@
 // src/lib/book-pipeline/structurizer.ts
+
 // Phase44: Groq 8b を使った 6 フィールド構造化モジュール
 // CLAUDE.md: 書籍内容をログに出力しない
 
 import { groqClient } from "../../agent/llm/groqClient";
 import type { TextChunk } from "./chunkSplitter";
 import type { SchemaField } from "./contentAnalyzer";
+import { logger } from '../logger';
 
 export interface StructuredChunk {
   chunkIndex: number;
@@ -148,7 +150,7 @@ export async function structurizeChunks(
       if (parsed) {
         structured = parsed;
       } else {
-        console.warn("[structurizer] parse failed chunk=%d, raw length=%d", i, raw.length);
+        logger.warn("[structurizer] parse failed chunk=%d, raw length=%d", i, raw.length);
         // パース失敗: フォールバック
         structured = {
           category: "その他",
@@ -162,7 +164,7 @@ export async function structurizeChunks(
     } catch (groqErr: unknown) {
       const errMsg = groqErr instanceof Error ? groqErr.message : String(groqErr);
       const bodySnippet = (groqErr as any)?.bodySnippet ?? '';
-      console.error("[structurizer] Groq call failed chunk=%d: %s %s", i, errMsg, bodySnippet);
+      logger.error("[structurizer] Groq call failed chunk=%d: %s %s", i, errMsg, bodySnippet);
       // API エラー: フォールバック
       structured = {
         category: "その他",
