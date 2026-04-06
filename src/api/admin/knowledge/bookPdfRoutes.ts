@@ -1,10 +1,13 @@
 // src/api/admin/knowledge/bookPdfRoutes.ts
 
 // Phase44: 書籍PDFアップロードAPI — AES-256-GCM暗号化 + Supabase Storage
+// Phase59: ZIPアップロード対応（複数PDF一括展開）
 
 import type { Express, NextFunction, Request, Response } from "express";
 import multer, { MulterError } from "multer";
 import crypto from "crypto";
+import path from "path";
+import AdmZip from "adm-zip";
 // @ts-ignore
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
@@ -14,13 +17,23 @@ import { logger } from '../../../lib/logger';
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
-// ── Multer: メモリバッファ、50MB上限、PDFのみ ─────────────────────────────
+// ── 定数 ──────────────────────────────────────────────────────────────────
+const ZIP_MIMETYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-zip",
+  "multipart/x-zip",
+]);
+const MAX_ZIP_PDF_COUNT = 20;                  // ZIP内PDFファイル数上限
+const MAX_ZIP_EXPANDED_BYTES = 200 * 1024 * 1024; // 展開後合計サイズ上限(200MB)
+
+// ── Multer: メモリバッファ、50MB上限、PDF + ZIP ────────────────────────────
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype !== "application/pdf") {
-      cb(new Error("PDFファイルのみアップロードできます"));
+    if (file.mimetype !== "application/pdf" && !ZIP_MIMETYPES.has(file.mimetype)) {
+      cb(new Error("PDFまたはZIPファイルのみアップロードできます"));
       return;
     }
     cb(null, true);
@@ -59,6 +72,152 @@ function resolveUploadTenantId(req: Request): string | null {
   return user?.tenantId ?? null;
 }
 
+// ── PDF 1件処理ヘルパー ────────────────────────────────────────────────────
+// 単体PDFアップロードとZIP展開後の各PDFに共通して使う内部関数
+type ProcessResult =
+  | { ok: true; bookId: number; fileName: string; title: string }
+  | { ok: false; fileName: string; error: string };
+
+async function processOnePdf(
+  buffer: Buffer,
+  fileName: string,
+  title: string,
+  tenantId: string,
+  userId: string,
+  db: Pool
+): Promise<ProcessResult> {
+  const encKey = process.env.KNOWLEDGE_ENCRYPTION_KEY;
+  let uploadBuffer = buffer;
+  let encryptionIv: string | null = null;
+
+  if (encKey) {
+    const result = encryptBuffer(buffer, encKey);
+    uploadBuffer = result.encrypted;
+    encryptionIv = result.iv;
+  } else {
+    logger.warn("[book-pdf] KNOWLEDGE_ENCRYPTION_KEY未設定: 平文保存フォールバック");
+  }
+
+  if (!supabaseAdmin) {
+    return { ok: false, fileName, error: "ストレージサービスが設定されていません" };
+  }
+
+  const storagePath = `${tenantId}/${crypto.randomUUID()}.pdf${encKey ? ".enc" : ""}`;
+
+  const { error: storageError } = await supabaseAdmin.storage
+    .from("book-pdfs")
+    .upload(storagePath, uploadBuffer, {
+      contentType: "application/octet-stream",
+      upsert: false,
+    });
+
+  if (storageError) {
+    logger.error("[book-pdf] Storage error:", storageError.message);
+    return { ok: false, fileName, error: "アップロードに失敗しました。もう一度お試しください" };
+  }
+
+  const result = await db.query(
+    `INSERT INTO book_uploads
+       (tenant_id, title, original_filename, storage_path, file_size_bytes, encryption_iv, uploaded_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, title, status, created_at`,
+    [tenantId, title, fileName, storagePath, buffer.length, encryptionIv, userId || null]
+  );
+
+  const bookId: number = result.rows[0].id;
+  void pipelineQueue.enqueue(bookId, { db });
+
+  return { ok: true, bookId, fileName, title };
+}
+
+// ── ZIP展開処理 ───────────────────────────────────────────────────────────
+async function handleZipUpload(
+  zipBuffer: Buffer,
+  tenantId: string,
+  userId: string,
+  db: Pool,
+  res: Response
+): Promise<Response> {
+  let zip: AdmZip;
+  try {
+    zip = new AdmZip(zipBuffer);
+  } catch {
+    return res.status(400).json({ error: "ZIPファイルの読み込みに失敗しました。正しいZIPファイルを選択してください。" });
+  }
+
+  const entries = zip.getEntries();
+
+  // セキュリティ: パストラバーサル検出
+  for (const entry of entries) {
+    const normalizedName = entry.entryName.replace(/\\/g, "/");
+    if (normalizedName.includes("../") || normalizedName.includes("..\\")) {
+      return res.status(400).json({ error: "不正なファイルパスが含まれています。別のZIPファイルをお試しください。" });
+    }
+  }
+
+  // PDFエントリを抽出（__MACOSX, ドットファイル, ディレクトリを除外）
+  const pdfEntries = entries.filter((e) => {
+    const name = e.entryName.replace(/\\/g, "/");
+    return (
+      !e.isDirectory &&
+      name.toLowerCase().endsWith(".pdf") &&
+      !name.startsWith("__MACOSX/") &&
+      !path.basename(name).startsWith(".")
+    );
+  });
+
+  if (pdfEntries.length === 0) {
+    return res.status(400).json({ error: "ZIPファイル内にPDFが見つかりません。PDFファイルを含むZIPを選択してください。" });
+  }
+
+  if (pdfEntries.length > MAX_ZIP_PDF_COUNT) {
+    return res.status(400).json({
+      error: `PDFの数が多すぎます。1つのZIPには${MAX_ZIP_PDF_COUNT}件まで入れてください。（現在: ${pdfEntries.length}件）`,
+    });
+  }
+
+  // セキュリティ: ZIP爆弾対策（展開後合計サイズ）
+  let totalUncompressedBytes = 0;
+  for (const entry of pdfEntries) {
+    totalUncompressedBytes += entry.header.size;
+    if (totalUncompressedBytes > MAX_ZIP_EXPANDED_BYTES) {
+      return res.status(400).json({
+        error: `ZIPを展開した合計サイズが上限（200MB）を超えています。ファイルを分割してアップロードしてください。`,
+      });
+    }
+  }
+
+  // 各PDFを順次処理
+  const results: Array<{ fileName: string; bookId?: number; status: "ok" | "error"; error?: string }> = [];
+  for (const entry of pdfEntries) {
+    const fileName = path.basename(entry.entryName);
+    const title = fileName.replace(/\.pdf$/i, "");
+    let pdfBuffer: Buffer;
+    try {
+      pdfBuffer = entry.getData();
+    } catch {
+      results.push({ fileName, status: "error", error: "ファイルの展開に失敗しました" });
+      continue;
+    }
+
+    const result = await processOnePdf(pdfBuffer, fileName, title, tenantId, userId, db);
+    if (result.ok) {
+      results.push({ fileName, bookId: result.bookId, status: "ok" });
+    } else {
+      results.push({ fileName, status: "error", error: result.error });
+    }
+  }
+
+  const successCount = results.filter((r) => r.status === "ok").length;
+  logger.info(`[book-pdf] ZIP upload: ${successCount}/${pdfEntries.length} PDFs processed for tenant ${tenantId}`);
+
+  return res.status(201).json({
+    message: `${successCount}件のPDFをアップロードしました`,
+    total: pdfEntries.length,
+    results,
+  });
+}
+
 // ── ルート登録 ─────────────────────────────────────────────────────────────
 export function registerBookPdfRoutes(
   app: Express,
@@ -87,10 +246,6 @@ export function registerBookPdfRoutes(
           return;
         }
         if (multerErr instanceof Error) {
-          if (multerErr.message.includes("PDFファイルのみ")) {
-            res.status(400).json({ error: multerErr.message });
-            return;
-          }
           res.status(400).json({ error: multerErr.message });
           return;
         }
@@ -104,21 +259,6 @@ export function registerBookPdfRoutes(
           return res.status(400).json({ error: "ファイルを選択してください" });
         }
 
-        // multerはContent-Dispositionのfilenameをlatin1でデコードするため、
-        // 日本語ファイル名はlatin1→utf8で再デコードが必要
-        let originalFilename = file.originalname;
-        try {
-          originalFilename = Buffer.from(file.originalname, "latin1").toString("utf8");
-        } catch {
-          // デコード失敗時はそのまま使用
-          originalFilename = file.originalname;
-        }
-
-        const title = ((req.body as Record<string, unknown>)?.title as string | undefined)?.trim();
-        if (!title) {
-          return res.status(400).json({ error: "書籍のタイトルを入力してください" });
-        }
-
         // tenantId: JWT から取得（body 禁止）
         const tenantId = resolveUploadTenantId(req);
         if (!tenantId) {
@@ -128,68 +268,40 @@ export function registerBookPdfRoutes(
         const userId: string =
           ((req as any).user as { id?: string } | undefined)?.id ?? "";
 
-        // 暗号化（KNOWLEDGE_ENCRYPTION_KEY 未設定時は平文フォールバック + warn）
-        const encKey = process.env.KNOWLEDGE_ENCRYPTION_KEY;
-        let uploadBuffer = file.buffer;
-        let encryptionIv: string | null = null;
-
-        if (encKey) {
-          const result = encryptBuffer(file.buffer, encKey);
-          uploadBuffer = result.encrypted;
-          encryptionIv = result.iv;
-        } else {
-          logger.warn(
-            "[book-pdf] KNOWLEDGE_ENCRYPTION_KEY未設定: 平文保存フォールバック"
-          );
+        // ── ZIPファイルの処理 ────────────────────────────────────────────
+        if (ZIP_MIMETYPES.has(file.mimetype)) {
+          return await handleZipUpload(file.buffer, tenantId, userId, db, res);
         }
 
-        // Supabase Storage がない場合はエラー
-        if (!supabaseAdmin) {
-          return res.status(500).json({
-            error: "ストレージサービスが設定されていません。もう一度お試しください",
-          });
+        // ── 単体PDFの処理（従来ロジック） ────────────────────────────────
+        // multerはContent-Dispositionのfilenameをlatin1でデコードするため、
+        // 日本語ファイル名はlatin1→utf8で再デコードが必要
+        let originalFilename = file.originalname;
+        try {
+          originalFilename = Buffer.from(file.originalname, "latin1").toString("utf8");
+        } catch {
+          originalFilename = file.originalname;
         }
 
-        const storagePath = `${tenantId}/${crypto.randomUUID()}.pdf${encKey ? ".enc" : ""}`;
-
-        const { error: storageError } = await supabaseAdmin.storage
-          .from("book-pdfs")
-          .upload(storagePath, uploadBuffer, {
-            contentType: "application/octet-stream",
-            upsert: false,
-          });
-
-        if (storageError) {
-          logger.error("[book-pdf] Storage error:", storageError.message);
-          return res.status(500).json({
-            error: "アップロードに失敗しました。もう一度お試しください",
-          });
+        const title = ((req.body as Record<string, unknown>)?.title as string | undefined)?.trim();
+        if (!title) {
+          return res.status(400).json({ error: "書籍のタイトルを入力してください" });
         }
 
-        // DB 挿入 — storage_path はサーバー内部のみ保持
-        const result = await db.query(
-          `INSERT INTO book_uploads
-             (tenant_id, title, original_filename, storage_path, file_size_bytes, encryption_iv, uploaded_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           RETURNING id, title, status, created_at`,
-          [
-            tenantId,
-            title,
-            originalFilename,
-            storagePath,
-            file.size,
-            encryptionIv,
-            userId || null,
-          ]
+        const result = await processOnePdf(
+          file.buffer, originalFilename, title, tenantId, userId, db
         );
 
-        const bookId = result.rows[0].id;
-
-        // バックグラウンドでパイプライン自動実行（順次キュー経由）
-        void pipelineQueue.enqueue(bookId, { db });
+        if (!result.ok) {
+          return res.status(500).json({ error: result.error });
+        }
 
         // storage_path はレスポンスに含めない（セキュリティ）
-        return res.status(201).json(result.rows[0]);
+        const dbRow = await db.query(
+          "SELECT id, title, status, created_at FROM book_uploads WHERE id = $1",
+          [result.bookId]
+        );
+        return res.status(201).json(dbRow.rows[0]);
       } catch (err: unknown) {
         logger.error(
           "[book-pdf] POST error:",

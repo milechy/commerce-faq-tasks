@@ -109,7 +109,7 @@ describe("POST /v1/admin/knowledge/book-pdf", () => {
       .attach("file", Buffer.from("not a pdf"), { filename: "test.txt", contentType: "text/plain" });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("PDFファイルのみ");
+    expect(res.body.error).toContain("PDFまたはZIP");
   });
 
   it("3. 50MB超過 → 413", async () => {

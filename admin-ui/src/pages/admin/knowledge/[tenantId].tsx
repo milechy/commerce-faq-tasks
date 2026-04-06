@@ -1633,6 +1633,9 @@ interface QueuedFile {
   status: FileUploadStatus;
   uploadedBookId?: number;
   errorMsg?: string;
+  isZip?: boolean;
+  /** ZIPアップロード後の内訳（ZIPの場合のみ） */
+  zipResults?: Array<{ fileName: string; bookId?: number; status: "ok" | "error"; error?: string }>;
 }
 
 const FILE_STATUS_ICON: Record<FileUploadStatus, string> = {
@@ -1738,14 +1741,38 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
     setTimeout(() => setToast(null), 3500);
   };
 
+  const ZIP_TYPES = new Set(["application/zip", "application/x-zip-compressed", "application/x-zip"]);
+  const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50MB
+
   const validateAndAddFiles = (files: FileList | File[]) => {
     const arr = Array.from(files);
     const newEntries: QueuedFile[] = [];
     for (const f of arr) {
-      if (f.type !== "application/pdf") {
-        showToast(`${f.name}: PDFファイルのみアップロードできます`, false);
+      const isZip = ZIP_TYPES.has(f.type) || f.name.toLowerCase().endsWith(".zip");
+      const isPdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+
+      if (!isPdf && !isZip) {
+        showToast(`${f.name}: PDFまたはZIPファイルを選択してください`, false);
         continue;
       }
+
+      if (isZip) {
+        if (f.size > MAX_ZIP_SIZE) {
+          showToast(`${f.name}: ファイルが大きすぎます。50MB以下のZIPファイルを選択してください。`, false);
+          continue;
+        }
+        // ZIPはタイトル不要（サーバー側でファイル名から自動設定）
+        newEntries.push({
+          id: `${Date.now()}-${Math.random()}`,
+          file: f,
+          title: f.name.replace(/\.zip$/i, ""), // 表示用（実際はZIPを一括送信）
+          status: "pending",
+          isZip: true,
+        });
+        continue;
+      }
+
+      // PDF
       if (f.size > MAX_BOOK_PDF_SIZE) {
         showToast(`${f.name}: ファイルサイズが10MBを超えています`, false);
         continue;
@@ -1789,8 +1816,8 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const handleUploadAll = async () => {
     const pendingItems = queue.filter((q) => q.status === "pending");
     if (pendingItems.length === 0) return;
-    if (pendingItems.some((q) => !q.title.trim())) {
-      showToast("全ファイルにタイトルを入力してください", false);
+    if (pendingItems.some((q) => !q.isZip && !q.title.trim())) {
+      showToast("全PDFファイルにタイトルを入力してください", false);
       return;
     }
 
@@ -1806,7 +1833,9 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
       try {
         const form = new FormData();
         form.append("file", item.file);
-        form.append("title", item.title.trim());
+        if (!item.isZip) {
+          form.append("title", item.title.trim());
+        }
         const res = await fetchWithAuth(uploadUrl, { method: "POST", body: form });
 
         if (!res.ok) {
@@ -1821,15 +1850,38 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
           continue;
         }
 
-        const created = (await res.json()) as { id?: number };
-        setQueue((prev) =>
-          prev.map((q) =>
-            q.id === item.id
-              ? { ...q, status: "processing", uploadedBookId: created.id }
-              : q
-          )
-        );
-        anyUploaded = true;
+        if (item.isZip) {
+          // ZIPレスポンス: { message, total, results }
+          const zipResp = (await res.json()) as {
+            message?: string;
+            total?: number;
+            results?: Array<{ fileName: string; bookId?: number; status: "ok" | "error"; error?: string }>;
+          };
+          const successCount = (zipResp.results ?? []).filter((r) => r.status === "ok").length;
+          setQueue((prev) =>
+            prev.map((q) =>
+              q.id === item.id
+                ? {
+                    ...q,
+                    status: successCount > 0 ? "processing" : "error",
+                    errorMsg: successCount === 0 ? "ZIPのPDFがアップロードできませんでした" : undefined,
+                    zipResults: zipResp.results,
+                  }
+                : q
+            )
+          );
+          if (successCount > 0) anyUploaded = true;
+        } else {
+          const created = (await res.json()) as { id?: number };
+          setQueue((prev) =>
+            prev.map((q) =>
+              q.id === item.id
+                ? { ...q, status: "processing", uploadedBookId: created.id }
+                : q
+            )
+          );
+          anyUploaded = true;
+        }
       } catch {
         setQueue((prev) =>
           prev.map((q) =>
@@ -1895,17 +1947,17 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/pdf"
+            accept=".pdf,.zip,application/pdf,application/zip"
             multiple
             style={{ display: "none" }}
             onChange={handleFileChange}
           />
           <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
           <div style={{ fontSize: 14, color: "#9ca3af" }}>
-            PDFをここにドラッグ＆ドロップ（複数可）
+            PDFまたはZIPをここにドラッグ＆ドロップ（複数可）
           </div>
           <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-            またはクリックして選択（各ファイル上限10MB）
+            またはクリックして選択（PDF: 各10MB以内、ZIP: 50MB以内・最大20件）
           </div>
         </div>
       </div>
@@ -1969,8 +2021,26 @@ function PdfUploadTab({ tenantId }: { tenantId: string }) {
                   )}
                 </div>
 
-                {/* タイトル入力（pendingのみ） */}
-                {item.status === "pending" && (
+                {/* ZIPの場合: 展開メッセージ表示 */}
+                {item.isZip && item.status === "pending" && (
+                  <div style={{ fontSize: 12, color: "#60a5fa", marginTop: 4 }}>
+                    ZIPファイル内のPDFを自動展開してアップロードします（最大20件）
+                  </div>
+                )}
+
+                {/* ZIP結果内訳 */}
+                {item.isZip && item.zipResults && item.zipResults.length > 0 && (
+                  <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+                    {item.zipResults.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.status === "ok" ? "#4ade80" : "#fca5a5", paddingLeft: 8 }}>
+                        {r.status === "ok" ? "✓" : "✗"} {r.fileName}{r.error ? `: ${r.error}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* タイトル入力（pendingのPDFのみ） */}
+                {item.status === "pending" && !item.isZip && (
                   <input
                     type="text"
                     value={item.title}

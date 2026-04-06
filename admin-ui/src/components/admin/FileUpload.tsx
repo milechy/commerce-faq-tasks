@@ -213,7 +213,7 @@ export default function FileUpload({
         <input
           ref={inputRef}
           type="file"
-          accept="application/pdf"
+          accept=".pdf,.zip,application/pdf,application/zip"
           onChange={handleInputChange}
           style={{ display: "none" }}
           aria-hidden="true"
