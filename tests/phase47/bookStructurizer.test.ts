@@ -188,7 +188,19 @@ describe('structurizeBook', () => {
     await expect(structurizeBook('tenant-a', 1, FULL_TEXT)).resolves.toBeDefined();
   });
 
-  it('12. prompt template has {{CHUNK_TEXT}} replaced with chunk content', async () => {
+  it('12. parses principles when Gemini wraps response in ```json block', async () => {
+    // Gemini occasionally wraps output in markdown code fences
+    const fencedResponse = `\`\`\`json\n${PRINCIPLE_RESPONSE}\n\`\`\``;
+    mockCallGemini.mockResolvedValue(fencedResponse);
+
+    const result = await structurizeBook('tenant-a', 1, FULL_TEXT);
+
+    expect(result.structuredCount).toBeGreaterThan(0);
+    expect(result.skippedCount).toBe(0);
+    expect(result.principles[0]!.principle).toBe('アンカリング効果');
+  });
+
+  it('13. prompt template has {{CHUNK_TEXT}} replaced with chunk content', async () => {
     mockCallGemini.mockResolvedValue('[]');
 
     await structurizeBook('tenant-a', 1, '単一のテスト段落です。');

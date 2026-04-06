@@ -137,17 +137,26 @@ export async function structurizeBook(
       continue;
     }
 
-    // JSON配列を抽出
+    // JSON配列を抽出（Geminiが```jsonブロックで返す場合にも対応）
     let principles: StructuredPrinciple[];
     try {
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
+      const cleaned = raw.replace(/```json\n?|```\n?/g, '').trim();
+      const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
         // 心理原則なし（目次・参考文献等）— スキップ
+        logger.debug(
+          { chunkIndex: chunk.chunkIndex },
+          'bookStructurizer: chunk skipped — no JSON array found (目次・参考文献等の可能性)',
+        );
         result.skippedCount++;
         continue;
       }
       const parsed = JSON.parse(jsonMatch[0]) as unknown[];
       if (!Array.isArray(parsed) || parsed.length === 0) {
+        logger.debug(
+          { chunkIndex: chunk.chunkIndex },
+          'bookStructurizer: chunk skipped — empty principles array',
+        );
         result.skippedCount++;
         continue;
       }
