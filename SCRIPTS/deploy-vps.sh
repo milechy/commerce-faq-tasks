@@ -13,6 +13,11 @@ set -euo pipefail
 VPS="${1:-root@65.108.159.161}"
 REMOTE_DIR="/opt/rajiuce"
 
+# Pre-deploy: Environment Check (warning-only, does not block deploy)
+echo "=== Pre-deploy: Environment Check ==="
+bash SCRIPTS/env-check.sh 2>&1 || true
+echo ""
+
 echo "=== Phase28: Deploy to ${VPS}:${REMOTE_DIR} ==="
 
 echo "[1/6] Syncing repository to VPS..."
@@ -79,6 +84,10 @@ echo "[7/7] Health check..."
 sleep 3
 ssh "${VPS}" "curl -sf http://localhost:3100/health && echo ' API OK' || echo ' API FAILED'"
 ssh "${VPS}" "curl -sf http://localhost:5173/ | grep -q 'root' && echo ' Admin UI OK' || echo ' Admin UI FAILED'"
+
+echo ""
+echo "=== Running post-deploy smoke test ==="
+bash SCRIPTS/post-deploy-smoke.sh || echo "⚠️  Some smoke tests failed (non-blocking)"
 
 echo ""
 echo "=== Deploy complete ==="
