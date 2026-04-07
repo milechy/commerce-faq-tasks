@@ -8,8 +8,11 @@ import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { ADMIN_AI_SYSTEM_PROMPT, isUnanswered } from "./systemPrompt";
 import { getPool } from "../../../lib/db";
-import { hybridSearch } from "../../../search/hybrid";
 import { logger } from '../../../lib/logger';
+import {
+  searchKnowledgeForSuggestion,
+  formatKnowledgeContext,
+} from '../../../lib/knowledgeSearchUtil';
 
 
 // ---------------------------------------------------------------------------
@@ -151,36 +154,7 @@ ${ragContext}`
 }
 
 // ---------------------------------------------------------------------------
-// 日本語対応キーワード抽出
-// ---------------------------------------------------------------------------
-
-function extractKeywords(message: string): string[] {
-  // 句読点・記号除去
-  const cleaned = message.replace(/[？?！!。、\s　「」『』（）()・]/g, "");
-
-  // 助詞・助動詞を長い順に除去
-  const stopWords = [
-    "ませんか", "ですか", "ますか", "ている", "でした", "ました",
-    "から", "まで", "より", "って", "った", "ない", "てる",
-    "は", "が", "の", "を", "に", "で", "と", "も", "か",
-    "ます", "です",
-  ];
-  let text = cleaned;
-  for (const sw of stopWords.sort((a, b) => b.length - a.length)) {
-    text = text.replace(new RegExp(sw, "g"), " ");
-  }
-
-  // スペース分割後2文字以上の語
-  const chunks = text.split(/\s+/).filter((w) => w.length >= 2);
-
-  // 漢字・カタカナの連続2文字以上も抽出
-  const kanjiMatches = cleaned.match(/[\u4E00-\u9FFF\u30A0-\u30FF]{2,}/g) ?? [];
-
-  return [...new Set([...chunks, ...kanjiMatches])].slice(0, 5);
-}
-
-// ---------------------------------------------------------------------------
-// business_faq モード: RAG検索 + 70b回答生成
+// business_faq モード: pgvectorナレッジ検索 + 70b回答生成
 // ---------------------------------------------------------------------------
 
 async function buildBusinessFaqAnswer(
@@ -188,49 +162,14 @@ async function buildBusinessFaqAnswer(
   tenantId: string
 ): Promise<{ answer: string; aiAnswered: boolean }> {
   try {
-    const pool = getPool();
+    // pgvector 意味検索（faq_docs ILIKE から切り替え）
+    const knowledgeCtx = await searchKnowledgeForSuggestion(tenantId, message);
+    const ragContext = formatKnowledgeContext(knowledgeCtx);
 
-    // 日本語対応キーワード抽出
-    const keywords = extractKeywords(message);
-    logger.info(`[ai-assist] extracted keywords: ${keywords.join(", ")}`);
-
-    let rows: Array<{ question: string; answer: string }> = [];
-
-    if (keywords.length > 0) {
-      // ILIKE 部分一致検索
-      const likeConditions = keywords
-        .map((_, i) => `(question ILIKE $${i + 2} OR answer ILIKE $${i + 2})`)
-        .join(" OR ");
-      const likeParams = keywords.map((k) => `%${k}%`);
-
-      const result = await pool.query<{ question: string; answer: string }>(
-        `SELECT question, answer FROM faq_docs WHERE tenant_id = $1 AND (${likeConditions}) LIMIT 5`,
-        [tenantId, ...likeParams]
-      );
-      rows = result.rows;
-    }
-
-    // フォールバック: ヒットなしなら最新5件
-    if (rows.length === 0) {
-      const result = await pool.query<{ question: string; answer: string }>(
-        "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 5",
-        [tenantId]
-      );
-      rows = result.rows;
-    }
-
-    logger.info(`[ai-assist] FAQ search: ${rows.length} hits for tenant=${tenantId}`);
-
-    // RAGコンテキスト構築（各200文字以内）
-    const ragContext = rows
-      .map((row) => `Q: ${row.question}\nA: ${row.answer}`.slice(0, 200))
-      .join("\n\n");
-
-    logger.info(`[ai-assist] ragContext length: ${ragContext.length}`);
-    logger.info(`[ai-assist] ragContext preview: ${ragContext.slice(0, 100)}`);
+    logger.info(`[ai-assist] pgvector search: ${knowledgeCtx.results.length} hits for tenant=${tenantId}`);
 
     const answer = await callGroq70b(message, ragContext);
-    const aiAnswered = rows.length > 0 && !isUnanswered(answer);
+    const aiAnswered = knowledgeCtx.results.length > 0 && !isUnanswered(answer);
     return { answer, aiAnswered };
   } catch (e) {
     logger.error("[ai-assist] buildBusinessFaqAnswer error:", e);

@@ -9,6 +9,12 @@
 // DB pool mock — shared across all flows
 jest.mock("../../src/lib/db", () => ({ getPool: jest.fn(), pool: null }));
 
+// Phase60-A: knowledgeSearchUtil mock (pgvector/embedding 外部依存を切り離す)
+jest.mock("../../src/lib/knowledgeSearchUtil", () => ({
+  searchKnowledgeForSuggestion: jest.fn().mockResolvedValue({ results: [] }),
+  formatKnowledgeContext: jest.fn().mockReturnValue(""),
+}));
+
 // LLM / external service mocks (factory mocks so jest.fn() is always set up)
 jest.mock("../../src/agent/llm/groqClient", () => ({
   groqClient: { call: jest.fn(), callWithUsage: jest.fn() },
@@ -297,6 +303,8 @@ describe("Flow 3: Judge evaluateSession → Gemini → DB persistence", () => {
         ],
         rowCount: 2,
       })
+      // Mock: tuning_rules SELECT (Phase60-A)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       // Mock: INSERT evaluation
       .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
@@ -322,8 +330,8 @@ describe("Flow 3: Judge evaluateSession → Gemini → DB persistence", () => {
     expect(callGeminiJudge).toHaveBeenCalledTimes(1);
     expect(result).not.toBeNull();
     expect(result!.overall_score).toBe(75);
-    // DB must have been called: session lookup + messages + insert evaluation
-    expect(MOCK_POOL.query).toHaveBeenCalledTimes(3);
+    // DB must have been called: session lookup + messages + tuning_rules SELECT (Phase60-A) + insert evaluation
+    expect(MOCK_POOL.query).toHaveBeenCalledTimes(4);
   });
 
   it("evaluateSession returns null when session not found in DB", async () => {

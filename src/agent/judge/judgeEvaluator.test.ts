@@ -19,6 +19,12 @@ jest.mock('../../lib/notifications', () => ({
   createNotification: jest.fn().mockResolvedValue(undefined),
 }));
 
+// Phase60-A: knowledgeSearchUtil をモック（pgvector/embedding は外部依存）
+jest.mock('../../lib/knowledgeSearchUtil', () => ({
+  searchKnowledgeForSuggestion: jest.fn().mockResolvedValue({ results: [] }),
+  formatKnowledgeContext: jest.fn().mockReturnValue(''),
+}));
+
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
@@ -91,6 +97,8 @@ describe('evaluateSession', () => {
           { role: 'assistant', content: 'ご予算の目安を教えてください。', created_at: new Date() },
         ],
       })
+      // Phase60-A: tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
       .mockResolvedValueOnce({ rows: [] });
 
@@ -111,8 +119,8 @@ describe('evaluateSession', () => {
     expect(result!.stage_progress_score).toBe(75);
     expect(result!.taboo_violation_score).toBe(90);
 
-    // INSERT was called with tenant_id and session_id
-    const insertCall = mockPool.query.mock.calls[2]!;
+    // INSERT was called with tenant_id and session_id (index 3 after Phase60-A tuning_rules SELECT)
+    const insertCall = mockPool.query.mock.calls[3]!;
     expect(insertCall[1]).toContain('tenant-abc');
     expect(insertCall[1]).toContain('session-123');
   });
@@ -129,6 +137,8 @@ describe('evaluateSession', () => {
           { role: 'assistant', content: '商品Aです。', created_at: new Date() },
         ],
       })
+      // Phase60-A: tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
       .mockResolvedValueOnce({ rows: [] })
       // INSERT tuning_rules
@@ -147,9 +157,9 @@ describe('evaluateSession', () => {
     expect(result).not.toBeNull();
     expect(result!.overall_score).toBe(30);
 
-    // Should have called INSERT for tuning_rules (4th query call)
-    expect(mockPool.query.mock.calls.length).toBeGreaterThanOrEqual(4);
-    const tuningInsertCall = mockPool.query.mock.calls[3]!;
+    // Should have called INSERT for tuning_rules (5th query call after Phase60-A)
+    expect(mockPool.query.mock.calls.length).toBeGreaterThanOrEqual(5);
+    const tuningInsertCall = mockPool.query.mock.calls[4]!;
     expect(tuningInsertCall[0]).toContain('tuning_rules');
   });
 
@@ -165,6 +175,8 @@ describe('evaluateSession', () => {
           { role: 'assistant', content: 'ファミリー向けのシエンタが198万円で...', created_at: new Date() },
         ],
       })
+      // Phase60-A: tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
       .mockResolvedValueOnce({ rows: [] });
 
@@ -181,10 +193,12 @@ describe('evaluateSession', () => {
     expect(result).not.toBeNull();
     expect(result!.overall_score).toBe(82);
 
-    // Only 3 queries: sessions, messages, INSERT evaluations — no tuning_rules insert
-    expect(mockPool.query.mock.calls.length).toBe(3);
+    // 4 queries: sessions, messages, tuning_rules SELECT (Phase60-A), INSERT evaluations
+    // tuning_rules INSERT should NOT be called (score >= threshold)
+    expect(mockPool.query.mock.calls.length).toBe(4);
     const queryTexts = mockPool.query.mock.calls.map((c) => c[0] as string);
-    expect(queryTexts.some((q) => q.includes('tuning_rules'))).toBe(false);
+    const insertCalls = queryTexts.filter((q) => q.includes('INSERT') && q.includes('tuning_rules'));
+    expect(insertCalls.length).toBe(0);
   });
 
   it('4. Groq failure → returns null, does not throw', async () => {
@@ -198,7 +212,9 @@ describe('evaluateSession', () => {
           { role: 'user', content: 'hi', created_at: new Date() },
           { role: 'assistant', content: 'hello', created_at: new Date() },
         ],
-      });
+      })
+      // Phase60-A: tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] });
 
     // Both attempts fail
     mockCallGroq
@@ -232,6 +248,9 @@ describe('evaluateSession', () => {
           { role: 'assistant', content: '承知しました。', created_at: new Date() },
         ],
       })
+      // Phase60-A: tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
+      // INSERT conversation_evaluations
       .mockResolvedValueOnce({ rows: [] });
 
     mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 70 }));

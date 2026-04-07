@@ -12,6 +12,10 @@ import {
   deleteRule,
 } from "./tuningRulesRepository";
 import { logger } from '../../../lib/logger';
+import {
+  searchKnowledgeForSuggestion,
+  formatKnowledgeContext,
+} from '../../../lib/knowledgeSearchUtil';
 
 // ---------------------------------------------------------------------------
 // Groq 8b: ルール提案
@@ -24,14 +28,23 @@ export interface SuggestRuleResponse {
   reason: string;
 }
 
-async function callGroq8bSuggest(
+export async function callGroq8bSuggest(
   userMsg: string,
   aiMsg: string,
+  knowledgeSection: string = '',
+  existingRulesSection: string = '',
 ): Promise<SuggestRuleResponse> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
     return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
   }
+
+  const knowledgePart = knowledgeSection
+    ? `\n## 参考ナレッジ（心理学原則・FAQ）\n${knowledgeSection}\n`
+    : '';
+  const rulesPart = existingRulesSection
+    ? `\n## 既存チューニングルール（重複しないルールを提案すること）\n${existingRulesSection}\n`
+    : '';
 
   const prompt = `以下のAIチャットの会話を分析して、AIの応答を改善するためのチューニングルールを1つ提案してください。
 
@@ -40,7 +53,7 @@ ${userMsg.slice(0, 500)}
 
 【AIの回答】
 ${aiMsg.slice(0, 500)}
-
+${knowledgePart}${rulesPart}
 以下のJSON形式のみで回答してください（説明不要）:
 {
   "trigger_pattern": "このルールが適用されるキーワードや状況（例: 価格について聞かれた場合）",
@@ -141,7 +154,30 @@ export function registerTuningRoutes(app: Express): void {
         return res.status(400).json({ error: "userMessage and aiMessage must not be empty" });
       }
 
-      const suggestion = await callGroq8bSuggest(userMessage.trim(), aiMessage.trim());
+      const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+
+      // ナレッジ検索と既存ルール取得を並行実行（失敗しても提案は続行）
+      const [knowledgeCtx, existingRules] = await Promise.all([
+        tenantId
+          ? searchKnowledgeForSuggestion(tenantId, userMessage.trim()).catch(() => ({ results: [] }))
+          : Promise.resolve({ results: [] }),
+        tenantId
+          ? listRules(tenantId).catch(() => [])
+          : Promise.resolve([]),
+      ]);
+
+      const knowledgeSection = formatKnowledgeContext(knowledgeCtx);
+      const existingRulesSection = existingRules
+        .filter((r) => r.is_active)
+        .map((r) => `- [${r.trigger_pattern}] ${r.expected_behavior}`)
+        .join('\n');
+
+      const suggestion = await callGroq8bSuggest(
+        userMessage.trim(),
+        aiMessage.trim(),
+        knowledgeSection,
+        existingRulesSection,
+      );
       return res.json(suggestion);
     },
   );

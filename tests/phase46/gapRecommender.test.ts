@@ -8,6 +8,10 @@ jest.mock('../../src/lib/db', () => ({ getPool: () => mockPool }));
 jest.mock('../../src/lib/gemini/client', () => ({
   callGeminiJudge: jest.fn(),
 }));
+jest.mock('../../src/lib/knowledgeSearchUtil', () => ({
+  searchKnowledgeForSuggestion: jest.fn().mockResolvedValue({ results: [] }),
+  formatKnowledgeContext: jest.fn().mockReturnValue(''),
+}));
 
 import { callGeminiJudge } from '../../src/lib/gemini/client';
 import { generateRecommendations } from '../../src/agent/gap/gapRecommender';
@@ -33,8 +37,6 @@ describe('generateRecommendations', () => {
   it('1. fetches gaps, calls Gemini, saves to DB, returns recommendations', async () => {
     // gaps query
     mockQuery.mockResolvedValueOnce({ rows: GAPS });
-    // faq summary query
-    mockQuery.mockResolvedValueOnce({ rows: [] });
     // UPDATE gap 1
     mockQuery.mockResolvedValueOnce({ rows: [] });
     // UPDATE gap 2
@@ -61,7 +63,6 @@ describe('generateRecommendations', () => {
 
   it('3. returns [] when Gemini call throws', async () => {
     mockQuery.mockResolvedValueOnce({ rows: GAPS });
-    mockQuery.mockResolvedValueOnce({ rows: [] });
 
     mockCallGemini.mockRejectedValueOnce(new Error('Gemini API error'));
 
@@ -72,7 +73,6 @@ describe('generateRecommendations', () => {
 
   it('4. returns [] when Gemini response has no JSON array', async () => {
     mockQuery.mockResolvedValueOnce({ rows: GAPS });
-    mockQuery.mockResolvedValueOnce({ rows: [] });
 
     mockCallGemini.mockResolvedValueOnce('申し訳ありませんが、JSONを生成できませんでした。');
 
@@ -86,7 +86,6 @@ describe('generateRecommendations', () => {
     const longSuggestedAnswer = 'B'.repeat(1200);
 
     mockQuery.mockResolvedValueOnce({ rows: [GAPS[0]!] });
-    mockQuery.mockResolvedValueOnce({ rows: [] });
     mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE
 
     mockCallGemini.mockResolvedValueOnce(
@@ -101,7 +100,6 @@ describe('generateRecommendations', () => {
 
   it('6. skips invalid index entries without crashing', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [GAPS[0]!] });
-    mockQuery.mockResolvedValueOnce({ rows: [] });
     mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE for valid item
 
     mockCallGemini.mockResolvedValueOnce(

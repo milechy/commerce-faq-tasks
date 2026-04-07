@@ -4,6 +4,10 @@
 import pino from 'pino';
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
+import {
+  searchKnowledgeForSuggestion,
+  formatKnowledgeContext,
+} from '../../lib/knowledgeSearchUtil';
 
 const logger = pino();
 const BATCH_SIZE = 20;
@@ -45,23 +49,12 @@ export async function generateRecommendations(
 
   if (gapsResult.rows.length === 0) return [];
 
-  // 既存FAQサマリー取得（Geminiに参考として渡す、Anti-Slop: 各100字以内）
-  let faqSummary = '（既存ナレッジなし）';
-  try {
-    const faqResult = await pool.query<{ question: string; answer: string }>(
-      `SELECT question, answer FROM faq_docs
-       WHERE tenant_id = $1 AND is_published = true
-       ORDER BY created_at DESC LIMIT 10`,
-      [tenantId],
-    );
-    if (faqResult.rows.length > 0) {
-      faqSummary = faqResult.rows
-        .map((f: { question: string; answer: string }) => `Q: ${f.question.slice(0, 100)} / A: ${f.answer.slice(0, 100)}`)
-        .join('\n');
-    }
-  } catch {
-    // FAQ summary is best-effort
-  }
+  // 代表質問（先頭ギャップ）でpgvectorナレッジ検索（faq_docs ILIKEからpgvector意味検索に切り替え）
+  const representativeQuery = gapsResult.rows[0]!.user_question;
+  const knowledgeCtx = await searchKnowledgeForSuggestion(tenantId, representativeQuery).catch(
+    () => ({ results: [] }),
+  );
+  const faqSummary = formatKnowledgeContext(knowledgeCtx) || '（既存ナレッジなし）';
 
   // Anti-Slop: user_question を 200 字以内に切り詰めてからプロンプトに埋め込む
   const gapList = gapsResult.rows

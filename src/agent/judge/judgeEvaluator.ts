@@ -10,6 +10,10 @@ import pino from 'pino';
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { createNotification } from '../../lib/notifications';
+import {
+  searchKnowledgeForSuggestion,
+  formatKnowledgeContext,
+} from '../../lib/knowledgeSearchUtil';
 
 const logger = pino();
 
@@ -159,13 +163,42 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
     const template = await loadPromptTemplate();
     const prompt = template.replace('{{CONVERSATION_LOG}}', conversationLog);
 
+    // 4b. テナントのナレッジ・チューニングルールを取得してpsychology_fit評価の精度を上げる
+    const firstUserMsg = (messages as ChatMessageRow[]).find((m) => m.role === 'user')?.content ?? '';
+    const [knowledgeCtx, tuningRulesResult] = await Promise.all([
+      firstUserMsg
+        ? searchKnowledgeForSuggestion(tenantId, firstUserMsg).catch(() => ({ results: [] }))
+        : Promise.resolve({ results: [] }),
+      pool
+        .query(
+          'SELECT trigger_pattern, expected_behavior FROM tuning_rules WHERE tenant_id = $1 AND is_active = true LIMIT 10',
+          [tenantId],
+        )
+        .then((res: { rows: Array<{ trigger_pattern: string; expected_behavior: string }> }) => res.rows)
+        .catch(() => [] as Array<{ trigger_pattern: string; expected_behavior: string }>),
+    ]);
+
+    const knowledgeSection = formatKnowledgeContext(knowledgeCtx);
+    const rulesText = (tuningRulesResult as Array<{ trigger_pattern: string; expected_behavior: string }>)
+      .map((r: { trigger_pattern: string; expected_behavior: string }) => `- [${r.trigger_pattern}] ${r.expected_behavior}`)
+      .join('\n');
+
+    const knowledgeAppendix = [
+      knowledgeSection
+        ? `\n\n## このテナントの心理学ナレッジ\n${knowledgeSection}`
+        : '',
+      rulesText
+        ? `\n\n## このテナントのチューニングルール\n${rulesText}\n\n上記のナレッジとルールに照らして、特にpsychology_fit_scoreの評価では「AIが適切な心理学原則を使えていたか」を具体的に判定してください。`
+        : '',
+    ].join('');
+
     // 5. Call Gemini — retry once on parse failure
     let result: JudgeEvaluationResult | null = null;
     let lastError: unknown = null;
 
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const fullPrompt = `厳格な営業チャット品質評価Judgeです。指定されたJSON形式のみで回答します。\n\n${prompt}`;
+        const fullPrompt = `厳格な営業チャット品質評価Judgeです。指定されたJSON形式のみで回答します。\n\n${prompt}${knowledgeAppendix}`;
         const raw = await callGeminiJudge(fullPrompt);
         result = parseJudgeResponse(raw);
         break;
