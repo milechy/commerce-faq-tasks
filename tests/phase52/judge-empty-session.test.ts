@@ -13,6 +13,19 @@ jest.mock("fs/promises", () => ({
   readFile: jest.fn(),
 }));
 
+jest.mock("../../src/lib/knowledgeSearchUtil", () => ({
+  searchKnowledgeForSuggestion: jest.fn().mockResolvedValue({ results: [] }),
+  formatKnowledgeContext: jest.fn().mockReturnValue(""),
+}));
+
+jest.mock("../../src/lib/crossTenantContext", () => ({
+  getCrossTenantContext: jest.fn().mockResolvedValue({
+    avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [],
+    effectiveRulePatterns: [], totalTenants: 0, dataAsOf: '',
+  }),
+  formatCrossTenantContext: jest.fn().mockReturnValue(""),
+}));
+
 import { callGeminiJudge } from "../../src/lib/gemini/client";
 import { getPool } from "../../src/lib/db";
 import { readFile } from "fs/promises";

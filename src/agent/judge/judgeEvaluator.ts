@@ -14,6 +14,10 @@ import {
   searchKnowledgeForSuggestion,
   formatKnowledgeContext,
 } from '../../lib/knowledgeSearchUtil';
+import {
+  getCrossTenantContext,
+  formatCrossTenantContext,
+} from '../../lib/crossTenantContext';
 
 const logger = pino();
 
@@ -165,7 +169,7 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
 
     // 4b. テナントのナレッジ・チューニングルールを取得してpsychology_fit評価の精度を上げる
     const firstUserMsg = (messages as ChatMessageRow[]).find((m) => m.role === 'user')?.content ?? '';
-    const [knowledgeCtx, tuningRulesResult] = await Promise.all([
+    const [knowledgeCtx, tuningRulesResult, crossTenantCtx] = await Promise.all([
       firstUserMsg
         ? searchKnowledgeForSuggestion(tenantId, firstUserMsg).catch(() => ({ results: [] }))
         : Promise.resolve({ results: [] }),
@@ -176,12 +180,14 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
         )
         .then((res: { rows: Array<{ trigger_pattern: string; expected_behavior: string }> }) => res.rows)
         .catch(() => [] as Array<{ trigger_pattern: string; expected_behavior: string }>),
+      getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
     ]);
 
     const knowledgeSection = formatKnowledgeContext(knowledgeCtx);
     const rulesText = (tuningRulesResult as Array<{ trigger_pattern: string; expected_behavior: string }>)
       .map((r: { trigger_pattern: string; expected_behavior: string }) => `- [${r.trigger_pattern}] ${r.expected_behavior}`)
       .join('\n');
+    const crossTenantSection = formatCrossTenantContext(crossTenantCtx);
 
     const knowledgeAppendix = [
       knowledgeSection
@@ -189,6 +195,9 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
         : '',
       rulesText
         ? `\n\n## このテナントのチューニングルール\n${rulesText}\n\n上記のナレッジとルールに照らして、特にpsychology_fit_scoreの評価では「AIが適切な心理学原則を使えていたか」を具体的に判定してください。`
+        : '',
+      crossTenantSection
+        ? `\n\n${crossTenantSection}`
         : '',
     ].join('');
 

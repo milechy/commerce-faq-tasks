@@ -25,6 +25,15 @@ jest.mock('../../lib/knowledgeSearchUtil', () => ({
   formatKnowledgeContext: jest.fn().mockReturnValue(''),
 }));
 
+// Phase60-B: crossTenantContext をモック（DBアクセス不要）
+jest.mock('../../lib/crossTenantContext', () => ({
+  getCrossTenantContext: jest.fn().mockResolvedValue({
+    avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [],
+    effectiveRulePatterns: [], totalTenants: 0, dataAsOf: '',
+  }),
+  formatCrossTenantContext: jest.fn().mockReturnValue(''),
+}));
+
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';

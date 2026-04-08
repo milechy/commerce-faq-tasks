@@ -13,6 +13,10 @@ import {
   searchKnowledgeForSuggestion,
   formatKnowledgeContext,
 } from '../../../lib/knowledgeSearchUtil';
+import {
+  getCrossTenantContext,
+  formatCrossTenantContext,
+} from '../../../lib/crossTenantContext';
 
 
 // ---------------------------------------------------------------------------
@@ -162,9 +166,15 @@ async function buildBusinessFaqAnswer(
   tenantId: string
 ): Promise<{ answer: string; aiAnswered: boolean }> {
   try {
-    // pgvector 意味検索（faq_docs ILIKE から切り替え）
-    const knowledgeCtx = await searchKnowledgeForSuggestion(tenantId, message);
-    const ragContext = formatKnowledgeContext(knowledgeCtx);
+    // pgvector 意味検索 + クロステナント統計を並行取得
+    const [knowledgeCtx, crossTenantCtx] = await Promise.all([
+      searchKnowledgeForSuggestion(tenantId, message),
+      getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
+    ]);
+    const crossTenantSection = formatCrossTenantContext(crossTenantCtx);
+    const ragContext = crossTenantSection
+      ? `${formatKnowledgeContext(knowledgeCtx)}\n\n${crossTenantSection}`
+      : formatKnowledgeContext(knowledgeCtx);
 
     logger.info(`[ai-assist] pgvector search: ${knowledgeCtx.results.length} hits for tenant=${tenantId}`);
 

@@ -1,18 +1,23 @@
-// tests/phase60/knowledgeInjection.test.ts
-// Phase60-A: ナレッジ注入 — 4機能へのプロンプト注入を検証
+// tests/phase60/crossTenantInjection.test.ts
+// Phase60-B: クロステナント統計注入 — 4機能へのプロンプト注入を検証
 
 // ─── トップレベルモック（hoisting対応） ───────────────────────────────────────
-const MOCK_FORMATTED = '1. [book] 返報性の原理 (score: 0.89)';
-const MOCK_KNOWLEDGE_CTX = {
-  results: [{ text: '返報性の原理', score: 0.89, source: 'book' }],
-};
+const MOCK_FORMATTED_KNOWLEDGE = '1. [book] 返報性の原理 (score: 0.89)';
+const MOCK_CROSS_TENANT_FORMATTED = '## クロステナント統計（匿名集計）\n- 全体平均スコア: 総合72.5点、心理適合68点、顧客反応75点、商談進展70点';
 
 const mockSearchKnowledge = jest.fn();
 const mockFormatKnowledge = jest.fn();
+const mockGetCrossTenantContext = jest.fn();
+const mockFormatCrossTenantContext = jest.fn();
 
 jest.mock('../../src/lib/knowledgeSearchUtil', () => ({
   searchKnowledgeForSuggestion: (...args: unknown[]) => mockSearchKnowledge(...args),
   formatKnowledgeContext: (...args: unknown[]) => mockFormatKnowledge(...args),
+}));
+
+jest.mock('../../src/lib/crossTenantContext', () => ({
+  getCrossTenantContext: (...args: unknown[]) => mockGetCrossTenantContext(...args),
+  formatCrossTenantContext: (...args: unknown[]) => mockFormatCrossTenantContext(...args),
 }));
 
 jest.mock('../../src/admin/http/supabaseAuthMiddleware', () => ({
@@ -44,15 +49,6 @@ jest.mock('../../src/lib/notifications', () => ({
   createNotification: jest.fn().mockResolvedValue(undefined),
 }));
 
-// Phase60-B: crossTenantContext をモック（DBアクセス不要）
-jest.mock('../../src/lib/crossTenantContext', () => ({
-  getCrossTenantContext: jest.fn().mockResolvedValue({
-    avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [],
-    effectiveRulePatterns: [], totalTenants: 0, dataAsOf: '',
-  }),
-  formatCrossTenantContext: jest.fn().mockReturnValue(''),
-}));
-
 // ─── 静的 import ──────────────────────────────────────────────────────────────
 import express from 'express';
 import supertest from 'supertest';
@@ -61,23 +57,27 @@ import { generateRecommendations } from '../../src/agent/gap/gapRecommender';
 import { evaluateSession } from '../../src/agent/judge/judgeEvaluator';
 import { registerAdminAiAssistRoutes } from '../../src/api/admin/ai-assist/routes';
 
+const EMPTY_CROSS_TENANT = {
+  avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [],
+  effectiveRulePatterns: [], totalTenants: 0, dataAsOf: '',
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
-// テスト 7・8: チューニングルールAI提案
+// テスト 13: チューニングルールAI提案 — クロステナント注入
 // ─────────────────────────────────────────────────────────────────────────────
-describe('[60A-2] チューニングルールAI提案 — ナレッジ注入', () => {
+describe('[60B-2] チューニングルールAI提案 — クロステナント注入', () => {
   let mockFetch: jest.Mock;
-  const GROQ_RESPONSE = {
-    choices: [{ message: { content: '{"trigger_pattern":"価格","instruction":"詳細案内","priority":5,"reason":"改善が必要"}' } }],
-  };
 
   beforeEach(() => {
     process.env.GROQ_API_KEY = 'test-key-groq';
-    mockSearchKnowledge.mockResolvedValue(MOCK_KNOWLEDGE_CTX);
-    mockFormatKnowledge.mockReturnValue(MOCK_FORMATTED);
+    mockSearchKnowledge.mockResolvedValue({ results: [] });
+    mockFormatKnowledge.mockReturnValue('');
+    mockGetCrossTenantContext.mockResolvedValue(EMPTY_CROSS_TENANT);
+    mockFormatCrossTenantContext.mockReturnValue(MOCK_CROSS_TENANT_FORMATTED);
 
     mockFetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve(GROQ_RESPONSE),
+      json: () => Promise.resolve({ choices: [{ message: { content: '{"trigger_pattern":"価格","instruction":"詳細案内","priority":5,"reason":"改善が必要"}' } }] }),
     });
     global.fetch = mockFetch as unknown as typeof fetch;
   });
@@ -87,51 +87,26 @@ describe('[60A-2] チューニングルールAI提案 — ナレッジ注入', (
     jest.clearAllMocks();
   });
 
-  // 7. プロンプトに「参考ナレッジ」セクションが含まれる
-  it('7. プロンプトに「参考ナレッジ」セクションが含まれる', async () => {
+  // 13. プロンプトにクロステナント統計が含まれる
+  it('13. callGroq8bSuggest — プロンプトにクロステナント統計が含まれる', async () => {
     await callGroq8bSuggest(
       '価格を教えてください',
       '料金プランをご案内します',
-      MOCK_FORMATTED,
       '',
+      '',
+      MOCK_CROSS_TENANT_FORMATTED,
     );
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string);
-    expect(body.messages[0].content).toContain('参考ナレッジ');
-    expect(body.messages[0].content).toContain(MOCK_FORMATTED);
-  });
-
-  // 8. プロンプトに「既存チューニングルール」セクションが含まれる
-  it('8. プロンプトに「既存チューニングルール」セクションが含まれる', async () => {
-    const existingRules = '- [価格について] 料金プランを詳しく案内する';
-
-    await callGroq8bSuggest(
-      '配送はどのくらいかかりますか',
-      '通常3〜5営業日です',
-      '',
-      existingRules,
-    );
-
-    const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string);
-    expect(body.messages[0].content).toContain('既存チューニングルール');
-    expect(body.messages[0].content).toContain(existingRules);
-  });
-
-  it('knowledgeSection と existingRulesSection が空のときセクション未追加', async () => {
-    await callGroq8bSuggest('質問', '回答', '', '');
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string);
-    expect(body.messages[0].content).not.toContain('参考ナレッジ');
-    expect(body.messages[0].content).not.toContain('既存チューニングルール');
+    expect(body.messages[0].content).toContain('クロステナント統計');
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// テスト 9・10: Judge評価フィードバック
+// テスト 14: Judge評価 — クロステナント注入
 // ─────────────────────────────────────────────────────────────────────────────
-describe('[60A-3] Judge評価 — ナレッジ注入', () => {
+describe('[60B-3] Judge評価 — クロステナント注入', () => {
   const EVAL_JSON = JSON.stringify({
     overall_score: 75,
     psychology_fit_score: 70,
@@ -147,8 +122,10 @@ describe('[60A-3] Judge評価 — ナレッジ注入', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockSearchKnowledge.mockResolvedValue(MOCK_KNOWLEDGE_CTX);
-    mockFormatKnowledge.mockReturnValue(MOCK_FORMATTED);
+    mockSearchKnowledge.mockResolvedValue({ results: [] });
+    mockFormatKnowledge.mockReturnValue('');
+    mockGetCrossTenantContext.mockResolvedValue(EMPTY_CROSS_TENANT);
+    mockFormatCrossTenantContext.mockReturnValue(MOCK_CROSS_TENANT_FORMATTED);
     mockCallGeminiJudge.mockResolvedValue(EVAL_JSON);
 
     mockDbQuery
@@ -157,34 +134,24 @@ describe('[60A-3] Judge評価 — ナレッジ注入', () => {
         { role: 'user', content: '価格を教えてください', created_at: new Date() },
         { role: 'assistant', content: '料金プランをご案内します', created_at: new Date() },
       ]})
-      .mockResolvedValueOnce({ rows: [{ trigger_pattern: '価格', expected_behavior: '詳細案内' }] })
+      .mockResolvedValueOnce({ rows: [] })  // tuning_rules SELECT
       .mockResolvedValue({ rows: [] });
   });
 
-  // 9. プロンプトに「心理学ナレッジ」セクションが含まれる
-  it('9. Geminiに渡すプロンプトに「心理学ナレッジ」セクションが含まれる', async () => {
+  // 14. プロンプトにクロステナント統計セクションが含まれる
+  it('14. Geminiに渡すプロンプトにクロステナント統計が含まれる', async () => {
     await evaluateSession('session-abc');
 
     expect(mockCallGeminiJudge).toHaveBeenCalledTimes(1);
     const calledPrompt: string = mockCallGeminiJudge.mock.calls[0]?.[0] ?? '';
-    expect(calledPrompt).toContain('このテナントの心理学ナレッジ');
-    expect(calledPrompt).toContain(MOCK_FORMATTED);
-  });
-
-  // 10. プロンプトに「チューニングルール」セクションが含まれる
-  it('10. Geminiに渡すプロンプトに「チューニングルール」セクションが含まれる', async () => {
-    await evaluateSession('session-abc');
-
-    const calledPrompt: string = mockCallGeminiJudge.mock.calls[0]?.[0] ?? '';
-    expect(calledPrompt).toContain('このテナントのチューニングルール');
-    expect(calledPrompt).toContain('価格');
+    expect(calledPrompt).toContain('クロステナント統計');
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// テスト 11: ギャップ推薦 — pgvector使用確認
+// テスト 15: ギャップ推薦 — クロステナント注入
 // ─────────────────────────────────────────────────────────────────────────────
-describe('[60A-4] ナレッジギャップAI推薦 — pgvector使用', () => {
+describe('[60B-4] ナレッジギャップAI推薦 — クロステナント注入', () => {
   const GAPS = [{ id: 1, user_question: '返品方法を教えてください' }];
   const GEMINI_RESPONSE = JSON.stringify([
     { index: 1, recommended_action: '返品FAQを追加する', suggested_answer: '購入後30日以内に返品できます' },
@@ -192,8 +159,10 @@ describe('[60A-4] ナレッジギャップAI推薦 — pgvector使用', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockSearchKnowledge.mockResolvedValue(MOCK_KNOWLEDGE_CTX);
-    mockFormatKnowledge.mockReturnValue(MOCK_FORMATTED);
+    mockSearchKnowledge.mockResolvedValue({ results: [] });
+    mockFormatKnowledge.mockReturnValue('');
+    mockGetCrossTenantContext.mockResolvedValue(EMPTY_CROSS_TENANT);
+    mockFormatCrossTenantContext.mockReturnValue(MOCK_CROSS_TENANT_FORMATTED);
     mockCallGeminiJudge.mockResolvedValue(GEMINI_RESPONSE);
 
     mockDbQuery
@@ -201,38 +170,42 @@ describe('[60A-4] ナレッジギャップAI推薦 — pgvector使用', () => {
       .mockResolvedValue({ rows: [] });
   });
 
-  // 11. faq_docs ILIKE ではなく searchKnowledgeForSuggestion が使われている
-  it('11. searchKnowledgeForSuggestion が呼ばれ、faq_docs クエリが呼ばれない', async () => {
+  // 15. プロンプトにクロステナント統計が含まれる
+  it('15. Geminiに渡すプロンプトにクロステナント統計が含まれる', async () => {
     await generateRecommendations('tenant-test');
 
-    expect(mockSearchKnowledge).toHaveBeenCalledWith('tenant-test', GAPS[0]!.user_question);
+    expect(mockCallGeminiJudge).toHaveBeenCalledTimes(1);
+    const calledPrompt: string = mockCallGeminiJudge.mock.calls[0]?.[0] ?? '';
+    expect(calledPrompt).toContain('クロステナント統計');
+  });
 
-    const allSqlCalls: string[] = (mockDbQuery.mock.calls as [string, unknown[]][])
-      .filter(([sql]) => typeof sql === 'string')
-      .map(([sql]) => sql as string);
-    expect(allSqlCalls.every((sql) => !sql.includes('faq_docs'))).toBe(true);
+  // 16. getCrossTenantContext が呼ばれる
+  it('16. getCrossTenantContext が呼ばれる', async () => {
+    await generateRecommendations('tenant-test');
+
+    expect(mockGetCrossTenantContext).toHaveBeenCalledTimes(1);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// テスト 12: AIアシスタント — pgvector使用確認
+// テスト 17・18: AIアシスタント — クロステナント注入
 // ─────────────────────────────────────────────────────────────────────────────
-describe('[60A-5] 管理画面AIアシスタント — pgvector使用', () => {
+describe('[60B-5] 管理画面AIアシスタント — クロステナント注入', () => {
   let mockFetch: jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.GROQ_API_KEY = 'test-key-groq';
-    mockSearchKnowledge.mockResolvedValue(MOCK_KNOWLEDGE_CTX);
-    mockFormatKnowledge.mockReturnValue(MOCK_FORMATTED);
+    mockSearchKnowledge.mockResolvedValue({ results: [] });
+    mockFormatKnowledge.mockReturnValue('');
+    mockGetCrossTenantContext.mockResolvedValue(EMPTY_CROSS_TENANT);
+    mockFormatCrossTenantContext.mockReturnValue(MOCK_CROSS_TENANT_FORMATTED);
 
     mockFetch = jest.fn()
-      // detectIntent → business_faq
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ choices: [{ message: { content: 'business_faq' } }] }),
       })
-      // callGroq70b
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ choices: [{ message: { content: '詳細はサポートまでお問い合わせください' } }] }),
@@ -246,8 +219,8 @@ describe('[60A-5] 管理画面AIアシスタント — pgvector使用', () => {
     delete process.env.GROQ_API_KEY;
   });
 
-  // 12. faq_docs ILIKE ではなく searchKnowledgeForSuggestion が使われている
-  it('12. searchKnowledgeForSuggestion が呼ばれ、faq_docs クエリが呼ばれない', async () => {
+  // 17. getCrossTenantContext が呼ばれる
+  it('17. getCrossTenantContext が呼ばれる', async () => {
     const app = express();
     app.use(express.json());
     registerAdminAiAssistRoutes(app);
@@ -256,11 +229,23 @@ describe('[60A-5] 管理画面AIアシスタント — pgvector使用', () => {
       .post('/v1/admin/ai-assist/chat')
       .send({ message: '返品方法を教えてください' });
 
-    expect(mockSearchKnowledge).toHaveBeenCalledWith('tenant-test', '返品方法を教えてください');
+    expect(mockGetCrossTenantContext).toHaveBeenCalledTimes(1);
+  });
 
-    const dbSqlCalls: string[] = (mockDbQuery.mock.calls as [string, unknown[]][])
-      .filter(([sql]) => typeof sql === 'string')
-      .map(([sql]) => sql as string);
-    expect(dbSqlCalls.every((sql) => !sql.includes('faq_docs'))).toBe(true);
+  // 18. クロステナント統計がGroqに渡るシステムプロンプトに含まれる
+  it('18. クロステナント統計がGroq 70bのシステムプロンプトに含まれる', async () => {
+    const app = express();
+    app.use(express.json());
+    registerAdminAiAssistRoutes(app);
+
+    await supertest(app)
+      .post('/v1/admin/ai-assist/chat')
+      .send({ message: '返品方法を教えてください' });
+
+    // 2回目のfetch呼び出しがGroq 70b
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const secondBody = JSON.parse((mockFetch.mock.calls[1] as [string, RequestInit])[1].body as string);
+    const systemContent: string = secondBody.messages[0].content;
+    expect(systemContent).toContain('クロステナント統計');
   });
 });

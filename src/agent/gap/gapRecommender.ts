@@ -8,6 +8,10 @@ import {
   searchKnowledgeForSuggestion,
   formatKnowledgeContext,
 } from '../../lib/knowledgeSearchUtil';
+import {
+  getCrossTenantContext,
+  formatCrossTenantContext,
+} from '../../lib/crossTenantContext';
 
 const logger = pino();
 const BATCH_SIZE = 20;
@@ -49,12 +53,14 @@ export async function generateRecommendations(
 
   if (gapsResult.rows.length === 0) return [];
 
-  // 代表質問（先頭ギャップ）でpgvectorナレッジ検索（faq_docs ILIKEからpgvector意味検索に切り替え）
+  // 代表質問（先頭ギャップ）でpgvectorナレッジ検索 + クロステナント統計を並行取得
   const representativeQuery = gapsResult.rows[0]!.user_question;
-  const knowledgeCtx = await searchKnowledgeForSuggestion(tenantId, representativeQuery).catch(
-    () => ({ results: [] }),
-  );
+  const [knowledgeCtx, crossTenantCtx] = await Promise.all([
+    searchKnowledgeForSuggestion(tenantId, representativeQuery).catch(() => ({ results: [] })),
+    getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
+  ]);
   const faqSummary = formatKnowledgeContext(knowledgeCtx) || '（既存ナレッジなし）';
+  const crossTenantSection = formatCrossTenantContext(crossTenantCtx);
 
   // Anti-Slop: user_question を 200 字以内に切り詰めてからプロンプトに埋め込む
   const gapList = gapsResult.rows
@@ -69,6 +75,7 @@ ${gapList}
 
 ## 既存ナレッジ概要（参考）
 ${faqSummary}
+${crossTenantSection ? `\n${crossTenantSection}\n` : ''}
 
 各質問に対して以下を提案してください:
 1. recommended_action: どんなナレッジを追加すべきか（日本語で簡潔に）

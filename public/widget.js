@@ -2361,4 +2361,53 @@
       .catch(function () { /* feature check失敗は無視 */ });
   }
 
+  // ─── R2C Conversion Tracking API ─────────────────────────────────────────
+  // パートナーが購入完了ページ等で呼び出す: window.r2c.trackConversion('purchase', 50000)
+  window.r2c = window.r2c || {};
+  window.r2c.trackConversion = function(conversionType, conversionValue) {
+    if (!conversionType) {
+      console.warn('[R2C] trackConversion: conversionType is required');
+      return;
+    }
+    var visitorId = '';
+    var sessionId = '';
+    try { visitorId = localStorage.getItem('r2c_vid') || ''; } catch (_e) {}
+    try { sessionId = sessionStorage.getItem('r2c_sid') || ''; } catch (_e) {}
+
+    var payload = {
+      visitor_id: visitorId || 'unknown',
+      session_id: sessionId || 'unknown',
+      events: [{
+        event_type: 'chat_conversion',
+        event_data: {
+          conversion_type: conversionType,
+          conversion_value: (typeof conversionValue === 'number') ? conversionValue : null
+        },
+        page_url: location.href,
+        referrer: document.referrer
+      }]
+    };
+
+    fetch(apiBase + '/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify(payload),
+      keepalive: true
+    }).then(function(response) {
+      if (!response.ok) {
+        console.warn('[R2C] trackConversion: server returned ' + response.status);
+      }
+    }).catch(function() { /* silent fail */ });
+  };
+
+  // r2cQueue drain: async読み込みで先にキューに積まれたイベントを処理する
+  if (window.r2cQueue && Array.isArray(window.r2cQueue)) {
+    window.r2cQueue.forEach(function(item) {
+      if (item.type === 'conversion') {
+        window.r2c.trackConversion(item.conversionType, item.value);
+      }
+    });
+    window.r2cQueue = null;
+  }
+
 })();

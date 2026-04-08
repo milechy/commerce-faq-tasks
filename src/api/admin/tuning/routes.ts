@@ -16,6 +16,10 @@ import {
   searchKnowledgeForSuggestion,
   formatKnowledgeContext,
 } from '../../../lib/knowledgeSearchUtil';
+import {
+  getCrossTenantContext,
+  formatCrossTenantContext,
+} from '../../../lib/crossTenantContext';
 
 // ---------------------------------------------------------------------------
 // Groq 8b: ルール提案
@@ -33,6 +37,7 @@ export async function callGroq8bSuggest(
   aiMsg: string,
   knowledgeSection: string = '',
   existingRulesSection: string = '',
+  crossTenantSection: string = '',
 ): Promise<SuggestRuleResponse> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
@@ -45,6 +50,9 @@ export async function callGroq8bSuggest(
   const rulesPart = existingRulesSection
     ? `\n## 既存チューニングルール（重複しないルールを提案すること）\n${existingRulesSection}\n`
     : '';
+  const crossTenantPart = crossTenantSection
+    ? `\n${crossTenantSection}\n`
+    : '';
 
   const prompt = `以下のAIチャットの会話を分析して、AIの応答を改善するためのチューニングルールを1つ提案してください。
 
@@ -53,7 +61,7 @@ ${userMsg.slice(0, 500)}
 
 【AIの回答】
 ${aiMsg.slice(0, 500)}
-${knowledgePart}${rulesPart}
+${knowledgePart}${rulesPart}${crossTenantPart}
 以下のJSON形式のみで回答してください（説明不要）:
 {
   "trigger_pattern": "このルールが適用されるキーワードや状況（例: 価格について聞かれた場合）",
@@ -156,14 +164,15 @@ export function registerTuningRoutes(app: Express): void {
 
       const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
 
-      // ナレッジ検索と既存ルール取得を並行実行（失敗しても提案は続行）
-      const [knowledgeCtx, existingRules] = await Promise.all([
+      // ナレッジ検索・既存ルール取得・クロステナント統計を並行実行（失敗しても提案は続行）
+      const [knowledgeCtx, existingRules, crossTenantCtx] = await Promise.all([
         tenantId
           ? searchKnowledgeForSuggestion(tenantId, userMessage.trim()).catch(() => ({ results: [] }))
           : Promise.resolve({ results: [] }),
         tenantId
           ? listRules(tenantId).catch(() => [])
           : Promise.resolve([]),
+        getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
       ]);
 
       const knowledgeSection = formatKnowledgeContext(knowledgeCtx);
@@ -171,12 +180,14 @@ export function registerTuningRoutes(app: Express): void {
         .filter((r) => r.is_active)
         .map((r) => `- [${r.trigger_pattern}] ${r.expected_behavior}`)
         .join('\n');
+      const crossTenantSection = formatCrossTenantContext(crossTenantCtx);
 
       const suggestion = await callGroq8bSuggest(
         userMessage.trim(),
         aiMessage.trim(),
         knowledgeSection,
         existingRulesSection,
+        crossTenantSection,
       );
       return res.json(suggestion);
     },

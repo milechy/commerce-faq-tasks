@@ -15,6 +15,15 @@ jest.mock("../../src/lib/knowledgeSearchUtil", () => ({
   formatKnowledgeContext: jest.fn().mockReturnValue(""),
 }));
 
+// Phase60-B: crossTenantContext mock（DBアクセス不要）
+jest.mock("../../src/lib/crossTenantContext", () => ({
+  getCrossTenantContext: jest.fn().mockResolvedValue({
+    avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [],
+    effectiveRulePatterns: [], totalTenants: 0, dataAsOf: '',
+  }),
+  formatCrossTenantContext: jest.fn().mockReturnValue(""),
+}));
+
 // LLM / external service mocks (factory mocks so jest.fn() is always set up)
 jest.mock("../../src/agent/llm/groqClient", () => ({
   groqClient: { call: jest.fn(), callWithUsage: jest.fn() },
