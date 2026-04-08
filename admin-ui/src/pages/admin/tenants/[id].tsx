@@ -1331,7 +1331,7 @@ function DeepResearchTab({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: "100%", overflowX: "hidden", boxSizing: "border-box" }}>
       {/* 確認ダイアログ */}
       {confirmPending && (
         <div
@@ -1393,7 +1393,7 @@ function DeepResearchTab({
           flexWrap: "wrap", gap: 16,
         }}
       >
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <p style={{ margin: "0 0 4px", fontWeight: 600, color: "#e5e7eb", fontSize: 15 }}>
             🔬 ディープリサーチ（AI提案の精度向上）
           </p>

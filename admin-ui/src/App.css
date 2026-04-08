@@ -5,6 +5,38 @@
   text-align: center;
 }
 
+/* ─── AdminNavBar レスポンシブ ─────────────────────────────────────────── */
+
+/* デスクトップ（768px以上）: desktop-navを表示、hambuergerを非表示 */
+.desktop-nav {
+  display: flex;
+}
+
+.mobile-hamburger {
+  display: none;
+}
+
+.user-area-desktop {
+  display: flex;
+}
+
+/* モバイル（767px以下）: desktop-navを非表示、hamburgerを表示 */
+@media (max-width: 767px) {
+  .desktop-nav {
+    display: none;
+  }
+
+  .mobile-hamburger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .user-area-desktop {
+    display: none;
+  }
+}
+
 .logo {
   height: 6em;
   padding: 1.5em;

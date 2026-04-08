@@ -179,7 +179,6 @@ export function AdminNavBar() {
       {/* Desktop Nav Groups */}
       <div
         style={{
-          display: "flex",
           alignItems: "center",
           gap: 2,
           flex: 1,
@@ -290,11 +289,11 @@ export function AdminNavBar() {
       {/* Notification Bell */}
       {user && <NotificationBell />}
 
-      {/* User area */}
+      {/* User area — hidden on mobile via CSS */}
       {user && (
         <div
+          className="user-area-desktop"
           style={{
-            display: "flex",
             alignItems: "center",
             gap: 8,
             flexShrink: 0,
@@ -345,18 +344,22 @@ export function AdminNavBar() {
         </div>
       )}
 
-      {/* Mobile hamburger */}
+      {/* Mobile hamburger — shown on mobile via CSS */}
       <button
         onClick={() => setMobileOpen(!mobileOpen)}
+        aria-label="メニュー"
+        aria-expanded={mobileOpen}
         style={{
-          display: "none",
           background: "none",
           border: "none",
           color: "#9ca3af",
           cursor: "pointer",
-          fontSize: 20,
-          padding: 4,
-          marginLeft: 8,
+          fontSize: 22,
+          padding: "0 6px",
+          marginLeft: 4,
+          minHeight: 44,
+          minWidth: 44,
+          flexShrink: 0,
         }}
         className="mobile-hamburger"
       >
