@@ -120,7 +120,9 @@ export function initAuthMiddleware(opts: AuthMiddlewareOptions = {}) {
 
       // 2b: Legacy plain-text comparison (migration only)
       if (legacyApiKey && timingSafeCompare(apiKeyHeader, legacyApiKey)) {
-        req.tenantId = req.header("x-tenant-id") ?? "default";
+        // P0: tenantId はクレデンシャルに静的バインドされた env var から取得する。
+        // x-tenant-id ヘッダーからの取得は禁止（テナント横断攻撃防止）。
+        req.tenantId = process.env.API_KEY_TENANT_ID ?? "default";
         return next();
       }
 
@@ -160,7 +162,9 @@ export function initAuthMiddleware(opts: AuthMiddlewareOptions = {}) {
         timingSafeCompare(user, legacyBasicUser) &&
         timingSafeCompare(pass, legacyBasicPass)
       ) {
-        req.tenantId = req.header("x-tenant-id") ?? "default";
+        // P0: tenantId はクレデンシャルに静的バインドされた env var から取得する。
+        // x-tenant-id ヘッダーからの取得は禁止（テナント横断攻撃防止）。
+        req.tenantId = process.env.BASIC_AUTH_TENANT_ID ?? "default";
         return next();
       }
 
