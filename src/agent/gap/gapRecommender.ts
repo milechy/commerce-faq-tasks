@@ -12,6 +12,9 @@ import {
   getCrossTenantContext,
   formatCrossTenantContext,
 } from '../../lib/crossTenantContext';
+import { getResearchProvider } from '../../lib/research';
+import { isDeepResearchEnabled } from '../../lib/research/featureCheck';
+import { buildResearchQuery } from '../../lib/research/queryBuilder';
 
 const logger = pino();
 const BATCH_SIZE = 20;
@@ -55,12 +58,19 @@ export async function generateRecommendations(
 
   // 代表質問（先頭ギャップ）でpgvectorナレッジ検索 + クロステナント統計を並行取得
   const representativeQuery = gapsResult.rows[0]!.user_question;
-  const [knowledgeCtx, crossTenantCtx] = await Promise.all([
+  const deepResearchEnabled = await isDeepResearchEnabled(tenantId);
+  const [knowledgeCtx, crossTenantCtx, researchResult] = await Promise.all([
     searchKnowledgeForSuggestion(tenantId, representativeQuery).catch(() => ({ results: [] })),
     getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
+    deepResearchEnabled
+      ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: representativeQuery }), 'ja') ?? Promise.resolve(null)).catch(() => null)
+      : Promise.resolve(null),
   ]);
   const faqSummary = formatKnowledgeContext(knowledgeCtx) || '（既存ナレッジなし）';
   const crossTenantSection = formatCrossTenantContext(crossTenantCtx);
+  const researchSection = researchResult
+    ? `\n## 外部リサーチ（最新の市場動向・学術知見）\n${researchResult.summary}${researchResult.citations.length > 0 ? '\n参照: ' + researchResult.citations.slice(0, 3).join(', ') : ''}`
+    : '';
 
   // Anti-Slop: user_question を 200 字以内に切り詰めてからプロンプトに埋め込む
   const gapList = gapsResult.rows
@@ -75,7 +85,7 @@ ${gapList}
 
 ## 既存ナレッジ概要（参考）
 ${faqSummary}
-${crossTenantSection ? `\n${crossTenantSection}\n` : ''}
+${crossTenantSection ? `\n${crossTenantSection}\n` : ''}${researchSection}
 
 各質問に対して以下を提案してください:
 1. recommended_action: どんなナレッジを追加すべきか（日本語で簡潔に）

@@ -23,6 +23,7 @@ const featuresSchema = z.object({
   avatar: z.boolean(),
   voice: z.boolean(),
   rag: z.boolean(),
+  deep_research: z.boolean().optional(),
 });
 
 const updateTenantSchema = z.object({
@@ -130,6 +131,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         avatar: z.boolean(),
         voice: z.boolean(),
         rag: z.boolean(),
+        deep_research: z.boolean().optional(),
       }),
     });
     const parsed = bodySchema.safeParse(req.body ?? {});
@@ -138,7 +140,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `UPDATE tenants SET features = $1::jsonb, updated_at = NOW() WHERE id = $2
+        `UPDATE tenants SET features = COALESCE(features, '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE id = $2
          RETURNING id, name, features, lemonslice_agent_id`,
         [JSON.stringify(parsed.data.features), tenantId]
       );
@@ -285,7 +287,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if ('billing_free_from' in fields) { params.push(fields.billing_free_from ?? null); setClauses.push(`billing_free_from = $${params.length}`); }
       if ('billing_free_until' in fields) { params.push(fields.billing_free_until ?? null); setClauses.push(`billing_free_until = $${params.length}`); }
       // Phase40: アバター機能フラグ
-      if (fields.features !== undefined) { params.push(JSON.stringify(fields.features)); setClauses.push(`features = $${params.length}::jsonb`); }
+      if (fields.features !== undefined) { params.push(JSON.stringify(fields.features)); setClauses.push(`features = COALESCE(features, '{}'::jsonb) || $${params.length}::jsonb`); }
       if ('lemonslice_agent_id' in fields) { params.push(fields.lemonslice_agent_id ?? null); setClauses.push(`lemonslice_agent_id = $${params.length}`); }
       if (fields.conversion_types !== undefined) { params.push(JSON.stringify(fields.conversion_types)); setClauses.push(`conversion_types = $${params.length}::jsonb`); }
       setClauses.push(`updated_at = NOW()`);

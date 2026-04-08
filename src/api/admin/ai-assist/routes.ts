@@ -17,6 +17,9 @@ import {
   getCrossTenantContext,
   formatCrossTenantContext,
 } from '../../../lib/crossTenantContext';
+import { getResearchProvider } from '../../../lib/research';
+import { isDeepResearchEnabled } from '../../../lib/research/featureCheck';
+import { buildResearchQuery } from '../../../lib/research/queryBuilder';
 
 
 // ---------------------------------------------------------------------------
@@ -166,15 +169,26 @@ async function buildBusinessFaqAnswer(
   tenantId: string
 ): Promise<{ answer: string; aiAnswered: boolean }> {
   try {
-    // pgvector 意味検索 + クロステナント統計を並行取得
-    const [knowledgeCtx, crossTenantCtx] = await Promise.all([
+    // deep_researchフラグ確認
+    const deepResearchEnabled = await isDeepResearchEnabled(tenantId);
+
+    // pgvector 意味検索 + クロステナント統計 + 外部リサーチを並行取得
+    const [knowledgeCtx, crossTenantCtx, researchResult] = await Promise.all([
       searchKnowledgeForSuggestion(tenantId, message),
       getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
+      deepResearchEnabled
+        ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: message }), 'ja') ?? Promise.resolve(null)).catch(() => null)
+        : Promise.resolve(null),
     ]);
     const crossTenantSection = formatCrossTenantContext(crossTenantCtx);
-    const ragContext = crossTenantSection
-      ? `${formatKnowledgeContext(knowledgeCtx)}\n\n${crossTenantSection}`
-      : formatKnowledgeContext(knowledgeCtx);
+    const researchSection = researchResult
+      ? `\n\n## 外部リサーチ（最新の市場動向・学術知見）\n${researchResult.summary}${researchResult.citations.length > 0 ? '\n参照: ' + researchResult.citations.slice(0, 3).join(', ') : ''}`
+      : '';
+    const ragContext = [
+      formatKnowledgeContext(knowledgeCtx),
+      crossTenantSection,
+      researchSection,
+    ].filter(Boolean).join('\n\n');
 
     logger.info(`[ai-assist] pgvector search: ${knowledgeCtx.results.length} hits for tenant=${tenantId}`);
 

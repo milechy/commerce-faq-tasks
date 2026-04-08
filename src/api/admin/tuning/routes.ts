@@ -20,6 +20,9 @@ import {
   getCrossTenantContext,
   formatCrossTenantContext,
 } from '../../../lib/crossTenantContext';
+import { getResearchProvider } from '../../../lib/research';
+import { isDeepResearchEnabled } from '../../../lib/research/featureCheck';
+import { buildResearchQuery } from '../../../lib/research/queryBuilder';
 
 // ---------------------------------------------------------------------------
 // Groq 8b: ルール提案
@@ -38,6 +41,7 @@ export async function callGroq8bSuggest(
   knowledgeSection: string = '',
   existingRulesSection: string = '',
   crossTenantSection: string = '',
+  researchSection: string = '',
 ): Promise<SuggestRuleResponse> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
@@ -53,6 +57,9 @@ export async function callGroq8bSuggest(
   const crossTenantPart = crossTenantSection
     ? `\n${crossTenantSection}\n`
     : '';
+  const researchPart = researchSection
+    ? `\n${researchSection}\n`
+    : '';
 
   const prompt = `以下のAIチャットの会話を分析して、AIの応答を改善するためのチューニングルールを1つ提案してください。
 
@@ -61,7 +68,7 @@ ${userMsg.slice(0, 500)}
 
 【AIの回答】
 ${aiMsg.slice(0, 500)}
-${knowledgePart}${rulesPart}${crossTenantPart}
+${knowledgePart}${rulesPart}${crossTenantPart}${researchPart}
 以下のJSON形式のみで回答してください（説明不要）:
 {
   "trigger_pattern": "このルールが適用されるキーワードや状況（例: 価格について聞かれた場合）",
@@ -164,8 +171,11 @@ export function registerTuningRoutes(app: Express): void {
 
       const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
 
-      // ナレッジ検索・既存ルール取得・クロステナント統計を並行実行（失敗しても提案は続行）
-      const [knowledgeCtx, existingRules, crossTenantCtx] = await Promise.all([
+      // deep_researchフラグ確認（DB失敗時はfalse）
+      const deepResearchEnabled = await isDeepResearchEnabled(tenantId);
+
+      // ナレッジ検索・既存ルール取得・クロステナント統計・外部リサーチを並行実行
+      const [knowledgeCtx, existingRules, crossTenantCtx, researchResult] = await Promise.all([
         tenantId
           ? searchKnowledgeForSuggestion(tenantId, userMessage.trim()).catch(() => ({ results: [] }))
           : Promise.resolve({ results: [] }),
@@ -173,6 +183,9 @@ export function registerTuningRoutes(app: Express): void {
           ? listRules(tenantId).catch(() => [])
           : Promise.resolve([]),
         getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
+        deepResearchEnabled
+          ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: userMessage.trim() }), 'ja') ?? Promise.resolve(null)).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       const knowledgeSection = formatKnowledgeContext(knowledgeCtx);
@@ -181,6 +194,9 @@ export function registerTuningRoutes(app: Express): void {
         .map((r) => `- [${r.trigger_pattern}] ${r.expected_behavior}`)
         .join('\n');
       const crossTenantSection = formatCrossTenantContext(crossTenantCtx);
+      const researchSection = researchResult
+        ? `## 外部リサーチ（最新の市場動向・学術知見）\n${researchResult.summary}${researchResult.citations.length > 0 ? '\n参照: ' + researchResult.citations.slice(0, 3).join(', ') : ''}`
+        : '';
 
       const suggestion = await callGroq8bSuggest(
         userMessage.trim(),
@@ -188,6 +204,7 @@ export function registerTuningRoutes(app: Express): void {
         knowledgeSection,
         existingRulesSection,
         crossTenantSection,
+        researchSection,
       );
       return res.json(suggestion);
     },
