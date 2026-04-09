@@ -156,6 +156,8 @@ export function AdminNavBar() {
           gap: 6,
           marginRight: 8,
           flexShrink: 0,
+          minHeight: 44,
+          minWidth: 44,
         }}
       >
         <span style={{ fontSize: 16, fontWeight: 800, color: "#f9fafb", letterSpacing: "-0.5px" }}>

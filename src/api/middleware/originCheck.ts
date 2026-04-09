@@ -38,6 +38,12 @@ export function createOriginCheckMiddleware(
     res: Response,
     next: NextFunction
   ): Promise<void> {
+    // chat-test tokens are admin-issued; skip per-tenant origin enforcement
+    if ((req as any).isChatTestToken) {
+      next();
+      return;
+    }
+
     if (!db) {
       next();
       return;

@@ -36,6 +36,7 @@ import { registerAdminAiAssistRoutes } from "./api/admin/ai-assist/routes";
 import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
 import { registerTenantAdminRoutes } from "./api/admin/tenants/routes";
 import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
+import { registerMonitoringRoutes } from "./api/admin/monitoring/routes";
 import { registerChatHistoryRoutes } from "./api/admin/chat-history/routes";
 import { registerTuningRoutes } from "./api/admin/tuning/routes";
 import { registerAvatarConfigRoutes } from "./api/admin/avatar/routes";
@@ -486,6 +487,7 @@ if (db) {
 // Phase34: 認証情報API
 registerAuthRoutes(app, db);
 registerChatTestRoutes(app);
+registerMonitoringRoutes(app);
 
 // Phase38: 会話履歴 + チューニングルール API
 registerChatHistoryRoutes(app);

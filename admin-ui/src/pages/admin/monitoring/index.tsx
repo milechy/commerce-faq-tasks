@@ -57,7 +57,7 @@ export default function MonitoringPage() {
 
   const fetchKpis = useCallback(async () => {
     try {
-      const res = await authFetch(`${API_BASE}/admin/monitoring/kpis`);
+      const res = await authFetch(`${API_BASE}/v1/admin/monitoring/kpis`);
 
       if (!res.ok) throw new Error("fetch failed");
 

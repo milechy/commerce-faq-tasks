@@ -142,10 +142,11 @@ describe("initAuthMiddleware — legacy API_KEY fallback", () => {
     legacyApiKey: "legacy-key",
   });
 
-  it("allows legacy plain-text api key with x-tenant-id header", () => {
+  it("allows legacy plain-text api key and uses API_KEY_TENANT_ID env (not x-tenant-id header)", () => {
+    // P0: tenantId は x-tenant-id ヘッダーからではなく API_KEY_TENANT_ID env var から取得する
     const headers: Record<string, string> = {
       "x-api-key": "legacy-key",
-      "x-tenant-id": "legacy-tenant",
+      "x-tenant-id": "should-be-ignored", // このヘッダーは無視される
     };
     const req = mockReq({
       headers,
@@ -155,6 +156,7 @@ describe("initAuthMiddleware — legacy API_KEY fallback", () => {
     middleware(req, res, nextFn);
 
     expect(nextFn).toHaveBeenCalled();
-    expect(req.tenantId).toBe("legacy-tenant");
+    // API_KEY_TENANT_ID が未設定なので "default" が使われる
+    expect(req.tenantId).toBe("default");
   });
 });

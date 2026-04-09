@@ -98,6 +98,8 @@ export function initAuthMiddleware(opts: AuthMiddlewareOptions = {}) {
         const payload = verifySupabaseJwt(apiKeyHeader);
         if (payload && (payload as any).purpose === "chat-test" && payload.tenant_id) {
           req.tenantId = payload.tenant_id;
+          // chat-test tokens are admin-issued; skip per-tenant origin enforcement
+          (req as any).isChatTestToken = true;
           return next();
         }
         // Invalid JWT sent as api-key → reject immediately
