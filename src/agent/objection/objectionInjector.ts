@@ -1,7 +1,6 @@
 // src/agent/objection/objectionInjector.ts
 // Phase46: SalesFlowに反論パターンの成功事例を注入する
 
-// @ts-ignore
 import { Pool } from 'pg';
 import pino from 'pino';
 import { OBJECTION_KEYWORDS } from './objectionDetector';

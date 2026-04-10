@@ -12,7 +12,6 @@
 //   GET /api/engagement/rules
 
 import type { Express, Request, Response, RequestHandler } from 'express';
-// @ts-ignore - pg has no bundled type declarations in this project
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware';

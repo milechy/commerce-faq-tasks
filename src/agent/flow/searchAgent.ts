@@ -149,7 +149,7 @@ export async function runSearchAgent(
     visitorId ? getBehaviorContext(effectiveTenantId, visitorId) : Promise.resolve(null),
     visitorId && pool
       ? getBehaviorContext(effectiveTenantId, visitorId).then((ctx) =>
-          ctx ? findSimilarPatterns(pool, effectiveTenantId, ctx) : [],
+          ctx ? findSimilarPatterns(pool!, effectiveTenantId, ctx) : [],
         ).catch(() => [])
       : Promise.resolve([]),
   ]).catch(() => [null, []] as [null, []]);

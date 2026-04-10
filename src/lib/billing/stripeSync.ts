@@ -9,7 +9,6 @@ const RETRY_DELAY_BASE_MS = 1000;
 function getStripeClient(): any {
   const secret = process.env.STRIPE_SECRET_KEY;
   if (!secret) throw new Error('STRIPE_SECRET_KEY is not set');
-  // @ts-ignore — stripe パッケージは backend_deps.md で申請済み
   const Stripe = require('stripe');
   return new Stripe(secret, { apiVersion: '2024-06-20' });
 }

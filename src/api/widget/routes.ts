@@ -7,7 +7,6 @@
 // - 404 if tenant not found or inactive.
 
 import type { Express, Request, Response } from "express";
-// @ts-ignore
 import { Pool } from "pg";
 import { generateWidgetJs } from "./widgetGenerator";
 

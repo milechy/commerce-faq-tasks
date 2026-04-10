@@ -8,7 +8,6 @@ import multer, { MulterError } from "multer";
 import crypto from "crypto";
 import path from "path";
 import AdmZip from "adm-zip";
-// @ts-ignore
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { pipelineQueue } from "../../../lib/book-pipeline/pipelineQueue";

@@ -1,7 +1,6 @@
 // src/agent/judge/evaluationRepository.ts
 // Phase45: Judge評価結果のDBリポジトリ
 
-// @ts-ignore
 import { Pool } from 'pg';
 import { getPool as _getDefaultPool } from '../../lib/db';
 

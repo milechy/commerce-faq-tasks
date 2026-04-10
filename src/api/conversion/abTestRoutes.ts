@@ -8,7 +8,6 @@
 // GET    /v1/admin/ab/experiments/:id/results
 
 import type { Express, Request, Response } from 'express';
-// @ts-ignore
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware';

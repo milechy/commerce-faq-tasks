@@ -300,7 +300,6 @@ export function registerBillingAdminRoutes(
           return;
         }
 
-        // @ts-ignore — stripe パッケージは package.json に登録済み
         const Stripe = require('stripe');
         const stripe = new Stripe(stripeSecretKey, { apiVersion: '2024-06-20' });
 

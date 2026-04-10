@@ -3,7 +3,6 @@
 // Import `pool` for nullable access (null when DATABASE_URL is absent),
 // or `getPool()` for guaranteed access (throws if DATABASE_URL is not set).
 
-// @ts-ignore - pg has no bundled type declarations in this project
 import { Pool } from "pg";
 import { config } from "../config/env";
 

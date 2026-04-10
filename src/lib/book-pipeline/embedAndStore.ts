@@ -2,7 +2,6 @@
 // Phase44: Embedding 生成 + faq_embeddings 保存 + ES 同期
 // CLAUDE.md: RAG excerpt ≤200 chars, 書籍内容をログに出力しない
 
-// @ts-ignore
 import type { Pool } from "pg";
 import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { encryptText } from "../crypto/textEncrypt";

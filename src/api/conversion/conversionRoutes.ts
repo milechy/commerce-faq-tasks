@@ -6,7 +6,6 @@
 // GET  /v1/admin/conversion/effectiveness — 心理原則効果ランキング（JWT）
 
 import type { Express, Request, Response, RequestHandler } from 'express';
-// @ts-ignore
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware';

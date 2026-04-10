@@ -137,6 +137,7 @@
     "@types/multer": "^2.0.0",
     "@types/node": "24.10.0",
     "@types/pdf-parse": "^1.1.5",
+    "@types/pg": "^8.20.0",
     "@types/supertest": "^7.2.0",
     "@types/uuid": "^11.0.0",
     "autocannon": "^8.0.0",

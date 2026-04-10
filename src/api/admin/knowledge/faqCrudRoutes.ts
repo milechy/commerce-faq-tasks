@@ -2,7 +2,6 @@
 
 // Phase30: FAQ CRUD API (Stream A)
 import type { Express, NextFunction, Request, Response } from "express";
-// @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";

@@ -2,7 +2,6 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 
-// @ts-ignore
 import { Pool } from "pg";
 import { z } from "zod";
 import jwt from "jsonwebtoken";

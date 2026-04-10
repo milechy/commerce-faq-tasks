@@ -2,7 +2,6 @@
 // Phase44: 書籍チャンクからの心理学原則検索
 // pgvector faq_embeddings テーブルで metadata.source=book かつ principle 名フィルタ
 
-// @ts-ignore
 import { Pool } from 'pg';
 import { getPool as _getDefaultPool } from '../../lib/db';
 

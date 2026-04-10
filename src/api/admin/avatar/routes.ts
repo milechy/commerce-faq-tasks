@@ -5,7 +5,6 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-// @ts-ignore
 import { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import multer from 'multer';

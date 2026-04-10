@@ -1,7 +1,6 @@
 // src/agent/judge/evaluationAnalyzer.ts
 // Phase45: 評価結果を分析してチューニングルールを提案する
 
-// @ts-ignore
 import { Pool } from 'pg';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';

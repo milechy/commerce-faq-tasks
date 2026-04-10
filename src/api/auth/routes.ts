@@ -2,7 +2,6 @@
 
 // Phase34: 認証情報API
 import type { Express, Request, Response } from "express";
-// @ts-ignore
 import { Pool } from "pg";
 import { supabaseAuthMiddleware } from "../../admin/http/supabaseAuthMiddleware";
 import { roleAuthMiddleware, type AuthenticatedUser } from "../middleware/roleAuth";

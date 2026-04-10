@@ -1,7 +1,6 @@
 // src/agent/report/weeklyReportGenerator.ts
 // Phase46: 週次レポート自動生成（毎週月曜AM9:00）
 
-// @ts-ignore
 import { Pool } from 'pg';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';

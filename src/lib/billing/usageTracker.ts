@@ -1,7 +1,6 @@
 // src/lib/billing/usageTracker.ts
 // Phase32: API使用量の非同期記録（fire-and-forget）
 
-// @ts-ignore
 import { Pool } from 'pg';
 import type pino from 'pino';
 import { calculateLLMCostCents, calculateBillingAmountCents } from './costCalculator';

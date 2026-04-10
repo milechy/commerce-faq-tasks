@@ -2,7 +2,6 @@
 
 // Phase29: カーネーション向けナレッジ管理API
 import type { Express, NextFunction, Request, Response } from "express";
-// @ts-ignore - pg has no bundled type declarations in this project
 import type { Pool } from "pg";
 import { z } from "zod";
 import { pool } from "../../../lib/db";

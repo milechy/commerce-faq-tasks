@@ -1,7 +1,6 @@
 // src/agent/objection/objectionDetector.ts
 // Phase46: 会話履歴から反論→対応→肯定パターンを自動検出し、objection_patternsに蓄積
 
-// @ts-ignore
 import { Pool } from 'pg';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';

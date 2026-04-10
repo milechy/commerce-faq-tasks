@@ -3,7 +3,6 @@
 // Phase44: 書籍チャンク構造化パイプライン オーケストレーター
 // status 遷移: uploaded → processing → chunked → embedded / error
 
-// @ts-ignore
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../auth/supabaseClient";
 import { extractPdfText } from "./pdfExtractor";

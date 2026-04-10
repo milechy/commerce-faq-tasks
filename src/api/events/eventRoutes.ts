@@ -7,7 +7,6 @@
 //   バリデーション: event_type enum, events配列1-50件, visitor_id/session_id必須
 
 import type { Express, Request, Response, RequestHandler } from 'express';
-// @ts-ignore - pg has no bundled type declarations in this project
 import type { Pool } from 'pg';
 import { z } from 'zod';
 
