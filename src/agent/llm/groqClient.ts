@@ -32,7 +32,7 @@ const groqRateLimitState: GroqRateLimitState = {
  * 現在アクティブな Groq グローバル backoff の残り時間（ms）。
  * backoff 中でなければ 0 を返す。
  */
-export function getGroqGlobalBackoffRemainingMs(): number {
+function getGroqGlobalBackoffRemainingMs(): number {
   const now = Date.now();
   if (groqRateLimitState.backoffUntil <= now) return 0;
   return groqRateLimitState.backoffUntil - now;

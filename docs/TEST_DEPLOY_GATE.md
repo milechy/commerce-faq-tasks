@@ -229,6 +229,8 @@ Gate 4bと同様、UI変更がないPhaseではスキップ可。
 
 ## 10. 組み合わせパターン
 
+> ★ Gate 1-3 は @gate-runner で一括実行可能（.claude/agents/gate-runner.md）
+
 | Phase種別 | Gate順序 |
 |---|---|
 | **UI変更を含むデプロイ（★ Phase54以降の標準）** | Gate 1-2 → Gate 2.5（Codex） → Gate 3 → git push → Gate 4b（Chrome） → デプロイ → Gate 5 + Gate 6 |
@@ -241,6 +243,13 @@ Gate 4bと同様、UI変更がないPhaseではスキップ可。
 ---
 
 ## 11. Claude Codeへの伝達方法
+
+### @gate-runner による一括実行（推奨）
+Gate 1-3は `.claude/agents/gate-runner.md` で定義された @gate-runner エージェントで一括実行可能:
+
+- CLI内で `@gate-runner` と入力するだけで Gate 1 → 1.5 → 2 → 3 を順に実行
+- 結果は統一フォーマットで報告される
+- Gate 2.5（Codex review）は引き続き人間が手動実行
 
 各タスクのプロンプトに以下を追記（または最初に読ませる）:
 
@@ -301,3 +310,16 @@ echo "=== All gates passed. Deploying... ==="
 
 これにより `bash SCRIPTS/deploy-vps.sh` 1コマンドでGate 1-3 + デプロイが完結する。
 ただし既存スクリプトへの変更なので、別タスクとして実装する。
+
+---
+
+## 14. ツール選定ガイド（カスタムエージェント）
+
+`.claude/agents/` に定義されたプロジェクト固有エージェント:
+
+| エージェント | 用途 | 起動 |
+|---|---|---|
+| **@gate-runner** | Gate 1〜3一括実行 + フォーマット報告 | Gate全体（.claude/agents/gate-runner.md） |
+| **@cleanup** | dead exports削除、any型付け、as any除去 | コード品質改善時 |
+| **@deploy-checker** | VPSデプロイ前後チェックリスト | デプロイ前後確認時 |
+| **@test-writer** | テスト作成（モック方針・配置ルール準拠） | 新規テスト追加時 |

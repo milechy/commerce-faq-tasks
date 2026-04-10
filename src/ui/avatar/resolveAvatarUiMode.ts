@@ -8,7 +8,7 @@ export type AvatarUiMode =
   | "show_failed"
   | "show_fallback";
 
-export function resolveAvatarUiMode(adapter?: AdapterMeta): AvatarUiMode {
+function resolveAvatarUiMode(adapter?: AdapterMeta): AvatarUiMode {
   if (!adapter) return "show_failed";
 
   switch (adapter.status) {

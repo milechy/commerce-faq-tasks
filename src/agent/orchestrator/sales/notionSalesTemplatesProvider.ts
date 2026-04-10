@@ -29,7 +29,7 @@ function mapToSalesTemplate(t: NotionTuningTemplate): SalesTemplate {
  *   2. if intent specified by caller, match intent
  *   3. if persona specified, prefer template sharing at least 1 tag
  */
-export function createNotionSalesTemplateProvider(
+function createNotionSalesTemplateProvider(
   templates: NotionTuningTemplate[]
 ): SalesTemplateProvider {
   const mapped = templates.map(mapToSalesTemplate);

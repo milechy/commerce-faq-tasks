@@ -11,7 +11,7 @@ export interface ClarifyLogInput {
   tenantId?: string;
 }
 
-export class ClarifyLogWriter {
+class ClarifyLogWriter {
   private readonly client: Client;
   private readonly databaseId: string;
 

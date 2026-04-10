@@ -203,7 +203,7 @@ export async function deleteRule(
  * カラムが存在しない / 空の場合は null を返す。
  * テーブルまたはカラムが存在しない場合は null を返す（migration未実行環境でも安全）。
  */
-export async function getTenantSystemPrompt(
+async function getTenantSystemPrompt(
   tenantId: string,
 ): Promise<string | null> {
   const pool = getPool();

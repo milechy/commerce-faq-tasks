@@ -31,7 +31,7 @@ function parseBasicAuth(
   return { user, pass };
 }
 
-export function createAuthMiddleware(logger: pino.Logger) {
+function createAuthMiddleware(logger: pino.Logger) {
   const apiKey = process.env.AGENT_API_KEY || "";
   const basicUser = process.env.AGENT_BASIC_USER || "";
   const basicPass = process.env.AGENT_BASIC_PASSWORD || "";

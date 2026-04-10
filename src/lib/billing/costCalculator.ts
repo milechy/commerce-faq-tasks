@@ -36,13 +36,13 @@ export const FISH_AUDIO_COST_PER_BYTE_USD = 15.0 / 1_000_000;
 export const LEMONSLICE_COST_PER_CREDIT_USD = 7.0 / 1_000;
 
 /** Phase42: Anam.ai単価: $0.16/分 (Starterプラン) */
-export const ANAM_COST_PER_MINUTE_USD = 0.16;
+const ANAM_COST_PER_MINUTE_USD = 0.16;
 
 /**
  * Phase42: Anamセッションコストをセント単位（整数）で返す。
  * $0.16/分。切り上げ。
  */
-export function calculateAnamSessionCostCents(sessionSeconds: number): number {
+function calculateAnamSessionCostCents(sessionSeconds: number): number {
   if (sessionSeconds < 0) throw new Error(`Invalid sessionSeconds: ${sessionSeconds}`);
   if (sessionSeconds === 0) return 0;
   const minutes = sessionSeconds / 60;

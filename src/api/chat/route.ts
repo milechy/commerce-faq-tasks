@@ -62,7 +62,7 @@ const DialogMessageSchema = z.object({
   content: z.string().min(1).max(4000),
 });
 
-export const ChatRequestSchema = z.object({
+const ChatRequestSchema = z.object({
   message: z
     .string()
     .min(1, "メッセージを入力してください")
@@ -75,7 +75,7 @@ export const ChatRequestSchema = z.object({
   visitor_id: z.string().max(128).optional(),
 });
 
-export type ChatRequest = z.infer<typeof ChatRequestSchema>;
+type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
 // ---------------------------------------------------------------------------
 // ルートハンドラ

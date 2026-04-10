@@ -125,7 +125,7 @@ export async function detectTopPrinciples(
  * 全候補を集約して重複しないIn-App通知を送信する。
  * fire-and-forget で呼ぶことを想定。
  */
-export async function runAutoTuningCheck(tenantId: string): Promise<void> {
+async function runAutoTuningCheck(tenantId: string): Promise<void> {
   if (!pool) return;
 
   const [judgeResults, abResults, principleResults] = await Promise.all([

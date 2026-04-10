@@ -23,7 +23,7 @@ export interface WeeklyMetrics {
 /**
  * 直近7日間のメトリクスを収集する。
  */
-export async function collectWeeklyMetrics(
+async function collectWeeklyMetrics(
   tenantId: string,
   pool: InstanceType<typeof Pool>,
   periodStart: Date,

@@ -69,7 +69,7 @@ export function getSalesPipelineConfig(
  * - テナント設定テーブルから kind を参照
  * - サブドメイン / テナントキーのパターンで推測
  */
-export function inferPipelineKindFromTenant(
+function inferPipelineKindFromTenant(
   tenantId?: string,
 ): SalesPipelineKind {
   void tenantId; // 未来の拡張用パラメータ、現在は未使用

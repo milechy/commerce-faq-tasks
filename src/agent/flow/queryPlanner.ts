@@ -38,7 +38,7 @@ export interface QueryPlanner {
  * - 空白を正規化
  * - シンプルなカテゴリ推定（返品 / 配送 / 支払い など）を filters に詰める
  */
-export class RuleBasedQueryPlanner implements QueryPlanner {
+class RuleBasedQueryPlanner implements QueryPlanner {
   plan(input: string, options: PlanOptions = {}): QueryPlan {
     const locale = options.locale ?? detectLocale(input)
     const normalized = normalizeQuestion(input, locale)

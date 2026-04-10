@@ -203,7 +203,7 @@ function deltaMap(
   return result;
 }
 
-export function computeSnapshot(
+function computeSnapshot(
   current: RawCounters,
   prev: RawCounters | null
 ): MetricsSnapshot {

@@ -5,7 +5,7 @@ import path from 'path'
  * stays within basePath (prevents path traversal attacks).
  * @throws Error if the resolved path escapes basePath
  */
-export function safePath(basePath: string, userInput: string): string {
+function safePath(basePath: string, userInput: string): string {
   const resolvedBase = path.resolve(basePath)
   const resolvedPath = path.resolve(basePath, path.normalize(userInput))
   if (!resolvedPath.startsWith(resolvedBase + path.sep) && resolvedPath !== resolvedBase) {

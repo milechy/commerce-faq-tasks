@@ -68,7 +68,7 @@ export interface SessionCountInput {
 // Collector
 // ---------------------------------------------------------------------------
 
-export const metricsCollector = {
+const metricsCollector = {
   /** 会話がターミナル状態（完了 / ループ中断 / Kill Switch 等）に達した */
   recordConversationTerminal(input: ConversationTerminalInput): void {
     conversationTerminalCounter.inc({

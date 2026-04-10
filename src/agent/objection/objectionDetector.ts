@@ -12,7 +12,7 @@ const logger = pino();
 export const OBJECTION_KEYWORDS = ['高い', '高すぎ', '他社', '安い', '必要ない', '考えます', '検討', '予算', '値段', '費用'];
 
 // 肯定反応キーワードリスト
-export const POSITIVE_KEYWORDS = ['なるほど', 'それなら', 'そうですね', 'わかりました', '確かに', 'ありがとう', '検討します', '興味'];
+const POSITIVE_KEYWORDS =['なるほど', 'それなら', 'そうですね', 'わかりました', '確かに', 'ありがとう', '検討します', '興味'];
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

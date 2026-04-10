@@ -143,7 +143,7 @@ function validateImageInput(buffer: Buffer, mimeType: string): void {
   }
 }
 
-export async function storeAvatarImageEncrypted(
+async function storeAvatarImageEncrypted(
   input: StoreAvatarImageInput
 ): Promise<StoredAvatarImage> {
   const { auth, imageBuffer, mimeType, originalFileName } = input;
@@ -194,7 +194,7 @@ export async function storeAvatarImageEncrypted(
   };
 }
 
-export async function decryptStoredAvatarImage(
+async function decryptStoredAvatarImage(
   auth: JwtTenantContext,
   storageKey: string
 ): Promise<{ buffer: Buffer; mimeType: string; sha256: string }> {

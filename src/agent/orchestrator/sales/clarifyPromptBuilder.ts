@@ -16,7 +16,7 @@ const CLARIFY_PHASE: SalesPhase = "clarify";
  * - まず Notion 由来のテンプレ (TuningTemplates) を優先して取得
  * - 見つからない場合はフォールバック文面を返す
  */
-export function buildClarifyPrompt(opts: {
+function buildClarifyPrompt(opts: {
   intent: ClarifyIntent;
   personaTags?: string[]; // ["社会人", "初心者"] など
 }): string {

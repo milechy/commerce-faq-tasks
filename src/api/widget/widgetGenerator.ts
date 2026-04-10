@@ -17,7 +17,7 @@ export interface TenantWidgetConfig {
 const WIDGET_SRC_PATH = path.resolve(process.cwd(), "public", "widget.js");
 
 /** Generate a 24h widget session token (tenantId + nonce) */
-export function generateWidgetToken(tenantId: string): string {
+function generateWidgetToken(tenantId: string): string {
   const secret = process.env.SUPABASE_JWT_SECRET ?? process.env.WIDGET_JWT_SECRET ?? "widget-secret-dev";
   return jwt.sign(
     {

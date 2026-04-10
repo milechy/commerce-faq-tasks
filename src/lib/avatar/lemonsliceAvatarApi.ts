@@ -70,7 +70,7 @@ function sanitizeDisplayName(name: string): string {
   return trimmed;
 }
 
-export async function registerAvatarToLemonslice(
+async function registerAvatarToLemonslice(
   input: RegisterLemonsliceAvatarInput
 ): Promise<LemonsliceAvatarRegistrationResult> {
   assertTenantIdFromJwt(input.auth.tenantId);

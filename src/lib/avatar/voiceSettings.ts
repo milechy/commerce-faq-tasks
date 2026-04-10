@@ -12,16 +12,16 @@ export interface VoiceSettingsInput {
   pitch?: number;
 }
 
-export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   voiceType: "neutral",
   speakingRate: 1.0,
   pitch: 0,
 };
 
-export const VOICE_RATE_MIN = 0.7;
-export const VOICE_RATE_MAX = 1.3;
-export const VOICE_PITCH_MIN = -6;
-export const VOICE_PITCH_MAX = 6;
+const VOICE_RATE_MIN = 0.7;
+const VOICE_RATE_MAX = 1.3;
+const VOICE_PITCH_MIN = -6;
+const VOICE_PITCH_MAX = 6;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -34,7 +34,7 @@ function normalizeVoiceType(raw?: string): VoiceType {
   return DEFAULT_VOICE_SETTINGS.voiceType;
 }
 
-export function normalizeVoiceSettings(input: VoiceSettingsInput): VoiceSettings {
+function normalizeVoiceSettings(input: VoiceSettingsInput): VoiceSettings {
   const speakingRate =
     typeof input.speakingRate === "number"
       ? clamp(input.speakingRate, VOICE_RATE_MIN, VOICE_RATE_MAX)
@@ -52,7 +52,7 @@ export function normalizeVoiceSettings(input: VoiceSettingsInput): VoiceSettings
   };
 }
 
-export function validateVoiceSettings(input: VoiceSettingsInput): string[] {
+function validateVoiceSettings(input: VoiceSettingsInput): string[] {
   const errors: string[] = [];
   if (
     input.voiceType !== undefined &&
