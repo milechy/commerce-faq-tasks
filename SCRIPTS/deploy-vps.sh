@@ -49,6 +49,38 @@ ssh "${VPS}" "cd ${REMOTE_DIR} && corepack enable && pnpm install --frozen-lockf
 echo "[3/6] Building API server..."
 ssh "${VPS}" "cd ${REMOTE_DIR} && pnpm build"
 
+# === Admin UI .env.local 検証（根絶ガード） ===
+echo "=== Checking admin-ui/.env.local on VPS ==="
+ENV_CHECK=$(ssh "$VPS" "
+  FILE='/opt/rajiuce/admin-ui/.env.local'
+  if [ ! -f \"\$FILE\" ]; then
+    echo 'MISSING'
+    exit 1
+  fi
+  MISSING=''
+  grep -q 'VITE_API_BASE=' \"\$FILE\" || MISSING=\"\${MISSING} VITE_API_BASE\"
+  grep -q 'VITE_SUPABASE_URL=' \"\$FILE\" || MISSING=\"\${MISSING} VITE_SUPABASE_URL\"
+  grep -q 'VITE_SUPABASE_ANON_KEY=' \"\$FILE\" || MISSING=\"\${MISSING} VITE_SUPABASE_ANON_KEY\"
+  if [ -n \"\$MISSING\" ]; then
+    echo \"MISSING_KEYS:\$MISSING\"
+    exit 1
+  fi
+  echo 'OK'
+")
+
+if [ "$ENV_CHECK" != "OK" ]; then
+  echo "❌ admin-ui/.env.local check FAILED: $ENV_CHECK"
+  echo ""
+  echo "VPS上で以下を実行して .env.local を復旧してください:"
+  echo "  ssh root@65.108.159.161 \"cat > /opt/rajiuce/admin-ui/.env.local << 'EOF'"
+  echo "VITE_API_BASE=https://api.r2c.biz"
+  echo "VITE_SUPABASE_URL=https://rpqrwifbrhlebbelyqog.supabase.co"
+  echo "VITE_SUPABASE_ANON_KEY=<Supabaseダッシュボードから取得>"
+  echo "EOF\""
+  exit 1
+fi
+echo "✅ admin-ui/.env.local: 3キー確認OK"
+
 echo "[4/6] Building Admin UI..."
 echo "  Clearing Vite cache before build..."
 ssh "${VPS}" "cd ${REMOTE_DIR}/admin-ui && rm -rf dist node_modules/.vite node_modules/.cache .vite"
