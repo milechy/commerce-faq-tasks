@@ -13,10 +13,17 @@ import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { encryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
+import type { SupabaseJwtUser } from '../../middleware/roleAuth';
 
 
 const CATEGORIES = ["inventory", "campaign", "coupon", "store_info", "product_info", "pricing", "booking", "warranty", "general"] as const;
 type Category = (typeof CATEGORIES)[number];
+
+type KnowledgeUser = { id: string; email: string; role: string; tenantId: string | null };
+type KnowledgeReq = Request & {
+  supabaseUser?: SupabaseJwtUser;
+  user?: KnowledgeUser;
+};
 
 interface FaqEntry {
   question: string;
@@ -145,8 +152,10 @@ ${text.slice(0, 4000)}
   if (!Array.isArray(parsed)) throw new Error("JSON形式が不正です");
 
   const faqs = parsed.filter(
-    (f): f is FaqEntry =>
-      typeof (f as any).question === "string" && typeof (f as any).answer === "string"
+    (f): f is FaqEntry => {
+      const r = f as Record<string, unknown>;
+      return typeof r.question === "string" && typeof r.answer === "string";
+    }
   );
 
   // カテゴリ強制上書き（手動指定の場合）
@@ -200,7 +209,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       // development: 署名検証なしでデコードし req.supabaseUser をセット
       if (authHeader.startsWith("Bearer ")) {
         try {
-          (req as any).supabaseUser = jwt.decode(authHeader.slice(7).trim());
+          (req as KnowledgeReq).supabaseUser = jwt.decode(authHeader.slice(7).trim()) as SupabaseJwtUser ?? undefined;
         } catch {
           // decode 失敗は無視して通す
         }
@@ -223,7 +232,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
     const token = authHeader.slice(7).trim();
     try {
-      (req as any).supabaseUser = jwt.verify(token, secret);
+      (req as KnowledgeReq).supabaseUser = jwt.verify(token, secret) as SupabaseJwtUser;
       return setUserAndNext(req, next);
     } catch (err) {
       logger.warn("[knowledgeAuth] invalid token", err);
@@ -232,21 +241,23 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   }
 
   function setUserAndNext(req: Request, next: NextFunction): void {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
-    (req as any).user = su
-      ? {
-          id: su.sub ?? su.id ?? "",
-          email: su.email ?? "",
-          role: su.app_metadata?.role ?? su.user_metadata?.role ?? "anonymous",
-          tenantId: su.app_metadata?.tenant_id ?? null,
-        }
-      : { id: "", email: "", role: "anonymous", tenantId: null };
+    const su = (req as KnowledgeReq).supabaseUser;
+    if (su) {
+      (req as KnowledgeReq).user = {
+        id: su.sub ?? su.id ?? "",
+        email: su.email ?? "",
+        role: su.app_metadata?.role ?? su.user_metadata?.role ?? "anonymous",
+        tenantId: su.app_metadata?.tenant_id ?? null,
+      };
+    } else {
+      (req as KnowledgeReq).user = { id: "", email: "", role: "anonymous", tenantId: null };
+    }
     next();
   }
 
   // role チェック（super_admin / client_admin のみ通過）
   function requireKnowledgeRole(req: Request, res: Response, next: NextFunction): void {
-    const user = (req as any).user as { role?: string } | undefined;
+    const user = (req as KnowledgeReq).user;
     if (!user || !["super_admin", "client_admin"].includes(user.role ?? "")) {
       res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
       return;
@@ -256,7 +267,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
   // テナント所有チェック（super_admin は全テナントにアクセス可）
   function requireKnowledgeTenant(req: Request, res: Response, next: NextFunction): void {
-    const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+    const user = (req as KnowledgeReq).user;
     if (user?.role === "super_admin") { next(); return; }
 
     const requestedTenant =
@@ -280,7 +291,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
   // -------------------------------------------------------------------------
   app.get("/v1/admin/knowledge", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
-    const user = (req as any).user as { role?: string } | undefined;
+    const user = (req as KnowledgeReq).user;
     const category = req.query.category as string | undefined;
     const isGlobalParam = req.query.is_global as string | undefined;
 
@@ -359,7 +370,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       // global ナレッジは super_admin のみ削除可能
       const recordTenantId = check.rows[0].tenant_id as string;
       if (recordTenantId === "global") {
-        const user = (req as any).user;
+        const user = (req as KnowledgeReq).user;
         if (user?.role !== "super_admin") {
           return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ削除可能です" });
         }
@@ -489,7 +500,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
-    if (target === "global" && (req as any).user?.role !== "super_admin") {
+    if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
@@ -652,7 +663,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
-    if (target === "global" && (req as any).user?.role !== "super_admin") {
+    if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
       return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
     }
 
@@ -713,7 +724,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+      const user = (req as KnowledgeReq).user;
       const tenantId = resolveTenantId(req);
 
       // client_admin はテナントIDが必須
@@ -813,7 +824,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as { role?: string; tenantId?: string | null } | undefined;
+      const user = (req as KnowledgeReq).user;
       if (user?.role !== 'super_admin') {
         return res.status(403).json({ error: 'Super Adminのみ実行できます' });
       }

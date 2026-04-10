@@ -5,6 +5,7 @@ import type {
   DialogAgentResponse,
   DialogTurnInput,
   PlannerPlan,
+  PlannerStep,
 } from "../dialog/types";
 
 export type AgentDialogOrchestratorRunInput = {
@@ -50,7 +51,7 @@ export class AgentDialogOrchestrator {
     // --- multi-step フラグ（ログ・コンテキスト用） ---
     const useMultiStep =
       body.options?.useMultiStepPlanner === true ||
-      (body.options?.useMultiStepPlanner as any) === "true";
+      String(body.options?.useMultiStepPlanner) === "true";
 
     const mode = body.options?.mode ?? "crew";
 
@@ -104,12 +105,12 @@ export class AgentDialogOrchestrator {
 
     const needsClarification: boolean =
       useMultiStep ||
-      (plannerPlan as any)?.needsClarification === true ||
-      (baseMeta as any).needsClarification === true;
+      plannerPlan?.needsClarification === true ||
+      (baseMeta as { needsClarification?: boolean }).needsClarification === true;
 
     let clarifyingQuestions: string[] =
-      (plannerPlan as any)?.clarifyingQuestions ??
-      ((baseMeta as any).clarifyingQuestions as string[] | undefined) ??
+      plannerPlan?.clarifyingQuestions ??
+      (baseMeta as { clarifyingQuestions?: string[] }).clarifyingQuestions ??
       [];
 
     // Phase10 のテスト互換: multi-step planner 有効時は必ず clarify 質問を 1 件以上返す
@@ -127,7 +128,7 @@ export class AgentDialogOrchestrator {
           description: "clarify the ambiguous question",
           questions: clarifyingQuestions,
         },
-      ] as any;
+      ] as unknown as PlannerStep[];
     } else {
       steps = [
         {
@@ -136,7 +137,7 @@ export class AgentDialogOrchestrator {
           description: "provide general policy",
           style: "fallback",
         },
-      ] as any;
+      ] as unknown as PlannerStep[];
     }
 
     // Phase10 との互換性維持: clarify 時は answer=null / final=false
@@ -185,7 +186,7 @@ export class AgentDialogOrchestrator {
         final,
         hasPlannerPlan: !!plannerPlan,
         hasKpiFunnel: !!meta.kpiFunnel,
-        kpiFunnelStage: (meta as any).kpiFunnel?.stage,
+        kpiFunnelStage: meta.kpiFunnel?.currentStage,
 
         // PR2b
         adapterStatus: meta.adapter?.status,

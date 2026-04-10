@@ -3,6 +3,7 @@
 // Phase38 Step4-BE: チューニングルール CRUD API
 
 import type { Express, Request, Response } from "express";
+import type { AuthedReq } from "../../middleware/roleAuth";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import {
@@ -96,7 +97,7 @@ ${knowledgePart}${rulesPart}${crossTenantPart}${researchPart}
       return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
     }
 
-    const data = (await res.json()) as any;
+    const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
     const raw: string = data.choices?.[0]?.message?.content?.trim() ?? "";
 
     // JSON部分を抽出（markdown code block 対応）
@@ -152,7 +153,7 @@ export function registerTuningRoutes(app: Express): void {
     "/v1/admin/tuning/suggest-rule",
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const su = (req as AuthedReq).supabaseUser;
       if (!su) {
         return res.status(401).json({ error: "unauthorized" });
       }
@@ -283,7 +284,7 @@ export function registerTuningRoutes(app: Express): void {
   app.put(
     "/v1/admin/tuning-rules/:id",
     async (req: Request, res: Response) => {
-      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const su = (req as AuthedReq).supabaseUser;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
       const isSuperAdmin: boolean =
         (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
@@ -324,7 +325,7 @@ export function registerTuningRoutes(app: Express): void {
   app.delete(
     "/v1/admin/tuning-rules/:id",
     async (req: Request, res: Response) => {
-      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const su = (req as AuthedReq).supabaseUser;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
       const isSuperAdmin: boolean =
         (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";

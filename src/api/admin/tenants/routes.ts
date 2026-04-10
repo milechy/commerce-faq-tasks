@@ -1,5 +1,6 @@
 // src/api/admin/tenants/routes.ts
 import type { Express, NextFunction, Request, Response } from "express";
+import type { AuthedReq } from "../../middleware/roleAuth";
 
 // @ts-ignore
 import { Pool } from "pg";
@@ -57,7 +58,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     if (process.env.NODE_ENV === "development") {
       if (authHeader.startsWith("Bearer ")) {
         try {
-          (req as any).supabaseUser = jwt.decode(authHeader.slice(7).trim());
+          (req as AuthedReq).supabaseUser = jwt.decode(authHeader.slice(7).trim()) as import("../../middleware/roleAuth").SupabaseJwtUser ?? undefined;
         } catch {
           // decode失敗は無視
         }
@@ -78,7 +79,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     const token = authHeader.slice(7).trim();
     try {
-      (req as any).supabaseUser = jwt.verify(token, secret);
+      (req as AuthedReq).supabaseUser = jwt.verify(token, secret) as import("../../middleware/roleAuth").SupabaseJwtUser;
       next();
     } catch (err) {
       logger.warn("[tenantAuth] invalid token", err);
@@ -87,8 +88,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   }
 
   function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
-    const role = su?.app_metadata?.role ?? su?.user_metadata?.role ?? su?.role ?? "anonymous";
+    const su = (req as AuthedReq).supabaseUser;
+    const role = su?.app_metadata?.role ?? su?.user_metadata?.role ?? "anonymous";
     if (role !== "super_admin") {
       res.status(403).json({ error: "forbidden", message: "スーパー管理者のみアクセスできます" });
       return;
@@ -99,7 +100,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
 
   // GET /v1/admin/my-tenant — Client Admin専用: JWTのtenant_idで自分のテナント情報を返す
   app.get("/v1/admin/my-tenant", tenantAuth, async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const tenantId = su?.app_metadata?.tenant_id as string | undefined;
     if (!tenantId) {
       return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
@@ -121,7 +122,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
 
   // PATCH /v1/admin/my-tenant — Client Admin専用: featuresのavatar/voiceのみ更新可
   app.patch("/v1/admin/my-tenant", tenantAuth, async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const tenantId = su?.app_metadata?.tenant_id as string | undefined;
     if (!tenantId) {
       return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });

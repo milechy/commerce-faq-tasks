@@ -17,7 +17,7 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware';
 import { roleAuthMiddleware, requireRole } from '../middleware/roleAuth';
-import type { AuthenticatedUser } from '../middleware/roleAuth';
+import type { AuthenticatedUser, AuthedReq } from '../middleware/roleAuth';
 
 const COMMON_FIELDS = {
   message_template: z.string().min(1).max(500),
@@ -65,7 +65,7 @@ export function registerEngagementRoutes(app: Express, apiStack: RequestHandler[
   app.get('/v1/admin/engagement/rules', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const queryTenantId = req.query['tenant_id'] as string | undefined;
 
     // client_admin は自テナントのみ
@@ -94,7 +94,7 @@ export function registerEngagementRoutes(app: Express, apiStack: RequestHandler[
   app.post('/v1/admin/engagement/rules', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     // null tenant_id (sent when super_admin is in preview mode) → treat as undefined
     const bodyNormalized = { ...req.body, tenant_id: req.body.tenant_id ?? undefined };
     const parsed = TriggerRuleSchema.safeParse(bodyNormalized);
@@ -132,7 +132,7 @@ export function registerEngagementRoutes(app: Express, apiStack: RequestHandler[
   app.put('/v1/admin/engagement/rules/:id', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const ruleId = Number(req.params['id']);
     if (!Number.isInteger(ruleId) || ruleId <= 0) {
       return res.status(400).json({ error: 'invalid_id' });
@@ -170,7 +170,7 @@ export function registerEngagementRoutes(app: Express, apiStack: RequestHandler[
   app.delete('/v1/admin/engagement/rules/:id', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const ruleId = Number(req.params['id']);
     if (!Number.isInteger(ruleId) || ruleId <= 0) {
       return res.status(400).json({ error: 'invalid_id' });
@@ -194,7 +194,7 @@ export function registerEngagementRoutes(app: Express, apiStack: RequestHandler[
   app.patch('/v1/admin/engagement/rules/:id/toggle', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const ruleId = Number(req.params['id']);
     if (!Number.isInteger(ruleId) || ruleId <= 0) {
       return res.status(400).json({ error: 'invalid_id' });
@@ -225,7 +225,7 @@ export function registerEngagementRoutes(app: Express, apiStack: RequestHandler[
   app.get('/api/engagement/rules', ...apiStack, async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const tenantId: string = (req as any).tenantId ?? '';
+    const tenantId: string = (req as Request & { tenantId?: string }).tenantId ?? '';
     if (!tenantId) return res.status(401).json({ error: 'tenant_not_found' });
 
     try {

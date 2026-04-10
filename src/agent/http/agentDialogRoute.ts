@@ -22,19 +22,20 @@ export function createAgentDialogHandler(
       return;
     }
 
-    const tenantId = (req as any).tenantId ?? "demo-tenant";
+    const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";
 
     // PR2b: adapter 状態（presentation-only）
     let adapterMeta: import("../dialog/types").AdapterMeta | undefined = undefined;
 
     try {
-      const options = (body as any).options ?? {};
+      const options = body.options ?? {};
       const locale: "ja" | "en" = options.language === "en" ? "en" : "ja";
+      const bodyAny = body as unknown as Record<string, unknown>;
       const sessionId: string | undefined =
-        typeof (body as any).sessionId === "string"
-          ? (body as any).sessionId
-          : typeof (body as any).conversationId === "string"
-          ? (body as any).conversationId
+        typeof body.sessionId === "string"
+          ? body.sessionId
+          : typeof bodyAny.conversationId === "string"
+          ? bodyAny.conversationId as string
           : undefined;
 
       const piiMode = options.piiMode === true;

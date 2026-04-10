@@ -30,7 +30,7 @@ export function createAgentDialogHandler(
       return;
     }
 
-    const tenantId = (req as any).tenantId ?? "demo-tenant";
+    const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";
 
     // ------------------------------------------------------------
     // Phase22 (PR2b): 接続層（UI/adapter）側の readiness/failed/fallback ログ
@@ -40,13 +40,14 @@ export function createAgentDialogHandler(
     // ------------------------------------------------------------
     let adapterMeta: AdapterMeta | undefined;
     try {
-      const options = (body as any).options ?? {};
+      const options = body.options ?? {};
       const locale: "ja" | "en" = options.language === "en" ? "en" : "ja";
+      const bodyAny = body as unknown as Record<string, unknown>;
       const sessionId: string | undefined =
-        typeof (body as any).sessionId === "string"
-          ? (body as any).sessionId
-          : typeof (body as any).conversationId === "string"
-          ? (body as any).conversationId
+        typeof body.sessionId === "string"
+          ? body.sessionId
+          : typeof bodyAny.conversationId === "string"
+          ? bodyAny.conversationId as string
           : undefined;
 
       const piiMode = options.piiMode === true;
@@ -76,14 +77,12 @@ export function createAgentDialogHandler(
     // - additive（既存のレスポンス形を壊さない）
     // - "ready" は probe 成功時のみ入る（UIが嘘をつかない）
     // ------------------------------------------------------------
-    const next = payload as any;
-
-    // payload.meta が無い/型固定でも壊さないよう any でマージ
-    const prevMeta = (next.meta ?? {}) as Record<string, unknown>;
-    const prevAdapter = (prevMeta.adapter ?? {}) as Record<string, unknown>;
+    const responseBody = payload as unknown as Record<string, unknown>;
+    const prevMeta = (payload.meta as unknown as Record<string, unknown>);
+    const prevAdapter = ((payload.meta.adapter ?? {}) as Record<string, unknown>);
 
     if (adapterMeta) {
-      next.meta = {
+      responseBody.meta = {
         ...prevMeta,
         adapter: {
           ...prevAdapter,
@@ -92,6 +91,6 @@ export function createAgentDialogHandler(
       };
     }
 
-    res.json(next);
+    res.json(responseBody);
   };
 }

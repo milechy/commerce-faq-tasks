@@ -5,6 +5,7 @@ import { ProductRepository } from "../../repositories/productRepository";
 import { TuningTemplateRepository } from "../../repositories/tuningTemplateRepository";
 import { INotionClient, NotionClient } from "./notionClient";
 import type { NotionTuningTemplate } from "./notionSchemas";
+import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints";
 import {
   mapFaqRow,
   mapLpPointRow,
@@ -29,7 +30,7 @@ export class NotionSyncService {
     });
 
     const faqEntities = notionRows.map((row) =>
-      mapFaqRow(row as any, DEFAULT_TENANT_ID)
+      mapFaqRow(row as PageObjectResponse, DEFAULT_TENANT_ID)
     );
     await this.faqRepo.bulkUpsert(faqEntities);
   }
@@ -40,7 +41,7 @@ export class NotionSyncService {
     });
 
     const productEntities = notionRows.map((row) =>
-      mapProductRow(row as any, DEFAULT_TENANT_ID)
+      mapProductRow(row as PageObjectResponse, DEFAULT_TENANT_ID)
     );
 
     await this.productRepo.bulkUpsert(productEntities);
@@ -52,7 +53,7 @@ export class NotionSyncService {
     });
 
     const lpPointEntities = notionRows.map((row) =>
-      mapLpPointRow(row as any, DEFAULT_TENANT_ID)
+      mapLpPointRow(row as PageObjectResponse, DEFAULT_TENANT_ID)
     );
 
     await this.lpPointRepo.bulkUpsert(lpPointEntities);
@@ -66,7 +67,7 @@ export class NotionSyncService {
     });
 
     const tuningTemplateEntities = notionRows.map((row) =>
-      mapTuningTemplateRow(row as any, DEFAULT_TENANT_ID)
+      mapTuningTemplateRow(row as PageObjectResponse, DEFAULT_TENANT_ID)
     );
 
     await this.tuningTemplateRepo.bulkUpsert(tuningTemplateEntities);

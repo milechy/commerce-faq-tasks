@@ -2,6 +2,7 @@
 
 
 import type { Express, Request, Response } from "express";
+import type { AuthedReq } from "../../middleware/roleAuth";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import {
@@ -30,7 +31,7 @@ export function registerFeedbackRoutes(app: Express): void {
   // NOTE: /threads を /:id より先に登録すること
   // -----------------------------------------------------------------------
   app.get("/v1/admin/feedback/threads", async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const isSuperAdmin: boolean =
       (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
@@ -51,7 +52,7 @@ export function registerFeedbackRoutes(app: Express): void {
   // GET /v1/admin/feedback — メッセージ一覧
   // -----------------------------------------------------------------------
   app.get("/v1/admin/feedback", async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
     const isSuperAdmin: boolean =
       (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
@@ -89,7 +90,7 @@ export function registerFeedbackRoutes(app: Express): void {
   // POST /v1/admin/feedback — メッセージ送信
   // -----------------------------------------------------------------------
   app.post("/v1/admin/feedback", async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
     const isSuperAdmin: boolean =
       (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
@@ -161,7 +162,7 @@ export function registerFeedbackRoutes(app: Express): void {
   // PATCH /v1/admin/feedback/:messageId/flag — 改善マークトグル（Super Admin専用）
   // -----------------------------------------------------------------------
   app.patch("/v1/admin/feedback/:messageId/flag", async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const isSuperAdmin: boolean =
       (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
 
@@ -195,7 +196,7 @@ export function registerFeedbackRoutes(app: Express): void {
   // PATCH /v1/admin/feedback/read — 既読処理
   // -----------------------------------------------------------------------
   app.patch("/v1/admin/feedback/read", async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
     const isSuperAdmin: boolean =
       (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
@@ -225,7 +226,7 @@ export function registerFeedbackRoutes(app: Express): void {
   // GET /v1/admin/feedback/unread-count — 未読数取得
   // -----------------------------------------------------------------------
   app.get("/v1/admin/feedback/unread-count", async (req: Request, res: Response) => {
-    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const su = (req as AuthedReq).supabaseUser;
     const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
     const isSuperAdmin: boolean =
       (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";

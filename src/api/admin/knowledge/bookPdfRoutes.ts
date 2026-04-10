@@ -16,6 +16,8 @@ import { decryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
+type BookPdfUser = { id?: string; role?: string; tenantId?: string | null };
+type BookPdfReq = Request & { user?: BookPdfUser };
 
 // ── 定数 ──────────────────────────────────────────────────────────────────
 const ZIP_MIMETYPES = new Set([
@@ -59,9 +61,7 @@ function encryptBuffer(
 
 // ── tenantId 解決（bodyから禁止 — CLAUDE.md） ─────────────────────────────
 function resolveUploadTenantId(req: Request): string | null {
-  const user = (req as any).user as
-    | { role?: string; tenantId?: string | null }
-    | undefined;
+  const user = (req as BookPdfReq).user;
   if (user?.role === "super_admin") {
     // super_admin: queryパラメータで対象テナントを指定可
     const fromQuery =
@@ -266,7 +266,7 @@ export function registerBookPdfRoutes(
         }
 
         const userId: string =
-          ((req as any).user as { id?: string } | undefined)?.id ?? "";
+          (req as BookPdfReq).user?.id ?? "";
 
         // ── ZIPファイルの処理 ────────────────────────────────────────────
         if (ZIP_MIMETYPES.has(file.mimetype)) {
@@ -324,9 +324,7 @@ export function registerBookPdfRoutes(
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as
-        | { role?: string; tenantId?: string | null }
-        | undefined;
+      const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
 
       let tenantId: string | null = null;
@@ -374,9 +372,7 @@ export function registerBookPdfRoutes(
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as
-        | { role?: string; tenantId?: string | null }
-        | undefined;
+      const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
 
       const id = parseInt(req.params.id, 10);
@@ -425,9 +421,7 @@ export function registerBookPdfRoutes(
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as
-        | { role?: string; tenantId?: string | null }
-        | undefined;
+      const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
 
       const id = parseInt(req.params.id, 10);
@@ -498,9 +492,7 @@ export function registerBookPdfRoutes(
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as
-        | { role?: string; tenantId?: string | null }
-        | undefined;
+      const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
 
       const id = parseInt(req.params.id, 10);
@@ -531,7 +523,7 @@ export function registerBookPdfRoutes(
         }
 
         // アップロード者本人かどうか判定
-        const currentUserId = ((req as any).user as { id?: string } | undefined)?.id ?? "";
+        const currentUserId = (req as BookPdfReq).user?.id ?? "";
         const isUploader = Boolean(currentUserId && book.uploaded_by && book.uploaded_by === currentUserId);
 
         // チャンク取得（embeddingベクトルは除外）
@@ -611,9 +603,7 @@ export function registerBookPdfRoutes(
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as
-        | { role?: string; tenantId?: string | null }
-        | undefined;
+      const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
 
       const chunkId = parseInt(req.params.chunkId, 10);
@@ -706,9 +696,7 @@ export function registerBookPdfRoutes(
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as
-        | { role?: string; tenantId?: string | null }
-        | undefined;
+      const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
 
       const chunkId = parseInt(req.params.chunkId, 10);
@@ -780,9 +768,7 @@ export function registerBookPdfRoutes(
     knowledgeAuth,
     requireKnowledgeRole,
     async (req: Request, res: Response) => {
-      const user = (req as any).user as
-        | { role?: string; tenantId?: string | null }
-        | undefined;
+      const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
 
       const id = parseInt(req.params.id, 10);

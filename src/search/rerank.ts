@@ -1,6 +1,7 @@
 // src/search/rerank.ts
 import { performance } from "node:perf_hooks";
 import { getCeEngine } from "./ceEngine";
+import type { CeEngineStatus } from "./ceEngine";
 
 // 重要：インスタンス自体は ceEngine 側の singleton に寄せる。
 // ここでは import 時に初期化しない（process.env がセットされる前に固定される事故を避ける）。
@@ -29,7 +30,7 @@ function readEnvEngine(): "onnx" | "dummy" {
 }
 
 function readEnvNumber(key: string): number | undefined {
-  const v = Number((process.env as any)[key]);
+  const v = Number(process.env[key]);
   return Number.isFinite(v) ? v : undefined;
 }
 
@@ -51,7 +52,7 @@ function ce() {
   // Fix the engine label on first access so that status()/rerank gating
   // cannot flap if ceEngine resolves engine name lazily.
   try {
-    _engine = _ce.status().engine;
+    _engine = (_ce.status() as CeEngineStatus).engine;
   } catch {
     _engine = _engine ?? null;
   }
@@ -59,20 +60,22 @@ function ce() {
   return _ce;
 }
 
-function stableStatus() {
+// Legacy CE status shape — some older implementations may expose onnxError / onnx_error
+type LegacyCeStatus = CeEngineStatus & { onnxError?: string | null; onnx_error?: string | null };
+
+function stableStatus(): CeEngineStatus {
   try {
-    const st = ce().status();
+    const st = ce().status() as LegacyCeStatus;
     // Some ceEngine implementations may expose errors as `onnxError` (legacy)
     // while newer ones use `error`. Normalize to `error` for internal use.
-    const normalizedError =
-      (st as any).error ?? (st as any).onnxError ?? (st as any).onnx_error ?? null;
+    const normalizedError = st.error ?? st.onnxError ?? st.onnx_error ?? null;
 
-    const engine = (_engine ?? (st as any).engine) === "onnx" ? "onnx" : "dummy";
+    const engine = (_engine ?? st.engine) === "onnx" ? "onnx" : "dummy";
     // Once we have a stable label, keep it pinned.
     _engine = _engine ?? engine;
 
     return {
-      ...(st as any),
+      ...st,
       // Keep engine label stable even if ceEngine resolves lazily.
       // Also normalize to the supported labels we expose via the HTTP API.
       engine,
@@ -81,13 +84,15 @@ function stableStatus() {
     };
   } catch (e) {
     // If status() ever throws, treat it as "not ready" but keep the configured label if we have one.
+    const resolvedEngine = (_engine ?? readEnvEngine()) === "onnx" ? "onnx" : "dummy";
     return {
-      engine: _engine ?? readEnvEngine(),
+      engine: resolvedEngine,
       onnxLoaded: false,
-      error: String((e as any)?.message ?? e ?? "status error"),
-      config: undefined,
-      modelPath: undefined,
-    } as any;
+      error: String((e as Error)?.message ?? String(e) ?? "status error"),
+      config: { candidates: readEnvCandidates() ?? 24, minQueryChars: readEnvMinQueryChars() ?? 8, maxBatchSize: 16 },
+      modelPath: null,
+      warmedUp: false,
+    };
   }
 }
 
@@ -143,14 +148,14 @@ function shouldUseCE(
 
   const minChars = Math.max(
     1,
-    (status as any).config?.minQueryChars ?? readEnvMinQueryChars() ?? 8
+    status.config?.minQueryChars ?? readEnvMinQueryChars() ?? 8
   );
 
   if (qLen < minChars) return false;
   if (candidates <= 1) return false;
 
-  if ((status as any).engine !== "onnx") return false;
-  if ((status as any).error) return false;
+  if (status.engine !== "onnx") return false;
+  if (status.error) return false;
 
   // ★ onnxLoaded は gate にしない（lazy load は scoreBatch 側に任せる）
   return true;
@@ -190,15 +195,15 @@ export function ceStatus() {
 
   // NOTE: /ce/status must be side-effect free.
   // Warmup (model load) is initiated explicitly via /ce/warmup, or implicitly when rerank calls scoreBatch.
-  const onnxError =
-    (st as any).error ?? (st as any).onnxError ?? (st as any).onnx_error ?? null;
+  // stableStatus() normalizes legacy onnxError/onnx_error into .error already.
+  const onnxError = st.error;
 
   return {
-    onnxLoaded: Boolean((st as any).onnxLoaded),
+    onnxLoaded: Boolean(st.onnxLoaded),
     onnxError,
     // Prefer pinned engine label; if unset, fall back to current env.
     engine:
-      (_engine ?? (st as any).engine ?? readEnvEngine()) === "onnx"
+      (_engine ?? st.engine ?? readEnvEngine()) === "onnx"
         ? "onnx"
         : "dummy",
   };
@@ -230,7 +235,7 @@ export async function rerank(
   const status = stableStatus();
   const ceCandidates = Math.max(
     1,
-    (status as any).config?.candidates ?? readEnvCandidates() ?? 24
+    status.config?.candidates ?? readEnvCandidates() ?? 24
   );
   const candidateLimit = Math.min(ceCandidates, scoredAll.length);
   const stage1Candidates = scoredAll.slice(0, candidateLimit);
@@ -252,9 +257,9 @@ export async function rerank(
         .map((it, idx) => ({
           ...it,
           __ce:
-            typeof scores[idx] === "number" ? scores[idx] : (it as any).__ce,
+            typeof scores[idx] === "number" ? scores[idx] : it.__ce,
         }))
-        .sort((a, b) => (b as any).__ce - (a as any).__ce || b.score - a.score);
+        .sort((a, b) => b.__ce - a.__ce || b.score - a.score);
 
       finalItems = withCeScores
         .slice(0, safeTopK)

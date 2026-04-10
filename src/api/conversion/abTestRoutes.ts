@@ -13,7 +13,7 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware';
 import { roleAuthMiddleware, requireRole } from '../middleware/roleAuth';
-import type { AuthenticatedUser } from '../middleware/roleAuth';
+import type { AuthenticatedUser, AuthedReq } from '../middleware/roleAuth';
 
 const ExperimentSchema = z.object({
   name: z.string().min(1).max(200),
@@ -49,7 +49,7 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
   app.get('/v1/admin/ab/experiments', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const queryTenantId = req.query['tenant_id'] as string | undefined;
 
     if (user.role === 'client_admin' && queryTenantId && queryTenantId !== user.tenantId) {
@@ -76,7 +76,7 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
   app.post('/v1/admin/ab/experiments', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const parsed = ExperimentSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
@@ -108,7 +108,7 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
   app.put('/v1/admin/ab/experiments/:id', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const id = Number(req.params['id']);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
 
@@ -143,7 +143,7 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
   app.patch('/v1/admin/ab/experiments/:id/status', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const id = Number(req.params['id']);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
 
@@ -177,7 +177,7 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
   app.get('/v1/admin/ab/experiments/:id/results', async (req: Request, res: Response) => {
     if (!db) return res.status(503).json({ error: 'database_unavailable' });
 
-    const user = (req as any).user as AuthenticatedUser;
+    const user = (req as AuthedReq).user as AuthenticatedUser;
     const id = Number(req.params['id']);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid_id' });
 

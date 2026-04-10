@@ -3,6 +3,8 @@
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 
 import type { Express, Request, Response } from "express";
+
+type AvatarReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { trackUsage } from "../../../lib/billing/usageTracker";
@@ -37,7 +39,7 @@ async function callGroqLLM(system: string, user: string): Promise<string> {
     throw new Error(`Groq API error ${res.status}: ${text}`);
   }
 
-  const data = (await res.json()) as any;
+  const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
   return data.choices?.[0]?.message?.content ?? "";
 }
 
@@ -78,11 +80,12 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
       }
 
       const { description } = parsed.data;
-      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const su = (req as AvatarReq).supabaseUser;
+      const suMeta = (su?.app_metadata as Record<string, unknown> | undefined);
       const tenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+        suMeta?.tenant_id as string ?? su?.tenant_id as string ?? "";
       const requestId: string =
-        (req as any).requestId ?? crypto.randomUUID();
+        (req as AvatarReq).requestId ?? crypto.randomUUID();
 
       try {
         // Step 1: Groq LLM で Leonardo.ai 用英語プロンプト生成
@@ -139,11 +142,13 @@ Output ONLY the English prompt, nothing else.`,
           throw new Error(`Leonardo generation error ${genRes.status}: ${text.slice(0, 200)}`);
         }
 
-        const genData = (await genRes.json()) as any;
+        const genData = await genRes.json() as Record<string, unknown>;
+        const sdJob = genData?.sdGenerationJob as Record<string, unknown> | undefined;
+        const gByPk = genData?.generations_by_pk as Record<string, unknown> | undefined;
         const generationId: string =
-          genData?.sdGenerationJob?.generationId ??
-          genData?.generations_by_pk?.id ??
-          genData?.id ?? "";
+          sdJob?.generationId as string ??
+          gByPk?.id as string ??
+          genData?.id as string ?? "";
 
         if (!generationId) {
           throw new Error("Leonardo: generationId not found in response");
@@ -158,14 +163,15 @@ Output ONLY the English prompt, nothing else.`,
               headers: { Authorization: `Bearer ${leonardoKey}` },
             });
             if (!pollRes.ok) continue;
-            const pollData = (await pollRes.json()) as any;
-            const gen =
+            const pollData = await pollRes.json() as Record<string, unknown>;
+            const gen = (
               pollData?.generations_by_pk ??
               pollData?.generation ??
-              pollData;
+              pollData
+            ) as Record<string, unknown>;
             if (gen?.status === "COMPLETE") {
-              const imgs: string[] = (gen?.generated_images ?? [])
-                .map((img: { url?: string } | null) => img?.url ?? "")
+              const imgs: string[] = ((gen?.generated_images ?? []) as Array<{ url?: string } | null>)
+                .map((img) => img?.url ?? "")
                 .filter(Boolean);
               return imgs;
             }
@@ -213,11 +219,12 @@ Output ONLY the English prompt, nothing else.`,
       }
 
       const { description } = parsed.data;
-      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const su = (req as AvatarReq).supabaseUser;
+      const suMeta = (su?.app_metadata as Record<string, unknown> | undefined);
       const tenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+        suMeta?.tenant_id as string ?? su?.tenant_id as string ?? "";
       const requestId: string =
-        (req as any).requestId ?? crypto.randomUUID();
+        (req as AvatarReq).requestId ?? crypto.randomUUID();
 
       try {
         // Step 1: Groq LLM でキーワード抽出（日本語優先）
@@ -249,8 +256,8 @@ Output ONLY the English prompt, nothing else.`,
           throw new Error(`Fish Audio API error ${fishRes.status}: ${text}`);
         }
 
-        const fishData = (await fishRes.json()) as any;
-        let models: Array<any> = fishData.items ?? fishData.data ?? (Array.isArray(fishData) ? fishData : []);
+        const fishData = await fishRes.json() as Record<string, unknown>;
+        let models: Array<Record<string, unknown>> = (fishData.items ?? fishData.data ?? (Array.isArray(fishData) ? fishData : [])) as Array<Record<string, unknown>>;
 
         // Step 2b: キーワード検索が0件 → language=ja の人気順トップにフォールバック
         if (models.length === 0) {
@@ -260,8 +267,8 @@ Output ONLY the English prompt, nothing else.`,
             { headers: { Authorization: `Bearer ${fishApiKey}` } }
           );
           if (fallbackRes.ok) {
-            const fallbackData = (await fallbackRes.json()) as any;
-            models = fallbackData.items ?? fallbackData.data ?? (Array.isArray(fallbackData) ? fallbackData : []);
+            const fallbackData = await fallbackRes.json() as Record<string, unknown>;
+            models = (fallbackData.items ?? fallbackData.data ?? (Array.isArray(fallbackData) ? fallbackData : [])) as Array<Record<string, unknown>>;
           }
         }
 
@@ -341,11 +348,12 @@ JSONのみ返してください。`,
       }
 
       const { rules } = parsed.data;
-      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const su = (req as AvatarReq).supabaseUser;
+      const suMeta = (su?.app_metadata as Record<string, unknown> | undefined);
       const tenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+        suMeta?.tenant_id as string ?? su?.tenant_id as string ?? "";
       const requestId: string =
-        (req as any).requestId ?? crypto.randomUUID();
+        (req as AvatarReq).requestId ?? crypto.randomUUID();
 
       try {
         // Step 1: Groq LLM で SYSTEM_PROMPT + emotion_tags 生成

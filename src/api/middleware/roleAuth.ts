@@ -11,6 +11,20 @@ export interface AuthenticatedUser {
   tenantId: string | null;
 }
 
+export type SupabaseJwtUser = {
+  sub?: string;
+  id?: string;
+  email?: string;
+  tenant_id?: string;
+  app_metadata?: { role?: string; tenant_id?: string };
+  user_metadata?: { role?: string; tenant_id?: string };
+};
+
+export type AuthedReq = Request & {
+  supabaseUser?: SupabaseJwtUser;
+  user?: AuthenticatedUser;
+};
+
 /**
  * req.supabaseUser からロール情報を読み取り req.user に付与する
  * supabaseAuthMiddleware の後に使用すること
@@ -20,10 +34,10 @@ export function roleAuthMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  const supabaseUser = (req as any).supabaseUser;
+  const supabaseUser = (req as AuthedReq).supabaseUser;
 
   if (!supabaseUser) {
-    (req as any).user = {
+    (req as AuthedReq).user = {
       id: "",
       email: "",
       role: "anonymous" as UserRole,
@@ -33,8 +47,8 @@ export function roleAuthMiddleware(
   }
 
   const role: UserRole =
-    supabaseUser.app_metadata?.role ||
-    supabaseUser.user_metadata?.role ||
+    (supabaseUser.app_metadata?.role as UserRole | undefined) ||
+    (supabaseUser.user_metadata?.role as UserRole | undefined) ||
     "anonymous";
 
   const tenantId: string | null =
@@ -42,7 +56,7 @@ export function roleAuthMiddleware(
     supabaseUser.user_metadata?.tenant_id ||
     null;
 
-  (req as any).user = {
+  (req as AuthedReq).user = {
     id: supabaseUser.sub || supabaseUser.id || "",
     email: supabaseUser.email || "",
     role,
@@ -57,7 +71,7 @@ export function roleAuthMiddleware(
  */
 export function requireRole(...roles: UserRole[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const user = (req as any).user as AuthenticatedUser | undefined;
+    const user = (req as AuthedReq).user;
     if (!user || !roles.includes(user.role)) {
       res.status(403).json({
         error: "forbidden",
@@ -75,7 +89,7 @@ export function requireRole(...roles: UserRole[]) {
  */
 export function requireOwnTenant() {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const user = (req as any).user as AuthenticatedUser | undefined;
+    const user = (req as AuthedReq).user;
 
     // super_admin はすべてのテナントにアクセス可能
     if (user?.role === "super_admin") {
