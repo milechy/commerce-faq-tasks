@@ -244,3 +244,86 @@ Core / Database / Elasticsearch / Cross-encoder / Auth / Supabase / LLM-Groq / L
 | `as any` キャスト | 188件 | P2 |
 | `@ts-ignore` | 25件 | P3 |
 | `langGraphOrchestrator.ts` 1,849行 | 分割未着手 | P3 |
+
+---
+
+## 2026-04-10 — コードクリーンアップセッション #2
+
+### 変更サマリー
+
+| 項目 | 変更前 | 変更後 |
+|---|---|---|
+| Dead exports | 56件 | 21件（実質0: false positive 5 + テスト用途 16） |
+| `: any` 型 | 134件 | 50件 |
+| `as any` キャスト | 192件 | 79件 |
+| `@ts-ignore` | 25件 | 0件 |
+| pnpm test | 1050/1050 | 1050/1050 ✅ |
+| pnpm typecheck | 0 errors | 0 errors ✅ |
+
+### Dead Exports (56 → 21)
+
+- 35件の export キーワード除去（関数自体は残存、ファイル内部で使用）
+- 2ファイル削除: `src/agent/crew/CrewTask.ts`, `src/agent/orchestrator/crew/crewClient.ts`（CrewAI legacy）
+- 残21件の内訳:
+  - false positive 5件（GroqApiError×4 + RAG_TOTAL_MAX_CHARS）
+  - テスト用途 16件（dead-code-check.sh がテストファイルの import を非スキャン）
+- Codex Review P1修正2件: getSalesPipelineConfig / NotionSyncService の export 復元
+
+### `: any` 型 (134 → 50)
+
+主な修正パターン:
+- Express `req: any, res: any` → `Request` / `Response` 型
+- `apiStack: any[]` → `RequestHandler[]`
+- DB `result.rows.map((row: any)` → `(result.rows as RowType[]).map`
+- ES検索結果 `esRes: any` → `EsHit` 型定義 + キャスト
+- Notion schemas ヘルパー → `NotionProp` インターフェース
+- `catch (err: any)` × 7 → `catch (err: unknown)` + `(err as Error).message`
+
+### `as any` キャスト (192 → 79)
+
+主な修正パターン:
+- `src/search/rerank.ts`: stableStatus() 戻り型を CeEngineStatus に明示、LegacyCeStatus 型（15→0件）
+- `src/api/middleware/roleAuth.ts`: SupabaseJwtUser + AuthedReq 型を export、複数ファイルで再利用
+- `src/api/admin/knowledge/routes.ts`: KnowledgeReq 型定義（13→0件）
+- `src/api/admin/knowledge/bookPdfRoutes.ts`: BookPdfReq 型定義（10→0件）
+- `src/api/admin/avatar/generationRoutes.ts`: AvatarReq 型 + LLM レスポンスに具体型（11→0件）
+- feedback, tuning, tenants, engagement, abTestRoutes: AuthedReq 型で `(req as any)` 除去
+
+### `@ts-ignore` (25 → 0)
+
+- 22件: `@types/pg` devDependency 追加で全解消（Pool型、QueryResult型が正しく認識）
+- 3件: Stripe パッケージ同梱の型で既に解決済み → 不要な @ts-ignore 削除
+- 副次修正: searchAgent.ts — Pool | null 型付けに伴い pool! 非nullアサーション追加
+
+### 未対応項目（将来タスク）
+
+| 項目 | 現状 | 優先度 |
+|---|---|---|
+| Dead exports 残 | 21件（全て正当理由あり） | 対応不要 |
+| `: any` 残 | 50件（外部ライブラリ型不足） | P3 |
+| `as any` 残 | 79件（外部ライブラリ型不整合） | P3 |
+| `@ts-ignore` | 0件 | ✅ 完了 |
+| `langGraphOrchestrator.ts` | 1,849行 → 470行 ✅ 分割完了（flowControl/graphNodes/llmCalls/ragRetrieval） | ✅ 完了 |
+
+### langGraphOrchestrator.ts 分割 (1,849行 → 470行)
+
+5ファイル構成:
+- `langGraphOrchestrator.ts` (470行) — runDialogGraph + re-export
+- `flowControl.ts` (460行) — Phase22フロー制御 + ルーティング判定5関数
+- `graphNodes.ts` (377行) — グラフノード8関数 + StateAnnotation
+- `llmCalls.ts` (307行) — プロンプトビルダー + LLM呼び出し
+- `ragRetrieval.ts` (217行) — RAG取得 + 履歴要約
+
+依存方向: flowControl(leaf) ← llmCalls ← ragRetrieval ← graphNodes ← langGraphOrchestrator（循環なし）
+
+### Claude Code カスタムエージェント導入
+
+本セッションで `.claude/agents/` に4エージェントを導入:
+- `@gate-runner` — Gate 1〜3 一括実行
+- `@cleanup` — dead exports/any型/as any除去
+- `@deploy-checker` — VPSデプロイ前後チェック
+- `@test-writer` — テスト作成
+
+環境変数:
+- `CLAUDE_CODE_NO_FLICKER=1` — Focus View 有効化
+- `MCP_CONNECTION_NONBLOCKING=true` — FT Pipeline --print 高速化
