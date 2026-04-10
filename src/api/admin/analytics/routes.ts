@@ -393,7 +393,8 @@ export function registerAnalyticsRoutes(app: Express): void {
           });
         }
 
-        const daily = result.rows.map((row: any) => {
+        type TrendRow = { date: string; sessions: number; avg_score: string | null; knowledge_gaps: number };
+        const daily = (result.rows as TrendRow[]).map((row) => {
           const sent = sentTrendsMap.get(row.date) ?? { positive: 0, negative: 0, neutral: 0 };
           return {
             date: row.date,
@@ -526,7 +527,8 @@ export function registerAnalyticsRoutes(app: Express): void {
           taboo_violation: parseFloat(axisRow.taboo_violation ?? "0"),
         };
 
-        const lowScoreSessions = lowResult.rows.map((row: any) => ({
+        type LowScoreRow = { session_id: string; score: string; evaluated_at: Date | string; message_count: number; feedback_summary: string | null };
+        const lowScoreSessions = (lowResult.rows as LowScoreRow[]).map((row) => ({
           session_id: row.session_id,
           score: parseFloat(row.score),
           evaluated_at: row.evaluated_at instanceof Date
@@ -591,7 +593,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           params,
         );
 
-        const totalSessions = summaryResult.rows.reduce((acc: number, row: any) => acc + parseInt(row.total_sessions, 10), 0);
+        const totalSessions = (summaryResult.rows as Array<{ total_sessions: string }>).reduce((acc, row) => acc + parseInt(row.total_sessions, 10), 0);
         // Dedup: get total from a separate count
         const totalCountResult = await pool.query(
           `SELECT COUNT(*) AS total FROM chat_sessions s

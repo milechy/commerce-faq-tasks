@@ -150,26 +150,36 @@ export function mapTuningTemplateRow(
 
 // --- 以下はプロパティタイプ別のヘルパー ---
 
-function getTitleText(property: any): string {
+type NotionProp = {
+  type?: string;
+  title?: RichTextItemResponse[];
+  rich_text?: RichTextItemResponse[];
+  multi_select?: { name: string }[];
+  select?: { name?: string } | null;
+  number?: number | null;
+  checkbox?: boolean;
+};
+
+function getTitleText(property: NotionProp): string {
   if (!property || property.type !== "title") return "";
   return (property.title as RichTextItemResponse[])
     .map((t) => t.plain_text ?? "")
     .join("");
 }
 
-function getRichText(property: any): string {
+function getRichText(property: NotionProp): string {
   if (!property || property.type !== "rich_text") return "";
   return (property.rich_text as RichTextItemResponse[])
     .map((t) => t.plain_text ?? "")
     .join("");
 }
 
-function getMultiSelectNames(property: any): string[] {
+function getMultiSelectNames(property: NotionProp): string[] {
   if (!property || property.type !== "multi_select") return [];
-  return property.multi_select.map((opt: { name: string }) => opt.name);
+  return (property.multi_select ?? []).map((opt) => opt.name);
 }
 
-function getSelectName(property: any): string | undefined {
+function getSelectName(property: NotionProp): string | undefined {
   if (!property) return undefined;
   if (property.type === "select") {
     return property.select?.name ?? undefined;
@@ -181,12 +191,12 @@ function getSelectName(property: any): string | undefined {
   return undefined;
 }
 
-function getNumber(property: any): number | undefined {
+function getNumber(property: NotionProp): number | undefined {
   if (!property || property.type !== "number") return undefined;
   return typeof property.number === "number" ? property.number : undefined;
 }
 
-function getCheckbox(property: any): boolean {
+function getCheckbox(property: NotionProp): boolean {
   if (!property || property.type !== "checkbox") return false;
   return Boolean(property.checkbox);
 }

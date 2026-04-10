@@ -258,20 +258,20 @@ export async function rerank(
 
       finalItems = withCeScores
         .slice(0, safeTopK)
-        .map(({ __ce, ...rest }: any) => rest as Item);
+        .map(({ __ce: _ce, ...rest }) => rest as Item);
       engineLabel = "ce";
     } catch {
       // CE に失敗した場合は Stage1 の heuristic 結果にフォールバック
       finalItems = stage1Candidates
         .slice(0, safeTopK)
-        .map(({ __ce, ...rest }: any) => rest as Item);
+        .map(({ __ce: _ce, ...rest }) => rest as Item);
       engineLabel = "ce+fallback";
     }
   } else {
     // CE を使わない場合: Stage1 の heuristic 上位からそのまま topK を返す
     finalItems = scoredAll
       .slice(0, safeTopK)
-      .map(({ __ce, ...rest }: any) => rest as Item);
+      .map(({ __ce: _ce, ...rest }) => rest as Item);
     engineLabel = "heuristic";
   }
 

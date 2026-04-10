@@ -25,23 +25,24 @@ type RagStatsCamel = {
   rerankEngine?: string;
 };
 
-function toCamelRagStats(ragStats: any): RagStatsCamel | undefined {
+function toCamelRagStats(ragStats: unknown): RagStatsCamel | undefined {
   if (!ragStats || typeof ragStats !== "object") return undefined;
+  const rs = ragStats as Record<string, unknown>;
 
   // ragStats が camelCase / snake_case どちらでも拾えるようにする（移行耐性）
-  const getNum = (a: any, b: any) =>
+  const getNum = (a: unknown, b: unknown) =>
     typeof a === "number" ? a : typeof b === "number" ? b : undefined;
 
-  const getStr = (a: any, b: any) =>
+  const getStr = (a: unknown, b: unknown) =>
     typeof a === "string" ? a : typeof b === "string" ? b : undefined;
 
   return {
-    plannerMs: getNum(ragStats.plannerMs, ragStats.planner_ms),
-    searchMs: getNum(ragStats.searchMs, ragStats.search_ms),
-    rerankMs: getNum(ragStats.rerankMs, ragStats.rerank_ms),
-    answerMs: getNum(ragStats.answerMs, ragStats.answer_ms),
-    totalMs: getNum(ragStats.totalMs, ragStats.total_ms),
-    rerankEngine: getStr(ragStats.rerankEngine, ragStats.rerank_engine),
+    plannerMs: getNum(rs['plannerMs'], rs['planner_ms']),
+    searchMs: getNum(rs['searchMs'], rs['search_ms']),
+    rerankMs: getNum(rs['rerankMs'], rs['rerank_ms']),
+    answerMs: getNum(rs['answerMs'], rs['answer_ms']),
+    totalMs: getNum(rs['totalMs'], rs['total_ms']),
+    rerankEngine: getStr(rs['rerankEngine'], rs['rerank_engine']),
   };
 }
 
@@ -101,7 +102,7 @@ export function createAgentSearchHandler(
       const camelRagStats = toCamelRagStats(anyResult?.ragStats);
 
       // base response
-      const responseBody: any = {
+      const responseBody: Record<string, unknown> & { meta?: Record<string, unknown> } = {
         ...anyResult,
         meta: {
           ...(anyResult.meta ?? {}),

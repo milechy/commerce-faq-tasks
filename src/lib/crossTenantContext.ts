@@ -111,7 +111,7 @@ async function fetchTopPsychologyPrinciples(): Promise<CrossTenantContext['topPs
       ORDER BY cv_rate DESC
       LIMIT 10
     `);
-    return result.rows.map((row: any) => ({
+    return (result.rows as Array<{ principle: string | null; total: string; cv_rate: string | null }>).map((row) => ({
       principle: String(row.principle ?? ''),
       conversionRate: Number(row.cv_rate ?? 0),
       sampleSize: Number(row.total ?? 0),
@@ -138,7 +138,7 @@ async function fetchCommonGapPatterns(): Promise<string[]> {
       ORDER BY gap_count DESC
       LIMIT 5
     `);
-    return result.rows.map((row: any) => `${row.pattern}(${row.gap_count}件)`);
+    return (result.rows as Array<{ pattern: string; gap_count: string }>).map((row) => `${row.pattern}(${row.gap_count}件)`);
   } catch (err) {
     if (!isTableNotFoundError(err)) {
       logger.warn({ err }, '[crossTenantContext] fetchCommonGapPatterns failed');

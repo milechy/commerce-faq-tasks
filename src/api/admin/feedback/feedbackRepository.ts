@@ -119,8 +119,7 @@ export async function getThreads(): Promise<FeedbackThread[]> {
     ORDER BY latest.last_message_at DESC
   `);
   // tenant_name はフロントで解決（テナント一覧APIを使用）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return res.rows.map((r: any) => ({
+  return (res.rows as Array<{ tenant_id: string; last_message: string; last_message_at: string; unread_count: number }>).map((r) => ({
     tenant_id: r.tenant_id as string,
     tenant_name: r.tenant_id as string, // フロント側で上書き
     last_message: r.last_message as string,

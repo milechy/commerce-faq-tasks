@@ -72,7 +72,7 @@ export async function runDialogOrchestrator(
     ? followQueries
     : plan.steps
         .filter((s) => s.type === 'search')
-        .map((s: any) => s.query)
+        .map((s: { type: string; query: string }) => s.query)
 
   if (!searchQueries || searchQueries.length === 0) {
     return {

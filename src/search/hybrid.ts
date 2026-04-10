@@ -11,6 +11,8 @@ export interface Hit {
   score: number;
   source: "es" | "pg";
 }
+type EsHit = { _id: string; _source?: { text?: string; [key: string]: unknown }; _score?: number };
+type EsSearchResult = { hits?: { hits?: EsHit[] } };
 const BUDGET = Number(process.env.HYBRID_TIMEOUT_MS || 600);
 const ALLOW_MOCK = process.env.HYBRID_MOCK_ON_FAILURE === "1";
 // Phase33 C: フィーチャーフラグ（LANG_SEARCH_ENABLED=1 で有効化）
@@ -94,7 +96,7 @@ export async function hybridSearch(
       : [`faq_${tenantId ?? "demo"}`];
     const esIndex = esIndices[0]; // まずプライマリを試す
 
-    const esRes: any = await es.search(
+    const esRes = await es.search(
       {
         index: esIndex,
         size: 50,
@@ -130,21 +132,21 @@ export async function hybridSearch(
     );
     const tEs1 = Date.now();
     esElapsedMs = tEs1 - tEs0;
-    esHits = (esRes.hits?.hits || []).map((h: any) => ({
+    esHits = ((esRes.hits?.hits ?? []) as EsHit[]).map((h) => ({
       id: h._id,
       text: decryptText(h._source?.text ?? ""),
-      score: h._score,
+      score: h._score ?? 0,
       source: "es" as const,
     }));
-  } catch (e: any) {
+  } catch (e: unknown) {
     const esErrCode = (e as any)?.meta?.statusCode ?? (e as any)?.statusCode;
-    notes.push(`es_error:${e.message || String(e)}`);
+    notes.push(`es_error:${(e as Error).message || String(e)}`);
 
     // Phase33 C: 言語別インデックスが存在しない場合（404）、旧インデックスにフォールバック
     if (LANG_SEARCH_ENABLED && esErrCode === 404 && tenantId) {
       const fallbackIndex = `faq_${tenantId}`;
       try {
-        const fbRes: any = await es.search(
+        const fbRes = await es.search(
           {
             index: fallbackIndex,
             size: 50,
@@ -157,17 +159,17 @@ export async function hybridSearch(
           },
           { requestTimeout: BUDGET }
         );
-        esHits = (fbRes.hits?.hits || []).map((h: any) => ({
+        esHits = ((fbRes.hits?.hits ?? []) as EsHit[]).map((h) => ({
           id: h._id,
           text: decryptText(h._source?.text ?? ""),
-          score: h._score,
+          score: h._score ?? 0,
           source: "es" as const,
         }));
         if (esHits.length > 0) {
           notes.push(`es_lang_fallback:${fallbackIndex} hits=${esHits.length}`);
         }
-      } catch (fbErr: any) {
-        notes.push(`es_fallback_error:${fbErr.message || String(fbErr)}`);
+      } catch (fbErr: unknown) {
+        notes.push(`es_fallback_error:${(fbErr as Error).message || String(fbErr)}`);
       }
     }
   }
@@ -183,7 +185,7 @@ export async function hybridSearch(
   if (esHits.length === 0 && !notes.some((n) => n.startsWith("es_error:"))) {
     try {
       const tProbe0 = Date.now();
-      const probe: any = await es.search(
+      const probe = await es.search(
         {
           index: `faq_${tenantId ?? "demo"}`,
           size: 5,
@@ -209,10 +211,10 @@ export async function hybridSearch(
       const tProbe1 = Date.now();
       const probeMs = tProbe1 - tProbe0;
       notes.push(`probe_ms=${probeMs}`);
-      const probeHits = (probe.hits?.hits || []).map((h: any) => ({
+      const probeHits = ((probe.hits?.hits ?? []) as EsHit[]).map((h) => ({
         id: h._id,
         text: decryptText(h._source?.text ?? ""),
-        score: h._score,
+        score: h._score ?? 0,
         source: "es" as const,
       }));
       if (probeHits.length > 0) {
@@ -221,8 +223,8 @@ export async function hybridSearch(
       } else {
         notes.push("probe:no_hits");
       }
-    } catch (e: any) {
-      notes.push(`probe_error:${e.message || String(e)}`);
+    } catch (e: unknown) {
+      notes.push(`probe_error:${(e as Error).message || String(e)}`);
     }
   }
 

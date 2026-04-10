@@ -11,7 +11,7 @@
 // Widget向け (x-api-key認証):
 //   GET /api/engagement/rules
 
-import type { Express, Request, Response } from 'express';
+import type { Express, Request, Response, RequestHandler } from 'express';
 // @ts-ignore - pg has no bundled type declarations in this project
 import type { Pool } from 'pg';
 import { z } from 'zod';
@@ -55,7 +55,7 @@ const TriggerRuleSchema = z.discriminatedUnion('trigger_type', [
 
 const ADMIN_AUTH = [supabaseAuthMiddleware, roleAuthMiddleware, requireRole('super_admin', 'client_admin')];
 
-export function registerEngagementRoutes(app: Express, apiStack: any[], db: Pool | null): void {
+export function registerEngagementRoutes(app: Express, apiStack: RequestHandler[], db: Pool | null): void {
   // ----------------------------------------------------------------
   // Admin CRUD
   // ----------------------------------------------------------------

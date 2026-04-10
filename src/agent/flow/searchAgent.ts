@@ -1,7 +1,7 @@
 // src/agent/flow/searchAgent.ts
 
 
-import { searchPgVector } from "../../search/pgvectorSearch";
+import { searchPgVector, type PgvectorSearchItem } from "../../search/pgvectorSearch";
 import { embedTextOpenAI } from "../llm/openaiEmbeddingClient";
 import { rerankTool } from "../tools/rerankTool";
 import { searchTool } from "../tools/searchTool";
@@ -54,7 +54,7 @@ export async function runSearchAgent(
   });
 
   // 2) pgvector search (Phase7 A-mode: pgvector → ES)
-  let pgVectorItems: any[] = [];
+  let pgVectorItems: PgvectorSearchItem[] = [];
   let pgVectorMs = 0;
   let pgVectorError = false;
   try {
@@ -84,9 +84,9 @@ export async function runSearchAgent(
 
   // Aモード: pgvector → ES の順でマージ
   const mergedItems = [
-    ...pgVectorItems.map((hit: any) => ({
+    ...pgVectorItems.map((hit) => ({
       ...hit,
-      source: (hit as any).source ?? "pgvector",
+      source: "pg" as const,
     })),
     ...(baseSearchResult.items || []),
   ];

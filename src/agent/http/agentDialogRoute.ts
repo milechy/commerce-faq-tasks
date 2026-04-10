@@ -5,7 +5,7 @@ import { AgentDialogOrchestrator } from "./AgentDialogOrchestrator";
 import { maybeProbeLemonSliceReadiness } from "./presentation/lemonSliceAdapter";
 
 export type AgentDialogDeps = {
-  webhookNotifier?: any;
+  webhookNotifier?: unknown;
 };
 
 export function createAgentDialogHandler(
@@ -25,7 +25,7 @@ export function createAgentDialogHandler(
     const tenantId = (req as any).tenantId ?? "demo-tenant";
 
     // PR2b: adapter 状態（presentation-only）
-    let adapterMeta: any = undefined;
+    let adapterMeta: import("../dialog/types").AdapterMeta | undefined = undefined;
 
     try {
       const options = (body as any).options ?? {};

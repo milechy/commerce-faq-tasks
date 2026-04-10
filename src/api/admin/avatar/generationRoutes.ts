@@ -165,7 +165,7 @@ Output ONLY the English prompt, nothing else.`,
               pollData;
             if (gen?.status === "COMPLETE") {
               const imgs: string[] = (gen?.generated_images ?? [])
-                .map((img: any) => img?.url ?? "")
+                .map((img: { url?: string } | null) => img?.url ?? "")
                 .filter(Boolean);
               return imgs;
             }

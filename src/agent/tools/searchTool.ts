@@ -30,7 +30,7 @@ export async function searchTool(
     });
 
     if (vecResult.items.length > 0) {
-      const items: Hit[] = vecResult.items.map((hit: any) => ({
+      const items: Hit[] = vecResult.items.map((hit) => ({
         id: hit.id,
         text: hit.text,
         score: hit.score,

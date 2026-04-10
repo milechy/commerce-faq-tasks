@@ -5,7 +5,7 @@
 // GET  /v1/admin/conversion/attributions — 管理一覧（JWT）
 // GET  /v1/admin/conversion/effectiveness — 心理原則効果ランキング（JWT）
 
-import type { Express, Request, Response } from 'express';
+import type { Express, Request, Response, RequestHandler } from 'express';
 // @ts-ignore
 import type { Pool } from 'pg';
 import { z } from 'zod';
@@ -35,7 +35,7 @@ const ADMIN_AUTH = [supabaseAuthMiddleware, roleAuthMiddleware, requireRole('sup
 
 export function registerConversionRoutes(
   app: Express,
-  apiStack: any[],
+  apiStack: RequestHandler[],
   db: Pool | null,
 ): void {
   // ----------------------------------------------------------------
@@ -204,7 +204,7 @@ export function registerConversionRoutes(
         params,
       );
 
-      const rankings = result.rows.map((row: any) => ({
+      const rankings = (result.rows as Array<{ principle: string; count: string; avg_temp_score: string | null }>).map((row) => ({
         principle: row.principle,
         count: Number(row.count),
         avg_temp_score: Number(row.avg_temp_score ?? 0),

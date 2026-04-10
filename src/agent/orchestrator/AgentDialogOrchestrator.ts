@@ -57,7 +57,7 @@ export class AgentDialogOrchestrator {
     // DialogTurnInput.history を CrewAgentInput.history 互換に正規化
     const history: Array<{ role: "user" | "assistant"; content: string }> =
       Array.isArray(body.history)
-        ? body.history.map((m: any) => ({
+        ? body.history.map((m: { role?: string; content?: unknown }) => ({
             role:
               m.role === "assistant"
                 ? ("assistant" as const)

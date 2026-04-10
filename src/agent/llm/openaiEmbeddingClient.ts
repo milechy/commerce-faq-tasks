@@ -32,14 +32,14 @@ export async function embedText(text: string): Promise<number[]> {
     throw new Error(`OpenAI embeddings failed: ${res.status} ${snippet}`);
   }
 
-  const json: any = await res.json();
+  const json = await res.json() as { data?: Array<{ embedding?: unknown[] }> };
   const embedding = json?.data?.[0]?.embedding;
   if (!Array.isArray(embedding)) {
     throw new Error("OpenAI embedding not found in response");
   }
 
   // 念のため number 配列に正規化
-  return embedding.map((v: any) =>
+  return embedding.map((v) =>
     typeof v === "number" ? v : Number(v) || 0
   );
 }

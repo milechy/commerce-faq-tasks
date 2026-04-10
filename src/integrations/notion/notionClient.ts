@@ -3,8 +3,8 @@ import { Client, isNotionClientError } from "@notionhq/client";
 
 export interface QueryDatabaseArgs {
   databaseId: string;
-  filter?: any;
-  sorts?: any;
+  filter?: unknown;
+  sorts?: unknown;
   start_cursor?: string;
   page_size?: number;
 }

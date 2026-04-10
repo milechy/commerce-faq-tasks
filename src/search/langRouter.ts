@@ -7,6 +7,7 @@
 
 import { Client as ES } from "@elastic/elasticsearch";
 import { pool as pg } from "../lib/db";
+type EsHit = { _id: string; _source?: { text?: string; [key: string]: unknown }; _score?: number };
 
 import {
   SupportedLang,
@@ -150,12 +151,12 @@ export async function langRouterSearch(
           ? buildEsQuery(q, tenantId, lang, psychologyHints)
           : buildEsFallbackQuery(q, tenantId, psychologyHints);
 
-        const esRes: any = await es.search(
+        const esRes = await es.search(
           { index, size: topK * 2, query: esQuery },
           { requestTimeout: BUDGET }
         );
 
-        const hits = (esRes.hits?.hits || []).map((h: any) => ({
+        const hits = ((esRes.hits?.hits ?? []) as EsHit[]).map((h) => ({
           id: h._id as string,
           text: h._source?.text as string,
           score: h._score as number,
@@ -213,7 +214,7 @@ export async function langRouterSearch(
       `;
 
       const res = await pg.query(sql, [embedLiteral, tenantId, lang, topK]);
-      pgHits = (res.rows || []).map((row: any) => ({
+      pgHits = (res.rows as Array<{ id: string; text: string; score: number; lang: string | null }> || []).map((row) => ({
         id: String(row.id),
         text: row.text as string,
         score: typeof row.score === "number" ? row.score : Number(row.score) || 0,
@@ -222,8 +223,8 @@ export async function langRouterSearch(
       }));
 
       notes.push(`pgvector:hits=${pgHits.length}`);
-    } catch (e: any) {
-      notes.push(`pgvector:error=${e.message || String(e)}`);
+    } catch (e: unknown) {
+      notes.push(`pgvector:error=${(e as Error).message || String(e)}`);
     }
   } else if (!embedding || embedding.length === 0) {
     notes.push("pgvector:no_embedding");

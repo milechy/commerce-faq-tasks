@@ -114,10 +114,11 @@ async function collectWeeklyMetrics(
        GROUP BY cs.prompt_variant_id, cs.prompt_variant_name`,
       [tenantId, periodStart, periodEnd],
     );
-    variantComparison = variantResult.rows.map((row: any) => ({
+    type VariantRow = { prompt_variant_id: string | null; prompt_variant_name: string | null; avg_score: string | null };
+    variantComparison = (variantResult.rows as VariantRow[]).map((row) => ({
       variantId: row.prompt_variant_id ?? 'unknown',
       variantName: row.prompt_variant_name ?? null,
-      avgScore: parseFloat(row.avg_score) || 0,
+      avgScore: parseFloat(row.avg_score ?? '0') || 0,
     }));
   } catch (err) {
     logger.warn({ err, tenantId }, 'weeklyReport.collectMetrics.variant.skipped');

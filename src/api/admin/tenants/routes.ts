@@ -381,7 +381,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
          ORDER BY created_at DESC`,
         [id]
       );
-      const keys = result.rows.map((row: any) => ({
+      const keys = (result.rows as Array<{ id: string; key_prefix: string; is_active: boolean; created_at: string; expires_at: string | null; last_used_at: string | null }>).map((row) => ({
         ...row,
         prefix: maskApiKeyPrefix(row.key_prefix),
       }));

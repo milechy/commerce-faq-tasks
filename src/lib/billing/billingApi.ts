@@ -2,6 +2,7 @@
 // Phase32 + Phase54: 課金管理API
 
 import type pino from 'pino';
+import type { Application, Request, Response, RequestHandler } from 'express';
 import { z } from 'zod';
 import { roleAuthMiddleware, requireRole } from '../../api/middleware/roleAuth';
 
@@ -23,7 +24,7 @@ const invoicesQuerySchema = z.object({
 });
 
 /** tenantId をJWT（client_admin）またはクエリ（super_admin）から解決する */
-function resolveTenantId(req: any): { tenantId: string | null; isSuperAdmin: boolean } {
+function resolveTenantId(req: Request): { tenantId: string | null; isSuperAdmin: boolean } {
   const user = (req as any).user as { role: string; tenantId: string | null } | undefined;
   const isSuperAdmin = user?.role === 'super_admin';
   if (isSuperAdmin) {
@@ -43,10 +44,10 @@ function resolveTenantId(req: any): { tenantId: string | null; isSuperAdmin: boo
  * ロール検査（super_admin / client_admin）はこの関数内部で行う。
  */
 export function registerBillingAdminRoutes(
-  app: any,
+  app: Application,
   db: any,
   logger: pino.Logger,
-  baseMiddleware: any[]
+  baseMiddleware: RequestHandler[]
 ): void {
   const mw = [...baseMiddleware, roleAuthMiddleware, requireRole('super_admin', 'client_admin')];
 
@@ -56,7 +57,7 @@ export function registerBillingAdminRoutes(
   app.get(
     '/v1/admin/billing/usage',
     ...mw,
-    async (req: any, res: any): Promise<void> => {
+    async (req: Request, res: Response): Promise<void> => {
       const parsed = usageQuerySchema.safeParse(req.query);
       if (!parsed.success) {
         res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
@@ -165,7 +166,7 @@ export function registerBillingAdminRoutes(
   app.get(
     '/v1/admin/billing/cost-breakdown',
     ...mw,
-    async (req: any, res: any): Promise<void> => {
+    async (req: Request, res: Response): Promise<void> => {
       const parsed = breakdownQuerySchema.safeParse(req.query);
       if (!parsed.success) {
         res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
@@ -219,7 +220,7 @@ export function registerBillingAdminRoutes(
         };
 
         const totalCents = result.rows.reduce(
-          (s: number, r: any) => s + Number(r.total_cents),
+          (s: number, r: Record<string, unknown>) => s + Number(r['total_cents']),
           0
         );
 
@@ -258,7 +259,7 @@ export function registerBillingAdminRoutes(
   app.get(
     '/v1/admin/billing/invoices',
     ...mw,
-    async (req: any, res: any): Promise<void> => {
+    async (req: Request, res: Response): Promise<void> => {
       const parsed = invoicesQuerySchema.safeParse(req.query);
       if (!parsed.success) {
         res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });

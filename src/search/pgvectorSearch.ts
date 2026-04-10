@@ -58,7 +58,7 @@ export async function searchPgVector(
     const result = await pool.query(query, [embeddingLiteral, tenantId, topK]);
     const t1 = performance.now();
 
-    const items: PgvectorSearchItem[] = result.rows.map((row: any) => ({
+    const items: PgvectorSearchItem[] = (result.rows as Array<{ id: string; text: string | null; score: number }>).map((row) => ({
       id: String(row.id),
       text: decryptText(row.text ?? ""),
       score: (() => {

@@ -31,7 +31,7 @@ export function registerInternalAvatarConfigRoutes(app: Express): void {
       }
 
       return res.json({ config: result.rows[0] });
-    } catch (err: any) {
+    } catch {
       return res.status(500).json({ error: "internal error" });
     }
   });

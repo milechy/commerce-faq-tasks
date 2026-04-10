@@ -7,7 +7,7 @@ export interface PgVectorHit {
   id: string;
   text: string;
   score: number; // 類似度（1 に近いほど類似）
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PgVectorSearchResult {
@@ -91,7 +91,8 @@ export async function searchPgVector(
     const res = await pg.query(sql, [tenantId, embedLiteral, topK]);
     const ms = Date.now() - t0;
 
-    const items: PgVectorHit[] = (res.rows || []).map((row: any) => ({
+    type PgRow = { id: string; text: string | null; metadata: Record<string, unknown> | null; score: number };
+    const items: PgVectorHit[] = (res.rows as PgRow[] || []).map((row) => ({
       id: String(row.id),
       text: decryptText(row.text ?? ""),
       metadata: row.metadata ?? undefined,
@@ -107,10 +108,11 @@ export async function searchPgVector(
       ms,
       note: notes.length ? notes.join(" | ") : undefined,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     const ms = Date.now() - t0;
+    const e = err as Error;
     notes.push(
-      `pgvector_error:${err?.name || "Error"}:${err?.message || String(err)}`
+      `pgvector_error:${e?.name || "Error"}:${e?.message || String(err)}`
     );
     return {
       items: [],

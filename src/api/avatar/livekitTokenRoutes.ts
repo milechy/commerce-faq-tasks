@@ -66,9 +66,9 @@ async function dispatchAgentToRoom(
       maxParticipants: 3,    // widget + agent + lemonslice
     });
     logger.info(`[livekitTokenRoutes] Room created: ${roomName}`);
-  } catch (err: any) {
+  } catch (err: unknown) {
     // "already exists" は無害
-    logger.warn(`[livekitTokenRoutes] CreateRoom warn: ${err?.message ?? err}`);
+    logger.warn(`[livekitTokenRoutes] CreateRoom warn: ${(err as Error)?.message ?? String(err)}`);
   }
 
   // 2. Agent Dispatch

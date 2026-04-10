@@ -376,7 +376,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       }
 
       const setClauses: string[] = [];
-      const values: any[] = [];
+      const values: unknown[] = [];
       let idx = 1;
 
       for (const [key, value] of Object.entries(data)) {
@@ -431,7 +431,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       try {
         // まず対象を取得して is_active チェック
         let checkQuery = "SELECT * FROM avatar_configs WHERE id = $1";
-        const checkValues: any[] = [id];
+        const checkValues: unknown[] = [id];
         if (!isSuperAdmin) {
           checkQuery += " AND tenant_id = $2";
           checkValues.push(tenantId);
@@ -518,7 +518,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
 
       try {
         let checkQuery = "SELECT * FROM avatar_configs WHERE id = $1";
-        const checkValues: any[] = [id];
+        const checkValues: unknown[] = [id];
         if (!isSuperAdmin) {
           checkQuery += " AND tenant_id = $2";
           checkValues.push(tenantId);

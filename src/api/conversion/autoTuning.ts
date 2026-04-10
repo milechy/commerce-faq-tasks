@@ -33,7 +33,7 @@ export async function detectRepeatedJudgeSuggestions(
       [tenantId],
     );
 
-    return result.rows.map((r: any) => ({
+    return (result.rows as Array<{ rule: string; cnt: string }>).map((r) => ({
       type: 'judge_repeated' as const,
       description: `AIが${r.cnt}回同じ提案をしています`,
       suggestedAction: r.rule,
@@ -52,6 +52,7 @@ export async function detectABWinners(
 ): Promise<AutoTuningCandidate[]> {
   if (!pool) return [];
   try {
+    type AbRow = { id: string; name: string; count_a: string; conv_a: string; count_b: string; conv_b: string };
     const experiments = await pool.query(
       `SELECT e.id, e.name, e.variant_a, e.variant_b, e.min_sample_size,
          COUNT(r.id) FILTER (WHERE r.variant = 'a') AS count_a,
@@ -66,13 +67,13 @@ export async function detectABWinners(
       [tenantId],
     );
 
-    return experiments.rows
-      .filter((e: any) => {
+    return (experiments.rows as AbRow[])
+      .filter((e) => {
         const rateA = Number(e.count_a) > 0 ? Number(e.conv_a) / Number(e.count_a) : 0;
         const rateB = Number(e.count_b) > 0 ? Number(e.conv_b) / Number(e.count_b) : 0;
         return Math.abs(rateA - rateB) > 0.05;
       })
-      .map((e: any) => {
+      .map((e) => {
         const rateA = Number(e.count_a) > 0 ? Number(e.conv_a) / Number(e.count_a) : 0;
         const rateB = Number(e.count_b) > 0 ? Number(e.conv_b) / Number(e.count_b) : 0;
         const winner = rateA >= rateB ? 'A' : 'B';
@@ -110,7 +111,7 @@ export async function detectTopPrinciples(
       [tenantId],
     );
 
-    return result.rows.map((r: any) => ({
+    return (result.rows as Array<{ principle: string; total: string; avg_temp: string | null }>).map((r) => ({
       type: 'effectiveness_top' as const,
       description: `「${r.principle}」が${r.total}回のCVに貢献（平均温度感${Math.round(Number(r.avg_temp ?? 0))}）`,
       suggestedAction: `「${r.principle}」をチューニングルールで優先設定`,

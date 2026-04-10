@@ -91,7 +91,7 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
       try {
         const pool = getPool();
         const conditions: string[] = [];
-        const values: any[] = [];
+        const values: unknown[] = [];
         let idx = 1;
 
         if (filterTenantId) {
@@ -220,7 +220,7 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
 
       const data = parsed.data;
       const setClauses: string[] = [];
-      const values: any[] = [];
+      const values: unknown[] = [];
       let idx = 1;
 
       if (data.status !== undefined) {

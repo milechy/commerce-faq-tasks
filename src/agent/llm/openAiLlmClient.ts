@@ -82,7 +82,7 @@ export class OpenAiLlmClient implements LlmClient {
         )
       }
 
-      const json: any = await res.json()
+      const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
 
       const content: string | undefined =
         json?.choices?.[0]?.message?.content

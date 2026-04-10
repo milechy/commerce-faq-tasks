@@ -69,12 +69,13 @@ async function probeHttpReadiness(params: {
     }
 
     return { ok: true, status: res.status };
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const err = e as Error | null;
     const msg =
-      e?.name === "AbortError"
+      err?.name === "AbortError"
         ? "timeout"
-        : typeof e?.message === "string"
-        ? e.message
+        : typeof err?.message === "string"
+        ? err.message
         : "unknown_error";
     return { ok: false, error: msg };
   } finally {

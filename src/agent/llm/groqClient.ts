@@ -156,7 +156,7 @@ export const groqClient: GroqClient = {
       throw new GroqBadRequestError(response.status, bodySnippet);
     }
 
-    const json: any = await response.json()
+    const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }
 
     const content = json?.choices?.[0]?.message?.content
     if (typeof content !== 'string') {
@@ -202,7 +202,7 @@ export const groqClient: GroqClient = {
       throw new GroqBadRequestError(response.status, bodySnippet);
     }
 
-    const json: any = await response.json()
+    const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }
     const content = json?.choices?.[0]?.message?.content
     if (typeof content !== 'string') {
       throw new Error('Groq API response has no message content')
@@ -222,8 +222,8 @@ export interface GroqRetryOptions {
   maxRetries?: number;
   baseBackoffMs?: number;
   logger?: {
-    warn: (obj: any, msg: string) => void;
-    info?: (obj: any, msg: string) => void;
+    warn: (obj: unknown, msg: string) => void;
+    info?: (obj: unknown, msg: string) => void;
   };
 }
 

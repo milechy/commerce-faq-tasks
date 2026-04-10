@@ -11,8 +11,7 @@ import type { AdapterMeta } from "../dialog/types";
 // ここで DialogAgentResponse 互換オブジェクトを直接組み立てる。
 
 export type AgentDialogDeps = {
-  // 現状の HTTP テストでは Webhook は利用しないため any で緩く定義
-  webhookNotifier?: any;
+  webhookNotifier?: unknown;
 };
 
 export function createAgentDialogHandler(

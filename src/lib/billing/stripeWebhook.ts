@@ -2,6 +2,7 @@
 // Phase32: Stripe Webhook処理
 
 import type pino from 'pino';
+import type { Request, Response } from 'express';
 
 function getStripeClient(): any {
   const secret = process.env.STRIPE_SECRET_KEY;
@@ -18,7 +19,7 @@ function getStripeClient(): any {
  *    Stripe 署名検証には raw body（Buffer）が必要。
  */
 export function createStripeWebhookHandler(db: any, logger: pino.Logger) {
-  return async (req: any, res: any): Promise<void> => {
+  return async (req: Request, res: Response): Promise<void> => {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!webhookSecret) {
       logger.error('[webhook] STRIPE_WEBHOOK_SECRET not set');

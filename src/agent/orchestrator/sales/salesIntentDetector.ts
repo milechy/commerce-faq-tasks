@@ -22,9 +22,7 @@ export type { DetectedSalesIntents } from '../../dialog/types'
 export type SalesIntentDetectionInput = {
   userMessage: string
   history?: DialogMessage[]
-  // Planner の詳細構造には依存しない。必要になったら型を広げる。
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  plan: any
+  plan: unknown
 }
 
 type PhaseRuleBase<TIntent extends string> = {
