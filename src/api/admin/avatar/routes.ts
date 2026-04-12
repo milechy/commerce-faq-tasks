@@ -449,7 +449,21 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
             .json({ error: "アクティブな設定は削除できません。先に別の設定を有効化してください" });
         }
 
+        const deletedTenantId: string = existing.rows[0].tenant_id as string;
         await db.query("DELETE FROM avatar_configs WHERE id = $1", [id]);
+
+        // 削除後にアクティブ設定が残っていなければ features.avatar = false に同期
+        const remaining = await db.query(
+          "SELECT COUNT(*) AS count FROM avatar_configs WHERE tenant_id = $1 AND is_active = true",
+          [deletedTenantId]
+        );
+        if (parseInt(remaining.rows[0].count as string, 10) === 0) {
+          await db.query(
+            "UPDATE tenants SET features = jsonb_set(COALESCE(features, '{}'), '{avatar}', 'false') WHERE id = $1",
+            [deletedTenantId]
+          );
+        }
+
         return res.json({ ok: true, id });
       } catch (err) {
         logger.warn("[DELETE /v1/admin/avatar/configs/:id]", err);
@@ -471,17 +485,17 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       try {
         await client.query("BEGIN");
 
-        // 全て deactivate
-        await client.query(
-          "UPDATE avatar_configs SET is_active = false WHERE tenant_id = $1",
-          [isSuperAdmin ? (req.query["tenant"] as string || tenantId) : tenantId]
-        );
-
-        // 対象を activate
         const effectiveTenantId = isSuperAdmin
           ? (req.query["tenant"] as string || tenantId)
           : tenantId;
 
+        // 全て deactivate
+        await client.query(
+          "UPDATE avatar_configs SET is_active = false WHERE tenant_id = $1",
+          [effectiveTenantId]
+        );
+
+        // 対象を activate
         const result = await client.query(
           "UPDATE avatar_configs SET is_active = true WHERE id = $1 AND tenant_id = $2 RETURNING *",
           [id, effectiveTenantId]
@@ -493,6 +507,12 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
             .status(404)
             .json({ error: "設定が見つからないかアクセス権限がありません" });
         }
+
+        // tenants.features.avatar を true に同期（widget/chat-test が参照するフラグ）
+        await client.query(
+          "UPDATE tenants SET features = jsonb_set(COALESCE(features, '{}'), '{avatar}', 'true') WHERE id = $1",
+          [effectiveTenantId]
+        );
 
         await client.query("COMMIT");
         return res.json(result.rows[0]);
