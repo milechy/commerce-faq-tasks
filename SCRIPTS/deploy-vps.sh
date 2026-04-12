@@ -23,24 +23,26 @@ echo "=== Phase28: Deploy to ${VPS}:${REMOTE_DIR} ==="
 echo "[1/6] Syncing repository to VPS..."
 # NOTE: --exclude '.env*' prevents rsync --delete from wiping VPS env files.
 # VPS holds the authoritative .env / .env.local with production secrets.
+# NOTE: 'admin-ui/dist/' は除外必須 — ローカルビルド成果物にはVITE_変数が入らない。
+#   VPS上では build-admin-ui.sh が .env.local を読んで正しくビルドする。
 rsync -avz --delete \
-  --exclude node_modules \
-  --exclude .pnpm-store \
-  --exclude dist \
-  --exclude admin-ui/node_modules \
-  --exclude admin-ui/dist \
+  --exclude 'node_modules/' \
+  --exclude '.pnpm-store/' \
+  --exclude 'dist/' \
+  --exclude 'admin-ui/node_modules/' \
+  --exclude 'admin-ui/dist/' \
   --exclude '.env' \
   --exclude '.env.*' \
-  --exclude '.git' \
-  --exclude logs \
+  --exclude '.git/' \
+  --exclude 'logs/' \
   --exclude '*.log' \
   --exclude '*.zip' \
-  --exclude '_bundle' \
+  --exclude '_bundle/' \
   --exclude '.DS_Store' \
-  --exclude '.vscode' \
-  --exclude '.devcontainer' \
-  --exclude '__pycache__' \
-  --exclude 'avatar-agent/venv' \
+  --exclude '.vscode/' \
+  --exclude '.devcontainer/' \
+  --exclude '__pycache__/' \
+  --exclude 'avatar-agent/venv/' \
   ./ "${VPS}:${REMOTE_DIR}/"
 
 echo "[2/6] Installing dependencies on VPS..."
