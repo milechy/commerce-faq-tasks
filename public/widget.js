@@ -1524,22 +1524,32 @@
   function sendTTSRequest(text) {
     try {
       var room = window.__rajiuceRoom;
-      if (!room || !room.localParticipant) {
-        console.warn('[FAQ Widget] sendTTSRequest: no room or participant');
+      console.log('[FAQ Widget] sendTTSRequest called: roomState=' + (room ? room.state : 'NO_ROOM') + ' textLen=' + (text ? text.length : 0));
+      if (!room) {
+        console.warn('[FAQ Widget] sendTTSRequest: no room (window.__rajiuceRoom is null)');
         return;
       }
+      if (!room.localParticipant) {
+        console.warn('[FAQ Widget] sendTTSRequest: localParticipant is null, state=' + room.state);
+        return;
+      }
+      // TTS用テキストを 500 文字に制限（Data Channel 上限対策）
+      var ttsText = text.length > 500 ? text.slice(0, 500) : text;
       var encoder = new TextEncoder();
-      var payload = encoder.encode(JSON.stringify({ type: 'tts_request', text: text }));
+      var payload = encoder.encode(JSON.stringify({ type: 'tts_request', text: ttsText }));
+      console.log('[FAQ Widget] sendTTSRequest: publishing ' + payload.length + ' bytes');
       var result = room.localParticipant.publishData(payload, { reliable: true });
       if (result && typeof result.then === 'function') {
         result.then(function() {
-          console.log('[FAQ Widget] sendTTSRequest: data published successfully');
+          console.log('[FAQ Widget] sendTTSRequest: published OK');
         }).catch(function(err) {
-          console.error('[FAQ Widget] sendTTSRequest: publishData failed:', err && err.message);
+          console.error('[FAQ Widget] sendTTSRequest: publishData rejected:', err && (err.message || err));
         });
+      } else {
+        console.log('[FAQ Widget] sendTTSRequest: publishData returned synchronously (no promise)');
       }
     } catch (e) {
-      console.error('[FAQ Widget] sendTTSRequest error:', e && e.message);
+      console.error('[FAQ Widget] sendTTSRequest error:', e && (e.message || e));
     }
   }
 
@@ -1857,8 +1867,10 @@
         };
         messages.push(assistantMsg);
 
-        // アバター有効（LiveKit Room接続中）→ 応答テキストをTTSリクエストとして送信
-        if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+        // アバター有効（LiveKit接続中）→ 応答テキストをTTSリクエストとして送信
+        var lkRoom = window.__rajiuceRoom;
+        console.log('[FAQ Widget] sendMessage after API: avatarProvider=' + avatarProvider + ' roomState=' + (lkRoom ? lkRoom.state : 'null') + ' hasParticipant=' + !!(lkRoom && lkRoom.localParticipant));
+        if (avatarProvider === 'lemonslice' && lkRoom && lkRoom.localParticipant) {
           sendTTSRequest(assistantContent);
         }
 
