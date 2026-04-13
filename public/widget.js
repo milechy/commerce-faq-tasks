@@ -1521,25 +1521,25 @@
     }
   }
 
-  function sendToLiveKit(text) {
+  function sendTTSRequest(text) {
     try {
       var room = window.__rajiuceRoom;
       if (!room || !room.localParticipant) {
-        console.warn('[FAQ Widget] sendToLiveKit: no room or participant');
+        console.warn('[FAQ Widget] sendTTSRequest: no room or participant');
         return;
       }
       var encoder = new TextEncoder();
-      var payload = encoder.encode(JSON.stringify({ type: 'chat', text: text }));
+      var payload = encoder.encode(JSON.stringify({ type: 'tts_request', text: text }));
       var result = room.localParticipant.publishData(payload, { reliable: true });
       if (result && typeof result.then === 'function') {
         result.then(function() {
-          console.log('[FAQ Widget] sendToLiveKit: data published successfully');
+          console.log('[FAQ Widget] sendTTSRequest: data published successfully');
         }).catch(function(err) {
-          console.error('[FAQ Widget] sendToLiveKit: publishData failed:', err && err.message);
+          console.error('[FAQ Widget] sendTTSRequest: publishData failed:', err && err.message);
         });
       }
     } catch (e) {
-      console.error('[FAQ Widget] sendToLiveKit error:', e && e.message);
+      console.error('[FAQ Widget] sendTTSRequest error:', e && e.message);
     }
   }
 
@@ -1786,18 +1786,6 @@
       return;
     }
 
-    sendToLiveKit(text.trim());
-
-    // アバター有効（LiveKit Room接続中）→ REST APIをスキップし音声応答のみ
-    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
-      isLoading = false;
-      textarea.disabled = false;
-      renderMessages();
-      updateSendButton();
-      textarea.focus();
-      return;
-    }
-
     if (currentAbortController) {
       currentAbortController.abort();
     }
@@ -1868,6 +1856,11 @@
           timestamp: (json.data && json.data.timestamp) || Date.now(),
         };
         messages.push(assistantMsg);
+
+        // アバター有効（LiveKit Room接続中）→ 応答テキストをTTSリクエストとして送信
+        if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+          sendTTSRequest(assistantContent);
+        }
 
         emitToHost('assistant:message', { messageLength: assistantContent.length });
       })

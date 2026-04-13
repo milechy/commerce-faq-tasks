@@ -361,8 +361,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 exc_info=inner_error,
             )
 
+    async def handle_tts_request(reply_text: str) -> None:
+        """本体APIの応答テキストをそのままTTSに渡す（Groq呼び出しなし）。"""
+        try:
+            logger.info(f"[tts_request] TTS直渡し ({len(reply_text)} chars): {reply_text[:80]!r}")
+            session.say(reply_text)
+        except Exception as e:
+            logger.error(f"[handle_tts_request] error: {e}")
+
     async def handle_chat(user_text: str) -> None:
-        """Groq LLM 直接呼び出し → session.say() でTTS再生 → Data Channel でWidget通知"""
+        """レガシー/フォールバック: Groq LLM 直接呼び出し → session.say() でTTS再生。"""
         try:
             # 1. Groq LLM で応答生成（毎回新しいSessionで "Session is closed" を回避）
             async with aiohttp.ClientSession() as http:
@@ -387,10 +395,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         try:
             msg = json.loads(data_packet.data.decode())
             msg_type = msg.get("type", "")
-            if msg_type == "chat":
+            if msg_type == "tts_request":
+                # Phase6-D: 本体APIの応答テキストをそのままTTSに渡す
                 text = msg.get("text", "").strip()
                 if text:
-                    logger.info(f"[data_channel] chat received: {text[:80]}")
+                    logger.info(f"[data_channel] tts_request received: {text[:80]}")
+                    asyncio.create_task(handle_tts_request(text))
+            elif msg_type == "chat":
+                # レガシー/フォールバック: agent側でGroq呼び出し
+                text = msg.get("text", "").strip()
+                if text:
+                    logger.info(f"[data_channel] chat received (fallback): {text[:80]}")
                     asyncio.create_task(handle_chat(text))
             elif msg_type == "widget_connected":
                 logger.info("[data_channel] widget_connected received")
