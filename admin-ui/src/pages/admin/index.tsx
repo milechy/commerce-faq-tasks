@@ -269,7 +269,7 @@ export default function AdminDashboard() {
       color: "#4ade80",
       items: [
         { label: "ナレッジ管理", desc: "AIが使う回答データを管理します", path: knowledgePath },
-        { label: "未回答質問", desc: "AIが答えられなかった質問を管理", path: "/admin/chat-history?has_knowledge_gaps=true", badge: stats?.gapCount, badgeColor: "#fbbf24" },
+        { label: "未回答質問", desc: "AIが答えられなかった質問を管理", path: "/admin/chat-history", badge: stats?.gapCount, badgeColor: "#fbbf24" },
       ],
     },
     {
@@ -471,7 +471,7 @@ export default function AdminDashboard() {
                 value={stats?.gapCount ?? 0}
                 accent={(stats?.gapCount ?? 0) > 0 ? "#fbbf24" : undefined}
                 sub="AIが答えられなかった質問数"
-                onClick={() => navigate("/admin/chat-history?has_knowledge_gaps=true")}
+                onClick={() => navigate("/admin/chat-history")}
               />
               <StatCard
                 icon="🕐"
