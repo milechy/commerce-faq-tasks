@@ -7,6 +7,20 @@ import { useAuth } from "../../../auth/useAuth";
 
 const DEFAULT_CONVERSION_TYPES = ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
 
+// ─── 型定義 ───────────────────────────────────────────────────────────────────
+
+interface Evaluation {
+  id: number;
+  overall_score?: number;
+  score: number;
+  psychology_fit_score?: number;
+  customer_reaction_score?: number;
+  stage_progress_score?: number;
+  taboo_violation_score?: number;
+  feedback?: { summary?: string };
+  evaluated_at: string;
+}
+
 interface Message {
   id: number;
   role: "user" | "assistant";
@@ -51,6 +65,7 @@ export default function ChatHistorySessionPage() {
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(sessionFromState);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [outcome, setOutcome] = useState<string | null>(null);
   const [outcomeRecordedAt, setOutcomeRecordedAt] = useState<string | null>(null);
   const [outcomeRecordedBy, setOutcomeRecordedBy] = useState<string | null>(null);
@@ -89,6 +104,20 @@ export default function ChatHistorySessionPage() {
   useEffect(() => {
     void loadMessages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Judge評価を取得
+  useEffect(() => {
+    if (!sessionId) return;
+    authFetch(`${API_BASE}/v1/admin/evaluations/${sessionId}`)
+      .then((r) => {
+        if (!r.ok) return null;
+        return r.json() as Promise<{ evaluations?: Evaluation[] }>;
+      })
+      .then((data) => {
+        setEvaluation(data?.evaluations?.[0] ?? null);
+      })
+      .catch(() => {});
   }, [sessionId]);
 
   // テナントのconversion_typesを取得
@@ -481,6 +510,71 @@ export default function ChatHistorySessionPage() {
               </div>
             </div>
           ))}
+          {/* Judge評価セクション */}
+          <div
+            style={{
+              marginTop: 8,
+              padding: "20px 18px",
+              borderRadius: 14,
+              border: "1px solid #1f2937",
+              background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+            }}
+          >
+            <p style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: "#e5e7eb" }}>
+              🤖 AI品質評価 (Judge)
+            </p>
+            {evaluation == null ? (
+              <span style={{
+                display: "inline-flex", alignItems: "center", padding: "4px 12px",
+                borderRadius: 999, fontSize: 12, fontWeight: 700,
+                background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "#9ca3af",
+              }}>未評価</span>
+            ) : (() => {
+              const overall = evaluation.overall_score ?? evaluation.score;
+              const scoreColor = overall >= 80 ? "#4ade80" : overall >= 60 ? "#fbbf24" : "#f87171";
+              const scoreBg = overall >= 80 ? "rgba(34,197,94,0.15)" : overall >= 60 ? "rgba(251,191,36,0.15)" : "rgba(248,113,113,0.15)";
+              const scoreBorder = overall >= 80 ? "rgba(34,197,94,0.3)" : overall >= 60 ? "rgba(251,191,36,0.3)" : "rgba(248,113,113,0.3)";
+              const AXES = [
+                { key: "psychology_fit_score" as const, label: "心理対応力" },
+                { key: "customer_reaction_score" as const, label: "顧客対応力" },
+                { key: "stage_progress_score" as const, label: "商談進行力" },
+                { key: "taboo_violation_score" as const, label: "NG行為" },
+              ];
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 14px",
+                    borderRadius: 999, fontSize: 15, fontWeight: 700,
+                    background: scoreBg, border: `1px solid ${scoreBorder}`, color: scoreColor,
+                    width: "fit-content",
+                  }}>
+                    総合スコア {overall}/100
+                  </span>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {AXES.map(({ key, label }) => {
+                      const s = evaluation[key];
+                      if (s == null) return null;
+                      const c = s >= 80 ? "#4ade80" : s >= 60 ? "#fbbf24" : "#f87171";
+                      return (
+                        <span key={key} style={{
+                          padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                          background: "rgba(31,41,55,0.8)", border: "1px solid #374151", color: c,
+                        }}>
+                          {label}: {s}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  {evaluation.feedback?.summary && (
+                    <p style={{ margin: 0, fontSize: 13, color: "#d1d5db", lineHeight: 1.6, padding: "10px 12px", borderRadius: 8, background: "rgba(31,41,55,0.6)", border: "1px solid #374151" }}>
+                      {evaluation.feedback.summary}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
           {/* 営業結果入力（Client Adminのみ表示） */}
           {!isSuperAdmin && <div
             style={{

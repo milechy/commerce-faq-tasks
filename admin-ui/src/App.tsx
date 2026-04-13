@@ -17,15 +17,12 @@ import ChatTestPage from "./pages/admin/chat-test/index";
 import ChatHistoryPage from "./pages/admin/chat-history/index";
 import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
-import KnowledgeGapsPage from "./pages/admin/knowledge-gaps/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAIChat from "./components/AdminAIChat";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarDefaultsPage from "./pages/admin/avatar-defaults/index";
 import BooksPage from "./pages/admin/knowledge/books";
-import EvaluationsPage from "./pages/admin/evaluations/index";
-import EvaluationDetailPage from "./pages/admin/evaluations/[id]";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
 import EngagementPage from "./pages/admin/engagement/index";
 import ConversionDashboardPage from "./pages/admin/conversion/index";
@@ -122,8 +119,8 @@ function AppInner() {
         {/* チューニングルール */}
         <Route path="/admin/tuning" element={<RequireAuth><TuningPage /></RequireAuth>} />
 
-        {/* ナレッジギャップ */}
-        <Route path="/admin/knowledge-gaps" element={<RequireAuth><KnowledgeGapsPage /></RequireAuth>} />
+        {/* ナレッジギャップ — 廃止: /admin/chat-history にリダイレクト */}
+        <Route path="/admin/knowledge-gaps" element={<Navigate to="/admin/chat-history?has_knowledge_gaps=true" replace />} />
 
         {/* フィードバック — Super Admin専用 */}
         <Route path="/admin/feedback" element={<SuperAdminRoute><FeedbackPage /></SuperAdminRoute>} />
@@ -139,9 +136,9 @@ function AppInner() {
         {/* 書籍管理 */}
         <Route path="/admin/knowledge/books" element={<RequireAuth><BooksPage /></RequireAuth>} />
 
-        {/* Phase45: AI評価 */}
-        <Route path="/admin/evaluations" element={<RequireAuth><EvaluationsPage /></RequireAuth>} />
-        <Route path="/admin/evaluations/:id" element={<RequireAuth><EvaluationDetailPage /></RequireAuth>} />
+        {/* Phase45: AI評価 — 廃止: /admin/chat-history にリダイレクト */}
+        <Route path="/admin/evaluations" element={<Navigate to="/admin/chat-history" replace />} />
+        <Route path="/admin/evaluations/:id" element={<Navigate to="/admin/chat-history" replace />} />
 
         {/* Phase50: 会話分析ダッシュボード */}
         <Route path="/admin/analytics" element={<RequireAuth><AnalyticsDashboardPage /></RequireAuth>} />

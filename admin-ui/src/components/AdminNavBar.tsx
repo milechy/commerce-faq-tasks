@@ -27,7 +27,6 @@ const NAV_GROUPS: NavGroup[] = [
     label: "会話",
     items: [
       { label: "会話履歴", path: "/admin/chat-history", desc: "全チャットログを確認" },
-      { label: "AI品質レポート", path: "/admin/evaluations", desc: "Judge評価・スコア管理" },
       { label: "お客様の声", path: "/admin/feedback", desc: "フィードバック管理", superAdminOnly: true },
     ],
   },
@@ -37,7 +36,6 @@ const NAV_GROUPS: NavGroup[] = [
     label: "ナレッジ",
     items: [
       { label: "ナレッジ管理", path: "/admin/knowledge", desc: "AIの回答データを管理" },
-      { label: "未回答質問", path: "/admin/knowledge-gaps", desc: "AIが答えられなかった質問" },
     ],
   },
   {

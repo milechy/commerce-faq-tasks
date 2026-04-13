@@ -257,8 +257,7 @@ export default function AdminDashboard() {
       title: "会話",
       color: "#60a5fa",
       items: [
-        { label: "会話履歴", desc: "お客様との全チャットログを確認", path: "/admin/chat-history" },
-        { label: "AI品質レポート", desc: "Judgeによる会話評価・スコア一覧", path: "/admin/evaluations" },
+        { label: "会話履歴", desc: "お客様との全チャットログ・AI品質評価を確認", path: "/admin/chat-history" },
         ...(isSuperAdmin
           ? [{ label: "お客様の声", desc: `フィードバック管理${(stats?.feedbackUnread ?? 0) > 0 ? "" : ""}`, path: "/admin/feedback", badge: stats?.feedbackUnread, badgeColor: "#60a5fa" }]
           : []),
@@ -270,7 +269,7 @@ export default function AdminDashboard() {
       color: "#4ade80",
       items: [
         { label: "ナレッジ管理", desc: "AIが使う回答データを管理します", path: knowledgePath },
-        { label: "未回答質問", desc: "AIが答えられなかった質問を管理", path: "/admin/knowledge-gaps", badge: stats?.gapCount, badgeColor: "#fbbf24" },
+        { label: "未回答質問", desc: "AIが答えられなかった質問を管理", path: "/admin/chat-history?has_knowledge_gaps=true", badge: stats?.gapCount, badgeColor: "#fbbf24" },
       ],
     },
     {
@@ -472,7 +471,7 @@ export default function AdminDashboard() {
                 value={stats?.gapCount ?? 0}
                 accent={(stats?.gapCount ?? 0) > 0 ? "#fbbf24" : undefined}
                 sub="AIが答えられなかった質問数"
-                onClick={() => navigate("/admin/knowledge-gaps")}
+                onClick={() => navigate("/admin/chat-history?has_knowledge_gaps=true")}
               />
               <StatCard
                 icon="🕐"
