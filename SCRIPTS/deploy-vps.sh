@@ -108,7 +108,7 @@ ssh "${VPS}" "nginx -s reload && echo '  ✅ Nginx reloaded' || echo '  ⚠️  
 
 echo "[5/6] Starting services with PM2..."
 # rajiuce-admin は Nginx が直接配信するため除外。slack-listener はスクリプト不在のため除外。
-ssh "${VPS}" "cd ${REMOTE_DIR} && pm2 startOrRestart ecosystem.config.cjs --env production --only rajiuce-api,rajiuce-avatar"
+ssh "${VPS}" "cd ${REMOTE_DIR} && pm2 startOrRestart ecosystem.config.cjs --env production --only rajiuce-api,rajiuce-avatar,rajiuce-admin"
 ssh "${VPS}" "pm2 save"
 
 echo "[6/6] Reloading Nginx..."
