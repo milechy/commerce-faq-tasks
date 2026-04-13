@@ -639,51 +639,6 @@ export default function AvatarListPage() {
                       {lang === "ja" ? "編集" : "Edit"}
                     </button>
                   )}
-                  {/* テストチャットボタン */}
-                  {!isSuperAdmin && (
-                    <button
-                      onClick={() => avatarEnabled && navigate(
-                        `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
-                      )}
-                      disabled={!avatarEnabled}
-                      title={!avatarEnabled ? (lang === "ja" ? "アバター機能をONにしてください" : "Enable avatar feature first") : undefined}
-                      style={{
-                        padding: "8px 14px",
-                        minHeight: 44,
-                        borderRadius: 8,
-                        border: "none",
-                        background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-                        color: "#fff",
-                        fontSize: 12,
-                        fontWeight: 700,
-                        cursor: avatarEnabled ? "pointer" : "not-allowed",
-                        opacity: avatarEnabled ? 1 : 0.5,
-                      }}
-                    >
-                      {lang === "ja" ? "テストチャット" : "Test Chat"}
-                    </button>
-                  )}
-                  {/* Super Admin: テストチャットボタン */}
-                  {isSuperAdmin && (
-                    <button
-                      onClick={() => navigate(
-                        `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
-                      )}
-                      style={{
-                        padding: "8px 14px",
-                        minHeight: 44,
-                        borderRadius: 8,
-                        border: "none",
-                        background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-                        color: "#fff",
-                        fontSize: 12,
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
-                      💬 {lang === "ja" ? "テスト" : "Test"}
-                    </button>
-                  )}
                   {!isSuperAdmin && !cfg.is_active && (
                     <button
                       onClick={() => void handleDelete(cfg.id)}

@@ -69,9 +69,23 @@ export default function ChatHistoryPage() {
   const [period, setPeriod] = useState<PeriodValue>("all");
   const [sentiment, setSentiment] = useState<SentimentFilter>("");
   const [search, setSearch] = useState("");
+  // Phase2-A: tenant selector (super admin only)
+  const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
+  const [selectedTenantFilter, setSelectedTenantFilter] = useState<string>("");
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+
+  // Phase2-A: fetch tenant list for super admin selector
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    authFetch(`${API_BASE}/v1/admin/tenants`)
+      .then((r) => r.json())
+      .then((data: { tenants?: { id: string; name: string }[] }) => {
+        setTenants(data.tenants ?? []);
+      })
+      .catch(() => {});
+  }, [isSuperAdmin]);
 
   const handleSort = (key: string) => {
     if (key === sortBy) {
@@ -88,7 +102,9 @@ export default function ChatHistoryPage() {
     setError(null);
     try {
       const params = new URLSearchParams({ limit: "20", offset: String(offset), sort_by: sortBy, sort_order: sortOrder });
-      if (tenantId) params.set("tenant", tenantId);
+      // super admin: selectedTenantFilter をサーバーに渡してページネーション精度を保証
+      const effectiveTenant = tenantId ?? (isSuperAdmin && selectedTenantFilter ? selectedTenantFilter : undefined);
+      if (effectiveTenant) params.set("tenant", effectiveTenant);
       if (period !== "all") params.set("period", period);
       if (sentiment) params.set("sentiment", sentiment);
       if (search) params.set("search", search);
@@ -100,7 +116,7 @@ export default function ChatHistoryPage() {
 
       // Fetch evaluations to get scores for badge display
       const evalParams = new URLSearchParams({ days: "365", limit: "200" });
-      if (tenantId) evalParams.set("tenant_id", tenantId);
+      if (effectiveTenant) evalParams.set("tenant_id", effectiveTenant);
       const evalRes = await authFetch(`${API_BASE}/v1/admin/evaluations?${evalParams}`);
       if (evalRes.ok) {
         const evalData = (await evalRes.json()) as {
@@ -119,7 +135,7 @@ export default function ChatHistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [tenantId, offset, sortBy, sortOrder, period, sentiment, search]);
+  }, [tenantId, isSuperAdmin, selectedTenantFilter, offset, sortBy, sortOrder, period, sentiment, search]);
 
   useEffect(() => {
     void loadSessions();
@@ -222,6 +238,22 @@ export default function ChatHistoryPage() {
       {/* Filter bar */}
       <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         <PeriodFilter value={period} onChange={(v) => { setPeriod(v); setOffset(0); }} />
+        {isSuperAdmin && (
+          <select
+            value={selectedTenantFilter}
+            onChange={(e) => { setSelectedTenantFilter(e.target.value); setOffset(0); }}
+            style={{
+              padding: "8px 12px", minHeight: 38, borderRadius: 10,
+              border: "1px solid #374151", background: "rgba(15,23,42,0.8)",
+              color: "#e5e7eb", fontSize: 13, cursor: "pointer",
+            }}
+          >
+            <option value="">すべてのテナント</option>
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        )}
         <select
           value={sentiment}
           onChange={(e) => { setSentiment(e.target.value as SentimentFilter); setOffset(0); }}

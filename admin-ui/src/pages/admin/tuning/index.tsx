@@ -119,6 +119,8 @@ export default function TuningRulesPage() {
   const [editTarget, setEditTarget] = useState<TuningRule | null>(null);
   const [sourceConversation, setSourceConversation] =
     useState<SourceConversation | null>(null);
+  const [createFromConversation, setCreateFromConversation] = useState(false);
+  const [presetTenantId, setPresetTenantId] = useState<string | undefined>(undefined);
 
   // ─── Delete state ───────────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -166,8 +168,11 @@ export default function TuningRulesPage() {
     if (searchParams.get("create") === "1") {
       const userMsg = searchParams.get("userMsg") ?? "";
       const assistantMsg = searchParams.get("assistantMsg") ?? "";
+      const fromTenantId = searchParams.get("presetTenantId") ?? undefined;
       if (userMsg || assistantMsg) {
         setSourceConversation({ userMsg, assistantMsg });
+        setCreateFromConversation(true);
+        setPresetTenantId(fromTenantId);
       }
       setCreateMode(true);
       // Clean URL without reload
@@ -196,6 +201,8 @@ export default function TuningRulesPage() {
     setEditTarget(null);
     setCreateMode(false);
     setSourceConversation(null);
+    setCreateFromConversation(false);
+    setPresetTenantId(undefined);
     showToast(msg);
   };
 
@@ -597,9 +604,13 @@ export default function TuningRulesPage() {
           tenantId={tenantId}
           isSuperAdmin={isSuperAdmin}
           tenantOptions={tenantOptions}
+          fromConversation={createFromConversation}
+          presetTenantId={presetTenantId}
           onClose={() => {
             setCreateMode(false);
             setSourceConversation(null);
+            setCreateFromConversation(false);
+            setPresetTenantId(undefined);
           }}
           onSuccess={handleModalSuccess}
         />

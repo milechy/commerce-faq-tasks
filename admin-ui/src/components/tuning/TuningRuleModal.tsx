@@ -27,6 +27,10 @@ interface Props {
   tenantId: string; // caller's tenant; "global" if super_admin
   isSuperAdmin: boolean;
   tenantOptions: { value: string; label: string }[];
+  /** 会話詳細から呼び出し時: trueでscopeセレクターを非表示にしてpresetTenantIdを使用 */
+  fromConversation?: boolean;
+  /** 会話詳細から呼び出し時: セッションのtenant_idを自動セット */
+  presetTenantId?: string;
   onClose: () => void;
   onSuccess: (message: string, rule: TuningRuleInput & { id?: number }) => void;
 }
@@ -71,6 +75,8 @@ export default function TuningRuleModal({
   tenantId,
   isSuperAdmin,
   tenantOptions,
+  fromConversation,
+  presetTenantId,
   onClose,
   onSuccess,
 }: Props) {
@@ -82,7 +88,7 @@ export default function TuningRuleModal({
   const [expectedBehavior, setExpectedBehavior] = useState(
     initialData?.expected_behavior ?? ""
   );
-  const [scope, setScope] = useState(initialData?.tenant_id ?? tenantId);
+  const [scope, setScope] = useState(initialData?.tenant_id ?? presetTenantId ?? tenantId);
   const [priority, setPriority] = useState(initialData?.priority ?? 0);
   const [isActive, setIsActive] = useState(initialData?.is_active ?? true);
   const [saving, setSaving] = useState(false);
@@ -511,37 +517,39 @@ export default function TuningRuleModal({
             )}
           </div>
 
-          {/* 適用範囲 */}
-          <div>
-            <label style={LABEL_STYLE}>{t("tuning.scope")}</label>
-            {isSuperAdmin ? (
-              <select
-                value={scope}
-                onChange={(e) => setScope(e.target.value)}
-                style={{ ...INPUT_STYLE, minHeight: 52, appearance: "auto" }}
-              >
-                <option value="global">{t("tuning.scope_global")}</option>
-                {tenantOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    🏢 {opt.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div
-                style={{
-                  padding: "12px 16px",
-                  borderRadius: 10,
-                  border: "1px solid #374151",
-                  background: "rgba(15,23,42,0.4)",
-                  color: "#9ca3af",
-                  fontSize: 15,
-                }}
-              >
-                🏢 {tenantOptions.find((o) => o.value === tenantId)?.label ?? tenantId}
-              </div>
-            )}
-          </div>
+          {/* 適用範囲（会話詳細から呼び出し時は非表示 — tenant_idを自動セット） */}
+          {!fromConversation && (
+            <div>
+              <label style={LABEL_STYLE}>{t("tuning.scope")}</label>
+              {isSuperAdmin ? (
+                <select
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value)}
+                  style={{ ...INPUT_STYLE, minHeight: 52, appearance: "auto" }}
+                >
+                  <option value="global">{t("tuning.scope_global")}</option>
+                  {tenantOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      🏢 {opt.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 10,
+                    border: "1px solid #374151",
+                    background: "rgba(15,23,42,0.4)",
+                    color: "#9ca3af",
+                    fontSize: 15,
+                  }}
+                >
+                  🏢 {tenantOptions.find((o) => o.value === tenantId)?.label ?? tenantId}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 優先度 */}
           <div>

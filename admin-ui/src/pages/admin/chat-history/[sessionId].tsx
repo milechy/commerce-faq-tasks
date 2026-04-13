@@ -174,6 +174,7 @@ export default function ChatHistorySessionPage() {
       userMsg,
       assistantMsg: assistantMsg.content,
     });
+    if (sessionInfo?.tenant_id) params.set("presetTenantId", sessionInfo.tenant_id);
     navigate(`/admin/tuning?${params.toString()}`);
   };
 
@@ -480,8 +481,8 @@ export default function ChatHistorySessionPage() {
               </div>
             </div>
           ))}
-          {/* 営業結果入力 */}
-          <div
+          {/* 営業結果入力（Client Adminのみ表示） */}
+          {!isSuperAdmin && <div
             style={{
               marginTop: 8,
               padding: "20px 18px",
@@ -550,7 +551,7 @@ export default function ChatHistorySessionPage() {
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
         </div>
       )}
     </div>
