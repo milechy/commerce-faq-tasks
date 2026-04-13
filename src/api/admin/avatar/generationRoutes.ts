@@ -9,6 +9,7 @@ import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { trackUsage } from "../../../lib/billing/usageTracker";
 import { logger } from '../../../lib/logger';
+import { containsBannedWord } from '../../../lib/contentGuard';
 
 // ---------------------------------------------------------------------------
 // Groq LLM helper
@@ -80,6 +81,12 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
       }
 
       const { description } = parsed.data;
+
+      // Phase5-D: 禁止ワードチェック（二重防御）
+      if (containsBannedWord(description)) {
+        return res.status(400).json({ error: "このプロンプトにはビジネスに不適切な表現が含まれています" });
+      }
+
       const su = (req as AvatarReq).supabaseUser;
       const suMeta = (su?.app_metadata as Record<string, unknown> | undefined);
       const tenantId: string =
@@ -105,6 +112,8 @@ Output ONLY the English prompt, nothing else.`,
           description
         );
 
+        logger.info("[generate-image] prompt generated", { requestId, tenantId, leonardoPrompt });
+
         // Step 2: Leonardo.ai で4枚生成（2段階: POST生成 → GETポーリング）
         const leonardoKey = process.env.LEONARDO_API_KEY?.trim();
         if (!leonardoKey) {
@@ -125,7 +134,8 @@ Output ONLY the English prompt, nothing else.`,
           body: JSON.stringify({
             prompt: leonardoPrompt,
             negative_prompt:
-              "anime, cartoon, illustration, CGI, 3D render, painting, drawing, sketch, deformed face, extra fingers, blurry, watermark, text, logo, multiple faces, two faces, duplicate face, side view, profile view, turned head, looking away, three-quarter view",
+              "nude, nsfw, violent, gore, copyrighted character, celebrity, anime, manga, cartoon, illustration, CGI, 3D render, painting, drawing, sketch, deformed face, extra fingers, blurry, watermark, text, logo, multiple faces, two faces, duplicate face, side view, profile view, turned head, looking away, three-quarter view",
+            nsfw: false,
             sd_version: "PHOENIX",
             presetStyle: "PHOTOGRAPHY",
             alchemy: true,
@@ -183,6 +193,7 @@ Output ONLY the English prompt, nothing else.`,
         };
 
         const images = await pollUntilComplete();
+        logger.info("[generate-image] images generated", { requestId, tenantId, count: images.length, urls: images });
 
         // Step 3: Usage tracking
         trackUsage({

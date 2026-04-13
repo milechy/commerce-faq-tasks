@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { containsBannedWord } from "../../../lib/contentGuard";
 
 interface AvatarConfig {
   id: string;
@@ -142,6 +143,7 @@ export default function AvatarStudioPage() {
   const [loadingEdit, setLoadingEdit] = useState(isEdit);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [imageDescError, setImageDescError] = useState<string | null>(null);
 
   // 編集時: 既存データ取得
   const fetchExisting = useCallback(async () => {
@@ -172,6 +174,12 @@ export default function AvatarStudioPage() {
 
   const handleGenerateImage = async () => {
     if (!imageDesc.trim() || generatingImage) return;
+    // Phase5-D: 禁止ワードチェック（フロントエンド第一防衛線）
+    if (containsBannedWord(imageDesc)) {
+      setImageDescError("このプロンプトは使用できません。ビジネスに適した表現に変更してください");
+      return;
+    }
+    setImageDescError(null);
     setGeneratingImage(true);
     setError(null);
     try {
@@ -518,12 +526,15 @@ export default function AvatarStudioPage() {
               <label style={LABEL_STYLE}>{lang === "ja" ? "アバターの説明" : "Avatar Description"}</label>
               <textarea
                 value={imageDesc}
-                onChange={(e) => setImageDesc(e.target.value)}
+                onChange={(e) => { setImageDesc(e.target.value); if (imageDescError) setImageDescError(null); }}
                 placeholder={lang === "ja"
                   ? "例: 30代の日本人女性、ショートヘア、紺色のジャケット、笑顔"
                   : "e.g. Japanese woman in 30s, short hair, navy jacket, smiling"}
                 style={TEXTAREA_STYLE}
               />
+              {imageDescError && (
+                <p style={{ margin: "6px 0 0", fontSize: 12, color: "#f87171" }}>{imageDescError}</p>
+              )}
             </div>
             <button
               onClick={() => void handleGenerateImage()}
