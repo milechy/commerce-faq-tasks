@@ -422,22 +422,25 @@
     /* モバイル最適化 */
     '@media (max-width: 390px) { .avatar-area { height: 180px; } }',
 
-    /* ───── avatar-active: Lemonslice風フルスクリーン ───── */
-    '.panel.avatar-active { background: #000; overscroll-behavior: contain; touch-action: none; }',
+    /* ───── avatar-active: スプリットレイアウト（上部: アバター / 下部: チャット） ───── */
+    '.panel.avatar-active { background: #000; overscroll-behavior: contain; }',
     '.panel.avatar-active .header { display: none; }',
 
-    /* アバターエリア: パネル全体を覆う */
+    /* アバターエリア: 上部固定高さ（スプリット上段） */
     '.panel.avatar-active .avatar-area {',
-    '  position: absolute;',
-    '  top: 0; left: 0;',
-    '  width: 100%; height: 100%;',
+    '  position: relative;',
+    '  flex-shrink: 0;',
+    '  width: 100%;',
+    '  height: 40%;',
+    '  min-height: 180px;',
+    '  max-height: 300px;',
     '  margin: 0;',
     '  border-radius: 0;',
-    '  z-index: 1;',
+    '  background: #000;',
     '}',
     '.panel.avatar-active .avatar-video { border-radius: 0; }',
 
-    /* 閉じるボタン: 右上フローティング */
+    /* 閉じるボタン: アバターエリア右上（avatarAreaがposition:relativeなので正確に配置） */
     '.avatar-close-btn {',
     '  position: absolute;',
     '  top: 12px; right: 12px;',
@@ -459,14 +462,13 @@
     /* アバターモード時: ヘッダーの従来閉じるボタンを非表示（avatar-close-btnのみ使用） */
     '.panel.avatar-active .close-btn { display: none !important; }',
 
-    /* メッセージエリア: 入力バーの直上にオーバーレイ（下から積み上げ） */
+    /* メッセージエリア: 下部スプリット（独立スクロール） */
     '.panel.avatar-active .messages {',
-    '  position: absolute;',
-    '  bottom: 64px;',
-    '  left: 0; right: 0;',
-    '  max-height: 240px;',
-    '  z-index: 5;',
-    '  background: transparent;',
+    '  position: static;',
+    '  flex: 1;',
+    '  max-height: none;',
+    '  z-index: auto;',
+    '  background: #111;',
     '  padding: 8px 16px;',
     '  overflow-y: auto;',
     '  display: flex;',
@@ -479,52 +481,47 @@
     '  touch-action: pan-y;',
     '}',
     '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
-    /* メッセージが少ない時は下寄せ (justify-content:flex-end の代替でスクロール可能) */
+    /* メッセージが少ない時は下寄せ */
     '.panel.avatar-active .messages > :first-child { margin-top: auto; }',
 
-    /* チャットバブル: 半透明 */
+    /* チャットバブル: ダークテーマ */
     '.panel.avatar-active .bubble.assistant {',
-    '  background: rgba(0,0,0,0.4);',
-    '  color: #fff;',
-    '  -webkit-backdrop-filter: blur(12px);',
-    '  backdrop-filter: blur(12px);',
+    '  background: rgba(255,255,255,0.08);',
+    '  color: #e5e7eb;',
     '  border: 1px solid rgba(255,255,255,0.1);',
     '  border-radius: 16px 16px 16px 4px;',
     '}',
     '.panel.avatar-active .bubble.user {',
-    '  background: rgba(37,99,235,0.5);',
+    '  background: rgba(37,99,235,0.7);',
     '  color: #fff;',
-    '  -webkit-backdrop-filter: blur(12px);',
-    '  backdrop-filter: blur(12px);',
-    '  border: 1px solid rgba(255,255,255,0.15);',
     '  border-radius: 16px 16px 4px 16px;',
     '}',
-    '.panel.avatar-active .ts { color: rgba(255,255,255,0.5); font-size: 10px; }',
+    '.panel.avatar-active .ts { color: rgba(255,255,255,0.4); font-size: 10px; }',
     /* アバター名ラベル */
     '.avatar-name-label { font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 2px; padding-left: 2px; }',
-    '.panel.avatar-active .avatar-name-label { color: rgba(255,255,255,0.6); }',
+    '.panel.avatar-active .avatar-name-label { color: rgba(255,255,255,0.5); }',
 
-    /* 入力エリア: 下部オーバーレイ */
+    /* 入力エリア: 最下部固定（static フロー） */
     '.panel.avatar-active .input-area {',
-    '  position: absolute;',
-    '  bottom: 0; left: 0; right: 0;',
-    '  z-index: 10;',
-    '  background: rgba(0,0,0,0.5);',
+    '  position: static;',
+    '  flex-shrink: 0;',
+    '  z-index: auto;',
+    '  background: rgba(0,0,0,0.85);',
     '  -webkit-backdrop-filter: blur(8px);',
     '  backdrop-filter: blur(8px);',
-    '  border-top: 1px solid rgba(255,255,255,0.1);',
+    '  border-top: 1px solid rgba(255,255,255,0.12);',
     '  padding: 10px 12px;',
     '  border-radius: 0 0 16px 16px;',
     '}',
     '.panel.avatar-active textarea {',
-    '  background: rgba(255,255,255,0.15);',
+    '  background: rgba(255,255,255,0.1);',
     '  border-color: rgba(255,255,255,0.2);',
     '  color: #fff;',
     '}',
-    '.panel.avatar-active textarea::placeholder { color: rgba(255,255,255,0.5); }',
+    '.panel.avatar-active textarea::placeholder { color: rgba(255,255,255,0.4); }',
     '.panel.avatar-active textarea:focus {',
-    '  background: rgba(255,255,255,0.2);',
-    '  border-color: rgba(255,255,255,0.4);',
+    '  background: rgba(255,255,255,0.15);',
+    '  border-color: rgba(255,255,255,0.35);',
     '}',
 
     /* ミュートボタン: static化して入力バーに収まる */
@@ -547,7 +544,7 @@
     '.panel.avatar-active .send-btn { background: rgba(37,99,235,0.8); }',
     '.panel.avatar-active .send-btn:disabled { background: rgba(255,255,255,0.2); cursor: not-allowed; }',
 
-    /* エラーバナー: 最上部オーバーレイ */
+    /* エラーバナー: パネル基準で絶対配置（パネルは position: fixed で包含ブロック） */
     '.panel.avatar-active .error-banner {',
     '  position: absolute;',
     '  top: 0; left: 0; right: 0;',
@@ -560,6 +557,11 @@
     /* 不要要素: 非表示 */
     '.panel.avatar-active .voice-mode-indicator { display: none; }',
     '.panel.avatar-active .empty-state { display: none; }',
+
+    /* モバイル: アバター上部を 35% / 最小 150px に縮小 */
+    '@media (max-width: 500px) {',
+    '  .panel.avatar-active .avatar-area { height: 35%; min-height: 150px; max-height: 240px; }',
+    '}',
   ].join('\n');
 
   shadow.appendChild(styleEl);
