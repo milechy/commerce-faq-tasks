@@ -9,6 +9,8 @@ import { useAuth } from "../../../auth/useAuth";
 import AIReportTab from "../../../components/admin/AIReportTab";
 import ABTestTab from "../../../components/admin/ABTestTab";
 import ObjectionPatternsTab from "../../../components/admin/ObjectionPatternsTab";
+import TenantTuningTab from "../../../components/admin/TenantTuningTab";
+import TenantTestTab from "../../../components/admin/TenantTestTab";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -1612,7 +1614,7 @@ function ConversionTypesTab({
 
 // ─── メインページ ─────────────────────────────────────────────────────────────
 
-type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns" | "conversion" | "deep-research";
+type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns" | "conversion" | "deep-research" | "tuning" | "test";
 
 export default function TenantDetailPage() {
   const navigate = useNavigate();
@@ -1728,6 +1730,8 @@ export default function TenantDetailPage() {
     { id: "ai-report", label: aiReportLabel },
     { id: "conversion", label: "🎯 成果設定" },
     { id: "deep-research", label: "🔬 ディープリサーチ" },
+    { id: "tuning", label: "🎛 チューニング" },
+    { id: "test", label: "💬 テスト" },
   ];
 
   const TABS: { id: TabId; label: React.ReactNode }[] = isSuperAdmin
@@ -1925,6 +1929,12 @@ export default function TenantDetailPage() {
               onUpdate={(updated) => setTenant(updated)}
               showToast={showToast}
             />
+          )}
+          {activeTab === "tuning" && tenant && (
+            <TenantTuningTab tenantId={tenantId} tenantName={tenant.name} />
+          )}
+          {activeTab === "test" && tenant && (
+            <TenantTestTab tenantId={tenantId} tenantName={tenant.name} />
           )}
         </>
       ) : (
