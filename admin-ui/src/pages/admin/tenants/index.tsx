@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
+import { SortableHeader } from "../../../components/common/SortableHeader";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 
@@ -252,6 +253,8 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
 
 // ─── メインページ ─────────────────────────────────────────────────────────────
 
+type SortByTenant = "name" | "createdAt";
+
 export default function TenantsPage() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
@@ -261,6 +264,45 @@ export default function TenantsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  // 検索・ソート・フィルター
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [sortBy, setSortBy] = useState<SortByTenant>("createdAt");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [statusFilter, setStatusFilter] = useState<"" | "active" | "inactive">("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [search]);
+
+  const handleSort = (key: string) => {
+    if (key === sortBy) {
+      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(key as SortByTenant);
+      setSortOrder("desc");
+    }
+  };
+
+  const filteredTenants = tenants
+    .filter((t) => {
+      if (statusFilter && t.status !== statusFilter) return false;
+      if (debouncedSearch && !t.name.toLowerCase().includes(debouncedSearch.toLowerCase())) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "name") {
+        cmp = a.name.localeCompare(b.name, locale);
+      } else {
+        cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      }
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
 
   const showToast = (message: string) => {
     setToast(message);
@@ -360,6 +402,26 @@ export default function TenantsPage() {
         </p>
       </header>
 
+      {/* 検索ボックス */}
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="テナントを検索..."
+        style={{
+          width: "100%",
+          padding: "12px 16px",
+          borderRadius: 10,
+          border: "1px solid #374151",
+          background: "rgba(15,23,42,0.8)",
+          color: "#e5e7eb",
+          fontSize: 14,
+          outline: "none",
+          boxSizing: "border-box",
+          marginBottom: 12,
+        }}
+      />
+
       {/* 追加ボタン */}
       <button
         onClick={() => setShowModal(true)}
@@ -379,12 +441,44 @@ export default function TenantsPage() {
           justifyContent: "center",
           gap: 10,
           boxShadow: "0 8px 25px rgba(34,197,94,0.25)",
-          marginBottom: 24,
+          marginBottom: 16,
         }}
       >
         <span style={{ fontSize: 22 }}>＋</span>
         {t("tenants.add")}
       </button>
+
+      {/* フィルター・ソートバー */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        {(["", "active", "inactive"] as const).map((val) => {
+          const label = val === "" ? "すべて" : val === "active" ? "有効のみ" : "無効のみ";
+          const active = statusFilter === val;
+          return (
+            <button
+              key={val}
+              onClick={() => setStatusFilter(val)}
+              style={{
+                padding: "7px 14px", minHeight: 36, borderRadius: 10, cursor: "pointer",
+                border: active ? "1px solid rgba(96,165,250,0.5)" : "1px solid #374151",
+                background: active ? "rgba(96,165,250,0.1)" : "rgba(15,23,42,0.8)",
+                color: active ? "#60a5fa" : "#9ca3af",
+                fontSize: 13, fontWeight: active ? 700 : 400, whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 8 }}>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>並び替え:</span>
+          <SortableHeader label="名前" sortKey="name" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+          <SortableHeader label="作成日" sortKey="createdAt" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+        </div>
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280", whiteSpace: "nowrap" }}>
+          全{tenants.length}件中{" "}
+          <span style={{ color: "#d1d5db", fontWeight: 700 }}>{filteredTenants.length}</span>件表示
+        </span>
+      </div>
 
       {/* エラー表示 */}
       {error && (
@@ -420,7 +514,7 @@ export default function TenantsPage() {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {tenants.length === 0 ? (
+          {filteredTenants.length === 0 ? (
             <div
               style={{
                 ...CARD_STYLE,
@@ -430,10 +524,10 @@ export default function TenantsPage() {
                 padding: "40px 20px",
               }}
             >
-              {t("tenants.empty")}
+              {tenants.length === 0 ? t("tenants.empty") : "条件に一致するテナントがありません"}
             </div>
           ) : (
-            tenants.map((tenant) => (
+            filteredTenants.map((tenant) => (
               <div
                 key={tenant.id}
                 style={{
