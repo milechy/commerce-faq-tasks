@@ -90,13 +90,13 @@ ssh "${VPS}" "bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
 
 # ── ビルド後の最終検証: Supabase URLがバンドルに含まれているか ──
 echo "  Verifying admin-ui bundle..."
-BUNDLE_OK=$(ssh "${VPS}" "grep -c 'rpqrwi' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+BUNDLE_OK=$(ssh "${VPS}" "grep -c 'rpqrwifbrhlebbelyqog' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
 if [ "${BUNDLE_OK}" = "0" ]; then
-  echo "  ⚠️  First build missing Supabase URL. Rebuilding..."
+  echo "  ERROR: Supabase URL not found in bundle. Retrying build..."
   ssh "${VPS}" "cd ${REMOTE_DIR}/admin-ui && rm -rf dist node_modules/.vite node_modules/.cache .vite && bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
-  BUNDLE_OK2=$(ssh "${VPS}" "grep -c 'rpqrwi' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+  BUNDLE_OK2=$(ssh "${VPS}" "grep -c 'rpqrwifbrhlebbelyqog' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
   if [ "${BUNDLE_OK2}" = "0" ]; then
-    echo "  ❌ FATAL: Admin UI build failed twice. Aborting deploy."
+    echo "  FATAL: Admin UI build failed — Supabase URL missing"
     exit 1
   fi
   echo "  ✅ Rebuild successful"
