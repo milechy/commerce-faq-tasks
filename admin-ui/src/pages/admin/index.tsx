@@ -258,11 +258,18 @@ export default function AdminDashboard() {
       color: "#60a5fa",
       items: [
         { label: "会話履歴", desc: "お客様との全チャットログ・AI品質評価を確認", path: "/admin/chat-history" },
-        ...(isSuperAdmin
-          ? [{ label: "お客様の声", desc: `フィードバック管理${(stats?.feedbackUnread ?? 0) > 0 ? "" : ""}`, path: "/admin/feedback", badge: stats?.feedbackUnread, badgeColor: "#60a5fa" }]
-          : []),
       ],
     },
+    ...(isSuperAdmin
+      ? [{
+          icon: "📋",
+          title: "運用管理",
+          color: "#a78bfa",
+          items: [
+            { label: "お客様の声", desc: "フィードバック管理", path: "/admin/feedback", badge: stats?.feedbackUnread, badgeColor: "#60a5fa" },
+          ],
+        }]
+      : []),
     {
       icon: "📚",
       title: "ナレッジ",

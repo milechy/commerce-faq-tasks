@@ -27,6 +27,13 @@ const NAV_GROUPS: NavGroup[] = [
     label: "会話",
     items: [
       { label: "会話履歴", path: "/admin/chat-history", desc: "全チャットログを確認" },
+    ],
+  },
+  {
+    id: "operations",
+    icon: "📋",
+    label: "運用管理",
+    items: [
       { label: "お客様の声", path: "/admin/feedback", desc: "フィードバック管理", superAdminOnly: true },
     ],
   },
