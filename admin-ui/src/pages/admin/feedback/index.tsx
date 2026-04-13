@@ -138,6 +138,47 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [creatingRule, setCreatingRule] = useState(false);
+  const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const showToast = (text: string, ok: boolean) => {
+    setToast({ text, ok });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleCreateDenyRule = async () => {
+    setCreatingRule(true);
+    try {
+      const ruleRes = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenant_id: item.tenant_id,
+          trigger_pattern: item.message,
+          expected_behavior:
+            "この種の質問には『申し訳ございませんが、当店ではお答えできかねます。ご了承ください。』と丁寧に断ってください",
+          priority: 8,
+        }),
+      });
+      if (!ruleRes.ok) {
+        showToast(lang === "ja" ? "ルール作成に失敗しました" : "Failed to create rule", false);
+        return;
+      }
+      // ステータスを「対応済み」に更新
+      await authFetch(`${API_BASE}/v1/admin/feedback/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "resolved" }),
+      });
+      setStatus("resolved");
+      onSaved({ ...item, status: "resolved" });
+      showToast(lang === "ja" ? "拒否ルールを作成しました" : "Deny rule created", true);
+    } catch {
+      showToast(lang === "ja" ? "ルール作成に失敗しました" : "Failed to create rule", false);
+    } finally {
+      setCreatingRule(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -320,25 +361,63 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
           </div>
         </div>
 
-        {/* Quick action: needs_improvement */}
-        {status !== "needs_improvement" && (
-          <button
-            onClick={() => setStatus("needs_improvement")}
-            style={{
-              padding: "8px 16px",
-              minHeight: 44,
-              borderRadius: 8,
-              border: "1px solid rgba(249,115,22,0.45)",
-              background: "rgba(249,115,22,0.08)",
-              color: "#fb923c",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-              alignSelf: "flex-start",
-            }}
-          >
-            {lang === "ja" ? "⚠ 要改善にセット" : "⚠ Mark as Needs Improvement"}
-          </button>
+        {/* Quick actions */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {status !== "needs_improvement" && (
+            <button
+              onClick={() => setStatus("needs_improvement")}
+              style={{
+                padding: "8px 16px",
+                minHeight: 44,
+                borderRadius: 8,
+                border: "1px solid rgba(249,115,22,0.45)",
+                background: "rgba(249,115,22,0.08)",
+                color: "#fb923c",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {lang === "ja" ? "⚠ 要改善にセット" : "⚠ Mark as Needs Improvement"}
+            </button>
+          )}
+          {status !== "resolved" && (
+            <button
+              onClick={() => void handleCreateDenyRule()}
+              disabled={creatingRule}
+              style={{
+                padding: "8px 16px",
+                minHeight: 44,
+                borderRadius: 8,
+                border: "1px solid rgba(239,68,68,0.45)",
+                background: "rgba(239,68,68,0.08)",
+                color: "#f87171",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: creatingRule ? "not-allowed" : "pointer",
+                opacity: creatingRule ? 0.6 : 1,
+              }}
+            >
+              {creatingRule
+                ? (lang === "ja" ? "作成中..." : "Creating...")
+                : (lang === "ja" ? "🚫 拒否ルールを作成" : "🚫 Create Deny Rule")}
+            </button>
+          )}
+        </div>
+
+        {/* Toast */}
+        {toast && (
+          <div style={{
+            padding: "10px 14px",
+            borderRadius: 8,
+            background: toast.ok ? "rgba(5,46,22,0.6)" : "rgba(127,29,29,0.5)",
+            border: `1px solid ${toast.ok ? "rgba(74,222,128,0.3)" : "rgba(248,113,113,0.3)"}`,
+            color: toast.ok ? "#4ade80" : "#fca5a5",
+            fontSize: 13,
+            fontWeight: 600,
+          }}>
+            {toast.text}
+          </div>
         )}
 
         {/* Admin notes */}
