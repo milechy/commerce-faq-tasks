@@ -343,7 +343,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     @session.on("error")
-    async def on_session_error(ev) -> None:
+    def on_session_error(ev) -> None:
         """LemonSlice Production Best Practices: pipeline error handling."""
         err = ev.error if hasattr(ev, 'error') else ev
         error_type = type(err).__name__
