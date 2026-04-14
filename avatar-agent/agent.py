@@ -426,7 +426,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "agent_image_url": effective_image_url,
                 "agent_prompt": avatar_prompt,
                 "idle_timeout": 300,
-                "response_done_timeout": 0.5,
+                "response_done_timeout": 4.0,  # 0.5→4.0: 複数センテンスTTS間の合成待ち(~1-2s)でアイドル遷移しないよう延長
                 "agent_idle_prompt": os.getenv("AVATAR_IDLE_PROMPT", "a friendly person smiling and nodding gently"),
             }
         else:
@@ -434,7 +434,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "agent_id": effective_agent_id,
                 "agent_prompt": avatar_prompt,
                 "idle_timeout": 300,
-                "response_done_timeout": 0.5,
+                "response_done_timeout": 4.0,  # 0.5→4.0: 同上
                 "agent_idle_prompt": os.getenv("AVATAR_IDLE_PROMPT", "a friendly person smiling and nodding gently"),
             }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)

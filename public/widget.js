@@ -1477,9 +1477,23 @@
           // Agent TTS からの音声トラックを再生（innerHTML 禁止 — attach() で要素生成）
           var audioEl = track.attach();
           audioEl.style.display = 'none';
-          audioEl.muted = avatarMuted;  // 現在のミュート状態を反映
+          audioEl.setAttribute('playsinline', '');
+          // autoplay policy 対策: 最初は muted で play() → 再生開始後に実際のミュート状態を適用
+          // （muted=false の unmuted 要素は Chrome の autoplay policy でブロックされる場合がある）
+          audioEl.muted = true;
           avatarArea.appendChild(audioEl);
-          console.log('[FAQ Widget] Audio track subscribed — avatar voice enabled');
+          var _ap = audioEl.play();
+          if (_ap && typeof _ap.then === 'function') {
+            _ap.then(function () {
+              audioEl.muted = avatarMuted;  // 再生開始後に実際のミュート状態を適用
+            }).catch(function (err) {
+              audioEl.muted = avatarMuted;
+              console.warn('[FAQ Widget] audio autoplay blocked:', err && err.name);
+            });
+          } else {
+            audioEl.muted = avatarMuted;
+          }
+          console.log('[FAQ Widget] Audio track subscribed, muted=' + avatarMuted);
         }
       });
 
