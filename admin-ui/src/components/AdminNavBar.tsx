@@ -35,6 +35,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "運用管理",
     items: [
       { label: "お客様の声", path: "/admin/feedback", desc: "フィードバック管理", superAdminOnly: true },
+      { label: "オプション代行管理", path: "/admin/options", desc: "代行依頼の確認・金額確定・完了処理", superAdminOnly: true },
     ],
   },
   {

@@ -153,4 +153,39 @@ export function registerNotificationRoutes(app: Express): void {
       return res.status(500).json({ error: '既読処理に失敗しました' });
     }
   });
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/notifications — Super Admin → テナント宛通知送信 (Phase63)
+  // -----------------------------------------------------------------------
+  app.post('/v1/admin/notifications', async (req: Request, res: Response) => {
+    const { isSuperAdmin } = extractAuth(req);
+    if (!isSuperAdmin) return res.status(403).json({ error: '権限がありません' });
+
+    const { recipient_tenant_id, type, title, message, link, metadata } = req.body as Record<string, unknown>;
+    if (!recipient_tenant_id || !title || !message) {
+      return res.status(400).json({ error: 'recipient_tenant_id, title, message は必須です' });
+    }
+
+    try {
+      const pool = getPool();
+      const result = await pool.query(
+        `INSERT INTO notifications (recipient_role, recipient_tenant_id, type, title, message, link, metadata)
+         VALUES ('client_admin', $1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [
+          recipient_tenant_id,
+          typeof type === 'string' ? type : 'option_scheduled',
+          title,
+          message,
+          typeof link === 'string' ? link : '/admin/options',
+          metadata ? JSON.stringify(metadata) : null,
+        ],
+      );
+      return res.status(201).json(result.rows[0]);
+    } catch (err: any) {
+      if (err?.code === '42P01') return res.status(503).json({ error: 'notifications テーブルが存在しません' });
+      logger.warn('[POST /v1/admin/notifications]', err);
+      return res.status(500).json({ error: '通知の送信に失敗しました' });
+    }
+  });
 }

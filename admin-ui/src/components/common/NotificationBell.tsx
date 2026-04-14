@@ -25,6 +25,10 @@ const TYPE_ICON: Record<string, string> = {
   outcome_reminder: "📋",
   high_conversion_pattern: "🎯",
   pdf_processed: "📄",
+  // Phase63: オプション代行
+  option_ordered: "🛒",
+  option_scheduled: "📅",
+  option_completed: "🎉",
 };
 
 function relativeTime(dateStr: string): string {

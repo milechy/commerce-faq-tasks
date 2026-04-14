@@ -26,6 +26,7 @@ import BooksPage from "./pages/admin/knowledge/books";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
 import EngagementPage from "./pages/admin/engagement/index";
 import ConversionDashboardPage from "./pages/admin/conversion/index";
+import OptionManagementPage from "./pages/admin/options/index";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -146,6 +147,9 @@ function AppInner() {
 
         {/* Phase58: コンバージョン最適化ダッシュボード */}
         <Route path="/admin/conversion" element={<RequireAuth><ConversionDashboardPage /></RequireAuth>} />
+
+        {/* Phase63: オプション代行管理 — Super Admin専用 */}
+        <Route path="/admin/options" element={<SuperAdminRoute><OptionManagementPage /></SuperAdminRoute>} />
 
         {/* 旧 /faqs → /admin にリダイレクト */}
         <Route path="/faqs" element={<Navigate to="/admin" replace />} />

@@ -69,6 +69,7 @@ import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
+import { registerOptionRoutes } from "./api/admin/options/routes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -511,6 +512,8 @@ registerAnalyticsRoutes(app);
 registerEventAnalyticsRoutes(app);
 // Phase52h: In-App通知センター API
 registerNotificationRoutes(app);
+// Phase61: オプションサービス発注 API
+registerOptionRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
 
