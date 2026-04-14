@@ -479,6 +479,8 @@
     '}',
     '.avatar-close-btn:hover { background: rgba(0,0,0,0.6); }',
     '.avatar-close-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
+    /* PC: ヘッダー（右カラム）に×ボタンがあるので左パネルの avatar-close-btn は非表示 */
+    '.panel.avatar-active .avatar-close-btn { display: none; }',
 
     /* メッセージエリア: 右カラム中段（独立スクロール） */
     '.panel.avatar-active .messages {',
@@ -585,6 +587,7 @@
     '  }',
     '  .panel.avatar-active .header { display: none; }',
     '  .panel.avatar-active .close-btn { display: none !important; }',
+    '  .panel.avatar-active .avatar-close-btn { display: flex; }',
     '  .panel.avatar-active .avatar-area {',
     '    grid-column: unset; grid-row: unset;',
     '    width: 100%; height: 35%;',
@@ -1374,6 +1377,14 @@
       return;
     }
 
+    // 再接続前: Disconnected ハンドラが非同期で戻した stale 要素も含めて完全削除
+    var _rkClose = avatarArea.querySelectorAll('.avatar-close-btn');
+    for (var _rki = 0; _rki < _rkClose.length; _rki++) { _rkClose[_rki].remove(); }
+    var _rkMuteA = avatarArea.querySelectorAll('.avatar-mute-btn');
+    for (var _rkj = 0; _rkj < _rkMuteA.length; _rkj++) { _rkMuteA[_rkj].remove(); }
+    var _rkMuteI = inputArea.querySelectorAll('.avatar-mute-btn');
+    for (var _rkk = 0; _rkk < _rkMuteI.length; _rkk++) { _rkMuteI[_rkk].remove(); }
+
     try {
       var LK = window.LivekitClient;
       var room = new LK.Room({ adaptiveStream: true, dynacast: true });
@@ -1812,6 +1823,14 @@
       try { window.__rajiuceRoom.disconnect(); } catch (_e) {}
       window.__rajiuceRoom = null;
     }
+    // アバターUI要素を同期的にクリーンアップ
+    // （Disconnected イベントは非同期のため、ここで先に削除しておく）
+    var _cpClose = avatarArea.querySelectorAll('.avatar-close-btn');
+    for (var _cpci = 0; _cpci < _cpClose.length; _cpci++) { _cpClose[_cpci].remove(); }
+    var _cpMuteI = inputArea.querySelectorAll('.avatar-mute-btn');
+    for (var _cpmi = 0; _cpmi < _cpMuteI.length; _cpmi++) { _cpMuteI[_cpmi].remove(); }
+    var _cpMuteA = avatarArea.querySelectorAll('.avatar-mute-btn');
+    for (var _cpaj = 0; _cpaj < _cpMuteA.length; _cpaj++) { _cpMuteA[_cpaj].remove(); }
     // Anam: ストリーミング停止
     if (avatarProvider === 'anam' && (anamClient || window.__anamClient)) {
       try {
