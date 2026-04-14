@@ -585,7 +585,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     for (const url of urls) {
       try {
         const html = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; RAJIUCE/1.0)" },
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; R2C/1.0)" },
           signal: AbortSignal.timeout(10_000),
         }).then((r) => r.text());
 

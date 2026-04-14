@@ -6,7 +6,7 @@ import type { Lang } from "./messages";
 const systemPrompts: Record<Lang, Record<string, string>> = {
   ja: {
     sales_assistant:
-      "あなたはRAJIUCEの営業アシスタントです。丁寧な日本語で回答してください。",
+      "あなたはR2Cの営業アシスタントです。丁寧な日本語で回答してください。",
     clarify:
       "ユーザーの質問を明確にするため、追加の質問をしてください。",
     answer:
@@ -14,7 +14,7 @@ const systemPrompts: Record<Lang, Record<string, string>> = {
   },
   en: {
     sales_assistant:
-      "You are a sales assistant for RAJIUCE. Please respond in polite English.",
+      "You are a sales assistant for R2C. Please respond in polite English.",
     clarify:
       "To clarify the user's question, please ask a follow-up question.",
     answer:

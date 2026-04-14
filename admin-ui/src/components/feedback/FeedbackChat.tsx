@@ -201,7 +201,7 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
                 lineHeight: 1.6,
                 textAlign: "left",
               }}>
-                <p style={{ margin: 0 }}>こんにちは！RAJIUCE管理画面のサポートです。</p>
+                <p style={{ margin: 0 }}>こんにちは！R2C管理画面のサポートです。</p>
                 <p style={{ margin: "4px 0 0" }}>改善のご要望や使い方のご質問など、お気軽にどうぞ。</p>
               </div>
             </div>

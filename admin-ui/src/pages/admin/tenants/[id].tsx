@@ -1118,7 +1118,7 @@ function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiK
   const activeKey = apiKeys.find((k) => k.status === "active");
   const displayKey = activeKey ? activeKey.maskedKey : "YOUR_API_KEY";
 
-  const embedCode = `<script src="https://cdn.rajiuce.com/widget.js"
+  const embedCode = `<script src="https://cdn.r2c.biz/widget.js"
   data-api-key="${displayKey}"
   data-tenant="${tenant.slug}"
   data-title="${tenant.widgetTitle}"

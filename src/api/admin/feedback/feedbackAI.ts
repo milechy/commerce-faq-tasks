@@ -8,7 +8,7 @@ import { logger } from '../../../lib/logger';
 
 const FEEDBACK_AI_MODEL = process.env.FEEDBACK_AI_MODEL ?? "llama-3.1-8b-instant";
 
-const SYSTEM_PROMPT = `あなたはRAJIUCE管理画面のサポートアシスタントです。
+const SYSTEM_PROMPT = `あなたはR2C管理画面のサポートアシスタントです。
 テナント管理者からの質問や要望に、丁寧かつ簡潔に（3文以内で）返答してください。
 
 対応範囲（積極的に回答する）:

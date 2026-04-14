@@ -166,7 +166,7 @@ export function AdminNavBar() {
         }}
       >
         <span style={{ fontSize: 16, fontWeight: 800, color: "#f9fafb", letterSpacing: "-0.5px" }}>
-          RAJIUCE
+          R2C
         </span>
         <span
           style={{

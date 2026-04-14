@@ -286,7 +286,7 @@ export async function saveWeeklyReport(params: {
  * Slack #rajiuce-dev にレポートを投稿する。
  * SLACK_WEBHOOK_URL が未設定の場合はスキップ。
  * 投稿フォーマット:
- * 📊 RAJIUCE 週次改善レポート（{MM/DD} - {MM/DD}）
+ * 📊 R2C 週次改善レポート（{MM/DD} - {MM/DD}）
  * {report_text}
  * 詳細は Admin UI > AI改善レポートで確認できます。
  */
@@ -305,7 +305,7 @@ export async function postReportToSlack(
   const endStr = formatDateShort(periodEnd);
 
   const text = [
-    `📊 RAJIUCE 週次改善レポート（${startStr} - ${endStr}）`,
+    `📊 R2C 週次改善レポート（${startStr} - ${endStr}）`,
     reportText,
     '詳細は Admin UI > AI改善レポートで確認できます。',
   ].join('\n');

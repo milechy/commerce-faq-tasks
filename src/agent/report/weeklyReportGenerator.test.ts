@@ -85,7 +85,7 @@ describe('postReportToSlack', () => {
 
     const callArgs = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.text).toContain('📊 RAJIUCE 週次改善レポート');
+    expect(body.text).toContain('📊 R2C 週次改善レポート');
     expect(body.text).toContain('テストレポート');
     expect(body.text).toContain('Admin UI > AI改善レポート');
   });

@@ -65,7 +65,7 @@ export default function Login() {
         }}
       >
         <h1 style={{ fontSize: 22, fontWeight: 600, textAlign: "center" }}>
-          Commerce FAQ Admin
+          R2C Admin
         </h1>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>

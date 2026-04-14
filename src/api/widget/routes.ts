@@ -11,7 +11,7 @@ import { Pool } from "pg";
 import { generateWidgetJs } from "./widgetGenerator";
 
 const API_BASE_URL =
-  process.env.API_BASE_URL ?? "https://api.rajiuce.com";
+  process.env.API_BASE_URL ?? "https://api.r2c.biz";
 
 export function registerWidgetRoutes(app: Express, db: Pool | null): void {
   app.get("/widget/:tenantSlug.js", async (req: Request, res: Response) => {

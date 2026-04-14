@@ -47,7 +47,7 @@ export async function generateWidgetJs(config: TenantWidgetConfig): Promise<stri
   const prefix = randomPrefix();
 
   // Config block injected before the widget source
-  const configBlock = `/* RAJIUCE Widget — tenant:${config.tenantId} */
+  const configBlock = `/* R2C Widget — tenant:${config.tenantId} */
 (function(){
   var ${prefix}_cfg = {
     tenantId: ${JSON.stringify(config.tenantId)},
