@@ -422,25 +422,45 @@
     /* モバイル最適化 */
     '@media (max-width: 390px) { .avatar-area { height: 180px; } }',
 
-    /* ───── avatar-active: スプリットレイアウト（上部: アバター / 下部: チャット） ───── */
-    '.panel.avatar-active { background: #000; overscroll-behavior: contain; }',
-    '.panel.avatar-active .header { display: none; }',
+    /* ───── avatar-active: PC 横並び2パネル / モバイル縦スプリット ───── */
 
-    /* アバターエリア: 上部固定高さ（スプリット上段） */
-    '.panel.avatar-active .avatar-area {',
-    '  position: relative;',
-    '  flex-shrink: 0;',
-    '  width: 100%;',
-    '  height: 40%;',
-    '  min-height: 180px;',
-    '  max-height: 300px;',
-    '  margin: 0;',
-    '  border-radius: 0;',
+    /* PC: CSS Grid 2カラム（左: アバター / 右: ヘッダー + チャット + 入力） */
+    '.panel.avatar-active {',
     '  background: #000;',
+    '  overscroll-behavior: contain;',
+    '  display: grid;',
+    '  grid-template-columns: 1fr 1fr;',
+    '  grid-template-rows: auto 1fr auto;',
+    '  width: min(700px, calc(100vw - 48px));',
     '}',
-    '.panel.avatar-active .avatar-video { border-radius: 0; }',
 
-    /* 閉じるボタン: アバターエリア右上（avatarAreaがposition:relativeなので正確に配置） */
+    /* ヘッダー: 右カラム上部（ダークテーマ） */
+    '.panel.avatar-active .header {',
+    '  grid-column: 2;',
+    '  grid-row: 1;',
+    '  display: flex;',
+    '  background: #111;',
+    '  border-bottom: 1px solid rgba(255,255,255,0.1);',
+    '  color: #e5e7eb;',
+    '}',
+
+    /* アバターエリア: 左カラム全体（3行スパン） */
+    '.panel.avatar-active .avatar-area {',
+    '  grid-column: 1;',
+    '  grid-row: 1 / 4;',
+    '  position: relative;',
+    '  width: 100%;',
+    '  height: 100%;',
+    '  min-height: unset;',
+    '  max-height: unset;',
+    '  margin: 0;',
+    '  border-radius: 16px 0 0 16px;',
+    '  background: #000;',
+    '  overflow: hidden;',
+    '}',
+    '.panel.avatar-active .avatar-video { border-radius: 0; width: 100%; height: 100%; object-fit: cover; }',
+
+    /* 閉じるボタン: アバターエリア右上 */
     '.avatar-close-btn {',
     '  position: absolute;',
     '  top: 12px; right: 12px;',
@@ -459,13 +479,12 @@
     '}',
     '.avatar-close-btn:hover { background: rgba(0,0,0,0.6); }',
     '.avatar-close-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
-    /* アバターモード時: ヘッダーの従来閉じるボタンを非表示（avatar-close-btnのみ使用） */
-    '.panel.avatar-active .close-btn { display: none !important; }',
 
-    /* メッセージエリア: 下部スプリット（独立スクロール） */
+    /* メッセージエリア: 右カラム中段（独立スクロール） */
     '.panel.avatar-active .messages {',
+    '  grid-column: 2;',
+    '  grid-row: 2;',
     '  position: static;',
-    '  flex: 1;',
     '  max-height: none;',
     '  z-index: auto;',
     '  background: #111;',
@@ -481,7 +500,6 @@
     '  touch-action: pan-y;',
     '}',
     '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
-    /* メッセージが少ない時は下寄せ */
     '.panel.avatar-active .messages > :first-child { margin-top: auto; }',
 
     /* チャットバブル: ダークテーマ */
@@ -497,12 +515,13 @@
     '  border-radius: 16px 16px 4px 16px;',
     '}',
     '.panel.avatar-active .ts { color: rgba(255,255,255,0.4); font-size: 10px; }',
-    /* アバター名ラベル */
     '.avatar-name-label { font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 2px; padding-left: 2px; }',
     '.panel.avatar-active .avatar-name-label { color: rgba(255,255,255,0.5); }',
 
-    /* 入力エリア: 最下部固定（static フロー） */
+    /* 入力エリア: 右カラム下段 */
     '.panel.avatar-active .input-area {',
+    '  grid-column: 2;',
+    '  grid-row: 3;',
     '  position: static;',
     '  flex-shrink: 0;',
     '  z-index: auto;',
@@ -511,7 +530,7 @@
     '  backdrop-filter: blur(8px);',
     '  border-top: 1px solid rgba(255,255,255,0.12);',
     '  padding: 10px 12px;',
-    '  border-radius: 0 0 16px 16px;',
+    '  border-radius: 0 0 16px 0;',
     '}',
     '.panel.avatar-active textarea {',
     '  background: rgba(255,255,255,0.1);',
@@ -524,7 +543,7 @@
     '  border-color: rgba(255,255,255,0.35);',
     '}',
 
-    /* ミュートボタン: static化して入力バーに収まる */
+    /* ミュートボタン */
     '.panel.avatar-active .avatar-mute-btn {',
     '  position: static;',
     '  background: rgba(255,255,255,0.15);',
@@ -533,18 +552,14 @@
     '  flex-shrink: 0;',
     '}',
     '.panel.avatar-active .avatar-mute-btn:hover { background: rgba(255,255,255,0.25); }',
-
-    /* マイクボタン: ダークテーマ */
     '.panel.avatar-active .mic-btn { background: rgba(255,255,255,0.15); color: #fff; }',
     '.panel.avatar-active .mic-btn:hover { background: rgba(255,255,255,0.25); color: #fff; }',
     '.panel.avatar-active .mic-btn.recording { background: rgba(220,38,38,0.6); color: #fff; }',
     '.panel.avatar-active .mic-btn.error { background: rgba(220,38,38,0.4); color: #fff; }',
-
-    /* 送信ボタン: ダークテーマ */
     '.panel.avatar-active .send-btn { background: rgba(37,99,235,0.8); }',
     '.panel.avatar-active .send-btn:disabled { background: rgba(255,255,255,0.2); cursor: not-allowed; }',
 
-    /* エラーバナー: パネル基準で絶対配置（パネルは position: fixed で包含ブロック） */
+    /* エラーバナー: パネル絶対配置 */
     '.panel.avatar-active .error-banner {',
     '  position: absolute;',
     '  top: 0; left: 0; right: 0;',
@@ -554,13 +569,36 @@
     '  border-bottom: none;',
     '}',
 
-    /* 不要要素: 非表示 */
     '.panel.avatar-active .voice-mode-indicator { display: none; }',
     '.panel.avatar-active .empty-state { display: none; }',
 
-    /* モバイル: アバター上部を 35% / 最小 150px に縮小 */
+    /* モバイル（<=500px）: flex-column 縦スプリット */
     '@media (max-width: 500px) {',
-    '  .panel.avatar-active .avatar-area { height: 35%; min-height: 150px; max-height: 240px; }',
+    '  .panel.avatar-active {',
+    '    display: flex;',
+    '    flex-direction: column;',
+    '    width: 100vw !important;',
+    '    max-width: 100vw !important;',
+    '    right: 0 !important; bottom: 0 !important;',
+    '    height: 100dvh;',
+    '    border-radius: 0;',
+    '  }',
+    '  .panel.avatar-active .header { display: none; }',
+    '  .panel.avatar-active .close-btn { display: none !important; }',
+    '  .panel.avatar-active .avatar-area {',
+    '    grid-column: unset; grid-row: unset;',
+    '    width: 100%; height: 35%;',
+    '    min-height: 150px; max-height: 240px;',
+    '    border-radius: 0;',
+    '  }',
+    '  .panel.avatar-active .messages {',
+    '    grid-column: unset; grid-row: unset;',
+    '    flex: 1;',
+    '  }',
+    '  .panel.avatar-active .input-area {',
+    '    grid-column: unset; grid-row: unset;',
+    '    border-radius: 0;',
+    '  }',
     '}',
   ].join('\n');
 
@@ -1325,7 +1363,12 @@
   function connectLiveKit() {
     if (!avatarConfig || !window.LivekitClient) return;
 
-    // 既に接続済み（またはRoom再利用可能）なら再接続しない
+    // 切断済み・エラー状態の古いRoomを先にクリーンアップ
+    if (window.__rajiuceRoom && window.__rajiuceRoom.state !== 'connected') {
+      try { window.__rajiuceRoom.disconnect(); } catch (_e) {}
+      window.__rajiuceRoom = null;
+    }
+    // 既に接続済みなら再利用
     if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
       avatarArea.style.display = 'flex';
       return;
@@ -1400,7 +1443,7 @@
       room.on(LK.RoomEvent.DataReceived, function (data) {
         try {
           var msg = JSON.parse(new TextDecoder().decode(data));
-          if (msg.type === 'agent_reply' && msg.text && avatarMuted) {
+          if (msg.type === 'agent_reply' && msg.text) {
             var assistantMsg = {
               id: generateMsgId(),
               role: 'assistant',
@@ -1474,6 +1517,18 @@
         fabVideoEl = null;
         fabMediaContainer = null;
         resetFabIcon();
+      });
+
+      room.on(LK.RoomEvent.Reconnecting, function () {
+        console.log('[FAQ Widget] LiveKit reconnecting...');
+      });
+
+      room.on(LK.RoomEvent.Reconnected, function () {
+        console.log('[FAQ Widget] LiveKit reconnected');
+        if (isOpen) {
+          avatarArea.style.display = 'flex';
+          panel.classList.add('avatar-active');
+        }
       });
 
       room.connect(avatarConfig.livekitUrl, avatarConfig.token)
@@ -1738,9 +1793,12 @@
       fab.appendChild(svgIcon(CHAT_SVG_PATH));
     }
     emitToHost('widget:closed', {});
-    // LiveKit Room は切断しない（Agentが Room 内で処理中のため）
-    // Room 切断は RoomEvent.Disconnected で自動的に処理される
-    // Anam: パネルを閉じてもセッションは維持（LiveKitと同じ考え方）
+    // LiveKit Room を切断（次回開閉時に新規接続で安定化）
+    if (window.__rajiuceRoom) {
+      try { window.__rajiuceRoom.disconnect(); } catch (_e) {}
+      window.__rajiuceRoom = null;
+    }
+    // Anam: ストリーミング停止
     if (avatarProvider === 'anam' && (anamClient || window.__anamClient)) {
       try {
         var _ac = anamClient || window.__anamClient;
@@ -1910,32 +1968,67 @@
     var isRecording = false;
     var currentRecognition = null;
 
+    function _stopRecognition() {
+      isRecording = false;
+      micBtn.classList.remove('recording');
+      micBtn.setAttribute('aria-label', '音声入力');
+      if (currentRecognition) {
+        try { currentRecognition.stop(); } catch (_e) {}
+        currentRecognition = null;
+      }
+      // 途中の interim テキストをクリア
+      if (textarea.value) {
+        textarea.value = '';
+        autoResizeTextarea();
+        updateSendButton();
+      }
+    }
+
     micBtn.addEventListener('click', function () {
       if (isRecording) {
-        if (currentRecognition) { currentRecognition.stop(); }
+        // OFF: 即時リセット（onend を待たない）
+        _stopRecognition();
         return;
       }
 
+      // ON: 即時 UI フィードバック（二重クリック防止）
+      isRecording = true;
+      micBtn.classList.add('recording');
+      micBtn.setAttribute('aria-label', '録音中 — タップで停止');
+
       var recognition = new SpeechRecognitionAPI();
       recognition.lang = 'ja-JP';
-      recognition.interimResults = false;
+      recognition.continuous = false;
+      recognition.interimResults = true;
       recognition.maxAlternatives = 1;
       currentRecognition = recognition;
 
       recognition.onstart = function () {
-        isRecording = true;
-        micBtn.classList.add('recording');
-        micBtn.setAttribute('aria-label', '録音中 — タップで停止');
+        // UI は click 時に更新済み
       };
 
       recognition.onresult = function (event) {
-        var text = event.results[0][0].transcript;
-        if (text.trim()) {
-          // テキストを入力欄に反映（auto-sendしない — ユーザーが確認後に送信）
-          textarea.value = (textarea.value ? textarea.value + ' ' : '') + text;
+        var interim = '';
+        var finalText = '';
+        for (var i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalText += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+        // 途中結果を入力欄にプレビュー表示
+        if (interim) {
+          textarea.value = interim;
           autoResizeTextarea();
           updateSendButton();
-          textarea.focus();
+        }
+        // 確定結果 → 自動送信
+        if (finalText.trim()) {
+          textarea.value = '';
+          autoResizeTextarea();
+          updateSendButton();
+          sendMessage(finalText.trim());
         }
       };
 
@@ -1944,6 +2037,12 @@
         currentRecognition = null;
         micBtn.classList.remove('recording');
         micBtn.setAttribute('aria-label', '音声入力');
+        // interim が残っていればクリア
+        if (textarea.value) {
+          textarea.value = '';
+          autoResizeTextarea();
+          updateSendButton();
+        }
       };
 
       recognition.onerror = function (event) {
@@ -1956,7 +2055,7 @@
         setTimeout(function () { micBtn.classList.remove('error'); }, 500);
         micBtn.setAttribute('aria-label', '音声入力');
         var errMsg = errCode === 'not-allowed' || errCode === 'service-not-allowed'
-          ? 'マイク権限が必要です（HTTPSが必要な場合があります）'
+          ? 'マイク権限が必要です（HTTPS環境でのみ利用可能）'
           : errCode === 'audio-capture'
             ? 'マイクが見つかりません'
             : errCode === 'network'
@@ -1971,6 +2070,7 @@
         console.warn('[FAQ Widget] recognition.start() failed:', e && e.message);
         isRecording = false;
         currentRecognition = null;
+        micBtn.classList.remove('recording');
         micBtn.classList.add('error');
         setTimeout(function () { micBtn.classList.remove('error'); }, 500);
         micBtn.setAttribute('title', '音声認識を開始できませんでした');
