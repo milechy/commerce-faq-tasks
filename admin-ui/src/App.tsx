@@ -27,6 +27,7 @@ import AnalyticsDashboardPage from "./pages/admin/analytics/index";
 import EngagementPage from "./pages/admin/engagement/index";
 import ConversionDashboardPage from "./pages/admin/conversion/index";
 import OptionManagementPage from "./pages/admin/options/index";
+import ResetPasswordPage from "./pages/ResetPassword";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -84,6 +85,9 @@ function AppInner() {
 
         {/* ログイン画面 */}
         <Route path="/login" element={<Login />} />
+
+        {/* パスワードリセット コールバック */}
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
 
         {/* ルートは管理ダッシュボードへリダイレクト */}
         <Route path="/" element={<Navigate to="/admin" replace />} />
