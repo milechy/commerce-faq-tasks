@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS option_orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id VARCHAR(255) NOT NULL,
+  tenant_id TEXT NOT NULL,
   chat_session_id UUID,
   description TEXT NOT NULL,
   llm_estimate_amount INTEGER,
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS option_orders (
   completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT fk_option_orders_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
+  CONSTRAINT fk_option_orders_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
   CONSTRAINT chk_option_status CHECK (status IN ('pending', 'in_progress', 'completed'))
 );
 
