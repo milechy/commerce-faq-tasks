@@ -81,10 +81,10 @@
     '  bottom: 24px;',
     '  right: 24px;',
     '  z-index: 2147483647;',
-    '  min-width: 56px;',
-    '  min-height: 56px;',
-    '  width: 56px;',
-    '  height: 56px;',
+    '  min-width: 64px;',
+    '  min-height: 64px;',
+    '  width: 64px;',
+    '  height: 64px;',
     '  border-radius: 50%;',
     '  border: none;',
     '  background-color: #2563eb;',
@@ -369,7 +369,7 @@
     '  height: 220px;',
     '  margin: 8px;',
     '  border-radius: 12px;',
-    '  background: #1a1a2e;',
+    '  background: linear-gradient(160deg, #0f0f1a 0%, #1a1a2e 60%, #0d1117 100%);',
     '  overflow: hidden;',
     '  position: relative;',
     '  display: flex;',
@@ -382,6 +382,7 @@
     '  width: 100%;',
     '  height: 100%;',
     '  object-fit: cover;',
+    '  object-position: center top;',
     '  border-radius: 12px;',
     '}',
 
@@ -424,14 +425,14 @@
 
     /* ───── avatar-active: PC 横並び2パネル / モバイル縦スプリット ───── */
 
-    /* PC: CSS Grid 2カラム（左: アバター / 右: ヘッダー + チャット + 入力） */
+    /* PC: CSS Grid 2カラム（左: アバター60% / 右: チャット40%） */
     '.panel.avatar-active {',
-    '  background: #000;',
+    '  background: linear-gradient(135deg, #050510 0%, #0a0a1a 100%);',
     '  overscroll-behavior: contain;',
     '  display: grid;',
-    '  grid-template-columns: 1fr 1fr;',
+    '  grid-template-columns: 3fr 2fr;',
     '  grid-template-rows: auto 1fr auto;',
-    '  width: min(700px, calc(100vw - 48px));',
+    '  width: min(900px, calc(100vw - 48px));',
     '}',
 
     /* ヘッダー: 右カラム上部（ダークテーマ） */
@@ -458,7 +459,7 @@
     '  background: #000;',
     '  overflow: hidden;',
     '}',
-    '.panel.avatar-active .avatar-video { border-radius: 0; width: 100%; height: 100%; object-fit: cover; }',
+    '.panel.avatar-active .avatar-video { border-radius: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }',
 
     /* 閉じるボタン: アバターエリア右上 */
     '.avatar-close-btn {',
@@ -590,8 +591,8 @@
     '  .panel.avatar-active .avatar-close-btn { display: flex; }',
     '  .panel.avatar-active .avatar-area {',
     '    grid-column: unset; grid-row: unset;',
-    '    width: 100%; height: 35%;',
-    '    min-height: 150px; max-height: 240px;',
+    '    width: 100%; height: 45%;',
+    '    min-height: 200px; max-height: 320px;',
     '    border-radius: 0;',
     '  }',
     '  .panel.avatar-active .messages {',
