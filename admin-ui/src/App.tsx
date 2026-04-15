@@ -21,6 +21,7 @@ import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAIChat from "./components/AdminAIChat";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
+import AvatarWizardPage from "./pages/admin/avatar/wizard";
 import AvatarDefaultsPage from "./pages/admin/avatar-defaults/index";
 import BooksPage from "./pages/admin/knowledge/books";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
@@ -132,6 +133,7 @@ function AppInner() {
 
         {/* アバターカスタマイズスタジオ */}
         <Route path="/admin/avatar" element={<RequireAuth><AvatarListPage /></RequireAuth>} />
+        <Route path="/admin/avatar/wizard" element={<RequireAuth><AvatarWizardPage /></RequireAuth>} />
         <Route path="/admin/avatar/studio" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
         <Route path="/admin/avatar/studio/:id" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
 
