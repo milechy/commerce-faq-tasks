@@ -686,8 +686,8 @@ export default function AvatarListPage() {
                 position: "relative",
               }}
             >
-              {/* テナント名バッジ（Super Adminのみ） */}
-              {isSuperAdmin && cfg.tenant_name && (
+              {/* テナント名 / R2Cデフォルトバッジ（Super Adminのみ） */}
+              {isSuperAdmin && (cfg.tenant_name || cfg.is_default) && (
                 <div style={{
                   position: "absolute",
                   top: 8,
@@ -695,9 +695,13 @@ export default function AvatarListPage() {
                   zIndex: 10,
                   padding: "3px 8px",
                   borderRadius: 6,
-                  background: "rgba(0,0,0,0.75)",
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  color: "#d1d5db",
+                  background: cfg.is_default
+                    ? "rgba(99,102,241,0.85)"
+                    : "rgba(0,0,0,0.75)",
+                  border: cfg.is_default
+                    ? "1px solid rgba(165,180,252,0.5)"
+                    : "1px solid rgba(255,255,255,0.15)",
+                  color: cfg.is_default ? "#e0e7ff" : "#d1d5db",
                   fontSize: 11,
                   fontWeight: 600,
                   maxWidth: 140,
@@ -705,7 +709,7 @@ export default function AvatarListPage() {
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
                 }}>
-                  {cfg.tenant_name}
+                  {cfg.is_default ? "R2C デフォルト" : cfg.tenant_name}
                 </div>
               )}
 
