@@ -19,6 +19,7 @@ const TYPE_ICON: Record<string, string> = {
   ai_rule_suggested: "🤖",
   knowledge_gap_frequent: "🔍",
   low_score_alert: "⚠️",
+  avatar_warning: "🚨",
   feedback_received: "📝",
   outcome_recorded: "✅",
   conversion_rate_change: "📈",

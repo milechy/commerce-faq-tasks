@@ -7,6 +7,13 @@ import { getPool } from "../../../lib/db";
 // 型定義
 // ---------------------------------------------------------------------------
 
+export interface ApprovedResponse {
+  text: string;
+  style: string;
+  reason?: string;
+  approved_at: string;
+}
+
 export interface TuningRule {
   id: number;
   tenant_id: string;
@@ -18,6 +25,7 @@ export interface TuningRule {
   source_message_id: number | null;
   created_at: string;
   updated_at: string;
+  approved_responses?: ApprovedResponse[];
 }
 
 export interface CreateRuleParams {
@@ -34,6 +42,7 @@ export interface UpdateRuleParams {
   expected_behavior?: string;
   priority?: number;
   is_active?: boolean;
+  approved_responses?: ApprovedResponse[];
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +121,7 @@ export async function createRule(params: CreateRuleParams): Promise<TuningRule> 
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, tenant_id, trigger_pattern, expected_behavior,
                priority, is_active, created_by, source_message_id,
-               created_at, updated_at`,
+               created_at, updated_at, approved_responses`,
     [
       params.tenant_id,
       params.trigger_pattern,
@@ -146,22 +155,29 @@ export async function updateRule(
   if (check.rows.length === 0) return null;
   if (tenantId && check.rows[0]!.tenant_id !== tenantId) return null;
 
+  const approvedJson =
+    params.approved_responses !== undefined
+      ? JSON.stringify(params.approved_responses)
+      : null;
+
   const result = await pool.query<TuningRule>(
     `UPDATE tuning_rules SET
-       trigger_pattern  = COALESCE($1, trigger_pattern),
+       trigger_pattern   = COALESCE($1, trigger_pattern),
        expected_behavior = COALESCE($2, expected_behavior),
-       priority         = COALESCE($3, priority),
-       is_active        = COALESCE($4, is_active),
-       updated_at       = NOW()
-     WHERE id = $5
+       priority          = COALESCE($3, priority),
+       is_active         = COALESCE($4, is_active),
+       approved_responses = CASE WHEN $5::text IS NOT NULL THEN $5::jsonb ELSE approved_responses END,
+       updated_at        = NOW()
+     WHERE id = $6
      RETURNING id, tenant_id, trigger_pattern, expected_behavior,
                priority, is_active, created_by, source_message_id,
-               created_at, updated_at`,
+               created_at, updated_at, approved_responses`,
     [
       params.trigger_pattern ?? null,
       params.expected_behavior ?? null,
       params.priority ?? null,
       params.is_active ?? null,
+      approvedJson,
       id,
     ],
   );

@@ -11,6 +11,17 @@ import { useAuth } from "../../../auth/useAuth";
 interface Tenant {
   id: string;
   name: string;
+  is_active?: boolean;
+  billing_free_from?: string | null;
+  billing_free_until?: string | null;
+}
+
+interface BillingAdjustment {
+  id: number;
+  amount: number;
+  reason: string;
+  adjusted_by: string;
+  created_at: string;
 }
 
 interface BillingSummary {
@@ -162,6 +173,20 @@ export default function BillingPage() {
 
   const [toast, setToast] = useState<string | null>(null);
 
+  // ── Super Admin 請求管理 state ──────────────────────────────
+  const [adjustModalOpen, setAdjustModalOpen] = useState(false);
+  const [freePeriodModalOpen, setFreePeriodModalOpen] = useState(false);
+  const [adjustAmount, setAdjustAmount] = useState("");
+  const [adjustType, setAdjustType] = useState<"discount" | "add">("discount");
+  const [adjustReason, setAdjustReason] = useState("");
+  const [adjustLoading, setAdjustLoading] = useState(false);
+  const [freeFrom, setFreeFrom] = useState("");
+  const [freeUntil, setFreeUntil] = useState("");
+  const [freePeriodLoading, setFreePeriodLoading] = useState(false);
+  const [adjustments, setAdjustments] = useState<BillingAdjustment[]>([]);
+  const [toggleLoading, setToggleLoading] = useState(false);
+  const [retryLoadingId, setRetryLoadingId] = useState<string | null>(null);
+
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
@@ -180,7 +205,12 @@ export default function BillingPage() {
         try {
           const res = await authFetch(`${API_BASE}/v1/admin/tenants`);
           if (res.ok) {
-            const data = (await res.json()) as { tenants: Tenant[] };
+            const data = (await res.json()) as {
+              tenants: Array<{
+                id: string; name: string; is_active?: boolean;
+                billing_free_from?: string | null; billing_free_until?: string | null;
+              }>;
+            };
             setTenants(data.tenants);
             if (data.tenants.length > 0) {
               setSelectedTenantId(data.tenants[0].id);
@@ -204,6 +234,120 @@ export default function BillingPage() {
       }
     })();
   }, [navigate, isSuperAdmin, user, previewMode, previewTenantId, previewTenantName]);
+
+  // ── 調整履歴取得 ──────────────────────────────────────────
+  const fetchAdjustments = useCallback(async (tenantId: string) => {
+    if (!isSuperAdmin || !tenantId) return;
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/billing/adjustments?tenantId=${tenantId}`);
+      if (res.ok) {
+        const data = await res.json() as { items: BillingAdjustment[] };
+        setAdjustments(data.items ?? []);
+      }
+    } catch { /* ignore */ }
+  }, [isSuperAdmin]);
+
+  // ── 再請求 ────────────────────────────────────────────────
+  const handleRetryInvoice = async (invoiceId: string) => {
+    if (!window.confirm("この請求書の再決済を試みますか？")) return;
+    setRetryLoadingId(invoiceId);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/billing/retry-invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoiceId }),
+      });
+      if (res.ok) {
+        showToast("✅ 再請求を送信しました");
+        void fetchBillingData();
+      } else {
+        const d = await res.json() as { error?: string; detail?: string };
+        showToast(`❌ 再請求に失敗しました: ${d.detail ?? d.error ?? ""}`);
+      }
+    } catch { showToast("❌ 再請求に失敗しました"); }
+    finally { setRetryLoadingId(null); }
+  };
+
+  // ── 金額調整 ──────────────────────────────────────────────
+  const handleAdjust = async () => {
+    const amountNum = parseInt(adjustAmount, 10);
+    if (!adjustAmount || isNaN(amountNum) || !adjustReason.trim()) return;
+    const finalAmount = adjustType === "discount" ? -Math.abs(amountNum) : Math.abs(amountNum);
+    setAdjustLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/billing/adjust`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: selectedTenantId, amount: finalAmount, reason: adjustReason.trim() }),
+      });
+      if (res.ok) {
+        showToast("✅ 金額調整を送信しました");
+        setAdjustModalOpen(false);
+        setAdjustAmount(""); setAdjustReason("");
+        void fetchAdjustments(selectedTenantId);
+      } else {
+        const d = await res.json() as { error?: string };
+        showToast(`❌ 調整に失敗しました: ${d.error ?? ""}`);
+      }
+    } catch { showToast("❌ 調整に失敗しました"); }
+    finally { setAdjustLoading(false); }
+  };
+
+  // ── 無料期間 ──────────────────────────────────────────────
+  const handleFreePeriod = async () => {
+    setFreePeriodLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/billing/free-period`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenantId: selectedTenantId,
+          freeFrom: freeFrom ? new Date(freeFrom).toISOString() : null,
+          freeUntil: freeUntil ? new Date(freeUntil).toISOString() : null,
+        }),
+      });
+      if (res.ok) {
+        showToast("✅ 無料期間を設定しました");
+        setFreePeriodModalOpen(false);
+        // ローカルのテナントリストも更新
+        setTenants((prev) =>
+          prev.map((t) => t.id === selectedTenantId
+            ? { ...t, billing_free_from: freeFrom || null, billing_free_until: freeUntil || null }
+            : t)
+        );
+      } else {
+        showToast("❌ 無料期間の設定に失敗しました");
+      }
+    } catch { showToast("❌ 無料期間の設定に失敗しました"); }
+    finally { setFreePeriodLoading(false); }
+  };
+
+  // ── サービス停止/再開 ─────────────────────────────────────
+  const handleToggleService = async (action: "pause" | "resume") => {
+    const msg = action === "pause"
+      ? "停止するとエンドユーザーのチャットも停止します。よろしいですか？"
+      : "このテナントのサービスを再開しますか？";
+    if (!window.confirm(msg)) return;
+    setToggleLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/billing/toggle-service`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: selectedTenantId, action }),
+      });
+      if (res.ok) {
+        showToast(action === "pause" ? "⏸️ サービスを停止しました" : "▶️ サービスを再開しました");
+        setTenants((prev) =>
+          prev.map((t) => t.id === selectedTenantId
+            ? { ...t, is_active: action === "resume" }
+            : t)
+        );
+      } else {
+        showToast("❌ サービスの切り替えに失敗しました");
+      }
+    } catch { showToast("❌ サービスの切り替えに失敗しました"); }
+    finally { setToggleLoading(false); }
+  };
 
   // 請求データを取得
   const fetchBillingData = useCallback(async () => {
@@ -363,12 +507,14 @@ export default function BillingPage() {
         };
         setCrossTenantRows(ct.tenants ?? []);
       }
+      // ── 調整履歴（Super Admin のみ） ─────────────────────
+      if (isSuperAdmin) void fetchAdjustments(selectedTenantId);
     } catch {
       setError(t("billing.load_error"));
     } finally {
       setLoadingData(false);
     }
-  }, [selectedTenantId, selectedMonth, isSuperAdmin, t]);
+  }, [selectedTenantId, selectedMonth, isSuperAdmin, t, fetchAdjustments]);
 
   useEffect(() => {
     fetchBillingData();
@@ -592,6 +738,50 @@ export default function BillingPage() {
             </a>
           )}
         </div>
+
+        {/* ── Super Admin 請求管理ボタン ── */}
+        {isSuperAdmin && selectedTenantId && (() => {
+          const st = tenants.find((t) => t.id === selectedTenantId);
+          return (
+            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap", borderTop: "1px solid #1f2937", paddingTop: 16 }}>
+              <span style={{ fontSize: 13, color: "#6b7280", alignSelf: "center", fontWeight: 600 }}>⚙️ 請求管理:</span>
+              <button
+                onClick={() => { setAdjustAmount(""); setAdjustReason(""); setAdjustType("discount"); setAdjustModalOpen(true); }}
+                style={{ ...BTN_LINK, fontSize: 13, padding: "8px 14px", borderColor: "#a855f7", color: "#d8b4fe" }}
+              >
+                💰 金額調整
+              </button>
+              <button
+                onClick={() => {
+                  setFreeFrom(st?.billing_free_from ? st.billing_free_from.slice(0, 10) : "");
+                  setFreeUntil(st?.billing_free_until ? st.billing_free_until.slice(0, 10) : "");
+                  setFreePeriodModalOpen(true);
+                }}
+                style={{ ...BTN_LINK, fontSize: 13, padding: "8px 14px", borderColor: "#f59e0b", color: "#fcd34d" }}
+              >
+                🎁 無料期間
+                {st?.billing_free_until && new Date(st.billing_free_until) > new Date() && (
+                  <span style={{ marginLeft: 6, padding: "1px 7px", borderRadius: 999, background: "rgba(251,191,36,0.2)", color: "#fbbf24", fontSize: 11 }}>設定中</span>
+                )}
+              </button>
+              <button
+                disabled={toggleLoading}
+                onClick={() => void handleToggleService(st?.is_active !== false ? "pause" : "resume")}
+                style={{
+                  ...BTN_LINK,
+                  fontSize: 13,
+                  padding: "8px 14px",
+                  borderColor: st?.is_active !== false ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)",
+                  color: st?.is_active !== false ? "#f87171" : "#4ade80",
+                  opacity: toggleLoading ? 0.6 : 1,
+                  cursor: toggleLoading ? "not-allowed" : "pointer",
+                }}
+              >
+                {toggleLoading ? "処理中..." : st?.is_active !== false ? "⏸ 停止" : "▶️ 再開"}
+              </button>
+            </div>
+          );
+        })()}
       </section>
 
       {/* ローディング */}
@@ -935,6 +1125,23 @@ export default function BillingPage() {
                             📥 PDF
                           </a>
                         )}
+                        {isSuperAdmin && inv.status === "open" && (
+                          <button
+                            onClick={() => void handleRetryInvoice(inv.id)}
+                            disabled={retryLoadingId === inv.id}
+                            style={{
+                              ...BTN_LINK,
+                              fontSize: 13,
+                              padding: "8px 14px",
+                              borderColor: "rgba(234,179,8,0.5)",
+                              color: "#fbbf24",
+                              opacity: retryLoadingId === inv.id ? 0.6 : 1,
+                              cursor: retryLoadingId === inv.id ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            {retryLoadingId === inv.id ? "処理中..." : "🔄 再請求"}
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -942,6 +1149,46 @@ export default function BillingPage() {
               </div>
             )}
           </section>
+          {/* Super Admin: 金額調整履歴 */}
+          {isSuperAdmin && adjustments.length > 0 && (
+            <section style={{ ...CARD, marginBottom: 20 }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 16px" }}>
+                💰 金額調整履歴
+              </h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {adjustments.map((adj) => (
+                  <div
+                    key={adj.id}
+                    style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "12px 16px", borderRadius: 10,
+                      border: "1px solid #1f2937", background: "rgba(0,0,0,0.2)",
+                      flexWrap: "wrap", gap: 8,
+                    }}
+                  >
+                    <div>
+                      <span style={{
+                        fontSize: 15, fontWeight: 700,
+                        color: adj.amount < 0 ? "#a78bfa" : "#f87171",
+                      }}>
+                        {adj.amount < 0
+                          ? `▼ ¥${Math.abs(adj.amount).toLocaleString("ja-JP")} 割引`
+                          : `▲ ¥${adj.amount.toLocaleString("ja-JP")} 追加`}
+                      </span>
+                      <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 2 }}>{adj.reason}</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>{adj.adjusted_by}</div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        {new Date(adj.created_at).toLocaleDateString("ja-JP")}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Super Admin: テナント横断利用状況 */}
           {isSuperAdmin && crossTenantRows.length > 0 && (
             <section style={{ ...CARD, marginBottom: 32 }}>
@@ -1004,6 +1251,216 @@ export default function BillingPage() {
           {tenants.length === 0 ? t("billing.no_tenant") : t("billing.select_tenant")}
         </div>
       ) : null}
+
+      {/* 金額調整モーダル */}
+      {adjustModalOpen && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 3000,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setAdjustModalOpen(false); }}
+        >
+          <div style={{
+            background: "linear-gradient(145deg,#0f172a,#1e293b)",
+            border: "1px solid #334155", borderRadius: 16,
+            padding: "28px 24px", width: "100%", maxWidth: 440,
+            boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+          }}>
+            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>💰 金額調整</h3>
+
+            {/* タイプ切替 */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <button
+                onClick={() => setAdjustType("discount")}
+                style={{
+                  flex: 1, padding: "10px 0", minHeight: 44, borderRadius: 10,
+                  border: `1px solid ${adjustType === "discount" ? "rgba(168,85,247,0.5)" : "#374151"}`,
+                  background: adjustType === "discount" ? "rgba(168,85,247,0.15)" : "transparent",
+                  color: adjustType === "discount" ? "#d8b4fe" : "#9ca3af",
+                  fontWeight: 700, fontSize: 14, cursor: "pointer",
+                }}
+              >▼ 割引（値引き）</button>
+              <button
+                onClick={() => setAdjustType("add")}
+                style={{
+                  flex: 1, padding: "10px 0", minHeight: 44, borderRadius: 10,
+                  border: `1px solid ${adjustType === "add" ? "rgba(239,68,68,0.5)" : "#374151"}`,
+                  background: adjustType === "add" ? "rgba(239,68,68,0.15)" : "transparent",
+                  color: adjustType === "add" ? "#f87171" : "#9ca3af",
+                  fontWeight: 700, fontSize: 14, cursor: "pointer",
+                }}
+              >▲ 追加請求</button>
+            </div>
+
+            {/* 金額 */}
+            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+              金額（円）
+            </label>
+            <input
+              type="number"
+              min="1"
+              value={adjustAmount}
+              onChange={(e) => setAdjustAmount(e.target.value)}
+              placeholder="例: 1000"
+              style={{
+                width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
+                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
+                color: "#e5e7eb", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
+              }}
+            />
+
+            {/* 理由 */}
+            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+              理由（必須）
+            </label>
+            <textarea
+              value={adjustReason}
+              onChange={(e) => setAdjustReason(e.target.value)}
+              placeholder="調整の理由を入力してください"
+              rows={3}
+              style={{
+                width: "100%", padding: "12px 14px", borderRadius: 10,
+                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
+                color: "#e5e7eb", fontSize: 14, resize: "vertical",
+                boxSizing: "border-box", marginBottom: 20, fontFamily: "inherit",
+              }}
+            />
+
+            {/* プレビュー */}
+            {adjustAmount && parseInt(adjustAmount, 10) > 0 && (
+              <div style={{
+                padding: "12px 16px", borderRadius: 10, marginBottom: 20,
+                background: adjustType === "discount" ? "rgba(168,85,247,0.1)" : "rgba(239,68,68,0.1)",
+                border: `1px solid ${adjustType === "discount" ? "rgba(168,85,247,0.3)" : "rgba(239,68,68,0.3)"}`,
+                fontSize: 14, color: adjustType === "discount" ? "#d8b4fe" : "#f87171", fontWeight: 600,
+              }}>
+                {adjustType === "discount"
+                  ? `¥${parseInt(adjustAmount, 10).toLocaleString("ja-JP")} を割引します`
+                  : `¥${parseInt(adjustAmount, 10).toLocaleString("ja-JP")} を追加請求します`}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => setAdjustModalOpen(false)}
+                style={{
+                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10,
+                  border: "1px solid #374151", background: "transparent",
+                  color: "#9ca3af", fontSize: 15, fontWeight: 600, cursor: "pointer",
+                }}
+              >キャンセル</button>
+              <button
+                onClick={() => void handleAdjust()}
+                disabled={adjustLoading || !adjustAmount || !adjustReason.trim()}
+                style={{
+                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10, border: "none",
+                  background: adjustLoading || !adjustAmount || !adjustReason.trim()
+                    ? "#374151" : "linear-gradient(135deg,#a855f7,#7c3aed)",
+                  color: adjustLoading || !adjustAmount || !adjustReason.trim() ? "#6b7280" : "#fff",
+                  fontSize: 15, fontWeight: 700,
+                  cursor: adjustLoading || !adjustAmount || !adjustReason.trim() ? "not-allowed" : "pointer",
+                }}
+              >{adjustLoading ? "送信中..." : "調整を送信"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 無料期間設定モーダル */}
+      {freePeriodModalOpen && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 3000,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setFreePeriodModalOpen(false); }}
+        >
+          <div style={{
+            background: "linear-gradient(145deg,#0f172a,#1e293b)",
+            border: "1px solid #334155", borderRadius: 16,
+            padding: "28px 24px", width: "100%", maxWidth: 400,
+            boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+          }}>
+            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>🎁 無料期間の設定</h3>
+
+            {/* 現在の設定 */}
+            {(() => {
+              const st = tenants.find((t) => t.id === selectedTenantId);
+              if (st?.billing_free_from || st?.billing_free_until) {
+                return (
+                  <div style={{
+                    padding: "10px 14px", borderRadius: 10, marginBottom: 20,
+                    background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)",
+                    fontSize: 13, color: "#fcd34d",
+                  }}>
+                    現在の設定:{" "}
+                    {st.billing_free_from ? st.billing_free_from.slice(0, 10) : "—"}
+                    {" 〜 "}
+                    {st.billing_free_until ? st.billing_free_until.slice(0, 10) : "—"}
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
+            {/* 開始日 */}
+            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+              開始日
+            </label>
+            <input
+              type="date"
+              value={freeFrom}
+              onChange={(e) => setFreeFrom(e.target.value)}
+              style={{
+                width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
+                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
+                color: "#e5e7eb", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
+              }}
+            />
+
+            {/* 終了日 */}
+            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+              終了日
+            </label>
+            <input
+              type="date"
+              value={freeUntil}
+              onChange={(e) => setFreeUntil(e.target.value)}
+              style={{
+                width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
+                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
+                color: "#e5e7eb", fontSize: 15, boxSizing: "border-box", marginBottom: 8,
+              }}
+            />
+            <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 20 }}>
+              空欄にすると設定を解除します
+            </p>
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => setFreePeriodModalOpen(false)}
+                style={{
+                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10,
+                  border: "1px solid #374151", background: "transparent",
+                  color: "#9ca3af", fontSize: 15, fontWeight: 600, cursor: "pointer",
+                }}
+              >キャンセル</button>
+              <button
+                onClick={() => void handleFreePeriod()}
+                disabled={freePeriodLoading}
+                style={{
+                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10, border: "none",
+                  background: freePeriodLoading ? "#374151" : "linear-gradient(135deg,#f59e0b,#d97706)",
+                  color: freePeriodLoading ? "#6b7280" : "#1a0a00",
+                  fontSize: 15, fontWeight: 700,
+                  cursor: freePeriodLoading ? "not-allowed" : "pointer",
+                }}
+              >{freePeriodLoading ? "保存中..." : "保存する"}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* トースト */}
       {toast && (

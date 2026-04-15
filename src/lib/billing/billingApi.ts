@@ -43,13 +43,45 @@ function resolveTenantId(req: Request): { tenantId: string | null; isSuperAdmin:
  * baseMiddleware には supabaseAuthMiddleware のみ渡すこと。
  * ロール検査（super_admin / client_admin）はこの関数内部で行う。
  */
+// ── Zod スキーマ (管理操作) ────────────────────────────────────────────────
+const retryInvoiceSchema = z.object({
+  invoiceId: z.string().min(1),
+});
+
+const adjustSchema = z.object({
+  tenantId: z.string().min(1),
+  amount:   z.number().int(),   // JPY（負=割引、正=追加）
+  reason:   z.string().min(1).max(500),
+});
+
+const freePeriodSchema = z.object({
+  tenantId:  z.string().min(1),
+  freeFrom:  z.string().datetime({ offset: true }).nullable().optional(),
+  freeUntil: z.string().datetime({ offset: true }).nullable().optional(),
+});
+
+const toggleServiceSchema = z.object({
+  tenantId: z.string().min(1),
+  action:   z.enum(['pause', 'resume']),
+});
+
+const adjustmentsQuerySchema = z.object({
+  tenantId: z.string().min(1),
+});
+
+function getStripe(secretKey: string): any {
+  const Stripe = require('stripe');
+  return new Stripe(secretKey, { apiVersion: '2024-06-20' });
+}
+
 export function registerBillingAdminRoutes(
   app: Application,
   db: any,
   logger: pino.Logger,
   baseMiddleware: RequestHandler[]
 ): void {
-  const mw = [...baseMiddleware, roleAuthMiddleware, requireRole('super_admin', 'client_admin')];
+  const mw   = [...baseMiddleware, roleAuthMiddleware, requireRole('super_admin', 'client_admin')];
+  const saMw = [...baseMiddleware, roleAuthMiddleware, requireRole('super_admin')];
 
   // ──────────────────────────────────────────────────────────────
   // GET /v1/admin/billing/usage
@@ -338,6 +370,198 @@ export function registerBillingAdminRoutes(
         });
       } catch (err) {
         logger.error({ err, tenantId: resolvedTenantId }, '[billingApi] invoices query failed');
+        res.status(500).json({ error: 'internal_error' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // POST /v1/admin/billing/retry-invoice  (super_admin)
+  // ──────────────────────────────────────────────────────────────
+  app.post(
+    '/v1/admin/billing/retry-invoice',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = retryInvoiceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { invoiceId } = parsed.data;
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeKey) { res.status(500).json({ error: 'stripe_not_configured' }); return; }
+      try {
+        const stripe = getStripe(stripeKey);
+        const invoice = await stripe.invoices.pay(invoiceId) as unknown;
+        res.json({ ok: true, invoice });
+      } catch (err: any) {
+        logger.warn({ err, invoiceId }, '[billingApi] retry-invoice failed');
+        res.status(400).json({ error: 'Re-payment failed', detail: String(err?.message ?? err) });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // POST /v1/admin/billing/adjust  (super_admin)
+  // ──────────────────────────────────────────────────────────────
+  app.post(
+    '/v1/admin/billing/adjust',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = adjustSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { tenantId, amount, reason } = parsed.data;
+
+      try {
+        const subResult = await db.query(
+          `SELECT stripe_customer_id FROM stripe_subscriptions
+           WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId]
+        );
+        if (subResult.rows.length === 0) {
+          res.status(404).json({ error: 'アクティブなサブスクリプションが見つかりません' });
+          return;
+        }
+        const customerId = subResult.rows[0].stripe_customer_id as string;
+
+        const stripeKey = process.env.STRIPE_SECRET_KEY;
+        if (!stripeKey) { res.status(500).json({ error: 'stripe_not_configured' }); return; }
+
+        const stripe = getStripe(stripeKey);
+        // JPY は最小単位が1円なのでそのまま渡す
+        await stripe.invoiceItems.create({
+          customer:    customerId,
+          amount,
+          currency:    'jpy',
+          description: reason,
+        });
+
+        const user = (req as any).user as { email?: string; tenantId?: string } | undefined;
+        const adjustedBy = user?.email ?? user?.tenantId ?? 'admin';
+
+        await db.query(
+          `INSERT INTO billing_adjustments (tenant_id, amount, reason, adjusted_by)
+           VALUES ($1, $2, $3, $4)`,
+          [tenantId, amount, reason, adjustedBy]
+        );
+
+        res.json({ ok: true });
+      } catch (err: any) {
+        logger.warn({ err, tenantId }, '[billingApi] adjust failed');
+        res.status(500).json({ error: '金額調整に失敗しました', detail: String(err?.message ?? err) });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // PUT /v1/admin/billing/free-period  (super_admin)
+  // ──────────────────────────────────────────────────────────────
+  app.put(
+    '/v1/admin/billing/free-period',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = freePeriodSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { tenantId, freeFrom, freeUntil } = parsed.data;
+      try {
+        await db.query(
+          `UPDATE tenants SET billing_free_from = $1, billing_free_until = $2, updated_at = NOW()
+           WHERE id = $3`,
+          [freeFrom ?? null, freeUntil ?? null, tenantId]
+        );
+        res.json({ ok: true });
+      } catch (err) {
+        logger.warn({ err, tenantId }, '[billingApi] free-period update failed');
+        res.status(500).json({ error: '無料期間の設定に失敗しました' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // PUT /v1/admin/billing/toggle-service  (super_admin)
+  // ──────────────────────────────────────────────────────────────
+  app.put(
+    '/v1/admin/billing/toggle-service',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = toggleServiceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { tenantId, action } = parsed.data;
+      const isActive = action === 'resume';
+
+      try {
+        await db.query(
+          `UPDATE tenants SET is_active = $1, updated_at = NOW() WHERE id = $2`,
+          [isActive, tenantId]
+        );
+
+        // Stripe サブスクリプションの一時停止/再開
+        const subResult = await db.query(
+          `SELECT stripe_subscription_id FROM stripe_subscriptions
+           WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId]
+        );
+
+        if (subResult.rows.length > 0) {
+          const stripeKey = process.env.STRIPE_SECRET_KEY;
+          if (stripeKey) {
+            const stripe = getStripe(stripeKey);
+            const subId = subResult.rows[0].stripe_subscription_id as string;
+            if (action === 'pause') {
+              await stripe.subscriptions.update(subId, {
+                pause_collection: { behavior: 'void' },
+              });
+            } else {
+              // resume: pause_collection を解除
+              await stripe.subscriptions.update(subId, {
+                pause_collection: '' as any,
+              });
+            }
+          }
+        }
+
+        res.json({ ok: true, is_active: isActive });
+      } catch (err) {
+        logger.warn({ err, tenantId, action }, '[billingApi] toggle-service failed');
+        res.status(500).json({ error: 'サービスの停止/再開に失敗しました' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // GET /v1/admin/billing/adjustments  (super_admin)
+  // ──────────────────────────────────────────────────────────────
+  app.get(
+    '/v1/admin/billing/adjustments',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = adjustmentsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { tenantId } = parsed.data;
+      try {
+        const result = await db.query(
+          `SELECT id, amount, reason, adjusted_by, created_at
+           FROM billing_adjustments
+           WHERE tenant_id = $1
+           ORDER BY created_at DESC
+           LIMIT 50`,
+          [tenantId]
+        );
+        res.json({ items: result.rows, total: result.rows.length });
+      } catch (err) {
+        logger.warn({ err, tenantId }, '[billingApi] adjustments query failed');
         res.status(500).json({ error: 'internal_error' });
       }
     }

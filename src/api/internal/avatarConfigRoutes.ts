@@ -22,7 +22,7 @@ export function registerInternalAvatarConfigRoutes(app: Express): void {
     try {
       const pool = getPool();
       const result = await pool.query(
-        "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+        "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
         [tenantId],
       );
 

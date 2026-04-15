@@ -2,6 +2,13 @@ import { useState, useEffect } from "react";
 import { useLang } from "../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../lib/api";
 
+export interface ApprovedResponse {
+  text: string;
+  style: string;
+  reason?: string;
+  approved_at: string;
+}
+
 export interface TuningRule {
   id: number;
   tenant_id: string;
@@ -11,6 +18,7 @@ export interface TuningRule {
   is_active: boolean;
   created_by: string;
   created_at: string;
+  approved_responses?: ApprovedResponse[];
 }
 
 export type TuningRuleInput = Omit<TuningRule, "id" | "created_by" | "created_at">;
@@ -18,6 +26,11 @@ export type TuningRuleInput = Omit<TuningRule, "id" | "created_by" | "created_at
 export interface SourceConversation {
   userMsg: string;
   assistantMsg: string;
+}
+
+interface TestResponseItem {
+  style: string;
+  text: string;
 }
 
 interface Props {
@@ -32,7 +45,7 @@ interface Props {
   /** 会話詳細から呼び出し時: セッションのtenant_idを自動セット */
   presetTenantId?: string;
   onClose: () => void;
-  onSuccess: (message: string, rule: TuningRuleInput & { id?: number }) => void;
+  onSuccess: (message: string, rule: TuningRule) => void;
 }
 
 const INPUT_STYLE: React.CSSProperties = {
@@ -97,6 +110,20 @@ export default function TuningRuleModal({
   const [aiSuggested, setAiSuggested] = useState(false);
   const [suggestReason, setSuggestReason] = useState<string | null>(null);
 
+  // ── テスト返答フェーズ ──────────────────────────────────────────────────
+  const [savedRule, setSavedRule] = useState<TuningRule | null>(
+    mode === "edit" && initialData ? initialData : null
+  );
+  const [testResponses, setTestResponses] = useState<TestResponseItem[]>([]);
+  const [testLoading, setTestLoading] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [approvedResponses, setApprovedResponses] = useState<ApprovedResponse[]>(
+    initialData?.approved_responses ?? []
+  );
+  // 採用ボタン押下時の理由入力: index → reason string
+  const [approveReasons, setApproveReasons] = useState<Record<number, string>>({});
+  const [approving, setApproving] = useState<number | null>(null);
+
   // AI提案: モーダルが開いた時点でsourceConversationがあれば自動実行
   useEffect(() => {
     if (mode !== "create" || !sourceConversation) return;
@@ -154,22 +181,7 @@ export default function TuningRuleModal({
     setError(null);
 
     try {
-      // TODO: Replace with actual API call
-      // const url = mode === "edit"
-      //   ? `${API_BASE}/v1/admin/tuning-rules/${initialData!.id}?tenant=${scope}`
-      //   : `${API_BASE}/v1/admin/tuning-rules?tenant=${scope}`;
-      // const res = await authFetch(url, {
-      //   method: mode === "edit" ? "PUT" : "POST",
-      //   headers: { "Content-Type": "application/json" },
-      //   body: JSON.stringify(payload),
-      // });
-      // if (!res.ok) throw new Error(t("tuning.save_error"));
-
-      // Simulate async save with mock
-      await new Promise((resolve) => setTimeout(resolve, 400));
-
-      const payload: TuningRuleInput & { id?: number } = {
-        id: initialData?.id,
+      const body = {
         tenant_id: scope,
         trigger_pattern: triggerPattern.trim(),
         expected_behavior: expectedBehavior.trim(),
@@ -177,15 +189,103 @@ export default function TuningRuleModal({
         is_active: isActive,
       };
 
+      const url =
+        mode === "edit"
+          ? `${API_BASE}/v1/admin/tuning-rules/${initialData!.id}`
+          : `${API_BASE}/v1/admin/tuning-rules`;
+      const method = mode === "edit" ? "PUT" : "POST";
+
+      const res = await authFetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(t("tuning.save_error"));
+
+      const saved = await res.json() as TuningRule;
+      // 採用済み返答を保持（PUT RETURNING に approved_responses が含まれる）
+      const savedWithApproved: TuningRule = {
+        ...saved,
+        approved_responses: saved.approved_responses ?? approvedResponses,
+      };
+      setSavedRule(savedWithApproved);
+      setApprovedResponses(savedWithApproved.approved_responses ?? []);
       onSuccess(
         mode === "edit" ? t("tuning.saved") : t("tuning.added"),
-        payload
+        savedWithApproved,
       );
     } catch {
       setError(t("tuning.save_error"));
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleGenerateTestResponses = async () => {
+    if (!savedRule) return;
+    setTestLoading(true);
+    setTestError(null);
+    setTestResponses([]);
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/tuning-rules/${savedRule.id}/test-responses`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        setTestError("テスト返答の生成に失敗しました。もう一度お試しください。");
+        return;
+      }
+      const data = await res.json() as { responses: TestResponseItem[] };
+      setTestResponses(data.responses ?? []);
+    } catch {
+      setTestError("ネットワークエラーが発生しました。");
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const handleApprove = async (item: TestResponseItem, idx: number) => {
+    if (!savedRule || approving !== null) return;
+    setApproving(idx);
+    const newEntry: ApprovedResponse = {
+      text: item.text,
+      style: item.style,
+      reason: approveReasons[idx]?.trim() || undefined,
+      approved_at: new Date().toISOString(),
+    };
+    const nextApproved = [...approvedResponses, newEntry];
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/tuning-rules/${savedRule.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved_responses: nextApproved }),
+        },
+      );
+      if (!res.ok) return;
+      setApprovedResponses(nextApproved);
+      // 採用後に理由をクリア
+      setApproveReasons((prev) => { const n = { ...prev }; delete n[idx]; return n; });
+    } catch { /* ignore */ }
+    finally { setApproving(null); }
+  };
+
+  const handleRemoveApproved = async (idx: number) => {
+    if (!savedRule) return;
+    const nextApproved = approvedResponses.filter((_, i) => i !== idx);
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/tuning-rules/${savedRule.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved_responses: nextApproved }),
+        },
+      );
+      if (!res.ok) return;
+      setApprovedResponses(nextApproved);
+    } catch { /* ignore */ }
   };
 
   return (
@@ -714,6 +814,97 @@ export default function TuningRuleModal({
               )}
             </button>
           </div>
+
+          {/* ── テスト返答セクション（保存後 or 編集時） ─────────────────────── */}
+          {savedRule && (
+            <div style={{ borderTop: "1px solid #1f2937", paddingTop: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db" }}>🧪 テスト返答</span>
+                <button
+                  type="button"
+                  onClick={() => void handleGenerateTestResponses()}
+                  disabled={testLoading}
+                  style={{
+                    padding: "10px 18px",
+                    minHeight: 44,
+                    borderRadius: 10,
+                    border: "none",
+                    background: testLoading ? "#374151" : "linear-gradient(135deg, #7c3aed, #a855f7)",
+                    color: "#fff",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: testLoading ? "not-allowed" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  {testLoading ? (
+                    <>
+                      <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite" }} />
+                      AIが生成中...
+                    </>
+                  ) : "🧪 テスト返答を生成"}
+                </button>
+              </div>
+
+              {testError && <div style={{ color: "#fca5a5", fontSize: 13 }}>{testError}</div>}
+
+              {/* 生成された返答カード */}
+              {testResponses.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {testResponses.map((item, idx) => (
+                    <div key={idx} style={{ borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.6)", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ padding: "2px 10px", borderRadius: 999, background: "rgba(139,92,246,0.15)", border: "1px solid rgba(139,92,246,0.3)", color: "#c4b5fd", fontSize: 11, fontWeight: 700 }}>{item.style}</span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 14, color: "#e5e7eb", lineHeight: 1.7 }}>{item.text}</p>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <textarea
+                          value={approveReasons[idx] ?? ""}
+                          onChange={(e) => setApproveReasons((prev) => ({ ...prev, [idx]: e.target.value }))}
+                          rows={2}
+                          placeholder="採用理由（任意）"
+                          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #374151", background: "#020617", color: "#e5e7eb", fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleApprove(item, idx)}
+                          disabled={approving !== null}
+                          style={{ padding: "8px 14px", minHeight: 36, borderRadius: 8, border: "1px solid rgba(34,197,94,0.4)", background: "rgba(34,197,94,0.1)", color: "#4ade80", fontSize: 13, fontWeight: 700, cursor: approving !== null ? "not-allowed" : "pointer", opacity: approving !== null ? 0.6 : 1, alignSelf: "flex-start" }}
+                        >
+                          {approving === idx ? "採用中..." : "✅ 採用"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 採用済み返答 */}
+              {approvedResponses.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#9ca3af" }}>採用済み返答 ({approvedResponses.length}件)</span>
+                  {approvedResponses.map((ap, idx) => (
+                    <div key={idx} style={{ borderRadius: 10, border: "1px solid rgba(34,197,94,0.25)", background: "rgba(34,197,94,0.05)", padding: "12px 14px", display: "flex", alignItems: "flex-start", gap: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ padding: "1px 8px", borderRadius: 999, background: "rgba(34,197,94,0.12)", color: "#4ade80", fontSize: 11, fontWeight: 700, marginBottom: 6, display: "inline-block" }}>{ap.style}</span>
+                        <p style={{ margin: "4px 0 0", fontSize: 13, color: "#d1d5db", lineHeight: 1.6 }}>{ap.text}</p>
+                        {ap.reason && <p style={{ margin: "4px 0 0", fontSize: 12, color: "#6b7280", fontStyle: "italic" }}>理由: {ap.reason}</p>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleRemoveApproved(idx)}
+                        style={{ padding: "4px 10px", minHeight: 32, borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", background: "transparent", color: "#f87171", fontSize: 12, cursor: "pointer", flexShrink: 0 }}
+                      >
+                        ❌ 取消
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </form>
       </div>
 

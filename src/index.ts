@@ -39,6 +39,7 @@ import { registerChatTestRoutes } from "./api/admin/chatTest/routes";
 import { registerMonitoringRoutes } from "./api/admin/monitoring/routes";
 import { registerChatHistoryRoutes } from "./api/admin/chat-history/routes";
 import { registerTuningRoutes } from "./api/admin/tuning/routes";
+import { registerTestResponseRoutes } from "./api/admin/tuning/testResponseRoutes";
 import { registerAvatarConfigRoutes } from "./api/admin/avatar/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
@@ -493,6 +494,7 @@ registerMonitoringRoutes(app);
 // Phase38: 会話履歴 + チューニングルール API
 registerChatHistoryRoutes(app);
 registerTuningRoutes(app);
+registerTestResponseRoutes(app);
 // Phase38+: ナレッジギャップ検出 API
 registerKnowledgeGapRoutes(app);
 // Phase46 Stream B: Knowledge Gap 推薦・ナレッジ追加 API

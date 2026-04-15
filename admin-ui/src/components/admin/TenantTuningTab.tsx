@@ -6,7 +6,6 @@ import { useAuth } from "../../auth/useAuth";
 import { authFetch, API_BASE } from "../../lib/api";
 import TuningRuleModal, {
   type TuningRule,
-  type TuningRuleInput,
 } from "../tuning/TuningRuleModal";
 
 interface Props {
@@ -64,10 +63,8 @@ export default function TenantTuningTab({ tenantId, tenantName }: Props) {
 
   useEffect(() => { void load(); }, [load]);
 
-  const handleSuccess = (message: string, _rule: TuningRuleInput & { id?: number }) => {
+  const handleSuccess = (message: string, _rule: TuningRule) => {
     showToast(message);
-    setShowModal(false);
-    setEditTarget(undefined);
     void load();
   };
 

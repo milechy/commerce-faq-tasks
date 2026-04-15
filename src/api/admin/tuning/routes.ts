@@ -130,11 +130,19 @@ const createSchema = z.object({
   source_message_id: z.number().int().positive().nullable().optional(),
 });
 
+const approvedResponseSchema = z.object({
+  text: z.string().min(1).max(4000),
+  style: z.string().max(50),
+  reason: z.string().max(1000).optional(),
+  approved_at: z.string(),
+});
+
 const updateSchema = z.object({
   trigger_pattern: z.string().min(1).max(1000).optional(),
   expected_behavior: z.string().min(1).max(4000).optional(),
   priority: z.number().int().min(-100).max(100).optional(),
   is_active: z.boolean().optional(),
+  approved_responses: z.array(approvedResponseSchema).optional(),
 });
 
 // ---------------------------------------------------------------------------

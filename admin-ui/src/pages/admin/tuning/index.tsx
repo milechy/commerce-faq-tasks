@@ -6,7 +6,6 @@ import { useAuth } from "../../../auth/useAuth";
 import { authFetch, API_BASE } from "../../../lib/api";
 import TuningRuleModal, {
   type TuningRule,
-  type TuningRuleInput,
   type SourceConversation,
 } from "../../../components/tuning/TuningRuleModal";
 
@@ -24,24 +23,6 @@ async function fetchRules(tenantId?: string): Promise<TuningRule[]> {
   if (!res.ok) throw new Error("load_error");
   const data = await res.json();
   return data.rules as TuningRule[];
-}
-
-async function createRule(input: TuningRuleInput): Promise<TuningRule> {
-  const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) throw new Error("save_error");
-  return (await res.json()) as TuningRule;
-}
-
-async function updateRule(id: number, input: TuningRuleInput): Promise<TuningRule> {
-  const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) throw new Error("save_error");
-  return (await res.json()) as TuningRule;
 }
 
 async function deleteRule(id: number): Promise<void> {
@@ -181,28 +162,14 @@ export default function TuningRulesPage() {
   }, [searchParams]);
 
   // ─── Modal success ──────────────────────────────────────────────────────────
-  const handleModalSuccess = (
-    msg: string,
-    payload: TuningRuleInput & { id?: number }
-  ) => {
-    if (payload.id != null) {
-      // Update existing
-      void (async () => {
-        const updated = await updateRule(payload.id!, payload as TuningRuleInput);
-        setRules((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
-      })();
-    } else {
-      // Create new
-      void (async () => {
-        const created = await createRule(payload as TuningRuleInput);
-        setRules((prev) => [created, ...prev]);
-      })();
-    }
-    setEditTarget(null);
-    setCreateMode(false);
-    setSourceConversation(null);
-    setCreateFromConversation(false);
-    setPresetTenantId(undefined);
+  // モーダルが保存API を自身で呼び出してTuningRuleを返す。
+  // ここではリスト更新とトーストのみ行い、モーダルは閉じない（テスト返答フェーズへ遷移）。
+  const handleModalSuccess = (msg: string, rule: TuningRule) => {
+    setRules((prev) =>
+      prev.some((r) => r.id === rule.id)
+        ? prev.map((r) => (r.id === rule.id ? rule : r))
+        : [rule, ...prev],
+    );
     showToast(msg);
   };
 
