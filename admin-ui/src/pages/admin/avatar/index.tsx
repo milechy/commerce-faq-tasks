@@ -394,6 +394,7 @@ export default function AvatarListPage() {
           overflow: hidden;
           background: #111827;
           position: relative;
+          border-radius: 0;
         }
         .av-img-wrap img {
           width: 100%;
@@ -401,6 +402,22 @@ export default function AvatarListPage() {
           object-fit: cover;
           object-position: center top;
           display: block;
+          transition: transform 0.5s cubic-bezier(0.25, 0.1, 0.25, 1);
+          transform-origin: center top;
+        }
+        .av-card:hover .av-img-wrap img {
+          animation: avatar-breathe 2s ease-in-out infinite;
+        }
+        @keyframes avatar-breathe {
+          0%, 100% {
+            transform: scale(1.05) translateY(0px) rotate(0deg);
+          }
+          30% {
+            transform: scale(1.08) translateY(-2px) rotate(0.5deg);
+          }
+          60% {
+            transform: scale(1.06) translateY(1px) rotate(-0.3deg);
+          }
         }
         .av-img-placeholder {
           width: 100%;
