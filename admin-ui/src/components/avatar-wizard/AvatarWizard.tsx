@@ -3,8 +3,8 @@
 
 import { useState } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
-import {
-  buildAvatarPrompt,
+import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
+import type {
   AvatarType,
   Gender,
   AgeRange,
