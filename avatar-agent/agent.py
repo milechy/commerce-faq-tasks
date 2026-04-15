@@ -414,9 +414,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             logger.warning(f"[data_channel] parse error: {e}")
 
     # Lemonslice Avatar（失敗してもテキストチャットにフォールバック）
-    avatar_prompt = os.environ.get(
-        "AVATAR_PROMPT",
-        "Be friendly and professional. Smile naturally. Use gentle hand gestures when explaining.",
+    # DB値（キャラ別）優先、なければ環境変数にフォールバック
+    effective_agent_prompt = (
+        (avatar_config.get("agent_prompt") if avatar_config else None)
+        or os.getenv("AVATAR_PROMPT", "Be friendly and professional. Smile naturally. Use gentle hand gestures when explaining.")
+    )
+    effective_agent_idle_prompt = (
+        (avatar_config.get("agent_idle_prompt") if avatar_config else None)
+        or os.getenv("AVATAR_IDLE_PROMPT", "a friendly person smiling and nodding gently")
+    )
+    logger.info(
+        f"[lemonslice] agent_prompt_src={'db' if avatar_config and avatar_config.get('agent_prompt') else 'env'}, "
+        f"agent_idle_prompt_src={'db' if avatar_config and avatar_config.get('agent_idle_prompt') else 'env'}"
     )
     try:
         # agent_id と agent_image_url は排他的（両方渡すとエラー）
@@ -424,18 +433,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             logger.info(f"[lemonslice] using agent_image_url: {effective_image_url[:80]!r}")
             avatar_kwargs = {
                 "agent_image_url": effective_image_url,
-                "agent_prompt": avatar_prompt,
+                "agent_prompt": effective_agent_prompt,
                 "idle_timeout": 300,
                 "response_done_timeout": 4.0,  # 0.5→4.0: 複数センテンスTTS間の合成待ち(~1-2s)でアイドル遷移しないよう延長
-                "agent_idle_prompt": os.getenv("AVATAR_IDLE_PROMPT", "a friendly person smiling and nodding gently"),
+                "agent_idle_prompt": effective_agent_idle_prompt,
+                "width": 1920,
+                "height": 1080,
             }
         else:
             avatar_kwargs = {
                 "agent_id": effective_agent_id,
-                "agent_prompt": avatar_prompt,
+                "agent_prompt": effective_agent_prompt,
                 "idle_timeout": 300,
                 "response_done_timeout": 4.0,  # 0.5→4.0: 同上
-                "agent_idle_prompt": os.getenv("AVATAR_IDLE_PROMPT", "a friendly person smiling and nodding gently"),
+                "agent_idle_prompt": effective_agent_idle_prompt,
+                "width": 1920,
+                "height": 1080,
             }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)
         await avatar.start(session, room=ctx.room)
