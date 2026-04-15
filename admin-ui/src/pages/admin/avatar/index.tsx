@@ -343,7 +343,83 @@ export default function AvatarListPage() {
   });
 
   return (
-    <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 960, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 1200, margin: "0 auto" }}>
+      <style>{`
+        .av-grid {
+          display: grid;
+          gap: 16px;
+          grid-template-columns: repeat(2, 1fr);
+        }
+        @media (min-width: 768px) {
+          .av-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (min-width: 1024px) {
+          .av-grid { grid-template-columns: repeat(4, 1fr); }
+        }
+        .av-card {
+          transition: box-shadow 0.18s, transform 0.18s;
+        }
+        .av-card:hover {
+          box-shadow: 0 8px 32px rgba(59,130,246,0.18), 0 2px 8px rgba(0,0,0,0.4);
+          transform: translateY(-2px);
+        }
+        .av-filter-panel {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        @media (min-width: 768px) {
+          .av-filter-panel {
+            flex-direction: row;
+            flex-wrap: wrap;
+            align-items: flex-start;
+          }
+          .av-filter-panel > * {
+            flex: 0 0 auto;
+          }
+        }
+        .av-btn-sm {
+          padding: 6px 10px;
+          font-size: 11px;
+        }
+        @media (min-width: 768px) {
+          .av-btn-sm {
+            padding: 8px 14px;
+            font-size: 12px;
+          }
+        }
+        .av-img-wrap {
+          width: 100%;
+          aspect-ratio: 1 / 1;
+          overflow: hidden;
+          background: #111827;
+          position: relative;
+        }
+        .av-img-wrap img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          object-position: center top;
+          display: block;
+        }
+        .av-img-placeholder {
+          width: 100%;
+          aspect-ratio: 1 / 1;
+          background: rgba(30,41,59,0.8);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #374151;
+          font-size: clamp(28px, 6vw, 48px);
+        }
+        .av-name {
+          font-size: clamp(12px, 3vw, 16px);
+          font-weight: 700;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      `}</style>
       {/* ヘッダー */}
       <header style={{ marginBottom: 28 }}>
         <button
@@ -367,37 +443,52 @@ export default function AvatarListPage() {
             )}
           </div>
           {!isSuperAdmin && (
-            <button
-              onClick={() => navigate("/admin/avatar/studio")}
-              style={{
-                padding: "10px 20px",
-                minHeight: 44,
-                borderRadius: 10,
-                border: "none",
-                background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-                color: "#fff",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              {lang === "ja" ? "+ 新規作成" : "+ New Config"}
-            </button>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                onClick={() => navigate("/admin/avatar/wizard")}
+                style={{
+                  padding: "10px 20px",
+                  minHeight: 44,
+                  borderRadius: 10,
+                  border: "1px solid rgba(245,158,11,0.4)",
+                  background: "rgba(245,158,11,0.12)",
+                  color: "#fcd34d",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                ✨ {lang === "ja" ? "AI生成" : "AI Generate"}
+              </button>
+              <button
+                onClick={() => navigate("/admin/avatar/studio")}
+                style={{
+                  padding: "10px 20px",
+                  minHeight: 44,
+                  borderRadius: 10,
+                  border: "none",
+                  background: "linear-gradient(135deg, #3b82f6, #6366f1)",
+                  color: "#fff",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                {lang === "ja" ? "+ 新規作成" : "+ New Config"}
+              </button>
+            </div>
           )}
         </div>
       </header>
 
       {/* ── Super Admin: ソート / フィルタパネル ─────────────────────────────── */}
       {isSuperAdmin && !loading && (
-        <div style={{
+        <div className="av-filter-panel" style={{
           marginBottom: 24,
           padding: "16px 20px",
           borderRadius: 14,
           border: "1px solid rgba(99,102,241,0.3)",
           background: "rgba(15,23,42,0.8)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
         }}>
           {/* ソート */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -580,10 +671,11 @@ export default function AvatarListPage() {
           }
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
+        <div className="av-grid">
           {displayedConfigs.map((cfg) => (
             <div
               key={cfg.id}
+              className="av-card"
               style={{
                 borderRadius: 14,
                 border: cfg.is_active ? "1px solid rgba(34,197,94,0.5)" : "1px solid #1f2937",
@@ -619,36 +711,24 @@ export default function AvatarListPage() {
 
               {/* サムネイル */}
               {cfg.image_url ? (
-                <div style={{ width: "100%", height: 160, overflow: "hidden", background: "#111827" }}>
+                <div className="av-img-wrap">
                   <img
                     src={cfg.image_url}
                     alt={cfg.name}
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).style.display = "none";
                     }}
                   />
                 </div>
               ) : (
-                <div style={{
-                  width: "100%",
-                  height: 120,
-                  background: "rgba(30,41,59,0.8)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "#374151",
-                  fontSize: 40,
-                }}>
-                  👤
-                </div>
+                <div className="av-img-placeholder">👤</div>
               )}
 
               {/* コンテンツ */}
               <div style={{ padding: "14px 16px", flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
                 {/* 名前 + バッジ */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: cfg.name ? "#f9fafb" : "#6b7280", fontStyle: cfg.name ? "normal" : "italic", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span className="av-name" style={{ color: cfg.name ? "#f9fafb" : "#6b7280", fontStyle: cfg.name ? "normal" : "italic", flex: 1, minWidth: 0 }}>
                     {cfg.name || (lang === "ja" ? "名前なし" : "Unnamed")}
                   </span>
                   {cfg.is_active && (isSuperAdmin || avatarEnabled) ? (
@@ -703,16 +783,15 @@ export default function AvatarListPage() {
                 <div style={{ display: "flex", gap: 8, marginTop: "auto", flexWrap: "wrap" }}>
                   {!isSuperAdmin && !cfg.is_active && (
                     <button
+                      className="av-btn-sm"
                       onClick={() => void handleActivate(cfg.id)}
                       disabled={activating === cfg.id}
                       style={{
-                        padding: "8px 14px",
-                        minHeight: 36,
+                        minHeight: 44,
                         borderRadius: 8,
                         border: "1px solid rgba(34,197,94,0.4)",
                         background: activating === cfg.id ? "rgba(34,197,94,0.05)" : "rgba(34,197,94,0.1)",
                         color: "#4ade80",
-                        fontSize: 12,
                         fontWeight: 600,
                         cursor: activating === cfg.id ? "not-allowed" : "pointer",
                         opacity: activating === cfg.id ? 0.6 : 1,
@@ -725,15 +804,14 @@ export default function AvatarListPage() {
                   )}
                   {!isSuperAdmin && (
                     <button
+                      className="av-btn-sm"
                       onClick={() => navigate(`/admin/avatar/studio/${cfg.id}`)}
                       style={{
-                        padding: "8px 14px",
-                        minHeight: 36,
+                        minHeight: 44,
                         borderRadius: 8,
                         border: "1px solid #374151",
                         background: "transparent",
                         color: "#9ca3af",
-                        fontSize: 12,
                         fontWeight: 600,
                         cursor: "pointer",
                       }}
@@ -743,16 +821,15 @@ export default function AvatarListPage() {
                   )}
                   {!isSuperAdmin && !cfg.is_active && (
                     <button
+                      className="av-btn-sm"
                       onClick={() => void handleDelete(cfg.id)}
                       disabled={deleting === cfg.id}
                       style={{
-                        padding: "8px 14px",
-                        minHeight: 36,
+                        minHeight: 44,
                         borderRadius: 8,
                         border: "1px solid rgba(239,68,68,0.3)",
                         background: deleting === cfg.id ? "rgba(239,68,68,0.05)" : "transparent",
                         color: "#f87171",
-                        fontSize: 12,
                         fontWeight: 600,
                         cursor: deleting === cfg.id ? "not-allowed" : "pointer",
                         opacity: deleting === cfg.id ? 0.6 : 1,
@@ -768,21 +845,24 @@ export default function AvatarListPage() {
                   {isSuperAdmin && (
                     <>
                       <button
+                        className="av-btn-sm"
                         onClick={() => navigate(`/admin/avatar/studio/${cfg.id}`)}
-                        style={{ padding: "8px 12px", minHeight: 36, borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                        style={{ minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontWeight: 600, cursor: "pointer" }}
                       >
                         編集
                       </button>
                       <button
+                        className="av-btn-sm"
                         onClick={() => void handleDelete(cfg.id)}
                         disabled={deleting === cfg.id}
-                        style={{ padding: "8px 12px", minHeight: 36, borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", background: deleting === cfg.id ? "rgba(239,68,68,0.05)" : "transparent", color: "#f87171", fontSize: 12, fontWeight: 600, cursor: deleting === cfg.id ? "not-allowed" : "pointer", opacity: deleting === cfg.id ? 0.6 : 1 }}
+                        style={{ minHeight: 44, borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", background: deleting === cfg.id ? "rgba(239,68,68,0.05)" : "transparent", color: "#f87171", fontWeight: 600, cursor: deleting === cfg.id ? "not-allowed" : "pointer", opacity: deleting === cfg.id ? 0.6 : 1 }}
                       >
                         {deleting === cfg.id ? "削除中..." : "削除"}
                       </button>
                       <button
+                        className="av-btn-sm"
                         onClick={() => setWarningTarget({ id: cfg.id, tenantId: cfg.tenant_id, name: cfg.name })}
-                        style={{ padding: "8px 12px", minHeight: 36, borderRadius: 8, border: "1px solid rgba(251,191,36,0.4)", background: "rgba(251,191,36,0.08)", color: "#fbbf24", fontSize: 12, fontWeight: 600, cursor: "pointer", marginLeft: "auto" }}
+                        style={{ minHeight: 44, borderRadius: 8, border: "1px solid rgba(251,191,36,0.4)", background: "rgba(251,191,36,0.08)", color: "#fbbf24", fontWeight: 600, cursor: "pointer", marginLeft: "auto" }}
                       >
                         ⚠️ 警告
                       </button>
