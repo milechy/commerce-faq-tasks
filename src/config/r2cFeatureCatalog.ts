@@ -8,6 +8,8 @@ export interface R2CFeature {
   category: 'setup' | 'config' | 'content' | 'monitoring';
   keywords: string[];
   description: string;
+  /** Phase64: 課金単価 (cents) */
+  pricePerUnit?: number;
 }
 
 export const R2C_FEATURE_CATALOG: R2CFeature[] = [
@@ -90,6 +92,17 @@ export const R2C_FEATURE_CATALOG: R2CFeature[] = [
     category: 'config',
     keywords: ['リサーチ', 'Perplexity', '検索', 'ウェブ', 'web'],
     description: 'Perplexityディープリサーチ機能のON/OFF',
+  },
+
+  // Phase64: プレミアムアバター生成
+  {
+    id: 'premium_avatar',
+    name: 'プレミアムアバター生成',
+    nameEn: 'Premium Avatar Generation',
+    category: 'config',
+    keywords: ['プレミアム', 'アバター生成', 'Magnific', 'Flux', '高品質', '高解像度', 'premium avatar'],
+    description: '高品質AIアバター画像生成（Flux 2 Pro + Magnific AI アップスケール）',
+    pricePerUnit: 100,
   },
 ];
 

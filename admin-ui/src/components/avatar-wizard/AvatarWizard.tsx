@@ -215,6 +215,15 @@ interface Props {
   onCancel: () => void;
 }
 
+type GenerateMode = "standard" | "premium";
+
+// プレミアム生成のステップラベル
+const PREMIUM_STEPS = [
+  "画像生成中...",
+  "品質向上処理中...",
+  "完了！",
+];
+
 export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
   const [step, setStep] = useState(1);
   const [state, setState] = useState<WizardState>(INITIAL);
@@ -222,6 +231,8 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [generateMode, setGenerateMode] = useState<GenerateMode>("standard");
+  const [premiumStep, setPremiumStep] = useState(0); // 0=生成前, 1=fal中, 2=Magnific中, 3=完了
 
   const set = <K extends keyof WizardState>(key: K, val: WizardState[K]) =>
     setState((s) => ({ ...s, [key]: val }));
@@ -232,30 +243,35 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
   // Step 2のスキップ判定: anime/3d は性別のみ
   const step2HasContent = state.type !== null;
 
-  // ── Step 6: fal.ai 生成 ──────────────────────────────────────────────────
+  function buildPrompt() {
+    if (!state.type || !state.composition || !state.expression || !state.background) return null;
+    return buildAvatarPrompt({
+      type: state.type,
+      gender: state.gender ?? undefined,
+      age: state.age ?? undefined,
+      outfit: state.outfit ?? undefined,
+      animalKind: state.animalKind ?? undefined,
+      animalVibe: state.animalVibe ?? undefined,
+      robotDesign: state.robotDesign ?? undefined,
+      composition: state.composition,
+      expression: state.expression,
+      background: state.background,
+      customBgColor: state.customBgColor,
+    });
+  }
+
+  // ── Step 6: 通常生成（4枚）──────────────────────────────────────────────
 
   async function handleGenerate() {
-    if (!state.type || !state.composition || !state.expression || !state.background) return;
+    const built = buildPrompt();
+    if (!built) return;
     setIsGenerating(true);
     setGenerateError(null);
     setGeneratedImages([]);
     setSelectedImage(null);
 
     try {
-      const { prompt, negativePrompt } = buildAvatarPrompt({
-        type: state.type,
-        gender: state.gender ?? undefined,
-        age: state.age ?? undefined,
-        outfit: state.outfit ?? undefined,
-        animalKind: state.animalKind ?? undefined,
-        animalVibe: state.animalVibe ?? undefined,
-        robotDesign: state.robotDesign ?? undefined,
-        composition: state.composition,
-        expression: state.expression,
-        background: state.background,
-        customBgColor: state.customBgColor,
-      });
-
+      const { prompt, negativePrompt } = built;
       const res = await authFetch(`${API_BASE}/v1/admin/avatar/fal/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -271,6 +287,44 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
       setGeneratedImages(data.images ?? []);
     } catch (err) {
       setGenerateError(err instanceof Error ? err.message : "画像の生成に失敗しました。もう一度お試しください。");
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
+  // ── Step 6: プレミアム生成（1枚 高品質）────────────────────────────────
+
+  async function handleGeneratePremium() {
+    const built = buildPrompt();
+    if (!built) return;
+    setIsGenerating(true);
+    setGenerateError(null);
+    setGeneratedImages([]);
+    setSelectedImage(null);
+    setPremiumStep(1);
+
+    try {
+      const { prompt, negativePrompt } = built;
+
+      // simulate step transition: Magnific処理は非同期で中継ぎUIを出す
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/generate-premium`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, negativePrompt }),
+      });
+
+      setPremiumStep(2); // Magnific処理中（実際は既に完了しているが表示のため）
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(err.error ?? "プレミアム生成に失敗しました");
+      }
+
+      const data = await res.json() as { imageUrl: string; originalUrl: string; enhancedUrl: string };
+      setPremiumStep(3);
+      setGeneratedImages([data.imageUrl]);
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "プレミアム生成に失敗しました。もう一度お試しください。");
     } finally {
       setIsGenerating(false);
     }
@@ -590,19 +644,73 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
               </span></div>
             </div>
 
-            {/* 生成ボタン */}
-            {generatedImages.length === 0 && !isGenerating && (
-              <button
-                type="button"
-                style={{ ...BTN, width: "100%", fontSize: 16 }}
-                onClick={handleGenerate}
-              >
-                ✨ アバターを生成する（4枚）
-              </button>
+            {/* 生成モード切替（初回のみ表示） */}
+            {generatedImages.length === 0 && !isGenerating && !generateError && (
+              <>
+                {/* モードトグル */}
+                <div style={{
+                  display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16,
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setGenerateMode("standard")}
+                    style={generateMode === "standard" ? CARD_SELECTED : CARD_BASE}
+                  >
+                    <span style={{ fontSize: 22 }}>✨</span>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>通常生成</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 400 }}>
+                      4枚候補から選ぶ
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGenerateMode("premium")}
+                    style={generateMode === "premium" ? {
+                      ...CARD_SELECTED,
+                      border: "2px solid #f59e0b",
+                      background: "rgba(245,158,11,0.12)",
+                      color: "#fcd34d",
+                    } : {
+                      ...CARD_BASE,
+                      border: "2px solid rgba(245,158,11,0.3)",
+                    }}
+                  >
+                    <span style={{ fontSize: 22 }}>💎</span>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>プレミアム生成</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 400 }}>
+                      1枚 高解像度・高品質
+                    </div>
+                  </button>
+                </div>
+
+                {generateMode === "premium" && (
+                  <div style={{
+                    background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)",
+                    borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#fcd34d",
+                    marginBottom: 14, lineHeight: 1.6,
+                  }}>
+                    💎 Flux 2 Pro + Magnific AI アップスケール処理を行います。<br />
+                    高品質画像を生成中... 1〜2分かかります
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  style={{
+                    ...BTN, width: "100%", fontSize: 16,
+                    ...(generateMode === "premium" ? {
+                      background: "linear-gradient(135deg, #d97706 0%, #f59e0b 100%)",
+                    } : {}),
+                  }}
+                  onClick={generateMode === "premium" ? handleGeneratePremium : handleGenerate}
+                >
+                  {generateMode === "premium" ? "💎 プレミアム生成する" : "✨ アバターを生成する（4枚）"}
+                </button>
+              </>
             )}
 
-            {/* ローディング */}
-            {isGenerating && (
+            {/* ローディング — 通常 */}
+            {isGenerating && generateMode === "standard" && (
               <div style={{ textAlign: "center", padding: "40px 0" }}>
                 <div style={{
                   width: 48, height: 48, border: "4px solid rgba(255,255,255,0.1)",
@@ -616,6 +724,54 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
               </div>
             )}
 
+            {/* ローディング — プレミアム（ステップ表示 + プログレスバー） */}
+            {isGenerating && generateMode === "premium" && (
+              <div style={{ textAlign: "center", padding: "40px 0" }}>
+                <div style={{
+                  width: 56, height: 56, border: "4px solid rgba(245,158,11,0.15)",
+                  borderTop: "4px solid #f59e0b", borderRadius: "50%",
+                  animation: "spin 0.8s linear infinite",
+                  margin: "0 auto 20px",
+                }} />
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
+                {/* ステップ名 */}
+                <div style={{ color: "#fcd34d", fontSize: 15, fontWeight: 700, marginBottom: 10 }}>
+                  {PREMIUM_STEPS[Math.min(premiumStep - 1, PREMIUM_STEPS.length - 1)]}
+                </div>
+
+                {/* プログレスバー */}
+                <div style={{
+                  width: "100%", height: 6, background: "rgba(245,158,11,0.15)",
+                  borderRadius: 3, overflow: "hidden", margin: "0 auto",
+                }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${Math.min((premiumStep / 3) * 100, 90)}%`,
+                    background: "linear-gradient(90deg, #d97706, #f59e0b)",
+                    borderRadius: 3,
+                    transition: "width 0.5s ease",
+                  }} />
+                </div>
+
+                {/* ステップ一覧 */}
+                <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {PREMIUM_STEPS.map((label, i) => (
+                    <div key={i} style={{
+                      fontSize: 12,
+                      color: i < premiumStep - 1 ? "#6ee7b7" : i === premiumStep - 1 ? "#fcd34d" : "#374151",
+                    }}>
+                      {i < premiumStep - 1 ? "✓" : i === premiumStep - 1 ? "▶" : "○"} {label}
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ color: "#6b7280", fontSize: 12, marginTop: 16 }}>
+                  高品質画像を生成中... 1〜2分かかります
+                </div>
+              </div>
+            )}
+
             {/* エラー */}
             {generateError && (
               <div style={{
@@ -626,7 +782,7 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
                 <button
                   type="button"
                   style={{ ...BTN, marginTop: 12, width: "100%", background: "rgba(220,38,38,0.6)" }}
-                  onClick={handleGenerate}
+                  onClick={generateMode === "premium" ? handleGeneratePremium : handleGenerate}
                 >
                   もう一度試す
                 </button>
@@ -637,10 +793,14 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
             {generatedImages.length > 0 && (
               <>
                 <div style={{ fontSize: 14, color: "#9ca3af", marginBottom: 12 }}>
-                  お気に入りの1枚を選んでください
+                  {generateMode === "premium"
+                    ? "💎 プレミアム画像が生成されました"
+                    : "お気に入りの1枚を選んでください"}
                 </div>
                 <div style={{
-                  display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 20,
+                  display: "grid",
+                  gridTemplateColumns: generateMode === "premium" ? "1fr" : "repeat(2, 1fr)",
+                  gap: 10, marginBottom: 20,
                 }}>
                   {generatedImages.map((url, i) => (
                     <button
@@ -649,7 +809,9 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
                       onClick={() => setSelectedImage(url)}
                       style={{
                         padding: 0, border: "none", cursor: "pointer", borderRadius: 12,
-                        outline: selectedImage === url ? "3px solid #3b82f6" : "2px solid transparent",
+                        outline: selectedImage === url
+                          ? `3px solid ${generateMode === "premium" ? "#f59e0b" : "#3b82f6"}`
+                          : "2px solid transparent",
                         outlineOffset: 2,
                         overflow: "hidden",
                         background: "none",
@@ -665,7 +827,11 @@ export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
                   ))}
                 </div>
                 <div style={{ display: "flex", gap: 12 }}>
-                  <button type="button" style={BTN_GHOST} onClick={handleGenerate}>
+                  <button
+                    type="button"
+                    style={BTN_GHOST}
+                    onClick={generateMode === "premium" ? handleGeneratePremium : handleGenerate}
+                  >
                     再生成
                   </button>
                   <button

@@ -57,6 +57,7 @@ import { registerAnamChatStreamRoutes } from "./api/avatar/anamChatStreamRoutes"
 import { registerFishTtsRoutes } from "./api/avatar/fishTtsRoutes";
 import { registerAvatarGenerationRoutes } from "./api/admin/avatar/generationRoutes";
 import { registerFalGenerationRoutes } from "./api/admin/avatar/falGenerationRoutes";
+import { registerPremiumGenerationRoutes } from "./api/admin/avatar/premiumGenerationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
 import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
@@ -544,6 +545,9 @@ if (db) registerAvatarGenerationRoutes(app, db);
 
 // Phase64: fal.ai Flux Pro アバター画像生成API
 registerFalGenerationRoutes(app);
+
+// Phase64: Flux 2 Pro + Magnific AI プレミアムアバター生成API
+registerPremiumGenerationRoutes(app);
 
 // Security Level 4: Dynamic per-tenant widget JS delivery
 registerWidgetRoutes(app, db);
