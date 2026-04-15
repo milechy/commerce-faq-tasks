@@ -78,31 +78,47 @@ export function registerOptionRoutes(app: Express): void {
   app.post('/v1/admin/options', async (req: Request, res: Response) => {
     const { tenantId } = extractAuth(req);
 
-    const { description, llm_estimate_amount, chat_session_id } = req.body as {
+    const { description, llm_estimate_amount, chat_session_id, type } = req.body as {
       description?: string;
       llm_estimate_amount?: number;
       chat_session_id?: string;
+      type?: string;
     };
 
     if (!description || typeof description !== 'string' || description.trim() === '') {
       return res.status(400).json({ error: 'description は必須です' });
     }
 
+    const orderType = type === 'premium_avatar' ? 'premium_avatar' : 'general';
+
     try {
       const pool = getPool();
       const result = await pool.query(
-        `INSERT INTO option_orders (tenant_id, chat_session_id, description, llm_estimate_amount)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO option_orders (tenant_id, chat_session_id, description, llm_estimate_amount, type)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING *`,
         [
           tenantId,
           chat_session_id ?? null,
           description.trim(),
           llm_estimate_amount ?? null,
+          orderType,
         ],
-      );
+      ).catch(async (err: any) => {
+        // type カラムが未マイグレーションの場合はフォールバック
+        if (err?.code === '42703') {
+          const pool2 = getPool();
+          return pool2.query(
+            `INSERT INTO option_orders (tenant_id, chat_session_id, description, llm_estimate_amount)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [tenantId, chat_session_id ?? null, description.trim(), llm_estimate_amount ?? null],
+          );
+        }
+        throw err;
+      });
 
-      return res.status(201).json({ item: result.rows[0] });
+      return res.status(201).json({ item: (result as any).rows[0] });
     } catch (err: any) {
       logger.warn('[POST /v1/admin/options]', err);
       return res.status(500).json({ error: 'オプション発注の作成に失敗しました' });
@@ -172,18 +188,36 @@ export function registerOptionRoutes(app: Express): void {
     }
 
     const { id } = req.params;
+    const { result_url } = req.body as { result_url?: string };
 
     try {
       const pool = getPool();
 
-      // 1. status を completed に更新
-      const result = await pool.query(
-        `UPDATE option_orders
-         SET status = 'completed', completed_at = NOW(), updated_at = NOW()
-         WHERE id = $1 AND status != 'completed'
-         RETURNING *`,
-        [id],
-      );
+      // 1. status を completed に更新（result_url があれば保存）
+      let result;
+      try {
+        result = await pool.query(
+          `UPDATE option_orders
+           SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
+               result_url = COALESCE($2, result_url)
+           WHERE id = $1 AND status != 'completed'
+           RETURNING *`,
+          [id, result_url ?? null],
+        );
+      } catch (colErr: any) {
+        // result_url カラムが未マイグレーションの場合はフォールバック
+        if (colErr?.code === '42703') {
+          result = await pool.query(
+            `UPDATE option_orders
+             SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+             WHERE id = $1 AND status != 'completed'
+             RETURNING *`,
+            [id],
+          );
+        } else {
+          throw colErr;
+        }
+      }
 
       if (result.rowCount === 0) {
         return res.status(404).json({ error: '発注が見つかりません（または既に完了済み）' });
@@ -193,18 +227,24 @@ export function registerOptionRoutes(app: Express): void {
         id: string;
         tenant_id: string;
         description: string;
+        type?: string;
         final_amount: number | null;
         llm_estimate_amount: number | null;
+        result_url?: string | null;
       };
+
+      const isPremiumAvatar = order.type === 'premium_avatar';
 
       // 2. 完了通知 INSERT
       await createNotification({
         recipientRole: 'client_admin',
         recipientTenantId: order.tenant_id,
-        type: 'option_completed',
-        title: 'オプションサービスが完了しました',
+        type: isPremiumAvatar ? 'premium_avatar_completed' : 'option_completed',
+        title: isPremiumAvatar
+          ? 'プレミアムアバターが完成しました'
+          : 'オプションサービスが完了しました',
         message: order.description.slice(0, 100),
-        link: '/admin/options',
+        link: isPremiumAvatar ? '/admin/avatar' : '/admin/options',
       });
 
       // 3. 課金トラッキング（fire-and-forget）

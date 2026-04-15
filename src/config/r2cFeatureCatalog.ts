@@ -10,6 +10,8 @@ export interface R2CFeature {
   description: string;
   /** Phase64: 課金単価 (cents) */
   pricePerUnit?: number;
+  /** Phase64: 代行サービスフラグ（弊社が手動で制作する） */
+  isService?: boolean;
 }
 
 export const R2C_FEATURE_CATALOG: R2CFeature[] = [
@@ -94,7 +96,7 @@ export const R2C_FEATURE_CATALOG: R2CFeature[] = [
     description: 'Perplexityディープリサーチ機能のON/OFF',
   },
 
-  // Phase64: プレミアムアバター生成
+  // Phase64: プレミアムアバター生成（セルフサービス）
   {
     id: 'premium_avatar',
     name: 'プレミアムアバター生成',
@@ -103,6 +105,23 @@ export const R2C_FEATURE_CATALOG: R2CFeature[] = [
     keywords: ['プレミアム', 'アバター生成', 'Magnific', 'Flux', '高品質', '高解像度', 'premium avatar'],
     description: '高品質AIアバター画像生成（Flux 2 Pro + Magnific AI アップスケール）',
     pricePerUnit: 100,
+  },
+
+  // Phase64: プレミアムアバター制作代行（弊社手動制作）
+  {
+    id: 'premium_avatar_service',
+    name: 'プレミアムアバター制作代行',
+    nameEn: 'Premium Avatar Production Service',
+    category: 'config',
+    keywords: [
+      'アバター品質', 'アバター 品質', 'リアル', 'もっとリアル', 'リアルな',
+      '高品質アバター', 'プロフェッショナルアバター', 'アバター制作代行',
+      'アバター 代行', 'アバターをもっと', 'アバターの改善',
+      '品質を上げたい', '品質向上', '最高品質',
+    ],
+    description: '弊社デザイナーがFlux 2 + Vellum + Magnific AIで世界最高品質のアバターを制作します',
+    pricePerUnit: 5000,
+    isService: true,
   },
 ];
 

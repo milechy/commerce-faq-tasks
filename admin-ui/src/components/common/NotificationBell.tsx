@@ -30,6 +30,9 @@ const TYPE_ICON: Record<string, string> = {
   option_ordered: "🛒",
   option_scheduled: "📅",
   option_completed: "🎉",
+  // Phase64: プレミアムアバター制作代行
+  premium_avatar_ordered: "🎨",
+  premium_avatar_completed: "✨",
 };
 
 function relativeTime(dateStr: string): string {

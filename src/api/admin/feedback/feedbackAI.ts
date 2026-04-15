@@ -54,18 +54,31 @@ const SYSTEM_PROMPT = `あなたはR2C管理画面のサポートアシスタン
 - A/Bテスト: トーン・CTA・ルールセットのA/Bテスト設定
 - 分析ダッシュボード: 会話分析・Judge評価・センチメント確認
 - ディープリサーチ: Perplexityディープリサーチ機能のON/OFF
+- プレミアムアバター制作代行: 弊社デザイナーによる最高品質アバター制作
 
 ### 判定ルール
 - ユーザーの質問が上記カタログのいずれかに関する「操作手順」「設定方法」「やり方」「手順」「トラブル」の場合 → 代行案内を付ける
 - カタログに直接マッチしなくても、質問が明らかに「R2C管理画面の操作・設定・トラブルシューティング」に関するものと判断できる場合 → 代行案内を付ける
 - 概念説明、料金の質問、一般的な質問 → 代行案内は付けない
 
+### アバター品質向上の特別ルール（重要）
+ユーザーが以下のようなアバター品質に関する要望を表明した場合は、通常の代行案内ではなく、
+プレミアムアバター制作代行の専用案内を付けてください:
+- 「アバターの品質を上げたい」「もっとリアルにしたい」「高品質なアバターが欲しい」
+- 「プロフェッショナルなアバターにしたい」「アバターを改善したい」「最高品質のアバター」
+- 「アバターがリアルでない」「アバターの仕上がりが気になる」
+
+この場合の案内テンプレート:
+🎨 弊社デザイナーが最高品質のアバターを制作いたします。Flux 2 Pro + Vellum手動調整 + Magnific AIアップスケールによる、API自動化では実現できない仕上がりです。ご希望の場合は「プレミアム制作をお願いします」とお伝えください。
+
 ### 代行案内テンプレート（操作手順系の場合のみ、回答の最後に追加）
 💼 この設定作業、弊社で代行することも可能です。ご希望の場合は「代行をお願いします」とお伝えください。
 
-### ユーザーが「代行をお願いします」「お願いします」「依頼したい」等の承諾を返した場合
+### ユーザーが「代行をお願いします」「お願いします」「依頼したい」「プレミアム制作をお願いします」等の承諾を返した場合
 以下のJSON形式で応答してください（通常のテキスト応答ではなくJSONのみ）:
-{"action":"estimate_request","task_description":"（直前の会話から特定した作業内容の要約）"}`;
+{"action":"estimate_request","task_description":"（直前の会話から特定した作業内容の要約）"}
+
+アバター品質改善の承諾の場合は task_description に「プレミアムアバター制作代行」を含めてください。`;
 
 // ---------------------------------------------------------------------------
 // ヘルパー関数
@@ -98,9 +111,17 @@ function isAffirming(message: string): boolean {
   const affirmPhrases = [
     'はい', 'yes', 'ok', 'OK', 'お願いします', '承諾', '依頼する',
     'お願い', 'いいです', '大丈夫', 'やってください',
+    'プレミアム制作をお願いします', 'プレミアム制作',
   ];
   const lower = message.toLowerCase();
   return affirmPhrases.some((p) => lower.includes(p.toLowerCase()));
+}
+
+/** アバター品質向上の承諾かどうかを判定 */
+function isPremiumAvatarRequest(message: string): boolean {
+  const premiumPhrases = ['プレミアム制作', 'premium制作'];
+  const lower = message.toLowerCase();
+  return premiumPhrases.some((p) => lower.includes(p.toLowerCase()));
 }
 
 /** 試算メッセージから作業内容と金額を抽出 */
@@ -155,10 +176,16 @@ export async function generateFeedbackReply(
     ) {
       const parsed = parseEstimateFromMessage(lastAssistantContent);
       if (parsed) {
+        const orderType =
+          isPremiumAvatarRequest(userMessage) ||
+          parsed.taskDescription.includes('プレミアムアバター')
+            ? 'premium_avatar'
+            : 'general';
         await placeOptionOrder({
           tenantId,
           taskDescription: parsed.taskDescription,
           estimatedAmount: parsed.amount,
+          orderType,
         });
         return 'ご依頼を承りました。担当者より追ってスケジュールのご連絡を差し上げます。';
       }
@@ -245,27 +272,46 @@ async function placeOptionOrder(params: {
   tenantId: string;
   taskDescription: string;
   estimatedAmount: number;
+  orderType?: string;
 }): Promise<void> {
-  const { tenantId, taskDescription, estimatedAmount } = params;
+  const { tenantId, taskDescription, estimatedAmount, orderType = 'general' } = params;
 
   try {
     const pool = getPool();
+    // type / result_url カラムは migration_premium_avatar.sql で追加済み
+    // 旧スキーマでは type カラムが存在しない可能性があるため COALESCE 的に対応
     await pool.query(
       `INSERT INTO option_orders
-         (tenant_id, description, llm_estimate_amount, status)
-       VALUES ($1, $2, $3, 'pending')`,
-      [tenantId, taskDescription, estimatedAmount],
-    );
+         (tenant_id, description, llm_estimate_amount, status, type)
+       VALUES ($1, $2, $3, 'pending', $4)`,
+      [tenantId, taskDescription, estimatedAmount, orderType],
+    ).catch(async (err: any) => {
+      // type カラムが未マイグレーションの場合はフォールバック
+      if (err?.code === '42703') {
+        const pool2 = getPool();
+        await pool2.query(
+          `INSERT INTO option_orders
+             (tenant_id, description, llm_estimate_amount, status)
+           VALUES ($1, $2, $3, 'pending')`,
+          [tenantId, taskDescription, estimatedAmount],
+        );
+      } else {
+        throw err;
+      }
+    });
   } catch (err) {
     logger.warn('[feedbackAI] option_orders INSERT failed', err);
   }
 
   try {
     const amountFormatted = estimatedAmount.toLocaleString('ja-JP');
+    const isPremiumAvatar = orderType === 'premium_avatar';
     await createNotification({
       recipientRole: 'super_admin',
-      type: 'option_ordered',
-      title: `新規代行依頼: ${tenantId}`,
+      type: isPremiumAvatar ? 'premium_avatar_ordered' : 'option_ordered',
+      title: isPremiumAvatar
+        ? `プレミアムアバター制作依頼: ${tenantId}`
+        : `新規代行依頼: ${tenantId}`,
       message: `${taskDescription}（見積: ¥${amountFormatted}）`,
       link: '/admin/options',
     });
