@@ -1,0 +1,68 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - button "R2C Admin" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: R2C
+      - generic [ref=e6]: Admin
+    - generic [ref=e7]:
+      - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: 💬
+        - text: 会話
+        - generic [ref=e11]: ▼
+      - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 📋
+        - text: 運用管理
+        - generic [ref=e15]: ▼
+      - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: 📚
+        - text: ナレッジ
+        - generic [ref=e19]: ▼
+      - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 📈
+        - text: 分析
+        - generic [ref=e23]: ▼
+      - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 💬
+        - text: 声がけ
+        - generic [ref=e27]: ▼
+      - button "📈 成果管理 ▼" [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: 📈
+        - text: 成果管理
+        - generic [ref=e31]: ▼
+      - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: ⚙️
+        - text: 設定
+        - generic [ref=e35]: ▼
+    - button "通知" [ref=e37] [cursor=pointer]: 🔔
+    - generic [ref=e38]:
+      - generic [ref=e39]: Super Admin
+      - generic [ref=e40]: admin@example.com
+      - button "ログアウト" [ref=e41] [cursor=pointer]
+  - generic [ref=e43]:
+    - banner [ref=e44]:
+      - generic [ref=e45]:
+        - button "← ダッシュボードに戻る" [ref=e46] [cursor=pointer]
+        - generic [ref=e47]:
+          - button "🇯🇵 日本語" [ref=e48] [cursor=pointer]
+          - button "🇺🇸 English" [ref=e49] [cursor=pointer]
+      - heading "テナント管理" [level=1] [ref=e50]
+      - paragraph [ref=e51]: 接続テナントの管理・設定・APIキー発行
+    - textbox "テナントを検索..." [ref=e52]
+    - button "＋ 新しいテナントを追加" [ref=e53] [cursor=pointer]:
+      - generic [ref=e54]: ＋
+      - text: 新しいテナントを追加
+    - generic [ref=e55]:
+      - button "すべて" [ref=e56] [cursor=pointer]
+      - button "有効のみ" [ref=e57] [cursor=pointer]
+      - button "無効のみ" [ref=e58] [cursor=pointer]
+      - generic [ref=e59]:
+        - generic [ref=e60]: "並び替え:"
+        - button "名前 ▼" [ref=e61] [cursor=pointer]:
+          - text: 名前
+          - generic [ref=e62]: ▼
+        - button "作成日 ▼" [ref=e63] [cursor=pointer]:
+          - text: 作成日
+          - generic [ref=e64]: ▼
+      - generic [ref=e65]: 全0件中 0件表示
+    - generic [ref=e66]:
+      - generic [ref=e67]: ⏳
+      - text: 読み込んでいます...

@@ -1,0 +1,60 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - button "R2C Admin" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: R2C
+      - generic [ref=e6]: Admin
+    - generic [ref=e7]:
+      - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: 💬
+        - text: 会話
+        - generic [ref=e11]: ▼
+      - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 📋
+        - text: 運用管理
+        - generic [ref=e15]: ▼
+      - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: 📚
+        - text: ナレッジ
+        - generic [ref=e19]: ▼
+      - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 📈
+        - text: 分析
+        - generic [ref=e23]: ▼
+      - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 💬
+        - text: 声がけ
+        - generic [ref=e27]: ▼
+      - generic [ref=e28]:
+        - button "📈 成果管理 ▼" [active] [ref=e29] [cursor=pointer]:
+          - generic [ref=e30]: 📈
+          - text: 成果管理
+          - generic [ref=e31]: ▼
+        - button "コンバージョン分析 CVの成果・A/Bテスト・AIからの改善提案" [ref=e176] [cursor=pointer]:
+          - generic [ref=e177]: コンバージョン分析
+          - generic [ref=e178]: CVの成果・A/Bテスト・AIからの改善提案
+      - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: ⚙️
+        - text: 設定
+        - generic [ref=e35]: ▼
+    - button "通知" [ref=e37] [cursor=pointer]:
+      - text: 🔔
+      - generic [ref=e55]: "3"
+    - generic [ref=e38]:
+      - generic [ref=e39]: Super Admin
+      - generic [ref=e40]: admin@example.com
+      - button "ログアウト" [ref=e41] [cursor=pointer]
+  - generic [ref=e158]:
+    - generic [ref=e159]:
+      - heading "💬 お客様への声がけ設定" [level=1] [ref=e160]
+      - paragraph [ref=e161]: お客様の行動に合わせて自動的に声をかけます
+    - button "＋ 新しいルールを作る" [ref=e163] [cursor=pointer]
+    - generic [ref=e165]:
+      - generic [ref=e166]: 📜
+      - generic [ref=e167]:
+        - generic [ref=e168]: ページをスクロールした時
+        - generic [ref=e169]: スクロール 75% 以上
+      - generic "テストメッセージ" [ref=e170]
+      - generic [ref=e171]: 優先度 0
+      - button "無効" [ref=e172] [cursor=pointer]
+      - button "編集" [ref=e173] [cursor=pointer]
+      - button "削除" [ref=e174] [cursor=pointer]

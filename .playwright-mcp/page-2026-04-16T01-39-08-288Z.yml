@@ -1,0 +1,302 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - button "R2C Admin" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: R2C
+      - generic [ref=e6]: Admin
+    - generic [ref=e7]:
+      - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: 💬
+        - text: 会話
+        - generic [ref=e11]: ▼
+      - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 📋
+        - text: 運用管理
+        - generic [ref=e15]: ▼
+      - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: 📚
+        - text: ナレッジ
+        - generic [ref=e19]: ▼
+      - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 📈
+        - text: 分析
+        - generic [ref=e23]: ▼
+      - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 💬
+        - text: 声がけ
+        - generic [ref=e27]: ▼
+      - button "📈 成果管理 ▼" [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: 📈
+        - text: 成果管理
+        - generic [ref=e31]: ▼
+      - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: ⚙️
+        - text: 設定
+        - generic [ref=e35]: ▼
+    - button "通知" [ref=e37] [cursor=pointer]:
+      - text: 🔔
+      - generic [ref=e61]: "3"
+    - generic [ref=e38]:
+      - generic [ref=e39]: Super Admin
+      - generic [ref=e40]: admin@example.com
+      - button "ログアウト" [ref=e41] [cursor=pointer]
+  - generic [ref=e222]:
+    - banner [ref=e223]:
+      - button "← 管理画面に戻る" [ref=e224] [cursor=pointer]
+      - generic [ref=e226]:
+        - heading "🎭 アバター設定" [level=1] [ref=e227]
+        - paragraph [ref=e228]: "全テナント: 19/19件"
+    - generic [ref=e229]:
+      - generic [ref=e230]:
+        - generic [ref=e231]: "ソート:"
+        - combobox [ref=e232] [cursor=pointer]:
+          - option "アバター名順 (A→Z)" [selected]
+          - option "作成日 (新しい順)"
+          - option "作成日 (古い順)"
+          - option "アクティブ優先"
+          - option "無効優先"
+          - option "デフォルト優先"
+      - generic [ref=e233]:
+        - generic [ref=e234]: "テナント:"
+        - combobox [ref=e235] [cursor=pointer]:
+          - option "全テナント" [selected]
+          - option "カーネーション（BROSS新潟）"
+      - generic [ref=e236]:
+        - generic [ref=e237]: "タイプ:"
+        - button "全て" [ref=e238] [cursor=pointer]
+        - button "デフォルト" [ref=e239] [cursor=pointer]
+        - button "カスタム" [ref=e240] [cursor=pointer]
+      - generic [ref=e241]:
+        - generic [ref=e242]: "状態:"
+        - button "全て" [ref=e243] [cursor=pointer]
+        - button "アクティブ" [ref=e244] [cursor=pointer]
+        - button "無効" [ref=e245] [cursor=pointer]
+    - generic [ref=e246]:
+      - generic [ref=e247]:
+        - generic [ref=e248]: R2C デフォルト
+        - generic [ref=e249]:
+          - img "Ambassador ZOG"
+        - generic [ref=e251]:
+          - generic [ref=e252]:
+            - generic [ref=e253]: Ambassador ZOG
+            - generic [ref=e254]: デフォルト
+          - generic [ref=e255]: "作成日: 2026年4月15日"
+          - generic [ref=e256]:
+            - button "編集" [ref=e257] [cursor=pointer]
+            - button "削除" [ref=e258] [cursor=pointer]
+      - generic [ref=e259]:
+        - generic [ref=e260]: R2C デフォルト
+        - generic [ref=e261]:
+          - img "ARJUN"
+        - generic [ref=e263]:
+          - generic [ref=e264]:
+            - generic [ref=e265]: ARJUN
+            - generic [ref=e266]: デフォルト
+          - generic [ref=e267]: "作成日: 2026年4月15日"
+          - generic [ref=e268]:
+            - button "編集" [ref=e269] [cursor=pointer]
+            - button "削除" [ref=e270] [cursor=pointer]
+      - generic [ref=e271]:
+        - generic [ref=e272]: R2C デフォルト
+        - generic [ref=e273]:
+          - img "BARKLEY"
+        - generic [ref=e275]:
+          - generic [ref=e276]:
+            - generic [ref=e277]: BARKLEY
+            - generic [ref=e278]: デフォルト
+          - generic [ref=e279]: "作成日: 2026年4月15日"
+          - generic [ref=e280]:
+            - button "編集" [ref=e281] [cursor=pointer]
+            - button "削除" [ref=e282] [cursor=pointer]
+      - generic [ref=e283]:
+        - generic [ref=e284]: R2C デフォルト
+        - generic [ref=e285]:
+          - img "BELLA"
+        - generic [ref=e287]:
+          - generic [ref=e288]:
+            - generic [ref=e289]: BELLA
+            - generic [ref=e290]: デフォルト
+          - generic [ref=e291]: "作成日: 2026年4月15日"
+          - generic [ref=e292]:
+            - button "編集" [ref=e293] [cursor=pointer]
+            - button "削除" [ref=e294] [cursor=pointer]
+      - generic [ref=e295]:
+        - generic [ref=e296]: R2C デフォルト
+        - generic [ref=e297]:
+          - img "CAPTAIN KOALA"
+        - generic [ref=e299]:
+          - generic [ref=e300]:
+            - generic [ref=e301]: CAPTAIN KOALA
+            - generic [ref=e302]: デフォルト
+          - generic [ref=e303]: "作成日: 2026年4月15日"
+          - generic [ref=e304]:
+            - button "編集" [ref=e305] [cursor=pointer]
+            - button "削除" [ref=e306] [cursor=pointer]
+      - generic [ref=e307]:
+        - generic [ref=e308]: R2C デフォルト
+        - generic [ref=e309]:
+          - img "ELENA"
+        - generic [ref=e311]:
+          - generic [ref=e312]:
+            - generic [ref=e313]: ELENA
+            - generic [ref=e314]: デフォルト
+          - generic [ref=e315]: "作成日: 2026年4月15日"
+          - generic [ref=e316]:
+            - button "編集" [ref=e317] [cursor=pointer]
+            - button "削除" [ref=e318] [cursor=pointer]
+      - generic [ref=e319]:
+        - generic [ref=e320]: R2C デフォルト
+        - generic [ref=e321]:
+          - img "Haruka"
+        - generic [ref=e323]:
+          - generic [ref=e324]:
+            - generic [ref=e325]: Haruka
+            - generic [ref=e326]: デフォルト
+          - generic [ref=e327]: "作成日: 2026年4月15日"
+          - generic [ref=e328]:
+            - button "編集" [ref=e329] [cursor=pointer]
+            - button "削除" [ref=e330] [cursor=pointer]
+      - generic [ref=e331]:
+        - generic [ref=e332]: R2C デフォルト
+        - generic [ref=e333]:
+          - img "KOHAKU"
+        - generic [ref=e335]:
+          - generic [ref=e336]:
+            - generic [ref=e337]: KOHAKU
+            - generic [ref=e338]: デフォルト
+          - generic [ref=e339]: "作成日: 2026年4月15日"
+          - generic [ref=e340]:
+            - button "編集" [ref=e341] [cursor=pointer]
+            - button "削除" [ref=e342] [cursor=pointer]
+      - generic [ref=e343]:
+        - generic [ref=e344]: R2C デフォルト
+        - generic [ref=e345]:
+          - img "KWAME"
+        - generic [ref=e347]:
+          - generic [ref=e348]:
+            - generic [ref=e349]: KWAME
+            - generic [ref=e350]: デフォルト
+          - generic [ref=e351]: "作成日: 2026年4月15日"
+          - generic [ref=e352]:
+            - button "編集" [ref=e353] [cursor=pointer]
+            - button "削除" [ref=e354] [cursor=pointer]
+      - generic [ref=e355]:
+        - generic [ref=e356]: R2C デフォルト
+        - generic [ref=e357]:
+          - img "LI"
+        - generic [ref=e359]:
+          - generic [ref=e360]:
+            - generic [ref=e361]: LI
+            - generic [ref=e362]: デフォルト
+          - generic [ref=e363]: "作成日: 2026年4月15日"
+          - generic [ref=e364]:
+            - button "編集" [ref=e365] [cursor=pointer]
+            - button "削除" [ref=e366] [cursor=pointer]
+      - generic [ref=e367]:
+        - generic [ref=e368]: R2C デフォルト
+        - generic [ref=e369]:
+          - img "MITSU"
+        - generic [ref=e371]:
+          - generic [ref=e372]:
+            - generic [ref=e373]: MITSU
+            - generic [ref=e374]: デフォルト
+          - generic [ref=e375]: "作成日: 2026年4月15日"
+          - generic [ref=e376]:
+            - button "編集" [ref=e377] [cursor=pointer]
+            - button "削除" [ref=e378] [cursor=pointer]
+      - generic [ref=e379]:
+        - generic [ref=e380]: R2C デフォルト
+        - generic [ref=e381]:
+          - img "NYX"
+        - generic [ref=e383]:
+          - generic [ref=e384]:
+            - generic [ref=e385]: NYX
+            - generic [ref=e386]: デフォルト
+          - generic [ref=e387]: "作成日: 2026年4月15日"
+          - generic [ref=e388]:
+            - button "編集" [ref=e389] [cursor=pointer]
+            - button "削除" [ref=e390] [cursor=pointer]
+      - generic [ref=e391]:
+        - generic [ref=e392]: R2C デフォルト
+        - generic [ref=e393]:
+          - img "Rei"
+        - generic [ref=e395]:
+          - generic [ref=e396]:
+            - generic [ref=e397]: Rei
+            - generic [ref=e398]: デフォルト
+          - generic [ref=e399]: "作成日: 2026年4月15日"
+          - generic [ref=e400]:
+            - button "編集" [ref=e401] [cursor=pointer]
+            - button "削除" [ref=e402] [cursor=pointer]
+      - generic [ref=e403]:
+        - generic [ref=e404]: R2C デフォルト
+        - generic [ref=e405]:
+          - img "SAM"
+        - generic [ref=e407]:
+          - generic [ref=e408]:
+            - generic [ref=e409]: SAM
+            - generic [ref=e410]: デフォルト
+          - generic [ref=e411]: "作成日: 2026年4月15日"
+          - generic [ref=e412]:
+            - button "編集" [ref=e413] [cursor=pointer]
+            - button "削除" [ref=e414] [cursor=pointer]
+      - generic [ref=e415]:
+        - generic [ref=e416]: R2C デフォルト
+        - generic [ref=e417]:
+          - img "SERAPH"
+        - generic [ref=e419]:
+          - generic [ref=e420]:
+            - generic [ref=e421]: SERAPH
+            - generic [ref=e422]: デフォルト
+          - generic [ref=e423]: "作成日: 2026年4月15日"
+          - generic [ref=e424]:
+            - button "編集" [ref=e425] [cursor=pointer]
+            - button "削除" [ref=e426] [cursor=pointer]
+      - generic [ref=e427]:
+        - generic [ref=e428]: R2C デフォルト
+        - generic [ref=e429]:
+          - img "SIR PEN"
+        - generic [ref=e431]:
+          - generic [ref=e432]:
+            - generic [ref=e433]: SIR PEN
+            - generic [ref=e434]: デフォルト
+          - generic [ref=e435]: "作成日: 2026年4月15日"
+          - generic [ref=e436]:
+            - button "編集" [ref=e437] [cursor=pointer]
+            - button "削除" [ref=e438] [cursor=pointer]
+      - generic [ref=e439]:
+        - generic [ref=e440]: R2C デフォルト
+        - generic [ref=e441]:
+          - img "Sophia"
+        - generic [ref=e443]:
+          - generic [ref=e444]:
+            - generic [ref=e445]: Sophia
+            - generic [ref=e446]: デフォルト
+          - generic [ref=e447]: "作成日: 2026年4月15日"
+          - generic [ref=e448]:
+            - button "編集" [ref=e449] [cursor=pointer]
+            - button "削除" [ref=e450] [cursor=pointer]
+      - generic [ref=e451]:
+        - generic [ref=e452]: R2C デフォルト
+        - generic [ref=e453]:
+          - img "Unit-PX7"
+        - generic [ref=e455]:
+          - generic [ref=e456]:
+            - generic [ref=e457]: Unit-PX7
+            - generic [ref=e458]: デフォルト
+          - generic [ref=e459]: "作成日: 2026年4月15日"
+          - generic [ref=e460]:
+            - button "編集" [ref=e461] [cursor=pointer]
+            - button "削除" [ref=e462] [cursor=pointer]
+      - generic [ref=e463]:
+        - generic [ref=e464]: カーネーション（BROSS新潟）
+        - generic [ref=e465]:
+          - img "カーネーション営業アシスタント"
+        - generic [ref=e467]:
+          - generic [ref=e468]:
+            - generic [ref=e469]: カーネーション営業アシスタント
+            - generic [ref=e470]: アクティブ
+          - generic [ref=e471]: "作成日: 2026年3月21日"
+          - generic [ref=e472]:
+            - button "編集" [ref=e473] [cursor=pointer]
+            - button "削除" [ref=e474] [cursor=pointer]
+            - button "⚠️ 警告" [ref=e475] [cursor=pointer]

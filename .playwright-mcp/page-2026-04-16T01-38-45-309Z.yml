@@ -1,0 +1,72 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - button "R2C Admin" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: R2C
+      - generic [ref=e6]: Admin
+    - generic [ref=e7]:
+      - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: 💬
+        - text: 会話
+        - generic [ref=e11]: ▼
+      - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 📋
+        - text: 運用管理
+        - generic [ref=e15]: ▼
+      - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: 📚
+        - text: ナレッジ
+        - generic [ref=e19]: ▼
+      - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 📈
+        - text: 分析
+        - generic [ref=e23]: ▼
+      - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 💬
+        - text: 声がけ
+        - generic [ref=e27]: ▼
+      - button "📈 成果管理 ▼" [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: 📈
+        - text: 成果管理
+        - generic [ref=e31]: ▼
+      - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: ⚙️
+        - text: 設定
+        - generic [ref=e35]: ▼
+    - button "通知" [ref=e37] [cursor=pointer]:
+      - text: 🔔
+      - generic [ref=e61]: "3"
+    - generic [ref=e38]:
+      - generic [ref=e39]: Super Admin
+      - generic [ref=e40]: admin@example.com
+      - button "ログアウト" [ref=e41] [cursor=pointer]
+  - generic [ref=e175]:
+    - generic [ref=e176]:
+      - heading "📈 コンバージョン分析" [level=1] [ref=e177]
+      - generic [ref=e178]:
+        - button "7日" [ref=e179] [cursor=pointer]
+        - button "30日" [ref=e180] [cursor=pointer]
+        - button "90日" [ref=e181] [cursor=pointer]
+    - generic [ref=e182]:
+      - generic [ref=e183]:
+        - generic [ref=e184]: 合計CV数
+        - generic [ref=e185]: "0"
+      - generic [ref=e186]:
+        - generic [ref=e187]: 平均温度感スコア
+        - generic [ref=e188]: 0/100
+      - generic [ref=e189]:
+        - generic [ref=e190]: トップ心理原則
+        - generic [ref=e191]: まだデータがありません
+      - generic [ref=e192]:
+        - generic [ref=e193]: 実施中A/Bテスト
+        - generic [ref=e194]: "0"
+    - generic [ref=e195]:
+      - generic [ref=e196]: 🧠 効果が高い心理アプローチ
+      - paragraph [ref=e197]: まだデータがありません
+    - generic [ref=e198]:
+      - generic [ref=e199]:
+        - generic [ref=e200]: 🔬 A/Bテスト
+        - button "管理" [ref=e201] [cursor=pointer]
+      - paragraph [ref=e202]: まだデータがありません
+    - generic [ref=e203]:
+      - generic [ref=e204]: 💡 AIからの改善提案
+      - paragraph [ref=e205]: 現在、改善提案はありません

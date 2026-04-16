@@ -1,0 +1,33 @@
+- navigation [ref=e3]:
+  - button "R2C Admin" [ref=e4] [cursor=pointer]:
+    - generic [ref=e5]: R2C
+    - generic [ref=e6]: Admin
+  - generic [ref=e7]:
+    - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+      - generic [ref=e10]: 💬
+      - text: 会話
+      - generic [ref=e11]: ▼
+    - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+      - generic [ref=e14]: 📋
+      - text: 運用管理
+      - generic [ref=e15]: ▼
+    - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+      - generic [ref=e18]: 📚
+      - text: ナレッジ
+      - generic [ref=e19]: ▼
+    - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+      - generic [ref=e22]: 📈
+      - text: 分析
+      - generic [ref=e23]: ▼
+    - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+      - generic [ref=e26]: 💬
+      - text: 声がけ
+      - generic [ref=e27]: ▼
+    - button "📈 成果管理 ▼" [ref=e29] [cursor=pointer]:
+      - generic [ref=e30]: 📈
+      - text: 成果管理
+      - generic [ref=e31]: ▼
+    - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+      - generic [ref=e34]: ⚙️
+      - text: 設定
+      - generic [ref=e35]: ▼

@@ -91,6 +91,7 @@ ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.
 | `src/agent/gap/migration_gap_detection_v2.sql` | ALTER `knowledge_gaps` (suggested_answer column) | Phase 46B |
 | `src/agent/judge/migration_cleanup_zero_scores.sql` | DELETE 不完全レコード from `conversation_evaluations` (score=0, feedback=NULL) | Phase 45 E2E修正 |
 | `src/api/admin/analytics/migration_sentiment.sql` | `chat_messages.sentiment` JSONB カラム追加 | Phase 51 |
+| `src/api/admin/avatar/migration_fix_active_constraint.sql` | `idx_avatar_configs_active` 再作成（デフォルト除外）+ デフォルトアバター is_active=true 一括更新 | Phase 64修正 |
 
 > 新しいマイグレーションを追加した場合は、このテーブルを更新すること。
 

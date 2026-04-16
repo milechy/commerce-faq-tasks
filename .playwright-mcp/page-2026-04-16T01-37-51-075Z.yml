@@ -1,0 +1,147 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - button "R2C Admin" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: R2C
+      - generic [ref=e6]: Admin
+    - generic [ref=e7]:
+      - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: 💬
+        - text: 会話
+        - generic [ref=e11]: ▼
+      - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 📋
+        - text: 運用管理
+        - generic [ref=e15]: ▼
+      - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: 📚
+        - text: ナレッジ
+        - generic [ref=e19]: ▼
+      - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 📈
+        - text: 分析
+        - generic [ref=e23]: ▼
+      - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 💬
+        - text: 声がけ
+        - generic [ref=e27]: ▼
+      - button "📈 成果管理 ▼" [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: 📈
+        - text: 成果管理
+        - generic [ref=e31]: ▼
+      - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: ⚙️
+        - text: 設定
+        - generic [ref=e35]: ▼
+    - button "通知" [ref=e37] [cursor=pointer]:
+      - text: 🔔
+      - generic [ref=e55]: "3"
+    - generic [ref=e38]:
+      - generic [ref=e39]: Super Admin
+      - generic [ref=e40]: admin@example.com
+      - button "ログアウト" [ref=e41] [cursor=pointer]
+  - generic [ref=e43]:
+    - banner [ref=e44]:
+      - generic [ref=e45]:
+        - button "← 管理画面へ戻る" [ref=e46] [cursor=pointer]
+        - heading "📈 会話分析ダッシュボード — 全テナント" [level=1] [ref=e47]:
+          - text: 📈 会話分析ダッシュボード
+          - generic [ref=e48]: — 全テナント
+        - paragraph [ref=e49]: KPI・トレンド・センチメントを可視化します
+      - generic [ref=e50]:
+        - combobox [ref=e51] [cursor=pointer]:
+          - option "全テナント" [selected]
+          - option "カーネーション（BROSS新潟）"
+          - option "デモテナント"
+        - combobox [ref=e52] [cursor=pointer]:
+          - option "7日"
+          - option "30日" [selected]
+          - option "90日"
+    - generic [ref=e56]:
+      - generic [ref=e57]:
+        - generic [ref=e58]: 💬
+        - generic [ref=e59]: "39"
+        - generic [ref=e60]: 総会話数
+        - generic [ref=e61]: ▲ 457.1% 前期比
+      - generic [ref=e62]:
+        - generic [ref=e63]: ⭐
+        - generic [ref=e64]: "31.0"
+        - generic [ref=e65]: 平均Judgeスコア
+        - generic [ref=e66]: /100
+      - generic [ref=e67]:
+        - generic [ref=e68]: 🔍
+        - generic [ref=e69]: "5"
+        - generic [ref=e70]: Knowledge Gap
+        - generic [ref=e71]: 件
+      - generic [ref=e72]:
+        - generic [ref=e73]: 🤖
+        - generic [ref=e74]: 0.0%
+        - generic [ref=e75]: アバター利用率
+        - generic [ref=e76]: 0件 / 全会話
+      - generic [ref=e77]:
+        - generic [ref=e78]: 😊
+        - generic [ref=e79]: 0.0%
+        - generic [ref=e80]: 顧客感情
+        - generic [ref=e81]: ポジティブ率
+    - generic [ref=e82]:
+      - heading "会話数トレンド" [level=3] [ref=e83]
+      - img [ref=e85]
+    - generic [ref=e86]:
+      - heading "センチメント推移" [level=3] [ref=e87]
+      - img [ref=e89]
+    - generic [ref=e90]:
+      - generic [ref=e91]:
+        - heading "Judgeスコア分布" [level=3] [ref=e92]
+        - img [ref=e94]
+      - generic [ref=e95]:
+        - heading "4軸平均スコア" [level=3] [ref=e96]
+        - img [ref=e98]
+      - generic [ref=e99]:
+        - heading "センチメント分布" [level=3] [ref=e100]
+        - img [ref=e102]
+    - generic [ref=e103]:
+      - heading "低スコア会話" [level=3] [ref=e104]
+      - table [ref=e106]:
+        - rowgroup [ref=e107]:
+          - row "セッションID スコア 評価日時 メッセージ数 フィードバック" [ref=e108]:
+            - columnheader "セッションID" [ref=e109]
+            - columnheader "スコア" [ref=e110]
+            - columnheader "評価日時" [ref=e111]
+            - columnheader "メッセージ数" [ref=e112]
+            - columnheader "フィードバック" [ref=e113]
+        - rowgroup [ref=e114]:
+          - 'row "8a999e31-b0e… 31 3月27日 12:00 0 {\"summary\": \"顧客の質問に全く答えられず、AIとしての価値を提供できていません。\\n顧客の心理やニーズを無視し、情報がないことを理由に顧客に手間を強いる対応は、チャットAIとしては非常に低" [ref=e115]':
+            - cell "8a999e31-b0e…" [ref=e116]:
+              - button "8a999e31-b0e…" [ref=e117] [cursor=pointer]
+            - cell "31" [ref=e118]
+            - cell "3月27日 12:00" [ref=e119]
+            - cell "0" [ref=e120]
+            - 'cell "{\"summary\": \"顧客の質問に全く答えられず、AIとしての価値を提供できていません。\\n顧客の心理やニーズを無視し、情報がないことを理由に顧客に手間を強いる対応は、チャットAIとしては非常に低" [ref=e121]'
+    - heading "🎯 成果・コンバージョン分析" [level=2] [ref=e122]
+    - generic [ref=e123]:
+      - generic [ref=e124]:
+        - generic [ref=e125]: 📊
+        - generic [ref=e126]: "39"
+        - generic [ref=e127]: 総セッション数
+      - generic [ref=e128]:
+        - generic [ref=e129]: ✅
+        - generic [ref=e130]: "1"
+        - generic [ref=e131]: 記録済み成果
+      - generic [ref=e132]:
+        - generic [ref=e133]: 📝
+        - generic [ref=e134]: 2.6%
+        - generic [ref=e135]: 記録率
+      - generic [ref=e136]:
+        - generic [ref=e137]: 🏆
+        - generic [ref=e138]: 2.6%
+        - generic [ref=e139]: コンバージョン率
+        - generic [ref=e140]: 離脱・不明を除く
+    - generic [ref=e141]:
+      - generic [ref=e142]:
+        - generic [ref=e143]: コンバージョン率推移
+        - img [ref=e145]
+      - generic [ref=e146]:
+        - generic [ref=e147]: 成果内訳
+        - img [ref=e149]
+    - generic [ref=e150]:
+      - generic [ref=e151]: ステージ別離脱分析
+      - img [ref=e153]

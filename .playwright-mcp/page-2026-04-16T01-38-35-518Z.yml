@@ -1,0 +1,170 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - button "R2C Admin" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: R2C
+      - generic [ref=e6]: Admin
+    - generic [ref=e7]:
+      - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: 💬
+        - text: 会話
+        - generic [ref=e11]: ▼
+      - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 📋
+        - text: 運用管理
+        - generic [ref=e15]: ▼
+      - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: 📚
+        - text: ナレッジ
+        - generic [ref=e19]: ▼
+      - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 📈
+        - text: 分析
+        - generic [ref=e23]: ▼
+      - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 💬
+        - text: 声がけ
+        - generic [ref=e27]: ▼
+      - generic [ref=e28]:
+        - button "📈 成果管理 ▼" [active] [ref=e29] [cursor=pointer]:
+          - generic [ref=e30]: 📈
+          - text: 成果管理
+          - generic [ref=e31]: ▼
+        - button "コンバージョン分析 CVの成果・A/Bテスト・AIからの改善提案" [ref=e58] [cursor=pointer]:
+          - generic [ref=e59]: コンバージョン分析
+          - generic [ref=e60]: CVの成果・A/Bテスト・AIからの改善提案
+      - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: ⚙️
+        - text: 設定
+        - generic [ref=e35]: ▼
+    - button "通知" [ref=e37] [cursor=pointer]:
+      - text: 🔔
+      - generic [ref=e61]: "3"
+    - generic [ref=e38]:
+      - generic [ref=e39]: Super Admin
+      - generic [ref=e40]: admin@example.com
+      - button "ログアウト" [ref=e41] [cursor=pointer]
+  - generic [ref=e43]:
+    - banner [ref=e44]:
+      - generic [ref=e45]:
+        - heading "📊 管理ダッシュボード" [level=1] [ref=e46]
+        - paragraph [ref=e47]: 全体の状況をひと目で確認できます
+      - generic [ref=e48]:
+        - generic [ref=e49]: 接続中
+        - generic [ref=e51]:
+          - button "🇯🇵 日本語" [ref=e52] [cursor=pointer]
+          - button "🇺🇸 English" [ref=e53] [cursor=pointer]
+        - button "ログアウト" [ref=e54] [cursor=pointer]
+    - generic [ref=e62]:
+      - heading "現在の状況" [level=2] [ref=e63]
+      - generic [ref=e64]:
+        - generic [ref=e65] [cursor=pointer]:
+          - generic [ref=e66]: 💬
+          - generic [ref=e67]: "1"
+          - generic [ref=e68]: 登録FAQ数
+          - generic [ref=e69]: 公開中・下書きを含む
+        - generic [ref=e70] [cursor=pointer]:
+          - generic [ref=e71]: ✅
+          - generic [ref=e72]: "1"
+          - generic [ref=e73]: 公開中のFAQ
+          - generic [ref=e74]: お客様に表示されています
+        - generic [ref=e75] [cursor=pointer]:
+          - generic [ref=e76]: 🔍
+          - generic [ref=e77]: "5"
+          - generic [ref=e78]: 未回答質問
+          - generic [ref=e79]: AIが答えられなかった質問数
+        - generic [ref=e80]:
+          - generic [ref=e81]: 🕐
+          - generic [ref=e82]: 3月10日
+          - generic [ref=e83]: 最終更新
+          - generic [ref=e84]: FAQの最終更新日
+    - generic [ref=e85]:
+      - heading "メニュー" [level=2] [ref=e86]
+      - generic [ref=e87]:
+        - generic [ref=e88]:
+          - generic [ref=e89]:
+            - generic [ref=e90]: 💬
+            - generic [ref=e91]: 会話
+          - button "会話履歴 お客様との全チャットログ・AI品質評価を確認 →" [ref=e93] [cursor=pointer]:
+            - generic [ref=e94]:
+              - generic [ref=e95]: 会話履歴
+              - generic [ref=e96]: お客様との全チャットログ・AI品質評価を確認
+            - generic [ref=e97]: →
+        - generic [ref=e98]:
+          - generic [ref=e99]:
+            - generic [ref=e100]: 📋
+            - generic [ref=e101]: 運用管理
+          - button "お客様の声 フィードバック管理 →" [ref=e103] [cursor=pointer]:
+            - generic [ref=e104]:
+              - generic [ref=e105]: お客様の声
+              - generic [ref=e106]: フィードバック管理
+            - generic [ref=e107]: →
+        - generic [ref=e108]:
+          - generic [ref=e109]:
+            - generic [ref=e110]: 📚
+            - generic [ref=e111]: ナレッジ
+          - generic [ref=e112]:
+            - button "ナレッジ管理 AIが使う回答データを管理します →" [ref=e113] [cursor=pointer]:
+              - generic [ref=e114]:
+                - generic [ref=e115]: ナレッジ管理
+                - generic [ref=e116]: AIが使う回答データを管理します
+              - generic [ref=e117]: →
+            - button "未回答質問 AIが答えられなかった質問を管理 5 →" [ref=e118] [cursor=pointer]:
+              - generic [ref=e119]:
+                - generic [ref=e120]: 未回答質問
+                - generic [ref=e121]: AIが答えられなかった質問を管理
+              - generic [ref=e122]: "5"
+              - generic [ref=e123]: →
+        - generic [ref=e124]:
+          - generic [ref=e125]:
+            - generic [ref=e126]: 📈
+            - generic [ref=e127]: 分析
+          - button "会話分析ダッシュボード KPI・トレンド・コンバージョン分析 →" [ref=e129] [cursor=pointer]:
+            - generic [ref=e130]:
+              - generic [ref=e131]: 会話分析ダッシュボード
+              - generic [ref=e132]: KPI・トレンド・コンバージョン分析
+            - generic [ref=e133]: →
+        - generic [ref=e134]:
+          - generic [ref=e135]:
+            - generic [ref=e136]: ⚙️
+            - generic [ref=e137]: 設定
+          - generic [ref=e138]:
+            - button "アバター設定 AIアバターの見た目と声を設定 →" [ref=e139] [cursor=pointer]:
+              - generic [ref=e140]:
+                - generic [ref=e141]: アバター設定
+                - generic [ref=e142]: AIアバターの見た目と声を設定
+              - generic [ref=e143]: →
+            - button "チューニングルール AIの回答を改善するルールを設定 →" [ref=e144] [cursor=pointer]:
+              - generic [ref=e145]:
+                - generic [ref=e146]: チューニングルール
+                - generic [ref=e147]: AIの回答を改善するルールを設定
+              - generic [ref=e148]: →
+            - button "テストチャット AIの回答をリアルタイムにテスト →" [ref=e149] [cursor=pointer]:
+              - generic [ref=e150]:
+                - generic [ref=e151]: テストチャット
+                - generic [ref=e152]: AIの回答をリアルタイムにテスト
+              - generic [ref=e153]: →
+            - button "テナント管理 登録テナントの設定と管理 →" [ref=e154] [cursor=pointer]:
+              - generic [ref=e155]:
+                - generic [ref=e156]: テナント管理
+                - generic [ref=e157]: 登録テナントの設定と管理
+              - generic [ref=e158]: →
+            - button "請求・使用量 API使用量と請求情報を確認 →" [ref=e159] [cursor=pointer]:
+              - generic [ref=e160]:
+                - generic [ref=e161]: 請求・使用量
+                - generic [ref=e162]: API使用量と請求情報を確認
+              - generic [ref=e163]: →
+    - generic [ref=e164]:
+      - heading "クイックアクション" [level=2] [ref=e165]
+      - generic [ref=e166]:
+        - button "🧪 テストチャット" [ref=e167] [cursor=pointer]:
+          - generic [ref=e168]: 🧪
+          - text: テストチャット
+        - button "📚 ナレッジ追加" [ref=e169] [cursor=pointer]:
+          - generic [ref=e170]: 📚
+          - text: ナレッジ追加
+        - button "⚙️ ルール確認" [ref=e171] [cursor=pointer]:
+          - generic [ref=e172]: ⚙️
+          - text: ルール確認
+        - button "📈 分析を見る" [ref=e173] [cursor=pointer]:
+          - generic [ref=e174]: 📈
+          - text: 分析を見る

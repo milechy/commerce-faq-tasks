@@ -1,0 +1,59 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - button "R2C Admin" [ref=e4] [cursor=pointer]:
+      - generic [ref=e5]: R2C
+      - generic [ref=e6]: Admin
+    - generic [ref=e7]:
+      - button "💬 会話 ▼" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: 💬
+        - text: 会話
+        - generic [ref=e11]: ▼
+      - button "📋 運用管理 ▼" [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: 📋
+        - text: 運用管理
+        - generic [ref=e15]: ▼
+      - button "📚 ナレッジ ▼" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: 📚
+        - text: ナレッジ
+        - generic [ref=e19]: ▼
+      - button "📈 分析 ▼" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: 📈
+        - text: 分析
+        - generic [ref=e23]: ▼
+      - button "💬 声がけ ▼" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: 💬
+        - text: 声がけ
+        - generic [ref=e27]: ▼
+      - button "📈 成果管理 ▼" [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: 📈
+        - text: 成果管理
+        - generic [ref=e31]: ▼
+      - button "⚙️ 設定 ▼" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: ⚙️
+        - text: 設定
+        - generic [ref=e35]: ▼
+    - button "通知" [ref=e37] [cursor=pointer]: 🔔
+    - generic [ref=e38]:
+      - generic [ref=e39]: Super Admin
+      - generic [ref=e40]: admin@example.com
+      - button "ログアウト" [ref=e41] [cursor=pointer]
+  - generic [ref=e43]:
+    - banner [ref=e44]:
+      - generic [ref=e45]:
+        - button "← ダッシュボードに戻る" [ref=e46] [cursor=pointer]
+        - generic [ref=e47]:
+          - button "🇯🇵 日本語" [ref=e48] [cursor=pointer]
+          - button "🇺🇸 English" [ref=e49] [cursor=pointer]
+      - heading "ナレッジ管理" [level=1] [ref=e50]
+      - paragraph [ref=e51]: 在庫・キャンペーン・クーポン情報を登録してAIに覚えさせましょう
+    - generic [ref=e52]:
+      - button "🌐 グローバルナレッジ 全テナント共通のナレッジを管理 ›" [ref=e53] [cursor=pointer]:
+        - generic [ref=e54]: 🌐
+        - generic [ref=e55]:
+          - generic [ref=e56]: グローバルナレッジ
+          - generic [ref=e57]: 全テナント共通のナレッジを管理
+        - generic [ref=e58]: ›
+      - button "💬 テスト" [ref=e59] [cursor=pointer]
+    - generic [ref=e60]:
+      - generic [ref=e61]: ⏳
+      - text: 読み込んでいます...
