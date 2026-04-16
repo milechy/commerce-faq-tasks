@@ -251,7 +251,7 @@ export default function FeedbackChat({ tenantId }: FeedbackChatProps) {
               onCompositionStart={() => setIsComposing(true)}
               onCompositionEnd={() => setIsComposing(false)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !isComposing) {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !isComposing && e.nativeEvent.keyCode !== 229) {
                   e.preventDefault();
                   void handleSend();
                 }

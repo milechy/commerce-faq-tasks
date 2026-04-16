@@ -152,6 +152,7 @@ export default function ChatTestPage() {
   const [adminMessages, setAdminMessages] = useState<AdminChatMessage[]>([]);
   const [adminInput, setAdminInput] = useState("");
   const [adminSending, setAdminSending] = useState(false);
+  const [adminIsComposing, setAdminIsComposing] = useState(false);
   const [adminSessionId] = useState(() => `admin-chat-${Date.now()}`);
 
   // ── チューニングモーダル状態 ────────────────────────────────────────────
@@ -489,7 +490,9 @@ export default function ChatTestPage() {
                   type="text"
                   value={adminInput}
                   onChange={(e) => setAdminInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleAdminSend(); } }}
+                  onCompositionStart={() => setAdminIsComposing(true)}
+                  onCompositionEnd={() => setAdminIsComposing(false)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !adminIsComposing && e.nativeEvent.keyCode !== 229) { e.preventDefault(); void handleAdminSend(); } }}
                   placeholder="メッセージを入力..."
                   disabled={adminSending}
                   style={{ flex: 1, padding: "10px 14px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#e5e7eb", fontSize: 14, outline: "none" }}

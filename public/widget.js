@@ -2122,7 +2122,7 @@
   textarea.addEventListener('compositionend', function () { isComposing = false; });
 
   textarea.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isComposing) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isComposing && e.keyCode !== 229) {
       e.preventDefault();
       var text = textarea.value;
       textarea.value = '';

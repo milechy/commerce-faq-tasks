@@ -25,6 +25,7 @@ export default function AdminAIChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -87,7 +88,7 @@ export default function AdminAIChat() {
   }, [input, loading]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !isComposing && e.nativeEvent.keyCode !== 229) {
       e.preventDefault();
       void handleSend();
     }
@@ -270,6 +271,8 @@ export default function AdminAIChat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              onCompositionStart={() => setIsComposing(true)}
+              onCompositionEnd={() => setIsComposing(false)}
               placeholder="質問を入力… (Enterで送信)"
               rows={1}
               style={{

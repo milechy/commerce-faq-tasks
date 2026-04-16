@@ -82,6 +82,7 @@ const SEND_ICON = (
 export default function ChatInput({ onSend, isLoading, disabled = false }: ChatInputProps) {
   const [value, setValue] = useState('')
   const [isFocused, setIsFocused] = useState(false)
+  const [isComposing, setIsComposing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const canSend = value.trim().length > 0 && !isLoading && !disabled
@@ -110,7 +111,7 @@ export default function ChatInput({ onSend, isLoading, disabled = false }: ChatI
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !isComposing && e.nativeEvent.keyCode !== 229) {
       e.preventDefault()
       if (canSend) {
         const trimmed = value.trim()
@@ -136,6 +137,8 @@ export default function ChatInput({ onSend, isLoading, disabled = false }: ChatI
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onCompositionStart={() => setIsComposing(true)}
+          onCompositionEnd={() => setIsComposing(false)}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
           placeholder="メッセージを入力… (Shift+Enterで改行)"
