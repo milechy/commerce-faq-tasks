@@ -245,9 +245,12 @@ export default function AvatarListPage() {
   const displayedConfigs = useMemo(() => {
     let result = [...configs];
 
-    // テナントフィルタ（is_defaultも含めて strict tenant_id 一致のみ表示）
+    // テナントフィルタ: 特定テナント選択時はis_default=trueを除外（タイプ「デフォルト」選択時は除外しない）
     if (tenantFilter !== "all") {
-      result = result.filter((c) => (c.tenant_id ?? "") === tenantFilter);
+      result = result.filter((c) => {
+        if (c.is_default && typeFilter !== "default") return false;
+        return (c.tenant_id ?? "") === tenantFilter;
+      });
     }
     // タイプフィルタ
     if (typeFilter === "default") result = result.filter((c) => c.is_default);
