@@ -21,6 +21,8 @@ interface AvatarConfig {
   is_active: boolean;
   is_default: boolean;
   avatar_provider: string | null;
+  agent_prompt: string | null;
+  agent_idle_prompt: string | null;
 }
 
 interface VoiceRecommendation {
@@ -138,6 +140,18 @@ export default function AvatarStudioPage() {
   const [isDefault, setIsDefault] = useState(false);
   const [resetting, setResetting] = useState(false);
 
+  // デフォルトアバター専用フィールド（読み取り専用）
+  const [agentPrompt, setAgentPrompt] = useState("");
+  const [agentIdlePrompt, setAgentIdlePrompt] = useState("");
+
+  // デフォルトアバターの初期ロード値（保存時の上書き防止用）
+  const initialProtectedValues = useRef<{
+    voice_id: string;
+    personality_prompt: string;
+    agent_prompt: string;
+    agent_idle_prompt: string;
+  } | null>(null);
+
   // 保存
   const [saving, setSaving] = useState(false);
   const [loadingEdit, setLoadingEdit] = useState(isEdit);
@@ -164,6 +178,16 @@ export default function AvatarStudioPage() {
         setBehaviorDescription(found.behavior_description ?? "");
         setEmotionTags(found.emotion_tags ?? []);
         setIsDefault(found.is_default ?? false);
+        setAgentPrompt(found.agent_prompt ?? "");
+        setAgentIdlePrompt(found.agent_idle_prompt ?? "");
+        if (found.is_default) {
+          initialProtectedValues.current = {
+            voice_id: found.voice_id ?? "",
+            personality_prompt: found.personality_prompt ?? "",
+            agent_prompt: found.agent_prompt ?? "",
+            agent_idle_prompt: found.agent_idle_prompt ?? "",
+          };
+        }
       }
     } catch { /* silent */ } finally {
       setLoadingEdit(false);
@@ -246,7 +270,7 @@ export default function AvatarStudioPage() {
   }
 
   const handleMatchVoice = async () => {
-    if (!voiceDesc.trim() || matchingVoice) return;
+    if (isDefault || !voiceDesc.trim() || matchingVoice) return;
     setMatchingVoice(true);
     setError(null);
     try {
@@ -282,7 +306,7 @@ export default function AvatarStudioPage() {
   };
 
   const handleGeneratePrompt = async () => {
-    if (!promptRules.trim() || generatingPrompt) return;
+    if (isDefault || !promptRules.trim() || generatingPrompt) return;
     setGeneratingPrompt(true);
     setError(null);
     try {
@@ -361,12 +385,20 @@ export default function AvatarStudioPage() {
     setSaving(true);
     setError(null);
     setSuccess(null);
+    // デフォルトアバターの保護フィールドは初期ロード値で上書き（UI操作による変更を無効化）
+    const protectedVoiceId = isDefault && initialProtectedValues.current
+      ? initialProtectedValues.current.voice_id
+      : voiceId;
+    const protectedPersonalityPrompt = isDefault && initialProtectedValues.current
+      ? initialProtectedValues.current.personality_prompt
+      : personalityPrompt;
+
     const payload = {
       name: name.trim(),
       image_url: imageUrl || undefined,
-      voice_id: voiceId || undefined,
+      voice_id: protectedVoiceId || undefined,
       voice_description: voiceDescription || undefined,
-      personality_prompt: personalityPrompt || undefined,
+      personality_prompt: protectedPersonalityPrompt || undefined,
       behavior_description: behaviorDescription || undefined,
       emotion_tags: emotionTags.length > 0 ? emotionTags : undefined,
       lemonslice_agent_id: lemonsliceAgentId || undefined,
@@ -717,11 +749,11 @@ export default function AvatarStudioPage() {
         </div>
         <button
           onClick={() => void handleMatchVoice()}
-          disabled={matchingVoice || !voiceDesc.trim()}
+          disabled={isDefault || matchingVoice || !voiceDesc.trim()}
           style={{
             ...BTN_PRIMARY,
-            opacity: matchingVoice || !voiceDesc.trim() ? 0.5 : 1,
-            cursor: matchingVoice || !voiceDesc.trim() ? "not-allowed" : "pointer",
+            opacity: isDefault || matchingVoice || !voiceDesc.trim() ? 0.5 : 1,
+            cursor: isDefault || matchingVoice || !voiceDesc.trim() ? "not-allowed" : "pointer",
           }}
         >
           {matchingVoice
@@ -762,15 +794,28 @@ export default function AvatarStudioPage() {
           </div>
         )}
 
-        {voiceId && (
+        {(voiceId || isDefault) && (
           <div style={{ marginTop: 14 }}>
-            <label style={LABEL_STYLE}>Voice ID</label>
+            <label style={LABEL_STYLE}>
+              {isDefault
+                ? (lang === "ja" ? "設定済みの声 (Voice ID)" : "Configured Voice (Voice ID)")
+                : "Voice ID"}
+            </label>
             <input
               type="text"
               value={voiceId}
               onChange={(e) => setVoiceId(e.target.value)}
-              style={INPUT_STYLE}
+              readOnly={isDefault}
+              style={{
+                ...INPUT_STYLE,
+                ...(isDefault ? { background: "rgba(15,23,42,0.6)", color: "#6b7280", cursor: "default" } : {}),
+              }}
             />
+            {isDefault && (
+              <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
+                {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -793,11 +838,11 @@ export default function AvatarStudioPage() {
         </div>
         <button
           onClick={() => void handleGeneratePrompt()}
-          disabled={generatingPrompt || !promptRules.trim()}
+          disabled={isDefault || generatingPrompt || !promptRules.trim()}
           style={{
             ...BTN_PRIMARY,
-            opacity: generatingPrompt || !promptRules.trim() ? 0.5 : 1,
-            cursor: generatingPrompt || !promptRules.trim() ? "not-allowed" : "pointer",
+            opacity: isDefault || generatingPrompt || !promptRules.trim() ? 0.5 : 1,
+            cursor: isDefault || generatingPrompt || !promptRules.trim() ? "not-allowed" : "pointer",
           }}
         >
           {generatingPrompt
@@ -812,10 +857,51 @@ export default function AvatarStudioPage() {
           <textarea
             value={personalityPrompt}
             onChange={(e) => setPersonalityPrompt(e.target.value)}
+            readOnly={isDefault}
             placeholder={lang === "ja" ? "AIが生成するか、直接入力してください" : "Auto-generated or enter manually"}
-            style={{ ...TEXTAREA_STYLE, minHeight: 120 }}
+            style={{
+              ...TEXTAREA_STYLE,
+              minHeight: 120,
+              ...(isDefault ? { background: "rgba(15,23,42,0.6)", color: "#9ca3af", cursor: "default" } : {}),
+            }}
           />
+          {isDefault && (
+            <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
+              {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
+            </p>
+          )}
         </div>
+
+        {isDefault && (agentPrompt || agentIdlePrompt) && (
+          <>
+            <div style={{ marginTop: 14 }}>
+              <label style={LABEL_STYLE}>
+                {lang === "ja" ? "動作プロンプト（会話中）" : "Agent Prompt (During Conversation)"}
+              </label>
+              <textarea
+                value={agentPrompt}
+                readOnly
+                style={{ ...TEXTAREA_STYLE, background: "rgba(15,23,42,0.6)", color: "#9ca3af", cursor: "default", fontStyle: "italic" }}
+              />
+              <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
+                {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
+              </p>
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <label style={LABEL_STYLE}>
+                {lang === "ja" ? "動作プロンプト（待機中）" : "Agent Prompt (Idle)"}
+              </label>
+              <textarea
+                value={agentIdlePrompt}
+                readOnly
+                style={{ ...TEXTAREA_STYLE, background: "rgba(15,23,42,0.6)", color: "#9ca3af", cursor: "default", fontStyle: "italic" }}
+              />
+              <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
+                {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
+              </p>
+            </div>
+          </>
+        )}
 
         <div style={{ marginTop: 14 }}>
           <label style={LABEL_STYLE}>

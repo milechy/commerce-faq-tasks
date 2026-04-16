@@ -167,6 +167,8 @@ git push origin main
 
 各PhaseのAsanaタスクまたはプロンプトに記載。
 
+Playwright MCPが利用可能な場合、CLIから `Playwright MCPでadmin.r2c.bizにアクセスして全ページの表示を確認して` で自動実行可能。
+
 ### スキップ条件
 
 API追加のみ・DBマイグレーションのみ・バックグラウンド処理のみなど、Admin UIに変更がないPhaseではスキップ可。

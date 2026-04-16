@@ -26,7 +26,7 @@ interface AvatarConfig {
   avatar_provider: string | null;
 }
 
-type SortKey = "tenant_asc" | "created_desc" | "created_asc" | "active_first" | "inactive_first" | "default_first";
+type SortKey = "name_asc" | "created_desc" | "created_asc" | "active_first" | "inactive_first" | "default_first";
 type TypeFilter = "all" | "default" | "custom";
 type StatusFilter = "all" | "active" | "inactive";
 
@@ -148,7 +148,7 @@ export default function AvatarListPage() {
   const [warningTarget, setWarningTarget] = useState<WarningTarget | null>(null);
 
   // ── Sort & Filter state ─────────────────────────────────────────────────
-  const [sortKey, setSortKey] = useState<SortKey>("tenant_asc");
+  const [sortKey, setSortKey] = useState<SortKey>("name_asc");
   const [tenantFilter, setTenantFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -231,21 +231,23 @@ export default function AvatarListPage() {
     const seen = new Set<string>();
     const list: { id: string; name: string }[] = [];
     for (const c of configs) {
-      if (!seen.has(c.tenant_id)) {
-        seen.add(c.tenant_id);
-        list.push({ id: c.tenant_id, name: c.tenant_name ?? c.tenant_id });
+      const tid = c.tenant_id;
+      if (!tid) continue; // null/emptyのテナントIDはスキップ
+      if (!seen.has(tid)) {
+        seen.add(tid);
+        list.push({ id: tid, name: c.tenant_name ?? tid });
       }
     }
-    return list.sort((a, b) => a.name.localeCompare(b.name));
+    return list.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
   }, [configs]);
 
   // ── フィルタ + ソート済みリスト ──────────────────────────────────────
   const displayedConfigs = useMemo(() => {
     let result = [...configs];
 
-    // テナントフィルタ
+    // テナントフィルタ（is_defaultも含めて strict tenant_id 一致のみ表示）
     if (tenantFilter !== "all") {
-      result = result.filter((c) => c.tenant_id === tenantFilter);
+      result = result.filter((c) => (c.tenant_id ?? "") === tenantFilter);
     }
     // タイプフィルタ
     if (typeFilter === "default") result = result.filter((c) => c.is_default);
@@ -257,18 +259,18 @@ export default function AvatarListPage() {
     // ソート
     result.sort((a, b) => {
       switch (sortKey) {
-        case "tenant_asc":
-          return (a.tenant_name ?? a.tenant_id).localeCompare(b.tenant_name ?? b.tenant_id) || new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        case "name_asc":
+          return (a.name ?? "").localeCompare(b.name ?? "") || (a.tenant_name ?? a.tenant_id ?? "").localeCompare(b.tenant_name ?? b.tenant_id ?? "");
         case "created_desc":
           return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         case "created_asc":
           return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
         case "active_first":
-          return (b.is_active ? 1 : 0) - (a.is_active ? 1 : 0);
+          return (b.is_active ? 1 : 0) - (a.is_active ? 1 : 0) || (a.name ?? "").localeCompare(b.name ?? "");
         case "inactive_first":
-          return (a.is_active ? 1 : 0) - (b.is_active ? 1 : 0);
+          return (a.is_active ? 1 : 0) - (b.is_active ? 1 : 0) || (a.name ?? "").localeCompare(b.name ?? "");
         case "default_first":
-          return (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0);
+          return (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0) || (a.name ?? "").localeCompare(b.name ?? "");
         default:
           return 0;
       }
@@ -404,6 +406,14 @@ export default function AvatarListPage() {
           display: block;
           transition: transform 0.5s cubic-bezier(0.25, 0.1, 0.25, 1);
           transform-origin: center top;
+          user-select: none;
+          -webkit-user-drag: none;
+          pointer-events: none;
+        }
+        .av-img-wrap .av-img-overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 1;
         }
         .av-card:hover .av-img-wrap img {
           animation: avatar-breathe 2s ease-in-out infinite;
@@ -498,8 +508,8 @@ export default function AvatarListPage() {
         </div>
       </header>
 
-      {/* ── Super Admin: ソート / フィルタパネル ─────────────────────────────── */}
-      {isSuperAdmin && !loading && (
+      {/* ── ソート / フィルタパネル ─────────────────────────────── */}
+      {!loading && (
         <div className="av-filter-panel" style={{
           marginBottom: 24,
           padding: "16px 20px",
@@ -526,7 +536,7 @@ export default function AvatarListPage() {
                 cursor: "pointer",
               }}
             >
-              <option value="tenant_asc">{lang === "ja" ? "テナント名順 (A→Z)" : "Tenant (A→Z)"}</option>
+              <option value="name_asc">{lang === "ja" ? "アバター名順 (A→Z)" : "Name (A→Z)"}</option>
               <option value="created_desc">{lang === "ja" ? "作成日 (新しい順)" : "Created (newest)"}</option>
               <option value="created_asc">{lang === "ja" ? "作成日 (古い順)" : "Created (oldest)"}</option>
               <option value="active_first">{lang === "ja" ? "アクティブ優先" : "Active first"}</option>
@@ -535,32 +545,34 @@ export default function AvatarListPage() {
             </select>
           </div>
 
-          {/* フィルタ: テナント */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
-              {lang === "ja" ? "テナント:" : "Tenant:"}
-            </span>
-            <select
-              value={tenantFilter}
-              onChange={(e) => setTenantFilter(e.target.value)}
-              style={{
-                padding: "8px 12px",
-                minHeight: 44,
-                borderRadius: 8,
-                border: "1px solid #374151",
-                background: "#111827",
-                color: "#e5e7eb",
-                fontSize: 13,
-                cursor: "pointer",
-                maxWidth: 220,
-              }}
-            >
-              <option value="all">{lang === "ja" ? "全テナント" : "All tenants"}</option>
-              {tenantList.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
+          {/* フィルタ: テナント（Super Adminのみ） */}
+          {isSuperAdmin && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+                {lang === "ja" ? "テナント:" : "Tenant:"}
+              </span>
+              <select
+                value={tenantFilter}
+                onChange={(e) => setTenantFilter(e.target.value)}
+                style={{
+                  padding: "8px 12px",
+                  minHeight: 44,
+                  borderRadius: 8,
+                  border: "1px solid #374151",
+                  background: "#111827",
+                  color: "#e5e7eb",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  maxWidth: 220,
+                }}
+              >
+                <option value="all">{lang === "ja" ? "全テナント" : "All tenants"}</option>
+                {tenantList.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* フィルタ: タイプ */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -740,6 +752,7 @@ export default function AvatarListPage() {
                       (e.currentTarget as HTMLImageElement).style.display = "none";
                     }}
                   />
+                  <div className="av-img-overlay" />
                 </div>
               ) : (
                 <div className="av-img-placeholder">👤</div>
@@ -880,13 +893,15 @@ export default function AvatarListPage() {
                       >
                         {deleting === cfg.id ? "削除中..." : "削除"}
                       </button>
-                      <button
-                        className="av-btn-sm"
-                        onClick={() => setWarningTarget({ id: cfg.id, tenantId: cfg.tenant_id, name: cfg.name })}
-                        style={{ minHeight: 44, borderRadius: 8, border: "1px solid rgba(251,191,36,0.4)", background: "rgba(251,191,36,0.08)", color: "#fbbf24", fontWeight: 600, cursor: "pointer", marginLeft: "auto" }}
-                      >
-                        ⚠️ 警告
-                      </button>
+                      {!cfg.is_default && (
+                        <button
+                          className="av-btn-sm"
+                          onClick={() => setWarningTarget({ id: cfg.id, tenantId: cfg.tenant_id, name: cfg.name })}
+                          style={{ minHeight: 44, borderRadius: 8, border: "1px solid rgba(251,191,36,0.4)", background: "rgba(251,191,36,0.08)", color: "#fbbf24", fontWeight: 600, cursor: "pointer", marginLeft: "auto" }}
+                        >
+                          ⚠️ 警告
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
