@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>購入申し込み完了 - BROSS新潟 [DEMO]</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a href="index.html" class="logo">🚗 BROSS新潟</a>
+      <nav>
+        <a href="index.html">ホーム</a>
+        <a href="stock.html">在庫一覧</a>
+        <a href="reservation.html">試乗予約</a>
+        <a href="inquiry.html">お問い合わせ</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="thanks-container">
+      <div class="thanks-icon">🎉</div>
+      <h1>購入申し込みを受け付けました</h1>
+      <p>
+        担当スタッフより2営業日以内にご連絡いたします。<br>
+        引き続きよろしくお願いいたします。
+      </p>
+      <div id="price-display" style="background: #1f2937; border-radius: 12px; padding: 20px; margin-bottom: 32px; display: none;">
+        <div style="font-size: 13px; color: #9ca3af; margin-bottom: 4px;">お申し込み金額</div>
+        <div id="price-text" style="font-size: 28px; font-weight: 800; color: #3b82f6;"></div>
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+        <a href="index.html" class="btn-primary">トップページへ</a>
+        <a href="stock.html" class="btn-secondary">在庫一覧を見る</a>
+      </div>
+      <div id="cv-status" style="font-size:12px;color:#6b7280;margin-top:20px;">CV送信中...</div>
+    </div>
+  </main>
+
+  <footer>
+    <p>© BROSS新潟 中古車販売<span class="demo-badge">DEMO - 検証用環境</span></p>
+  </footer>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var priceParam = params.get('price');
+    if (priceParam) {
+      var priceNum = Number(priceParam);
+      if (priceNum > 0) {
+        document.getElementById('price-display').style.display = 'block';
+        document.getElementById('price-text').textContent = Math.round(priceNum / 10000) + '万円';
+      }
+    }
+  </script>
+
+  <script
+    src="/widget.js"
+    data-tenant="carnation"
+    data-api-key="rjc_6c2d11a0097425b875b81d9a9b7c5c68afc20f8c37ae5dc984400e66c35ab37f"
+    async
+  ></script>
+
+  <script>
+  window.addEventListener('load', function() {
+    var attempts = 0;
+    var interval = setInterval(function() {
+      attempts++;
+      if (typeof window.r2c !== 'undefined' && typeof window.r2c.trackConversion === 'function') {
+        clearInterval(interval);
+        try {
+          var params = new URLSearchParams(window.location.search);
+          var price = Number(params.get('price')) || 2890000;
+          window.r2c.trackConversion('purchase', price);
+          console.log('[demo] purchase CV fired, price:', price);
+          document.getElementById('cv-status').textContent = '✅ CV記録: purchase (' + Math.round(price/10000) + '万円)';
+        } catch(e) {
+          document.getElementById('cv-status').textContent = '❌ CV失敗: ' + e.message;
+        }
+      } else if (attempts >= 50) {
+        clearInterval(interval);
+        document.getElementById('cv-status').textContent = '⚠️ r2c未ロード';
+      }
+    }, 100);
+  });
+  </script>
+</body>
+</html>

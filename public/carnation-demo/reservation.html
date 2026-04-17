@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>試乗予約 - BROSS新潟 [DEMO]</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a href="index.html" class="logo">🚗 BROSS新潟</a>
+      <nav>
+        <a href="index.html">ホーム</a>
+        <a href="stock.html">在庫一覧</a>
+        <a href="reservation.html">試乗予約</a>
+        <a href="inquiry.html">お問い合わせ</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="page-header">
+      <div class="container">
+        <h1>試乗予約</h1>
+        <p>ご希望の日時をご指定ください</p>
+      </div>
+    </div>
+
+    <div class="form-page">
+      <div id="car-banner"></div>
+
+      <form id="reservation-form" action="reservation-thanks.html" method="GET">
+        <input type="hidden" name="car_id" id="hidden-car-id" value="">
+        <input type="hidden" name="car_name" id="hidden-car-name" value="">
+        <div class="form-stack">
+          <div class="form-group">
+            <label for="name">お名前 <span style="color: #ef4444;">*</span></label>
+            <input type="text" id="name" name="name" placeholder="例：山田 太郎" required>
+          </div>
+          <div class="form-group">
+            <label for="phone">電話番号 <span style="color: #ef4444;">*</span></label>
+            <input type="tel" id="phone" name="phone" placeholder="例：025-000-0000" required>
+          </div>
+          <div class="form-group">
+            <label for="email">メールアドレス（任意）</label>
+            <input type="email" id="email" name="email" placeholder="例：taro@example.com">
+          </div>
+          <div class="form-group">
+            <label for="date">ご希望日 <span style="color: #ef4444;">*</span></label>
+            <input type="date" id="date" name="date" required>
+          </div>
+          <div class="form-group">
+            <label for="time-slot">ご希望時間帯 <span style="color: #ef4444;">*</span></label>
+            <select id="time-slot" name="time_slot" required>
+              <option value="">-- 選択してください --</option>
+              <option value="morning">午前（10:00〜13:00）</option>
+              <option value="afternoon">午後（13:00〜16:00）</option>
+              <option value="evening">夕方（16:00〜19:00）</option>
+            </select>
+          </div>
+          <button type="submit" class="btn-primary" style="width: 100%; font-size: 16px; padding: 14px;">予約を申し込む</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <footer>
+    <p>© BROSS新潟 中古車販売<span class="demo-badge">DEMO - 検証用環境</span></p>
+  </footer>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var carId = params.get('car_id');
+    var carName = params.get('car_name');
+
+    if (carId) {
+      document.getElementById('hidden-car-id').value = carId;
+    }
+    if (carName) {
+      document.getElementById('hidden-car-name').value = carName;
+      var banner = document.getElementById('car-banner');
+      banner.innerHTML =
+        '<div class="selected-car-banner">試乗希望車両: <span>' + decodeURIComponent(carName) + '</span></div>';
+    }
+
+    // Set min date to today
+    var today = new Date();
+    var yyyy = today.getFullYear();
+    var mm = String(today.getMonth() + 1).padStart(2, '0');
+    var dd = String(today.getDate()).padStart(2, '0');
+    document.getElementById('date').min = yyyy + '-' + mm + '-' + dd;
+
+    document.getElementById('reservation-form').addEventListener('submit', function(e) {
+      var name = document.getElementById('name').value.trim();
+      var phone = document.getElementById('phone').value.trim();
+      var date = document.getElementById('date').value;
+      var timeSlot = document.getElementById('time-slot').value;
+
+      if (!name || !phone || !date || !timeSlot) {
+        e.preventDefault();
+        alert('お名前・電話番号・ご希望日・ご希望時間帯は必須です。');
+        return false;
+      }
+    });
+  </script>
+
+  <script
+    src="/widget.js"
+    data-tenant="carnation"
+    data-api-key="rjc_6c2d11a0097425b875b81d9a9b7c5c68afc20f8c37ae5dc984400e66c35ab37f"
+    async
+  ></script>
+</body>
+</html>

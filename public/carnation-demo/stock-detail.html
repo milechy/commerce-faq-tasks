@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>車両詳細 - BROSS新潟 [DEMO]</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a href="index.html" class="logo">🚗 BROSS新潟</a>
+      <nav>
+        <a href="index.html">ホーム</a>
+        <a href="stock.html">在庫一覧</a>
+        <a href="reservation.html">試乗予約</a>
+        <a href="inquiry.html">お問い合わせ</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="container" style="padding: 32px 24px;" id="detail-root">
+      <p style="color: #9ca3af;">読み込み中...</p>
+    </div>
+  </main>
+
+  <footer>
+    <p>© BROSS新潟 中古車販売<span class="demo-badge">DEMO - 検証用環境</span></p>
+  </footer>
+
+  <script>
+    var CVT = 'CVT';
+    var cars = [
+      { id: 1, name: 'トヨタ ハリアー',     year: 2020, price: 2890000, color: 'ホワイトパール', mileage: '3.2万km', engine: '2.0L ハイブリッド', mission: CVT },
+      { id: 2, name: 'ホンダ ヴェゼル',     year: 2021, price: 2390000, color: 'ブラック',       mileage: '1.8万km', engine: '1.5L ハイブリッド', mission: CVT },
+      { id: 3, name: '日産 エクストレイル', year: 2019, price: 2490000, color: 'シルバー',       mileage: '5.6万km', engine: '2.0L ガソリン',    mission: CVT },
+      { id: 4, name: 'マツダ CX-5',        year: 2022, price: 3190000, color: 'ソウルレッド',   mileage: '0.9万km', engine: '2.0L ガソリン',    mission: '6AT' },
+      { id: 5, name: 'スバル フォレスター', year: 2020, price: 2690000, color: 'ブルー',         mileage: '4.1万km', engine: '2.5L ガソリン',    mission: CVT },
+    ];
+
+    var params = new URLSearchParams(window.location.search);
+    var id = parseInt(params.get('id'), 10);
+    var car = cars.find(function(c) { return c.id === id; });
+
+    var root = document.getElementById('detail-root');
+
+    if (!car) {
+      root.innerHTML =
+        '<div style="text-align: center; padding: 48px 0;">' +
+          '<p style="color: #9ca3af; font-size: 18px; margin-bottom: 24px;">車両が見つかりませんでした。</p>' +
+          '<a href="stock.html" class="btn-secondary">在庫一覧に戻る</a>' +
+        '</div>';
+    } else {
+      var encodedName = encodeURIComponent(car.name);
+      root.innerHTML =
+        '<div style="margin-bottom: 16px;">' +
+          '<a href="stock.html" style="color: #6b7280; font-size: 14px; text-decoration: none;">← 在庫一覧に戻る</a>' +
+        '</div>' +
+        '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start;" class="detail-grid">' +
+          '<div>' +
+            '<div style="background: #374151; border-radius: 12px; height: 260px; display: flex; align-items: center; justify-content: center; font-size: 64px; margin-bottom: 16px;">🚗</div>' +
+          '</div>' +
+          '<div>' +
+            '<h1 style="font-size: 26px; font-weight: 800; color: #f9fafb; margin-bottom: 8px;">' + car.name + '</h1>' +
+            '<div style="font-size: 32px; font-weight: 800; color: #3b82f6; margin-bottom: 24px;">' + (car.price / 10000).toFixed(0) + '万円</div>' +
+            '<div class="card" style="margin-bottom: 24px;">' +
+              '<table style="width: 100%; border-collapse: collapse;">' +
+                '<tr style="border-bottom: 1px solid #374151;"><td style="padding: 10px 4px; color: #9ca3af; font-size: 13px; width: 40%;">年式</td><td style="padding: 10px 4px; color: #f9fafb;">' + car.year + '年</td></tr>' +
+                '<tr style="border-bottom: 1px solid #374151;"><td style="padding: 10px 4px; color: #9ca3af; font-size: 13px;">走行距離</td><td style="padding: 10px 4px; color: #f9fafb;">' + car.mileage + '</td></tr>' +
+                '<tr style="border-bottom: 1px solid #374151;"><td style="padding: 10px 4px; color: #9ca3af; font-size: 13px;">カラー</td><td style="padding: 10px 4px; color: #f9fafb;">' + car.color + '</td></tr>' +
+                '<tr style="border-bottom: 1px solid #374151;"><td style="padding: 10px 4px; color: #9ca3af; font-size: 13px;">エンジン</td><td style="padding: 10px 4px; color: #f9fafb;">' + car.engine + '</td></tr>' +
+                '<tr><td style="padding: 10px 4px; color: #9ca3af; font-size: 13px;">ミッション</td><td style="padding: 10px 4px; color: #f9fafb;">' + car.mission + '</td></tr>' +
+              '</table>' +
+            '</div>' +
+            '<div style="display: flex; flex-direction: column; gap: 12px;">' +
+              '<a href="reservation.html?car_id=' + car.id + '&car_name=' + encodedName + '" class="btn-primary">試乗予約する</a>' +
+              '<a href="inquiry.html?car_id=' + car.id + '&car_name=' + encodedName + '" class="btn-secondary">問い合わせる</a>' +
+              '<a href="purchase.html?car_id=' + car.id + '&car_name=' + encodedName + '&price=' + car.price + '" class="btn-primary" style="background: #16a34a;">購入手続きへ</a>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+
+      // responsive fix
+      var style = document.createElement('style');
+      style.textContent = '@media (max-width: 768px) { .detail-grid { grid-template-columns: 1fr !important; } }';
+      document.head.appendChild(style);
+    }
+  </script>
+
+  <script
+    src="/widget.js"
+    data-tenant="carnation"
+    data-api-key="rjc_6c2d11a0097425b875b81d9a9b7c5c68afc20f8c37ae5dc984400e66c35ab37f"
+    async
+  ></script>
+</body>
+</html>

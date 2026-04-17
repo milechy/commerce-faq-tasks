@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>購入手続き - BROSS新潟 [DEMO]</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a href="index.html" class="logo">🚗 BROSS新潟</a>
+      <nav>
+        <a href="index.html">ホーム</a>
+        <a href="stock.html">在庫一覧</a>
+        <a href="reservation.html">試乗予約</a>
+        <a href="inquiry.html">お問い合わせ</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="page-header">
+      <div class="container">
+        <h1>購入手続き</h1>
+        <p>必要事項をご記入の上、お申し込みください</p>
+      </div>
+    </div>
+
+    <div class="form-page">
+      <div id="car-summary"></div>
+
+      <form id="purchase-form" action="purchase-thanks.html" method="GET">
+        <input type="hidden" name="car_id" id="hidden-car-id" value="">
+        <input type="hidden" name="car_name" id="hidden-car-name" value="">
+        <input type="hidden" name="price" id="hidden-price" value="">
+        <div class="form-stack">
+          <div class="form-group">
+            <label for="name">お名前 <span style="color: #ef4444;">*</span></label>
+            <input type="text" id="name" name="name" placeholder="例：山田 太郎" required>
+          </div>
+          <div class="form-group">
+            <label for="address">ご住所 <span style="color: #ef4444;">*</span></label>
+            <input type="text" id="address" name="address" placeholder="例：新潟県新潟市中央区〇〇1-2-3" required>
+          </div>
+          <div class="form-group">
+            <label for="phone">連絡先電話番号 <span style="color: #ef4444;">*</span></label>
+            <input type="tel" id="phone" name="phone" placeholder="例：025-000-0000" required>
+          </div>
+          <div class="form-group">
+            <label>お支払い方法 <span style="color: #ef4444;">*</span></label>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 12px 0;">
+              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; color: #e5e7eb; font-size: 15px;">
+                <input type="radio" name="payment" value="cash" required style="width: auto; accent-color: #3b82f6;">
+                現金一括
+              </label>
+              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; color: #e5e7eb; font-size: 15px;">
+                <input type="radio" name="payment" value="loan" style="width: auto; accent-color: #3b82f6;">
+                ローン（分割）
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; color: #e5e7eb; font-size: 14px; line-height: 1.6;">
+              <input type="checkbox" id="agree" name="agree" required style="width: auto; margin-top: 3px; accent-color: #3b82f6;">
+              <span>個人情報の取り扱いに同意します。本申し込みはデモ用であり、実際の購入手続きは発生しません。</span>
+            </label>
+          </div>
+          <button type="submit" class="btn-primary" style="width: 100%; font-size: 16px; padding: 14px; background: #16a34a;">購入を申し込む</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <footer>
+    <p>© BROSS新潟 中古車販売<span class="demo-badge">DEMO - 検証用環境</span></p>
+  </footer>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var carId = params.get('car_id');
+    var carName = params.get('car_name');
+    var price = params.get('price');
+
+    if (carId) document.getElementById('hidden-car-id').value = carId;
+    if (price)  document.getElementById('hidden-price').value = price;
+
+    if (carName || price) {
+      var displayName = carName ? decodeURIComponent(carName) : '選択した車両';
+      var displayPrice = price ? (Math.round(Number(price) / 10000)) + '万円' : '';
+      document.getElementById('hidden-car-name').value = carName || '';
+
+      var summary = document.getElementById('car-summary');
+      summary.innerHTML =
+        '<div class="card" style="margin-bottom: 24px; border: 1px solid #2563eb;">' +
+          '<div style="font-size: 13px; color: #9ca3af; margin-bottom: 6px;">購入対象車両</div>' +
+          '<div style="font-size: 18px; font-weight: 700; color: #f9fafb; margin-bottom: 4px;">' + displayName + '</div>' +
+          (displayPrice ? '<div style="font-size: 26px; font-weight: 800; color: #3b82f6;">' + displayPrice + '</div>' : '') +
+        '</div>';
+    }
+
+    document.getElementById('purchase-form').addEventListener('submit', function(e) {
+      var agree = document.getElementById('agree').checked;
+      if (!agree) {
+        e.preventDefault();
+        alert('個人情報の取り扱いへの同意が必要です。');
+        return false;
+      }
+    });
+  </script>
+
+  <script
+    src="/widget.js"
+    data-tenant="carnation"
+    data-api-key="rjc_6c2d11a0097425b875b81d9a9b7c5c68afc20f8c37ae5dc984400e66c35ab37f"
+    async
+  ></script>
+</body>
+</html>

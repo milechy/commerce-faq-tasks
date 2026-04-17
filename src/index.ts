@@ -148,6 +148,8 @@ app.use(
   express.static(publicDir)
 );
 app.get("/ui", (_req, res) => res.redirect("/ui/index.html"));
+// Phase65: 旧demoページから新構成への後方互換リダイレクト
+app.get("/carnation-demo.html", (_req, res) => res.redirect(301, "/carnation-demo/index.html"));
 
 // CE status is public (side-effect free)
 app.get("/ce/status", (_req, res) => {

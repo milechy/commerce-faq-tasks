@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>お問い合わせ - BROSS新潟 [DEMO]</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a href="index.html" class="logo">🚗 BROSS新潟</a>
+      <nav>
+        <a href="index.html">ホーム</a>
+        <a href="stock.html">在庫一覧</a>
+        <a href="reservation.html">試乗予約</a>
+        <a href="inquiry.html">お問い合わせ</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="page-header">
+      <div class="container">
+        <h1>お問い合わせ</h1>
+        <p>気になる車両やご質問はお気軽にどうぞ</p>
+      </div>
+    </div>
+
+    <div class="form-page">
+      <div id="car-banner"></div>
+
+      <form id="inquiry-form" action="inquiry-thanks.html" method="GET">
+        <input type="hidden" name="car_id" id="hidden-car-id" value="">
+        <div class="form-stack">
+          <div class="form-group">
+            <label for="name">お名前 <span style="color: #ef4444;">*</span></label>
+            <input type="text" id="name" name="name" placeholder="例：山田 太郎" required>
+          </div>
+          <div class="form-group">
+            <label for="email">メールアドレス <span style="color: #ef4444;">*</span></label>
+            <input type="email" id="email" name="email" placeholder="例：taro@example.com" required>
+          </div>
+          <div class="form-group">
+            <label for="phone">電話番号（任意）</label>
+            <input type="tel" id="phone" name="phone" placeholder="例：025-000-0000">
+          </div>
+          <div class="form-group">
+            <label for="message">お問い合わせ内容 <span style="color: #ef4444;">*</span></label>
+            <textarea id="message" name="message" rows="5" placeholder="ご質問・ご要望をご記入ください" required></textarea>
+          </div>
+          <button type="submit" class="btn-primary" style="width: 100%; font-size: 16px; padding: 14px;">送信する</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <footer>
+    <p>© BROSS新潟 中古車販売<span class="demo-badge">DEMO - 検証用環境</span></p>
+  </footer>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+    var carId = params.get('car_id');
+    var carName = params.get('car_name');
+
+    if (carId) {
+      document.getElementById('hidden-car-id').value = carId;
+      if (carName) {
+        var banner = document.getElementById('car-banner');
+        banner.innerHTML =
+          '<div class="selected-car-banner">お問い合わせ車両: <span>' + decodeURIComponent(carName) + '</span></div>';
+      }
+    }
+
+    document.getElementById('inquiry-form').addEventListener('submit', function(e) {
+      var name = document.getElementById('name').value.trim();
+      var email = document.getElementById('email').value.trim();
+      var message = document.getElementById('message').value.trim();
+
+      if (!name || !email || !message) {
+        e.preventDefault();
+        alert('お名前・メールアドレス・お問い合わせ内容は必須です。');
+        return false;
+      }
+    });
+  </script>
+
+  <script
+    src="/widget.js"
+    data-tenant="carnation"
+    data-api-key="rjc_6c2d11a0097425b875b81d9a9b7c5c68afc20f8c37ae5dc984400e66c35ab37f"
+    async
+  ></script>
+</body>
+</html>

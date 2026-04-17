@@ -61,7 +61,7 @@ fi
 check "Admin UI" "$ADMIN_URL"
 
 # ── 4. Demo page ──────────────────────────────────────────────────────────
-check "Demo page" "$API_URL/carnation-demo.html"
+check "Demo page" "$API_URL/carnation-demo/index.html"
 
 # ── 5. Metrics（内部リクエストヘッダー必要）─────────────────────────────
 metrics_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \

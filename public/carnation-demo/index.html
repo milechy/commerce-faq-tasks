@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BROSS新潟 - 中古車販売 [DEMO]</title>
+  <link rel="stylesheet" href="common.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a href="index.html" class="logo">🚗 BROSS新潟</a>
+      <nav>
+        <a href="index.html">ホーム</a>
+        <a href="stock.html">在庫一覧</a>
+        <a href="reservation.html">試乗予約</a>
+        <a href="inquiry.html">お問い合わせ</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" style="background: linear-gradient(180deg, #1a1a2e 0%, #0f1117 100%);">
+      <h1>新潟で30年の実績<br>あなたの理想の1台を見つけよう</h1>
+      <p>在庫300台以上・全車保証付き</p>
+      <a href="reservation.html" class="btn-primary" style="font-size: 16px; padding: 14px 32px;">試乗予約する</a>
+    </section>
+
+    <!-- 新着在庫 -->
+    <section class="section">
+      <div class="container">
+        <div class="section-header">
+          <h2 class="section-title">新着在庫ピックアップ</h2>
+          <a href="stock.html" class="btn-secondary" style="font-size: 13px; padding: 8px 16px; min-height: 36px;">在庫一覧を見る →</a>
+        </div>
+        <div class="grid" id="pickup-cars"></div>
+      </div>
+    </section>
+
+    <!-- 店舗情報 -->
+    <section class="section" style="background: #161b27; padding: 48px 24px;">
+      <div class="container">
+        <h2 class="section-title" style="text-align: center; margin-bottom: 32px;">店舗情報</h2>
+        <div class="store-info-grid">
+          <div class="card info-item">
+            <div class="icon">📍</div>
+            <h3>所在地</h3>
+            <p>新潟県新潟市中央区</p>
+            <p style="font-size: 13px; color: #6b7280; font-weight: 400; margin-top: 4px;">駅より徒歩10分</p>
+          </div>
+          <div class="card info-item">
+            <div class="icon">🕐</div>
+            <h3>営業時間</h3>
+            <p>10:00 〜 19:00</p>
+            <p style="font-size: 13px; color: #6b7280; font-weight: 400; margin-top: 4px;">年中無休</p>
+          </div>
+          <div class="card info-item">
+            <div class="icon">📞</div>
+            <h3>電話番号</h3>
+            <p>025-XXX-XXXX</p>
+            <p style="font-size: 13px; color: #6b7280; font-weight: 400; margin-top: 4px;">お気軽にどうぞ</p>
+          </div>
+        </div>
+        <div style="text-align: center; margin-top: 32px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;">
+          <a href="reservation.html" class="btn-primary">試乗予約する</a>
+          <a href="inquiry.html" class="btn-secondary">お問い合わせ</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>© BROSS新潟 中古車販売<span class="demo-badge">DEMO - 検証用環境</span></p>
+  </footer>
+
+  <script>
+    var pickupCars = [
+      { id: 1, name: 'トヨタ ハリアー', year: 2020, price: 2890000, color: 'ホワイトパール', mileage: '3.2万km' },
+      { id: 2, name: 'ホンダ ヴェゼル',  year: 2021, price: 2390000, color: 'ブラック',       mileage: '1.8万km' },
+      { id: 3, name: '日産 エクストレイル', year: 2019, price: 2490000, color: 'シルバー',   mileage: '5.6万km' },
+    ];
+
+    var container = document.getElementById('pickup-cars');
+    pickupCars.forEach(function(car) {
+      var card = document.createElement('div');
+      card.className = 'car-card';
+      card.innerHTML =
+        '<div class="car-card-image">🚗 ' + car.name + '</div>' +
+        '<div class="car-card-body">' +
+          '<div class="car-card-name">' + car.name + '</div>' +
+          '<div class="car-card-price">' + (car.price / 10000).toFixed(0) + '万円</div>' +
+          '<div class="car-card-meta">' +
+            '<span>📅 ' + car.year + '年</span>' +
+            '<span>🛣 ' + car.mileage + '</span>' +
+            '<span>🎨 ' + car.color + '</span>' +
+          '</div>' +
+          '<a href="stock-detail.html?id=' + car.id + '" class="btn-primary" style="width: 100%;">詳細を見る</a>' +
+        '</div>';
+      container.appendChild(card);
+    });
+  </script>
+
+  <script
+    src="/widget.js"
+    data-tenant="carnation"
+    data-api-key="rjc_6c2d11a0097425b875b81d9a9b7c5c68afc20f8c37ae5dc984400e66c35ab37f"
+    async
+  ></script>
+</body>
+</html>
