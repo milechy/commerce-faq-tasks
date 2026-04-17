@@ -20,6 +20,12 @@ echo ""
 
 echo "=== Phase28: Deploy to ${VPS}:${REMOTE_DIR} ==="
 
+echo "[0/6] VPSファイル所有者正常化..."
+# rsync -a がMac側のUID(501)を保持するため、pnpmがUID 1001 sandboxでvite buildを実行し
+# VITE_* 環境変数が継承されない問題を防ぐ。rsync前にVPS側をroot:rootに正規化する。
+ssh "${VPS}" "chown -R root:root ${REMOTE_DIR} 2>/dev/null || true"
+echo "  ✅ VPSファイル所有者: root:root に正規化完了"
+
 echo "[1/6] Syncing repository to VPS..."
 # NOTE: --exclude '.env*' prevents rsync --delete from wiping VPS env files.
 # VPS holds the authoritative .env / .env.local with production secrets.
@@ -44,6 +50,10 @@ rsync -avz --delete \
   --exclude '__pycache__/' \
   --exclude 'avatar-agent/venv/' \
   ./ "${VPS}:${REMOTE_DIR}/"
+
+# rsync後の所有者正規化: Mac側UID(501)がrsync -a で転送されてもroot:rootに上書き
+ssh "${VPS}" "chown -R root:root ${REMOTE_DIR} 2>/dev/null || true"
+echo "  ✅ rsync後VPSファイル所有者: root:root に正規化完了"
 
 echo "[2/6] Installing dependencies on VPS..."
 ssh "${VPS}" "cd ${REMOTE_DIR} && corepack enable && pnpm install --frozen-lockfile"
@@ -87,6 +97,20 @@ echo "[4/6] Building Admin UI..."
 echo "  Clearing Vite cache before build..."
 ssh "${VPS}" "cd ${REMOTE_DIR}/admin-ui && rm -rf dist node_modules/.vite node_modules/.cache .vite"
 ssh "${VPS}" "bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
+
+# ── UID汚染チェック: distファイル所有者がroot:rootであることを確認 ──
+# pnpmがUID 1001 sandboxで実行した場合、distはUID 1001所有になりUID汚染が再発している。
+DIST_OWNER=$(ssh "${VPS}" "stat -c '%U:%G' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null | head -1 | tr -d '\\n'" 2>/dev/null || true)
+if [ -z "${DIST_OWNER}" ]; then
+  echo "  ❌ FATAL: dist/assets/index-*.js が見つかりません — ビルドが失敗した可能性があります"
+  exit 1
+fi
+if [ "${DIST_OWNER}" != "root:root" ]; then
+  echo "  ❌ FATAL: dist所有者が root:root ではありません (${DIST_OWNER})"
+  echo "       UID汚染バグが再発しています。VPS上で chown -R root:root ${REMOTE_DIR} を実行してください。"
+  exit 1
+fi
+echo "  ✅ dist所有者: ${DIST_OWNER} (UID汚染なし)"
 
 # ── ビルド後の最終検証: Supabase URLがバンドルに含まれているか ──
 # プロジェクトIDを .env.local から動的取得（ハードコード排除）
