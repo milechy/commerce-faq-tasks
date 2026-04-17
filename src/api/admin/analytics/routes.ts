@@ -29,6 +29,18 @@ interface AnalyticsSummaryResponse {
     neutral: number;
     total: number;
   };
+  // Phase65-3: CV metrics (fixed 30-day window)
+  cv_count_30d: number;
+  cv_total_value_30d: number;
+  cv_types_breakdown: {
+    purchase: number;
+    inquiry: number;
+    reservation: number;
+    signup: number;
+    other: number;
+  };
+  cv_fired_status: 'fired' | 'not_fired';
+  cv_days_since_first_session: number | null;
 }
 
 interface AnalyticsTrendsResponse {
@@ -268,6 +280,50 @@ export function registerAnalyticsRoutes(app: Express): void {
         const sentNegative = sentMap.get("negative") ?? 0;
         const sentNeutral = sentMap.get("neutral") ?? 0;
 
+        // Phase65-3: CV aggregation (30d fixed)
+        const cvQueryParams: (string | number)[] = [];
+        const cvTenantClause = tenantId ? "AND tenant_id = $1" : "";
+        if (tenantId) cvQueryParams.push(tenantId);
+        const cvResult = await pool.query(
+          `SELECT
+             conversion_type,
+             COUNT(*)::int AS count,
+             COALESCE(SUM(conversion_value), 0)::numeric AS total_value
+           FROM conversion_attributions
+           WHERE created_at > NOW() - INTERVAL '30 days'
+           ${cvTenantClause}
+           GROUP BY conversion_type`,
+          cvQueryParams,
+        );
+
+        const cvBreakdown = { purchase: 0, inquiry: 0, reservation: 0, signup: 0, other: 0 };
+        let cvCount30d = 0;
+        let cvTotalValue30d = 0;
+        for (const row of cvResult.rows as Array<{ conversion_type: string; count: number; total_value: string }>) {
+          const t = row.conversion_type as keyof typeof cvBreakdown;
+          const cnt = row.count;
+          const val = parseFloat(row.total_value);
+          if (t in cvBreakdown) cvBreakdown[t] = cnt;
+          cvCount30d += cnt;
+          cvTotalValue30d += val;
+        }
+
+        let cvDaysSinceFirstSession: number | null = null;
+        if (tenantId) {
+          const ageResult = await pool.query(
+            `SELECT EXTRACT(DAYS FROM (NOW() - COALESCE(cs_min.first_session_at, t.created_at)))::int AS days
+             FROM tenants t
+             LEFT JOIN (
+               SELECT tenant_id, MIN(started_at) AS first_session_at
+               FROM chat_sessions
+               GROUP BY tenant_id
+             ) cs_min ON cs_min.tenant_id = t.id
+             WHERE t.id = $1`,
+            [tenantId],
+          );
+          cvDaysSinceFirstSession = ageResult.rows[0]?.days ?? null;
+        }
+
         const response: AnalyticsSummaryResponse = {
           period,
           tenant_id: tenantId,
@@ -285,6 +341,11 @@ export function registerAnalyticsRoutes(app: Express): void {
             neutral: sentNeutral,
             total: sentPositive + sentNegative + sentNeutral,
           },
+          cv_count_30d: cvCount30d,
+          cv_total_value_30d: Math.round(cvTotalValue30d),
+          cv_types_breakdown: cvBreakdown,
+          cv_fired_status: cvCount30d > 0 ? 'fired' : 'not_fired',
+          cv_days_since_first_session: cvDaysSinceFirstSession,
         };
 
         return res.json(response);
@@ -823,6 +884,88 @@ export function registerAnalyticsRoutes(app: Express): void {
       } catch (err) {
         logger.warn("[GET /v1/admin/analytics/conversions]", err);
         return res.status(500).json({ error: "コンバージョン分析の取得に失敗しました" });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/cv-status  (Phase65-3: super_admin only)
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/cv-status",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+
+      if (!isSuperAdmin) {
+        return res.status(403).json({ error: "アクセス権限がありません" });
+      }
+
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      try {
+        const result = await pool.query(
+          `SELECT
+             t.id AS tenant_id,
+             t.name AS tenant_name,
+             COALESCE(ca_stats.cv_count, 0)::int AS cv_count_30d,
+             ca_stats.last_cv_at,
+             EXTRACT(DAYS FROM (NOW() - COALESCE(cs_min.first_session_at, t.created_at)))::int
+               AS days_since_effective_start
+           FROM tenants t
+           LEFT JOIN (
+             SELECT
+               tenant_id,
+               COUNT(*)::int AS cv_count,
+               MAX(created_at) AS last_cv_at
+             FROM conversion_attributions
+             WHERE created_at > NOW() - INTERVAL '30 days'
+             GROUP BY tenant_id
+           ) ca_stats ON ca_stats.tenant_id = t.id
+           LEFT JOIN (
+             SELECT tenant_id, MIN(started_at) AS first_session_at
+             FROM chat_sessions
+             GROUP BY tenant_id
+           ) cs_min ON cs_min.tenant_id = t.id
+           WHERE t.is_active = true
+           ORDER BY cv_count_30d ASC, days_since_effective_start DESC`,
+        );
+
+        type CvRow = {
+          tenant_id: string;
+          tenant_name: string;
+          cv_count_30d: number;
+          last_cv_at: Date | null;
+          days_since_effective_start: number;
+        };
+
+        const tenants = (result.rows as CvRow[]).map((row) => ({
+          tenant_id: row.tenant_id,
+          tenant_name: row.tenant_name,
+          cv_count_30d: row.cv_count_30d,
+          cv_fired_status: (row.cv_count_30d > 0 ? 'fired' : 'not_fired') as 'fired' | 'not_fired',
+          days_since_effective_start: row.days_since_effective_start,
+          last_cv_at: row.last_cv_at
+            ? row.last_cv_at instanceof Date
+              ? row.last_cv_at.toISOString()
+              : String(row.last_cv_at)
+            : null,
+        }));
+
+        const firedTenants = tenants.filter((t) => t.cv_fired_status === 'fired').length;
+
+        return res.json({
+          total_tenants: tenants.length,
+          fired_tenants: firedTenants,
+          not_fired_tenants: tenants.length - firedTenants,
+          tenants,
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/cv-status]", err);
+        return res.status(500).json({ error: "CV発火状況の取得に失敗しました" });
       }
     },
   );
