@@ -33,6 +33,8 @@ const TYPE_ICON: Record<string, string> = {
   // Phase64: プレミアムアバター制作代行
   premium_avatar_ordered: "🎨",
   premium_avatar_completed: "✨",
+  // Phase65-3: CV未発火アラート
+  cv_unfired: "📉",
 };
 
 function relativeTime(dateStr: string): string {

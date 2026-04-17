@@ -51,6 +51,18 @@ interface AnalyticsSummaryResponse {
     neutral: number;
     total: number;
   };
+  // Phase65-3: CV metrics
+  cv_count_30d: number;
+  cv_total_value_30d: number;
+  cv_types_breakdown: {
+    purchase: number;
+    inquiry: number;
+    reservation: number;
+    signup: number;
+    other: number;
+  };
+  cv_fired_status: "fired" | "not_fired";
+  cv_days_since_first_session: number | null;
 }
 
 interface AnalyticsTrendsResponse {
@@ -594,6 +606,25 @@ export default function AnalyticsDashboardPage() {
               </span>
             </div>
 
+            {/* CV件数(30日) */}
+            <div style={cardStyle}>
+              <span style={{ fontSize: 24 }}>🛒</span>
+              <span
+                style={{
+                  fontSize: 28,
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  color: summary?.cv_fired_status === "fired" ? "#34d399" : summary?.cv_fired_status === "not_fired" ? "#f87171" : "#f9fafb",
+                }}
+              >
+                {summary?.cv_count_30d ?? "—"}
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>CV件数(30日)</span>
+              <span style={{ fontSize: 12, color: "#6b7280" }}>
+                ¥{(summary?.cv_total_value_30d ?? 0).toLocaleString("ja-JP")}
+              </span>
+            </div>
+
             {/* 顧客感情 */}
             <div style={cardStyle}>
               <span style={{ fontSize: 24 }}>😊</span>
@@ -626,6 +657,50 @@ export default function AnalyticsDashboardPage() {
               })()}
             </div>
           </div>
+
+          {/* CV タイプ別ブレイクダウン */}
+          {summary && summary.cv_count_30d > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                marginBottom: 24,
+                padding: "12px 16px",
+                borderRadius: 10,
+                border: "1px solid #1f2937",
+                background: "rgba(15,23,42,0.6)",
+              }}
+            >
+              <span style={{ fontSize: 12, color: "#6b7280", alignSelf: "center", marginRight: 4 }}>CV内訳:</span>
+              {(
+                [
+                  ["purchase", "購入", "#34d399"],
+                  ["inquiry", "問合せ", "#60a5fa"],
+                  ["reservation", "予約", "#a78bfa"],
+                  ["signup", "登録", "#fbbf24"],
+                  ["other", "その他", "#9ca3af"],
+                ] as [keyof typeof summary.cv_types_breakdown, string, string][]
+              )
+                .filter(([key]) => summary.cv_types_breakdown[key] > 0)
+                .map(([key, label, color]) => (
+                  <span
+                    key={key}
+                    style={{
+                      padding: "3px 10px",
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: `${color}18`,
+                      border: `1px solid ${color}44`,
+                      color,
+                    }}
+                  >
+                    {label} {summary.cv_types_breakdown[key]}
+                  </span>
+                ))}
+            </div>
+          )}
 
           {/* Line Chart: 会話数トレンド */}
           {lineData && (

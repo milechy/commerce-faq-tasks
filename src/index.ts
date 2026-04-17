@@ -136,7 +136,14 @@ app.use(
   (_req, res, next) => {
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+      [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https://cdn.leonardo.ai",
+        "connect-src 'self' https://api.r2c.biz wss://*.livekit.cloud",
+        "media-src 'self' https: blob:",
+      ].join("; ")
     );
     // widget.js はデプロイのたびに変わるため必ず再取得させる
     if (_req.path === "/widget.js") {

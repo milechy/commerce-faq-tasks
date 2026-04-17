@@ -83,7 +83,9 @@ describe("1. GET /v1/admin/analytics/summary", () => {
       .mockResolvedValueOnce({ rows: [{ total_knowledge_gaps: vals.total_knowledge_gaps }] })
       .mockResolvedValueOnce({ rows: [{ avg_messages_per_session: vals.avg_messages_per_session }] })
       .mockResolvedValueOnce({ rows: [{ avatar_session_count: vals.avatar_session_count }] })
-      .mockResolvedValueOnce({ rows: [] }); // sentiment distribution (Phase51)
+      .mockResolvedValueOnce({ rows: [] })  // sentiment distribution (Phase51)
+      .mockResolvedValueOnce({ rows: [] })  // Phase65-3: CV aggregation
+      .mockResolvedValueOnce({ rows: [{ days: 30 }] }); // Phase65-3: tenant age (used when tenantId set)
   }
 
   it("returns correct shape for client_admin", async () => {
@@ -131,7 +133,9 @@ describe("1. GET /v1/admin/analytics/summary", () => {
       .mockResolvedValueOnce({ rows: [{ total_knowledge_gaps: "0" }] })
       .mockResolvedValueOnce({ rows: [{ avg_messages_per_session: "0" }] })
       .mockResolvedValueOnce({ rows: [{ avatar_session_count: "0" }] })
-      .mockResolvedValueOnce({ rows: [] }); // sentiment distribution (Phase51)
+      .mockResolvedValueOnce({ rows: [] })  // sentiment distribution (Phase51)
+      .mockResolvedValueOnce({ rows: [] })  // Phase65-3: CV aggregation
+      .mockResolvedValueOnce({ rows: [{ days: 10 }] }); // Phase65-3: tenant age
 
     const res = await request(makeApp())
       .get("/v1/admin/analytics/summary");

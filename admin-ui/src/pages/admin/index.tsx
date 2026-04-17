@@ -7,6 +7,7 @@ import { API_BASE, authFetch } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import LangSwitcher from "../../components/LangSwitcher";
 import { useAuth } from "../../auth/useAuth";
+import { CVUnfiredAlert } from "../../components/dashboard/CVUnfiredAlert";
 
 interface DashboardStats {
   faqCount: number;
@@ -443,6 +444,9 @@ export default function AdminDashboard() {
           {error}
         </div>
       )}
+
+      {/* Phase65-3: CV未発火アラート */}
+      <CVUnfiredAlert />
 
       {loading ? (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 120, color: "#9ca3af", fontSize: 15 }}>

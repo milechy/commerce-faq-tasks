@@ -25,6 +25,7 @@ import AvatarWizardPage from "./pages/admin/avatar/wizard";
 import AvatarDefaultsPage from "./pages/admin/avatar-defaults/index";
 import BooksPage from "./pages/admin/knowledge/books";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
+import CvStatusPage from "./pages/admin/analytics/cv-status";
 import EngagementPage from "./pages/admin/engagement/index";
 import ConversionDashboardPage from "./pages/admin/conversion/index";
 import OptionManagementPage from "./pages/admin/options/index";
@@ -149,6 +150,8 @@ function AppInner() {
 
         {/* Phase50: 会話分析ダッシュボード */}
         <Route path="/admin/analytics" element={<RequireAuth><AnalyticsDashboardPage /></RequireAuth>} />
+        {/* Phase65-3: CV発火状況 — super_admin 専用 */}
+        <Route path="/admin/analytics/cv-status" element={<SuperAdminRoute><CvStatusPage /></SuperAdminRoute>} />
         <Route path="/admin/engagement" element={<RequireAuth><EngagementPage /></RequireAuth>} />
 
         {/* Phase58: コンバージョン最適化ダッシュボード */}

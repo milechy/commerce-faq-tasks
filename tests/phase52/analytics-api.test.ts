@@ -65,7 +65,9 @@ function setupSummaryMocks() {
     .mockResolvedValueOnce({ rows: [{ total_knowledge_gaps: "5" }] })
     .mockResolvedValueOnce({ rows: [{ avg_messages_per_session: "5.2" }] })
     .mockResolvedValueOnce({ rows: [{ avatar_session_count: "3" }] })
-    .mockResolvedValueOnce({ rows: [] }); // sentiment
+    .mockResolvedValueOnce({ rows: [] })  // sentiment
+    .mockResolvedValueOnce({ rows: [] })  // Phase65-3: CV aggregation
+    .mockResolvedValueOnce({ rows: [{ days: 30 }] }); // Phase65-3: tenant age (used when tenantId set)
 }
 
 beforeEach(() => {
@@ -154,7 +156,9 @@ describe("4. avg_judge_score — score=0 評価除外", () => {
       .mockResolvedValueOnce({ rows: [{ total_knowledge_gaps: "0" }] })
       .mockResolvedValueOnce({ rows: [{ avg_messages_per_session: "0" }] })
       .mockResolvedValueOnce({ rows: [{ avatar_session_count: "0" }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })   // sentiment
+      .mockResolvedValueOnce({ rows: [] })   // Phase65-3: CV aggregation
+      .mockResolvedValueOnce({ rows: [{ days: 10 }] }); // Phase65-3: tenant age
 
     const res = await request(makeApp())
       .get("/v1/admin/analytics/summary");
