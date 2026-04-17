@@ -856,6 +856,26 @@ export default function AvatarListPage() {
                       {lang === "ja" ? "編集" : "Edit"}
                     </button>
                   )}
+                  {!isSuperAdmin && !cfg.is_default && avatarEnabled && (
+                    <button
+                      className="av-btn-sm"
+                      onClick={() => navigate(
+                        `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
+                      )}
+                      title="このアバターでテストチャットを開く"
+                      style={{
+                        minHeight: 44,
+                        borderRadius: 8,
+                        border: "none",
+                        background: "linear-gradient(135deg, #3b82f6, #6366f1)",
+                        color: "#fff",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      💬 {lang === "ja" ? "テストチャット" : "Test Chat"}
+                    </button>
+                  )}
                   {!isSuperAdmin && !cfg.is_active && (
                     <button
                       className="av-btn-sm"
@@ -895,6 +915,16 @@ export default function AvatarListPage() {
                         style={{ minHeight: 44, borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", background: deleting === cfg.id ? "rgba(239,68,68,0.05)" : "transparent", color: "#f87171", fontWeight: 600, cursor: deleting === cfg.id ? "not-allowed" : "pointer", opacity: deleting === cfg.id ? 0.6 : 1 }}
                       >
                         {deleting === cfg.id ? "削除中..." : "削除"}
+                      </button>
+                      <button
+                        className="av-btn-sm"
+                        onClick={() => navigate(
+                          `/admin/chat-test?tenantId=${encodeURIComponent(cfg.tenant_id)}&avatarConfigId=${encodeURIComponent(cfg.id)}`
+                        )}
+                        title="このアバターでテストチャットを開く"
+                        style={{ minHeight: 44, borderRadius: 8, border: "none", background: "linear-gradient(135deg, #3b82f6, #6366f1)", color: "#fff", fontWeight: 600, cursor: "pointer" }}
+                      >
+                        💬 テスト
                       </button>
                       {!cfg.is_default && (
                         <button
