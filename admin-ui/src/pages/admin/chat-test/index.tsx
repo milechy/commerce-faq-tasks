@@ -141,7 +141,7 @@ export default function ChatTestPage() {
     widgetScriptRef.current = script;
     document.body.appendChild(script);
     return cleanupWidget;
-  }, [token, effectiveTenantId, cleanupWidget]);
+  }, [token, effectiveTenantId, cleanupWidget, queryAvatarConfigId]);
 
   useEffect(() => {
     return () => {
