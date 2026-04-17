@@ -49,3 +49,4 @@ reports/
 SCRIPTS/*.local.sh
 test-results/
 Thumbs.db
+.playwright-mcp/
