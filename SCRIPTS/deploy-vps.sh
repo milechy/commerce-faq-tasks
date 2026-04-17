@@ -105,16 +105,17 @@ if [ -z "${SUPABASE_PROJECT_ID}" ]; then
   exit 1
 fi
 
-BUNDLE_OK=$(ssh "${VPS}" "grep -c '${SUPABASE_PROJECT_ID}' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
-BUNDLE_FALLBACK=$(ssh "${VPS}" "grep -c 'not-configured.invalid' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+# grep -l でマッチしたファイル数を数える（grep -c は複数ファイル時に "file:N" 複数行になる罠あり）
+BUNDLE_OK=$(ssh "${VPS}" "grep -l '${SUPABASE_PROJECT_ID}' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null | wc -l | tr -d ' '")
+BUNDLE_FALLBACK=$(ssh "${VPS}" "grep -l 'not-configured.invalid' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null | wc -l | tr -d ' '")
 
 if [ "${BUNDLE_OK}" = "0" ] || [ "${BUNDLE_FALLBACK}" != "0" ]; then
-  echo "  ERROR: bundle検証失敗 (project_id_found=${BUNDLE_OK}, fallback_found=${BUNDLE_FALLBACK}). Retrying build..."
+  echo "  ERROR: bundle検証失敗 (project_id_files=${BUNDLE_OK}, fallback_files=${BUNDLE_FALLBACK}). Retrying build..."
   ssh "${VPS}" "cd ${REMOTE_DIR}/admin-ui && rm -rf dist node_modules/.vite node_modules/.cache .vite && bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
-  BUNDLE_OK2=$(ssh "${VPS}" "grep -c '${SUPABASE_PROJECT_ID}' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
-  BUNDLE_FALLBACK2=$(ssh "${VPS}" "grep -c 'not-configured.invalid' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+  BUNDLE_OK2=$(ssh "${VPS}" "grep -l '${SUPABASE_PROJECT_ID}' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null | wc -l | tr -d ' '")
+  BUNDLE_FALLBACK2=$(ssh "${VPS}" "grep -l 'not-configured.invalid' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null | wc -l | tr -d ' '")
   if [ "${BUNDLE_OK2}" = "0" ] || [ "${BUNDLE_FALLBACK2}" != "0" ]; then
-    echo "  ❌ FATAL: Admin UI build failed — bundle検証失敗 (project_id=${BUNDLE_OK2}, fallback=${BUNDLE_FALLBACK2})"
+    echo "  ❌ FATAL: Admin UI build failed — bundle検証失敗 (project_id_files=${BUNDLE_OK2}, fallback_files=${BUNDLE_FALLBACK2})"
     exit 1
   fi
   echo "  ✅ Rebuild successful"
