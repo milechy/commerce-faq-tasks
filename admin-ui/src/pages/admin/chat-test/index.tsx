@@ -134,6 +134,9 @@ export default function ChatTestPage() {
     script.src = `${API_BASE}/widget.js`;
     script.setAttribute("data-tenant", effectiveTenantId);
     script.setAttribute("data-api-key", token);
+    if (queryAvatarConfigId) {
+      script.setAttribute("data-avatar-config-id", queryAvatarConfigId);
+    }
     script.async = true;
     widgetScriptRef.current = script;
     document.body.appendChild(script);

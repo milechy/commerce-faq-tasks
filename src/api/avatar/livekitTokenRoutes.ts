@@ -149,13 +149,23 @@ export function registerLiveKitTokenRoutes(
       const token    = generateLiveKitToken({ apiKey, apiSecret, roomName, identity });
 
       // アクティブなavatar_configのimage_urlとnameを取得
+      // avatarConfigId が指定された場合はそのconfigを優先（テスト用途 — 特定アバターのプレビュー）
       let imageUrl: string | null = null;
       let avatarName: string | null = null;
+      const requestedAvatarConfigId = typeof req.body?.avatarConfigId === "string" ? req.body.avatarConfigId : null;
       try {
-        const avatarConfigResult = await pool.query(
-          "SELECT image_url, name FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
-          [tenantId]
-        );
+        let avatarConfigResult;
+        if (requestedAvatarConfigId) {
+          avatarConfigResult = await pool.query(
+            "SELECT image_url, name FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR is_default = true) LIMIT 1",
+            [requestedAvatarConfigId, tenantId]
+          );
+        } else {
+          avatarConfigResult = await pool.query(
+            "SELECT image_url, name FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+            [tenantId]
+          );
+        }
         imageUrl = (avatarConfigResult.rows[0]?.image_url as string | null) ?? null;
         avatarName = (avatarConfigResult.rows[0]?.name as string | null) ?? null;
       } catch (avatarErr: any) {

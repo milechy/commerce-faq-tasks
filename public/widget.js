@@ -22,6 +22,7 @@
   // tenantId は data-tenant 属性から取得（CLAUDE.md Anti-Slop: body から禁止）
   var tenantId = currentScript ? currentScript.getAttribute('data-tenant') : '';
   var apiKey = currentScript ? currentScript.getAttribute('data-api-key') : '';
+  var avatarConfigId = currentScript ? (currentScript.getAttribute('data-avatar-config-id') || '') : '';
 
   if (!tenantId) {
     console.warn('[FAQ Widget] data-tenant 属性が必要です。例: data-tenant="your-tenant-id"');
@@ -978,7 +979,8 @@
         avatarProvider = 'lemonslice';
         fetch(apiBase + '/api/avatar/room-token', {
           method: 'POST',
-          headers: { 'x-api-key': apiKey },
+          headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+          body: avatarConfigId ? JSON.stringify({ avatarConfigId: avatarConfigId }) : undefined,
         })
           .then(function (r) { return r.json(); })
           .then(function (lkData) {
@@ -1005,7 +1007,8 @@
         avatarProvider = 'lemonslice';
         fetch(apiBase + '/api/avatar/room-token', {
           method: 'POST',
-          headers: { 'x-api-key': apiKey },
+          headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+          body: avatarConfigId ? JSON.stringify({ avatarConfigId: avatarConfigId }) : undefined,
         })
           .then(function (r) { return r.json(); })
           .then(function (lkData) {
