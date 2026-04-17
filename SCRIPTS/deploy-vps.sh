@@ -89,19 +89,37 @@ ssh "${VPS}" "cd ${REMOTE_DIR}/admin-ui && rm -rf dist node_modules/.vite node_m
 ssh "${VPS}" "bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
 
 # ── ビルド後の最終検証: Supabase URLがバンドルに含まれているか ──
+# プロジェクトIDを .env.local から動的取得（ハードコード排除）
 echo "  Verifying admin-ui bundle..."
-BUNDLE_OK=$(ssh "${VPS}" "grep -c 'rpqrwifbrhlebbelyqog' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
-if [ "${BUNDLE_OK}" = "0" ]; then
-  echo "  ERROR: Supabase URL not found in bundle. Retrying build..."
+SUPABASE_PROJECT_ID=$(ssh "${VPS}" "
+  ENV_FILE=''
+  [ -f ${REMOTE_DIR}/admin-ui/.env.local ] && ENV_FILE='${REMOTE_DIR}/admin-ui/.env.local'
+  [ -z \"\$ENV_FILE\" ] && [ -f ${REMOTE_DIR}/admin-ui/.env ] && ENV_FILE='${REMOTE_DIR}/admin-ui/.env'
+  if [ -z \"\$ENV_FILE\" ]; then echo ''; exit 0; fi
+  URL=\$(grep '^VITE_SUPABASE_URL=' \"\$ENV_FILE\" | head -1 | cut -d= -f2-)
+  echo \"\$URL\" | sed -E 's|https://([^.]+)\\..*|\\1|'
+" 2>/dev/null)
+
+if [ -z "${SUPABASE_PROJECT_ID}" ]; then
+  echo "  ❌ FATAL: VPS上の .env.local から Supabase プロジェクトIDを取得できませんでした"
+  exit 1
+fi
+
+BUNDLE_OK=$(ssh "${VPS}" "grep -c '${SUPABASE_PROJECT_ID}' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+BUNDLE_FALLBACK=$(ssh "${VPS}" "grep -c 'not-configured.invalid' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+
+if [ "${BUNDLE_OK}" = "0" ] || [ "${BUNDLE_FALLBACK}" != "0" ]; then
+  echo "  ERROR: bundle検証失敗 (project_id_found=${BUNDLE_OK}, fallback_found=${BUNDLE_FALLBACK}). Retrying build..."
   ssh "${VPS}" "cd ${REMOTE_DIR}/admin-ui && rm -rf dist node_modules/.vite node_modules/.cache .vite && bash ${REMOTE_DIR}/SCRIPTS/build-admin-ui.sh"
-  BUNDLE_OK2=$(ssh "${VPS}" "grep -c 'rpqrwifbrhlebbelyqog' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
-  if [ "${BUNDLE_OK2}" = "0" ]; then
-    echo "  FATAL: Admin UI build failed — Supabase URL missing"
+  BUNDLE_OK2=$(ssh "${VPS}" "grep -c '${SUPABASE_PROJECT_ID}' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+  BUNDLE_FALLBACK2=$(ssh "${VPS}" "grep -c 'not-configured.invalid' ${REMOTE_DIR}/admin-ui/dist/assets/index-*.js 2>/dev/null || echo 0")
+  if [ "${BUNDLE_OK2}" = "0" ] || [ "${BUNDLE_FALLBACK2}" != "0" ]; then
+    echo "  ❌ FATAL: Admin UI build failed — bundle検証失敗 (project_id=${BUNDLE_OK2}, fallback=${BUNDLE_FALLBACK2})"
     exit 1
   fi
   echo "  ✅ Rebuild successful"
 fi
-echo "  ✅ Admin UI bundle verified (Supabase URL present)"
+echo "  ✅ Admin UI bundle verified (Supabase project ID: ${SUPABASE_PROJECT_ID})"
 
 echo "  Reloading Nginx to serve new Admin UI build..."
 ssh "${VPS}" "nginx -s reload && echo '  ✅ Nginx reloaded' || echo '  ⚠️  Nginx reload failed (non-fatal)'"
@@ -113,6 +131,28 @@ ssh "${VPS}" "pm2 save"
 
 echo "[6/6] Reloading Nginx..."
 ssh "${VPS}" "nginx -t && systemctl reload nginx && echo ' Nginx reloaded OK' || echo ' Nginx reload FAILED'"
+
+echo "=== デプロイ後スモークテスト ==="
+sleep 3  # nginx reload + PM2 起動待ち
+
+# 本番サイトから配信中の bundle ファイル名を取得
+DEPLOYED_BUNDLE=$(curl -sf "https://admin.r2c.biz/" | grep -oE "assets/index-[^\"]+\.js" | head -1 || true)
+if [ -z "${DEPLOYED_BUNDLE}" ]; then
+  echo "⚠️  WARNING: 本番サイトから bundle 名を取得できませんでした（スモークテストスキップ）"
+else
+  BUNDLE_CONTENT=$(curl -sf "https://admin.r2c.biz/${DEPLOYED_BUNDLE}" || true)
+  if echo "${BUNDLE_CONTENT}" | grep -q "not-configured.invalid"; then
+    echo "❌ FATAL: 本番 bundle にフォールバック値 'not-configured.invalid' が検出されました"
+    echo "   Bundle: ${DEPLOYED_BUNDLE}"
+    echo "   管理画面が 'Supabase未設定' エラーを表示します"
+    exit 1
+  fi
+  if [ -n "${SUPABASE_PROJECT_ID}" ] && ! echo "${BUNDLE_CONTENT}" | grep -q "${SUPABASE_PROJECT_ID}"; then
+    echo "❌ FATAL: 本番 bundle に Supabase プロジェクトID (${SUPABASE_PROJECT_ID}) が含まれていません"
+    exit 1
+  fi
+  echo "✅ Smoke test passed: ${DEPLOYED_BUNDLE}"
+fi
 
 echo "[7/7] Health check..."
 sleep 3
