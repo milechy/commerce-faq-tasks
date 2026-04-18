@@ -258,7 +258,9 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       let result;
       if (filterTenantId) {
         result = await db.query(
-          "SELECT * FROM avatar_configs WHERE tenant_id = $1 ORDER BY created_at DESC",
+          `SELECT * FROM avatar_configs
+           WHERE (tenant_id = $1 OR tenant_id = 'r2c_default')
+           ORDER BY is_default ASC, created_at DESC`,
           [filterTenantId]
         );
       } else {

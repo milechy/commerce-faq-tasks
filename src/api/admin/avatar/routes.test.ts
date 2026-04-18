@@ -112,6 +112,101 @@ describe("POST /v1/admin/avatar/configs/:id/activate", () => {
 });
 
 // --------------------------------------------------------------------------
+// GET /v1/admin/avatar/configs — r2c_default 包含テスト
+// --------------------------------------------------------------------------
+
+describe("GET /v1/admin/avatar/configs", () => {
+  const CUSTOM_ROW = {
+    id: "cust-1",
+    tenant_id: "tenant-a",
+    name: "カスタムアバター",
+    is_default: false,
+    is_active: true,
+    created_at: new Date().toISOString(),
+  };
+  const DEFAULT_ROW = {
+    id: "def-1",
+    tenant_id: "r2c_default",
+    name: "SAM",
+    is_default: true,
+    is_active: true,
+    created_at: new Date().toISOString(),
+  };
+
+  it("T1: client_admin → 自テナント + r2c_default が両方返る", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValue({ rows: [CUSTOM_ROW, DEFAULT_ROW] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .get("/v1/admin/avatar/configs");
+
+    expect(res.status).toBe(200);
+    expect(res.body.configs).toHaveLength(2);
+
+    const [sql, params] = dbQuery.mock.calls[0] as [string, string[]];
+    expect(sql).toContain("tenant_id = 'r2c_default'");
+    expect(params).toContain("tenant-a");
+  });
+
+  it("T2: 自テナントにカスタムなし → r2c_default のみ返る", async () => {
+    const dbQuery = jest.fn().mockResolvedValue({ rows: [DEFAULT_ROW] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-empty"))
+      .get("/v1/admin/avatar/configs");
+
+    expect(res.status).toBe(200);
+    expect(res.body.configs).toHaveLength(1);
+    expect(res.body.configs[0].tenant_id).toBe("r2c_default");
+  });
+
+  it("T3: super_admin ?tenant=carnation → carnation + r2c_default 両方返る", async () => {
+    const carnationRow = { ...CUSTOM_ROW, tenant_id: "carnation", id: "carn-1" };
+    const dbQuery = jest.fn().mockResolvedValue({ rows: [carnationRow, DEFAULT_ROW] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .get("/v1/admin/avatar/configs?tenant=carnation");
+
+    expect(res.status).toBe(200);
+    expect(res.body.configs).toHaveLength(2);
+
+    const [sql, params] = dbQuery.mock.calls[0] as [string, string[]];
+    expect(sql).toContain("tenant_id = 'r2c_default'");
+    expect(params).toContain("carnation");
+  });
+
+  it("T4: super_admin ?tenant=r2c_default → r2c_default のみ返る", async () => {
+    const dbQuery = jest.fn().mockResolvedValue({ rows: [DEFAULT_ROW] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .get("/v1/admin/avatar/configs?tenant=r2c_default");
+
+    expect(res.status).toBe(200);
+    expect(res.body.configs).toHaveLength(1);
+    expect(res.body.configs[0].tenant_id).toBe("r2c_default");
+
+    const [sql, params] = dbQuery.mock.calls[0] as [string, string[]];
+    expect(params).toContain("r2c_default");
+  });
+
+  it("T5: ORDER BY is_default ASC が SQL に含まれる (カスタム先頭)", async () => {
+    const dbQuery = jest.fn().mockResolvedValue({ rows: [CUSTOM_ROW, DEFAULT_ROW] });
+    const db = { query: dbQuery };
+
+    await request(makeApp(db, "client_admin", "tenant-a"))
+      .get("/v1/admin/avatar/configs");
+
+    const [sql] = dbQuery.mock.calls[0] as [string, string[]];
+    expect(sql).toContain("is_default ASC");
+    expect(sql).toContain("created_at DESC");
+  });
+});
+
+// --------------------------------------------------------------------------
 // DELETE /v1/admin/avatar/configs/:id
 // --------------------------------------------------------------------------
 

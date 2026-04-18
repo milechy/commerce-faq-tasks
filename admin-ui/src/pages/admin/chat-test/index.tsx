@@ -22,6 +22,14 @@ interface ChatTestToken {
   expiresIn: number;
 }
 
+interface AvatarConfigOption {
+  id: string;
+  name: string;
+  image_url: string | null;
+  is_default: boolean;
+  tenant_id: string;
+}
+
 interface QAPair {
   question: AdminChatMessage;
   answer: AdminChatMessage | null;
@@ -55,6 +63,10 @@ export default function ChatTestPage() {
   const [selectedTenantId, setSelectedTenantId] = useState<string>(
     isSuperAdmin && queryTenantId ? queryTenantId : ""
   );
+
+  // アバター選択
+  const [availableAvatars, setAvailableAvatars] = useState<AvatarConfigOption[]>([]);
+  const [selectedAvatarConfigId, setSelectedAvatarConfigId] = useState<string | null>(null);
 
   // トークン状態
   const [token, setToken] = useState<string | null>(null);
@@ -99,6 +111,32 @@ export default function ChatTestPage() {
   }, [isSuperAdmin]);
 
   useEffect(() => {
+    if (!effectiveTenantId || scopeGlobal) {
+      setAvailableAvatars([]);
+      setSelectedAvatarConfigId(null);
+      return;
+    }
+    const url = isSuperAdmin
+      ? `${API_BASE}/v1/admin/avatar/configs?tenant=${encodeURIComponent(effectiveTenantId)}`
+      : `${API_BASE}/v1/admin/avatar/configs`;
+    void authFetch(url)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data: { configs?: AvatarConfigOption[] }) => {
+        const configs = data.configs ?? [];
+        setAvailableAvatars(configs);
+        const urlMatch = configs.find((c) => c.id === queryAvatarConfigId);
+        if (urlMatch) {
+          setSelectedAvatarConfigId(urlMatch.id);
+        } else {
+          const firstCustom = configs.find((c) => !c.is_default);
+          setSelectedAvatarConfigId(firstCustom?.id ?? configs[0]?.id ?? null);
+        }
+      })
+      .catch(() => { setAvailableAvatars([]); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTenantId, scopeGlobal, queryAvatarConfigId]);
+
+  useEffect(() => {
     if (!effectiveTenantId) return;
     cleanupWidget();
     setToken(null);
@@ -134,14 +172,14 @@ export default function ChatTestPage() {
     script.src = `${API_BASE}/widget.js`;
     script.setAttribute("data-tenant", effectiveTenantId);
     script.setAttribute("data-api-key", token);
-    if (queryAvatarConfigId) {
-      script.setAttribute("data-avatar-config-id", queryAvatarConfigId);
+    if (selectedAvatarConfigId) {
+      script.setAttribute("data-avatar-config-id", selectedAvatarConfigId);
     }
     script.async = true;
     widgetScriptRef.current = script;
     document.body.appendChild(script);
     return cleanupWidget;
-  }, [token, effectiveTenantId, cleanupWidget, queryAvatarConfigId]);
+  }, [token, effectiveTenantId, cleanupWidget, selectedAvatarConfigId]);
 
   useEffect(() => {
     return () => {
@@ -298,6 +336,7 @@ export default function ChatTestPage() {
   const handleTenantChange = (newTenantId: string) => {
     setSelectedTenantId(newTenantId);
     setAdminMessages([]);
+    setSelectedAvatarConfigId(null);
   };
 
   const handleReload = () => {
@@ -368,21 +407,59 @@ export default function ChatTestPage() {
           </div>
         )}
 
+        {/* アバター選択ドロップダウン */}
+        {effectiveTenantId && !scopeGlobal && (
+          <div style={{ marginBottom: 24 }}>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 8 }}>
+              🎭 テストするアバター
+            </label>
+            {availableAvatars.length === 0 ? (
+              <p style={{ fontSize: 14, color: "#6b7280", padding: "8px 0", margin: 0 }}>
+                このテナントにはアバターがありません。テキストチャットでテスト可能です。
+              </p>
+            ) : (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <select
+                  value={selectedAvatarConfigId ?? ""}
+                  onChange={(e) => setSelectedAvatarConfigId(e.target.value || null)}
+                  style={{ flex: 1, minWidth: 200, padding: "12px 14px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#e5e7eb", fontSize: 15, outline: "none", cursor: "pointer" }}
+                >
+                  <option value="">— アバターなし（テキストのみ）—</option>
+                  {availableAvatars.map((av) => (
+                    <option key={av.id} value={av.id}>
+                      {av.name}{av.is_default ? " (R2Cデフォルト)" : " (カスタム)"}
+                    </option>
+                  ))}
+                </select>
+                {selectedAvatarConfigId && (() => {
+                  const av = availableAvatars.find((a) => a.id === selectedAvatarConfigId);
+                  if (!av) return null;
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 10, border: "1px solid rgba(59,130,246,0.3)", background: "rgba(59,130,246,0.08)", flexShrink: 0 }}>
+                      {av.image_url && (
+                        <img src={av.image_url} alt="" width={40} height={40} style={{ borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
+                      )}
+                      <span style={{ fontSize: 14, color: "#93c5fd", fontWeight: 600 }}>{av.name}</span>
+                    </div>
+                  );
+                })()}
+                {!selectedAvatarConfigId && (
+                  <span style={{ fontSize: 13, color: "#6b7280" }}>テキストチャットのみ</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {!effectiveTenantId && !scopeGlobal && (
           <p style={{ textAlign: "center", color: "#6b7280", fontSize: 15, padding: "32px 0" }}>{t("chat_test.select_tenant")}</p>
         )}
 
         {effectiveTenantId && (
           <>
-            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: queryAvatarConfigId ? 8 : 20 }}>
+            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 20 }}>
               {t("chat_test.tenant_label")}: <strong style={{ color: "#9ca3af" }}>{displayTenantName}</strong>
             </p>
-            {queryAvatarConfigId && (
-              <div style={{ marginBottom: 20, padding: "10px 14px", borderRadius: 8, background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", fontSize: 13, color: "#93c5fd", display: "flex", alignItems: "center", gap: 8 }}>
-                <span>🎭</span>
-                <span>アバター設定をテスト中: <code style={{ fontFamily: "monospace", fontSize: 11, opacity: 0.8 }}>{queryAvatarConfigId}</code></span>
-              </div>
-            )}
 
             {gettingToken && (
               <div style={{ textAlign: "center", padding: "32px 0", color: "#6b7280", fontSize: 15 }}>
