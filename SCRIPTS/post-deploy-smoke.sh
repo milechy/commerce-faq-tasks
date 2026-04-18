@@ -57,7 +57,7 @@ else
   echo "  ⚠️  Widget JS content-type unexpected: $widget_ct"
 fi
 
-# ── 3. Admin UI ───────────────────────────────────────────────────────────
+# ── 3. Admin UI (Cloudflare Pages) ────────────────────────────────────────
 check "Admin UI" "$ADMIN_URL"
 
 # ── 4. Demo page ──────────────────────────────────────────────────────────

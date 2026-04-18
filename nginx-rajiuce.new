@@ -1,0 +1,31 @@
+server {
+    server_name api.r2c.biz;
+
+    location / {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/api.r2c.biz/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.r2c.biz/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+}
+
+server {
+    if ($host = api.r2c.biz) {
+        return 301 https://$host$request_uri;
+    }
+    listen 80;
+    server_name api.r2c.biz;
+    return 404;
+}
