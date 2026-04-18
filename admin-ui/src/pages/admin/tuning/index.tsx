@@ -88,7 +88,8 @@ export default function TuningRulesPage() {
   const { user, isSuperAdmin } = useAuth();
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
-  const tenantId = user?.tenantId ?? "carnation";
+  // super admin は JWT に tenantId がないため、MOCK_TENANTS の先頭をデフォルトにする
+  const tenantId = user?.tenantId ?? (isSuperAdmin ? (MOCK_TENANTS[0]?.value ?? "") : "");
 
   // ─── List state ─────────────────────────────────────────────────────────────
   const [rules, setRules] = useState<TuningRule[]>([]);
