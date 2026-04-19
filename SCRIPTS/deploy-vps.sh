@@ -25,6 +25,52 @@ echo ""
 
 echo "=== Phase28: Deploy to ${VPS}:${REMOTE_DIR} ==="
 
+# === VPS Integrity Guards ===
+echo "=== VPS Integrity Guards ==="
+
+# Guard 4-B: Abort if VPS has uncommitted changes (VPS should be a clean deploy target)
+UNCOMMITTED=$(ssh "${VPS}" "cd ${REMOTE_DIR} && git status --porcelain 2>/dev/null | wc -l | tr -d ' '" || echo "0")
+if [ "${UNCOMMITTED}" -gt 0 ]; then
+    echo "⚠️  WARNING: Uncommitted changes on VPS (${UNCOMMITTED} files):"
+    ssh "${VPS}" "cd ${REMOTE_DIR} && git status --short" || true
+    echo ""
+    echo "🛑 Aborting deploy. VPS has local modifications that may be overwritten."
+    echo "   To clean up VPS and retry:"
+    echo "     ssh ${VPS} \"cd ${REMOTE_DIR} && git stash push -u -m 'backup-$(date +%Y%m%d)-before-reset' && git fetch origin && git reset --hard origin/main\""
+    exit 1
+fi
+echo "  ✅ Guard 4-B: VPS git status clean"
+
+# Guard 4-A: Detect recent npm usage (this project uses pnpm — npm install corrupts node_modules)
+CLEAN_REBUILD=0
+RECENT_NPM_LOG=$(ssh "${VPS}" "ls -t /root/.npm/_logs/*.log 2>/dev/null | head -1 || true" || echo "")
+if [ -n "${RECENT_NPM_LOG}" ]; then
+    LOG_AGE=$(ssh "${VPS}" "echo \$(( (\$(date +%s) - \$(stat -c %Y '${RECENT_NPM_LOG}' 2>/dev/null || echo 0)) / 86400 ))" || echo "99")
+    if [ "${LOG_AGE}" -lt 7 ]; then
+        echo "⚠️  Guard 4-A: Recent npm usage detected (${LOG_AGE}d ago: ${RECENT_NPM_LOG})"
+        echo "⚠️  Direct npm install may have corrupted pnpm node_modules. Forcing clean rebuild."
+        CLEAN_REBUILD=1
+    fi
+fi
+[ "${CLEAN_REBUILD}" = "0" ] && echo "  ✅ Guard 4-A: No recent npm usage detected"
+
+# Guard 4-C: Detect broken pnpm node_modules (pnpm uses symlinks; npm install creates real dirs)
+# test -L returns true for symlinks (pnpm), false for real directories (npm-created)
+for pkg in adm-zip express pdf-parse; do
+    IS_SYMLINK=$(ssh "${VPS}" "test -L ${REMOTE_DIR}/node_modules/${pkg} && echo yes || echo no" || echo "no")
+    if [ "${IS_SYMLINK}" = "no" ] && ssh "${VPS}" "test -e ${REMOTE_DIR}/node_modules/${pkg}" 2>/dev/null; then
+        echo "⚠️  Guard 4-C: ${pkg} is a real directory, not a pnpm symlink. Forcing clean rebuild."
+        CLEAN_REBUILD=1
+    fi
+done
+[ "${CLEAN_REBUILD}" = "0" ] && echo "  ✅ Guard 4-C: pnpm symlinks intact"
+
+if [ "${CLEAN_REBUILD}" = "1" ]; then
+    echo "  🔧 Removing node_modules on VPS for clean rebuild..."
+    ssh "${VPS}" "rm -rf ${REMOTE_DIR}/node_modules"
+fi
+echo ""
+
 echo "[0/5] VPSファイル所有者正常化..."
 # rsync -a がMac側のUID(501)を保持するため、pnpmがUID 1001 sandboxでvite buildを実行し
 # 環境変数が継承されない問題を防ぐ。rsync前にVPS側をroot:rootに正規化する。
