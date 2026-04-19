@@ -182,3 +182,8 @@ Phase42 では Lemonslice から Anam.ai への一本化を試みたが、以下
 - **検証結果**: CARA-3 モデルの画像品質は合格だったが、日本語音声品質が本番利用に耐えない
 - **現状**: Lemonslice + Fish Audio + LiveKit の現行構成を維持
 - **成果の継承**: Leonardo.ai 画像生成統合（DALL-E 置き換え）は Phase41 に取り込み済み
+
+**2026-04-19 追記**: Anam 関連テスト (`tests/phase48/avatarFeatureFlag.test.ts`) を削除。
+`ts-jest@29` + `jest@30` のバージョン不一致による `jest.mock` hoisting 問題により、
+hkobayashi の環境で非決定的に失敗していたため。`anamRoutes.ts` 本体は将来再検討のため残存。
+根本原因の解消は別タスク（ts-jest 30.x アップグレード）で検討予定。
