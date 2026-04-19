@@ -1,0 +1,5 @@
+# 静的アセットを最優先（SPAフォールバックに拾われないように）
+/assets/*  /assets/:splat  200
+
+# SPA Fallback（最後に評価される）
+/*  /index.html  200
