@@ -20,7 +20,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "security-scan": "bash SCRIPTS/security-scan.sh",
-    "verify": "pnpm typecheck && pnpm test && (test -f SCRIPTS/security-scan.sh && bash SCRIPTS/security-scan.sh || true)",
+    "verify": "pnpm typecheck && pnpm test && (cd admin-ui && pnpm install --frozen-lockfile && pnpm test:ui) && (test -f SCRIPTS/security-scan.sh && bash SCRIPTS/security-scan.sh || true)",
     "sync:notion": "ts-node SCRIPTS/sync-notion.ts",
     "build": "tsc -p tsconfig.json",
     "build:admin": "cd admin-ui && pnpm install --frozen-lockfile && pnpm build",
