@@ -15,8 +15,8 @@ R2C チャットウィジェット SaaS (Express + pgvector + Elasticsearch + Re
 | テスト件数 | 99 files | 128 files | △+29（**改善**） |
 | Admin UI 大型ファイル | 最大 2,210 行 | 最大 2,280 行 | △+70（悪化傾向） |
 | production 脆弱性 (security-scan.sh) | 0 件 | 0 件 | **維持** |
-| dev 脆弱性 (pnpm audit) | 未記録 | Critical 1 / High 20 | 新規可視化 |
-| Dead exports | 21 件（正当理由あり） | 139 件（要精査） | △+118（要検証） |
+| dev 脆弱性 (pnpm audit) | 未記録 | Critical 1 / High 17 (axios High 3件はPR #112で解消済み) | 新規可視化→一部対応済 |
+| Dead exports | 21 件（正当理由あり） | 139 件→精査後 41 件（PR #113 対応済） | △+118→精査・削除済 |
 
 ### 1.2 トレンド総括
 
@@ -49,7 +49,7 @@ R2C チャットウィジェット SaaS (Express + pgvector + Elasticsearch + Re
 | 優先度 | 件数 | 代表項目 |
 |---|---:|---|
 | P0 | 0 | （緊急対応必須項目なし） |
-| P1 | 3 | axios DoS 脆弱性、Admin UI 巨大ファイル、Dead exports 再検証 |
+| P1 | 1 | Admin UI 巨大ファイル（axios DoS 脆弱性・Dead exports は対応済） |
 | P2 | 6 | devDeps 脆弱性群、widget.js 単一ファイル、TODO 6 件、等 |
 | P3 | 4 | `: any`/`as any` 微増、文字列定数一元化、等 |
 
@@ -61,7 +61,7 @@ R2C チャットウィジェット SaaS (Express + pgvector + Elasticsearch + Re
 
 | ID | 優先度 | 項目 | 現状 | 前回差分 |
 |---|---|---|---|---|
-| SEC-1 | **P1** | axios の DoS 脆弱性 (high, production dep) | `__proto__` 経由 DoS | 新規可視化 |
+| SEC-1 | ✅ **対応済** | axios の DoS 脆弱性 (high, wait-on@9.0.3 devDep 経由の推移的依存) | PR #112: wait-on@9.0.5 + pnpm.overrides["axios"]=">=1.15.0" で解消 (pnpm audit High -3) | 新規可視化→対応済 |
 | SEC-2 | **P2** | devDependencies 経由の Critical/High 脆弱性群 | handlebars Critical×1 / tar・minimatch・picomatch・handlebars 等 High×20 | 新規可視化 |
 | SEC-3 | **P2** | body-parser / qs の moderate 脆弱性 | production dep | 新規可視化 |
 | SEC-4 | ✅ | security-scan.sh (production only) | High/Critical **0 件** | 維持 |
@@ -69,7 +69,7 @@ R2C チャットウィジェット SaaS (Express + pgvector + Elasticsearch + Re
 | SEC-6 | ✅ | ルート未登録ミドルウェア | **0 件** | 維持 |
 | SEC-7 | ✅ | apiKey 検証実装 | `src/agent/http/authMiddleware.ts` | 維持 |
 
-**所見**：Gate 2 の `security-scan.sh` は production dep のみ対象で 0 件を維持しており、本番リスクは低い。`pnpm audit` で可視化された脆弱性の大半 (Critical/High 21 件) は langchain / langsmith 等のツールチェーン経由の devDependencies であり、本番バンドルには混入しない。唯一 production に影響する high 脆弱性は **axios の DoS via `__proto__`** のみであり P1 相当。
+**所見**：Gate 2 の `security-scan.sh` は production dep のみ対象で 0 件を維持しており、本番リスクは低い。`pnpm audit` で可視化された脆弱性の大半 (Critical/High 21 件) は langchain / langsmith 等のツールチェーン経由の devDependencies であり、本番バンドルには混入しない。axios の DoS 脆弱性は `wait-on@9.0.3` (devDep) 経由の推移的依存であり、production dep ではなかった。PR #112 (wait-on@9.0.5 + pnpm.overrides) にて **対応済** (High -3)。
 
 ### 2.2 保守性
 
@@ -90,11 +90,11 @@ R2C チャットウィジェット SaaS (Express + pgvector + Elasticsearch + Re
 | TST-1 | ✅ | テストファイル数 | 128 files | **△+29（大幅改善）** |
 | TST-2 | ✅ | テストスイート / ケース | 110 / 1,122 | 今回初計測 |
 | TST-3 | **P3** | Admin UI テスト整備状況 | admin-ui Vitest 導入済 (58fbacc) | 継続整備中 |
-| TST-4 | **P2** | Dead exports 急増 (139 件) の再精査 | ts-unused-exports の FP 含む可能性大 | △+118（要再確認） |
+| TST-4 | ✅ **対応済** | Dead exports 再精査 (ts-prune: src/ 真の未使用 47→41 件) | PR #113: crewSchemas.ts 削除・5 export 除去 | 対応済 |
 
 **所見**：前回「99 files」から今回「128 files」へ 29% 増。Admin UI Vitest 導入 (PR #109) と Phase65 関連テストが効いている。Gate 1 が 1,122 ケース全通過しており、テスト文化は健全な方向にある。
 
-Dead exports の 21→139 急増は脅威というより `ts-unused-exports` 検出ロジックの差分（型 alias / re-export の扱い等）で説明可能な可能性が高く、P2 として「前回監査と同じ手順で再計測→真の未使用だけ残す」作業を推奨。
+Dead exports は `ts-prune` で再精査した結果、src/ 真の未使用は 47 件（139 件との差は型 alias / re-export / 意図的 public API による FP）。PR #113 で 2 ファイル削除 + 5 export 除去を実施し 41 件に削減。**対応済**。
 
 ### 2.4 アップグレード耐性
 
@@ -178,15 +178,14 @@ Dead exports の 21→139 急増は脅威というより `ts-unused-exports` 検
 
 ### 4.2 P1（次 Phase で対応）
 
-#### P1-1. axios の DoS 脆弱性対応（SEC-1）
+#### ~~P1-1. axios の DoS 脆弱性対応（SEC-1）~~ ✅ **対応済 (PR #112)**
 
-- **対象**：production dep の axios（high severity, DoS via `__proto__`）
-- **手順**：
-  1. `pnpm why axios` で依存元を特定
-  2. 直接依存なら `pnpm up axios@latest` で最新版に更新
-  3. 間接依存なら `pnpm.overrides` で強制バージョン固定
-  4. `pnpm verify` → `bash SCRIPTS/security-scan.sh` で確認
-  5. feature branch → PR（Codex review Gate 2.5）→ merge
+- **誤分類訂正**：当初「production dep」と記載したが、実際は `wait-on@9.0.3` (devDep) 経由の推移的依存だった。
+- **対応内容**：
+  - `wait-on` を `^9.0.5`（axios 修正済みバージョンを同梱）へアップデート
+  - `pnpm.overrides["axios"] = ">=1.15.0"` を追加してトランジティブ依存を強制固定
+  - `pnpm audit` 結果: High **-3** 件（40 vuln → 37 vuln）
+- **結果**：Gate 2 (security-scan.sh) は引き続き 0 件。本番リスクなし。
 
 #### P1-2. Admin UI 巨大ファイル分割（MNT-1）
 
@@ -202,13 +201,17 @@ Dead exports の 21→139 急増は脅威というより `ts-unused-exports` 検
   5. feature branch → PR → Gate 1-3
 - **目標**：各ファイルを 800 行以内に削減（`billing` は優先度最上）
 
-#### P1-3. Dead exports 139 件の再精査（TST-4）
+#### ~~P1-3. Dead exports 139 件の再精査（TST-4）~~ ✅ **対応済 (PR #113)**
 
-- **手順**：
-  1. `pnpm dlx ts-unused-exports tsconfig.json` を前回と同じフラグで実行
-  2. 前回 21 件の「正当理由」リストを突合し、今回の 139 件との差分を抽出
-  3. 真の未使用を削除、残りは `// ts-unused-exports:ignore` 等でアノテート
-  4. `docs/CODE_HEALTH_REPORT.md` の再計測方法と一致させる
+- **精査結果**：`ts-prune` で再計測した結果、src/ の真の未使用 export は **47 件**（ts-unused-exports の 139 件は型 alias / re-export / 意図的 public API による FP を多数含む）
+- **対応内容**：
+  - `src/agent/orchestrator/crew/crewSchemas.ts` 削除（`CrewOrchestratorRequest` / `CrewOrchestratorResponse`）
+  - `src/auth/tokenBlacklist.ts` 削除（`TokenBlacklistEntry` / `BlacklistedToken`）
+  - `export type TenantConfigResolver` / `export type ApiKeyTenantResolver` の export 除去（authMiddleware.ts）
+  - `export type LoopType` の export 除去（loopDetector.ts）
+  - `export const RAG_TOTAL_MAX_CHARS` の export 除去（ragLimits.ts）
+  - `export class CrewAgent` → class export 除去（クラス自体は CrewOrchestrator.ts から使用継続）
+- **結果**：src/ 真の未使用 47 → **41 件**（残 6 件は public API / 設計上の意図的 export）
 
 ### 4.3 P2（中優先・将来対応）
 
@@ -241,10 +244,21 @@ R2C プロジェクトは **型安全性・セキュリティ基盤（production
 
 一方、**Admin UI の巨大ファイル問題は確実に悪化している** 点が最大の懸念。`tenants/[id].tsx` +309 行、`billing/index.tsx` +457 行は 1 Phase の追加量として過剰であり、次 Phase 前にリファクタ枠を確保することを強く推奨する。
 
-production 依存の脆弱性は axios（P1）1 件のみで、Gate 2 の production-only スキャンは 0 件を維持。devDeps 経由の 21 件は本番影響なしとして P2 分類で問題ない。
+production 依存の脆弱性は Gate 2 の production-only スキャンで 0 件を維持。axios の脆弱性は wait-on (devDep) 経由の推移的依存であり production に直接影響しないが、PR #112 にて対応済み。devDeps 経由の残 18 件は本番影響なしとして P2 分類で問題ない。
 
-P0 項目なし、P1 項目 3 件（axios 更新 / Admin UI 分割 / Dead exports 再精査）で次 Phase 計画を組むのが妥当。
+P0 項目なし、P1 項目 **1 件**（Admin UI 巨大ファイル分割）に絞り込まれた。axios 脆弱性 (PR #112) と Dead exports (PR #113) は本監査期間中に対応済みのため、次 Phase は MNT-1 の分割リファクタを最優先課題とする。
 
 ---
 
 *監査日: 2026-04-19 / 前回監査: 2026-04-10 (CODE_HEALTH_REPORT.md)*
+
+---
+
+## 6. 修正履歴
+
+| 日付 | 修正内容 | 関連 PR |
+|---|---|---|
+| 2026-04-19 | 初版作成 | PR #111 |
+| 2026-04-19 | SEC-1 分類訂正: 「production dep」→「wait-on@9.0.3 devDep 経由の推移的依存」に修正。対応済みステータス追記。 | PR #112 |
+| 2026-04-19 | TST-4 / P1-3: ts-prune による再精査結果 (src/ 真の未使用 47→41 件) と対応済みステータスを追記。 | PR #113 |
+| 2026-04-19 | P1 件数を 3→1 に更新（残存 P1 は MNT-1 Admin UI 巨大ファイルのみ）。 | — |
