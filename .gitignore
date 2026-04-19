@@ -31,6 +31,8 @@ admin-ui/.env.production
 admin-ui/dist/
 admin-ui/testsprite_tests/
 avatar-agent/__pycache__/
+**/__pycache__/
+**/*.pyc
 CLAUDE.md.backup-pre-openwolf
 commerce-faq-phase7-minimal/**/*.js
 commerce-faq-phase8-*.zip
@@ -50,3 +52,8 @@ SCRIPTS/*.local.sh
 test-results/
 Thumbs.db
 .playwright-mcp/
+
+# 作業用スクリーンショット（ルート直下）
+/e[0-9]*.png
+/*-screenshot*.png
+/tmp-*.png
