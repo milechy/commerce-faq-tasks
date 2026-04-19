@@ -237,6 +237,50 @@ git commit                        # 同内容で再コミット
 - mainへの直接pushはCodex review（Gate 2.5）が機能しない（base=mainでdiff=0になる）
 - PRマージ記録がなくなりレビュー・承認フローが消える
 
+## PRマージ自動化 (auto-merge) ルール
+
+### 背景
+2026-04-19 に PR #110-#117 の 8 本を一括マージする際、手動操作の長さと conflict 解消で一日が大きく削られた。
+同様の手動作業を避けるため、以下の運用ルールを遵守する。
+
+### 運用ルール
+
+**PR 作成時は必ず auto-merge を有効化する:**
+
+```bash
+gh pr create --title "..." --body "..." && \
+gh pr merge $(gh pr view --json number -q .number) --auto --squash --delete-branch
+```
+
+または既存 PR 番号を使って:
+```bash
+gh pr merge <PR番号> --auto --squash --delete-branch
+```
+
+### auto-merge の動作条件
+
+以下が全て揃った時点で自動マージされる:
+- CI (pnpm verify / build) が green
+- 必要なレビュー承認済み（プロジェクト設定による）
+- conflict なし
+
+### conflict が発生した場合
+
+- auto-merge は停止、PR 画面で「Merge conflict」警告が表示される
+- hkobayashi または CLI が手動で conflict を解消
+- 解消後に再度 auto-merge が有効化される
+
+### マージ方式の統一
+
+- **squash and merge** を標準とする（linear history 維持）
+- rebase merge / merge commit は使わない（履歴複雑化回避）
+
+### 関連タスク
+
+- Phase1（本ルール策定）: Asana 1214121039752589
+- Phase2（SCRIPTS/merge-ready-prs.sh 作成）: Asana 1214121039752589（別タスク化済み）
+- Phase3（Claude Code CLI /merge エージェント）: 将来タスク、未起票
+
 ## Settings Hygiene
 - `.claude/settings.local.json` は `.gitignore` に登録済み（プロジェクトローカルルール）
 - allowedTools にAPIトークン・パスワード等の認証情報を含めない
