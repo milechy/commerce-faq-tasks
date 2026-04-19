@@ -14,7 +14,7 @@ export type CrewAgentOutput = {
   meta?: DialogAgentMeta;
 };
 
-export class CrewAgent {
+class CrewAgent {
   name: string;
   description: string;
   private executor: (input: CrewAgentInput) => Promise<CrewAgentOutput>;
