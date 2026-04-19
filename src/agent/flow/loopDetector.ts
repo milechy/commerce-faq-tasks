@@ -2,7 +2,7 @@
 
 import type { FlowState } from "../dialog/flowContextStore";
 
-export type LoopType = "state_pattern" | "clarify_signature";
+type LoopType = "state_pattern" | "clarify_signature";
 
 export function detectStatePatternLoop(
   recentStates: FlowState[],
