@@ -33,6 +33,48 @@ DEPLOY_KEYWORDS = [
     'service restart',
 ]
 
+# 読み取り専用SSH調査コマンドの明示的許可リスト (2026-04-19 追加)
+# 設計原則:
+#   - re.fullmatch による完全一致のみ (部分マッチ不可)
+#   - '..' チェックでパストラバーサルを関数レベルで一律拒否
+#   - /opt/rajiuce/ 配下のみ許可 (システムパスへのアクセス禁止)
+#   - 破壊的操作 (pm2 restart, rm, git reset) は含めない
+#   - curl は DEPLOY_KEYWORDS 対象外だが将来追加に備えて収録
+READ_ONLY_SSH_ALLOWLIST = [
+    # PM2 監視系 (副作用なし)
+    r'ssh root@65\.108\.159\.161 "pm2 list"',
+    r'ssh root@65\.108\.159\.161 "pm2 describe [a-z][a-z0-9\-]+"',
+    # pm2 env は本番シークレット(環境変数)を出力するため意図的に除外
+    r'ssh root@65\.108\.159\.161 "pm2 logs [a-z][a-z0-9\-]+ --lines \d+ --nostream( 2>&1 \| grep -i?E? \'[^\']+\' \| (tail|head) -\d+)?"',
+
+    # システム監視 (読み取り専用)
+    r'ssh root@65\.108\.159\.161 "free -h"',
+    r'ssh root@65\.108\.159\.161 "free -h && df -h /"',
+    r'ssh root@65\.108\.159\.161 "df -h /?"',
+    r'ssh root@65\.108\.159\.161 "dmesg -T( \| grep -i?E? \'[^\']+\')?( \| tail -\d+)?"',
+
+    # ファイル確認 (/opt/rajiuce/ 配下のみ)
+    # パストラバーサル (..) は is_read_only_ssh_allowed で一律拒否
+    r'ssh root@65\.108\.159\.161 "ls -la? /opt/rajiuce/[a-zA-Z0-9_\-][a-zA-Z0-9_\-\./]*( 2>/dev/null)?"',
+    r'ssh root@65\.108\.159\.161 "test -L /opt/rajiuce/[a-zA-Z0-9_\-][a-zA-Z0-9_\-\./]* && echo \'[^\']+\' \|\| echo \'[^\']+\'"',
+    r'ssh root@65\.108\.159\.161 "stat -c \'?%[a-zA-Z0-9 %]+\'? /opt/rajiuce/[a-zA-Z0-9_\-][a-zA-Z0-9_\-\./]*( 2>/dev/null)?"',
+    r'ssh root@65\.108\.159\.161 "grep [a-zA-Z0-9_\-]+ /opt/rajiuce/package\.json"',
+
+    # git 読み取り専用
+    r'ssh root@65\.108\.159\.161 "cd /opt/rajiuce && git (status|log --oneline -\d+|branch --show-current)"',
+
+    # npm ログ一覧 (ls のみ許可 — cat はトークン/認証情報漏洩リスクのため除外)
+    r'ssh root@65\.108\.159\.161 "ls -lt /root/\.npm/_logs/"',
+
+    # ヘルスチェック (curl は現在 DEPLOY_KEYWORDS 対象外だが防御目的で収録)
+    r'curl -s https?://(65\.108\.159\.161:3100|api\.r2c\.biz|admin\.r2c\.biz)/health( \| jq \.status)?',
+    r'curl -s https?://(65\.108\.159\.161:3100|api\.r2c\.biz|admin\.r2c\.biz)/',
+    r'curl -I https?://admin\.r2c\.biz/assets/[a-zA-Z0-9_\-\.]+( -H \'Cache-Control: no-store\')?( \| grep -i?E? [a-zA-Z\-]+)?',
+
+    # pnpm 読み取り専用
+    r'ssh root@65\.108\.159\.161 "cd /opt/rajiuce && pnpm ls [a-zA-Z0-9@_\-]+( 2>&1)?"',
+]
+
 
 def strip_quoted_strings(cmd: str) -> str:
     """Remove single- and double-quoted string content so commit messages
@@ -55,6 +97,23 @@ def is_allowed_deploy(cmd: str) -> bool:
     return any(re.search(pattern, cmd) for pattern in ALLOWED_DEPLOY_COMMANDS)
 
 
+def is_read_only_ssh_allowed(command: str) -> bool:
+    """完全一致で read-only SSH / curl 調査コマンドを許可する。
+
+    安全設計:
+    - '..' を含むコマンドはパストラバーサルとして一律拒否
+    - re.fullmatch で文字列全体が一致した場合のみ許可 (末尾インジェクション防止)
+    - 先頭空白・末尾コマンドチェインはいずれも fullmatch で除外される
+    """
+    # Path traversal guard: reject any command containing '..'
+    if '..' in command:
+        return False
+    for pattern in READ_ONLY_SSH_ALLOWLIST:
+        if re.fullmatch(pattern, command):
+            return True
+    return False
+
+
 try:
     raw = sys.stdin.read()
     if not raw.strip():
@@ -71,7 +130,7 @@ try:
     command = tool_input.get("command", "")
 
     if is_deploy_command(command):
-        if is_allowed_deploy(command):
+        if is_allowed_deploy(command) or is_read_only_ssh_allowed(command):
             sys.exit(0)  # Allowlist match — permit
         else:
             print(
