@@ -389,3 +389,81 @@ Status: ✅ Completed (2026-04-06)
 テスト: 988件 → 1043件（+55）
 
 Status: ✅ Completed (2026-04-09)
+
+---
+
+## Phase61-63 – オプション代行サービス（完了）
+
+- Asana GID: 1214050763911954
+- `option_orders` テーブル（FK → `tenants(id)`）、CRUD API（`/v1/admin/options/*`）、R2C 機能カタログ実装
+- `feedbackAI` 代行提案フロー: カタログ + LLM 判定ハイブリッド → 料金試算 (70B) → 承諾 → DB 保存 + 通知送信
+- オプション管理 UI（`/admin/options`、SuperAdminRoute）、`POST /v1/admin/notifications`（SA → テナント宛送信）
+- `NotificationBell` TYPE_ICON 拡張（`option_ordered` 🛒 / `option_scheduled` 📅 / `option_completed` 🎉）
+- `FeatureUsed` 型に `option_service` 追加
+
+主要コミット:
+- `3c070d5` feat: Phase61-63 option delegation service (DB + API + chat flow + admin UI + notifications)
+- `6e60269` fix: option_orders migration FK references tenants(id)
+
+Status: ✅ Completed (2026-04-14)
+
+---
+
+## Phase64 – アバター高度化（完了）
+
+- 全 6 タスク + UI 改善 3 件を実施
+- `agent.py` DB 値優先フォールバック + 1920×1080 解像度対応
+- Fish Audio 18 体音声割り当て（日本語 16 体 + 英語 2 体）
+- ウィジェット大型表示（PC 900px / 3fr:2fr グリッド）、6 ステップ生成ウィザード（fal.ai Flux 2 Pro）
+- プレミアムパイプライン（Magnific AI 高解像度化）、代行サービスオプション `premium_avatar` 追加
+- UI: PC グリッド 4 列、R2C デフォルト紫バッジ、ホバーアニメーション、画像コピー防止、ソート全修正、テナントフィルタ厳密化
+- demo 重複 18 体 DB 削除済み
+
+主要コミット:
+- `8a70d92` feat(avatar): Phase64 — agent.py DB値優先フォールバック + 1920x1080
+- `c5cdc35` feat(avatar): Phase64 — Fish Audio 18体音声割り当て + migration SQL
+- `b45913c` feat(widget): Phase64 — アバターUI大型表示対応 + 音声migration SQL
+- `ac46617` feat(avatar): Phase64-タスク4 — fal.ai Flux Pro 6ステップ生成ウィザード
+- `241f385` feat(avatar): Phase64-タスク5 — Flux 2 Pro + Magnific AI プレミアム生成パイプライン
+- `ae02497` feat(avatar): Phase64-タスク6 — プレミアムアバター制作代行フロー
+- `5fa8a93` feat(ui): Phase64追加 — アバター管理ページ レスポンシブグリッド改善
+
+Status: ✅ Completed (2026-04-15)
+
+---
+
+## Phase65 – コンバージョントラッキング（完了 + 派生タスク進行中）
+
+- デモサイトシミュレーション（carnation-demo 9 ページ構成、CV 発火シミュレーション）
+- `trackConversion()` → `conversion_attributions` へのブリッジ実装
+- Analytics API 拡張、`CVUnfiredAlert`、`cv_fired_status` エンドポイント
+- テスト: 1043 件 → 1122 件（+79）
+
+派生タスク:
+- **Phase65-2**: パートナー向けコンバージョン計測実装ガイド（`docs/CONVERSION_TRACKING_GUIDE.md`）→ PR #110 + #115 で完了（2026-04-19）
+- **Phase65-4**: carnation ロールアウト計画 → Asana 1214121023204382（2026-05-09 期限）
+
+主要コミット:
+- `eb1644a` feat(demo): Phase65-1 carnation-demo 9ページ構成に拡張、CV発火シミュレーション追加
+- `c9a8ffd` fix(events): Phase65 chat_conversion → conversion_attributions ブリッジ追加
+- `b551a99` feat(analytics): Phase65-3 CV指標・cv-statusエンドポイント・CVUnfiredAlert
+
+Status: ✅ Completed (2026-04-09) / 派生タスク進行中
+
+---
+
+## Phase66 – R2C 仮想テナント追加 + carnation 誤表示修正（完了）
+
+- Asana GID: 1214115420756112
+- `src/api/admin/tenants/migration_r2c_default.sql` で `r2c_default` テナント新設（enterprise プラン、`avatar:true`、billing 無効）
+- `avatar_configs` の `is_default=true` 18 体を `carnation` → `r2c_default` に UPDATE
+- `livekitTokenRoutes.ts` Q2（`OR is_default=true` → `OR tenant_id='r2c_default'`）、Q3 に `ORDER BY created_at DESC` 追加
+- `admin-ui/src/pages/admin/tuning/index.tsx:91` super_admin フォールバック修正（Codex P2 指摘反映: `MOCK_TENANTS[0]?.value`）
+- 1117 テスト全 pass + 本番反映済み
+- 関連: chat-test 画面 UX 改善（Asana 1214115421896831）と admin-ui vitest（Asana 1214115484987893）は別タスク
+
+主要コミット:
+- `0faf117` feat(phase66): R2C default virtual tenant + carnation misattribution fix
+- `0d9a09d` fix(ui): デフォルトアバターのテストボタンでavatarConfigId優先、carnationアバター誤表示解消
+
+Status: ✅ Completed (2026-04-18)
