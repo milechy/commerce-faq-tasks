@@ -17,6 +17,46 @@ const syncSchema = z.object({
 });
 
 export function registerInternalGa4SyncRoutes(app: Express, db: Pool): void {
+  // POST /internal/ga4/health-check-all — Workers Cron: 全連携テナント一括チェック
+  app.post(
+    "/internal/ga4/health-check-all",
+    internalHmacMiddleware,
+    async (_req: Request, res: Response) => {
+      try {
+        const rows = await db.query<{ id: string; ga4_property_id: string }>(
+          `SELECT id, ga4_property_id FROM tenants
+           WHERE is_active = true
+             AND ga4_property_id IS NOT NULL
+             AND ga4_status IN ('connected', 'error', 'timeout', 'permission_revoked', 'pending')`,
+        );
+
+        const results = await Promise.all(
+          rows.rows.map(async (row) => {
+            try {
+              const result = await runGa4HealthCheck(row.id, row.ga4_property_id, db);
+              return {
+                tenant_id: row.id,
+                status: result.status,
+                error_message: result.errorMessage ?? null,
+              };
+            } catch (err) {
+              return {
+                tenant_id: row.id,
+                status: "error" as const,
+                error_message: err instanceof Error ? err.message.slice(0, 200) : String(err),
+              };
+            }
+          }),
+        );
+
+        return res.json({ ok: true, results, checked_at: new Date().toISOString() });
+      } catch (err) {
+        logger.warn({ err }, "[internalGa4] health-check-all error");
+        return res.status(500).json({ error: "internal error" });
+      }
+    },
+  );
+
   // POST /internal/ga4/health-check — Cloudflare Workers Cron用
   app.post(
     "/internal/ga4/health-check",

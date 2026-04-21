@@ -13,24 +13,33 @@
   },
 
   // Email Service binding (Cloudflare Email Routing)
+  // destination_address restricts outbound email to this address during testing
   "send_email": [
     {
-      "name": "EMAIL"
+      "name": "EMAIL",
+      "destination_address": "hkobayashi@mooores.com"
     }
   ],
 
   // Environment variables (non-secret)
   "vars": {
     "ENVIRONMENT": "development",
-    "INTERNAL_API_URL": "https://api.r2c.biz"
+    "INTERNAL_API_URL": "https://api.r2c.biz",
+    "ALERT_EMAIL_TO": "hkobayashi@mooores.com"
   },
 
   // Production environment overrides
   "env": {
     "production": {
+      "send_email": [
+        {
+          "name": "EMAIL"
+        }
+      ],
       "vars": {
         "ENVIRONMENT": "production",
-        "INTERNAL_API_URL": "https://api.r2c.biz"
+        "INTERNAL_API_URL": "https://api.r2c.biz",
+        "ALERT_EMAIL_TO": "hkobayashi@mooores.com"
       }
     }
   }
