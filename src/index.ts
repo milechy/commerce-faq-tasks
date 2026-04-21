@@ -61,6 +61,7 @@ import { registerPremiumGenerationRoutes } from "./api/admin/avatar/premiumGener
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
 import { registerGa4TenantRoutes } from "./api/admin/tenants/ga4Routes";
+import { registerPostHogTenantRoutes } from "./api/admin/tenants/posthogRoutes";
 import { registerInternalGa4SyncRoutes } from "./api/internal/ga4SyncRoutes";
 import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
 import { registerVariantRoutes } from "./api/admin/variants/routes";
@@ -485,6 +486,9 @@ if (db) registerTenantAdminRoutes(app, db);
 
 // Phase A: GA4連携管理API (テナント別 connect/test/status/disconnect)
 if (db) registerGa4TenantRoutes(app, db);
+
+// Phase A Day 5: PostHog連携管理API
+if (db) registerPostHogTenantRoutes(app, db);
 
 // Phase32: 課金管理API
 if (db) initUsageTracker(db, logger);
