@@ -179,6 +179,24 @@ export function registerGa4TenantRoutes(app: Express, db: Pool): void {
     },
   );
 
+  // GET /v1/admin/ga4/service-account-info — サービスアカウントメール取得 (frontend表示用)
+  app.get(
+    "/v1/admin/ga4/service-account-info",
+    tenantAuth,
+    (_req: Request, res: Response) => {
+      const credB64 = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+      if (!credB64) {
+        return res.json({ configured: false, client_email: null });
+      }
+      try {
+        const json = JSON.parse(Buffer.from(credB64, "base64").toString("utf-8")) as Record<string, unknown>;
+        return res.json({ configured: true, client_email: json.client_email ?? null });
+      } catch {
+        return res.json({ configured: false, client_email: null });
+      }
+    },
+  );
+
   // DELETE /v1/admin/tenants/:id/ga4/disconnect — GA4連携解除
   app.delete(
     "/v1/admin/tenants/:id/ga4/disconnect",
