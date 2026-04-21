@@ -101,7 +101,7 @@ async function fetchTenantDetail(tenantId: string): Promise<TenantDetail> {
 
 async function updateTenant(
   tenantId: string,
-  data: { name: string; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }
+  data: { name: string; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string; tenant_contact_email?: string | null }
 ): Promise<TenantDetail> {
   // Backend expects is_active: boolean (not status string)
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
@@ -111,6 +111,7 @@ async function updateTenant(
       is_active: data.status === "active",
       allowed_origins: data.allowed_origins,
       system_prompt: data.system_prompt ?? "",
+      tenant_contact_email: data.tenant_contact_email,
     }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -689,7 +690,7 @@ function SettingsTab({
 }: {
   tenant: TenantDetail;
   isSuperAdmin: boolean;
-  onSave: (data: { name: string; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string }) => Promise<void>;
+  onSave: (data: { name: string; status: "active" | "inactive"; allowed_origins: string[]; system_prompt?: string; tenant_contact_email?: string | null }) => Promise<void>;
   onBillingUpdate: (updated: TenantDetail) => void;
 }) {
   const { t } = useLang();
@@ -697,6 +698,7 @@ function SettingsTab({
   const [status, setStatus] = useState<"active" | "inactive">(tenant.status);
   const [originsText, setOriginsText] = useState((tenant.allowed_origins ?? []).join("\n"));
   const [systemPrompt, setSystemPrompt] = useState(tenant.system_prompt ?? "");
+  const [contactEmail, setContactEmail] = useState(tenant.tenant_contact_email ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -714,7 +716,7 @@ function SettingsTab({
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), status, allowed_origins, system_prompt: systemPrompt });
+      await onSave({ name: name.trim(), status, allowed_origins, system_prompt: systemPrompt, tenant_contact_email: contactEmail.trim() || null });
     } catch {
       setError(t("tenant_detail.save_error"));
     } finally {
@@ -820,6 +822,20 @@ function SettingsTab({
           <p style={{ fontSize: 12, color: "#6b7280", margin: "4px 0 0", textAlign: "right" }}>
             {systemPrompt.length} / 5000
           </p>
+        </div>
+
+        <div>
+          <label style={LABEL_STYLE}>担当者メールアドレス</label>
+          <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 8px", lineHeight: 1.5 }}>
+            GA4エラー通知・請求通知の送信先
+          </p>
+          <input
+            type="email"
+            value={contactEmail}
+            onChange={(e) => setContactEmail(e.target.value)}
+            placeholder="contact@example.com"
+            style={INPUT_STYLE}
+          />
         </div>
 
         <button
@@ -2249,9 +2265,289 @@ function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
   );
 }
 
+// ─── タブ: アナリティクスサマリー ──────────────────────────────────────────────
+
+interface AnalyticsSummary {
+  period: string;
+  conversations: { total: number; avg_per_day: number };
+  cv: {
+    macro: { r2c_db: number; ga4: number; posthog: number; ranked_a: number; ranked_d: number };
+    micro: { r2c_db: number; ga4: number; posthog: number };
+  };
+  llm_usage: { tokens: number; cost_jpy: number; generations: number } | null;
+  alerts: { source_mismatch_count: number; ranked_d_count: number };
+}
+
+function AnalyticsSummaryTab({ tenantId }: { tenantId: string }) {
+  const [period, setPeriod] = useState<"last_7d" | "last_30d" | "last_90d">("last_30d");
+  const [data, setData] = useState<AnalyticsSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}/analytics-summary?period=${period}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setData(await res.json() as AnalyticsSummary);
+      } catch {
+        setError("データ取得に失敗しました");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, [tenantId, period]);
+
+  const periodLabel: Record<string, string> = { last_7d: "7日間", last_30d: "30日間", last_90d: "90日間" };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Period selector */}
+      <div style={{ ...CARD_STYLE, display: "flex", gap: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 14, color: "#9ca3af", fontWeight: 600 }}>期間:</span>
+        {(["last_7d", "last_30d", "last_90d"] as const).map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => setPeriod(p)}
+            style={{
+              padding: "8px 16px",
+              minHeight: 36,
+              borderRadius: 8,
+              border: period === p ? "1px solid #4ade80" : "1px solid #374151",
+              background: period === p ? "rgba(34,197,94,0.15)" : "rgba(0,0,0,0.3)",
+              color: period === p ? "#4ade80" : "#9ca3af",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {periodLabel[p]}
+          </button>
+        ))}
+      </div>
+
+      {loading && <div style={{ color: "#6b7280", textAlign: "center", padding: 32 }}>読み込み中...</div>}
+      {error && <div style={{ color: "#f87171", padding: 16 }}>{error}</div>}
+
+      {data && !loading && (
+        <>
+          {/* Conversations */}
+          <div style={{ ...CARD_STYLE }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>💬 会話数</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {[
+                { label: "総会話数", value: data.conversations.total.toLocaleString() },
+                { label: "1日平均", value: `${data.conversations.avg_per_day}件` },
+              ].map(({ label, value }) => (
+                <div key={label} style={{ padding: "16px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid #1f2937" }}>
+                  <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "#e5e7eb" }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* CV */}
+          <div style={{ ...CARD_STYLE }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>🎯 コンバージョン</h3>
+            <div style={{ display: "grid", gap: 10 }}>
+              {[
+                { label: "マクロCV (r2c_db)", value: data.cv.macro.r2c_db },
+                { label: "マクロCV (GA4)", value: data.cv.macro.ga4 },
+                { label: "マクロCV (PostHog)", value: data.cv.macro.posthog },
+                { label: "マイクロCV (r2c_db)", value: data.cv.micro.r2c_db },
+                { label: "マイクロCV (GA4)", value: data.cv.micro.ga4 },
+                { label: "ランクA (3ソース確認済)", value: data.cv.macro.ranked_a },
+              ].map(({ label, value }) => (
+                <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid #1f2937", fontSize: 14 }}>
+                  <span style={{ color: "#9ca3af" }}>{label}</span>
+                  <span style={{ color: "#e5e7eb", fontWeight: 600 }}>{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* LLM Usage */}
+          {data.llm_usage && (
+            <div style={{ ...CARD_STYLE }}>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>🤖 LLM使用量（今月）</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                {[
+                  { label: "総トークン", value: data.llm_usage.tokens.toLocaleString() },
+                  { label: "推定コスト", value: `¥${data.llm_usage.cost_jpy.toLocaleString()}` },
+                  { label: "生成回数", value: data.llm_usage.generations.toLocaleString() },
+                ].map(({ label, value }) => (
+                  <div key={label} style={{ padding: "14px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid #1f2937" }}>
+                    <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: "#4ade80" }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Alerts */}
+          {(data.alerts.source_mismatch_count > 0 || data.alerts.ranked_d_count > 0) && (
+            <div style={{ ...CARD_STYLE, border: "1px solid rgba(239,68,68,0.4)", background: "rgba(127,29,29,0.15)" }}>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "#f87171", margin: "0 0 12px" }}>⚠️ アラート</h3>
+              <div style={{ display: "grid", gap: 8 }}>
+                {data.alerts.source_mismatch_count > 0 && (
+                  <div style={{ fontSize: 14, color: "#fca5a5" }}>ソース不一致: {data.alerts.source_mismatch_count}件（同一イベントが複数ソースで記録）</div>
+                )}
+                {data.alerts.ranked_d_count > 0 && (
+                  <div style={{ fontSize: 14, color: "#fca5a5" }}>ランクD（疑義あり）: {data.alerts.ranked_d_count}件</div>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── タブ: 請求情報 ───────────────────────────────────────────────────────────
+
+function BillingInfoTab({ tenant }: { tenant: TenantDetail }) {
+  return (
+    <div style={{ ...CARD_STYLE, display: "flex", flexDirection: "column", gap: 16 }}>
+      <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: 0 }}>💳 請求情報</h3>
+      <div style={{ display: "grid", gap: 10 }}>
+        {[
+          { label: "プラン", value: tenant.plan.toUpperCase() },
+          { label: "課金有効", value: tenant.billing_enabled ? "有効" : "無効" },
+          { label: "無料期間（開始）", value: tenant.billing_free_from ? new Date(tenant.billing_free_from).toLocaleDateString("ja-JP") : "—" },
+          { label: "無料期間（終了）", value: tenant.billing_free_until ? new Date(tenant.billing_free_until).toLocaleDateString("ja-JP") : "—" },
+        ].map(({ label, value }) => (
+          <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "12px 16px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid #1f2937", fontSize: 14 }}>
+            <span style={{ color: "#9ca3af" }}>{label}</span>
+            <span style={{ color: "#e5e7eb", fontWeight: 600 }}>{value}</span>
+          </div>
+        ))}
+      </div>
+      <p style={{ fontSize: 12, color: "#6b7280", margin: 0 }}>
+        詳細な請求設定はSuper Admin専用の設定タブから変更できます。
+      </p>
+    </div>
+  );
+}
+
+// ─── タブ: 通知設定 ───────────────────────────────────────────────────────────
+
+interface NotificationPref {
+  notification_type: string;
+  email_enabled: boolean;
+  in_app_enabled: boolean;
+  threshold: Record<string, unknown> | null;
+}
+
+const DEFAULT_NOTIFICATION_TYPES = [
+  { type: "ga4_error", label: "GA4接続エラー" },
+  { type: "cv_drop", label: "CV数急減" },
+  { type: "llm_cost_spike", label: "LLMコスト急増" },
+  { type: "weekly_report", label: "週次レポート" },
+];
+
+function NotificationPreferencesTab({ tenantId }: { tenantId: string }) {
+  const [prefs, setPrefs] = useState<Record<string, NotificationPref>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3000); };
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}/notification-preferences`);
+        if (!res.ok) return;
+        const json = await res.json() as { preferences: NotificationPref[] };
+        const map: Record<string, NotificationPref> = {};
+        for (const p of json.preferences) map[p.notification_type] = p;
+        setPrefs(map);
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, [tenantId]);
+
+  const handleToggle = async (type: string, field: "email_enabled" | "in_app_enabled") => {
+    const current = prefs[type] ?? { notification_type: type, email_enabled: true, in_app_enabled: true, threshold: null };
+    const updated = { ...current, [field]: !current[field] };
+    setSaving(type);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}/notification-preferences`, {
+        method: "PUT",
+        body: JSON.stringify({ notification_type: type, email_enabled: updated.email_enabled, in_app_enabled: updated.in_app_enabled }),
+      });
+      if (res.ok) {
+        setPrefs((prev) => ({ ...prev, [type]: updated }));
+        showToast("✅ 保存しました");
+      }
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (loading) return <div style={{ color: "#6b7280", textAlign: "center", padding: 32 }}>読み込み中...</div>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {toast && (
+        <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(15,23,42,0.98)", border: "1px solid #22c55e", color: "#4ade80", fontSize: 14, fontWeight: 600 }}>
+          {toast}
+        </div>
+      )}
+      <div style={{ ...CARD_STYLE }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>🔔 通知設定</h3>
+        <div style={{ display: "grid", gap: 8 }}>
+          {DEFAULT_NOTIFICATION_TYPES.map(({ type, label }) => {
+            const pref = prefs[type] ?? { notification_type: type, email_enabled: true, in_app_enabled: true, threshold: null };
+            const isSavingThis = saving === type;
+            return (
+              <div key={type} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid #1f2937" }}>
+                <span style={{ fontSize: 14, color: "#d1d5db", fontWeight: 500 }}>{label}</span>
+                <div style={{ display: "flex", gap: 12 }}>
+                  {(["email_enabled", "in_app_enabled"] as const).map((field) => (
+                    <button
+                      key={field}
+                      type="button"
+                      disabled={isSavingThis}
+                      onClick={() => void handleToggle(type, field)}
+                      style={{
+                        padding: "6px 14px",
+                        minHeight: 32,
+                        borderRadius: 6,
+                        border: pref[field] ? "1px solid #4ade80" : "1px solid #374151",
+                        background: pref[field] ? "rgba(34,197,94,0.15)" : "rgba(0,0,0,0.3)",
+                        color: pref[field] ? "#4ade80" : "#6b7280",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: isSavingThis ? "not-allowed" : "pointer",
+                        opacity: isSavingThis ? 0.5 : 1,
+                      }}
+                    >
+                      {field === "email_enabled" ? "📧 メール" : "🔔 アプリ内"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── メインページ ─────────────────────────────────────────────────────────────
 
-type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns" | "conversion" | "deep-research" | "tuning" | "test" | "ga4" | "posthog";
+type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns" | "conversion" | "deep-research" | "tuning" | "test" | "ga4" | "posthog" | "analytics" | "billing-info" | "notification-prefs";
 
 export default function TenantDetailPage() {
   const navigate = useNavigate();
@@ -2300,6 +2596,7 @@ export default function TenantDetailPage() {
     status: "active" | "inactive";
     allowed_origins: string[];
     system_prompt?: string;
+    tenant_contact_email?: string | null;
   }) => {
     const updated = await updateTenant(tenantId, data);
     setTenant(updated);
@@ -2366,6 +2663,9 @@ export default function TenantDetailPage() {
     { id: "avatar", label: "🤖 アバター" },
     { id: "ga4", label: "📊 GA4連携" },
     { id: "posthog", label: "📈 PostHog連携" },
+    { id: "analytics", label: "📉 アナリティクス" },
+    { id: "billing-info", label: "💳 請求情報" },
+    { id: "notification-prefs", label: "🔔 通知設定" },
     { id: "ai-report", label: aiReportLabel },
     { id: "conversion", label: "🎯 成果設定" },
     { id: "deep-research", label: "🔬 ディープリサーチ" },
@@ -2552,6 +2852,15 @@ export default function TenantDetailPage() {
           )}
           {activeTab === "posthog" && (
             <PostHogIntegrationTab tenantId={tenantId} />
+          )}
+          {activeTab === "analytics" && (
+            <AnalyticsSummaryTab tenantId={tenantId} />
+          )}
+          {activeTab === "billing-info" && tenant && (
+            <BillingInfoTab tenant={tenant} />
+          )}
+          {activeTab === "notification-prefs" && (
+            <NotificationPreferencesTab tenantId={tenantId} />
           )}
           {activeTab === "ai-report" && (
             <AIReportTab tenantId={tenantId} />
