@@ -110,6 +110,10 @@ ssh "${VPS}" "cd ${REMOTE_DIR} && corepack enable && pnpm install --frozen-lockf
 echo "[3/5] Building API server..."
 ssh "${VPS}" "cd ${REMOTE_DIR} && pnpm build"
 
+echo "[3.5/5] Updating avatar-agent Python dependencies..."
+ssh "${VPS}" "cd ${REMOTE_DIR}/avatar-agent && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip -q && pip install -r requirements.txt -q"
+echo "  ✅ avatar-agent venv updated"
+
 echo "[4/5] Starting services with PM2..."
 ssh "${VPS}" "cd ${REMOTE_DIR} && pm2 startOrRestart ecosystem.config.cjs --env production --only rajiuce-api,rajiuce-avatar"
 ssh "${VPS}" "pm2 save"
