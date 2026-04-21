@@ -1592,11 +1592,23 @@
         window.__rajiuceRoom = null;
         // Room が切断されたら次のパネル開閉で再fetch可能にする
         avatarConfigFetched = false;
+        // avatar thumbnail URL を disconnected 後のFAB復元用に保持してから avatarConfig を解放
+        var _disconnectThumbUrl = avatarConfig ? (avatarConfig.imageUrl || null) : null;
         avatarConfig = null;
         // FABをリセット
         fabVideoEl = null;
         fabMediaContainer = null;
-        resetFabIcon();
+        // パネルが閉じている場合: アバター顔画像を復元（disconnect でアイコン劣化を防ぐ）
+        // パネルが開いている場合: FABは非表示なのでリセットで問題なし
+        if (!isOpen && _disconnectThumbUrl) {
+          var _thumbImg = document.createElement('img');
+          _thumbImg.src = _disconnectThumbUrl;
+          _thumbImg.alt = 'アバター';
+          _thumbImg.onerror = function () { resetFabIcon(); };
+          showFabMedia(_thumbImg);
+        } else {
+          resetFabIcon();
+        }
       });
 
       room.on(LK.RoomEvent.Reconnecting, function () {
@@ -1868,6 +1880,10 @@
         fabVideoEl.parentNode.removeChild(fabVideoEl);
       }
       showFabMedia(fabVideoEl);
+    } else if (fabMediaContainer && fabMediaContainer.firstChild) {
+      // 静止画アバター: openPanel で fab から切り離された fabMediaContainer を復元
+      while (fab.firstChild) { fab.removeChild(fab.firstChild); }
+      fab.appendChild(fabMediaContainer);
     } else {
       // アバターなし: チャットアイコン
       while (fab.firstChild) { fab.removeChild(fab.firstChild); }
