@@ -8,6 +8,7 @@ set -euo pipefail
 
 API_URL="${1:-https://api.r2c.biz}"
 ADMIN_URL="${2:-https://admin.r2c.biz}"
+VPS="${3:-root@65.108.159.161}"
 PASS=0
 FAIL=0
 
@@ -71,6 +72,16 @@ if [ "$metrics_status" = "200" ]; then
   PASS=$((PASS + 1))
 else
   echo "  ⚠️  Metrics — $metrics_status (non-critical, requires X-Internal-Request header)"
+fi
+
+# ── 6. avatar-agent PM2 status ────────────────────────────────────────────
+avatar_status=$(ssh "${VPS}" "pm2 describe rajiuce-avatar 2>/dev/null | grep -E 'status.*online' | wc -l | tr -d ' '" 2>/dev/null || echo "0")
+if [ "$avatar_status" -gt 0 ]; then
+  echo "  ✅ rajiuce-avatar — online"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ rajiuce-avatar — not online (check: ssh ${VPS} 'pm2 logs rajiuce-avatar --lines 50 --nostream')"
+  FAIL=$((FAIL + 1))
 fi
 
 # ── 結果 ──────────────────────────────────────────────────────────────────
