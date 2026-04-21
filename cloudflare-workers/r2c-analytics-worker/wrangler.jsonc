@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "r2c-analytics-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Paid Plan required for Cron Triggers
+  "triggers": {
+    "crons": [
+      "*/10 * * * *"
+    ]
+  },
+
+  // Email Service binding (Cloudflare Email Routing)
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
+
+  // Environment variables (non-secret)
+  "vars": {
+    "ENVIRONMENT": "development",
+    "INTERNAL_API_URL": "https://api.r2c.biz"
+  },
+
+  // Production environment overrides
+  "env": {
+    "production": {
+      "vars": {
+        "ENVIRONMENT": "production",
+        "INTERNAL_API_URL": "https://api.r2c.biz"
+      }
+    }
+  }
+}
