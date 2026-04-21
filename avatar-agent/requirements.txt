@@ -1,6 +1,9 @@
-livekit-agents[lemonslice,openai]>=1.4.0
-fish-audio-sdk>=1.0.0
-groq>=0.11.0
-httpx>=0.27.0
-python-dotenv>=1.0.0
-aiohttp>=3.9.0
+# Direct dependencies — pinned via `pip freeze` on VPS 2026-04-21
+# To update: pip install -U <package> && pip freeze > /tmp/freeze.txt, then update this file
+# DO NOT use >= constraints — they allow silent version drift that breaks livekit-agents compatibility
+livekit-agents[lemonslice,openai]==1.5.5
+fish-audio-sdk==1.3.0
+groq==1.2.0
+httpx==0.28.1
+python-dotenv==1.2.2
+aiohttp==3.13.5

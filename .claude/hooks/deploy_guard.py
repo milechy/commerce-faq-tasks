@@ -73,6 +73,9 @@ READ_ONLY_SSH_ALLOWLIST = [
 
     # pnpm 読み取り専用
     r'ssh root@65\.108\.159\.161 "cd /opt/rajiuce && pnpm ls [a-zA-Z0-9@_\-]+( 2>&1)?"',
+
+    # pip freeze (読み取り専用 — venv の固定バージョン取得用)
+    r'ssh root@65\.108\.159\.161 "cd /opt/rajiuce/avatar-agent && source venv/bin/activate && pip freeze"',
 ]
 
 
