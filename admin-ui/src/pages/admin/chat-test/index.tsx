@@ -78,6 +78,8 @@ export default function ChatTestPage() {
 
   // ウィジェット
   const widgetScriptRef = useRef<HTMLScriptElement | null>(null);
+  // テナント切替時の stale-token 注入を防ぐ: token がどのテナント用かを追跡
+  const tokenForTenantRef = useRef<string | null>(null);
 
   const effectiveTenantId = scopeGlobal
     ? "global"
@@ -146,6 +148,8 @@ export default function ChatTestPage() {
 
   useEffect(() => {
     if (!effectiveTenantId) return;
+    // テナント変更時はすぐに ref をリセット（inject effect が同 render で stale token を使わないよう保証）
+    tokenForTenantRef.current = null;
     cleanupWidget();
     setToken(null);
     setTokenError(null);
@@ -154,9 +158,12 @@ export default function ChatTestPage() {
     setGettingToken(true);
     void fetchChatTestToken(effectiveTenantId)
       .then((result) => {
+        // 新しい token がこのテナント用であることを記録してから state を更新
+        tokenForTenantRef.current = effectiveTenantId;
         setToken(result.token);
         setGettingToken(false);
         tokenExpiryRef.current = setTimeout(() => {
+          tokenForTenantRef.current = null;
           setToken(null);
           setTokenError(t("chat_test.token_expired"));
           cleanupWidget();
@@ -175,7 +182,8 @@ export default function ChatTestPage() {
 
   useEffect(() => {
     // avatar config fetch 完了まで待機（null→UUID 変化による二重注入を防止）
-    if (!token || !effectiveTenantId || !avatarConfigsReady) return;
+    // tokenForTenantRef で stale-token（テナント切替直後の古いトークン）注入を防止
+    if (!token || !effectiveTenantId || !avatarConfigsReady || tokenForTenantRef.current !== effectiveTenantId) return;
     cleanupWidget();
     const script = document.createElement("script");
     script.src = `${API_BASE}/widget.js`;
