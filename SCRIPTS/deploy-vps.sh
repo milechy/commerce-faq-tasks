@@ -28,10 +28,12 @@ echo "=== Phase28: Deploy to ${VPS}:${REMOTE_DIR} ==="
 # === VPS Integrity Guards ===
 echo "=== VPS Integrity Guards ==="
 
-# Guard 4-B: Abort if VPS has uncommitted changes (VPS should be a clean deploy target)
-UNCOMMITTED=$(ssh "${VPS}" "cd ${REMOTE_DIR} && git status --porcelain 2>/dev/null | wc -l | tr -d ' '" || echo "0")
+# Guard 4-B: Abort if VPS has modified tracked files (VPS should be a clean deploy target)
+# NOTE: Only checks modified tracked files (grep -v '^??'). Untracked files (rsync-transferred
+# local-only dirs like docs/investigation/) are intentionally excluded to prevent false positives.
+UNCOMMITTED=$(ssh "${VPS}" "cd ${REMOTE_DIR} && git status --porcelain 2>/dev/null | grep -v '^\?\?' | wc -l | tr -d ' '" || echo "0")
 if [ "${UNCOMMITTED}" -gt 0 ]; then
-    echo "⚠️  WARNING: Uncommitted changes on VPS (${UNCOMMITTED} files):"
+    echo "⚠️  WARNING: Modified tracked files on VPS (${UNCOMMITTED} files):"
     ssh "${VPS}" "cd ${REMOTE_DIR} && git status --short" || true
     echo ""
     echo "🛑 Aborting deploy. VPS has local modifications that may be overwritten."
@@ -39,7 +41,12 @@ if [ "${UNCOMMITTED}" -gt 0 ]; then
     echo "     ssh ${VPS} \"cd ${REMOTE_DIR} && git stash push -u -m 'backup-$(date +%Y%m%d)-before-reset' && git fetch origin && git reset --hard origin/main\""
     exit 1
 fi
-echo "  ✅ Guard 4-B: VPS git status clean"
+echo "  ✅ Guard 4-B: VPS git status clean (tracked files)"
+
+# Pre-deploy VPS cleanup: remove known local-only dirs that rsync may have transferred previously
+# Protects: avatar-agent/venv/ (excluded by rsync), models/ (not transferred)
+ssh "${VPS}" "rm -rf ${REMOTE_DIR}/docs/investigation/ ${REMOTE_DIR}/.wolf/ 2>/dev/null; true"
+echo "  ✅ Pre-deploy cleanup: removed rsync-only untracked dirs from VPS"
 
 # Guard 4-A: Detect recent npm usage (this project uses pnpm — npm install corrupts node_modules)
 CLEAN_REBUILD=0
@@ -98,6 +105,8 @@ rsync -avz --delete \
   --exclude '.devcontainer/' \
   --exclude '__pycache__/' \
   --exclude 'avatar-agent/venv/' \
+  --exclude 'docs/investigation/' \
+  --exclude '.wolf/' \
   ./ "${VPS}:${REMOTE_DIR}/"
 
 # rsync後の所有者正規化: Mac側UID(501)がrsync -a で転送されてもroot:rootに上書き

@@ -24,7 +24,27 @@ bash SCRIPTS/deploy-vps.sh
 
 ---
 
-## 2. avatar-agent 運用
+## 2. rsync 除外対象
+
+`deploy-vps.sh` の rsync は以下を VPS に転送しない:
+
+| 除外パス | 理由 |
+|---|---|
+| `node_modules/`, `admin-ui/node_modules/` | VPS で pnpm install により生成 |
+| `dist/`, `admin-ui/dist/` | VPS で pnpm build により生成 |
+| `.env`, `.env.*` | VPS の本番シークレットを保持（上書き禁止） |
+| `avatar-agent/venv/` | VPS で pip install により生成 |
+| `docs/investigation/` | ローカル調査メモ（VPS 不要 + Guard 4-B 誤検知防止） |
+| `.wolf/` | OpenWolf ローカルキャッシュ（VPS 不要） |
+| `.git/`, `logs/`, `*.log`, `.DS_Store` | ビルド生成物・ローカル専用 |
+
+> **Guard 4-B について**: rsync 除外漏れで VPS にローカル専用ファイルが転送されると
+> `git status --porcelain` に untracked として表示され Guard 4-B がブロックする。
+> `deploy-vps.sh` は deploy 前に `docs/investigation/` と `.wolf/` を VPS から自動削除する。
+
+---
+
+## 3. avatar-agent 運用
 
 ### プロセス管理
 
@@ -58,22 +78,37 @@ pm2 restart rajiuce-avatar
 
 ### 依存パッケージ
 
-`avatar-agent/requirements.txt` に明示された依存（`aiohttp` も含む）:
+`avatar-agent/requirements.txt` の直接依存（バージョン固定済み、2026-04-21 pip freeze より）:
 
-| パッケージ | 用途 |
-|---|---|
-| `livekit-agents[lemonslice,openai]` | LiveKit Agent SDK |
-| `fish-audio-sdk` | Fish Audio TTS |
-| `groq` | Groq LLM SDK |
-| `httpx` | HTTP クライアント |
-| `python-dotenv` | `.env` 読み込み |
-| `aiohttp` | 非同期 HTTP（Groq API, Fish Audio, 内部API呼び出し） |
+| パッケージ | バージョン | 用途 |
+|---|---|---|
+| `livekit-agents[lemonslice,openai]` | 1.5.5 | LiveKit Agent SDK |
+| `fish-audio-sdk` | 1.3.0 | Fish Audio TTS |
+| `groq` | 1.2.0 | Groq LLM SDK |
+| `httpx` | 0.28.1 | HTTP クライアント |
+| `python-dotenv` | 1.2.2 | `.env` 読み込み |
+| `aiohttp` | 3.13.5 | 非同期 HTTP（Groq API, Fish Audio, 内部API呼び出し） |
 
-> ⚠️ `agent.py` は `aiohttp` を直接 `import` する。`requirements.txt` に明記が必要。
+#### バージョン更新手順
+
+```bash
+# 1. VPS 上でアップグレード
+ssh root@65.108.159.161
+cd /opt/rajiuce/avatar-agent
+source venv/bin/activate
+pip install -U livekit-agents  # 更新したいパッケージ
+pip freeze > /tmp/freeze.txt
+
+# 2. ローカルに requirements.txt を更新
+# 直接依存（上記6パッケージ）のバージョンを pip freeze 出力に合わせて書き換え
+```
+
+> ⚠️ `>=` 制約は使わない。livekit-agents はマイナーバージョン間で破壊的変更があるため、
+> バージョン未固定だと deploy 毎に異なるバージョンが入りサイレントな不具合が発生する。
 
 ---
 
-## 3. インシデント記録
+## 4. インシデント記録
 
 ### [2026-04-21] avatar-agent venv 消失 → aiohttp 欠落
 
@@ -92,7 +127,7 @@ pm2 restart rajiuce-avatar
 
 ---
 
-## 4. PM2 プロセス一覧
+## 5. PM2 プロセス一覧
 
 | ID | Name | Script |
 |---|---|---|
@@ -107,7 +142,7 @@ ssh root@65.108.159.161 "pm2 list"
 
 ---
 
-## 5. Nginx 設定
+## 6. Nginx 設定
 
 - `api.r2c.biz` → `localhost:3100`
 - `admin.r2c.biz` → Cloudflare Pages（VPS は admin UI をホストしない）
