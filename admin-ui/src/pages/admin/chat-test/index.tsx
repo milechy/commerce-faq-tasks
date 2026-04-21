@@ -67,6 +67,8 @@ export default function ChatTestPage() {
   // アバター選択
   const [availableAvatars, setAvailableAvatars] = useState<AvatarConfigOption[]>([]);
   const [selectedAvatarConfigId, setSelectedAvatarConfigId] = useState<string | null>(null);
+  // avatar config fetch が完了するまで widget 注入を待機するフラグ
+  const [avatarConfigsReady, setAvatarConfigsReady] = useState(false);
 
   // トークン状態
   const [token, setToken] = useState<string | null>(null);
@@ -89,8 +91,8 @@ export default function ChatTestPage() {
       : (previewMode ? (previewTenantName ?? effectiveTenantId) : (user?.tenantName ?? effectiveTenantId));
 
   const cleanupWidget = useCallback(() => {
-    const host = document.getElementById("faq-chat-widget-host");
-    if (host) host.remove();
+    // querySelectorAll で同一IDの重複ホストを全て削除（getElementById は先頭1件のみ）
+    document.querySelectorAll("#faq-chat-widget-host").forEach((host) => host.remove());
     if (widgetScriptRef.current) {
       widgetScriptRef.current.remove();
       widgetScriptRef.current = null;
@@ -111,9 +113,11 @@ export default function ChatTestPage() {
   }, [isSuperAdmin]);
 
   useEffect(() => {
+    setAvatarConfigsReady(false);
     if (!effectiveTenantId || scopeGlobal) {
       setAvailableAvatars([]);
       setSelectedAvatarConfigId(null);
+      setAvatarConfigsReady(true);
       return;
     }
     const url = isSuperAdmin
@@ -131,8 +135,12 @@ export default function ChatTestPage() {
           const firstCustom = configs.find((c) => !c.is_default);
           setSelectedAvatarConfigId(firstCustom?.id ?? configs[0]?.id ?? null);
         }
+        setAvatarConfigsReady(true);
       })
-      .catch(() => { setAvailableAvatars([]); });
+      .catch(() => {
+        setAvailableAvatars([]);
+        setAvatarConfigsReady(true);
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTenantId, scopeGlobal, queryAvatarConfigId]);
 
@@ -166,7 +174,8 @@ export default function ChatTestPage() {
   }, [effectiveTenantId]);
 
   useEffect(() => {
-    if (!token || !effectiveTenantId) return;
+    // avatar config fetch 完了まで待機（null→UUID 変化による二重注入を防止）
+    if (!token || !effectiveTenantId || !avatarConfigsReady) return;
     cleanupWidget();
     const script = document.createElement("script");
     script.src = `${API_BASE}/widget.js`;
@@ -179,7 +188,7 @@ export default function ChatTestPage() {
     widgetScriptRef.current = script;
     document.body.appendChild(script);
     return cleanupWidget;
-  }, [token, effectiveTenantId, cleanupWidget, selectedAvatarConfigId]);
+  }, [token, effectiveTenantId, cleanupWidget, selectedAvatarConfigId, avatarConfigsReady]);
 
   useEffect(() => {
     return () => {
