@@ -106,6 +106,7 @@
   },
   "dependencies": {
     "@elastic/elasticsearch": "8.19.1",
+    "@google-analytics/data": "^5.2.1",
     "@langchain/core": "^0.3.80",
     "@langchain/langgraph": "^0.2.74",
     "@notionhq/client": "^5.4.0",

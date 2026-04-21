@@ -111,6 +111,37 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 |---|---|---|
 | `src/api/admin/feedback/migration_feedback.sql` | feedback_messages テーブル初期作成 | ✅ |
 | `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | 要適用 |
+| `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | 要適用 |
+
+### Phase A Day 2 migration 実行手順
+
+```bash
+# 1. VPS SSH接続
+ssh root@65.108.159.161
+
+# 2. バックアップ (必須)
+pg_dump $DATABASE_URL > /opt/backups/pre_phase_a_$(date +%Y%m%d_%H%M).sql
+
+# 3. Migration 実行
+psql $DATABASE_URL < /opt/rajiuce/src/api/admin/tenants/migration_phase_a.sql
+
+# 4. 確認
+psql $DATABASE_URL -c "\d tenants" | grep ga4
+psql $DATABASE_URL -c "\d notification_preferences"
+psql $DATABASE_URL -c "\d ga4_connection_logs"
+psql $DATABASE_URL -c "\d ga4_test_history"
+psql $DATABASE_URL -c "\d conversion_attributions" | grep event_id
+```
+
+### Phase A Day 2 環境変数追加 (.env)
+
+```bash
+# GA4 Data API (サービスアカウントJSON をbase64エンコード)
+GOOGLE_APPLICATION_CREDENTIALS_JSON=<base64-encoded-service-account-json>
+
+# Cloudflare Workers → VPS HMAC認証 (Workers側と同じ値を設定)
+INTERNAL_API_HMAC_SECRET=<random-256bit-secret>
+```
 
 ```bash
 # VPS で実行:
