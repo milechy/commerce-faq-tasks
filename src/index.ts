@@ -60,6 +60,8 @@ import { registerFalGenerationRoutes } from "./api/admin/avatar/falGenerationRou
 import { registerPremiumGenerationRoutes } from "./api/admin/avatar/premiumGenerationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
+import { registerGa4TenantRoutes } from "./api/admin/tenants/ga4Routes";
+import { registerInternalGa4SyncRoutes } from "./api/internal/ga4SyncRoutes";
 import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
 import { registerVariantRoutes } from "./api/admin/variants/routes";
 import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/routes";
@@ -481,6 +483,9 @@ registerKnowledgeAdminRoutes(app);
 // Phase31: テナント管理API
 if (db) registerTenantAdminRoutes(app, db);
 
+// Phase A: GA4連携管理API (テナント別 connect/test/status/disconnect)
+if (db) registerGa4TenantRoutes(app, db);
+
 // Phase32: 課金管理API
 if (db) initUsageTracker(db, logger);
 
@@ -545,6 +550,9 @@ registerInternalUsageRoutes(app);
 
 // Internal: avatar-agent → テナント別アバター設定取得（X-Internal-Request: 1 認証）
 registerInternalAvatarConfigRoutes(app);
+
+// Phase A: GA4連携 内部API (Cloudflare Workers Cron用, HMAC認証)
+if (db) registerInternalGa4SyncRoutes(app, db);
 
 // Phase41: Avatar Customization Studio — Admin CRUD API
 if (db) registerAvatarConfigRoutes(app, db);
