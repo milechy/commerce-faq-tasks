@@ -23,6 +23,7 @@
   var tenantId = currentScript ? currentScript.getAttribute('data-tenant') : '';
   var apiKey = currentScript ? currentScript.getAttribute('data-api-key') : '';
   var avatarConfigId = currentScript ? (currentScript.getAttribute('data-avatar-config-id') || '') : '';
+  var posthogKey = currentScript ? (currentScript.getAttribute('data-posthog-key') || '') : '';
 
   if (!tenantId) {
     console.warn('[FAQ Widget] data-tenant 属性が必要です。例: data-tenant="your-tenant-id"');
@@ -47,6 +48,56 @@
   var allowedOrigins = rawAllowed
     ? rawAllowed.split(',').map(function (s) { return s.trim(); })
     : [window.location.origin];
+
+  /* ------------------------------------------------------------------ */
+  /* 2a. PostHog SDK 読み込み + イベントキャプチャ                        */
+  /* ------------------------------------------------------------------ */
+
+  var _posthogReady = false;
+  var _posthogQueue = [];
+
+  function capturePostHog(eventName, props) {
+    try {
+      var p = Object.assign({ tenant_id: tenantId }, props || {});
+      if (_posthogReady && window.posthog && typeof window.posthog.capture === 'function') {
+        window.posthog.capture(eventName, p);
+      } else {
+        _posthogQueue.push({ eventName: eventName, props: p });
+      }
+    } catch (_e) { /* fire-and-forget */ }
+  }
+
+  if (posthogKey) {
+    try {
+      var phScript = document.createElement('script');
+      phScript.src = 'https://eu-assets.i.posthog.com/static/array.js';
+      phScript.async = true;
+      phScript.onload = function () {
+        try {
+          var sessionId = '';
+          try { sessionId = sessionStorage.getItem('r2c_sid') || ''; } catch (_e) {}
+
+          window.posthog.init(posthogKey, {
+            api_host: 'https://eu.i.posthog.com',
+            autocapture: false,
+            capture_pageview: false,
+            capture_heatmaps: false,
+          });
+          if (sessionId) {
+            window.posthog.identify(sessionId, { tenant_id: tenantId });
+          }
+          _posthogReady = true;
+          // drain queue
+          for (var qi = 0; qi < _posthogQueue.length; qi++) {
+            var item = _posthogQueue[qi];
+            window.posthog.capture(item.eventName, item.props);
+          }
+          _posthogQueue = [];
+        } catch (_initErr) { /* ignore */ }
+      };
+      document.head.appendChild(phScript);
+    } catch (_e) { /* ignore */ }
+  }
 
   /* ------------------------------------------------------------------ */
   /* 2. prefers-reduced-motion 検出                                       */
@@ -1781,6 +1832,7 @@
     }
     textarea.focus();
     emitToHost('widget:opened', {});
+    capturePostHog('widget_opened', { page_url: window.location.href.slice(0, 2048) });
     // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
     if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
       avatarArea.style.display = 'flex';
@@ -1822,6 +1874,7 @@
       fab.appendChild(svgIcon(CHAT_SVG_PATH));
     }
     emitToHost('widget:closed', {});
+    capturePostHog('widget_closed', {});
     // LiveKit Room を切断（次回開閉時に新規接続で安定化）
     if (window.__rajiuceRoom) {
       try { window.__rajiuceRoom.disconnect(); } catch (_e) {}
@@ -1878,6 +1931,8 @@
     textarea.disabled = true;
 
     emitToHost('user:message', { messageLength: text.length });
+    capturePostHog('message_sent', { message_length: text.length });
+    var _phSendStart = Date.now();
 
     // Anam アバター有効時 → Client-Side Custom LLM (Groq) で応答生成してTTSへ
     if (avatarProvider === 'anam' && (anamClient || window.__anamClient)) {
@@ -1972,6 +2027,10 @@
         }
 
         emitToHost('assistant:message', { messageLength: assistantContent.length });
+        capturePostHog('llm_response_received', {
+          latency_ms: typeof _phSendStart !== 'undefined' ? Date.now() - _phSendStart : undefined,
+          response_length: assistantContent.length,
+        });
       })
       .catch(function (err) {
         if (err && err.name === 'AbortError') return;
@@ -2531,6 +2590,12 @@
         referrer: document.referrer
       }]
     };
+
+    capturePostHog('cv_macro', {
+      conversion_type: conversionType,
+      conversion_value: (typeof conversionValue === 'number') ? conversionValue : null,
+      session_id: sessionId || 'unknown',
+    });
 
     fetch(apiBase + '/api/events', {
       method: 'POST',

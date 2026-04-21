@@ -7,6 +7,7 @@ import type { PlannerPlan } from '../dialog/types';
 import type { PlannerRoute } from '../llm/modelRouter';
 import { RAG_EXCERPT_MAX_CHARS, RAG_MAX_EXCERPTS } from '../config/ragLimits';
 import { detectIntentHint, type DialogInput, type RagContext } from './flowControl';
+import { trackLlmGeneration } from '../../lib/posthog/llmAnalyticsTracker';
 
 const logger = pino();
 
@@ -303,5 +304,19 @@ export async function callAnswerLLM(
     { route, model, safeMode: !!payload.safeMode, latencyMs },
     'dialog.answer.finished',
   );
+
+  // Fire-and-forget LLM Analytics (non-blocking, failure ignored)
+  setImmediate(() => {
+    try {
+      trackLlmGeneration({
+        tenantId: payload.input.tenantId,
+        sessionId: payload.input.conversationId ?? 'unknown',
+        model,
+        provider: 'groq',
+        latencyMs,
+      });
+    } catch { /* ignore */ }
+  });
+
   return raw;
 }
