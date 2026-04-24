@@ -201,6 +201,7 @@ export async function runDialogTurn(
         orchestrated.clarifyingQuestions ?? multiStepPlan.clarifyingQuestions,
       gapSignal: orchestrated.gapSignal,
       llmUsage: orchestrated.llmUsage,
+      ragSources: orchestrated.ragSources,
     },
   };
 

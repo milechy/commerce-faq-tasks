@@ -10,6 +10,7 @@ import type {
   AgentSearchParams,
   AgentSearchResponse,
   AgentStep,
+  RagSource,
 } from "../types";
 import { planQueryWithLlmAsync } from "./llmPlannerRuntime";
 import { planQuery } from "./queryPlanner";
@@ -184,10 +185,29 @@ export async function runSearchAgent(
     rerankEngine: rerankResult.rerankEngine,
   };
 
+  // Phase68: rerank 後の topK チャンクを RAG ソースとして抽出。
+  // metadata の 'source' が 'book' のときのみ principle/book 扱い、
+  // 未設定 (ES ヒット or 旧データ) は FAQ として扱う。
+  const ragSources: RagSource[] = rerankResult.items.map((it) => {
+    const meta = (it as { metadata?: Record<string, unknown> }).metadata;
+    const sourceType = meta && meta["source"] === "book" ? "book" : "faq";
+    const principle = typeof meta?.["principle"] === "string"
+      ? (meta["principle"] as string)
+      : undefined;
+    const source: RagSource = {
+      chunk_id: String(it.id),
+      source: sourceType,
+      score: typeof it.score === "number" ? it.score : 0,
+    };
+    if (principle) source.principle = principle;
+    return source;
+  });
+
   return {
     answer: synth.answer,
     steps,
     ragStats,
+    ragSources,
     gapSignal: synth.gapSignal,
     llmUsage: synth.llmUsage,
     debug: {

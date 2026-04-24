@@ -168,6 +168,8 @@ export default function AnalyticsDashboardPage() {
   const [evaluations, setEvaluations] = useState<AnalyticsEvaluationsResponse | null>(null);
   const [conversion, setConversion] = useState<ConversionResponse | null>(null);
   const [techSortAsc, setTechSortAsc] = useState(false);
+  // Phase68: ナレッジ貢献度 — Top3 の平均 CV 率
+  const [knowledgeTop3AvgRate, setKnowledgeTop3AvgRate] = useState<number | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -211,6 +213,42 @@ export default function AnalyticsDashboardPage() {
       setTrends((await trendsRes.json()) as AnalyticsTrendsResponse);
       setEvaluations((await evalsRes.json()) as AnalyticsEvaluationsResponse);
       setConversion((await convRes.json()) as ConversionResponse);
+
+      // Phase68: ナレッジ貢献度（特定テナントが選ばれている場合のみ）
+      const effectiveTenantId =
+        tenantId ?? (isSuperAdmin && tenantFilter ? tenantFilter : undefined);
+      if (effectiveTenantId) {
+        try {
+          const kaParams = new URLSearchParams({
+            tenant_id: effectiveTenantId,
+            period,
+            sort_by: "conversion_rate",
+            limit: "3",
+          });
+          const kaRes = await authFetch(
+            `${API_BASE}/v1/admin/analytics/knowledge-attribution?${kaParams}`,
+          );
+          if (kaRes.ok) {
+            const ka = (await kaRes.json()) as {
+              items: Array<{ conversion_rate: number }>;
+            };
+            if (ka.items.length > 0) {
+              const top3 = ka.items.slice(0, 3);
+              const avg =
+                top3.reduce((s, i) => s + (i.conversion_rate ?? 0), 0) / top3.length;
+              setKnowledgeTop3AvgRate(avg);
+            } else {
+              setKnowledgeTop3AvgRate(null);
+            }
+          } else {
+            setKnowledgeTop3AvgRate(null);
+          }
+        } catch {
+          setKnowledgeTop3AvgRate(null);
+        }
+      } else {
+        setKnowledgeTop3AvgRate(null);
+      }
     } catch {
       setError("データの読み込みに失敗しました");
     } finally {
@@ -622,6 +660,29 @@ export default function AnalyticsDashboardPage() {
               <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>CV件数(30日)</span>
               <span style={{ fontSize: 12, color: "#6b7280" }}>
                 ¥{(summary?.cv_total_value_30d ?? 0).toLocaleString("ja-JP")}
+              </span>
+            </div>
+
+            {/* ナレッジ貢献度 (Phase68) */}
+            <div style={cardStyle}>
+              <span style={{ fontSize: 24 }}>📈</span>
+              <span
+                style={{
+                  fontSize: 28,
+                  fontWeight: 700,
+                  color: knowledgeTop3AvgRate != null ? "#4ade80" : "#9ca3af",
+                  lineHeight: 1,
+                }}
+              >
+                {knowledgeTop3AvgRate != null
+                  ? `${(knowledgeTop3AvgRate * 100).toFixed(1)}%`
+                  : "—"}
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>
+                ナレッジ貢献度
+              </span>
+              <span style={{ fontSize: 12, color: "#6b7280" }}>
+                Top3 平均CV率
               </span>
             </div>
 

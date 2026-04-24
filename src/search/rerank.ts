@@ -101,6 +101,8 @@ export type Item = {
   text: string;
   score: number;
   source: "es" | "pg" | "pgvector";
+  /** Phase68: faq_embeddings.metadata（source='faq'|'book', principle 等） */
+  metadata?: Record<string, unknown>;
 };
 
 export type RerankResult = {

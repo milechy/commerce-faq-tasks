@@ -7,6 +7,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { pool } from "../../../lib/db";
 import { createNotification, notificationExists } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
+import { decryptText } from '../../../lib/crypto/textEncrypt';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -966,6 +967,255 @@ export function registerAnalyticsRoutes(app: Express): void {
       } catch (err) {
         logger.warn("[GET /v1/admin/analytics/cv-status]", err);
         return res.status(500).json({ error: "CV発火状況の取得に失敗しました" });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/knowledge-attribution
+  // Phase68: ナレッジ別 CV 影響度集計
+  //   - tenant_id 必須（super_admin は query、client_admin は JWT 強制）
+  //   - period: 7d | 30d | 90d（デフォルト 30d）
+  //   - source_type: all | faq | book（デフォルト all）
+  //   - sort_by: conversion_rate | usage_count | judge_score（デフォルト conversion_rate）
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/knowledge-attribution",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string =
+        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+
+      // RBAC: client_admin は JWT の tenantId を強制、super_admin は query ?tenant_id=
+      const tenantId: string | undefined = isSuperAdmin
+        ? ((req.query["tenant_id"] as string | undefined) || undefined)
+        : (jwtTenantId || undefined);
+
+      if (!tenantId) {
+        return res.status(400).json({
+          error: isSuperAdmin
+            ? "tenant_id クエリパラメータが必要です"
+            : "テナントIDが解決できません",
+        });
+      }
+
+      const period = ((req.query["period"] as string | undefined) ?? "30d");
+      const interval = periodToInterval(period);
+
+      const sourceTypeRaw = (req.query["source_type"] as string | undefined) ?? "all";
+      const sourceType: "all" | "faq" | "book" =
+        sourceTypeRaw === "faq" || sourceTypeRaw === "book" ? sourceTypeRaw : "all";
+
+      const sortByRaw = (req.query["sort_by"] as string | undefined) ?? "conversion_rate";
+      const validSortBy = ["conversion_rate", "usage_count", "judge_score"] as const;
+      const sortBy: typeof validSortBy[number] = validSortBy.includes(
+        sortByRaw as typeof validSortBy[number],
+      )
+        ? (sortByRaw as typeof validSortBy[number])
+        : "conversion_rate";
+
+      const limitRaw = parseInt((req.query["limit"] as string | undefined) ?? "50", 10);
+      const limit = Math.max(1, Math.min(Number.isFinite(limitRaw) ? limitRaw : 50, 200));
+
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      // ORDER BY 列を allow-list から選択（SQLインジェクション防止）
+      const orderColumn =
+        sortBy === "usage_count"
+          ? "c.usage_count"
+          : sortBy === "judge_score"
+          ? "c.avg_judge_score"
+          : "conversion_rate";
+
+      const sourceFilterClause =
+        sourceType === "all" ? "" : "AND (src->>'source') = $3";
+
+      try {
+        // ----- 現期間・前期間を1発のCTEクエリで集計 -----
+        // chat_messages.rag_sources は [{chunk_id, source, score, principle?}, ...] 想定
+        const queryArgs: (string | number)[] = [tenantId, interval];
+        if (sourceType !== "all") queryArgs.push(sourceType);
+
+        const sql = `
+          WITH current_period AS (
+            SELECT
+              (src->>'chunk_id') AS chunk_id,
+              (src->>'source') AS src_type,
+              (src->>'principle') AS principle,
+              cs.id AS session_uuid,
+              cs.session_id AS session_text_id,
+              ca.id IS NOT NULL AS converted,
+              ev.score AS judge_score
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cs.id = cm.session_id
+            LEFT JOIN conversion_attributions ca ON ca.session_id = cs.id
+            LEFT JOIN conversation_evaluations ev ON ev.session_id = cs.session_id AND ev.score > 0
+            CROSS JOIN LATERAL jsonb_array_elements(cm.rag_sources) AS src
+            WHERE cs.tenant_id = $1
+              AND cm.rag_sources IS NOT NULL
+              AND cm.role = 'assistant'
+              AND cm.created_at >= NOW() - $2::interval
+              ${sourceFilterClause}
+          ),
+          previous_period AS (
+            SELECT
+              (src->>'chunk_id') AS chunk_id,
+              cs.id AS session_uuid,
+              ca.id IS NOT NULL AS converted
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cs.id = cm.session_id
+            LEFT JOIN conversion_attributions ca ON ca.session_id = cs.id
+            CROSS JOIN LATERAL jsonb_array_elements(cm.rag_sources) AS src
+            WHERE cs.tenant_id = $1
+              AND cm.rag_sources IS NOT NULL
+              AND cm.role = 'assistant'
+              AND cm.created_at >= NOW() - ($2::interval * 2)
+              AND cm.created_at <  NOW() - $2::interval
+              ${sourceFilterClause}
+          ),
+          current_agg AS (
+            SELECT
+              chunk_id,
+              MAX(src_type) AS src_type,
+              MAX(principle) AS principle,
+              COUNT(*)::int AS usage_count,
+              COUNT(DISTINCT session_uuid)::int AS conversation_count,
+              COUNT(DISTINCT CASE WHEN converted THEN session_uuid END)::int AS conversion_count,
+              AVG(judge_score)::float AS avg_judge_score
+            FROM current_period
+            GROUP BY chunk_id
+          ),
+          previous_agg AS (
+            SELECT
+              chunk_id,
+              CASE
+                WHEN COUNT(DISTINCT session_uuid) > 0
+                THEN COUNT(DISTINCT CASE WHEN converted THEN session_uuid END)::float
+                     / COUNT(DISTINCT session_uuid)
+                ELSE 0
+              END AS prev_rate
+            FROM previous_period
+            GROUP BY chunk_id
+          ),
+          joined AS (
+            SELECT
+              c.chunk_id,
+              c.src_type,
+              c.principle,
+              c.usage_count,
+              c.conversation_count,
+              c.conversion_count,
+              CASE
+                WHEN c.conversation_count > 0
+                THEN (c.conversion_count::float / c.conversation_count)
+                ELSE 0
+              END AS conversion_rate,
+              c.avg_judge_score,
+              fe.text AS raw_text,
+              bu.title AS book_title,
+              COALESCE(p.prev_rate, 0) AS prev_rate
+            FROM current_agg c
+            LEFT JOIN faq_embeddings fe
+              ON fe.id::text = c.chunk_id AND (fe.tenant_id = $1 OR fe.tenant_id = 'global')
+            LEFT JOIN book_uploads bu
+              ON bu.id::text = fe.metadata->>'book_id'
+            LEFT JOIN previous_agg p ON p.chunk_id = c.chunk_id
+          )
+          SELECT * FROM joined
+          ORDER BY ${orderColumn} DESC NULLS LAST, usage_count DESC
+          LIMIT ${limit}
+        `;
+
+        const result = await pool.query(sql, queryArgs);
+
+        type AttrRow = {
+          chunk_id: string;
+          src_type: "faq" | "book" | null;
+          principle: string | null;
+          usage_count: number;
+          conversation_count: number;
+          conversion_count: number;
+          conversion_rate: number;
+          avg_judge_score: number | null;
+          raw_text: string | null;
+          book_title: string | null;
+          prev_rate: number;
+        };
+
+        const items = (result.rows as AttrRow[]).map((row) => {
+          const currentRate = row.conversion_rate ?? 0;
+          const prevRate = row.prev_rate ?? 0;
+          const delta = currentRate - prevRate;
+          const trend: "up" | "down" | "stable" =
+            Math.abs(delta) < 0.02 ? "stable" : delta > 0 ? "up" : "down";
+          // タイトル: 暗号化テキストを復号し先頭50文字を表示
+          const chunkTitle = row.raw_text
+            ? (() => { try { return decryptText(row.raw_text).slice(0, 50); } catch { return row.raw_text.slice(0, 50); } })()
+            : null;
+          const displayTitle =
+            row.src_type === "book" && row.book_title
+              ? `${row.book_title} — ${chunkTitle ?? ""}`
+              : chunkTitle ?? "(削除済み)";
+          return {
+            chunk_id: row.chunk_id,
+            source: (row.src_type ?? "faq") as "faq" | "book",
+            title: displayTitle,
+            principle: row.principle ?? undefined,
+            usage_count: row.usage_count,
+            conversation_count: row.conversation_count,
+            conversion_count: row.conversion_count,
+            conversion_rate: Number(currentRate.toFixed(4)),
+            avg_judge_score:
+              row.avg_judge_score != null
+                ? Number(row.avg_judge_score.toFixed(2))
+                : null,
+            trend,
+          };
+        });
+
+        // サマリー
+        const totalChunksUsed = items.length;
+        const avgConversionRate =
+          totalChunksUsed > 0
+            ? Number(
+                (
+                  items.reduce((s, i) => s + i.conversion_rate, 0) / totalChunksUsed
+                ).toFixed(4),
+              )
+            : 0;
+        const topPerformer = items.reduce<typeof items[number] | null>(
+          (best, it) =>
+            best == null || it.conversion_rate > best.conversion_rate ? it : best,
+          null,
+        );
+        const worstPerformer = items.reduce<typeof items[number] | null>(
+          (worst, it) =>
+            worst == null || it.conversion_rate < worst.conversion_rate ? it : worst,
+          null,
+        );
+
+        return res.json({
+          period,
+          tenant_id: tenantId,
+          source_type: sourceType,
+          sort_by: sortBy,
+          items,
+          summary: {
+            total_chunks_used: totalChunksUsed,
+            avg_conversion_rate: avgConversionRate,
+            top_performer: topPerformer,
+            worst_performer: worstPerformer,
+          },
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/knowledge-attribution]", err);
+        return res
+          .status(500)
+          .json({ error: "ナレッジ貢献度の集計に失敗しました" });
       }
     },
   );

@@ -47,6 +47,22 @@ export interface AgentSearchParams {
   visitorId?: string;
 }
 
+/**
+ * Phase68: LLM応答に使用された RAG チャンクの 1 件。
+ * chat_messages.rag_sources に JSONB 配列として永続化される。
+ * ナレッジ別 CV 影響度の集計キーとなる。
+ */
+export interface RagSource {
+  /** faq_embeddings.id の文字列表現 */
+  chunk_id: string;
+  /** FAQ チャンクか書籍チャンクか */
+  source: "faq" | "book";
+  /** rerank 後の最終スコア (0〜1 目安) */
+  score: number;
+  /** 書籍チャンクに関連づけられた心理原則（書籍チャンクのみ） */
+  principle?: string;
+}
+
 export interface AgentSearchResponse {
   answer: string;
   steps: AgentStep[];
@@ -58,6 +74,8 @@ export interface AgentSearchResponse {
     totalMs?: number;
     rerankEngine?: string;
   };
+  /** Phase68: 応答生成に使用された RAG チャンク（rerank 後の topK） */
+  ragSources?: RagSource[];
   gapSignal?: { hitCount: number; topScore: number };
   /** Phase53: Groq API実トークン数 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number };

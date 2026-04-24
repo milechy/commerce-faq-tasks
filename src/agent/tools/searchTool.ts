@@ -36,6 +36,8 @@ export async function searchTool(
         score: hit.score,
         // pgvector だが、既存の 'pg' ソース種別に合わせておく
         source: 'pg',
+        // Phase68: faq_embeddings.metadata を引き継ぐ (source/principle/book_id)
+        metadata: hit.metadata,
       }));
 
       return {

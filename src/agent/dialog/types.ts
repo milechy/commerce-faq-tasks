@@ -114,6 +114,8 @@ export interface DialogTurnMeta {
   gapSignal?: { hitCount: number; topScore: number };
   /** Phase53: Groq API実トークン数 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number };
+  /** Phase68: 応答生成に使用された RAG チャンク */
+  ragSources?: import("../types").RagSource[];
 }
 
 export interface DialogTurnResult {

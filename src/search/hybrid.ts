@@ -10,6 +10,8 @@ export interface Hit {
   text: string;
   score: number;
   source: "es" | "pg";
+  /** Phase68: faq_embeddings.metadata（pgvector 経由のヒット時に格納） */
+  metadata?: Record<string, unknown>;
 }
 type EsHit = { _id: string; _source?: { text?: string; [key: string]: unknown }; _score?: number };
 type EsSearchResult = { hits?: { hits?: EsHit[] } };
@@ -137,6 +139,9 @@ export async function hybridSearch(
       text: decryptText(h._source?.text ?? ""),
       score: h._score ?? 0,
       source: "es" as const,
+      metadata: h._source?.["source"] != null
+        ? { source: h._source["source"], book_id: h._source["book_id"] }
+        : undefined,
     }));
   } catch (e: unknown) {
     const esErrCode = (e as any)?.meta?.statusCode ?? (e as any)?.statusCode;
@@ -164,6 +169,9 @@ export async function hybridSearch(
           text: decryptText(h._source?.text ?? ""),
           score: h._score ?? 0,
           source: "es" as const,
+          metadata: h._source?.["source"] != null
+            ? { source: h._source["source"], book_id: h._source["book_id"] }
+            : undefined,
         }));
         if (esHits.length > 0) {
           notes.push(`es_lang_fallback:${fallbackIndex} hits=${esHits.length}`);
@@ -216,6 +224,9 @@ export async function hybridSearch(
         text: decryptText(h._source?.text ?? ""),
         score: h._score ?? 0,
         source: "es" as const,
+        metadata: h._source?.["source"] != null
+          ? { source: h._source["source"], book_id: h._source["book_id"] }
+          : undefined,
       }));
       if (probeHits.length > 0) {
         esHits = probeHits;
