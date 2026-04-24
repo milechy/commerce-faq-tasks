@@ -331,3 +331,78 @@ export MCP_CONNECTION_NONBLOCKING=true # MCP非同期接続
 - コスト $0（ローカル処理のみ、外部API不使用）
 - `openwolf status` で健全性確認、`openwolf scan` で構造マップ更新
 - `.wolf/` は `.gitignore` 登録済み（ローカルのみ）
+
+## 開発プレイブック参照
+
+開発の進め方の全体像は `docs/R2C_DEVELOPMENT_PLAYBOOK.md` を参照。
+
+### 役割分担
+- Claude.ai: 戦略/Asana MCP/メモリー管理/CLI用1-2行要件提示
+- CLI: 自律実装 (discovery→plan→implement→gate→Codex→push)
+- 人間: Gate 2.5手動/DBマイグレーション手動/デプロイ判断
+
+### CLIプロンプト生成ルール
+- 冒頭に `## 推奨モデル: [Opus 4.7 / Sonnet 4.6 / Plan Mode]` 必須（省略禁止）
+- SSHコマンドはCLIプロンプトに含めない（deploy_guardブロック）
+- DBマイグレーションは「hkobayashiが手動実行」ステップとして記載し、CLIには確認クエリのみ
+- 詳細な章立て・ステップバイステップ指示を書かない（CLIが自走する）
+- `!`コマンド列挙・push承認ゲート設置・Gate結果仲介指示は全て禁止
+
+### CLIプロンプトテンプレート
+
+**標準（新規タスク）:**
+```
+## 推奨モデル: [Opus 4.7 / Sonnet 4.6]
+
+## タスク
+Asana GID: XXXX — [タスク名]
+[1-3行でゴール・完了条件]
+
+## 制約
+- [アーキテクチャ制約]
+
+## Gate
+@gate-runner で Gate 1-3実行。Gate 2.5必要。
+```
+
+**バグ修正:**
+```
+## 推奨モデル: Sonnet 4.6
+
+## バグ
+[症状1-2行]
+
+## 初動
+Playwright MCPで現象確認してから修正。推測で修正しない。
+
+## Gate
+@gate-runner で Gate 1-3実行。Gate 2.5必要。
+```
+
+**並列開発（Agent Teams）:**
+```
+## 推奨モデル: Opus 4.7
+
+## 概要
+[Phase名 — 目的]
+
+## 共有インターフェース
+[DB schema / API spec / TS types 埋め込み]
+
+## ペイン1-N
+[各1-2行]
+
+## Gate
+各ペイン完了後 @gate-runner。Gate 2.5必要。
+```
+
+### セッション開始プロトコル
+1. Asana:get_project (GID: 1213607637045514) で未完了タスク確認
+2. Asana:get_task で個別タスクの completed 等を検証
+3. メモリーと実態の乖離検出→メモリー更新提案
+4. 未完了タスクから優先順位付きCLI要件を提示（推奨モデル明記）
+
+### 問題解決原則
+- 根本原因特定+再発防止（症状修正で終わらない）
+- バグ報告→テキスト推測禁止→Playwright MCP/pm2 logs/DB SELECTの3点確認
+- CLI報告に「変更しました/no diff/リスク最小」→スコープ再評価要求
