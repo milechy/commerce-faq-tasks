@@ -137,6 +137,21 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const sqlArg = String(mockQuery.mock.calls[0]?.[0] ?? '');
     expect(sqlArg).toMatch(/ORDER BY\s+usage_count\s+DESC/);
+    // ORDER BY 節に c. プレフィックスが付いていないこと（CTE スコープ外）
+    expect(sqlArg).not.toMatch(/ORDER BY\s+c\.usage_count/);
+  });
+
+  it('SQL の ORDER BY が sort_by に合わせて切り替わる (judge_score)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .query({ sort_by: 'judge_score' })
+      .set('x-tenant-id', 'tenant-A');
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const sqlArg = String(mockQuery.mock.calls[0]?.[0] ?? '');
+    expect(sqlArg).toMatch(/ORDER BY\s+avg_judge_score\s+DESC/);
+    expect(sqlArg).not.toMatch(/ORDER BY\s+c\.avg_judge_score/);
   });
 
   it('source_type=book のとき LATERAL に絞り込みパラメータが追加される', async () => {

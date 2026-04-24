@@ -18,6 +18,14 @@ set -euo pipefail
 VPS="${1:-root@65.108.159.161}"
 REMOTE_DIR="/opt/rajiuce"
 
+# CWD guard: must be run from project root
+if [[ ! -f package.json ]] || [[ ! -f ecosystem.config.cjs ]]; then
+  echo "❌ ERROR: deploy-vps.sh must be run from the project root directory"
+  echo "  Current directory: $(pwd)"
+  echo "  Expected: package.json and ecosystem.config.cjs in CWD"
+  exit 1
+fi
+
 # Pre-deploy: Environment Check (warning-only, does not block deploy)
 echo "=== Pre-deploy: Environment Check ==="
 bash SCRIPTS/env-check.sh 2>&1 || true
