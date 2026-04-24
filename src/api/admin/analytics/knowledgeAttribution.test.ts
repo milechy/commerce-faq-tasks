@@ -136,7 +136,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
 
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const sqlArg = String(mockQuery.mock.calls[0]?.[0] ?? '');
-    expect(sqlArg).toMatch(/ORDER BY\s+c\.usage_count\s+DESC/);
+    expect(sqlArg).toMatch(/ORDER BY\s+usage_count\s+DESC/);
   });
 
   it('source_type=book のとき LATERAL に絞り込みパラメータが追加される', async () => {

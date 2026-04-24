@@ -1026,9 +1026,9 @@ export function registerAnalyticsRoutes(app: Express): void {
       // ORDER BY 列を allow-list から選択（SQLインジェクション防止）
       const orderColumn =
         sortBy === "usage_count"
-          ? "c.usage_count"
+          ? "usage_count"
           : sortBy === "judge_score"
-          ? "c.avg_judge_score"
+          ? "avg_judge_score"
           : "conversion_rate";
 
       const sourceFilterClause =
