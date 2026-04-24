@@ -10,6 +10,8 @@ export interface Hit {
   text: string;
   score: number;
   source: "es" | "pg";
+  /** Phase68: faq_embeddings.metadata（pgvector 経由のヒット時に格納） */
+  metadata?: Record<string, unknown>;
 }
 type EsHit = { _id: string; _source?: { text?: string; [key: string]: unknown }; _score?: number };
 type EsSearchResult = { hits?: { hits?: EsHit[] } };

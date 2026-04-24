@@ -27,6 +27,8 @@ export async function rerankTool(
     text: hit.text,
     score: hit.score,
     source: hit.source,
+    // Phase68: metadata を rerank 層に引き継ぐ（rerank 内で spread 保持）
+    metadata: hit.metadata,
   }));
 
   const result = await rerank(query, ceItems, topK);

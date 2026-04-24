@@ -2,6 +2,7 @@
 // Phase38: 会話履歴DB永続化リポジトリ（Step1: 保存 / Step2: 取得）
 
 import { getPool } from "../../../lib/db";
+import type { RagSource } from "../../../agent/types";
 
 export interface SaveMessageParams {
   tenantId: string;
@@ -12,6 +13,12 @@ export interface SaveMessageParams {
   /** Phase46: A/Bテスト variant記録 */
   promptVariantId?: string | null;
   promptVariantName?: string | null;
+  /**
+   * Phase68: 応答生成に使用された RAG チャンク（assistant メッセージのみ）。
+   * chat_messages.rag_sources JSONB カラムに配列として保存される。
+   * 既存テスト互換のため optional。
+   */
+  ragSources?: RagSource[];
 }
 
 /**
@@ -42,16 +49,21 @@ export async function saveMessage(params: SaveMessageParams): Promise<void> {
   const dbSessionId = sessionResult.rows[0]?.id;
   if (!dbSessionId) return;
 
-  // 3. メッセージを保存
+  // 3. メッセージを保存 (Phase68: rag_sources を assistant メッセージのみ記録)
+  const ragSourcesJson =
+    params.ragSources && params.ragSources.length > 0
+      ? JSON.stringify(params.ragSources)
+      : null;
   await pool.query(
-    `INSERT INTO chat_messages (session_id, tenant_id, role, content, metadata)
-     VALUES ($1, $2, $3, $4, $5)`,
+    `INSERT INTO chat_messages (session_id, tenant_id, role, content, metadata, rag_sources)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
     [
       dbSessionId,
       params.tenantId,
       params.role,
       params.content,
       JSON.stringify(params.metadata ?? {}),
+      ragSourcesJson,
     ],
   );
 }

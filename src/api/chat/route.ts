@@ -294,6 +294,7 @@ export function createChatHandler(logger: Logger) {
       }
 
       // Phase38: アシスタント応答をDBに保存（fire-and-forget、レスポンス後）
+      // Phase68: ragSources を専用カラムに記録してナレッジCV影響度集計に利用する
       saveMessage({
         tenantId,
         sessionId,
@@ -306,6 +307,7 @@ export function createChatHandler(logger: Logger) {
           rag_top_score: gapSignal?.topScore ?? 0,
           knowledge_gap: isKnowledgeGap(gapSignal) || isResponseGap(content),
         },
+        ragSources: result.meta?.ragSources,
       }).catch((err) =>
         logger.warn({ err }, "[chat-history] save assistant message failed")
       );

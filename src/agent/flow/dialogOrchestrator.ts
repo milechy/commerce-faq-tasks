@@ -1,6 +1,7 @@
 // src/agent/flow/dialogOrchestrator.ts
 
 import type { DialogMessage, MultiStepQueryPlan, OrchestratorStep } from '../dialog/types'
+import type { RagSource } from '../types'
 import { runSearchAgent } from './searchAgent'
 
 // Re-exported for backward compatibility — definition lives in dialog/types.ts
@@ -28,6 +29,8 @@ export interface OrchestratorResult {
   gapSignal?: { hitCount: number; topScore: number }
   /** Phase53: Groq API実トークン数 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number }
+  /** Phase68: 応答生成に使用された RAG チャンク */
+  ragSources?: RagSource[]
 }
 
 /**
@@ -111,5 +114,6 @@ export async function runDialogOrchestrator(
     final: true,
     gapSignal: searchResult.gapSignal,
     llmUsage: searchResult.llmUsage,
+    ragSources: searchResult.ragSources,
   }
 }

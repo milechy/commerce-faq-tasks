@@ -16,6 +16,8 @@ export type PgvectorSearchItem = {
   text: string;
   score: number;
   source: "pgvector";
+  /** Phase68: faq_embeddings.metadata（source='faq'|'book', principle, book_id 等） */
+  metadata?: Record<string, unknown>;
 };
 
 export type PgvectorSearchResult = {
@@ -42,6 +44,7 @@ export async function searchPgVector(
       SELECT
         id::text,
         text,
+        metadata,
         1 - (embedding <-> $1::vector) / 2 AS score
       FROM faq_embeddings
       WHERE tenant_id = $2 OR tenant_id = 'global'
@@ -58,7 +61,7 @@ export async function searchPgVector(
     const result = await pool.query(query, [embeddingLiteral, tenantId, topK]);
     const t1 = performance.now();
 
-    const items: PgvectorSearchItem[] = (result.rows as Array<{ id: string; text: string | null; score: number }>).map((row) => ({
+    const items: PgvectorSearchItem[] = (result.rows as Array<{ id: string; text: string | null; score: number; metadata: Record<string, unknown> | null }>).map((row) => ({
       id: String(row.id),
       text: decryptText(row.text ?? ""),
       score: (() => {
@@ -67,6 +70,7 @@ export async function searchPgVector(
         return Math.max(0, Math.min(1, s));
       })(),
       source: "pgvector",
+      metadata: row.metadata ?? undefined,
     }));
 
     return {

@@ -7,6 +7,7 @@ import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
 import BookChunksPanel from "./BookChunksPanel";
+import KnowledgeAttributionTab from "../../../components/knowledge/KnowledgeAttributionTab";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ interface ScrapePreviewItem {
   error?: string;
 }
 
-type Tab = "list" | "text" | "scrape" | "pdf";
+type Tab = "list" | "text" | "scrape" | "pdf" | "attribution";
 type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
 type Category = string;
 
@@ -2176,7 +2177,12 @@ export default function TenantKnowledgePage() {
   const gapQuestion = searchParams.get("question") ?? undefined;
 
   const [activeTab, setActiveTab] = useState<Tab>(
-    tabParam === "text" || tabParam === "scrape" || tabParam === "pdf" ? tabParam : "list"
+    tabParam === "text" ||
+      tabParam === "scrape" ||
+      tabParam === "pdf" ||
+      tabParam === "attribution"
+      ? tabParam
+      : "list"
   );
 
   // tenantId の解決: URL params → pathnameの末尾 → JWTのtenantId
@@ -2197,6 +2203,7 @@ export default function TenantKnowledgePage() {
     { id: "text", label: t("knowledge.tab_text"), icon: "✏️" },
     { id: "scrape", label: t("knowledge.tab_scrape"), icon: "🌐" },
     { id: "pdf", label: "PDFアップロード", icon: "📚" },
+    { id: "attribution", label: "CV影響度", icon: "📈" },
   ];
 
   const isGlobalTenant = resolvedTenantId === "global";
@@ -2275,6 +2282,9 @@ export default function TenantKnowledgePage() {
       {activeTab === "text" && <TextInputTab tenantId={resolvedTenantId} gapQuestion={gapQuestion} gapId={gapId} />}
       {activeTab === "scrape" && <ScrapeTab tenantId={resolvedTenantId} onCommitSuccess={() => setActiveTab("list")} gapQuestion={gapQuestion} gapId={gapId} />}
       {activeTab === "pdf" && <PdfUploadTab tenantId={resolvedTenantId} />}
+      {activeTab === "attribution" && (
+        <KnowledgeAttributionTab tenantId={resolvedTenantId} />
+      )}
     </div>
   );
 }
