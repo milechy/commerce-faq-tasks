@@ -55,7 +55,7 @@ type AttrRow = {
   conversion_count: number;
   conversion_rate: number;
   avg_judge_score: number | null;
-  title: string | null;
+  raw_text: string | null;
   book_title: string | null;
   prev_rate: number;
 };
@@ -78,7 +78,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         conversion_count: 12,
         conversion_rate: 12 / 38,
         avg_judge_score: 72.5,
-        title: '返品はできますか？',
+        raw_text: '返品はできますか？',
         book_title: null,
         prev_rate: 0.25, // 上昇傾向
       },
@@ -91,7 +91,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         conversion_count: 7,
         conversion_rate: 0.5,
         avg_judge_score: 80.0,
-        title: '返報性の原理は顧客心理に強く働く',
+        raw_text: '返報性の原理は顧客心理に強く働く',
         book_title: '影響力の武器',
         prev_rate: 0.5, // stable
       },

@@ -7,6 +7,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { pool } from "../../../lib/db";
 import { createNotification, notificationExists } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
+import { decryptText } from '../../../lib/crypto/textEncrypt';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1114,7 +1115,7 @@ export function registerAnalyticsRoutes(app: Express): void {
                 ELSE 0
               END AS conversion_rate,
               c.avg_judge_score,
-              COALESCE(LEFT(fe.text, 50), '(削除済み)') AS title,
+              fe.text AS raw_text,
               bu.title AS book_title,
               COALESCE(p.prev_rate, 0) AS prev_rate
             FROM current_agg c
@@ -1140,7 +1141,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           conversion_count: number;
           conversion_rate: number;
           avg_judge_score: number | null;
-          title: string | null;
+          raw_text: string | null;
           book_title: string | null;
           prev_rate: number;
         };
@@ -1151,11 +1152,14 @@ export function registerAnalyticsRoutes(app: Express): void {
           const delta = currentRate - prevRate;
           const trend: "up" | "down" | "stable" =
             Math.abs(delta) < 0.02 ? "stable" : delta > 0 ? "up" : "down";
-          // タイトル: FAQ は text 先頭50文字、書籍は 書名 + チャンク先頭50文字
+          // タイトル: 暗号化テキストを復号し先頭50文字を表示
+          const chunkTitle = row.raw_text
+            ? (() => { try { return decryptText(row.raw_text).slice(0, 50); } catch { return row.raw_text.slice(0, 50); } })()
+            : null;
           const displayTitle =
             row.src_type === "book" && row.book_title
-              ? `${row.book_title} — ${row.title ?? ""}`
-              : row.title ?? "(削除済み)";
+              ? `${row.book_title} — ${chunkTitle ?? ""}`
+              : chunkTitle ?? "(削除済み)";
           return {
             chunk_id: row.chunk_id,
             source: (row.src_type ?? "faq") as "faq" | "book",
