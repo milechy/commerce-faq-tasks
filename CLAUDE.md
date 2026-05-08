@@ -281,6 +281,72 @@ gh pr merge <PR番号> --auto --squash --delete-branch
 - Phase2（SCRIPTS/merge-ready-prs.sh 作成）: Asana 1214121039752589（別タスク化済み）
 - Phase3（Claude Code CLI /merge エージェント）: 将来タスク、未起票
 
+## Auto Mode 運用ルール（Claude Code v2.1.83+）
+
+⚠️ Auto Modeは Sonnet 4.6 ベースの分類器が各ツールコールを事前審査する研究プレビュー機能。
+`--dangerously-skip-permissions` より安全だが完全ではない。以下のルールを厳守すること。
+
+### 起動と切替
+
+```bash
+claude --enable-auto-mode    # 初回のみ
+# セッション内で Shift+Tab を押してモード切替
+# default → acceptEdits → plan → auto の順にサイクル
+```
+
+ステータスバーが **赤色スピナー** で表示されていればauto有効。
+
+### 使用OK（Auto Modeで実装する）
+
+- feature branch上での実装作業
+- pnpm install / pnpm verify / pnpm test / pnpm build
+- src/, app/, components/, admin-ui/, docs/, SCRIPTS/ の編集
+- git add / git commit / git push（feature branchのみ）
+- Asana MCP / Playwright MCP の読み取り操作
+
+### 使用NG（必ず Shift+Tab で default に戻す）
+
+| 操作 | 理由 |
+|---|---|
+| `bash SCRIPTS/deploy-vps.sh` 実行前後 | 本番デプロイは必ず人間が承認 |
+| DB migration SQL実行 | 不可逆操作 |
+| main branch操作 | Branch Rule厳守（Gate 2.5の前提） |
+| `.env` / `.env.local` / `.env.production` 編集 | 機密情報リーク防止（denyルールでも保護） |
+| 書籍PDF / Convex DB seed / シークレット系 | LLM学習防止制約と整合 |
+| `/opt/rajiuce/` 配下の操作 | VPS本番領域（denyルールでも保護） |
+
+### 既知バグの回避
+
+- `defaultMode: "auto"` は settings.json で **効かない**（Issue #49273）
+  → 毎セッション手動で Shift+Tab する
+- 「pushしないで」等の自然言語境界は **context compaction後に消失**（Issue #51689）
+  → ハード禁止は `permissions.deny` に書く
+- 分類器がOpus 4.7を呼ぶケースあり（Issue #49837）
+  → コスト・レイテンシが想定より上がる可能性
+
+### permissions.deny で保護されている範囲（参考）
+
+`~/.claude/settings.local.json` の `permissions.deny` で以下を多重防御:
+- `.env` 系全般（`.env.example` は除外＝編集可）
+- VPS SSH・rsync コマンド
+- `/opt/rajiuce/**` への書き込み
+- main branch への直接push
+- `rm -rf /` 系の破壊的コマンド
+
+### Gate ワークフローとの整合
+
+- Gate 1-3（@gate-runner）はAuto Modeで快適に回せる
+- Gate 2.5（Codex review）は引き続き **人間が手動実行**（Auto Mode関係なし）
+- Gate 4b/6（Playwright MCP / Chrome）は通常モードで実行推奨
+
+### トラブル時のリセット
+
+```bash
+# Auto Modeを完全停止したい場合
+# セッション内で Shift+Tab を押し続けて default に戻す
+# 緊急時: Ctrl+C でセッション終了、claude を default モードで再起動
+```
+
 ## Settings Hygiene
 - `.claude/settings.local.json` は `.gitignore` に登録済み（プロジェクトローカルルール）
 - allowedTools にAPIトークン・パスワード等の認証情報を含めない
