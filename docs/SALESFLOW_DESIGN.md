@@ -42,7 +42,7 @@ The detector returns a `DetectedSalesIntents` structure that summarizes:
 - Propose, recommend, and close intent candidates
 - A short `detectionText` used for debugging and logging
 
-This structure is later consumed by the stage machine and orchestrator.
+This structure is later consumed by the state machine and orchestrator.
 
 ## 3. Stage Control (State Machine)
 
