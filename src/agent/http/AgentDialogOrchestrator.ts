@@ -71,6 +71,8 @@ export class AgentDialogOrchestrator {
     const locale: "ja" | "en" =
       body.options?.language === "en" ? "en" : "ja";
 
+    const excludedIds = body.options?.excluded_ids;
+
     // CrewOrchestrator 経由で LangGraph / CrewGraph を実行
     const crewResult = await this.crew.run({
       message: body.message,
@@ -81,6 +83,7 @@ export class AgentDialogOrchestrator {
         sessionId,
         mode,
         useMultiStepPlanner: useMultiStep,
+        excludedIds,
       },
     });
 

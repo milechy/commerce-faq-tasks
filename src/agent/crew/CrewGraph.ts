@@ -31,6 +31,8 @@ export interface CrewGraphState {
     locale: string;
     tenantId?: string;
     sessionId?: string;
+    /** Phase69-2: 検索結果から除外するエントリID一覧 */
+    excludedIds?: string[];
   };
 
   // プランナーが生成したプラン（LangGraph / CrewGraph いずれでも可）

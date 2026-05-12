@@ -7,6 +7,8 @@ export interface RerankToolInput {
   query: string;
   items: Hit[];
   topK: number;
+  /** Phase69-2: rerank後の二重防御フィルター用除外ID一覧 */
+  excludedIds?: string[];
 }
 
 export interface RerankToolOutput extends RerankResult {
@@ -20,7 +22,7 @@ export interface RerankToolOutput extends RerankResult {
 export async function rerankTool(
   input: RerankToolInput,
 ): Promise<RerankToolOutput> {
-  const { query, items, topK } = input;
+  const { query, items, topK, excludedIds } = input;
 
   const ceItems: RerankItem[] = items.map((hit) => ({
     id: hit.id,
@@ -31,7 +33,7 @@ export async function rerankTool(
     metadata: hit.metadata,
   }));
 
-  const result = await rerank(query, ceItems, topK);
+  const result = await rerank(query, ceItems, topK, excludedIds);
   return {
     ...result,
     rerankEngine: result.engine,

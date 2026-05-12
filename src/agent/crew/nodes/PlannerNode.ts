@@ -29,6 +29,7 @@ export class PlannerNode implements CrewNode {
       locale: locale as "ja" | "en",
       conversationId,
       history: input.history,
+      excludedIds: input.excludedIds,
     });
 
     return {

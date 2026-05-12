@@ -33,11 +33,12 @@ function insertEmbeddingAsync(
   faqId: number,
   meta: Record<string, unknown>
 ): void {
+  const isExcluded = Boolean(meta.is_excluded_from_search);
   embedText(text)
     .then((vec) =>
       db.query(
-        "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata) VALUES ($1, $2, $3::vector, $4::jsonb)",
-        [tenantId, text, `[${vec.join(",")}]`, JSON.stringify(meta)]
+        "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata, is_excluded_from_search) VALUES ($1, $2, $3::vector, $4::jsonb, $5)",
+        [tenantId, text, `[${vec.join(",")}]`, JSON.stringify(meta), isExcluded]
       )
     )
     .catch((e) => logger.warn("[faqCrud] embedding insert failed", e));
@@ -91,6 +92,13 @@ const updateSchema = z.object({
   category: z.enum(CATEGORIES).optional(),
   tags: z.array(z.string()).optional(),
   is_published: z.boolean().optional(),
+  /** Phase69-2: 検索除外フラグ */
+  is_excluded_from_search: z.boolean().optional(),
+});
+
+/** Phase69-2: 検索除外フラグのみを更新するスキーマ */
+const excludeSchema = z.object({
+  is_excluded_from_search: z.boolean(),
 });
 
 type KnowledgeMiddleware = (req: Request, res: Response, next: NextFunction) => void;
@@ -270,7 +278,7 @@ export function registerFaqCrudRoutes(
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { question, answer, category, tags, is_published } = parsed.data;
+    const { question, answer, category, tags, is_published, is_excluded_from_search } = parsed.data;
 
     try {
       // 存在チェック + テナント確認
@@ -295,6 +303,7 @@ export function registerFaqCrudRoutes(
              category = $3,
              tags = COALESCE($4, tags),
              is_published = COALESCE($5, is_published),
+             is_excluded_from_search = COALESCE($8, is_excluded_from_search),
              updated_at = NOW()
          WHERE id = $6 AND tenant_id = $7
          RETURNING *`,
@@ -306,10 +315,11 @@ export function registerFaqCrudRoutes(
           is_published !== undefined ? is_published : null,
           id,
           tenantId,
+          is_excluded_from_search !== undefined ? is_excluded_from_search : null,
         ]
       );
 
-      const updated = updateResult.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
+      const updated = updateResult.rows[0] as { id: number; question: string; answer: string; is_published: boolean; is_excluded_from_search: boolean };
 
       // 古い embedding を削除し再挿入
       try {
@@ -327,12 +337,68 @@ export function registerFaqCrudRoutes(
       insertEmbeddingAsync(db, tenantId, embText, updated.id, {
         source: "faq_crud",
         faq_id: updated.id,
+        is_excluded_from_search: updated.is_excluded_from_search ?? false,
       });
       upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer, updated.is_published);
 
       return res.json(updated);
     } catch (err) {
       logger.warn("[PUT /v1/admin/knowledge/faq/:id]", err);
+      return res.status(500).json({ error: "更新に失敗しました" });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // PATCH /v1/admin/knowledge/faq/:id/exclude
+  // Phase69-2: 検索除外フラグのみ更新（embedding 再生成不要）
+  // -------------------------------------------------------------------------
+  app.patch("/v1/admin/knowledge/faq/:id/exclude", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
+    const tenantId = resolveTenantId(req);
+    if (!tenantId) {
+      return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
+    }
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "idが不正です" });
+    }
+
+    const parsed = excludeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+
+    const { is_excluded_from_search } = parsed.data;
+
+    try {
+      const check = await db.query(
+        `SELECT id, tenant_id FROM faq_docs WHERE id = $1`,
+        [id]
+      );
+
+      if (check.rowCount === 0) {
+        return res.status(404).json({ error: "FAQが見つかりません" });
+      }
+
+      const existing = check.rows[0] as { tenant_id: string };
+      if (existing.tenant_id !== tenantId) {
+        return res.status(403).json({ error: "アクセス権限がありません" });
+      }
+
+      // faq_docs + faq_embeddings の両方を同時更新
+      await db.query(
+        `UPDATE faq_docs SET is_excluded_from_search = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3`,
+        [is_excluded_from_search, id, tenantId]
+      );
+      await db.query(
+        `UPDATE faq_embeddings SET is_excluded_from_search = $1
+         WHERE tenant_id = $2 AND (metadata->>'faq_id')::bigint = $3`,
+        [is_excluded_from_search, tenantId, id]
+      );
+
+      return res.json({ id, is_excluded_from_search });
+    } catch (err) {
+      logger.warn("[PATCH /v1/admin/knowledge/faq/:id/exclude]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
     }
   });
