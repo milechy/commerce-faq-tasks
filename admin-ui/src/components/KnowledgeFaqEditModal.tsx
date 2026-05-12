@@ -11,6 +11,8 @@ export interface KnowledgeFaqItem {
   category: string | null;
   tags: string[] | null;
   is_published?: boolean;
+  /** Phase69-2: 検索除外フラグ */
+  is_excluded_from_search?: boolean;
 }
 
 interface Props {
@@ -61,6 +63,7 @@ export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, o
   const [category, setCategory] = useState(item?.category ?? "inventory");
   const [tagsInput, setTagsInput] = useState((item?.tags ?? []).join(", "));
   const [isPublished, setIsPublished] = useState(item?.is_published ?? true);
+  const [isExcluded, setIsExcluded] = useState(item?.is_excluded_from_search ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,6 +106,7 @@ export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, o
       category: category || null,
       tags,
       is_published: isPublished,
+      is_excluded_from_search: isExcluded,
     };
 
     try {
@@ -346,6 +350,56 @@ export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, o
                   position: "absolute",
                   top: 3,
                   left: isPublished ? 25 : 3,
+                  width: 24,
+                  height: 24,
+                  borderRadius: "50%",
+                  background: "#fff",
+                  transition: "left 0.2s",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* 検索除外トグル（Phase69-2） */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "18px 20px",
+              borderRadius: 12,
+              border: `1px solid ${isExcluded ? "rgba(239,68,68,0.4)" : "#374151"}`,
+              background: isExcluded ? "rgba(69,10,10,0.5)" : "rgba(15,23,42,0.6)",
+              transition: "all 0.2s",
+              cursor: "pointer",
+            }}
+            onClick={() => setIsExcluded((v) => !v)}
+          >
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: isExcluded ? "#f87171" : "#9ca3af" }}>
+                {isExcluded ? "検索から除外中" : "検索に含める"}
+              </div>
+              <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2 }}>
+                {isExcluded ? "このナレッジは検索結果に表示されません" : "検索クエリにヒットすれば表示されます"}
+              </div>
+            </div>
+            <div
+              style={{
+                width: 52,
+                height: 30,
+                borderRadius: 999,
+                background: isExcluded ? "#ef4444" : "#374151",
+                position: "relative",
+                flexShrink: 0,
+                transition: "background 0.2s",
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  top: 3,
+                  left: isExcluded ? 25 : 3,
                   width: 24,
                   height: 24,
                   borderRadius: "50%",

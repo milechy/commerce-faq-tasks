@@ -20,6 +20,8 @@ export interface PgVectorSearchParams {
   tenantId: string;
   embedding: number[]; // クエリ埋め込み
   topK?: number;
+  /** Phase69-2: 検索結果から除外するエントリID一覧（テナント分離保証） */
+  excludedIds?: string[];
 }
 
 /**
@@ -46,7 +48,7 @@ export interface PgVectorSearchParams {
 export async function searchPgVector(
   params: PgVectorSearchParams
 ): Promise<PgVectorSearchResult> {
-  const { tenantId, embedding, topK = 20 } = params;
+  const { tenantId, embedding, topK = 20, excludedIds } = params;
 
   if (!pg) {
     return {
@@ -70,8 +72,11 @@ export async function searchPgVector(
   // pgvector 用に '[0.1,0.2,...]' 形式のリテラルを作る
   const embedLiteral = `[${embedding.join(",")}]`;
 
-  // faq_docs と LEFT JOIN して is_published = false のエントリを除外
-  // (metadata に faq_id がない古いエントリはそのまま返す)
+  const safeExcludedIds = (excludedIds ?? []).filter(Boolean);
+  const excludeClause = safeExcludedIds.length > 0
+    ? `and fe.id::text != ALL($4::text[])`
+    : "";
+
   const sql = `
     select
       fe.id::text as id,
@@ -83,12 +88,18 @@ export async function searchPgVector(
       on fd.id = (fe.metadata->>'faq_id')::bigint
     where (fe.tenant_id = $1 OR fe.tenant_id = 'global')
       and (fd.is_published = true OR fd.id IS NULL)
+      and (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
+      and (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
+      ${excludeClause}
     order by fe.embedding <-> $2::vector
     limit $3;
   `;
 
+  const queryParams: unknown[] = [tenantId, embedLiteral, topK];
+  if (safeExcludedIds.length > 0) queryParams.push(safeExcludedIds);
+
   try {
-    const res = await pg.query(sql, [tenantId, embedLiteral, topK]);
+    const res = await pg.query(sql, queryParams);
     const ms = Date.now() - t0;
 
     type PgRow = { id: string; text: string | null; metadata: Record<string, unknown> | null; score: number };

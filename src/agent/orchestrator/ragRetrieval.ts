@@ -27,6 +27,8 @@ export async function runInitialRagRetrieval(
     topK: 8,
     useLlmPlanner: false,
     debug: true,
+    tenantId: initialInput.tenantId,
+    excludedIds: initialInput.excludedIds,
   });
 
   const rerankDebug = searchResponse.debug?.rerank as

@@ -5,7 +5,7 @@ import type { DialogAgentMeta } from "../dialog/types";
 export type CrewAgentInput = {
   message: string;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
-  context?: { sessionId?: string; locale?: string; tenantId?: string; mode?: string; useMultiStepPlanner?: boolean };
+  context?: { sessionId?: string; locale?: string; tenantId?: string; mode?: string; useMultiStepPlanner?: boolean; excludedIds?: string[] };
 };
 
 export type CrewAgentOutput = {

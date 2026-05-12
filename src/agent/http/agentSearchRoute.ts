@@ -10,6 +10,8 @@ const AgentSearchSchema = z.object({
   topK: z.number().int().min(1).max(20).optional(),
   debug: z.boolean().optional(),
   useLlmPlanner: z.boolean().optional(),
+  /** Phase69-2: 検索結果から除外するエントリID一覧（最大500件） */
+  excluded_ids: z.array(z.string()).max(500).optional(),
 });
 
 type AgentSearchDeps = {
@@ -69,7 +71,7 @@ export function createAgentSearchHandler(
       return;
     }
 
-    const { q, topK, debug, useLlmPlanner } = parsed.data;
+    const { q, topK, debug, useLlmPlanner, excluded_ids } = parsed.data;
     const startedAt = Date.now();
 
     const headerTenantId = req.header("x-tenant-id");
@@ -85,6 +87,7 @@ export function createAgentSearchHandler(
         debug,
         useLlmPlanner,
         tenantId,
+        excludedIds: excluded_ids,
       });
 
       const durationMs = Date.now() - startedAt;

@@ -7,6 +7,8 @@ import { embedText } from '../llm/openaiEmbeddingClient';
 export interface SearchToolInput {
   query: string;
   tenantId?: string;
+  /** Phase69-2: 検索結果から除外するエントリID一覧 */
+  excludedIds?: string[];
 }
 
 export interface SearchToolOutput {
@@ -18,7 +20,7 @@ export interface SearchToolOutput {
 export async function searchTool(
   input: SearchToolInput,
 ): Promise<SearchToolOutput> {
-  const { query, tenantId } = input;
+  const { query, tenantId, excludedIds } = input;
   const effectiveTenantId = tenantId ?? 'default';
 
   // 1) Try pgvector (Groq embeddings + pgvector)
@@ -27,6 +29,7 @@ export async function searchTool(
     const vecResult = await searchPgVector({
       tenantId: effectiveTenantId,
       embedding,
+      excludedIds,
     });
 
     if (vecResult.items.length > 0) {
@@ -52,6 +55,6 @@ export async function searchTool(
   }
 
   // 2) Fallback: 既存の hybridSearch（ES + PG FTS 等）
-  const result = await hybridSearch(query, tenantId);
+  const result = await hybridSearch(query, tenantId, undefined, excludedIds);
   return result;
 }

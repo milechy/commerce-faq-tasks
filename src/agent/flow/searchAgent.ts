@@ -25,7 +25,7 @@ import { logger } from '../../lib/logger';
 export async function runSearchAgent(
   params: AgentSearchParams
 ): Promise<AgentSearchResponse> {
-  const { q, topK, debug = true, useLlmPlanner, tenantId, visitorId } = params;
+  const { q, topK, debug = true, useLlmPlanner, tenantId, visitorId, excludedIds } = params;
   const effectiveTenantId = tenantId ?? "demo";
   const steps: AgentStep[] = [];
 
@@ -65,6 +65,7 @@ export async function runSearchAgent(
       tenantId: effectiveTenantId,
       embedding,
       topK: plan.topK ?? topK,
+      excludedIds,
     });
     const tPg1 = performance.now();
     pgVectorItems = pgRes.items ?? [];
@@ -80,6 +81,7 @@ export async function runSearchAgent(
   const baseSearchResult = await searchTool({
     query: plan.searchQuery,
     tenantId: effectiveTenantId,
+    excludedIds,
   });
   const tSearch1 = performance.now();
 
@@ -124,6 +126,7 @@ export async function runSearchAgent(
     query: plan.searchQuery,
     items: searchResult.items,
     topK: plan.topK,
+    excludedIds,
   });
   const tRerank1 = performance.now();
   steps.push({
