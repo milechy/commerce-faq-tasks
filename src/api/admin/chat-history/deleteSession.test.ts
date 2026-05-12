@@ -7,8 +7,20 @@ import { registerChatHistoryRoutes } from "./routes";
 
 jest.mock("./deleteSessionRepository");
 jest.mock("../../../lib/db");
+jest.mock("../../../lib/logger", () => ({
+  logger: {
+    warn: jest.fn(),
+    info: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+    trace: jest.fn(),
+    fatal: jest.fn(),
+    child: jest.fn(),
+  },
+}));
 import { deleteSession } from "./deleteSessionRepository";
 import * as dbModule from "../../../lib/db";
+import { logger } from "../../../lib/logger";
 const mockDeleteSession = deleteSession as jest.MockedFunction<typeof deleteSession>;
 
 function makeDevJwt(payload: object): string {
@@ -391,6 +403,141 @@ describe("DELETE /v1/admin/chat-history/sessions/:sessionId", () => {
 
     expect(res.status).toBe(403);
     expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  // ── [HIGH] Round 6: jwtTenantId の su.tenant_id フォールバック削除 ──────────
+  // app_metadata.tenant_id のみを信頼し、top-level tenant_id は無視することを確認
+
+  it("Test 26: app_metadata.tenant_id='t1', su.tenant_id='t2' → t1 でスコープ (cross-tenant 防止)", async () => {
+    mockDeleteSession.mockResolvedValueOnce(MOCK_RESULT);
+
+    const crossTenantToken = makeDevJwt({
+      email: "admin@example.com",
+      tenant_id: "t2",
+      app_metadata: { role: "client_admin", tenant_id: "t1" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${crossTenantToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(200);
+    expect(mockDeleteSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { kind: "tenant", tenantId: "t1" },
+      }),
+    );
+  });
+
+  it("Test 27 [攻撃シナリオ]: app_metadata.tenant_id なし, su.tenant_id='t1' → 403", async () => {
+    const noAppTenantToken = makeDevJwt({
+      email: "attacker@example.com",
+      tenant_id: "t1",
+      app_metadata: { role: "client_admin" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${noAppTenantToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("Test 28 [攻撃シナリオ]: app_metadata.tenant_id='', su.tenant_id='t1' → 403 (空文字攻撃)", async () => {
+    const emptyAppTenantToken = makeDevJwt({
+      email: "attacker@example.com",
+      tenant_id: "t1",
+      app_metadata: { role: "client_admin", tenant_id: "" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${emptyAppTenantToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  // ── [MEDIUM] Round 6: 55P03 structured warning ログ ─────────────────────────
+
+  it("Test 31: 55P03 エラー発生時、logger.warn が呼ばれる", async () => {
+    const lockErr = Object.assign(new Error("lock timeout"), { code: "55P03" });
+    mockDeleteSession.mockRejectedValueOnce(lockErr);
+
+    await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .send({ reason: VALID_REASON });
+
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("Test 32: 55P03 logger.warn payload に必要フィールドが含まれる", async () => {
+    const lockErr = Object.assign(new Error("lock timeout"), { code: "55P03" });
+    mockDeleteSession.mockRejectedValueOnce(lockErr);
+
+    await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .send({ reason: VALID_REASON });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat_history_delete_lock_timeout",
+        errorCode: "55P03",
+        sessionId: "sess-uuid-1",
+      }),
+      expect.any(String),
+    );
+  });
+});
+
+// ── [HIGH] Round 6: GET 系エンドポイントの jwtTenantId フォールバック削除 ──────
+
+describe("GET /v1/admin/chat-history: tenant_id fallback 削除", () => {
+  let app: ReturnType<typeof express>;
+
+  beforeAll(() => {
+    process.env.NODE_ENV = "development";
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    app = express();
+    app.use(express.json());
+    registerChatHistoryRoutes(app);
+  });
+
+  it("Test 29: GET sessions 一覧で app_metadata.tenant_id なし, su.tenant_id あり → 403", async () => {
+    const noAppTenantToken = makeDevJwt({
+      email: "attacker@example.com",
+      tenant_id: "t1",
+      app_metadata: { role: "client_admin" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions")
+      .set("Authorization", `Bearer ${noAppTenantToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 30: GET sessions/:id/messages で app_metadata.tenant_id なし, su.tenant_id あり → 403", async () => {
+    const noAppTenantToken = makeDevJwt({
+      email: "attacker@example.com",
+      tenant_id: "t1",
+      app_metadata: { role: "client_admin" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+      .set("Authorization", `Bearer ${noAppTenantToken}`);
+
+    expect(res.status).toBe(403);
   });
 });
 
