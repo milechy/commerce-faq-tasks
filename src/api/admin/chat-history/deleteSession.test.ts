@@ -6,7 +6,9 @@ import request from "supertest";
 import { registerChatHistoryRoutes } from "./routes";
 
 jest.mock("./deleteSessionRepository");
+jest.mock("../../../lib/db");
 import { deleteSession } from "./deleteSessionRepository";
+import * as dbModule from "../../../lib/db";
 const mockDeleteSession = deleteSession as jest.MockedFunction<typeof deleteSession>;
 
 function makeDevJwt(payload: object): string {
@@ -161,7 +163,7 @@ describe("DELETE /v1/admin/chat-history/sessions/:sessionId", () => {
     );
   });
 
-  it("super_admin は tenantId 縛りなし（tenantId: undefined）で呼び出す", async () => {
+  it("super_admin は scope: global で呼び出す（テナント縛りなし）", async () => {
     mockDeleteSession.mockResolvedValueOnce(MOCK_RESULT);
 
     await request(app)
@@ -171,11 +173,74 @@ describe("DELETE /v1/admin/chat-history/sessions/:sessionId", () => {
 
     expect(mockDeleteSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        tenantId: undefined,
+        scope: { kind: "global" },
         actorRole: "super_admin",
         actorEmail: "super@example.com",
       }),
     );
+  });
+
+  it("client_admin は scope: tenant で呼び出す（自テナント限定）", async () => {
+    mockDeleteSession.mockResolvedValueOnce(MOCK_RESULT);
+
+    await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .send({ reason: VALID_REASON });
+
+    expect(mockDeleteSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { kind: "tenant", tenantId: "tenant-a" },
+        actorRole: "client_admin",
+      }),
+    );
+  });
+
+  // ── [HIGH] Round2: client_admin の tenantId 必須チェック ─────────────────
+
+  it("認可: client_admin で tenantId が空（app_metadata なし）は403を返す", async () => {
+    const noTenantToken = makeDevJwt({
+      email: "admin@example.com",
+      app_metadata: { role: "client_admin" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${noTenantToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("認可: client_admin で tenant_id が空文字は403を返す", async () => {
+    const emptyTenantToken = makeDevJwt({
+      email: "admin@example.com",
+      app_metadata: { role: "client_admin", tenant_id: "" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${emptyTenantToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("認可: client_admin で tenant_id がスペースのみは403を返す", async () => {
+    const spaceTenantToken = makeDevJwt({
+      email: "admin@example.com",
+      app_metadata: { role: "client_admin", tenant_id: "   " },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${spaceTenantToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
   });
 
   // ── [HIGH] 認可ホワイトリスト追加テスト ─────────────────────────────────
@@ -236,5 +301,99 @@ describe("DELETE /v1/admin/chat-history/sessions/:sessionId", () => {
       .send({ reason: VALID_REASON });
 
     expect(res.status).toBe(500);
+  });
+
+  // ── [HIGH] lock_timeout (55P03) → 409 ────────────────────────────────────
+
+  it("Test 17: lock_timeout エラー (55P03) 発生時は409を返す", async () => {
+    const lockErr = Object.assign(new Error("lock timeout"), { code: "55P03" });
+    mockDeleteSession.mockRejectedValueOnce(lockErr);
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/再度お試し/);
+  });
+});
+
+// ── リポジトリ内部クエリ整合性テスト（Tests 18-20） ──────────────────────────
+// deleteSession の実装を直接テスト: lib/db をモックしてクエリシーケンスを検証
+
+describe("deleteSessionRepository: lock_timeout / ROLLBACK 整合性", () => {
+  let mockQuery: jest.Mock;
+  let mockRelease: jest.Mock;
+  let realDeleteSession: (p: Parameters<typeof import("./deleteSessionRepository").deleteSession>[0]) => Promise<unknown>;
+
+  const BASE_PARAMS = {
+    sessionDbId: "sess-uuid-1",
+    scope: { kind: "global" as const },
+    actorRole: "super_admin",
+    actorEmail: "super@example.com",
+    reason: "test reason here",
+  };
+
+  beforeEach(() => {
+    mockQuery = jest.fn();
+    mockRelease = jest.fn();
+
+    jest.mocked(dbModule.getPool).mockReturnValue({
+      connect: jest.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
+    } as unknown as ReturnType<typeof dbModule.getPool>);
+
+    realDeleteSession = (jest.requireActual<typeof import("./deleteSessionRepository")>(
+      "./deleteSessionRepository",
+    ) as { deleteSession: typeof realDeleteSession }).deleteSession;
+  });
+
+  it("Test 18: BEGIN 直後に SET LOCAL lock_timeout = '3s' が実行される", async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 }); // session not found → return null
+
+    await realDeleteSession(BASE_PARAMS);
+
+    const calls = mockQuery.mock.calls.map((c) => c[0] as string);
+    const beginIdx = calls.findIndex((q) => q === "BEGIN");
+    const lockIdx = calls.findIndex((q) => q === "SET LOCAL lock_timeout = '3s'");
+
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    expect(lockIdx).toBe(beginIdx + 1);
+  });
+
+  it("Test 19: rowCount !== 1 検証失敗時、手動 ROLLBACK は呼ばれず catch の ROLLBACK のみ（合計1回）", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // SET LOCAL lock_timeout
+      .mockResolvedValueOnce({                           // SELECT FOR UPDATE → found
+        rows: [{ id: "sess-uuid-1", tenant_id: "tenant-a" }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [{ cnt: "2" }], rowCount: 1 }) // COUNT messages
+      .mockResolvedValueOnce({ rows: [{ cnt: "0" }], rowCount: 1 }) // COUNT orders (0)
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // DELETE RETURNING → rowCount=0
+      .mockResolvedValue({ rows: [], rowCount: 0 }); // ROLLBACK
+
+    await expect(realDeleteSession(BASE_PARAMS)).rejects.toThrow("Deletion verification failed");
+
+    const rollbackCalls = mockQuery.mock.calls.filter(
+      (c) => typeof c[0] === "string" && (c[0] as string).toUpperCase() === "ROLLBACK",
+    );
+    expect(rollbackCalls).toHaveLength(1); // catch のみ、手動 ROLLBACK なし
+  });
+
+  it("Test 20: DB エラー発生時に catch block が ROLLBACK を実行し connection を release する", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // SET LOCAL lock_timeout
+      .mockRejectedValueOnce(new Error("DB connection error")); // SELECT fails
+
+    await expect(realDeleteSession(BASE_PARAMS)).rejects.toThrow("DB connection error");
+
+    const rollbackCalls = mockQuery.mock.calls.filter(
+      (c) => typeof c[0] === "string" && (c[0] as string).toUpperCase() === "ROLLBACK",
+    );
+    expect(rollbackCalls).toHaveLength(1);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 });

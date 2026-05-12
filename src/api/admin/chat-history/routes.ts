@@ -150,8 +150,6 @@ export function registerChatHistoryRoutes(app: Express): void {
       const sessionDbId: string = req.params["sessionId"] ?? "";
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
       const actorRole: string =
         su?.app_metadata?.role ?? su?.user_metadata?.role ?? "unknown";
       const actorEmail: string = su?.email ?? su?.app_metadata?.email ?? "";
@@ -167,6 +165,19 @@ export function registerChatHistoryRoutes(app: Express): void {
         return res.status(403).json({ error: "この操作を実行する権限がありません" });
       }
 
+      // Phase69-1 fix [HIGH] Round2: client_admin は必ず有効な tenant_id を持つこと
+      // JWT app_metadata が欠損/不正な場合でもクロステナント削除を防ぐ
+      let scope: import("./deleteSessionRepository").DeleteSessionScope;
+      if (actorRole === "client_admin") {
+        if (!jwtTenantId || typeof jwtTenantId !== "string" || jwtTenantId.trim() === "") {
+          return res.status(403).json({ error: "この操作を実行する権限がありません" });
+        }
+        scope = { kind: "tenant", tenantId: jwtTenantId };
+      } else {
+        // super_admin: スコープなし（全テナント対象）
+        scope = { kind: "global" };
+      }
+
       const { reason } = (req.body ?? {}) as Record<string, unknown>;
       if (typeof reason !== "string" || reason.trim().length < 5) {
         return res.status(400).json({ error: "reason は5文字以上500文字以下の文字列が必要です" });
@@ -176,12 +187,10 @@ export function registerChatHistoryRoutes(app: Express): void {
       }
       const reasonValue = reason.trim();
 
-      const tenantFilter: string | undefined = isSuperAdmin ? undefined : jwtTenantId;
-
       try {
         const result = await deleteSession({
           sessionDbId,
-          tenantId: tenantFilter,
+          scope,
           actorRole,
           actorEmail,
           reason: reasonValue,
@@ -196,6 +205,10 @@ export function registerChatHistoryRoutes(app: Express): void {
           affected_counts: result.affected_counts,
         });
       } catch (err) {
+        // Phase69-1 fix [HIGH]: lock_timeout (55P03) → 409
+        if ((err as { code?: string }).code === "55P03") {
+          return res.status(409).json({ error: "他の処理中のため、少し時間をおいて再度お試しください" });
+        }
         logger.warn("[DELETE /v1/admin/chat-history/sessions/:id]", err);
         return res.status(500).json({ error: "セッションの削除に失敗しました" });
       }
