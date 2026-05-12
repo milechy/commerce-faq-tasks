@@ -36,11 +36,12 @@ export async function deleteSession(
   try {
     await client.query("BEGIN");
 
-    // 1. セッション取得（テナント所有権チェック）
+    // 1. セッション取得（テナント所有権チェック + 行ロック）
+    // FOR UPDATE で並行削除との競合を防ぐ
     const sessionResult = await client.query<{ id: string; tenant_id: string }>(
       params.tenantId
-        ? `SELECT id, tenant_id FROM chat_sessions WHERE id = $1 AND tenant_id = $2`
-        : `SELECT id, tenant_id FROM chat_sessions WHERE id = $1`,
+        ? `SELECT id, tenant_id FROM chat_sessions WHERE id = $1 AND tenant_id = $2 FOR UPDATE`
+        : `SELECT id, tenant_id FROM chat_sessions WHERE id = $1 FOR UPDATE`,
       params.tenantId ? [params.sessionDbId, params.tenantId] : [params.sessionDbId],
     );
 
@@ -74,12 +75,20 @@ export async function deleteSession(
     }
 
     // 4. chat_sessions 削除（chat_messages は CASCADE DELETE）
-    await client.query(
-      `DELETE FROM chat_sessions WHERE id = $1`,
+    // Phase69-1 fix [MEDIUM]: RETURNING で実際に削除されたことを証明し、
+    // audit_logs への記録を削除成功後にのみ行う
+    const deleteResult = await client.query<{ id: string }>(
+      `DELETE FROM chat_sessions WHERE id = $1 RETURNING id`,
       [session.id],
     );
 
-    // 5. audit_logs 記録（同一 TX）
+    if ((deleteResult.rowCount ?? 0) !== 1) {
+      // FOR UPDATE 取得後に消えることは通常起き得ないが、防御として
+      await client.query("ROLLBACK");
+      throw new Error(`Deletion verification failed for session ${session.id}`);
+    }
+
+    // 5. audit_logs 記録（削除成功が証明された後のみ）
     const metadata = {
       reason: params.reason,
       affected_counts: {

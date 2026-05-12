@@ -160,6 +160,13 @@ export function registerChatHistoryRoutes(app: Express): void {
         return res.status(400).json({ error: "sessionId が必要です" });
       }
 
+      // Phase69-1 fix [HIGH]: ロールホワイトリスト強制
+      const ALLOWED_ROLES = ["super_admin", "client_admin"] as const;
+      type AllowedRole = typeof ALLOWED_ROLES[number];
+      if (!ALLOWED_ROLES.includes(actorRole as AllowedRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+
       const { reason } = (req.body ?? {}) as Record<string, unknown>;
       if (typeof reason !== "string" || reason.trim().length < 5) {
         return res.status(400).json({ error: "reason は5文字以上500文字以下の文字列が必要です" });

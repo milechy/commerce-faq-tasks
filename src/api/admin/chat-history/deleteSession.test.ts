@@ -177,4 +177,64 @@ describe("DELETE /v1/admin/chat-history/sessions/:sessionId", () => {
       }),
     );
   });
+
+  // ── [HIGH] 認可ホワイトリスト追加テスト ─────────────────────────────────
+
+  it("認可: viewer ロールは403を返す", async () => {
+    const viewerToken = makeDevJwt({
+      email: "viewer@example.com",
+      app_metadata: { role: "viewer", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${viewerToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("認可: role が undefined (unknown) のユーザーは403を返す", async () => {
+    const noRoleToken = makeDevJwt({
+      email: "norole@example.com",
+      app_metadata: { tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${noRoleToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("認可: ALLOWED_ROLES 外の任意の文字列ロールは403を返す", async () => {
+    const bogusRoleToken = makeDevJwt({
+      email: "bogus@example.com",
+      app_metadata: { role: "tenant_manager", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${bogusRoleToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  // ── [MEDIUM] 並行削除 / audit_logs 整合性テスト ──────────────────────────
+
+  it("並行削除: deleteSession が throw した場合は500を返し、audit_logs は挿入されない", async () => {
+    mockDeleteSession.mockRejectedValueOnce(new Error("Deletion verification failed"));
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(500);
+  });
 });
