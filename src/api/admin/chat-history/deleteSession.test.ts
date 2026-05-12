@@ -317,6 +317,81 @@ describe("DELETE /v1/admin/chat-history/sessions/:sessionId", () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/再度お試し/);
   });
+
+  // ── [CRITICAL] Round 5: user_metadata.role フォールバック削除 ─────────────
+  // app_metadata.role のみを信頼し、user_metadata.role は無視することを確認
+
+  it("Test 21: app_metadata.role='super_admin', user_metadata なし → 200 (正常系)", async () => {
+    mockDeleteSession.mockResolvedValueOnce(MOCK_RESULT);
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted_session_id).toBe("sess-uuid-1");
+  });
+
+  it("Test 22 [攻撃シナリオ]: app_metadata.role なし, user_metadata.role='super_admin' → 403", async () => {
+    const attackToken = makeDevJwt({
+      email: "attacker@example.com",
+      user_metadata: { role: "super_admin" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${attackToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("Test 23 [攻撃シナリオ]: app_metadata.role なし, user_metadata.role='client_admin' → 403", async () => {
+    const attackToken = makeDevJwt({
+      email: "attacker@example.com",
+      user_metadata: { role: "client_admin" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${attackToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("Test 24: app_metadata.role='viewer', user_metadata.role='super_admin' → 403 (ALLOWED_ROLES外)", async () => {
+    const mixedToken = makeDevJwt({
+      email: "viewer@example.com",
+      app_metadata: { role: "viewer", tenant_id: "tenant-a" },
+      user_metadata: { role: "super_admin" },
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${mixedToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it("Test 25: app_metadata.role なし, user_metadata.role なし → 403", async () => {
+    const noRoleToken = makeDevJwt({
+      email: "nobody@example.com",
+    });
+
+    const res = await request(app)
+      .delete("/v1/admin/chat-history/sessions/sess-uuid-1")
+      .set("Authorization", `Bearer ${noRoleToken}`)
+      .send({ reason: VALID_REASON });
+
+    expect(res.status).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
 });
 
 // ── リポジトリ内部クエリ整合性テスト（Tests 18-20） ──────────────────────────

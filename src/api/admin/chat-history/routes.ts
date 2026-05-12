@@ -39,8 +39,10 @@ export function registerChatHistoryRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
       const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+        su?.app_metadata?.role === "super_admin";
 
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
 
@@ -105,8 +107,10 @@ export function registerChatHistoryRoutes(app: Express): void {
       const sessionDbId: string = req.params["sessionId"] ?? "";
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
       const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+        su?.app_metadata?.role === "super_admin";
 
       // テナント検証:
       //   super_admin: ?tenant=xxx があればそれを使う。なければ undefined (全セッション閲覧可)
@@ -150,8 +154,12 @@ export function registerChatHistoryRoutes(app: Express): void {
       const sessionDbId: string = req.params["sessionId"] ?? "";
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const actorRole: string =
-        su?.app_metadata?.role ?? su?.user_metadata?.role ?? "unknown";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const actorRole: string | undefined = su?.app_metadata?.role as string | undefined;
+      if (!actorRole || typeof actorRole !== "string") {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
       const actorEmail: string = su?.email ?? su?.app_metadata?.email ?? "";
 
       if (!sessionDbId) {
@@ -228,8 +236,10 @@ export function registerChatHistoryRoutes(app: Express): void {
       const sessionDbId: string = req.params["sessionId"] ?? "";
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
       const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+        su?.app_metadata?.role === "super_admin";
       const email: string = su?.email ?? su?.app_metadata?.email ?? "";
 
       if (!sessionDbId) {
