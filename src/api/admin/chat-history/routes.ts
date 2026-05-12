@@ -6,6 +6,7 @@ import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
 import { getSessions, getMessages } from "./chatHistoryRepository";
+import { deleteSession } from "./deleteSessionRepository";
 import { createNotification } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 
@@ -134,6 +135,62 @@ export function registerChatHistoryRoutes(app: Express): void {
       } catch (err) {
         logger.warn("[GET /v1/admin/chat-history/sessions/:id/messages]", err);
         return res.status(500).json({ error: "メッセージの取得に失敗しました" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // DELETE /v1/admin/chat-history/sessions/:sessionId
+  // Phase69-1: Right to Erasure — セッション完全削除
+  // Body: { reason: string (5–500文字) }
+  // -----------------------------------------------------------------------
+  app.delete(
+    "/v1/admin/chat-history/sessions/:sessionId",
+    async (req: Request, res: Response) => {
+      const sessionDbId: string = req.params["sessionId"] ?? "";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const isSuperAdmin: boolean =
+        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const actorRole: string =
+        su?.app_metadata?.role ?? su?.user_metadata?.role ?? "unknown";
+      const actorEmail: string = su?.email ?? su?.app_metadata?.email ?? "";
+
+      if (!sessionDbId) {
+        return res.status(400).json({ error: "sessionId が必要です" });
+      }
+
+      const { reason } = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof reason !== "string" || reason.trim().length < 5) {
+        return res.status(400).json({ error: "reason は5文字以上500文字以下の文字列が必要です" });
+      }
+      if (reason.trim().length > 500) {
+        return res.status(400).json({ error: "reason は5文字以上500文字以下の文字列が必要です" });
+      }
+      const reasonValue = reason.trim();
+
+      const tenantFilter: string | undefined = isSuperAdmin ? undefined : jwtTenantId;
+
+      try {
+        const result = await deleteSession({
+          sessionDbId,
+          tenantId: tenantFilter,
+          actorRole,
+          actorEmail,
+          reason: reasonValue,
+        });
+
+        if (!result) {
+          return res.status(404).json({ error: "セッションが見つかりません" });
+        }
+
+        return res.json({
+          deleted_session_id: result.deleted_session_id,
+          affected_counts: result.affected_counts,
+        });
+      } catch (err) {
+        logger.warn("[DELETE /v1/admin/chat-history/sessions/:id]", err);
+        return res.status(500).json({ error: "セッションの削除に失敗しました" });
       }
     },
   );
