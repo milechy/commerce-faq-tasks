@@ -83,13 +83,32 @@ describe("roleAuthMiddleware", () => {
     expect(user.tenantId).toBe("tenant-abc");
   });
 
-  it("falls back to user_metadata.tenant_id when app_metadata.tenant_id is absent", () => {
+  it("[攻撃防止] user_metadata.role='super_admin' は anonymous になる (クライアント制御可能)", () => {
     const req = mockReq({
       supabaseUser: {
-        sub: "user-003",
-        email: "client2@example.com",
+        sub: "attacker-001",
+        email: "attacker@example.com",
+        user_metadata: { role: "super_admin" },
+        // app_metadata.role は未設定
+      },
+    });
+    const res = mockRes();
+    roleAuthMiddleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    const user: AuthenticatedUser = (req as any).user;
+    expect(user.role).toBe("anonymous");
+    expect(user.tenantId).toBeNull();
+  });
+
+  it("[攻撃防止] user_metadata.tenant_id は無視され tenantId が null になる", () => {
+    const req = mockReq({
+      supabaseUser: {
+        sub: "attacker-002",
+        email: "attacker@example.com",
         app_metadata: { role: "client_admin" },
-        user_metadata: { tenant_id: "tenant-from-user-meta" },
+        user_metadata: { tenant_id: "injected-tenant" },
+        // app_metadata.tenant_id は未設定
       },
     });
     const res = mockRes();
@@ -98,7 +117,25 @@ describe("roleAuthMiddleware", () => {
     expect(next).toHaveBeenCalled();
     const user: AuthenticatedUser = (req as any).user;
     expect(user.role).toBe("client_admin");
-    expect(user.tenantId).toBe("tenant-from-user-meta");
+    expect(user.tenantId).toBeNull(); // user_metadata.tenant_id は無視
+  });
+
+  it("[攻撃防止] app_metadata なし + user_metadata のみ → anonymous / null", () => {
+    const req = mockReq({
+      supabaseUser: {
+        sub: "attacker-003",
+        email: "attacker@example.com",
+        user_metadata: { role: "client_admin", tenant_id: "attacker-tenant" },
+        // app_metadata 自体なし
+      },
+    });
+    const res = mockRes();
+    roleAuthMiddleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    const user: AuthenticatedUser = (req as any).user;
+    expect(user.role).toBe("anonymous");
+    expect(user.tenantId).toBeNull();
   });
 });
 

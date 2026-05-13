@@ -17,8 +17,16 @@ export type SupabaseJwtUser = {
   email?: string;
   tenant_id?: string;
   app_metadata?: { role?: string; tenant_id?: string };
+  // user_metadata は Supabase JWT に存在するがクライアント制御可能なため、
+  // 認可ロジックでは使用してはならない（型定義のみ保持）
   user_metadata?: { role?: string; tenant_id?: string };
 };
+
+// セキュリティ要件: JWT claim を安全に string として取得する
+// typeof ガードにより any/undefined を "" にフォールバック（実行時保証）
+function safeStringClaim(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
 
 export type AuthedReq = Request & {
   supabaseUser?: SupabaseJwtUser;
@@ -46,15 +54,14 @@ export function roleAuthMiddleware(
     return next();
   }
 
+  // セキュリティ要件: ロール / テナントスコープは app_metadata のみを信頼する
+  // user_metadata はクライアント制御可能なため、特権判定に使用してはならない
+  const rawRole = safeStringClaim(supabaseUser.app_metadata?.role);
   const role: UserRole =
-    (supabaseUser.app_metadata?.role as UserRole | undefined) ||
-    (supabaseUser.user_metadata?.role as UserRole | undefined) ||
-    "anonymous";
+    rawRole === "super_admin" || rawRole === "client_admin" ? rawRole : "anonymous";
 
-  const tenantId: string | null =
-    supabaseUser.app_metadata?.tenant_id ||
-    supabaseUser.user_metadata?.tenant_id ||
-    null;
+  const rawTenantId = safeStringClaim(supabaseUser.app_metadata?.tenant_id);
+  const tenantId: string | null = rawTenantId || null;
 
   (req as AuthedReq).user = {
     id: supabaseUser.sub || supabaseUser.id || "",
