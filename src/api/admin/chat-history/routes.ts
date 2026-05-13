@@ -38,9 +38,17 @@ export function registerChatHistoryRoutes(app: Express): void {
     "/v1/admin/chat-history/sessions",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      // su.tenant_id (top-level claim) はクライアント制御可能なため使用しない
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
       const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+        su?.app_metadata?.role === "super_admin";
+
+      if (!isSuperAdmin && !jwtTenantId) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
 
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
 
@@ -104,9 +112,13 @@ export function registerChatHistoryRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const sessionDbId: string = req.params["sessionId"] ?? "";
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      // su.tenant_id (top-level claim) はクライアント制御可能なため使用しない
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
       const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+        su?.app_metadata?.role === "super_admin";
 
       // テナント検証:
       //   super_admin: ?tenant=xxx があればそれを使う。なければ undefined (全セッション閲覧可)
@@ -119,7 +131,7 @@ export function registerChatHistoryRoutes(app: Express): void {
         return res.status(400).json({ error: "sessionId が必要です" });
       }
       if (!isSuperAdmin && !tenantId) {
-        return res.status(400).json({ error: "tenant が解決できません" });
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
       }
 
       try {
@@ -149,15 +161,39 @@ export function registerChatHistoryRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const sessionDbId: string = req.params["sessionId"] ?? "";
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
-      const actorRole: string =
-        su?.app_metadata?.role ?? su?.user_metadata?.role ?? "unknown";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      // su.tenant_id (top-level claim) はクライアント制御可能なため使用しない
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const actorRole: string | undefined = su?.app_metadata?.role as string | undefined;
+      if (!actorRole || typeof actorRole !== "string") {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
       const actorEmail: string = su?.email ?? su?.app_metadata?.email ?? "";
 
       if (!sessionDbId) {
         return res.status(400).json({ error: "sessionId が必要です" });
+      }
+
+      // Phase69-1 fix [HIGH]: ロールホワイトリスト強制
+      const ALLOWED_ROLES = ["super_admin", "client_admin"] as const;
+      type AllowedRole = typeof ALLOWED_ROLES[number];
+      if (!ALLOWED_ROLES.includes(actorRole as AllowedRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+
+      // Phase69-1 fix [HIGH] Round2: client_admin は必ず有効な tenant_id を持つこと
+      // JWT app_metadata が欠損/不正な場合でもクロステナント削除を防ぐ
+      let scope: import("./deleteSessionRepository").DeleteSessionScope;
+      if (actorRole === "client_admin") {
+        if (!jwtTenantId || typeof jwtTenantId !== "string" || jwtTenantId.trim() === "") {
+          return res.status(403).json({ error: "この操作を実行する権限がありません" });
+        }
+        scope = { kind: "tenant", tenantId: jwtTenantId };
+      } else {
+        // super_admin: スコープなし（全テナント対象）
+        scope = { kind: "global" };
       }
 
       const { reason } = (req.body ?? {}) as Record<string, unknown>;
@@ -169,12 +205,10 @@ export function registerChatHistoryRoutes(app: Express): void {
       }
       const reasonValue = reason.trim();
 
-      const tenantFilter: string | undefined = isSuperAdmin ? undefined : jwtTenantId;
-
       try {
         const result = await deleteSession({
           sessionDbId,
-          tenantId: tenantFilter,
+          scope,
           actorRole,
           actorEmail,
           reason: reasonValue,
@@ -189,6 +223,17 @@ export function registerChatHistoryRoutes(app: Express): void {
           affected_counts: result.affected_counts,
         });
       } catch (err) {
+        // Phase69-1 fix [HIGH]: lock_timeout (55P03) → 409
+        if ((err as { code?: string }).code === "55P03") {
+          logger.warn({
+            event: "chat_history_delete_lock_timeout",
+            tenantId: jwtTenantId || "unknown",
+            sessionId: sessionDbId,
+            actorEmail: actorEmail || "unknown",
+            errorCode: "55P03",
+          }, "DELETE session lock timeout (3s exceeded)");
+          return res.status(409).json({ error: "他の処理中のため、少し時間をおいて再度お試しください" });
+        }
         logger.warn("[DELETE /v1/admin/chat-history/sessions/:id]", err);
         return res.status(500).json({ error: "セッションの削除に失敗しました" });
       }
@@ -207,9 +252,13 @@ export function registerChatHistoryRoutes(app: Express): void {
       const pool = getPool();
       const sessionDbId: string = req.params["sessionId"] ?? "";
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      // su.tenant_id (top-level claim) はクライアント制御可能なため使用しない
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
       const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+        su?.app_metadata?.role === "super_admin";
       const email: string = su?.email ?? su?.app_metadata?.email ?? "";
 
       if (!sessionDbId) {
