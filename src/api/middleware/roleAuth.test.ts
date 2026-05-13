@@ -137,6 +137,72 @@ describe("roleAuthMiddleware", () => {
     expect(user.role).toBe("anonymous");
     expect(user.tenantId).toBeNull();
   });
+
+  // ── fail-closed: client_admin without tenant_id ─────────────────────────
+
+  it("[X] client_admin + app_metadata.tenant_id=undefined → 403 (fail-closed)", () => {
+    const req = mockReq({
+      supabaseUser: {
+        sub: "user-010",
+        email: "cadmin@example.com",
+        app_metadata: { role: "client_admin" },
+        // tenant_id 未設定
+      },
+    });
+    const res = mockRes();
+    roleAuthMiddleware(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("[Y] client_admin + app_metadata.tenant_id='' → 403 (fail-closed)", () => {
+    const req = mockReq({
+      supabaseUser: {
+        sub: "user-011",
+        email: "cadmin2@example.com",
+        app_metadata: { role: "client_admin", tenant_id: "" },
+      },
+    });
+    const res = mockRes();
+    roleAuthMiddleware(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("[Z] client_admin + app_metadata.tenant_id='t1' → next() 呼ばれる", () => {
+    const req = mockReq({
+      supabaseUser: {
+        sub: "user-012",
+        email: "cadmin3@example.com",
+        app_metadata: { role: "client_admin", tenant_id: "t1" },
+      },
+    });
+    const res = mockRes();
+    roleAuthMiddleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+    const user: AuthenticatedUser = (req as any).user;
+    expect(user.role).toBe("client_admin");
+    expect(user.tenantId).toBe("t1");
+  });
+
+  it("[W] super_admin + tenant_id なし → next() 呼ばれる (グローバル操作は影響なし)", () => {
+    const req = mockReq({
+      supabaseUser: {
+        sub: "user-013",
+        email: "superadmin@example.com",
+        app_metadata: { role: "super_admin" },
+        // tenant_id なし — super_admin は全テナント対象
+      },
+    });
+    const res = mockRes();
+    roleAuthMiddleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+    const user: AuthenticatedUser = (req as any).user;
+    expect(user.role).toBe("super_admin");
+    expect(user.tenantId).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

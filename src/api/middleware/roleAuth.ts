@@ -63,6 +63,13 @@ export function roleAuthMiddleware(
   const rawTenantId = safeStringClaim(supabaseUser.app_metadata?.tenant_id);
   const tenantId: string | null = rawTenantId || null;
 
+  // セキュリティ要件: client_admin は必ず tenant_id を持つこと
+  // 防御深度: ミドルウェア層と route 層の両方で fail-closed
+  if (role === "client_admin" && (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "")) {
+    res.status(403).json({ error: "この操作を実行する権限がありません" });
+    return;
+  }
+
   (req as AuthedReq).user = {
     id: supabaseUser.sub || supabaseUser.id || "",
     email: supabaseUser.email || "",
