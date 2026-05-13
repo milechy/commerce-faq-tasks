@@ -101,7 +101,9 @@ describe("roleAuthMiddleware", () => {
     expect(user.tenantId).toBeNull();
   });
 
-  it("[攻撃防止] user_metadata.tenant_id は無視され tenantId が null になる", () => {
+  it("[攻撃防止] user_metadata.tenant_id は無視され 403 になる (fail-closed)", () => {
+    // user_metadata.tenant_id はクライアント制御可能なため無視される。
+    // app_metadata.tenant_id が未設定の client_admin は fail-closed で 403 になる。
     const req = mockReq({
       supabaseUser: {
         sub: "attacker-002",
@@ -114,10 +116,8 @@ describe("roleAuthMiddleware", () => {
     const res = mockRes();
     roleAuthMiddleware(req, res, next);
 
-    expect(next).toHaveBeenCalled();
-    const user: AuthenticatedUser = (req as any).user;
-    expect(user.role).toBe("client_admin");
-    expect(user.tenantId).toBeNull(); // user_metadata.tenant_id は無視
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled(); // user_metadata は無視 → tenant_id なし → 403
   });
 
   it("[攻撃防止] app_metadata なし + user_metadata のみ → anonymous / null", () => {
