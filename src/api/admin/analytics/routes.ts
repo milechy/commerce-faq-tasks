@@ -116,6 +116,13 @@ function resolveTenantFilter(
   return jwtTenantId || null;
 }
 
+const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
+type AllowedAdminRole = typeof ALLOWED_ADMIN_ROLES[number];
+function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
+  return typeof role === "string" &&
+         (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role);
+}
+
 // ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
@@ -130,11 +137,35 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/summary",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
-        "super_admin";
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'tenant_id_missing',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataTenantId: !!su?.app_metadata?.tenant_id,
+          hasUserMetadataTenantId: !!su?.user_metadata?.tenant_id,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_TENANT_INVALID',
+        }, "Admin analytics access denied: tenant_id missing for non-super-admin");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -364,11 +395,35 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/trends",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
-        "super_admin";
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'tenant_id_missing',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataTenantId: !!su?.app_metadata?.tenant_id,
+          hasUserMetadataTenantId: !!su?.user_metadata?.tenant_id,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_TENANT_INVALID',
+        }, "Admin analytics access denied: tenant_id missing for non-super-admin");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -490,11 +545,35 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/evaluations",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
-        "super_admin";
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'tenant_id_missing',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataTenantId: !!su?.app_metadata?.tenant_id,
+          hasUserMetadataTenantId: !!su?.user_metadata?.tenant_id,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_TENANT_INVALID',
+        }, "Admin analytics access denied: tenant_id missing for non-super-admin");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -624,9 +703,35 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/conversions",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'tenant_id_missing',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataTenantId: !!su?.app_metadata?.tenant_id,
+          hasUserMetadataTenantId: !!su?.user_metadata?.tenant_id,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_TENANT_INVALID',
+        }, "Admin analytics access denied: tenant_id missing for non-super-admin");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -896,11 +1001,31 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/cv-status",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      const isSuperAdmin: boolean = actorRole === "super_admin";
 
       if (!isSuperAdmin) {
-        return res.status(403).json({ error: "アクセス権限がありません" });
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'insufficient_role',
+          actorRole,
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INSUFFICIENT',
+        }, "Admin analytics access denied: super_admin required");
+        return res.status(403).json({ error: "アクセス権限がありません", code: 'AUTH_ROLE_INSUFFICIENT' });
       }
 
       if (!pool) {
@@ -983,10 +1108,35 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/knowledge-attribution",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'tenant_id_missing',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataTenantId: !!su?.app_metadata?.tenant_id,
+          hasUserMetadataTenantId: !!su?.user_metadata?.tenant_id,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_TENANT_INVALID',
+        }, "Admin analytics access denied: tenant_id missing for non-super-admin");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
 
       // RBAC: client_admin は JWT の tenantId を強制、super_admin は query ?tenant_id=
       const tenantId: string | undefined = isSuperAdmin
