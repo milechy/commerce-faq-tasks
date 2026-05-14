@@ -23,6 +23,7 @@ jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
 
 import express from 'express';
 import request from 'supertest';
+import { logger } from '../../../lib/logger';
 import { registerAnalyticsRoutes } from './routes';
 import { registerEventAnalyticsRoutes } from './eventAnalyticsRoutes';
 
@@ -50,6 +51,10 @@ const TENANT_SCOPED_ROUTES = [
 
 // All routes including super_admin-only cv-status
 const ALL_ROUTES = [...TENANT_SCOPED_ROUTES, '/v1/admin/analytics/cv-status'];
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
 // ---------------------------------------------------------------------------
 // Whitelist: viewer role → 403
@@ -89,5 +94,99 @@ describe('analytics routes — tenant_id fail-closed (client_admin + no tenant �
       const res = await request(app).get(route);
       expect(res.status).toBe(403);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Observability: logger.warn called with structured payload on 403 denials
+// ---------------------------------------------------------------------------
+describe('analytics routes — logger.warn structured payload on 403 (observability)', () => {
+  it('/v1/admin/analytics/summary — viewer → logger.warn with AUTH_ROLE_INVALID', async () => {
+    const app = makeApp({ role: 'viewer', tenant_id: 'tenant-a' });
+    await request(app).get('/v1/admin/analytics/summary');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'analytics_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTH_ROLE_INVALID',
+        hasAppMetadataRole: true,
+        hasUserMetadataRole: false,
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('/v1/admin/analytics/summary — no role → logger.warn with AUTH_ROLE_INVALID', async () => {
+    const app = makeApp({ tenant_id: 'tenant-a' }); // role absent
+    await request(app).get('/v1/admin/analytics/summary');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'analytics_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTH_ROLE_INVALID',
+        hasAppMetadataRole: false,
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('/v1/admin/analytics/summary — client_admin + no tenant → logger.warn with AUTH_TENANT_INVALID', async () => {
+    const app = makeApp({ role: 'client_admin' }); // tenant_id absent
+    await request(app).get('/v1/admin/analytics/summary');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'analytics_access_denied',
+        reason: 'tenant_id_missing',
+        errorCode: 'AUTH_TENANT_INVALID',
+        hasAppMetadataTenantId: false,
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('/v1/admin/analytics/events — viewer → logger.warn with AUTH_ROLE_INVALID', async () => {
+    const app = makeApp({ role: 'viewer', tenant_id: 'tenant-a' });
+    await request(app).get('/v1/admin/analytics/events');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'analytics_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTH_ROLE_INVALID',
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('/v1/admin/analytics/events — client_admin + no tenant → logger.warn with AUTH_TENANT_INVALID', async () => {
+    const app = makeApp({ role: 'client_admin' }); // tenant_id absent
+    await request(app).get('/v1/admin/analytics/events');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'analytics_access_denied',
+        reason: 'tenant_id_missing',
+        errorCode: 'AUTH_TENANT_INVALID',
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('/v1/admin/analytics/cv-status — client_admin (insufficient role) → logger.warn with AUTH_ROLE_INSUFFICIENT', async () => {
+    const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
+    await request(app).get('/v1/admin/analytics/cv-status');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'analytics_access_denied',
+        reason: 'insufficient_role',
+        errorCode: 'AUTH_ROLE_INSUFFICIENT',
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('403 response includes errorCode field', async () => {
+    const app = makeApp({ role: 'viewer', tenant_id: 'tenant-a' });
+    const res = await request(app).get('/v1/admin/analytics/summary');
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'AUTH_ROLE_INVALID' });
   });
 });
