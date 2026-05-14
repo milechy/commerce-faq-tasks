@@ -539,6 +539,145 @@ describe("GET /v1/admin/chat-history: tenant_id fallback 削除", () => {
 
     expect(res.status).toBe(403);
   });
+
+  // ── [HIGH] Phase69-1.5: GET エンドポイントのロールホワイトリスト ──────────
+
+  it("Test 33: GET sessions — viewer ロールは403を返す", async () => {
+    const viewerToken = makeDevJwt({
+      email: "viewer@example.com",
+      app_metadata: { role: "viewer", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions")
+      .set("Authorization", `Bearer ${viewerToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 34: GET sessions — role が undefined のユーザーは403を返す", async () => {
+    const noRoleToken = makeDevJwt({
+      email: "norole@example.com",
+      app_metadata: { tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions")
+      .set("Authorization", `Bearer ${noRoleToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 35: GET sessions — role が空文字のユーザーは403を返す", async () => {
+    const emptyRoleToken = makeDevJwt({
+      email: "empty@example.com",
+      app_metadata: { role: "", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions")
+      .set("Authorization", `Bearer ${emptyRoleToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 36: GET sessions/:id/messages — viewer ロールは403を返す", async () => {
+    const viewerToken = makeDevJwt({
+      email: "viewer@example.com",
+      app_metadata: { role: "viewer", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+      .set("Authorization", `Bearer ${viewerToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 37: GET sessions/:id/messages — role が undefined のユーザーは403を返す", async () => {
+    const noRoleToken = makeDevJwt({
+      email: "norole@example.com",
+      app_metadata: { tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+      .set("Authorization", `Bearer ${noRoleToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 38: GET sessions/:id/messages — role が空文字のユーザーは403を返す", async () => {
+    const emptyRoleToken = makeDevJwt({
+      email: "empty@example.com",
+      app_metadata: { role: "", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+      .set("Authorization", `Bearer ${emptyRoleToken}`);
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// ── [HIGH] Phase69-1.5: PATCH エンドポイントのロールホワイトリスト ─────────────
+
+describe("PATCH /v1/admin/chat-history: role whitelist", () => {
+  let app: ReturnType<typeof express>;
+
+  beforeAll(() => {
+    process.env.NODE_ENV = "development";
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    app = express();
+    app.use(express.json());
+    registerChatHistoryRoutes(app);
+  });
+
+  it("Test 39: PATCH outcome — viewer ロールは403を返す", async () => {
+    const viewerToken = makeDevJwt({
+      email: "viewer@example.com",
+      app_metadata: { role: "viewer", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .patch("/v1/admin/chat-history/sessions/sess-uuid-1/outcome")
+      .set("Authorization", `Bearer ${viewerToken}`)
+      .send({ outcome: "購入完了" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 40: PATCH outcome — role が undefined のユーザーは403を返す", async () => {
+    const noRoleToken = makeDevJwt({
+      email: "norole@example.com",
+      app_metadata: { tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .patch("/v1/admin/chat-history/sessions/sess-uuid-1/outcome")
+      .set("Authorization", `Bearer ${noRoleToken}`)
+      .send({ outcome: "購入完了" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("Test 41: PATCH outcome — role が空文字のユーザーは403を返す", async () => {
+    const emptyRoleToken = makeDevJwt({
+      email: "empty@example.com",
+      app_metadata: { role: "", tenant_id: "tenant-a" },
+    });
+
+    const res = await request(app)
+      .patch("/v1/admin/chat-history/sessions/sess-uuid-1/outcome")
+      .set("Authorization", `Bearer ${emptyRoleToken}`)
+      .send({ outcome: "購入完了" });
+
+    expect(res.status).toBe(403);
+  });
 });
 
 // ── リポジトリ内部クエリ整合性テスト（Tests 18-20） ──────────────────────────
