@@ -130,11 +130,13 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/summary",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
-        "super_admin";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const rawRole = su?.app_metadata?.role;
+      const isSuperAdmin: boolean = rawRole === "super_admin";
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -364,11 +366,13 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/trends",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
-        "super_admin";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const rawRole = su?.app_metadata?.role;
+      const isSuperAdmin: boolean = rawRole === "super_admin";
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -490,11 +494,13 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/evaluations",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") ===
-        "super_admin";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const rawRole = su?.app_metadata?.role;
+      const isSuperAdmin: boolean = rawRole === "super_admin";
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -624,9 +630,13 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/conversions",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const rawRole = su?.app_metadata?.role;
+      const isSuperAdmin: boolean = rawRole === "super_admin";
 
       const period = (req.query["period"] as string | undefined) ?? "30d";
       const interval = periodToInterval(period);
@@ -896,8 +906,10 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/cv-status",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const rawRole = su?.app_metadata?.role;
+      const isSuperAdmin: boolean = rawRole === "super_admin";
 
       if (!isSuperAdmin) {
         return res.status(403).json({ error: "アクセス権限がありません" });
@@ -983,10 +995,13 @@ export function registerAnalyticsRoutes(app: Express): void {
     "/v1/admin/analytics/knowledge-attribution",
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const rawRole = su?.app_metadata?.role;
+      const isSuperAdmin: boolean = rawRole === "super_admin";
 
       // RBAC: client_admin は JWT の tenantId を強制、super_admin は query ?tenant_id=
       const tenantId: string | undefined = isSuperAdmin

@@ -63,10 +63,13 @@ export function registerEventAnalyticsRoutes(app: Express): void {
     '/v1/admin/analytics/events',
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
-      const jwtTenantId: string =
-        su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? '';
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? '') === 'super_admin';
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+      const rawRole = su?.app_metadata?.role;
+      const isSuperAdmin: boolean = rawRole === "super_admin";
 
       const queryTenantId = (req.query['tenant_id'] as string | undefined) ?? '';
       const tenantId = isSuperAdmin ? (queryTenantId || null) : jwtTenantId;
