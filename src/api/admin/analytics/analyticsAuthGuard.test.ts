@@ -190,3 +190,50 @@ describe('analytics routes — logger.warn structured payload on 403 (observabil
     expect(res.body).toMatchObject({ code: 'AUTH_ROLE_INVALID' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Allow-path: super_admin passes ALLOWED_ROLES + tenant guards → 503 (pool=null)
+// knowledge-attribution without ?tenant_id returns 400 (not 403) for super_admin;
+// expect(not.toBe(403)) covers both 503 and 400 outcomes.
+// ---------------------------------------------------------------------------
+describe('analytics routes — allow-path: super_admin passes ALLOWED_ROLES + tenant guards', () => {
+  ALL_ROUTES.forEach((route) => {
+    it(`${route} — super_admin → not 403 (auth passes; pool unavailable → 503)`, async () => {
+      const app = makeApp({ role: 'super_admin' });
+      const res = await request(app).get(route);
+      expect(res.status).not.toBe(403);
+    });
+  });
+
+  it('/v1/admin/analytics/summary — super_admin with ?tenant=tenant-a query scoping → 503', async () => {
+    const app = makeApp({ role: 'super_admin' });
+    const res = await request(app).get('/v1/admin/analytics/summary?tenant=tenant-a');
+    expect(res.status).toBe(503);
+  });
+
+  it('/v1/admin/analytics/knowledge-attribution — super_admin with ?tenant_id=tenant-a → 503 (auth + tenant resolved, pool unavailable)', async () => {
+    const app = makeApp({ role: 'super_admin' });
+    const res = await request(app).get('/v1/admin/analytics/knowledge-attribution?tenant_id=tenant-a');
+    expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Allow-path: client_admin with valid tenant_id passes ALLOWED_ROLES + tenant guards → 503
+// cv-status is intentionally excluded: client_admin → 403 AUTH_ROLE_INSUFFICIENT (super_admin only)
+// ---------------------------------------------------------------------------
+describe('analytics routes — allow-path: client_admin with tenant_id passes ALLOWED_ROLES + tenant guards', () => {
+  TENANT_SCOPED_ROUTES.forEach((route) => {
+    it(`${route} — client_admin + tenant_id → 503 (auth passes, pool unavailable)`, async () => {
+      const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
+      const res = await request(app).get(route);
+      expect(res.status).toBe(503);
+    });
+  });
+
+  it('/v1/admin/analytics/events — client_admin + own tenant_id in query → 503 (cross-tenant guard permits own tenant)', async () => {
+    const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
+    const res = await request(app).get('/v1/admin/analytics/events?tenant_id=tenant-a');
+    expect(res.status).toBe(503);
+  });
+});
