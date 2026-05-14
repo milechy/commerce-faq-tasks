@@ -56,6 +56,13 @@ function formatEventAnalytics(
   }));
 }
 
+const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
+type AllowedAdminRole = typeof ALLOWED_ADMIN_ROLES[number];
+function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
+  return typeof role === "string" &&
+         (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role);
+}
+
 export function registerEventAnalyticsRoutes(app: Express): void {
   app.use('/v1/admin/analytics/events', supabaseAuthMiddleware);
 
@@ -63,13 +70,17 @@ export function registerEventAnalyticsRoutes(app: Express): void {
     '/v1/admin/analytics/events',
     async (req: Request, res: Response) => {
       const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
       // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
       const rawTenantId = su?.app_metadata?.tenant_id;
       const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
-      // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
-      // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
-      const rawRole = su?.app_metadata?.role;
-      const isSuperAdmin: boolean = rawRole === "super_admin";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
 
       const queryTenantId = (req.query['tenant_id'] as string | undefined) ?? '';
       const tenantId = isSuperAdmin ? (queryTenantId || null) : jwtTenantId;
