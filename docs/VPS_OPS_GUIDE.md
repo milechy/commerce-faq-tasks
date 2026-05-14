@@ -180,6 +180,13 @@ ssh root@65.108.159.161 "cd /opt/rajiuce && psql \$DATABASE_URL -f src/migration
 Phase69-2 で ES mapping に `is_published` / `is_excluded_from_search` を明示追加した。
 既存インデックスは dynamic mapping のため、明示マッピングを反映するには re-index が必要。
 
+> **ES write path の注意 (Phase69-2 Round 5 / Phase69-2-E 参照)**
+> `upsertToEsAsync`（CRUD POST/PUT）・`syncIsExcludedToEsAsync`（/exclude PATCH）はいずれも
+> `is_excluded_from_search` を ES に伝搬する。ただし書き込み index は `ES_FAQ_INDEX || "faqs"` であり、
+> 検索 read path (`faq_<tenantId>`) とは index 名が異なる可能性がある（Phase33-c 起因の既存不整合）。
+> **この不整合により、Phase69-2-E 完了まで ES への除外同期は事実上機能しない可能性がある。**
+> pgvector 経由の除外フィルター（`WHERE fd.is_excluded_from_search = false`）は index 名に依存せず機能する。
+
 ```bash
 ssh root@65.108.159.161 "cd /opt/rajiuce && pnpm ts-node SCRIPTS/sync-es.ts --all"
 ```

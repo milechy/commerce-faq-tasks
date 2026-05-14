@@ -701,6 +701,73 @@ describe("PATCH /v1/admin/knowledge/faq/:id/exclude (Phase69-2 Round 2 + Round 4
 });
 
 // ---------------------------------------------------------------------------
+// Phase69-2 Round 5 (Codex Round 4 Finding #1): upsertToEsAsync に is_excluded_from_search 伝搬
+// ---------------------------------------------------------------------------
+describe("upsertToEsAsync — is_excluded_from_search propagation (Phase69-2 Round 5)", () => {
+  beforeEach(() => {
+    mockFetch.mockClear();
+    process.env.ES_URL = "http://es-test:9200";
+  });
+
+  afterEach(() => {
+    delete process.env.ES_URL;
+  });
+
+  it("POST /faq: ES upsert payload contains is_excluded_from_search: false on create", async () => {
+    const createdRow = {
+      id: 99,
+      tenant_id: "tenant-test",
+      question: "新規Q",
+      answer: "新規A",
+      is_published: true,
+    };
+    const queryMock = jest.fn().mockResolvedValueOnce({ rows: [createdRow] });
+    const app = buildApp(queryMock);
+
+    await request(app, "POST", "/v1/admin/knowledge/faq", {
+      body: { question: "新規Q", answer: "新規A" },
+    });
+
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).includes("/_doc/99_tenant-test"),
+    );
+    expect(esCalls.length).toBeGreaterThanOrEqual(1);
+    const payload = JSON.parse(esCalls[0][1]?.body as string);
+    expect(payload).toHaveProperty("is_excluded_from_search", false);
+  });
+
+  it("PUT /faq/:id: ES upsert payload contains is_excluded_from_search from updated row", async () => {
+    const updatedRow = {
+      id: 5,
+      tenant_id: "tenant-test",
+      question: "変更Q",
+      answer: "変更A",
+      is_published: true,
+      is_excluded_from_search: true,
+    };
+    const queryMock = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 5, tenant_id: "tenant-test" }] }) // SELECT check
+      .mockResolvedValueOnce({ rows: [updatedRow] }) // UPDATE RETURNING
+      .mockResolvedValueOnce({ rowCount: 0 }); // DELETE embeddings
+    const app = buildApp(queryMock);
+
+    await request(app, "PUT", "/v1/admin/knowledge/faq/5", {
+      body: { question: "変更Q", answer: "変更A", is_excluded_from_search: true },
+    });
+
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).includes("/_doc/5_tenant-test"),
+    );
+    expect(esCalls.length).toBeGreaterThanOrEqual(1);
+    const payload = JSON.parse(esCalls[0][1]?.body as string);
+    expect(payload).toHaveProperty("is_excluded_from_search", true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase69-2 PR-C2 Round 2: hybrid.ts ES クエリ永続フィルター回帰
 // ---------------------------------------------------------------------------
 describe("hybridSearch ES query — is_excluded_from_search must_not filter (Phase69-2 PR-C2 Round 2)", () => {

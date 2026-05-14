@@ -50,12 +50,13 @@ function upsertToEsAsync(
   faqId: number,
   question: string,
   answer: string,
-  isPublished = true
+  isPublished = true,
+  isExcludedFromSearch = false
 ): void {
   const esUrl = process.env.ES_URL;
   const index = process.env.ES_FAQ_INDEX || "faqs";
   if (!esUrl) return;
-  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: isPublished };
+  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: isPublished, is_excluded_from_search: isExcludedFromSearch };
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${faqId}_${tenantId}`;
   fetch(url, {
     method: "PUT",
@@ -271,7 +272,7 @@ export function registerFaqCrudRoutes(
       const embText = `${row.question}\n${row.answer}`;
 
       insertEmbeddingAsync(db, tenantId, embText, faqId, { source: "faq_crud", faq_id: faqId });
-      upsertToEsAsync(tenantId, faqId, row.question, row.answer, row.is_published);
+      upsertToEsAsync(tenantId, faqId, row.question, row.answer, row.is_published, false);
 
       return res.status(201).json(row);
     } catch (err) {
@@ -361,7 +362,7 @@ export function registerFaqCrudRoutes(
         faq_id: updated.id,
         is_excluded_from_search: updated.is_excluded_from_search ?? false,
       });
-      upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer, updated.is_published);
+      upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer, updated.is_published, updated.is_excluded_from_search ?? false);
 
       return res.json(updated);
     } catch (err) {
