@@ -393,34 +393,54 @@ export function registerFaqCrudRoutes(
     const { is_excluded_from_search } = parsed.data;
 
     try {
-      const check = await db.query(
-        `SELECT id, tenant_id FROM faq_docs WHERE id = $1`,
-        [id]
-      );
-
-      if (check.rowCount === 0) {
-        return res.status(404).json({ error: "FAQが見つかりません" });
-      }
-
-      const existing = check.rows[0] as { tenant_id: string };
-      if (existing.tenant_id !== tenantId) {
-        return res.status(403).json({ error: "アクセス権限がありません" });
-      }
-
-      // Phase69-2 PR-C2 Round 2 (Codex adversarial Round 1 HIGH/MEDIUM 対応):
-      //   - HIGH-2: faq_docs と faq_embeddings の UPDATE を単一 DB tx で atomic 化
-      //   - MEDIUM-1: (metadata->>'faq_id')::bigint キャスト前に '^[0-9]+$' で数値ガード
-      //   - HIGH-1: COMMIT 後に ES へ is_excluded_from_search を fire-and-forget 同期
-      // pattern: deleteSessionRepository (Phase69-1) / bulk-delete (このファイル下部) 準拠
+      // Phase69-2 PR-C2 Round 4 (Codex adversarial Round 3 MEDIUM-2 対応):
+      //   precheck を tx 外で行うと、SELECT 通過後・UPDATE 開始前に行が削除/移動された場合
+      //   UPDATE rowCount=0 でも COMMIT 成功扱いとなり、200 を返す check-then-act レースが残る。
+      //   対策として:
+      //     - SELECT ... FOR UPDATE で precheck を tx 内に取り込み、ターゲット行をロック
+      //     - faq_docs UPDATE rowCount=1 を assert (FOR UPDATE で 1 件取れた後の不一致は内部矛盾)
+      //   その他 Round 2 維持事項:
+      //     - HIGH-2: faq_docs と faq_embeddings UPDATE を単一 DB tx で atomic 化
+      //     - MEDIUM-1: (metadata->>'faq_id')::bigint キャスト前に '^[0-9]+$' で数値ガード
+      //     - HIGH-1: COMMIT 後に ES へ is_excluded_from_search を fire-and-forget 同期
       const client = await db.connect();
+      let txSucceeded = false;
       try {
         await client.query("BEGIN");
         await client.query("SET LOCAL lock_timeout = '3s'");
 
-        await client.query(
+        // in-tx lock + tenant 確認 (Round 4: precheck を tx 内に移動)
+        const lockResult = await client.query(
+          `SELECT id, tenant_id FROM faq_docs WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
+        if (lockResult.rowCount === 0) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "FAQが見つかりません" });
+        }
+        const lockedRow = lockResult.rows[0] as { tenant_id: string };
+        if (lockedRow.tenant_id !== tenantId) {
+          await client.query("ROLLBACK");
+          return res.status(403).json({ error: "アクセス権限がありません" });
+        }
+
+        const docsResult = await client.query(
           `UPDATE faq_docs SET is_excluded_from_search = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3`,
           [is_excluded_from_search, id, tenantId]
         );
+        // FOR UPDATE で 1 件取れた直後の rowCount 不一致は内部矛盾。ROLLBACK して 500。
+        if (docsResult.rowCount !== 1) {
+          await client.query("ROLLBACK");
+          logger.error({
+            event: 'faq_exclude_docs_update_unexpected',
+            errorCode: 'FAQ_DOCS_UPDATE_ROWCOUNT_MISMATCH',
+            tenantId,
+            faqId: id,
+            rowCount: docsResult.rowCount,
+          }, "Unexpected rowCount on faq_docs UPDATE after SELECT FOR UPDATE");
+          return res.status(500).json({ error: "更新に失敗しました" });
+        }
+
         await client.query(
           `UPDATE faq_embeddings SET is_excluded_from_search = $1
            WHERE tenant_id = $2
@@ -430,6 +450,7 @@ export function registerFaqCrudRoutes(
         );
 
         await client.query("COMMIT");
+        txSucceeded = true;
       } catch (txErr) {
         await client.query("ROLLBACK").catch(() => {});
         const pgErr = txErr as { code?: string };
@@ -449,10 +470,13 @@ export function registerFaqCrudRoutes(
         client.release();
       }
 
-      // COMMIT 後に ES 同期（fire-and-forget — DB が source-of-truth）
-      syncIsExcludedToEsAsync(tenantId, id, is_excluded_from_search);
-
-      return res.json({ id, is_excluded_from_search });
+      if (txSucceeded) {
+        // COMMIT 後に ES 同期（fire-and-forget — DB が source-of-truth）
+        syncIsExcludedToEsAsync(tenantId, id, is_excluded_from_search);
+        return res.json({ id, is_excluded_from_search });
+      }
+      // 防御的: txSucceeded=false かつ catch も response 返さず通過した場合
+      return res.status(500).json({ error: "更新に失敗しました" });
     } catch (err) {
       logger.warn("[PATCH /v1/admin/knowledge/faq/:id/exclude]", err);
       return res.status(500).json({ error: "更新に失敗しました" });

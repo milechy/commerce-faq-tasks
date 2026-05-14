@@ -218,40 +218,74 @@ DB マイグレーション失敗時:
 - `phase69_2_excluded_ids.sql` は `IF NOT EXISTS` 付きなので冪等
 - カラム追加失敗時は `ALTER TABLE ... DROP COLUMN is_excluded_from_search` で巻き戻し
 
-#### (d) 除外対象スコープ (Round 3, Codex Adversarial #1 対応)
+#### (d) 除外対象スコープ — identity-based 判定 (Round 4, Codex Adversarial Round 3 #1 対応)
 
-Phase69-2 の `PATCH /v1/admin/knowledge/faq/:id/exclude` および
-`pgvector.ts` の source 分岐は **FAQ 系 embedding のみが対象**:
+`pgvector.ts` の WHERE 句は **faq_id identity** で FAQ かどうかを判定する:
+- **FAQ identity** = `metadata.faq_id` が数値文字列で、対応する `faq_docs` 行が存在する
+- **非 FAQ** = `metadata.faq_id` が存在しない、または数値以外
 
-| source | スコープ | exclusion 経路 |
+##### 設計の変遷
+
+| Round | 判定方式 | 問題 |
 |---|---|---|
-| `scrape` / `text` / `faq` | **FAQ 系** (Phase69-2 対象) | `faq_docs.is_excluded_from_search` + `faq_embeddings.is_excluded_from_search` (両更新) |
-| `book` / `book:pdf:qwen-ocr` | 非 FAQ 系 (書籍 PDF) | 将来 Phase で UI 化予定 |
-| `carnation:web` | 非 FAQ 系 (web scrape) | 将来 Phase で UI 化予定 |
-| `groq/compound-mini` | 非 FAQ 系 (LLM 自動生成) | 将来 Phase で UI 化予定 |
-| `NULL` | 非 FAQ 系扱い (defensive default) | 将来 Phase で対応 |
+| Round 2 (旧) | `fd.id IS NULL` でパススルー | legacy embedding が exclusion をすり抜ける (Codex Round 2 #1) |
+| Round 3 (旧) | `source IN ('scrape','text','faq')` で FAQ 系を限定 | CRUD 経由 (`source='faq_crud'`) が非 FAQ branch に落ちて未公開 FAQ が漏れる (Codex Round 3 #1) |
+| **Round 4 (現行)** | `faq_id` の有無 + `faq_docs` JOIN 成功で判定 | source 名のミスタイプ・列挙漏れに無敵 |
+
+##### embedding source 別の挙動
+
+| source | `faq_id` | identity 判定 | exclusion 経路 |
+|---|---|---|---|
+| `faq_crud` (CRUD POST/PUT) | 数値 | **FAQ 系** | `faq_docs.is_excluded_from_search` + `faq_embeddings.is_excluded_from_search` (両更新) |
+| `scrape` / `text` / `faq` (旧 import) | 数値 | **FAQ 系** | 同上 |
+| `book` / `book:pdf:qwen-ocr` (PDF) | NULL | 非 FAQ | `faq_embeddings.is_excluded_from_search` のみ (将来 UI 化) |
+| `carnation:web` (web scrape) | NULL | 非 FAQ | 同上 |
+| `groq/compound-mini` (LLM 生成) | NULL | 非 FAQ | 同上 |
+| `NULL` | (任意) | `faq_id` で判定 | 同上 |
+| orphan (`faq_id` 数値だが `faq_docs` 行なし) | 数値 | **どちらにもマッチせず除外** | 自動的に検索結果から除外 |
 
 参考: 2026-05-15 時点の VPS DB 実態 (`faq_embeddings` 全 147 件):
-- FAQ 系: scrape 41 + text 10 + faq 2 = **53 件** (全件 `metadata.faq_id` 保持)
-- 非 FAQ 系: book 40 + book:pdf:qwen-ocr 29 + carnation:web 22 + groq/compound-mini 3 = **94 件** (`faq_id` NULL)
-- orphan (faq_id 持つが faq_docs に対応なし): **1 件** → 別タスク (Phase69-2-D) で対処予定
+- FAQ 系 (faq_id 数値持ち + faq_docs JOIN 成功): 53 件
+- 非 FAQ (faq_id NULL): 94 件 (book 40 + book:pdf:qwen-ocr 29 + carnation:web 22 + groq/compound-mini 3)
+- orphan: 1 件 → 別タスク (Phase69-2-D) で対処予定
 
-`pgvector.ts` の WHERE 句は以下の構造で source を判定:
+##### pgvector.ts WHERE 句 (identity-based)
 
 ```sql
--- FAQ 系: faq_docs 厳格チェック (legacy 未連携 embedding は FAQ 検索結果から除外)
-fe.metadata->>'source' IN ('scrape', 'text', 'faq')
-AND fd.id IS NOT NULL
-AND fd.is_published = true
-AND (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
--- OR
--- 非 FAQ 系: faq_docs チェックをスキップ (faq_embeddings レイヤーのみで判定)
-(fe.metadata->>'source' IS NULL OR fe.metadata->>'source' NOT IN ('scrape', 'text', 'faq'))
+WHERE (fe.tenant_id = $1 OR fe.tenant_id = 'global')
+  AND (
+    -- FAQ identity branch: faq_docs を厳格チェック
+    (
+      fe.metadata->>'faq_id' ~ '^[0-9]+$'
+      AND fd.id IS NOT NULL
+      AND fd.is_published = true
+      AND (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
+    )
+    OR
+    -- 非 FAQ branch: faq_docs を見ない
+    (fe.metadata->>'faq_id' IS NULL OR fe.metadata->>'faq_id' !~ '^[0-9]+$')
+  )
+  AND (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
 ```
 
-加えて `fe.is_excluded_from_search` フィルターは全 source 共通で適用される (二重防御)。
+`fe.is_excluded_from_search` フィルターは全 identity 共通で適用 (二重防御)。
 
-orphan 検出 SQL (運用確認用):
+##### /exclude エンドポイント — in-tx lock + rowCount assertion (Round 4)
+
+`PATCH /v1/admin/knowledge/faq/:id/exclude` は以下のシーケンスで動作する:
+
+1. `BEGIN`
+2. `SET LOCAL lock_timeout = '3s'`
+3. `SELECT id, tenant_id FROM faq_docs WHERE id = $1 FOR UPDATE` ← tx 内 precheck + 行ロック
+4. rowCount=0 → 404 (`ROLLBACK`)、tenant 不一致 → 403 (`ROLLBACK`)
+5. `UPDATE faq_docs SET is_excluded_from_search = $1 ...` ← rowCount=1 を assert (異常時 500 + `ROLLBACK`)
+6. `UPDATE faq_embeddings SET is_excluded_from_search = $1 WHERE ... AND (metadata->>'faq_id') ~ '^[0-9]+$' AND (metadata->>'faq_id')::bigint = $3`
+7. `COMMIT`
+8. COMMIT 後に ES へ partial update を fire-and-forget 同期
+
+これにより precheck → UPDATE 間のレース (削除/移動) でも 200 success を返さない。
+
+##### orphan 検出 SQL (運用確認用)
 
 ```sql
 -- orphan: faq_id を持つが faq_docs に対応行なし
@@ -260,3 +294,6 @@ FROM faq_embeddings fe
 LEFT JOIN faq_docs fd ON fd.id = (fe.metadata->>'faq_id')::bigint
 WHERE fe.metadata->>'faq_id' ~ '^[0-9]+$' AND fd.id IS NULL;
 ```
+
+orphan は Round 4 の identity-based 判定で自動的に検索結果から除外される
+(FAQ identity branch には `fd.id IS NOT NULL` が必須、非 FAQ branch には `faq_id IS NULL` が必須)。

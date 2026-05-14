@@ -90,19 +90,22 @@ describe("hybridSearch: excludedIds (ES_URL なし)", () => {
   });
 });
 
-// --- pgvector.ts: source-aware exclusion (Phase69-2 Round 3, Codex #1 対応) ---
+// --- pgvector.ts: identity-based exclusion (Phase69-2 Round 4, Codex Round 3 #1 対応) ---
 //
 // pgvector.ts は widget chat / dialog (searchTool 経由) で使われる主検索パス。
-// Codex Adversarial Round 2 #1: legacy embedding without faq_id metadata が
-// fd.id IS NULL pass-through で FAQ exclusion をすり抜ける問題への対応。
+// Codex Adversarial Round 3 #1: Round 3 の source-based 分岐 (scrape/text/faq) に対し、
+// CRUD 経由で書き込まれる embedding (source='faq_crud') が非 FAQ branch にすり抜けて
+// faq_docs の visibility check (is_published / is_excluded_from_search) をバイパスする
+// 問題への対応。
 //
-// 対応方針 (Option C): source 判定で FAQ 系 / 非 FAQ 系を分離
-//   - FAQ 系 (scrape/text/faq) → faq_docs 厳格チェック (fd.id IS NOT NULL 必須)
-//   - 非 FAQ 系 (book/web/groq, source NULL) → faq_embeddings.is_excluded_from_search のみ
+// Round 4 設計: source 文字列に依存せず、faq_id identity で FAQ かどうかを判定する。
+//   - FAQ 系 (numeric faq_id + faq_docs JOIN 成功) → faq_docs 厳格チェック
+//   - 非 FAQ (faq_id を持たない or 数値以外) → faq_embeddings.is_excluded_from_search のみ
+//   - orphan (numeric faq_id 持ちだが faq_docs 行なし) → 両 branch にマッチせず除外
 //
 // 静的 SQL 検証 (本番 SQL は Postgres 側評価のため、SQL 文字列に必要句が含まれることで確認)
 
-describe("pgvector.ts SQL: source-aware exclusion (Phase69-2 Round 3)", () => {
+describe("pgvector.ts SQL: identity-based exclusion (Phase69-2 Round 4)", () => {
   const filePath = path.resolve(__dirname, "pgvector.ts");
   let source: string;
 
@@ -110,32 +113,32 @@ describe("pgvector.ts SQL: source-aware exclusion (Phase69-2 Round 3)", () => {
     source = fs.readFileSync(filePath, "utf8");
   });
 
-  it("FAQ 系 source (scrape/text/faq) を IN 句で限定する", () => {
-    expect(source).toMatch(/fe\.metadata->>'source'\s+IN\s+\(\s*'scrape'\s*,\s*'text'\s*,\s*'faq'\s*\)/);
+  it("source-based の判定句 (IN ('scrape','text','faq')) は削除されている", () => {
+    // Round 3 で書いた source-based 判定が残っていないこと
+    expect(source).not.toMatch(/fe\.metadata->>'source'\s+IN\s+\(\s*'scrape'\s*,\s*'text'\s*,\s*'faq'\s*\)/);
+    expect(source).not.toMatch(/fe\.metadata->>'source'\s+NOT\s+IN\s+\(\s*'scrape'\s*,\s*'text'\s*,\s*'faq'\s*\)/);
   });
 
-  it("FAQ 系では fd.id IS NOT NULL を要求する (legacy 未連携 embedding を除外)", () => {
-    // FAQ 系ブロック内で fd.id IS NOT NULL が現れることを確認
+  it("FAQ identity branch: numeric faq_id + fd.id IS NOT NULL + is_published + 非 excluded を要求", () => {
+    // FAQ identity ブロックを最初の OR の前方 400 文字以内で確認
     const faqBlockMatch = source.match(
-      /fe\.metadata->>'source'\s+IN\s+\(\s*'scrape'\s*,\s*'text'\s*,\s*'faq'\s*\)[\s\S]{0,400}/
+      /fe\.metadata->>'faq_id'\s*~\s*'\^\[0-9\]\+\$'[\s\S]{0,400}fd\.id IS NOT NULL[\s\S]{0,300}/
     );
     expect(faqBlockMatch).not.toBeNull();
-    expect(faqBlockMatch![0]).toMatch(/fd\.id IS NOT NULL/);
     expect(faqBlockMatch![0]).toMatch(/fd\.is_published\s*=\s*true/);
     expect(faqBlockMatch![0]).toMatch(/fd\.is_excluded_from_search/);
   });
 
-  it("非 FAQ 系 (source NULL or NOT IN リスト) は OR ブランチで faq_docs チェックをスキップ", () => {
-    expect(source).toMatch(/fe\.metadata->>'source'\s+IS\s+NULL/);
-    expect(source).toMatch(/fe\.metadata->>'source'\s+NOT\s+IN\s+\(\s*'scrape'\s*,\s*'text'\s*,\s*'faq'\s*\)/);
+  it("非 FAQ branch: faq_id IS NULL OR !~ '^[0-9]+$' で網羅", () => {
+    expect(source).toMatch(/fe\.metadata->>'faq_id'\s+IS\s+NULL/);
+    expect(source).toMatch(/fe\.metadata->>'faq_id'\s+!~\s+'\^\[0-9\]\+\$'/);
   });
 
-  it("faq_embeddings 直接の is_excluded_from_search フィルターは維持される (全 source 共通)", () => {
+  it("faq_embeddings 直接の is_excluded_from_search フィルターは維持される (全 identity 共通)", () => {
     expect(source).toMatch(/fe\.is_excluded_from_search IS NULL OR fe\.is_excluded_from_search\s*=\s*false/);
   });
 
   it("JOIN ON 句に numeric guard (~ '^[0-9]+$') が入る (非数値 faq_id での bigint キャスト失敗を防ぐ)", () => {
-    // LEFT JOIN ブロック内に numeric guard が含まれることを確認
     const joinBlockMatch = source.match(/left join faq_docs fd[\s\S]{0,300}/);
     expect(joinBlockMatch).not.toBeNull();
     expect(joinBlockMatch![0]).toMatch(/fe\.metadata->>'faq_id'\s*~\s*'\^\[0-9\]\+\$'/);
@@ -146,9 +149,9 @@ describe("pgvector.ts SQL: source-aware exclusion (Phase69-2 Round 3)", () => {
   });
 });
 
-// --- pgvector.ts: 実 SQL 実行系テスト (pool.query をモックして bind/結果マッピングを検証) ---
+// --- pgvector.ts: 実 SQL 実行系テスト (pool.query をモックして bind/SQL を検証) ---
 
-describe("pgvector.ts: searchPgVector runtime behavior (Phase69-2 Round 3)", () => {
+describe("pgvector.ts: searchPgVector runtime behavior (Phase69-2 Round 4)", () => {
   const origDbUrl = process.env.DATABASE_URL;
   let capturedSql: string | null = null;
   let capturedParams: unknown[] | null = null;
@@ -216,14 +219,30 @@ describe("pgvector.ts: searchPgVector runtime behavior (Phase69-2 Round 3)", () 
     expect(capturedParams).toHaveLength(3);
   });
 
-  it("実行 SQL に source 判定の OR ブランチ両方が含まれる", async () => {
+  it("実行 SQL に identity-based の OR ブランチ両方が含まれる (FAQ identity + 非 FAQ)", async () => {
     const { searchPgVector } = await import("./pgvector");
     await searchPgVector({
       tenantId: "tenantA",
       embedding: [0.1],
     });
-    expect(capturedSql).toMatch(/fe\.metadata->>'source'\s+IN\s+\(\s*'scrape'\s*,\s*'text'\s*,\s*'faq'\s*\)/);
-    expect(capturedSql).toMatch(/fe\.metadata->>'source'\s+NOT\s+IN\s+\(\s*'scrape'\s*,\s*'text'\s*,\s*'faq'\s*\)/);
+    // FAQ identity branch
+    expect(capturedSql).toMatch(/fe\.metadata->>'faq_id'\s*~\s*'\^\[0-9\]\+\$'/);
     expect(capturedSql).toMatch(/fd\.id IS NOT NULL/);
+    expect(capturedSql).toMatch(/fd\.is_published\s*=\s*true/);
+    // 非 FAQ branch
+    expect(capturedSql).toMatch(/fe\.metadata->>'faq_id'\s+IS\s+NULL/);
+    expect(capturedSql).toMatch(/fe\.metadata->>'faq_id'\s+!~\s+'\^\[0-9\]\+\$'/);
+  });
+
+  it("Round 3 で残した source 文字列リテラル ('scrape'/'text'/'faq') は SQL に含まれない", async () => {
+    // Codex Round 3 #1: source-based 分岐は faq_crud をすり抜けたため identity-based に統一
+    const { searchPgVector } = await import("./pgvector");
+    await searchPgVector({
+      tenantId: "tenantA",
+      embedding: [0.1],
+    });
+    expect(capturedSql).not.toMatch(/'scrape'/);
+    expect(capturedSql).not.toMatch(/'text'/);
+    expect(capturedSql).not.toMatch(/'faq_crud'/);
   });
 });

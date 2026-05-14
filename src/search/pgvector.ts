@@ -77,12 +77,22 @@ export async function searchPgVector(
     ? `and fe.id::text != ALL($4::text[])`
     : "";
 
-  // Phase69-2 Round 3: source 判定で FAQ 系 / 非 FAQ 系を分離 (Codex Adversarial #1 対応)
-  //   - FAQ 系 (source IN ('scrape','text','faq')) は faq_docs 厳格チェック
-  //     → fd.id IS NOT NULL 必須。faq_id を持たない legacy embedding は FAQ 検索から除外。
-  //   - 非 FAQ 系 (book/web/groq 等、または source NULL) は faq_docs を見ない
-  //     → faq_embeddings.is_excluded_from_search のみで判定。
-  // JOIN ON 句に numeric guard を入れて非数値 faq_id での bigint キャスト失敗を防ぐ。
+  // Phase69-2 Round 4: identity-based FAQ visibility (Codex Adversarial Round 3 #1 対応)
+  //
+  // Round 3 では source 文字列リテラル ('scrape'/'text'/'faq') で FAQ 系を判定していたが、
+  // CRUD 経由で書き込まれる embedding は source='faq_crud' のため非 FAQ branch に落ちて
+  // faq_docs.is_published / is_excluded_from_search のチェックをすり抜けていた。
+  //
+  // Round 4 では source 名に依存せず、faq_id identity (= 数値 faq_id + faq_docs JOIN 成功)
+  // で FAQ かどうかを判定する。これにより:
+  //   - FAQ 系 (faq_crud / scrape / text / faq, など faq_id を持つ全 source) は
+  //     faq_docs を厳格にチェック (is_published=true かつ is_excluded_from_search != true)。
+  //   - 非 FAQ (faq_id を持たない book/web/groq 等) は faq_docs を見ず
+  //     faq_embeddings.is_excluded_from_search のみで判定。
+  //   - orphan (数値 faq_id 持ちだが faq_docs 行なし) はどちらの branch にもマッチせず
+  //     検索結果から除外される (Codex Round 2 で問題視された fd.id IS NULL pass-through が消える)。
+  //
+  // JOIN ON 句にも numeric guard を入れて非数値 faq_id での bigint キャスト失敗を防ぐ。
   const sql = `
     select
       fe.id::text as id,
@@ -96,15 +106,15 @@ export async function searchPgVector(
     where (fe.tenant_id = $1 OR fe.tenant_id = 'global')
       and (
         (
-          fe.metadata->>'source' IN ('scrape', 'text', 'faq')
+          fe.metadata->>'faq_id' ~ '^[0-9]+$'
           and fd.id IS NOT NULL
           and fd.is_published = true
           and (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
         )
         OR
         (
-          fe.metadata->>'source' IS NULL
-          OR fe.metadata->>'source' NOT IN ('scrape', 'text', 'faq')
+          fe.metadata->>'faq_id' IS NULL
+          OR fe.metadata->>'faq_id' !~ '^[0-9]+$'
         )
       )
       and (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
