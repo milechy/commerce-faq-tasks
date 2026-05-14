@@ -101,7 +101,7 @@ describe("roleAuthMiddleware", () => {
     expect(user.tenantId).toBeNull();
   });
 
-  it("[攻撃防止] user_metadata.tenant_id は無視され tenantId が null になる", () => {
+  it("[攻撃防止] client_admin + user_metadata.tenant_id のみ → fail-closed で 403", () => {
     const req = mockReq({
       supabaseUser: {
         sub: "attacker-002",
@@ -114,10 +114,13 @@ describe("roleAuthMiddleware", () => {
     const res = mockRes();
     roleAuthMiddleware(req, res, next);
 
-    expect(next).toHaveBeenCalled();
-    const user: AuthenticatedUser = (req as any).user;
-    expect(user.role).toBe("client_admin");
-    expect(user.tenantId).toBeNull(); // user_metadata.tenant_id は無視
+    // user_metadata.tenant_id は信頼源として扱われないため app_metadata.tenant_id が欠損
+    // → client_admin + tenantId=null → fail-closed で 403
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: expect.any(String),
+    }));
   });
 
   it("[攻撃防止] app_metadata なし + user_metadata のみ → anonymous / null", () => {
