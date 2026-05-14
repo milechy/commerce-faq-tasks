@@ -154,3 +154,109 @@ ssh root@65.108.159.161 "nginx -t"
 # リロード
 ssh root@65.108.159.161 "systemctl reload nginx"
 ```
+
+---
+
+## 7. Phase 別デプロイ後の手動運用手順
+
+### Phase69-2: excluded_ids ゼロ知識検索
+
+`deploy-vps.sh` 完了後、以下を **hkobayashi が手動で順次実行**。
+
+#### (a) DB マイグレーション
+
+```bash
+ssh root@65.108.159.161 "cd /opt/rajiuce && psql \$DATABASE_URL -f src/migrations/phase69_2_excluded_ids.sql"
+```
+
+追加されるもの:
+- `faq_embeddings.is_excluded_from_search BOOLEAN DEFAULT FALSE`
+- `faq_docs.is_excluded_from_search BOOLEAN DEFAULT FALSE`
+- `tenants.default_excluded_ids TEXT[] DEFAULT '{}'`
+- 上記カラムへのインデックス
+
+#### (b) Elasticsearch re-index
+
+Phase69-2 で ES mapping に `is_published` / `is_excluded_from_search` を明示追加した。
+既存インデックスは dynamic mapping のため、明示マッピングを反映するには re-index が必要。
+
+```bash
+ssh root@65.108.159.161 "cd /opt/rajiuce && pnpm ts-node SCRIPTS/sync-es.ts --all"
+```
+
+これにより全テナントの `faq_<tenantId>` インデックスが削除→再作成され、
+新しい mapping (`is_excluded_from_search: { type: 'boolean' }`) で再構築される。
+
+#### (c) 反映検証
+
+```bash
+# 1. テストテナントで FAQ を1件除外フラグ ON にする
+curl -X PATCH https://api.r2c.biz/v1/admin/knowledge/faq/<faqId>/exclude \
+  -H "Authorization: Bearer <JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"is_excluded_from_search": true}'
+
+# 2. 該当 FAQ を含むクエリで hybrid 検索を実行し、結果に出ないことを確認
+curl -X POST https://api.r2c.biz/agent.search \
+  -H "x-api-key: <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"q": "<該当FAQに含まれる質問>", "topK": 10}'
+
+# 3. ES 側でも除外されていることを直接確認（オプション）
+ssh root@65.108.159.161 'curl -s "$ES_URL/faq_<tenantId>/_search" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\":{\"term\":{\"is_excluded_from_search\":true}},\"_source\":[\"faq_id\",\"is_excluded_from_search\"]}"'
+```
+
+#### ロールバック手順
+
+ES 同期失敗時:
+- DB は source-of-truth なので、ES 不整合があれば `sync-es.ts --all` で再同期可能
+- API は fire-and-forget で 5xx を返さないため、Admin UI 操作は成功扱い
+
+DB マイグレーション失敗時:
+- `phase69_2_excluded_ids.sql` は `IF NOT EXISTS` 付きなので冪等
+- カラム追加失敗時は `ALTER TABLE ... DROP COLUMN is_excluded_from_search` で巻き戻し
+
+#### (d) 除外対象スコープ (Round 3, Codex Adversarial #1 対応)
+
+Phase69-2 の `PATCH /v1/admin/knowledge/faq/:id/exclude` および
+`pgvector.ts` の source 分岐は **FAQ 系 embedding のみが対象**:
+
+| source | スコープ | exclusion 経路 |
+|---|---|---|
+| `scrape` / `text` / `faq` | **FAQ 系** (Phase69-2 対象) | `faq_docs.is_excluded_from_search` + `faq_embeddings.is_excluded_from_search` (両更新) |
+| `book` / `book:pdf:qwen-ocr` | 非 FAQ 系 (書籍 PDF) | 将来 Phase で UI 化予定 |
+| `carnation:web` | 非 FAQ 系 (web scrape) | 将来 Phase で UI 化予定 |
+| `groq/compound-mini` | 非 FAQ 系 (LLM 自動生成) | 将来 Phase で UI 化予定 |
+| `NULL` | 非 FAQ 系扱い (defensive default) | 将来 Phase で対応 |
+
+参考: 2026-05-15 時点の VPS DB 実態 (`faq_embeddings` 全 147 件):
+- FAQ 系: scrape 41 + text 10 + faq 2 = **53 件** (全件 `metadata.faq_id` 保持)
+- 非 FAQ 系: book 40 + book:pdf:qwen-ocr 29 + carnation:web 22 + groq/compound-mini 3 = **94 件** (`faq_id` NULL)
+- orphan (faq_id 持つが faq_docs に対応なし): **1 件** → 別タスク (Phase69-2-D) で対処予定
+
+`pgvector.ts` の WHERE 句は以下の構造で source を判定:
+
+```sql
+-- FAQ 系: faq_docs 厳格チェック (legacy 未連携 embedding は FAQ 検索結果から除外)
+fe.metadata->>'source' IN ('scrape', 'text', 'faq')
+AND fd.id IS NOT NULL
+AND fd.is_published = true
+AND (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
+-- OR
+-- 非 FAQ 系: faq_docs チェックをスキップ (faq_embeddings レイヤーのみで判定)
+(fe.metadata->>'source' IS NULL OR fe.metadata->>'source' NOT IN ('scrape', 'text', 'faq'))
+```
+
+加えて `fe.is_excluded_from_search` フィルターは全 source 共通で適用される (二重防御)。
+
+orphan 検出 SQL (運用確認用):
+
+```sql
+-- orphan: faq_id を持つが faq_docs に対応行なし
+SELECT fe.id, fe.tenant_id, fe.metadata->>'faq_id' AS faq_id
+FROM faq_embeddings fe
+LEFT JOIN faq_docs fd ON fd.id = (fe.metadata->>'faq_id')::bigint
+WHERE fe.metadata->>'faq_id' ~ '^[0-9]+$' AND fd.id IS NULL;
+```

@@ -77,6 +77,12 @@ export async function searchPgVector(
     ? `and fe.id::text != ALL($4::text[])`
     : "";
 
+  // Phase69-2 Round 3: source 判定で FAQ 系 / 非 FAQ 系を分離 (Codex Adversarial #1 対応)
+  //   - FAQ 系 (source IN ('scrape','text','faq')) は faq_docs 厳格チェック
+  //     → fd.id IS NOT NULL 必須。faq_id を持たない legacy embedding は FAQ 検索から除外。
+  //   - 非 FAQ 系 (book/web/groq 等、または source NULL) は faq_docs を見ない
+  //     → faq_embeddings.is_excluded_from_search のみで判定。
+  // JOIN ON 句に numeric guard を入れて非数値 faq_id での bigint キャスト失敗を防ぐ。
   const sql = `
     select
       fe.id::text as id,
@@ -85,10 +91,22 @@ export async function searchPgVector(
       1 - (fe.embedding <-> $2::vector) as score
     from faq_embeddings fe
     left join faq_docs fd
-      on fd.id = (fe.metadata->>'faq_id')::bigint
+      on fe.metadata->>'faq_id' ~ '^[0-9]+$'
+     and fd.id = (fe.metadata->>'faq_id')::bigint
     where (fe.tenant_id = $1 OR fe.tenant_id = 'global')
-      and (fd.is_published = true OR fd.id IS NULL)
-      and (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
+      and (
+        (
+          fe.metadata->>'source' IN ('scrape', 'text', 'faq')
+          and fd.id IS NOT NULL
+          and fd.is_published = true
+          and (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
+        )
+        OR
+        (
+          fe.metadata->>'source' IS NULL
+          OR fe.metadata->>'source' NOT IN ('scrape', 'text', 'faq')
+        )
+      )
       and (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
       ${excludeClause}
     order by fe.embedding <-> $2::vector

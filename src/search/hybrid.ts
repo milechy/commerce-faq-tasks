@@ -124,6 +124,13 @@ export async function hybridSearch(
                           minimum_should_match: 1,
                         },
                       },
+                      // Phase69-2 PR-C2 Round 2: ES 永続フィルター（is_excluded_from_search=true は除外）
+                      // pgvector の WHERE 句と対応。リクエストスコープ excluded_ids との二重防御
+                      {
+                        bool: {
+                          must_not: { term: { is_excluded_from_search: true } },
+                        },
+                      },
                     ],
                   },
                 },

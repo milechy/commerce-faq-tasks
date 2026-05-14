@@ -64,6 +64,28 @@ function upsertToEsAsync(
   }).catch((e) => logger.warn("[faqCrud] ES upsert failed", e));
 }
 
+// Phase69-2 PR-C2 Round 2: ES に is_excluded_from_search を partial update で伝搬する
+// 設計判断 (Codex adversarial Round 1):
+//   - fire-and-forget: DB が source-of-truth、ES は eventual consistency
+//   - POST _update: question/answer 等を消さない partial doc 更新
+//   - pgvector layer (永続フィルター) + ES layer (今回追加) + リクエスト excluded_ids の三層防御
+/** ESインデックスの is_excluded_from_search のみ partial update（fire-and-forget） */
+function syncIsExcludedToEsAsync(
+  tenantId: string,
+  faqId: number,
+  isExcludedFromSearch: boolean
+): void {
+  const esUrl = process.env.ES_URL;
+  const index = process.env.ES_FAQ_INDEX || "faqs";
+  if (!esUrl) return;
+  const url = `${esUrl.replace(/\/$/, "")}/${index}/_update/${faqId}_${tenantId}`;
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ doc: { is_excluded_from_search: isExcludedFromSearch } }),
+  }).catch((e) => logger.warn("[faqCrud] ES is_excluded_from_search sync failed", e));
+}
+
 const listQuerySchema = z.object({
   tenant: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -385,16 +407,50 @@ export function registerFaqCrudRoutes(
         return res.status(403).json({ error: "アクセス権限がありません" });
       }
 
-      // faq_docs + faq_embeddings の両方を同時更新
-      await db.query(
-        `UPDATE faq_docs SET is_excluded_from_search = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3`,
-        [is_excluded_from_search, id, tenantId]
-      );
-      await db.query(
-        `UPDATE faq_embeddings SET is_excluded_from_search = $1
-         WHERE tenant_id = $2 AND (metadata->>'faq_id')::bigint = $3`,
-        [is_excluded_from_search, tenantId, id]
-      );
+      // Phase69-2 PR-C2 Round 2 (Codex adversarial Round 1 HIGH/MEDIUM 対応):
+      //   - HIGH-2: faq_docs と faq_embeddings の UPDATE を単一 DB tx で atomic 化
+      //   - MEDIUM-1: (metadata->>'faq_id')::bigint キャスト前に '^[0-9]+$' で数値ガード
+      //   - HIGH-1: COMMIT 後に ES へ is_excluded_from_search を fire-and-forget 同期
+      // pattern: deleteSessionRepository (Phase69-1) / bulk-delete (このファイル下部) 準拠
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL lock_timeout = '3s'");
+
+        await client.query(
+          `UPDATE faq_docs SET is_excluded_from_search = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3`,
+          [is_excluded_from_search, id, tenantId]
+        );
+        await client.query(
+          `UPDATE faq_embeddings SET is_excluded_from_search = $1
+           WHERE tenant_id = $2
+             AND (metadata->>'faq_id') ~ '^[0-9]+$'
+             AND (metadata->>'faq_id')::bigint = $3`,
+          [is_excluded_from_search, tenantId, id]
+        );
+
+        await client.query("COMMIT");
+      } catch (txErr) {
+        await client.query("ROLLBACK").catch(() => {});
+        const pgErr = txErr as { code?: string };
+        logger.warn({
+          event: 'faq_exclude_tx_failed',
+          tenantId,
+          faqId: id,
+          targetState: is_excluded_from_search,
+          errorCode: pgErr.code === '55P03' ? 'DB_LOCK_TIMEOUT' : 'DB_TX_FAILED',
+          pgCode: pgErr.code,
+        }, "PATCH /faq/:id/exclude transaction failed; rolled back");
+        if (pgErr.code === '55P03') {
+          return res.status(409).json({ error: "他の処理中のため、少し時間をおいて再度お試しください" });
+        }
+        return res.status(500).json({ error: "更新に失敗しました" });
+      } finally {
+        client.release();
+      }
+
+      // COMMIT 後に ES 同期（fire-and-forget — DB が source-of-truth）
+      syncIsExcludedToEsAsync(tenantId, id, is_excluded_from_search);
 
       return res.json({ id, is_excluded_from_search });
     } catch (err) {
