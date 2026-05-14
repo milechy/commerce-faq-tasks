@@ -90,7 +90,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
 
   function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
     const su = (req as AuthedReq).supabaseUser;
-    const role = su?.app_metadata?.role ?? su?.user_metadata?.role ?? "anonymous";
+    // セキュリティ要件: 認可ロールは app_metadata.role のみを信頼する
+    // user_metadata はクライアント編集可能なため、特権判定に使用してはならない
+    const rawRole = su?.app_metadata?.role;
+    const role = typeof rawRole === "string" ? rawRole : "";
     if (role !== "super_admin") {
       res.status(403).json({ error: "forbidden", message: "スーパー管理者のみアクセスできます" });
       return;
