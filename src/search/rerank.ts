@@ -218,7 +218,8 @@ export function ceStatus() {
 export async function rerank(
   q: string,
   items: Item[],
-  topK = 5
+  topK = 5,
+  excludedIds?: string[]
 ): Promise<RerankResult> {
   if (!items.length) {
     return { items: [], ce_ms: 0, engine: "heuristic" };
@@ -280,6 +281,12 @@ export async function rerank(
       .slice(0, safeTopK)
       .map(({ __ce: _ce, ...rest }) => rest as Item);
     engineLabel = "heuristic";
+  }
+
+  // Phase69-2: rerank後の二重防御フィルター（upstream フィルター漏れ対応）
+  if (excludedIds && excludedIds.length > 0) {
+    const excludedSet = new Set(excludedIds.filter(Boolean));
+    finalItems = finalItems.filter((it) => !excludedSet.has(it.id));
   }
 
   return {

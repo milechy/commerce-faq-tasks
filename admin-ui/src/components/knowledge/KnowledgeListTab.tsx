@@ -534,6 +534,21 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                   >
                     {categoryLabel(item.category)}
                   </span>
+                  {item.is_excluded_from_search && (
+                    <span
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        background: "rgba(239,68,68,0.1)",
+                        border: "1px solid rgba(239,68,68,0.3)",
+                        color: "#f87171",
+                        fontSize: 11,
+                        fontWeight: 600,
+                      }}
+                    >
+                      検索除外
+                    </span>
+                  )}
                   <span style={{ fontSize: 11, color: "#6b7280" }}>
                     {formatDate(item.created_at, locale)}
                   </span>
@@ -580,6 +595,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                       category: item.category,
                       tags: item.tags,
                       is_published: item.is_published,
+                      is_excluded_from_search: item.is_excluded_from_search,
                     })
                   }
                   style={{

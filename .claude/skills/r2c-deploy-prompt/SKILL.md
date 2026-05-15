@@ -249,3 +249,54 @@ ssh root@65.108.159.161 "pm2 logs rajiuce-api --lines 20 --nostream 2>&1 | grep 
 - [ ] Gate 1-3 実行と結果報告フォーマット指示がある
 - [ ] Gate 2.5 は「人間手動」と明記
 - [ ] Asana GID か Phase番号で参照先が明確
+
+## Codex コマンドの完全形（2026-05-15 追加）
+
+CLI プロンプトの Gate 2.5 セクションには以下を明記:
+
+```
+⛔ STOP → hkobayashi が Gate 2.5 手動実行:
+  /codex:review --base main --background
+  または（security 変更含む場合）:
+  /codex:adversarial-review --base main --background
+```
+
+**★ `--base main` 省略は禁止**（working-tree 限定誤判定リスク）。
+省略すると「No diff = No findings」と誤判定され、実質未レビューのまま push に進む。
+（Phase69-2-A Round 1 で実際に発生した事例）
+
+## Round 1 先回り実装テンプレート（2026-05-15 追加）
+
+新規 PR の CLI プロンプトには以下を「Phase69-1.5 で得たパターンを先回り適用」セクションとして含める:
+
+```
+## Phase69-1.5 で得たパターンを先回り適用
+
+Codex Round 深化パターン（Round n+1 で深い層指摘）を踏まえ、
+Round 1 で以下を最初から含める:
+- fail-closed: 想定外パターンの安全側挙動（ALLOWED_ROLES + tenant_id guard）
+- observability: logger.warn + 構造化 errorCode
+- allow-path テスト: 正常系の網羅（super_admin + client_admin）
+- トランザクション境界: 複数 UPDATE は BEGIN/COMMIT/ROLLBACK + lock_timeout + rowCount assertion
+- identity-based 分岐: 文字列リテラル依存ではなく構造的判定
+
+これにより Round 1 で Ship-ready 取得を目指す。
+```
+
+## データ依存設計時の事前調査ステップ（2026-05-15 追加）
+
+WHERE 句や分岐ロジックで data 値に依存する場合、CLI プロンプトに以下の Step 1 を必ず含める:
+
+```
+## Step 1: 事前調査（実装前に必ず実施）
+
+VPS 本番 DB の実データ値を確認:
+(1) 該当列の値分布（source/type 等の集計）
+(2) 書き込みコード grep（POST/PUT/INSERT の値）
+(3) faq_id 等 identity 属性の網羅性
+
+報告後、過去データ + 書き込みコード両方を踏まえて設計判断。
+```
+
+値リテラルを IN/NOT IN で列挙する設計は、将来の書き込み値追加で取りこぼしが発生する。
+構造的 identity 判定（`faq_id IS NOT NULL` 等）を優先すること。

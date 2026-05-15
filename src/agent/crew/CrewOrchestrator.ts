@@ -37,6 +37,7 @@ export class CrewOrchestrator {
         locale: input.context?.locale ?? "ja",
         tenantId: input.context?.tenantId,
         sessionId: input.context?.sessionId,
+        excludedIds: input.context?.excludedIds,
       },
       plannerPlan: undefined,
       answerText: undefined,

@@ -100,6 +100,8 @@ export interface DialogTurnInput {
     piiMode?: boolean;
     /** Phase57: Widget の EventTracker が生成した visitor_id */
     visitorId?: string;
+    /** Phase69-2: 検索結果から除外するエントリID一覧 */
+    excluded_ids?: string[];
   };
 }
 

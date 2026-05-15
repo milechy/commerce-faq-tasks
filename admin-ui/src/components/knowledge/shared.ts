@@ -20,6 +20,8 @@ export interface KnowledgeItem {
   category: string | null;
   tags: string[] | null;
   is_published?: boolean;
+  /** Phase69-2: 検索除外フラグ */
+  is_excluded_from_search?: boolean;
   created_at: string;
 }
 

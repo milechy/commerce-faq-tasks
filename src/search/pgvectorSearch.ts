@@ -9,6 +9,8 @@ export type PgvectorSearchParams = {
   tenantId: string;
   embedding: number[];
   topK?: number;
+  /** Phase69-2: 検索結果から除外するエントリID一覧（テナント分離保証） */
+  excludedIds?: string[];
 };
 
 export type PgvectorSearchItem = {
@@ -29,7 +31,7 @@ export type PgvectorSearchResult = {
 export async function searchPgVector(
   params: PgvectorSearchParams
 ): Promise<PgvectorSearchResult> {
-  const { tenantId, embedding, topK = 5 } = params;
+  const { tenantId, embedding, topK = 5, excludedIds } = params;
   const t0 = performance.now();
 
   if (!pool) {
@@ -40,6 +42,11 @@ export async function searchPgVector(
     return { items: [], ms: 0 };
   }
 
+  const safeExcludedIds = (excludedIds ?? []).filter(Boolean);
+  const excludeClause = safeExcludedIds.length > 0
+    ? `AND id::text != ALL($4::text[])`
+    : "";
+
   const query = `
       SELECT
         id::text,
@@ -47,7 +54,9 @@ export async function searchPgVector(
         metadata,
         1 - (embedding <-> $1::vector) / 2 AS score
       FROM faq_embeddings
-      WHERE tenant_id = $2 OR tenant_id = 'global'
+      WHERE (tenant_id = $2 OR tenant_id = 'global')
+        AND (is_excluded_from_search IS NULL OR is_excluded_from_search = false)
+        ${excludeClause}
       ORDER BY embedding <-> $1::vector
       LIMIT $3
     `;
@@ -56,9 +65,11 @@ export async function searchPgVector(
   // node-postgres would otherwise send this as a Postgres array ("{0.1,0.2,...}"),
   // which causes a "malformed vector literal" error.
   const embeddingLiteral = `[${embedding.join(",")}]`;
+  const queryParams: unknown[] = [embeddingLiteral, tenantId, topK];
+  if (safeExcludedIds.length > 0) queryParams.push(safeExcludedIds);
 
   try {
-    const result = await pool.query(query, [embeddingLiteral, tenantId, topK]);
+    const result = await pool.query(query, queryParams);
     const t1 = performance.now();
 
     const items: PgvectorSearchItem[] = (result.rows as Array<{ id: string; text: string | null; score: number; metadata: Record<string, unknown> | null }>).map((row) => ({
