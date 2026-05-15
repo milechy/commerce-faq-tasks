@@ -24,8 +24,9 @@ export function createAgentDialogHandler(
     }
 
     // Phase69-2: excluded_ids の入力検証（/agent.search と同等の上限）
+    // null は undefined と同等（除外なし）として扱う
     const rawExcludedIds = (body.options as Record<string, unknown> | undefined)?.excluded_ids;
-    if (rawExcludedIds !== undefined) {
+    if (rawExcludedIds != null) {
       const result = z.array(z.string()).max(500).safeParse(rawExcludedIds);
       if (!result.success) {
         res.status(400).json({ error: "invalid_excluded_ids", details: result.error.flatten() });
