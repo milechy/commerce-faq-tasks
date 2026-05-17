@@ -245,7 +245,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       (req as KnowledgeReq).user = {
         id: su.sub ?? su.id ?? "",
         email: su.email ?? "",
-        role: su.app_metadata?.role ?? su.user_metadata?.role ?? "anonymous",
+        role: su.app_metadata?.role ?? "anonymous",
         tenantId: su.app_metadata?.tenant_id ?? null,
       };
     } else {
@@ -254,11 +254,25 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     next();
   }
 
-  // role チェック（super_admin / client_admin のみ通過）
+  // role チェック（super_admin / client_admin のみ通過 — Phase69-1.5 PR-C4 v2: ALLOWED_KNOWLEDGE_ROLES 統合）
+  const ALLOWED_KNOWLEDGE_ROLES = ["super_admin", "client_admin"] as const;
   function requireKnowledgeRole(req: Request, res: Response, next: NextFunction): void {
     const user = (req as KnowledgeReq).user;
-    if (!user || !["super_admin", "client_admin"].includes(user.role ?? "")) {
-      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
+    const role = user?.role ?? "";
+    if (!user || !(ALLOWED_KNOWLEDGE_ROLES as readonly string[]).includes(role)) {
+      const su = (req as KnowledgeReq).supabaseUser;
+      logger.warn({
+        event: 'knowledge_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTHZ_ROLE_DENIED',
+        requested_path: req.path,
+        actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+        actor_role: role,
+        required_roles: ALLOWED_KNOWLEDGE_ROLES,
+        hasAppMetadataRole: !!su?.app_metadata?.role,
+        hasUserMetadataRole: !!(su as any)?.user_metadata?.role,
+      }, 'knowledge access denied: invalid actor role');
+      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません", code: 'AUTHZ_ROLE_DENIED' });
       return;
     }
     next();

@@ -21,17 +21,45 @@ import {
 import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_EVALUATION_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedEvaluationRole = typeof ALLOWED_EVALUATION_ROLES[number];
+function isAllowedEvaluationRole(role: unknown): role is AllowedEvaluationRole {
+  return typeof role === 'string' &&
+         (ALLOWED_EVALUATION_ROLES as readonly string[]).includes(role);
+}
+
+// ---------------------------------------------------------------------------
 // ユーティリティ
 // ---------------------------------------------------------------------------
 
-function resolveAuth(req: Request): { jwtTenantId: string; isSuperAdmin: boolean; email: string } {
+function resolveAuth(req: Request): { su: Record<string, any> | undefined; role: unknown; jwtTenantId: string; isSuperAdmin: boolean; email: string } {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role: unknown = su?.app_metadata?.role;
   return {
-    jwtTenantId:
-      su?.app_metadata?.tenant_id ?? su?.user_metadata?.tenant_id ?? su?.tenant_id ?? "",
-    isSuperAdmin: (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin",
+    su,
+    role,
+    jwtTenantId: su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "",
+    isSuperAdmin: role === "super_admin",
     email: su?.email ?? "",
   };
+}
+
+function denyEvaluationRole(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'evaluations_access_denied',
+    reason: 'invalid_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ALLOWED_EVALUATION_ROLES,
+    hasAppMetadataRole: !!su?.['app_metadata']?.role,
+    hasUserMetadataRole: !!su?.['user_metadata']?.role,
+  }, 'evaluations access denied: invalid actor role');
+  return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
 function parseDays(raw: unknown, defaultVal: number): number {
@@ -70,7 +98,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // クエリ: tenantId, days(デフォルト7), limit, offset
   // -------------------------------------------------------------------------
   app.get("/v1/admin/evaluations", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
 
     // super_admin: ?tenantId= で絞り込み可 / client_admin: 自テナント強制
     const tenantId = isSuperAdmin
@@ -100,7 +131,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // クエリ: tenantId, days(デフォルト30)
   // -------------------------------------------------------------------------
   app.get("/v1/admin/evaluations/stats", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
 
     const tenantId = isSuperAdmin
       ? ((req.query["tenantId"] as string | undefined) || undefined)
@@ -122,7 +156,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // クエリ: tenantId, days(デフォルト30)
   // -------------------------------------------------------------------------
   app.get("/v1/admin/evaluations/kpi-stats", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
 
     const tenantId = isSuperAdmin
       ? ((req.query["tenantId"] as string | undefined) || undefined)
@@ -144,6 +181,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // 指定セッションの評価を手動トリガー（未評価の場合のみ）
   // -------------------------------------------------------------------------
   app.post("/v1/admin/evaluations/trigger", async (req: Request, res: Response) => {
+    const { su, role } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
     const { session_id } = (req.body ?? {}) as Record<string, unknown>;
     if (!session_id || typeof session_id !== "string") {
       return res.status(400).json({ error: "session_id is required" });
@@ -174,7 +215,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // NOTE: /:sessionId の catch-all より前に登録する必要あり
   // -------------------------------------------------------------------------
   app.get("/v1/admin/evaluations/by-id/:id", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
     const id = Number(req.params["id"]);
     if (!Number.isFinite(id) || id <= 0) {
       return res.status(400).json({ error: "id must be a positive integer" });
@@ -202,14 +246,12 @@ export function registerEvaluationRoutes(app: Express): void {
     "/v1/admin/evaluations/:id/rules/:ruleIndex",
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const { jwtTenantId, isSuperAdmin, email } = resolveAuth(req);
-      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const { su, role, jwtTenantId, isSuperAdmin, email } = resolveAuth(req);
       if (!su) {
         return res.status(401).json({ error: "unauthorized", message: "認証が必要です。" });
       }
-      const role = su.app_metadata?.role ?? su.user_metadata?.role ?? "";
-      if (role !== "super_admin" && role !== "client_admin") {
-        return res.status(403).json({ error: "forbidden", message: "権限がありません。" });
+      if (!isAllowedEvaluationRole(role)) {
+        return denyEvaluationRole(req, res, su, role);
       }
       const id = Number(req.params["id"]);
       const ruleIndex = Number(req.params["ruleIndex"]);
@@ -277,7 +319,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // NOTE: 静的パス (/stats, /kpi-stats) より後に登録する必要あり
   // -------------------------------------------------------------------------
   app.get("/v1/admin/evaluations/:sessionId", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
     const sessionId = req.params["sessionId"] ?? "";
 
     if (!sessionId) {
@@ -303,7 +348,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // Body: { outcome: 'replied' | 'appointment' | 'lost' | 'unknown' }
   // -------------------------------------------------------------------------
   app.put("/v1/admin/evaluations/:id/outcome", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin, email } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin, email } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
 
     const id = Number(req.params["id"]);
     if (!Number.isFinite(id) || id <= 0) {
@@ -335,7 +383,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // status → 'active', approved_at = NOW()
   // -------------------------------------------------------------------------
   app.put("/v1/admin/tuning/:id/approve", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
 
     const id = Number(req.params["id"]);
     if (!Number.isFinite(id) || id <= 0) {
@@ -361,7 +412,10 @@ export function registerEvaluationRoutes(app: Express): void {
   // status → 'rejected', rejected_at = NOW()
   // -------------------------------------------------------------------------
   app.put("/v1/admin/tuning/:id/reject", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedEvaluationRole(role)) {
+      return denyEvaluationRole(req, res, su, role);
+    }
 
     const id = Number(req.params["id"]);
     if (!Number.isFinite(id) || id <= 0) {

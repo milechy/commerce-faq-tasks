@@ -143,15 +143,54 @@ const updateSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_AVATAR_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedAvatarRole = typeof ALLOWED_AVATAR_ROLES[number];
+function isAllowedAvatarRole(role: unknown): role is AllowedAvatarRole {
+  return typeof role === 'string' &&
+         (ALLOWED_AVATAR_ROLES as readonly string[]).includes(role);
+}
+
+// ---------------------------------------------------------------------------
 // ヘルパー: JWT から tenantId / super_admin 判定
 // ---------------------------------------------------------------------------
 
 function extractAuth(req: Request) {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role = su?.app_metadata?.role;
   const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-  const isSuperAdmin: boolean =
-    (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
-  return { tenantId, isSuperAdmin };
+  const isSuperAdmin: boolean = role === "super_admin";
+  return { su, role, tenantId, isSuperAdmin };
+}
+
+function denyAvatarRole(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'avatar_access_denied',
+    reason: 'invalid_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ALLOWED_AVATAR_ROLES,
+    hasAppMetadataRole: !!su?.['app_metadata']?.role,
+    hasUserMetadataRole: !!su?.['user_metadata']?.role,
+  }, 'avatar access denied: invalid actor role');
+  return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
+}
+
+function denyAvatarInsufficient(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'avatar_access_denied',
+    reason: 'insufficient_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ['super_admin'],
+  }, 'avatar access denied: super_admin required');
+  return res.status(403).json({ error: 'Super Admin権限が必要です', code: 'AUTHZ_ROLE_DENIED' });
 }
 
 // ---------------------------------------------------------------------------
@@ -170,9 +209,12 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
     "/v1/admin/avatar/defaults/upload",
     upload.single("file"),
     async (req: Request, res: Response) => {
-      const { isSuperAdmin } = extractAuth(req);
+      const { su, role, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
       if (!isSuperAdmin) {
-        return res.status(403).json({ error: 'Super Admin権限が必要です' });
+        return denyAvatarInsufficient(req, res, su, role);
       }
       if (!supabaseAdmin) {
         return res.status(503).json({ error: 'Supabase Storage が利用できません' });
@@ -219,9 +261,12 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   // GET /v1/admin/avatar/configs/all — Super Admin: 全テナント横断一覧 (tenant_name付き)
   // -----------------------------------------------------------------------
   app.get("/v1/admin/avatar/configs/all", async (req: Request, res: Response) => {
-    const { isSuperAdmin } = extractAuth(req);
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedAvatarRole(role)) {
+      return denyAvatarRole(req, res, su, role);
+    }
     if (!isSuperAdmin) {
-      return res.status(403).json({ error: "Super Admin権限が必要です" });
+      return denyAvatarInsufficient(req, res, su, role);
     }
     try {
       const result = await db.query(
@@ -241,7 +286,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   // GET /v1/admin/avatar/configs — テナント一覧
   // -----------------------------------------------------------------------
   app.get("/v1/admin/avatar/configs", async (req: Request, res: Response) => {
-    const { tenantId, isSuperAdmin } = extractAuth(req);
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedAvatarRole(role)) {
+      return denyAvatarRole(req, res, su, role);
+    }
 
     // Bug-3 fix: client_admin は tenantId が空でも JWT から取得済みの tenantId を必ず使う。
     // isSuperAdmin の場合のみ query パラメータによるテナント絞り込みを許可する。
@@ -279,7 +327,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   // POST /v1/admin/avatar/configs — 新規作成
   // -----------------------------------------------------------------------
   app.post("/v1/admin/avatar/configs", async (req: Request, res: Response) => {
-    const { tenantId } = extractAuth(req);
+    const { su, role, tenantId } = extractAuth(req);
+    if (!isAllowedAvatarRole(role)) {
+      return denyAvatarRole(req, res, su, role);
+    }
 
     if (!tenantId) {
       return res.status(403).json({ error: "テナント情報が取得できません" });
@@ -359,7 +410,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   app.patch(
     "/v1/admin/avatar/configs/:id",
     async (req: Request, res: Response) => {
-      const { tenantId, isSuperAdmin } = extractAuth(req);
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
       const id = req.params["id"];
 
       const parsed = updateSchema.safeParse(req.body ?? {});
@@ -442,7 +496,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   app.delete(
     "/v1/admin/avatar/configs/:id",
     async (req: Request, res: Response) => {
-      const { tenantId, isSuperAdmin } = extractAuth(req);
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
       const id = req.params["id"];
 
       try {
@@ -496,7 +553,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   app.post(
     "/v1/admin/avatar/configs/:id/activate",
     async (req: Request, res: Response) => {
-      const { tenantId, isSuperAdmin } = extractAuth(req);
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
       const id = req.params["id"];
 
       const client = await db.connect();
@@ -550,7 +610,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   app.post(
     "/v1/admin/avatar/configs/:id/reset-to-default",
     async (req: Request, res: Response) => {
-      const { tenantId, isSuperAdmin } = extractAuth(req);
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
       const id = req.params["id"];
 
       try {
