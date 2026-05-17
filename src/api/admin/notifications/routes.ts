@@ -7,12 +7,51 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { getPool } from '../../../lib/db';
 import { logger } from '../../../lib/logger';
 
+// ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_NOTIFICATION_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedNotificationRole = typeof ALLOWED_NOTIFICATION_ROLES[number];
+function isAllowedNotificationRole(role: unknown): role is AllowedNotificationRole {
+  return typeof role === 'string' &&
+         (ALLOWED_NOTIFICATION_ROLES as readonly string[]).includes(role);
+}
+
 function extractAuth(req: Request) {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role = su?.app_metadata?.role;
   const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? '';
-  const isSuperAdmin: boolean =
-    (su?.app_metadata?.role ?? su?.user_metadata?.role ?? '') === 'super_admin';
-  return { tenantId, isSuperAdmin };
+  const isSuperAdmin: boolean = role === 'super_admin';
+  return { su, role, tenantId, isSuperAdmin };
+}
+
+function denyNotificationRole(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'notifications_access_denied',
+    reason: 'invalid_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ALLOWED_NOTIFICATION_ROLES,
+    hasAppMetadataRole: !!su?.['app_metadata']?.role,
+    hasUserMetadataRole: !!su?.['user_metadata']?.role,
+  }, 'notifications access denied: invalid actor role');
+  return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
+}
+
+function denyNotificationInsufficient(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'notifications_access_denied',
+    reason: 'insufficient_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ['super_admin'],
+  }, 'notifications access denied: super_admin required');
+  return res.status(403).json({ error: '権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
 export function registerNotificationRoutes(app: Express): void {
@@ -24,7 +63,10 @@ export function registerNotificationRoutes(app: Express): void {
   // Client Admin: client_admin AND (自テナント OR recipient_tenant_id IS NULL)
   // -----------------------------------------------------------------------
   app.get('/v1/admin/notifications', async (req: Request, res: Response) => {
-    const { tenantId, isSuperAdmin } = extractAuth(req);
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedNotificationRole(role)) {
+      return denyNotificationRole(req, res, su, role);
+    }
     const isReadParam = req.query['is_read'] as string | undefined;
     const limit = Math.min(parseInt((req.query['limit'] as string) ?? '20', 10), 100);
     const offset = Math.max(0, parseInt((req.query['offset'] as string) ?? '0', 10));
@@ -88,7 +130,10 @@ export function registerNotificationRoutes(app: Express): void {
   // ※ /:id/read より前に登録する必要はないが安全のため先に登録
   // -----------------------------------------------------------------------
   app.patch('/v1/admin/notifications/read-all', async (req: Request, res: Response) => {
-    const { tenantId, isSuperAdmin } = extractAuth(req);
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedNotificationRole(role)) {
+      return denyNotificationRole(req, res, su, role);
+    }
 
     try {
       const pool = getPool();
@@ -126,7 +171,10 @@ export function registerNotificationRoutes(app: Express): void {
       return res.status(400).json({ error: 'id が不正です' });
     }
 
-    const { tenantId, isSuperAdmin } = extractAuth(req);
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedNotificationRole(role)) {
+      return denyNotificationRole(req, res, su, role);
+    }
 
     try {
       const pool = getPool();
@@ -158,8 +206,13 @@ export function registerNotificationRoutes(app: Express): void {
   // POST /v1/admin/notifications — Super Admin → テナント宛通知送信 (Phase63)
   // -----------------------------------------------------------------------
   app.post('/v1/admin/notifications', async (req: Request, res: Response) => {
-    const { isSuperAdmin } = extractAuth(req);
-    if (!isSuperAdmin) return res.status(403).json({ error: '権限がありません' });
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedNotificationRole(role)) {
+      return denyNotificationRole(req, res, su, role);
+    }
+    if (!isSuperAdmin) {
+      return denyNotificationInsufficient(req, res, su, role);
+    }
 
     const { recipient_tenant_id, type, title, message, link, metadata } = req.body as Record<string, unknown>;
     if (!recipient_tenant_id || !title || !message) {

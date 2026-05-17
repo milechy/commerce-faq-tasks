@@ -14,16 +14,42 @@ import { callGeminiJudge } from '../../../lib/gemini/client';
 const logger = pino();
 
 // ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_KG_PHASE46_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedKgPhase46Role = typeof ALLOWED_KG_PHASE46_ROLES[number];
+function isAllowedKgPhase46Role(role: unknown): role is AllowedKgPhase46Role {
+  return typeof role === 'string' &&
+         (ALLOWED_KG_PHASE46_ROLES as readonly string[]).includes(role);
+}
+
+// ---------------------------------------------------------------------------
 // Auth helpers
 // ---------------------------------------------------------------------------
 
-function resolveJwt(req: Request): { jwtTenantId: string; isSuperAdmin: boolean; isClientAdmin: boolean } {
+function resolveJwt(req: Request): { su: Record<string, any> | undefined; role: unknown; jwtTenantId: string; isSuperAdmin: boolean; isClientAdmin: boolean } {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role: unknown = su?.app_metadata?.role;
   const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? '';
-  const role: string = su?.app_metadata?.role ?? su?.user_metadata?.role ?? '';
   const isSuperAdmin = role === 'super_admin';
   const isClientAdmin = role === 'client_admin';
-  return { jwtTenantId, isSuperAdmin, isClientAdmin };
+  return { su, role, jwtTenantId, isSuperAdmin, isClientAdmin };
+}
+
+function denyKgPhase46Role(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'knowledge_gaps_access_denied',
+    reason: 'invalid_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ALLOWED_KG_PHASE46_ROLES,
+    hasAppMetadataRole: !!su?.['app_metadata']?.role,
+    hasUserMetadataRole: !!su?.['user_metadata']?.role,
+  }, 'knowledge-gaps access denied: invalid actor role');
+  return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
 // ---------------------------------------------------------------------------
@@ -117,9 +143,9 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
     '/v1/admin/knowledge-gaps',
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const { jwtTenantId, isSuperAdmin, isClientAdmin } = resolveJwt(req);
-      if (!isSuperAdmin && !isClientAdmin) {
-        return res.status(403).json({ error: 'forbidden' });
+      const { su, role, jwtTenantId, isSuperAdmin } = resolveJwt(req);
+      if (!isAllowedKgPhase46Role(role)) {
+        return denyKgPhase46Role(req, res, su, role);
       }
 
       const tenantFilter = isSuperAdmin
@@ -238,9 +264,9 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       const id = parseInt(req.params['id'] ?? '', 10);
       if (isNaN(id)) return res.status(400).json({ error: 'id が不正です' });
 
-      const { jwtTenantId, isSuperAdmin, isClientAdmin } = resolveJwt(req);
-      if (!isSuperAdmin && !isClientAdmin) {
-        return res.status(403).json({ error: 'forbidden' });
+      const { su, role, jwtTenantId, isSuperAdmin } = resolveJwt(req);
+      if (!isAllowedKgPhase46Role(role)) {
+        return denyKgPhase46Role(req, res, su, role);
       }
 
       const parsed = recommendationActionSchema.safeParse(req.body);
@@ -309,9 +335,9 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       const id = parseInt(req.params['id'] ?? '', 10);
       if (isNaN(id)) return res.status(400).json({ error: 'id が不正です' });
 
-      const { jwtTenantId, isSuperAdmin, isClientAdmin } = resolveJwt(req);
-      if (!isSuperAdmin && !isClientAdmin) {
-        return res.status(403).json({ error: 'forbidden' });
+      const { su, role, jwtTenantId, isSuperAdmin } = resolveJwt(req);
+      if (!isAllowedKgPhase46Role(role)) {
+        return denyKgPhase46Role(req, res, su, role);
       }
 
       const parsed = addKnowledgeSchema.safeParse(req.body);
@@ -397,9 +423,9 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       const id = parseInt(req.params['id'] ?? '', 10);
       if (isNaN(id)) return res.status(400).json({ error: 'id が不正です' });
 
-      const { jwtTenantId, isSuperAdmin, isClientAdmin } = resolveJwt(req);
-      if (!isSuperAdmin && !isClientAdmin) {
-        return res.status(403).json({ error: 'forbidden' });
+      const { su, role, jwtTenantId, isSuperAdmin } = resolveJwt(req);
+      if (!isAllowedKgPhase46Role(role)) {
+        return denyKgPhase46Role(req, res, su, role);
       }
 
       try {

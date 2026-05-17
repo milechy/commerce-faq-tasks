@@ -12,12 +12,38 @@ import {
 } from "./knowledgeGapRepository";
 import { logger } from '../../../lib/logger';
 
-function resolveJwtTenantId(req: Request): { jwtTenantId: string; isSuperAdmin: boolean } {
+// ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_KG_LEGACY_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedKgLegacyRole = typeof ALLOWED_KG_LEGACY_ROLES[number];
+function isAllowedKgLegacyRole(role: unknown): role is AllowedKgLegacyRole {
+  return typeof role === 'string' &&
+         (ALLOWED_KG_LEGACY_ROLES as readonly string[]).includes(role);
+}
+
+function resolveJwtTenantId(req: Request): { su: Record<string, any> | undefined; role: unknown; jwtTenantId: string; isSuperAdmin: boolean } {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role: unknown = su?.app_metadata?.role;
   const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-  const isSuperAdmin: boolean =
-    (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
-  return { jwtTenantId, isSuperAdmin };
+  const isSuperAdmin: boolean = role === "super_admin";
+  return { su, role, jwtTenantId, isSuperAdmin };
+}
+
+function denyKgLegacyRole(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'knowledge_gaps_legacy_access_denied',
+    reason: 'invalid_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ALLOWED_KG_LEGACY_ROLES,
+    hasAppMetadataRole: !!su?.['app_metadata']?.role,
+    hasUserMetadataRole: !!su?.['user_metadata']?.role,
+  }, 'knowledge/gaps access denied: invalid actor role');
+  return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
 const updateStatusSchema = z.object({
@@ -33,7 +59,10 @@ export function registerKnowledgeGapRoutes(app: Express): void {
   // NOTE: この route は /:id より先に登録する必要がある
   // -----------------------------------------------------------------------
   app.get("/v1/admin/knowledge/gaps/count", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveJwtTenantId(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveJwtTenantId(req);
+    if (!isAllowedKgLegacyRole(role)) {
+      return denyKgLegacyRole(req, res, su, role);
+    }
     const tenantFilter = isSuperAdmin
       ? ((req.query["tenant"] as string | undefined) || undefined)
       : jwtTenantId;
@@ -55,7 +84,10 @@ export function registerKnowledgeGapRoutes(app: Express): void {
   // GET /v1/admin/knowledge/gaps  (一覧)
   // -----------------------------------------------------------------------
   app.get("/v1/admin/knowledge/gaps", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveJwtTenantId(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveJwtTenantId(req);
+    if (!isAllowedKgLegacyRole(role)) {
+      return denyKgLegacyRole(req, res, su, role);
+    }
     const tenantFilter = isSuperAdmin
       ? ((req.query["tenant"] as string | undefined) || undefined)
       : jwtTenantId;
@@ -91,7 +123,10 @@ export function registerKnowledgeGapRoutes(app: Express): void {
       return res.status(400).json({ error: "id が不正です" });
     }
 
-    const { jwtTenantId, isSuperAdmin } = resolveJwtTenantId(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveJwtTenantId(req);
+    if (!isAllowedKgLegacyRole(role)) {
+      return denyKgLegacyRole(req, res, su, role);
+    }
     const tenantId = isSuperAdmin ? undefined : jwtTenantId;
 
     if (!isSuperAdmin && !tenantId) {
