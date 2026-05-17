@@ -11,16 +11,27 @@ import { createNotification } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist
+// ---------------------------------------------------------------------------
+
+const ALLOWED_FEEDBACK_MGMT_ROLES = ["super_admin", "client_admin"] as const;
+type AllowedFeedbackMgmtRole = typeof ALLOWED_FEEDBACK_MGMT_ROLES[number];
+function isAllowedFeedbackMgmtRole(role: unknown): role is AllowedFeedbackMgmtRole {
+  return typeof role === "string" &&
+         (ALLOWED_FEEDBACK_MGMT_ROLES as readonly string[]).includes(role);
+}
+
+// ---------------------------------------------------------------------------
 // ヘルパー
 // ---------------------------------------------------------------------------
 
 function extractAuth(req: Request) {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role = su?.app_metadata?.role;
   const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-  const isSuperAdmin: boolean =
-    (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+  const isSuperAdmin: boolean = role === "super_admin";
   const email: string = su?.email ?? "";
-  return { tenantId, isSuperAdmin, email };
+  return { su, role, tenantId, isSuperAdmin, email };
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +77,21 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
     "/v1/admin/feedback",
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const { tenantId, isSuperAdmin } = extractAuth(req);
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedFeedbackMgmtRole(role)) {
+        logger.warn({
+          event: 'feedback_mgmt_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_FEEDBACK_MGMT_ROLES,
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+        }, "feedback_mgmt access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+      }
 
       const filterTenantId = isSuperAdmin
         ? (req.query["tenant_id"] as string | undefined) || undefined
@@ -143,7 +168,21 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
     "/v1/admin/feedback",
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const { tenantId, email } = extractAuth(req);
+      const { su, role, tenantId, email } = extractAuth(req);
+      if (!isAllowedFeedbackMgmtRole(role)) {
+        logger.warn({
+          event: 'feedback_mgmt_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_FEEDBACK_MGMT_ROLES,
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+        }, "feedback_mgmt access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+      }
 
       if (!tenantId) {
         return res.status(403).json({ error: "テナント情報が取得できません" });
@@ -200,10 +239,32 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
     "/v1/admin/feedback/:id",
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const { isSuperAdmin } = extractAuth(req);
-
+      const { su, role, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedFeedbackMgmtRole(role)) {
+        logger.warn({
+          event: 'feedback_mgmt_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_FEEDBACK_MGMT_ROLES,
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+        }, "feedback_mgmt access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+      }
       if (!isSuperAdmin) {
-        return res.status(403).json({ error: "super_admin のみアクセス可能です" });
+        logger.warn({
+          event: 'feedback_mgmt_access_denied',
+          reason: 'insufficient_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ['super_admin'],
+        }, "feedback_mgmt access denied: super_admin required");
+        return res.status(403).json({ error: "super_admin のみアクセス可能です", code: 'AUTHZ_ROLE_DENIED' });
       }
 
       const id = req.params["id"];
@@ -269,10 +330,32 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
     "/v1/admin/feedback/:id",
     supabaseAuthMiddleware,
     async (req: Request, res: Response) => {
-      const { isSuperAdmin } = extractAuth(req);
-
+      const { su, role, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedFeedbackMgmtRole(role)) {
+        logger.warn({
+          event: 'feedback_mgmt_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_FEEDBACK_MGMT_ROLES,
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+        }, "feedback_mgmt access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+      }
       if (!isSuperAdmin) {
-        return res.status(403).json({ error: "super_admin のみアクセス可能です" });
+        logger.warn({
+          event: 'feedback_mgmt_access_denied',
+          reason: 'insufficient_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ['super_admin'],
+        }, "feedback_mgmt access denied: super_admin required");
+        return res.status(403).json({ error: "super_admin のみアクセス可能です", code: 'AUTHZ_ROLE_DENIED' });
       }
 
       const id = req.params["id"];
