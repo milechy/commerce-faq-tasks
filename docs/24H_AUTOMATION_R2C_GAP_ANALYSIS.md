@@ -433,6 +433,24 @@ DoD:
 
 ---
 
+## Phase 1 進捗 (2026-05-18 完了)
+
+| Phase 1 タスク | PR | 状態 |
+|---|---|---|
+| Claude.ai 指示文 v1 | #155 | ✅ |
+| Phase 0 評価 (本ドキュメント) | #156 | ✅ |
+| 移行手順書 | #157 | ✅ |
+| 並列ベース整備 | #158 | ✅ |
+| SECURITY_SCAN_ALLOWLIST | #159 | ✅ |
+| .wolf/hooks worktree 検知 | #160 | ✅ |
+| retry + Pushover spec | #161 | ✅ |
+| lane-templates × 5 | #162 | ✅ |
+| アカウント分離実行 | (Tier S) | ⏳ 2026-05-19 06:05 |
+| RUNBOOK_R2C.md | - | ⏳ UATa runbook 取得後 |
+| SCRIPTS/r2c-*.sh 16本 | - | ⏳ Tier S + RUNBOOK 後 |
+
+---
+
 ## 改訂履歴
 
 | バージョン | 日付 | 変更点 | Asana |

@@ -406,3 +406,19 @@ Playwright MCPで現象確認してから修正。推測で修正しない。
 - 根本原因特定+再発防止（症状修正で終わらない）
 - バグ報告→テキスト推測禁止→Playwright MCP/pm2 logs/DB SELECTの3点確認
 - CLI報告に「変更しました/no diff/リスク最小」→スコープ再評価要求
+
+## Phase 1 24h 自律ループ実装状況 (2026-05-18 時点)
+
+| 項目 | 状態 | 関連 PR | 関連ドキュメント |
+|---|---|---|---|
+| Claude.ai 指示文 v1 | ✅ | #155 | docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md |
+| Phase 0 評価 | ✅ | #156 | docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md |
+| 移行手順書 + verify | ✅ | #157 | docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md |
+| 並列ベース整備 | ✅ | #158 | docs/PHASE1_PARALLEL_WORK_RULES.md |
+| SECURITY_SCAN_ALLOWLIST | ✅ | #159 | docs/SECURITY_SCAN_ALLOWLIST.md |
+| .wolf/hooks worktree 検知 | ✅ | #160 | .wolf/hooks/HOOK_BEHAVIOR.md |
+| lane-templates × 5 | ✅ | #162 | .claude/lane-templates/ |
+| retry + Pushover spec | ✅ | #161 | docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md |
+| アカウント分離 (Tier S 実行) | ⏳ 2026-05-19 06:05 | - | docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md |
+| RUNBOOK_R2C 作成 | ⏳ UATa runbook 本文待ち | - | - |
+| SCRIPTS/r2c-*.sh 16本 | ⏳ Tier S + RUNBOOK 後 | - | - |

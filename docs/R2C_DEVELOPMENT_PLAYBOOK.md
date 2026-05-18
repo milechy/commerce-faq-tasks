@@ -606,3 +606,16 @@ claude      # default ~/.claude/ を使う
 bash scripts/verify-account-isolation.sh
 ```
 ```
+
+---
+
+## 16. Lane retry / Pushover 通知仕様
+
+24h ループの Lane 失敗時 retry 戦略と Pushover priority マッピングの詳細は以下を参照:
+
+- **仕様書**: `docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md`
+  - Section 1: Lane 失敗 retry 戦略（1 回目=5 分後 / 2 回目=30 分後 priority 0 / 3 回目=停止 priority 1）
+  - Section 2: Pushover priority 完全列挙（2 Critical / 1 High / 0 Normal / -1 Low / -2 Lowest）
+  - Section 3: 構造化 JSON 通知本文ルール
+  - Section 4: morning-report Slack Block Kit JSON schema
+- **正本**: `docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md` §16
