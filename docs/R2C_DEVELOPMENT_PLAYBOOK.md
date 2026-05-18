@@ -619,3 +619,22 @@ bash scripts/verify-account-isolation.sh
   - Section 3: 構造化 JSON 通知本文ルール
   - Section 4: morning-report Slack Block Kit JSON schema
 - **正本**: `docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md` §16
+
+---
+
+## 使わないツール・禁止ライブラリ
+
+> 追加: 2026-05-18（Phase1 Step-F — セキュリティポリシー強化）
+
+### OpenClaw 系統（全面禁止）
+
+- **OpenClaw** — CVE-2026-25253 (CVSS 8.8): WebSocket トークン漏洩
+- **ClawHub** — ClawHavoc Attack: 341 悪意 skill がデフォルト有効
+- **OpenClaw Plugins** — 上記リスクを継承する全プラグイン
+
+詳細は `docs/SECURITY_SCAN_ALLOWLIST.md §使用禁止ツール` を参照。
+
+インストール試みを検出した場合:
+1. 即時 `npm uninstall / pip uninstall`
+2. `git diff` で意図しない依存追加がないか確認
+3. Asana に "セキュリティインシデント" タスク起票
