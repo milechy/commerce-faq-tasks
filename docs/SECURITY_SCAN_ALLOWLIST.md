@@ -70,3 +70,35 @@
 - `docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md` §7 — Claude.ai 月次レビューフロー
 - `.github/workflows/security-scan.yml` — CI security-scan の実装
 - `SCRIPTS/security-scan.sh` — ローカル実行スクリプト
+
+---
+
+## 使用禁止ツール・ライブラリ
+
+> 追加: 2026-05-18（Phase1 Step-F T2）
+
+以下のツール・ライブラリは R2C プロジェクトで**一切使用禁止**とする。
+
+### OpenClaw / ClawHub / OpenClaw Plugins
+
+**禁止理由（複数の重大インシデント）:**
+
+| 識別子 | 深刻度 | 概要 |
+|---|---|---|
+| CVE-2026-25253 | CVSS 8.8 (High) | WebSocket トークン漏洩 — セッショントークンが第三者サーバーへ平文送信される |
+| ClawHavoc Attack | Critical | 341 の悪意ある skill がデフォルト有効化されており、外部コマンド実行・ファイル流出が可能 |
+
+**参照警告:**
+- Koi Security: "OpenClaw Plugin Architecture Allows Arbitrary Code Execution" (2026-03)
+- Microsoft Security Blog: "ClawHavoc — Lessons from a Compromised AI Dev Tool" (2026-04)
+- Cisco Talos: "CVE-2026-25253 — OpenClaw WebSocket Token Exfiltration" (2026-04)
+
+**検出 grep ルール（Aikido Plugin trial 追記依頼として記録）:**
+```
+# package.json / requirements.txt での検出
+grep -r "openclaw\|clawhub\|claw-hub\|@claw/" . --include="*.json" --include="*.txt"
+```
+
+**代替ツール:**
+- Claude Code CLI 公式プラグイン（`claude mcp add`）のみ使用
+- MCP サーバーは `.claude/settings.json` の `mcpServers` で明示管理
