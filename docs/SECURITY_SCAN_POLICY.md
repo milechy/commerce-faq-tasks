@@ -73,3 +73,4 @@ bash SCRIPTS/security-scan.sh
 - CI ワークフロー: `.github/workflows/security-scan.yml`
 - デプロイチェックリスト: `docs/DEPLOY_CHECKLIST.md`
 - CLAUDE.md セキュリティゲートセクション: `## Security Scan`
+- ALLOWLIST 運用: `docs/SECURITY_SCAN_ALLOWLIST.md`
