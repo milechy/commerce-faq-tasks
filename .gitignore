@@ -56,4 +56,7 @@ Thumbs.db
 # 作業用スクリーンショット（ルート直下）
 /e[0-9]*.png
 /*-screenshot*.png
+
+# 24h ループ worktree（claude agents / Phase 1 並列作業用）
+.claude/worktrees/
 /tmp-*.png
