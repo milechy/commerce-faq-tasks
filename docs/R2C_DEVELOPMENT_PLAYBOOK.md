@@ -575,3 +575,34 @@ CLIプロンプトにSSHコマンドを含めない。代わりに:
 CLIはマイグレーション完了後の確認クエリのみ実行:
   SELECT column_name FROM information_schema.columns WHERE table_name = 'xxx';
 ```
+
+---
+
+## 15. アカウント分離手順（Claude Code config-dir 分離）
+
+### 概要
+
+24h ループで起動する Lane (claude agents) が他プロジェクト（DIA1000 等）の設定と混線しないよう、
+R2C 専用の `~/.claude-r2c-config/` を使用する。
+
+- **確定仕様**: `docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md` §15
+- **移行評価**: `docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md` §8
+- **手順書**: `docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md`（2026-05-19 06:05 実施済）
+- **検証スクリプト**: `scripts/verify-account-isolation.sh`
+
+### 日常運用
+
+```bash
+# R2C 作業
+claude-r2c  # alias: CLAUDE_CONFIG_DIR=~/.claude-r2c-config claude
+
+# その他プロジェクト（DIA 等）
+claude      # default ~/.claude/ を使う
+```
+
+### 独立性確認
+
+```bash
+bash scripts/verify-account-isolation.sh
+```
+```
