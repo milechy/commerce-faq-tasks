@@ -419,6 +419,10 @@ Playwright MCPで現象確認してから修正。推測で修正しない。
 | .wolf/hooks worktree 検知 | ✅ | #160 | .wolf/hooks/HOOK_BEHAVIOR.md |
 | lane-templates × 5 | ✅ | #162 | .claude/lane-templates/ |
 | retry + Pushover spec | ✅ | #161 | docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md |
+| RUNBOOK_R2C 作成 | ✅ | #164 | docs/24H_AUTOMATION_RUNBOOK_R2C.md |
+| SCRIPTS/r2c-*.sh 16本 | ✅ | #165-168 | SCRIPTS/r2c-*.sh |
+| Secrets + Pushover セットアップ | ✅ | #169 | docs/24H_LOOP_SECRETS_TEMPLATE.md |
+| Managed Agents 申請ドラフト | ✅ | #171 | docs/MANAGED_AGENTS_APPLICATION.md |
+| OpenClaw 使用禁止ポリシー | ✅ | #172 | docs/SECURITY_SCAN_ALLOWLIST.md §使用禁止ツール |
+| Memory Tool 評価レポート | ✅ | #170 | docs/MEMORY_TOOL_EVALUATION.md |
 | アカウント分離 (Tier S 実行) | ⏳ 2026-05-19 06:05 | - | docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md |
-| RUNBOOK_R2C 作成 | ⏳ UATa runbook 本文待ち | - | - |
-| SCRIPTS/r2c-*.sh 16本 | ⏳ Tier S + RUNBOOK 後 | - | - |
