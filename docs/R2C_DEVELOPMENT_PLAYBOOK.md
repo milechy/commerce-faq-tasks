@@ -589,6 +589,8 @@ R2C 専用の `~/.claude-r2c-config/` を使用する。
 - **移行評価**: `docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md` §8
 - **手順書**: `docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md`（2026-05-19 06:05 実施済）
 - **検証スクリプト**: `scripts/verify-account-isolation.sh`
+- **シークレット配備手順**: `docs/24H_LOOP_SECRETS_TEMPLATE.md`（Tier S 完了後に hkobayashi 手動実施）
+- **Pushover セットアップ**: `docs/PUSHOVER_SETUP_GUIDE.md`（iOS アプリ + App Token 取得）
 
 ### 日常運用
 
