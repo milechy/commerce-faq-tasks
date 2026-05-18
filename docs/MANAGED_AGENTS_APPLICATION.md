@@ -1,7 +1,7 @@
 # Managed Agents 申請ドラフト — R2C
 
 > 作成: 2026-05-18
-> 状態: DRAFT（送信前）
+> 状態: SENT: 2026-05-18（Dreaming ウェイトリスト送信完了）
 > 担当: hkobayashi 手動送信（本 docs に "SENT: YYYY-MM-DD" と記録すること）
 
 ## 1. ユースケース概要
@@ -113,3 +113,26 @@ Dreaming 承認後の統合イメージ（`docs/24H_AUTOMATION_RUNBOOK_R2C.md` S
 - [Dreaming ウェイトリスト申請フォーム](https://claude.com/form/claude-managed-agents)
 - [Anthropic 発表記事 (2026-04-09)](https://www.anthropic.com/news/finance-agents)
 - [3新機能アップデート (2026-05-07)](https://9to5mac.com/2026/05/07/anthropic-updates-claude-managed-agents-with-three-new-features/)
+
+---
+
+## 送信ステータス
+
+- **送信日時**: 2026-05-18 (JST 午前中)
+- **送信者**: hkobayashi (hkobayashi@mooores.com)
+- **送信先**: https://claude.com/form/claude-managed-agents
+- **送信内容**:
+  - First name: Hiroaki
+  - Last name: Kobayashi
+  - Business email: hkobayashi@mooores.com
+  - Company or organization name: Mooore
+  - API Organization UUID: 1f2b5f79-5606-421a-859d-25a4bfa19f70
+  - Features: Dreaming
+  - SDKs & tools: Claude API CLI
+- **ステータス**: 送信完了、Anthropic からの承認/保留/拒否の連絡待ち
+- **次のアクション**: 承認連絡を受信したら本ドキュメント末尾に「## 承認結果」セクション追加
+
+## 重要な事実訂正 (2026-05-18 調査時に判明)
+
+- Managed Agents 本体は 2026-04-09 に Public Beta ローンチ済み、申請不要 (Claude Console「マネージドエージェント」セクションから直接利用可能)
+- 本申請はあくまで **Dreaming (Research Preview) のウェイトリスト** のみ
