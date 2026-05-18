@@ -426,3 +426,19 @@ Playwright MCPで現象確認してから修正。推測で修正しない。
 | OpenClaw 使用禁止ポリシー | ✅ | #172 | docs/SECURITY_SCAN_ALLOWLIST.md §使用禁止ツール |
 | Memory Tool 評価レポート | ✅ | #170 | docs/MEMORY_TOOL_EVALUATION.md |
 | アカウント分離 (Tier S 実行) | ⏳ 2026-05-19 06:05 | - | docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md |
+
+## 24h 自走中の禁止操作（Phase70-A — 必読）
+
+24h 自走モード ON 中 (`~/.r2c-24h-mode` 存在時 または `R2C_24H_MODE=1`) は
+以下の操作を **絶対に実施しない**。違反検知時は Slack #r2c に `HUMAN-REVIEW-REQUIRED`
+投稿して自身を停止すること。
+
+Out of scope 10項目: VPS 接続 / main merge / DB migration / .env 編集 / git force /
+avatar-agent 操作 / Cloudflare 設定変更 / 依存メジャー bump / 法務文書編集 / 本番テナント影響。
+
+詳細・運用手順・トラブルシュートは **`docs/24H_AUTONOMOUS_PLAYBOOK.md`** を必ず読むこと。
+
+ON/OFF 操作:
+- ON: `bash SCRIPTS/24h-mode-on.sh` (dry-run: `--dry-run`)
+- OFF: `bash SCRIPTS/24h-mode-off.sh`
+- 検知 hook: `.claude/hooks/deploy_guard.py` が `R2C_24H_MODE` を読み追加ブロック実施

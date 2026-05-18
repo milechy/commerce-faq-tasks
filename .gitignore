@@ -60,3 +60,7 @@ Thumbs.db
 # 24h ループ worktree（claude agents / Phase 1 並列作業用）
 .claude/worktrees/
 /tmp-*.png
+
+# Phase70-A 24h 自走モード一時ファイル (HOME 直下が本体だが、誤って repo に置かれた場合の保険)
+.r2c-24h-mode
+.r2c-24h-mode-*
