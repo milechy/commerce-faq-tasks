@@ -32,20 +32,24 @@ def is_self_edit_attempt(cmd: str) -> bool:
     """Detect Bash attempts to overwrite guard scripts or 24h-mode scripts.
 
     Detects: redirect (>), tee, in-place sed, python open(..., 'w').
+    Matches both bare paths and ./-prefixed paths (e.g. ./SCRIPTS/...).
     """
     for target in SELF_EDIT_PROTECTED_FILES:
+        # Allow optional ./ prefix (e.g. > ./SCRIPTS/24h-mode-on.sh)
+        escaped = r"(?:\./)?" + re.escape(target)
         # Redirect write: cmd > target / cmd >> target
-        if re.search(r">+\s*" + re.escape(target), cmd):
+        if re.search(r">+\s*" + escaped, cmd):
             return True
         # tee write: tee target / tee -a target
-        if re.search(r"\btee\s+(?:-a\s+)?" + re.escape(target), cmd):
+        if re.search(r"\btee\s+(?:-a\s+)?" + escaped, cmd):
             return True
         # in-place sed: sed -i '...' target
-        if re.search(r"\bsed\s+(?:-[a-zA-Z]*i[a-zA-Z]*|--in-place)[^\n]*" + re.escape(target), cmd):
+        if re.search(r"\bsed\s+(?:-[a-zA-Z]*i[a-zA-Z]*|--in-place)[^\n]*" + escaped, cmd):
             return True
-        # python open with write mode
-        if "open(" in cmd and target in cmd and ("'w'" in cmd or '"w"' in cmd):
-            return True
+        # python open with write mode (check both bare and ./-prefixed path)
+        if "open(" in cmd and ("'w'" in cmd or '"w"' in cmd):
+            if target in cmd or ("./" + target) in cmd:
+                return True
     return False
 
 
