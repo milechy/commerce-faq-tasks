@@ -94,16 +94,16 @@ bash SCRIPTS/24h-mode-off.sh --dry-run
 1-5 まで同手順
 6. **Pause deployments** トグルを **OFF**
 
-## 4. 朝のレビューフロー (Phase70-C で詳細化)
+## 4. 朝のレビューフロー
 
-⚠️ プレースホルダ — Phase70-C で本格設計
+> 詳細手順・判定マトリクス・チェックリストは **[docs/MORNING_REVIEW_FLOW.md](MORNING_REVIEW_FLOW.md)** を参照（Phase70-C で設計）。
 
-24h 自走完了後 (翌朝):
-1. `SCRIPTS/r2c-morning-report.sh` 実行 → Slack 投稿
-2. 各 lane が生成した PR を一覧確認 (`gh pr list --search "label:24h-loop"`)
-3. branch protection を一時 OFF せず、PR 個別レビュー → squash merge
+24h 自走完了後 (翌朝、2 時間以内):
+1. `bash SCRIPTS/morning-digest.sh` 実行 → Slack #r2c に PR 一覧・リスク・Codex 結果投稿
+2. `docs/MORNING_REVIEW_FLOW.md` の判定マトリクスで各 PR を low / medium / high / reject 分類
+3. branch protection を一時 OFF せず、PR 個別レビュー → squash merge (`docs/PR_MERGE_RULES.md`)
 4. 全 PR 処理完了後、`bash SCRIPTS/24h-mode-off.sh`
-5. Cloudflare Pages auto-deploy を再開
+5. Cloudflare Pages auto-deploy を再開（CF ダッシュボード手動操作、§3 参照）
 
 ## 5. トラブルシュート
 
