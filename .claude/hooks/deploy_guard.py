@@ -30,11 +30,11 @@ MODE_24H_BLOCK_PATTERNS = [
 
 # ssh がコマンドトークンとして現れるか検出するための正規表現。
 # コマンド境界: 行頭 / && / ; / || / | / $( (コマンド置換) / ` (バックティック置換)
-# これにより以下のケースを全てブロックできる:
-#   ssh "root@host" "cmd"            — 引用符付きホスト (行頭)
-#   echo $(ssh "root@host" "cmd")    — $() コマンド置換内
-#   echo `ssh root@host free`        — バックティック置換内
-# echo "use ssh root@host" のようにコマンド本体が ssh でないケースは除外される。
+# strip_quoted_strings 後の文字列に対して適用することで:
+#   - ssh "root@host" "cmd"         → strip後 ssh "" "" → ^ssh\s でブロック
+#   - echo $(ssh "root@h" "cmd")    → strip後 echo $(ssh "" "") → \$\( でブロック
+#   - echo `ssh root@host free`     → strip後 変化なし (バックティック外) → ` でブロック
+#   - echo "x | ssh root@host"      → strip後 echo "" → | が消えて誤マッチしない (P2対策)
 _SSH_AS_CMD_RE = re.compile(r'(?:^|&&|;|\|\||\||\$\(|`)\s*ssh\s', re.MULTILINE)
 
 
@@ -54,15 +54,16 @@ def is_24h_mode() -> bool:
 def is_blocked_in_24h_mode(cmd: str) -> bool:
     """24h モード時の追加ブロックパターン照合。
 
-    quote 除去後のパターンマッチに加え、raw コマンドに対しても
-    ssh がコマンドトークンとして現れるか確認する (_SSH_AS_CMD_RE)。
-    これにより ssh "root@host" "cmd" のような引用符付きホストも確実にブロックできる。
-    echo "use ssh root@host" のような文字列内への言及は除外される。
+    全チェックを strip_quoted_strings 後の文字列に対して行う。
+    - MODE_24H_BLOCK_PATTERNS: 通常の ssh / deploy-vps.sh を検出
+    - _SSH_AS_CMD_RE: 引用符付きホスト・コマンド置換内 ssh を検出
+      strip 後も $( や ` はコマンド外に残るため置換内 ssh を捕捉できる。
+      一方 echo "x | ssh root@host" → strip 後 echo "" で | が消え誤ブロックしない。
     """
     cmd_unquoted = strip_quoted_strings(cmd)
     if any(re.search(pattern, cmd_unquoted) for pattern in MODE_24H_BLOCK_PATTERNS):
         return True
-    return bool(_SSH_AS_CMD_RE.search(cmd))
+    return bool(_SSH_AS_CMD_RE.search(cmd_unquoted))
 
 # Keywords that classify a command as deploy-related.
 # Note: 'deploy' alone is intentionally omitted — too broad (matches script names).
