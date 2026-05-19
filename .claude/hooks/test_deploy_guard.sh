@@ -115,6 +115,54 @@ test_case "blocked: pm2 env (exposes production secrets)" \
 test_case "blocked: cat npm debug log (may contain tokens)" \
   '{"tool_name":"Bash","tool_input":{"command":"ssh root@65.108.159.161 \"cat /root/.npm/_logs/2026-04-17T10_00_00_000Z-debug-0.log\""}}' 2
 
+# --- 24h モード追加テスト (P1修正: ^ アンカー除去 + strip_quoted_strings適用) ---
+test_case_24h() {
+  local desc="$1"
+  local input="$2"
+  local expected_exit="$3"
+
+  echo "$input" | R2C_24H_MODE=1 python3 "$GUARD" 2>/dev/null
+  actual=$?
+
+  if [ "$actual" -eq "$expected_exit" ]; then
+    echo "✅ [24h] $desc (exit=$actual)"
+    ((PASS++))
+  else
+    echo "❌ [24h] $desc (expected=$expected_exit, actual=$actual)"
+    ((FAIL++))
+  fi
+}
+
+test_case_24h "allowed: normal command in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"pnpm verify"}}' 0
+
+test_case_24h "blocked: deploy-vps.sh in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"bash SCRIPTS/deploy-vps.sh"}}' 2
+
+test_case_24h "blocked: ssh root@ in 24h mode (even read-only)" \
+  '{"tool_name":"Bash","tool_input":{"command":"ssh root@65.108.159.161 \"pm2 list\""}}' 2
+
+test_case_24h "blocked: chained ssh after pnpm in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"pnpm build && ssh root@65.108.159.161 \"pm2 list\""}}' 2
+
+test_case_24h "blocked: semicolon-chained ssh in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo done; ssh root@65.108.159.161 \"free -h\""}}' 2
+
+test_case_24h "allowed: echo with quoted ssh string in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo \"use ssh root@host to connect\""}}' 0
+
+test_case_24h "allowed: pipe symbol inside quoted string (P2 false-positive guard)" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo \"x | ssh root@65.108.159.161\""}}' 0
+
+test_case_24h "blocked: ssh with quoted host in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"ssh \"root@65.108.159.161\" \"pm2 list\""}}' 2
+
+test_case_24h "blocked: ssh via \$() substitution in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo $(ssh \"root@65.108.159.161\" \"pm2 list\")"}}' 2
+
+test_case_24h "blocked: ssh via backtick substitution in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"echo `ssh root@65.108.159.161 free`"}}' 2
+
 # fail-closed
 test_case "fail-closed: malformed JSON" \
   'not valid json' 2

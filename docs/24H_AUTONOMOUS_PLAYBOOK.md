@@ -1,0 +1,150 @@
+# 24h 自走 Playbook (Phase70-A 論理層 安全装置)
+
+R2C は dev/staging を持たず本番 VPS (65.108.159.161) のみ。
+UATa テンプレ v1.0 §2.1「本番への接続を物理的に閉じる」が適用不能なので、
+論理層の多層防御で代替する。
+
+## 関連 Asana
+- Phase70 親: 1214919472827777
+- Phase70-A 本タスク: 1214919660483265
+- Phase70-H 初回 24h 自走 (利用先): 別途
+
+## 24h 自走中の禁止操作 (Out of Scope 10項目)
+
+24h 自走モード中、Claude Code CLI および全サブエージェントは
+以下の操作を **絶対に行ってはならない**。違反検知時は **Slack #r2c に
+`HUMAN-REVIEW-REQUIRED` を投稿し、自身を停止する**。
+
+| # | 禁止操作 | 検知/防御 |
+|---|---|---|
+| 1 | VPS (65.108.159.161 / api.r2c.biz) への一切の接続試行 | deploy_guard.py R2C_24H_MODE |
+| 2 | main branch への merge 操作 (PR merge 含む) | GitHub branch protection |
+| 3 | DB マイグレーションの自動実行 | 人間手動運用ルール |
+| 4 | .env / secrets / *.key の編集 | .claudeignore |
+| 5 | git push --force / git reset --hard origin/main | 運用ルール + branch protection |
+| 6 | avatar-agent プロセス操作 (start/stop/restart) | deploy_guard.py SSH ブロック |
+| 7 | Cloudflare Pages の設定変更 | 手動停止 (本ドキュメント §3) |
+| 8 | 依存ライブラリのメジャーバージョン変更 | コードレビュー / Codex |
+| 9 | 法務・契約関連ドキュメント編集 (docs/legal/, docs/contracts/ 等) | 運用ルール |
+| 10 | パートナー本番テナント (live tenant) 影響操作 | tenantId 検証 + L1-L4 |
+
+各項目に違反した場合の動作:
+1. 即座に `gh api -X POST repos/milechy/commerce-faq-tasks/issues -f title="HUMAN-REVIEW-REQUIRED ..."` で Issue 作成
+2. `bash SCRIPTS/r2c-slack-notify.sh --text "HUMAN-REVIEW-REQUIRED: <reason>"` 投稿
+3. 当該作業を即時停止 (新規 Bash tool 呼び出しを行わない)
+
+## 1. SCRIPTS/24h-mode-on.sh の使い方
+
+```bash
+# 通常実行 (実 ON)
+bash SCRIPTS/24h-mode-on.sh
+
+# dry-run (副作用なしで実行内容を確認)
+bash SCRIPTS/24h-mode-on.sh --dry-run
+```
+
+実行内容:
+1. GitHub main branch protection を有効化 (PR レビュー 1必須, admin 含む direct push 禁止, status check 必須)
+2. リポジトリの `allow_auto_merge=false`
+3. 既存 open PR の auto-merge フラグを解除
+4. `~/.r2c-24h-mode` (perm 600) に `R2C_24H_MODE=1` と起動時刻を書き込み
+5. Slack `#r2c` (C0AG07HFJTB) に「🔒 24h 自走モード ON」通知
+6. Cloudflare Pages の手動停止手順を標準出力 (自動化はしない)
+
+冪等性: `~/.r2c-24h-mode` が既存なら何もせず exit 0。
+
+環境変数オーバーライド:
+- `GH_REPO` — 対象リポジトリ (default: `milechy/commerce-faq-tasks`)
+- `STATUS_CHECKS` — 必須 status checks CSV (default: `Stream Path Check,Security Scan`)
+- `R2C_24H_MODE_FILE` — モードファイルパス (default: `~/.r2c-24h-mode`)
+
+## 2. SCRIPTS/24h-mode-off.sh の使い方
+
+```bash
+# 通常実行
+bash SCRIPTS/24h-mode-off.sh
+
+# dry-run
+bash SCRIPTS/24h-mode-off.sh --dry-run
+```
+
+実行内容: on.sh の全逆操作。
+1. main branch protection 削除
+2. `allow_auto_merge=true` 復帰
+3. `~/.r2c-24h-mode` 削除
+4. Slack 「🔓 24h 自走モード OFF」通知
+5. Cloudflare Pages 再開手順を出力
+
+## 3. Cloudflare Pages の手動停止手順
+
+⚠️ wrangler/IaC でコード管理されていないため、自動化対象外。Phase70-H 開始前に必ず手動実施すること。
+
+### 停止 (24h 自走開始時)
+
+1. https://dash.cloudflare.com にログイン (hkobayashi アカウント)
+2. 左ペイン: **Workers & Pages**
+3. プロジェクト一覧から `admin-r2c` を選択
+4. 上部タブ: **Settings**
+5. 左サイドバー: **Builds & deployments**
+6. **Production branch** セクションの **Pause deployments** トグルを **ON**
+7. 確認: Deployments タブで "Pending" が新規発生しないこと
+
+### 再開 (24h 自走終了時)
+
+1-5 まで同手順
+6. **Pause deployments** トグルを **OFF**
+
+## 4. 朝のレビューフロー (Phase70-C で詳細化)
+
+⚠️ プレースホルダ — Phase70-C で本格設計
+
+24h 自走完了後 (翌朝):
+1. `SCRIPTS/r2c-morning-report.sh` 実行 → Slack 投稿
+2. 各 lane が生成した PR を一覧確認 (`gh pr list --search "label:24h-loop"`)
+3. branch protection を一時 OFF せず、PR 個別レビュー → squash merge
+4. 全 PR 処理完了後、`bash SCRIPTS/24h-mode-off.sh`
+5. Cloudflare Pages auto-deploy を再開
+
+## 5. トラブルシュート
+
+### 24h-mode-on.sh が「Already ON」で停止する
+→ 期待通り (冪等性)。実際に branch protection が掛かっているか確認:
+```
+gh api repos/milechy/commerce-faq-tasks/branches/main/protection
+```
+
+### gh CLI が admin 権限不足エラー
+→ `gh auth status` で scope に `repo` があるか確認。
+無ければ `gh auth refresh -s repo,admin:repo` 実行。
+それでも失敗するなら GitHub Web UI から手動で branch protection を設定:
+- https://github.com/milechy/commerce-faq-tasks/settings/branches
+
+### Slack 通知が来ない
+→ `SLACK_WEBHOOK_URL` が `~/.claude-r2c-config/secrets/r2c-loop.env` にあるか確認。
+`SCRIPTS/r2c-slack-notify.sh --text "test" --dry-run` で payload 確認。
+
+### deploy_guard.py が 24h-mode を検知しない
+→ `R2C_24H_MODE=1` が export されているか、または `~/.r2c-24h-mode` が存在するか確認。
+hook 動作確認:
+```
+echo '{"tool_name":"Bash","tool_input":{"command":"bash SCRIPTS/deploy-vps.sh"}}' | \
+  R2C_24H_MODE=1 python3 .claude/hooks/deploy_guard.py
+```
+→ exit 2 で `BLOCKED (24h-mode)` が出れば正常。
+
+### 緊急で 24h-mode を強制解除したい
+1. `rm -f ~/.r2c-24h-mode`
+2. `gh api -X DELETE repos/milechy/commerce-faq-tasks/branches/main/protection`
+3. `bash SCRIPTS/r2c-slack-notify.sh --text "⚠️ 24h-mode 緊急解除 by hkobayashi"`
+
+## 6. 設計判断ログ
+
+- **物理停止 NG → 論理多層防御**: dev 環境ないため。
+- **branch protection: enforce_admins=true**: admin 自身も誤って push しないため。
+- **STATUS_CHECKS デフォルト 2 件のみ**: PR で確実に走る workflow に限定。`perf-gate.yml` は workflow_dispatch のみで実行されないため除外。`Claude PR Review` はタイミングが不安定なため除外。
+- **Cloudflare Pages 自動化なし**: wrangler.toml / API token がコード管理されていない。Phase70-H 直前に hkobayashi が手動操作するのが安全。
+- **deploy_guard env-var + file 二重判定**: env var が忘れられても、ファイル存在で fail-safe に動作。
+
+---
+
+更新: 2026-05-19 (Phase70-A 初版)
