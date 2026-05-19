@@ -254,10 +254,14 @@ fi
 log "Risk: $RISK | auto_merge_eligible: $AUTO_MERGE"
 
 # ─── JSON 組み立て ─────────────────────────────────────────────────────────
-REASON_JSON="$(printf '%s\n' "${RISK_REASONS[@]}" | jq -R . | jq -s .)"
-HIGH_JSON="$(printf '%s\n' "${AFFECTED_HIGH[@]+"${AFFECTED_HIGH[@]}"}" | jq -R . | jq -s .)"
-MEDIUM_JSON="$(printf '%s\n' "${AFFECTED_MEDIUM[@]+"${AFFECTED_MEDIUM[@]}"}" | jq -R . | jq -s .)"
-LOW_JSON="$(printf '%s\n' "${AFFECTED_LOW[@]+"${AFFECTED_LOW[@]}"}" | jq -R . | jq -s .)"
+arr_to_json() {
+    if [[ $# -eq 0 ]]; then echo "[]"; return; fi
+    printf '%s\n' "$@" | jq -R . | jq -s .
+}
+REASON_JSON="$(arr_to_json "${RISK_REASONS[@]+"${RISK_REASONS[@]}"}")"
+HIGH_JSON="$(arr_to_json "${AFFECTED_HIGH[@]+"${AFFECTED_HIGH[@]}"}")"
+MEDIUM_JSON="$(arr_to_json "${AFFECTED_MEDIUM[@]+"${AFFECTED_MEDIUM[@]}"}")"
+LOW_JSON="$(arr_to_json "${AFFECTED_LOW[@]+"${AFFECTED_LOW[@]}"}")"
 
 OUTPUT_JSON="$(jq -n \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
