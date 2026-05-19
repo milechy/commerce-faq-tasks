@@ -86,7 +86,7 @@ gh pr view <PR番号> --comments | grep -A 20 "codex"
 
 ## 3. 判定マトリクス
 
-> **注**: Risk Scorer (Phase70-F, 未実装) が完成後は自動スコアを参照。現時点は手動判定。
+> **Risk Scorer (Phase70-F 実装済み)**: `bash SCRIPTS/pr-risk-scorer.sh <PR番号>` で自動判定・ラベル付与。手動判定のフォールバックとして本マトリクスを使用。JSON 出力: `bash SCRIPTS/pr-risk-scorer.sh <PR番号> --json-only`
 
 | リスク | 条件 | アクション |
 |---|---|---|
@@ -179,6 +179,8 @@ echo "$(date '+%Y-%m-%d %H:%M') STRIKE: <系統名>" >> ~/.claude-r2c-config/3-s
 |---|---|---|
 | `SCRIPTS/morning-digest.sh` | 夜間 PR + Codex サマリ + Slack 投稿 | Phase70-C で新規作成 |
 | `SCRIPTS/codex-result-to-pr.sh` | Codex review 結果を PR コメントに貼り付け | Phase70-C で新規作成 |
+| `SCRIPTS/pr-risk-scorer.sh` | PR diff から risk:low/medium/high を自動判定 + GitHub ラベル付与 | **Phase70-F で新規作成** |
+| `SCRIPTS/pr-risk-scorer.test.sh` | Risk Scorer の mock/unit テスト | Phase70-F で新規作成 |
 | `SCRIPTS/r2c-morning-report.sh` | cron 06:00 自動 Slack 投稿 (既存) | 稼働中 (参照) |
 | `SCRIPTS/notify-slack.sh` | Slack 通知 (Phase70-L) | 稼働中 |
 | `SCRIPTS/24h-mode-off.sh` | 24h 自走モード解除 | 稼働中 |
