@@ -180,6 +180,50 @@ bash SCRIPTS/notify-slack.sh "<message>" --color info --channel C0AG07HFJTB
 bash SCRIPTS/notify-slack.sh "test" --color info --dry-run
 ```
 
+## 8. Auto-Memory 確認手順 (Phase70-B)
+
+### auto-memory とは
+
+Claude Code v2.1.143+ の永続メモリ機能。セッション間の学習内容を
+`~/.claude/projects/<project-hash>/memory/MEMORY.md` に自動保存する。
+
+24h 自走中は `.wolf/cerebrum.md` / `.wolf/memory.md` への書き込みを禁止し、
+auto-memory (`MEMORY.md`) が唯一の学習書き込み先となる（OpenWolf 役割分離）。
+
+### 設定確認コマンド
+
+```bash
+# 1. settings.json で有効化を確認
+cat .claude/settings.json | grep -A2 autoMemory
+# 期待値: "autoMemoryEnabled": true, "cleanupPeriodDays": 99999
+
+# 2. メモリファイルの存在確認
+ls ~/.claude/projects/-Users-hkobayashi-Documents-GitHub-commerce-faq-tasks/memory/
+# MEMORY.md が存在すること
+
+# 3. Claude Code CLI セッション内で /memory コマンドを実行して内容確認
+```
+
+### 24h 自走開始前チェックリスト (auto-memory 関連)
+
+- [ ] `autoMemoryEnabled: true` が `.claude/settings.json` にある
+- [ ] `cleanupPeriodDays: 99999` が設定されている (事実上永続)
+- [ ] `.wolf/cerebrum.md` が最新状態（自走開始後は Read-Only）
+- [ ] `~/.claude/projects/.../memory/MEMORY.md` が存在する
+
+### トラブルシュート
+
+**`/memory` で内容が表示されない**
+→ `autoMemoryEnabled` が `true` か確認。セッション再起動で有効化される。
+
+**24h 自走後に `.wolf/cerebrum.md` が書き換わっている**
+→ `deploy_guard.py` が `.wolf/cerebrum.md` への Edit をブロックしているか確認:
+```bash
+echo '{"tool_name":"Edit","tool_input":{"file_path":".wolf/cerebrum.md","old_string":"x","new_string":"y"}}' | \
+  R2C_24H_MODE=1 python3 .claude/hooks/deploy_guard.py
+```
+exit 2 + BLOCKED が出れば正常。出なければ deny リストに追加を検討。
+
 ## 6. 設計判断ログ
 
 - **物理停止 NG → 論理多層防御**: dev 環境ないため。
