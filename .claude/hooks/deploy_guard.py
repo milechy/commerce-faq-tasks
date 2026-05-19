@@ -29,9 +29,13 @@ MODE_24H_BLOCK_PATTERNS = [
 ]
 
 # ssh がコマンドトークンとして現れるか検出するための正規表現。
-# これにより ssh "root@host" のように引用符でホストを囲んでいるケースも補捉できる。
+# コマンド境界: 行頭 / && / ; / || / | / $( (コマンド置換) / ` (バックティック置換)
+# これにより以下のケースを全てブロックできる:
+#   ssh "root@host" "cmd"            — 引用符付きホスト (行頭)
+#   echo $(ssh "root@host" "cmd")    — $() コマンド置換内
+#   echo `ssh root@host free`        — バックティック置換内
 # echo "use ssh root@host" のようにコマンド本体が ssh でないケースは除外される。
-_SSH_AS_CMD_RE = re.compile(r'(?:^|&&|;|\|\||\|)\s*ssh\s', re.MULTILINE)
+_SSH_AS_CMD_RE = re.compile(r'(?:^|&&|;|\|\||\||\$\(|`)\s*ssh\s', re.MULTILINE)
 
 
 def is_24h_mode() -> bool:
