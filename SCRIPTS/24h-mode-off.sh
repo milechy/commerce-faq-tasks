@@ -31,6 +31,7 @@ done
 
 GH_REPO="${GH_REPO:-milechy/commerce-faq-tasks}"
 MODE_FILE="${R2C_24H_MODE_FILE:-$HOME/.r2c-24h-mode}"
+BACKUP_FILE="${HOME}/.r2c-24h-mode-protection-backup.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 log() { printf '[24h-mode-off] %s\n' "$*"; }
@@ -52,15 +53,50 @@ else
     log "Found mode file: $MODE_FILE"
 fi
 
-# ─── 1. branch protection 削除 ───
-log "Removing branch protection on $GH_REPO main…"
+# ─── 1. branch protection 復元 (P2: on.sh バックアップから元設定を復元) ───
+log "Restoring branch protection on $GH_REPO main…"
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '[dry-run] gh api -X DELETE repos/%s/branches/main/protection\n' "$GH_REPO"
-else
-    if gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1; then
-        log "  ✓ branch protection removed"
+    if [[ -f "$BACKUP_FILE" ]]; then
+        printf '[dry-run] restore branch protection from %s\n' "$BACKUP_FILE"
     else
-        log "  WARN: failed to remove (may already be off, or admin permission missing)"
+        printf '[dry-run] gh api -X DELETE repos/%s/branches/main/protection (no backup found)\n' "$GH_REPO"
+    fi
+else
+    if [[ -f "$BACKUP_FILE" ]]; then
+        if jq -e '.no_protection == true' "$BACKUP_FILE" >/dev/null 2>&1; then
+            # 24h-mode 有効化前に protection がなかった → 削除して元の状態に戻す
+            if gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1; then
+                log "  ✓ branch protection removed (was none before 24h-mode)"
+            else
+                log "  WARN: failed to remove (may already be off)"
+            fi
+        else
+            # 元の protection 設定を PUT 形式に変換して復元
+            RESTORE_PAYLOAD=$(jq '{
+                required_status_checks: .required_status_checks,
+                enforce_admins: (.enforce_admins.enabled // false),
+                required_pull_request_reviews: .required_pull_request_reviews,
+                restrictions: .restrictions,
+                required_linear_history: (.required_linear_history.enabled // false),
+                allow_force_pushes: (.allow_force_pushes.enabled // false),
+                allow_deletions: (.allow_deletions.enabled // false)
+            }' "$BACKUP_FILE")
+            if printf '%s' "$RESTORE_PAYLOAD" | gh api -X PUT "repos/$GH_REPO/branches/main/protection" --input - >/dev/null 2>&1; then
+                log "  ✓ branch protection restored from backup"
+            else
+                log "  WARN: restore failed — falling back to DELETE"
+                gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1 || true
+            fi
+        fi
+        rm -f "$BACKUP_FILE"
+        log "  ✓ backup file removed"
+    else
+        # バックアップなし (on.sh が古い版の場合など) → 従来通り削除
+        if gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1; then
+            log "  ✓ branch protection removed (no backup found)"
+        else
+            log "  WARN: failed to remove (may already be off, or admin permission missing)"
+        fi
     fi
 fi
 

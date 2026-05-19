@@ -39,6 +39,7 @@ done
 GH_REPO="${GH_REPO:-milechy/commerce-faq-tasks}"
 STATUS_CHECKS="${STATUS_CHECKS:-Stream Path Check,Security Scan}"
 MODE_FILE="${R2C_24H_MODE_FILE:-$HOME/.r2c-24h-mode}"
+BACKUP_FILE="${HOME}/.r2c-24h-mode-protection-backup.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 log() { printf '[24h-mode-on] %s\n' "$*"; }
@@ -62,6 +63,21 @@ command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI required" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq required" >&2; exit 1; }
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# ─── 0. 現在の branch protection をバックアップ (P2: 解除時に元設定を復元するため) ───
+log "Backing up current branch protection to ${BACKUP_FILE}..."
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '[dry-run] gh api repos/%s/branches/main/protection → %s\n' "$GH_REPO" "$BACKUP_FILE"
+else
+    if gh api "repos/$GH_REPO/branches/main/protection" > "$BACKUP_FILE" 2>/dev/null; then
+        chmod 600 "$BACKUP_FILE"
+        log "  ✓ existing protection backed up"
+    else
+        printf '{"no_protection":true}\n' > "$BACKUP_FILE"
+        chmod 600 "$BACKUP_FILE"
+        log "  ✓ no existing protection — sentinel saved"
+    fi
+fi
 
 # ─── 1. main branch protection ON ───
 log "Enabling branch protection on $GH_REPO main…"

@@ -22,10 +22,13 @@ ALLOWED_DEPLOY_COMMANDS = [
 # Phase70-A: 24h 自走モード中は更に厳格化
 # R2C_24H_MODE=1 または ~/.r2c-24h-mode 存在時、以下も全てブロック
 # (通常時 allowlist で通っていた deploy-vps.sh / ssh root@* も遮断)
+#
+# P1修正: ^ アンカー除去 + strip_quoted_strings 適用 (is_blocked_in_24h_mode 内)
+# → "pnpm build && ssh root@..." のようなチェーンコマンドを24h専用チェックで確実に捕捉
 MODE_24H_BLOCK_PATTERNS = [
-    r'^bash\s+SCRIPTS/deploy-vps\.sh',
-    r'^\s*ssh\s+root@',
-    r'^\s*ssh\s+\S+@65\.108\.159\.161',
+    r'bash\s+SCRIPTS/deploy-vps\.sh',
+    r'ssh\s+root@',
+    r'ssh\s+\S+@65\.108\.159\.161',
 ]
 
 
@@ -43,8 +46,14 @@ def is_24h_mode() -> bool:
 
 
 def is_blocked_in_24h_mode(cmd: str) -> bool:
-    """24h モード時の追加ブロックパターン照合。"""
-    return any(re.search(pattern, cmd) for pattern in MODE_24H_BLOCK_PATTERNS)
+    """24h モード時の追加ブロックパターン照合。
+
+    quote 除去後の文字列に対して全パターンを検索する。
+    チェーンコマンド (pnpm build && ssh root@...) も確実に捕捉するため
+    ^ アンカーなしの re.search を使用。
+    """
+    cmd_unquoted = strip_quoted_strings(cmd)
+    return any(re.search(pattern, cmd_unquoted) for pattern in MODE_24H_BLOCK_PATTERNS)
 
 # Keywords that classify a command as deploy-related.
 # Note: 'deploy' alone is intentionally omitted — too broad (matches script names).
