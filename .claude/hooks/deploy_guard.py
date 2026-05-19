@@ -22,14 +22,16 @@ ALLOWED_DEPLOY_COMMANDS = [
 # Phase70-A: 24h 自走モード中は更に厳格化
 # R2C_24H_MODE=1 または ~/.r2c-24h-mode 存在時、以下も全てブロック
 # (通常時 allowlist で通っていた deploy-vps.sh / ssh root@* も遮断)
-#
-# P1修正: ^ アンカー除去 + strip_quoted_strings 適用 (is_blocked_in_24h_mode 内)
-# → "pnpm build && ssh root@..." のようなチェーンコマンドを24h専用チェックで確実に捕捉
 MODE_24H_BLOCK_PATTERNS = [
     r'bash\s+SCRIPTS/deploy-vps\.sh',
     r'ssh\s+root@',
     r'ssh\s+\S+@65\.108\.159\.161',
 ]
+
+# ssh がコマンドトークンとして現れるか検出するための正規表現。
+# これにより ssh "root@host" のように引用符でホストを囲んでいるケースも補捉できる。
+# echo "use ssh root@host" のようにコマンド本体が ssh でないケースは除外される。
+_SSH_AS_CMD_RE = re.compile(r'(?:^|&&|;|\|\||\|)\s*ssh\s', re.MULTILINE)
 
 
 def is_24h_mode() -> bool:
@@ -48,12 +50,15 @@ def is_24h_mode() -> bool:
 def is_blocked_in_24h_mode(cmd: str) -> bool:
     """24h モード時の追加ブロックパターン照合。
 
-    quote 除去後の文字列に対して全パターンを検索する。
-    チェーンコマンド (pnpm build && ssh root@...) も確実に捕捉するため
-    ^ アンカーなしの re.search を使用。
+    quote 除去後のパターンマッチに加え、raw コマンドに対しても
+    ssh がコマンドトークンとして現れるか確認する (_SSH_AS_CMD_RE)。
+    これにより ssh "root@host" "cmd" のような引用符付きホストも確実にブロックできる。
+    echo "use ssh root@host" のような文字列内への言及は除外される。
     """
     cmd_unquoted = strip_quoted_strings(cmd)
-    return any(re.search(pattern, cmd_unquoted) for pattern in MODE_24H_BLOCK_PATTERNS)
+    if any(re.search(pattern, cmd_unquoted) for pattern in MODE_24H_BLOCK_PATTERNS):
+        return True
+    return bool(_SSH_AS_CMD_RE.search(cmd))
 
 # Keywords that classify a command as deploy-related.
 # Note: 'deploy' alone is intentionally omitted — too broad (matches script names).

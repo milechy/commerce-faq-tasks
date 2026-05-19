@@ -151,6 +151,9 @@ test_case_24h "blocked: semicolon-chained ssh in 24h mode" \
 test_case_24h "allowed: echo with quoted ssh string in 24h mode" \
   '{"tool_name":"Bash","tool_input":{"command":"echo \"use ssh root@host to connect\""}}' 0
 
+test_case_24h "blocked: ssh with quoted host in 24h mode" \
+  '{"tool_name":"Bash","tool_input":{"command":"ssh \"root@65.108.159.161\" \"pm2 list\""}}' 2
+
 # fail-closed
 test_case "fail-closed: malformed JSON" \
   'not valid json' 2

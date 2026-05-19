@@ -73,7 +73,10 @@ else
             rm -f "$BACKUP_FILE"
             log "  ✓ backup file removed"
         else
-            # 元の protection 設定を PUT 形式に変換して復元
+            # 元の protection 設定を PUT 形式に変換して復元。
+            # GET レスポンスのネストされたオブジェクト (.enabled) をフラット化し、
+            # PUT で受け付ける全フィールドを漏れなく含める。
+            # フィールド追加時は on.sh の PROTECTION_PAYLOAD との対称性を維持すること。
             RESTORE_PAYLOAD=$(jq '{
                 required_status_checks: .required_status_checks,
                 enforce_admins: (.enforce_admins.enabled // false),
@@ -81,7 +84,10 @@ else
                 restrictions: .restrictions,
                 required_linear_history: (.required_linear_history.enabled // false),
                 allow_force_pushes: (.allow_force_pushes.enabled // false),
-                allow_deletions: (.allow_deletions.enabled // false)
+                allow_deletions: (.allow_deletions.enabled // false),
+                required_conversation_resolution: (.required_conversation_resolution.enabled // false),
+                block_creations: (.block_creations.enabled // false),
+                lock_branch: (.lock_branch.enabled // false)
             }' "$BACKUP_FILE")
             if printf '%s' "$RESTORE_PAYLOAD" | gh api -X PUT "repos/$GH_REPO/branches/main/protection" --input - >/dev/null 2>&1; then
                 log "  ✓ branch protection restored from backup"
