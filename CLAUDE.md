@@ -38,27 +38,7 @@ This project uses OpenWolf for context management. Read and follow .wolf/OPENWOL
 - Gap: 4トリガー → Gemini推薦エンジン → 知識追加 (Phase46)
 - Book RAG: PDF → 6フィールド構造化 → pgvector + ES (Phase47)
 - LLM Defense: L5 Input Sanitizer → L6 Prompt Firewall → L7 Topic Guard → L8 Output Guard (Phase48)
-
-## Key Endpoints
-| Path | Auth | Purpose |
-|---|---|---|
-| POST /api/chat | x-api-key | Widget → Chat |
-| POST /dialog/turn | x-api-key / JWT | Multi-turn dialog |
-| POST /agent.search | x-api-key / JWT | RAG search |
-| GET /health | public | ES/PG/CE health |
-| GET /metrics | X-Internal-Request: 1 | Prometheus metrics |
-| /v1/admin/tenants/* | JWT (super_admin) | テナント管理 |
-| /v1/admin/chat-history/* | JWT | 会話履歴 |
-| /v1/admin/tuning/* | JWT | チューニングルール |
-| /v1/admin/feedback/* | JWT | フィードバック管理 |
-| /v1/admin/avatar/* | JWT | アバター設定 (Phase40-41) |
-| /v1/admin/evaluations/* | JWT | Judge評価 (Phase45) |
-| /v1/admin/knowledge-gaps/* | JWT | Gap検出 (Phase46) |
-| /v1/admin/knowledge/books/* | JWT | PDF書籍管理 (Phase47) |
-| /v1/admin/ai-assist/* | JWT (super_admin) | AIアシスタント (Phase43) |
-| /v1/admin/variants/* | JWT | A/Bテスト |
-| /v1/admin/reports/* | JWT | 週次レポート |
-| POST /api/avatar/room-token | x-api-key | LiveKit JWT発行 + Agent Dispatch |
+- Key endpoints / env vars: `docs/API_REFERENCE.md`
 
 ## Security Middleware Order (src/index.ts)
 1. requestIdMiddleware (global)
@@ -70,225 +50,49 @@ This project uses OpenWolf for context management. Read and follow .wolf/OPENWOL
 7. tenantContextLoader (per-route stack)
 8. securityPolicyEnforcer (per-route stack)
 
-## Environment Variables
-```bash
-# Core
-PORT, LOG_LEVEL, ES_URL, DATABASE_URL
-ALLOWED_ORIGINS, DEFAULT_TENANT_ID
-
-# Auth
-AGENT_API_KEY, API_KEY_TENANT_ID, BASIC_AUTH_TENANT_ID
-SUPABASE_URL, SUPABASE_JWT_SECRET, SUPABASE_SERVICE_ROLE_KEY
-
-# LLM
-GROQ_API_KEY, GROQ_CHAT_MODEL, GROQ_MODEL_8B, GROQ_MODEL_70B
-LLM_API_KEY, LLM_BASE_URL, LLM_CHAT_MODEL, LLM_MODEL_20B, LLM_MODEL_120B
-OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL
-GEMINI_API_KEY  # Phase45 Judge専用
-
-# Avatar (Phase40-41)
-LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
-FISH_AUDIO_API_KEY, FISH_AUDIO_REFERENCE_ID
-LEMONSLICE_API_KEY, LEMONSLICE_AGENT_ID
-
-# Storage
-SUPABASE_STORAGE_URL, SUPABASE_BUCKET_BOOK_PDFS
-
-# Billing (Phase32)
-STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-
-# Cross-encoder
-CE_MODEL_PATH, CE_ENGINE
-
-# Phase22 Flow Control
-PHASE22_MAX_TURNS, PHASE22_MAX_CLARIFY_REPEATS
-PHASE22_MAX_CONFIRM_REPEATS, PHASE22_LOOP_WINDOW_TURNS
-
-# Phase45 Judge
-JUDGE_AUTO_EVALUATE, JUDGE_SCORE_THRESHOLD
-
-# Monitoring
-SLACK_WEBHOOK_URL
-```
-
-## Deployment (Phase28)
-- VPS: Hetzner 65.108.159.161
-- API: PM2 → `node dist/index.js` (port 3100)
-- Admin UI: PM2 → `serve -s admin-ui/dist` (port 5173)
-- Admin UI API base: `VITE_API_BASE` 環境変数 (default: localhost:3100)
-- Deploy: `bash SCRIPTS/deploy-vps.sh [user@host]`
-- Checklist: `docs/DEPLOY_CHECKLIST.md`
-- Public URLs (Phase49):
-  - API: https://api.r2c.biz (Nginx → PM2 port 3100)
-  - Admin UI: https://admin.r2c.biz (Nginx → serve port 5173)
-  - SSL: Let's Encrypt (certbot --nginx, auto-renew)
-- PM2 processes (ecosystem.config.cjs):
-  1. `rajiuce-api` — `dist/src/index.js` (port 3100)
-  2. `rajiuce-avatar` — `avatar-agent/agent.py` (LiveKit Agent)
-  3. `rajiuce-admin` — `serve admin-ui/dist -l 5173`
-  4. `slack-listener` — `slack_listener.py`
-
-## Cost Constraint
-- Monthly: $27-48
-- Grafana + Prometheus: self-hosted $0-5
-- Slack Webhook: free
-- Groq API: usage-based (120B ratio ≤10%)
-
 ## VPSデプロイルール（厳守）
 
-⚠️ 以下のルールはClaude Code CLIが必ず従うこと。ユーザーへの提案時も同様。
-
-### デプロイコマンド
-
-```bash
-bash SCRIPTS/deploy-vps.sh
-```
-
-これが唯一のデプロイ手順。以下の個別コマンドは禁止:
-- ❌ `ssh root@... "git pull && pnpm build && pm2 restart"`
-- ❌ `ssh root@... "cd admin-ui && pnpm build"`
-- ❌ VPSで直接 `git pull` を実行
-
-deploy-vps.sh は rsync + API build + Admin UI build（キャッシュクリア付き）+ バンドル検証 + PM2 restart を一括で行う。
-
-### 重要な注意事項
+⚠️ 唯一の手順: `bash SCRIPTS/deploy-vps.sh`
 - ecosystem.config.cjs の script は `dist/src/index.js`（`dist/index.js` ではない）
-- PM2は `.env` を自動で読まない。dotenv/config が src/index.ts の先頭でimportされている
-- Admin UIは `serve -s admin-ui/dist -l 5173` で静的ファイル配信
+- PM2は `.env` を自動で読まない (dotenv/config が src/index.ts 先頭でimport済み)
+- 禁止: ssh直接コマンド / VPSで git pull / 個別 pnpm build
+詳細: `docs/DEPLOY_CHECKLIST.md`
 
 ## Security Scan
-- デプロイ前: bash SCRIPTS/security-scan.sh を実行推奨
+- デプロイ前: `bash SCRIPTS/security-scan.sh` 実行推奨
 - CI: .github/workflows/security-scan.yml が main push / PR / 週次で自動実行
-- ポリシー: docs/SECURITY_SCAN_POLICY.md 参照
-- High/Critical 検出時はデプロイをブロック
+- High/Critical 検出時はデプロイをブロック。ポリシー: `docs/SECURITY_SCAN_POLICY.md`
 
 ## Test & Deploy Gate（必須フロー）
 
-⚠️ 全Phaseに適用。Gate通過なしのデプロイは禁止。
+⚠️ 全Phaseに適用。Gate通過なしのデプロイは禁止。詳細: `docs/TEST_DEPLOY_GATE.md`
 
-### Gate順序（実装完了後に必ずこの順で実行）
+Gate順序:
+- Gate 1: `pnpm verify` (typecheck + lint + test 全パス)
+- Gate 2: `bash SCRIPTS/security-scan.sh` (High/Critical = 0)
+- Gate 2.5: `/codex:review --base main --background` (**git push前**に実行)
+- Gate 3: `pnpm build && cd admin-ui && pnpm build`
+- git commit + push (Gate 1-3通過後のみ)
 
-```
-実装完了
-  → Gate 1: pnpm verify（typecheck + lint + test 全パス）
-  → Gate 2: bash SCRIPTS/security-scan.sh（High/Critical = 0）
-  → Gate 2.5: /codex:review --base main --background
-              → /codex:result
-              ★ 必ずgit push前に実行（push後は差分なしで無意味）
-              ※ セキュリティ変更時のみ: /codex:adversarial-review --background
-              ※ Critical/High指摘 → 修正 → Gate 1から再実行
-  → Gate 3: pnpm build && cd admin-ui && pnpm build
-  → git commit + push（Gate 1-3通過後のみ）
-────────────────────────────────
-以降は人間が実行:
-  → Gate 4b: claude --chrome でブラウザテスト（★ UI変更Phase: 必須）
-  → デプロイ: bash SCRIPTS/deploy-vps.sh
-  → DBマイグレーション: VPSでSQL手動実行（あれば）
-  → Gate 5: curl https://api.r2c.biz/health + Admin UIログイン確認
-  → Gate 6: UI調査（★ UI変更Phase: 必須・Claude in Chrome）
-  → Asanaタスク完了 + ドキュメント更新
-```
-
-### Codex Review 運用ルール
-- review gate: **常時OFF**（自動ループはコスト消費が大きすぎる）
-- 通常レビュー: PR前に1回だけ `/codex:review --base main --background`（**git push前**）
-- セキュリティ変更時のみ: `/codex:adversarial-review --background`
-- 結果確認: `/codex:status` → `/codex:result`
-- Critical/High → 修正必須。False positive → スキップ理由をコミットメッセージに記載
-- スキップOK: typo修正、ドキュメントのみ、CSSのみ、テストコードのみ
-
-### テスト作成ルール
-- 新規API: 正常系1 + 認証エラー1 + バリデーション1（最低限）
-- セキュリティ関連: 全パスカバー
-- 外部API（Groq, Gemini, Supabase Storage, Fish Audio等）: 常にモック
-- Gate 1-3が通らない限りgit pushしない
-- ★ Gate 2.5（Codex review）はgit push前に実行（push後は差分なしで無意味）
-
-### Chrome ブラウザテスト（UI変更Phase: 必須）
-- `claude --chrome` で実行（Gate 4b）
-- 共通項目: ログイン / ダッシュボード表示 / 🔔通知ベル / モバイル390px / コンソールエラーなし
-- `~/.claude/settings.local.json` に `"mcp__claude-in-chrome__computer"` が必要
-- ★ UI変更がないPhaseではスキップ可。UI変更があれば Gate 6（UI調査）も必須
-
-詳細: docs/TEST_DEPLOY_GATE.md
+Codex review gate: 常時OFF。スキップOK: typo修正・ドキュメントのみ・CSSのみ・テストコードのみ
 
 ## Git Branch Rule（厳守）
 
 ⚠️ **mainへの直接コミット禁止。test-onlyでも例外なし。**
 
-### 必須フロー
 ```
 git checkout -b feature/<asana-id>-<short-description>
-# 実装 + Gate 1〜3
-git commit
-# Gate 2.5: /codex:review --base main --background（コミット後、push前）
-git push -u origin feature/...
-gh pr create
 ```
 
-### 違反時の復旧
-```bash
-git reset --soft HEAD~1          # コミット取り消し（変更は残す）
-git checkout -b feature/...      # feature branch作成
-git commit                        # 同内容で再コミット
-```
-
-### 理由
-- mainへの直接pushはCodex review（Gate 2.5）が機能しない（base=mainでdiff=0になる）
-- PRマージ記録がなくなりレビュー・承認フローが消える
-
-## PRマージ自動化 (auto-merge) ルール
-
-### 背景
-2026-04-19 に PR #110-#117 の 8 本を一括マージする際、手動操作の長さと conflict 解消で一日が大きく削られた。
-同様の手動作業を避けるため、以下の運用ルールを遵守する。
-
-### 運用ルール
-
-**PR 作成時は必ず auto-merge を有効化する:**
-
-```bash
-gh pr create --title "..." --body "..." && \
-gh pr merge $(gh pr view --json number -q .number) --auto --squash --delete-branch
-```
-
-または既存 PR 番号を使って:
-```bash
-gh pr merge <PR番号> --auto --squash --delete-branch
-```
-
-### auto-merge の動作条件
-
-以下が全て揃った時点で自動マージされる:
-- CI (pnpm verify / build) が green
-- 必要なレビュー承認済み（プロジェクト設定による）
-- conflict なし
-
-### conflict が発生した場合
-
-- auto-merge は停止、PR 画面で「Merge conflict」警告が表示される
-- hkobayashi または CLI が手動で conflict を解消
-- 解消後に再度 auto-merge が有効化される
-
-### マージ方式の統一
-
-- **squash and merge** を標準とする（linear history 維持）
-- rebase merge / merge commit は使わない（履歴複雑化回避）
-
-### 関連タスク
-
-- Phase1（本ルール策定）: Asana 1214121039752589
-- Phase2（SCRIPTS/merge-ready-prs.sh 作成）: Asana 1214121039752589（別タスク化済み）
-- Phase3（Claude Code CLI /merge エージェント）: 将来タスク、未起票
+違反復旧: `git reset --soft HEAD~1` → feature branch作成 → 再コミット
+PR: `gh pr merge <PR番号> --auto --squash --delete-branch` 詳細: `docs/PR_MERGE_RULES.md`
 
 ## Settings Hygiene
-- `.claude/settings.local.json` は `.gitignore` に登録済み（プロジェクトローカルルール）
+- `.claude/settings.local.json` は `.gitignore` 登録済み（プロジェクトローカルルール）
 - allowedTools にAPIトークン・パスワード等の認証情報を含めない
 - 禁止デプロイコマンドを allowedTools に追加しない（deploy_guard.py フックが検知）
 
 ## Custom Agents (.claude/agents/)
-
-プロジェクト固有のサブエージェント。`@エージェント名` で呼び出す。
 
 | Agent | 用途 | 呼び出し |
 |---|---|---|
@@ -297,135 +101,19 @@ gh pr merge <PR番号> --auto --squash --delete-branch
 | deploy-checker | VPSデプロイ前後チェックリスト | @deploy-checker |
 | test-writer | テスト作成（モック方針・配置ルール準拠） | @test-writer |
 
-### 環境変数（Claude Code最新機能用）
-- `CLAUDE_CODE_NO_FLICKER=1` — Focus View有効（Ctrl+Oで切替）
-- `MCP_CONNECTION_NONBLOCKING=true` — FT Pipeline --print高速化
+環境変数: `CLAUDE_CODE_NO_FLICKER=1` (Focus View), `MCP_CONNECTION_NONBLOCKING=true` (MCP高速化)
 
 ## MCP Integrations
-
-### Playwright MCP (E2E Browser Testing)
-- Setup: `claude mcp add --scope project playwright npx @playwright/mcp@latest`
-- Usage: 「Playwright MCPでadmin.r2c.bizにアクセスして〇〇をテストして」
-- Gate 4b/Gate 6 のブラウザテストをCLIから自動実行可能
-- 初回は明示的に「Playwright MCP」と言うこと（Bash実行と区別するため）
-- 認証: ログイン画面が表示されたら人間が手動ログイン→Cookie維持
-
-### Environment Variables (Performance)
-```bash
-# ~/.zshrc に追加済み
-export ENABLE_PROMPT_CACHING_1H=1    # 1時間プロンプトキャッシュ
-export CLAUDE_CODE_NO_FLICKER=1       # フリッカー防止
-export MCP_CONNECTION_NONBLOCKING=true # MCP非同期接続
-```
-
-### Session Features
-- `/recap` — セッション復帰時のコンテキスト自動要約
-- `/review` — コードレビュー（Skill tool経由で自動発見可能）
-- `/security-review` — セキュリティレビュー
+- Playwright MCP (Gate 4b/6): `claude mcp add --scope project playwright npx @playwright/mcp@latest`
+- Session: `/recap` (コンテキスト要約) / `/review` (コードレビュー) / `/security-review`
 
 ## OpenWolf（トークン最適化ミドルウェア）
-- `.wolf/` にプロジェクトインデックス・学習メモリ・トークンレジャーを保持
-- 6つのフックスクリプトがClaude Code操作時に自動実行
-- ファイル読み取り前に `anatomy.md` で内容を要約 → 不要な全文読み取りを削減
-- `cerebrum.md` に過去の修正・好みを蓄積 → セッション間で学習
-- コスト $0（ローカル処理のみ、外部API不使用）
+- `.wolf/` にインデックス・学習メモリ・トークンレジャーを保持（`.gitignore` 登録済み）
+- anatomy.md で不要な全文読み取りを削減、cerebrum.md でセッション間学習
 - `openwolf status` で健全性確認、`openwolf scan` で構造マップ更新
-- `.wolf/` は `.gitignore` 登録済み（ローカルのみ）
 
 ## 開発プレイブック参照
-
-開発の進め方の全体像は `docs/R2C_DEVELOPMENT_PLAYBOOK.md` を参照。
-
-### 役割分担
-- Claude.ai: 戦略/Asana MCP/メモリー管理/CLI用1-2行要件提示
-- CLI: 自律実装 (discovery→plan→implement→gate→Codex→push)
-- 人間: Gate 2.5手動/DBマイグレーション手動/デプロイ判断
-
-### CLIプロンプト生成ルール
-- 冒頭に `## 推奨モデル: [Opus 4.7 / Sonnet 4.6 / Plan Mode]` 必須（省略禁止）
-- SSHコマンドはCLIプロンプトに含めない（deploy_guardブロック）
-- DBマイグレーションは「hkobayashiが手動実行」ステップとして記載し、CLIには確認クエリのみ
-- 詳細な章立て・ステップバイステップ指示を書かない（CLIが自走する）
-- `!`コマンド列挙・push承認ゲート設置・Gate結果仲介指示は全て禁止
-
-### CLIプロンプトテンプレート
-
-**標準（新規タスク）:**
-```
-## 推奨モデル: [Opus 4.7 / Sonnet 4.6]
-
-## タスク
-Asana GID: XXXX — [タスク名]
-[1-3行でゴール・完了条件]
-
-## 制約
-- [アーキテクチャ制約]
-
-## Gate
-@gate-runner で Gate 1-3実行。Gate 2.5必要。
-```
-
-**バグ修正:**
-```
-## 推奨モデル: Sonnet 4.6
-
-## バグ
-[症状1-2行]
-
-## 初動
-Playwright MCPで現象確認してから修正。推測で修正しない。
-
-## Gate
-@gate-runner で Gate 1-3実行。Gate 2.5必要。
-```
-
-**並列開発（Agent Teams）:**
-```
-## 推奨モデル: Opus 4.7
-
-## 概要
-[Phase名 — 目的]
-
-## 共有インターフェース
-[DB schema / API spec / TS types 埋め込み]
-
-## ペイン1-N
-[各1-2行]
-
-## Gate
-各ペイン完了後 @gate-runner。Gate 2.5必要。
-```
-
-### セッション開始プロトコル
-1. Asana:get_project (GID: 1213607637045514) で未完了タスク確認
-2. Asana:get_task で個別タスクの completed 等を検証
-3. メモリーと実態の乖離検出→メモリー更新提案
-4. 未完了タスクから優先順位付きCLI要件を提示（推奨モデル明記）
-
-### 問題解決原則
-- 根本原因特定+再発防止（症状修正で終わらない）
-- バグ報告→テキスト推測禁止→Playwright MCP/pm2 logs/DB SELECTの3点確認
-- CLI報告に「変更しました/no diff/リスク最小」→スコープ再評価要求
-
-## Phase 1 24h 自律ループ実装状況 (2026-05-18 時点)
-
-| 項目 | 状態 | 関連 PR | 関連ドキュメント |
-|---|---|---|---|
-| Claude.ai 指示文 v1 | ✅ | #155 | docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md |
-| Phase 0 評価 | ✅ | #156 | docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md |
-| 移行手順書 + verify | ✅ | #157 | docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md |
-| 並列ベース整備 | ✅ | #158 | docs/PHASE1_PARALLEL_WORK_RULES.md |
-| SECURITY_SCAN_ALLOWLIST | ✅ | #159 | docs/SECURITY_SCAN_ALLOWLIST.md |
-| .wolf/hooks worktree 検知 | ✅ | #160 | .wolf/hooks/HOOK_BEHAVIOR.md |
-| lane-templates × 5 | ✅ | #162 | .claude/lane-templates/ |
-| retry + Pushover spec | ✅ | #161 | docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md |
-| RUNBOOK_R2C 作成 | ✅ | #164 | docs/24H_AUTOMATION_RUNBOOK_R2C.md |
-| SCRIPTS/r2c-*.sh 16本 | ✅ | #165-168 | SCRIPTS/r2c-*.sh |
-| Secrets + Pushover セットアップ | ✅ | #169 | docs/24H_LOOP_SECRETS_TEMPLATE.md |
-| Managed Agents 申請ドラフト | ✅ | #171 | docs/MANAGED_AGENTS_APPLICATION.md |
-| OpenClaw 使用禁止ポリシー | ✅ | #172 | docs/SECURITY_SCAN_ALLOWLIST.md §使用禁止ツール |
-| Memory Tool 評価レポート | ✅ | #170 | docs/MEMORY_TOOL_EVALUATION.md |
-| アカウント分離 (Tier S 実行) | ⏳ 2026-05-19 06:05 | - | docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md |
+詳細 (役割分担・CLIプロンプトテンプレート・セッション開始プロトコル): `docs/R2C_DEVELOPMENT_PLAYBOOK.md`
 
 ## 24h 自走中の禁止操作（Phase70-A — 必読）
 
@@ -442,3 +130,14 @@ ON/OFF 操作:
 - ON: `bash SCRIPTS/24h-mode-on.sh` (dry-run: `--dry-run`)
 - OFF: `bash SCRIPTS/24h-mode-off.sh`
 - 検知 hook: `.claude/hooks/deploy_guard.py` が `R2C_24H_MODE` を読み追加ブロック実施
+
+## 学習セクション (Auto-updated by Claude Code)
+
+<!-- このセクションは Claude Code の auto-memory 機能により管理される -->
+<!-- 手動編集不要。memory path: ~/.claude/projects/-Users-hkobayashi-Documents-GitHub-commerce-faq-tasks/memory/ -->
+
+- **Memory path**: `~/.claude/projects/-Users-hkobayashi-Documents-GitHub-commerce-faq-tasks/memory/`
+- **OpenWolf 役割分離 (24h自走中)**:
+  - `.wolf/cerebrum.md` / `.wolf/memory.md` = Read-Only (24h自走中)
+  - `MEMORY.md` (auto-memory) = 唯一の書き込み可能領域
+- **設定**: `.claude/settings.json` の `autoMemoryEnabled: true` で有効化済み

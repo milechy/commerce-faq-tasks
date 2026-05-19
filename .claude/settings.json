@@ -1,4 +1,15 @@
 {
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "deny": [
+      "Edit(.claude/hooks/deploy_guard.py)",
+      "Edit(SCRIPTS/24h-mode-on.sh)",
+      "Edit(SCRIPTS/24h-mode-off.sh)",
+      "Edit(.claude/hooks/*)"
+    ]
+  },
+  "autoMemoryEnabled": true,
+  "cleanupPeriodDays": 99999,
   "hooks": {
     "SessionStart": [
       {
