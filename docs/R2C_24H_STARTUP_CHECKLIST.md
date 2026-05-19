@@ -1,12 +1,16 @@
-> **⚠️ DRAFT v1.1 (2026-05-19) - 要 hkobayashi レビュー、70-K で正式整理予定**
-
 # R2C 24h 自走 起動チェックリスト v1.1
 
-**版数:** 1.1
-**作成日:** 2026-05-19 v1.0、改訂 2026-05-19 v1.1
+**版数:** 1.1 (正式版 — Phase70-K 2026-05-20)
+**作成日:** 2026-05-19 v1.0、改訂 2026-05-19 v1.1、正式化 2026-05-20 Phase70-K
 **位置づけ:** Phase70-H 初回 12h パイロット起動の前提条件
 **出典:** UATa 24h 自走運用テンプレ v1.0 (2026-05-19 09:00 JST) + UATa 1日実体験生記録 v1.0 (2026-05-19 18:00 JST) を R2C 固有の制約に合わせてカスタマイズ
-**関連:** docs/PHASE70_AI_CROSSCHECK.md §5.5 (24h 起動の足場整備という発見)
+**関連ドキュメント:**
+- `docs/24H_AUTONOMOUS_PLAYBOOK.md` — 論理ブロック安全装置 + 起動/停止スクリプト操作手順
+- `docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md` — UATa vs R2C ギャップ分析
+- `docs/24H_AUTOMATION_RUNBOOK_R2C.md` — R2C 24h 自走 初期構築手順書
+- `docs/24H_LOOP_LEARNING_INTEGRATION.md` — 学習ループ統合仕様
+- `docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md` — Lane retry 戦略 + Pushover 通知仕様
+- `docs/PHASE70_AI_CROSSCHECK.md` §5.5 (24h 起動の足場整備という発見)
 
 ---
 
@@ -227,8 +231,8 @@ R2C 採用案 (Gemini 案、Phase70-B で `.wolf/OPENWOLF.md` に反映済):
 ### 3.4 知識ベース (Claude.ai プロジェクト) の整理 (R2C 固有)
 
 R2C のプロジェクト知識ベース現状:
-- R2C_DEVELOPMENT_PLAYBOOK.md (388 行) ⚠️ §11/§12 が 1 ヶ月古い
-- SKILL.md (251 行) ⚠️ PLAYBOOK と内容重複
+- R2C_DEVELOPMENT_PLAYBOOK.md (654 行) ✅ §11/§12 を Asana 参照化済み (70-K)
+- SKILL.md (302 行) ✅ PLAYBOOK との役割境界明文化済み (70-K)
 - TEST_DEPLOY_GATE.md (520 行) ⚠️ Claude in Chrome 前提、Playwright MCP に未追従
 - SECURITY_SCAN_POLICY.md (75 行) ✅
 - PHASE38_COMPLETION.md (52 行) ⚠️ 単発 Phase、知識ベースに残す必要性低
@@ -509,6 +513,7 @@ R2C 適用済の差分:
 |---|---|---|---|
 | 1.0 | 2026-05-19 13:00 JST | UATa 24h 自走運用テンプレ v1.0 を R2C 用にカスタマイズ。R2C 固有 (staging 無し、CF Pages auto-deploy、論理ブロック 100% 依存) を反映。起動前チェックリストを 12 項目に拡張 (UATa §9 の 8 項目 + R2C 固有 4 項目) | claude.ai |
 | **1.1** | **2026-05-19 22:00 JST** | **UATa 1日実体験生記録 v1.0 (2026-05-19 18:00 JST) を反映**: ①§7.2 タスクキュー 30-50 本先積み追加 (UATa §5 #9)、②§9 起動前チェックリスト 12→16 項目に拡張 (VPS メモリ 4 項目追加、UATa §4.3 教訓)、③§5.1 UATa 14 件→21 件に拡張、④§5.3 「3 回ルール」明文化 (UATa PR #246)、⑤§10 R2C-G/H/I/J 4 項目追加 (deploy 失敗時 docker 生存確認 / 焼き込み grep / 3 回ルール / VPS メモリ余裕)。Phase70-A/B/D/J/L 完了状態も反映 (PR #176/#178/#179/#180/#181) | claude.ai |
+| **1.1 正式** | **2026-05-20 Phase70-K** | DRAFT マーカー削除・正式版昇格。関連ドキュメント一覧追加 (24H_* 5件相互参照)。§3.4 の PLAYBOOK/SKILL 行数を実機確認値に更新 (PLAYBOOK 654 行 / SKILL 302 行)。CLAUDE.md に「3 回ルール」セクション追加 (PR #182 → Phase70-K PR) | claude code cli |
 
 ---
 
