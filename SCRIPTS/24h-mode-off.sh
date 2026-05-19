@@ -70,6 +70,8 @@ else
             else
                 log "  WARN: failed to remove (may already be off)"
             fi
+            rm -f "$BACKUP_FILE"
+            log "  ✓ backup file removed"
         else
             # 元の protection 設定を PUT 形式に変換して復元
             RESTORE_PAYLOAD=$(jq '{
@@ -83,13 +85,19 @@ else
             }' "$BACKUP_FILE")
             if printf '%s' "$RESTORE_PAYLOAD" | gh api -X PUT "repos/$GH_REPO/branches/main/protection" --input - >/dev/null 2>&1; then
                 log "  ✓ branch protection restored from backup"
+                rm -f "$BACKUP_FILE"
+                log "  ✓ backup file removed"
             else
-                log "  WARN: restore failed — falling back to DELETE"
-                gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1 || true
+                echo "ERROR: Failed to restore branch protection from backup." >&2
+                echo "  Current protection is NOT modified — main branch remains protected." >&2
+                echo "  Backup preserved at: $BACKUP_FILE" >&2
+                echo "  To restore manually:" >&2
+                echo "    1. Inspect backup: cat $BACKUP_FILE" >&2
+                echo "    2. Re-run after fixing the issue: bash SCRIPTS/24h-mode-off.sh" >&2
+                echo "  Or restore via GitHub UI: https://github.com/$GH_REPO/settings/branches" >&2
+                exit 1
             fi
         fi
-        rm -f "$BACKUP_FILE"
-        log "  ✓ backup file removed"
     else
         # バックアップなし (on.sh が古い版の場合など) → 従来通り削除
         if gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1; then
