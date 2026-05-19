@@ -430,16 +430,45 @@ grep -rn "metadata.*source" src/api/
 
 ## 9. 並列開発パターン
 
-### Agent Teams（tmux並列）
+> **重要 (2026-05-20 追加):** Claude Code の並列実行には 2 系統あり、混同禁止。
 
-3つ以上の独立ストリームを持つ新フェーズで使用。
+### 9-A. Agent View（独立 Lane — R2C の基本方針）
+
+`claude agents` で起動（または既存セッションで左矢印キー → [New]）。
+
+**特徴:**
+- UI dashboard でタスク一覧管理
+- バックグラウンド session は書き込み前に `.claude/worktrees/<id>/` に自動分離（手動 `git worktree add` 不要）
+- supervisor process が管理 → 端末を閉じても継続
+- 全プラン利用可（Opus / Sonnet / Haiku）
+- `dispatch --model sonnet` は疑似コマンド。UI 経由で session 起動するのが正しい操作
+
+**R2C 用途:** Phase70 の独立 Lane (K/E/C/H 等) — 互いに依存しないタスクを並列実行
 
 **前提:**
-- 全ペインの共有インターフェース（DB schema, API spec, TypeScript types）を事前設計
-- 各ペインのプロンプトにインターフェースを直接埋め込む
-- ペイン間の通信依存を排除
+- 全 Lane の共有インターフェース（DB schema, API spec, TypeScript types）を事前設計
+- 各 Lane のプロンプトにインターフェースを直接埋め込む
+- Lane 間の通信依存を排除
 
-**使わない場面:**
+### 9-B. Agent Teams（cross-domain 連携 — experimental）
+
+環境変数 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` が必須。Claude Code v2.1.32+。
+
+**特徴:**
+- 自然言語「create an agent team」で lead + teammate 自動生成
+- inter-agent messaging + shared task list
+- Opus 4.6+ 強制（全 agent が同モデル）
+- **3-4 倍トークン消費** → コスト注意
+- 実験的機能のため仕様変更リスクあり
+
+**R2C 方針:** cross-domain 連携が必要な場合のみ使用。独立タスクは Agent View を優先。
+
+### 9-C. Mac での起動メモ
+
+- `ulimit -n 2147483646 + launchctl 設定`は実体験ベース、公式 doc には明記なし
+- Mac ターミナル直起動でも動作実績あり（VSCode 経由でなくても可）
+
+**使わない場面（共通）:**
 - ファイル依存がある順次タスク
 - 2タスク以下
 - バグ修正
@@ -456,28 +485,30 @@ grep -rn "metadata.*source" src/api/
 
 ---
 
-## 11. 現在の未完了タスク（2026-04-24時点）
+## 11. 現在の未完了タスク（Asana 参照）
 
-1. PR#134 follow-up P2 E2E CHAT_TEST_URL（due 5/2）
-2. PR#134 follow-up P3 非アバターE2E（due 5/9）
-3. Phase65-Attribution GA4+PostHog+成果報酬MVP親タスク（due 5/15）
-4. TEST_DEPLOY_GATE.md Playwright整合（due 5/16）
-5. ts-jest30アップグレード（due 5/31）
+> ⚠️ 静的リストは陳腐化するため廃止。常に Asana を正とする。
 
-**完了済み:** Phase68（PR#136 Knowledge Attribution + PR#138 ORDER BY CTE alias修正）
+**確認手順:** Claude.ai セッション開始時の §2 プロトコル（Step 1-4）を実行すること。
+または Asana `RAJIUCE Development` (GID: 1213607637045514) を直接確認。
+
+**現在の主要 Phase（2026-05-20 時点）:**
+- Phase70: 24h 自走基盤整備（複数サブタスク進行中 — Asana 参照）
+- Phase69-2: 残件 B/D/E（Asana 参照）
 
 ---
 
-## 12. 今後の開発ロードマップ
+## 12. 今後の開発ロードマップ（Asana 参照）
 
-| タスク | due | 備考 |
+> ⚠️ 中長期計画は Asana タスクを正とする。以下は参考記録（2026-04-24 時点）。
+
+| タスク | 状況 | 備考 |
 |---|---|---|
-| GA4 MCP統合 | 6/30 | Asana未起票 |
-| LemonSlice Video Generation API（idle hover animation） | 5/30 | Asana未起票 |
-| Phase67候補: 自動パートナー通知（CV alert, KPI anomaly, Cloudflare Email） | 未定 | |
-| R2C仮想テナント: テストチャットセレクタに「R2C（デフォルト）」追加 | 未定 | |
-| 書籍管理→ナレッジ管理ページ統合 | 未定 | |
-| パートナー獲得: 初の実テナントオンボーディング（PARTNER_ROLLOUT_PLAYBOOK.md） | 未定 | |
+| Phase70: 24h 自走基盤 | **進行中** | Phase70-A〜L 複数サブタスク |
+| GA4 MCP統合 | 未起票 | Asana 参照 |
+| LemonSlice Video Generation API | 未起票 | Asana 参照 |
+| R2C仮想テナント | 未起票 | Asana 参照 |
+| パートナー獲得: 実テナントオンボーディング | 未定 | PARTNER_ROLLOUT_PLAYBOOK.md |
 
 ---
 

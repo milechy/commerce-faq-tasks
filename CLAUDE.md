@@ -69,8 +69,9 @@ This project uses OpenWolf for context management. Read and follow .wolf/OPENWOL
 
 Gate順序:
 - Gate 1: `pnpm verify` (typecheck + lint + test 全パス)
+- Gate 1.5: `bash SCRIPTS/dead-code-check.sh` (孤立コード確認)
 - Gate 2: `bash SCRIPTS/security-scan.sh` (High/Critical = 0)
-- Gate 2.5: `/codex:review --base main --background` (**git push前**に実行)
+- Gate 2.5: `/codex:review --base main --background` (**git push前**に実行、`--base main` 省略禁止)
 - Gate 3: `pnpm build && cd admin-ui && pnpm build`
 - git commit + push (Gate 1-3通過後のみ)
 
@@ -130,6 +131,18 @@ ON/OFF 操作:
 - ON: `bash SCRIPTS/24h-mode-on.sh` (dry-run: `--dry-run`)
 - OFF: `bash SCRIPTS/24h-mode-off.sh`
 - 検知 hook: `.claude/hooks/deploy_guard.py` が `R2C_24H_MODE` を読み追加ブロック実施
+
+## 3 回ルール（UATa PR #246 教訓 — Phase70-K 追加）
+
+**同系統のミスを 3 回繰り返したら、その判断は hkobayashi が引き取る。**
+
+適用されるミスタイプ（例）:
+1. **推測ベース書き換え** — 実機確認せずに変更 → 確認後に提案
+2. **メモリ盲信** — memory 参照後に実機状態を未確認 → 対応ファイル・コマンドで確認
+3. **並列化忘れ** — セッション開始時に並列可能性を未検討 → 初手でマトリクス化
+
+資格喪失後の再開条件: ガード/監視の実装完了後。
+詳細: `docs/R2C_24H_STARTUP_CHECKLIST.md §5.3`
 
 ## 学習セクション (Auto-updated by Claude Code)
 

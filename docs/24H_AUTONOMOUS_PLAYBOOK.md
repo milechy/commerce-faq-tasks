@@ -4,6 +4,19 @@ R2C は dev/staging を持たず本番 VPS (65.108.159.161) のみ。
 UATa テンプレ v1.0 §2.1「本番への接続を物理的に閉じる」が適用不能なので、
 論理層の多層防御で代替する。
 
+## 関連ドキュメント (24H_* ファイル群)
+
+| ファイル | 役割 |
+|---|---|
+| **このファイル** `24H_AUTONOMOUS_PLAYBOOK.md` | 論理ブロック安全装置・起動/停止スクリプト・Cloudflare Pages 手動停止手順 |
+| `R2C_24H_STARTUP_CHECKLIST.md` | **24h 自走起動前チェックリスト v1.1** — 16 項目全 ✓ が起動条件。UATa 26 件失敗パターン・3 回ルール・タスクキュー管理 |
+| `24H_AUTOMATION_R2C_GAP_ANALYSIS.md` | UATa vs R2C ギャップ分析・アカウント分離手順 |
+| `24H_AUTOMATION_RUNBOOK_R2C.md` | R2C 24h 自走 初期構築手順書 |
+| `24H_LOOP_LEARNING_INTEGRATION.md` | 学習ループ統合仕様 |
+| `24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md` | Lane retry 戦略 (1回目5分/2回目30分/3回目停止) + Pushover priority |
+
+**Phase70-H 起動前は必ず `R2C_24H_STARTUP_CHECKLIST.md` §9 の 16 項目を全て確認すること。**
+
 ## 関連 Asana
 - Phase70 親: 1214919472827777
 - Phase70-A 本タスク: 1214919660483265

@@ -7,6 +7,29 @@ description: R2C のデプロイフロー（bash SCRIPTS/deploy-vps.sh のみ使
 
 R2Cの開発フローは Claude.ai / CLI / hkobayashi の役割分担が厳密。このルールを破ると deploy_guard でブロックされたり、デプロイ失敗・再発防止漏れにつながる。
 
+## このスキルと PLAYBOOK の役割境界（Phase70-K 追加）
+
+| ドキュメント | 対象読者 | 内容 |
+|---|---|---|
+| **この SKILL.md** | Claude.ai (dispatch 起点) | デプロイ・CLIプロンプト生成の即時ルールと禁止事項。Claude.ai がトリガー時に参照 |
+| **R2C_DEVELOPMENT_PLAYBOOK.md** | Claude.ai (セッション全般) | 完全な開発ワークフロー、Asana運用、アーキテクチャ制約、CLIプロンプトテンプレート。セッション開始時の包括的リファレンス |
+
+**要約:** SKILL.md = Trigger 時の即時チェックリスト。PLAYBOOK = セッション全体のリファレンス。重複がある場合は PLAYBOOK を正とし、SKILL.md は要点のポインタとして機能する。
+
+## Phase70 体制（2026-05-20 追加）
+
+R2C では Phase70 以降、24h 自走ループを導入。並列実行には 2 系統あり混同禁止:
+
+| 種別 | 起動 | 用途 | コスト |
+|---|---|---|---|
+| **Agent View** | `claude agents` / 左矢印 → [New] | 独立 Lane (K/E/C 等)、背景実行 | 通常 |
+| **Agent Teams** | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` 必須 | cross-domain 連携 | 3-4 倍 |
+
+- R2C 方針: 独立 Lane = Agent View 基本。cross-domain 連携必要時のみ Agent Teams
+- `dispatch --model X` は疑似コマンド（UI 経由で session 起動が正しい操作）
+- 24h 自走中の禁止操作・安全境界: `docs/24H_AUTONOMOUS_PLAYBOOK.md`
+- Gate 2.5 = `/codex:review --base main --background`（R2C は旧 `/codex:review` 継続、`code-review` plugin は他プロジェクトのみ）
+
 ## 役割分担（再掲）
 
 | 担当 | やること |
