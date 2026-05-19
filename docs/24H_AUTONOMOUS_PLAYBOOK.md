@@ -137,6 +137,49 @@ echo '{"tool_name":"Bash","tool_input":{"command":"bash SCRIPTS/deploy-vps.sh"}}
 2. `gh api -X DELETE repos/milechy/commerce-faq-tasks/branches/main/protection`
 3. `bash SCRIPTS/r2c-slack-notify.sh --text "⚠️ 24h-mode 緊急解除 by hkobayashi"`
 
+## 7. CLI 自走通知パターン (Phase70-L)
+
+### notify-slack.sh の使い方
+
+```bash
+# 基本
+bash SCRIPTS/notify-slack.sh "<message>" --color <info|success|warning|error>
+
+# dry-run (実際には送信しない)
+bash SCRIPTS/notify-slack.sh "<message>" --color info --dry-run
+
+# チャンネル指定 (デフォルト: C0AG07HFJTB = #r2c)
+bash SCRIPTS/notify-slack.sh "<message>" --color info --channel C0AG07HFJTB
+```
+
+3段フォールバック:
+1. `SLACK_BOT_TOKEN` — `chat.postMessage` API (Slack MCP 相当)
+2. `SLACK_WEBHOOK_URL_R2C` or `SLACK_WEBHOOK_URL` — Incoming Webhook curl
+3. stderr 書き出し + 終了コード 1
+
+### 標準通知パターン (CLI 自走プロンプトに組み込む)
+
+| イベント | コマンド |
+|---|---|
+| PR 作成完了 | `bash SCRIPTS/notify-slack.sh "✅ PR #N pushed: <title>, ready for Gate 2.5" --color success` |
+| Gate 失敗 | `bash SCRIPTS/notify-slack.sh "⚠️ Gate failed at <step>: <error>" --color warning` |
+| Stop condition 発火 | `bash SCRIPTS/notify-slack.sh "🛑 Stopped: <reason>" --color error` |
+| HUMAN-REVIEW-REQUIRED | `bash SCRIPTS/r2c-slack-notify.sh --text "HUMAN-REVIEW-REQUIRED: <reason>"` |
+
+### Stop 後の通知ループ防止
+
+- `--color error` で送信成功すると `~/.claude-r2c-config/.r2c-notified-stop` が作成される。
+- 同ファイルが存在する間、`--color error` の重複投稿は **skip (exit 0)** される。
+- `bash SCRIPTS/24h-mode-off.sh` 実行時にこのフラグファイルを削除すること。
+- Stop signal が発火したら **新規 Bash tool 呼び出しを一切行わず**、当該作業を即時停止する。
+
+### Slack 通知が来ない場合
+
+`SLACK_BOT_TOKEN` と `SLACK_WEBHOOK_URL_R2C` の両方が `~/.claude-r2c-config/secrets/r2c-loop.env` に設定されているか確認:
+```bash
+bash SCRIPTS/notify-slack.sh "test" --color info --dry-run
+```
+
 ## 6. 設計判断ログ
 
 - **物理停止 NG → 論理多層防御**: dev 環境ないため。
