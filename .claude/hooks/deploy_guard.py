@@ -19,6 +19,36 @@ ALLOWED_DEPLOY_COMMANDS = [
     r'^pm2\s+restart\s+rajiuce-avatar',       # Avatar agent individual restart only
 ]
 
+# Phase70-I: 自編集禁止 — deploy_guard.py 自身および 24h-mode スクリプトへの
+# Bash 書き込み操作を常時ブロック (Edit ツールは settings.json deny で別途保護済)
+SELF_EDIT_PROTECTED_FILES = [
+    ".claude/hooks/deploy_guard.py",
+    "SCRIPTS/24h-mode-on.sh",
+    "SCRIPTS/24h-mode-off.sh",
+]
+
+
+def is_self_edit_attempt(cmd: str) -> bool:
+    """Detect Bash attempts to overwrite guard scripts or 24h-mode scripts.
+
+    Detects: redirect (>), tee, in-place sed, python open(..., 'w').
+    """
+    for target in SELF_EDIT_PROTECTED_FILES:
+        # Redirect write: cmd > target / cmd >> target
+        if re.search(r">+\s*" + re.escape(target), cmd):
+            return True
+        # tee write: tee target / tee -a target
+        if re.search(r"\btee\s+(?:-a\s+)?" + re.escape(target), cmd):
+            return True
+        # in-place sed: sed -i '...' target
+        if re.search(r"\bsed\s+(?:-[a-zA-Z]*i[a-zA-Z]*|--in-place)[^\n]*" + re.escape(target), cmd):
+            return True
+        # python open with write mode
+        if "open(" in cmd and target in cmd and ("'w'" in cmd or '"w"' in cmd):
+            return True
+    return False
+
+
 # Phase70-A: 24h 自走モード中は更に厳格化
 # R2C_24H_MODE=1 または ~/.r2c-24h-mode 存在時、以下も全てブロック
 # (通常時 allowlist で通っていた deploy-vps.sh / ssh root@* も遮断)
@@ -178,6 +208,16 @@ try:
         sys.exit(0)
 
     command = tool_input.get("command", "")
+
+    # Phase70-I: 自編集禁止チェック (常時、24h-mode 問わず)
+    if is_self_edit_attempt(command):
+        print(
+            f"[deploy_guard] BLOCKED (self-edit): guard script modification not permitted\n"
+            f"  command: {command[:200]}\n"
+            "  deploy_guard.py / 24h-mode-*.sh への書き込みは禁止されています。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # Phase70-A: 24h 自走モード中は最初に厳格ブロックを実施
     if is_24h_mode() and is_blocked_in_24h_mode(command):

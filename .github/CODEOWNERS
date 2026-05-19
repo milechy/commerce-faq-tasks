@@ -1,0 +1,42 @@
+# CODEOWNERS — 高リスクパスの保護 (Phase70-I)
+#
+# 設計方針:
+#   - 重要パスのみ指定 (docs/ は Mergify docs-only auto-merge の対象のため除外)
+#   - GitHub ユーザー名: @milechy (hkobayashi)
+#
+# 参照:
+#   - docs/24H_AUTONOMOUS_PLAYBOOK.md §禁止操作 Out of scope 11項目
+#   - .mergify.yml Rule 2 (高リスクパス定義と完全一致させること)
+
+# ── デプロイスクリプト ──────────────────────────────────────
+SCRIPTS/deploy-vps.sh          @milechy
+SCRIPTS/24h-mode-on.sh         @milechy
+SCRIPTS/24h-mode-off.sh        @milechy
+SCRIPTS/                       @milechy
+
+# ── セキュリティフック・Claude Code 設定 ────────────────────
+.claude/hooks/                 @milechy
+.claude/settings.json          @milechy
+
+# ── コア API セキュリティ層 ──────────────────────────────────
+src/index.ts                   @milechy
+src/middleware/                @milechy
+src/api/internal/              @milechy
+
+# ── CI/CD・Mergify 設定 ──────────────────────────────────────
+.github/                       @milechy
+.mergify.yml                   @milechy
+
+# ── 依存管理 ────────────────────────────────────────────────
+package.json                   @milechy
+pnpm-lock.yaml                 @milechy
+
+# ── 環境変数・シークレット ───────────────────────────────────
+.env                           @milechy
+.env.*                         @milechy
+*.key                          @milechy
+secrets/                       @milechy
+
+# ── 法務・パートナー関連 ─────────────────────────────────────
+docs/legal/                    @milechy
+PARTNER_*                      @milechy
