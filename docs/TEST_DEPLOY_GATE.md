@@ -18,6 +18,17 @@ Gate 1: pnpm verify（自動）
   │  test → all pass
   │
   ▼
+Gate 1.5: dead-code-check（自動）
+  │  bash SCRIPTS/dead-code-check.sh
+  │  新規ファイル孤立 / 未登録ルート / 循環依存 → 修正必須
+  │
+  ▼
+Gate 1.6: テストカバレッジ判定（自動）
+  │  bash SCRIPTS/gate-1.6-coverage-check.sh
+  │  ベースラインより 2% 以上低下 → FAIL
+  │  ベースライン未設定 → SKIP (初回は --set-baseline で設定)
+  │
+  ▼
 Gate 2: セキュリティスキャン（自動）
   │  bash SCRIPTS/security-scan.sh
   │  High/Critical → デプロイブロック
@@ -81,6 +92,35 @@ Claude Codeは実装の最終ステップで必ず `pnpm verify` を実行し、
 - 外部API（Groq, Supabase Storage, Leonardo.ai, Fish Audio）: 常にモック
 - DB（PostgreSQL）: テスト用DBまたはモック（既存パターンに従う）
 - Elasticsearch: モック（既存パターンに従う）
+
+---
+
+## 2.6. Gate 1.6: テストカバレッジ判定（自動）
+
+```bash
+bash SCRIPTS/gate-1.6-coverage-check.sh
+```
+
+実装完了後、毎回実行してカバレッジが低下していないことを確認する。
+
+### 初回ベースライン設定（main ブランチで一度だけ実施）
+
+```bash
+bash SCRIPTS/gate-1.6-coverage-check.sh --set-baseline
+git add .coverage-baseline
+git commit -m "chore: set Gate 1.6 coverage baseline"
+```
+
+### 判断基準
+
+- ベースライン未設定 → SKIP（警告のみ、Git 管理外）
+- ベースラインより 2% 以上低下 → **FAIL（修正必須）**
+- 低下 2% 以内 または 上昇 → PASS
+
+### ベースライン更新タイミング
+
+テスト削除・対象外化で意図的にカバレッジが下がる場合は
+`--set-baseline` でベースラインを更新し、その旨をコミットメッセージに記載する。
 
 ---
 

@@ -1,0 +1,106 @@
+# .mergify.yml — Mergify 設定 (Phase70-I, Free プラン)
+#
+# 設計方針:
+#   1. 夜間帯 (22:00-07:00 JST) は auto-merge 全停止 (24h 自走モード保護)
+#   2. 高リスクパス変更は常に @milechy の人手レビューを要求
+#   3. 日中 (07:00-22:00 JST) の docs-only PR のみ CI 全 PASS で auto-merge
+#
+# GitHub Apps インストール (hkobayashi が手動実施):
+#   https://github.com/apps/mergify → Install → milechy/commerce-faq-tasks
+#   Free プランで上記機能は全て利用可能。
+
+pull_request_rules:
+  # ──────────────────────────────────────────────────────────
+  # Rule 1: 夜間フリーズ通知 (22:00-07:00 JST)
+  # 24h 自走モード中の暴走防止。日中 schedule を満たさないと auto-merge 不可。
+  # ──────────────────────────────────────────────────────────
+  - name: "🌙 夜間フリーズ通知 (22:00-07:00 JST)"
+    conditions:
+      - base=main
+      - -merged
+      - -closed
+      - -schedule=Mon-Sun 07:00-22:00[Asia/Tokyo]
+    actions:
+      comment:
+        message: |
+          🌙 **自動マージ停止中 (22:00–07:00 JST)**
+
+          24h 自走モードの夜間暴走防止のため、この時間帯の auto-merge は全停止しています。
+          07:00 JST 以降に CI が全 PASS していれば自動評価が再開します。
+
+          ℹ️ 緊急マージが必要な場合は `@milechy` が手動で対応してください。
+
+  # ──────────────────────────────────────────────────────────
+  # Rule 2: 高リスクパス — 常に @milechy レビュー必須
+  # deploy スクリプト・セキュリティフック・コア API・依存管理を保護
+  # CODEOWNERS と対象パスを一致させること
+  # ──────────────────────────────────────────────────────────
+  - name: "⚠️ 高リスクパス検出 — @milechy レビュー必須"
+    conditions:
+      - base=main
+      - -merged
+      - -closed
+      - or:
+          - "files~=^SCRIPTS/deploy-vps\\.sh$"
+          - "files~=^\\.claude/hooks/"
+          - "files~=^SCRIPTS/24h-mode"
+          - "files~=^src/index\\.ts$"
+          - "files~=^src/middleware/"
+          - "files~=^src/api/internal/"
+          - "files~=^package\\.json$"
+          - "files~=^pnpm-lock\\.yaml$"
+          - "files~=^\\.github/"
+          - "files~=^\\.mergify\\.yml$"
+          - "files~=^\\.claude/settings"
+    actions:
+      comment:
+        message: |
+          ⚠️ **高リスクパスの変更を検出しました**
+
+          以下のパスへの変更は `@milechy` の手動レビューが必須です:
+          - `SCRIPTS/deploy-vps.sh` — デプロイスクリプト
+          - `.claude/hooks/` — セキュリティフック (deploy_guard.py 等)
+          - `SCRIPTS/24h-mode*.sh` — 24h 自走制御スクリプト
+          - `src/index.ts`, `src/middleware/` — API セキュリティ層
+          - `package.json`, `pnpm-lock.yaml` — 依存管理
+          - `.github/`, `.mergify.yml`, `.claude/settings*` — CI/CD 設定
+
+          このPRの auto-merge は **無効**です。
+      request_reviews:
+        users:
+          - milechy
+      label:
+        add:
+          - high-risk
+
+  # ──────────────────────────────────────────────────────────
+  # Rule 3: docs-only PR の自動マージ (日中 07:00-22:00 JST のみ)
+  # 全 CI PASS + 高リスクラベルなし + ソースコード変更なし
+  # ──────────────────────────────────────────────────────────
+  - name: "✅ docs-only 自動マージ (07:00-22:00 JST)"
+    conditions:
+      - base=main
+      - -merged
+      - -closed
+      # 日中のみ auto-merge を許可
+      - schedule=Mon-Sun 07:00-22:00[Asia/Tokyo]
+      # CI 全 PASS
+      - check-success=security-scan
+      - check-success=path-check
+      - check-success=Claude PR Review
+      # 高リスクラベルなし
+      - "-label=high-risk"
+      - "-label=needs-review"
+      # ソースコード・設定ファイル変更なし (docs-only 判定)
+      - "-files~=^src/"
+      - "-files~=^SCRIPTS/"
+      - "-files~=^\\.claude/"
+      - "-files~=^admin-ui/src/"
+      - "-files~=^package\\.json$"
+      - "-files~=^pnpm-lock\\.yaml$"
+      - "-files~=^public/"
+      - "-files~=^\\.github/"
+      - "-files~=^\\.mergify\\.yml$"
+    actions:
+      merge:
+        method: squash

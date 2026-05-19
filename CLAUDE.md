@@ -122,8 +122,9 @@ PR: `gh pr merge <PR番号> --auto --squash --delete-branch` 詳細: `docs/PR_ME
 以下の操作を **絶対に実施しない**。違反検知時は Slack #r2c に `HUMAN-REVIEW-REQUIRED`
 投稿して自身を停止すること。
 
-Out of scope 10項目: VPS 接続 / main merge / DB migration / .env 編集 / git force /
-avatar-agent 操作 / Cloudflare 設定変更 / 依存メジャー bump / 法務文書編集 / 本番テナント影響。
+Out of scope 11項目: VPS 接続 / main merge / DB migration / .env 編集 / git force /
+avatar-agent 操作 / Cloudflare 設定変更 / 依存メジャー bump / 法務文書編集 / 本番テナント影響 /
+**deploy_guard.py・24h-mode スクリプト自己編集禁止** (deploy_guard.py が検知・ブロック)。
 
 詳細・運用手順・トラブルシュートは **`docs/24H_AUTONOMOUS_PLAYBOOK.md`** を必ず読むこと。
 

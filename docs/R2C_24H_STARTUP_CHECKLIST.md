@@ -493,6 +493,22 @@ UATa の制約に加えて、R2C 固有:
   - UATa: frontend build OOM (exit 146)、R2C は CF Pages 側ビルドだがバックエンド API/avatar-agent は VPS のメモリを消費
   - 24h 自走中の自然増加に備え事前確認
 
+### 【Phase70-I 追加】 scope 判定・env ファイル管理ルール
+
+- **R2C-K**: **既存依存脆弱性アップグレード = scope 外確定ルール** (Phase70-I, 2026-05-20 朝の PR #183/#184 判定経験)
+  - 判定基準: `git log --all --oneline -- pnpm-lock.yaml | head -5` で lockfile 最終更新日を確認
+  - Phase 着手日より前に lockfile が更新されている場合、検出脆弱性は **既存バグ = 当該 Phase の scope 外**
+  - 対応: SECURITY_SCAN_ALLOWLIST.md に CVE ID を照合し全件一致なら False Positive 判定 → --admin merge 可
+  - 別タスク化: 独立 Asana タスク「依存パッケージアップグレード」を起票 (due_on: 2週間以内)
+  - allowlist 漏れが 1 件でもあれば --admin merge 中止、hkobayashi 報告
+
+- **R2C-L**: **.env.bak / .env\* 系の git 追跡防止ルール** (Phase70-I, 2026-05-20 朝の security scan WARN 経験)
+  - `.gitignore` に `.env.bak` を必須記載 (追加済: Phase70-I PR)
+  - `git ls-files | grep -E '\.env'` で追跡状態を確認し、`.env.bak` や `.env.*` が出力されたら即 untrack
+  - untrack 手順: `git rm --cached .env.bak && git commit -m "chore: untrack .env.bak"`
+  - security scan で `[WARN] .env.bak tracked by git` が出た場合は内容を必ず確認し、本番 API キーが含まれていれば即停止 → hkobayashi 報告
+  - ローカル開発値のみ (PORT/localhost/placeholder) なら WARN 止まりとして merge は許可するが、untrack 対応を別タスク化
+
 ---
 
 ## 11. プロジェクト固有部分 (R2C 適応版、UATa §11 対応)
@@ -514,6 +530,7 @@ R2C 適用済の差分:
 | 1.0 | 2026-05-19 13:00 JST | UATa 24h 自走運用テンプレ v1.0 を R2C 用にカスタマイズ。R2C 固有 (staging 無し、CF Pages auto-deploy、論理ブロック 100% 依存) を反映。起動前チェックリストを 12 項目に拡張 (UATa §9 の 8 項目 + R2C 固有 4 項目) | claude.ai |
 | **1.1** | **2026-05-19 22:00 JST** | **UATa 1日実体験生記録 v1.0 (2026-05-19 18:00 JST) を反映**: ①§7.2 タスクキュー 30-50 本先積み追加 (UATa §5 #9)、②§9 起動前チェックリスト 12→16 項目に拡張 (VPS メモリ 4 項目追加、UATa §4.3 教訓)、③§5.1 UATa 14 件→21 件に拡張、④§5.3 「3 回ルール」明文化 (UATa PR #246)、⑤§10 R2C-G/H/I/J 4 項目追加 (deploy 失敗時 docker 生存確認 / 焼き込み grep / 3 回ルール / VPS メモリ余裕)。Phase70-A/B/D/J/L 完了状態も反映 (PR #176/#178/#179/#180/#181) | claude.ai |
 | **1.1 正式** | **2026-05-20 Phase70-K** | DRAFT マーカー削除・正式版昇格。関連ドキュメント一覧追加 (24H_* 5件相互参照)。§3.4 の PLAYBOOK/SKILL 行数を実機確認値に更新 (PLAYBOOK 654 行 / SKILL 302 行)。CLAUDE.md に「3 回ルール」セクション追加 (PR #182 → Phase70-K PR) | claude code cli |
+| **1.2** | **2026-05-20 Phase70-I** | §10 Out of scope 拡張: R2C-K (既存依存脆弱性 scope 外判定ルール) + R2C-L (.env.bak git 追跡防止ルール) 追加。PR #183/#184 の pnpm audit 判定経験を明文化。 | claude code cli |
 
 ---
 
