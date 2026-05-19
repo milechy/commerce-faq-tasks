@@ -224,6 +224,36 @@ echo '{"tool_name":"Edit","tool_input":{"file_path":".wolf/cerebrum.md","old_str
 ```
 exit 2 + BLOCKED が出れば正常。出なければ deny リストに追加を検討。
 
+## 9. CLI プロンプトテンプレート (Phase70-E)
+
+24h 自走中に各タスクを処理する際は、タスク種別に応じたテンプレートを使用すること。
+
+### 起動プロンプト (マスター)
+
+- **`.claude/prompts/24h-autonomous.md`** — 24h 自走一括起動プロンプト。Phase 0〜4 の全フロー、Stop conditions、Slack 通知ポイント 5箇所を定義。
+
+### タスク種別テンプレート (`docs/templates/`)
+
+| ファイル | 用途 | Gate | 推奨モデル |
+|---|---|---|---|
+| `cli-prompt-feature.md` | 機能追加 | 1/1.5/2/2.5/3 | Sonnet / Opus (複雑) |
+| `cli-prompt-bugfix.md` | バグ修正 | 1/1.5/2/2.5/3 | Sonnet / Opus (根本不明) |
+| `cli-prompt-refactor.md` | リファクタ | 1/1.5/2/2.5/3 | Sonnet / Opus (横断) |
+| `cli-prompt-docs.md` | docs 更新 | 1 のみ | Sonnet 4.6 固定 |
+| `cli-prompt-investigation.md` | 事前調査 | 不要 | Sonnet 4.6 固定 |
+
+### 使い方 (Phase 2〜3 タスクループ内)
+
+```bash
+# 1. asana-watcher.sh でタスクを取得
+bash SCRIPTS/asana-watcher.sh --limit 1
+
+# 2. タスクの性質を確認して対応テンプレートのプレースホルダを埋める
+# 3. dispatch --model <model> でテンプレート内容を実行
+```
+
+詳細な Slack 通知パターンは §7 を参照。
+
 ## 6. 設計判断ログ
 
 - **物理停止 NG → 論理多層防御**: dev 環境ないため。
@@ -234,4 +264,4 @@ exit 2 + BLOCKED が出れば正常。出なければ deny リストに追加を
 
 ---
 
-更新: 2026-05-19 (Phase70-A 初版)
+更新: 2026-05-20 (Phase70-E: CLI プロンプトテンプレート §9 追加)
