@@ -80,15 +80,41 @@ else
             rm -f "$BACKUP_FILE"
             log "  ✓ backup file removed"
         else
-            # 元の protection 設定を PUT 形式に変換して復元。
-            # GET レスポンスのネストされたオブジェクト (.enabled) をフラット化し、
-            # PUT で受け付ける全フィールドを漏れなく含める。
-            # フィールド追加時は on.sh の PROTECTION_PAYLOAD との対称性を維持すること。
+            # GET レスポンスを GitHub branch-protection PUT スキーマに変換して復元。
+            # - ネストされた .enabled をフラット化 (enforce_admins 等)
+            # - GET 専用の read-only フィールド (url, enforcement_level, contexts_url 等) を除去
+            # - restrictions / required_pull_request_reviews のフルオブジェクトから
+            #   PUT が受け付けるフィールドのみを抽出 (API が URL 等を拒否するため)
             RESTORE_PAYLOAD=$(jq '{
-                required_status_checks: .required_status_checks,
+                required_status_checks: (
+                    if .required_status_checks == null then null
+                    else {
+                        strict: (.required_status_checks.strict // false),
+                        contexts: (.required_status_checks.contexts // []),
+                        checks: (.required_status_checks.checks // [])
+                    }
+                    end
+                ),
                 enforce_admins: (.enforce_admins.enabled // false),
-                required_pull_request_reviews: .required_pull_request_reviews,
-                restrictions: .restrictions,
+                required_pull_request_reviews: (
+                    if .required_pull_request_reviews == null then null
+                    else {
+                        dismiss_stale_reviews: (.required_pull_request_reviews.dismiss_stale_reviews // false),
+                        require_code_owner_reviews: (.required_pull_request_reviews.require_code_owner_reviews // false),
+                        required_approving_review_count: (.required_pull_request_reviews.required_approving_review_count // 0),
+                        require_last_push_approval: (.required_pull_request_reviews.require_last_push_approval // false)
+                    }
+                    end
+                ),
+                restrictions: (
+                    if .restrictions == null then null
+                    else {
+                        users: ([.restrictions.users[]?.login] // []),
+                        teams: ([.restrictions.teams[]?.slug] // []),
+                        apps:  ([.restrictions.apps[]?.slug]  // [])
+                    }
+                    end
+                ),
                 required_linear_history: (.required_linear_history.enabled // false),
                 allow_force_pushes: (.allow_force_pushes.enabled // false),
                 allow_deletions: (.allow_deletions.enabled // false),
