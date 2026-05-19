@@ -414,6 +414,18 @@ grep -rn "metadata.*source" src/api/
 - `create_task_preview` は人間クリックで確定
 - 一括完了: `update_tasks` + `[{task: GID, completed: true}]`
 
+### タスク記述規約（Phase70-J 策定）
+
+タスクのタイトル形式・description 構造・Tier 定義・24h-eligible タグ運用の詳細は以下を参照:
+
+**[docs/ASANA_TASK_TEMPLATE.md](./ASANA_TASK_TEMPLATE.md)**
+
+概要:
+- タイトル接頭辞: `feat:` / `docs:` / `fix:` / `schema:` / `chore:` / `refactor:`
+- タイトル先頭禁止文字: `[` `~` `.`（Asana MCP 作成失敗の原因）
+- Tier: S（本番・VPS）/ A（機能追加）/ B（docs・設定のみ）
+- 24h-eligible タグ GID: `1214922984195645`（Tier A を自走対象にするとき hkobayashi が手動付与）
+
 ---
 
 ## 9. 並列開発パターン
