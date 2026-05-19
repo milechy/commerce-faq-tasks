@@ -89,48 +89,100 @@ fi
 
 # ─── 一時ファイル ──────────────────────────────────────────────────────────
 RAW=$(mktemp)
-trap 'rm -f "$RAW"' EXIT
+ACCUMULATED=$(mktemp)
+trap 'rm -f "$RAW" "$ACCUMULATED" "${ACCUMULATED}.tmp"' EXIT
+printf '[]' > "$ACCUMULATED"
 
-# ─── Asana API 呼び出し（または mock 読込） ────────────────────────────────
-if [ -n "$MOCK_FILE" ]; then
-    if [ ! -f "$MOCK_FILE" ]; then
-        echo "ERROR: mock file not found: $MOCK_FILE" >&2
-        exit 5
+# ─── Asana API 呼び出し（または mock 読込）— next_page.offset pagination loop ──
+OPT_FIELDS="gid,name,notes,due_on,completed,permalink_url,modified_at,tags.gid,tags.name"
+PAGE_NUM=0
+OFFSET=""
+
+while true; do
+    PAGE_NUM=$((PAGE_NUM + 1))
+
+    if [ -n "$MOCK_FILE" ]; then
+        if [ "$PAGE_NUM" -eq 1 ]; then
+            PAGE_FILE="$MOCK_FILE"
+        else
+            PAGE_FILE="${MOCK_FILE%.json}-p${PAGE_NUM}.json"
+        fi
+
+        if [ ! -f "$PAGE_FILE" ]; then
+            if [ "$PAGE_NUM" -eq 1 ]; then
+                echo "ERROR: mock file not found: $PAGE_FILE" >&2
+                exit 5
+            fi
+            log "No mock file for page ${PAGE_NUM} (${PAGE_FILE}), stopping pagination"
+            break
+        fi
+        log "Using mock file (page ${PAGE_NUM}): $PAGE_FILE"
+        cp "$PAGE_FILE" "$RAW"
+    else
+        if [ -z "$OFFSET" ]; then
+            URL="${ASANA_API_BASE}/tasks?project=${ASANA_PROJECT_GID}&completed_since=now&opt_fields=${OPT_FIELDS}&limit=100"
+        else
+            URL_ENC_OFFSET=$(printf '%s' "$OFFSET" | jq -sRr @uri)
+            URL="${ASANA_API_BASE}/tasks?project=${ASANA_PROJECT_GID}&completed_since=now&opt_fields=${OPT_FIELDS}&limit=100&offset=${URL_ENC_OFFSET}"
+        fi
+        log "Fetching page ${PAGE_NUM}: $URL"
+
+        HTTP_STATUS=""
+        RETRY=0
+        while true; do
+            HTTP_STATUS=$(curl -sS --max-time 25 -o "$RAW" -w "%{http_code}" \
+                -H "Authorization: Bearer ${ASANA_ACCESS_TOKEN}" \
+                -H "Accept: application/json" \
+                "$URL" || echo "000")
+
+            if [ "$HTTP_STATUS" = "429" ] && [ "$RETRY" -lt 3 ]; then
+                RETRY=$((RETRY + 1))
+                WAIT=$((5 * (2 ** (RETRY - 1))))
+                log "Rate limited (429), retry ${RETRY}/3 in ${WAIT}s..."
+                sleep "$WAIT"
+            else
+                break
+            fi
+        done
+
+        if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: Asana API returned HTTP ${HTTP_STATUS} on page ${PAGE_NUM}" >&2
+            head -c 500 "$RAW" >&2 2>/dev/null || true
+            echo "" >&2
+            jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg err "asana_api_http_${HTTP_STATUS}" \
+                '{generated_at:$ts, total_open:0, eligible_count:0, error:$err, tasks:[], skipped:[]}'
+            exit 6
+        fi
     fi
-    log "Using mock file: $MOCK_FILE"
-    cp "$MOCK_FILE" "$RAW"
-else
-    OPT_FIELDS="gid,name,notes,due_on,completed,permalink_url,modified_at,tags.gid,tags.name"
-    URL="${ASANA_API_BASE}/tasks?project=${ASANA_PROJECT_GID}&completed_since=now&opt_fields=${OPT_FIELDS}&limit=100"
-    log "Fetching: $URL"
 
-    HTTP_STATUS=$(curl -sS --max-time 25 -o "$RAW" -w "%{http_code}" \
-        -H "Authorization: Bearer ${ASANA_ACCESS_TOKEN}" \
-        -H "Accept: application/json" \
-        "$URL" || echo "000")
-
-    if [ "$HTTP_STATUS" != "200" ]; then
-        echo "ERROR: Asana API returned HTTP ${HTTP_STATUS}" >&2
-        head -c 500 "$RAW" >&2 2>/dev/null || true
-        echo "" >&2
-        # 失敗時も valid JSON を返す（CLI が parse できるように）
-        jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg err "asana_api_http_${HTTP_STATUS}" \
-            '{generated_at:$ts, total_open:0, eligible_count:0, error:$err, tasks:[], skipped:[]}'
-        exit 6
+    # ── jq parse 検証 (UATa asana-poll.sh の jq fix 教訓) ──────────────────
+    if ! jq -e '.data' < "$RAW" >/dev/null 2>&1; then
+        echo "ERROR: unexpected Asana response on page ${PAGE_NUM} (first 500 bytes):" >&2
+        head -c 500 "$RAW" >&2; echo "" >&2
+        jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{generated_at:$ts, total_open:0, eligible_count:0, error:"asana_response_parse_failed", tasks:[], skipped:[]}'
+        exit 7
     fi
-fi
 
-# ─── jq parse 検証 (UATa asana-poll.sh の jq fix 教訓) ─────────────────────
-if ! jq -e '.data' < "$RAW" >/dev/null 2>&1; then
-    echo "ERROR: unexpected Asana response (first 500 bytes follow):" >&2
-    head -c 500 "$RAW" >&2; echo "" >&2
-    jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{generated_at:$ts, total_open:0, eligible_count:0, error:"asana_response_parse_failed", tasks:[], skipped:[]}'
-    exit 7
-fi
+    PAGE_COUNT=$(jq '[.data[] | select(.completed == false)] | length' < "$RAW")
+    log "Page ${PAGE_NUM}: ${PAGE_COUNT} incomplete tasks"
 
-TOTAL_OPEN=$(jq '[.data[] | select(.completed == false)] | length' < "$RAW")
-log "Open tasks fetched: ${TOTAL_OPEN}"
+    # Accumulate page .data into ACCUMULATED array
+    jq -s '.[0] + (.[1].data // [])' "$ACCUMULATED" "$RAW" > "${ACCUMULATED}.tmp"
+    mv "${ACCUMULATED}.tmp" "$ACCUMULATED"
+
+    # Check for next page
+    NEXT_OFFSET=$(jq -r '.next_page.offset // empty' < "$RAW")
+    if [ -z "$NEXT_OFFSET" ]; then
+        log "Pagination exhausted at page ${PAGE_NUM}"
+        break
+    fi
+    OFFSET="$NEXT_OFFSET"
+    log "Next page offset acquired, continuing to page $((PAGE_NUM + 1))"
+done
+
+TOTAL_OPEN=$(jq '[.[] | select(.completed == false)] | length' < "$ACCUMULATED")
+log "Total open tasks (all pages): ${TOTAL_OPEN}"
 
 # ─── フィルタ・分類 (jq ワンショット) ──────────────────────────────────────
 # Tier 抽出: description の "Tier: [SAB]" 行を優先、なければ title の "[Tier S|A|B]" レガシー記法
@@ -163,7 +215,7 @@ CLASSIFIED=$(jq --arg eligible_tag "$ELIGIBLE_TAG_GID" '
     def has_eligible_tag(tags):
         (tags // []) | map(.gid) | index($eligible_tag) != null;
 
-    [ .data[] | select(.completed == false) ] as $open
+    [ .[] | select(.completed == false) ] as $open
     | $open
     | map(
         . as $t
@@ -193,7 +245,7 @@ CLASSIFIED=$(jq --arg eligible_tag "$ELIGIBLE_TAG_GID" '
             reason:        $cls.reason
           }
       )
-' < "$RAW")
+' < "$ACCUMULATED")
 
 # ─── 並び替え（eligible のみ）+ skipped 抽出 ───────────────────────────────
 # 優先度: due_on asc (null 末尾) → Tier (A>B) → modified_at desc
