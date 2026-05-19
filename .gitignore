@@ -65,3 +65,4 @@ Thumbs.db
 .r2c-24h-mode
 .r2c-24h-mode-*
 .env.bak
+DAILY_REPORT_*.md
