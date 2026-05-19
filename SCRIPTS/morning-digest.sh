@@ -19,9 +19,11 @@ LOG_DIR="${R2C_CONFIG}/logs"
 NOTIFY_SLACK="${R2C_ROOT}/SCRIPTS/notify-slack.sh"
 SLACK_CHANNEL_ID="C0AG07HFJTB"
 
-# Risk Scorer (Phase70-F) が未実装のためフォールバック: Tier から推定
-# Phase70-F 完成後は SCRIPTS/r2c-risk-scorer.sh の出力を参照
+# Risk Scorer (Phase70-F): SCRIPTS/pr-risk-scorer.sh を使用
+# フォールバック: pr-risk-scorer.sh が存在しない or 失敗時は Tier から推定
+RISK_SCORER_PATH="${R2C_ROOT}/SCRIPTS/pr-risk-scorer.sh"
 RISK_SCORER_AVAILABLE=0
+[[ -x "$RISK_SCORER_PATH" ]] && RISK_SCORER_AVAILABLE=1
 
 DRY_RUN=0
 
@@ -69,16 +71,30 @@ format_risk() {
     local deletions="$4"
     local checks_state="$5"
 
-    # Tier をラベルまたはブランチ名から判定（Risk Scorer 未実装のフォールバック）
+    # Phase70-F Risk Scorer を優先使用、失敗時はフォールバック
+    if [[ "$RISK_SCORER_AVAILABLE" -eq 1 ]]; then
+        local scorer_json
+        scorer_json="$(bash "$RISK_SCORER_PATH" "$pr_number" --json-only --dry-run 2>/dev/null)" || scorer_json=""
+        if [[ -n "$scorer_json" ]]; then
+            echo "$scorer_json" | jq -r '.risk // "medium"'
+            return
+        fi
+    fi
+
+    # フォールバック: Tier + diff size から推定
     local tier="A"
-    if echo "$labels" | grep -q "tier-b\|docs\|script\|test"; then
+    if echo "$labels" | grep -q "tier-b\|docs\|script\|test\|risk:low"; then
         tier="B"
     fi
 
     local diff_size=$(( additions + deletions ))
     local risk="medium"
 
-    if [[ "$tier" == "B" ]] && [[ "$checks_state" == "SUCCESS" ]]; then
+    if echo "$labels" | grep -q "risk:high"; then
+        risk="high"
+    elif echo "$labels" | grep -q "risk:low"; then
+        risk="low"
+    elif [[ "$tier" == "B" ]] && [[ "$checks_state" == "SUCCESS" ]]; then
         risk="low"
     elif [[ "$diff_size" -gt 200 ]] || [[ "$checks_state" != "SUCCESS" ]]; then
         risk="high"
