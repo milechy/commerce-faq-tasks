@@ -53,7 +53,14 @@ else
     log "Found mode file: $MODE_FILE"
 fi
 
-# ─── 1. branch protection 復元 (P2: on.sh バックアップから元設定を復元) ───
+# ─── 0. バックアップから復元値を先読みする ───
+# allow_auto_merge の元の値は branch protection 復元 (バックアップ削除) より前に読む必要がある
+ORIG_AUTO_MERGE="true"  # fallback: 元の値が不明な場合は true (最もよくある設定)
+if [[ "$DRY_RUN" -eq 0 ]] && [[ -f "$BACKUP_FILE" ]]; then
+    ORIG_AUTO_MERGE=$(jq -r '.original_allow_auto_merge // true' "$BACKUP_FILE" 2>/dev/null || echo "true")
+fi
+
+# ─── 1. branch protection 復元 (on.sh バックアップから元設定を復元) ───
 log "Restoring branch protection on $GH_REPO main…"
 if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ -f "$BACKUP_FILE" ]]; then
@@ -114,10 +121,10 @@ else
     fi
 fi
 
-# ─── 2. allow_auto_merge 復帰 ───
-log "Re-enabling repository auto-merge…"
-run "gh api -X PATCH 'repos/$GH_REPO' -f allow_auto_merge=true >/dev/null"
-log "  ✓ allow_auto_merge=true"
+# ─── 2. allow_auto_merge を元の値に復帰 ───
+log "Restoring repository auto-merge to original value (${ORIG_AUTO_MERGE})…"
+run "gh api -X PATCH 'repos/$GH_REPO' -f allow_auto_merge=${ORIG_AUTO_MERGE} >/dev/null"
+log "  ✓ allow_auto_merge=${ORIG_AUTO_MERGE}"
 
 # ─── 3. モードファイル削除 ───
 log "Removing mode file: $MODE_FILE"

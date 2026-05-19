@@ -64,18 +64,37 @@ command -v jq >/dev/null 2>&1 || { echo "ERROR: jq required" >&2; exit 1; }
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# ─── 0. 現在の branch protection をバックアップ (P2: 解除時に元設定を復元するため) ───
+# ─── 0. 現在の branch protection をバックアップ (解除時に元設定を復元するため) ───
+# 再実行安全性: バックアップが既に存在する場合は上書きしない。
+# 初回実行途中で失敗して再実行した場合に、既に変更済みの設定を元の設定と
+# 誤認識してしまう問題を防ぐ。
 log "Backing up current branch protection to ${BACKUP_FILE}..."
 if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '[dry-run] gh api repos/%s/branches/main/protection → %s\n' "$GH_REPO" "$BACKUP_FILE"
+    printf '[dry-run] gh api repos/%s --jq .allow_auto_merge → %s (original_allow_auto_merge)\n' "$GH_REPO" "$BACKUP_FILE"
 else
-    if gh api "repos/$GH_REPO/branches/main/protection" > "$BACKUP_FILE" 2>/dev/null; then
-        chmod 600 "$BACKUP_FILE"
-        log "  ✓ existing protection backed up"
+    if [[ -f "$BACKUP_FILE" ]]; then
+        log "  ✓ backup already exists — preserving original (re-run of failed activation detected)"
     else
-        printf '{"no_protection":true}\n' > "$BACKUP_FILE"
-        chmod 600 "$BACKUP_FILE"
-        log "  ✓ no existing protection — sentinel saved"
+        if gh api "repos/$GH_REPO/branches/main/protection" > "$BACKUP_FILE" 2>/dev/null; then
+            chmod 600 "$BACKUP_FILE"
+            log "  ✓ existing protection backed up"
+        else
+            printf '{"no_protection":true}\n' > "$BACKUP_FILE"
+            chmod 600 "$BACKUP_FILE"
+            log "  ✓ no existing protection — sentinel saved"
+        fi
+        # allow_auto_merge の元の値をバックアップに追記 (off.sh で正確に復元するため)
+        ORIG_AUTO_MERGE=$(gh api "repos/$GH_REPO" --jq '.allow_auto_merge // false' 2>/dev/null || echo "false")
+        _tmp=$(mktemp)
+        if jq --argjson val "$ORIG_AUTO_MERGE" '. + {original_allow_auto_merge: $val}' "$BACKUP_FILE" > "$_tmp"; then
+            mv "$_tmp" "$BACKUP_FILE"
+            chmod 600 "$BACKUP_FILE"
+            log "  ✓ original allow_auto_merge=$ORIG_AUTO_MERGE saved to backup"
+        else
+            rm -f "$_tmp"
+            log "  WARN: failed to save allow_auto_merge to backup (will default to true on restore)"
+        fi
     fi
 fi
 
