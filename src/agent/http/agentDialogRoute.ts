@@ -36,6 +36,26 @@ export function createAgentDialogHandler(
 
     const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";
 
+    // Phase69-2: excluded_ids バリデーション（Zod 未導入のため手動チェック）
+    const rawExcludedIds = (body as unknown as Record<string, unknown>).options
+      ? ((body as unknown as Record<string, unknown>).options as Record<string, unknown>).excluded_ids
+      : undefined;
+    if (rawExcludedIds !== undefined) {
+      if (!Array.isArray(rawExcludedIds)) {
+        res.status(400).json({ error: "excluded_ids は配列で指定してください" });
+        return;
+      }
+      if (rawExcludedIds.length > 500) {
+        res.status(400).json({ error: "excluded_ids は500件以内で指定してください" });
+        return;
+      }
+      const invalid = rawExcludedIds.find((el) => typeof el !== "string" || el.length > 200);
+      if (invalid !== undefined) {
+        res.status(400).json({ error: "excluded_ids の各要素は200文字以内の文字列で指定してください" });
+        return;
+      }
+    }
+
     // PR2b: adapter 状態（presentation-only）
     let adapterMeta: import("../dialog/types").AdapterMeta | undefined = undefined;
 
