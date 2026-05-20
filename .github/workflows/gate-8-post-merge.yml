@@ -1,0 +1,34 @@
+name: Gate 8 — 統合 smoke (post-merge)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  gate-8-smoke:
+    name: Gate 8 Integration Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Gate 8 smoke
+        env:
+          API_URL: https://api.r2c.biz
+        run: bash SCRIPTS/gate-8-integration-smoke.sh
+
+      - name: Slack alert on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_R2C }}
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          PR_TITLE="${{ github.event.head_commit.message }}"
+          MSG="⛔ *Gate 8 FAIL* (post-merge smoke)\ncommit: \`${SHORT_SHA}\`\nmsg: ${PR_TITLE}\n\n直近 PR の rollback を検討してください。\nhttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+            curl -s -X POST "${SLACK_WEBHOOK_URL}" \
+              -H 'Content-type: application/json' \
+              --data "{\"text\":\"${MSG}\"}" || true
+          fi
