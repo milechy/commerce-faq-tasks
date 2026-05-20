@@ -130,6 +130,7 @@ while IFS=$'\t' read -r pname restart; do
             --color error \
             --alert-type pm2_restart \
             --immediate-escalation \
+            --bypass-stop-dedupe \
             "${EXTRA_FLAGS[@]}" || true
     elif [[ "$restart" -gt "$WARN_THRESHOLD" ]]; then
         MSG="[PM2] ${pname}: restart_time=${restart} (warn>${WARN_THRESHOLD})"

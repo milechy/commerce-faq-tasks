@@ -64,6 +64,7 @@ ALERT_TYPE=""
 ESCALATION_COUNT="$DEFAULT_ESCALATION_COUNT"
 IMMEDIATE_ESCALATION=0
 RESET_ALERT_TYPE=""
+BYPASS_STOP_DEDUPE=0
 
 usage() {
     cat <<'USAGE'
@@ -73,6 +74,7 @@ Usage: notify-slack.sh <message> [--color info|success|warning|error]
                                  [--escalation-count <N>]
                                  [--immediate-escalation]
                                  [--reset-alert-type <type>]
+                                 [--bypass-stop-dedupe]
 USAGE
 }
 
@@ -86,6 +88,7 @@ while [[ $# -gt 0 ]]; do
         --escalation-count)   ESCALATION_COUNT="${2:-$DEFAULT_ESCALATION_COUNT}"; shift 2 ;;
         --immediate-escalation) IMMEDIATE_ESCALATION=1; shift ;;
         --reset-alert-type)   RESET_ALERT_TYPE="${2:-}"; shift 2 ;;
+        --bypass-stop-dedupe) BYPASS_STOP_DEDUPE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         --*)       echo "ERROR: unknown option: $1" >&2; usage; exit 1 ;;
         *)
@@ -129,7 +132,8 @@ esac
 
 # ─── Stop 連投防止 ───
 # Stop signal 通知済みフラグがあれば重複投稿しない
-if [[ "$COLOR" == "error" ]] && [[ -f "$STOP_NOTIFIED_FILE" ]]; then
+# --bypass-stop-dedupe 指定時はスキップ (safety-critical path 専用 opt-in)
+if [[ "$COLOR" == "error" ]] && [[ "$BYPASS_STOP_DEDUPE" -eq 0 ]] && [[ -f "$STOP_NOTIFIED_FILE" ]]; then
     echo "[${SCRIPT_NAME}] Stop already notified, skipping duplicate." >&2
     exit 0
 fi

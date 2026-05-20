@@ -759,13 +759,36 @@ bash SCRIPTS/notify-slack.sh --reset-alert-type pm2_restart --dry-run
 */5 * * * * /opt/rajiuce/SCRIPTS/check-pm2-health.sh >> /var/log/r2c-check-pm2-health.log 2>&1
 ```
 
-### 15.5.6 テスト
+### 15.5.6 `--bypass-stop-dedupe` フラグ使用ルール
 
-`SCRIPTS/escalation-test.sh` で 20 ケース自動検証 (sqlite3 / Slack 未送信状態で動作):
+`notify-slack.sh` は `--color error` + `.r2c-notified-stop` sentinel 存在時に通知を短絡する (stop 連投防止)。
+**PM2 emergency 等の safety-critical path ではこの短絡を避けたい場合に `--bypass-stop-dedupe` を明示指定する**。
+
+```bash
+# ✅ 正しい: emergency は sentinel 状態に関わらず必ず届く
+notify-slack.sh "[PM2-EMERGENCY] ..." \
+    --alert-type pm2_restart --immediate-escalation \
+    --color error --bypass-stop-dedupe
+
+# ✅ 正しい: 通常の stop 通知 (sentinel 後は短絡 OK)
+notify-slack.sh "🛑 Stopped: <reason>" --color error
+
+# ❌ 誤り: emergency なのに bypass 指定なし → sentinel 存在時に silent drop
+notify-slack.sh "[PM2-EMERGENCY] ..." --color error --immediate-escalation
+```
+
+**使用ルール**:
+1. `--bypass-stop-dedupe` は **escalation / safety-critical path でのみ** 使用する
+2. warn path (`--color warning`) には不要 (stop-dedupe は `error` にのみ適用)
+3. 通常の stop 通知 (`🛑 Stopped:`) には **付けない** — sentinel による重複防止が目的
+
+### 15.5.7 テスト
+
+`SCRIPTS/escalation-test.sh` で 24 ケース自動検証 (sqlite3 / Slack 未送信状態で動作):
 
 ```bash
 bash SCRIPTS/escalation-test.sh
-# Expected: PASS=20 FAIL=0
+# Expected: PASS=24 FAIL=0
 ```
 
 検証項目:
@@ -776,10 +799,13 @@ bash SCRIPTS/escalation-test.sh
 - `--reset-alert-type` の手動 ack
 - カスタム閾値 (`--escalation-count 3`)
 - バリデーション (非整数閾値で exit 1)
-- `check-pm2-health.sh --self-test` (fixture 動作確認)
+- `check-*-health.sh --self-test` (fixture 動作確認)
 - warn/emergency 分類の正確性
+- **[P1 fix]** `--bypass-stop-dedupe` + emergency → sentinel 存在下でも通知到達
+- **[P1 fix]** `--color error` 単独 (bypass なし) → sentinel 存在時に短絡 (既存挙動維持)
+- **[P1 fix]** emergency + bypass なし → 短絡 (明示的フラグ必須)
 
-### 15.5.7 stuck-detector との統合 (本PRスコープ外、別PR)
+### 15.5.8 stuck-detector との統合 (本PRスコープ外、別PR)
 
 stuck-detector (Asana 1214954523638712) は本 PR では触らず、以下の共有設計のみ提供:
 

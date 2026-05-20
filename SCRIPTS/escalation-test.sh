@@ -218,6 +218,30 @@ assert_contains "Test 10.2: emergency-only が EMERGENCY として記録" "$out"
 assert_contains "Test 10.3: healthy はalertなし" "$out" "total alerts=2"
 
 echo
+echo "=== Test 11: stop-dedupe bypass — emergency + --bypass-stop-dedupe は sentinel 無視 ==="
+touch "${R2C_CONFIG}/.r2c-notified-stop"
+rm -f "$TEST_DB"
+out="$(run_notify "[PM2-EMERGENCY] bypass-test restart=150" \
+        --alert-type pm2_restart --immediate-escalation \
+        --bypass-stop-dedupe --color error --dry-run)"
+assert_contains "Test 11.1: bypass 時は ESCALATION 出力" "$out" "ESCALATION"
+assert_contains "Test 11.2: bypass 時は IMMEDIATE タグ付与" "$out" "IMMEDIATE"
+
+echo
+echo "=== Test 12: stop-dedupe — sentinel 存在 + color error (bypass なし) → 短絡 ==="
+# sentinel は Test 11 で作成済み
+out="$(run_notify "normal error without bypass" --color error --dry-run)"
+assert_contains "Test 12.1: bypass なし → 短絡メッセージ出力" "$out" "Stop already notified"
+
+echo
+echo "=== Test 13: stop-dedupe — sentinel 存在 + emergency (bypass なし) → 短絡 ==="
+out="$(run_notify "[PM2-EMERGENCY] no-bypass restart=150" \
+        --alert-type pm2_restart --immediate-escalation \
+        --color error --dry-run)"
+assert_contains "Test 13.1: --bypass-stop-dedupe なし emergency → 短絡" "$out" "Stop already notified"
+rm -f "${R2C_CONFIG}/.r2c-notified-stop"
+
+echo
 echo "================================================"
 echo "Test summary: PASS=$PASS FAIL=$FAIL"
 echo "================================================"
