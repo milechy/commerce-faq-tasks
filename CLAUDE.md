@@ -145,6 +145,47 @@ ON/OFF 操作:
 資格喪失後の再開条件: ガード/監視の実装完了後。
 詳細: `docs/R2C_24H_STARTUP_CHECKLIST.md §5.3`
 
+## Claude.ai 振る舞いルール (UATa 16事例導出 2026-05-20)
+
+出典: `docs/UATA_R2C_DIFF_ANALYSIS.md` / UATa 24h 1日実体験生記録 v1.0
+
+### 1. Claude.ai 生成プロンプトの禁止事項
+- `docker compose ... build` 直接コマンドを含めない
+- VPS デプロイは `bash SCRIPTS/deploy-vps.sh` 等の wrapper script 経由のみ
+- UATa 事例 #8: PR #191 で `--env-file` 抜けて本番 wallet 死亡、4-5h 復旧
+
+### 2. Lane / CLI プロンプト発行前の実機照合必須
+- memory 記載のファイル名・endpoint・import path は古い可能性あり
+- 必ず CLI に「該当ファイル / grep / git log で実機照合」→ 結果貼り戻し後にプロンプト発行
+- UATa 事例 #9: 鉄則 8 違反 3 連続でセッション信頼失墜
+
+### 3. CLI 報告の「全停止」鵜呑み禁止
+- 「中止推奨」「全停止」「制約あり」レポートは 4 軸再確認必須
+- 4 軸: 観測 (curl/frontend/agent/backend) / 環境 (production/staging/dev) / 時間 (今日/既解消/未解消) / 影響 (当該 Lane/Phase 全体/全停止)
+- UATa 事例 #15: 鵜呑みで 4 Lane 全停止指示
+
+### 4. Opus 障害時の Sonnet 退避ルート
+
+Sonnet 4.6 で進められる作業:
+- read-only 調査
+- `.claude/agents/` + `.claude/skills/` + `docs/` 更新
+- pytest / E2E 追加のみの PR
+- Phase 1-2 (コード把握 + test 設計)
+- PR 作成 (Gate 4 一部保留可)
+
+Sonnet 4.6 不可、Opus 復旧待ち:
+- Tier S 直列
+- 大規模リファクタ
+- セキュリティ系本体修正
+- 安全装置配線変更
+- 本体最終実装
+
+UATa 事例 #14: Opus 障害で 3 Lane 全停止 → Sonnet 退避未確立で大幅遅延
+
+### 5. Phase 計画立案前の 5 軸事前確認
+- 凍結期限 / UAT 状況 / API 障害 / 期限タスク / 過去 postmortem P1 未済
+- UATa CLAUDE.md §4「Phase 計画立案 必須セクション」を R2C に移植検討
+
 ## 学習セクション (Auto-updated by Claude Code)
 
 <!-- このセクションは Claude Code の auto-memory 機能により管理される -->
