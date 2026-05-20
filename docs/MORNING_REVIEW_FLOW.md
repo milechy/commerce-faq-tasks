@@ -70,6 +70,21 @@ done
 | Gate 1 (verify) | PR checks 結果 | 全 green |
 | Gate 2 (security) | PR checks 結果 | High/Critical = 0 |
 | Gate 2.5 (Codex) | PR コメント (`/codex:review` 結果) | Codex P0/P1 なし |
+| **Gate 8 (統合 smoke)** | GitHub Actions `gate-8-post-merge.yml` 結果 | 全チェック PASS |
+
+**Gate 8 確認コマンド (直近 24h の結果):**
+
+```bash
+# GitHub Actions の最新 Gate 8 実行結果
+gh run list --workflow=gate-8-post-merge.yml --limit 5 \
+  --json status,conclusion,createdAt,headCommit \
+  --template '{{range .}}{{.createdAt}} {{.conclusion}} ({{.headCommit.message}})\n{{end}}'
+
+# 失敗していた場合: ログ確認
+gh run view --workflow=gate-8-post-merge.yml --log-failed
+```
+
+> Gate 8 が失敗している場合 → 直近 merge した PR を特定して rollback 検討。手動実行: `bash SCRIPTS/gate-8-integration-smoke.sh`
 
 ```bash
 # Codex review 結果をコメントで確認
@@ -184,6 +199,7 @@ echo "$(date '+%Y-%m-%d %H:%M') STRIKE: <系統名>" >> ~/.claude-r2c-config/3-s
 | `SCRIPTS/r2c-morning-report.sh` | cron 06:00 自動 Slack 投稿 (既存) | 稼働中 (参照) |
 | `SCRIPTS/notify-slack.sh` | Slack 通知 (Phase70-L) | 稼働中 |
 | `SCRIPTS/24h-mode-off.sh` | 24h 自走モード解除 | 稼働中 |
+| `SCRIPTS/gate-8-integration-smoke.sh` | Gate 8 統合 smoke (Phase70-J) | **Phase70-J で新規作成** |
 
 ---
 
@@ -227,6 +243,7 @@ flowchart TD
 - [ ] 全 PR の CI checks が green
 - [ ] `Stream Path Check` / `Security Scan` が green
 - [ ] Codex review 結果が各 PR コメントにある（なければ `codex-result-to-pr.sh` 実行）
+- [ ] **直近 24h の Gate 8 結果が PASS** (`gh run list --workflow=gate-8-post-merge.yml --limit 5`)
 
 ### フェーズ 3: 個別 PR 判定（〜60 分、PR 1 本 5〜10 分目安）
 - [ ] 判定マトリクスで low / medium / medium-high / high / reject を分類

@@ -66,6 +66,12 @@ Gate 6: UI調査（UI変更Phase: 必須）
   │  ★ UI変更がないPhaseではスキップ可
   │
   ▼
+Gate 8: 統合 smoke（自動・main push 後）
+  │  bash SCRIPTS/gate-8-integration-smoke.sh
+  │  (GitHub Actions gate-8-post-merge.yml が自動実行)
+  │  FAIL → Slack #r2c alert + rollback 検討
+  │
+  ▼
 完了 → Asanaタスク完了 → PHASE_ROADMAP.md更新
 ```
 
@@ -269,16 +275,64 @@ Gate 4bと同様、UI変更がないPhaseではスキップ可。
 
 ---
 
+## 9.5. Gate 8: 統合 smoke（自動・main push 後）
+
+> UATa 事例 #11「並列後の統合検証なし」由来 (Phase70-J)
+
+### 目的
+
+複数 PR の並列 merge 後に、統合された状態で主要エンドポイントが正常に動作することを確認する。  
+Gate 1-6 は各 PR 単体の品質を担保するが、Gate 8 は **merge 後の統合状態** を検証する。
+
+### 実行タイミング
+
+- **自動**: `.github/workflows/gate-8-post-merge.yml` が main push 時に実行
+- **手動**: `bash SCRIPTS/gate-8-integration-smoke.sh`
+
+### チェック内容（3-5 分で完走）
+
+| ステップ | 確認内容 | 期待値 |
+|---|---|---|
+| A. /health | 基本死活確認 | status=ok |
+| B. /health/business | ビジネスロジック健全性 | warnings=0 (未実装時 SKIP) |
+| C. /api/chat | chat エンドポイント存在確認 | 200/401/400/405 |
+| D. /carnation-demo/ + /widget.js | widget 配信確認 | 200/3xx |
+| E. avatar-agent token | auth guard 生存確認 | 401/403 (未実装時 SKIP) |
+
+### 失敗時のアクション
+
+1. GitHub Actions の失敗通知が Slack `#r2c` に届く
+2. 失敗項目を確認し、直近 merge した PR との関係を調査
+3. 問題 PR の rollback を検討（`gh pr revert <PR番号>`）
+4. 修正 PR を作成して再 merge
+
+```bash
+# 手動実行
+bash SCRIPTS/gate-8-integration-smoke.sh
+
+# 特定環境向け
+API_URL=https://staging.r2c.biz bash SCRIPTS/gate-8-integration-smoke.sh
+```
+
+### 制約・設計方針
+
+- Playwright / ブラウザは使わない（Gate 4b/6 と区別、軽量化重視）
+- VPS 操作なし（GitHub Actions / ローカル smoke のみ）
+- 既存 Gate 1-6 / 1.6 とは独立した別系統
+- 認証が必要な機能は「エンドポイント存在確認」のみ（API キー不要）
+
+---
+
 ## 10. 組み合わせパターン
 
 > ★ Gate 1-3 は @gate-runner で一括実行可能（.claude/agents/gate-runner.md）
 
 | Phase種別 | Gate順序 |
 |---|---|
-| **UI変更を含むデプロイ（★ Phase54以降の標準）** | Gate 1-2 → Gate 2.5（Codex） → Gate 3 → git push → Gate 4b（Chrome） → デプロイ → Gate 5 + Gate 6 |
-| **API追加のみ（UI変更なし）** | Gate 1-2 → Gate 2.5（Codex） → Gate 3 → git push → デプロイ → Gate 5 |
-| **typo・ドキュメントのみ** | Gate 1 → git push → デプロイ → Gate 5 |
-| **セキュリティ変更** | Gate 1-2 → Gate 2.5（adversarial-review） → Gate 3 → git push → Gate 4b → デプロイ → Gate 5 + Gate 6 |
+| **UI変更を含むデプロイ（★ Phase54以降の標準）** | Gate 1-2 → Gate 2.5（Codex） → Gate 3 → git push → Gate 4b（Chrome） → デプロイ → Gate 5 + Gate 6 → **Gate 8（自動）** |
+| **API追加のみ（UI変更なし）** | Gate 1-2 → Gate 2.5（Codex） → Gate 3 → git push → デプロイ → Gate 5 → **Gate 8（自動）** |
+| **typo・ドキュメントのみ** | Gate 1 → git push → デプロイ → Gate 5 → **Gate 8（自動）** |
+| **セキュリティ変更** | Gate 1-2 → Gate 2.5（adversarial-review） → Gate 3 → git push → Gate 4b → デプロイ → Gate 5 + Gate 6 → **Gate 8（自動）** |
 
 **UI変更を含むPhaseでは Gate 4b と Gate 6 を絶対にスキップしない。**
 
