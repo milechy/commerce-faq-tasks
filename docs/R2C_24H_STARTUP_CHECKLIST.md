@@ -10,7 +10,6 @@
 - `docs/24H_AUTOMATION_RUNBOOK_R2C.md` — R2C 24h 自走 初期構築手順書
 - `docs/24H_LOOP_LEARNING_INTEGRATION.md` — 学習ループ統合仕様
 - `docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md` — Lane retry 戦略 + Pushover 通知仕様
-- `docs/PHASE70_AI_CROSSCHECK.md` §5.5 (24h 起動の足場整備という発見)
 
 ---
 
@@ -361,7 +360,7 @@ R2C で今朝 (2026-05-19) Claude.ai が既に 3 回以上繰り返した系統:
 実用例 (R2C で実施済):
 - 2026-05-19 AM: Phase70 v1.0 → v1.1 改訂 (Claude / Grok / Gemini / ChatGPT)
 - 採用 14 件、不採用 3 件、新規 70-I 起票、初回 12h パイロット化
-- docs/PHASE70_AI_CROSSCHECK.md v1.2 (517 行) に統合済
+- ※クロスチェック結果は Asana Phase70-G タスクで管理 (docs/PHASE70_AI_CROSSCHECK.md は R2C リポ未作成、2026-05-20 確認)
 
 24h 自走開始前の最終確認も 3 AI クロスチェックを検討:
 - Phase70-H 初回 12h パイロット直前 (必須)
