@@ -94,7 +94,107 @@ R2C 対応:
 - [ ] 24h 自走プロンプト (70-E) に「並列 tool call は最大 2 本」を明記
 - [ ] CLI 側 hook で heartbeat ファイル更新 (将来検討、70-H で必要性判断)
 - [ ] 初回 12h パイロット (70-H) では人間が 4h バッチで進捗確認
-- [ ] **【v1.1 追加】 stuck-detector daemon の R2C 版実装を別タスク化** (70-F の Risk Scorer と並走 or 独立)
+- [x] **【Phase70-? 完了】 stuck-detector daemon R2C 版実装**: `SCRIPTS/r2c-stuck-detector.sh`
+
+### 1.3.1 stuck-detector 起動方法 (R2C 版)
+
+`SCRIPTS/r2c-stuck-detector.sh` は 24h 自走開始と同時に **別プロセスとして起動** する。
+
+#### オプション A: launchd plist (推奨 — macOS 常駐)
+
+`~/Library/LaunchAgents/com.r2c.stuck-detector.plist` として配置:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.r2c.stuck-detector</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks/SCRIPTS/r2c-stuck-detector.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>R2C_CONFIG</key>
+        <string>/Users/hkobayashi/.claude-r2c-config</string>
+        <key>STUCK_WARN_THRESHOLD</key>
+        <string>1800</string>
+        <key>STUCK_KILL_THRESHOLD</key>
+        <string>5400</string>
+        <key>STUCK_POLL_INTERVAL</key>
+        <string>60</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/r2c-stuck-detector.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/r2c-stuck-detector.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+```
+
+起動コマンド:
+```bash
+launchctl load ~/Library/LaunchAgents/com.r2c.stuck-detector.plist
+launchctl start com.r2c.stuck-detector
+```
+
+停止コマンド (24h 自走終了時):
+```bash
+launchctl stop com.r2c.stuck-detector
+launchctl unload ~/Library/LaunchAgents/com.r2c.stuck-detector.plist
+```
+
+#### オプション B: cron (シンプル版)
+
+```bash
+# 毎分実行 — one-shot モードで自前ループを持たせない場合
+* * * * * R2C_CONFIG=$HOME/.claude-r2c-config bash /path/to/SCRIPTS/r2c-stuck-detector.sh --one-shot >> $HOME/.claude-r2c-config/logs/r2c-stuck-detector.log 2>&1
+```
+
+#### オプション C: バックグラウンド起動 (24h-mode-on.sh から呼ぶ)
+
+```bash
+# SCRIPTS/24h-mode-on.sh の末尾に追加
+nohup bash SCRIPTS/r2c-stuck-detector.sh \
+    >> "${R2C_CONFIG}/logs/r2c-stuck-detector.log" 2>&1 &
+echo $! > "${R2C_CONFIG}/.stuck-detector.pid"
+echo "[24h-mode-on] stuck-detector started (PID $(cat ${R2C_CONFIG}/.stuck-detector.pid))"
+```
+
+停止 (24h-mode-off.sh に追加):
+```bash
+PID_FILE="${R2C_CONFIG}/.stuck-detector.pid"
+if [[ -f "$PID_FILE" ]]; then
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    echo "[24h-mode-off] stuck-detector stopped"
+fi
+```
+
+#### 環境変数チューニング例
+
+| 変数 | デフォルト | 説明 |
+|---|---|---|
+| `STUCK_WARN_THRESHOLD` | 1800 (30分) | Slack 警告発火までの秒数 |
+| `STUCK_KILL_THRESHOLD` | 5400 (90分) | session kill 発火までの秒数 |
+| `STUCK_POLL_INTERVAL` | 60 (1分) | heartbeat チェック間隔 |
+| `MAX_DISPATCH_ATTEMPTS` | 3 | 最大 re-dispatch 試行回数 |
+| `DISPATCH_COMMAND` | (未設定) | 再dispatch コマンド (未設定時は Slack 通知のみ) |
+| `PUSHOVER_APP_TOKEN` | (未設定) | Pushover 通知 token (3回失敗時に使用) |
+| `PUSHOVER_USER_KEY` | (未設定) | Pushover user key |
+
+✅ 起動前チェック項目 (§9 に追加):
+- [ ] `bash SCRIPTS/r2c-stuck-detector.sh --dry-run --one-shot --verbose` で dry-run 動作確認
+- [ ] `~/.claude-r2c-config/heartbeat` が 24h 自走プロンプトで定期 touch されることを確認
+- [ ] launchd / cron / nohup のどれを使うかを決定し起動方法を PLAYBOOK に記載
 
 ### 1.4 重要操作の自動禁止 (`.claude/settings.json` の `permissions.deny`)
 
