@@ -244,6 +244,11 @@ flowchart TD
 - [ ] `Stream Path Check` / `Security Scan` が green
 - [ ] Codex review 結果が各 PR コメントにある（なければ `codex-result-to-pr.sh` 実行）
 - [ ] **直近 24h の Gate 8 結果が PASS** (`gh run list --workflow=gate-8-post-merge.yml --limit 5`)
+- [ ] **業務 KPI 確認**: `curl https://api.r2c.biz/health/business | jq .warnings` を実行し、`warnings` 配列が空であることを確認
+  - 非空の場合: 各警告の原因を調査してから PR マージを進める
+  - `CRITICAL: rag_searches_24h is 0` → RAG パイプライン障害の可能性、即時調査
+  - `chat_messages_24h dropped X% vs 7-day average` → チャット量急減、Widget/API 障害を確認
+  - `last_chat_message_at is older than 6 hours` → チャット停止の可能性、Widget 疎通確認
 
 ### フェーズ 3: 個別 PR 判定（〜60 分、PR 1 本 5〜10 分目安）
 - [ ] 判定マトリクスで low / medium / medium-high / high / reject を分類
