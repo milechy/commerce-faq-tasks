@@ -210,9 +210,12 @@ cat > "$TMP_FIXTURE" <<'JSON'
   {"name":"emergency-only","pm_id":2,"pm2_env":{"restart_time":130,"status":"online"}}
 ]
 JSON
+set +e
 out="$(PM2_JLIST_CMD="cat $TMP_FIXTURE" ALERT_DB_PATH="$TEST_DB" \
         "$HEALTH_CHECK" --dry-run --warn 50 --emergency 100 2>&1)"
+set -e
 rm -f "$TMP_FIXTURE"
+# 新 exit code 体系 (Fix 3): alerts 検知時 rc=1 が想定 — assert は出力内容のみ確認
 assert_contains "Test 10.1: warn-only が warn として記録" "$out" "[PM2] warn-only"
 assert_contains "Test 10.2: emergency-only が EMERGENCY として記録" "$out" "[PM2-EMERGENCY] emergency-only"
 assert_contains "Test 10.3: healthy はalertなし" "$out" "total alerts=2"
@@ -240,6 +243,121 @@ out="$(run_notify "[PM2-EMERGENCY] no-bypass restart=150" \
         --color error --dry-run)"
 assert_contains "Test 13.1: --bypass-stop-dedupe なし emergency → 短絡" "$out" "Stop already notified"
 rm -f "${R2C_CONFIG}/.r2c-notified-stop"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase70-L Round 3 — Codex Round 2 指摘対応の追加検証 (T14-T17)
+# ─────────────────────────────────────────────────────────────────────────────
+
+echo
+echo "=== Test 14: [Round3 Fix1] immediate-escalation send 失敗時 db_mark_escalated 不実行 ==="
+# Codex Round 2 high #1: send_escalation 失敗時に db_mark_escalated を呼ぶと
+# unack alert の backlog が消えてしまう。修正後は send 失敗時に backlog 維持される。
+rm -f "$TEST_DB"
+if command -v sqlite3 >/dev/null 2>&1; then
+    set +e
+    R2C_TEST_FORCE_ESCALATION_FAIL=1 \
+        ALERT_DB_PATH="$TEST_DB" bash "$NOTIFY" "[FAIL-TEST] immediate fail" \
+        --alert-type stuck --immediate-escalation --color warning --dry-run >/dev/null 2>&1
+    rc=$?
+    set -e
+    # alert 自体は pre-send record される (Fix 2)
+    total="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM alerts WHERE alert_type='stuck';" 2>/dev/null || echo 0)"
+    assert_eq "Test 14.1: alert は record される" "1" "$total"
+    # send 失敗時 mark_escalated されないので unescalated=1 が残る
+    unack="$(db_count stuck)"
+    assert_eq "Test 14.2: send 失敗時 backlog 維持 (unescalated=1)" "1" "$unack"
+    # primary send (dry-run) は delivered 扱い、escalation 失敗とは別管理
+    delivered="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM alerts WHERE alert_type='stuck' AND delivery_status='delivered';" 2>/dev/null || echo 0)"
+    assert_eq "Test 14.3: primary send (dry-run) は delivered" "1" "$delivered"
+fi
+
+echo
+echo "=== Test 15: [Round3 Fix2] 両 transport fail 時 alert 記録は残る + delivery_status=failed ==="
+# Codex Round 2 high #2: primary send (bot/webhook) が両方 fail した場合、
+# 旧実装では post_send_escalation_check が呼ばれず alert が record されなかった。
+# 修正後は pre-send record により alert 発生事実が確実に記録される。
+rm -f "$TEST_DB"
+if command -v sqlite3 >/dev/null 2>&1; then
+    set +e
+    # SLACK_* は冒頭で unset 済み → 両 transport が skip される (curl は呼ばれない)
+    ALERT_DB_PATH="$TEST_DB" bash "$NOTIFY" "[FAIL-TEST] both transports skip" \
+        --alert-type fail_test --color warning >/dev/null 2>&1
+    rc=$?
+    set -e
+    total="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM alerts WHERE alert_type='fail_test';" 2>/dev/null || echo 0)"
+    assert_eq "Test 15.1: transport fail でも alert は record" "1" "$total"
+    failed="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM alerts WHERE alert_type='fail_test' AND delivery_status='failed';" 2>/dev/null || echo 0)"
+    assert_eq "Test 15.2: delivery_status=failed で記録" "1" "$failed"
+    assert_eq "Test 15.3: 両 transport fail で exit code 1" "1" "$rc"
+    # counter は increment されるので escalation 評価対象になる
+    unack="$(db_count fail_test)"
+    assert_eq "Test 15.4: counter +1 (delivery 失敗でも threshold 評価可)" "1" "$unack"
+fi
+
+echo
+echo "=== Test 16: [Round3 Fix3] check-*-health.sh notifier 失敗 + PM2 alert → exit code 3 ==="
+# Codex Round 2 medium #3: 旧実装は `|| true` で notifier 失敗を握りつぶし
+# 常に exit 0 を返すため、cron / launchd / 外部監視が通知系障害を検知できなかった。
+# 修正後は notifier 失敗を集計し exit code 0/1/2/3 を返す。
+MOCK_NOTIFY="$(mktemp)"
+cat > "$MOCK_NOTIFY" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+chmod +x "$MOCK_NOTIFY"
+
+TMP_FIXTURE16="$(mktemp)"
+cat > "$TMP_FIXTURE16" <<'JSON'
+[
+  {"name":"warn-target","pm_id":0,"pm2_env":{"restart_time":60,"status":"online"}}
+]
+JSON
+set +e
+out16="$(NOTIFY_SCRIPT="$MOCK_NOTIFY" PM2_JLIST_CMD="cat $TMP_FIXTURE16" \
+        ALERT_DB_PATH="$TEST_DB" "$HEALTH_CHECK" --dry-run --warn 50 --emergency 100 2>&1)"
+rc16=$?
+set -e
+rm -f "$TMP_FIXTURE16"
+# warn-only fixture → alerts=1, notifier_failures=1 → rc=3 (both)
+assert_eq "Test 16.1: PM2 alert + notifier 失敗で exit code 3" "3" "$rc16"
+assert_contains "Test 16.2: stderr に EXIT_REASON=both" "$out16" "EXIT_REASON=both"
+assert_contains "Test 16.3: notifier_failures=1 が記録" "$out16" "notifier_failures=1"
+
+# PM2 健全 + notifier 失敗なし (notifier 呼ばれない) → exit 0
+HEALTHY_FIXTURE="$(mktemp)"
+cat > "$HEALTHY_FIXTURE" <<'JSON'
+[
+  {"name":"healthy","pm_id":0,"pm2_env":{"restart_time":5,"status":"online"}}
+]
+JSON
+set +e
+NOTIFY_SCRIPT="$MOCK_NOTIFY" PM2_JLIST_CMD="cat $HEALTHY_FIXTURE" \
+    ALERT_DB_PATH="$TEST_DB" "$HEALTH_CHECK" --dry-run --warn 50 --emergency 100 >/dev/null 2>&1
+rc16b=$?
+set -e
+rm -f "$HEALTHY_FIXTURE" "$MOCK_NOTIFY"
+assert_eq "Test 16.4: 健全 + alert なしで exit code 0" "0" "$rc16b"
+
+echo
+echo "=== Test 17: [Round3 先回り1] 同時 2 cron で race condition なし (BEGIN IMMEDIATE) ==="
+# 先回り 1: sqlite3 への同時書き込みで一方がロストしないことを確認。
+# db_record_alert 内で PRAGMA busy_timeout=5000 + BEGIN IMMEDIATE TRANSACTION 採用。
+if command -v sqlite3 >/dev/null 2>&1; then
+    rm -f "$TEST_DB"*
+    # 2 つの notify-slack.sh を background で同時起動 (--dry-run)
+    set +e
+    (ALERT_DB_PATH="$TEST_DB" bash "$NOTIFY" "race-event-1" \
+        --alert-type race --color warning --dry-run >/dev/null 2>&1) &
+    PID_A=$!
+    (ALERT_DB_PATH="$TEST_DB" bash "$NOTIFY" "race-event-2" \
+        --alert-type race --color warning --dry-run >/dev/null 2>&1) &
+    PID_B=$!
+    wait "$PID_A"
+    wait "$PID_B"
+    set -e
+    race_total="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM alerts WHERE alert_type='race';" 2>/dev/null || echo 0)"
+    assert_eq "Test 17.1: 同時 2 件で race の alert_count=2 (ロストなし)" "2" "$race_total"
+fi
 
 echo
 echo "================================================"

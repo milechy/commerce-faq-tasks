@@ -152,31 +152,73 @@ fi
 
 db_init() {
     [[ "$HAS_SQLITE" -eq 0 ]] && return 0
-    sqlite3 "$ALERT_DB_PATH" <<'SQL' 2>/dev/null || true
+    # v2 schema: delivery_status / retry_count / last_attempt_at 列を追加
+    # WAL mode: 同時 cron 実行時の lock 競合回避 (memory#14, 先回り 1)
+    # 注意: PRAGMA 設定値は stdout に出力されるので >/dev/null で抑制 (caller 側捕捉汚染防止)
+    sqlite3 "$ALERT_DB_PATH" <<'SQL' >/dev/null 2>&1 || true
+PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   alert_type TEXT NOT NULL,
   message TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  escalated INTEGER NOT NULL DEFAULT 0
+  escalated INTEGER NOT NULL DEFAULT 0,
+  delivery_status TEXT DEFAULT 'pending',
+  retry_count INTEGER DEFAULT 0,
+  last_attempt_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_type_escalated
   ON alerts(alert_type, escalated);
 SQL
+    # v1 → v2 in-place migration (列がなければ ADD、あれば errno 1 で no-op)
+    for col_def in \
+        "delivery_status TEXT DEFAULT 'pending'" \
+        "retry_count INTEGER DEFAULT 0" \
+        "last_attempt_at INTEGER"; do
+        sqlite3 "$ALERT_DB_PATH" "ALTER TABLE alerts ADD COLUMN ${col_def};" >/dev/null 2>&1 || true
+    done
 }
 
-# DB に alert を1件記録 (escalated=0)
+# DB に alert を1件記録 → rowid を stdout に出力 (空文字なら sqlite3 不在 or 失敗)
+# 先回り 1: BEGIN IMMEDIATE + busy_timeout で同時 cron 実行時のロスト書き込みを防止。
+# busy_timeout は per-connection 設定のため、各 sqlite3 呼び出しで明示する。
 db_record_alert() {
     local atype="$1" msg="$2"
-    [[ "$HAS_SQLITE" -eq 0 ]] && return 0
+    [[ "$HAS_SQLITE" -eq 0 ]] && { echo ""; return 0; }
     db_init
     local esc_msg
     esc_msg="$(printf '%s' "$msg" | sed "s/'/''/g")"
-    sqlite3 "$ALERT_DB_PATH" \
-        "INSERT INTO alerts (alert_type, message, created_at) VALUES ('${atype}', '${esc_msg}', $(date +%s));" 2>/dev/null || true
+    local now
+    now="$(date +%s)"
+    # PRAGMA busy_timeout=5000 は "5000" を stdout に出力するため、
+    # SELECT last_insert_rowid() の結果と混ざる。tail -1 で最終行 (rowid) のみ取り出す。
+    local out
+    out="$(sqlite3 "$ALERT_DB_PATH" <<SQL 2>/dev/null
+PRAGMA busy_timeout=5000;
+BEGIN IMMEDIATE;
+INSERT INTO alerts (alert_type, message, created_at, delivery_status, last_attempt_at)
+  VALUES ('${atype}', '${esc_msg}', ${now}, 'pending', ${now});
+SELECT last_insert_rowid();
+COMMIT;
+SQL
+)"
+    printf '%s' "$out" | tail -n 1
 }
 
-# 同種 unescalated alert の件数を返す
+# rowid の delivery_status を更新 (delivered / failed)
+db_update_delivery_status() {
+    local rowid="$1" status="$2"
+    [[ "$HAS_SQLITE" -eq 0 ]] && return 0
+    [[ -z "$rowid" ]] && return 0
+    db_init
+    sqlite3 "$ALERT_DB_PATH" <<SQL >/dev/null 2>&1 || true
+PRAGMA busy_timeout=5000;
+UPDATE alerts SET delivery_status='${status}', last_attempt_at=$(date +%s) WHERE id=${rowid};
+SQL
+}
+
+# 同種 unescalated alert の件数を返す (delivery_status は問わない — alert 発生事実が threshold 対象)
 db_count_unescalated() {
     local atype="$1"
     [[ "$HAS_SQLITE" -eq 0 ]] && { echo 0; return; }
@@ -191,8 +233,10 @@ db_mark_escalated() {
     local atype="$1"
     [[ "$HAS_SQLITE" -eq 0 ]] && return 0
     db_init
-    sqlite3 "$ALERT_DB_PATH" \
-        "UPDATE alerts SET escalated=1 WHERE alert_type='${atype}' AND escalated=0;" 2>/dev/null || true
+    sqlite3 "$ALERT_DB_PATH" <<SQL >/dev/null 2>&1 || true
+PRAGMA busy_timeout=5000;
+UPDATE alerts SET escalated=1 WHERE alert_type='${atype}' AND escalated=0;
+SQL
 }
 
 # 手動 reset (運用 ack 用)
@@ -200,8 +244,33 @@ db_reset_alert_type() {
     local atype="$1"
     [[ "$HAS_SQLITE" -eq 0 ]] && return 0
     db_init
-    sqlite3 "$ALERT_DB_PATH" \
-        "DELETE FROM alerts WHERE alert_type='${atype}';" 2>/dev/null || true
+    sqlite3 "$ALERT_DB_PATH" <<SQL >/dev/null 2>&1 || true
+PRAGMA busy_timeout=5000;
+DELETE FROM alerts WHERE alert_type='${atype}';
+SQL
+}
+
+# 先回り 3: delivery_failed の stderr を rate-limit (同一 key で 5 分 1 回まで)
+# R2C_CONFIG/delivery-fail-locks/ にロックファイル (mtime ベース)
+log_delivery_failure_rate_limited() {
+    local key="$1" msg="$2"
+    local lock_dir="${R2C_CONFIG}/delivery-fail-locks"
+    mkdir -p "$lock_dir" 2>/dev/null || true
+    local key_hash
+    key_hash="$(printf '%s' "$key" | shasum -a 1 2>/dev/null | awk '{print $1}')"
+    [[ -z "$key_hash" ]] && key_hash="default"
+    local lock="$lock_dir/$key_hash"
+    local now mtime age
+    now="$(date +%s)"
+    if [[ -f "$lock" ]]; then
+        mtime="$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo 0)"
+        age=$((now - mtime))
+        if [[ "$age" -lt 300 ]]; then
+            return 0
+        fi
+    fi
+    touch "$lock"
+    printf '%s\n' "$msg" >&2
 }
 
 # ─── ペイロード構築 (Attachment 形式、color 対応) ───
@@ -229,6 +298,12 @@ build_escalation_message() {
 send_escalation() {
     local esc_msg="$1"
     local esc_payload esc_webhook esc_channel
+    # Test-only hook: escalation-test.sh T14 (immediate-escalation 失敗時の挙動検証)
+    # dry-run guard より前に評価することでテストから強制 fail させられる
+    if [[ -n "${R2C_TEST_FORCE_ESCALATION_FAIL:-}" ]]; then
+        log "ERROR: [test-forced] ESCALATION send failed: $esc_msg"
+        return 1
+    fi
     # Q1 設計: SLACK_WEBHOOK_URL_EMERGENCY 優先、なければ既存webhookに prefix 付きでフォールバック
     esc_webhook="${SLACK_WEBHOOK_URL_EMERGENCY:-${SLACK_WEBHOOK_URL_R2C:-${SLACK_WEBHOOK_URL:-}}}"
     esc_channel="${SLACK_CHANNEL_EMERGENCY:-$CHANNEL}"
@@ -267,6 +342,15 @@ if [[ -n "$RESET_ALERT_TYPE" ]]; then
     fi
 fi
 
+# ─── Pre-send: alert 発生事実を確実に DB へ記録 (Fix 2) ───
+# Codex Round 2 high #2: primary send が失敗しても alert は counter に積まれるべき。
+# transport 障害時にも escalation threshold が正常に評価されるよう、
+# 送信試行の前に record しておく (rowid は後で delivery_status 更新に使う)。
+RECORDED_ROWID=""
+if [[ -n "$ALERT_TYPE" ]]; then
+    RECORDED_ROWID="$(db_record_alert "$ALERT_TYPE" "$MESSAGE")"
+fi
+
 # ─── Dry-run ───
 # 注意: dry-run でも counter (DB) + escalation 判定は実行する。
 #       (テストランナーで動作確認できるよう / send_escalation は内部 DRY_RUN guard で curl skip)
@@ -300,22 +384,28 @@ send_via_bot_token() {
     return 0
 }
 
-post_send_escalation_check() {
-    # primary send が成功した後の escalation 処理
-    # --alert-type 未指定なら何もしない (後方互換)
+# immediate-escalation 専用 handler
+# Fix 1 (Codex Round 2 high): send_escalation 成功時のみ db_mark_escalated を呼ぶ。
+#                             失敗時は backlog (escalated=0) を保持し次回呼び出しで再評価可能にする。
+handle_immediate_escalation() {
+    [[ "$IMMEDIATE_ESCALATION" -eq 1 ]] || return 0
     [[ -z "$ALERT_TYPE" ]] && return 0
-
-    if [[ "$IMMEDIATE_ESCALATION" -eq 1 ]]; then
-        local esc_msg
-        esc_msg="$(build_escalation_message "$ALERT_TYPE" "$MESSAGE" 1 "immediate")"
-        send_escalation "$esc_msg" || true
-        # immediate escalation 後も該当 type の未ack alert はクリア
+    local esc_msg
+    esc_msg="$(build_escalation_message "$ALERT_TYPE" "$MESSAGE" 1 "immediate")"
+    if send_escalation "$esc_msg"; then
         db_mark_escalated "$ALERT_TYPE"
         return 0
     fi
+    log "ERROR: immediate ESCALATION send failed; backlog preserved for alert_type=$ALERT_TYPE"
+    return 1
+}
 
-    # 通常 path: counter +1 → threshold 判定
-    db_record_alert "$ALERT_TYPE" "$MESSAGE"
+# threshold-based escalation check (通常 alert path 専用)
+# Fix 2 (Codex Round 2 high): db_record_alert は呼び出し側で pre-send 実行済み。
+#                             ここでは threshold 判定 + send_escalation のみ。
+post_send_escalation_check() {
+    [[ -z "$ALERT_TYPE" ]] && return 0
+    [[ "$IMMEDIATE_ESCALATION" -eq 1 ]] && return 0  # immediate path は handle_immediate_escalation で処理
     local cnt
     cnt="$(db_count_unescalated "$ALERT_TYPE")"
     log "alert_type=$ALERT_TYPE unescalated_count=$cnt threshold=$ESCALATION_COUNT"
@@ -324,6 +414,8 @@ post_send_escalation_check() {
         esc_msg="$(build_escalation_message "$ALERT_TYPE" "$MESSAGE" "$cnt" "threshold")"
         if send_escalation "$esc_msg"; then
             db_mark_escalated "$ALERT_TYPE"
+        else
+            log "WARN: threshold ESCALATION send failed; backlog preserved (count=$cnt threshold=$ESCALATION_COUNT)"
         fi
     fi
 }
@@ -332,26 +424,13 @@ post_send_escalation_check() {
 # (exec >> log redirect の前で実行 → 出力が stdout に残り、テストで検証可能)
 if [[ "$DRY_RUN_EXIT_AFTER_CHECK" -eq 1 ]]; then
     log "[dry-run] skipping primary send; running counter/escalation check only"
+    db_update_delivery_status "$RECORDED_ROWID" "delivered"
+    handle_immediate_escalation || true
     post_send_escalation_check
     exit 0
 fi
 
-# 本番送信パスは log file へ集約 (curl の noise を log に閉じ込める)
-exec >> "${LOG_DIR}/${SCRIPT_NAME}.log" 2>&1
-
-if [[ -n "${SLACK_BOT_TOKEN:-}" ]]; then
-    if send_via_bot_token "$SLACK_BOT_TOKEN" "$PAYLOAD"; then
-        log "Sent via bot token (attempt 1): $MESSAGE"
-        [[ "$COLOR" == "error" ]] && touch "$STOP_NOTIFIED_FILE"
-        post_send_escalation_check
-        exit 0
-    fi
-    log "WARN: bot token send failed, trying webhook (attempt 2)"
-fi
-
-# ─── 第2試行: curl Incoming Webhook ───
-WEBHOOK_URL="${SLACK_WEBHOOK_URL_R2C:-${SLACK_WEBHOOK_URL:-}}"
-
+# webhook send 関数 (第2試行) — dispatch ロジックより前に定義する必要があるので定義のみ移動済み
 send_via_webhook() {
     local url="$1" payload="$2"
     local resp
@@ -364,18 +443,56 @@ send_via_webhook() {
     return 0
 }
 
-if [[ -n "${WEBHOOK_URL:-}" ]]; then
+# 本番送信パスは log file へ集約 (curl の noise を log に閉じ込める)
+exec >> "${LOG_DIR}/${SCRIPT_NAME}.log" 2>&1
+
+PRIMARY_SENT=0
+
+# ─── 第1試行: Slack Bot Token (chat.postMessage) ───
+if [[ -n "${SLACK_BOT_TOKEN:-}" ]]; then
+    if send_via_bot_token "$SLACK_BOT_TOKEN" "$PAYLOAD"; then
+        log "Sent via bot token (attempt 1): $MESSAGE"
+        [[ "$COLOR" == "error" ]] && touch "$STOP_NOTIFIED_FILE"
+        PRIMARY_SENT=1
+    else
+        log "WARN: bot token send failed, trying webhook (attempt 2)"
+    fi
+fi
+
+# ─── 第2試行: curl Incoming Webhook ───
+WEBHOOK_URL="${SLACK_WEBHOOK_URL_R2C:-${SLACK_WEBHOOK_URL:-}}"
+if [[ "$PRIMARY_SENT" -eq 0 ]] && [[ -n "${WEBHOOK_URL:-}" ]]; then
     if send_via_webhook "$WEBHOOK_URL" "$PAYLOAD"; then
         log "Sent via webhook (attempt 2): $MESSAGE"
         [[ "$COLOR" == "error" ]] && touch "$STOP_NOTIFIED_FILE"
-        post_send_escalation_check
-        exit 0
+        PRIMARY_SENT=1
+    else
+        log "WARN: webhook send failed, falling back to stderr (attempt 3)"
     fi
-    log "WARN: webhook send failed, falling back to stderr (attempt 3)"
 fi
 
-# ─── 第3試行: stderr 書き出し + 終了コード 1 ───
+if [[ "$PRIMARY_SENT" -eq 1 ]]; then
+    db_update_delivery_status "$RECORDED_ROWID" "delivered"
+    handle_immediate_escalation || true
+    post_send_escalation_check
+    exit 0
+fi
+
+# ─── 全 transport 失敗 (Fix 2: alert recording / escalation 評価は維持) ───
+# - DB の delivery_status を 'failed' に更新 (alert 自体は record 済み)
+# - escalation 評価は実行 (counter は increment 済みなので threshold 評価可)
+# - stderr 出力は rate-limit (5 分 1 回/key) で flood を回避 (先回り 3)
+db_update_delivery_status "$RECORDED_ROWID" "failed"
+
 log "ERROR: all Slack send attempts failed for: $MESSAGE"
-printf '[%s] [%s] SLACK_SEND_FAILED color=%s channel=%s message=%s\n' \
-    "$(ts)" "$SCRIPT_NAME" "$COLOR" "$CHANNEL" "$MESSAGE" >&2
+log_delivery_failure_rate_limited \
+    "primary_send_${ALERT_TYPE:-none}_${COLOR}" \
+    "[$(ts)] [${SCRIPT_NAME}] SLACK_SEND_FAILED color=${COLOR} channel=${CHANNEL} alert_type=${ALERT_TYPE:-(none)} message=${MESSAGE}"
+
+# delivery 失敗でも escalation 評価は走らせる:
+# - immediate: send_escalation が同じく fail するなら mark_escalated されず backlog 維持
+# - threshold: counter は record 済みなので評価可能、send_escalation 失敗時は backlog 維持
+handle_immediate_escalation || true
+post_send_escalation_check
+
 exit 1

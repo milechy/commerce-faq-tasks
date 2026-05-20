@@ -80,12 +80,21 @@ if [[ "$SELF_TEST" -eq 1 ]]; then
 ]
 JSON
     echo "[self-test] fixture: $TMP_FIXTURE"
+    set +e
     PM2_JLIST_CMD="cat $TMP_FIXTURE" DRY_RUN=1 \
         "$0" --dry-run --warn 50 --emergency 100
     rc=$?
+    set -e
     rm -f "$TMP_FIXTURE"
-    [[ "$rc" -eq 0 ]] && echo "[self-test] PASS" || echo "[self-test] FAIL (rc=$rc)"
-    exit "$rc"
+    # 期待 exit code: 1 (fixture に 3 alert あり、notifier 失敗なし)
+    # Fix 3 (Codex Round 2 medium) で exit code 体系を導入したため、
+    # self-test の合否は "rc=0 or 1 (alerts 検知も成功扱い)" とする。
+    if [[ "$rc" -eq 0 ]] || [[ "$rc" -eq 1 ]]; then
+        echo "[self-test] PASS (rc=$rc — fixture contains 3 alerts; rc=1 is expected with new exit code semantics)"
+        exit 0
+    fi
+    echo "[self-test] FAIL (rc=$rc — expected 0 or 1)"
+    exit 1
 fi
 
 # ─── 本処理 ───
@@ -111,6 +120,10 @@ fi
 ALERT_TOTAL=0
 EMERGENCY_TOTAL=0
 WARN_TOTAL=0
+# Codex Round 2 medium #3 対応 (Fix 3):
+# notifier 呼び出し失敗を集計 → 終了コード 0/1/2/3 で観測可能にする
+# (cron / launchd / 外部監視が alerting 系の障害を検知できるようにする)
+NOTIFIER_FAILURES=0
 
 # jq で name と restart_time を tab 区切りで出力
 while IFS=$'\t' read -r pname restart; do
@@ -126,12 +139,16 @@ while IFS=$'\t' read -r pname restart; do
         echo "$MSG"
         EXTRA_FLAGS=()
         [[ "$DRY_RUN" -eq 1 ]] && EXTRA_FLAGS+=(--dry-run)
-        bash "$NOTIFY_SCRIPT" "$MSG" \
+        if ! bash "$NOTIFY_SCRIPT" "$MSG" \
             --color error \
             --alert-type pm2_restart \
             --immediate-escalation \
             --bypass-stop-dedupe \
-            "${EXTRA_FLAGS[@]}" || true
+            "${EXTRA_FLAGS[@]}"; then
+            rc=$?
+            NOTIFIER_FAILURES=$((NOTIFIER_FAILURES + 1))
+            echo "[check-pm2-health] WARN: notifier invocation failed (emergency path) service=${pname} exit_code=${rc}" >&2
+        fi
     elif [[ "$restart" -gt "$WARN_THRESHOLD" ]]; then
         MSG="[PM2] ${pname}: restart_time=${restart} (warn>${WARN_THRESHOLD})"
         WARN_TOTAL=$((WARN_TOTAL + 1))
@@ -139,12 +156,33 @@ while IFS=$'\t' read -r pname restart; do
         echo "$MSG"
         EXTRA_FLAGS=()
         [[ "$DRY_RUN" -eq 1 ]] && EXTRA_FLAGS+=(--dry-run)
-        bash "$NOTIFY_SCRIPT" "$MSG" \
+        if ! bash "$NOTIFY_SCRIPT" "$MSG" \
             --color warning \
             --alert-type pm2_restart \
-            "${EXTRA_FLAGS[@]}" || true
+            "${EXTRA_FLAGS[@]}"; then
+            rc=$?
+            NOTIFIER_FAILURES=$((NOTIFIER_FAILURES + 1))
+            echo "[check-pm2-health] WARN: notifier invocation failed (warn path) service=${pname} exit_code=${rc}" >&2
+        fi
     fi
 done < <(echo "$JLIST_JSON" | jq -r '.[] | [.name, (.pm2_env.restart_time // 0)] | @tsv')
 
-echo "[check-pm2-health] total alerts=${ALERT_TOTAL} (warn=${WARN_TOTAL}, emergency=${EMERGENCY_TOTAL})"
+echo "[check-pm2-health] total alerts=${ALERT_TOTAL} (warn=${WARN_TOTAL}, emergency=${EMERGENCY_TOTAL}) notifier_failures=${NOTIFIER_FAILURES}"
+
+# Exit code 体系 (Fix 3 — Codex Round 2 medium #3):
+#   0 = 正常 (alerting 機能)
+#   1 = PM2 異常検知 (alerting 機能)
+#   2 = notifier 失敗 (PM2 状態は OK だが通知系が壊れている)
+#   3 = PM2 異常 + notifier 失敗 (両方)
+# cron / launchd / 監視は非 0 を検知して oncall に通知する想定。
+if [[ "$ALERT_TOTAL" -gt 0 ]] && [[ "$NOTIFIER_FAILURES" -gt 0 ]]; then
+    echo "[check-pm2-health] EXIT_REASON=both alerts=${ALERT_TOTAL} notifier_failures=${NOTIFIER_FAILURES}" >&2
+    exit 3
+elif [[ "$NOTIFIER_FAILURES" -gt 0 ]]; then
+    echo "[check-pm2-health] EXIT_REASON=notifier_failure notifier_failures=${NOTIFIER_FAILURES}" >&2
+    exit 2
+elif [[ "$ALERT_TOTAL" -gt 0 ]]; then
+    echo "[check-pm2-health] EXIT_REASON=pm2_issue alerts=${ALERT_TOTAL}" >&2
+    exit 1
+fi
 exit 0

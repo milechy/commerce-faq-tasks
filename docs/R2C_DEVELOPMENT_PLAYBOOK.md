@@ -782,13 +782,75 @@ notify-slack.sh "[PM2-EMERGENCY] ..." --color error --immediate-escalation
 2. warn path (`--color warning`) には不要 (stop-dedupe は `error` にのみ適用)
 3. 通常の stop 通知 (`🛑 Stopped:`) には **付けない** — sentinel による重複防止が目的
 
+### 15.5.6.1 Round 3 — Delivery failure 時の挙動 (Codex Round 2 指摘対応)
+
+Codex Round 2 で指摘された「primary send / escalation send 失敗時に backlog や delivery 状態が観測不能になる」問題への対応として、下記 3 点を実装している。
+
+**Fix 1 — immediate-escalation の `db_mark_escalated` を send 成功時のみに条件化** (`notify-slack.sh:handle_immediate_escalation`)
+旧: `send_escalation ... || true; db_mark_escalated ...` で送信失敗でも backlog をクリアしていた。
+新: `if send_escalation ...; then db_mark_escalated ...; fi` で send 成功時のみ backlog をクリア。失敗時は unack 状態が保持され、次回呼び出しで再評価される。
+
+**Fix 2 — alert recording を primary send 前に pre-record で分離** (`notify-slack.sh:RECORDED_ROWID` ブロック)
+旧: `post_send_escalation_check` 内で `db_record_alert` していたため、primary send (bot/webhook) が両方 fail すると alert そのものが record されず、threshold 評価機会が失われていた。
+新: primary send の前に `db_record_alert` で alert 発生事実を必ず DB へ記録。primary send の成否は `delivery_status` 列で別管理 (`pending` → `delivered` / `failed`)。送信失敗時も escalation 評価は走り、backlog として残る。
+
+**Fix 3 — `check-pm2-health.sh` の exit code 体系導入**
+旧: notifier 呼び出しを `|| true` で潰し常に `exit 0` を返していたため、cron / launchd / 外部監視が通知系障害を検知できなかった。
+新: notifier 失敗を集計し下記 exit code を返す。
+
+| exit code | 意味 | 用途 |
+|---|---|---|
+| 0 | 正常 (PM2 健全 + notifier OK) | 監視は無反応で可 |
+| 1 | PM2 異常検知 (notifier は機能) | alerting は届いている / 復旧待ち |
+| 2 | notifier 失敗のみ (PM2 OK) | 通知系自体の障害 — 別経路で oncall 通知 |
+| 3 | PM2 異常 + notifier 失敗 | 最悪ケース — 直接 oncall ページ |
+
+stderr に `EXIT_REASON=pm2_issue|notifier_failure|both` サマリを出力し、`notifier_failures=N` で件数を観測できる。
+
+#### Round 3 先回り対応
+
+**先回り 1 — sqlite3 WAL + BEGIN IMMEDIATE TRANSACTION** (`notify-slack.sh:db_init / db_record_alert`)
+同時 cron 実行時 (`check-pm2-health.sh` と `stuck-detector` が同時起動する etc.) に sqlite3 の lock 競合で書き込みがロストしないよう、`PRAGMA journal_mode=WAL` (per-DB persistent) と `PRAGMA busy_timeout=5000` + `BEGIN IMMEDIATE TRANSACTION` (per-connection) を採用。テスト T17 で 2 プロセス並行起動下のロストなしを検証。
+
+**先回り 3 — delivery_failed log の rate-limit** (`notify-slack.sh:log_delivery_failure_rate_limited`)
+primary send 失敗時の `SLACK_SEND_FAILED` stderr 出力は 5 分以内に同一 key (`primary_send_${ALERT_TYPE}_${COLOR}`) なら 1 回までに制限。Slack 障害時の flood prevention。lock file は `${R2C_CONFIG}/delivery-fail-locks/` 配下 (テスト隔離可能)。
+
+#### DB schema v2 (追加 3 列)
+
+```sql
+ALTER TABLE alerts ADD COLUMN delivery_status TEXT DEFAULT 'pending';
+ALTER TABLE alerts ADD COLUMN retry_count INTEGER DEFAULT 0;
+ALTER TABLE alerts ADD COLUMN last_attempt_at INTEGER;
+```
+
+| 列 | 用途 | 本 PR での扱い |
+|---|---|---|
+| `delivery_status` | pending / delivered / failed | Fix 2 で primary send 結果を追跡 |
+| `retry_count`     | 失敗時の再試行回数 | **予約のみ・logic は別 PR** (exponential backoff 実装は scope 外) |
+| `last_attempt_at` | 最終 send 試行の Unix timestamp | delivery 状態と同時更新 |
+
+`retry_count` を本 PR で予約する理由: 将来 backoff 実装で DB schema 変更を 2 回繰り返す手間を回避。現状は INSERT 時 0 固定、UPDATE もしない。
+
+#### Migration script (`SCRIPTS/migrate-alert-db-v2.sh`)
+
+既存 v1 DB を in-place で v2 へ移行する idempotent script。`notify-slack.sh` の `db_init` 内でも自動 ALTER を試行するため通常運用では migration script を明示実行する必要はないが、本番 DB を計画的に移行したい場合に使用する。
+
+```bash
+bash SCRIPTS/migrate-alert-db-v2.sh --dry-run                # 影響範囲確認
+bash SCRIPTS/migrate-alert-db-v2.sh                           # 適用
+ALERT_DB_PATH=/path/to/alerts.db bash SCRIPTS/migrate-alert-db-v2.sh
+bash SCRIPTS/migrate-alert-db-v2.sh --rollback                # v1 へ戻す (table rebuild)
+```
+
+後方互換: 既存 v1 rows は `delivery_status` 列追加時に DEFAULT `'pending'` が適用されるが、`db_count_unescalated` は `escalated` 列のみ参照するため counter 動作に影響なし。
+
 ### 15.5.7 テスト
 
-`SCRIPTS/escalation-test.sh` で 24 ケース自動検証 (sqlite3 / Slack 未送信状態で動作):
+`SCRIPTS/escalation-test.sh` で 36 ケース自動検証 (sqlite3 / Slack 未送信状態で動作):
 
 ```bash
 bash SCRIPTS/escalation-test.sh
-# Expected: PASS=24 FAIL=0
+# Expected: PASS=36 FAIL=0
 ```
 
 検証項目:
@@ -804,6 +866,10 @@ bash SCRIPTS/escalation-test.sh
 - **[P1 fix]** `--bypass-stop-dedupe` + emergency → sentinel 存在下でも通知到達
 - **[P1 fix]** `--color error` 単独 (bypass なし) → sentinel 存在時に短絡 (既存挙動維持)
 - **[P1 fix]** emergency + bypass なし → 短絡 (明示的フラグ必須)
+- **[Round3 Fix1]** immediate-escalation send 失敗時 backlog 維持 (T14)
+- **[Round3 Fix2]** primary send 全失敗時も alert は record + delivery_status=failed (T15)
+- **[Round3 Fix3]** notifier 失敗時 exit code 2/3 + EXIT_REASON 出力 (T16)
+- **[Round3 先回り1]** 同時 2 cron で race condition なし (T17)
 
 ### 15.5.8 stuck-detector との統合 (本PRスコープ外、別PR)
 
