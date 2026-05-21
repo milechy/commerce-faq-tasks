@@ -120,7 +120,11 @@ dispatch_one() {
     local branch_name="auto/${tier,,}-${task_id}-${slug}"
     local log_file="${LOG_DIR}/lane-${task_id}.log"
     local lane_name="auto-${tier,,}-${task_id}"
-    local perm_mode="acceptEdits"
+    # Tier B は夜間自律実行のため bypassPermissions（acceptEdits だと Bash で
+    # permission prompt が固着し停止する）。.claude/settings.json の deny 層が
+    # force/main push・scp・rm -rf /opt・.env/opt 書込みを最終防衛する前提。
+    # Tier A/S は朝承認・人間判断のため plan のまま。
+    local perm_mode="bypassPermissions"
     case "$tier" in
         A) perm_mode="plan" ;;
         S) perm_mode="plan" ;;
