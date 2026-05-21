@@ -20,7 +20,10 @@ R2C_CONFIG="${R2C_CONFIG:-$HOME/.claude-r2c-config}"
 QUEUE_DB="${R2C_ROOT}/.claude/queue/r2c-queue.db"
 LOG_DIR="${R2C_CONFIG}/logs"
 SCRIPT_NAME="$(basename "$0" .sh)"
-MAX_RUN_MINUTES=90
+# UATa 3日運用教訓: 90min × MAX_ATTEMPTS(3) = 最大 4.5h の長時間 stuck が複数発生。
+# 45min に短縮して最大 stuck 時間を 2.25h に圧縮する。CI 完了待ちは Lane 内の
+# 20min timeout（lane-template / CLAUDE.md「CI 待ちプロトコル」参照）で別途制御。
+MAX_RUN_MINUTES=45
 MAX_ATTEMPTS=3
 RECENT_FAILED_THRESHOLD=5
 RECENT_FAILED_WINDOW="-2 hours"
@@ -40,8 +43,20 @@ if [ "$DRY_RUN" -eq 0 ]; then
     exec >> "${LOG_DIR}/${SCRIPT_NAME}.log" 2>&1
 fi
 
-# shellcheck disable=SC1091
-source "${R2C_CONFIG}/secrets/r2c-loop.env" 2>/dev/null || true
+# secrets fail-fast: 24h ループ本体は secrets 必須。silent-failure で空 token のまま
+# 走ると通知不能の連鎖事故になるため、未配備/source 失敗時は即停止する。
+# (注: Slack/Pushover の認証情報も secrets 内のため、未配備時の通知は stderr 止まり)
+SECRETS_FILE="${R2C_CONFIG}/secrets/r2c-loop.env"
+if [ ! -f "$SECRETS_FILE" ]; then
+    echo "[$(date +%Y-%m-%d_%H:%M:%S)] FATAL: secrets not found: ${SECRETS_FILE} — 配備後に再実行" >&2
+    bash "${R2C_ROOT}/SCRIPTS/notify-slack.sh" "🛑 r2c-supervisor: secrets 未配備で起動中止 (${SECRETS_FILE})" --color error 2>/dev/null || true
+    exit 1
+fi
+# shellcheck disable=SC1090,SC1091
+source "$SECRETS_FILE" || {
+    echo "[$(date +%Y-%m-%d_%H:%M:%S)] FATAL: failed to source secrets: ${SECRETS_FILE}" >&2
+    exit 1
+}
 
 echo "[$(date +%Y-%m-%d_%H:%M:%S)] === r2c-supervisor start (dry=${DRY_RUN}) ==="
 
@@ -59,7 +74,9 @@ notify() {
     local title="$2"
     local body="$3"
     if [ -x "${R2C_ROOT}/SCRIPTS/r2c-pushover.sh" ]; then
-        bash "${R2C_ROOT}/SCRIPTS/r2c-pushover.sh" --priority "$priority" --title "$title" --message "$body" 2>&1 || true
+        # 通知失敗を完全無音にしない: 失敗時は必ず stderr(=ログ) に痕跡を残す
+        bash "${R2C_ROOT}/SCRIPTS/r2c-pushover.sh" --priority "$priority" --title "$title" --message "$body" 2>&1 \
+            || echo "WARN: pushover notify failed (priority=${priority}): ${title} — ${body}" >&2
     else
         echo "NOTIFY(priority=${priority}): ${title} — ${body}"
     fi
