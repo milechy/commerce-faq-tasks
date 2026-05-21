@@ -66,3 +66,6 @@ Thumbs.db
 .r2c-24h-mode
 .r2c-24h-mode-*
 .env.bak
+
+# cron 自動生成日次レポート（Asana 正本あり、再生成可能）
+DAILY_REPORT_*.md
