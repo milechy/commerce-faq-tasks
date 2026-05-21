@@ -5,7 +5,22 @@
       "Edit(.claude/hooks/deploy_guard.py)",
       "Edit(SCRIPTS/24h-mode-on.sh)",
       "Edit(SCRIPTS/24h-mode-off.sh)",
-      "Edit(.claude/hooks/*)"
+      "Edit(.claude/hooks/*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push -u origin main:*)",
+      "Bash(scp:*)",
+      "Bash(rm -rf /opt)",
+      "Bash(rm -rf /opt/*)",
+      "Bash(rm -fr /opt/*)",
+      "Edit(.env)",
+      "Edit(.env.*)",
+      "Write(.env)",
+      "Write(.env.*)",
+      "Edit(//opt/**)",
+      "Write(//opt/**)"
     ]
   },
   "autoMemoryEnabled": true,
