@@ -207,6 +207,7 @@ if [ "$AUTO_MODE" -eq 1 ]; then
 
     # 要件4: 自走タスク枯渇 + 全 Lane idle + 人間レビュー待ち が揃った時の「無通知 exit」を防ぐ。
     # cron が毎分走るため、通知スパムを避ける throttle(6h) 付きで「通知して静かに待つ」。
+    # 実 Slack 送信と automation_state 更新は dry-run では行わない (副作用なしの preview を維持)。
     if [ "$SLOTS_USED" -eq 0 ] && [ "${ACTIVE_COUNT:-0}" -eq 0 ]; then
         HUMAN_GATE=$(SQ "SELECT COUNT(*) FROM tasks WHERE state IN ('needs_approval','needs_approval_critical','ready_to_merge');")
         HUMAN_GATE=${HUMAN_GATE:-0}
@@ -214,13 +215,16 @@ if [ "$AUTO_MODE" -eq 1 ]; then
             LAST_NOTIFY=$(SQ "SELECT value FROM automation_state WHERE key='drained_notified_at';" || true)
             NOW_EPOCH=$(date +%s)
             THROTTLE_SECS=21600  # 6h
-            if [ -z "$LAST_NOTIFY" ] || [ "$((NOW_EPOCH - LAST_NOTIFY))" -ge "$THROTTLE_SECS" ]; then
-                echo "自走タスク枯渇: ${HUMAN_GATE}件が人間レビュー待ち → 通知 (throttle 6h)"
-                bash "${R2C_ROOT}/SCRIPTS/r2c-slack-notify.sh" --text "🟡 R2C 自走タスク枯渇: dispatch 可能タスク 0件・稼働 Lane 0本。${HUMAN_GATE}件が人間レビュー待ち (needs_approval / ready_to_merge)。ループは待機継続中。" 2>/dev/null || true
-                SQ "INSERT OR REPLACE INTO automation_state (key, value) VALUES ('drained_notified_at', '${NOW_EPOCH}');" || true
+            # 空 / 非数値 (DB 破損等) は「未通知」扱いにして throttle 計算のクラッシュを避ける
+            if [ -z "$LAST_NOTIFY" ] || ! [[ "$LAST_NOTIFY" =~ ^[0-9]+$ ]] || [ "$((NOW_EPOCH - LAST_NOTIFY))" -ge "$THROTTLE_SECS" ]; then
+                echo "自走タスク枯渇: ${HUMAN_GATE}件が人間レビュー待ち → 通知 (throttle 6h, dry=${DRY_RUN})"
+                if [ "$DRY_RUN" -eq 0 ]; then
+                    bash "${R2C_ROOT}/SCRIPTS/r2c-slack-notify.sh" --text "🟡 R2C 自走タスク枯渇: dispatch 可能タスク 0件・稼働 Lane 0本。${HUMAN_GATE}件が人間レビュー待ち (needs_approval / ready_to_merge)。ループは待機継続中。" 2>/dev/null || true
+                    SQ "INSERT OR REPLACE INTO automation_state (key, value) VALUES ('drained_notified_at', '${NOW_EPOCH}');" || true
+                fi
             fi
         fi
-    else
+    elif [ "$DRY_RUN" -eq 0 ]; then
         # 何か dispatch した / Lane 稼働中 → drained 通知の throttle をリセット
         SQ "DELETE FROM automation_state WHERE key='drained_notified_at';" 2>/dev/null || true
     fi
