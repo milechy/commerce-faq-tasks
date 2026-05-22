@@ -191,7 +191,16 @@ dispatch_one() {
 
 if [ "$AUTO_MODE" -eq 1 ]; then
     SLOTS_USED=0
+    # 無限ループ防止: dispatch_one が state 未変化のまま失敗し続けても
+    # 1 サイクルで有限回しか試行しないよう上限化する。
+    ITER_GUARD=0
+    MAX_ITER=$((AVAILABLE_SLOTS * 3 + 5))
     while [ "$SLOTS_USED" -lt "$AVAILABLE_SLOTS" ]; do
+        ITER_GUARD=$((ITER_GUARD + 1))
+        if [ "$ITER_GUARD" -gt "$MAX_ITER" ]; then
+            echo "WARNING: dispatch loop guard hit (${ITER_GUARD} iters > ${MAX_ITER}), aborting cycle"
+            break
+        fi
         NEXT_ID=$(SQ "SELECT id FROM tasks
                       WHERE state = 'prompt_generated' ${NIGHT_FILTER}
                       ORDER BY CASE tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 ELSE 2 END,
@@ -199,13 +208,40 @@ if [ "$AUTO_MODE" -eq 1 ]; then
                                id ASC
                       LIMIT 1;")
         if [ -z "$NEXT_ID" ]; then
-            echo "No more prompt_generated tasks (slots used=${SLOTS_USED}/${AVAILABLE_SLOTS})"
-            break
+            # prompt_generated が無ければ pending を 1 件昇格してから dispatch する。
+            # これが pending→prompt_generated の唯一の駆動点 (r2c-generate-lane.sh は
+            # 純粋テンプレ置換で claude 起動なし)。dispatch と同じ night filter / tier 順を適用。
+            PENDING_ID=$(SQ "SELECT id FROM tasks
+                          WHERE state = 'pending' ${NIGHT_FILTER}
+                          ORDER BY CASE tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 ELSE 2 END,
+                                   COALESCE(asana_due_on, '9999-12-31') ASC,
+                                   id ASC
+                          LIMIT 1;")
+            if [ -z "$PENDING_ID" ]; then
+                echo "No dispatchable tasks (prompt_generated / pending とも 0, slots used=${SLOTS_USED}/${AVAILABLE_SLOTS})"
+                break
+            fi
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "[dry-run] would promote pending task ${PENDING_ID} via r2c-generate-lane.sh, then dispatch"
+                break
+            fi
+            echo "Promoting pending task ${PENDING_ID} → prompt_generated (r2c-generate-lane.sh)"
+            if bash "${R2C_ROOT}/SCRIPTS/r2c-generate-lane.sh" --task-id "${PENDING_ID}"; then
+                NEXT_ID="${PENDING_ID}"
+            else
+                echo "WARNING: generate-lane failed for ${PENDING_ID}, marking failed"
+                SQ "UPDATE tasks SET state='failed', error_message='generate-lane failed', last_action='generate_failed' WHERE id = ${PENDING_ID};"
+                continue
+            fi
         fi
         if dispatch_one "$NEXT_ID"; then
             SLOTS_USED=$((SLOTS_USED + 1))
         else
-            echo "WARNING: dispatch_one failed for ${NEXT_ID}, continuing"
+            # dispatch_one が state を変えずに失敗した場合 (prompt_path 欠落等の
+            # early-return)、同一タスクが毎 iteration 再選択され他タスクが starve する。
+            # selectable な状態のままなら failed にして再選択を防ぐ (running/failed 等は不変)。
+            echo "WARNING: dispatch_one failed for ${NEXT_ID}, marking failed to avoid re-selection"
+            SQ "UPDATE tasks SET state='failed', error_message='dispatch_one failed', last_action='dispatch_failed' WHERE id = ${NEXT_ID} AND state IN ('pending','prompt_generated');"
         fi
     done
 
