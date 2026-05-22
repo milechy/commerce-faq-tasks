@@ -62,6 +62,9 @@ Thumbs.db
 .claude/worktrees/
 /tmp-*.png
 
+# 24h ループ実行時 SQLite キュー（r2c-queue-init.sh で初期化、コミット禁止）
+.claude/queue/
+
 # Phase70-A 24h 自走モード一時ファイル (HOME 直下が本体だが、誤って repo に置かれた場合の保険)
 .r2c-24h-mode
 .r2c-24h-mode-*

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        R2C 24h Loop - Morning Report (毎日 06:00)
+        雛形配置: SCRIPTS/launchd/com.r2c.morning-report.plist (tracked)
+        実体配置: ~/Library/LaunchAgents/com.r2c.morning-report.plist (hkobayashi が手動 cp + load)
+
+          cp SCRIPTS/launchd/com.r2c.morning-report.plist ~/Library/LaunchAgents/
+          launchctl load -w ~/Library/LaunchAgents/com.r2c.morning-report.plist
+
+        役割: r2c-cron-wrapper.sh 経由で r2c-morning-report.sh を起動。
+              L1-L6 集計 → Slack #r2c Block Kit 投稿 + Pushover priority -2。
+              RunAtLoad=false: load 時には即時投稿せず、06:00 ちょうどにのみ発火。
+    -->
+    <key>Label</key>
+    <string>com.r2c.morning-report</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks/SCRIPTS/r2c-cron-wrapper.sh</string>
+        <string>--script</string>
+        <string>r2c-morning-report.sh</string>
+    </array>
+
+    <!-- 毎日 06:00 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/launchd-morning-report.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/launchd-morning-report-err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/hkobayashi</string>
+        <key>CLAUDE_CONFIG_DIR</key>
+        <string>/Users/hkobayashi/.claude-r2c-config</string>
+        <key>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</key>
+        <string>1</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks</string>
+
+    <key>KeepAlive</key>
+    <false/>
+    <!-- 06:00 ちょうどのみ。load 時の即時発火を防ぐ -->
+    <key>RunAtLoad</key>
+    <false/>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>
