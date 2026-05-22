@@ -7,6 +7,12 @@
         雛形配置: SCRIPTS/launchd/com.r2c.dispatch.plist (tracked)
         実体配置: ~/Library/LaunchAgents/com.r2c.dispatch.plist (hkobayashi が手動 cp + load)
 
+        ⚠️ 前提 (macOS Sequoia TCC, 実機検証 2026-05-22): launchd は ~/Documents 配下の
+           ファイルを読めず、load しても "Operation not permitted" (exit 126) で失敗する。
+           WorkingDirectory では回避不可。対策のいずれか:
+             (a) /bin/bash に Full Disk Access を付与 (System Settings → Privacy)
+             (b) repo を ~/Documents 外 (~/projects 等、稼働中の UATa/DIA1000 と同じ) へ移設
+
           cp SCRIPTS/launchd/com.r2c.dispatch.plist ~/Library/LaunchAgents/
           launchctl load -w ~/Library/LaunchAgents/com.r2c.dispatch.plist
 

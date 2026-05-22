@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 3,
     night_mode_allowed INTEGER NOT NULL DEFAULT 1 CHECK (night_mode_allowed IN (0,1)),
+    -- dispatch / supervisor が遷移ごとに記録する運用列 (手動 ALTER を schema 化し --reset で消えないように)
+    last_action TEXT,
+    error_message TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     started_at TEXT,
