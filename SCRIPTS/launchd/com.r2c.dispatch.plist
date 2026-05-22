@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        R2C 24h Loop - Dispatch (1 分間隔、--auto)
+        雛形配置: SCRIPTS/launchd/com.r2c.dispatch.plist (tracked)
+        実体配置: ~/Library/LaunchAgents/com.r2c.dispatch.plist (hkobayashi が手動 cp + load)
+
+          cp SCRIPTS/launchd/com.r2c.dispatch.plist ~/Library/LaunchAgents/
+          launchctl load -w ~/Library/LaunchAgents/com.r2c.dispatch.plist
+
+        役割: r2c-cron-wrapper.sh 経由で r2c-dispatch.sh --auto を起動。
+              prompt_generated タスクを Lane (claude --bg) に払い出す (MAX_SLOTS=3)。
+              CLAUDE_CONFIG_DIR を env で渡し、Lane が R2C 専用アカウントで動くことを保証。
+    -->
+    <key>Label</key>
+    <string>com.r2c.dispatch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks/SCRIPTS/r2c-cron-wrapper.sh</string>
+        <string>--script</string>
+        <string>r2c-dispatch.sh</string>
+        <string>--</string>
+        <string>--auto</string>
+    </array>
+
+    <!-- 1 分間隔 -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/launchd-dispatch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/launchd-dispatch-err.log</string>
+
+    <!-- launchd 最小環境への注入: PATH + アカウント分離 (CLAUDE_CONFIG_DIR) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/hkobayashi</string>
+        <key>CLAUDE_CONFIG_DIR</key>
+        <string>/Users/hkobayashi/.claude-r2c-config</string>
+        <key>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</key>
+        <string>1</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks</string>
+
+    <key>KeepAlive</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>

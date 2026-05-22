@@ -103,7 +103,14 @@ cd "${R2C_ROOT}"
 
 START_TS=$(date +%s)
 set +e
-bash "SCRIPTS/${SCRIPT}" "${PASS_THROUGH[@]:-}" >> "${TARGET_LOG}" 2>&1
+# bash 3.2 (macOS) では空配列の "${arr[@]:-}" が空文字列1個に展開され、
+# 引数なし起動のはずの script に "" が渡って "unknown arg" で落ちる。
+# pass-through の有無で分岐し、空配列時は引数を一切渡さない。
+if [ "${#PASS_THROUGH[@]}" -gt 0 ]; then
+    bash "SCRIPTS/${SCRIPT}" "${PASS_THROUGH[@]}" >> "${TARGET_LOG}" 2>&1
+else
+    bash "SCRIPTS/${SCRIPT}" >> "${TARGET_LOG}" 2>&1
+fi
 EXIT_CODE=$?
 set -e
 END_TS=$(date +%s)
