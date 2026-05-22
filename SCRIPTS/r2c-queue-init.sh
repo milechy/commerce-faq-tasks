@@ -140,6 +140,18 @@ fi
 printf '%s\n' "$SCHEMA_SQL" | sqlite3 "$QUEUE_DB"
 log "  schema applied (idempotent)"
 
+# 既存 DB への idempotent migration: CREATE TABLE IF NOT EXISTS は既存テーブルに
+# 列を追加しないため、不足している運用列 (dispatch/supervisor が UPDATE する) を補う。
+ensure_column() {
+    local col="$1" decl="$2"
+    if ! sqlite3 "$QUEUE_DB" "PRAGMA table_info(tasks);" | cut -d'|' -f2 | grep -qx "$col"; then
+        sqlite3 "$QUEUE_DB" "ALTER TABLE tasks ADD COLUMN ${col} ${decl};"
+        log "  migrate: added column tasks.${col}"
+    fi
+}
+ensure_column last_action "TEXT"
+ensure_column error_message "TEXT"
+
 INTEGRITY=$(sqlite3 "$QUEUE_DB" "PRAGMA integrity_check;")
 log "  PRAGMA integrity_check: $INTEGRITY"
 if [ "$INTEGRITY" != "ok" ]; then
