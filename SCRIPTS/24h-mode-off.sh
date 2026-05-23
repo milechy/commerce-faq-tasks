@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # 24h-mode-off.sh — 24h 自走モード OFF
 #
-# Phase70-A: 24h 自走の安全装置 (論理層) — on.sh の全逆操作
+# Phase70-A: 24h 自走の安全装置 (論理層) — on.sh の autonomy 部分のみを解除
 #
 # 機能:
-#   1. main branch protection を削除
-#   2. repository allow_auto_merge ON 復帰
+#   1. main branch protection を「安全ベースライン」へ更新
+#      (force/main直push/削除禁止 は ON/OFF 通じて永続)
+#   2. repository allow_auto_merge を元の値に復帰
 #   3. ~/.r2c-24h-mode を削除
 #   4. Slack #r2c にモード OFF 通知
 #   5. Cloudflare Pages の再開手順を出力
+#
+# 設計方針:
+#   旧版は backup から pre-on 状態を復元していたが、pre-on が無保護だと OFF 中に
+#   main が無防備 (force push / 直push 可) になり「main直push禁止・force禁止」
+#   invariant が ON/OFF 切替で消える問題があった。
+#   このため OFF でも force/直push/削除禁止は維持し、autonomy 特有の縛り
+#   (Security Scan 必須・conversation_resolution・auto-merge OFF) のみを解く。
 #
 # 冪等性:
 #   モードファイルが無い場合は warn を出して続行 (リソース側の clean-up は試みる)
@@ -44,6 +52,7 @@ run() {
 }
 
 command -v gh >/dev/null 2>&1 || { echo "ERROR: gh CLI required" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq required" >&2; exit 1; }
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -53,104 +62,61 @@ else
     log "Found mode file: $MODE_FILE"
 fi
 
-# ─── 0. バックアップから復元値を先読みする ───
-# allow_auto_merge の元の値は branch protection 復元 (バックアップ削除) より前に読む必要がある
+# ─── 0. バックアップから allow_auto_merge の元の値を先読み (backup 削除前に必要) ───
 ORIG_AUTO_MERGE="true"  # fallback: 元の値が不明な場合は true (最もよくある設定)
 if [[ "$DRY_RUN" -eq 0 ]] && [[ -f "$BACKUP_FILE" ]]; then
     ORIG_AUTO_MERGE=$(jq -r '.original_allow_auto_merge // true' "$BACKUP_FILE" 2>/dev/null || echo "true")
 fi
 
-# ─── 1. branch protection 復元 (on.sh バックアップから元設定を復元) ───
-log "Restoring branch protection on $GH_REPO main…"
+# ─── 1. branch protection を「安全ベースライン」へ更新 ───
+# ベースライン (ON/OFF 通じて永続): force禁止 / 削除禁止 / PR必須(direct push禁止) /
+#   enforce_admins:false / approval:0 / required_status_checks:null
+# (旧版は backup から pre-on を復元していたが、pre-on が無保護だと OFF 中に
+#  main が無防備になるため、ベースラインを必ず適用する設計に変更)
+log "Applying safety baseline branch protection on $GH_REPO main…"
+
+BASELINE_PAYLOAD=$(jq -nc '{
+    required_status_checks: null,
+    enforce_admins: false,
+    required_pull_request_reviews: {
+        dismiss_stale_reviews: true,
+        require_code_owner_reviews: false,
+        required_approving_review_count: 0
+    },
+    restrictions: null,
+    required_linear_history: false,
+    allow_force_pushes: false,
+    allow_deletions: false,
+    required_conversation_resolution: false
+}')
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    if [[ -f "$BACKUP_FILE" ]]; then
-        printf '[dry-run] restore branch protection from %s\n' "$BACKUP_FILE"
-    else
-        printf '[dry-run] gh api -X DELETE repos/%s/branches/main/protection (no backup found)\n' "$GH_REPO"
-    fi
+    printf '[dry-run] gh api -X PUT repos/%s/branches/main/protection --input <baseline>\n' "$GH_REPO"
+    echo '[dry-run] payload:'
+    printf '%s' "$BASELINE_PAYLOAD" | jq .
 else
-    if [[ -f "$BACKUP_FILE" ]]; then
-        if jq -e '.no_protection == true' "$BACKUP_FILE" >/dev/null 2>&1; then
-            # 24h-mode 有効化前に protection がなかった → 削除して元の状態に戻す
-            if gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1; then
-                log "  ✓ branch protection removed (was none before 24h-mode)"
-            else
-                log "  WARN: failed to remove (may already be off)"
-            fi
-            rm -f "$BACKUP_FILE"
-            log "  ✓ backup file removed"
-        else
-            # GET レスポンスを GitHub branch-protection PUT スキーマに変換して復元。
-            # - ネストされた .enabled をフラット化 (enforce_admins 等)
-            # - GET 専用の read-only フィールド (url, enforcement_level, contexts_url 等) を除去
-            # - restrictions / required_pull_request_reviews のフルオブジェクトから
-            #   PUT が受け付けるフィールドのみを抽出 (API が URL 等を拒否するため)
-            RESTORE_PAYLOAD=$(jq '{
-                required_status_checks: (
-                    if .required_status_checks == null then null
-                    else {
-                        strict: (.required_status_checks.strict // false),
-                        contexts: (.required_status_checks.contexts // []),
-                        checks: (.required_status_checks.checks // [])
-                    }
-                    end
-                ),
-                enforce_admins: (.enforce_admins.enabled // false),
-                required_pull_request_reviews: (
-                    if .required_pull_request_reviews == null then null
-                    else {
-                        dismiss_stale_reviews: (.required_pull_request_reviews.dismiss_stale_reviews // false),
-                        require_code_owner_reviews: (.required_pull_request_reviews.require_code_owner_reviews // false),
-                        required_approving_review_count: (.required_pull_request_reviews.required_approving_review_count // 0),
-                        require_last_push_approval: (.required_pull_request_reviews.require_last_push_approval // false)
-                    }
-                    end
-                ),
-                restrictions: (
-                    if .restrictions == null then null
-                    else {
-                        users: ([.restrictions.users[]?.login] // []),
-                        teams: ([.restrictions.teams[]?.slug] // []),
-                        apps:  ([.restrictions.apps[]?.slug]  // [])
-                    }
-                    end
-                ),
-                required_linear_history: (.required_linear_history.enabled // false),
-                allow_force_pushes: (.allow_force_pushes.enabled // false),
-                allow_deletions: (.allow_deletions.enabled // false),
-                required_conversation_resolution: (.required_conversation_resolution.enabled // false),
-                block_creations: (.block_creations.enabled // false),
-                lock_branch: (.lock_branch.enabled // false)
-            }' "$BACKUP_FILE")
-            if printf '%s' "$RESTORE_PAYLOAD" | gh api -X PUT "repos/$GH_REPO/branches/main/protection" --input - >/dev/null 2>&1; then
-                log "  ✓ branch protection restored from backup"
-                rm -f "$BACKUP_FILE"
-                log "  ✓ backup file removed"
-            else
-                echo "ERROR: Failed to restore branch protection from backup." >&2
-                echo "  Current protection is NOT modified — main branch remains protected." >&2
-                echo "  Backup preserved at: $BACKUP_FILE" >&2
-                echo "  To restore manually:" >&2
-                echo "    1. Inspect backup: cat $BACKUP_FILE" >&2
-                echo "    2. Re-run after fixing the issue: bash SCRIPTS/24h-mode-off.sh" >&2
-                echo "  Or restore via GitHub UI: https://github.com/$GH_REPO/settings/branches" >&2
-                exit 1
-            fi
-        fi
+    if printf '%s' "$BASELINE_PAYLOAD" | gh api -X PUT "repos/$GH_REPO/branches/main/protection" --input - >/tmp/24h-mode-off-protection.json 2>&1; then
+        log "  ✓ safety baseline applied (force/main直push/削除禁止 持続, 人間 merge 可)"
     else
-        # バックアップなし (on.sh が古い版の場合など) → 従来通り削除
-        if gh api -X DELETE "repos/$GH_REPO/branches/main/protection" >/dev/null 2>&1; then
-            log "  ✓ branch protection removed (no backup found)"
-        else
-            log "  WARN: failed to remove (may already be off, or admin permission missing)"
-        fi
+        echo "ERROR: Failed to apply safety baseline protection." >&2
+        cat /tmp/24h-mode-off-protection.json >&2
+        echo "  Backup preserved at: $BACKUP_FILE" >&2
+        echo "  Manual restore via: https://github.com/$GH_REPO/settings/branches" >&2
+        exit 1
     fi
 fi
 
 # ─── 2. allow_auto_merge を元の値に復帰 ───
+# 注: backup 削除は PATCH 成功後まで遅延 (失敗時に元の値で再試行できるよう保持)。
 log "Restoring repository auto-merge to original value (${ORIG_AUTO_MERGE})…"
 run "gh api -X PATCH 'repos/$GH_REPO' -f allow_auto_merge=${ORIG_AUTO_MERGE} >/dev/null"
 log "  ✓ allow_auto_merge=${ORIG_AUTO_MERGE}"
+
+# ─── 2.5. backup file 削除 (PATCH 成功後、復元不可能性を回避) ───
+if [[ "$DRY_RUN" -eq 0 ]] && [[ -f "$BACKUP_FILE" ]]; then
+    rm -f "$BACKUP_FILE"
+    log "  ✓ backup file removed (mode fully reverted)"
+fi
 
 # ─── 3. モードファイル削除 ───
 log "Removing mode file: $MODE_FILE"

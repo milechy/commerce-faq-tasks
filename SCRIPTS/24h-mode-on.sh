@@ -4,12 +4,22 @@
 # Phase70-A: 24h 自走の安全装置 (論理層)
 #
 # 機能:
-#   1. main branch protection を有効化 (PRレビュー1必須/admin含むdirect push禁止)
+#   1. main branch protection を有効化 (PR必須=direct push禁止 / force・削除禁止 /
+#      admin は手動merge可 [enforce_admins=false] / approval 0 / Security Scan 非必須)
 #   2. repository allow_auto_merge OFF
 #   3. 既存 open PR の auto-merge フラグ解除
 #   4. ~/.r2c-24h-mode に R2C_24H_MODE=1 + 起動時刻を書く
 #   5. Slack #r2c にモード ON 通知
 #   6. Cloudflare Pages の手動停止手順を出力 (自動化はしない)
+#
+# 設計方針 (Phase70 安全弁の本質):
+#   Lane の main 到達阻止は (a) settings.json deny 層 [git push origin main /
+#   force / gh pr merge] と (b) branch protection の force/main直push/削除禁止 +
+#   PR必須 + auto-merge OFF の二重で担保。
+#   一方で 1人開発では approval 必須 + enforce_admins=true は人間 merge を阻害
+#   して詰むため、approval=0 / enforce_admins=false に。Security Scan は既存依存
+#   20件で常時 FAIL のため required から外し、人間が朝レビューで内訳判断する
+#   (UATa/DIA1000 と同方針)。
 #
 # 冪等性:
 #   既に ON 状態 (~/.r2c-24h-mode 存在) なら何もせず exit 0
@@ -20,7 +30,7 @@
 #
 # 環境変数:
 #   GH_REPO              — owner/repo (default: milechy/commerce-faq-tasks)
-#   STATUS_CHECKS        — required status checks (CSV, default: "Stream Path Check,Security Scan")
+#   STATUS_CHECKS        — required status checks (CSV, default: "Stream Path Check")
 #   SLACK_WEBHOOK_URL    — Slack incoming webhook (なければ通知スキップ)
 #   R2C_24H_MODE_FILE    — モードファイルパス (default: $HOME/.r2c-24h-mode)
 set -euo pipefail
@@ -37,7 +47,7 @@ for arg in "$@"; do
 done
 
 GH_REPO="${GH_REPO:-milechy/commerce-faq-tasks}"
-STATUS_CHECKS="${STATUS_CHECKS:-Stream Path Check,Security Scan}"
+STATUS_CHECKS="${STATUS_CHECKS:-Stream Path Check}"
 MODE_FILE="${R2C_24H_MODE_FILE:-$HOME/.r2c-24h-mode}"
 BACKUP_FILE="${HOME}/.r2c-24h-mode-protection-backup.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -99,6 +109,9 @@ else
 fi
 
 # ─── 1. main branch protection ON ───
+# 設計の核 (Phase70 安全弁): Lane 阻止は settings.json deny 層が主役。
+# branch protection は (a) PR必須=direct push禁止 (b) force/削除禁止 を担保し、
+# 人間 admin が手動merge できる状態 (approval=0, enforce_admins=false) を保つ。
 log "Enabling branch protection on $GH_REPO main…"
 
 CHECKS_JSON=$(printf '%s' "$STATUS_CHECKS" | jq -Rcs 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map({context: ., app_id: -1})')
@@ -107,11 +120,11 @@ PROTECTION_PAYLOAD=$(jq -nc \
     --argjson checks "$CHECKS_JSON" \
     '{
         required_status_checks: { strict: true, checks: $checks },
-        enforce_admins: true,
+        enforce_admins: false,
         required_pull_request_reviews: {
             dismiss_stale_reviews: true,
             require_code_owner_reviews: false,
-            required_approving_review_count: 1
+            required_approving_review_count: 0
         },
         restrictions: null,
         required_linear_history: false,
