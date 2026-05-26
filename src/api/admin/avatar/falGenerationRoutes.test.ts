@@ -23,7 +23,7 @@ function makeApp(tenantId = "tenant-a") {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res: any, next: any) => {
-    req.supabaseUser = { app_metadata: { tenant_id: tenantId } };
+    req.supabaseUser = { app_metadata: { tenant_id: tenantId, role: 'client_admin' } };
     req.requestId = "req-test-001";
     next();
   });
