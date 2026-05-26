@@ -99,14 +99,24 @@ describe("GET /api/internal/avatar-config", () => {
       expect(sql).toContain("tenant_id = 'r2c_default'");
     });
 
-    it("他テナント非デフォルトアバターは取得できない (0件 → null)", async () => {
-      mockPool([]);
+    it("他テナント非デフォルトアバターは取得できない — SQL が tenant_id と id の両方でバインドして排除する", async () => {
+      const mockQuery = mockPool([]);
       const res = await request(makeApp())
         .get(`/api/internal/avatar-config?tenantId=tenant-a&avatarConfigId=${UUID_OTHER}`)
         .set("X-Internal-Request", "1");
 
       expect(res.status).toBe(200);
       expect(res.body.config).toBeNull();
+
+      // WHERE 句と引数バインドを両方確認:
+      // DB が 0件を返したのが「UUID_OTHER が tenant-a にも r2c_default にも属さない」
+      // という正しいクエリを発行した結果であることを検証する
+      const sql: string = mockQuery.mock.calls[0][0];
+      const params: unknown[] = mockQuery.mock.calls[0][1];
+      expect(sql).toContain("id = $1");
+      expect(sql).toContain("tenant_id = $2");
+      expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(params).toEqual([UUID_OTHER, "tenant-a"]);
     });
   });
 
