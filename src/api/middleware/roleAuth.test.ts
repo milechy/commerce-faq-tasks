@@ -4,7 +4,6 @@ import type { NextFunction, Request, Response } from "express";
 import {
   roleAuthMiddleware,
   requireRole,
-  requireOwnTenant,
   type AuthenticatedUser,
 } from "./roleAuth";
 
@@ -268,82 +267,6 @@ describe("requireRole", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// requireOwnTenant
-// ---------------------------------------------------------------------------
-describe("requireOwnTenant", () => {
-  it("allows super_admin to access any tenant", () => {
-    const req = mockReq({
-      user: { id: "u1", email: "a@a.com", role: "super_admin", tenantId: null },
-      query: { tenant: "some-other-tenant" },
-    });
-    const res = mockRes();
-    requireOwnTenant()(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  it("allows client_admin to access own tenant via query param", () => {
-    const req = mockReq({
-      user: { id: "u2", email: "c@c.com", role: "client_admin", tenantId: "tenant-xyz" },
-      query: { tenant: "tenant-xyz" },
-    });
-    const res = mockRes();
-    requireOwnTenant()(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-  });
-
-  it("returns 403 when client_admin accesses another tenant", () => {
-    const req = mockReq({
-      user: { id: "u2", email: "c@c.com", role: "client_admin", tenantId: "tenant-xyz" },
-      query: { tenant: "other-tenant" },
-    });
-    const res = mockRes();
-    requireOwnTenant()(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({
-      error: "forbidden",
-    });
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it("auto-injects tenantId when client_admin provides no tenant param", () => {
-    const req = mockReq({
-      user: { id: "u2", email: "c@c.com", role: "client_admin", tenantId: "tenant-xyz" },
-      query: {},
-    });
-    const res = mockRes();
-    requireOwnTenant()(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect((req as any).query.tenant).toBe("tenant-xyz");
-  });
-
-  it("allows client_admin access when tenant matches x-tenant-id header", () => {
-    const req = mockReq({
-      user: { id: "u2", email: "c@c.com", role: "client_admin", tenantId: "tenant-abc" },
-      query: {},
-      headers: { "x-tenant-id": "tenant-abc" },
-    });
-    const res = mockRes();
-    requireOwnTenant()(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-  });
-
-  it("returns 403 when client_admin header tenant mismatches", () => {
-    const req = mockReq({
-      user: { id: "u2", email: "c@c.com", role: "client_admin", tenantId: "tenant-abc" },
-      query: {},
-      headers: { "x-tenant-id": "tenant-other" },
-    });
-    const res = mockRes();
-    requireOwnTenant()(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(next).not.toHaveBeenCalled();
-  });
-});
+// NOTE: requireOwnTenant() ヘルパー削除に伴い、対応する describe ブロックは撤去。
+// テナント分離の retest は per-tenant ルートのテスト（例: knowledgeGapAuthGuard.test.ts,
+// evaluationsAuthGuard.test.ts, optionsAuthGuard.test.ts 等）でカバーされている。
