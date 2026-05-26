@@ -30,9 +30,11 @@ export function registerInternalAvatarConfigRoutes(app: Express): void {
       const pool = getPool();
       let result;
       if (avatarConfigId) {
-        // 特定アバターをID指定で取得（自テナント or r2c_default 限定）
+        // 特定アバターをID指定で取得（自テナント or r2c_default 限定 + is_active）
+        // is_active 必須 — 無効化済み config が ID 指定で復活する穴を塞ぐ
+        // (admin UI の inactive プレビューは別経路の別タスクで対応 — #210 スコープ外)
         result = await pool.query(
-          `SELECT ${COLS} FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'r2c_default') LIMIT 1`,
+          `SELECT ${COLS} FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'r2c_default') AND is_active = true LIMIT 1`,
           [avatarConfigId, tenantId],
         );
       } else {

@@ -83,6 +83,7 @@ describe("GET /api/internal/avatar-config", () => {
       expect(sql).toContain("id = $1");
       expect(sql).toContain("tenant_id = $2");
       expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(sql).toContain("is_active = true");  // Codex MEDIUM #210: ID 指定パスも is_active 必須
       expect(mockQuery.mock.calls[0][1]).toEqual([UUID_SAM, "tenant-a"]);
     });
 
@@ -116,7 +117,23 @@ describe("GET /api/internal/avatar-config", () => {
       expect(sql).toContain("id = $1");
       expect(sql).toContain("tenant_id = $2");
       expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(sql).toContain("is_active = true");
       expect(params).toEqual([UUID_OTHER, "tenant-a"]);
+    });
+
+    it("inactive な自テナントアバターは ID 指定でも復活しない (Codex MEDIUM #210)", async () => {
+      // 無効化済み config は WHERE id = $1 AND ... AND is_active = true で 0件
+      const mockQuery = mockPool([]);
+      const res = await request(makeApp())
+        .get(`/api/internal/avatar-config?tenantId=tenant-a&avatarConfigId=${UUID_SAM}`)
+        .set("X-Internal-Request", "1");
+
+      expect(res.status).toBe(200);
+      expect(res.body.config).toBeNull();
+
+      const sql: string = mockQuery.mock.calls[0][0];
+      expect(sql).toContain("is_active = true");
+      // 注: admin UI の inactive プレビューはこの経路ではなく、認証済み admin 専用経路で対応 (別タスク)
     });
   });
 
