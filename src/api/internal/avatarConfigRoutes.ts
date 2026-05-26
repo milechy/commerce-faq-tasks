@@ -19,12 +19,31 @@ export function registerInternalAvatarConfigRoutes(app: Express): void {
       return res.status(400).json({ error: "tenantId required" });
     }
 
+    const _rawConfigId = typeof req.query.avatarConfigId === "string" ? req.query.avatarConfigId : undefined;
+    // UUID形式のみ受け付ける（ログインジェクション・不正入力を排除）
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const avatarConfigId = _rawConfigId && UUID_RE.test(_rawConfigId) ? _rawConfigId : undefined;
+
+    const COLS = "voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt";
+
     try {
       const pool = getPool();
-      const result = await pool.query(
-        "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
-        [tenantId],
-      );
+      let result;
+      if (avatarConfigId) {
+        // 特定アバターをID指定で取得（自テナント or r2c_default 限定 + is_active）
+        // is_active 必須 — 無効化済み config が ID 指定で復活する穴を塞ぐ
+        // (admin UI の inactive プレビューは別経路の別タスクで対応 — #210 スコープ外)
+        result = await pool.query(
+          `SELECT ${COLS} FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'r2c_default') AND is_active = true LIMIT 1`,
+          [avatarConfigId, tenantId],
+        );
+      } else {
+        // アクティブアバターを決定的に取得（ORDER BY で非決定性を排除）
+        result = await pool.query(
+          `SELECT ${COLS} FROM avatar_configs WHERE tenant_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1`,
+          [tenantId],
+        );
+      }
 
       if (result.rows.length === 0) {
         return res.json({ config: null });

@@ -57,13 +57,18 @@ SYSTEM_PROMPT = (
 
 
 # --- Groq LLM 直接呼び出し ---
-async def fetch_avatar_config(tenant_id: str, api_url: str) -> dict | None:
-    """テナント別アバター設定を内部APIから取得。失敗時はNoneを返す。"""
+async def fetch_avatar_config(tenant_id: str, api_url: str, avatar_config_id: str | None = None) -> dict | None:
+    """テナント別アバター設定を内部APIから取得。失敗時はNoneを返す。
+    avatar_config_id 指定時は特定アバターを取得（テスト用途）。
+    """
+    params: dict[str, str] = {"tenantId": tenant_id}
+    if avatar_config_id:
+        params["avatarConfigId"] = avatar_config_id
     try:
         async with aiohttp.ClientSession() as http:
             async with http.get(
                 f"{api_url}/api/internal/avatar-config",
-                params={"tenantId": tenant_id},
+                params=params,
                 headers={"X-Internal-Request": "1"},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
@@ -304,11 +309,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     tenant_id = _extract_tenant_id(ctx.room.name)
     logger.info(f"[entrypoint] extracted tenant_id={tenant_id!r} from room={ctx.room.name!r}")
 
+    # room metadata から avatarConfigId を取得（テストチャットで特定アバターを指定された場合）
+    import json as _json
+    _meta: dict = {}
+    try:
+        _meta = _json.loads(ctx.room.metadata or "{}")
+    except Exception:
+        pass
+    import re as _re
+    _raw_cfg_id = _meta.get("avatarConfigId")
+    _UUID_RE = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.IGNORECASE)
+    avatar_config_id: str | None = str(_raw_cfg_id) if isinstance(_raw_cfg_id, str) and _UUID_RE.match(_raw_cfg_id) else None
+    logger.info(f"[entrypoint] avatar_config_id={'[redacted-uuid]' if avatar_config_id else None} from room metadata")
+
     # アバター設定を動的取得
     api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
     avatar_config = None
     if tenant_id:
-        avatar_config = await fetch_avatar_config(tenant_id, api_url)
+        avatar_config = await fetch_avatar_config(tenant_id, api_url, avatar_config_id)
 
     # 設定を適用（fallback: 環境変数のデフォルト）
     effective_system_prompt = (
