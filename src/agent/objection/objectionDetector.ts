@@ -93,7 +93,7 @@ export async function saveObjectionPatterns(
     try {
       const normalized = await callGroqWith429Retry(
         {
-          model: 'llama3-8b-8192',
+          model: 'llama-3.1-8b-instant',
           messages: [
             {
               role: 'system',
