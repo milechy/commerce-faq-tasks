@@ -53,7 +53,8 @@ async function dispatchAgentToRoom(
   livekitUrl: string,
   apiKey: string,
   apiSecret: string,
-  roomName: string
+  roomName: string,
+  avatarConfigId?: string
 ): Promise<void> {
   const roomClient = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
   const dispatchClient = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
@@ -64,6 +65,8 @@ async function dispatchAgentToRoom(
       name: roomName,
       emptyTimeout: 1800,    // 30分（デフォルト5分→延長）
       maxParticipants: 3,    // widget + agent + lemonslice
+      // avatarConfigId を metadata に埋め込み → agent.py が特定アバターを選択できる
+      metadata: avatarConfigId ? JSON.stringify({ avatarConfigId }) : undefined,
     });
     logger.info(`[livekitTokenRoutes] Room created: ${roomName}`);
   } catch (err: unknown) {
@@ -177,7 +180,7 @@ export function registerLiveKitTokenRoutes(
 
       // Room 作成 + Agent Dispatch（SDK 経由 — await して結果をログ、失敗してもトークンは返す）
       try {
-        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName);
+        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, requestedAvatarConfigId ?? undefined);
       } catch (err) {
         logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
       }

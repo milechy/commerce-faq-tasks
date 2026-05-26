@@ -4,6 +4,9 @@
 // 修正内容(Phase66):
 //   Q2: OR is_default = true → OR tenant_id = 'r2c_default' (クロステナント誤表示修正)
 //   Q3: ORDER BY created_at DESC 追加 (非決定的LIMIT防止)
+//
+// 修正内容(Path B fix / GID1215114990855142):
+//   avatarConfigId を room metadata に埋め込み → agent.py が特定アバターを選択できる
 
 import express from "express";
 import request from "supertest";
@@ -14,12 +17,15 @@ import { registerLiveKitTokenRoutes } from "./livekitTokenRoutes";
 jest.mock("../../lib/db", () => ({
   pool: { query: jest.fn() },
 }));
+const mockCreateRoom = jest.fn().mockResolvedValue({});
+const mockCreateDispatch = jest.fn().mockResolvedValue({ id: "dispatch-1", room: "room-1" });
+
 jest.mock("livekit-server-sdk", () => ({
   RoomServiceClient: jest.fn().mockImplementation(() => ({
-    createRoom: jest.fn().mockResolvedValue({}),
+    createRoom: mockCreateRoom,
   })),
   AgentDispatchClient: jest.fn().mockImplementation(() => ({
-    createDispatch: jest.fn().mockResolvedValue({ id: "dispatch-1", room: "room-1" }),
+    createDispatch: mockCreateDispatch,
   })),
 }));
 
@@ -61,6 +67,8 @@ describe("POST /api/avatar/room-token", () => {
     savedEnv = { ...process.env };
     Object.assign(process.env, LIVEKIT_ENV);
     mockQuery.mockReset();
+    mockCreateRoom.mockReset().mockResolvedValue({});
+    mockCreateDispatch.mockReset().mockResolvedValue({ id: "dispatch-1", room: "room-1" });
   });
 
   afterEach(() => {
@@ -159,6 +167,40 @@ describe("POST /api/avatar/room-token", () => {
 
       expect(res.body.enabled).toBe(true);
       expect(res.body.imageUrl).toBeNull();
+    });
+  });
+
+  describe("Path B fix: room metadata への avatarConfigId 伝搬", () => {
+    it("avatarConfigId 指定時: createRoom が metadata={avatarConfigId} で呼ばれる", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/sam.png", name: "SAM" }] });
+
+      const app = makeApp("tenant-a");
+      await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: "config-sam-uuid" });
+
+      expect(mockCreateRoom).toHaveBeenCalledTimes(1);
+      const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
+      expect(createRoomArg.metadata).toBeDefined();
+      const meta = JSON.parse(createRoomArg.metadata!);
+      expect(meta.avatarConfigId).toBe("config-sam-uuid");
+    });
+
+    it("avatarConfigId 未指定時: createRoom の metadata は undefined", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const app = makeApp("tenant-a");
+      await request(app)
+        .post("/api/avatar/room-token")
+        .send({});
+
+      expect(mockCreateRoom).toHaveBeenCalledTimes(1);
+      const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
+      expect(createRoomArg.metadata).toBeUndefined();
     });
   });
 });
