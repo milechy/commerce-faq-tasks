@@ -65,9 +65,11 @@ const generatePromptSchema = z.object({
 // Authorization middleware
 // ---------------------------------------------------------------------------
 
+const AVATAR_GEN_ALLOWED_ROLES = ['super_admin', 'client_admin'] as const;
+
 function avatarGenAuthzLogger(req: Request, _res: Response, next: NextFunction): void {
   const user = (req as AuthedReq).user;
-  if (!user || !(['super_admin', 'client_admin'] as string[]).includes(user.role)) {
+  if (!user || !(AVATAR_GEN_ALLOWED_ROLES as readonly string[]).includes(user.role)) {
     logger.warn({
       event: 'avatar_generation_authz_denied',
       path: req.path,
@@ -79,7 +81,7 @@ function avatarGenAuthzLogger(req: Request, _res: Response, next: NextFunction):
   next();
 }
 
-const AVATAR_GEN_AUTHZ = [roleAuthMiddleware, avatarGenAuthzLogger, requireRole('super_admin', 'client_admin')];
+const AVATAR_GEN_AUTHZ = [roleAuthMiddleware, avatarGenAuthzLogger, requireRole(...AVATAR_GEN_ALLOWED_ROLES)];
 
 // ---------------------------------------------------------------------------
 // Route registration

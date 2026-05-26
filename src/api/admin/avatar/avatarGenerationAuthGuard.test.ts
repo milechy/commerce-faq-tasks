@@ -144,6 +144,19 @@ describe('avatar generation routes — allow-path: client_admin passes authz', (
   });
 });
 
+// ── fail-closed: client_admin with no tenant_id → 403 (roleAuthMiddleware early return) ──
+
+describe('avatar generation routes — fail-closed: client_admin without tenant_id → 403', () => {
+  GENERATION_ENDPOINTS.forEach(({ method, path, body }) => {
+    it(`${method.toUpperCase()} ${path} — client_admin no tenant → 403`, async () => {
+      // roleAuthMiddleware returns 403 early when client_admin has no tenant_id
+      const app = makeApp({ app_metadata: { role: 'client_admin' }, email: 'ca-notenant@t.com' });
+      const res = await (request(app) as any)[method](path).send(body);
+      expect(res.status).toBe(403);
+    });
+  });
+});
+
 // ── allow-path: 認可通過時にログが出ないこと ─────────────────────────────────
 
 describe('avatar generation routes — allow-path: no authz warn on success', () => {
