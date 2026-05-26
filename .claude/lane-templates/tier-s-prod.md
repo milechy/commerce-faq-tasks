@@ -84,7 +84,7 @@ git diff --name-only main...HEAD
 - [ ] バックアップ (`pg_dump` 等) 取得日時: YYYY-MM-DD HH:MM
 
 ### Apply
-1. `cd ~/Documents/GitHub/commerce-faq-tasks && git pull origin main`
+1. `cd ~/projects/commerce-faq-tasks && git pull origin main`
 2. `bash SCRIPTS/deploy-vps.sh`
 3. DB migration (該当する場合): VPS で `psql -f migrations/YYYYMMDD_*.sql` を手動実行
 4. ヘルスチェック: `curl https://api.r2c.biz/health`

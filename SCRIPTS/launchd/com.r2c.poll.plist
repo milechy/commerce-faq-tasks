@@ -27,7 +27,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks/SCRIPTS/r2c-cron-wrapper.sh</string>
+        <string>/Users/hkobayashi/projects/commerce-faq-tasks/SCRIPTS/r2c-cron-wrapper.sh</string>
         <string>--script</string>
         <string>r2c-asana-poll.sh</string>
     </array>
@@ -55,7 +55,7 @@
     </dict>
 
     <key>WorkingDirectory</key>
-    <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks</string>
+    <string>/Users/hkobayashi/projects/commerce-faq-tasks</string>
 
     <key>KeepAlive</key>
     <false/>
