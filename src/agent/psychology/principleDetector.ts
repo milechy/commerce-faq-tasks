@@ -23,7 +23,7 @@ export interface PrincipleDetectionResult {
 
 /**
  * 直近3件のユーザーメッセージからキーワードマッチで心理学原則を検出する。
- * マッチなし → Groq 8b (llama3-8b-8192) でLLM判定（フォールバック）。
+ * マッチなし → Groq 8b (llama-3.1-8b-instant) でLLM判定（フォールバック）。
  * salesStage が propose/recommend/close の場合、最低1原則を返す。
  *
  * セキュリティ: LLMに渡すメッセージ内容は slice(0,500) でトリミング
@@ -81,7 +81,7 @@ async function detectWithLlm(
 
   try {
     const response = await groqClient.call({
-      model: "llama3-8b-8192",
+      model: "llama-3.1-8b-instant",
       messages: [
         {
           role: "system",

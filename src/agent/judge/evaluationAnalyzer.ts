@@ -8,7 +8,7 @@ import { createEvaluationRepository } from './evaluationRepository';
 
 const logger = pino();
 
-const ANALYZER_MODEL = 'llama3-8b-8192';
+const ANALYZER_MODEL = 'llama-3.1-8b-instant';
 
 export interface SuggestedRule {
   triggerPattern: string;
