@@ -202,5 +202,21 @@ describe("POST /api/avatar/room-token", () => {
       const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
       expect(createRoomArg.metadata).toBeUndefined();
     });
+
+    it("cross-tenant avatarConfigId (Q2=0件): createRoom の metadata は undefined (trust boundary)", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] }); // Q2 0件 = 他テナント非デフォルト → アクセス拒否
+
+      const app = makeApp("tenant-a");
+      await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" });
+
+      expect(mockCreateRoom).toHaveBeenCalledTimes(1);
+      const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
+      // SQL ownership check が通らなかった UUID は room metadata に載らない
+      expect(createRoomArg.metadata).toBeUndefined();
+    });
   });
 });

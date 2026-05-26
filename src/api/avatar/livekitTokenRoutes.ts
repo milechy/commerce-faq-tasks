@@ -156,6 +156,8 @@ export function registerLiveKitTokenRoutes(
       let imageUrl: string | null = null;
       let avatarName: string | null = null;
       const requestedAvatarConfigId = typeof req.body?.avatarConfigId === "string" ? req.body.avatarConfigId : null;
+      // SQL ownership check が通ったときのみ room metadata に伝搬（cross-tenant UUID が素通りするのを防ぐ）
+      let verifiedAvatarConfigId: string | null = null;
       try {
         let avatarConfigResult;
         if (requestedAvatarConfigId) {
@@ -163,6 +165,9 @@ export function registerLiveKitTokenRoutes(
             "SELECT image_url, name FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'r2c_default') LIMIT 1",
             [requestedAvatarConfigId, tenantId]
           );
+          if (avatarConfigResult.rows.length > 0) {
+            verifiedAvatarConfigId = requestedAvatarConfigId;
+          }
         } else {
           avatarConfigResult = await pool.query(
             "SELECT image_url, name FROM avatar_configs WHERE tenant_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1",
@@ -180,7 +185,7 @@ export function registerLiveKitTokenRoutes(
 
       // Room 作成 + Agent Dispatch（SDK 経由 — await して結果をログ、失敗してもトークンは返す）
       try {
-        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, requestedAvatarConfigId ?? undefined);
+        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, verifiedAvatarConfigId ?? undefined);
       } catch (err) {
         logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
       }
