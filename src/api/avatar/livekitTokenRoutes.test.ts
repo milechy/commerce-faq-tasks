@@ -128,6 +128,16 @@ describe("POST /api/avatar/room-token", () => {
       expect(res.body.enabled).toBe(true);
       expect(res.body.imageUrl).toBeNull();
       expect(res.body.avatarName).toBeNull();
+
+      // Q2 SQL が tenant_id 制約で他テナントを排除していることを検証
+      // (mockPool([]) の決め打ちではなく、WHERE句が実際に組み込まれていることを確認)
+      const q2Call = mockQuery.mock.calls[1];
+      const sql: string = q2Call[0];
+      const params: unknown[] = q2Call[1];
+      expect(sql).toContain("tenant_id = $2");
+      expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(params[0]).toBe("config-from-other-tenant"); // $1 = avatarConfigId
+      expect(params[1]).toBe("tenant-a");                 // $2 = requestingTenantId (排除の主体)
     });
   });
 
@@ -208,14 +218,24 @@ describe("POST /api/avatar/room-token", () => {
         .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
         .mockResolvedValueOnce({ rows: [] }); // Q2 0件 = 他テナント非デフォルト → アクセス拒否
 
+      const CROSS_TENANT_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
       const app = makeApp("tenant-a");
       await request(app)
         .post("/api/avatar/room-token")
-        .send({ avatarConfigId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" });
+        .send({ avatarConfigId: CROSS_TENANT_UUID });
 
+      // Q2 SQL が tenant_id = $2 で tenant-a 以外を排除していることを検証
+      const q2Call = mockQuery.mock.calls[1];
+      const sql: string = q2Call[0];
+      const params: unknown[] = q2Call[1];
+      expect(sql).toContain("tenant_id = $2");
+      expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(params[0]).toBe(CROSS_TENANT_UUID); // $1 = avatarConfigId
+      expect(params[1]).toBe("tenant-a");         // $2 = requestingTenantId
+
+      // SQL ownership check が通らなかった UUID は room metadata に載らない
       expect(mockCreateRoom).toHaveBeenCalledTimes(1);
       const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
-      // SQL ownership check が通らなかった UUID は room metadata に載らない
       expect(createRoomArg.metadata).toBeUndefined();
     });
   });
