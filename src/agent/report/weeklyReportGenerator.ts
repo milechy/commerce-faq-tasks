@@ -333,6 +333,44 @@ export async function postReportToSlack(
   }
 }
 
+/**
+ * 直近7日間の週次レポートを生成・保存・Slack 通知まで一括実行する。
+ * SCRIPTS/weekly-report.ts および将来の cron スケジューラから呼ばれる。
+ */
+export async function runWeeklyReport(
+  tenantId: string,
+  pool: InstanceType<typeof Pool>,
+  periodStart?: Date,
+  periodEnd?: Date,
+): Promise<{ reportText: string; slackPosted: boolean }> {
+  const end = periodEnd ?? new Date();
+  const start = periodStart ?? (() => {
+    const d = new Date(end);
+    d.setDate(d.getDate() - 7);
+    return d;
+  })();
+
+  logger.info({ tenantId, periodStart: start, periodEnd: end }, 'weeklyReport.run.start');
+
+  const metrics = await collectWeeklyMetrics(tenantId, pool, start, end);
+  const reportText = await generateReportText(metrics, start, end);
+  const slackPosted = await postReportToSlack(reportText, start, end);
+
+  await saveWeeklyReport({
+    tenantId,
+    reportText,
+    periodStart: start,
+    periodEnd: end,
+    metrics,
+    slackPosted,
+    pool,
+  });
+
+  logger.info({ tenantId, slackPosted }, 'weeklyReport.run.done');
+
+  return { reportText, slackPosted };
+}
+
 
 // ユーティリティ
 
