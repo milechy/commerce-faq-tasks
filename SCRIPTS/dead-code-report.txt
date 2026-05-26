@@ -1,6 +1,6 @@
 DEAD CODE DETECTION REPORT
 Generated: 2026-04-02 12:06:50
-Project: /Users/hkobayashi/Documents/GitHub/commerce-faq-tasks
+Project: /Users/hkobayashi/projects/commerce-faq-tasks
 
 ============================================================
 === CHECK 1: TypeScript未使用export (ts-prune) === [HIGH]

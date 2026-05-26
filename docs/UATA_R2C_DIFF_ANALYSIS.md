@@ -2,13 +2,13 @@
 
 **版数:** 1.0
 **作成日:** 2026-05-20 (Phase70-K 完了直後、Phase70-H 12h パイロット直前)
-**作成者:** Claude Code CLI (Sonnet 4.6) on `/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks`
+**作成者:** Claude Code CLI (Sonnet 4.6) on `/Users/hkobayashi/projects/commerce-faq-tasks`
 **位置づけ:** UATa (`milechy/ultra-autotrade-project`) と R2C (`milechy/commerce-faq-tasks`) の 24h 自走インフラを比較し、Phase70-H 12h パイロット起動前に取り込むべきギャップを抽出する。
 **対象範囲:** scripts / hooks / agents / checklist / playbook 等の **autonomous infrastructure**。デプロイ二重構造・Tier 判定・Pushover ポリシー等の **runtime architecture** は既存の `docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md` (Phase 0, 458 行) で確定済のため重複させない。
 **ガードレール:** R2C 固有強みセクションは `commerce-faq-tasks` リポに **実在確認済みファイルのみ** 引用 (`wc -l` / `ls -la` で全数検証済)。推測 docs 禁止 (memory#29)。
 **比較ソース:**
 - UATa リポ: `/Users/hkobayashi/projects/UATa-readonly/`
-- R2C リポ: `/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks/` (HEAD `0dbb3bc`)
+- R2C リポ: `/Users/hkobayashi/projects/commerce-faq-tasks/` (HEAD `0dbb3bc`)
 
 **関連ドキュメント (R2C 側、参照のみ):**
 - `docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md` (Phase 0, 458 行) — runtime architecture 差分の正本

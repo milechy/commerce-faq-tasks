@@ -114,7 +114,7 @@ R2C 対応:
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks/SCRIPTS/r2c-stuck-detector.sh</string>
+        <string>/Users/hkobayashi/projects/commerce-faq-tasks/SCRIPTS/r2c-stuck-detector.sh</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

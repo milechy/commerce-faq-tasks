@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-R2C_ROOT="${R2C_ROOT:-$HOME/Documents/GitHub/commerce-faq-tasks}"
+R2C_ROOT="${R2C_ROOT:-$HOME/projects/commerce-faq-tasks}"
 R2C_CONFIG="${R2C_CONFIG:-$HOME/.claude-r2c-config}"
 QUEUE_DB="${QUEUE_DB:-${R2C_ROOT}/.claude/queue/r2c-queue.db}"
 LOG_DIR="${LOG_DIR:-${R2C_CONFIG}/logs}"

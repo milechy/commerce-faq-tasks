@@ -72,3 +72,9 @@ Thumbs.db
 
 # cron 自動生成日次レポート（Asana 正本あり、再生成可能）
 DAILY_REPORT_*.md
+
+# 移設後追記: 24h ループのキュー実体 / Lane 作業ディレクトリ (コミット禁止)
+.r2c-queue.db
+.r2c-queue.db-shm
+.r2c-queue.db-wal
+.claude/lanes/
