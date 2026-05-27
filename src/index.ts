@@ -49,6 +49,7 @@ import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
+import { internalNetworkOnly } from "./api/middleware/internalNetworkOnly";
 import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
@@ -171,8 +172,10 @@ app.get("/ce/status", (_req, res) => {
 // Health check — public, no sensitive data returned
 app.get("/health", healthHandler);
 
-// Prometheus metrics — 内部ネットワーク専用（X-Internal-Request: 1 必須）
-app.get("/metrics", async (req, res) => {
+// Prometheus metrics — 内部ネットワーク専用
+//   - internalNetworkOnly: socket peer が loopback でなければ 403（spoof不可）
+//   - X-Internal-Request: 1 ヘッダ要求（後方互換 + nginx strip と合わせ二重防御）
+app.get("/metrics", internalNetworkOnly, async (req, res) => {
   if (req.headers[INTERNAL_REQUEST_HEADER] !== "1") {
     return res.status(403).json({ error: "forbidden" });
   }

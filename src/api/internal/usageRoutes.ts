@@ -9,9 +9,10 @@
 import type { Express, Request, Response } from 'express';
 import { INTERNAL_REQUEST_HEADER } from '../../lib/metrics/kpiDefinitions';
 import { trackUsage } from '../../lib/billing/usageTracker';
+import { internalNetworkOnly } from '../middleware/internalNetworkOnly';
 
 export function registerInternalUsageRoutes(app: Express): void {
-  app.post('/api/internal/usage', (req: Request, res: Response) => {
+  app.post('/api/internal/usage', internalNetworkOnly, (req: Request, res: Response) => {
     if (req.headers[INTERNAL_REQUEST_HEADER] !== '1') {
       return res.status(403).json({ error: 'forbidden' });
     }

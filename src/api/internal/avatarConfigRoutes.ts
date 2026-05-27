@@ -7,9 +7,10 @@
 import type { Express, Request, Response } from "express";
 import { INTERNAL_REQUEST_HEADER } from "../../lib/metrics/kpiDefinitions";
 import { getPool } from "../../lib/db";
+import { internalNetworkOnly } from "../middleware/internalNetworkOnly";
 
 export function registerInternalAvatarConfigRoutes(app: Express): void {
-  app.get("/api/internal/avatar-config", async (req: Request, res: Response) => {
+  app.get("/api/internal/avatar-config", internalNetworkOnly, async (req: Request, res: Response) => {
     if (req.headers[INTERNAL_REQUEST_HEADER] !== "1") {
       return res.status(403).json({ error: "forbidden" });
     }

@@ -1,6 +1,61 @@
 server {
     server_name api.r2c.biz;
 
+    # ----------------------------------------------------------------------
+    # Internal endpoints — IP allowlist + X-Internal-Request header strip.
+    #   - /api/internal/  : avatar-agent (localhost) のみ。spoof閉塞。
+    #   - /metrics        : Prometheus scrape (localhost) のみ。
+    #   - /internal/ga4/  : Cloudflare Workers Cron から叩く必要があるため
+    #                       IP制限はしない（HMAC で守る）。ヘッダはstripしない
+    #                       — internalHmacMiddleware が X-Internal-Request:1 を要求するため。
+    # ----------------------------------------------------------------------
+    location /api/internal/ {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # 外部由来の X-Internal-Request ヘッダを強制strip（多層防御）
+        proxy_set_header X-Internal-Request "";
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+
+    location = /metrics {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Internal-Request "";
+        proxy_read_timeout 30s;
+    }
+
+    location /internal/ga4/ {
+        # CF Workers Cron からの呼び出しを受ける必要があるため allow/deny は付けない。
+        # 認証は HMAC (internalHmacMiddleware) に委譲する。
+        # 外部由来 X-Internal-Request:1 はここでは strip しない — HMAC ミドルウェアが
+        # 同ヘッダ + 5分以内の有効署名 + timing-safe比較で実認証する。
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 1M;
+        proxy_read_timeout 60s;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:3100;
         proxy_http_version 1.1;
@@ -10,6 +65,8 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # デフォルトでも strip — このヘッダを正当に使うのは /internal/ga4/ のみ
+        proxy_set_header X-Internal-Request "";
         client_max_body_size 50M;
         proxy_read_timeout 120s;
     }
