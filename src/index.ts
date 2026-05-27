@@ -611,6 +611,24 @@ app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: e
 });
 
 async function startServer() {
+  // Codex review #3: 必須secretは boot 時に検証して fail-fast する。
+  // 起動後に runtime 500 を吐き続ける partial outage を防ぐ。
+  // production では未設定なら exit(1)。dev/test では loud warn で続行。
+  if (!process.env.INTERNAL_API_HMAC_SECRET) {
+    if (process.env.NODE_ENV === "production") {
+      logger.fatal(
+        "[startup] INTERNAL_API_HMAC_SECRET is required in production " +
+          "(/internal/ga4/* would 500 indefinitely). Aborting boot.",
+      );
+      process.exit(1);
+    } else {
+      logger.warn(
+        "[startup] INTERNAL_API_HMAC_SECRET not set — /internal/ga4/* will fail-closed (500). " +
+          "OK for dev/test, FATAL in production.",
+      );
+    }
+  }
+
   app.listen(port, () => {
     logger.info({ port, env: process.env.NODE_ENV }, "server listening");
   });
