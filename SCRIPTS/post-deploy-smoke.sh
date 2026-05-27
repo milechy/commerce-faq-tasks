@@ -73,7 +73,10 @@ if [ "$metrics_status" = "200" ]; then
   echo "  ✅ Metrics — $metrics_status (localhost on VPS)"
   PASS=$((PASS + 1))
 else
-  echo "  ⚠️  Metrics — $metrics_status (non-critical, VPS localhost check)"
+  # Codex Round 2: 内部メトリクスは observability の生命線。WARN ではなく
+  # FAIL にして deploy ゲートで止める（observability regression を看過させない）。
+  echo "  ❌ Metrics — $metrics_status (expected 200 via VPS localhost:3100)"
+  FAIL=$((FAIL + 1))
 fi
 
 # ── 5b. 公開面では /metrics は必ず deny される（spoof閉塞の確認）──────
@@ -97,7 +100,10 @@ if [ "$nginx_loopback_status" = "200" ]; then
   echo "  ✅ /metrics via nginx loopback — $nginx_loopback_status"
   PASS=$((PASS + 1))
 else
-  echo "  ⚠️  /metrics via nginx loopback — $nginx_loopback_status (expected 200, check nginx header injection)"
+  # Codex Round 2: nginx ↔ Express の interplay が壊れたら 200 を返せなくなる。
+  # 検出を deploy ゲートで強制するため FAIL に格上げ。
+  echo "  ❌ /metrics via nginx loopback — $nginx_loopback_status (expected 200, check nginx X-Internal-Request injection / IP allow)"
+  FAIL=$((FAIL + 1))
 fi
 
 # ── 6. avatar-agent PM2 status ────────────────────────────────────────────

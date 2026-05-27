@@ -43,6 +43,22 @@ describe("isLoopbackAddress", () => {
   it("allows IPv4-mapped IPv6 loopback (::ffff:127.0.0.1)", () => {
     expect(isLoopbackAddress("::ffff:127.0.0.1")).toBe(true);
   });
+  // Codex Round 2: 127.0.0.0/8 is loopback per RFC 5735, not just 127.0.0.1
+  it("allows other addresses in 127.0.0.0/8 (e.g. 127.0.0.2)", () => {
+    expect(isLoopbackAddress("127.0.0.2")).toBe(true);
+  });
+  it("allows 127.1.2.3 (rest of 127/8)", () => {
+    expect(isLoopbackAddress("127.1.2.3")).toBe(true);
+  });
+  it("allows ::ffff:127.0.0.2 (mapped, non-canonical loopback)", () => {
+    expect(isLoopbackAddress("::ffff:127.0.0.2")).toBe(true);
+  });
+  it("allows mixed-case IPv4-mapped prefix (::FFFF:127.0.0.1)", () => {
+    expect(isLoopbackAddress("::FFFF:127.0.0.1")).toBe(true);
+  });
+  it("trims surrounding whitespace before evaluation", () => {
+    expect(isLoopbackAddress("  127.0.0.1  ")).toBe(true);
+  });
   it("denies undefined (fail-closed)", () => {
     expect(isLoopbackAddress(undefined)).toBe(false);
   });
@@ -66,6 +82,23 @@ describe("isLoopbackAddress", () => {
   });
   it("denies a deceptive string that contains 127.0.0.1 as substring", () => {
     expect(isLoopbackAddress("127.0.0.1.evil.example.com")).toBe(false);
+  });
+  it("denies 128.0.0.1 (off-by-one above 127/8)", () => {
+    expect(isLoopbackAddress("128.0.0.1")).toBe(false);
+  });
+  it("denies ::ffff:8.8.8.8 (mapped non-loopback)", () => {
+    expect(isLoopbackAddress("::ffff:8.8.8.8")).toBe(false);
+  });
+  it("denies malformed IPv4 (octets > 255)", () => {
+    expect(isLoopbackAddress("127.0.0.999")).toBe(false);
+  });
+  it("denies leading-zero / non-decimal forms (avoids ambiguous parsers)", () => {
+    // Defensively: '127.000.000.001' MIGHT be normalized to 127.0.0.1 in some
+    // libs; we only accept literal 1-3 digit decimal octets to stay predictable.
+    expect(isLoopbackAddress("0177.0.0.1")).toBe(false);
+  });
+  it("denies non-string inputs", () => {
+    expect(isLoopbackAddress(123 as unknown as string)).toBe(false);
   });
 });
 
