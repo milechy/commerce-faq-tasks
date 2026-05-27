@@ -87,6 +87,19 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# ── 5c. nginx 経由の loopback (VPSローカルhttp 127.0.0.1) は 200 を返す ──
+# Codex MEDIUM 反映: nginx の proxy_set_header 設定誤りで loopback 経由も
+# 200 を返せなくなる lockout を検出する。Pre-A 時点と Post-A 時点で意味が
+# 変わる(Post: nginx が "1" を注入してくれるのでヘッダなしでも 200)。
+nginx_loopback_status=$(ssh "${VPS}" "curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+  http://127.0.0.1/metrics 2>/dev/null" 2>/dev/null || echo "000")
+if [ "$nginx_loopback_status" = "200" ]; then
+  echo "  ✅ /metrics via nginx loopback — $nginx_loopback_status"
+  PASS=$((PASS + 1))
+else
+  echo "  ⚠️  /metrics via nginx loopback — $nginx_loopback_status (expected 200, check nginx header injection)"
+fi
+
 # ── 6. avatar-agent PM2 status ────────────────────────────────────────────
 avatar_status=$(ssh "${VPS}" "pm2 describe rajiuce-avatar 2>/dev/null | grep -E 'status.*online' | wc -l | tr -d ' '" 2>/dev/null || echo "0")
 if [ "$avatar_status" -gt 0 ]; then
