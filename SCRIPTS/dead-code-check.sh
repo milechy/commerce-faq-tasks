@@ -44,7 +44,7 @@ for line in lines:
     name = m.group(1)
     # count references in src/ outside the declaring file
     result = subprocess.run(
-        ['grep', '-rn', '--include=*.ts', '--', name, 'src/'],
+        ['grep', '-rn', '--include=*.ts', '--exclude=*.test.ts', '--', name, 'src/'],
         capture_output=True, text=True
     )
     refs = [l for l in result.stdout.strip().split('\n')
@@ -80,9 +80,9 @@ UNREGISTERED=0
 while IFS= read -r route_file; do
   base=$(basename "$route_file" .ts)
   # src/index.ts に直接登録、または他の *.ts ファイルから import されているか確認
-  refs=$(grep -rn --include="*.ts" -- "$base" src/ 2>/dev/null | grep -v "^${route_file}:" | grep -c "" || echo "0")
-  if [ "$refs" = "0" ]; then
-    echo "  ⚠️  $route_file (no references found in src/)"
+  ref_count=$(grep -rn --include="*.ts" -- "$base" src/ 2>/dev/null | grep -v "^${route_file}:" | wc -l)
+  if [ "${ref_count// /}" = "0" ]; then
+    echo "  ⚠️  $route_file (no references found outside itself in src/)"
     UNREGISTERED=$((UNREGISTERED + 1))
   fi
 done < <(find src/api/ -name "*.ts" | grep -i "routes\|router" | grep -v "\.test\.ts" || true)
