@@ -67,6 +67,15 @@ bash SCRIPTS/security-scan.sh
 
 ---
 
+## ローカル ⇔ CI 判定一致 (2026-05-27, GID 1215114679975245)
+
+- `SCRIPTS/security-scan.sh` の audit 評価は **`pnpm audit --production --audit-level=high`** に統一済み (旧 `|| true` 握り潰しを撤廃)。
+- `set -o pipefail` で `{ ... } | tee` 内部の `exit 1` を script 終了コードに伝播。
+- CI `.github/workflows/security-scan.yml` の独立 audit ステップと **判定基準・対象パス・閾値が完全一致**。
+- ignore 対象 CVE は **`package.json#pnpm.auditConfig.ignoreCves` で集中管理**。根拠と再評価トリガーは `docs/SECURITY_SCAN_ALLOWLIST.md#pnpm-auditconfig-ignorecves` を参照。
+
+> ⚠️ `pnpm verify` (定義: `package.json#scripts.verify`) の末尾には `bash SCRIPTS/security-scan.sh || true` が残っており、Gate 1 単独では audit 失敗を捕らえない。`bash SCRIPTS/security-scan.sh` を別途実行するか、verify から `|| true` を撤廃する follow-up を別 PR で扱う。
+
 ## 関連ファイル
 
 - スキャンスクリプト: `SCRIPTS/security-scan.sh`

@@ -63,6 +63,53 @@
 3. **期限超過**: 2026-09-30 を過ぎたエントリは Asana タスク化 (担当: Phase 担当の hkobayashi)。
 4. **transitive 元の更新が前提**: 直接更新 (`pnpm update <pkg>`) は親が pinned のため効かない。`pnpm.overrides` で強制更新するか、親のメジャー更新を待つ。
 
+---
+
+## pnpm auditConfig ignoreCves (2026-05-27 追加, GID 1215114679975245)
+
+> **位置づけ**: `package.json#pnpm.auditConfig.ignoreCves` で `pnpm audit --audit-level=high` の判定から除外する CVE。
+> ローカル `SCRIPTS/security-scan.sh` と CI `.github/workflows/security-scan.yml` が同じ判定基準で動くようになったため (二枚舌閉じ込め)、
+> ignore は **コード/設定の単一の源** で管理する。
+>
+> **再評価条件**: 各エントリの「再評価トリガー」列に記載した条件が成立したら、grep 再実行で到達不能根拠の有効性を再確認し、必要なら ignore を解除する。
+> **計測元**: `pnpm audit --production --audit-level=high --json` 実行結果 (2026-05-27 時点)
+
+### Ignore 対象 (8件 High)
+
+| # | CVE | sev | module | 経路 | 到達不能/低リスク根拠 (実機照合) | 再評価トリガー |
+|---|---|---|---|---|---|---|
+| I-1 | CVE-2026-26996 | high | minimatch | `@google-analytics/data → google-gax → rimraf → glob → minimatch@9.0.5` | `grep "from 'minimatch'" src/` 0件 → 直接呼び出し無し。GA4 client は `GOOGLE_APPLICATION_CREDENTIALS_JSON` 必須 (`src/lib/ga4/ga4Client.ts:16`)。攻撃面 = google-gax 内部の path sweep (rimraf) のみで攻撃者操作不能 | `@google-analytics/data` major bump (5→6) 時 / google-gax が rimraf/glob 新版採用時 |
+| I-2 | CVE-2026-27903 | high | minimatch | 同上 | 同上 (matchOne ReDoS。同様に攻撃者からの pattern 入力経路なし) | 同上 |
+| I-3 | CVE-2026-27904 | high | minimatch | 同上 | 同上 (nested *() extglobs ReDoS) | 同上 |
+| I-4 | CVE-2026-44289 | high | protobufjs | `@google-analytics/data → google-gax → @grpc/proto-loader → protobufjs@7.5.5` | `grep "from 'protobufjs'\|@grpc/" src/` 0件 → 直接呼び出し無し。protobuf decode 入力は **Google API サーバーからの TLS 応答**のみ (信頼境界=Google)。`src/lib/ga4/ga4Client.ts:40,71` で `runReport` 経由 | 同上 / google-gax が protobufjs 7.5.6+ 採用時 |
+| I-5 | CVE-2026-44290 | high | protobufjs | 同上 | 同上 (unsafe option paths DoS、unbounded message) | 同上 |
+| I-6 | CVE-2026-44291 | high | protobufjs | 同上 | 同上 (Code generation gadget after prototype pollution、信頼された入力のみ) | 同上 |
+| I-7 | CVE-2026-44293 | high | protobufjs | 同上 | 同上 (bytes field default code injection、信頼された .proto 定義のみ) | 同上 |
+| I-8 | CVE-2026-45134 | high | langsmith | `@langchain/core@0.3.80 → langsmith@0.3.81` (+ `@langchain/langgraph → @langchain/core → langsmith` 経路あり) | `grep "from 'langsmith'" src/` 0件。`grep "LANGCHAIN_TRACING\|LANGSMITH_API_KEY" src/` 0件 → tracing 環境変数未設定で langsmith クライアントは初期化されない。`pullPrompt` 経路も未使用 | `@langchain/core` major bump (0.3→1.x) 時 / LANGCHAIN_TRACING を導入する場合は即時解除 |
+
+### Moderate 維持 (Ignore しない、到達可・将来対処)
+
+`pnpm audit --audit-level=high` の gating 対象外のため CI は緑のまま。可視性は残す。
+
+| Moderate CVE | module | 到達可? | 想定対処 |
+|---|---|---|---|
+| CVE-2025-13466 | body-parser <2.2.1 | ✅ 全 POST/PUT/PATCH 経路 | `express 5.1.0 → 5.2.x` minor bump (低リスク) |
+| CVE-2025-15284, CVE-2026-2391 (low), CVE-2026-8723 | qs <6.15.2 | ✅ 全 querystring 経路 | 同上 (express bump で transitive 追従) |
+| CVE-2026-26996, CVE-2026-40190, CVE-2026-41182 | langsmith | ✗ 未到達 (I-8 と同根拠) | 親 `@langchain/core` major bump 時に一括 |
+| CVE-2026-41907 | uuid 13.0.0 (直接) | ✗ R2C は `v4 as uuidv4` のみ使用 (`src/index.ts:10`)、CVE は v3/v5/v6+buf 限定 | uuid 13→14 patch bump (低リスク) |
+| CVE-2026-41907 | uuid 10.0.0 (langchain transitive) | ✗ 同上 | langchain major bump 待ち |
+| CVE-2026-44288, 44292, 44294, 45740 | protobufjs / @protobufjs/utf8 | △ GA4 経路限定 (I-4〜7 と同根拠) | GA4 major bump 時 |
+| CVE-2026-33750 | brace-expansion | △ GA4 経路限定 (I-1〜3 と同根拠) | 同上 |
+| CVE-2026-45736 | ws (@supabase/realtime-js) | ✗ `grep "\.channel(" src/` 0件 → Realtime 購読未使用 | Realtime 機能採用時に即時解除 |
+
+### Ignore 解除運用
+
+1. 月次レビュー (`docs/SECURITY_SCAN_POLICY.md` の「月次レビュー」フロー) で `package.json#pnpm.auditConfig.ignoreCves` の各エントリに対し:
+   - 再評価トリガーが発生していないか確認
+   - 該当 CVE が直接 dep に昇格していないか `pnpm why <pkg>` で確認
+   - 解除可能なら ignore リストから削除し、`pnpm audit` 再実行で確証
+2. **新規 High/Critical** は本リストに無条件で追加しない。Tier S 即時対応が原則。やむを得ない場合のみ、根拠と再評価条件をこの表に明記したうえで追加可。
+
 ## 関連ドキュメント
 
 - `docs/SECURITY_SCAN_POLICY.md` — Security scan の運用ポリシー全体
