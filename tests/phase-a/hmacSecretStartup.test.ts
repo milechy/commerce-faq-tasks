@@ -57,20 +57,37 @@ describe("evaluateInternalSecretGuard (Codex #4 — invert NODE_ENV gating)", ()
     expect(out.mustExit).toBe(false);
   });
 
-  it("secret 未設定 + ALLOW_MISSING_INTERNAL_HMAC_SECRET=true → 明示的 escape hatch で warn", () => {
+  // Codex review #5: production で bypass を試みても無効、必ず fail-fast。
+  it("secret 未設定 + production + ALLOW_MISSING_INTERNAL_HMAC_SECRET=true → bypass しない (Codex #5)", () => {
     const out = evaluateInternalSecretGuard({
       NODE_ENV: "production",
       ALLOW_MISSING_INTERNAL_HMAC_SECRET: "true",
     } as NodeJS.ProcessEnv);
-    expect(out.result).toBe("warn");
-    expect(out.mustExit).toBe(false);
-    expect(out.reason).toMatch(/explicit-bypass/);
+    expect(out.mustExit).toBe(true);
+    expect(out.reason).toMatch(/production/);
   });
 
-  it("secret 未設定 + ALLOW_MISSING_INTERNAL_HMAC_SECRET=other → bypass しない", () => {
+  it("secret 未設定 + staging + ALLOW_MISSING_INTERNAL_HMAC_SECRET=true → bypass しない", () => {
+    const out = evaluateInternalSecretGuard({
+      NODE_ENV: "staging",
+      ALLOW_MISSING_INTERNAL_HMAC_SECRET: "true",
+    } as NodeJS.ProcessEnv);
+    expect(out.mustExit).toBe(true);
+  });
+
+  it("secret 未設定 + 不明env + ALLOW_MISSING_INTERNAL_HMAC_SECRET=true → bypass しない", () => {
+    const out = evaluateInternalSecretGuard({
+      ALLOW_MISSING_INTERNAL_HMAC_SECRET: "true",
+    } as NodeJS.ProcessEnv);
+    expect(out.mustExit).toBe(true);
+  });
+
+  it("secret 未設定 + 任意の追加 env を渡しても production では mustExit=true", () => {
     const out = evaluateInternalSecretGuard({
       NODE_ENV: "production",
-      ALLOW_MISSING_INTERNAL_HMAC_SECRET: "1",
+      DEBUG: "true",
+      FORCE_BYPASS: "1",
+      ALLOW_ANYTHING: "yes",
     } as NodeJS.ProcessEnv);
     expect(out.mustExit).toBe(true);
   });

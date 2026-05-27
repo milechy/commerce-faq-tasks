@@ -12,10 +12,10 @@
 //   - secret UNSET, NODE_ENV ∈ {development,test}   → "warn"  (loud log, continue)
 //   - secret UNSET, anything else (incl. undefined) → onFatal() (process.exit(1))
 //
-// Escape hatch: if a user explicitly opts in via
-// ALLOW_MISSING_INTERNAL_HMAC_SECRET=true (e.g. ephemeral container running an
-// admin-only command path that does not touch /internal/ga4/*), the guard
-// downgrades to "warn". This must be an explicit signal, never the default.
+// Codex review #5: 以前提供していた ALLOW_MISSING_INTERNAL_HMAC_SECRET=true
+// による無条件 bypass は削除。production/staging で誤って env var を継承した
+// 場合に sentinel が無効化される事故を防ぐため、bypass は dev/test に限定する。
+// dev/test では NODE_ENV だけで判別できるので、追加 env var は不要 (= 完全削除)。
 
 export type GuardResult = "ok" | "warn";
 
@@ -26,13 +26,6 @@ export function evaluateInternalSecretGuard(
 ): { result: GuardResult; mustExit: boolean; reason: string } {
   if (env.INTERNAL_API_HMAC_SECRET) {
     return { result: "ok", mustExit: false, reason: "secret-present" };
-  }
-  if (env.ALLOW_MISSING_INTERNAL_HMAC_SECRET === "true") {
-    return {
-      result: "warn",
-      mustExit: false,
-      reason: "secret-missing-explicit-bypass",
-    };
   }
   const nodeEnv = env.NODE_ENV ?? "";
   if (SAFE_NON_PROD_ENVS.has(nodeEnv)) {
@@ -64,7 +57,7 @@ export function assertInternalSecretConfigured(
     logger.fatal(
       `[startup] INTERNAL_API_HMAC_SECRET is required (reason=${reason}). ` +
         "/internal/ga4/* would 500 indefinitely. Aborting boot. " +
-        "Set the secret, or set ALLOW_MISSING_INTERNAL_HMAC_SECRET=true to bypass.",
+        "Set INTERNAL_API_HMAC_SECRET, or set NODE_ENV=development|test for non-production runs.",
     );
     onFatal();
   }
