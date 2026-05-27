@@ -1,7 +1,7 @@
 # Claude Code 完全活用ガイド (R2C)
 
-> 実機照合日: 2026-05-26 / Claude Code 2.1.150
-> 全記載事実は `grep` / `cat` / `gh` / `git` で確認済み。推測禁止 (#27)。
+> 実機照合日: 2026-05-27 / Claude Code 2.1.150
+> 全記載事実は `grep` / `cat` / `gh` / `git` / `sqlite3` で確認済み。推測禁止 (#27)。
 
 ---
 
@@ -205,105 +205,248 @@ git -C ~/projects/commerce-faq-tasks worktree list
 
 ## 第3部 単一情報源 (Single Source of Truth)
 
-> TODO (2026-05-27 deploy 後に肉付け予定)
+> 実機照合日: 2026-05-27 / 全記載は grep・cat・sqlite3 出力に基づく。
 
-### 3-A ファイル別責任範囲 (スケルトン)
+### 3-A ファイル別責任範囲
 
-| ファイル / 場所 | 正本の内容 | 更新権者 |
-|---------------|-----------|---------|
-| `CLAUDE.md` | 全 Lane 共通の禁止事項・ゲート条件・運用プロトコル | hkobayashi (手動) |
-| `.wolf/cerebrum.md` | プロジェクト横断の AI 学習 (Key Learnings / Do-Not-Repeat) | Lane (通常セッション) / Read-Only (24h自走中) |
-| `auto-memory MEMORY.md` | 腐らない罠・preference・実機確認手順 | Lane (常時書き込み可) |
-| `.claude/agents/*.md` | エージェント定義 (モデル・effort・ツール) | hkobayashi |
-| `.claude/skills/*.md` | スラッシュコマンド定義 | hkobayashi |
-| `docs/` | 設計・Runbook・API リファレンス | Lane / hkobayashi |
+| ファイル / 場所 | 正本の内容 | 更新権者 | 24h自走中 |
+|---------------|-----------|---------|----------|
+| `CLAUDE.md` | 全 Lane 共通禁止事項・ゲート条件・運用プロトコル・Anti-Slop ルール | hkobayashi (手動) | Read-Only |
+| `.wolf/cerebrum.md` | Key Learnings / Do-Not-Repeat / User Preferences / Decision Log | Lane (通常セッション) | **Read-Only** |
+| `.wolf/memory.md` | セッション記録 (HH:MM / description / file / outcome / ~tokens) | Lane (通常セッション) | **Read-Only** |
+| `.wolf/buglog.json` | バグログ (error_message / root_cause / fix / tags) | Lane (通常セッション) | **Read-Only** |
+| `.wolf/anatomy.md` | 全ファイル 2-3 行説明 + トークン見積 (1047 ファイル追跡) | Lane (通常セッション) | **Read-Only** |
+| `auto-memory MEMORY.md` | 腐らない罠・preference・実機確認手順（3問フィルタ通過分のみ） | Lane (常時書き込み可) | 書き込み可 (唯一) |
+| `.claude/agents/*.md` | エージェント定義 (モデル・effort・ツール・description) | hkobayashi | Read-Only |
+| `.claude/skills/*.md` | スラッシュコマンド定義 (24 ファイル存在) | hkobayashi | Read-Only |
+| `docs/` | 設計・Runbook・API リファレンス (107 ファイル) | Lane / hkobayashi | 書き込み可 |
+| `.claude/settings.json` | project 権限・フック・MCP 設定 (deny 25件) | hkobayashi のみ (deny で自衛) | Read-Only |
+| `.claude/settings.local.json` | allowlist 314件 (gitignored) | Lane / hkobayashi | 書き込み可 |
 
-### 3-B 更新規律 (スケルトン)
+**重複・矛盾の現状と整理案**
 
-- CLAUDE.md にルールを先書き → MEMORY.md には「なぜ変えたか」経緯のみ
-- cerebrum.md と MEMORY.md の役割混在禁止 (24h自走ルール)
-- 詳細: `CLAUDE.md §auto-memory 運用ルール`
+| 重複パターン | 現状 | 提案正本 |
+|------------|------|---------|
+| 禁止事項が CLAUDE.md と cerebrum.md の両方にある | 発生中 (24h自走ルール等) | CLAUDE.md を正本とし、cerebrum.md には「なぜ」の経緯のみ残す |
+| 運用プロトコルが docs/ と CLAUDE.md の両方にある | 24H_AUTONOMOUS_PLAYBOOK.md と CLAUDE.md が重複 | docs/ は詳細 Runbook、CLAUDE.md はサマリ + 参照リンクに限定 |
+| preference が MEMORY.md と cerebrum.md 両方に書かれる | 通常セッション中に起きやすい | 通常: cerebrum.md に書き、24h自走中: MEMORY.md に書く (時間で使い分け) |
+
+### 3-B 更新規律
+
+1. **ルール変更は CLAUDE.md が先** → MEMORY.md / cerebrum.md には「なぜ変えたか」の経緯のみ
+2. **24h自走中の書き込み先は MEMORY.md のみ** — `.wolf/` の 4 ファイルは Read-Only
+3. **MEMORY.md 書き込み前 3問フィルタ**: (Q1) コードを読めば分かるか? (Q2) 2週間後も正しいか? (Q3) 次の自分が罠を踏まずに済むか?
+4. **状態スナップショット/PR番号/Asana GID は MEMORY.md 禁止** — git log / gh pr view / sqlite3 が正典
+
+詳細: `CLAUDE.md §auto-memory 運用ルール`
 
 ---
 
 ## 第4部 24h ループ可視化
 
-> TODO (2026-05-27 deploy 後に肉付け予定)
+> 実機照合日: 2026-05-27 / launchd plist は `SCRIPTS/launchd/` から読み出し確認済み。
 
 ### 4-A launchd 4 本 (実機確認済)
 
-| plist | 間隔 | 役割 | ログ |
-|------|------|------|------|
-| `com.r2c.dispatch.plist` | 1分 | `r2c-dispatch.sh --auto` / MAX_SLOTS=3 | `launchd-dispatch.log` |
-| `com.r2c.supervisor.plist` | 1分 | stuck Lane 監視 / MAX_RUN_MINUTES=45 | `launchd-supervisor.log` |
-| `com.r2c.poll.plist` | 5分 | Asana poll | `launchd-poll.log` |
-| `com.r2c.morning-report.plist` | 06:00 daily | Slack Block Kit + Pushover | `launchd-morning-report.log` |
+| plist | 間隔 | 実行スクリプト | 役割 | ログ (stdout/stderr) |
+|------|------|-------------|------|---------------------|
+| `com.r2c.dispatch.plist` | **60秒** | `r2c-dispatch.sh --auto` | `prompt_generated` タスクを Lane に払い出す。MAX_SLOTS=3。night mode 中は Tier S/A をスキップ | `launchd-dispatch.log` / `launchd-dispatch-err.log` |
+| `com.r2c.supervisor.plist` | **60秒** | `r2c-supervisor.sh` | `running` 状態の Lane を監視。MAX_RUN_MINUTES=45 超過の stuck Lane を auto-retry / rollback | `launchd-supervisor.log` / `launchd-supervisor-err.log` |
+| `com.r2c.poll.plist` | **300秒 (5分)** | `r2c-asana-poll.sh` | Asana project `1213607637045514` から新規タスクを queue に取り込む | `launchd-poll.log` / `launchd-poll-err.log` |
+| `com.r2c.morning-report.plist` | **06:00 daily** | `r2c-morning-report.sh` | L1-L6 集計 → Slack #r2c Block Kit 投稿 + Pushover priority -2。RunAtLoad=false (load 時は即時発火しない) | `launchd-morning-report.log` / `launchd-morning-report-err.log` |
 
-全ログ: `~/.claude-r2c-config/logs/`
+全ログ保存先: `~/.claude-r2c-config/logs/`
 
-TCC 注意: `~/Documents` 配下は macOS Sequoia で `Operation not permitted (exit 126)` → `~/projects` 以下か Full Disk Access 付与が必要。
+共通環境変数 (全 plist で注入):
+- `CLAUDE_CONFIG_DIR=/Users/hkobayashi/.claude-r2c-config` — R2C 専用アカウント分離
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` — 並列 Lane 有効
+- `PATH=/opt/homebrew/bin:/opt/homebrew/sbin:...`
 
-### 4-B 稼働確認コマンド (スケルトン)
+**TCC 注意 (macOS Sequoia 実機検証 2026-05-22)**: `~/Documents` 配下は `Operation not permitted (exit 126)` で launchd から読めない。対策: (a) `/bin/bash` に Full Disk Access 付与 または (b) repo を `~/projects/` 以下に配置。R2C は現在 `~/projects/commerce-faq-tasks` で稼働中。
+
+**デプロイ方法** (hkobayashi 手動):
+```bash
+cp SCRIPTS/launchd/com.r2c.dispatch.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.r2c.dispatch.plist
+# 他 3 本も同様
+```
+
+---
+
+### 4-B queue (tasks テーブル) 状態マシン
+
+Queue DB パス: `~/projects/commerce-faq-tasks/.claude/queue/r2c-queue.db`
+
+テーブル構成 (実機 `.schema` から):
+- `tasks` — タスク本体 (以下参照)
+- `automation_state` — key/value ストア (mode, pause_dispatching, drained_notified_at)
+- `lane_events` — タスク操作ログ (event_type, payload)
+
+**tasks テーブル state 遷移 (CHECK 制約から実機確認)**:
+
+```
+Asana poll → [pending]
+                ↓ r2c-generate-lane.sh (dispatch --auto)
+         [prompt_generated]
+                ↓ r2c-dispatch.sh (claude --bg 起動)
+            [running] ─── 45分タイムアウト → rollbacked
+                ↓ Lane 自己報告
+         [pr_created] → [verify_passed] → [ready_to_merge]
+                                       ↘
+                              [needs_approval] / [needs_approval_critical]
+                ↓ hkobayashi merge
+             [merged] → [deployed] → [done]
+                ↘ 失敗
+             [failed] / [rollbacked] / [cancelled]
+```
+
+現在の実 DB 状態 (2026-05-27 確認):
+```bash
+sqlite3 ~/projects/commerce-faq-tasks/.claude/queue/r2c-queue.db \
+  "SELECT DISTINCT state FROM tasks;"
+# → needs_approval_critical / rollbacked / running
+```
+
+---
+
+### 4-C 稼働確認コマンド
 
 ```bash
-# launchd 4 本状態
+# ① launchd 4 本の稼働状態 (hkobayashi が実行、Lane は launchctl 操作禁止)
 launchctl list | grep com.r2c
 
-# queue 状態
-sqlite3 ~/.claude/projects/$(ls ~/.claude/projects | grep commerce-faq)/queue/r2c-queue.db \
-  "SELECT status, count(*) FROM tasks GROUP BY status;"
+# ② queue state 集計
+sqlite3 ~/projects/commerce-faq-tasks/.claude/queue/r2c-queue.db \
+  "SELECT state, count(*) FROM tasks GROUP BY state ORDER BY count(*) DESC;"
 
-# Lane (worktree) 一覧
+# ③ human gate 待ちタスク一覧
+sqlite3 ~/projects/commerce-faq-tasks/.claude/queue/r2c-queue.db \
+  "SELECT id, tier, asana_name, state FROM tasks
+   WHERE state IN ('needs_approval','needs_approval_critical','ready_to_merge')
+   ORDER BY tier, id;"
+
+# ④ 実行中 Lane (worktree)
 git -C ~/projects/commerce-faq-tasks worktree list
 
-# /usage 確認 — セッション内でコスト内訳を表示
-# Claude Code セッション内で: /usage
+# ⑤ 本日のコスト内訳 (Claude Code セッション内)
+# /usage
+# → Model / Tool / Agent 別消費トークンを表示
+
+# ⑥ dispatch 手動起動 (dry-run)
+bash SCRIPTS/r2c-dispatch.sh --auto --dry-run
 ```
+
+**automation_state で dispatch を一時停止**:
+```bash
+sqlite3 ~/projects/commerce-faq-tasks/.claude/queue/r2c-queue.db \
+  "UPDATE automation_state SET value='1' WHERE key='pause_dispatching';"
+# 再開:
+sqlite3 ~/projects/commerce-faq-tasks/.claude/queue/r2c-queue.db \
+  "UPDATE automation_state SET value='0' WHERE key='pause_dispatching';"
+```
+
+---
+
+### 4-D Lane の起動コマンド (dispatch が実際に発行するもの)
+
+`r2c-dispatch.sh` が内部で実行する実コマンド (実機 `sed -n '181p'` 確認):
+
+```bash
+nohup bash -c "
+  cd '<worktree_path>'
+  export PATH='/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH'
+  claude --bg \
+    --name '<lane_name>' \
+    --model '<resolved_model>' \
+    --permission-mode '<perm_mode>' \
+    --prompt-file '<prompt_path>'
+" > /dev/null 2>&1 &
+disown
+```
+
+- `--bg`: バックグラウンドセッション（端末を閉じても継続）
+- `--name`: Agent View での Lane 識別名
+- `--permission-mode`: Tier S → `default`, Tier A/B → `bypassPermissions`
+- `--prompt-file`: `r2c-generate-lane.sh` が生成した Markdown ファイルへのパス
 
 ---
 
 ## 第5部 企画 → 実装フロー
 
-> TODO (2026-05-27 deploy 後に肉付け予定)
+> 実機照合日: 2026-05-27 / memory#17「CLI主・Claude.aiサブ体制」を実機コマンドで補強。
 
-### 5-A 標準フロー概要 (スケルトン)
+### 5-A 役割分担 (確定版)
+
+| 担当 | できること | できないこと |
+|------|-----------|------------|
+| **Claude.ai** | 戦略立案 / Asana MCP / Phase 計画 / Gate 2.5 スコープ判断 / merge 可否 / dispatch 配分 / 1-2 行プロンプト発行 | 実機操作 (grep / git / sqlite) / launchctl / VPS SSH |
+| **Claude Code CLI (Lane)** | 実装・調査・Gate 1〜3 / PR 作成 / ログ・DB 確認 / Playwright / Slack MCP 通知 | launchctl 操作 / deploy_guard ブロック対象の SSH / DB マイグレーション |
+| **hkobayashi** | launchctl load/unload / DB マイグレーション / VPS 接続 / merge 最終確認 / Asana 完了確定 | — |
+
+**Claude.ai 指示形式**: 「推奨モデルヘッダ + 1〜2 行」のみ。長文・詳細章立て禁止 (memory フィードバック確認済み)。
+
+---
+
+### 5-B 並列 Lane の 2 系統 (混同禁止)
+
+| 種別 | 起動方法 | 特徴 | コスト | R2C 用途 |
+|------|---------|------|--------|---------|
+| **Agent View** | ① `claude agents` コマンド ② 既存セッションで左矢印 → `[New]` | worktree 自動分離 / supervisor 管理 / 端末を閉じても継続 / 全モデル使用可 | 通常 | 独立 Lane (並列タスク) — R2C の基本方針 |
+| **Agent Teams** | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (設定済) + 「create an agent team」指示 | inter-agent messaging / shared task list / Opus 強制 / 実験的機能 | **3-4 倍** | cross-domain 連携が必要な場合のみ |
+| **24h 自走 Lane** | `r2c-dispatch.sh` → `claude --bg --name X --model Y --permission-mode Z --prompt-file F` | nohup + disown / worktree 内に自動配置 / DB state 管理 | 通常 | 自動化ループ |
+
+**注意**: `dispatch --model X` は疑似コマンド。UI または --bg 経由が正規起動方法。
+
+---
+
+### 5-C 標準フロー (企画 → Asana 完了)
 
 ```
 [Claude.ai: 企画・判断]
-  ↓ (§2-B 強制照合 — Lane に state 確認させてから)
-[Asana タスク作成]
+  ├ §2-B 強制照合 — Lane に gh/sqlite/git worktree を実行させてから判断
+  └ Asana タスク作成 (mcp__claude_ai_Asana__create_tasks)
+        ↓
+[Asana poll → queue tasks テーブル (state: pending)]
+  ↓ r2c-dispatch.sh --auto (60秒ごと)
+[state: prompt_generated]
+  ↓ r2c-dispatch.sh → claude --bg 起動
+[state: running / Agent View に Lane が出現]
+        ↓
+  ┌─ /fewer-permission-prompts (allowlist 整備)
+  ├─ @gate-runner (Gate 1→1.5→2→3)
+  │     Gate 1: pnpm verify (typecheck + test 全パス)
+  │     Gate 1.5: bash SCRIPTS/dead-code-check.sh
+  │     Gate 2: bash SCRIPTS/security-scan.sh
+  │     Gate 3: pnpm build && cd admin-ui && pnpm build
+  ├─ @cleanup (dead exports / any 型 / as any 除去)
+  ├─ @test-writer (テスト追加)
+  └─ @deploy-checker (VPS 前後確認)
+        ↓
+[PR 作成 → state: pr_created]
+  ↓ hkobayashi が gh pr view mergedAt で実機確認してから merge
+[state: merged → deployed → done]
   ↓
-[Lane dispatch (r2c-dispatch.sh)]
-  ↓  └ worktree 分離 (git worktree add)
-[実装 Lane: feature branch]
-  ├ /fewer-permission-prompts (allowlist 整備)
-  ├ @gate-runner (Gate 1→1.5→2→3)
-  ├ @cleanup (dead code)
-  ├ @test-writer (テスト追加)
-  └ @deploy-checker (VPS 前後確認)
-  ↓
-[PR 作成 → hkobayashi merge 確認 (gh pr view mergedAt)]
-  ↓
-[VPS deploy: bash SCRIPTS/deploy-vps.sh]
-  ↓
-[curl ヘルスチェック確認]
+[bash SCRIPTS/deploy-vps.sh → curl ヘルスチェック]
   ↓
 [Asana 完了 (deploy 確認後に初めて実施)]
 ```
 
-### 5-B 第1部機能と標準フローの対応 (スケルトン)
+---
 
-| フェーズ | 使う機能 |
-|---------|---------|
-| 企画・状態確認 | §2-B 強制照合 (gh/sqlite/git worktree) |
-| allowlist 整備 | `/fewer-permission-prompts` スキル |
-| 実装 | `bypassPermissions` + deny list で安全自走 |
-| テスト / Gate | `@gate-runner`, `@test-writer` |
-| コード整理 | `@cleanup` |
-| deploy 確認 | `@deploy-checker` |
-| コスト監査 | `/usage` |
-| PR / Asana 連携 | `mcp__claude_ai_Asana__*`, `mcp__claude_ai_Slack__*` |
-| 並列 Lane | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` + worktree |
+### 5-D 第1部機能とフェーズの対応
+
+| フェーズ | 使う機能 (第1部参照) |
+|---------|-------------------|
+| 企画・状態確認 | §2-B 強制照合 (gh / sqlite3 / git worktree) |
+| allowlist 整備 | `/fewer-permission-prompts` スキル (1-D) |
+| 自動化起動 | `bypassPermissions` + deny 25件 (1-A) + launchd 4本 (4-A) |
+| 並列実行 | Agent View または `claude --bg` + `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (1-F) |
+| テスト / Gate | `@gate-runner` / `@test-writer` (1-C) |
+| コード整理 | `@cleanup` (1-C) |
+| deploy 確認 | `@deploy-checker` (1-C) |
+| コスト監査 | `/usage` (1-I) |
+| PR / Asana / Slack 連携 | `mcp__claude_ai_Asana__*` / `mcp__claude_ai_Slack__*` (1-G) |
+| コード品質 Gate 2.5 | `/codex:review --base main` (Gate 2.5, docs-only はスキップ可) |
 
 ---
 
@@ -315,9 +458,9 @@ claude --version
 # → 2.1.150 (2026-05-26 確認)
 
 # 設定ファイル優先順位 (global → project → local)
-cat ~/.claude/settings.json            # global
-cat .claude/settings.json             # project (project 設定)
-cat .claude/settings.local.json       # local (gitignored, 314件 allow)
+cat ~/.claude/settings.json            # global (model/plugins/skipDangerousModePrompt 等)
+cat .claude/settings.json             # project (hooks/MCP/deny 25件)
+cat .claude/settings.local.json       # local (gitignored, allow 314件)
 
 # Hooks 確認
 cat .claude/settings.json | python3 -c "import json,sys; d=json.load(sys.stdin); [print(k) for k in d.get('hooks',{}).keys()]"
@@ -328,15 +471,25 @@ head -5 .claude/agents/gate-runner.md
 
 # スキル確認
 ls .claude/skills/ | wc -l
+# → 24
 
 # Worktree 確認
 git worktree list
 
-# Queue 確認
-sqlite3 .claude/queue/r2c-queue.db "SELECT status, count(*) FROM tasks GROUP BY status;"
+# Queue 確認 (tasks テーブル)
+sqlite3 .claude/queue/r2c-queue.db "SELECT state, count(*) FROM tasks GROUP BY state;"
+
+# launchd 稼働状態 (hkobayashi のみ実行可)
+launchctl list | grep com.r2c
+
+# dispatch dry-run
+bash SCRIPTS/r2c-dispatch.sh --auto --dry-run
+
+# 24h モード確認
+ls ~/.r2c-24h-mode 2>/dev/null && echo "24h ON" || echo "24h OFF"
 ```
 
 ---
 
-*本ドキュメントは実機照合事実のみを記載。推測・未確認事項は TODO として明示。*
-*次回更新: 2026-05-27 (VPS deploy #209/#210 完了後、第3〜5部肉付け)*
+*本ドキュメントは実機照合事実のみを記載。推測禁止 (#27)。*
+*更新: 2026-05-27 (第3〜5部実機肉付け完了)*
