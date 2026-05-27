@@ -611,7 +611,39 @@ app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: e
   }
 });
 
+// Phase70-Q (GID 1215114679975245): langsmith CVE ignore の前提条件チェック.
+// `pnpm.auditConfig.ignoreCves` で CVE-2026-45134 (langsmith) を除外しているが、
+// これは「LangChain tracing が無効」という invariant に依存する.
+// 本番で LANGCHAIN_TRACING / LANGSMITH_API_KEY 等が設定されると、ignore の前提が
+// 崩れて vulnerable コードパスが起動する — fail-fast で起動阻止する.
+// 詳細: docs/SECURITY_SCAN_ALLOWLIST.md#pnpm-auditconfig-ignorecves I-8
+const LANGCHAIN_TRACING_ENV_VARS = [
+  "LANGCHAIN_TRACING_V2",
+  "LANGCHAIN_TRACING",
+  "LANGCHAIN_API_KEY",
+  "LANGSMITH_API_KEY",
+  "LANGSMITH_TRACING",
+] as const;
+
+function assertLangchainTracingDisabled(): void {
+  const active = LANGCHAIN_TRACING_ENV_VARS.filter((k) => {
+    const v = process.env[k];
+    return v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
+  });
+  if (active.length === 0) return;
+  const msg =
+    `[startup] LangChain tracing env detected: ${active.join(", ")}. ` +
+    "CVE-2026-45134 (langsmith) is currently ignored on the premise that tracing is disabled. " +
+    "Either unset these env vars OR remove langsmith from package.json#pnpm.auditConfig.ignoreCves " +
+    "before enabling tracing. Fail-closed at startup.";
+  logger.error(msg);
+  // eslint-disable-next-line no-console
+  console.error(msg);
+  process.exit(1);
+}
+
 async function startServer() {
+  assertLangchainTracingDisabled();
   // Codex review #3/#4: 必須secretは boot 時に検証して fail-fast する。
   // 起動後に runtime 500 を吐き続ける partial outage を防ぐ。
   // production / staging / 不明 env では未設定なら exit(1)。

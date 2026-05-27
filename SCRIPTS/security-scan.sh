@@ -1,6 +1,14 @@
 #!/bin/bash
 # RAJIUCE Security Scan Script
 # Usage: bash SCRIPTS/security-scan.sh [--save]
+#
+# CI と判定基準を完全に揃える:
+#   - pnpm audit は --audit-level=high で評価し、非ゼロを FAIL とする
+#   - ignore 対象 CVE は package.json#pnpm.auditConfig.ignoreCves で集中管理
+#     (根拠と再評価条件は docs/SECURITY_SCAN_ALLOWLIST.md に記録)
+
+# 中の `{ ... } | tee` パターンでも内側ブロックの exit 1 を script 全体に伝播させる
+set -o pipefail
 
 SAVE=false
 if [[ "$1" == "--save" ]]; then
@@ -28,9 +36,17 @@ echo ''
 
 # -------------------------------------------------------------------
 # 1. npm audit（node依存の脆弱性）
+#    CIの独立auditステップ (.github/workflows/security-scan.yml) と同一基準:
+#      pnpm audit --production --audit-level=high
+#    ignore 対象 CVE は package.json#pnpm.auditConfig.ignoreCves で集中管理
 # -------------------------------------------------------------------
-echo '--- [1] npm audit ---'
-pnpm audit --production 2>&1 || true
+echo '--- [1] npm audit (--audit-level=high) ---'
+pnpm audit --production --audit-level=high 2>&1
+AUDIT_RC=$?
+if [[ $AUDIT_RC -ne 0 ]]; then
+  echo "[HIGH] pnpm audit detected high/critical vulnerabilities (exit=$AUDIT_RC)"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
 echo ''
 
 # -------------------------------------------------------------------
