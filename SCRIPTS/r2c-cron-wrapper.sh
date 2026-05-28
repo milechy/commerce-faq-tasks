@@ -111,10 +111,22 @@ set +e
 # 親 env が継承されると、後段 dispatch.sh:190 の `cat prompt | claude --bg ...`
 # の stdin pipe が claude プロセスに届かなくなり、Lane が
 # `(idle — send a prompt to start)` で待機 → 45min stuck → rollback する罠が判明。
-# 実機検証 (2026-05-28) で、`env -i` で env を必要最小限に絞ると cron-wrapper 経由
-# でも cat | claude --bg の stdin pipe が機能することを確認。
-# よって target script を env -i で起動し、必要な変数のみ明示的に渡す。
+# `env -i` で env を必要最小限に絞り、interactive shell 由来 env (TMUX/ITERM_*/
+# BASH_*/SHELLOPTS 等) や launchd 由来 env の継承を断つ。
+#
+# 2026-05-28 罠6 対応: env -i だけでは launchd 実起動経由でなお spawn が失敗
+# (e2e #5 task 44 で session_id NULL のまま 0byte log 確認)。env では制御
+# できない launchd domain の session/process group attribute が子プロセス
+# ツリーに伝播し claude --bg の bg-spare daemon socket 接続を阻害していた。
+# `setsid(2)` で新しい session leader を作って launchd session attribute を
+# 断ち切ることで launchd 実起動経由でも cat | claude --bg が機能することを
+# 実証 (e2e trap6-launchd task 46: 30 秒で session_id 取得 + result 生成)。
+# macOS には setsid(1) が無いため /usr/bin/python3 で setsid(2) を呼ぶ。
 # 詳細: docs/postmortem/2026-05-28-oauth-fail/
+
+# setsid + exec を行う Python ワンライナー (macOS で setsid(1) の代替)
+SETSID_EXEC='import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])'
+
 if [ "${#PASS_THROUGH[@]}" -gt 0 ]; then
     env -i \
         HOME="${HOME}" \
@@ -123,7 +135,8 @@ if [ "${#PASS_THROUGH[@]}" -gt 0 ]; then
         R2C_CONFIG="${R2C_CONFIG}" \
         CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-${R2C_CONFIG}}" \
         CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-1}" \
-        bash "SCRIPTS/${SCRIPT}" "${PASS_THROUGH[@]}" >> "${TARGET_LOG}" 2>&1
+        /usr/bin/python3 -c "${SETSID_EXEC}" \
+            bash "SCRIPTS/${SCRIPT}" "${PASS_THROUGH[@]}" >> "${TARGET_LOG}" 2>&1
 else
     env -i \
         HOME="${HOME}" \
@@ -132,7 +145,8 @@ else
         R2C_CONFIG="${R2C_CONFIG}" \
         CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-${R2C_CONFIG}}" \
         CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-1}" \
-        bash "SCRIPTS/${SCRIPT}" >> "${TARGET_LOG}" 2>&1
+        /usr/bin/python3 -c "${SETSID_EXEC}" \
+            bash "SCRIPTS/${SCRIPT}" >> "${TARGET_LOG}" 2>&1
 fi
 EXIT_CODE=$?
 set -e
