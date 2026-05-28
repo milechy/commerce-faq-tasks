@@ -5,6 +5,13 @@
 This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
 
 
+# 運用体制(2026-05-28〜)
+
+- **Claude Code CLI = 主担当**。調査/実装/Gate/PR/ログ/DB/VPS/grep/Playwright、実機作業すべて。Asanaタスクを自走で実装まで進める。
+- **Claude.ai = サブ**。実機に触れない判断のみ。止めるのは4点だけ: ①merge可否 ②Codex結果(実害セキュリティ) ③Phase/スコープ方針 ④不可逆操作。
+- **24hループ(Phase70)は2026-05-28に完全自走確定**（6罠攻略、PR #197/#217/#218/#219/#220/#221/#222）。Tier-S id=4 試運転中。
+- CLIは段取り/設定/接続/worktree/調査/テスト/機械チェックで止まらず自走、結果のみ報告。
+
 # RAJIUCE CLAUDE.md
 
 ## Core Principles
