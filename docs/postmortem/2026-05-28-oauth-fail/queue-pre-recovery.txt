@@ -1,0 +1,12 @@
+needs_approval_critical|1
+rollbacked|33
+34|rollbacked|B|lint実効化（ESLint config新規+pnpm lintスクリプト+verify組込み）|3|auto_rollback|2026-05-27 03:01:30
+33|rollbacked|B|[bug] admin avatar一覧: テナント特定選択でデフォルトアバターが全消え(0/19件)|3|auto_rollback|2026-05-27 00:25:28
+32|rollbacked|B|外部ツール/プラクティス採用ジャッジ|3|auto_rollback|2026-05-26 10:19:47
+31|rollbacked|B|[Security/Authz] X-Internal-Request ヘッダ spoofable — /api/int|3|auto_rollback|2026-05-26 07:58:59
+29|rollbacked|B|[要望] アバター表示サイズ拡大(待機/表示を可能な限り大きく)|3|auto_rollback|2026-05-26 03:27:23
+30|rollbacked|B|[バグ] テストチャットが設定と違うアバターで起動する|3|auto_rollback|2026-05-26 03:27:23
+28|rollbacked|B|外部ツール最新版の活用検討(5/26調査ベース)|3|auto_rollback|2026-05-26 03:07:17
+27|rollbacked|B|security-scanのlocal/CI二枚舌修正 + main常時赤（25 CVE）の棚卸し|3|auto_rollback|2026-05-26 02:57:14
+26|rollbacked|B|[要最優先] avatar生成複数ルートの認可欠落(課金APIがroleチェックなしで叩ける)|3|auto_rollback|2026-05-26 02:42:09
+25|rollbacked|B|Phase44–46 未配線機能の検知と回収|3|auto_rollback|2026-05-26 02:12:00

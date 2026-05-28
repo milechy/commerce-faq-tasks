@@ -185,6 +185,16 @@ dispatch_one() {
     " > /dev/null 2>&1 &
     disown
 
+    # PR #197 残存リスク② 解消: session_id を Lane 自己申告に依存せず
+    # dispatch 側で claude agents --json から自動発見して DB へ書き戻す。
+    # 2026-05-26 OAuth daemon 凍結事故 (docs/postmortem/2026-05-28-oauth-fail/)
+    # の根本原因。失敗時も Lane の自走は妨げない (resolver は常に exit 0)。
+    nohup bash "${R2C_ROOT}/SCRIPTS/r2c-lane-session-resolver.sh" \
+        --task-id "${task_id}" \
+        --lane-name "${lane_name}" \
+        --log-file "${log_file}.sid" > /dev/null 2>&1 &
+    disown
+
     echo "Dispatched task ${task_id} (lane=${lane_name}) → ${log_file}"
     return 0
 }
