@@ -10,6 +10,7 @@ VPS: `65.108.159.161` (Hetzner)
 - [ ] `.env.production.example` から `.env` を作成済み
 - [ ] `admin-ui/.env.production.example` から `admin-ui/.env.production` を作成済み
 - [ ] API キーを `node -e "console.log(require('crypto').randomUUID())"` で生成済み
+- [ ] 本番 .env にプレースホルダ残存なし (`grep -E '=(your-|YOUR_|CHANGE_ME|_xxxx|<your-)' .env` → 出力なし)
 
 ## VPS 環境セットアップ (初回のみ)
 
