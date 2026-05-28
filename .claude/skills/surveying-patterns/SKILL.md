@@ -1,6 +1,7 @@
 ---
 name: surveying-patterns
 description: UI baseline constraints and pattern enforcement to prevent interface slop
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---

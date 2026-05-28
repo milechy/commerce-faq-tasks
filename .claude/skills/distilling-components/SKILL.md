@@ -1,6 +1,7 @@
 ---
 name: distilling-components
 description: Component design patterns - compound components, composition, props API
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---

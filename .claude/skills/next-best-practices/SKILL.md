@@ -1,6 +1,7 @@
 ---
 name: next-best-practices
 description: React and Next.js performance optimization patterns from Vercel Engineering
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---
