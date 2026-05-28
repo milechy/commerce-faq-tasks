@@ -178,11 +178,15 @@ dispatch_one() {
     # claude-code v2.1.152 で --prompt-file フラグが silently 削除された対応。
     # 旧形式 `--prompt-file '${prompt_path}'` は unknown flag として無視され、
     # claude --bg は prompt 無しで idle 起動 → 45min stuck → rollback していた。
-    # 詳細: docs/postmortem/2026-05-28-oauth-fail/
     # stdin pipe で渡す形式に変更 (claude --help: `claude [options] [command] [prompt]`)。
+    #
+    # export PATH=... は cron-wrapper.sh が既に Homebrew 含む PATH を設定済みで
+    # 完全に冗長な上、bash -c 内に置くと cat | claude --bg の stdin pipe が
+    # 切れて claude が prompt を受信せず idle 起動する問題が判明 (2026-05-28)。
+    # よって本ブロック内では export PATH を行わない。
+    # 詳細: docs/postmortem/2026-05-28-oauth-fail/
     nohup bash -c "
         cd '${worktree_path}'
-        export PATH='/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:\$PATH'
         cat '${prompt_path}' | claude --bg --name '${lane_name}' \\
             --model '${resolved_model}' \\
             --permission-mode '${perm_mode}' > '${log_file}' 2>&1
