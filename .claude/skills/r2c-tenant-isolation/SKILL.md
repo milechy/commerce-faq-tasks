@@ -1,6 +1,7 @@
 ---
 name: r2c-tenant-isolation
 description: R2Cマルチテナント環境でテナント分離を厳格に守る。tenantId は必ず JWT または x-api-key から取得し、req.body から取らない。super_admin JWT には tenantId が含まれない（client_admin のみ含む）特殊仕様に対応。全DBクエリに tenant_id WHERE 句を追加し、他テナントのデータ漏洩をゼロにする。avatar-agent では room名 rajiuce-{tenantId}-{hex} から tenantId を復元。tenants テーブルの主キーは id (TEXT)、tenant_id ではない。トリガー: 新規API追加時 / DBクエリ作成時 / authMiddleware変更時 / tenantContextLoader変更時 / RLSポリシー追加時 / Gate 2.5 adversarial-review対象になる変更時。Phase52 L1-L4セキュリティ層とPhase69コンプライアンス要件を維持するため。
+version: 1.0.0
 ---
 
 # R2C テナント分離規則（セキュリティ最重要）

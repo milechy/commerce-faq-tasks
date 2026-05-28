@@ -1,6 +1,7 @@
 ---
 name: health
 description: Run when Claude feels off, ignores rules, or hooks/MCP need auditing.
+version: 1.0.0
 ---
 
 # Claude Code Configuration Health Audit

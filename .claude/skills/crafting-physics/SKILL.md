@@ -1,6 +1,7 @@
 ---
 name: crafting-physics
 description: Design physics system for UI interactions - sync strategies, timing, confirmations
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---

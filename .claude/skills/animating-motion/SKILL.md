@@ -1,6 +1,7 @@
 ---
 name: animating-motion
 description: Motion design and animation patterns for UI based on Emil Kowalski's principles
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---
