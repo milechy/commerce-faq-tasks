@@ -683,3 +683,69 @@ bash scripts/verify-account-isolation.sh
 1. 即時 `npm uninstall / pip uninstall`
 2. `git diff` で意図しない依存追加がないか確認
 3. Asana に "セキュリティインシデント" タスク起票
+
+---
+
+## 17. 24h ループ Lane spawn 経路の罠 6 層 (Phase 70 終結、2026-05-28)
+
+### 概要
+2026-05-26 OAuth daemon 凍結事故と 5/28 の e2e 検証で 24h ループ自走経路に 6 層の罠を発見、
+6 PR で全カバー、e2e #6 (launchd 実起動 task 47 で 40 秒自走成功) で完全復活確定。
+
+### 最大教訓: **launchd 実起動経由で検証必須**
+- interactive shell から呼んで動く ≠ launchd 経由で動く (PR #220 env -i がこれで裏切った)
+- 修正 PR の前ゲートとして **launchd cron 1分毎の自然拾い** で result file 生成を 120 秒以内に観測する
+- 「手動 dispatch で動いた」だけで PR を merge せず、必ず launchd 実起動経由で確認すること
+
+### 検証手順テンプレ (新規 PR で claude --bg / dispatch / cron-wrapper 関連を触る時)
+
+```bash
+# 1. 修正を一時適用 (sed/heredoc で書換、commit せず)
+sed -i.bak '...' SCRIPTS/r2c-cron-wrapper.sh
+
+# 2. test task 投入 (safe Tier-B、repo modification 禁止 prompt)
+cat > /tmp/r2c-verify.md <<'P'
+Write /tmp/r2c-verify-result.md with "VERIFY_OK" and exit.
+P
+sqlite3 .claude/queue/r2c-queue.db "INSERT INTO tasks (...) VALUES (..., 'prompt_generated', '/tmp/r2c-verify.md', ...);"
+
+# 3. 手動 dispatch 厳禁、launchd 自然拾い最大 120 秒待機
+sleep 120
+
+# 4. 全項目 ✅ なら本適用 → PR
+sqlite3 .claude/queue/r2c-queue.db "SELECT id, state, session_id FROM tasks WHERE asana_gid='verify-...';"
+cat /tmp/r2c-verify-result.md
+ls -la ~/.claude-r2c-config/logs/lane-*.log.sid | tail -1
+
+# 5. 一時パッチを git checkout で revert、worktree で正式適用
+git checkout SCRIPTS/r2c-cron-wrapper.sh
+```
+
+### 6 PR 対応表 (Phase 70 終結 commit log)
+
+| PR | 罠 | 内容 |
+|---|---|---|
+| #197 ✅ | 1: OAuth fail | auth fail-fast 化、stderr 出力で警告経路確保 |
+| #217 ✅ | 4 安全装置 | `SCRIPTS/r2c-lane-session-resolver.sh` で session_id 自動発見 |
+| #218 ✅ | 2 | `--prompt-file` 廃止対応 → stdin pipe (`cat prompt \| claude --bg ...`) |
+| #219 ✅ | 3 | `SCRIPTS/r2c-dispatch.sh:185` の `export PATH=` 撤廃 |
+| #220 ✅ | 5 | `SCRIPTS/r2c-cron-wrapper.sh` を `env -i HOME PATH R2C_* CLAUDE_*` で env isolation |
+| #221 ✅ | 6 | `SCRIPTS/r2c-cron-wrapper.sh` を `/usr/bin/python3 -c 'os.setsid(); execvp(...)'` で launchd session 分離 |
+
+### 5 軸ヘルスチェック監視 (PR #222 / 本ファイル更新と同時)
+
+`SCRIPTS/monitor-claude-health.sh` (launchd `com.r2c.monitor.plist`、5分毎):
+
+- 軸A: OAuth fail (`~/.claude/daemon-auth-status.json` 存在 + `auth_required`) → critical
+- 軸B: `claude --version` 差分 (前回値を `~/.claude-r2c-config/state/last-claude-version.txt` 保存) → warning
+- 軸C: lane-*.log 0byte 連続 (過去 1h で 2 件以上=warning / 5 件以上=critical)
+- 軸D: dispatch idle (`agents --json` 空 + `prompt_generated` > 0) → critical
+- 軸E: session_id 未取得 (`state=running` で 60s 以上 `session_id=NULL`、1 件=warning / 3 件=critical)
+
+Slack `#rajiuce-dev` (`C0AG07HFJTB`) 通知、6h throttle、復旧通知は throttle 対象外。
+
+### 関連ファイル
+- `docs/postmortem/2026-05-28-oauth-fail/MEMORY_27.md` (罠 6 層 + 切り分け手順、144 行)
+- `docs/postmortem/2026-05-28-oauth-fail/MONITOR_TASK.md` (5 軸監視設計、81 行)
+- `SCRIPTS/monitor-claude-health.sh` (5 軸ヘルスチェック実装)
+- `SCRIPTS/launchd/com.r2c.monitor.plist` (launchd plist)
