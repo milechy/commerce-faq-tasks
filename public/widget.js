@@ -831,9 +831,9 @@
     micBtn.appendChild(svg);
   })();
 
-  // Web Speech API 非対応ブラウザでは非表示
+  // Web Speech API 非対応ブラウザ・HTTP環境では非表示
   var SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognitionAPI) {
+  if (!SpeechRecognitionAPI || !window.isSecureContext) {
     micBtn.style.display = 'none';
   }
 
