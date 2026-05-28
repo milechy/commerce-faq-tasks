@@ -82,3 +82,7 @@ DAILY_REPORT_*.md
 # 2026-05-28 OAuth postmortem 関連の大容量バイナリは個別運用 (リポ肥大回避)
 docs/postmortem/2026-05-28-oauth-fail/daemon.log.snapshot
 docs/postmortem/2026-05-28-oauth-fail/r2c-queue.db.pre-clean
+
+# 2026-05-28 LFS untrack: CE_MODEL_PATH env でVPS実体(/opt/rajiuce/models/...)を参照
+# git管理不要、LFS帯域超過(9.1GB/月)の根治
+models/ce-export/model.onnx
