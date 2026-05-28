@@ -45,6 +45,7 @@ import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
 import { reportUsageToStripe } from "./lib/billing/stripeSync";
+import { pipelineQueue } from "./lib/book-pipeline/pipelineQueue";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
@@ -670,6 +671,22 @@ async function startServer() {
       });
     }, STRIPE_REPORT_INTERVAL_MS);
     logger.info("[startup] Stripe usage reporter scheduled (24h interval)");
+  }
+
+  // Phase70K: pipelineQueue self-heal — PM2再起動で stuck した job を自動復旧
+  if (db) {
+    const dbPool = db;
+    pipelineQueue.selfHeal(dbPool).catch((err) => {
+      logger.error({ err }, "[pipelineQueue] selfHeal failed");
+    });
+
+    const STUCK_JOB_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10分
+    setInterval(() => {
+      pipelineQueue.checkStuckJobs(dbPool).catch((err) => {
+        logger.error({ err }, "[pipelineQueue] checkStuckJobs failed");
+      });
+    }, STUCK_JOB_CHECK_INTERVAL_MS);
+    logger.info("[startup] pipelineQueue selfHeal + stuck-job monitor started");
   }
 }
 
