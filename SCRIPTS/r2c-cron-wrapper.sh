@@ -106,10 +106,33 @@ set +e
 # bash 3.2 (macOS) では空配列の "${arr[@]:-}" が空文字列1個に展開され、
 # 引数なし起動のはずの script に "" が渡って "unknown arg" で落ちる。
 # pass-through の有無で分岐し、空配列時は引数を一切渡さない。
+#
+# 2026-05-28 罠5 対応: interactive shell から呼ばれた場合や launchd 経由実起動で
+# 親 env が継承されると、後段 dispatch.sh:190 の `cat prompt | claude --bg ...`
+# の stdin pipe が claude プロセスに届かなくなり、Lane が
+# `(idle — send a prompt to start)` で待機 → 45min stuck → rollback する罠が判明。
+# 実機検証 (2026-05-28) で、`env -i` で env を必要最小限に絞ると cron-wrapper 経由
+# でも cat | claude --bg の stdin pipe が機能することを確認。
+# よって target script を env -i で起動し、必要な変数のみ明示的に渡す。
+# 詳細: docs/postmortem/2026-05-28-oauth-fail/
 if [ "${#PASS_THROUGH[@]}" -gt 0 ]; then
-    bash "SCRIPTS/${SCRIPT}" "${PASS_THROUGH[@]}" >> "${TARGET_LOG}" 2>&1
+    env -i \
+        HOME="${HOME}" \
+        PATH="${PATH}" \
+        R2C_ROOT="${R2C_ROOT}" \
+        R2C_CONFIG="${R2C_CONFIG}" \
+        CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-${R2C_CONFIG}}" \
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-1}" \
+        bash "SCRIPTS/${SCRIPT}" "${PASS_THROUGH[@]}" >> "${TARGET_LOG}" 2>&1
 else
-    bash "SCRIPTS/${SCRIPT}" >> "${TARGET_LOG}" 2>&1
+    env -i \
+        HOME="${HOME}" \
+        PATH="${PATH}" \
+        R2C_ROOT="${R2C_ROOT}" \
+        R2C_CONFIG="${R2C_CONFIG}" \
+        CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-${R2C_CONFIG}}" \
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-1}" \
+        bash "SCRIPTS/${SCRIPT}" >> "${TARGET_LOG}" 2>&1
 fi
 EXIT_CODE=$?
 set -e
