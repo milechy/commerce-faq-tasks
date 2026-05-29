@@ -8,7 +8,7 @@ RAJIUCE プロジェクトのセキュリティ品質を継続的に維持する
 
 - Node.js 依存パッケージの脆弱性（npm audit）
 - TypeScript 型安全性（strict check）
-- シークレット・認証情報の漏洩（grep ベース静的解析）
+- シークレット・認証情報の漏洩（grep ベース静的解析 + gitleaks）
 - SQL インジェクションパターン（文字列補間検出）
 
 ---
@@ -76,10 +76,30 @@ bash SCRIPTS/security-scan.sh
 
 > ⚠️ `pnpm verify` (定義: `package.json#scripts.verify`) の末尾には `bash SCRIPTS/security-scan.sh || true` が残っており、Gate 1 単独では audit 失敗を捕らえない。`bash SCRIPTS/security-scan.sh` を別途実行するか、verify から `|| true` を撤廃する follow-up を別 PR で扱う。
 
+---
+
+## gitleaks 運用 (2026-05-29 追加)
+
+`SCRIPTS/security-scan.sh` の grep ベース検出を補完する二次スキャンとして、gitleaks を使用する。
+特に **docs/ への実 credential 素通り**（org UUID等が markdown に混入するケース）を捕捉するのが目的。
+
+### docs-only PR での Gate 2 代替
+
+`SCRIPTS/security-scan.sh` は `node_modules` が必要なため docs-only 変更では実行できない。
+代わりに `gitleaks protect --staged` を実行し、以下フォーマットで報告する:
+
+```
+## Gate 2: security-scan (docs-only → gitleaks)
+- gitleaks protect --staged: PASS (0 leaks)
+```
+
+詳細な運用手順・allowlist ポリシー・既知リダクト事例: **`docs/GITLEAKS_ALLOWLIST_POLICY.md`**
+
 ## 関連ファイル
 
 - スキャンスクリプト: `SCRIPTS/security-scan.sh`
+- gitleaks 設定 + allowlist: `.gitleaks.toml`（詳細: `docs/GITLEAKS_ALLOWLIST_POLICY.md`）
 - CI ワークフロー: `.github/workflows/security-scan.yml`
 - デプロイチェックリスト: `docs/DEPLOY_CHECKLIST.md`
 - CLAUDE.md セキュリティゲートセクション: `## Security Scan`
-- ALLOWLIST 運用: `docs/SECURITY_SCAN_ALLOWLIST.md`
+- CVE allowlist: `docs/SECURITY_SCAN_ALLOWLIST.md`
