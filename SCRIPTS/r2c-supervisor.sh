@@ -86,8 +86,7 @@ notify() {
 STUCK=$(SQ "SELECT id, asana_gid, asana_name, session_id, COALESCE(attempt_count,0), worktree_path
             FROM tasks
             WHERE state = 'running'
-              AND started_at IS NOT NULL
-              AND started_at < datetime('now', '-${MAX_RUN_MINUTES} minutes');")
+              AND COALESCE(started_at, updated_at, created_at) < datetime('now', '-${MAX_RUN_MINUTES} minutes');")
 
 STUCK_COUNT=0
 if [ -n "$STUCK" ]; then
