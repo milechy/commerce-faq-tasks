@@ -11,6 +11,10 @@ jobs:
     name: Gate 1 — typecheck + lint + test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # jest --runInBand が大規模スイートで node 既定ヒープ(~4GB)を超え OOM (FATAL heap limit / exit 134) するため明示拡張。
+    # 症状: docs-only PR でも同一の OOM で Gate 1 が落ちる = main 由来の CI 環境問題 (PR 内容と無関係)。
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
 
     steps:
       - uses: actions/checkout@v4
