@@ -145,7 +145,7 @@ check_axis_b() {
     local previous
     previous=$(cat "$VERSION_FILE")
     if [ "$current" != "$previous" ]; then
-        notify warning B "claude --version 変化検出" "$previous → $current。罠2 級 breaking change 再発の可能性、24h ループ e2e 確認推奨。"
+        notify warning B "claude --version 変化検出" "${previous} → ${current}。罠2 級 breaking change 再発の可能性、24h ループ e2e 確認推奨。"
         echo "$current" > "$VERSION_FILE"
     fi
 }
