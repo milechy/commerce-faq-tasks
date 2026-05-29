@@ -83,7 +83,7 @@ notify() {
 }
 
 # ─── 1. Stuck Lane 検出 ──────────────────────────────────────────────────
-STUCK=$(SQ "SELECT id, asana_gid, asana_name, session_id, COALESCE(attempt_count,0), worktree_path
+STUCK=$(SQ "SELECT id, asana_gid, asana_name, session_id, COALESCE(attempt_count,0), worktree_path, COALESCE(branch,'')
             FROM tasks
             WHERE state = 'running'
               AND COALESCE(started_at, updated_at, created_at) < datetime('now', '-${MAX_RUN_MINUTES} minutes');")
@@ -106,9 +106,31 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 if [ -n "$STUCK" ]; then
-    while IFS='|' read -r TID GID NAME SID ATTEMPT WORKTREE; do
+    while IFS='|' read -r TID GID NAME SID ATTEMPT WORKTREE BRANCH; do
         [ -z "$TID" ] && continue
         echo "Stuck task ${TID} (gid=${GID:-NA}, attempt=${ATTEMPT}, session=${SID:-NA}): ${NAME}"
+
+        # ─── PR-aware guard: 既に PR を作成済みなら "stuck" ではない (誤 rollback 防止) ───
+        # Lane が PR を出したのに state が running のまま残る (pr_created へ未遷移) と、
+        # supervisor が "running > 45min" と誤検出し、成果物ごと auto_rollback してしまう
+        # (2026-05-29 に id=49/50 が merged 済、52/53/54 が PR open のまま誤 rollback された事案)。
+        # kill/cleanup/retry/rollback を行う前に、branch に対応する PR の有無を確認する。
+        if [ -n "${BRANCH:-}" ]; then
+            PR_JSON=$(cd "$R2C_ROOT" && gh pr list --head "$BRANCH" --state all --json number,state --limit 1 2>/dev/null || echo '[]')
+            PR_NUM=$(printf '%s' "$PR_JSON" | jq -r '.[0].number // empty' 2>/dev/null || true)
+            PR_STATE=$(printf '%s' "$PR_JSON" | jq -r '.[0].state // empty' 2>/dev/null || true)
+            if [ -n "${PR_NUM:-}" ]; then
+                if [ "$PR_STATE" = "MERGED" ]; then
+                    RECONCILED_STATE="merged"
+                else
+                    RECONCILED_STATE="pr_created"
+                fi
+                SQ "UPDATE tasks SET state='${RECONCILED_STATE}', pr_number=${PR_NUM}, error_message='supervisor: PR #${PR_NUM} (${PR_STATE}) 検出 — stuck 誤判定を回避', last_action='pr_reconciled', updated_at=datetime('now') WHERE id = ${TID};"
+                echo "  → reconciled to ${RECONCILED_STATE} (PR #${PR_NUM} ${PR_STATE} 存在; stuck ではない)"
+                notify 0 "R2C Lane reconciled" "Task ${TID}: PR #${PR_NUM} (${PR_STATE}) 検出。stuck 誤判定を回避し ${RECONCILED_STATE} へ遷移: ${NAME}"
+                continue
+            fi
+        fi
 
         # claude session kill (best-effort)
         if [ -n "$SID" ]; then
