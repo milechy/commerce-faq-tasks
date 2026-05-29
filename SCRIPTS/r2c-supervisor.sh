@@ -119,12 +119,16 @@ if [ -n "$STUCK" ]; then
             PR_JSON=$(cd "$R2C_ROOT" && gh pr list --head "$BRANCH" --state all --json number,state --limit 1 2>/dev/null || echo '[]')
             PR_NUM=$(printf '%s' "$PR_JSON" | jq -r '.[0].number // empty' 2>/dev/null || true)
             PR_STATE=$(printf '%s' "$PR_JSON" | jq -r '.[0].state // empty' 2>/dev/null || true)
-            if [ -n "${PR_NUM:-}" ]; then
-                if [ "$PR_STATE" = "MERGED" ]; then
-                    RECONCILED_STATE="merged"
-                else
-                    RECONCILED_STATE="pr_created"
-                fi
+            # OPEN→pr_created / MERGED→merged のみ正規化する。
+            # CLOSED(未merge) や PR 無しは既存 stuck 処理 (retry/rollback) にフォールスルー。
+            # (Codex Gate 2.5 [P2]: CLOSED を pr_created にすると非終端で取り残され復旧不能)
+            RECONCILED_STATE=""
+            if [ "$PR_STATE" = "MERGED" ]; then
+                RECONCILED_STATE="merged"
+            elif [ "$PR_STATE" = "OPEN" ]; then
+                RECONCILED_STATE="pr_created"
+            fi
+            if [ -n "${PR_NUM:-}" ] && [ -n "$RECONCILED_STATE" ]; then
                 SQ "UPDATE tasks SET state='${RECONCILED_STATE}', pr_number=${PR_NUM}, error_message='supervisor: PR #${PR_NUM} (${PR_STATE}) 検出 — stuck 誤判定を回避', last_action='pr_reconciled', updated_at=datetime('now') WHERE id = ${TID};"
                 echo "  → reconciled to ${RECONCILED_STATE} (PR #${PR_NUM} ${PR_STATE} 存在; stuck ではない)"
                 notify 0 "R2C Lane reconciled" "Task ${TID}: PR #${PR_NUM} (${PR_STATE}) 検出。stuck 誤判定を回避し ${RECONCILED_STATE} へ遷移: ${NAME}"
