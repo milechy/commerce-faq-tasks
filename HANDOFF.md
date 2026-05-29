@@ -1,9 +1,46 @@
 # RAJIUCE Handoff Document
 
 ## Quick State
-- Phase 70: 24h 自走ループ確立済み (2026-05-28) ✅ 完全自走確定
-- Active: Phase53残 (book id=1 VPS復旧) → Phase54 billing → pipelineQueue永続化
-- 24h Loop: Tier-S id=4 試運転中 (3日連続成功で正式承認、14日でDoD)
+- Phase 70: 24h 自走ループ確立済み (2026-05-28) ✅
+- Active: 昨夜残務・インフラ復旧完了 (2026-05-29)。dispatch 停止中 → #237 merge 後に hkobayashi が手動再開予定。
+- 24h Loop: dispatch/poll/supervisor bootout 中（launchd 停止）。monitor は #233 版で LastExitStatus=0 で稼働中。
+
+## 残人手タスク (hkobayashi 実行)
+1. **dispatch 再開** (#237 merge 後):
+   ```
+   sqlite3 ~/projects/commerce-faq-tasks/.claude/queue/r2c-queue.db \
+     "INSERT OR REPLACE INTO automation_state(key,value) VALUES('pause_dispatching','0');"
+   for l in dispatch poll supervisor; do
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.r2c.$l.plist
+   done
+   ```
+2. book id=1 VPS復旧: `POST /v1/admin/knowledge/book-pdf/1/process` (super_admin JWT)
+3. Phase44 P2 VPS: `psql $DATABASE_URL < src/migrations/phase44_book_uploads.sql` → deploy
+
+## 2026-05-29 成果サマリ
+
+### インフラ復旧 (昨夜残務 ①②③)
+
+**① Gate1 OOM 根治 PR #236** (sha=5b0e2c7d0d19) — merged ✅
+- 切り分け: docs-only PR でも OOM → main 由来確定。
+- 真因: `bookPdfRoutes.test.ts` が `pipelineQueue.enqueue` を未 mock → DB-backed queue(#227) と mock db が非同期無限ループ → JS heap OOM。Gate1 赤化は #227 merge と時期一致。
+- 修正: test に `jest.mock(pipelineQueue)` (本番無変更) + `isolatedModules:true` + CI `NODE_OPTIONS=6144`。142 suites/1721 tests 全通過。Gate1 5分 OOM → 1分完走。
+
+**② supervisor 誤 rollback 根治 PR #237** (sha=9ec767c78251) — merged ✅
+- 真因: running>45min 検出時に PR 存在確認なし。Lane が PR を出しても state 遷移漏れで running のまま → 5 レーン (id=49/50/52/53/54) が auto_rollback された。
+- 修正: kill 前に `gh pr list --head <branch>` で確認。OPEN=pr_created / MERGED=merged / CLOSED=フォールスルー。
+- Codex Gate 2.5: P0/P1 なし、P2 指摘(CLOSED→pr_created 非終端放置)を修正済み。
+- キュー整合済: 49/50→merged, 52/53/54→pr_created (+pr_number)。
+
+**③ Codex Gate 2.5 復旧確定** — #237 で実走・完走ログ取得・PR コメント投稿済み ✅
+
+### その他 merged PR (2026-05-29)
+| PR | sha | 内容 |
+|---|---|---|
+| #233 | 7a2d155c77dd | fix(monitor): bash 5.3.3 `$current。` 誤展開修正 → monitor LastExitStatus=0 ✅ |
+| #232 | eed25ebc5dd9 | docs(postmortem): Tier-S id=4 固着 + single-slot 調査レポート |
+| #234 | a1c64b58a84b | fix(supervisor): started_at=NULL stuck 検出漏れ修正 |
+| #235 | fa302f4fb001 | docs(gitleaks): allowlist + docs org UUID redact |
 
 ## 2026-05-28 成果サマリ
 
