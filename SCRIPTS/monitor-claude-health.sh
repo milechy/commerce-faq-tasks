@@ -178,7 +178,7 @@ check_axis_d() {
 check_axis_e() {
     [ -f "$QUEUE_DB" ] || return
     local count
-    count=$(sqlite3 "$QUEUE_DB" "SELECT COUNT(*) FROM tasks WHERE state='running' AND (session_id IS NULL OR session_id='') AND started_at < datetime('now', '-60 seconds');" 2>/dev/null || echo 0)
+    count=$(sqlite3 "$QUEUE_DB" "SELECT COUNT(*) FROM tasks WHERE state='running' AND (session_id IS NULL OR session_id='') AND COALESCE(started_at, updated_at, created_at) < datetime('now', '-60 seconds');" 2>/dev/null || echo 0)
     if [ -z "$count" ] || ! [[ "$count" =~ ^[0-9]+$ ]]; then count=0; fi
     if [ "$count" -ge 3 ]; then
         notify critical E "session_id 未取得多発 (罠5/6 兆候)" "running task が ${count} 件 session_id NULL のまま 60s 超。cron context spawn 不能の可能性。"
