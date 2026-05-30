@@ -1,6 +1,7 @@
 // src/api/admin/knowledge/routes.ts
 
 // Phase29: カーネーション向けナレッジ管理API
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
@@ -88,7 +89,7 @@ async function textToFaqs(
   categoryOverride?: string | null,
   existingQuestions?: string[]
 ): Promise<FaqEntry[]> {
-  const model = process.env.GROQ_FAQ_GEN_MODEL ?? "llama-3.3-70b-versatile";
+  const model = process.env.GROQ_FAQ_GEN_MODEL ?? GROQ_VERSATILE_70B;
 
   const existingSection =
     existingQuestions && existingQuestions.length > 0

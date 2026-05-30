@@ -1,13 +1,14 @@
 // src/agent/report/weeklyReportGenerator.ts
 // Phase46: 週次レポート自動生成（毎週月曜AM9:00）
 
+import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import { Pool } from 'pg';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';
 
 const logger = pino();
 
-const REPORT_MODEL = 'llama-3.3-70b-versatile';
+const REPORT_MODEL = GROQ_VERSATILE_70B;
 
 export interface WeeklyMetrics {
   avgScore: number;

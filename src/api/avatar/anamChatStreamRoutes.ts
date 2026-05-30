@@ -6,6 +6,7 @@
 //   widget.jsからの会話履歴を受け取り、Groq LLMでストリーミング応答を返す。
 //   Anam JS SDKのcreateTalkMessageStream()でTTS化される。
 
+import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
@@ -81,7 +82,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
           'Authorization': `Bearer ${groqApiKey}`,
         },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: GROQ_VERSATILE_70B,
           messages: groqMessages,
           stream: true,
           max_tokens: 150,

@@ -1,6 +1,7 @@
 // src/agent/judge/evaluationAnalyzer.ts
 // Phase45: 評価結果を分析してチューニングルールを提案する
 
+import { GROQ_INSTANT_8B } from '../../config/groqModels';
 import { Pool } from 'pg';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';
@@ -8,7 +9,7 @@ import { createEvaluationRepository } from './evaluationRepository';
 
 const logger = pino();
 
-const ANALYZER_MODEL = 'llama-3.1-8b-instant';
+const ANALYZER_MODEL = GROQ_INSTANT_8B;
 
 export interface SuggestedRule {
   triggerPattern: string;

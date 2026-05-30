@@ -2,6 +2,7 @@
 // Phase44: 心理学原則検出器
 // キーワードマッチング + Groq 8b LLMフォールバック
 
+import { GROQ_INSTANT_8B } from '../../config/groqModels';
 import { groqClient } from '../llm/groqClient';
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -81,7 +82,7 @@ async function detectWithLlm(
 
   try {
     const response = await groqClient.call({
-      model: "llama-3.1-8b-instant",
+      model: GROQ_INSTANT_8B,
       messages: [
         {
           role: "system",
