@@ -190,7 +190,7 @@ export function registerFaqCrudRoutes(
       params.push(limit);
       params.push(offset);
       const itemsResult = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
          FROM faq_docs
          ${whereClause}
          ORDER BY ${safeSortCol} ${safeOrder}
@@ -222,7 +222,7 @@ export function registerFaqCrudRoutes(
 
     try {
       const result = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
          FROM faq_docs
          WHERE id = $1`,
         [id]
