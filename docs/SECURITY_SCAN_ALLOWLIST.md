@@ -78,18 +78,24 @@
 > **再評価条件**: 各エントリの「再評価トリガー」列に記載した条件が成立したら、grep 再実行で到達不能根拠の有効性を再確認し、必要なら ignore を解除する。
 > **計測元**: `pnpm audit --production --audit-level=high --json` 実行結果 (2026-05-27 時点)
 
-### Ignore 対象 (8件 High)
+### Ignore 対象 (1件 High)
 
 | # | CVE | sev | module | 経路 | 到達不能/低リスク根拠 (実機照合) | 再評価トリガー |
 |---|---|---|---|---|---|---|
-| I-1 | CVE-2026-26996 | high | minimatch | `@google-analytics/data → google-gax → rimraf → glob → minimatch@9.0.5` | `grep "from 'minimatch'" src/` 0件 → 直接呼び出し無し。GA4 client は `GOOGLE_APPLICATION_CREDENTIALS_JSON` 必須 (`src/lib/ga4/ga4Client.ts:16`)。攻撃面 = google-gax 内部の path sweep (rimraf) のみで攻撃者操作不能 | `@google-analytics/data` major bump (5→6) 時 / google-gax が rimraf/glob 新版採用時 |
-| I-2 | CVE-2026-27903 | high | minimatch | 同上 | 同上 (matchOne ReDoS。同様に攻撃者からの pattern 入力経路なし) | 同上 |
-| I-3 | CVE-2026-27904 | high | minimatch | 同上 | 同上 (nested *() extglobs ReDoS) | 同上 |
-| I-4 | CVE-2026-44289 | high | protobufjs | `@google-analytics/data → google-gax → @grpc/proto-loader → protobufjs@7.5.5` | **両面**: (a) `grep "from 'protobufjs'\|@grpc/" src/` 0件で直接呼び出し無し。(b) `src/lib/ga4/ga4Client.ts:40,71` の `runReport` 経由で protobufjs decode は通る — ただし decode 対象は **Google API (analyticsdata.googleapis.com) からの TLS 応答** のみ。エクスプロイトには (i) Google サーバーを掌握して悪意ある protobuf 応答を返させる、または (ii) admin 認証 + 自前で制御する GA4 property を内部で指定させる、の **2段階権限昇格** が必要。GA4 routes (`src/api/admin/tenants/ga4Routes.ts`) は `super_admin` gating かつ credential は DB 側固定で攻撃者の自由度なし。**残余リスク = なし** | 同上 / google-gax が protobufjs 7.5.6+ 採用時 / GA4 endpoint を非 super_admin に開放する場合は即時解除 |
-| I-5 | CVE-2026-44290 | high | protobufjs | 同上 | 同上 (unsafe option paths DoS、unbounded message) — 信頼境界 Google + admin gating で防御。**残余リスク = なし** | 同上 |
-| I-6 | CVE-2026-44291 | high | protobufjs | 同上 | 同上 (Code generation gadget after prototype pollution) — Google が返す protobuf message 構造のみ decode、攻撃者は構造を制御不能。**残余リスク = なし** | 同上 |
-| I-7 | CVE-2026-44293 | high | protobufjs | 同上 | 同上 (bytes field default code injection) — `.proto` 定義は @grpc/proto-loader にバンドル済みで実行時 untrusted な定義は受け取らない。**残余リスク = なし** | 同上 |
 | I-8 | CVE-2026-45134 | high | langsmith | `@langchain/core@0.3.80 → langsmith@0.3.81` (+ `@langchain/langgraph → @langchain/core → langsmith` 経路あり) | **両面 (起動時 invariant + grep)**: (a) `grep "from 'langsmith'" src/` 0件で直接呼び出し無し、`pullPrompt` 経路未使用。(b) 環境変数経由の起動を防ぐため `src/index.ts:assertLangchainTracingDisabled()` で `LANGCHAIN_TRACING_V2 / LANGCHAIN_TRACING / LANGCHAIN_API_KEY / LANGSMITH_API_KEY / LANGSMITH_TRACING` のいずれかが truthy なら **起動を fail-fast で阻止**。grep だけでなく実行時 invariant でも保証する二重防御。**残余リスク = なし (env-activation 経路が起動時にブロックされる)** | `@langchain/core` major bump (0.3→1.x) 時 / **tracing を意図して導入する場合は: (1) ignoreCves から CVE-2026-45134 を削除し (2) `src/index.ts` の startup check を撤廃する手順をセットで PR** |
+
+### 解決済み — override で実修正 (ignore から削除, 2026-05-30)
+
+旧 I-1〜I-7 (minimatch 3件 + protobufjs 4件) は `pnpm.overrides` で transitive を強制更新し、
+ignore ではなく **実際に脆弱版を排除**した。`pnpm audit --production --audit-level=high` で High は
+langsmith (I-8) の 1件のみに減少。**同一メジャー内**に制約してメジャー跨ぎの破壊を回避している。
+
+| 旧# | CVE | module | 修正 (pnpm.overrides) | 解決後 resolved | 制約理由 |
+|---|---|---|---|---|---|
+| I-1〜3 | CVE-2026-26996 / 27903 / 27904 | minimatch | `">=9.0.7 <10"` | minimatch@9.0.9 | minimatch 10.x は `glob@10`(minimatch ^9 想定) を壊しうるため 9.x に制約 |
+| I-4〜7 | CVE-2026-44289 / 44290 / 44291 / 44293 | protobufjs | `">=7.5.6 <8"` | protobufjs@7.6.1 | protobufjs 8.x は `@grpc/proto-loader@0.8.0`(protobufjs ^7.2.5 想定, 本番GA4 grpc) を壊しうるため 7.x に制約 |
+
+検証: Gate1 typecheck/build クリーン・全テスト 1721/1721 pass・security-scan PASS。
 
 ### Moderate 維持 (Ignore しない、到達可・将来対処)
 
