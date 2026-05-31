@@ -180,12 +180,25 @@ ssh root@65.108.159.161 "cd /opt/rajiuce && psql \$DATABASE_URL -f src/migration
 Phase69-2 で ES mapping に `is_published` / `is_excluded_from_search` を明示追加した。
 既存インデックスは dynamic mapping のため、明示マッピングを反映するには re-index が必要。
 
-> **ES write path の注意 (Phase69-2 Round 5 / Phase69-2-E 参照)**
-> `upsertToEsAsync`（CRUD POST/PUT）・`syncIsExcludedToEsAsync`（/exclude PATCH）はいずれも
-> `is_excluded_from_search` を ES に伝搬する。ただし書き込み index は `ES_FAQ_INDEX || "faqs"` であり、
-> 検索 read path (`faq_<tenantId>`) とは index 名が異なる可能性がある（Phase33-c 起因の既存不整合）。
-> **この不整合により、Phase69-2-E 完了まで ES への除外同期は事実上機能しない可能性がある。**
-> pgvector 経由の除外フィルター（`WHERE fd.is_excluded_from_search = false`）は index 名に依存せず機能する。
+> **ES write path の不整合は Phase69-2-E で解消済み**
+> `upsertToEsAsync`（CRUD POST/PUT）・`syncIsExcludedToEsAsync`（/exclude PATCH）・`deleteFromEs`（DELETE）は
+> いずれも `is_excluded_from_search` を含む doc を ES に伝搬する。
+> **Phase69-2-E 以前は書き込み index が `ES_FAQ_INDEX || "faqs"`、検索 read path が `faq_<tenantId>` と
+> 異なっており（Phase33-c 起因）、ES への除外同期が事実上機能していなかった。**
+> Phase69-2-E で write path を read path と同じ `faq_<tenantId>` に統一した（後述の命名規則を参照）。
+> なお pgvector 経由の除外フィルター（`WHERE fd.is_excluded_from_search = false`）は index 名に依存せず常に機能する。
+
+##### ES index 命名規則（Phase69-2-E で確定）
+
+| 用途 | index 名 | 解決元 |
+|------|----------|--------|
+| FAQ 書き込み（upsert / delete / exclude 同期） | `faq_<tenantId>` | `src/search/langIndex.ts` の `resolveFaqWriteIndex(tenantId)` |
+| FAQ 検索 read path（hybrid / langRouter） | `faq_<tenantId>_<lang>`（プライマリ）→ `faq_<tenantId>`（フォールバック） | `resolveFallbackIndices(tenantId, lang)` |
+| reindex（全件再構築） | `faq_<tenantId>` | `SCRIPTS/sync-es.ts` の `syncTenant()` |
+
+- **正典は `resolveFaqWriteIndex` / `sync-es.ts` で、いずれも `faq_<tenantId>`。** 環境変数 `ES_FAQ_INDEX` による FAQ index の上書きは廃止した。
+- `ES_FAQ_INDEX` は book-pipeline（Phase44/47、`bookStructurizer.ts` / `embedAndStore.ts`）が暫定的に参照するのみ。FAQ 検索経路では一切使わない。
+- global ナレッジの delete は `faq_global` ではなく、doc が書き込まれたテナントの `faq_<recordTenantId>` を対象にする（write 時と同じ index）。
 
 ```bash
 ssh root@65.108.159.161 "cd /opt/rajiuce && pnpm ts-node SCRIPTS/sync-es.ts --all"
