@@ -13,6 +13,7 @@ import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { encryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
+import { resolveFaqWriteIndex } from "../../../search/langIndex";
 import type { SupabaseJwtUser } from '../../middleware/roleAuth';
 
 
@@ -165,10 +166,11 @@ ${text.slice(0, 4000)}
   return faqs;
 }
 
-/** ESインデックスからドキュメントを削除（best-effort） */
-async function deleteFromEs(esDocId: string): Promise<void> {
+/** ESインデックスからドキュメントを削除（best-effort）
+ * Phase69-2-E: write index を read path と同じ faq_${tenantId} に統一 */
+async function deleteFromEs(tenantId: string, esDocId: string): Promise<void> {
   const esUrl = process.env.ES_URL;
-  const index = process.env.ES_FAQ_INDEX || "faqs";
+  const index = resolveFaqWriteIndex(tenantId);
   if (!esUrl || !esDocId) return;
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(esDocId)}`;
   await fetch(url, { method: "DELETE" }).catch(() => {});
@@ -408,7 +410,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       );
 
       // ES 削除（best-effort）
-      if (esDocId) await deleteFromEs(esDocId);
+      if (esDocId) await deleteFromEs(recordTenantId, esDocId);
 
       return res.json({ ok: true, id });
     } catch (err) {
