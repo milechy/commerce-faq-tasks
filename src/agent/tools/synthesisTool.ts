@@ -1,5 +1,6 @@
 // src/agent/tools/synthesisTool.ts
 
+import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import type { RerankItem } from '../types';
 import { groqClient, type GroqUsage } from '../llm/groqClient';
 import {
@@ -286,7 +287,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       : `お客様の質問: ${query}\n上記の応答ルールに従って、お客様の質問に自然な日本語で回答してください。`;
 
     const synthResult = await groqClient.callWithUsage({
-      model: 'llama-3.3-70b-versatile',
+      model: GROQ_VERSATILE_70B,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },

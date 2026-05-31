@@ -1,5 +1,11 @@
 import { getPostHogClient } from "./posthogClient";
 import { logger } from "../logger";
+import {
+  GROQ_COMPOUND,
+  GROQ_COMPOUND_MINI,
+  GROQ_VERSATILE_70B,
+  GROQ_INSTANT_8B,
+} from "../../config/groqModels";
 
 export interface LlmAnalyticsEvent {
   tenantId: string;
@@ -12,10 +18,10 @@ export interface LlmAnalyticsEvent {
 }
 
 const COST_PER_1K: Record<string, { input: number; output: number }> = {
-  "groq/compound": { input: 0.0009, output: 0.0009 },
-  "groq/compound-mini": { input: 0.0006, output: 0.0006 },
-  "llama-3.3-70b-versatile": { input: 0.00059, output: 0.00079 },
-  "llama-3.1-8b-instant": { input: 0.00005, output: 0.00008 },
+  [GROQ_COMPOUND]: { input: 0.0009, output: 0.0009 },
+  [GROQ_COMPOUND_MINI]: { input: 0.0006, output: 0.0006 },
+  [GROQ_VERSATILE_70B]: { input: 0.00059, output: 0.00079 },
+  [GROQ_INSTANT_8B]: { input: 0.00005, output: 0.00008 },
 };
 
 function estimateCostUsd(

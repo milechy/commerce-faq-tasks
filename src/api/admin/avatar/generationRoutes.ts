@@ -2,6 +2,7 @@
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import type { Express, NextFunction, Request, Response } from "express";
 
 type AvatarReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
@@ -27,7 +28,7 @@ async function callGroqLLM(system: string, user: string): Promise<string> {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: GROQ_VERSATILE_70B,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -355,7 +356,7 @@ JSONのみ返してください。`,
           tenantId,
           requestId,
           featureUsed: "avatar_config_voice",
-          model: "llama-3.3-70b-versatile",
+          model: GROQ_VERSATILE_70B,
           inputTokens: 0,
           outputTokens: 0,
         });
@@ -420,7 +421,7 @@ JSONのみ返してください。`,
           tenantId,
           requestId,
           featureUsed: "avatar_config_prompt",
-          model: "llama-3.3-70b-versatile",
+          model: GROQ_VERSATILE_70B,
           inputTokens: 0,
           outputTokens: 0,
         });

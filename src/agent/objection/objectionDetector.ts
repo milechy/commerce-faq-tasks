@@ -1,6 +1,7 @@
 // src/agent/objection/objectionDetector.ts
 // Phase46: 会話履歴から反論→対応→肯定パターンを自動検出し、objection_patternsに蓄積
 
+import { GROQ_INSTANT_8B } from '../../config/groqModels';
 import { Pool } from 'pg';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';
@@ -93,7 +94,7 @@ export async function saveObjectionPatterns(
     try {
       const normalized = await callGroqWith429Retry(
         {
-          model: 'llama-3.1-8b-instant',
+          model: GROQ_INSTANT_8B,
           messages: [
             {
               role: 'system',

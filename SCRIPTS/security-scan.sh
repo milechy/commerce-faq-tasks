@@ -133,6 +133,20 @@ if [[ -n "$ENV_BAK" ]]; then
 fi
 echo ''
 
+echo '--- [7] Groq EOL model check ---'
+if [[ -f "$(dirname "$0")/check-groq-models.sh" ]]; then
+  if bash "$(dirname "$0")/check-groq-models.sh" >/tmp/groq_eol_check.txt 2>&1; then
+    echo '[PASS] No decommissioned Groq model IDs in src/'
+  else
+    echo '[CRITICAL] Decommissioned Groq model ID(s) referenced in src/:'
+    grep -E 'DEPRECATED MODEL IN USE|src/' /tmp/groq_eol_check.txt || cat /tmp/groq_eol_check.txt
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  fi
+else
+  echo '[WARN] check-groq-models.sh not found, skipping'
+fi
+echo ''
+
 # -------------------------------------------------------------------
 # Summary
 # -------------------------------------------------------------------

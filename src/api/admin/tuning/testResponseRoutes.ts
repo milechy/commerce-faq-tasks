@@ -1,13 +1,14 @@
 // src/api/admin/tuning/testResponseRoutes.ts
 // Phase6-B: チューニングルール LLMテスト返答生成API
 
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
 import { logger } from "../../../lib/logger";
 
-const GROQ_MODEL_70B = "llama-3.3-70b-versatile";
+const GROQ_MODEL_70B = GROQ_VERSATILE_70B;
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist
