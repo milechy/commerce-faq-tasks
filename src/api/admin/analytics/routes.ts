@@ -8,6 +8,7 @@ import { pool } from "../../../lib/db";
 import { createNotification, notificationExists } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 import { decryptText } from '../../../lib/crypto/textEncrypt';
+import { isAllowedAdminRole } from "../../middleware/roleAuth";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -114,13 +115,6 @@ function resolveTenantFilter(
     return fromQuery ?? null;
   }
   return jwtTenantId || null;
-}
-
-const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
-type AllowedAdminRole = typeof ALLOWED_ADMIN_ROLES[number];
-function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
-  return typeof role === "string" &&
-         (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role);
 }
 
 // ---------------------------------------------------------------------------
