@@ -4,6 +4,22 @@ import type { NextFunction, Request, Response } from "express";
 
 export type UserRole = "super_admin" | "client_admin" | "anonymous";
 
+// 管理者ロール allowlist（admin 系ルートの認可判定で共有）。
+// 旧来 chat-history / analytics / eventAnalytics に重複定義されていたものを集約。
+export const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
+export type AllowedAdminRole = (typeof ALLOWED_ADMIN_ROLES)[number];
+/**
+ * actor のロールが admin 系（super_admin / client_admin）か判定する型ガード。
+ * セキュリティ要件: 認可ロールは app_metadata.role のみを信頼すること
+ * （user_metadata はクライアント編集可能なため特権判定に使用してはならない）。
+ */
+export function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
+  return (
+    typeof role === "string" &&
+    (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role)
+  );
+}
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
