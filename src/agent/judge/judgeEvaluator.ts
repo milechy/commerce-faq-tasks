@@ -175,7 +175,9 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
         : Promise.resolve({ results: [] }),
       pool
         .query(
-          'SELECT trigger_pattern, expected_behavior FROM tuning_rules WHERE tenant_id = $1 AND is_active = true LIMIT 10',
+          // runtime (tuningRulesRepository) は tenant + 'global' 共有ルールを適用するため、
+          // judge も同じルール集合で psychology_fit を評価する (他RAG経路と一貫)。
+          "SELECT trigger_pattern, expected_behavior FROM tuning_rules WHERE (tenant_id = $1 OR tenant_id = 'global') AND is_active = true LIMIT 10",
           [tenantId],
         )
         .then((res: { rows: Array<{ trigger_pattern: string; expected_behavior: string }> }) => res.rows)
