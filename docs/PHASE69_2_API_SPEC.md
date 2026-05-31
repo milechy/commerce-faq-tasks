@@ -1,7 +1,7 @@
 # Phase69-2 API 拡張仕様 — AVAS チーム連携用
 
 **作成日:** 2026-05-19
-**バージョン:** 1.1
+**バージョン:** 1.2
 **ステータス:** Phase69-2-A 本番稼働中 (PR #152 merge済)
 **作成者:** R2C (RAJIUCE) チーム
 **共有先:** AVAS チーム
@@ -96,12 +96,31 @@ POST /dialog/turn
 
 ### 2.4 動作仕様
 
+#### 現状の実装 (Phase69-2-A 時点)
+
+リクエストの `excluded_ids` のみが検索フィルターに適用される:
+
 ```
-最終的な除外リスト = テナントの default_excluded_ids ∪ リクエスト excluded_ids
+実際の除外リスト = リクエスト excluded_ids (フィルタ後の空文字除去済み)
 ```
 
-→ 両者は **OR 結合**。`default_excluded_ids` だけでも除外される。
-→ リクエストで `excluded_ids: []` を送っても `default_excluded_ids` は適用される。
+`pgvector.ts` の実装:
+```sql
+AND fe.id::text != ALL($4::text[])  -- リクエスト excluded_ids のみ
+```
+
+#### 設計上の将来仕様 (Phase69-2-E 以降で実装予定)
+
+```
+設計上の除外リスト = テナントの default_excluded_ids ∪ リクエスト excluded_ids
+```
+
+> **⚠️ 注意 (2026-05-31 時点):** `tenants.default_excluded_ids` カラムは DB スキーマに追加済みだが、
+> TypeScript 側でこのカラムを検索時に読み込んでマージする実装はまだ存在しない。
+> 現時点では `default_excluded_ids` はデータモデルとして定義されているのみで、検索動作への影響はない。
+> AVAS チームは `excluded_ids` パラメータを使った「リクエストスコープ除外」のみ利用可能。
+
+→ `default_excluded_ids` の永続統合（§7.2）は Phase69-2-E 対応後に利用可能になる予定。
 
 ### 2.5 サンプルリクエスト ★ 実装確認済み
 
@@ -447,7 +466,7 @@ WHERE tenant_id = '<your-tenant-id>';
 |---|---|
 | 検索 API rate limit | テナントの `rateLimit` (デフォルト 60 req/min) |
 | `excluded_ids` 上限 | **500 要素** ★ 実装確認済み (Zod `z.array(z.string()).max(500)`) |
-| `default_excluded_ids` の適用タイミング | リクエストごとに DB から取得 (インメモリキャッシュなし) |
+| `default_excluded_ids` の適用タイミング | **未実装** (DB スキーマのみ定義済み。Phase69-2-E 以降で実装予定) |
 | Admin API (PATCH exclude) DB lock timeout | 3秒 (`SET LOCAL lock_timeout = '3s'`) |
 
 ---
@@ -471,6 +490,7 @@ WHERE tenant_id = '<your-tenant-id>';
 |---|---|---|---|
 | 1.0 | 2026-05-19 | 初版作成、Phase69-2-A 本番稼働後の仕様確定版 | R2C チーム |
 | 1.1 | 2026-05-19 | PR #152 実装に基づく精緻化、推測ベースの値を実装値に置換: max要素数1000→500、`q`フィールド名修正、dialog `options`配下に修正、PATCH response形式修正 (`reason`/`updated_at`/`updated_by` 削除)、faq_docs カラム追加記載、インデックス条件修正 (`= true`)、excluded_count/excluded_default_count 削除、audit_log 記載修正、409エラー追加 | R2C チーム (CLI) |
+| 1.2 | 2026-05-31 | Phase69-2-C AVAS連携対応: `default_excluded_ids` の実装状況を実機照合で訂正 (DB スキーマのみ定義済み、TypeScript 側でのマージ実装は未着手)。§2.4 動作仕様に「現状実装」と「将来設計」を分離記載、§8 パフォーマンス表の適用タイミングを未実装と明記。PARTNER_ROLLOUT_PLAYBOOK.md にゼロ知識検索節を追記。 | R2C チーム (CLI) |
 
 ---
 
