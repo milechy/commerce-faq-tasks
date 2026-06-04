@@ -60,6 +60,10 @@ Thumbs.db
 
 # 24h ループ worktree（claude agents / Phase 1 並列作業用）
 .claude/worktrees/
+
+# Lane Agent Memory: local scope (memory: local) はマシン固有のため gitignore
+# project scope (.claude/agent-memory/) は git 管理 (memory: project)
+.claude/agent-memory-local/
 /tmp-*.png
 
 # 24h ループ実行時 SQLite キュー（r2c-queue-init.sh で初期化、コミット禁止）
