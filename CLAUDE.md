@@ -12,6 +12,15 @@ This project uses OpenWolf for context management. Read and follow .wolf/OPENWOL
 - **24hループ(Phase70)は2026-05-28に完全自走確定**（6罠攻略、PR #197/#217/#218/#219/#220/#221/#222）。Tier-S id=4 試運転中。
 - CLIは段取り/設定/接続/worktree/調査/テスト/機械チェックで止まらず自走、結果のみ報告。
 
+## セッション開始時の必須確認（毎回）
+
+CLIは新セッション開始時に以下を確認・報告する（省略禁止）:
+- `claude --version`（最新版との差分を確認）
+- `claude plugin list`（導入済みプラグイン一覧）
+- `.claude/skills/`・`.claude/agents/`・`.claude/hooks/` の現状
+- 公式 changelog（https://code.claude.com/docs/en/changelog）から前回確認版以降の新機能を抽出
+- 当日タスクに活用できる新機能・資産を能動的に提案する（確認だけで終わらせない）
+
 # RAJIUCE CLAUDE.md
 
 ## Core Principles
