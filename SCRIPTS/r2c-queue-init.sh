@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-R2C_ROOT="${R2C_ROOT:-$HOME/Documents/GitHub/commerce-faq-tasks}"
+R2C_ROOT="${R2C_ROOT:-$HOME/projects/commerce-faq-tasks}"
 R2C_CONFIG="${R2C_CONFIG:-$HOME/.claude-r2c-config}"
 QUEUE_DB="${QUEUE_DB:-${R2C_ROOT}/.claude/queue/r2c-queue.db}"
 LOG_DIR="${LOG_DIR:-${R2C_CONFIG}/logs}"
@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 3,
     night_mode_allowed INTEGER NOT NULL DEFAULT 1 CHECK (night_mode_allowed IN (0,1)),
+    -- dispatch / supervisor が遷移ごとに記録する運用列 (手動 ALTER を schema 化し --reset で消えないように)
+    last_action TEXT,
+    error_message TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     started_at TEXT,
@@ -136,6 +139,18 @@ fi
 
 printf '%s\n' "$SCHEMA_SQL" | sqlite3 "$QUEUE_DB"
 log "  schema applied (idempotent)"
+
+# 既存 DB への idempotent migration: CREATE TABLE IF NOT EXISTS は既存テーブルに
+# 列を追加しないため、不足している運用列 (dispatch/supervisor が UPDATE する) を補う。
+ensure_column() {
+    local col="$1" decl="$2"
+    if ! sqlite3 "$QUEUE_DB" "PRAGMA table_info(tasks);" | cut -d'|' -f2 | grep -qx "$col"; then
+        sqlite3 "$QUEUE_DB" "ALTER TABLE tasks ADD COLUMN ${col} ${decl};"
+        log "  migrate: added column tasks.${col}"
+    fi
+}
+ensure_column last_action "TEXT"
+ensure_column error_message "TEXT"
 
 INTEGRITY=$(sqlite3 "$QUEUE_DB" "PRAGMA integrity_check;")
 log "  PRAGMA integrity_check: $INTEGRITY"

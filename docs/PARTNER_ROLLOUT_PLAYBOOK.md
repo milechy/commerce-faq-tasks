@@ -22,7 +22,8 @@
 10. [KPI](#10-kpi)
     - [10.5 費用・プラン説明テンプレート（低優先）](#105-費用プラン説明テンプレート低優先)
 11. [トラブルシューティング FAQ](#11-トラブルシューティング-faq)
-12. [Appendix: carnation demo site での自己検証手順](#12-appendix-carnation-demo-site-での自己検証手順)
+12. [ゼロ知識検索 — AVAS / 外部連携向け](#12-ゼロ知識検索-zero-knowledge-exclusion-search--avas--外部連携向け)
+13. [Appendix: carnation demo site での自己検証手順](#13-appendix-carnation-demo-site-での自己検証手順)
 
 ---
 
@@ -734,7 +735,96 @@ Access to fetch at 'https://api.r2c.biz/api/events' from origin
 
 ---
 
-## 12. Appendix: carnation demo site での自己検証手順
+## 12. ゼロ知識検索 (Zero-Knowledge Exclusion Search) — AVAS / 外部連携向け
+
+> **対象**: AVAS 等の外部システムと R2C を API 連携させる担当者。
+> **前提**: Phase69-2-A で実装済み。詳細仕様は `docs/PHASE69_2_API_SPEC.md` を参照。
+
+### 12.1 この機能の目的
+
+R2C の検索 API に「特定ナレッジ ID を結果から除外する」機能を追加した。AVAS / Hermes 等の外部システムが R2C 検索を利用する際に、自社内で管理しているセンシティブなナレッジリストを R2C 側に渡さず、除外 ID のリストだけを指定できる。
+
+**責務分担**:
+
+| 領域 | R2C 側 | 外部システム (AVAS 等) |
+|---|---|---|
+| FAQ / ナレッジの実体保持 | ✅ | ❌ |
+| 除外 ID リストの保持 | ❌ | ✅ |
+| 除外判定・フィルタリング | ✅ | ❌ |
+| 除外対象の内容を外部システムに返却 | ❌ (ゼロ知識保証) | - |
+
+### 12.2 除外 ID の指定方法
+
+#### `/agent.search` を使う場合
+
+```bash
+curl -X POST "https://api.r2c.biz/agent.search" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <API_KEY>" \
+  -d '{
+    "q": "返品ポリシーを教えてください",
+    "excluded_ids": [
+      "550e8400-e29b-41d4-a716-446655440000",
+      "550e8400-e29b-41d4-a716-446655440001"
+    ]
+  }'
+```
+
+#### `/dialog/turn` を使う場合 (`excluded_ids` は `options` 配下)
+
+```bash
+curl -X POST "https://api.r2c.biz/dialog/turn" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <API_KEY>" \
+  -d '{
+    "message": "返品ポリシーを教えてください",
+    "options": {
+      "excluded_ids": ["550e8400-e29b-41d4-a716-446655440000"]
+    }
+  }'
+```
+
+### 12.3 制約
+
+| 項目 | 制限 |
+|---|---|
+| `excluded_ids` 最大要素数 | **500 件** (超過時は 400 エラー) |
+| `excluded_ids` が null / 未指定 | 除外なし (全件検索) |
+| 存在しない ID を指定 | エラーにならない (無視される) |
+| 他テナントの ID を混入 | 無効 (テナント境界で自動隔離) |
+
+### 12.4 Admin API: 個別 FAQ の永続除外フラグ設定
+
+Admin UI 操作または API 経由で、個別 FAQ を「常に検索結果から除外」に設定できる。
+
+```bash
+# FAQ ID 42 を検索対象外に設定
+curl -X PATCH "https://api.r2c.biz/v1/admin/knowledge/faq/42/exclude?tenant=<TENANT_ID>" \
+  -H "Authorization: Bearer <JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"is_excluded_from_search": true}'
+
+# レスポンス
+# {"id": 42, "is_excluded_from_search": true}
+```
+
+この設定は `faq_docs` と `faq_embeddings` に atomic に反映され、以降すべての検索リクエストで当該 FAQ が自動除外される。
+
+### 12.5 ゼロ知識保証の確認
+
+レスポンス内に除外した FAQ の内容 (title / answer / metadata) は**一切含まれない**。除外件数のカウントフィールドも返却されない。
+
+外部システム側で除外数を追跡する場合は `excluded_ids` 配列の長さを参照すること。
+
+### 12.6 テナント分離の保証
+
+- `excluded_ids` に他テナントの ID を混入させても、自テナント外のデータにはアクセスできない
+- 検索は常に認証済みテナントの範囲内でのみ実行される
+- 詳細: `docs/PHASE69_2_API_SPEC.md §5`
+
+---
+
+## 13. Appendix: carnation demo site での自己検証手順
 
 > **目的**: 実パートナー導入前に、R2C 側の担当者が本書に従って手順をなぞり、動作確認できるようにする。
 
@@ -799,4 +889,4 @@ demo site で上記5シナリオがすべて通った段階で、本書全体の
 
 ---
 
-*最終更新: 2026-04-22 / Phase: Partner Rollout Playbook 初版*
+*最終更新: 2026-05-31 / Phase69-2-C: ゼロ知識検索節 (§12) 追加*

@@ -1,13 +1,14 @@
 // src/api/admin/avatar/premiumGenerationRoutes.ts
 // Phase64 タスク5: Flux 2 Pro + Magnific AI プレミアムアバター生成API
 
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
 import { upscaleWithMagnific } from "../../../lib/magnific";
 import { trackUsage } from "../../../lib/billing/usageTracker";
+import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
 
@@ -78,13 +79,33 @@ async function uploadUrlToStorage(
   }
 }
 
+// ── 認可ミドルウェア ───────────────────────────────────────────────────────────
+
+const PREMIUM_GEN_ALLOWED_ROLES = ['super_admin', 'client_admin'] as const;
+
+function premiumGenAuthzLogger(req: Request, _res: Response, next: NextFunction): void {
+  const user = (req as AuthedReq).user;
+  if (!user || !(PREMIUM_GEN_ALLOWED_ROLES as readonly string[]).includes(user.role)) {
+    logger.warn({
+      event: 'avatar_premium_generation_authz_denied',
+      path: req.path,
+      method: req.method,
+      actor_role: user?.role ?? 'unknown',
+      actor_email: user?.email ? user.email.slice(0, 3) + '***' : 'unknown',
+    });
+  }
+  next();
+}
+
+const PREMIUM_GEN_AUTHZ = [roleAuthMiddleware, premiumGenAuthzLogger, requireRole(...PREMIUM_GEN_ALLOWED_ROLES)];
+
 // ── ルート登録 ────────────────────────────────────────────────────────────────
 
 export function registerPremiumGenerationRoutes(app: Express): void {
   app.use("/v1/admin/avatar/generate-premium", supabaseAuthMiddleware);
 
   // POST /v1/admin/avatar/generate-premium
-  app.post("/v1/admin/avatar/generate-premium", async (req: Request, res: Response) => {
+  app.post("/v1/admin/avatar/generate-premium", ...PREMIUM_GEN_AUTHZ, async (req: Request, res: Response) => {
     const parsed = premiumSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });

@@ -23,6 +23,15 @@ jest.mock("../../../lib/logger", () => ({
   createLogger: jest.fn(() => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() })),
 }));
 
+// pipelineQueue をモック（重要）:
+// 本テストはルートの責務のみを検証する。実 pipelineQueue.enqueue を走らせると、
+// 全クエリが canned 値を返すモック db と DB-backed queue (#227) が組み合わさり、
+// バックグラウンドの非同期処理が無限ループ化 → jest ヒープ OOM (exit 134) を起こす
+// (Gate 1 赤化の根本原因)。enqueue を no-op 化して副作用を遮断する。
+jest.mock("../../../lib/book-pipeline/pipelineQueue", () => ({
+  pipelineQueue: { enqueue: jest.fn().mockResolvedValue(undefined) },
+}));
+
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
 

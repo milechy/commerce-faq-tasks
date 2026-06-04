@@ -16,13 +16,16 @@
 set -euo pipefail
 
 # ─── R2C 定数 ─────────────────────────────────────────────────────────────
-R2C_ROOT="${R2C_ROOT:-$HOME/Documents/GitHub/commerce-faq-tasks}"
+R2C_ROOT="${R2C_ROOT:-$HOME/projects/commerce-faq-tasks}"
 R2C_CONFIG="${R2C_CONFIG:-$HOME/.claude-r2c-config}"
 QUEUE_DB="${R2C_ROOT}/.claude/queue/r2c-queue.db"
 WORKTREE_BASE="${R2C_ROOT}/.claude/worktrees"
 LOG_DIR="${R2C_CONFIG}/logs"
 SCRIPT_NAME="$(basename "$0" .sh)"
-MAX_SLOTS=5
+# UATa 3日運用教訓: 同時稼働 Lane が 3本を超えると Claude Code の result drop /
+# context 断絶が多発した (公式 issue #39830 と一致, 実測 154件)。同時上限を 3 に抑制。
+# 並列 tool call も 3本未満に保つこと (CLAUDE.md「24h ループ並列上限」参照)。
+MAX_SLOTS=3
 
 # ─── 引数 ──────────────────────────────────────────────────────────────────
 TASK_ID=""
@@ -49,8 +52,20 @@ if [ "$DRY_RUN" -eq 0 ]; then
     exec >> "${LOG_DIR}/${SCRIPT_NAME}.log" 2>&1
 fi
 
-# shellcheck disable=SC1091
-source "${R2C_CONFIG}/secrets/r2c-loop.env" 2>/dev/null || true
+# secrets fail-fast: 24h ループ本体は secrets 必須。silent-failure で空 token のまま
+# Lane を起動すると通知不能の連鎖事故になるため、未配備/source 失敗時は即停止する。
+# (注: Slack 認証情報も secrets 内のため、未配備時の通知は stderr 止まりになる)
+SECRETS_FILE="${R2C_CONFIG}/secrets/r2c-loop.env"
+if [ ! -f "$SECRETS_FILE" ]; then
+    echo "[$(date +%Y-%m-%d_%H:%M:%S)] FATAL: secrets not found: ${SECRETS_FILE} — 配備後に再実行" >&2
+    bash "${R2C_ROOT}/SCRIPTS/notify-slack.sh" "🛑 r2c-dispatch: secrets 未配備で起動中止 (${SECRETS_FILE})" --color error 2>/dev/null || true
+    exit 1
+fi
+# shellcheck disable=SC1090,SC1091
+source "$SECRETS_FILE" || {
+    echo "[$(date +%Y-%m-%d_%H:%M:%S)] FATAL: failed to source secrets: ${SECRETS_FILE}" >&2
+    exit 1
+}
 
 echo "[$(date +%Y-%m-%d_%H:%M:%S)] === r2c-dispatch start (auto=${AUTO_MODE} task=${TASK_ID:-NA} dry=${DRY_RUN}) ==="
 
@@ -120,7 +135,11 @@ dispatch_one() {
     local branch_name="auto/${tier,,}-${task_id}-${slug}"
     local log_file="${LOG_DIR}/lane-${task_id}.log"
     local lane_name="auto-${tier,,}-${task_id}"
-    local perm_mode="acceptEdits"
+    # Tier B は夜間自律実行のため bypassPermissions（acceptEdits だと Bash で
+    # permission prompt が固着し停止する）。.claude/settings.json の deny 層が
+    # force/main push・scp・rm -rf /opt・.env/opt 書込みを最終防衛する前提。
+    # Tier A/S は朝承認・人間判断のため plan のまま。
+    local perm_mode="bypassPermissions"
     case "$tier" in
         A) perm_mode="plan" ;;
         S) perm_mode="plan" ;;
@@ -156,14 +175,32 @@ dispatch_one() {
 
     mkdir -p "$(dirname "$log_file")"
 
+    # claude-code v2.1.152 で --prompt-file フラグが silently 削除された対応。
+    # 旧形式 `--prompt-file '${prompt_path}'` は unknown flag として無視され、
+    # claude --bg は prompt 無しで idle 起動 → 45min stuck → rollback していた。
+    # stdin pipe で渡す形式に変更 (claude --help: `claude [options] [command] [prompt]`)。
+    #
+    # export PATH=... は cron-wrapper.sh が既に Homebrew 含む PATH を設定済みで
+    # 完全に冗長な上、bash -c 内に置くと cat | claude --bg の stdin pipe が
+    # 切れて claude が prompt を受信せず idle 起動する問題が判明 (2026-05-28)。
+    # よって本ブロック内では export PATH を行わない。
+    # 詳細: docs/postmortem/2026-05-28-oauth-fail/
     nohup bash -c "
         cd '${worktree_path}'
-        export PATH='/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:\$PATH'
-        claude --bg --name '${lane_name}' \\
+        cat '${prompt_path}' | claude --bg --name '${lane_name}' \\
             --model '${resolved_model}' \\
-            --permission-mode '${perm_mode}' \\
-            --prompt-file '${prompt_path}' > '${log_file}' 2>&1
+            --permission-mode '${perm_mode}' > '${log_file}' 2>&1
     " > /dev/null 2>&1 &
+    disown
+
+    # PR #197 残存リスク② 解消: session_id を Lane 自己申告に依存せず
+    # dispatch 側で claude agents --json から自動発見して DB へ書き戻す。
+    # 2026-05-26 OAuth daemon 凍結事故 (docs/postmortem/2026-05-28-oauth-fail/)
+    # の根本原因。失敗時も Lane の自走は妨げない (resolver は常に exit 0)。
+    nohup bash "${R2C_ROOT}/SCRIPTS/r2c-lane-session-resolver.sh" \
+        --task-id "${task_id}" \
+        --lane-name "${lane_name}" \
+        --log-file "${log_file}.sid" > /dev/null 2>&1 &
     disown
 
     echo "Dispatched task ${task_id} (lane=${lane_name}) → ${log_file}"
@@ -172,7 +209,16 @@ dispatch_one() {
 
 if [ "$AUTO_MODE" -eq 1 ]; then
     SLOTS_USED=0
+    # 無限ループ防止: dispatch_one が state 未変化のまま失敗し続けても
+    # 1 サイクルで有限回しか試行しないよう上限化する。
+    ITER_GUARD=0
+    MAX_ITER=$((AVAILABLE_SLOTS * 3 + 5))
     while [ "$SLOTS_USED" -lt "$AVAILABLE_SLOTS" ]; do
+        ITER_GUARD=$((ITER_GUARD + 1))
+        if [ "$ITER_GUARD" -gt "$MAX_ITER" ]; then
+            echo "WARNING: dispatch loop guard hit (${ITER_GUARD} iters > ${MAX_ITER}), aborting cycle"
+            break
+        fi
         NEXT_ID=$(SQ "SELECT id FROM tasks
                       WHERE state = 'prompt_generated' ${NIGHT_FILTER}
                       ORDER BY CASE tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 ELSE 2 END,
@@ -180,15 +226,66 @@ if [ "$AUTO_MODE" -eq 1 ]; then
                                id ASC
                       LIMIT 1;")
         if [ -z "$NEXT_ID" ]; then
-            echo "No more prompt_generated tasks (slots used=${SLOTS_USED}/${AVAILABLE_SLOTS})"
-            break
+            # prompt_generated が無ければ pending を 1 件昇格してから dispatch する。
+            # これが pending→prompt_generated の唯一の駆動点 (r2c-generate-lane.sh は
+            # 純粋テンプレ置換で claude 起動なし)。dispatch と同じ night filter / tier 順を適用。
+            PENDING_ID=$(SQ "SELECT id FROM tasks
+                          WHERE state = 'pending' ${NIGHT_FILTER}
+                          ORDER BY CASE tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 ELSE 2 END,
+                                   COALESCE(asana_due_on, '9999-12-31') ASC,
+                                   id ASC
+                          LIMIT 1;")
+            if [ -z "$PENDING_ID" ]; then
+                echo "No dispatchable tasks (prompt_generated / pending とも 0, slots used=${SLOTS_USED}/${AVAILABLE_SLOTS})"
+                break
+            fi
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "[dry-run] would promote pending task ${PENDING_ID} via r2c-generate-lane.sh, then dispatch"
+                break
+            fi
+            echo "Promoting pending task ${PENDING_ID} → prompt_generated (r2c-generate-lane.sh)"
+            if bash "${R2C_ROOT}/SCRIPTS/r2c-generate-lane.sh" --task-id "${PENDING_ID}"; then
+                NEXT_ID="${PENDING_ID}"
+            else
+                echo "WARNING: generate-lane failed for ${PENDING_ID}, marking failed"
+                SQ "UPDATE tasks SET state='failed', error_message='generate-lane failed', last_action='generate_failed' WHERE id = ${PENDING_ID};"
+                continue
+            fi
         fi
         if dispatch_one "$NEXT_ID"; then
             SLOTS_USED=$((SLOTS_USED + 1))
         else
-            echo "WARNING: dispatch_one failed for ${NEXT_ID}, continuing"
+            # dispatch_one が state を変えずに失敗した場合 (prompt_path 欠落等の
+            # early-return)、同一タスクが毎 iteration 再選択され他タスクが starve する。
+            # selectable な状態のままなら failed にして再選択を防ぐ (running/failed 等は不変)。
+            echo "WARNING: dispatch_one failed for ${NEXT_ID}, marking failed to avoid re-selection"
+            SQ "UPDATE tasks SET state='failed', error_message='dispatch_one failed', last_action='dispatch_failed' WHERE id = ${NEXT_ID} AND state IN ('pending','prompt_generated');"
         fi
     done
+
+    # 要件4: 自走タスク枯渇 + 全 Lane idle + 人間レビュー待ち が揃った時の「無通知 exit」を防ぐ。
+    # cron が毎分走るため、通知スパムを避ける throttle(6h) 付きで「通知して静かに待つ」。
+    # 実 Slack 送信と automation_state 更新は dry-run では行わない (副作用なしの preview を維持)。
+    if [ "$SLOTS_USED" -eq 0 ] && [ "${ACTIVE_COUNT:-0}" -eq 0 ]; then
+        HUMAN_GATE=$(SQ "SELECT COUNT(*) FROM tasks WHERE state IN ('needs_approval','needs_approval_critical','ready_to_merge');")
+        HUMAN_GATE=${HUMAN_GATE:-0}
+        if [ "$HUMAN_GATE" -ge 1 ]; then
+            LAST_NOTIFY=$(SQ "SELECT value FROM automation_state WHERE key='drained_notified_at';" || true)
+            NOW_EPOCH=$(date +%s)
+            THROTTLE_SECS=21600  # 6h
+            # 空 / 非数値 (DB 破損等) は「未通知」扱いにして throttle 計算のクラッシュを避ける
+            if [ -z "$LAST_NOTIFY" ] || ! [[ "$LAST_NOTIFY" =~ ^[0-9]+$ ]] || [ "$((NOW_EPOCH - LAST_NOTIFY))" -ge "$THROTTLE_SECS" ]; then
+                echo "自走タスク枯渇: ${HUMAN_GATE}件が人間レビュー待ち → 通知 (throttle 6h, dry=${DRY_RUN})"
+                if [ "$DRY_RUN" -eq 0 ]; then
+                    bash "${R2C_ROOT}/SCRIPTS/r2c-slack-notify.sh" --text "🟡 R2C 自走タスク枯渇: dispatch 可能タスク 0件・稼働 Lane 0本。${HUMAN_GATE}件が人間レビュー待ち (needs_approval / ready_to_merge)。ループは待機継続中。" 2>/dev/null || true
+                    SQ "INSERT OR REPLACE INTO automation_state (key, value) VALUES ('drained_notified_at', '${NOW_EPOCH}');" || true
+                fi
+            fi
+        fi
+    elif [ "$DRY_RUN" -eq 0 ]; then
+        # 何か dispatch した / Lane 稼働中 → drained 通知の throttle をリセット
+        SQ "DELETE FROM automation_state WHERE key='drained_notified_at';" 2>/dev/null || true
+    fi
 else
     dispatch_one "$TASK_ID"
 fi

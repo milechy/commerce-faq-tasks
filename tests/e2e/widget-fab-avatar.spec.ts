@@ -13,7 +13,12 @@ const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');
 
-  const CHAT_TEST_URL = process.env.E2E_CHAT_TEST_URL || 'https://admin.r2c.biz';
+  // アバター設定済みテナントのデモページ (test 1/2 が使用)
+  const AVATAR_DEMO_URL =
+    process.env.E2E_CHAT_TEST_URL || 'https://api.r2c.biz/carnation-demo/index.html';
+  // 非アバターテナントのページ (test 3 が使用)。CI で実 URL を注入すると非アバター経路を実検証できる。
+  // 未指定時はアバター版にフォールバック → test 3 は従来どおり skip される（誤検証を防ぐ）。
+  const NON_AVATAR_DEMO_URL = process.env.E2E_NON_AVATAR_TEST_URL || AVATAR_DEMO_URL;
 
   /** Wait for FAB to appear inside the widget Shadow DOM */
   async function getFabState(page: any) {
@@ -34,7 +39,7 @@ test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
 
   test('FAB retains avatar image after chat close (single cycle)', async ({ page }) => {
     // Navigate to carnation demo — widget initializes with avatar config
-    const resp = await page.goto('https://api.r2c.biz/carnation-demo/index.html');
+    const resp = await page.goto(AVATAR_DEMO_URL);
     expect(resp?.status()).toBe(200);
 
     // Wait for widget init + avatar config prefetch (max 8s)
@@ -87,7 +92,7 @@ test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
   });
 
   test('FAB retains avatar image across multiple open/close cycles', async ({ page }) => {
-    const resp = await page.goto('https://api.r2c.biz/carnation-demo/index.html');
+    const resp = await page.goto(AVATAR_DEMO_URL);
     expect(resp?.status()).toBe(200);
 
     await page.waitForFunction(
@@ -132,7 +137,7 @@ test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
   test('FAB shows chat SVG icon for non-avatar tenant (demo page without avatar)', async ({ page }) => {
     // Demo page uses a different tenant without avatar configuration
     // If FAB has no avatar image initially, it should have chat SVG — open/close should keep it
-    const resp = await page.goto('https://api.r2c.biz/carnation-demo/index.html');
+    const resp = await page.goto(NON_AVATAR_DEMO_URL);
     expect(resp?.status()).toBe(200);
 
     await page.waitForFunction(

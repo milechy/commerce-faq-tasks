@@ -1,11 +1,12 @@
 // src/api/admin/avatar/falGenerationRoutes.ts
 // Phase64 タスク4: fal.ai Flux Pro v1.1 を使ったアバター画像生成API
 
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
+import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
 
@@ -53,6 +54,26 @@ async function uploadImageFromUrl(
   }
 }
 
+// ── 認可ミドルウェア ───────────────────────────────────────────────────────────
+
+const FAL_GEN_ALLOWED_ROLES = ['super_admin', 'client_admin'] as const;
+
+function falGenAuthzLogger(req: Request, _res: Response, next: NextFunction): void {
+  const user = (req as AuthedReq).user;
+  if (!user || !(FAL_GEN_ALLOWED_ROLES as readonly string[]).includes(user.role)) {
+    logger.warn({
+      event: 'avatar_fal_generation_authz_denied',
+      path: req.path,
+      method: req.method,
+      actor_role: user?.role ?? 'unknown',
+      actor_email: user?.email ? user.email.slice(0, 3) + '***' : 'unknown',
+    });
+  }
+  next();
+}
+
+const FAL_GEN_AUTHZ = [roleAuthMiddleware, falGenAuthzLogger, requireRole(...FAL_GEN_ALLOWED_ROLES)];
+
 // ── ルート登録 ────────────────────────────────────────────────────────────────
 
 export function registerFalGenerationRoutes(app: Express): void {
@@ -61,6 +82,7 @@ export function registerFalGenerationRoutes(app: Express): void {
   // POST /v1/admin/avatar/fal/generate
   app.post(
     "/v1/admin/avatar/fal/generate",
+    ...FAL_GEN_AUTHZ,
     async (req: Request, res: Response) => {
       const parsed = generateSchema.safeParse(req.body ?? {});
       if (!parsed.success) {

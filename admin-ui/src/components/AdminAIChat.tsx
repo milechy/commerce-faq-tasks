@@ -157,7 +157,7 @@ export default function AdminAIChat() {
             <span style={{ fontSize: 18 }}>🤖</span>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#f9fafb" }}>AIサポート</div>
-              <div style={{ fontSize: 11, color: "#6b7280" }}>管理画面の使い方をお答えします</div>
+              <div style={{ fontSize: 11, color: "#6b7280" }}>ご質問・ご要望・不具合のご報告をどうぞ</div>
             </div>
             <button
               onClick={() => setOpen(false)}
@@ -192,7 +192,7 @@ export default function AdminAIChat() {
             {messages.length === 0 && (
               <div style={{ textAlign: "center", color: "#6b7280", fontSize: 13, paddingTop: 40 }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
-                管理画面の使い方についてご質問ください
+                質問や要望を入力...
               </div>
             )}
             {messages.map((msg, i) => (

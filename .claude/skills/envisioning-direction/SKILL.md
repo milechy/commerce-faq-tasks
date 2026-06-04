@@ -1,6 +1,7 @@
 ---
 name: envisioning-direction
 description: Interactive design direction through visual reference capture and tension resolution. Use when starting a new project or refining design direction.
+version: 1.0.0
 user-invocable: true
 aliases: [envision]
 allowed-tools: Read, Write, Glob, Grep, Edit, Bash, AskUserQuestion

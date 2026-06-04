@@ -128,6 +128,12 @@ describe('evaluateSession', () => {
     expect(result!.stage_progress_score).toBe(75);
     expect(result!.taboo_violation_score).toBe(90);
 
+    // tuning_rules SELECT (call index 2) must include the 'global' shared-tenant fallback
+    // so judge evaluates against the same rule set runtime applies (tenant + global)
+    const tuningSelectCall = mockPool.query.mock.calls[2]!;
+    expect(tuningSelectCall[0]).toContain('tuning_rules');
+    expect(tuningSelectCall[0]).toMatch(/tenant_id = \$1\s+OR\s+tenant_id = 'global'/);
+
     // INSERT was called with tenant_id and session_id (index 3 after Phase60-A tuning_rules SELECT)
     const insertCall = mockPool.query.mock.calls[3]!;
     expect(insertCall[1]).toContain('tenant-abc');

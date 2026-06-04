@@ -2,11 +2,13 @@
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 
-import type { Express, Request, Response } from "express";
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
+import type { Express, NextFunction, Request, Response } from "express";
 
 type AvatarReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
 import { trackUsage } from "../../../lib/billing/usageTracker";
 import { logger } from '../../../lib/logger';
 import { containsBannedWord } from '../../../lib/contentGuard';
@@ -26,7 +28,7 @@ async function callGroqLLM(system: string, user: string): Promise<string> {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: GROQ_VERSATILE_70B,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -61,6 +63,28 @@ const generatePromptSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Authorization middleware
+// ---------------------------------------------------------------------------
+
+const AVATAR_GEN_ALLOWED_ROLES = ['super_admin', 'client_admin'] as const;
+
+function avatarGenAuthzLogger(req: Request, _res: Response, next: NextFunction): void {
+  const user = (req as AuthedReq).user;
+  if (!user || !(AVATAR_GEN_ALLOWED_ROLES as readonly string[]).includes(user.role)) {
+    logger.warn({
+      event: 'avatar_generation_authz_denied',
+      path: req.path,
+      method: req.method,
+      actor_role: user?.role ?? 'unknown',
+      actor_email: user?.email ? user.email.slice(0, 3) + '***' : 'unknown',
+    });
+  }
+  next();
+}
+
+const AVATAR_GEN_AUTHZ = [roleAuthMiddleware, avatarGenAuthzLogger, requireRole(...AVATAR_GEN_ALLOWED_ROLES)];
+
+// ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
 
@@ -72,6 +96,7 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
   // -----------------------------------------------------------------------
   app.post(
     "/v1/admin/avatar/generate-image",
+    ...AVATAR_GEN_AUTHZ,
     async (req: Request, res: Response) => {
       const parsed = generateImageSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
@@ -221,6 +246,7 @@ Output ONLY the English prompt, nothing else.`,
   // -----------------------------------------------------------------------
   app.post(
     "/v1/admin/avatar/match-voice",
+    ...AVATAR_GEN_AUTHZ,
     async (req: Request, res: Response) => {
       const parsed = matchVoiceSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
@@ -330,7 +356,7 @@ JSONのみ返してください。`,
           tenantId,
           requestId,
           featureUsed: "avatar_config_voice",
-          model: "llama-3.3-70b-versatile",
+          model: GROQ_VERSATILE_70B,
           inputTokens: 0,
           outputTokens: 0,
         });
@@ -350,6 +376,7 @@ JSONのみ返してください。`,
   // -----------------------------------------------------------------------
   app.post(
     "/v1/admin/avatar/generate-prompt",
+    ...AVATAR_GEN_AUTHZ,
     async (req: Request, res: Response) => {
       const parsed = generatePromptSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
@@ -394,7 +421,7 @@ JSONのみ返してください。`,
           tenantId,
           requestId,
           featureUsed: "avatar_config_prompt",
-          model: "llama-3.3-70b-versatile",
+          model: GROQ_VERSATILE_70B,
           inputTokens: 0,
           outputTokens: 0,
         });

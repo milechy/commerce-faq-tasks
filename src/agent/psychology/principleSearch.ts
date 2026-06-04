@@ -19,6 +19,8 @@ function getPool(db?: InstanceType<typeof Pool>): InstanceType<typeof Pool> {
 /**
  * pgvector の faq_embeddings テーブルから心理学原則チャンクを取得する。
  * metadata.source = 'book' かつ metadata.principle が principles 配列に含まれるレコードを検索。
+ * tenant_id は当該テナント または共有の 'global' テナントを対象とする
+ * （他RAG経路 pgvector / langRouter / knowledgeSearchUtil と一貫: `tenant_id = $1 OR 'global'`）。
  * 各テキストフィールドに ragExcerpt.slice(0, 200) を適用（書籍内容漏洩防止）。
  */
 export async function searchPrincipleChunks(
@@ -47,7 +49,7 @@ export async function searchPrincipleChunks(
         metadata->>'example' as example,
         metadata->>'contraindication' as contraindication
        FROM faq_embeddings
-       WHERE tenant_id = $1
+       WHERE (tenant_id = $1 OR tenant_id = 'global')
          AND metadata->>'source' = 'book'
          AND metadata->>'principle' = ANY($2)
        LIMIT 3`,

@@ -1,6 +1,7 @@
 ---
 name: rams
 description: Accessibility and visual design review based on WCAG 2.1
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit, Bash
 ---

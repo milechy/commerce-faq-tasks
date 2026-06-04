@@ -4,6 +4,9 @@
 // 修正内容(Phase66):
 //   Q2: OR is_default = true → OR tenant_id = 'r2c_default' (クロステナント誤表示修正)
 //   Q3: ORDER BY created_at DESC 追加 (非決定的LIMIT防止)
+//
+// 修正内容(Path B fix / GID1215114990855142):
+//   avatarConfigId を room metadata に埋め込み → agent.py が特定アバターを選択できる
 
 import express from "express";
 import request from "supertest";
@@ -14,12 +17,15 @@ import { registerLiveKitTokenRoutes } from "./livekitTokenRoutes";
 jest.mock("../../lib/db", () => ({
   pool: { query: jest.fn() },
 }));
+const mockCreateRoom = jest.fn().mockResolvedValue({});
+const mockCreateDispatch = jest.fn().mockResolvedValue({ id: "dispatch-1", room: "room-1" });
+
 jest.mock("livekit-server-sdk", () => ({
   RoomServiceClient: jest.fn().mockImplementation(() => ({
-    createRoom: jest.fn().mockResolvedValue({}),
+    createRoom: mockCreateRoom,
   })),
   AgentDispatchClient: jest.fn().mockImplementation(() => ({
-    createDispatch: jest.fn().mockResolvedValue({ id: "dispatch-1", room: "room-1" }),
+    createDispatch: mockCreateDispatch,
   })),
 }));
 
@@ -61,11 +67,18 @@ describe("POST /api/avatar/room-token", () => {
     savedEnv = { ...process.env };
     Object.assign(process.env, LIVEKIT_ENV);
     mockQuery.mockReset();
+    mockCreateRoom.mockReset().mockResolvedValue({});
+    mockCreateDispatch.mockReset().mockResolvedValue({ id: "dispatch-1", room: "room-1" });
   });
 
   afterEach(() => {
     process.env = savedEnv;
   });
+
+  // ── 有効な UUID テストフィクスチャ (strict UUID validation 対応) ──
+  const UUID_SAM       = "87ca75df-8fd5-4e41-b3e4-1cbdc2d97462";
+  const UUID_DEFAULT   = "d0d3722c-e033-4d91-8eb2-66a06978548a";
+  const UUID_OTHER     = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
   describe("avatarConfigId 指定時 (Q2)", () => {
     it("同テナントの avatarConfigId を指定すると image_url/name を返す", async () => {
@@ -78,16 +91,17 @@ describe("POST /api/avatar/room-token", () => {
       const app = makeApp("tenant-a");
       const res = await request(app)
         .post("/api/avatar/room-token")
-        .send({ avatarConfigId: "config-123" });
+        .send({ avatarConfigId: UUID_SAM });
 
       expect(res.body.enabled).toBe(true);
       expect(res.body.imageUrl).toBe("https://example.com/img.png");
       expect(res.body.avatarName).toBe("Haruka");
 
-      // Q2クエリが r2c_default 条件を使っていることを検証
+      // Q2クエリが r2c_default 条件 + is_active 必須を含むことを検証
       const q2Call = mockQuery.mock.calls[1];
       const sql: string = q2Call[0];
       expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(sql).toContain("is_active = true");
       expect(sql).not.toContain("is_default = true");
     });
 
@@ -101,7 +115,7 @@ describe("POST /api/avatar/room-token", () => {
       const app = makeApp("other-tenant");
       const res = await request(app)
         .post("/api/avatar/room-token")
-        .send({ avatarConfigId: "r2c-default-config-id" });
+        .send({ avatarConfigId: UUID_DEFAULT });
 
       expect(res.body.enabled).toBe(true);
       expect(res.body.avatarName).toBe("SAM");
@@ -115,11 +129,103 @@ describe("POST /api/avatar/room-token", () => {
       const app = makeApp("tenant-a");
       const res = await request(app)
         .post("/api/avatar/room-token")
-        .send({ avatarConfigId: "config-from-other-tenant" });
+        .send({ avatarConfigId: UUID_OTHER });
 
       expect(res.body.enabled).toBe(true);
       expect(res.body.imageUrl).toBeNull();
       expect(res.body.avatarName).toBeNull();
+
+      // Q2 SQL が tenant_id 制約で他テナントを排除していることを検証
+      // (mockPool([]) の決め打ちではなく、WHERE句が実際に組み込まれていることを確認)
+      const q2Call = mockQuery.mock.calls[1];
+      const sql: string = q2Call[0];
+      const params: unknown[] = q2Call[1];
+      expect(sql).toContain("tenant_id = $2");
+      expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(sql).toContain("is_active = true");
+      expect(params[0]).toBe(UUID_OTHER);                 // $1 = avatarConfigId
+      expect(params[1]).toBe("tenant-a");                 // $2 = requestingTenantId (排除の主体)
+    });
+
+    it("inactive な自テナント avatarConfigId は is_active=true 制約で 0件 (Codex MEDIUM #210)", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] }); // 0件: 無効化済み config は復活させない
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: UUID_SAM });
+
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.imageUrl).toBeNull();
+      expect(res.body.avatarName).toBeNull();
+
+      // Q2 SQL に is_active = true が含まれることを検証
+      const q2Call = mockQuery.mock.calls[1];
+      const sql: string = q2Call[0];
+      expect(sql).toContain("is_active = true");
+
+      // 無効化済み config は room metadata にも伝搬しない (verifiedAvatarConfigId = null)
+      expect(mockCreateRoom).toHaveBeenCalledTimes(1);
+      const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
+      expect(createRoomArg.metadata).toBeUndefined();
+    });
+  });
+
+  describe("UUID validation (Codex LOW #210)", () => {
+    it("不正な avatarConfigId (非UUID文字列) は 400", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 });
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: "not-a-uuid" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/UUID/);
+      // DB lookup (Q2/Q3) より前に弾く — tenants SELECT のみで終わる
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it("不正な avatarConfigId (number 型) は 400", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 });
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: 12345 });
+
+      expect(res.status).toBe(400);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it("avatarConfigId 未指定 (undefined) は素通し (fallback Q3 へ)", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.enabled).toBe(true);
+    });
+
+    it("avatarConfigId が null は素通し (fallback Q3 へ)", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: null });
+
+      expect(res.status).toBe(200);
+      expect(res.body.enabled).toBe(true);
     });
   });
 
@@ -159,6 +265,66 @@ describe("POST /api/avatar/room-token", () => {
 
       expect(res.body.enabled).toBe(true);
       expect(res.body.imageUrl).toBeNull();
+    });
+  });
+
+  describe("Path B fix: room metadata への avatarConfigId 伝搬", () => {
+    it("avatarConfigId 指定時: createRoom が metadata={avatarConfigId} で呼ばれる", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/sam.png", name: "SAM" }] });
+
+      const app = makeApp("tenant-a");
+      await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: UUID_SAM });
+
+      expect(mockCreateRoom).toHaveBeenCalledTimes(1);
+      const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
+      expect(createRoomArg.metadata).toBeDefined();
+      const meta = JSON.parse(createRoomArg.metadata!);
+      expect(meta.avatarConfigId).toBe(UUID_SAM);
+    });
+
+    it("avatarConfigId 未指定時: createRoom の metadata は undefined", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const app = makeApp("tenant-a");
+      await request(app)
+        .post("/api/avatar/room-token")
+        .send({});
+
+      expect(mockCreateRoom).toHaveBeenCalledTimes(1);
+      const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
+      expect(createRoomArg.metadata).toBeUndefined();
+    });
+
+    it("cross-tenant avatarConfigId (Q2=0件): createRoom の metadata は undefined (trust boundary)", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] }); // Q2 0件 = 他テナント非デフォルト → アクセス拒否
+
+      const app = makeApp("tenant-a");
+      await request(app)
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: UUID_OTHER });
+
+      // Q2 SQL が tenant_id = $2 で tenant-a 以外を排除していることを検証
+      const q2Call = mockQuery.mock.calls[1];
+      const sql: string = q2Call[0];
+      const params: unknown[] = q2Call[1];
+      expect(sql).toContain("tenant_id = $2");
+      expect(sql).toContain("tenant_id = 'r2c_default'");
+      expect(sql).toContain("is_active = true");
+      expect(params[0]).toBe(UUID_OTHER);          // $1 = avatarConfigId
+      expect(params[1]).toBe("tenant-a");          // $2 = requestingTenantId
+
+      // SQL ownership check が通らなかった UUID は room metadata に載らない
+      expect(mockCreateRoom).toHaveBeenCalledTimes(1);
+      const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
+      expect(createRoomArg.metadata).toBeUndefined();
     });
   });
 });

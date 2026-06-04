@@ -46,10 +46,13 @@ import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
 import { reportUsageToStripe } from "./lib/billing/stripeSync";
+import { pipelineQueue } from "./lib/book-pipeline/pipelineQueue";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
+import { internalNetworkOnly } from "./api/middleware/internalNetworkOnly";
+import { assertInternalSecretConfigured } from "./lib/startup/internalSecretGuard";
 import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
@@ -175,8 +178,10 @@ app.get("/health", healthHandler);
 // Business KPI health check — UATa 事例 #6: scheduler_healthy 誤判断回避
 app.get("/health/business", businessHealthHandler);
 
-// Prometheus metrics — 内部ネットワーク専用（X-Internal-Request: 1 必須）
-app.get("/metrics", async (req, res) => {
+// Prometheus metrics — 内部ネットワーク専用
+//   - internalNetworkOnly: socket peer が loopback でなければ 403（spoof不可）
+//   - X-Internal-Request: 1 ヘッダ要求（後方互換 + nginx strip と合わせ二重防御）
+app.get("/metrics", internalNetworkOnly, async (req, res) => {
   if (req.headers[INTERNAL_REQUEST_HEADER] !== "1") {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -611,7 +616,48 @@ app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: e
   }
 });
 
+// Phase70-Q (GID 1215114679975245): langsmith CVE ignore の前提条件チェック.
+// `pnpm.auditConfig.ignoreCves` で CVE-2026-45134 (langsmith) を除外しているが、
+// これは「LangChain tracing が無効」という invariant に依存する.
+// 本番で LANGCHAIN_TRACING / LANGSMITH_API_KEY 等が設定されると、ignore の前提が
+// 崩れて vulnerable コードパスが起動する — fail-fast で起動阻止する.
+// 詳細: docs/SECURITY_SCAN_ALLOWLIST.md#pnpm-auditconfig-ignorecves I-8
+const LANGCHAIN_TRACING_ENV_VARS = [
+  "LANGCHAIN_TRACING_V2",
+  "LANGCHAIN_TRACING",
+  "LANGCHAIN_API_KEY",
+  "LANGSMITH_API_KEY",
+  "LANGSMITH_TRACING",
+] as const;
+
+function assertLangchainTracingDisabled(): void {
+  const active = LANGCHAIN_TRACING_ENV_VARS.filter((k) => {
+    const v = process.env[k];
+    return v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
+  });
+  if (active.length === 0) return;
+  const msg =
+    `[startup] LangChain tracing env detected: ${active.join(", ")}. ` +
+    "CVE-2026-45134 (langsmith) is currently ignored on the premise that tracing is disabled. " +
+    "Either unset these env vars OR remove langsmith from package.json#pnpm.auditConfig.ignoreCves " +
+    "before enabling tracing. Fail-closed at startup.";
+  logger.error(msg);
+  // eslint-disable-next-line no-console
+  console.error(msg);
+  process.exit(1);
+}
+
 async function startServer() {
+  assertLangchainTracingDisabled();
+  // Codex review #3/#4: 必須secretは boot 時に検証して fail-fast する。
+  // 起動後に runtime 500 を吐き続ける partial outage を防ぐ。
+  // production / staging / 不明 env では未設定なら exit(1)。
+  // dev/test または ALLOW_MISSING_INTERNAL_HMAC_SECRET=true でのみ続行。
+  assertInternalSecretConfigured({
+    warn: (msg) => logger.warn(msg),
+    fatal: (msg) => logger.fatal(msg),
+  });
+
   app.listen(port, () => {
     logger.info({ port, env: process.env.NODE_ENV }, "server listening");
   });
@@ -629,6 +675,22 @@ async function startServer() {
       });
     }, STRIPE_REPORT_INTERVAL_MS);
     logger.info("[startup] Stripe usage reporter scheduled (24h interval)");
+  }
+
+  // Phase70K: pipelineQueue self-heal — PM2再起動で stuck した job を自動復旧
+  if (db) {
+    const dbPool = db;
+    pipelineQueue.selfHeal(dbPool).catch((err) => {
+      logger.error({ err }, "[pipelineQueue] selfHeal failed");
+    });
+
+    const STUCK_JOB_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10分
+    setInterval(() => {
+      pipelineQueue.checkStuckJobs(dbPool).catch((err) => {
+        logger.error({ err }, "[pipelineQueue] checkStuckJobs failed");
+      });
+    }, STUCK_JOB_CHECK_INTERVAL_MS);
+    logger.info("[startup] pipelineQueue selfHeal + stuck-job monitor started");
   }
 }
 

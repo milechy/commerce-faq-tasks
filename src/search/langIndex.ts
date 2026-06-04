@@ -18,6 +18,21 @@ export function resolveEsIndex(tenantId: string, lang: SupportedLang): string {
 }
 
 /**
+ * FAQ の ES 書き込み先インデックス名を解決する（テナント別）。
+ *
+ * Phase69-2-E: write path と read path の index 名不整合（Phase33-c 起因）を解消するための
+ * 単一の正典関数。read path（hybrid.ts / langRouter.ts の resolveFallbackIndices）も
+ * 同じ `faq_${tenantId}` 命名規則を使うため、upsert/delete/exclude の全 write 経路は
+ * 必ずこの関数で index 名を解決すること。
+ *
+ * 命名規則の正典は SCRIPTS/sync-es.ts（reindex）と一致: `faq_${tenantId}`。
+ * 環境変数 ES_FAQ_INDEX による上書きは廃止（read path がテナント別 index を前提とするため）。
+ */
+export function resolveFaqWriteIndex(tenantId: string): string {
+  return `faq_${tenantId}`;
+}
+
+/**
  * 言語別インデックスが存在しないテナントのためのフォールバックリスト。
  * 先頭から順に試行し、最初にヒットしたものを使う想定。
  */

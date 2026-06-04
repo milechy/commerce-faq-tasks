@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
@@ -56,7 +56,7 @@ export default function ChatHistorySessionPage() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, isClientAdmin } = useAuth();
   const location = useLocation();
 
   const sessionFromState = (location.state as { session?: SessionInfo } | null)?.session ?? null;
@@ -72,6 +72,16 @@ export default function ChatHistorySessionPage() {
   const [conversionTypes, setConversionTypes] = useState<string[]>(DEFAULT_CONVERSION_TYPES);
   const [outcomeSubmitting, setOutcomeSubmitting] = useState(false);
   const [outcomeToast, setOutcomeToast] = useState<string | null>(null);
+
+  // ─── セッション完全削除（GDPR Art.17 / 個情法30条） ────────────────────────
+  type DeleteStep = "idle" | "step1" | "step2";
+  const [deleteStep, setDeleteStep] = useState<DeleteStep>("idle");
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState("");
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteReasonRef = useRef<HTMLTextAreaElement>(null);
+  const deleteConfirmRef = useRef<HTMLInputElement>(null);
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
@@ -191,6 +201,60 @@ export default function ChatHistorySessionPage() {
     }
   };
 
+  // セッション削除: super_admin / client_admin のみ許可
+  const isDeleteAllowed = isSuperAdmin || isClientAdmin;
+
+  const handleDeleteSubmit = async () => {
+    if (!sessionId) return;
+    const trimmedReason = deleteReason.trim();
+    if (trimmedReason.length < 5) {
+      setDeleteError("削除理由は5文字以上で入力してください");
+      deleteReasonRef.current?.focus();
+      return;
+    }
+    if (trimmedReason.length > 500) {
+      setDeleteError("削除理由は500文字以内で入力してください");
+      deleteReasonRef.current?.focus();
+      return;
+    }
+    if (deleteConfirmId.trim() !== sessionId) {
+      setDeleteError("セッションIDが一致しません。もう一度確認してください");
+      deleteConfirmRef.current?.focus();
+      return;
+    }
+    setDeleteSubmitting(true);
+    setDeleteError(null);
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/chat-history/sessions/${sessionId}`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({ reason: trimmedReason }),
+        },
+      );
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        console.error("[DeleteSession] API error", { sessionId, status: res.status, error: data.error });
+        setDeleteError(
+          data.error ??
+            "削除できませんでした。少し時間をおいてもう一度試してみてください 🙏",
+        );
+        setDeleteSubmitting(false);
+        return;
+      }
+      // 成功: トースト表示後に一覧へ遷移
+      setDeleteStep("idle");
+      setOutcomeToast("✅ セッションを完全に削除しました");
+      setTimeout(() => {
+        navigate("/admin/chat-history");
+      }, 1500);
+    } catch (err) {
+      console.error("[DeleteSession] unexpected error", { sessionId, err });
+      setDeleteError("サーバーとうまくお話できませんでした。もう一度試してみてください 🙏");
+      setDeleteSubmitting(false);
+    }
+  };
+
   const handleCreateRule = (assistantMsg: Message) => {
     const msgIndex = messages.findIndex((m) => m.id === assistantMsg.id);
     const userMsg =
@@ -299,6 +363,47 @@ export default function ChatHistorySessionPage() {
           <LangSwitcher />
         </div>
 
+        {/* 完全削除ボタン (super_admin / client_admin のみ) */}
+        {isDeleteAllowed && (
+          <div style={{ marginBottom: 8 }}>
+            <button
+              onClick={() => {
+                setDeleteStep("step1");
+                setDeleteError(null);
+                setDeleteReason("");
+                setDeleteConfirmId("");
+              }}
+              style={{
+                padding: "10px 18px",
+                minHeight: 44,
+                borderRadius: 10,
+                border: "1px solid rgba(239,68,68,0.4)",
+                background: "rgba(127,29,29,0.2)",
+                color: "#f87171",
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                transition: "border-color 0.15s, background 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                const btn = e.currentTarget as HTMLButtonElement;
+                btn.style.borderColor = "rgba(239,68,68,0.7)";
+                btn.style.background = "rgba(127,29,29,0.4)";
+              }}
+              onMouseLeave={(e) => {
+                const btn = e.currentTarget as HTMLButtonElement;
+                btn.style.borderColor = "rgba(239,68,68,0.4)";
+                btn.style.background = "rgba(127,29,29,0.2)";
+              }}
+            >
+              🗑️ 完全削除
+            </button>
+          </div>
+        )}
+
         <div
           style={{
             borderRadius: 14,
@@ -367,6 +472,283 @@ export default function ChatHistorySessionPage() {
           }}
         >
           {outcomeToast}
+        </div>
+      )}
+
+      {/* ─── 完全削除モーダル ──────────────────────────────────────────────────── */}
+      {deleteStep !== "idle" && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="セッション完全削除"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !deleteSubmitting) {
+              setDeleteStep("idle");
+            }
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.75)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              background: "#0f172a",
+              border: "1px solid #1f2937",
+              borderRadius: 16,
+              padding: "28px 24px",
+              maxWidth: 480,
+              width: "100%",
+            }}
+          >
+            {/* エラー表示 */}
+            {deleteError && (
+              <div
+                style={{
+                  marginBottom: 16,
+                  padding: "12px 16px",
+                  borderRadius: 10,
+                  background: "rgba(127,29,29,0.4)",
+                  border: "1px solid rgba(248,113,113,0.3)",
+                  color: "#fca5a5",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }}
+              >
+                {deleteError}
+              </div>
+            )}
+
+            {/* Step 1: 警告・確認 */}
+            {deleteStep === "step1" && (
+              <>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+                  🗑️ セッションを完全に削除しますか?
+                </h2>
+                <div
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 10,
+                    background: "rgba(120,53,15,0.4)",
+                    border: "1px solid rgba(251,191,36,0.3)",
+                    color: "#fbbf24",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    marginBottom: 20,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  ⚠️ この操作は取り消せません。チャット履歴・評価データがすべて完全に削除されます。
+                </div>
+                <p style={{ fontSize: 15, color: "#d1d5db", marginBottom: 24, lineHeight: 1.6 }}>
+                  GDPR（忘れられる権利）または個人情報保護法に基づいて削除を行う場合は「次へ」を押してください。
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <button
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteStep("step2");
+                      setTimeout(() => deleteReasonRef.current?.focus(), 50);
+                    }}
+                    style={{
+                      padding: "16px 24px",
+                      minHeight: 52,
+                      borderRadius: 12,
+                      border: "1px solid rgba(239,68,68,0.5)",
+                      background: "rgba(127,29,29,0.3)",
+                      color: "#f87171",
+                      fontSize: 16,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      width: "100%",
+                    }}
+                  >
+                    次へ（削除理由を入力）
+                  </button>
+                  <button
+                    onClick={() => setDeleteStep("idle")}
+                    style={{
+                      padding: "14px 24px",
+                      minHeight: 48,
+                      borderRadius: 12,
+                      border: "1px solid #374151",
+                      background: "transparent",
+                      color: "#9ca3af",
+                      fontSize: 15,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      width: "100%",
+                    }}
+                  >
+                    やめる
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Step 2: 削除理由入力 + セッションID確認 */}
+            {deleteStep === "step2" && (
+              <>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+                  削除の詳細確認
+                </h2>
+
+                {/* 削除理由 */}
+                <div style={{ marginBottom: 20 }}>
+                  <label
+                    htmlFor="delete-reason"
+                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}
+                  >
+                    削除理由 <span style={{ color: "#f87171" }}>*</span>
+                    <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: 4 }}>(5〜500文字)</span>
+                  </label>
+                  <textarea
+                    id="delete-reason"
+                    ref={deleteReasonRef}
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    placeholder="例: GDPR Art.17に基づくデータ削除要求（ユーザーID: xxx、受付日: 2026-05-31）"
+                    rows={4}
+                    disabled={deleteSubmitting}
+                    style={{
+                      width: "100%",
+                      padding: "12px 14px",
+                      borderRadius: 10,
+                      border: "1px solid #374151",
+                      background: "rgba(15,23,42,0.9)",
+                      color: "#e5e7eb",
+                      fontSize: 14,
+                      lineHeight: 1.6,
+                      resize: "vertical",
+                      minHeight: 96,
+                      boxSizing: "border-box",
+                      outline: "none",
+                    }}
+                  />
+                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                    {deleteReason.trim().length} / 500文字
+                  </span>
+                </div>
+
+                {/* セッションID確認 */}
+                <div style={{ marginBottom: 24 }}>
+                  <label
+                    htmlFor="delete-confirm-id"
+                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}
+                  >
+                    確認のため、セッションIDを入力してください <span style={{ color: "#f87171" }}>*</span>
+                  </label>
+                  <div
+                    style={{
+                      fontFamily: "monospace",
+                      fontSize: 12,
+                      color: "#9ca3af",
+                      background: "rgba(0,0,0,0.4)",
+                      border: "1px solid #1f2937",
+                      borderRadius: 8,
+                      padding: "6px 10px",
+                      marginBottom: 8,
+                      wordBreak: "break-all",
+                      userSelect: "text",
+                    }}
+                  >
+                    {sessionId}
+                  </div>
+                  <input
+                    id="delete-confirm-id"
+                    ref={deleteConfirmRef}
+                    type="text"
+                    value={deleteConfirmId}
+                    onChange={(e) => setDeleteConfirmId(e.target.value)}
+                    placeholder="上記のセッションIDをそのまま入力"
+                    disabled={deleteSubmitting}
+                    style={{
+                      width: "100%",
+                      padding: "12px 14px",
+                      borderRadius: 10,
+                      border:
+                        deleteConfirmId && deleteConfirmId !== sessionId
+                          ? "1px solid rgba(248,113,113,0.5)"
+                          : "1px solid #374151",
+                      background: "rgba(15,23,42,0.9)",
+                      color: "#e5e7eb",
+                      fontSize: 14,
+                      fontFamily: "monospace",
+                      boxSizing: "border-box",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <button
+                    onClick={() => void handleDeleteSubmit()}
+                    disabled={
+                      deleteSubmitting ||
+                      deleteReason.trim().length < 5 ||
+                      deleteConfirmId.trim() !== sessionId
+                    }
+                    style={{
+                      padding: "16px 24px",
+                      minHeight: 52,
+                      borderRadius: 12,
+                      border: "1px solid rgba(239,68,68,0.5)",
+                      background:
+                        deleteSubmitting ||
+                        deleteReason.trim().length < 5 ||
+                        deleteConfirmId.trim() !== sessionId
+                          ? "rgba(127,29,29,0.2)"
+                          : "rgba(127,29,29,0.5)",
+                      color:
+                        deleteSubmitting ||
+                        deleteReason.trim().length < 5 ||
+                        deleteConfirmId.trim() !== sessionId
+                          ? "rgba(248,113,113,0.5)"
+                          : "#f87171",
+                      fontSize: 16,
+                      fontWeight: 700,
+                      cursor:
+                        deleteSubmitting ||
+                        deleteReason.trim().length < 5 ||
+                        deleteConfirmId.trim() !== sessionId
+                          ? "not-allowed"
+                          : "pointer",
+                      width: "100%",
+                    }}
+                  >
+                    {deleteSubmitting ? "⏳ 削除中..." : "🗑️ 完全に削除する"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteStep("step1");
+                    }}
+                    disabled={deleteSubmitting}
+                    style={{
+                      padding: "14px 24px",
+                      minHeight: 48,
+                      borderRadius: 12,
+                      border: "1px solid #374151",
+                      background: "transparent",
+                      color: "#9ca3af",
+                      fontSize: 15,
+                      fontWeight: 600,
+                      cursor: deleteSubmitting ? "not-allowed" : "pointer",
+                      width: "100%",
+                    }}
+                  >
+                    戻る
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 

@@ -15,12 +15,15 @@
 set -uo pipefail
 
 # ─── R2C 定数 ─────────────────────────────────────────────────────────────
-R2C_ROOT="${R2C_ROOT:-$HOME/Documents/GitHub/commerce-faq-tasks}"
+R2C_ROOT="${R2C_ROOT:-$HOME/projects/commerce-faq-tasks}"
 R2C_CONFIG="${R2C_CONFIG:-$HOME/.claude-r2c-config}"
 QUEUE_DB="${R2C_ROOT}/.claude/queue/r2c-queue.db"
 LOG_DIR="${R2C_CONFIG}/logs"
 SCRIPT_NAME="$(basename "$0" .sh)"
-MAX_RUN_MINUTES=90
+# UATa 3日運用教訓: 90min × MAX_ATTEMPTS(3) = 最大 4.5h の長時間 stuck が複数発生。
+# 45min に短縮して最大 stuck 時間を 2.25h に圧縮する。CI 完了待ちは Lane 内の
+# 20min timeout（lane-template / CLAUDE.md「CI 待ちプロトコル」参照）で別途制御。
+MAX_RUN_MINUTES=45
 MAX_ATTEMPTS=3
 RECENT_FAILED_THRESHOLD=5
 RECENT_FAILED_WINDOW="-2 hours"
@@ -40,8 +43,20 @@ if [ "$DRY_RUN" -eq 0 ]; then
     exec >> "${LOG_DIR}/${SCRIPT_NAME}.log" 2>&1
 fi
 
-# shellcheck disable=SC1091
-source "${R2C_CONFIG}/secrets/r2c-loop.env" 2>/dev/null || true
+# secrets fail-fast: 24h ループ本体は secrets 必須。silent-failure で空 token のまま
+# 走ると通知不能の連鎖事故になるため、未配備/source 失敗時は即停止する。
+# (注: Slack/Pushover の認証情報も secrets 内のため、未配備時の通知は stderr 止まり)
+SECRETS_FILE="${R2C_CONFIG}/secrets/r2c-loop.env"
+if [ ! -f "$SECRETS_FILE" ]; then
+    echo "[$(date +%Y-%m-%d_%H:%M:%S)] FATAL: secrets not found: ${SECRETS_FILE} — 配備後に再実行" >&2
+    bash "${R2C_ROOT}/SCRIPTS/notify-slack.sh" "🛑 r2c-supervisor: secrets 未配備で起動中止 (${SECRETS_FILE})" --color error 2>/dev/null || true
+    exit 1
+fi
+# shellcheck disable=SC1090,SC1091
+source "$SECRETS_FILE" || {
+    echo "[$(date +%Y-%m-%d_%H:%M:%S)] FATAL: failed to source secrets: ${SECRETS_FILE}" >&2
+    exit 1
+}
 
 echo "[$(date +%Y-%m-%d_%H:%M:%S)] === r2c-supervisor start (dry=${DRY_RUN}) ==="
 
@@ -59,18 +74,19 @@ notify() {
     local title="$2"
     local body="$3"
     if [ -x "${R2C_ROOT}/SCRIPTS/r2c-pushover.sh" ]; then
-        bash "${R2C_ROOT}/SCRIPTS/r2c-pushover.sh" --priority "$priority" --title "$title" --message "$body" 2>&1 || true
+        # 通知失敗を完全無音にしない: 失敗時は必ず stderr(=ログ) に痕跡を残す
+        bash "${R2C_ROOT}/SCRIPTS/r2c-pushover.sh" --priority "$priority" --title "$title" --message "$body" 2>&1 \
+            || echo "WARN: pushover notify failed (priority=${priority}): ${title} — ${body}" >&2
     else
         echo "NOTIFY(priority=${priority}): ${title} — ${body}"
     fi
 }
 
 # ─── 1. Stuck Lane 検出 ──────────────────────────────────────────────────
-STUCK=$(SQ "SELECT id, asana_gid, asana_name, session_id, COALESCE(attempt_count,0), worktree_path
+STUCK=$(SQ "SELECT id, asana_gid, asana_name, session_id, COALESCE(attempt_count,0), worktree_path, COALESCE(branch,'')
             FROM tasks
             WHERE state = 'running'
-              AND started_at IS NOT NULL
-              AND started_at < datetime('now', '-${MAX_RUN_MINUTES} minutes');")
+              AND COALESCE(started_at, updated_at, created_at) < datetime('now', '-${MAX_RUN_MINUTES} minutes');")
 
 STUCK_COUNT=0
 if [ -n "$STUCK" ]; then
@@ -90,9 +106,35 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 if [ -n "$STUCK" ]; then
-    while IFS='|' read -r TID GID NAME SID ATTEMPT WORKTREE; do
+    while IFS='|' read -r TID GID NAME SID ATTEMPT WORKTREE BRANCH; do
         [ -z "$TID" ] && continue
         echo "Stuck task ${TID} (gid=${GID:-NA}, attempt=${ATTEMPT}, session=${SID:-NA}): ${NAME}"
+
+        # ─── PR-aware guard: 既に PR を作成済みなら "stuck" ではない (誤 rollback 防止) ───
+        # Lane が PR を出したのに state が running のまま残る (pr_created へ未遷移) と、
+        # supervisor が "running > 45min" と誤検出し、成果物ごと auto_rollback してしまう
+        # (2026-05-29 に id=49/50 が merged 済、52/53/54 が PR open のまま誤 rollback された事案)。
+        # kill/cleanup/retry/rollback を行う前に、branch に対応する PR の有無を確認する。
+        if [ -n "${BRANCH:-}" ]; then
+            PR_JSON=$(cd "$R2C_ROOT" && gh pr list --head "$BRANCH" --state all --json number,state --limit 1 2>/dev/null || echo '[]')
+            PR_NUM=$(printf '%s' "$PR_JSON" | jq -r '.[0].number // empty' 2>/dev/null || true)
+            PR_STATE=$(printf '%s' "$PR_JSON" | jq -r '.[0].state // empty' 2>/dev/null || true)
+            # OPEN→pr_created / MERGED→merged のみ正規化する。
+            # CLOSED(未merge) や PR 無しは既存 stuck 処理 (retry/rollback) にフォールスルー。
+            # (Codex Gate 2.5 [P2]: CLOSED を pr_created にすると非終端で取り残され復旧不能)
+            RECONCILED_STATE=""
+            if [ "$PR_STATE" = "MERGED" ]; then
+                RECONCILED_STATE="merged"
+            elif [ "$PR_STATE" = "OPEN" ]; then
+                RECONCILED_STATE="pr_created"
+            fi
+            if [ -n "${PR_NUM:-}" ] && [ -n "$RECONCILED_STATE" ]; then
+                SQ "UPDATE tasks SET state='${RECONCILED_STATE}', pr_number=${PR_NUM}, error_message='supervisor: PR #${PR_NUM} (${PR_STATE}) 検出 — stuck 誤判定を回避', last_action='pr_reconciled', updated_at=datetime('now') WHERE id = ${TID};"
+                echo "  → reconciled to ${RECONCILED_STATE} (PR #${PR_NUM} ${PR_STATE} 存在; stuck ではない)"
+                notify 0 "R2C Lane reconciled" "Task ${TID}: PR #${PR_NUM} (${PR_STATE}) 検出。stuck 誤判定を回避し ${RECONCILED_STATE} へ遷移: ${NAME}"
+                continue
+            fi
+        fi
 
         # claude session kill (best-effort)
         if [ -n "$SID" ]; then
