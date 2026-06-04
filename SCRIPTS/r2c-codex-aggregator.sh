@@ -2,11 +2,11 @@
 # r2c-codex-aggregator.sh — R2C 24h ループ Codex Gate 2.5 集計
 #
 # 用途:
-#   queue (.claude/queue/r2c-queue.db) から
-#     gate_2_5_required=1 AND state='pr_created'
-#   のタスクを抽出し、`gh pr view` で merged 状態を確認。
-#   既に merged なら state を `merged` に更新、未 merge なら朝の Codex review
-#   待ち件数として集計する。
+#   queue (.claude/queue/r2c-queue.db) から state='pr_created' の全タスクを抽出し、
+#   `gh pr view` で merged 状態を確認 (reconcile)。既に merged なら state を `merged`
+#   に更新する。gate_2_5_required≠1 の CLI 直接 PR も対象 (GID 1215263653870104)。
+#   未 merge かつ gate_2_5_required=1 の OPEN PR のみ朝の Codex review 待ち件数として
+#   集計する (gate_2_5_required≠1 の OPEN PR は人間マージ待ちで Codex 対象外)。
 #   morning-report.sh から --output-block で呼び出され、Slack Block Kit の
 #   1 セクションとして結果を返す。
 #
@@ -58,10 +58,14 @@ command -v jq >/dev/null 2>&1 || { echo "ERROR: jq required" >&2; exit 1; }
 # ─── Collect rows from queue (graceful when DB absent) ───
 pending_rows=""
 if command -v sqlite3 >/dev/null 2>&1 && [[ -r "$QUEUE_DB" ]]; then
+    # reconcile(merge同期)は全 pr_created を対象にする。gate_2_5_required で絞ると
+    # CLI 直接 PR 化タスク(gate_2_5_required≠1)が merged 後も pr_created に永久残留する
+    # (GID 1215263653870104)。merge 同期と Gate2.5 レビュー集約は別関心事なので分離し、
+    # gate_2_5_required は列として取得して下流の「Codex 待ち」集計だけに使う。
     pending_rows="$(sqlite3 -separator '|' "$QUEUE_DB" \
-        "SELECT id, asana_gid, asana_name, pr_number, pr_url \
+        "SELECT id, asana_gid, asana_name, pr_number, pr_url, COALESCE(gate_2_5_required, 0) \
          FROM tasks \
-         WHERE gate_2_5_required = 1 AND state = 'pr_created' \
+         WHERE state = 'pr_created' \
          ORDER BY pr_number ASC;" 2>/dev/null || true)"
 else
     log "WARN: queue DB not found or sqlite3 missing (db=${QUEUE_DB}) — empty result"
@@ -72,7 +76,7 @@ merged_count=0
 waiting_lines=()
 
 if [[ -n "$pending_rows" ]]; then
-    while IFS='|' read -r task_id _asana_gid asana_name pr_number pr_url; do
+    while IFS='|' read -r task_id _asana_gid asana_name pr_number pr_url gate_2_5_required; do
         [[ -z "${pr_number:-}" ]] && continue
         pr_state="UNKNOWN"
         merged_at="null"
@@ -94,10 +98,17 @@ if [[ -n "$pending_rows" ]]; then
             fi
             log "merged: PR #${pr_number} (task=${task_id})"
         elif [[ "$pr_state" == "OPEN" ]]; then
-            waiting_count=$((waiting_count + 1))
-            short_name="$(printf '%s' "$asana_name" | cut -c1-40)"
-            url="${pr_url:-https://github.com/${REPO_SLUG}/pull/${pr_number}}"
-            waiting_lines+=("• <${url}|PR #${pr_number}> ${short_name}")
+            # 「Codex Gate 2.5 待ち」は gate_2_5_required=1 の OPEN PR のみ計上する。
+            # gate_2_5_required≠1 の OPEN PR は人間マージ待ちであり Codex レビュー対象ではない
+            # (reconcile では拾うが Codex 待ち集計には混ぜない)。
+            if [[ "${gate_2_5_required:-0}" == "1" ]]; then
+                waiting_count=$((waiting_count + 1))
+                short_name="$(printf '%s' "$asana_name" | cut -c1-40)"
+                url="${pr_url:-https://github.com/${REPO_SLUG}/pull/${pr_number}}"
+                waiting_lines+=("• <${url}|PR #${pr_number}> ${short_name}")
+            else
+                log "open (awaiting merge, non-gate): PR #${pr_number} (task=${task_id})"
+            fi
         else
             log "skip: PR #${pr_number} state=${pr_state} (neither merged nor open)"
         fi

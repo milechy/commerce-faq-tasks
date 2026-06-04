@@ -1,5 +1,7 @@
 // src/admin/http/faqAdminRoutes.test.ts
 // fix(security/HIGH): /admin/faqs 認証・テナント分離テスト
+// F1(HIGH): DELETE /admin/faqs/:id が faq_docs と faq_embeddings を連鎖削除することも併せて検証
+//   (faq_embeddings は物理FKを持たず metadata->>'faq_id' 参照のため ON DELETE CASCADE が効かない)
 
 jest.mock("../../lib/db", () => ({
   pool: { query: jest.fn() },
@@ -229,5 +231,55 @@ describe("resolveTenantId — JWT 優先", () => {
     expect(res.status).toBe(200);
     const [, params] = mockQuery.mock.calls[0];
     expect(params[0]).toBe("tenant-a");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1(HIGH): DELETE /admin/faqs/:id — faq_embeddings 連鎖削除
+// client_admin (tenant-a) で自テナント FAQ を削除すると faq_embeddings も連鎖削除されること。
+// ---------------------------------------------------------------------------
+describe("DELETE /admin/faqs/:id — faq_embeddings 連鎖削除 (F1)", () => {
+  it("正常系: faq_docs 削除に続けて faq_embeddings も同一 tenant/faq_id で削除する", async () => {
+    mockQuery
+      .mockReset();
+    mockQuery
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 5 }] }) // faq_docs 削除
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }); // faq_embeddings 削除
+
+    const res = await request(makeApp())
+      .delete("/admin/faqs/5")
+      .set("Authorization", bearerOf(CLIENT_A));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, id: 5 });
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+
+    // 2 回目の呼び出しが faq_embeddings の連鎖削除であること
+    const [embedSql, embedParams] = mockQuery.mock.calls[1];
+    expect(embedSql).toMatch(/DELETE FROM faq_embeddings/);
+    expect(embedSql).toMatch(/metadata->>'faq_id'/);
+    expect(embedParams).toEqual(["tenant-a", 5]);
+  });
+
+  it("404: FAQ が存在しない場合は faq_embeddings 削除を実行しない", async () => {
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // faq_docs 該当なし
+
+    const res = await request(makeApp())
+      .delete("/admin/faqs/999")
+      .set("Authorization", bearerOf(CLIENT_A));
+
+    expect(res.status).toBe(404);
+    expect(mockQuery).toHaveBeenCalledTimes(1); // embeddings 削除は呼ばれない
+  });
+
+  it("バリデーション: id が数値でない場合は 400 で DB を触らない", async () => {
+    mockQuery.mockReset();
+    const res = await request(makeApp())
+      .delete("/admin/faqs/not-a-number")
+      .set("Authorization", bearerOf(CLIENT_A));
+
+    expect(res.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });
