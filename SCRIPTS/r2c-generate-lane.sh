@@ -72,7 +72,8 @@ IFS='|' read -r ASANA_GID ASANA_NAME ASANA_NOTES ASANA_PERMALINK ASANA_DUE_ON TI
 # ─── テンプレ選択 ────────────────────────────────────────────────────────
 TEMPLATE_FILE=""
 case "${TIER}:${TASK_TYPE}" in
-    "B:docs"|"B:test"|"B:other") TEMPLATE_FILE="${TEMPLATE_DIR}/tier-b-docs.md" ;;
+    "B:test")                    TEMPLATE_FILE="${TEMPLATE_DIR}/tier-b-test.md" ;;
+    "B:docs"|"B:other")          TEMPLATE_FILE="${TEMPLATE_DIR}/tier-b-docs.md" ;;
     "B:skill"|"B:hook")          TEMPLATE_FILE="${TEMPLATE_DIR}/tier-b-skill.md" ;;
     "A:api"|"A:migration")       TEMPLATE_FILE="${TEMPLATE_DIR}/tier-a-api.md" ;;
     "A:schema")                  TEMPLATE_FILE="${TEMPLATE_DIR}/tier-a-schema.md" ;;
