@@ -2,11 +2,11 @@
 # r2c-codex-aggregator.sh — R2C 24h ループ Codex Gate 2.5 集計
 #
 # 用途:
-#   queue (.claude/queue/r2c-queue.db) から
-#     gate_2_5_required=1 AND state='pr_created'
-#   のタスクを抽出し、`gh pr view` で merged 状態を確認。
-#   既に merged なら state を `merged` に更新、未 merge なら朝の Codex review
-#   待ち件数として集計する。
+#   queue (.claude/queue/r2c-queue.db) から state='pr_created' の全タスクを抽出し、
+#   `gh pr view` で merged 状態を確認 (reconcile)。既に merged なら state を `merged`
+#   に更新する。gate_2_5_required≠1 の CLI 直接 PR も対象 (GID 1215263653870104)。
+#   未 merge かつ gate_2_5_required=1 の OPEN PR のみ朝の Codex review 待ち件数として
+#   集計する (gate_2_5_required≠1 の OPEN PR は人間マージ待ちで Codex 対象外)。
 #   morning-report.sh から --output-block で呼び出され、Slack Block Kit の
 #   1 セクションとして結果を返す。
 #
