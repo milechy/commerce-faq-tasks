@@ -66,6 +66,7 @@ import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
 import { registerGa4TenantRoutes } from "./api/admin/tenants/ga4Routes";
 import { registerPostHogTenantRoutes } from "./api/admin/tenants/posthogRoutes";
+import { flushPostHog } from "./lib/posthog/posthogClient";
 import { registerAnalyticsSummaryRoutes } from "./api/admin/tenants/analyticsSummaryRoutes";
 import { registerNotificationPreferencesRoutes } from "./api/admin/tenants/notificationPreferencesRoutes";
 import { registerInternalGa4SyncRoutes } from "./api/internal/ga4SyncRoutes";
@@ -658,9 +659,19 @@ async function startServer() {
     fatal: (msg) => logger.fatal(msg),
   });
 
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     logger.info({ port, env: process.env.NODE_ENV }, "server listening");
   });
+
+  const onShutdown = (signal: string) => () => {
+    logger.info({ signal }, "[shutdown] graceful shutdown initiated");
+    server.close();
+    flushPostHog()
+      .catch((err) => logger.error({ err }, "[shutdown] flushPostHog failed"))
+      .finally(() => process.exit(0));
+  };
+  process.on("SIGTERM", onShutdown("SIGTERM"));
+  process.on("SIGINT", onShutdown("SIGINT"));
 
   // Phase23: AlertEngine — 60秒周期で KPI を評価し Slack アラートを送信
   alertEngine.start();
