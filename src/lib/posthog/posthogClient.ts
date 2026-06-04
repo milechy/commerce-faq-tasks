@@ -17,7 +17,7 @@ export function getPostHogClient(): PostHog | null {
 
 export async function flushPostHog(): Promise<void> {
   if (_client) {
-    await _client.flush();
+    await _client.shutdown();
   }
 }
 

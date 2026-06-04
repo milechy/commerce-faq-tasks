@@ -2,8 +2,19 @@
 
 > 作成: 2026-05-18
 > Asana GID: 1214891874822963
-> 実装予定: Phase 1-G（別タスク GID:1214886037602478）
-> 本書は **設計のみ**。実装は別タスクで行う。
+> 実装完了: Phase 1-G（GID:1214886037602478、PR branch: auto/b-18-tier-b-hook-auto-memory-auto-dream-r2c）
+> ~~本書は **設計のみ**。実装は別タスクで行う。~~ → **実装済み** (2026-06-04)
+
+### Phase 1-G 実装内容 (2026-06-04)
+
+| 項目 | 状態 | 詳細 |
+|---|---|---|
+| `autoMemoryEnabled: true` | ✅ 設定済み | `.claude/settings.json` に既存 |
+| CLAUDE.md memory path 修正 | ✅ 完了 | `~/.claude-r2c-config/projects/-Users-hkobayashi-projects-commerce-faq-tasks/memory/` に更新 |
+| Lane 1–5 agent ファイル作成 | ✅ 完了 | `.claude/agents/lane-{1-5}-*.md` (memory フィールド付き) |
+| project scope agent memory 初期化 | ✅ 完了 | `.claude/agent-memory/lane-{2,3,5}/MEMORY.md` |
+| Session Memory (claude.ai) 確認 | ⚠️ 手動確認必要 | claude.ai Settings → Features → Memory: ON を目視確認 |
+| Dreaming 統合 | ⏳ 承認待ち | Managed Agents ウェイトリスト申請中 (`MANAGED_AGENTS_APPLICATION.md`) |
 
 ---
 

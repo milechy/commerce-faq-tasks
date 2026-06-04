@@ -4,6 +4,7 @@ import type pino from "pino";
 import { z } from "zod";
 import type { WebhookNotifier } from "../../integration/webhookNotifier";
 import { runSearchAgent } from "../flow/searchAgent";
+import { fetchDefaultExcludedIds, mergeExcludedIds } from "../../lib/defaultExcludedIds";
 
 const AgentSearchSchema = z.object({
   q: z.string().min(1),
@@ -81,13 +82,17 @@ export function createAgentSearchHandler(
         : "demo";
 
     try {
+      // Phase69-2: DB の default_excluded_ids をリクエスト側とマージする
+      const dbDefaultIds = await fetchDefaultExcludedIds(tenantId);
+      const mergedExcludedIds = mergeExcludedIds(excluded_ids, dbDefaultIds);
+
       const result = await runSearchAgent({
         q,
         topK,
         debug,
         useLlmPlanner,
         tenantId,
-        excludedIds: excluded_ids,
+        excludedIds: mergedExcludedIds,
       });
 
       const durationMs = Date.now() - startedAt;

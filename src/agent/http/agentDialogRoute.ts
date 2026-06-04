@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { DialogTurnInput } from "../dialog/types";
 import { AgentDialogOrchestrator } from "./AgentDialogOrchestrator";
 import { maybeProbeLemonSliceReadiness } from "./presentation/lemonSliceAdapter";
+import { fetchDefaultExcludedIds, mergeExcludedIds } from "../../lib/defaultExcludedIds";
 
 export type AgentDialogDeps = {
   webhookNotifier?: unknown;
@@ -35,6 +36,14 @@ export function createAgentDialogHandler(
     }
 
     const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";
+
+    // Phase69-2: DB の default_excluded_ids をリクエスト側とマージする
+    const dbDefaultIds = await fetchDefaultExcludedIds(tenantId);
+    if (dbDefaultIds.length > 0) {
+      const merged = mergeExcludedIds(body.options?.excluded_ids, dbDefaultIds);
+      body.options = body.options ?? {};
+      body.options.excluded_ids = merged;
+    }
 
     // PR2b: adapter 状態（presentation-only）
     let adapterMeta: import("../dialog/types").AdapterMeta | undefined = undefined;
