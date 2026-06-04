@@ -102,7 +102,7 @@ for cmd in gh jq; do command -v "$cmd" >/dev/null 2>&1 || { log "missing: $cmd";
 
 # ─── PR メタ取得 ─────────────────────────────────────────────────────────────
 META="$(gh pr view "$PR_NUMBER" \
-  --json number,state,isDraft,baseRefName,labels,statusCheckRollup,mergeStateStatus,title \
+  --json number,state,isDraft,baseRefName,headRefName,labels,statusCheckRollup,mergeStateStatus,title \
   2>/dev/null)" || { log "PR #$PR_NUMBER 取得失敗"; exit 2; }
 
 STATE="$(jq -r '.state' <<<"$META")"
@@ -112,6 +112,7 @@ LABELS="$(jq -r '[.labels[].name] | join(",")' <<<"$META")"
 ROLLUP="$(jq -c '.statusCheckRollup' <<<"$META")"
 TITLE="$(jq -r '.title' <<<"$META")"
 MERGE_STATE="$(jq -r '.mergeStateStatus' <<<"$META")"
+HEAD_REF="$(jq -r '.headRefName' <<<"$META")"
 
 decline() { log "SKIP #$PR_NUMBER ($1): $TITLE"; exit 0; }
 
@@ -121,9 +122,18 @@ decline() { log "SKIP #$PR_NUMBER ($1): $TITLE"; exit 0; }
 has_block_label "$LABELS"  && decline "block-label ($LABELS)"
 night_frozen               && decline "night-freeze (22:00-07:00 JST)"
 
-# Tier 判定 (正典: pr-risk-scorer)
-ELIGIBLE="$(bash "$SCORER" "$PR_NUMBER" --json-only 2>/dev/null | jq -r '.auto_merge_eligible')" || decline "scorer失敗"
-[[ "$ELIGIBLE" == "true" ]] || decline "Tier S (auto_merge_eligible=$ELIGIBLE)"
+# Tier 判定: ループ生成 PR (auto/tier-N-*) はブランチ名で確定、それ以外は scorer にフォールバック
+# auto/s-* = Tier S → human merge required (merge しない)
+# auto/a-* = Tier A → auto-merge eligible (scorer スキップ)
+# auto/b-* = Tier B → auto-merge eligible (scorer スキップ)
+# それ以外 (手動PR等) → scorer で判定 (従来動作)
+[[ "$HEAD_REF" =~ ^auto/s- ]] && decline "Tier S — human merge required (branch: $HEAD_REF)"
+if [[ "$HEAD_REF" =~ ^auto/[ab]- ]]; then
+    log "Tier A/B loop PR — auto-merge eligible (branch: $HEAD_REF)"
+else
+    ELIGIBLE="$(bash "$SCORER" "$PR_NUMBER" --json-only 2>/dev/null | jq -r '.auto_merge_eligible')" || decline "scorer失敗"
+    [[ "$ELIGIBLE" == "true" ]] || decline "not auto-merge eligible (auto_merge_eligible=$ELIGIBLE)"
+fi
 
 # 必須チェック全 green
 all_required_green "$ROLLUP" "$REQUIRED_CSV" || decline "checks not all green"
