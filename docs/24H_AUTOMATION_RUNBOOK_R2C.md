@@ -58,7 +58,7 @@ export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 ### ディレクトリ構造（Phase 1 完了時）
 
 ```
-~/Documents/GitHub/commerce-faq-tasks/
+~/projects/commerce-faq-tasks/
 ├── .claude/
 │   ├── settings.json
 │   ├── lane-templates/         ← Phase 1 T3 完了 (5 ファイル)

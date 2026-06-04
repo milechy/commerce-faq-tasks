@@ -10,6 +10,7 @@ import { superAdminMiddleware } from '../tenants/superAdminMiddleware';
 import { embedText } from '../../../agent/llm/openaiEmbeddingClient';
 import { generateRecommendations } from '../../../agent/gap/gapRecommender';
 import { callGeminiJudge } from '../../../lib/gemini/client';
+import { resolveFaqWriteIndex } from '../../../search/langIndex';
 
 const logger = pino();
 
@@ -79,7 +80,7 @@ function upsertToEsAsync(
   answer: string,
 ): void {
   const esUrl = process.env['ES_URL'];
-  const index = process.env['ES_FAQ_INDEX'] ?? 'faqs';
+  const index = resolveFaqWriteIndex(tenantId);
   if (!esUrl) return;
   const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: true };
   const url = `${esUrl.replace(/\/$/, '')}/${index}/_doc/${faqId}_${tenantId}`;

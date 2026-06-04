@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-R2C_ROOT="${R2C_ROOT:-$HOME/Documents/GitHub/commerce-faq-tasks}"
+R2C_ROOT="${R2C_ROOT:-$HOME/projects/commerce-faq-tasks}"
 QUEUE_DB="${QUEUE_DB:-${R2C_ROOT}/.claude/queue/r2c-queue.db}"
 
 STATE_CSV=""

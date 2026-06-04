@@ -126,7 +126,7 @@ Dreaming 承認後の統合イメージ（`docs/24H_AUTOMATION_RUNBOOK_R2C.md` S
   - Last name: Kobayashi
   - Business email: hkobayashi@mooores.com
   - Company or organization name: Mooore
-  - API Organization UUID: 1f2b5f79-5606-421a-859d-25a4bfa19f70
+  - API Organization UUID: `[REDACTED]` — org UUID は秘密情報につき docs への直書き禁止（gitleaks `generic-api-key` 検知対象）
   - Features: Dreaming
   - SDKs & tools: Claude API CLI
 - **ステータス**: 送信完了、Anthropic からの承認/保留/拒否の連絡待ち

@@ -50,7 +50,7 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/xxx/xxx
 export SLACK_CHANNEL_ID=C0AG07HFJTB
 
 # --- R2C プロジェクト設定 ---
-export R2C_REPO_PATH=/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks
+export R2C_REPO_PATH=/Users/hkobayashi/projects/commerce-faq-tasks
 export R2C_ASANA_PROJECT_GID=1213607637045514
 ```
 

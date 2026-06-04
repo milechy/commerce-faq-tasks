@@ -128,3 +128,11 @@ pnpm build && cd admin-ui && pnpm build && cd ..
 5. `gh pr create --title "<type>(<scope>): <要約>" --body "<DoD checklist + Asana GID>"`
 6. Team Lead 指示で auto-merge: `gh pr merge <N> --auto --squash --delete-branch`
 7. PR URL + 変更ファイル一覧を 1 行で報告
+
+---
+
+## 24h ループ共通ガード（CLAUDE.md「24h ループ安定性ガード」準拠）
+
+- **並列上限**: 同時稼働 Lane 最大 3 本 / 1 セッション内の並列 tool call も 3 本未満（result drop 回避・issue #39830）。
+- **CI 待ち（無限待ち禁止）**: `gh run watch` には timeout が無い。最大 **20 分**の deadline ループ（`gh run view <id> --json status,conclusion` を 30s 間隔）で待ち、超過したら `bash SCRIPTS/notify-slack.sh "⚠️ CI 20分超過、人間確認へ" --color warning` で通知して次へ進む。実装例は CLAUDE.md 参照。
+- **context 断絶時**: `previous_message_not_found` 検知 → 状態を `MEMORY.md` に記録 → Lane 終了 → Team Lead が再 dispatch（推測で続行しない）。

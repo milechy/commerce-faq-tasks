@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Gate 1 — typecheck + lint + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # jest --runInBand が大規模スイートで node 既定ヒープ(~4GB)を超え OOM (FATAL heap limit / exit 134) するため明示拡張。
+    # 症状: docs-only PR でも同一の OOM で Gate 1 が落ちる = main 由来の CI 環境問題 (PR 内容と無関係)。
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+  admin-ui-build:
+    name: Gate 3 — admin-ui build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install (root)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API
+        run: pnpm build
+
+      - name: Install admin-ui
+        run: cd admin-ui && pnpm install --frozen-lockfile
+
+      - name: Build admin-ui
+        run: cd admin-ui && pnpm build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'placeholder' }}

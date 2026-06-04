@@ -13,6 +13,22 @@ dispatch --model sonnet
 
 <!-- タスクが Opus 4.7 推奨の場合は asana-watcher.sh 取得後に適宜切り替え -->
 
+## 起動前 preflight (必須)
+
+> worktree 破損・stale branch・マージ済みゴミブランチを除去してから起動すること。
+> exit code が 0 でない場合は **起動中止** → hkobayashi に Slack #r2c で連絡。
+
+```bash
+bash SCRIPTS/24h-preflight.sh
+```
+
+preflight が exit 1 を返した場合:
+- Slack #r2c に自動アラートが投稿される
+- 以降のコマンドを一切実行しない
+- hkobayashi が手動確認・クリーンアップするまで待機
+
+---
+
 ## 前提(重要・必読)
 - 24h 自走モード ON 中 (`~/.r2c-24h-mode` 存在)
 - branch protection: main への direct push 禁止

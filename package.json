@@ -8,7 +8,14 @@
     "overrides": {
       "undici": ">=6.24.0",
       "path-to-regexp": ">=8.4.2",
-      "axios": ">=1.15.0"
+      "axios": ">=1.15.0",
+      "minimatch": ">=9.0.7 <10",
+      "protobufjs": ">=7.5.6 <8"
+    },
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-45134"
+      ]
     }
   },
   "engines": {
@@ -21,7 +28,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "security-scan": "bash SCRIPTS/security-scan.sh",
-    "verify": "pnpm typecheck && pnpm test && (cd admin-ui && pnpm install --frozen-lockfile && pnpm test:ui) && (test -f SCRIPTS/security-scan.sh && bash SCRIPTS/security-scan.sh || true)",
+    "verify": "pnpm typecheck && pnpm test && (cd admin-ui && pnpm install --frozen-lockfile && pnpm test:ui) && bash SCRIPTS/security-scan.sh",
     "sync:notion": "ts-node SCRIPTS/sync-notion.ts",
     "build": "tsc -p tsconfig.json",
     "build:admin": "cd admin-ui && pnpm install --frozen-lockfile && pnpm build",

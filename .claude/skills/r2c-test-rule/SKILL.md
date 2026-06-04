@@ -1,6 +1,7 @@
 ---
 name: r2c-test-rule
 description: R2Cで新規API・ビジネスロジック・セキュリティ機能を実装した時に、必要最低限のテスト構成と外部依存モック方針を適用する。新規APIは最低「正常系1 + 認証エラー1 + バリデーションエラー1」の3点セット必須。外部API（Groq / Gemini / Supabase / Fish Audio / Stripe / Leonardo.ai / Perplexity / Elasticsearch）は常にモック。テナント分離・暗号化・認証は全パスカバー。トリガー: 新規ルート追加(routes.ts / index.ts) / handler作成 / *.test.ts作成 / 既存テストへのcase追加 / Gate 1失敗時のテスト追加。Phase毎にテスト数を増やしGate 1（pnpm verify）を確実に通すため。
+version: 1.0.0
 ---
 
 # R2C テストルール

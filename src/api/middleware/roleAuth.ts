@@ -4,6 +4,22 @@ import type { NextFunction, Request, Response } from "express";
 
 export type UserRole = "super_admin" | "client_admin" | "anonymous";
 
+// 管理者ロール allowlist（admin 系ルートの認可判定で共有）。
+// 旧来 chat-history / analytics / eventAnalytics に重複定義されていたものを集約。
+export const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
+export type AllowedAdminRole = (typeof ALLOWED_ADMIN_ROLES)[number];
+/**
+ * actor のロールが admin 系（super_admin / client_admin）か判定する型ガード。
+ * セキュリティ要件: 認可ロールは app_metadata.role のみを信頼すること
+ * （user_metadata はクライアント編集可能なため特権判定に使用してはならない）。
+ */
+export function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
+  return (
+    typeof role === "string" &&
+    (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role)
+  );
+}
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
@@ -97,38 +113,10 @@ export function requireRole(...roles: UserRole[]) {
   };
 }
 
-/**
- * client_admin が自テナントのデータのみアクセスできるようにする
- * super_admin はすべてのテナントにアクセス可能
- */
-export function requireOwnTenant() {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const user = (req as AuthedReq).user;
-
-    // super_admin はすべてのテナントにアクセス可能
-    if (user?.role === "super_admin") {
-      return next();
-    }
-
-    const requestedTenant =
-      (req.params.tenantId as string | undefined) ||
-      (req.query.tenant as string | undefined) ||
-      (req.query.tenant_id as string | undefined) ||
-      (req.headers["x-tenant-id"] as string | undefined);
-
-    if (requestedTenant && requestedTenant !== user?.tenantId) {
-      res.status(403).json({
-        error: "forbidden",
-        message: "他のテナントのデータにはアクセスできません",
-      });
-      return;
-    }
-
-    // client_admin のリクエストに tenant_id が未指定なら自動付与
-    if (!requestedTenant && user?.tenantId) {
-      req.query.tenant = user.tenantId;
-    }
-
-    next();
-  };
-}
+// NOTE: 旧 `requireOwnTenant()` ヘルパーは削除済み（Phase70 / Phase44-46 棚卸し結論）。
+// テナント分離は各 per-tenant ルート内で個別に実装されている等価ロジックで担保されており、
+// 一律ミドルウェアの再配線は不要と確認した。代表例:
+//   - src/api/admin/knowledge/routes.ts:282 `requireKnowledgeTenant`
+//   - src/api/admin/chatTest/routes.ts:78    インライン check
+//   - src/api/admin/chat-history/routes.ts:54 `app_metadata.tenant_id` を直接 SQL フィルタに使用
+// 詳細: PR #207 (feature/1215114203188918-remove-dead-requireOwnTenant)

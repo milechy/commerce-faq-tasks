@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        R2C 24h Loop - Asana Poll (5 分間隔)
+        雛形配置: SCRIPTS/launchd/com.r2c.poll.plist (tracked)
+        実体配置: ~/Library/LaunchAgents/com.r2c.poll.plist (hkobayashi が手動 cp + load)
+
+        ⚠️ 前提 (macOS Sequoia TCC, 実機検証 2026-05-22): launchd は ~/Documents 配下の
+           ファイルを読めず、load しても "Operation not permitted" (exit 126) で失敗する。
+           WorkingDirectory では回避不可。対策のいずれか:
+             (a) /bin/bash に Full Disk Access を付与 (System Settings → Privacy)
+             (b) repo を ~/Documents 外 (~/projects 等、稼働中の UATa/DIA1000 と同じ) へ移設
+
+          cp SCRIPTS/launchd/com.r2c.poll.plist ~/Library/LaunchAgents/
+          launchctl load -w ~/Library/LaunchAgents/com.r2c.poll.plist
+          launchctl list | grep r2c
+          launchctl unload ~/Library/LaunchAgents/com.r2c.poll.plist  # 停止
+
+        役割: r2c-cron-wrapper.sh 経由で r2c-asana-poll.sh を起動。
+              Asana project 1213607637045514 から新規タスクを queue に取り込む。
+    -->
+    <key>Label</key>
+    <string>com.r2c.poll</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/hkobayashi/projects/commerce-faq-tasks/SCRIPTS/r2c-cron-wrapper.sh</string>
+        <string>--script</string>
+        <string>r2c-asana-poll.sh</string>
+    </array>
+
+    <!-- 5 分間隔 -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/launchd-poll.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/launchd-poll-err.log</string>
+
+    <!-- launchd 最小環境への注入: PATH + アカウント分離 (CLAUDE_CONFIG_DIR) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/hkobayashi</string>
+        <key>CLAUDE_CONFIG_DIR</key>
+        <string>/Users/hkobayashi/.claude-r2c-config</string>
+        <key>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</key>
+        <string>1</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/hkobayashi/projects/commerce-faq-tasks</string>
+
+    <key>KeepAlive</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>

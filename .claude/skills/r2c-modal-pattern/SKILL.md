@@ -1,6 +1,7 @@
 ---
 name: r2c-modal-pattern
 description: R2C Admin UI（React + Vite + Shadcn UI + Tailwind）でモーダル・ダイアログ・フォーム・ボタン・テーブルを実装する際、既存パターンに厳密に追従する。新規コンポーネントを発明せず、既存の Dialog / Sheet / Form / Button / Table コンポーネントを使い回す。ITリテラシ低パートナー向けにタッチターゲット44px以上・モバイル390pxレスポンシブ・ドラッグ&ドロップ対応を保証する。トリガー: admin-ui/ 配下のコンポーネント追加 / モーダル実装 / フォーム実装 / ファイルアップロードUI / 確認ダイアログ / Gate 6 U1-U8チェック対応時。Phase39で確立したUI品質基準とPhase49のダークテーマを維持するため。
+version: 1.0.0
 ---
 
 # R2C Admin UI 実装パターン（既存踏襲ルール）

@@ -6,12 +6,14 @@
 //
 // Body: { tenantId, requestId?, ttsTextBytes?, avatarCredits?, avatarSessionMs? }
 
+import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import type { Express, Request, Response } from 'express';
 import { INTERNAL_REQUEST_HEADER } from '../../lib/metrics/kpiDefinitions';
 import { trackUsage } from '../../lib/billing/usageTracker';
+import { internalNetworkOnly } from '../middleware/internalNetworkOnly';
 
 export function registerInternalUsageRoutes(app: Express): void {
-  app.post('/api/internal/usage', (req: Request, res: Response) => {
+  app.post('/api/internal/usage', internalNetworkOnly, (req: Request, res: Response) => {
     if (req.headers[INTERNAL_REQUEST_HEADER] !== '1') {
       return res.status(403).json({ error: 'forbidden' });
     }
@@ -32,7 +34,7 @@ export function registerInternalUsageRoutes(app: Express): void {
     trackUsage({
       tenantId,
       requestId: rid,
-      model: 'llama-3.3-70b-versatile',  // avatarセッションのLLM
+      model: GROQ_VERSATILE_70B,  // avatarセッションのLLM
       inputTokens: 0,
       outputTokens: 0,
       featureUsed: 'avatar',

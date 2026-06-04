@@ -1,6 +1,7 @@
 ---
 name: r2c-gentle-error
 description: R2C Admin UIとWidget向けのユーザーフレンドリーなエラーメッセージを生成する。バリデーション失敗、APIエラー、認証エラー、ネットワークエラー、空状態の全てで「優しい日本語」を使用し、専門用語を排除する。パートナーはITリテラシ低層を想定しているため、HTTPコード・JWT・CORS・Token・Promise等の技術用語は画面に出さない。トリガー: toast / alert / errorMessage / validation / try-catch / 401 / 403 / 404 / 500 / fetch失敗 / 空状態(empty state) / loading state 実装時。Gate 6 U3「専門用語が画面に残っていない」U4「優しい日本語」U6「空状態が白い画面にならない」をクリアするため。
+version: 1.0.0
 ---
 
 # R2C エラーメッセージ規則（パートナーフレンドリー）

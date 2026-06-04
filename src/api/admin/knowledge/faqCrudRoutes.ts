@@ -6,6 +6,7 @@ import { Pool } from "pg";
 import { z } from "zod";
 import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { logger } from '../../../lib/logger';
+import { resolveFaqWriteIndex } from "../../../search/langIndex";
 
 const CATEGORIES = ["inventory", "campaign", "coupon", "store_info"] as const;
 
@@ -16,10 +17,11 @@ function resolveTenantId(req: Request): string | null {
   return fromQuery || fromHeader || null;
 }
 
-/** ESインデックスからドキュメントを削除（best-effort） */
-async function deleteFromEs(esDocId: string): Promise<void> {
+/** ESインデックスからドキュメントを削除（best-effort）
+ * Phase69-2-E: write index を read path と同じ faq_${tenantId} に統一 */
+async function deleteFromEs(tenantId: string, esDocId: string): Promise<void> {
   const esUrl = process.env.ES_URL;
-  const index = process.env.ES_FAQ_INDEX || "faqs";
+  const index = resolveFaqWriteIndex(tenantId);
   if (!esUrl || !esDocId) return;
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(esDocId)}`;
   await fetch(url, { method: "DELETE" }).catch(() => {});
@@ -54,7 +56,7 @@ function upsertToEsAsync(
   isExcludedFromSearch = false
 ): void {
   const esUrl = process.env.ES_URL;
-  const index = process.env.ES_FAQ_INDEX || "faqs";
+  const index = resolveFaqWriteIndex(tenantId);
   if (!esUrl) return;
   const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: isPublished, is_excluded_from_search: isExcludedFromSearch };
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${faqId}_${tenantId}`;
@@ -77,7 +79,7 @@ function syncIsExcludedToEsAsync(
   isExcludedFromSearch: boolean
 ): void {
   const esUrl = process.env.ES_URL;
-  const index = process.env.ES_FAQ_INDEX || "faqs";
+  const index = resolveFaqWriteIndex(tenantId);
   if (!esUrl) return;
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_update/${faqId}_${tenantId}`;
   fetch(url, {
@@ -188,7 +190,7 @@ export function registerFaqCrudRoutes(
       params.push(limit);
       params.push(offset);
       const itemsResult = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
          FROM faq_docs
          ${whereClause}
          ORDER BY ${safeSortCol} ${safeOrder}
@@ -220,7 +222,7 @@ export function registerFaqCrudRoutes(
 
     try {
       const result = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
          FROM faq_docs
          WHERE id = $1`,
         [id]
@@ -543,7 +545,7 @@ export function registerFaqCrudRoutes(
       let failed = 0;
       for (const id of ids) {
         try {
-          await deleteFromEs(`${id}_${tenantId}`);
+          await deleteFromEs(tenantId, `${id}_${tenantId}`);
         } catch {
           failed++;
           logger.warn(`[DELETE /v1/admin/knowledge/faq/bulk] ES delete failed for id=${id}`);
@@ -603,7 +605,7 @@ export function registerFaqCrudRoutes(
       );
 
       // ES 削除（best-effort）
-      await deleteFromEs(`${id}_${tenantId}`);
+      await deleteFromEs(tenantId, `${id}_${tenantId}`);
 
       return res.json({ ok: true, id });
     } catch (err) {

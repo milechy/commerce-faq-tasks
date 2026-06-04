@@ -10,7 +10,6 @@
 - `docs/24H_AUTOMATION_RUNBOOK_R2C.md` — R2C 24h 自走 初期構築手順書
 - `docs/24H_LOOP_LEARNING_INTEGRATION.md` — 学習ループ統合仕様
 - `docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md` — Lane retry 戦略 + Pushover 通知仕様
-- `docs/PHASE70_AI_CROSSCHECK.md` §5.5 (24h 起動の足場整備という発見)
 
 ---
 
@@ -94,7 +93,107 @@ R2C 対応:
 - [ ] 24h 自走プロンプト (70-E) に「並列 tool call は最大 2 本」を明記
 - [ ] CLI 側 hook で heartbeat ファイル更新 (将来検討、70-H で必要性判断)
 - [ ] 初回 12h パイロット (70-H) では人間が 4h バッチで進捗確認
-- [ ] **【v1.1 追加】 stuck-detector daemon の R2C 版実装を別タスク化** (70-F の Risk Scorer と並走 or 独立)
+- [x] **【Phase70-? 完了】 stuck-detector daemon R2C 版実装**: `SCRIPTS/r2c-stuck-detector.sh`
+
+### 1.3.1 stuck-detector 起動方法 (R2C 版)
+
+`SCRIPTS/r2c-stuck-detector.sh` は 24h 自走開始と同時に **別プロセスとして起動** する。
+
+#### オプション A: launchd plist (推奨 — macOS 常駐)
+
+`~/Library/LaunchAgents/com.r2c.stuck-detector.plist` として配置:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.r2c.stuck-detector</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/hkobayashi/projects/commerce-faq-tasks/SCRIPTS/r2c-stuck-detector.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>R2C_CONFIG</key>
+        <string>/Users/hkobayashi/.claude-r2c-config</string>
+        <key>STUCK_WARN_THRESHOLD</key>
+        <string>1800</string>
+        <key>STUCK_KILL_THRESHOLD</key>
+        <string>5400</string>
+        <key>STUCK_POLL_INTERVAL</key>
+        <string>60</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/r2c-stuck-detector.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/hkobayashi/.claude-r2c-config/logs/r2c-stuck-detector.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+```
+
+起動コマンド:
+```bash
+launchctl load ~/Library/LaunchAgents/com.r2c.stuck-detector.plist
+launchctl start com.r2c.stuck-detector
+```
+
+停止コマンド (24h 自走終了時):
+```bash
+launchctl stop com.r2c.stuck-detector
+launchctl unload ~/Library/LaunchAgents/com.r2c.stuck-detector.plist
+```
+
+#### オプション B: cron (シンプル版)
+
+```bash
+# 毎分実行 — one-shot モードで自前ループを持たせない場合
+* * * * * R2C_CONFIG=$HOME/.claude-r2c-config bash /path/to/SCRIPTS/r2c-stuck-detector.sh --one-shot >> $HOME/.claude-r2c-config/logs/r2c-stuck-detector.log 2>&1
+```
+
+#### オプション C: バックグラウンド起動 (24h-mode-on.sh から呼ぶ)
+
+```bash
+# SCRIPTS/24h-mode-on.sh の末尾に追加
+nohup bash SCRIPTS/r2c-stuck-detector.sh \
+    >> "${R2C_CONFIG}/logs/r2c-stuck-detector.log" 2>&1 &
+echo $! > "${R2C_CONFIG}/.stuck-detector.pid"
+echo "[24h-mode-on] stuck-detector started (PID $(cat ${R2C_CONFIG}/.stuck-detector.pid))"
+```
+
+停止 (24h-mode-off.sh に追加):
+```bash
+PID_FILE="${R2C_CONFIG}/.stuck-detector.pid"
+if [[ -f "$PID_FILE" ]]; then
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    echo "[24h-mode-off] stuck-detector stopped"
+fi
+```
+
+#### 環境変数チューニング例
+
+| 変数 | デフォルト | 説明 |
+|---|---|---|
+| `STUCK_WARN_THRESHOLD` | 1800 (30分) | Slack 警告発火までの秒数 |
+| `STUCK_KILL_THRESHOLD` | 5400 (90分) | session kill 発火までの秒数 |
+| `STUCK_POLL_INTERVAL` | 60 (1分) | heartbeat チェック間隔 |
+| `MAX_DISPATCH_ATTEMPTS` | 3 | 最大 re-dispatch 試行回数 |
+| `DISPATCH_COMMAND` | (未設定) | 再dispatch コマンド (未設定時は Slack 通知のみ) |
+| `PUSHOVER_APP_TOKEN` | (未設定) | Pushover 通知 token (3回失敗時に使用) |
+| `PUSHOVER_USER_KEY` | (未設定) | Pushover user key |
+
+✅ 起動前チェック項目 (§9 に追加):
+- [ ] `bash SCRIPTS/r2c-stuck-detector.sh --dry-run --one-shot --verbose` で dry-run 動作確認
+- [ ] `~/.claude-r2c-config/heartbeat` が 24h 自走プロンプトで定期 touch されることを確認
+- [ ] launchd / cron / nohup のどれを使うかを決定し起動方法を PLAYBOOK に記載
 
 ### 1.4 重要操作の自動禁止 (`.claude/settings.json` の `permissions.deny`)
 
@@ -361,7 +460,7 @@ R2C で今朝 (2026-05-19) Claude.ai が既に 3 回以上繰り返した系統:
 実用例 (R2C で実施済):
 - 2026-05-19 AM: Phase70 v1.0 → v1.1 改訂 (Claude / Grok / Gemini / ChatGPT)
 - 採用 14 件、不採用 3 件、新規 70-I 起票、初回 12h パイロット化
-- docs/PHASE70_AI_CROSSCHECK.md v1.2 (517 行) に統合済
+- ※クロスチェック結果は Asana Phase70-G タスクで管理 (docs/PHASE70_AI_CROSSCHECK.md は R2C リポ未作成、2026-05-20 確認)
 
 24h 自走開始前の最終確認も 3 AI クロスチェックを検討:
 - Phase70-H 初回 12h パイロット直前 (必須)
@@ -493,6 +592,22 @@ UATa の制約に加えて、R2C 固有:
   - UATa: frontend build OOM (exit 146)、R2C は CF Pages 側ビルドだがバックエンド API/avatar-agent は VPS のメモリを消費
   - 24h 自走中の自然増加に備え事前確認
 
+### 【Phase70-I 追加】 scope 判定・env ファイル管理ルール
+
+- **R2C-K**: **既存依存脆弱性アップグレード = scope 外確定ルール** (Phase70-I, 2026-05-20 朝の PR #183/#184 判定経験)
+  - 判定基準: `git log --all --oneline -- pnpm-lock.yaml | head -5` で lockfile 最終更新日を確認
+  - Phase 着手日より前に lockfile が更新されている場合、検出脆弱性は **既存バグ = 当該 Phase の scope 外**
+  - 対応: SECURITY_SCAN_ALLOWLIST.md に CVE ID を照合し全件一致なら False Positive 判定 → --admin merge 可
+  - 別タスク化: 独立 Asana タスク「依存パッケージアップグレード」を起票 (due_on: 2週間以内)
+  - allowlist 漏れが 1 件でもあれば --admin merge 中止、hkobayashi 報告
+
+- **R2C-L**: **.env.bak / .env\* 系の git 追跡防止ルール** (Phase70-I, 2026-05-20 朝の security scan WARN 経験)
+  - `.gitignore` に `.env.bak` を必須記載 (追加済: Phase70-I PR)
+  - `git ls-files | grep -E '\.env'` で追跡状態を確認し、`.env.bak` や `.env.*` が出力されたら即 untrack
+  - untrack 手順: `git rm --cached .env.bak && git commit -m "chore: untrack .env.bak"`
+  - security scan で `[WARN] .env.bak tracked by git` が出た場合は内容を必ず確認し、本番 API キーが含まれていれば即停止 → hkobayashi 報告
+  - ローカル開発値のみ (PORT/localhost/placeholder) なら WARN 止まりとして merge は許可するが、untrack 対応を別タスク化
+
 ---
 
 ## 11. プロジェクト固有部分 (R2C 適応版、UATa §11 対応)
@@ -514,6 +629,7 @@ R2C 適用済の差分:
 | 1.0 | 2026-05-19 13:00 JST | UATa 24h 自走運用テンプレ v1.0 を R2C 用にカスタマイズ。R2C 固有 (staging 無し、CF Pages auto-deploy、論理ブロック 100% 依存) を反映。起動前チェックリストを 12 項目に拡張 (UATa §9 の 8 項目 + R2C 固有 4 項目) | claude.ai |
 | **1.1** | **2026-05-19 22:00 JST** | **UATa 1日実体験生記録 v1.0 (2026-05-19 18:00 JST) を反映**: ①§7.2 タスクキュー 30-50 本先積み追加 (UATa §5 #9)、②§9 起動前チェックリスト 12→16 項目に拡張 (VPS メモリ 4 項目追加、UATa §4.3 教訓)、③§5.1 UATa 14 件→21 件に拡張、④§5.3 「3 回ルール」明文化 (UATa PR #246)、⑤§10 R2C-G/H/I/J 4 項目追加 (deploy 失敗時 docker 生存確認 / 焼き込み grep / 3 回ルール / VPS メモリ余裕)。Phase70-A/B/D/J/L 完了状態も反映 (PR #176/#178/#179/#180/#181) | claude.ai |
 | **1.1 正式** | **2026-05-20 Phase70-K** | DRAFT マーカー削除・正式版昇格。関連ドキュメント一覧追加 (24H_* 5件相互参照)。§3.4 の PLAYBOOK/SKILL 行数を実機確認値に更新 (PLAYBOOK 654 行 / SKILL 302 行)。CLAUDE.md に「3 回ルール」セクション追加 (PR #182 → Phase70-K PR) | claude code cli |
+| **1.2** | **2026-05-20 Phase70-I** | §10 Out of scope 拡張: R2C-K (既存依存脆弱性 scope 外判定ルール) + R2C-L (.env.bak git 追跡防止ルール) 追加。PR #183/#184 の pnpm audit 判定経験を明文化。 | claude code cli |
 
 ---
 

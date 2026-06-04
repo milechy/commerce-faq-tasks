@@ -1,6 +1,7 @@
 ---
 name: applying-behavior
 description: Touch, keyboard, and form interaction patterns for accessible UI
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---

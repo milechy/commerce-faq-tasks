@@ -24,7 +24,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0" .sh)"
-R2C_ROOT="${R2C_ROOT:-$HOME/Documents/GitHub/commerce-faq-tasks}"
+R2C_ROOT="${R2C_ROOT:-$HOME/projects/commerce-faq-tasks}"
 R2C_CONFIG="${R2C_CONFIG:-$HOME/.claude-r2c-config}"
 LOG_DIR="${R2C_CONFIG}/logs"
 SLACK_NOTIFY_BIN="${R2C_ROOT}/SCRIPTS/r2c-slack-notify.sh"

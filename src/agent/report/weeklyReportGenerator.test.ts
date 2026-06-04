@@ -4,6 +4,7 @@
 import {
   generateReportText,
   postReportToSlack,
+  runWeeklyReport,
   saveWeeklyReport,
   WeeklyMetrics,
 } from './weeklyReportGenerator';
@@ -134,5 +135,55 @@ describe('saveWeeklyReport', () => {
     expect(params[1]).toBe('テストレポート');
     expect(params[4]).toBe(JSON.stringify(metrics));
     expect(params[5]).toBe(true);
+  });
+});
+
+describe('runWeeklyReport', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    delete process.env.SLACK_WEBHOOK_URL;
+  });
+
+  it('orchestrates collect → generate → slack → save', async () => {
+    // collectWeeklyMetrics は内部関数 — pool に対する 5 種類の SELECT を返す
+    // (avg_score x2, kpi x2, variant, objection, tuning)
+    const mockQuery = jest
+      .fn()
+      // collect: 当週 avg_score
+      .mockResolvedValueOnce({ rows: [{ avg_score: '80', eval_count: '5' }] })
+      // collect: 前週 avg_score
+      .mockResolvedValueOnce({ rows: [{ avg_score: '70' }] })
+      // collect: 当週 KPI
+      .mockResolvedValueOnce({ rows: [{ outcome: 'appointment', cnt: '3' }, { outcome: 'declined', cnt: '7' }] })
+      // collect: 前週 KPI
+      .mockResolvedValueOnce({ rows: [{ outcome: 'appointment', cnt: '2' }, { outcome: 'declined', cnt: '8' }] })
+      // collect: variant
+      .mockResolvedValueOnce({ rows: [] })
+      // collect: objection
+      .mockResolvedValueOnce({ rows: [{ cnt: '0' }] })
+      // collect: tuning
+      .mockResolvedValueOnce({ rows: [{ cnt: '0' }] })
+      // save
+      .mockResolvedValueOnce({ rows: [] });
+
+    const mockPool = { query: mockQuery } as unknown as InstanceType<typeof import('pg').Pool>;
+
+    const result = await runWeeklyReport(
+      'tenant-x',
+      mockPool,
+      periodStart,
+      periodEnd,
+    );
+
+    expect(typeof result.reportText).toBe('string');
+    expect(result.reportText.length).toBeGreaterThan(0);
+    expect(result.slackPosted).toBe(false); // SLACK_WEBHOOK_URL 未設定なので false
+    // 7 SELECT (collect) + 1 INSERT (save) = 8 queries
+    expect(mockQuery).toHaveBeenCalledTimes(8);
+    // 最後の query は INSERT INTO weekly_reports
+    const lastCallSql: string = mockQuery.mock.calls[7][0];
+    expect(lastCallSql).toContain('INSERT INTO weekly_reports');
+    const lastCallParams: unknown[] = mockQuery.mock.calls[7][1];
+    expect(lastCallParams[0]).toBe('tenant-x');
   });
 });

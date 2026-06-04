@@ -221,7 +221,7 @@ ssh root@65.108.159.161 "ls -la /opt/rajiuce/node_modules/.pnpm/pdf2pic@*/node_m
 **gm npm パッケージがない場合:**
 
 ```bash
-cd ~/Documents/GitHub/commerce-faq-tasks
+cd ~/projects/commerce-faq-tasks
 pnpm add gm
 pnpm add -D @types/gm
 git add -A && git commit -m "fix: add gm explicitly"

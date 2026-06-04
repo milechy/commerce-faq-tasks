@@ -5,6 +5,13 @@
 This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
 
 
+# 運用体制(2026-05-28〜)
+
+- **Claude Code CLI = 主担当**。調査/実装/Gate/PR/ログ/DB/VPS/grep/Playwright、実機作業すべて。Asanaタスクを自走で実装まで進める。
+- **Claude.ai = サブ**。実機に触れない判断のみ。止めるのは4点だけ: ①merge可否 ②Codex結果(実害セキュリティ) ③Phase/スコープ方針 ④不可逆操作。
+- **24hループ(Phase70)は2026-05-28に完全自走確定**（6罠攻略、PR #197/#217/#218/#219/#220/#221/#222）。Tier-S id=4 試運転中。
+- CLIは段取り/設定/接続/worktree/調査/テスト/機械チェックで止まらず自走、結果のみ報告。
+
 # RAJIUCE CLAUDE.md
 
 ## Core Principles
@@ -122,8 +129,9 @@ PR: `gh pr merge <PR番号> --auto --squash --delete-branch` 詳細: `docs/PR_ME
 以下の操作を **絶対に実施しない**。違反検知時は Slack #r2c に `HUMAN-REVIEW-REQUIRED`
 投稿して自身を停止すること。
 
-Out of scope 10項目: VPS 接続 / main merge / DB migration / .env 編集 / git force /
-avatar-agent 操作 / Cloudflare 設定変更 / 依存メジャー bump / 法務文書編集 / 本番テナント影響。
+Out of scope 11項目: VPS 接続 / main merge / DB migration / .env 編集 / git force /
+avatar-agent 操作 / Cloudflare 設定変更 / 依存メジャー bump / 法務文書編集 / 本番テナント影響 /
+**deploy_guard.py・24h-mode スクリプト自己編集禁止** (deploy_guard.py が検知・ブロック)。
 
 詳細・運用手順・トラブルシュートは **`docs/24H_AUTONOMOUS_PLAYBOOK.md`** を必ず読むこと。
 
@@ -144,6 +152,132 @@ ON/OFF 操作:
 資格喪失後の再開条件: ガード/監視の実装完了後。
 詳細: `docs/R2C_24H_STARTUP_CHECKLIST.md §5.3`
 
+## Claude.ai 振る舞いルール (UATa 16事例導出 2026-05-20)
+
+出典: `docs/UATA_R2C_DIFF_ANALYSIS.md` / UATa 24h 1日実体験生記録 v1.0
+
+### 1. Claude.ai 生成プロンプトの禁止事項
+- `docker compose ... build` 直接コマンドを含めない
+- VPS デプロイは `bash SCRIPTS/deploy-vps.sh` 等の wrapper script 経由のみ
+- UATa 事例 #8: PR #191 で `--env-file` 抜けて本番 wallet 死亡、4-5h 復旧
+
+### 2. Lane / CLI プロンプト発行前の実機照合必須
+- memory 記載のファイル名・endpoint・import path は古い可能性あり
+- 必ず CLI に「該当ファイル / grep / git log で実機照合」→ 結果貼り戻し後にプロンプト発行
+- UATa 事例 #9: 鉄則 8 違反 3 連続でセッション信頼失墜
+
+### 3. CLI 報告の「全停止」鵜呑み禁止
+- 「中止推奨」「全停止」「制約あり」レポートは 4 軸再確認必須
+- 4 軸: 観測 (curl/frontend/agent/backend) / 環境 (production/staging/dev) / 時間 (今日/既解消/未解消) / 影響 (当該 Lane/Phase 全体/全停止)
+- UATa 事例 #15: 鵜呑みで 4 Lane 全停止指示
+
+### 4. Opus 障害時の Sonnet 退避ルート
+
+Sonnet 4.6 で進められる作業:
+- read-only 調査
+- `.claude/agents/` + `.claude/skills/` + `docs/` 更新
+- pytest / E2E 追加のみの PR
+- Phase 1-2 (コード把握 + test 設計)
+- PR 作成 (Gate 4 一部保留可)
+
+Sonnet 4.6 不可、Opus 復旧待ち:
+- Tier S 直列
+- 大規模リファクタ
+- セキュリティ系本体修正
+- 安全装置配線変更
+- 本体最終実装
+
+UATa 事例 #14: Opus 障害で 3 Lane 全停止 → Sonnet 退避未確立で大幅遅延
+
+### 5. Phase 計画立案前の 5 軸事前確認
+- 凍結期限 / UAT 状況 / API 障害 / 期限タスク / 過去 postmortem P1 未済
+- UATa CLAUDE.md §4「Phase 計画立案 必須セクション」を R2C に移植検討
+
+## 24h ループ安定性ガード（点火前要件 — UATa 3日運用導出）
+
+UATa 3日自走（stop_hook 144件）で判明した停止原因への恒久対策。Lane / Team Lead 双方が遵守する。
+
+### 1. 並列上限（要件5a — result drop 回避）
+- **同時稼働 Lane は最大 3 本**（`r2c-dispatch.sh` の `MAX_SLOTS=3`）。
+- **1 セッション内の並列 tool call も 3 本未満**に保つ。
+- 根拠: 同時 3 本超で Claude Code の result drop / context 断絶が多発（公式 issue #39830、UATa 実測 154件）。
+- Team Lead が手動で Lane を起こす場合もこの上限を超えない。
+
+### 2. CI 待ちプロトコル（要件1 — 無限待ち禁止 / Lane 内 20分 timeout）
+- Lane は CI 完了を**最大 20 分**しか待たない。超えたら人間へ通知して次へ進む（ブロックしない）。
+- `gh run watch` には timeout フラグが無く、`timeout(1)` も非搭載環境があるため、**deadline ループ**で自己制御する:
+  ```bash
+  run_id=$(gh run list --branch "$BR" --limit 1 --json databaseId -q '.[0].databaseId')
+  deadline=$(( $(date +%s) + 1200 ))   # 20分
+  while :; do
+    st=$(gh run view "$run_id" --json status,conclusion -q '.status+":"+(.conclusion//"")')
+    case "$st" in
+      completed:success) echo "CI OK"; break ;;
+      completed:*)       echo "CI NG: $st"; break ;;
+    esac
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      bash SCRIPTS/notify-slack.sh "⚠️ CI 20分超過、人間確認へ: run $run_id" --color warning
+      break
+    fi
+    sleep 30
+  done
+  ```
+- supervisor は stuck Lane を **45分**で検出・retry する（`MAX_RUN_MINUTES=45`）。CI 待ちはそれより内側の 20分で必ず畳む。
+
+### 3. コンテキスト断絶の復元プロトコル（要件5b）
+- Lane が `previous_message_not_found` / context 断絶を検知したら、その場で粘らず:
+  1. 現在の作業状態（branch / 最後に通過した Gate / 次の手順）を auto-memory（`MEMORY.md`）に必ず書く。
+  2. Lane を一旦終了し、Team Lead が再 dispatch する（`r2c-dispatch.sh --task-id <id>`）。
+  3. 再起動後の Lane は `MEMORY.md` から前回状態を復元してから再開する。
+- 断絶したまま推測で続行しない（誤った差分の量産を防ぐ）。
+
+## auto-memory (MEMORY.md) 運用ルール（UATa 3日運用導出）
+
+UATa の24hループで「状態スナップショット/GID一覧/完了済み作業を memory に書いて3日で腐る」が
+最大のノイズ源と判明。R2C は今日点火。以下のフィルタを先回りで適用する。
+
+### 1. 書き込み前3問フィルタ（全Laneに適用）
+
+MEMORY.md に書く前に必ずこの3問を通過させること:
+
+- **Q1 コードを読めば分かるか?** → Yes なら書かない（コードが正典）
+- **Q2 2週間後も正しいか?** → No なら書かない（腐る情報は毒）
+- **Q3 次の自分が罠を踏まずに済むか?** → Yes なら書く（これだけが memory の存在理由）
+
+**書いてはいけないもの（腐る）**:
+- 状態スナップショット（「現在 Phase70-K が進行中」等）
+- Asana GID 一覧・PR番号・Issue番号
+- 完了済み作業の記録
+- 一時的な障害状況・API 障害メモ
+
+**書くべきもの（腐らない）**:
+- 罠の構造（「なぜこのパスが誤検知されるか」等）
+- 確認手順（実機で確認しないと分からない手順）
+- ユーザー修正から得た preference（「こうではなくこうやれ」）
+- 環境固有のデプロイ・接続の gotcha
+
+### 2. ルール変更は CLAUDE.md が先（memory は経緯のみ）
+
+ルール・禁止事項・ゲート条件を変更する場合:
+
+1. **CLAUDE.md を先に更新する**（全 Lane が読む正典）
+2. memory には「なぜ変えたか」の経緯のみ書く（差分の理由）
+3. memory にルールを先書きしない（CLAUDE.md と矛盾する二重状態を作らない）
+
+UATa 事故: memory にルール先書き → CLAUDE.md と矛盾 → Lane 間で異なる動作。
+
+### 3. 役割分担（CLAUDE.md vs MEMORY.md）
+
+| 内容 | 書く場所 |
+|------|---------|
+| 全 Lane 共通の禁止事項 | CLAUDE.md |
+| Tier 分類・ゲート条件 | CLAUDE.md |
+| 運用プロトコル・フロー | CLAUDE.md |
+| 罠の構造・誤検知パターン | MEMORY.md |
+| 実機確認しないと分からない手順 | MEMORY.md |
+| ユーザー preference（修正から得たもの） | MEMORY.md |
+| CLAUDE.md に書けない理由がある経緯 | MEMORY.md |
+
 ## 学習セクション (Auto-updated by Claude Code)
 
 <!-- このセクションは Claude Code の auto-memory 機能により管理される -->
@@ -154,3 +288,47 @@ ON/OFF 操作:
   - `.wolf/cerebrum.md` / `.wolf/memory.md` = Read-Only (24h自走中)
   - `MEMORY.md` (auto-memory) = 唯一の書き込み可能領域
 - **設定**: `.claude/settings.json` の `autoMemoryEnabled: true` で有効化済み
+
+## 24h ループ Lane spawn 経路の罠 6 層 (Phase 70 終結、2026-05-28)
+
+2026-05-26〜28 の OAuth daemon 凍結事故と e2e 検証で 24h ループ自走の障害を 6 層解明。
+PR #197/#217/#218/#219/#220/#221 で全カバー、e2e #6 (launchd 実起動 task 47 で 40 秒自走成功) で完全復活確定。
+
+### 最大教訓
+**launchd 実起動経由で検証しないと罠を見逃す**。interactive shell 成功 ≠ launchd 成功
+(PR #220 env -i がこれで裏切った)。修正 PR の前に **launchd cron 1分毎の自然拾い** で
+result file 生成を 120 秒以内に観測することを必須ゲートにすること。
+
+### 6 PR 対応表
+
+| 罠 | 内容 | 解消 PR | 修正概要 |
+|---|---|---|---|
+| 1 | OAuth daemon 凍結 | #197 | auth fail-fast 化 (`claude /login` 手動復旧、headless 不可) |
+| 2 | `--prompt-file` v2.1.152 廃止 | #218 | `cat prompt \| claude --bg ...` (stdin pipe) |
+| 3 | dispatch.sh `export PATH=` が stdin pipe を壊す | #219 | export PATH= 行削除 |
+| 4 | lane-*.log 0byte/223byte ≠ 即死 (解釈罠) | #217 (resolver 安全装置) | `(idle — send a prompt to start)` バナーで判別 |
+| 5 | cron-wrapper.sh の親 env 継承 | #220 | `env -i HOME PATH R2C_* CLAUDE_* bash ...` |
+| 6 | launchd session/process group attribute | #221 | `/usr/bin/python3 -c 'os.setsid(); execvp(...)'` で session 分離 |
+
+### OAuth 復旧手順 (罠1 発生時)
+
+```bash
+# 1. 状態確認
+cat ~/.claude/daemon-auth-status.json    # {"status":"auth_required",...} なら罠1
+# 2. hkobayashi 手動で /login (headless 不可)
+claude /login
+# 3. daemon が status.json を更新しない場合は強制再起動 (別ターミナルから)
+pkill -f "claude.exe daemon"
+pkill -f "claude.exe --bg-spare"
+# 4. ファイル消失で valid 状態のシグナル
+ls ~/.claude/daemon-auth-status.json   # No such file = OK
+```
+
+### 監視 (5 軸ヘルスチェック)
+- `SCRIPTS/monitor-claude-health.sh` で 5 分毎チェック (`com.r2c.monitor.plist`)
+- 軸A: OAuth fail / 軸B: claude --version 差分 / 軸C: lane-*.log 0byte 連続 / 軸D: dispatch idle / 軸E: session_id 未取得
+- Slack `#rajiuce-dev` (C0AG07HFJTB) 通知、6h throttle
+
+### ポストモーテム
+- `docs/postmortem/2026-05-28-oauth-fail/MEMORY_27.md` (罠 6 層 + 切り分け手順、144 行)
+- `docs/postmortem/2026-05-28-oauth-fail/MONITOR_TASK.md` (5 軸監視設計、81 行)
