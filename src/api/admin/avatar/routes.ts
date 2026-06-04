@@ -5,7 +5,6 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import multer from 'multer';
 import { logger } from '../../../lib/logger';

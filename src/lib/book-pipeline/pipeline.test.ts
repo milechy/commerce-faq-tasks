@@ -55,10 +55,6 @@ function makePages(text: string, pageNumber = 1): PageText[] {
   return [{ pageNumber, text }];
 }
 
-function makeLongText(chars: number): string {
-  return "あ".repeat(chars);
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeDb(overrides: { queryFn?: (sql: string, params?: any[]) => Promise<unknown> } = {}) {
   const rows: unknown[] = [];

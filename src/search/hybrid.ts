@@ -14,7 +14,6 @@ export interface Hit {
   metadata?: Record<string, unknown>;
 }
 type EsHit = { _id: string; _source?: { text?: string; [key: string]: unknown }; _score?: number };
-type EsSearchResult = { hits?: { hits?: EsHit[] } };
 const BUDGET = Number(process.env.HYBRID_TIMEOUT_MS || 600);
 const ALLOW_MOCK = process.env.HYBRID_MOCK_ON_FAILURE === "1";
 // Phase33 C: フィーチャーフラグ（LANG_SEARCH_ENABLED=1 で有効化）

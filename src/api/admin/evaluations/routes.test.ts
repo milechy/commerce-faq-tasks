@@ -22,9 +22,7 @@ jest.mock("./evaluationsRepository", () => ({
 import {
   listEvaluations,
   getDetailedStats,
-  getEvaluationsBySession,
   updateOutcome,
-  getKpiStats,
   approveTuningRule,
   rejectTuningRule,
 } from "./evaluationsRepository";
@@ -48,18 +46,6 @@ function makeApp(role: Role = "client_admin", tenantId = "tenant-a") {
     next();
   });
 
-  registerEvaluationRoutes(app);
-  return app;
-}
-
-function makeAppNoAuth() {
-  const app = express();
-  app.use(express.json());
-  // supabaseAuthMiddleware をモック → 401 を返す
-  jest.mock("../../../admin/http/supabaseAuthMiddleware", () => ({
-    supabaseAuthMiddleware: (_req: any, res: any) =>
-      res.status(401).json({ error: "Unauthorized" }),
-  }));
   registerEvaluationRoutes(app);
   return app;
 }

@@ -273,7 +273,6 @@ describe('feedback management routes — super_admin-only routes reject client_a
 describe('feedback management routes — stale JWT (user_metadata.role only) → 403', () => {
   MGMT_ALL_ROUTES.forEach(({ method, path }) => {
     it(`${method.toUpperCase()} ${path} — stale JWT → 403`, async () => {
-      const app = makeAppMgmt(null);
       // Inject full user object with user_metadata only (stale JWT)
       const staleApp = express();
       staleApp.use(express.json());

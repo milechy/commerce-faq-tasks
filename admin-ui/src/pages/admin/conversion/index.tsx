@@ -33,13 +33,6 @@ interface ABExperiment {
   created_at: string;
 }
 
-interface ABVariantResult {
-  total: number;
-  converted: number;
-  conversion_rate: number;
-  avg_judge_score: number | null;
-}
-
 // ------------------------------------------------------------------ //
 // Styles
 // ------------------------------------------------------------------ //
