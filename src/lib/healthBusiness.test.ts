@@ -1,14 +1,13 @@
 // src/lib/healthBusiness.test.ts
 
 import type { Request, Response } from "express";
-import { buildWarnings, businessHealthHandler } from "./healthBusiness";
+import { buildWarnings } from "./healthBusiness";
 
 // ---------------------------------------------------------------------------
 // buildWarnings — 各 warning 条件のユニットテスト
 // ---------------------------------------------------------------------------
 
 describe("buildWarnings", () => {
-  const now = new Date().toISOString();
   const recent = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30分前
   const old = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(); // 7時間前
 
