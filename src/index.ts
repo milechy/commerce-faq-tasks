@@ -15,6 +15,7 @@ import { INTERNAL_REQUEST_HEADER } from "./lib/metrics/kpiDefinitions";
 import { metricsRegistry } from "./lib/metrics/promExporter";
 import { createChatHandler } from "./api/chat/route";
 import { healthHandler } from "./lib/health";
+import { businessHealthHandler } from "./lib/healthBusiness";
 import { runDialogTurn } from "./agent/dialog/dialogAgent";
 import { initAuthMiddleware } from "./agent/http/authMiddleware";
 import { createAgentSearchHandler } from "./agent/http/agentSearchRoute";
@@ -173,6 +174,9 @@ app.get("/ce/status", (_req, res) => {
 
 // Health check — public, no sensitive data returned
 app.get("/health", healthHandler);
+
+// Business KPI health check — UATa 事例 #6: scheduler_healthy 誤判断回避
+app.get("/health/business", businessHealthHandler);
 
 // Prometheus metrics — 内部ネットワーク専用
 //   - internalNetworkOnly: socket peer が loopback でなければ 403（spoof不可）
