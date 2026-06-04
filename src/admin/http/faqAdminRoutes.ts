@@ -1,5 +1,5 @@
 // src/admin/http/faqAdminRoutes.ts
-import express, { type Express, type Request, type Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { pool } from "../../lib/db";
 import { supabaseAuthMiddleware } from "./supabaseAuthMiddleware";
@@ -28,20 +28,54 @@ function requireDb() {
   return pool;
 }
 
+type FaqSupabaseUser = {
+  app_metadata?: { role?: string; tenant_id?: string };
+};
+
 function resolveTenantId(req: Request): string | null {
   // CLAUDE.md: tenantId は body から取得禁止
-  const fromQuery = (req.query.tenantId || req.query.tenant_id) as
-    | string
-    | undefined;
-  const fromHeader =
-    (req.headers["x-tenant-id"] as string | undefined) ?? undefined;
-  // JWT の app_metadata.tenant_id をフォールバックとして使用
-  const supabaseUser = (req as any).supabaseUser as
-    | { app_metadata?: { tenant_id?: string } }
-    | undefined;
-  const fromJwt = supabaseUser?.app_metadata?.tenant_id ?? undefined;
+  // JWT 優先 (defense-in-depth):
+  //   super_admin: fromJwt = undefined → query/header の previewMode 経路が有効
+  //   client_admin: fromJwt = tenant_id → query/header 注入を無効化
+  const su = (req as any).supabaseUser as FaqSupabaseUser | undefined;
+  const fromJwt = su?.app_metadata?.tenant_id ?? undefined;
+  const fromQuery = (req.query.tenantId || req.query.tenant_id) as string | undefined;
+  const fromHeader = (req.headers["x-tenant-id"] as string | undefined) ?? undefined;
+  return fromJwt || fromQuery || fromHeader || null;
+}
 
-  return fromQuery || fromHeader || fromJwt || null;
+// super_admin / client_admin のみ通過。anonymous JWT は 403。
+function requireFaqRole(req: Request, res: Response, next: NextFunction): void {
+  const su = (req as any).supabaseUser as FaqSupabaseUser | undefined;
+  const role = su?.app_metadata?.role ?? "anonymous";
+  if (role !== "super_admin" && role !== "client_admin") {
+    res.status(403).json({ error: "forbidden", message: "この操作を実行する権限がありません" });
+    return;
+  }
+  next();
+}
+
+// super_admin: 全テナント通過（previewMode 経路）
+// client_admin: JWT tenantId と異なるテナント指定 → 403 / 未指定 → JWT で補完
+function requireFaqTenant(req: Request, res: Response, next: NextFunction): void {
+  const su = (req as any).supabaseUser as FaqSupabaseUser | undefined;
+  const role = su?.app_metadata?.role ?? "anonymous";
+  if (role === "super_admin") { next(); return; }
+
+  const requestedTenant =
+    (req.query.tenantId as string | undefined) ||
+    (req.query.tenant_id as string | undefined) ||
+    (req.headers["x-tenant-id"] as string | undefined);
+  const jwtTenantId = su?.app_metadata?.tenant_id;
+
+  if (requestedTenant && jwtTenantId && requestedTenant !== jwtTenantId) {
+    res.status(403).json({ error: "forbidden", message: "他のテナントのデータにはアクセスできません" });
+    return;
+  }
+  if (!requestedTenant && jwtTenantId) {
+    req.query.tenantId = jwtTenantId;
+  }
+  next();
 }
 
 async function updateEsFaqDocument(row: FaqRow) {
@@ -104,11 +138,8 @@ export function registerFaqAdminRoutes(app: Express) {
 
   const db = requireDb();
 
-  // 🔐 Supabase Auth ミドルウェアを /admin/faqs 配下に適用
-  app.use("/admin/faqs", supabaseAuthMiddleware);
-
-  // 🔐 将来的に Supabase Auth ミドルウェアをここに噛ませる想定
-  // 例: app.use("/admin/faqs", supabaseAuthMiddleware);
+  // 認証 + ロール + テナント分離の3層を /admin/faqs 全ルートに適用
+  app.use("/admin/faqs", supabaseAuthMiddleware, requireFaqRole, requireFaqTenant);
 
   /**
    * GET /admin/faqs
@@ -117,10 +148,8 @@ export function registerFaqAdminRoutes(app: Express) {
    */
   app.get("/admin/faqs", async (req: Request, res: Response) => {
     const tenantId = resolveTenantId(req);
-    const supabaseUser = (req as any).supabaseUser as
-      | { app_metadata?: { role?: string } }
-      | undefined;
-    const role = supabaseUser?.app_metadata?.role ?? "anonymous";
+    const su = (req as any).supabaseUser as FaqSupabaseUser | undefined;
+    const role = su?.app_metadata?.role ?? "anonymous";
 
     if (!tenantId && role !== "super_admin") {
       return res.status(400).json({ error: "tenantId is required" });
