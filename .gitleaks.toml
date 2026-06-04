@@ -1,0 +1,30 @@
+title = "RAJIUCE gitleaks configuration"
+# Allowlist policy and rationale: docs/GITLEAKS_ALLOWLIST_POLICY.md
+
+[allowlist]
+description = "Known false positives — see docs/GITLEAKS_ALLOWLIST_POLICY.md for each entry's rationale"
+regexTarget = "secret"
+
+paths = [
+  # Demo widget embed pages: the api-key in data-api-key attribute is intentional.
+  # This is the carnation demo tenant key embedded for live widget demo pages.
+  # The key grants access only to the sandboxed demo tenant — not a real credential leak.
+  '''public/carnation-demo/''',
+
+  # Test fixture files: strings are synthetic, clearly marked as test data.
+  # e.g. "my-secret-api-key-12345", "test-raw-api-key-abc123", "test-key-abc123"
+  # These do not correspond to any real credential in the system.
+  '''tests/phase48/apiKeyAuth\.test\.ts''',
+  '''tests/widget/trackConversion\.test\.ts''',
+]
+
+regexes = [
+  # Asana Project/Task GIDs — 16-digit sequential numeric identifiers.
+  # The built-in rule "asana-client-id" triggers on these because the pattern
+  # overlaps with Asana's OAuth client ID format, but in this codebase they are
+  # only used as public task/project references (not OAuth credentials).
+  # Seen in: docs/, PHASE_ROADMAP.md, .claude/skills/, SCRIPTS/r2c-asana-poll.sh,
+  #          SCRIPTS/r2c-morning-report.sh
+  # Entropy check: ~3.3 bits/char (numeric only) — below credential threshold.
+  '''^121[0-9]{13}$''',
+]

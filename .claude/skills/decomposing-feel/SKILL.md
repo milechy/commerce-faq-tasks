@@ -1,6 +1,7 @@
 ---
 name: decomposing-feel
 description: Convert vague "feel" feedback into specific actionable fixes via decomposition questions
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit, AskUserQuestion
 ---

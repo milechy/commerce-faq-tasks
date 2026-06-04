@@ -9,6 +9,7 @@ import type { Express, Request, Response } from 'express';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';
 import { pool } from '../../../lib/db';
 import { logger } from '../../../lib/logger';
+import { isAllowedAdminRole } from "../../middleware/roleAuth";
 
 // whitelist: SQL injection防止のため group_by は固定列名のみ許可
 const ALLOWED_GROUP_BY = new Set(['event_type', 'page_url', 'visitor_id']);
@@ -57,12 +58,6 @@ function formatEventAnalytics(
   }));
 }
 
-const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
-type AllowedAdminRole = typeof ALLOWED_ADMIN_ROLES[number];
-function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
-  return typeof role === "string" &&
-         (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role);
-}
 
 export function registerEventAnalyticsRoutes(app: Express): void {
   app.use('/v1/admin/analytics/events', supabaseAuthMiddleware);

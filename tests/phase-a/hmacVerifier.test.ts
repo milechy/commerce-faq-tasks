@@ -98,4 +98,21 @@ describe("internalHmacMiddleware", () => {
       .send({ task: "sync" });
     expect(res.status).toBe(401);
   });
+
+  it("fail-closed: secret 未設定でも dev 素通りしない (500)", async () => {
+    // 旧実装は NODE_ENV !== "production" なら secret なしで next() していた。
+    // 誤起動時の全開放を防ぐため、env に関わらず secret 未設定なら必ず 500。
+    delete process.env.INTERNAL_API_HMAC_SECRET;
+    const app = express();
+    app.use(express.json());
+    app.post("/internal/test", internalHmacMiddleware, (_req, res) => {
+      res.json({ ok: true });
+    });
+    const res = await request(app)
+      .post("/internal/test")
+      .set("x-internal-request", "1")
+      .send({ task: "sync" });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/secret/i);
+  });
 });

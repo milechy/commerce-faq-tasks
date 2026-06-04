@@ -1,6 +1,7 @@
 ---
 name: r2c-deploy-prompt
 description: R2C のデプロイフロー（bash SCRIPTS/deploy-vps.sh のみ使用）と、Claude.ai が Claude Code CLI に投入する 1-2行要件プロンプトのテンプレートを提供する。SSH直接コマンドは deploy_guard でブロックされるため絶対に CLI プロンプトに含めない。DBマイグレーションは「hkobayashiが手動実行」ステップとして明示する。CLIプロンプト冒頭には必ず推奨モデル（Opus 4.7 / Sonnet 4.6 / Plan Mode）を記載。Gate 1-3 はCLI自動、Gate 2.5 は人間手動の境界を明確化。トリガー: VPSデプロイ実行時 / CLIタスク要件生成時 / 新規Phase着手時 / Gate結果報告受領時 / DBマイグレーション必要な変更時。CLAUDE.md と R2C_DEVELOPMENT_PLAYBOOK.md のルールに厳格に準拠するため。
+version: 1.0.0
 ---
 
 # R2C デプロイ・CLIプロンプト規則

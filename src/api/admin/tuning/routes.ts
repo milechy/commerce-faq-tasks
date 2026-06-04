@@ -2,6 +2,7 @@
 
 // Phase38 Step4-BE: チューニングルール CRUD API
 
+import { GROQ_INSTANT_8B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { z } from "zod";
@@ -97,7 +98,7 @@ ${knowledgePart}${rulesPart}${crossTenantPart}${researchPart}
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL_8B ?? "llama-3.1-8b-instant",
+        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.4,
         max_tokens: 400,

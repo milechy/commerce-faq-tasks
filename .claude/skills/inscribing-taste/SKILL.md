@@ -1,6 +1,7 @@
 ---
 name: inscribing-taste
 description: Apply brand taste tokens to components from taste.md
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---

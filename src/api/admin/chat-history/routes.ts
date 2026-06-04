@@ -9,6 +9,7 @@ import { getSessions, getMessages } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
 import { createNotification } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
+import { isAllowedAdminRole } from "../../middleware/roleAuth";
 
 /**
  * テナントIDをリクエストから解決する。
@@ -27,12 +28,6 @@ function resolveTenantFilter(
   return jwtTenantId; // client_admin は自テナント強制
 }
 
-const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
-type AllowedAdminRole = typeof ALLOWED_ADMIN_ROLES[number];
-function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
-  return typeof role === "string" &&
-         (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role);
-}
 
 export function registerChatHistoryRoutes(app: Express): void {
   // 認証ミドルウェアを適用

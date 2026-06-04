@@ -1,6 +1,7 @@
 ---
 name: styling-material
 description: UI polish patterns for typography, visual design, layout, and dark mode
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---
