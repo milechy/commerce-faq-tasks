@@ -41,12 +41,14 @@
 ### Embedding / LLM レイヤー
 
 - Embedding:
-  - 現状: Groq API（`groq/compound-mini` など）を利用し、1536 次元のベクトルを生成
+  - 現状: Groq API（`GROQ_COMPOUND_MINI` = `groq/compound-mini`）を利用し、1536 次元のベクトルを生成
   - `faq_embeddings.embedding` (vector(1536)) に保存
   - `metadata` に `source`, `faq_id` などを保存
 - LLM 応答生成:
   - ハイブリッド検索で取得した候補 FAQ から要約・回答文を生成
-  - どの LLM を使うかは環境変数で差し替え可能な想定（OpenAI / Groq など）
+  - モデル ID は `src/config/groqModels.ts` に集約（単一の真実）。呼び出し元は定数 import 経由
+  - デフォルト: `GROQ_VERSATILE_70B` / 複雑クエリ・safety: `GPT_OSS_120B`（比率 ≤10%）
+  - 保守手順・EOL 検知層の詳細: `docs/GROQ_MODELS.md`
 
 ### 管理 UI（admin-ui, React + Vite）
 
