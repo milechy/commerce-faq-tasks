@@ -50,18 +50,6 @@ function makeApp(role: Role = "client_admin", tenantId = "tenant-a") {
   return app;
 }
 
-function makeAppNoAuth() {
-  const app = express();
-  app.use(express.json());
-  // supabaseAuthMiddleware をモック → 401 を返す
-  jest.mock("../../../admin/http/supabaseAuthMiddleware", () => ({
-    supabaseAuthMiddleware: (_req: any, res: any) =>
-      res.status(401).json({ error: "Unauthorized" }),
-  }));
-  registerEvaluationRoutes(app);
-  return app;
-}
-
 const NOW = new Date().toISOString();
 
 const EVAL_ROW = {

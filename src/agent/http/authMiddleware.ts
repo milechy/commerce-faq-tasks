@@ -29,9 +29,6 @@ function timingSafeCompare(a: string, b: string): boolean {
   return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-type TenantConfigResolver = (
-  tenantId: string
-) => TenantConfig | undefined;
 export type ApiKeyTenantResolver = (
   apiKeyHash: string
 ) => TenantConfig | undefined;

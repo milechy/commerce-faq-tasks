@@ -2,8 +2,6 @@
 
 import type { FlowState } from "../dialog/flowContextStore";
 
-type LoopType = "state_pattern" | "clarify_signature";
-
 export function detectStatePatternLoop(
   recentStates: FlowState[],
   windowTurns: number
