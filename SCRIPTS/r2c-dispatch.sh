@@ -135,15 +135,11 @@ dispatch_one() {
     local branch_name="auto/${tier,,}-${task_id}-${slug}"
     local log_file="${LOG_DIR}/lane-${task_id}.log"
     local lane_name="auto-${tier,,}-${task_id}"
-    # Tier B は夜間自律実行のため bypassPermissions（acceptEdits だと Bash で
-    # permission prompt が固着し停止する）。.claude/settings.json の deny 層が
-    # force/main push・scp・rm -rf /opt・.env/opt 書込みを最終防衛する前提。
-    # Tier A/S は朝承認・人間判断のため plan のまま。
+    # 全 Tier bypassPermissions で実装まで自走。merge の可否は ci-auto-merge.sh の
+    # ブランチ名判定(auto/s-* は merge skip、auto/a-* と auto/b-* は auto-merge)で制御する。
+    # acceptEdits だと Bash で permission prompt が固着し停止するため bypassPermissions を使う。
+    # .claude/settings.json の deny 層が force/main push・scp・rm -rf /opt・.env 書込みを防衛。
     local perm_mode="bypassPermissions"
-    case "$tier" in
-        A) perm_mode="plan" ;;
-        S) perm_mode="plan" ;;
-    esac
     local resolved_model="${model:-claude-sonnet-4-6}"
 
     if [ "$DRY_RUN" -eq 1 ]; then
