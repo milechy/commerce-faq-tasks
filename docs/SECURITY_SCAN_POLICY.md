@@ -10,6 +10,7 @@ RAJIUCE プロジェクトのセキュリティ品質を継続的に維持する
 - TypeScript 型安全性（strict check）
 - シークレット・認証情報の漏洩（grep ベース静的解析 + gitleaks）
 - SQL インジェクションパターン（文字列補間検出）
+- Groq モデル EOL 検知（decommission 済みモデル ID の src/ 混入を検出）
 
 ---
 
@@ -98,6 +99,9 @@ bash SCRIPTS/security-scan.sh
 ## 関連ファイル
 
 - スキャンスクリプト: `SCRIPTS/security-scan.sh`
+- Groq EOL 検知スクリプト: `SCRIPTS/check-groq-models.sh`（[7] として security-scan.sh に統合済み）
+- Groq モデルカタログ: `src/config/groqModels.ts`（EOL リストの単一の真実）
+- Groq 保守ガイド: `docs/GROQ_MODELS.md`
 - gitleaks 設定 + allowlist: `.gitleaks.toml`（詳細: `docs/GITLEAKS_ALLOWLIST_POLICY.md`）
 - CI ワークフロー: `.github/workflows/security-scan.yml`
 - デプロイチェックリスト: `docs/DEPLOY_CHECKLIST.md`

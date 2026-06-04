@@ -152,7 +152,10 @@ MEDIUM_PATTERNS=(
     "ecosystem\.config"
 )
 
-# ── low リスクパターン(全ファイルがこれだけなら low) ──────────────────────
+# ── low リスクパターン (= Tier B / auto_merge_eligible。全ファイルがこれだけなら low) ──
+# .mergify.yml の Tier B 定義と境界を一致させること。
+# SCRIPTS/ と .claude/agents|skills/ は HIGH (deploy/24h-mode/security-scan/hooks) を
+# 先に弾いた上で low 扱いになる (classify_file の評価順に依存)。
 LOW_PATTERNS=(
     "^docs/"
     "\.md$"
@@ -160,6 +163,9 @@ LOW_PATTERNS=(
     "\.test\.(ts|tsx|js)$"
     "^\.wolf/"
     "^DAILY_REPORT"
+    "^SCRIPTS/"
+    "^\.claude/agents/"
+    "^\.claude/skills/"
 )
 
 classify_file() {
@@ -171,8 +177,11 @@ classify_file() {
             return
         fi
     done
-    # .claude/(hooks 以外)は設定ファイルのため medium(.md でも上書き)
-    if echo "$f" | grep -qE "^\.claude/" && ! echo "$f" | grep -qE "^\.claude/hooks/"; then
+    # .claude/ は設定ファイルのため medium(.md でも上書き)。
+    # ただし agents/ と skills/ は Tier B (auto-merge 対象) なので除外し、後段の low へ流す。
+    # hooks/ は HIGH_PATTERNS で既に弾かれている。
+    if echo "$f" | grep -qE "^\.claude/" \
+        && ! echo "$f" | grep -qE "^\.claude/(hooks|agents|skills)/"; then
         echo "medium"
         return
     fi
@@ -241,7 +250,7 @@ else
     # low のみ
     RISK="low"
     AUTO_MERGE=true
-    RISK_REASONS+=("docs/tests/md only")
+    RISK_REASONS+=("Tier B only (docs/tests/md/SCRIPTS/.claude agents+skills)")
 fi
 
 # low でも diff が極端に大きければ medium に昇格
