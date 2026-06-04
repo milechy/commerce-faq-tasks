@@ -143,6 +143,27 @@ _get_lane_failures_24h() {
         ORDER BY updated_at DESC LIMIT 10;"
 }
 
+# ─── テスト自動化統計 (test-seeder 由来タスク) ───
+_get_test_seeder_stats() {
+    local queued_24h done_24h pending total_seeded
+    queued_24h="$(sq "SELECT COUNT(*) FROM tasks \
+        WHERE task_type = 'test' \
+          AND created_at > datetime('now','-1 day');")"
+    done_24h="$(sq "SELECT COUNT(*) FROM tasks \
+        WHERE task_type = 'test' \
+          AND state IN ('merged','done','deployed') \
+          AND updated_at > datetime('now','-1 day');")"
+    pending="$(sq "SELECT COUNT(*) FROM tasks \
+        WHERE task_type = 'test' \
+          AND state IN ('pending','prompt_generated','running','pr_created','verify_passed','ready_to_merge');")"
+    total_seeded="$(sq "SELECT COUNT(*) FROM tasks WHERE task_type = 'test';")"
+    queued_24h="${queued_24h:-0}"
+    done_24h="${done_24h:-0}"
+    pending="${pending:-0}"
+    total_seeded="${total_seeded:-0}"
+    printf '%s|%s|%s|%s' "$queued_24h" "$done_24h" "$pending" "$total_seeded"
+}
+
 # ─── Render Tier list as bullet lines for Slack mrkdwn ───
 _render_tier_lines() {
     local rows="$1" label="$2"
@@ -206,6 +227,15 @@ FAIL_COUNT="${FAIL_RENDER%%|*}"
 FAIL_LINES="${FAIL_RENDER#*|}"
 [[ -z "$FAIL_LINES" || "$FAIL_LINES" == "$FAIL_RENDER" ]] && FAIL_LINES="(なし)"
 
+TEST_STATS_RAW="$(_get_test_seeder_stats)"
+TEST_QUEUED_24H="${TEST_STATS_RAW%%|*}"
+_rest="${TEST_STATS_RAW#*|}"
+TEST_DONE_24H="${_rest%%|*}"
+_rest="${_rest#*|}"
+TEST_PENDING="${_rest%%|*}"
+TEST_TOTAL="${_rest#*|}"
+TEST_SUMMARY="追加 ${TEST_QUEUED_24H} 件 / 完了 ${TEST_DONE_24H} 件 / 未着手 ${TEST_PENDING} 件 (累計 ${TEST_TOTAL} 件)"
+
 # ─── Codex aggregator (Block Kit 部分 JSON) ───
 CODEX_BLOCKS="[]"
 if [[ -x "$CODEX_AGG_BIN" ]]; then
@@ -236,6 +266,7 @@ build_blocks() {
         --arg tier_s "$TIER_S_FIELD" \
         --arg tier_a "$TIER_A_FIELD" \
         --arg fail_lines "$FAIL_LINES" \
+        --arg test_summary "$TEST_SUMMARY" \
         --arg now "$NOW_JST" --arg next "$NEXT_JST" \
         --argjson include_approval "$include_approval" \
         --argjson include_failures "$include_failures" \
@@ -275,7 +306,11 @@ build_blocks() {
             +
             $codex_blocks
             +
-            [ { type: "divider" } ]
+            [ { type: "divider" },
+              { type: "section",
+                text: { type: "mrkdwn",
+                        text: ("*🧪 テスト自動化 (24h)*: " + $test_summary) } },
+              { type: "divider" } ]
             +
             ( if $include_failures == 1 then
                 [ { type: "section",
