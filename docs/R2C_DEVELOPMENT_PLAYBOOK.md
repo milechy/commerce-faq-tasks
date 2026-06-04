@@ -178,6 +178,45 @@ CLIの実装完了報告を受けたとき、以下を**全て確認してから
 
 **CLIが報告を省略した場合、Claude.aiが能動的に確認を求めること。**
 
+### 4-G'. Codex Review プラクティス（2026-05-15 追加）
+
+#### Codex 起動コマンドの正しい形
+
+| 用途 | コマンド |
+|---|---|
+| 通常レビュー | `/codex:review --base main --background` |
+| 敵対的レビュー（security 変更） | `/codex:adversarial-review --base main --background` |
+| 事後レビュー（merge 済） | `/codex:review --base <pre-merge SHA> --background` |
+
+**★ `--base main` 省略は禁止。**
+省略すると Codex は working-tree（staged + unstaged）のみをレビュー対象とし、cherry-pick 済みのコミット diff は無視される。
+結果として「No diff = No findings」と誤判定され、実質未レビューのまま push に進む危険がある。
+（Phase69-2-A Round 1 で実際に発生した事例）
+
+#### Codex Round 深化パターン
+
+Codex は Round を重ねるごとに「より深い層」を指摘するパターンが観察されている。
+
+| Round | 典型的指摘層 |
+|---|---|
+| Round 1 | 機械的置換、明確な実装漏れ |
+| Round 2 | fail-closed gap、認可ロジック不足 |
+| Round 3 | observability gap（logger.warn + errorCode） |
+| Round 4 | allow-path テスト不足（正常系の網羅） |
+| Round 5+ | 既存コード/設計の深層問題 |
+
+#### 先回り戦略（Round 1 で Ship-ready 取得）
+
+新しい PR の Round 1 実装時に、以下を「最初から」含める:
+
+- **fail-closed**: 想定外パターンの安全側挙動（ALLOWED_ROLES whitelist、tenant_id guard）
+- **observability**: `logger.warn` + 構造化 `errorCode`
+- **allow-path テスト**: 正常系の網羅（super_admin + client_admin）
+- **トランザクション境界**: 複数 UPDATE は BEGIN/COMMIT/ROLLBACK + lock_timeout + rowCount assertion
+- **identity-based 分岐**: 文字列リテラル依存ではなく構造的判定
+
+Phase69-1.5 PR-C2 と Phase69-2-A は共に Round 5 まで要したが、これらを先回りすれば Round 1 で Ship-ready 取得可能だった。
+
 ---
 
 ## 5. Git/ブランチ規約
@@ -237,6 +276,53 @@ Gate 2.5なしでmergeされた場合:
 以下の表現がCLI報告に含まれたら、即座にスコープ再評価を要求:
 - 「変更しました」「に修正」「ファイル削除不可」「no diff」「リスク最小」
 
+### 6-D. 既存バグ vs Phase 起因の切り分け（2026-05-15 追加）
+
+Codex の深い Round で既存コードの問題を指摘された場合、スコープ判定で時間を浪費しないため以下のフローで判断する。
+
+#### 判定手順（1-2 分で完了）
+
+```bash
+# 該当ファイルの commit 履歴
+git log --all --oneline -- src/path/to/file.ts | head -30
+
+# 該当ロジック行の最終変更 commit
+git blame src/path/to/file.ts | grep <該当行>
+
+# commit 日付確認
+git show --format='%ad' --date=short <commit SHA>
+```
+
+判定結果:
+
+- **commit 日付 < 現 Phase 着手日** → 既存バグ確定 → 独立 Asana タスク化（scope 外）
+- **commit 日付 >= 現 Phase 着手日** → Phase 起因 → 現 PR 内で修正
+
+#### scope 外判定時の対応
+
+1. 別 Asana タスク化（Phase 系の独立サブタスクとして起票）
+2. PR 本文に明記:
+
+```
+## Codex Round X Finding 評価
+
+[HIGH] <Finding 内容>:
+- <PhaseY>-c (YYYY-MM-DD, commit XXXXXXX) からの既存バグ
+- 本 Phase の責任範囲外（既存パターン踏襲）
+- Phase69-X-Y (Asana GID: XXXXXX, due YYYY-MM-DD) で独立修正
+- 多層防御: <代替の安全網があれば明記>
+- acknowledged & out-of-scope として進行
+```
+
+3. 続く Round で同じ指摘が再発しても「acknowledged」として進行可能
+
+#### 事例
+
+- Phase69-2-A Round 4 で発覚した ES index naming mismatch
+  → Phase33-c（2026-03-12, commit 97a764c）起因確定
+  → Phase69-2-E（GID: 1214821660260379）に切り出し
+  → Phase69-2-A は acknowledged & out-of-scope で merge 進行
+
 ---
 
 ## 7. アーキテクチャ判断メモ（CLIが知るべき制約）
@@ -252,6 +338,54 @@ Gate 2.5なしでmergeされた場合:
 | DB migration | 自動実行しない。VPSで人間が手動SQL。`docs/VPS_OPS_GUIDE.md` に一覧管理 |
 | Groq API Key | Organization-levelが必須（project-scopedはInvalid API Key返す） |
 | PM2 env更新 | `--update-env` フラグ必須 |
+
+### 7'. データ依存設計のチェックリスト（2026-05-15 追加）
+
+SQL WHERE 句や条件分岐ロジックを実装する際、データ値に依存する設計は要注意。
+
+#### 設計時の必須確認 3 ステップ
+
+##### Step 1: VPS 本番 DB の実データ値の網羅性確認
+
+```sql
+-- 例: source 列の値分布
+SELECT COALESCE(metadata->>'source', 'NULL') AS source, COUNT(*)
+FROM faq_embeddings
+GROUP BY metadata->>'source'
+ORDER BY count DESC;
+```
+
+##### Step 2: 書き込みコードの全箇所 grep
+
+```bash
+# 過去データだけでなく、将来書き込まれる値も把握
+grep -rn "source:" src/ | grep -v test
+grep -rn "metadata.*source" src/api/
+```
+
+##### Step 3: 構造的 identity 判定への切替
+
+| ❌ 文字列リテラル分岐 | ✅ 構造的 identity 判定 |
+|---|---|
+| `source IN ('faq', 'faq_crud', 'scrape')` | `faq_id IS NOT NULL AND faq_docs JOIN 成功` |
+| 将来 source 値追加で取りこぼし | 構造的に安全、新規 source も自動対応 |
+
+#### NG パターン
+
+- 過去データの集計だけで分岐ルールを設計する
+- `source` 列の値を IN/NOT IN で列挙する
+- 「ほとんどの場合これで動く」前提の実装
+
+#### OK パターン
+
+- データ依存分岐の前に、書き込みコードも全箇所確認
+- 値リテラルではなく構造的属性（NOT NULL、JOIN 成功、数値性）で判定
+- VPS DB 集計を「設計判断の前提」として CLI に明示指示
+
+#### 事例
+
+- Phase69-2-A Round 3 で `source IN ('scrape', 'text', 'faq')` 設計 → CRUD で書き込まれる `'faq_crud'` を見落とし
+- Round 4 で `faq_id` + `faq_docs JOIN 成功` の identity-based 判定に切替 → 構造的解決
 
 ---
 
@@ -280,20 +414,61 @@ Gate 2.5なしでmergeされた場合:
 - `create_task_preview` は人間クリックで確定
 - 一括完了: `update_tasks` + `[{task: GID, completed: true}]`
 
+### タスク記述規約（Phase70-J 策定）
+
+タスクのタイトル形式・description 構造・Tier 定義・24h-eligible タグ運用の詳細は以下を参照:
+
+**[docs/ASANA_TASK_TEMPLATE.md](./ASANA_TASK_TEMPLATE.md)**
+
+概要:
+- タイトル接頭辞: `feat:` / `docs:` / `fix:` / `schema:` / `chore:` / `refactor:`
+- タイトル先頭禁止文字: `[` `~` `.`（Asana MCP 作成失敗の原因）
+- Tier: S（本番・VPS）/ A（機能追加）/ B（docs・設定のみ）
+- 24h-eligible タグ GID: `1214922984195645`（Tier A を自走対象にするとき hkobayashi が手動付与）
+
 ---
 
 ## 9. 並列開発パターン
 
-### Agent Teams（tmux並列）
+> **重要 (2026-05-20 追加):** Claude Code の並列実行には 2 系統あり、混同禁止。
 
-3つ以上の独立ストリームを持つ新フェーズで使用。
+### 9-A. Agent View（独立 Lane — R2C の基本方針）
+
+`claude agents` で起動（または既存セッションで左矢印キー → [New]）。
+
+**特徴:**
+- UI dashboard でタスク一覧管理
+- バックグラウンド session は書き込み前に `.claude/worktrees/<id>/` に自動分離（手動 `git worktree add` 不要）
+- supervisor process が管理 → 端末を閉じても継続
+- 全プラン利用可（Opus / Sonnet / Haiku）
+- `dispatch --model sonnet` は疑似コマンド。UI 経由で session 起動するのが正しい操作
+
+**R2C 用途:** Phase70 の独立 Lane (K/E/C/H 等) — 互いに依存しないタスクを並列実行
 
 **前提:**
-- 全ペインの共有インターフェース（DB schema, API spec, TypeScript types）を事前設計
-- 各ペインのプロンプトにインターフェースを直接埋め込む
-- ペイン間の通信依存を排除
+- 全 Lane の共有インターフェース（DB schema, API spec, TypeScript types）を事前設計
+- 各 Lane のプロンプトにインターフェースを直接埋め込む
+- Lane 間の通信依存を排除
 
-**使わない場面:**
+### 9-B. Agent Teams（cross-domain 連携 — experimental）
+
+環境変数 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` が必須。Claude Code v2.1.32+。
+
+**特徴:**
+- 自然言語「create an agent team」で lead + teammate 自動生成
+- inter-agent messaging + shared task list
+- Opus 4.6+ 強制（全 agent が同モデル）
+- **3-4 倍トークン消費** → コスト注意
+- 実験的機能のため仕様変更リスクあり
+
+**R2C 方針:** cross-domain 連携が必要な場合のみ使用。独立タスクは Agent View を優先。
+
+### 9-C. Mac での起動メモ
+
+- `ulimit -n 2147483646 + launchctl 設定`は実体験ベース、公式 doc には明記なし
+- Mac ターミナル直起動でも動作実績あり（VSCode 経由でなくても可）
+
+**使わない場面（共通）:**
 - ファイル依存がある順次タスク
 - 2タスク以下
 - バグ修正
@@ -310,28 +485,30 @@ Gate 2.5なしでmergeされた場合:
 
 ---
 
-## 11. 現在の未完了タスク（2026-04-24時点）
+## 11. 現在の未完了タスク（Asana 参照）
 
-1. PR#134 follow-up P2 E2E CHAT_TEST_URL（due 5/2）
-2. PR#134 follow-up P3 非アバターE2E（due 5/9）
-3. Phase65-Attribution GA4+PostHog+成果報酬MVP親タスク（due 5/15）
-4. TEST_DEPLOY_GATE.md Playwright整合（due 5/16）
-5. ts-jest30アップグレード（due 5/31）
+> ⚠️ 静的リストは陳腐化するため廃止。常に Asana を正とする。
 
-**完了済み:** Phase68（PR#136 Knowledge Attribution + PR#138 ORDER BY CTE alias修正）
+**確認手順:** Claude.ai セッション開始時の §2 プロトコル（Step 1-4）を実行すること。
+または Asana `RAJIUCE Development` (GID: 1213607637045514) を直接確認。
+
+**現在の主要 Phase（2026-05-20 時点）:**
+- Phase70: 24h 自走基盤整備（複数サブタスク進行中 — Asana 参照）
+- Phase69-2: 残件 B/D/E（Asana 参照）
 
 ---
 
-## 12. 今後の開発ロードマップ
+## 12. 今後の開発ロードマップ（Asana 参照）
 
-| タスク | due | 備考 |
+> ⚠️ 中長期計画は Asana タスクを正とする。以下は参考記録（2026-04-24 時点）。
+
+| タスク | 状況 | 備考 |
 |---|---|---|
-| GA4 MCP統合 | 6/30 | Asana未起票 |
-| LemonSlice Video Generation API（idle hover animation） | 5/30 | Asana未起票 |
-| Phase67候補: 自動パートナー通知（CV alert, KPI anomaly, Cloudflare Email） | 未定 | |
-| R2C仮想テナント: テストチャットセレクタに「R2C（デフォルト）」追加 | 未定 | |
-| 書籍管理→ナレッジ管理ページ統合 | 未定 | |
-| パートナー獲得: 初の実テナントオンボーディング（PARTNER_ROLLOUT_PLAYBOOK.md） | 未定 | |
+| Phase70: 24h 自走基盤 | **進行中** | Phase70-A〜L 複数サブタスク |
+| GA4 MCP統合 | 未起票 | Asana 参照 |
+| LemonSlice Video Generation API | 未起票 | Asana 参照 |
+| R2C仮想テナント | 未起票 | Asana 参照 |
+| パートナー獲得: 実テナントオンボーディング | 未定 | PARTNER_ROLLOUT_PLAYBOOK.md |
 
 ---
 
@@ -441,3 +618,134 @@ CLIプロンプトにSSHコマンドを含めない。代わりに:
 CLIはマイグレーション完了後の確認クエリのみ実行:
   SELECT column_name FROM information_schema.columns WHERE table_name = 'xxx';
 ```
+
+---
+
+## 15. アカウント分離手順（Claude Code config-dir 分離）
+
+### 概要
+
+24h ループで起動する Lane (claude agents) が他プロジェクト（DIA1000 等）の設定と混線しないよう、
+R2C 専用の `~/.claude-r2c-config/` を使用する。
+
+- **確定仕様**: `docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md` §15
+- **移行評価**: `docs/24H_AUTOMATION_R2C_GAP_ANALYSIS.md` §8
+- **手順書**: `docs/PHASE1_ACCOUNT_MIGRATION_RUNBOOK.md`（2026-05-19 06:05 実施済）
+- **検証スクリプト**: `scripts/verify-account-isolation.sh`
+- **シークレット配備手順**: `docs/24H_LOOP_SECRETS_TEMPLATE.md`（Tier S 完了後に hkobayashi 手動実施）
+- **Pushover セットアップ**: `docs/PUSHOVER_SETUP_GUIDE.md`（iOS アプリ + App Token 取得）
+
+### 日常運用
+
+```bash
+# R2C 作業
+claude-r2c  # alias: CLAUDE_CONFIG_DIR=~/.claude-r2c-config claude
+
+# その他プロジェクト（DIA 等）
+claude      # default ~/.claude/ を使う
+```
+
+### 独立性確認
+
+```bash
+bash scripts/verify-account-isolation.sh
+```
+```
+
+---
+
+## 16. Lane retry / Pushover 通知仕様
+
+24h ループの Lane 失敗時 retry 戦略と Pushover priority マッピングの詳細は以下を参照:
+
+- **仕様書**: `docs/24H_LOOP_RETRY_AND_NOTIFICATION_SPEC.md`
+  - Section 1: Lane 失敗 retry 戦略（1 回目=5 分後 / 2 回目=30 分後 priority 0 / 3 回目=停止 priority 1）
+  - Section 2: Pushover priority 完全列挙（2 Critical / 1 High / 0 Normal / -1 Low / -2 Lowest）
+  - Section 3: 構造化 JSON 通知本文ルール
+  - Section 4: morning-report Slack Block Kit JSON schema
+- **正本**: `docs/R2C_CLAUDE_AI_INSTRUCTIONS_V1.md` §16
+
+---
+
+## 使わないツール・禁止ライブラリ
+
+> 追加: 2026-05-18（Phase1 Step-F — セキュリティポリシー強化）
+
+### OpenClaw 系統（全面禁止）
+
+- **OpenClaw** — CVE-2026-25253 (CVSS 8.8): WebSocket トークン漏洩
+- **ClawHub** — ClawHavoc Attack: 341 悪意 skill がデフォルト有効
+- **OpenClaw Plugins** — 上記リスクを継承する全プラグイン
+
+詳細は `docs/SECURITY_SCAN_ALLOWLIST.md §使用禁止ツール` を参照。
+
+インストール試みを検出した場合:
+1. 即時 `npm uninstall / pip uninstall`
+2. `git diff` で意図しない依存追加がないか確認
+3. Asana に "セキュリティインシデント" タスク起票
+
+---
+
+## 17. 24h ループ Lane spawn 経路の罠 6 層 (Phase 70 終結、2026-05-28)
+
+### 概要
+2026-05-26 OAuth daemon 凍結事故と 5/28 の e2e 検証で 24h ループ自走経路に 6 層の罠を発見、
+6 PR で全カバー、e2e #6 (launchd 実起動 task 47 で 40 秒自走成功) で完全復活確定。
+
+### 最大教訓: **launchd 実起動経由で検証必須**
+- interactive shell から呼んで動く ≠ launchd 経由で動く (PR #220 env -i がこれで裏切った)
+- 修正 PR の前ゲートとして **launchd cron 1分毎の自然拾い** で result file 生成を 120 秒以内に観測する
+- 「手動 dispatch で動いた」だけで PR を merge せず、必ず launchd 実起動経由で確認すること
+
+### 検証手順テンプレ (新規 PR で claude --bg / dispatch / cron-wrapper 関連を触る時)
+
+```bash
+# 1. 修正を一時適用 (sed/heredoc で書換、commit せず)
+sed -i.bak '...' SCRIPTS/r2c-cron-wrapper.sh
+
+# 2. test task 投入 (safe Tier-B、repo modification 禁止 prompt)
+cat > /tmp/r2c-verify.md <<'P'
+Write /tmp/r2c-verify-result.md with "VERIFY_OK" and exit.
+P
+sqlite3 .claude/queue/r2c-queue.db "INSERT INTO tasks (...) VALUES (..., 'prompt_generated', '/tmp/r2c-verify.md', ...);"
+
+# 3. 手動 dispatch 厳禁、launchd 自然拾い最大 120 秒待機
+sleep 120
+
+# 4. 全項目 ✅ なら本適用 → PR
+sqlite3 .claude/queue/r2c-queue.db "SELECT id, state, session_id FROM tasks WHERE asana_gid='verify-...';"
+cat /tmp/r2c-verify-result.md
+ls -la ~/.claude-r2c-config/logs/lane-*.log.sid | tail -1
+
+# 5. 一時パッチを git checkout で revert、worktree で正式適用
+git checkout SCRIPTS/r2c-cron-wrapper.sh
+```
+
+### 6 PR 対応表 (Phase 70 終結 commit log)
+
+| PR | 罠 | 内容 |
+|---|---|---|
+| #197 ✅ | 1: OAuth fail | auth fail-fast 化、stderr 出力で警告経路確保 |
+| #217 ✅ | 4 安全装置 | `SCRIPTS/r2c-lane-session-resolver.sh` で session_id 自動発見 |
+| #218 ✅ | 2 | `--prompt-file` 廃止対応 → stdin pipe (`cat prompt \| claude --bg ...`) |
+| #219 ✅ | 3 | `SCRIPTS/r2c-dispatch.sh:185` の `export PATH=` 撤廃 |
+| #220 ✅ | 5 | `SCRIPTS/r2c-cron-wrapper.sh` を `env -i HOME PATH R2C_* CLAUDE_*` で env isolation |
+| #221 ✅ | 6 | `SCRIPTS/r2c-cron-wrapper.sh` を `/usr/bin/python3 -c 'os.setsid(); execvp(...)'` で launchd session 分離 |
+
+### 5 軸ヘルスチェック監視 (PR #222 / 本ファイル更新と同時)
+
+`SCRIPTS/monitor-claude-health.sh` (launchd `com.r2c.monitor.plist`、5分毎):
+
+- 軸A: OAuth fail (`~/.claude/daemon-auth-status.json` 存在 + `auth_required`) → critical
+- 軸B: `claude --version` 差分 (前回値を `~/.claude-r2c-config/state/last-claude-version.txt` 保存) → warning
+- 軸C: lane-*.log 0byte 連続 (過去 1h で 2 件以上=warning / 5 件以上=critical)
+- 軸D: dispatch idle (`agents --json` 空 + `prompt_generated` > 0) → critical
+- 軸E: session_id 未取得 (`state=running` で 60s 以上 `session_id=NULL`、1 件=warning / 3 件=critical)
+
+Slack `#rajiuce-dev` (`C0AG07HFJTB`) 通知、6h throttle、復旧通知は throttle 対象外。
+
+### 関連ファイル
+- `docs/postmortem/2026-05-28-oauth-fail/MEMORY_27.md` (罠 6 層 + 切り分け手順、144 行)
+- `docs/postmortem/2026-05-28-oauth-fail/MONITOR_TASK.md` (5 軸監視設計、81 行)
+- `SCRIPTS/monitor-claude-health.sh` (5 軸ヘルスチェック実装)
+- `SCRIPTS/launchd/com.r2c.monitor.plist` (launchd plist)

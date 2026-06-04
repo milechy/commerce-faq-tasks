@@ -262,7 +262,7 @@ describe("Flow 2: searchTool wires to hybridSearch (ES/pgvector fallback)", () =
 
     const result = await searchTool({ query: "返品", tenantId: "test-tenant" });
 
-    expect(hybridSearch).toHaveBeenCalledWith("返品", "test-tenant");
+    expect(hybridSearch).toHaveBeenCalledWith("返品", "test-tenant", undefined, undefined);
     expect(result.items.length).toBeGreaterThanOrEqual(1);
     expect(result.items[0]).toHaveProperty("text");
     expect(result.items[0]).toHaveProperty("score");

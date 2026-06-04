@@ -30,7 +30,8 @@ const normZ = (xs: number[]) => {
 export async function hybridSearch(
   q: string,
   tenantId?: string,
-  lang?: unknown // Phase33 C: SupportedLang に変換（不正値は DEFAULT_LANG）
+  lang?: unknown, // Phase33 C: SupportedLang に変換（不正値は DEFAULT_LANG）
+  excludedIds?: string[]
 ) {
   const t0 = Date.now();
   const notes: string[] = [];
@@ -121,6 +122,13 @@ export async function hybridSearch(
                             { bool: { must_not: { exists: { field: "is_published" } } } },
                           ],
                           minimum_should_match: 1,
+                        },
+                      },
+                      // Phase69-2 PR-C2 Round 2: ES 永続フィルター（is_excluded_from_search=true は除外）
+                      // pgvector の WHERE 句と対応。リクエストスコープ excluded_ids との二重防御
+                      {
+                        bool: {
+                          must_not: { term: { is_excluded_from_search: true } },
                         },
                       },
                     ],
@@ -260,6 +268,10 @@ export async function hybridSearch(
     };
   }
 
+  // Phase69-2: excluded_ids フィルター（テナント分離のため呼び出し元から渡された id のみ除外）
+  const safeExcludedIds = new Set((excludedIds ?? []).filter(Boolean));
+  const filterExcluded = (h: Hit) => safeExcludedIds.size === 0 || !safeExcludedIds.has(h.id);
+
   // z-scoreで正規化（将来PG経路とマージする前提のままにしておく）
   const zES = normZ(esHits.map((h) => h.score));
   const zPG = normZ(pgHits.map((h) => h.score));
@@ -269,6 +281,7 @@ export async function hybridSearch(
   ]
     .sort((a, b) => b.z - a.z)
     .filter((h, i, self) => self.findIndex((x) => x.id === h.id) === i)
+    .filter(filterExcluded)
     .slice(0, 80)
     .map(({ z, ...rest }) => rest);
 

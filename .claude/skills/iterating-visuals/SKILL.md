@@ -1,6 +1,7 @@
 ---
 name: iterating-visuals
 description: Auto-screenshot design iteration loop with active feedback request. Use when making visual/style changes to components.
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit, Bash, AskUserQuestion
 ---

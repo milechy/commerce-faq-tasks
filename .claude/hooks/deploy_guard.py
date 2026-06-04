@@ -8,6 +8,7 @@ Any deploy-related command not in ALLOWED_DEPLOY_COMMANDS is blocked.
 Fails closed on malformed/missing input.
 """
 import json
+import os
 import re
 import sys
 
@@ -17,6 +18,86 @@ ALLOWED_DEPLOY_COMMANDS = [
     r'^bash\s+SCRIPTS/deploy-vps\.sh',       # Only official deploy method
     r'^pm2\s+restart\s+rajiuce-avatar',       # Avatar agent individual restart only
 ]
+
+# Phase70-I: 自編集禁止 — deploy_guard.py 自身および 24h-mode スクリプトへの
+# Bash 書き込み操作を常時ブロック (Edit ツールは settings.json deny で別途保護済)
+SELF_EDIT_PROTECTED_FILES = [
+    ".claude/hooks/deploy_guard.py",
+    "SCRIPTS/24h-mode-on.sh",
+    "SCRIPTS/24h-mode-off.sh",
+]
+
+
+def is_self_edit_attempt(cmd: str) -> bool:
+    """Detect Bash attempts to overwrite guard scripts or 24h-mode scripts.
+
+    Detects: redirect (>), tee, in-place sed, python open(..., 'w').
+    Matches both bare paths and ./-prefixed paths (e.g. ./SCRIPTS/...).
+    """
+    for target in SELF_EDIT_PROTECTED_FILES:
+        # Allow optional ./ prefix (e.g. > ./SCRIPTS/24h-mode-on.sh)
+        escaped = r"(?:\./)?" + re.escape(target)
+        # Redirect write: cmd > target / cmd >> target
+        if re.search(r">+\s*" + escaped, cmd):
+            return True
+        # tee write: tee target / tee -a target
+        if re.search(r"\btee\s+(?:-a\s+)?" + escaped, cmd):
+            return True
+        # in-place sed: sed -i '...' target
+        if re.search(r"\bsed\s+(?:-[a-zA-Z]*i[a-zA-Z]*|--in-place)[^\n]*" + escaped, cmd):
+            return True
+        # python open with write mode (check both bare and ./-prefixed path)
+        if "open(" in cmd and ("'w'" in cmd or '"w"' in cmd):
+            if target in cmd or ("./" + target) in cmd:
+                return True
+    return False
+
+
+# Phase70-A: 24h 自走モード中は更に厳格化
+# R2C_24H_MODE=1 または ~/.r2c-24h-mode 存在時、以下も全てブロック
+# (通常時 allowlist で通っていた deploy-vps.sh / ssh root@* も遮断)
+MODE_24H_BLOCK_PATTERNS = [
+    r'bash\s+SCRIPTS/deploy-vps\.sh',
+    r'ssh\s+root@',
+    r'ssh\s+\S+@65\.108\.159\.161',
+]
+
+# ssh がコマンドトークンとして現れるか検出するための正規表現。
+# コマンド境界: 行頭 / && / ; / || / | / $( (コマンド置換) / ` (バックティック置換)
+# strip_quoted_strings 後の文字列に対して適用することで:
+#   - ssh "root@host" "cmd"         → strip後 ssh "" "" → ^ssh\s でブロック
+#   - echo $(ssh "root@h" "cmd")    → strip後 echo $(ssh "" "") → \$\( でブロック
+#   - echo `ssh root@host free`     → strip後 変化なし (バックティック外) → ` でブロック
+#   - echo "x | ssh root@host"      → strip後 echo "" → | が消えて誤マッチしない (P2対策)
+_SSH_AS_CMD_RE = re.compile(r'(?:^|&&|;|\|\||\||\$\(|`)\s*ssh\s', re.MULTILINE)
+
+
+def is_24h_mode() -> bool:
+    """24h 自走モードが有効か判定。
+
+    優先順位: 環境変数 R2C_24H_MODE=1 > $HOME/.r2c-24h-mode ファイル存在
+    """
+    if os.environ.get("R2C_24H_MODE") == "1":
+        return True
+    mode_file = os.path.expanduser(
+        os.environ.get("R2C_24H_MODE_FILE", "~/.r2c-24h-mode")
+    )
+    return os.path.isfile(mode_file)
+
+
+def is_blocked_in_24h_mode(cmd: str) -> bool:
+    """24h モード時の追加ブロックパターン照合。
+
+    全チェックを strip_quoted_strings 後の文字列に対して行う。
+    - MODE_24H_BLOCK_PATTERNS: 通常の ssh / deploy-vps.sh を検出
+    - _SSH_AS_CMD_RE: 引用符付きホスト・コマンド置換内 ssh を検出
+      strip 後も $( や ` はコマンド外に残るため置換内 ssh を捕捉できる。
+      一方 echo "x | ssh root@host" → strip 後 echo "" で | が消え誤ブロックしない。
+    """
+    cmd_unquoted = strip_quoted_strings(cmd)
+    if any(re.search(pattern, cmd_unquoted) for pattern in MODE_24H_BLOCK_PATTERNS):
+        return True
+    return bool(_SSH_AS_CMD_RE.search(cmd_unquoted))
 
 # Keywords that classify a command as deploy-related.
 # Note: 'deploy' alone is intentionally omitted — too broad (matches script names).
@@ -131,6 +212,26 @@ try:
         sys.exit(0)
 
     command = tool_input.get("command", "")
+
+    # Phase70-I: 自編集禁止チェック (常時、24h-mode 問わず)
+    if is_self_edit_attempt(command):
+        print(
+            f"[deploy_guard] BLOCKED (self-edit): guard script modification not permitted\n"
+            f"  command: {command[:200]}\n"
+            "  deploy_guard.py / 24h-mode-*.sh への書き込みは禁止されています。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Phase70-A: 24h 自走モード中は最初に厳格ブロックを実施
+    if is_24h_mode() and is_blocked_in_24h_mode(command):
+        print(
+            f"[deploy_guard] BLOCKED (24h-mode): destructive command not permitted\n"
+            f"  command: {command[:200]}\n"
+            "  24h 自走モード中。解除は: bash SCRIPTS/24h-mode-off.sh",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     if is_deploy_command(command):
         if is_allowed_deploy(command) or is_read_only_ssh_allowed(command):

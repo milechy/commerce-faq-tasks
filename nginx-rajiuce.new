@@ -1,6 +1,71 @@
 server {
     server_name api.r2c.biz;
 
+    # ----------------------------------------------------------------------
+    # Internal endpoints — IP allowlist + X-Internal-Request header policy.
+    #
+    #   /api/internal/  : loopback のみ (avatar-agent / smoke / local ops)
+    #   /metrics        : loopback のみ (Prometheus scrape)
+    #   /internal/ga4/  : 公開可 (CF Workers Cron)。HMAC で守る。ヘッダ操作なし。
+    #   /               : デフォルト。X-Internal-Request は強制strip。
+    #
+    # ヘッダ方針 (Codex review #1 反映 — 2026-05-27):
+    #   /api/internal/ と /metrics は allow/deny で loopback 確定済なので、
+    #   nginx 側で `X-Internal-Request: 1` を **必ず注入** する（strip ではなく
+    #   上書き）。これにより:
+    #     - 直接 :3100 を叩く caller (avatar-agent 等) はクライアントが付ければ通る
+    #     - nginx 経由の loopback caller (例 prometheus@VPS) もそのまま 200
+    #     - 外部攻撃者は deny all で nginx 段で 403 → app 層 internalNetworkOnly
+    #       の二重ガードに辿りつかない
+    #   "nginx strip → app 必須" の二重鍵ロックアウト (Codex HIGH 指摘) を回避。
+    # ----------------------------------------------------------------------
+    location /api/internal/ {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # 到達できるのは allow/deny 通過済 loopback クライアントのみ → "1" 強制注入。
+        # 攻撃者由来の値もこの上書きで無効化される。
+        proxy_set_header X-Internal-Request "1";
+        client_max_body_size 50M;
+        proxy_read_timeout 120s;
+    }
+
+    location = /metrics {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Internal-Request "1";
+        proxy_read_timeout 30s;
+    }
+
+    location /internal/ga4/ {
+        # CF Workers Cron からの呼び出しを受ける必要があるため allow/deny は付けない。
+        # 認証は HMAC (internalHmacMiddleware) に委譲する。
+        # X-Internal-Request:1 はクライアント(CF Worker)が付けて来る。strip しない。
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 1M;
+        proxy_read_timeout 60s;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:3100;
         proxy_http_version 1.1;
@@ -10,6 +75,9 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # 公開トラフィックでは X-Internal-Request を強制 strip
+        # — 内部 endpoint は別 location で IP 制限 + 注入、ここで偽装値を残さない。
+        proxy_set_header X-Internal-Request "";
         client_max_body_size 50M;
         proxy_read_timeout 120s;
     }

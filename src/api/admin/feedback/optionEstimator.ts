@@ -1,6 +1,7 @@
 // src/api/admin/feedback/optionEstimator.ts
 // Phase62: オプションサービス料金試算（Groq 70B呼び出し）
 
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import { logger } from '../../../lib/logger';
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
@@ -49,7 +50,7 @@ export async function estimateOptionPrice(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL_70B ?? 'llama-3.3-70b-versatile',
+        model: process.env.GROQ_MODEL_70B ?? GROQ_VERSATILE_70B,
         messages: [
           { role: 'system', content: ESTIMATE_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },

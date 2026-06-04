@@ -5,6 +5,13 @@
 This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
 
 
+# 運用体制(2026-05-28〜)
+
+- **Claude Code CLI = 主担当**。調査/実装/Gate/PR/ログ/DB/VPS/grep/Playwright、実機作業すべて。Asanaタスクを自走で実装まで進める。
+- **Claude.ai = サブ**。実機に触れない判断のみ。止めるのは4点だけ: ①merge可否 ②Codex結果(実害セキュリティ) ③Phase/スコープ方針 ④不可逆操作。
+- **24hループ(Phase70)は2026-05-28に完全自走確定**（6罠攻略、PR #197/#217/#218/#219/#220/#221/#222）。Tier-S id=4 試運転中。
+- CLIは段取り/設定/接続/worktree/調査/テスト/機械チェックで止まらず自走、結果のみ報告。
+
 # RAJIUCE CLAUDE.md
 
 ## Core Principles
@@ -38,27 +45,7 @@ This project uses OpenWolf for context management. Read and follow .wolf/OPENWOL
 - Gap: 4トリガー → Gemini推薦エンジン → 知識追加 (Phase46)
 - Book RAG: PDF → 6フィールド構造化 → pgvector + ES (Phase47)
 - LLM Defense: L5 Input Sanitizer → L6 Prompt Firewall → L7 Topic Guard → L8 Output Guard (Phase48)
-
-## Key Endpoints
-| Path | Auth | Purpose |
-|---|---|---|
-| POST /api/chat | x-api-key | Widget → Chat |
-| POST /dialog/turn | x-api-key / JWT | Multi-turn dialog |
-| POST /agent.search | x-api-key / JWT | RAG search |
-| GET /health | public | ES/PG/CE health |
-| GET /metrics | X-Internal-Request: 1 | Prometheus metrics |
-| /v1/admin/tenants/* | JWT (super_admin) | テナント管理 |
-| /v1/admin/chat-history/* | JWT | 会話履歴 |
-| /v1/admin/tuning/* | JWT | チューニングルール |
-| /v1/admin/feedback/* | JWT | フィードバック管理 |
-| /v1/admin/avatar/* | JWT | アバター設定 (Phase40-41) |
-| /v1/admin/evaluations/* | JWT | Judge評価 (Phase45) |
-| /v1/admin/knowledge-gaps/* | JWT | Gap検出 (Phase46) |
-| /v1/admin/knowledge/books/* | JWT | PDF書籍管理 (Phase47) |
-| /v1/admin/ai-assist/* | JWT (super_admin) | AIアシスタント (Phase43) |
-| /v1/admin/variants/* | JWT | A/Bテスト |
-| /v1/admin/reports/* | JWT | 週次レポート |
-| POST /api/avatar/room-token | x-api-key | LiveKit JWT発行 + Agent Dispatch |
+- Key endpoints / env vars: `docs/API_REFERENCE.md`
 
 ## Security Middleware Order (src/index.ts)
 1. requestIdMiddleware (global)
@@ -70,216 +57,43 @@ This project uses OpenWolf for context management. Read and follow .wolf/OPENWOL
 7. tenantContextLoader (per-route stack)
 8. securityPolicyEnforcer (per-route stack)
 
-## Environment Variables
-```bash
-# Core
-PORT, LOG_LEVEL, ES_URL, DATABASE_URL
-ALLOWED_ORIGINS, DEFAULT_TENANT_ID
-
-# Auth
-AGENT_API_KEY, API_KEY_TENANT_ID, BASIC_AUTH_TENANT_ID
-SUPABASE_URL, SUPABASE_JWT_SECRET, SUPABASE_SERVICE_ROLE_KEY
-
-# LLM
-GROQ_API_KEY, GROQ_CHAT_MODEL, GROQ_MODEL_8B, GROQ_MODEL_70B
-LLM_API_KEY, LLM_BASE_URL, LLM_CHAT_MODEL, LLM_MODEL_20B, LLM_MODEL_120B
-OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL
-GEMINI_API_KEY  # Phase45 Judge専用
-
-# Avatar (Phase40-41)
-LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
-FISH_AUDIO_API_KEY, FISH_AUDIO_REFERENCE_ID
-LEMONSLICE_API_KEY, LEMONSLICE_AGENT_ID
-
-# Storage
-SUPABASE_STORAGE_URL, SUPABASE_BUCKET_BOOK_PDFS
-
-# Billing (Phase32)
-STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-
-# Cross-encoder
-CE_MODEL_PATH, CE_ENGINE
-
-# Phase22 Flow Control
-PHASE22_MAX_TURNS, PHASE22_MAX_CLARIFY_REPEATS
-PHASE22_MAX_CONFIRM_REPEATS, PHASE22_LOOP_WINDOW_TURNS
-
-# Phase45 Judge
-JUDGE_AUTO_EVALUATE, JUDGE_SCORE_THRESHOLD
-
-# Monitoring
-SLACK_WEBHOOK_URL
-```
-
-## Deployment (Phase28)
-- VPS: Hetzner 65.108.159.161
-- API: PM2 → `node dist/index.js` (port 3100)
-- Admin UI: PM2 → `serve -s admin-ui/dist` (port 5173)
-- Admin UI API base: `VITE_API_BASE` 環境変数 (default: localhost:3100)
-- Deploy: `bash SCRIPTS/deploy-vps.sh [user@host]`
-- Checklist: `docs/DEPLOY_CHECKLIST.md`
-- Public URLs (Phase49):
-  - API: https://api.r2c.biz (Nginx → PM2 port 3100)
-  - Admin UI: https://admin.r2c.biz (Nginx → serve port 5173)
-  - SSL: Let's Encrypt (certbot --nginx, auto-renew)
-- PM2 processes (ecosystem.config.cjs):
-  1. `rajiuce-api` — `dist/src/index.js` (port 3100)
-  2. `rajiuce-avatar` — `avatar-agent/agent.py` (LiveKit Agent)
-  3. `rajiuce-admin` — `serve admin-ui/dist -l 5173`
-  4. `slack-listener` — `slack_listener.py`
-
-## Cost Constraint
-- Monthly: $27-48
-- Grafana + Prometheus: self-hosted $0-5
-- Slack Webhook: free
-- Groq API: usage-based (120B ratio ≤10%)
-
 ## VPSデプロイルール（厳守）
 
-⚠️ 以下のルールはClaude Code CLIが必ず従うこと。ユーザーへの提案時も同様。
-
-### デプロイコマンド
-
-```bash
-bash SCRIPTS/deploy-vps.sh
-```
-
-これが唯一のデプロイ手順。以下の個別コマンドは禁止:
-- ❌ `ssh root@... "git pull && pnpm build && pm2 restart"`
-- ❌ `ssh root@... "cd admin-ui && pnpm build"`
-- ❌ VPSで直接 `git pull` を実行
-
-deploy-vps.sh は rsync + API build + Admin UI build（キャッシュクリア付き）+ バンドル検証 + PM2 restart を一括で行う。
-
-### 重要な注意事項
+⚠️ 唯一の手順: `bash SCRIPTS/deploy-vps.sh`
 - ecosystem.config.cjs の script は `dist/src/index.js`（`dist/index.js` ではない）
-- PM2は `.env` を自動で読まない。dotenv/config が src/index.ts の先頭でimportされている
-- Admin UIは `serve -s admin-ui/dist -l 5173` で静的ファイル配信
+- PM2は `.env` を自動で読まない (dotenv/config が src/index.ts 先頭でimport済み)
+- 禁止: ssh直接コマンド / VPSで git pull / 個別 pnpm build
+詳細: `docs/DEPLOY_CHECKLIST.md`
 
 ## Security Scan
-- デプロイ前: bash SCRIPTS/security-scan.sh を実行推奨
+- デプロイ前: `bash SCRIPTS/security-scan.sh` 実行推奨
 - CI: .github/workflows/security-scan.yml が main push / PR / 週次で自動実行
-- ポリシー: docs/SECURITY_SCAN_POLICY.md 参照
-- High/Critical 検出時はデプロイをブロック
+- High/Critical 検出時はデプロイをブロック。ポリシー: `docs/SECURITY_SCAN_POLICY.md`
 
 ## Test & Deploy Gate（必須フロー）
 
-⚠️ 全Phaseに適用。Gate通過なしのデプロイは禁止。
+⚠️ 全Phaseに適用。Gate通過なしのデプロイは禁止。詳細: `docs/TEST_DEPLOY_GATE.md`
 
-### Gate順序（実装完了後に必ずこの順で実行）
+Gate順序:
+- Gate 1: `pnpm verify` (typecheck + lint + test 全パス)
+- Gate 1.5: `bash SCRIPTS/dead-code-check.sh` (孤立コード確認)
+- Gate 2: `bash SCRIPTS/security-scan.sh` (High/Critical = 0)
+- Gate 2.5: `/codex:review --base main --background` (**git push前**に実行、`--base main` 省略禁止)
+- Gate 3: `pnpm build && cd admin-ui && pnpm build`
+- git commit + push (Gate 1-3通過後のみ)
 
-```
-実装完了
-  → Gate 1: pnpm verify（typecheck + lint + test 全パス）
-  → Gate 2: bash SCRIPTS/security-scan.sh（High/Critical = 0）
-  → Gate 2.5: /codex:review --base main --background
-              → /codex:result
-              ★ 必ずgit push前に実行（push後は差分なしで無意味）
-              ※ セキュリティ変更時のみ: /codex:adversarial-review --background
-              ※ Critical/High指摘 → 修正 → Gate 1から再実行
-  → Gate 3: pnpm build && cd admin-ui && pnpm build
-  → git commit + push（Gate 1-3通過後のみ）
-────────────────────────────────
-以降は人間が実行:
-  → Gate 4b: claude --chrome でブラウザテスト（★ UI変更Phase: 必須）
-  → デプロイ: bash SCRIPTS/deploy-vps.sh
-  → DBマイグレーション: VPSでSQL手動実行（あれば）
-  → Gate 5: curl https://api.r2c.biz/health + Admin UIログイン確認
-  → Gate 6: UI調査（★ UI変更Phase: 必須・Claude in Chrome）
-  → Asanaタスク完了 + ドキュメント更新
-```
-
-### Codex Review 運用ルール
-- review gate: **常時OFF**（自動ループはコスト消費が大きすぎる）
-- 通常レビュー: PR前に1回だけ `/codex:review --base main --background`（**git push前**）
-- セキュリティ変更時のみ: `/codex:adversarial-review --background`
-- 結果確認: `/codex:status` → `/codex:result`
-- Critical/High → 修正必須。False positive → スキップ理由をコミットメッセージに記載
-- スキップOK: typo修正、ドキュメントのみ、CSSのみ、テストコードのみ
-
-### テスト作成ルール
-- 新規API: 正常系1 + 認証エラー1 + バリデーション1（最低限）
-- セキュリティ関連: 全パスカバー
-- 外部API（Groq, Gemini, Supabase Storage, Fish Audio等）: 常にモック
-- Gate 1-3が通らない限りgit pushしない
-- ★ Gate 2.5（Codex review）はgit push前に実行（push後は差分なしで無意味）
-
-### Chrome ブラウザテスト（UI変更Phase: 必須）
-- `claude --chrome` で実行（Gate 4b）
-- 共通項目: ログイン / ダッシュボード表示 / 🔔通知ベル / モバイル390px / コンソールエラーなし
-- `~/.claude/settings.local.json` に `"mcp__claude-in-chrome__computer"` が必要
-- ★ UI変更がないPhaseではスキップ可。UI変更があれば Gate 6（UI調査）も必須
-
-詳細: docs/TEST_DEPLOY_GATE.md
+Codex review gate: 常時OFF。スキップOK: typo修正・ドキュメントのみ・CSSのみ・テストコードのみ
 
 ## Git Branch Rule（厳守）
 
 ⚠️ **mainへの直接コミット禁止。test-onlyでも例外なし。**
 
-### 必須フロー
 ```
 git checkout -b feature/<asana-id>-<short-description>
-# 実装 + Gate 1〜3
-git commit
-# Gate 2.5: /codex:review --base main --background（コミット後、push前）
-git push -u origin feature/...
-gh pr create
 ```
 
-### 違反時の復旧
-```bash
-git reset --soft HEAD~1          # コミット取り消し（変更は残す）
-git checkout -b feature/...      # feature branch作成
-git commit                        # 同内容で再コミット
-```
-
-### 理由
-- mainへの直接pushはCodex review（Gate 2.5）が機能しない（base=mainでdiff=0になる）
-- PRマージ記録がなくなりレビュー・承認フローが消える
-
-## PRマージ自動化 (auto-merge) ルール
-
-### 背景
-2026-04-19 に PR #110-#117 の 8 本を一括マージする際、手動操作の長さと conflict 解消で一日が大きく削られた。
-同様の手動作業を避けるため、以下の運用ルールを遵守する。
-
-### 運用ルール
-
-**PR 作成時は必ず auto-merge を有効化する:**
-
-```bash
-gh pr create --title "..." --body "..." && \
-gh pr merge $(gh pr view --json number -q .number) --auto --squash --delete-branch
-```
-
-または既存 PR 番号を使って:
-```bash
-gh pr merge <PR番号> --auto --squash --delete-branch
-```
-
-### auto-merge の動作条件
-
-以下が全て揃った時点で自動マージされる:
-- CI (pnpm verify / build) が green
-- 必要なレビュー承認済み（プロジェクト設定による）
-- conflict なし
-
-### conflict が発生した場合
-
-- auto-merge は停止、PR 画面で「Merge conflict」警告が表示される
-- hkobayashi または CLI が手動で conflict を解消
-- 解消後に再度 auto-merge が有効化される
-
-### マージ方式の統一
-
-- **squash and merge** を標準とする（linear history 維持）
-- rebase merge / merge commit は使わない（履歴複雑化回避）
-
-### 関連タスク
-
-- Phase1（本ルール策定）: Asana 1214121039752589
-- Phase2（SCRIPTS/merge-ready-prs.sh 作成）: Asana 1214121039752589（別タスク化済み）
-- Phase3（Claude Code CLI /merge エージェント）: 将来タスク、未起票
+違反復旧: `git reset --soft HEAD~1` → feature branch作成 → 再コミット
+PR: `gh pr merge <PR番号> --auto --squash --delete-branch` 詳細: `docs/PR_MERGE_RULES.md`
 
 ## Auto Mode 運用ルール（Claude Code v2.1.83+）
 
@@ -348,13 +162,11 @@ claude --enable-auto-mode    # 初回のみ
 ```
 
 ## Settings Hygiene
-- `.claude/settings.local.json` は `.gitignore` に登録済み（プロジェクトローカルルール）
+- `.claude/settings.local.json` は `.gitignore` 登録済み（プロジェクトローカルルール）
 - allowedTools にAPIトークン・パスワード等の認証情報を含めない
 - 禁止デプロイコマンドを allowedTools に追加しない（deploy_guard.py フックが検知）
 
 ## Custom Agents (.claude/agents/)
-
-プロジェクト固有のサブエージェント。`@エージェント名` で呼び出す。
 
 | Agent | 用途 | 呼び出し |
 |---|---|---|
@@ -363,112 +175,226 @@ claude --enable-auto-mode    # 初回のみ
 | deploy-checker | VPSデプロイ前後チェックリスト | @deploy-checker |
 | test-writer | テスト作成（モック方針・配置ルール準拠） | @test-writer |
 
-### 環境変数（Claude Code最新機能用）
-- `CLAUDE_CODE_NO_FLICKER=1` — Focus View有効（Ctrl+Oで切替）
-- `MCP_CONNECTION_NONBLOCKING=true` — FT Pipeline --print高速化
+環境変数: `CLAUDE_CODE_NO_FLICKER=1` (Focus View), `MCP_CONNECTION_NONBLOCKING=true` (MCP高速化)
 
 ## MCP Integrations
-
-### Playwright MCP (E2E Browser Testing)
-- Setup: `claude mcp add --scope project playwright npx @playwright/mcp@latest`
-- Usage: 「Playwright MCPでadmin.r2c.bizにアクセスして〇〇をテストして」
-- Gate 4b/Gate 6 のブラウザテストをCLIから自動実行可能
-- 初回は明示的に「Playwright MCP」と言うこと（Bash実行と区別するため）
-- 認証: ログイン画面が表示されたら人間が手動ログイン→Cookie維持
-
-### Environment Variables (Performance)
-```bash
-# ~/.zshrc に追加済み
-export ENABLE_PROMPT_CACHING_1H=1    # 1時間プロンプトキャッシュ
-export CLAUDE_CODE_NO_FLICKER=1       # フリッカー防止
-export MCP_CONNECTION_NONBLOCKING=true # MCP非同期接続
-```
-
-### Session Features
-- `/recap` — セッション復帰時のコンテキスト自動要約
-- `/review` — コードレビュー（Skill tool経由で自動発見可能）
-- `/security-review` — セキュリティレビュー
+- Playwright MCP (Gate 4b/6): `claude mcp add --scope project playwright npx @playwright/mcp@latest`
+- Session: `/recap` (コンテキスト要約) / `/review` (コードレビュー) / `/security-review`
 
 ## OpenWolf（トークン最適化ミドルウェア）
-- `.wolf/` にプロジェクトインデックス・学習メモリ・トークンレジャーを保持
-- 6つのフックスクリプトがClaude Code操作時に自動実行
-- ファイル読み取り前に `anatomy.md` で内容を要約 → 不要な全文読み取りを削減
-- `cerebrum.md` に過去の修正・好みを蓄積 → セッション間で学習
-- コスト $0（ローカル処理のみ、外部API不使用）
+- `.wolf/` にインデックス・学習メモリ・トークンレジャーを保持（`.gitignore` 登録済み）
+- anatomy.md で不要な全文読み取りを削減、cerebrum.md でセッション間学習
 - `openwolf status` で健全性確認、`openwolf scan` で構造マップ更新
-- `.wolf/` は `.gitignore` 登録済み（ローカルのみ）
 
 ## 開発プレイブック参照
+詳細 (役割分担・CLIプロンプトテンプレート・セッション開始プロトコル): `docs/R2C_DEVELOPMENT_PLAYBOOK.md`
 
-開発の進め方の全体像は `docs/R2C_DEVELOPMENT_PLAYBOOK.md` を参照。
+## 24h 自走中の禁止操作（Phase70-A — 必読）
 
-### 役割分担
-- Claude.ai: 戦略/Asana MCP/メモリー管理/CLI用1-2行要件提示
-- CLI: 自律実装 (discovery→plan→implement→gate→Codex→push)
-- 人間: Gate 2.5手動/DBマイグレーション手動/デプロイ判断
+24h 自走モード ON 中 (`~/.r2c-24h-mode` 存在時 または `R2C_24H_MODE=1`) は
+以下の操作を **絶対に実施しない**。違反検知時は Slack #r2c に `HUMAN-REVIEW-REQUIRED`
+投稿して自身を停止すること。
 
-### CLIプロンプト生成ルール
-- 冒頭に `## 推奨モデル: [Opus 4.7 / Sonnet 4.6 / Plan Mode]` 必須（省略禁止）
-- SSHコマンドはCLIプロンプトに含めない（deploy_guardブロック）
-- DBマイグレーションは「hkobayashiが手動実行」ステップとして記載し、CLIには確認クエリのみ
-- 詳細な章立て・ステップバイステップ指示を書かない（CLIが自走する）
-- `!`コマンド列挙・push承認ゲート設置・Gate結果仲介指示は全て禁止
+Out of scope 11項目: VPS 接続 / main merge / DB migration / .env 編集 / git force /
+avatar-agent 操作 / Cloudflare 設定変更 / 依存メジャー bump / 法務文書編集 / 本番テナント影響 /
+**deploy_guard.py・24h-mode スクリプト自己編集禁止** (deploy_guard.py が検知・ブロック)。
 
-### CLIプロンプトテンプレート
+詳細・運用手順・トラブルシュートは **`docs/24H_AUTONOMOUS_PLAYBOOK.md`** を必ず読むこと。
 
-**標準（新規タスク）:**
+ON/OFF 操作:
+- ON: `bash SCRIPTS/24h-mode-on.sh` (dry-run: `--dry-run`)
+- OFF: `bash SCRIPTS/24h-mode-off.sh`
+- 検知 hook: `.claude/hooks/deploy_guard.py` が `R2C_24H_MODE` を読み追加ブロック実施
+
+## 3 回ルール（UATa PR #246 教訓 — Phase70-K 追加）
+
+**同系統のミスを 3 回繰り返したら、その判断は hkobayashi が引き取る。**
+
+適用されるミスタイプ（例）:
+1. **推測ベース書き換え** — 実機確認せずに変更 → 確認後に提案
+2. **メモリ盲信** — memory 参照後に実機状態を未確認 → 対応ファイル・コマンドで確認
+3. **並列化忘れ** — セッション開始時に並列可能性を未検討 → 初手でマトリクス化
+
+資格喪失後の再開条件: ガード/監視の実装完了後。
+詳細: `docs/R2C_24H_STARTUP_CHECKLIST.md §5.3`
+
+## Claude.ai 振る舞いルール (UATa 16事例導出 2026-05-20)
+
+出典: `docs/UATA_R2C_DIFF_ANALYSIS.md` / UATa 24h 1日実体験生記録 v1.0
+
+### 1. Claude.ai 生成プロンプトの禁止事項
+- `docker compose ... build` 直接コマンドを含めない
+- VPS デプロイは `bash SCRIPTS/deploy-vps.sh` 等の wrapper script 経由のみ
+- UATa 事例 #8: PR #191 で `--env-file` 抜けて本番 wallet 死亡、4-5h 復旧
+
+### 2. Lane / CLI プロンプト発行前の実機照合必須
+- memory 記載のファイル名・endpoint・import path は古い可能性あり
+- 必ず CLI に「該当ファイル / grep / git log で実機照合」→ 結果貼り戻し後にプロンプト発行
+- UATa 事例 #9: 鉄則 8 違反 3 連続でセッション信頼失墜
+
+### 3. CLI 報告の「全停止」鵜呑み禁止
+- 「中止推奨」「全停止」「制約あり」レポートは 4 軸再確認必須
+- 4 軸: 観測 (curl/frontend/agent/backend) / 環境 (production/staging/dev) / 時間 (今日/既解消/未解消) / 影響 (当該 Lane/Phase 全体/全停止)
+- UATa 事例 #15: 鵜呑みで 4 Lane 全停止指示
+
+### 4. Opus 障害時の Sonnet 退避ルート
+
+Sonnet 4.6 で進められる作業:
+- read-only 調査
+- `.claude/agents/` + `.claude/skills/` + `docs/` 更新
+- pytest / E2E 追加のみの PR
+- Phase 1-2 (コード把握 + test 設計)
+- PR 作成 (Gate 4 一部保留可)
+
+Sonnet 4.6 不可、Opus 復旧待ち:
+- Tier S 直列
+- 大規模リファクタ
+- セキュリティ系本体修正
+- 安全装置配線変更
+- 本体最終実装
+
+UATa 事例 #14: Opus 障害で 3 Lane 全停止 → Sonnet 退避未確立で大幅遅延
+
+### 5. Phase 計画立案前の 5 軸事前確認
+- 凍結期限 / UAT 状況 / API 障害 / 期限タスク / 過去 postmortem P1 未済
+- UATa CLAUDE.md §4「Phase 計画立案 必須セクション」を R2C に移植検討
+
+## 24h ループ安定性ガード（点火前要件 — UATa 3日運用導出）
+
+UATa 3日自走（stop_hook 144件）で判明した停止原因への恒久対策。Lane / Team Lead 双方が遵守する。
+
+### 1. 並列上限（要件5a — result drop 回避）
+- **同時稼働 Lane は最大 3 本**（`r2c-dispatch.sh` の `MAX_SLOTS=3`）。
+- **1 セッション内の並列 tool call も 3 本未満**に保つ。
+- 根拠: 同時 3 本超で Claude Code の result drop / context 断絶が多発（公式 issue #39830、UATa 実測 154件）。
+- Team Lead が手動で Lane を起こす場合もこの上限を超えない。
+
+### 2. CI 待ちプロトコル（要件1 — 無限待ち禁止 / Lane 内 20分 timeout）
+- Lane は CI 完了を**最大 20 分**しか待たない。超えたら人間へ通知して次へ進む（ブロックしない）。
+- `gh run watch` には timeout フラグが無く、`timeout(1)` も非搭載環境があるため、**deadline ループ**で自己制御する:
+  ```bash
+  run_id=$(gh run list --branch "$BR" --limit 1 --json databaseId -q '.[0].databaseId')
+  deadline=$(( $(date +%s) + 1200 ))   # 20分
+  while :; do
+    st=$(gh run view "$run_id" --json status,conclusion -q '.status+":"+(.conclusion//"")')
+    case "$st" in
+      completed:success) echo "CI OK"; break ;;
+      completed:*)       echo "CI NG: $st"; break ;;
+    esac
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      bash SCRIPTS/notify-slack.sh "⚠️ CI 20分超過、人間確認へ: run $run_id" --color warning
+      break
+    fi
+    sleep 30
+  done
+  ```
+- supervisor は stuck Lane を **45分**で検出・retry する（`MAX_RUN_MINUTES=45`）。CI 待ちはそれより内側の 20分で必ず畳む。
+
+### 3. コンテキスト断絶の復元プロトコル（要件5b）
+- Lane が `previous_message_not_found` / context 断絶を検知したら、その場で粘らず:
+  1. 現在の作業状態（branch / 最後に通過した Gate / 次の手順）を auto-memory（`MEMORY.md`）に必ず書く。
+  2. Lane を一旦終了し、Team Lead が再 dispatch する（`r2c-dispatch.sh --task-id <id>`）。
+  3. 再起動後の Lane は `MEMORY.md` から前回状態を復元してから再開する。
+- 断絶したまま推測で続行しない（誤った差分の量産を防ぐ）。
+
+## auto-memory (MEMORY.md) 運用ルール（UATa 3日運用導出）
+
+UATa の24hループで「状態スナップショット/GID一覧/完了済み作業を memory に書いて3日で腐る」が
+最大のノイズ源と判明。R2C は今日点火。以下のフィルタを先回りで適用する。
+
+### 1. 書き込み前3問フィルタ（全Laneに適用）
+
+MEMORY.md に書く前に必ずこの3問を通過させること:
+
+- **Q1 コードを読めば分かるか?** → Yes なら書かない（コードが正典）
+- **Q2 2週間後も正しいか?** → No なら書かない（腐る情報は毒）
+- **Q3 次の自分が罠を踏まずに済むか?** → Yes なら書く（これだけが memory の存在理由）
+
+**書いてはいけないもの（腐る）**:
+- 状態スナップショット（「現在 Phase70-K が進行中」等）
+- Asana GID 一覧・PR番号・Issue番号
+- 完了済み作業の記録
+- 一時的な障害状況・API 障害メモ
+
+**書くべきもの（腐らない）**:
+- 罠の構造（「なぜこのパスが誤検知されるか」等）
+- 確認手順（実機で確認しないと分からない手順）
+- ユーザー修正から得た preference（「こうではなくこうやれ」）
+- 環境固有のデプロイ・接続の gotcha
+
+### 2. ルール変更は CLAUDE.md が先（memory は経緯のみ）
+
+ルール・禁止事項・ゲート条件を変更する場合:
+
+1. **CLAUDE.md を先に更新する**（全 Lane が読む正典）
+2. memory には「なぜ変えたか」の経緯のみ書く（差分の理由）
+3. memory にルールを先書きしない（CLAUDE.md と矛盾する二重状態を作らない）
+
+UATa 事故: memory にルール先書き → CLAUDE.md と矛盾 → Lane 間で異なる動作。
+
+### 3. 役割分担（CLAUDE.md vs MEMORY.md）
+
+| 内容 | 書く場所 |
+|------|---------|
+| 全 Lane 共通の禁止事項 | CLAUDE.md |
+| Tier 分類・ゲート条件 | CLAUDE.md |
+| 運用プロトコル・フロー | CLAUDE.md |
+| 罠の構造・誤検知パターン | MEMORY.md |
+| 実機確認しないと分からない手順 | MEMORY.md |
+| ユーザー preference（修正から得たもの） | MEMORY.md |
+| CLAUDE.md に書けない理由がある経緯 | MEMORY.md |
+
+## 学習セクション (Auto-updated by Claude Code)
+
+<!-- このセクションは Claude Code の auto-memory 機能により管理される -->
+<!-- 手動編集不要。memory path: ~/.claude/projects/-Users-hkobayashi-Documents-GitHub-commerce-faq-tasks/memory/ -->
+
+- **Memory path**: `~/.claude/projects/-Users-hkobayashi-Documents-GitHub-commerce-faq-tasks/memory/`
+- **OpenWolf 役割分離 (24h自走中)**:
+  - `.wolf/cerebrum.md` / `.wolf/memory.md` = Read-Only (24h自走中)
+  - `MEMORY.md` (auto-memory) = 唯一の書き込み可能領域
+- **設定**: `.claude/settings.json` の `autoMemoryEnabled: true` で有効化済み
+
+## 24h ループ Lane spawn 経路の罠 6 層 (Phase 70 終結、2026-05-28)
+
+2026-05-26〜28 の OAuth daemon 凍結事故と e2e 検証で 24h ループ自走の障害を 6 層解明。
+PR #197/#217/#218/#219/#220/#221 で全カバー、e2e #6 (launchd 実起動 task 47 で 40 秒自走成功) で完全復活確定。
+
+### 最大教訓
+**launchd 実起動経由で検証しないと罠を見逃す**。interactive shell 成功 ≠ launchd 成功
+(PR #220 env -i がこれで裏切った)。修正 PR の前に **launchd cron 1分毎の自然拾い** で
+result file 生成を 120 秒以内に観測することを必須ゲートにすること。
+
+### 6 PR 対応表
+
+| 罠 | 内容 | 解消 PR | 修正概要 |
+|---|---|---|---|
+| 1 | OAuth daemon 凍結 | #197 | auth fail-fast 化 (`claude /login` 手動復旧、headless 不可) |
+| 2 | `--prompt-file` v2.1.152 廃止 | #218 | `cat prompt \| claude --bg ...` (stdin pipe) |
+| 3 | dispatch.sh `export PATH=` が stdin pipe を壊す | #219 | export PATH= 行削除 |
+| 4 | lane-*.log 0byte/223byte ≠ 即死 (解釈罠) | #217 (resolver 安全装置) | `(idle — send a prompt to start)` バナーで判別 |
+| 5 | cron-wrapper.sh の親 env 継承 | #220 | `env -i HOME PATH R2C_* CLAUDE_* bash ...` |
+| 6 | launchd session/process group attribute | #221 | `/usr/bin/python3 -c 'os.setsid(); execvp(...)'` で session 分離 |
+
+### OAuth 復旧手順 (罠1 発生時)
+
+```bash
+# 1. 状態確認
+cat ~/.claude/daemon-auth-status.json    # {"status":"auth_required",...} なら罠1
+# 2. hkobayashi 手動で /login (headless 不可)
+claude /login
+# 3. daemon が status.json を更新しない場合は強制再起動 (別ターミナルから)
+pkill -f "claude.exe daemon"
+pkill -f "claude.exe --bg-spare"
+# 4. ファイル消失で valid 状態のシグナル
+ls ~/.claude/daemon-auth-status.json   # No such file = OK
 ```
-## 推奨モデル: [Opus 4.7 / Sonnet 4.6]
 
-## タスク
-Asana GID: XXXX — [タスク名]
-[1-3行でゴール・完了条件]
+### 監視 (5 軸ヘルスチェック)
+- `SCRIPTS/monitor-claude-health.sh` で 5 分毎チェック (`com.r2c.monitor.plist`)
+- 軸A: OAuth fail / 軸B: claude --version 差分 / 軸C: lane-*.log 0byte 連続 / 軸D: dispatch idle / 軸E: session_id 未取得
+- Slack `#rajiuce-dev` (C0AG07HFJTB) 通知、6h throttle
 
-## 制約
-- [アーキテクチャ制約]
-
-## Gate
-@gate-runner で Gate 1-3実行。Gate 2.5必要。
-```
-
-**バグ修正:**
-```
-## 推奨モデル: Sonnet 4.6
-
-## バグ
-[症状1-2行]
-
-## 初動
-Playwright MCPで現象確認してから修正。推測で修正しない。
-
-## Gate
-@gate-runner で Gate 1-3実行。Gate 2.5必要。
-```
-
-**並列開発（Agent Teams）:**
-```
-## 推奨モデル: Opus 4.7
-
-## 概要
-[Phase名 — 目的]
-
-## 共有インターフェース
-[DB schema / API spec / TS types 埋め込み]
-
-## ペイン1-N
-[各1-2行]
-
-## Gate
-各ペイン完了後 @gate-runner。Gate 2.5必要。
-```
-
-### セッション開始プロトコル
-1. Asana:get_project (GID: 1213607637045514) で未完了タスク確認
-2. Asana:get_task で個別タスクの completed 等を検証
-3. メモリーと実態の乖離検出→メモリー更新提案
-4. 未完了タスクから優先順位付きCLI要件を提示（推奨モデル明記）
-
-### 問題解決原則
-- 根本原因特定+再発防止（症状修正で終わらない）
-- バグ報告→テキスト推測禁止→Playwright MCP/pm2 logs/DB SELECTの3点確認
-- CLI報告に「変更しました/no diff/リスク最小」→スコープ再評価要求
+### ポストモーテム
+- `docs/postmortem/2026-05-28-oauth-fail/MEMORY_27.md` (罠 6 層 + 切り分け手順、144 行)
+- `docs/postmortem/2026-05-28-oauth-fail/MONITOR_TASK.md` (5 軸監視設計、81 行)

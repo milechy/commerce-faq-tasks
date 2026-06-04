@@ -30,6 +30,8 @@ export interface DialogInput {
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** 圧縮された過去履歴のサマリ。 */
   historySummary?: string;
+  /** Phase69-2: 検索結果から除外するエントリID一覧 */
+  excludedIds?: string[];
 }
 
 /**

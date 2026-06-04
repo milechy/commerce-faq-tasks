@@ -4,6 +4,7 @@ import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { pool } from "../../lib/db";
 import { supabaseAuthMiddleware } from "./supabaseAuthMiddleware";
 import { logger } from '../../lib/logger';
+import { resolveFaqWriteIndex } from "../../search/langIndex";
 
 
 
@@ -46,7 +47,8 @@ function resolveTenantId(req: Request): string | null {
 async function updateEsFaqDocument(row: FaqRow) {
   try {
     const esUrl = process.env.ES_URL;
-    const esFaqIndex = process.env.ES_FAQ_INDEX || "faqs";
+    // Phase69-2-E: write index を read path と同じ faq_${tenantId} に統一
+    const esFaqIndex = resolveFaqWriteIndex(row.tenant_id);
 
     if (!esUrl) {
       logger.warn("[updateEsFaqDocument] ES_URL is not set");

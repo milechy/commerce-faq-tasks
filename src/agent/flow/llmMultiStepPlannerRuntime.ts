@@ -1,5 +1,6 @@
 // src/agent/flow/llmMultiStepPlannerRuntime.ts
 
+import { GPT_OSS_120B, GPT_OSS_20B } from '../../config/groqModels';
 import { routePlannerModel, type RouteContext } from '../../llm/modelRouter'
 import type { DialogMessage, MultiStepQueryPlan } from '../dialog/types'
 import type { MultiStepPlannerOptions } from './multiStepPlanner'
@@ -156,9 +157,9 @@ async function fetchLlmPlan(
   const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`
 
   const model20b =
-    process.env.LLM_MODEL_20B ?? 'openai/gpt-oss-20b'
+    process.env.LLM_MODEL_20B ?? GPT_OSS_20B
   const model120b =
-    process.env.LLM_MODEL_120B ?? 'openai/gpt-oss-120b'
+    process.env.LLM_MODEL_120B ?? GPT_OSS_120B
 
   const routeCtx = buildRouteContext(options)
   const routed = routePlannerModel(routeCtx)

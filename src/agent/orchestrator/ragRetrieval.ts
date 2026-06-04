@@ -1,6 +1,7 @@
 // src/agent/orchestrator/ragRetrieval.ts
 // RAG 検索 + 履歴要約
 
+import { GROQ_COMPOUND_MINI } from '../../config/groqModels';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';
 import { runSearchAgent } from '../flow/searchAgent';
@@ -27,6 +28,8 @@ export async function runInitialRagRetrieval(
     topK: 8,
     useLlmPlanner: false,
     debug: true,
+    tenantId: initialInput.tenantId,
+    excludedIds: initialInput.excludedIds,
   });
 
   const rerankDebug = searchResponse.debug?.rerank as
@@ -132,7 +135,7 @@ async function summarizeHistoryWithLLM(payload: {
 
   if (!older.length) return existingSummary ?? '';
 
-  const model = process.env.GROQ_PLANNER_20B_MODEL ?? 'groq/compound-mini';
+  const model = process.env.GROQ_PLANNER_20B_MODEL ?? GROQ_COMPOUND_MINI;
 
   const turnsText = older
     .map((m, idx) => `${idx + 1}. ${m.role}: ${m.content}`)

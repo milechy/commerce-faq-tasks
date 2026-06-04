@@ -36,11 +36,11 @@ export function internalHmacMiddleware(
 
   const secret = process.env.INTERNAL_API_HMAC_SECRET;
   if (!secret) {
-    // HMAC secret 未設定は開発環境のみ許容
-    if (process.env.NODE_ENV !== "production") {
-      next();
-      return;
-    }
+    // fail-closed: dev/test も含めて secret なしでは絶対に通さない。
+    // テストは process.env.INTERNAL_API_HMAC_SECRET を明示的に設定すること。
+    // 旧実装は NODE_ENV !== production で素通りしていたが、誤起動時に dev 扱いで
+    // 内部APIが全開放される事故を防ぐため、ここで一律 500 fail-closed に統一。
+    logger.error("[hmacVerifier] INTERNAL_API_HMAC_SECRET not configured — fail-closed");
     res.status(500).json({ error: "HMAC secret not configured" });
     return;
   }

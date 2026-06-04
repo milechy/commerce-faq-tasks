@@ -1,6 +1,7 @@
 ---
 name: analyzing-feedback
 description: Analyze feedback logs to detect design preference patterns. Upstream contribution is opt-in only (disabled by default).
+version: 1.0.0
 user-invocable: true
 aliases: [artisan-patterns]
 allowed-tools: Read, Write, Glob, Grep, Bash

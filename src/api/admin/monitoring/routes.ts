@@ -5,6 +5,17 @@ import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { logger } from "../../../lib/logger";
 
+// ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_MONITORING_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedMonitoringRole = typeof ALLOWED_MONITORING_ROLES[number];
+function isAllowedMonitoringRole(role: unknown): role is AllowedMonitoringRole {
+  return typeof role === 'string' &&
+         (ALLOWED_MONITORING_ROLES as readonly string[]).includes(role);
+}
+
 const DEFAULT_SLA = {
   completionRateMin: 70,
   loopRateMax: 10,
@@ -87,11 +98,21 @@ export function registerMonitoringRoutes(app: Express): void {
 
   app.get("/v1/admin/monitoring/kpis", async (req: Request, res: Response) => {
     const su = (req as any).supabaseUser as Record<string, any> | undefined;
-    const role =
-      su?.app_metadata?.role ?? su?.user_metadata?.role ?? su?.role ?? "anonymous";
+    const role: unknown = su?.app_metadata?.role;
 
-    if (!["super_admin", "client_admin"].includes(role)) {
-      res.status(403).json({ error: "forbidden", message: "管理者ログインが必要です" });
+    if (!isAllowedMonitoringRole(role)) {
+      logger.warn({
+        event: 'monitoring_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTHZ_ROLE_DENIED',
+        requested_path: req.path,
+        actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+        actor_role: role,
+        required_roles: ALLOWED_MONITORING_ROLES,
+        hasAppMetadataRole: !!su?.['app_metadata']?.role,
+        hasUserMetadataRole: !!su?.['user_metadata']?.role,
+      }, 'monitoring access denied: invalid actor role');
+      res.status(403).json({ error: "forbidden", message: "管理者ログインが必要です", code: 'AUTHZ_ROLE_DENIED' });
       return;
     }
 

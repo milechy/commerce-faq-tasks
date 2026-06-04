@@ -53,7 +53,8 @@ async function dispatchAgentToRoom(
   livekitUrl: string,
   apiKey: string,
   apiSecret: string,
-  roomName: string
+  roomName: string,
+  avatarConfigId?: string
 ): Promise<void> {
   const roomClient = new RoomServiceClient(livekitUrl, apiKey, apiSecret);
   const dispatchClient = new AgentDispatchClient(livekitUrl, apiKey, apiSecret);
@@ -64,6 +65,8 @@ async function dispatchAgentToRoom(
       name: roomName,
       emptyTimeout: 1800,    // 30分（デフォルト5分→延長）
       maxParticipants: 3,    // widget + agent + lemonslice
+      // avatarConfigId を metadata に埋め込み → agent.py が特定アバターを選択できる
+      metadata: avatarConfigId ? JSON.stringify({ avatarConfigId }) : undefined,
     });
     logger.info(`[livekitTokenRoutes] Room created: ${roomName}`);
   } catch (err: unknown) {
@@ -152,14 +155,31 @@ export function registerLiveKitTokenRoutes(
       // avatarConfigId が指定された場合はそのconfigを優先（テスト用途 — 特定アバターのプレビュー）
       let imageUrl: string | null = null;
       let avatarName: string | null = null;
-      const requestedAvatarConfigId = typeof req.body?.avatarConfigId === "string" ? req.body.avatarConfigId : null;
+      // UUID形式のみ受け付ける（DB lookup 前に不正入力を 400 で弾く — ログインジェクション・型混入対策）
+      // avatarConfigRoutes.ts と同一の strict UUID regex
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const rawRequestedAvatarConfigId = req.body?.avatarConfigId;
+      if (rawRequestedAvatarConfigId !== undefined && rawRequestedAvatarConfigId !== null) {
+        if (typeof rawRequestedAvatarConfigId !== "string" || !UUID_RE.test(rawRequestedAvatarConfigId)) {
+          return res.status(400).json({ error: "invalid avatarConfigId format (UUID required)" });
+        }
+      }
+      const requestedAvatarConfigId = typeof rawRequestedAvatarConfigId === "string" ? rawRequestedAvatarConfigId : null;
+      // SQL ownership check が通ったときのみ room metadata に伝搬（cross-tenant UUID が素通りするのを防ぐ）
+      let verifiedAvatarConfigId: string | null = null;
       try {
         let avatarConfigResult;
         if (requestedAvatarConfigId) {
+          // is_active 必須 — 無効化済み config が ID 指定で復活する穴を塞ぐ
+          // (本番 token route は信頼できない入力 widget→エンドユーザ改竄可。
+          //  admin UI の inactive プレビューは別経路の別タスクで対応 — #210 スコープ外)
           avatarConfigResult = await pool.query(
-            "SELECT image_url, name FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'r2c_default') LIMIT 1",
+            "SELECT image_url, name FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'r2c_default') AND is_active = true LIMIT 1",
             [requestedAvatarConfigId, tenantId]
           );
+          if (avatarConfigResult.rows.length > 0) {
+            verifiedAvatarConfigId = requestedAvatarConfigId;
+          }
         } else {
           avatarConfigResult = await pool.query(
             "SELECT image_url, name FROM avatar_configs WHERE tenant_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1",
@@ -177,7 +197,7 @@ export function registerLiveKitTokenRoutes(
 
       // Room 作成 + Agent Dispatch（SDK 経由 — await して結果をログ、失敗してもトークンは返す）
       try {
-        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName);
+        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, verifiedAvatarConfigId ?? undefined);
       } catch (err) {
         logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
       }

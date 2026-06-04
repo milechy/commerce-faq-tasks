@@ -1,6 +1,7 @@
 ---
 name: synthesizing-taste
 description: Extract brand taste tokens from reference materials into taste.md
+version: 1.0.0
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit
 ---

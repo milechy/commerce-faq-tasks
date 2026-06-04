@@ -1,6 +1,7 @@
 // src/agent/orchestrator/llmCalls.ts
 // プランナー・回答 LLM 呼び出し + プロンプトビルダー
 
+import { GROQ_COMPOUND, GROQ_COMPOUND_MINI } from '../../config/groqModels';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';
 import type { PlannerPlan } from '../dialog/types';
@@ -155,8 +156,8 @@ export async function callPlannerLLM(
 ): Promise<PlannerPlan> {
   const model =
     route === '120b'
-      ? process.env.GROQ_PLANNER_120B_MODEL ?? 'groq/compound'
-      : process.env.GROQ_PLANNER_20B_MODEL ?? 'groq/compound-mini';
+      ? process.env.GROQ_PLANNER_120B_MODEL ?? GROQ_COMPOUND
+      : process.env.GROQ_PLANNER_20B_MODEL ?? GROQ_COMPOUND_MINI;
 
   const prompt = buildPlannerPrompt(payload);
 
@@ -274,8 +275,8 @@ export async function callAnswerLLM(
 ): Promise<string> {
   const model =
     route === '120b'
-      ? process.env.GROQ_ANSWER_120B_MODEL ?? 'groq/compound'
-      : process.env.GROQ_ANSWER_20B_MODEL ?? 'groq/compound-mini';
+      ? process.env.GROQ_ANSWER_120B_MODEL ?? GROQ_COMPOUND
+      : process.env.GROQ_ANSWER_20B_MODEL ?? GROQ_COMPOUND_MINI;
 
   const prompt = buildAnswerPrompt(payload);
   const maxTokens = payload.safeMode ? 320 : 256;

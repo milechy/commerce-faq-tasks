@@ -1,0 +1,33 @@
+# .claudeignore — Claude Code が読み書きしてはいけないパス
+# Phase70-A 24h 自走中に意図せず秘密情報を読み込まないようガードする
+# (ローカル開発でも常時適用)
+
+# Secrets
+.env
+.env.*
+secrets/
+**/secrets/
+**/credentials/
+*.key
+*-private.key
+*.pem
+*.p12
+
+# Build / generated artifacts (token waste 防止)
+.wolf/
+node_modules/
+dist/
+admin-ui/dist/
+admin-ui/.vite/
+*.log
+playwright-report/
+
+# 一時的な調査メモ・本番ログ
+docs/investigation/
+logs/
+reports/
+
+# ユーザー設定 / 認証情報
+~/.ssh/
+.claude/settings.local.json
+.mcp.json

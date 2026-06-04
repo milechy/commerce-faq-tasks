@@ -1,12 +1,13 @@
 // src/agent/judge/conversationJudge.ts
 // Phase45: Judge評価エンジン - Groq 70b (llama-3.3-70b-versatile) で会話を評価
 
+import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';
 
 const logger = pino();
 
-const JUDGE_MODEL = 'llama-3.3-70b-versatile';
+const JUDGE_MODEL = GROQ_VERSATILE_70B;
 
 export interface JudgeInput {
   tenantId: string;

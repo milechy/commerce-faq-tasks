@@ -344,3 +344,443 @@ describe("DELETE /v1/admin/knowledge/faq/:id", () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase69-2 PR-C2 Round 2: PATCH /v1/admin/knowledge/faq/:id/exclude
+// Codex adversarial Round 1 指摘 (HIGH×2, MEDIUM×1) の回帰テスト
+// ---------------------------------------------------------------------------
+
+// Transaction-aware mock helper: db.query (pool-level) + db.connect (client-level)
+function makeTxMockDb(
+  poolQueryImpl: jest.Mock,
+  clientQueryImpl: jest.Mock,
+  releaseImpl?: jest.Mock,
+) {
+  const client = {
+    query: clientQueryImpl,
+    release: releaseImpl ?? jest.fn(),
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return {
+    query: poolQueryImpl,
+    connect: jest.fn().mockResolvedValue(client),
+    __client: client,
+  } as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
+function buildAppTx(
+  poolQueryImpl: jest.Mock,
+  clientQueryImpl: jest.Mock,
+  releaseImpl?: jest.Mock,
+): { app: Express; db: ReturnType<typeof makeTxMockDb> } {
+  const app = express();
+  app.use(express.json());
+  const db = makeTxMockDb(poolQueryImpl, clientQueryImpl, releaseImpl);
+  const noop = (_req: any, _res: any, next: any) => next(); // eslint-disable-line @typescript-eslint/no-explicit-any
+  registerFaqCrudRoutes(app, db, noop, noop, noop);
+  return { app, db };
+}
+
+describe("PATCH /v1/admin/knowledge/faq/:id/exclude (Phase69-2 Round 2 + Round 4)", () => {
+  const ORIGINAL_ES_URL = process.env.ES_URL;
+
+  beforeEach(() => {
+    mockFetch.mockClear();
+    mockFetch.mockResolvedValue({ ok: true });
+    process.env.ES_URL = "http://es.test:9200";
+    process.env.ES_FAQ_INDEX = "faqs";
+  });
+
+  afterAll(() => {
+    if (ORIGINAL_ES_URL === undefined) delete process.env.ES_URL;
+    else process.env.ES_URL = ORIGINAL_ES_URL;
+  });
+
+  // ---- Round 4 (Codex Round 3 MEDIUM-2): in-tx SELECT FOR UPDATE precheck ----
+  //
+  // Round 4 では precheck (existence + tenant) を tx 内に取り込み、
+  // SELECT ... FOR UPDATE で対象行をロックする。これにより precheck → UPDATE 間で
+  // 削除/移動された場合に COMMIT 成功 + 200 を返す check-then-act race が消える。
+  //
+  // 期待される client.query 呼び出し順:
+  //   1. BEGIN
+  //   2. SET LOCAL lock_timeout = '3s'
+  //   3. SELECT id, tenant_id FROM faq_docs WHERE id = $1 FOR UPDATE  ← Round 4 新規
+  //   4. UPDATE faq_docs ...
+  //   5. UPDATE faq_embeddings ...
+  //   6. COMMIT
+
+  it("[HIGH-1] propagates is_excluded_from_search to ES via POST _update (partial doc)", async () => {
+    const poolQuery = jest.fn();
+    // precheck → SELECT FOR UPDATE → UPDATE faq_docs (rowCount=1) → UPDATE faq_embeddings → COMMIT
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET lock_timeout
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 42, tenant_id: "tenant-test" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE faq_docs
+      .mockResolvedValueOnce({ rowCount: 0 }) // UPDATE faq_embeddings
+      .mockResolvedValueOnce({ rowCount: 0 }); // COMMIT
+    const { app } = buildAppTx(poolQuery, clientQuery);
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/42/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).includes("/_update/42_tenant-test"),
+    );
+    expect(esCalls).toHaveLength(1);
+    const call = esCalls[0];
+    expect(call[1]?.method).toBe("POST");
+    expect(JSON.parse(call[1]?.body as string)).toEqual({
+      doc: { is_excluded_from_search: true },
+    });
+  });
+
+  it("[HIGH-1] also propagates is_excluded_from_search=false (un-exclude)", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 7, tenant_id: "tenant-test" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE faq_docs
+      .mockResolvedValueOnce({ rowCount: 0 }) // UPDATE faq_embeddings
+      .mockResolvedValueOnce({ rowCount: 0 }); // COMMIT
+    const { app } = buildAppTx(poolQuery, clientQuery);
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/7/exclude", {
+      body: { is_excluded_from_search: false },
+    });
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).includes("/_update/7_tenant-test"),
+    );
+    expect(esCalls).toHaveLength(1);
+    expect(JSON.parse(esCalls[0][1]?.body as string)).toEqual({
+      doc: { is_excluded_from_search: false },
+    });
+  });
+
+  it("[HIGH-2 + Round 4] wraps SELECT FOR UPDATE + both UPDATEs in a single transaction (BEGIN/COMMIT)", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, tenant_id: "tenant-test" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE faq_docs
+      .mockResolvedValueOnce({ rowCount: 0 }) // UPDATE faq_embeddings
+      .mockResolvedValueOnce({ rowCount: 0 }); // COMMIT
+    const release = jest.fn();
+    const { app, db } = buildAppTx(poolQuery, clientQuery, release);
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/1/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(200);
+    expect(db.connect).toHaveBeenCalled();
+    const sqls = clientQuery.mock.calls.map((c) => String(c[0]));
+    expect(sqls[0]).toBe("BEGIN");
+    expect(sqls[1]).toContain("lock_timeout");
+    expect(sqls[2]).toContain("SELECT id, tenant_id FROM faq_docs");
+    expect(sqls[2]).toContain("FOR UPDATE");
+    expect(sqls[3]).toContain("UPDATE faq_docs");
+    expect(sqls[4]).toContain("UPDATE faq_embeddings");
+    expect(sqls[5]).toBe("COMMIT");
+    expect(release).toHaveBeenCalledTimes(1);
+    // pool-level (db.query) precheck は廃止
+    expect(poolQuery).not.toHaveBeenCalled();
+  });
+
+  it("[HIGH-2] ROLLBACK and returns 500 when faq_embeddings UPDATE fails; ES sync is not called", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET lock_timeout
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 2, tenant_id: "tenant-test" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE faq_docs
+      .mockRejectedValueOnce(new Error("cast error")) // UPDATE faq_embeddings
+      .mockResolvedValueOnce({ rowCount: 0 }); // ROLLBACK
+    const release = jest.fn();
+    const { app } = buildAppTx(poolQuery, clientQuery, release);
+
+    const initialEsCalls = mockFetch.mock.calls.length;
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/2/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(500);
+    const sqls = clientQuery.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain("ROLLBACK");
+    expect(release).toHaveBeenCalledTimes(1);
+    await new Promise((r) => setImmediate(r));
+    const esUpdateCalls = mockFetch.mock.calls
+      .slice(initialEsCalls)
+      .filter((c) => String(c[0]).includes("/_update/"));
+    expect(esUpdateCalls).toHaveLength(0);
+  });
+
+  it("[HIGH-2] returns 409 with errorCode DB_LOCK_TIMEOUT when PostgreSQL lock_timeout (55P03) fires", async () => {
+    const poolQuery = jest.fn();
+    const lockErr = Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" });
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET lock_timeout
+      .mockRejectedValueOnce(lockErr) // SELECT FOR UPDATE → lock timeout
+      .mockResolvedValueOnce({ rowCount: 0 }); // ROLLBACK
+    const release = jest.fn();
+    const { app } = buildAppTx(poolQuery, clientQuery, release);
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/3/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(409);
+    expect((res.body as { error: string }).error).toMatch(/少し時間/);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("[MEDIUM-1] embeddings UPDATE SQL includes numeric guard for metadata->>'faq_id'", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 9, tenant_id: "tenant-test" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE faq_docs
+      .mockResolvedValueOnce({ rowCount: 0 }) // UPDATE faq_embeddings
+      .mockResolvedValueOnce({ rowCount: 0 }); // COMMIT
+    const { app } = buildAppTx(poolQuery, clientQuery);
+
+    await request(app, "PATCH", "/v1/admin/knowledge/faq/9/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    const embeddingsCall = clientQuery.mock.calls.find((c) =>
+      String(c[0]).includes("UPDATE faq_embeddings"),
+    );
+    expect(embeddingsCall).toBeDefined();
+    expect(String(embeddingsCall![0])).toMatch(/~ '\^\[0-9\]\+\$'/);
+  });
+
+  // ---- Round 4 新規 (Codex Round 3 MEDIUM-2 回帰防御) ----
+
+  it("[Round 4] returns 404 when SELECT FOR UPDATE finds 0 rows (in-tx existence check), ROLLBACK called", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // SELECT FOR UPDATE → 0 rows
+      .mockResolvedValueOnce({ rowCount: 0 }); // ROLLBACK
+    const release = jest.fn();
+    const { app, db } = buildAppTx(poolQuery, clientQuery, release);
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/999/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(404);
+    // pool-level (db.query) precheck は呼ばれない: tx 内 SELECT FOR UPDATE が唯一の存在確認
+    expect(poolQuery).not.toHaveBeenCalled();
+    expect(db.connect).toHaveBeenCalled();
+    const sqls = clientQuery.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain("ROLLBACK");
+    expect(sqls.some((s) => /UPDATE faq_/.test(s))).toBe(false); // UPDATE は走らない
+    expect(release).toHaveBeenCalledTimes(1);
+    // ES 同期も呼ばれない
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) => String(c[0]).includes("/_update/"));
+    expect(esCalls).toHaveLength(0);
+  });
+
+  it("[Round 4] returns 403 on tenant mismatch within tx, ROLLBACK called, no UPDATE", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 5, tenant_id: "other-tenant" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 0 }); // ROLLBACK
+    const release = jest.fn();
+    const { app, db } = buildAppTx(poolQuery, clientQuery, release);
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/5/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(403);
+    expect(poolQuery).not.toHaveBeenCalled();
+    expect(db.connect).toHaveBeenCalled();
+    const sqls = clientQuery.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain("ROLLBACK");
+    expect(sqls.some((s) => /UPDATE faq_/.test(s))).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("[Round 4] returns 500 + ROLLBACK if UPDATE faq_docs rowCount !== 1 after SELECT FOR UPDATE (assertion)", async () => {
+    // 想定: FOR UPDATE で行ロック取得直後の UPDATE rowCount=0 は内部矛盾
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1, tenant_id: "tenant-test" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 0 }) // UPDATE faq_docs → rowCount=0 (想定外)
+      .mockResolvedValueOnce({ rowCount: 0 }); // ROLLBACK
+    const release = jest.fn();
+    const { app } = buildAppTx(poolQuery, clientQuery, release);
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/1/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(500);
+    const sqls = clientQuery.mock.calls.map((c) => String(c[0]));
+    expect(sqls).toContain("ROLLBACK");
+    // UPDATE faq_embeddings は走らない (rowCount assertion で早期 ROLLBACK)
+    expect(sqls.some((s) => /UPDATE faq_embeddings/.test(s))).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+    // ES 同期も走らない
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) => String(c[0]).includes("/_update/"));
+    expect(esCalls).toHaveLength(0);
+  });
+
+  it("[Round 4] SELECT FOR UPDATE SQL contains 'FOR UPDATE' clause", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // SELECT FOR UPDATE (404 path)
+      .mockResolvedValueOnce({ rowCount: 0 }); // ROLLBACK
+    const { app } = buildAppTx(poolQuery, clientQuery);
+
+    await request(app, "PATCH", "/v1/admin/knowledge/faq/42/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    const selectCall = clientQuery.mock.calls.find((c) =>
+      String(c[0]).includes("SELECT") && String(c[0]).includes("faq_docs"),
+    );
+    expect(selectCall).toBeDefined();
+    expect(String(selectCall![0])).toMatch(/FOR UPDATE/);
+  });
+
+  it("returns 200 even if ES sync fails (fire-and-forget — DB is source-of-truth)", async () => {
+    const poolQuery = jest.fn();
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rowCount: 0 }) // SET
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 11, tenant_id: "tenant-test" }] }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE faq_docs
+      .mockResolvedValueOnce({ rowCount: 0 }) // UPDATE faq_embeddings
+      .mockResolvedValueOnce({ rowCount: 0 }); // COMMIT
+    const { app } = buildAppTx(poolQuery, clientQuery);
+
+    mockFetch.mockRejectedValueOnce(new Error("ES connection refused"));
+
+    const res = await request(app, "PATCH", "/v1/admin/knowledge/faq/11/exclude", {
+      body: { is_excluded_from_search: true },
+    });
+
+    expect(res.status).toBe(200);
+    expect((res.body as { is_excluded_from_search: boolean }).is_excluded_from_search).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase69-2 Round 5 (Codex Round 4 Finding #1): upsertToEsAsync に is_excluded_from_search 伝搬
+// ---------------------------------------------------------------------------
+describe("upsertToEsAsync — is_excluded_from_search propagation (Phase69-2 Round 5)", () => {
+  beforeEach(() => {
+    mockFetch.mockClear();
+    process.env.ES_URL = "http://es-test:9200";
+  });
+
+  afterEach(() => {
+    delete process.env.ES_URL;
+  });
+
+  it("POST /faq: ES upsert payload contains is_excluded_from_search: false on create", async () => {
+    const createdRow = {
+      id: 99,
+      tenant_id: "tenant-test",
+      question: "新規Q",
+      answer: "新規A",
+      is_published: true,
+    };
+    const queryMock = jest.fn().mockResolvedValueOnce({ rows: [createdRow] });
+    const app = buildApp(queryMock);
+
+    await request(app, "POST", "/v1/admin/knowledge/faq", {
+      body: { question: "新規Q", answer: "新規A" },
+    });
+
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).includes("/_doc/99_tenant-test"),
+    );
+    expect(esCalls.length).toBeGreaterThanOrEqual(1);
+    const payload = JSON.parse(esCalls[0][1]?.body as string);
+    expect(payload).toHaveProperty("is_excluded_from_search", false);
+  });
+
+  it("PUT /faq/:id: ES upsert payload contains is_excluded_from_search from updated row", async () => {
+    const updatedRow = {
+      id: 5,
+      tenant_id: "tenant-test",
+      question: "変更Q",
+      answer: "変更A",
+      is_published: true,
+      is_excluded_from_search: true,
+    };
+    const queryMock = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 5, tenant_id: "tenant-test" }] }) // SELECT check
+      .mockResolvedValueOnce({ rows: [updatedRow] }) // UPDATE RETURNING
+      .mockResolvedValueOnce({ rowCount: 0 }); // DELETE embeddings
+    const app = buildApp(queryMock);
+
+    await request(app, "PUT", "/v1/admin/knowledge/faq/5", {
+      body: { question: "変更Q", answer: "変更A", is_excluded_from_search: true },
+    });
+
+    await new Promise((r) => setImmediate(r));
+    const esCalls = mockFetch.mock.calls.filter((c) =>
+      String(c[0]).includes("/_doc/5_tenant-test"),
+    );
+    expect(esCalls.length).toBeGreaterThanOrEqual(1);
+    const payload = JSON.parse(esCalls[0][1]?.body as string);
+    expect(payload).toHaveProperty("is_excluded_from_search", true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase69-2 PR-C2 Round 2: hybrid.ts ES クエリ永続フィルター回帰
+// ---------------------------------------------------------------------------
+describe("hybridSearch ES query — is_excluded_from_search must_not filter (Phase69-2 PR-C2 Round 2)", () => {
+  it("ES filter.bool.must includes a must_not for is_excluded_from_search: true", () => {
+    // hybrid.ts のクエリ構造を文字列レベルで検証（実 ES 呼び出し不要）
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("fs") as typeof import("fs");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("path") as typeof import("path");
+    const hybridSrc = fs.readFileSync(
+      path.join(__dirname, "../src/search/hybrid.ts"),
+      "utf-8",
+    );
+    expect(hybridSrc).toMatch(/must_not:\s*{\s*term:\s*{\s*is_excluded_from_search:\s*true\s*}\s*}/);
+  });
+});

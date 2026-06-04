@@ -2,6 +2,7 @@
 
 // Phase38 Step4-BE: チューニングルール CRUD API
 
+import { GROQ_INSTANT_8B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { z } from "zod";
@@ -24,6 +25,17 @@ import {
 import { getResearchProvider } from '../../../lib/research';
 import { isDeepResearchEnabled } from '../../../lib/research/featureCheck';
 import { buildResearchQuery } from '../../../lib/research/queryBuilder';
+
+// ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist
+// ---------------------------------------------------------------------------
+
+const ALLOWED_TUNING_ROLES = ["super_admin", "client_admin"] as const;
+type AllowedTuningRole = typeof ALLOWED_TUNING_ROLES[number];
+function isAllowedTuningRole(role: unknown): role is AllowedTuningRole {
+  return typeof role === "string" &&
+         (ALLOWED_TUNING_ROLES as readonly string[]).includes(role);
+}
 
 // ---------------------------------------------------------------------------
 // Groq 8b: ルール提案
@@ -86,7 +98,7 @@ ${knowledgePart}${rulesPart}${crossTenantPart}${researchPart}
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL_8B ?? "llama-3.1-8b-instant",
+        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.4,
         max_tokens: 400,
@@ -165,9 +177,20 @@ export function registerTuningRoutes(app: Express): void {
       if (!su) {
         return res.status(401).json({ error: "unauthorized" });
       }
-      const role = su.app_metadata?.role ?? su.user_metadata?.role ?? "";
-      if (role !== "super_admin" && role !== "client_admin") {
-        return res.status(403).json({ error: "forbidden" });
+      const role = su.app_metadata?.role;
+      if (!isAllowedTuningRole(role)) {
+        logger.warn({
+          event: 'tuning_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_TUNING_ROLES,
+          hasAppMetadataRole: !!su.app_metadata?.role,
+          hasUserMetadataRole: !!(su as any).user_metadata?.role,
+        }, "tuning access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
       }
 
       const { userMessage, aiMessage } = (req.body ?? {}) as Record<string, unknown>;
@@ -224,9 +247,23 @@ export function registerTuningRoutes(app: Express): void {
   // -----------------------------------------------------------------------
   app.get("/v1/admin/tuning-rules", async (req: Request, res: Response) => {
     const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const role = su?.app_metadata?.role;
     const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-    const isSuperAdmin: boolean =
-      (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+    const isSuperAdmin: boolean = role === "super_admin";
+    if (!isAllowedTuningRole(role)) {
+      logger.warn({
+        event: 'tuning_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTHZ_ROLE_DENIED',
+        requested_path: req.path,
+        actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+        actor_role: role,
+        required_roles: ALLOWED_TUNING_ROLES,
+        hasAppMetadataRole: !!su?.app_metadata?.role,
+        hasUserMetadataRole: !!su?.user_metadata?.role,
+      }, "tuning access denied: invalid actor role");
+      return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+    }
 
     // super_admin: ?tenant= で絞り込み可（未指定 = 全テナント）
     // client_admin: 自テナント固有 + global のみ
@@ -248,10 +285,24 @@ export function registerTuningRoutes(app: Express): void {
   // -----------------------------------------------------------------------
   app.post("/v1/admin/tuning-rules", async (req: Request, res: Response) => {
     const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const role = su?.app_metadata?.role;
     const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-    const isSuperAdmin: boolean =
-      (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+    const isSuperAdmin: boolean = role === "super_admin";
     const jwtEmail: string = su?.email ?? "";
+    if (!isAllowedTuningRole(role)) {
+      logger.warn({
+        event: 'tuning_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTHZ_ROLE_DENIED',
+        requested_path: req.path,
+        actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+        actor_role: role,
+        required_roles: ALLOWED_TUNING_ROLES,
+        hasAppMetadataRole: !!su?.app_metadata?.role,
+        hasUserMetadataRole: !!su?.user_metadata?.role,
+      }, "tuning access denied: invalid actor role");
+      return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+    }
 
     const parsed = createSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -293,9 +344,23 @@ export function registerTuningRoutes(app: Express): void {
     "/v1/admin/tuning-rules/:id",
     async (req: Request, res: Response) => {
       const su = (req as AuthedReq).supabaseUser;
+      const role = su?.app_metadata?.role;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const isSuperAdmin: boolean = role === "super_admin";
+      if (!isAllowedTuningRole(role)) {
+        logger.warn({
+          event: 'tuning_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_TUNING_ROLES,
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!(su as any)?.user_metadata?.role,
+        }, "tuning access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+      }
 
       const id = Number(req.params["id"]);
       if (!Number.isFinite(id) || id <= 0) {
@@ -334,9 +399,23 @@ export function registerTuningRoutes(app: Express): void {
     "/v1/admin/tuning-rules/:id",
     async (req: Request, res: Response) => {
       const su = (req as AuthedReq).supabaseUser;
+      const role = su?.app_metadata?.role;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const isSuperAdmin: boolean = role === "super_admin";
+      if (!isAllowedTuningRole(role)) {
+        logger.warn({
+          event: 'tuning_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_TUNING_ROLES,
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!(su as any)?.user_metadata?.role,
+        }, "tuning access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+      }
 
       const id = Number(req.params["id"]);
       if (!Number.isFinite(id) || id <= 0) {

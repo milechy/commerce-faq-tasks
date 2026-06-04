@@ -64,14 +64,46 @@ check "Admin UI" "$ADMIN_URL"
 # ── 4. Demo page ──────────────────────────────────────────────────────────
 check "Demo page" "$API_URL/carnation-demo/index.html"
 
-# ── 5. Metrics（内部リクエストヘッダー必要）─────────────────────────────
-metrics_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-  -H "X-Internal-Request: 1" "$API_URL/metrics" 2>/dev/null || echo "000")
+# ── 5. Metrics（VPS内 localhost 経由でのみ確認）─────────────────────────
+# 注: /metrics は外部からは nginx allow 127.0.0.1; deny all; で必ず 403。
+# 内部疎通は ssh で VPS に入ってから http://localhost:3100 を叩いて確認する。
+metrics_status=$(ssh "${VPS}" "curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+  -H 'X-Internal-Request: 1' http://localhost:3100/metrics 2>/dev/null" 2>/dev/null || echo "000")
 if [ "$metrics_status" = "200" ]; then
-  echo "  ✅ Metrics — $metrics_status"
+  echo "  ✅ Metrics — $metrics_status (localhost on VPS)"
   PASS=$((PASS + 1))
 else
-  echo "  ⚠️  Metrics — $metrics_status (non-critical, requires X-Internal-Request header)"
+  # Codex Round 2: 内部メトリクスは observability の生命線。WARN ではなく
+  # FAIL にして deploy ゲートで止める（observability regression を看過させない）。
+  echo "  ❌ Metrics — $metrics_status (expected 200 via VPS localhost:3100)"
+  FAIL=$((FAIL + 1))
+fi
+
+# ── 5b. 公開面では /metrics は必ず deny される（spoof閉塞の確認）──────
+public_metrics_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+  -H "X-Internal-Request: 1" "$API_URL/metrics" 2>/dev/null || echo "000")
+if [ "$public_metrics_status" = "403" ] || [ "$public_metrics_status" = "404" ]; then
+  echo "  ✅ /metrics public spoof denied — $public_metrics_status"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ /metrics is reachable from public with header — got $public_metrics_status (expected 403/404)"
+  FAIL=$((FAIL + 1))
+fi
+
+# ── 5c. nginx 経由の loopback (VPSローカルhttp 127.0.0.1) は 200 を返す ──
+# Codex MEDIUM 反映: nginx の proxy_set_header 設定誤りで loopback 経由も
+# 200 を返せなくなる lockout を検出する。Pre-A 時点と Post-A 時点で意味が
+# 変わる(Post: nginx が "1" を注入してくれるのでヘッダなしでも 200)。
+nginx_loopback_status=$(ssh "${VPS}" "curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+  http://127.0.0.1/metrics 2>/dev/null" 2>/dev/null || echo "000")
+if [ "$nginx_loopback_status" = "200" ]; then
+  echo "  ✅ /metrics via nginx loopback — $nginx_loopback_status"
+  PASS=$((PASS + 1))
+else
+  # Codex Round 2: nginx ↔ Express の interplay が壊れたら 200 を返せなくなる。
+  # 検出を deploy ゲートで強制するため FAIL に格上げ。
+  echo "  ❌ /metrics via nginx loopback — $nginx_loopback_status (expected 200, check nginx X-Internal-Request injection / IP allow)"
+  FAIL=$((FAIL + 1))
 fi
 
 # ── 6. avatar-agent PM2 status ────────────────────────────────────────────

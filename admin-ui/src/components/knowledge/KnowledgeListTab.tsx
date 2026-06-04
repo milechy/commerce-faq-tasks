@@ -14,6 +14,7 @@ import {
 import FaqSearchBar from "./FaqSearchBar";
 import Pagination from "./Pagination";
 import BulkActionBar from "./BulkActionBar";
+import ExcludeSearchToggle from "./ExcludeSearchToggle";
 
 type SortKey = "created_at" | "updated_at" | "category";
 
@@ -261,6 +262,15 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     }
   };
 
+  // ─── 検索除外フラグ楽観的更新 ────────────────────────────────────────────────
+  const handleExcludeToggled = (faqId: number, newValue: boolean) => {
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === faqId ? { ...item, is_excluded_from_search: newValue } : item
+      )
+    );
+  };
+
   // ─── Derived ──────────────────────────────────────────────────────────────
   const pageIds = items.map((f) => f.id);
   const allPageSelected =
@@ -493,7 +503,11 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                 flexWrap: "wrap",
                 background: selectedIds.has(item.id)
                   ? "rgba(34,197,94,0.04)"
+                  : item.is_excluded_from_search
+                  ? "rgba(127,29,29,0.06)"
                   : "transparent",
+                opacity: item.is_excluded_from_search ? 0.75 : 1,
+                transition: "all 0.15s",
               }}
             >
               {/* チェックボックス */}
@@ -534,6 +548,21 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                   >
                     {categoryLabel(item.category)}
                   </span>
+                  {item.is_excluded_from_search && (
+                    <span
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        background: "rgba(239,68,68,0.1)",
+                        border: "1px solid rgba(239,68,68,0.3)",
+                        color: "#f87171",
+                        fontSize: 11,
+                        fontWeight: 600,
+                      }}
+                    >
+                      検索除外
+                    </span>
+                  )}
                   <span style={{ fontSize: 11, color: "#6b7280" }}>
                     {formatDate(item.created_at, locale)}
                   </span>
@@ -569,8 +598,16 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                   gap: 8,
                   flexShrink: 0,
                   alignItems: "center",
+                  flexWrap: "wrap",
                 }}
               >
+                <ExcludeSearchToggle
+                  faqId={item.id}
+                  tenantId={tenantId}
+                  isExcluded={item.is_excluded_from_search ?? false}
+                  onToggled={handleExcludeToggled}
+                  onError={(msg) => showToast(msg)}
+                />
                 <button
                   onClick={() =>
                     setEditTarget({
@@ -580,6 +617,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                       category: item.category,
                       tags: item.tags,
                       is_published: item.is_published,
+                      is_excluded_from_search: item.is_excluded_from_search,
                     })
                   }
                   style={{
@@ -832,6 +870,9 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           </div>
         </div>
       )}
+
+      {/* spin animation for ExcludeSearchToggle */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

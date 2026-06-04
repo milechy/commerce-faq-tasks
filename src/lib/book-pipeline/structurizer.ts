@@ -3,6 +3,7 @@
 // Phase44: Groq 8b を使った 6 フィールド構造化モジュール
 // CLAUDE.md: 書籍内容をログに出力しない
 
+import { GROQ_INSTANT_8B } from '../../config/groqModels';
 import { groqClient } from "../../agent/llm/groqClient";
 import type { TextChunk } from "./chunkSplitter";
 import type { SchemaField } from "./contentAnalyzer";
@@ -26,7 +27,7 @@ export interface StructurizerDeps {
   schema?: SchemaField[];
 }
 
-const MODEL = "llama-3.1-8b-instant";
+const MODEL = GROQ_INSTANT_8B;
 const DELAY_MS = 200; // Groq レート制限対策
 
 const BASE_SYSTEM_PROMPT = `あなたは書籍コンテンツのFAQ化アシスタントです。

@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
+import { z } from "zod";
 import type { DialogTurnInput } from "../dialog/types";
 import { AgentDialogOrchestrator } from "./AgentDialogOrchestrator";
 import { maybeProbeLemonSliceReadiness } from "./presentation/lemonSliceAdapter";
@@ -20,6 +21,17 @@ export function createAgentDialogHandler(
     if (!body || typeof body.message !== "string") {
       res.status(400).json({ error: "invalid_body" });
       return;
+    }
+
+    // Phase69-2: excluded_ids の入力検証（/agent.search と同等の上限）
+    // null は undefined と同等（除外なし）として扱う
+    const rawExcludedIds = (body.options as Record<string, unknown> | undefined)?.excluded_ids;
+    if (rawExcludedIds != null) {
+      const result = z.array(z.string()).max(500).safeParse(rawExcludedIds);
+      if (!result.success) {
+        res.status(400).json({ error: "invalid_excluded_ids", details: result.error.flatten() });
+        return;
+      }
     }
 
     const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";

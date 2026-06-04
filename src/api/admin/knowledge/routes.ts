@@ -1,6 +1,7 @@
 // src/api/admin/knowledge/routes.ts
 
 // Phase29: カーネーション向けナレッジ管理API
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
@@ -12,6 +13,7 @@ import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { encryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
+import { resolveFaqWriteIndex } from "../../../search/langIndex";
 import type { SupabaseJwtUser } from '../../middleware/roleAuth';
 
 
@@ -88,7 +90,7 @@ async function textToFaqs(
   categoryOverride?: string | null,
   existingQuestions?: string[]
 ): Promise<FaqEntry[]> {
-  const model = process.env.GROQ_FAQ_GEN_MODEL ?? "llama-3.3-70b-versatile";
+  const model = process.env.GROQ_FAQ_GEN_MODEL ?? GROQ_VERSATILE_70B;
 
   const existingSection =
     existingQuestions && existingQuestions.length > 0
@@ -164,10 +166,11 @@ ${text.slice(0, 4000)}
   return faqs;
 }
 
-/** ESインデックスからドキュメントを削除（best-effort） */
-async function deleteFromEs(esDocId: string): Promise<void> {
+/** ESインデックスからドキュメントを削除（best-effort）
+ * Phase69-2-E: write index を read path と同じ faq_${tenantId} に統一 */
+async function deleteFromEs(tenantId: string, esDocId: string): Promise<void> {
   const esUrl = process.env.ES_URL;
-  const index = process.env.ES_FAQ_INDEX || "faqs";
+  const index = resolveFaqWriteIndex(tenantId);
   if (!esUrl || !esDocId) return;
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(esDocId)}`;
   await fetch(url, { method: "DELETE" }).catch(() => {});
@@ -245,7 +248,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       (req as KnowledgeReq).user = {
         id: su.sub ?? su.id ?? "",
         email: su.email ?? "",
-        role: su.app_metadata?.role ?? su.user_metadata?.role ?? "anonymous",
+        role: su.app_metadata?.role ?? "anonymous",
         tenantId: su.app_metadata?.tenant_id ?? null,
       };
     } else {
@@ -254,11 +257,25 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     next();
   }
 
-  // role チェック（super_admin / client_admin のみ通過）
+  // role チェック（super_admin / client_admin のみ通過 — Phase69-1.5 PR-C4 v2: ALLOWED_KNOWLEDGE_ROLES 統合）
+  const ALLOWED_KNOWLEDGE_ROLES = ["super_admin", "client_admin"] as const;
   function requireKnowledgeRole(req: Request, res: Response, next: NextFunction): void {
     const user = (req as KnowledgeReq).user;
-    if (!user || !["super_admin", "client_admin"].includes(user.role ?? "")) {
-      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
+    const role = user?.role ?? "";
+    if (!user || !(ALLOWED_KNOWLEDGE_ROLES as readonly string[]).includes(role)) {
+      const su = (req as KnowledgeReq).supabaseUser;
+      logger.warn({
+        event: 'knowledge_access_denied',
+        reason: 'invalid_role',
+        errorCode: 'AUTHZ_ROLE_DENIED',
+        requested_path: req.path,
+        actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+        actor_role: role,
+        required_roles: ALLOWED_KNOWLEDGE_ROLES,
+        hasAppMetadataRole: !!su?.app_metadata?.role,
+        hasUserMetadataRole: !!(su as any)?.user_metadata?.role,
+      }, 'knowledge access denied: invalid actor role');
+      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません", code: 'AUTHZ_ROLE_DENIED' });
       return;
     }
     next();
@@ -393,7 +410,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       );
 
       // ES 削除（best-effort）
-      if (esDocId) await deleteFromEs(esDocId);
+      if (esDocId) await deleteFromEs(recordTenantId, esDocId);
 
       return res.json({ ok: true, id });
     } catch (err) {

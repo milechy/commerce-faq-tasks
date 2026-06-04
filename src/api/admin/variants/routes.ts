@@ -9,15 +9,44 @@ import { listVariants, upsertVariants, getVariantStats } from "./variantsReposit
 import { logger } from '../../../lib/logger';
 
 // ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_VARIANT_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedVariantRole = typeof ALLOWED_VARIANT_ROLES[number];
+function isAllowedVariantRole(role: unknown): role is AllowedVariantRole {
+  return typeof role === 'string' &&
+         (ALLOWED_VARIANT_ROLES as readonly string[]).includes(role);
+}
+
+// ---------------------------------------------------------------------------
 // ユーティリティ
 // ---------------------------------------------------------------------------
 
-function resolveAuth(req: Request): { jwtTenantId: string; isSuperAdmin: boolean } {
+function resolveAuth(req: Request): { su: Record<string, any> | undefined; role: unknown; jwtTenantId: string; isSuperAdmin: boolean } {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role: unknown = su?.app_metadata?.role;
   return {
+    su,
+    role,
     jwtTenantId: su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "",
-    isSuperAdmin: (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin",
+    isSuperAdmin: role === "super_admin",
   };
+}
+
+function denyVariantRole(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'variants_access_denied',
+    reason: 'invalid_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ALLOWED_VARIANT_ROLES,
+    hasAppMetadataRole: !!su?.['app_metadata']?.role,
+    hasUserMetadataRole: !!su?.['user_metadata']?.role,
+  }, 'variants access denied: invalid actor role');
+  return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
 function parseDays(raw: unknown, defaultVal: number): number {
@@ -52,7 +81,10 @@ export function registerVariantRoutes(app: Express): void {
   // GET /v1/admin/variants?tenantId=xxx
   // -------------------------------------------------------------------------
   app.get("/v1/admin/variants", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedVariantRole(role)) {
+      return denyVariantRole(req, res, su, role);
+    }
     const queryTenantId = req.query["tenantId"] as string | undefined;
 
     if (!isSuperAdmin && queryTenantId && queryTenantId !== jwtTenantId) {
@@ -79,7 +111,10 @@ export function registerVariantRoutes(app: Express): void {
   // NOTE: 静的パスなので PUT より先に登録
   // -------------------------------------------------------------------------
   app.get("/v1/admin/variants/stats", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedVariantRole(role)) {
+      return denyVariantRole(req, res, su, role);
+    }
     const queryTenantId = req.query["tenantId"] as string | undefined;
 
     if (!isSuperAdmin && queryTenantId && queryTenantId !== jwtTenantId) {
@@ -109,7 +144,10 @@ export function registerVariantRoutes(app: Express): void {
   // バリデーション: weightの合計が100であること
   // -------------------------------------------------------------------------
   app.put("/v1/admin/variants", async (req: Request, res: Response) => {
-    const { jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
+    if (!isAllowedVariantRole(role)) {
+      return denyVariantRole(req, res, su, role);
+    }
 
     const parsed = putVariantsSchema.safeParse(req.body ?? {});
     if (!parsed.success) {

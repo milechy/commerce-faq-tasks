@@ -26,6 +26,13 @@ bash SCRIPTS/dead-code-check.sh を実行。
 - 未登録ルート → 修正必須
 - 循環依存 → 修正必須
 
+### Gate 1.6: テストカバレッジ判定
+bash SCRIPTS/gate-1.6-coverage-check.sh を実行。
+判断基準:
+- ベースライン未設定 → SKIP (警告として報告、初回は --set-baseline で設定)
+- ベースラインより 2% 以上低下 → FAIL (修正必須)
+- 低下なし or 2% 以内 → PASS
+
 ### Gate 2: セキュリティスキャン
 bash SCRIPTS/security-scan.sh を実行。High/Critical → デプロイブロック。
 
@@ -36,6 +43,7 @@ pnpm build && cd admin-ui && pnpm build && cd .. を実行。
 
 Gate 1: [○スイート ○テスト全パス / typecheck結果]
 Gate 1.5: [PASS — 新規ファイル孤立なし / 要修正 — 孤立ファイル一覧]
+Gate 1.6: [PASS X% (ベースライン Y%) / SKIP ベースライン未設定 / FAIL 低下Z%]
 Gate 2: [PASS/FAIL、Critical/High件数]
 Gate 3: [API build結果、Admin UI build結果]
 

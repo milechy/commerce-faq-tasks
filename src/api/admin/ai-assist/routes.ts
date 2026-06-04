@@ -3,6 +3,7 @@
 // Phase43 P2: インテント振り分け + RAG統合
 // POST /v1/admin/ai-assist/chat
 
+import { GROQ_INSTANT_8B, GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
@@ -57,7 +58,7 @@ async function detectIntent(message: string): Promise<Intent> {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
+        model: GROQ_INSTANT_8B,
         messages: [
           {
             role: "user",
@@ -93,7 +94,7 @@ async function callGroq8b(userMessage: string): Promise<string> {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "llama-3.1-8b-instant",
+      model: GROQ_INSTANT_8B,
       messages: [
         { role: "system", content: ADMIN_AI_SYSTEM_PROMPT },
         { role: "user", content: userMessage },
@@ -141,7 +142,7 @@ ${ragContext}`
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: GROQ_VERSATILE_70B,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },

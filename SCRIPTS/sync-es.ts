@@ -41,6 +41,9 @@ if (!allMode && !tenantArg) {
 }
 
 // ESインデックスのmappings（kuromojiアナライザー付き）
+// Phase69-2 PR-C2 Round 2: is_published / is_excluded_from_search を明示マッピング
+//   - dynamic mapping のブレを防ぐ
+//   - hybrid.ts の filter.must_not で参照される
 const MAPPINGS_KUROMOJI = {
   mappings: {
     properties: {
@@ -51,6 +54,8 @@ const MAPPINGS_KUROMOJI = {
       tags: { type: "keyword" },
       faq_id: { type: "integer" },
       created_at: { type: "date" },
+      is_published: { type: "boolean" },
+      is_excluded_from_search: { type: "boolean" },
     },
   },
 };
@@ -66,6 +71,8 @@ const MAPPINGS_STANDARD = {
       tags: { type: "keyword" },
       faq_id: { type: "integer" },
       created_at: { type: "date" },
+      is_published: { type: "boolean" },
+      is_excluded_from_search: { type: "boolean" },
     },
   },
 };
@@ -161,6 +168,9 @@ async function bulkIndex(index: string, rows: any[]): Promise<number> {
       created_at: row.created_at
         ? new Date(row.created_at).toISOString()
         : null,
+      // Phase69-2 PR-C2 Round 2: 永続フィルター用フィールドを ES に同期
+      is_published: row.is_published === false ? false : true,
+      is_excluded_from_search: row.is_excluded_from_search === true,
     });
     lines.push(action);
     lines.push(doc);

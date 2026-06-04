@@ -158,6 +158,42 @@ async function test_dialog_returns_clarify_when_multi_step_enabled() {
   assertAdapterMetaShape(body.meta);
 }
 
+async function test_dialog_excluded_ids_over_500_returns_400() {
+  const overLimitIds = Array.from({ length: 501 }, (_, i) => `id-${i}`);
+  const { statusCode, body } = await callHandler({
+    message: "返品の送料を知りたい",
+    options: { excluded_ids: overLimitIds },
+  });
+  assert.equal(statusCode, 400, "should return 400 for excluded_ids > 500");
+  assert.equal(body.error, "invalid_excluded_ids", "error field should be invalid_excluded_ids");
+}
+
+async function test_dialog_excluded_ids_500_or_less_succeeds() {
+  const ids = Array.from({ length: 5 }, (_, i) => `id-${i}`);
+  const { statusCode } = await callHandler({
+    message: "返品の送料を知りたい",
+    options: { excluded_ids: ids },
+  });
+  assert.equal(statusCode, 200, "should return 200 for excluded_ids <= 500");
+}
+
+async function test_dialog_excluded_ids_omitted_variants_succeed() {
+  const cases: Array<{ label: string; options: unknown }> = [
+    { label: "options=undefined", options: undefined },
+    { label: "options={}", options: {} },
+    { label: "excluded_ids=[]", options: { excluded_ids: [] } },
+    { label: "excluded_ids=null", options: { excluded_ids: null } },
+  ];
+
+  for (const { label, options } of cases) {
+    const { statusCode } = await callHandler({
+      message: "返品の送料を知りたい",
+      options,
+    });
+    assert.equal(statusCode, 200, `should return 200 when ${label}`);
+  }
+}
+
 async function main() {
   console.log("Running /agent.dialog http tests...");
 
@@ -170,6 +206,18 @@ async function main() {
     [
       "dialog returns clarify when multi-step enabled",
       test_dialog_returns_clarify_when_multi_step_enabled,
+    ],
+    [
+      "dialog excluded_ids over 500 returns 400",
+      test_dialog_excluded_ids_over_500_returns_400,
+    ],
+    [
+      "dialog excluded_ids 500 or less succeeds",
+      test_dialog_excluded_ids_500_or_less_succeeds,
+    ],
+    [
+      "dialog excluded_ids omitted/null/empty succeeds",
+      test_dialog_excluded_ids_omitted_variants_succeed,
     ],
   ];
 

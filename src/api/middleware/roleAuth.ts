@@ -4,6 +4,22 @@ import type { NextFunction, Request, Response } from "express";
 
 export type UserRole = "super_admin" | "client_admin" | "anonymous";
 
+// 管理者ロール allowlist（admin 系ルートの認可判定で共有）。
+// 旧来 chat-history / analytics / eventAnalytics に重複定義されていたものを集約。
+export const ALLOWED_ADMIN_ROLES = ["super_admin", "client_admin"] as const;
+export type AllowedAdminRole = (typeof ALLOWED_ADMIN_ROLES)[number];
+/**
+ * actor のロールが admin 系（super_admin / client_admin）か判定する型ガード。
+ * セキュリティ要件: 認可ロールは app_metadata.role のみを信頼すること
+ * （user_metadata はクライアント編集可能なため特権判定に使用してはならない）。
+ */
+export function isAllowedAdminRole(role: unknown): role is AllowedAdminRole {
+  return (
+    typeof role === "string" &&
+    (ALLOWED_ADMIN_ROLES as readonly string[]).includes(role)
+  );
+}
+
 export interface AuthenticatedUser {
   id: string;
   email: string;
@@ -17,8 +33,16 @@ export type SupabaseJwtUser = {
   email?: string;
   tenant_id?: string;
   app_metadata?: { role?: string; tenant_id?: string };
+  // user_metadata は Supabase JWT に存在するがクライアント制御可能なため、
+  // 認可ロジックでは使用してはならない（型定義のみ保持）
   user_metadata?: { role?: string; tenant_id?: string };
 };
+
+// セキュリティ要件: JWT claim を安全に string として取得する
+// typeof ガードにより any/undefined を "" にフォールバック（実行時保証）
+function safeStringClaim(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
 
 export type AuthedReq = Request & {
   supabaseUser?: SupabaseJwtUser;
@@ -46,15 +70,21 @@ export function roleAuthMiddleware(
     return next();
   }
 
+  // セキュリティ要件: ロール / テナントスコープは app_metadata のみを信頼する
+  // user_metadata はクライアント制御可能なため、特権判定に使用してはならない
+  const rawRole = safeStringClaim(supabaseUser.app_metadata?.role);
   const role: UserRole =
-    (supabaseUser.app_metadata?.role as UserRole | undefined) ||
-    (supabaseUser.user_metadata?.role as UserRole | undefined) ||
-    "anonymous";
+    rawRole === "super_admin" || rawRole === "client_admin" ? rawRole : "anonymous";
 
-  const tenantId: string | null =
-    supabaseUser.app_metadata?.tenant_id ||
-    supabaseUser.user_metadata?.tenant_id ||
-    null;
+  const rawTenantId = safeStringClaim(supabaseUser.app_metadata?.tenant_id);
+  const tenantId: string | null = rawTenantId || null;
+
+  // セキュリティ要件: client_admin は必ず tenant_id を持つこと
+  // 防御深度: ミドルウェア層と route 層の両方で fail-closed
+  if (role === "client_admin" && (!tenantId || typeof tenantId !== "string" || tenantId.trim() === "")) {
+    res.status(403).json({ error: "この操作を実行する権限がありません" });
+    return;
+  }
 
   (req as AuthedReq).user = {
     id: supabaseUser.sub || supabaseUser.id || "",
@@ -83,38 +113,10 @@ export function requireRole(...roles: UserRole[]) {
   };
 }
 
-/**
- * client_admin が自テナントのデータのみアクセスできるようにする
- * super_admin はすべてのテナントにアクセス可能
- */
-export function requireOwnTenant() {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const user = (req as AuthedReq).user;
-
-    // super_admin はすべてのテナントにアクセス可能
-    if (user?.role === "super_admin") {
-      return next();
-    }
-
-    const requestedTenant =
-      (req.params.tenantId as string | undefined) ||
-      (req.query.tenant as string | undefined) ||
-      (req.query.tenant_id as string | undefined) ||
-      (req.headers["x-tenant-id"] as string | undefined);
-
-    if (requestedTenant && requestedTenant !== user?.tenantId) {
-      res.status(403).json({
-        error: "forbidden",
-        message: "他のテナントのデータにはアクセスできません",
-      });
-      return;
-    }
-
-    // client_admin のリクエストに tenant_id が未指定なら自動付与
-    if (!requestedTenant && user?.tenantId) {
-      req.query.tenant = user.tenantId;
-    }
-
-    next();
-  };
-}
+// NOTE: 旧 `requireOwnTenant()` ヘルパーは削除済み（Phase70 / Phase44-46 棚卸し結論）。
+// テナント分離は各 per-tenant ルート内で個別に実装されている等価ロジックで担保されており、
+// 一律ミドルウェアの再配線は不要と確認した。代表例:
+//   - src/api/admin/knowledge/routes.ts:282 `requireKnowledgeTenant`
+//   - src/api/admin/chatTest/routes.ts:78    インライン check
+//   - src/api/admin/chat-history/routes.ts:54 `app_metadata.tenant_id` を直接 SQL フィルタに使用
+// 詳細: PR #207 (feature/1215114203188918-remove-dead-requireOwnTenant)

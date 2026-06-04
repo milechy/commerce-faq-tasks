@@ -8,12 +8,51 @@ import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { createNotification } from '../../../lib/notifications';
 
+// ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_OPTION_ROLES = ['super_admin', 'client_admin'] as const;
+type AllowedOptionRole = typeof ALLOWED_OPTION_ROLES[number];
+function isAllowedOptionRole(role: unknown): role is AllowedOptionRole {
+  return typeof role === 'string' &&
+         (ALLOWED_OPTION_ROLES as readonly string[]).includes(role);
+}
+
 function extractAuth(req: Request) {
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
+  const role = su?.app_metadata?.role;
   const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? '';
-  const isSuperAdmin: boolean =
-    (su?.app_metadata?.role ?? su?.user_metadata?.role ?? '') === 'super_admin';
-  return { tenantId, isSuperAdmin };
+  const isSuperAdmin: boolean = role === 'super_admin';
+  return { su, role, tenantId, isSuperAdmin };
+}
+
+function denyRole(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown, requiredRoles: readonly string[]) {
+  logger.warn({
+    event: 'options_access_denied',
+    reason: 'invalid_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: requiredRoles,
+    hasAppMetadataRole: !!su?.['app_metadata']?.role,
+    hasUserMetadataRole: !!su?.['user_metadata']?.role,
+  }, 'options access denied: invalid actor role');
+  return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
+}
+
+function denyInsufficient(req: Request, res: Response, su: Record<string, any> | undefined, role: unknown) {
+  logger.warn({
+    event: 'options_access_denied',
+    reason: 'insufficient_role',
+    errorCode: 'AUTHZ_ROLE_DENIED',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+    actor_role: role,
+    required_roles: ['super_admin'],
+  }, 'options access denied: super_admin required');
+  return res.status(403).json({ error: '権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
 export function registerOptionRoutes(app: Express): void {
@@ -25,7 +64,10 @@ export function registerOptionRoutes(app: Express): void {
   // クエリパラメータ: status, limit, offset
   // -------------------------------------------------------------------------
   app.get('/v1/admin/options', async (req: Request, res: Response) => {
-    const { tenantId, isSuperAdmin } = extractAuth(req);
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
     const statusFilter = req.query['status'] as string | undefined;
     const limit = Math.min(parseInt((req.query['limit'] as string) ?? '20', 10), 100);
     const offset = Math.max(0, parseInt((req.query['offset'] as string) ?? '0', 10));
@@ -76,7 +118,10 @@ export function registerOptionRoutes(app: Express): void {
   // POST /v1/admin/options — 新規発注作成（feedbackAIから呼ばれる）
   // -------------------------------------------------------------------------
   app.post('/v1/admin/options', async (req: Request, res: Response) => {
-    const { tenantId } = extractAuth(req);
+    const { su, role, tenantId } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
 
     const { description, llm_estimate_amount, chat_session_id, type } = req.body as {
       description?: string;
@@ -129,9 +174,12 @@ export function registerOptionRoutes(app: Express): void {
   // PUT /v1/admin/options/:id — 更新（super_adminのみ）
   // -------------------------------------------------------------------------
   app.put('/v1/admin/options/:id', async (req: Request, res: Response) => {
-    const { isSuperAdmin } = extractAuth(req);
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
     if (!isSuperAdmin) {
-      return res.status(403).json({ error: '権限がありません' });
+      return denyInsufficient(req, res, su, role);
     }
 
     const { id } = req.params;
@@ -182,9 +230,12 @@ export function registerOptionRoutes(app: Express): void {
   // 3. trackUsage() で option_service 課金記録
   // -------------------------------------------------------------------------
   app.put('/v1/admin/options/:id/complete', async (req: Request, res: Response) => {
-    const { isSuperAdmin } = extractAuth(req);
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
     if (!isSuperAdmin) {
-      return res.status(403).json({ error: '権限がありません' });
+      return denyInsufficient(req, res, su, role);
     }
 
     const { id } = req.params;

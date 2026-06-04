@@ -45,6 +45,8 @@ export interface AgentSearchParams {
   tenantId?: string;
   /** Phase57: visitor_id (行動コンテキスト注入用) */
   visitorId?: string;
+  /** Phase69-2: 検索結果から除外するエントリID一覧 */
+  excludedIds?: string[];
 }
 
 /**

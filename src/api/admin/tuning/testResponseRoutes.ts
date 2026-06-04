@@ -1,13 +1,25 @@
 // src/api/admin/tuning/testResponseRoutes.ts
 // Phase6-B: チューニングルール LLMテスト返答生成API
 
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
 import { logger } from "../../../lib/logger";
 
-const GROQ_MODEL_70B = "llama-3.3-70b-versatile";
+const GROQ_MODEL_70B = GROQ_VERSATILE_70B;
+
+// ---------------------------------------------------------------------------
+// ALLOWED_ROLES whitelist
+// ---------------------------------------------------------------------------
+
+const ALLOWED_TEST_RESPONSE_ROLES = ["super_admin", "client_admin"] as const;
+type AllowedTestResponseRole = typeof ALLOWED_TEST_RESPONSE_ROLES[number];
+function isAllowedTestResponseRole(role: unknown): role is AllowedTestResponseRole {
+  return typeof role === "string" &&
+         (ALLOWED_TEST_RESPONSE_ROLES as readonly string[]).includes(role);
+}
 
 export interface TestResponse {
   style: string;
@@ -26,9 +38,23 @@ export function registerTestResponseRoutes(app: Express): void {
     "/v1/admin/tuning-rules/:id/test-responses",
     async (req: Request, res: Response) => {
       const su = (req as AuthedReq).supabaseUser;
+      const role = su?.app_metadata?.role;
       const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
-      const isSuperAdmin: boolean =
-        (su?.app_metadata?.role ?? su?.user_metadata?.role ?? "") === "super_admin";
+      const isSuperAdmin: boolean = role === "super_admin";
+      if (!isAllowedTestResponseRole(role)) {
+        logger.warn({
+          event: 'tuning_access_denied',
+          reason: 'invalid_role',
+          errorCode: 'AUTHZ_ROLE_DENIED',
+          requested_path: req.path,
+          actor_email: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          actor_role: role,
+          required_roles: ALLOWED_TEST_RESPONSE_ROLES,
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!(su as any)?.user_metadata?.role,
+        }, "tuning test-response access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
+      }
 
       const id = Number(req.params["id"]);
       if (!Number.isFinite(id) || id <= 0) {

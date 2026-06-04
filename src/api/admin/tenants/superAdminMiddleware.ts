@@ -20,11 +20,10 @@ export function superAdminMiddleware(
     return;
   }
 
-  // Supabase JWT: app_metadata.role または user_metadata.role をチェック
-  const role =
-    user.app_metadata?.role ||
-    user.user_metadata?.role ||
-    user.role;
+  // セキュリティ要件: ロールは app_metadata.role のみを信頼する
+  // user_metadata / top-level role はクライアント制御可能なため使用してはならない
+  const rawRole = user.app_metadata?.role;
+  const role: string = typeof rawRole === "string" ? rawRole : "";
 
   if (role !== "super_admin") {
     res.status(403).json({ error: "forbidden", message: "Super Admin権限が必要です。" });
