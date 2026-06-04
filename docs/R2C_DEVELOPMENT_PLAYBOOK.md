@@ -654,6 +654,235 @@ bash scripts/verify-account-isolation.sh
 
 ---
 
+## 15.5 Escalation 設計 (警告 N 件無視防止)
+
+> **追加**: 2026-05-20 (Asana 1214955296965915)
+> **背景**: UATa 1日実体験記録 §事例 #4 — 警告 3 万件無視 → 18.2h 停止。
+>          R2C も postgres / PM2 SIGKILL 多発時に同じパターンに陥らないため、
+>          単発alert と escalation を分離するエスカレーション層を整備する。
+> **関連実装**: `SCRIPTS/notify-slack.sh` (拡張) / `SCRIPTS/check-pm2-health.sh` (新規) /
+>              `SCRIPTS/escalation-test.sh` (テストランナー)
+
+### 15.5.1 設計判断 Q1 — エスカレーション通知先
+
+**採用**: B案 (envに `SLACK_WEBHOOK_URL_EMERGENCY` を設定、未設定ならC案にgraceful fallback)
+
+| 案 | 採否 | 理由 |
+|---|---|---|
+| A. Pushover (新規) | 不採用 | 月 $5 課金 + アカウント新規開設、Phase70-H パイロット段階では過剰投資 |
+| **B. `#r2c-emergency` 新設 + env で切替** | **採用** | 初動コスト最小、env未設定でもコードが動く設計で channel 作成と分離 |
+| C. 既存 `#r2c` に `<!here>` mention | フォールバック | 強制力は弱いが、Bが未設定でも escalation が必ず届く保険 |
+
+**実装の env 優先順**:
+1. `SLACK_WEBHOOK_URL_EMERGENCY` — escalation 専用 (Q1 B案)
+2. `SLACK_WEBHOOK_URL_R2C` / `SLACK_WEBHOOK_URL` — 通常webhook (Q1 C案フォールバック)
+3. message 先頭に `<!here> 🚨 ESCALATION [<alert_type>]: ` prefix が付与され、未設定でも視認性確保
+
+**hkobayashi が後追いで設定** (コード変更不要):
+1. Slack で `#r2c-emergency` を新設 + Incoming Webhook を作成
+2. `~/.claude-r2c-config/secrets/r2c-loop.env` に `SLACK_WEBHOOK_URL_EMERGENCY=https://hooks.slack.com/...` を追記
+3. 以降の escalation は emergency channel のみへ自動配送
+
+### 15.5.2 設計判断 Q2 — escalation 閾値
+
+**採用**: 同一 `alert_type` が **5 回連続** 未ackで蓄積 → escalation 発火
+
+| 観点 | 採用値 | 根拠 |
+|---|---|---|
+| カウント単位 | `alert_type` 別 (混在カウントせず) | stuck と pm2_restart を独立に追跡、片方の暴発がもう片方を巻き込まない |
+| 閾値 | 5 連続 | UATa 事例で「3 連続無視」は短すぎ noisy、「10 連続」は遅すぎる教訓の中間値 |
+| reset 条件 | escalation 発火後、当該 `alert_type` の unescalated を全て `escalated=1` にマーク | 同じ問題で連続エスカを撃たない (alert fatigue 抑制) |
+| 手動 ack | `notify-slack.sh --reset-alert-type <type>` | 運用者が「対処済み」を明示 |
+
+**カスタマイズ可**: `--escalation-count <N>` で 3〜N に変更可能 (postgres SIGKILL は更に厳しく 3 に設定する想定)
+
+### 15.5.3 設計判断 Q3 — PM2 監視しきい値
+
+**採用**: `pm2 jlist` の `restart_time` を絶対値で判定
+
+| 閾値 | デフォルト | 動作 | カスタマイズ |
+|---|---|---|---|
+| WARN | `restart_time > 50` | 通常alert → counter 経由で 5 連続なら escalation | `--warn <N>` |
+| EMERGENCY | `restart_time > 100` | counter bypass の即時 escalation | `--emergency <N>` |
+
+**観測対象 PM2 プロセス** (本リポ `ecosystem.config.cjs` 由来):
+- `rajiuce-api` (Node Express)
+- `rajiuce-avatar` (Python avatar agent, `max_restarts: 999`, `exp_backoff_restart_delay`)
+- `rajiuce-admin` (serve, admin-ui static)
+- `slack-listener` (Python, `max_restarts: 10`)
+
+**注意**: `rajiuce-avatar` は `max_restarts: 999` で長期運用すると restart_time が自然に積み上がる。
+初回起動から 2 週間以内なら閾値 50 は妥当だが、長期運用後は **delta 検知** (前回値との差分) への
+切替を別タスク化検討 (現状は absolute count のシンプル設計を採用)。
+
+### 15.5.4 運用フロー (誰が何分以内に対応するか)
+
+| シナリオ | 送信先 | 検知から対応開始まで | 対応者 |
+|---|---|---|---|
+| 通常alert (counter < 5) | `#r2c` (既存通知 channel) | 翌営業日 | hkobayashi (朝のレビュー時に確認) |
+| escalation 発火 (5 連続) | `#r2c-emergency` (B案) または `#r2c` `<!here>` (C案フォールバック) | **30 分以内** | hkobayashi (深夜・休日含む) |
+| `[*-IMMEDIATE]` (`--immediate-escalation`) | 同上 | **15 分以内** | hkobayashi (priority2 相当) |
+
+**ack 手順** (escalation 対処後):
+```bash
+# 該当 alert_type の counter をクリア (次の 5 連続から再カウント開始)
+bash SCRIPTS/notify-slack.sh --reset-alert-type pm2_restart --dry-run
+```
+
+### 15.5.5 launchd / cron 登録案 (本起動は hkobayashi 手動 deploy 後)
+
+**ローカル Mac** (開発確認 / 24h 自走中の Mac 側監視):
+
+```xml
+<!-- ~/Library/LaunchAgents/com.r2c.check-pm2-health.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.r2c.check-pm2-health</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/hkobayashi/Documents/GitHub/commerce-faq-tasks/SCRIPTS/check-pm2-health.sh</string>
+    </array>
+    <key>StartInterval</key><integer>300</integer>
+    <key>StandardOutPath</key><string>/tmp/check-pm2-health.out</string>
+    <key>StandardErrorPath</key><string>/tmp/check-pm2-health.err</string>
+</dict>
+</plist>
+```
+
+**VPS Linux** (本番監視 — hkobayashi 手動 deploy 後に root crontab で登録):
+
+```cron
+# 5 分間隔で PM2 健全性チェック (Hetzner)
+*/5 * * * * /opt/rajiuce/SCRIPTS/check-pm2-health.sh >> /var/log/r2c-check-pm2-health.log 2>&1
+```
+
+### 15.5.6 `--bypass-stop-dedupe` フラグ使用ルール
+
+`notify-slack.sh` は `--color error` + `.r2c-notified-stop` sentinel 存在時に通知を短絡する (stop 連投防止)。
+**PM2 emergency 等の safety-critical path ではこの短絡を避けたい場合に `--bypass-stop-dedupe` を明示指定する**。
+
+```bash
+# ✅ 正しい: emergency は sentinel 状態に関わらず必ず届く
+notify-slack.sh "[PM2-EMERGENCY] ..." \
+    --alert-type pm2_restart --immediate-escalation \
+    --color error --bypass-stop-dedupe
+
+# ✅ 正しい: 通常の stop 通知 (sentinel 後は短絡 OK)
+notify-slack.sh "🛑 Stopped: <reason>" --color error
+
+# ❌ 誤り: emergency なのに bypass 指定なし → sentinel 存在時に silent drop
+notify-slack.sh "[PM2-EMERGENCY] ..." --color error --immediate-escalation
+```
+
+**使用ルール**:
+1. `--bypass-stop-dedupe` は **escalation / safety-critical path でのみ** 使用する
+2. warn path (`--color warning`) には不要 (stop-dedupe は `error` にのみ適用)
+3. 通常の stop 通知 (`🛑 Stopped:`) には **付けない** — sentinel による重複防止が目的
+
+### 15.5.6.1 Round 3 — Delivery failure 時の挙動 (Codex Round 2 指摘対応)
+
+Codex Round 2 で指摘された「primary send / escalation send 失敗時に backlog や delivery 状態が観測不能になる」問題への対応として、下記 3 点を実装している。
+
+**Fix 1 — immediate-escalation の `db_mark_escalated` を send 成功時のみに条件化** (`notify-slack.sh:handle_immediate_escalation`)
+旧: `send_escalation ... || true; db_mark_escalated ...` で送信失敗でも backlog をクリアしていた。
+新: `if send_escalation ...; then db_mark_escalated ...; fi` で send 成功時のみ backlog をクリア。失敗時は unack 状態が保持され、次回呼び出しで再評価される。
+
+**Fix 2 — alert recording を primary send 前に pre-record で分離** (`notify-slack.sh:RECORDED_ROWID` ブロック)
+旧: `post_send_escalation_check` 内で `db_record_alert` していたため、primary send (bot/webhook) が両方 fail すると alert そのものが record されず、threshold 評価機会が失われていた。
+新: primary send の前に `db_record_alert` で alert 発生事実を必ず DB へ記録。primary send の成否は `delivery_status` 列で別管理 (`pending` → `delivered` / `failed`)。送信失敗時も escalation 評価は走り、backlog として残る。
+
+**Fix 3 — `check-pm2-health.sh` の exit code 体系導入**
+旧: notifier 呼び出しを `|| true` で潰し常に `exit 0` を返していたため、cron / launchd / 外部監視が通知系障害を検知できなかった。
+新: notifier 失敗を集計し下記 exit code を返す。
+
+| exit code | 意味 | 用途 |
+|---|---|---|
+| 0 | 正常 (PM2 健全 + notifier OK) | 監視は無反応で可 |
+| 1 | PM2 異常検知 (notifier は機能) | alerting は届いている / 復旧待ち |
+| 2 | notifier 失敗のみ (PM2 OK) | 通知系自体の障害 — 別経路で oncall 通知 |
+| 3 | PM2 異常 + notifier 失敗 | 最悪ケース — 直接 oncall ページ |
+
+stderr に `EXIT_REASON=pm2_issue|notifier_failure|both` サマリを出力し、`notifier_failures=N` で件数を観測できる。
+
+#### Round 3 先回り対応
+
+**先回り 1 — sqlite3 WAL + BEGIN IMMEDIATE TRANSACTION** (`notify-slack.sh:db_init / db_record_alert`)
+同時 cron 実行時 (`check-pm2-health.sh` と `stuck-detector` が同時起動する etc.) に sqlite3 の lock 競合で書き込みがロストしないよう、`PRAGMA journal_mode=WAL` (per-DB persistent) と `PRAGMA busy_timeout=5000` + `BEGIN IMMEDIATE TRANSACTION` (per-connection) を採用。テスト T17 で 2 プロセス並行起動下のロストなしを検証。
+
+**先回り 3 — delivery_failed log の rate-limit** (`notify-slack.sh:log_delivery_failure_rate_limited`)
+primary send 失敗時の `SLACK_SEND_FAILED` stderr 出力は 5 分以内に同一 key (`primary_send_${ALERT_TYPE}_${COLOR}`) なら 1 回までに制限。Slack 障害時の flood prevention。lock file は `${R2C_CONFIG}/delivery-fail-locks/` 配下 (テスト隔離可能)。
+
+#### DB schema v2 (追加 3 列)
+
+```sql
+ALTER TABLE alerts ADD COLUMN delivery_status TEXT DEFAULT 'pending';
+ALTER TABLE alerts ADD COLUMN retry_count INTEGER DEFAULT 0;
+ALTER TABLE alerts ADD COLUMN last_attempt_at INTEGER;
+```
+
+| 列 | 用途 | 本 PR での扱い |
+|---|---|---|
+| `delivery_status` | pending / delivered / failed | Fix 2 で primary send 結果を追跡 |
+| `retry_count`     | 失敗時の再試行回数 | **予約のみ・logic は別 PR** (exponential backoff 実装は scope 外) |
+| `last_attempt_at` | 最終 send 試行の Unix timestamp | delivery 状態と同時更新 |
+
+`retry_count` を本 PR で予約する理由: 将来 backoff 実装で DB schema 変更を 2 回繰り返す手間を回避。現状は INSERT 時 0 固定、UPDATE もしない。
+
+#### Migration script (`SCRIPTS/migrate-alert-db-v2.sh`)
+
+既存 v1 DB を in-place で v2 へ移行する idempotent script。`notify-slack.sh` の `db_init` 内でも自動 ALTER を試行するため通常運用では migration script を明示実行する必要はないが、本番 DB を計画的に移行したい場合に使用する。
+
+```bash
+bash SCRIPTS/migrate-alert-db-v2.sh --dry-run                # 影響範囲確認
+bash SCRIPTS/migrate-alert-db-v2.sh                           # 適用
+ALERT_DB_PATH=/path/to/alerts.db bash SCRIPTS/migrate-alert-db-v2.sh
+bash SCRIPTS/migrate-alert-db-v2.sh --rollback                # v1 へ戻す (table rebuild)
+```
+
+後方互換: 既存 v1 rows は `delivery_status` 列追加時に DEFAULT `'pending'` が適用されるが、`db_count_unescalated` は `escalated` 列のみ参照するため counter 動作に影響なし。
+
+### 15.5.7 テスト
+
+`SCRIPTS/escalation-test.sh` で 36 ケース自動検証 (sqlite3 / Slack 未送信状態で動作):
+
+```bash
+bash SCRIPTS/escalation-test.sh
+# Expected: PASS=36 FAIL=0
+```
+
+検証項目:
+- 後方互換 (`--alert-type` なし)
+- 4 連続では発火しない / 5 連続で発火 + counter リセット
+- 別 `alert_type` 混在カウントなし
+- `--immediate-escalation` の counter bypass
+- `--reset-alert-type` の手動 ack
+- カスタム閾値 (`--escalation-count 3`)
+- バリデーション (非整数閾値で exit 1)
+- `check-*-health.sh --self-test` (fixture 動作確認)
+- warn/emergency 分類の正確性
+- **[P1 fix]** `--bypass-stop-dedupe` + emergency → sentinel 存在下でも通知到達
+- **[P1 fix]** `--color error` 単独 (bypass なし) → sentinel 存在時に短絡 (既存挙動維持)
+- **[P1 fix]** emergency + bypass なし → 短絡 (明示的フラグ必須)
+- **[Round3 Fix1]** immediate-escalation send 失敗時 backlog 維持 (T14)
+- **[Round3 Fix2]** primary send 全失敗時も alert は record + delivery_status=failed (T15)
+- **[Round3 Fix3]** notifier 失敗時 exit code 2/3 + EXIT_REASON 出力 (T16)
+- **[Round3 先回り1]** 同時 2 cron で race condition なし (T17)
+
+### 15.5.8 stuck-detector との統合 (本PRスコープ外、別PR)
+
+stuck-detector (Asana 1214954523638712) は本 PR では触らず、以下の共有設計のみ提供:
+
+- `/tmp/r2c-alert-count.db` の sqlite schema に `alert_type` カラム
+- stuck-detector が将来 `--alert-type stuck` で notify-slack.sh を呼ぶことで自動統合
+- 識別子: `[STUCK]` / `[STUCK-IMMEDIATE]` / `[PM2]` / `[PM2-EMERGENCY]` / `[PM2-IMMEDIATE]`
+
+→ stuck-detector PR で `bash SCRIPTS/notify-slack.sh "[STUCK] ..." --alert-type stuck` に切替えるだけで、本 PR の counter 機構を流用できる。
+
+---
+
 ## 16. Lane retry / Pushover 通知仕様
 
 24h ループの Lane 失敗時 retry 戦略と Pushover priority マッピングの詳細は以下を参照:
