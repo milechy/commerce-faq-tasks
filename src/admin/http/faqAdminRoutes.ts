@@ -436,7 +436,19 @@ export function registerFaqAdminRoutes(app: Express) {
         return res.status(404).json({ error: "FAQ not found" });
       }
 
-      // embeddings 側を faq_id などで紐付けるようにしたら、ここで一緒に削除
+      // F1(HIGH): faq_docs 削除に連鎖して faq_embeddings も削除する。
+      // faq_embeddings は物理 FK を持たず metadata->>'faq_id' で faq_docs を参照するため
+      // ON DELETE CASCADE が効かない (phase69_2d_faq_embedding_orphan_cleanup.sql 参照)。
+      // PUT /admin/faqs/:id の再 embed 経路と同じ WHERE で連鎖削除し orphan 量産を防ぐ。
+      await db.query(
+        `
+        DELETE FROM faq_embeddings
+        WHERE tenant_id = $1
+          AND metadata->>'faq_id' IS NOT NULL
+          AND (metadata->>'faq_id')::bigint = $2
+        `,
+        [tenantId, id]
+      );
 
       return res.json({ ok: true, id });
     } catch (err) {
