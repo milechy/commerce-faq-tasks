@@ -14,22 +14,5 @@ export type CrewAgentOutput = {
   meta?: DialogAgentMeta;
 };
 
-class CrewAgent {
-  name: string;
-  description: string;
-  private executor: (input: CrewAgentInput) => Promise<CrewAgentOutput>;
-
-  constructor(opts: {
-    name: string;
-    description: string;
-    executor: (input: CrewAgentInput) => Promise<CrewAgentOutput>;
-  }) {
-    this.name = opts.name;
-    this.description = opts.description;
-    this.executor = opts.executor;
-  }
-
-  async run(input: CrewAgentInput): Promise<CrewAgentOutput> {
-    return this.executor(input);
-  }
-}
+// NOTE: CrewAgent クラス本体は CrewGraph (LangGraph 統一) に置換済みのため削除。
+// CrewAgentInput / CrewAgentOutput 型は CrewOrchestrator 等が参照するため保持する。

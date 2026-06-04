@@ -16,20 +16,6 @@ import type { SimilarPattern } from '../../api/events/similarUserMatcher';
 import { getPool } from '../../lib/db';
 import { buildSentimentHint } from '../../lib/sentiment/hint';
 
-async function getTenantsSystemPrompt(tenantId: string): Promise<string | null> {
-  try {
-    const pool = getPool();
-    const result = await pool.query<{ system_prompt: string | null }>(
-      'SELECT system_prompt FROM tenants WHERE id = $1',
-      [tenantId],
-    );
-    const val = result.rows[0]?.system_prompt;
-    return val && val.trim() ? val.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
 async function getTenantsPromptWithVariant(tenantId: string): Promise<{
   prompt: string | null;
   variantId: string | null;
