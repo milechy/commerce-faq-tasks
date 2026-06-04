@@ -5,6 +5,7 @@
 import type { Pool } from "pg";
 import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { encryptText } from "../crypto/textEncrypt";
+import { resolveFaqWriteIndex } from "../../search/langIndex";
 import type { StructuredChunk } from "./structurizer";
 
 export interface EmbedAndStoreDeps {
@@ -12,14 +13,22 @@ export interface EmbedAndStoreDeps {
   embedFn?: (text: string) => Promise<number[]>;
 }
 
-const ES_INDEX = process.env.ES_FAQ_INDEX ?? "faqs";
-
-async function upsertToEs(
+/**
+ * 構造化チャンク doc を ES へ upsert する（best-effort）。
+ *
+ * F3 / Phase69-2-E: 書き込み先 index は必ずテナント別の `faq_${tenantId}`。
+ * 旧実装はモジュールレベルの `process.env.ES_FAQ_INDEX ?? "faqs"` を使っており、
+ * read path（resolveFallbackIndices の `faq_${tenantId}`）と不整合だったため、
+ * 書籍 doc が検索 index に届いていなかった。resolveFaqWriteIndex で統一する。
+ */
+export async function upsertToEs(
   esUrl: string,
+  tenantId: string,
   docId: string,
   doc: Record<string, unknown>
 ): Promise<void> {
-  const url = `${esUrl.replace(/\/$/, "")}/${ES_INDEX}/_doc/${encodeURIComponent(docId)}`;
+  const index = resolveFaqWriteIndex(tenantId);
+  const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(docId)}`;
   try {
     await fetch(url, {
       method: "PUT",
@@ -95,7 +104,7 @@ export async function embedAndStore(
     // ES sync（best-effort, fire-and-forget 風だが await して例外は無視）
     if (esUrl) {
       const docId = `book_${bookId}_chunk_${chunk.chunkIndex}`;
-      const doc = {
+      const doc: Record<string, unknown> = {
         tenant_id: tenantId,
         // ES には question/answer のみ（書籍本文は含めない — Anti-Slop）
         question: chunk.question.slice(0, 200),
@@ -107,7 +116,7 @@ export async function embedAndStore(
         keywords: chunk.keywords,
         is_published: true,
       };
-      await upsertToEs(esUrl, docId, doc);
+      await upsertToEs(esUrl, tenantId, docId, doc);
     }
   }
 
