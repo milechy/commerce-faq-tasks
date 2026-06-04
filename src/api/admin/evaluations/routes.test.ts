@@ -22,9 +22,7 @@ jest.mock("./evaluationsRepository", () => ({
 import {
   listEvaluations,
   getDetailedStats,
-  getEvaluationsBySession,
   updateOutcome,
-  getKpiStats,
   approveTuningRule,
   rejectTuningRule,
 } from "./evaluationsRepository";
