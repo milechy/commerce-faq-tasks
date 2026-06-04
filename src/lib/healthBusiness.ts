@@ -124,7 +124,7 @@ export async function businessHealthHandler(_req: Request, res: Response): Promi
     };
 
     res.status(200).json(body);
-  } catch (_err) {
+  } catch {
     res.status(500).json({ error: "internal_error", message: "業務KPI取得に失敗しました" });
   }
 }
