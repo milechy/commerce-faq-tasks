@@ -1,7 +1,7 @@
 // src/agent/orchestrator/sales/recommendPromptBuilder.ts
 // Phase14: Recommend-flow helper — similar to Propose, but used for course/module recommendations.
 
-import { getSalesTemplate, type SalesPhase, type SalesTemplate } from "./salesRules";
+import { getSalesTemplate, type SalesPhase } from "./salesRules";
 import type { BuiltSalesPromptResult } from "./proposePromptBuilder";
 
 /**

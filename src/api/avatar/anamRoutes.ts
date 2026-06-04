@@ -9,7 +9,6 @@
 //   'lemonslice' または未設定なら { enabled: false, avatarProvider: 'lemonslice' } を返す。
 
 import type { Express, Request, Response, RequestHandler } from 'express';
-import { Pool } from 'pg';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { pool as globalPool } from '../../lib/db';
 import { logger } from '../../lib/logger';
