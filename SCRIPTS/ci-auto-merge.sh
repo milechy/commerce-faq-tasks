@@ -111,6 +111,7 @@ BASE="$(jq -r '.baseRefName' <<<"$META")"
 LABELS="$(jq -r '[.labels[].name] | join(",")' <<<"$META")"
 ROLLUP="$(jq -c '.statusCheckRollup' <<<"$META")"
 TITLE="$(jq -r '.title' <<<"$META")"
+MERGE_STATE="$(jq -r '.mergeStateStatus' <<<"$META")"
 
 decline() { log "SKIP #$PR_NUMBER ($1): $TITLE"; exit 0; }
 
@@ -127,11 +128,26 @@ ELIGIBLE="$(bash "$SCORER" "$PR_NUMBER" --json-only 2>/dev/null | jq -r '.auto_m
 # 必須チェック全 green
 all_required_green "$ROLLUP" "$REQUIRED_CSV" || decline "checks not all green"
 
+# コンフリクトは自動解消しない
+[[ "$MERGE_STATE" == "DIRTY" ]] && decline "conflict (mergeStateStatus=DIRTY)"
+
 # ─── merge ───────────────────────────────────────────────────────────────────
 if [[ "$DRY_RUN" == "1" ]]; then
-  log "DRY-RUN: #$PR_NUMBER は全条件クリア → merge 対象 (Tier B / 全 green / 非ブロック)"
+  log "DRY-RUN: #$PR_NUMBER は全条件クリア → merge 対象 (mergeState=$MERGE_STATE)"
   exit 0
 fi
-log "MERGE: #$PR_NUMBER (Tier B / 全 green) を squash merge します"
+
+# BEHIND (branch protection strict:true で base に遅れている) は merge できないので、
+# branch を base で更新する。更新で CI が再実行されるため、本サイクルでは merge せず
+# 次サイクル (check_suite 完了 or 30分 sweep) に委ねる。strict:false なら BEHIND にならず直 merge。
+# 24h-mode-on.sh が strict:true を再設定するため、この自己解消は恒久的な堅牢性として必要。
+if [[ "$MERGE_STATE" == "BEHIND" ]]; then
+  log "BEHIND: #$PR_NUMBER を base で更新 (update-branch)。merge は次サイクルで実行。"
+  gh pr update-branch "$PR_NUMBER" 2>&1 | sed 's/^/[ci-auto-merge]   /' >&2 || \
+    log "  update-branch 失敗 (権限/競合の可能性) — 次サイクルで再試行"
+  exit 0
+fi
+
+log "MERGE: #$PR_NUMBER (Tier B / 全 green / mergeState=$MERGE_STATE) を squash merge します"
 gh pr merge "$PR_NUMBER" --squash --delete-branch 2>&1 | sed 's/^/[ci-auto-merge]   /' >&2
 log "✅ #$PR_NUMBER merged"
