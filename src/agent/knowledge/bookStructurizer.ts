@@ -8,6 +8,7 @@ import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { embedText } from '../llm/openaiEmbeddingClient';
 import { splitIntoChunks } from './bookChunker';
+import { resolveFaqWriteIndex } from '../../search/langIndex';
 
 const logger = pino();
 
@@ -15,7 +16,6 @@ const BOOK_STRUCTURIZE_BATCH_SIZE = 10;
 const MAX_CONSECUTIVE_FAILURES = 5;
 const BATCH_WAIT_MS = 1000;
 const FIELD_MAX_CHARS = 200;
-const ES_INDEX = process.env['ES_FAQ_INDEX'] ?? 'faqs';
 
 export interface StructuredPrinciple {
   situation: string;
@@ -34,10 +34,23 @@ export interface StructurizeResult {
   principles: StructuredPrinciple[];
 }
 
-async function upsertToEs(docId: string, doc: Record<string, unknown>): Promise<void> {
+/**
+ * 書籍由来 doc を ES へ upsert する（fire-and-forget）。
+ *
+ * F3 / Phase69-2-E: 書き込み先 index は必ずテナント別の `faq_${tenantId}` を使う。
+ * 旧実装はモジュールレベルの `process.env['ES_FAQ_INDEX'] ?? 'faqs'` を使っており、
+ * read path（resolveFallbackIndices の `faq_${tenantId}`）と不整合だったため
+ * 書籍 doc が検索 index に届かなかった。resolveFaqWriteIndex で write/read を統一する。
+ */
+export async function upsertToEs(
+  tenantId: string,
+  docId: string,
+  doc: Record<string, unknown>,
+): Promise<void> {
   const esUrl = process.env['ES_URL'];
   if (!esUrl) return;
-  const url = `${esUrl.replace(/\/$/, '')}/${ES_INDEX}/_doc/${encodeURIComponent(docId)}`;
+  const index = resolveFaqWriteIndex(tenantId);
+  const url = `${esUrl.replace(/\/$/, '')}/${index}/_doc/${encodeURIComponent(docId)}`;
   try {
     await fetch(url, {
       method: 'PUT',
@@ -220,7 +233,7 @@ export async function structurizeBook(
         // ES 同期（fire-and-forget、Anti-Slop: 書籍原文は含めない）
         if (embeddingId != null) {
           const docId = `book_${bookId}_chunk_${chunk.chunkIndex}_${principle.principle.slice(0, 30)}`;
-          void upsertToEs(docId, {
+          void upsertToEs(tenantId, docId, {
             tenant_id: tenantId,
             question: principle.situation.slice(0, 200),
             answer: principle.example.slice(0, 200),
