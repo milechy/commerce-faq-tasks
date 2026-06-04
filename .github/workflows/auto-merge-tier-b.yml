@@ -1,0 +1,86 @@
+# Auto-merge Tier B — Mergify 非依存の自前 auto-merge
+#
+# Mergify Free は private repo で rule engine が動かず auto-merge が一度も発火しなかったため、
+# GitHub Actions + SCRIPTS/ci-auto-merge.sh で自前実装する。
+#
+# 安全設計:
+#   - check_suite / schedule トリガーは base リポジトリの trusted context で実行 (PR コードを checkout しない)
+#   - Tier 判定は pr-risk-scorer.sh (テスト済) を正典に再利用 → Tier S (src/ 等) は絶対に merge しない
+#   - high-risk / do-not-merge / needs-review ラベルで人間が即停止可能
+#   - 必須チェック (Gate 1 / security-scan / path-check / Claude PR Review) が全 green のときのみ merge
+#   - GITHUB_TOKEN で merge (branch protection の必須チェックは GitHub 側でも二重に強制される)
+#
+# トリガー:
+#   - check_suite completed: CI 完了時に該当 PR を評価
+#   - schedule (30分毎): イベント取りこぼしの backstop sweep
+#   - workflow_dispatch: 手動実行 (任意で pr 指定)
+
+name: Auto-merge Tier B
+
+on:
+  check_suite:
+    types: [completed]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "評価する PR 番号 (空なら open PR を全 sweep)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: auto-merge-tier-b
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (base repo scripts のみ — PR コードは取得しない)
+        uses: actions/checkout@v4
+
+      - name: 候補 PR を評価して Tier B かつ green なら merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 夜間も含め 24/7 で merge (一晩無人で main に届ける)。夜間停止したい場合は "1"。
+          AUTO_MERGE_NIGHT_FREEZE: "0"
+        run: |
+          set -euo pipefail
+
+          # 候補 PR 番号を決める
+          prs=""
+          case "${{ github.event_name }}" in
+            check_suite)
+              prs=$(jq -r '.check_suite.pull_requests[]?.number' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+              ;;
+            workflow_dispatch)
+              if [ -n "${{ github.event.inputs.pr }}" ]; then
+                prs="${{ github.event.inputs.pr }}"
+              else
+                prs=$(gh pr list --state open --base main --json number -q '.[].number')
+              fi
+              ;;
+            schedule)
+              prs=$(gh pr list --state open --base main --json number -q '.[].number')
+              ;;
+          esac
+
+          if [ -z "$prs" ]; then
+            echo "評価対象の PR なし"
+            exit 0
+          fi
+
+          echo "評価対象 PR: $(echo "$prs" | tr '\n' ' ')"
+          for pr in $prs; do
+            echo "::group::PR #$pr"
+            bash SCRIPTS/ci-auto-merge.sh "$pr" || echo "  (#$pr は merge せず or エラー — 続行)"
+            echo "::endgroup::"
+          done
