@@ -1,69 +1,73 @@
-# .mergify.yml — Mergify 設定 (Phase70-I, Free プラン)
+# .mergify.yml — Mergify 設定 (Phase70-I → Tier B auto-merge 拡張, Free プラン)
 #
-# 設計方針:
+# 設計方針 (2026-06-04 hkobayashi 承認, DIA 同等スコープ):
 #   1. 夜間帯 (22:00-07:00 JST) は auto-merge 全停止 (24h 自走モード保護)
-#   2. 高リスクパス変更は常に @milechy の人手レビューを要求
-#   3. 日中 (07:00-22:00 JST) の docs-only PR のみ CI 全 PASS で auto-merge
+#   2. 高リスクパス (Tier S) は常に @milechy の人手レビューを要求
+#   3. 日中 (07:00-22:00 JST) の Tier B PR は CI 全 PASS で auto-merge
+#
+# Tier B (auto-merge 対象): docs/**, *.md, tests/**, SCRIPTS/**(deploy/24h/security-scan 除く),
+#                           .claude/agents/**, .claude/skills/**, .wolf/**
+# Tier S (人手レビュー必須): src/**, admin-ui/src/**, public/**, package.json, pnpm-lock.yaml,
+#                           .github/**, .mergify.yml, .claude/{hooks,settings,rules}/**,
+#                           SCRIPTS/{deploy,24h-mode,security-scan}*, ecosystem.config*
+#
+# ⚠️ Tier B 判定は「Tier S パスを 1 つも含まない」negative-list が正典。
+#    RE2 (Mergify) は lookahead 非対応のため「全ファイルが Tier B」を 1 正規表現で表現できない。
+#    新しい最上位パスを追加したら Rule 1 (Tier S 検出) と Rule 2 の exclude 両方に必ず追記すること。
+#    pr-risk-scorer.sh の HIGH/MEDIUM/LOW_PATTERNS と境界を一致させること。
 #
 # GitHub Apps インストール (hkobayashi が手動実施):
 #   https://github.com/apps/mergify → Install → milechy/commerce-faq-tasks
 #   Free プランで上記機能は全て利用可能。
 
 pull_request_rules:
-  # ──────────────────────────────────────────────────────────
-  # Rule 1: 夜間フリーズ通知 (22:00-07:00 JST)
-  # 24h 自走モード中の暴走防止。日中 schedule を満たさないと auto-merge 不可。
-  # ──────────────────────────────────────────────────────────
-  - name: "🌙 夜間フリーズ通知 (22:00-07:00 JST)"
-    conditions:
-      - base=main
-      - -merged
-      - -closed
-      - -schedule=Mon-Sun 07:00-22:00[Asia/Tokyo]
-    actions:
-      comment:
-        message: |
-          🌙 **自動マージ停止中 (22:00–07:00 JST)**
-
-          24h 自走モードの夜間暴走防止のため、この時間帯の auto-merge は全停止しています。
-          07:00 JST 以降に CI が全 PASS していれば自動評価が再開します。
-
-          ℹ️ 緊急マージが必要な場合は `@milechy` が手動で対応してください。
+  # ⚠️ 夜間フリーズ (22:00-07:00 JST) は Rule 2 (Tier B auto-merge) の
+  #    POSITIVE な `schedule=...07:00-22:00` 条件で実現する。
+  #    Mergify の `schedule` 属性は `-` (否定) 修飾子を許さない
+  #    (`-schedule=...` は config 全体を invalid にし、全ルールが無効化される)。
+  #    そのため独立した「夜間通知ルール」は置かない。日中以外は単に merge されない。
 
   # ──────────────────────────────────────────────────────────
-  # Rule 2: 高リスクパス — 常に @milechy レビュー必須
-  # deploy スクリプト・セキュリティフック・コア API・依存管理を保護
-  # CODEOWNERS と対象パスを一致させること
+  # Rule 1: 高リスクパス (Tier S) — 常に @milechy レビュー必須
+  # deploy / セキュリティフック / コア API (src 全般) / 依存管理 / CI 設定を保護。
+  # ここに該当すると high-risk ラベルが付き、Rule 2 (auto-merge) が無効化される。
+  # CODEOWNERS と対象パスを一致させること。
   # ──────────────────────────────────────────────────────────
-  - name: "⚠️ 高リスクパス検出 — @milechy レビュー必須"
+  - name: "⚠️ 高リスクパス (Tier S) 検出 — @milechy レビュー必須"
     conditions:
       - base=main
       - -merged
       - -closed
       - or:
-          - "files~=^SCRIPTS/deploy-vps\\.sh$"
-          - "files~=^\\.claude/hooks/"
-          - "files~=^SCRIPTS/24h-mode"
-          - "files~=^src/index\\.ts$"
-          - "files~=^src/middleware/"
-          - "files~=^src/api/internal/"
+          # アプリ本体・管理 UI・ウィジェット
+          - "files~=^src/"
+          - "files~=^admin-ui/src/"
+          - "files~=^public/"
+          # 依存管理・ビルド設定
           - "files~=^package\\.json$"
           - "files~=^pnpm-lock\\.yaml$"
+          - "files~=^ecosystem\\.config"
+          # CI/CD・マージ設定
           - "files~=^\\.github/"
           - "files~=^\\.mergify\\.yml$"
+          # セーフガード・運用制御 (自己編集禁止系)
+          - "files~=^\\.claude/hooks/"
           - "files~=^\\.claude/settings"
+          - "files~=^\\.claude/rules/"
+          - "files~=^SCRIPTS/deploy"
+          - "files~=^SCRIPTS/24h-mode"
+          - "files~=^SCRIPTS/security-scan"
     actions:
       comment:
         message: |
-          ⚠️ **高リスクパスの変更を検出しました**
+          ⚠️ **高リスクパス (Tier S) の変更を検出しました**
 
           以下のパスへの変更は `@milechy` の手動レビューが必須です:
-          - `SCRIPTS/deploy-vps.sh` — デプロイスクリプト
-          - `.claude/hooks/` — セキュリティフック (deploy_guard.py 等)
-          - `SCRIPTS/24h-mode*.sh` — 24h 自走制御スクリプト
-          - `src/index.ts`, `src/middleware/` — API セキュリティ層
-          - `package.json`, `pnpm-lock.yaml` — 依存管理
-          - `.github/`, `.mergify.yml`, `.claude/settings*` — CI/CD 設定
+          - `src/**`, `admin-ui/src/**`, `public/**` — アプリ本体・UI・ウィジェット
+          - `package.json`, `pnpm-lock.yaml`, `ecosystem.config*` — 依存・ビルド設定
+          - `.github/**`, `.mergify.yml` — CI/CD・マージ設定
+          - `.claude/{hooks,settings,rules}/**` — セーフガード・運用制御
+          - `SCRIPTS/{deploy,24h-mode,security-scan}*` — デプロイ・自走制御・スキャン
 
           このPRの auto-merge は **無効**です。
       request_reviews:
@@ -74,33 +78,50 @@ pull_request_rules:
           - high-risk
 
   # ──────────────────────────────────────────────────────────
-  # Rule 3: docs-only PR の自動マージ (日中 07:00-22:00 JST のみ)
-  # 全 CI PASS + 高リスクラベルなし + ソースコード変更なし
+  # Rule 2: Tier B PR の自動マージ (日中 07:00-22:00 JST のみ)
+  # 全 CI PASS + 高リスクラベルなし + Tier S パス変更なし + Tier B パスを 1 件以上含む。
   # ──────────────────────────────────────────────────────────
-  - name: "✅ docs-only 自動マージ (07:00-22:00 JST)"
+  - name: "✅ Tier B 自動マージ (07:00-22:00 JST)"
     conditions:
       - base=main
       - -merged
       - -closed
-      # 日中のみ auto-merge を許可
+      # 日中のみ auto-merge を許可 (夜間フリーズ)
       - schedule=Mon-Sun 07:00-22:00[Asia/Tokyo]
-      # CI 全 PASS
+      # CI / レビュー全 PASS (hkobayashi 承認ゲート: Gate1 + security-scan + path-check + Claude PR Review)
+      - "check-success=Gate 1 — typecheck + lint + test"
       - check-success=security-scan
       - check-success=path-check
       - check-success=Claude PR Review
       # 高リスクラベルなし
       - "-label=high-risk"
       - "-label=needs-review"
-      # ソースコード・設定ファイル変更なし (docs-only 判定)
+      # Tier S パス変更なし (negative-list が正典 — Rule 1 と一致させること)
       - "-files~=^src/"
-      - "-files~=^SCRIPTS/"
-      - "-files~=^\\.claude/"
       - "-files~=^admin-ui/src/"
+      - "-files~=^public/"
       - "-files~=^package\\.json$"
       - "-files~=^pnpm-lock\\.yaml$"
-      - "-files~=^public/"
+      - "-files~=^ecosystem\\.config"
       - "-files~=^\\.github/"
       - "-files~=^\\.mergify\\.yml$"
+      - "-files~=^\\.claude/hooks/"
+      - "-files~=^\\.claude/settings"
+      - "-files~=^\\.claude/rules/"
+      - "-files~=^SCRIPTS/deploy"
+      - "-files~=^SCRIPTS/24h-mode"
+      - "-files~=^SCRIPTS/security-scan"
+      # Tier B パスを 1 件以上含む (空 PR / 未知パス単独の取りこぼし防止)
+      - or:
+          - "files~=^docs/"
+          - "files~=\\.md$"
+          - "files~=^tests/"
+          - "files~=\\.test\\.(ts|tsx|js)$"
+          - "files~=^SCRIPTS/"
+          - "files~=^\\.claude/agents/"
+          - "files~=^\\.claude/skills/"
+          - "files~=^\\.wolf/"
     actions:
       merge:
         method: squash
+      delete_head_branch: {}
