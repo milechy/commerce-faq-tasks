@@ -89,7 +89,7 @@ export function detectPiiRoute(payload: {
   // IDっぽいトークン（ざっくり）: 連続数字が長い、英数ハイフンが長い等
   // ※厳密にPII抽出しない。あくまで「導線」判定。
   const longDigit = /\b\d{10,}\b/;
-  const longToken = /\b[a-z0-9\-]{16,}\b/;
+  const longToken = /\b[a-z0-9-]{16,}\b/;
   if (longDigit.test(text) || longToken.test(text)) {
     reasons.push("id_like_token");
   }

@@ -9,6 +9,11 @@ const DEFAULT_CONVERSION_TYPES = ["購入完了", "予約完了", "問い合わ�
 
 // ─── 型定義 ───────────────────────────────────────────────────────────────────
 
+interface SuggestedRule {
+  rule_text: string;
+  status?: string;
+}
+
 interface Evaluation {
   id: number;
   overall_score?: number;
@@ -19,6 +24,7 @@ interface Evaluation {
   taboo_violation_score?: number;
   feedback?: { summary?: string };
   evaluated_at: string;
+  suggested_rules?: SuggestedRule[];
 }
 
 interface Message {
@@ -50,6 +56,97 @@ async function fetchMessages(
   if (!res.ok) throw new Error("Failed to fetch messages");
   const data = await res.json();
   return data.messages as Message[];
+}
+
+// ─── AI提案ルール承認カード (Super Admin only) ─────────────────────────────────
+
+function SuggestedRulesCard({
+  evaluationId,
+  rules,
+  onUpdate,
+}: {
+  evaluationId: number;
+  rules: SuggestedRule[];
+  onUpdate: (updated: SuggestedRule[]) => void;
+}) {
+  const [processing, setProcessing] = useState<number | null>(null);
+
+  const pending = rules.filter((r) => !r.status || r.status === "pending");
+  if (pending.length === 0) return null;
+
+  const handleAction = async (ruleIndex: number, action: "approve" | "reject") => {
+    setProcessing(ruleIndex);
+    try {
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/evaluations/${evaluationId}/rules/${ruleIndex}`,
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) },
+      );
+      if (res.ok) {
+        const updated = rules.map((r, i) =>
+          i === ruleIndex ? { ...r, status: action === "approve" ? "approved" : "rejected" } : r,
+        );
+        onUpdate(updated);
+      }
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+      <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#c4b5fd" }}>
+        💡 AI提案ルール ({pending.length}件)
+      </p>
+      {rules.map((rule, idx) => {
+        if (rule.status && rule.status !== "pending") return null;
+        const busy = processing === idx;
+        return (
+          <div
+            key={idx}
+            style={{
+              padding: "12px 14px",
+              borderRadius: 10,
+              background: "rgba(124,58,237,0.08)",
+              border: "1px solid rgba(196,181,253,0.2)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <p style={{ margin: 0, fontSize: 13, color: "#e5e7eb", lineHeight: 1.6 }}>
+              {rule.rule_text}
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => void handleAction(idx, "approve")}
+                disabled={busy}
+                style={{
+                  flex: 1, padding: "10px 12px", minHeight: 44, borderRadius: 8,
+                  border: "1px solid rgba(74,222,128,0.4)", background: "rgba(34,197,94,0.15)",
+                  color: "#4ade80", fontSize: 14, fontWeight: 700,
+                  cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+                }}
+              >
+                ✅ 承認してルールに追加
+              </button>
+              <button
+                onClick={() => void handleAction(idx, "reject")}
+                disabled={busy}
+                style={{
+                  padding: "10px 16px", minHeight: 44, borderRadius: 8,
+                  border: "1px solid rgba(248,113,113,0.4)", background: "rgba(239,68,68,0.15)",
+                  color: "#f87171", fontSize: 14, fontWeight: 700,
+                  cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+                }}
+              >
+                ❌ 却下
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function ChatHistorySessionPage() {
@@ -951,6 +1048,13 @@ export default function ChatHistorySessionPage() {
                     <p style={{ margin: 0, fontSize: 13, color: "#d1d5db", lineHeight: 1.6, padding: "10px 12px", borderRadius: 8, background: "rgba(31,41,55,0.6)", border: "1px solid #374151" }}>
                       {evaluation.feedback.summary}
                     </p>
+                  )}
+                  {isSuperAdmin && Array.isArray(evaluation.suggested_rules) && evaluation.suggested_rules.length > 0 && (
+                    <SuggestedRulesCard
+                      evaluationId={evaluation.id}
+                      rules={evaluation.suggested_rules}
+                      onUpdate={(updated) => setEvaluation((prev) => prev ? { ...prev, suggested_rules: updated } : prev)}
+                    />
                   )}
                 </div>
               );

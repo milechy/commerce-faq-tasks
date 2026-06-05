@@ -113,7 +113,7 @@ export function createAgentSearchHandler(
       const responseBody: Record<string, unknown> & { meta?: Record<string, unknown> } = {
         ...anyResult,
         meta: {
-          ...(anyResult.meta ?? {}),
+          ...anyResult.meta,
           tenant_id: tenantId,
           duration_ms: durationMs,
           ...(camelRagStats
@@ -128,7 +128,7 @@ export function createAgentSearchHandler(
       // Compat: optionally keep top-level ragStats.
       if (camelRagStats) {
         responseBody.meta = {
-          ...(responseBody.meta ?? {}),
+          ...responseBody.meta,
           deprecated: {
             ...(responseBody.meta?.deprecated ?? {}),
             ...(keepTopLevelRagStats
