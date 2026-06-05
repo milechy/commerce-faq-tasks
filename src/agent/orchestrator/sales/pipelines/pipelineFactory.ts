@@ -53,7 +53,7 @@ const PIPELINE_CONFIGS: Record<SalesPipelineKind, SalesPipelineConfig> = {
  * 指定された kind に対応するパイプライン設定を返す。
  * 未知の kind や undefined の場合は、常に generic にフォールバックする。
  */
-export function getSalesPipelineConfig(
+function getSalesPipelineConfig(
   kind: SalesPipelineKind | undefined,
 ): SalesPipelineConfig {
   if (!kind) return PIPELINE_CONFIGS.generic;

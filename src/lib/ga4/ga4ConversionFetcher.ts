@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { runGa4ConversionReport } from "./ga4Client";
 import { logger } from "../logger";
+import { recordAndDedupe } from "../posthog/eventIdDedupe";
 
 export interface Ga4ConversionSummary {
   propertyId: string;
@@ -20,6 +21,20 @@ export async function fetchGa4Conversions(
   try {
     const rows = await runGa4ConversionReport(propertyId, startDate, endDate);
     const totalConversions = rows.reduce((sum, r) => sum + r.conversions, 0);
+
+    // conversion_attributions に GA4 コンバージョンを記録（重複排除付き）
+    for (const row of rows) {
+      await recordAndDedupe(
+        {
+          eventId: `ga4_${propertyId}_${row.date}`,
+          tenantId,
+          source: "ga4",
+          eventType: "macro",
+          conversionValue: row.conversions,
+        },
+        db,
+      );
+    }
 
     // Update last sync timestamp
     await db.query(
