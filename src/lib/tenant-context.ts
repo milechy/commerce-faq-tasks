@@ -35,6 +35,19 @@ export function getTenantByApiKeyHash(
   return undefined;
 }
 
+/**
+ * Update only the `enabled` flag of an existing in-memory tenant.
+ * Used by kill-switch and PATCH is_active to propagate DB changes instantly
+ * without requiring PM2 restart.
+ * Returns true if tenant was found in store, false if not (DB-only tenant).
+ */
+export function updateTenantEnabled(tenantId: string, enabled: boolean): boolean {
+  const existing = tenantStore.get(tenantId);
+  if (!existing) return false;
+  tenantStore.set(tenantId, { ...existing, enabled });
+  return true;
+}
+
 
 // ---------------------------------------------------------------------------
 // Seed from environment (TENANT_CONFIGS_JSON or individual vars)
