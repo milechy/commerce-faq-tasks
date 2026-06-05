@@ -149,7 +149,7 @@ export async function runBookPipeline(
 
     // 6. Groq 8b 構造化
     const structuredChunks = await structurizeChunks(chunks, {
-      ...(deps.structurizer ?? {}),
+      ...deps.structurizer,
       schema: contentSchema,
     });
 
