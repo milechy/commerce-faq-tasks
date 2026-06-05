@@ -273,6 +273,7 @@ export function registerEvaluationRoutes(app: Express): void {
       const tenantId = isSuperAdmin ? undefined : jwtTenantId || undefined;
 
       try {
+        let tuningRuleId: number | null = null;
         if (action === "approve") {
           // Fetch the evaluation to get the rule text
           const data = await getEvaluationById(id, tenantId);
@@ -286,7 +287,7 @@ export function registerEvaluationRoutes(app: Express): void {
           }
           const ruleText = rule.rule_text ?? "";
           if (ruleText) {
-            await insertTuningRuleFromSuggestion(data.evaluation.tenant_id, ruleText, {
+            tuningRuleId = await insertTuningRuleFromSuggestion(data.evaluation.tenant_id, ruleText, {
               editedText: typeof edited_text === "string" ? edited_text : undefined,
               editedBy: email || undefined,
             });
@@ -302,7 +303,7 @@ export function registerEvaluationRoutes(app: Express): void {
         if (!updated) {
           return res.status(404).json({ error: "評価データが見つかりません" });
         }
-        return res.json({ ok: true, evaluation: updated });
+        return res.json({ ok: true, evaluation: updated, ...(tuningRuleId !== null ? { tuning_rule_id: tuningRuleId } : {}) });
       } catch (err: unknown) {
         if (err instanceof RangeError) {
           return res.status(400).json({ error: err.message });
