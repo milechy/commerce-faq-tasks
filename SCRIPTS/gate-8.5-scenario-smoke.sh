@@ -47,7 +47,11 @@ chat_status=$(echo "${chat_response}" | python3 -c "import sys,json; d=json.load
 chat_answer=$(echo "${chat_response}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('answer',''))" 2>/dev/null || echo "")
 chat_answer_len=${#chat_answer}
 
-if [[ "${chat_answer_len}" -ge 10 ]]; then
+chat_error=$(echo "${chat_response}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null || echo "")
+
+if [[ "${chat_error}" == "invalid_api_key" ]]; then
+  skip "POST /api/chat → invalid_api_key (E2E_TEST_API_KEY の有効なキーへの更新が必要 — GitHub Secrets を確認してください)"
+elif [[ "${chat_answer_len}" -ge 10 ]]; then
   pass "POST /api/chat → answer ${chat_answer_len} 文字, state='${chat_status}'"
 elif [[ -n "${chat_status}" ]]; then
   fail "POST /api/chat → answer が短すぎる (${chat_answer_len} 文字), state='${chat_status}'"
