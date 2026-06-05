@@ -37,6 +37,18 @@ gh pr merge <PR番号> --auto --squash --delete-branch
 - **squash and merge** を標準とする（linear history 維持）
 - rebase merge / merge commit は使わない（履歴複雑化回避）
 
+## CL（変更リスト）小型化原則
+
+Codex レビューのラウンド数削減と安全な auto-merge のために、PR は小さく保つ:
+
+- **1 PR = 1 論理変更**。複数フィーチャーを1 PR に混ぜない
+- `src/` 変更 + `SCRIPTS/` 変更は分離を検討（Tier が変わる場合は必須）
+- migration SQL + アプリコードは同一 PR で可（atomic deploy 前提）
+- テスト追加 + 実装は同一 PR に含める（Gate 通過の前提）
+
+大きな PR は Codex ラウンド数が増え、auto-merge の確認コストも上がる。
+スコープが膨らんだと感じたら、その場で分割を検討すること。
+
 ## 関連タスク
 
 - Phase1（本ルール策定）: Asana 1214121039752589
