@@ -59,16 +59,40 @@ describe("buildWarnings", () => {
     expect(warnings.some((w) => w.includes("7-day average"))).toBe(false);
   });
 
-  it("warns when last_chat_message_at is null", () => {
+  it("warns when last_chat_message_at is null and 7d baseline exists", () => {
+    const warnings = buildWarnings({
+      last_chat_message_at: null,
+      chat_messages_24h: 0,
+      chat_messages_7d: 100,
+      cv_events_24h: 0,
+      rag_searches_24h: 0,
+      tenants_active_24h: [],
+    });
+    expect(warnings.some((w) => w.includes("last_chat_message_at is null"))).toBe(true);
+  });
+
+  it("does NOT warn when last_chat_message_at is null and chat_messages_7d is 0", () => {
     const warnings = buildWarnings({
       last_chat_message_at: null,
       chat_messages_24h: 0,
       chat_messages_7d: 0,
       cv_events_24h: 0,
-      rag_searches_24h: 10,
+      rag_searches_24h: 0,
       tenants_active_24h: [],
     });
-    expect(warnings.some((w) => w.includes("last_chat_message_at is null"))).toBe(true);
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("does NOT emit CRITICAL warning when rag_searches_24h is 0 but chat_messages_7d is also 0", () => {
+    const warnings = buildWarnings({
+      last_chat_message_at: null,
+      chat_messages_24h: 0,
+      chat_messages_7d: 0,
+      cv_events_24h: 0,
+      rag_searches_24h: 0,
+      tenants_active_24h: [],
+    });
+    expect(warnings.some((w) => w.includes("CRITICAL"))).toBe(false);
   });
 
   it("warns when last_chat_message_at is older than 6 hours", () => {
