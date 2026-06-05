@@ -21,7 +21,16 @@ export default defineConfig({
     },
     {
       name: 'admin-ui',
-      testMatch: /(responsive|avatar-test-button|visual-regression)\.spec\.ts/,
+      testMatch: /(responsive|avatar-test-button)\.spec\.ts/,
+      use: {
+        browserName: 'chromium',
+        storageState: AUTH_FILE,
+      },
+      dependencies: ['setup'],
+    },
+    {
+      name: 'visual-regression',
+      testMatch: /visual-regression\.spec\.ts/,
       use: {
         browserName: 'chromium',
         storageState: AUTH_FILE,
