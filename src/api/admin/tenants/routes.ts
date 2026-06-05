@@ -5,7 +5,7 @@ import type { AuthedReq } from "../../middleware/roleAuth";
 import { Pool } from "pg";
 import { z } from "zod";
 import jwt from "jsonwebtoken";
-import { registerTenant } from "../../../lib/tenant-context";
+import { registerTenant, updateTenantEnabled } from "../../../lib/tenant-context";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { DEFAULT_AVATARS } from "../avatar/routes";
@@ -306,10 +306,42 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, tenant_contact_email, created_at, updated_at`,
         params
       );
+      // in-memory store を即時同期 (is_active 変更が次リクエストから有効になる)
+      if (fields.is_active !== undefined) {
+        updateTenantEnabled(id, fields.is_active);
+      }
       return res.json(result.rows[0]);
     } catch (err) {
       logger.warn("[PATCH /v1/admin/tenants/:id]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
+    }
+  });
+
+  // POST /v1/admin/tenants/:id/kill-switch — テナント即時無効化 (SLA: 1分以内)
+  app.post("/v1/admin/tenants/:id/kill-switch", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const activatedAt = Date.now();
+    try {
+      const check = await db.query("SELECT id, is_active FROM tenants WHERE id = $1", [id]);
+      if (check.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
+      }
+      // DB を即時無効化
+      await db.query("UPDATE tenants SET is_active = false, updated_at = NOW() WHERE id = $1", [id]);
+      // in-memory store も即時反映 (PM2 再起動不要)
+      const inMemoryUpdated = updateTenantEnabled(id, false);
+      const latencyMs = Date.now() - activatedAt;
+      logger.warn({ tenantId: id, latencyMs, inMemoryUpdated }, "kill_switch_activated");
+      return res.json({
+        ok: true,
+        tenantId: id,
+        activated_at: new Date(activatedAt).toISOString(),
+        latency_ms: latencyMs,
+        in_memory_updated: inMemoryUpdated,
+      });
+    } catch (err) {
+      logger.warn("[POST /v1/admin/tenants/:id/kill-switch]", err);
+      return res.status(500).json({ error: "kill-switch の実行に失敗しました" });
     }
   });
 
