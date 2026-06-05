@@ -187,6 +187,17 @@ dispatch_one() {
             --model '${resolved_model}' \\
             --permission-mode '${perm_mode}' > '${log_file}' 2>&1
     " > /dev/null 2>&1 &
+    local nohup_pid=$!   # spawn checker に渡す (欠陥①対策: kill に使用)
+    disown "${nohup_pid}"
+
+    # spawn checker: SPAWN_WINDOW=180 秒後に起動確認し、失敗時は kill + DB 更新
+    # 3 欠陥修正版 (PR #252 revert 教訓 — docs/AGENT_TEAMS_BASH_PERMISSION_BUG.md §5.1)
+    nohup bash "${R2C_ROOT}/SCRIPTS/r2c-lane-spawn-checker.sh" \
+        --task-id "${task_id}" \
+        --lane-name "${lane_name}" \
+        --log-file "${log_file}" \
+        --nohup-pid "${nohup_pid}" \
+        > /dev/null 2>&1 &
     disown
 
     # PR #197 残存リスク② 解消: session_id を Lane 自己申告に依存せず
