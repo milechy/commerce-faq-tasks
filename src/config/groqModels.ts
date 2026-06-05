@@ -81,3 +81,36 @@ export function assertActiveGroqModel(model: string): void {
     );
   }
 }
+
+/**
+ * モデルが 404 / model_not_found エラーを返した際のフォールバックチェーン。
+ *
+ * キー: 優先モデルの ID
+ * 値: 退避先モデルの ID（カタログの ACTIVE_GROQ_MODELS 内のみ許可）
+ *
+ * 設計方針:
+ *   - 高性能モデルから汎用モデルへ段階的に下げる。
+ *   - 最後は必ず llama-3.1-8b-instant（最小/最安）。
+ *   - 120B 系は compound に退避（ANTI-SLOP: 120B は複雑クエリ/safety のみ使用）。
+ *   - チェーンは最大 2 段。無限ループ防止のため resolve 時に検証する。
+ */
+export const GROQ_FALLBACK_CHAIN: Readonly<Record<string, string>> = {
+  // gpt-oss 系: EOL 通知前の緊急退避
+  [GPT_OSS_120B]: GPT_OSS_20B,
+  [GPT_OSS_20B]: GROQ_VERSATILE_70B,
+  // compound 系
+  [GROQ_COMPOUND]: GROQ_COMPOUND_MINI,
+  [GROQ_COMPOUND_MINI]: GROQ_VERSATILE_70B,
+  // versatile → instant
+  [GROQ_VERSATILE_70B]: GROQ_INSTANT_8B,
+  // instant: これ以上退避先なし（チェーン終端）
+};
+
+/**
+ * 指定モデルのフォールバック先を返す。
+ *
+ * @returns フォールバック先モデル ID。チェーン終端の場合は null。
+ */
+export function getFallbackGroqModel(model: string): string | null {
+  return GROQ_FALLBACK_CHAIN[model] ?? null;
+}

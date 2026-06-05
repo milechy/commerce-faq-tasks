@@ -1,5 +1,7 @@
 // src/agent/llm/groqClient.ts
 
+import { getFallbackGroqModel } from '../../config/groqModels';
+
 export type GroqRole = 'system' | 'user' | 'assistant'
 
 export interface GroqMessage {
@@ -71,6 +73,32 @@ export class GroqBadRequestError extends GroqApiError {
     super('Groq bad request error', status, bodySnippet);
     this.name = 'GroqBadRequestError';
   }
+}
+
+/**
+ * Groq が 404 / `model_not_found` を返したときに投げるエラー。
+ *
+ * 判定条件: HTTP 404、かつレスポンスボディに "model_not_found" または "model not found"
+ * (大文字小文字問わず) が含まれる場合。単純な 404 は GroqBadRequestError のまま。
+ */
+export class GroqModelNotFoundError extends GroqApiError {
+  /** 存在しないとして扱われたモデル ID */
+  readonly modelId: string;
+
+  constructor(status: number, bodySnippet: string, modelId: string) {
+    super(`Groq model not found: "${modelId}"`, status, bodySnippet);
+    this.name = 'GroqModelNotFoundError';
+    this.modelId = modelId;
+  }
+}
+
+/**
+ * HTTP 404 レスポンスが「モデル不在」由来かを判定するヘルパー。
+ * エラー識別を groqClient 内に閉じ込めるための内部ユーティリティ。
+ */
+export function isModelNotFoundBody(bodySnippet: string): boolean {
+  const lower = bodySnippet.toLowerCase();
+  return lower.includes('model_not_found') || lower.includes('model not found');
 }
 
 /** Groq API の usage フィールド */
@@ -149,6 +177,10 @@ export const groqClient: GroqClient = {
         throw new GroqRateLimitError(response.status, bodySnippet, retryAfterMs);
       }
 
+      if (response.status === 404 && isModelNotFoundBody(bodySnippet)) {
+        throw new GroqModelNotFoundError(response.status, bodySnippet, model);
+      }
+
       if (response.status >= 500) {
         throw new GroqServerError(response.status, bodySnippet);
       }
@@ -198,6 +230,9 @@ export const groqClient: GroqClient = {
         }
       }
       if (response.status === 429) throw new GroqRateLimitError(response.status, bodySnippet, retryAfterMs);
+      if (response.status === 404 && isModelNotFoundBody(bodySnippet)) {
+        throw new GroqModelNotFoundError(response.status, bodySnippet, model);
+      }
       if (response.status >= 500) throw new GroqServerError(response.status, bodySnippet);
       throw new GroqBadRequestError(response.status, bodySnippet);
     }
@@ -333,6 +368,125 @@ export async function callGroqWith429Retry(
       await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
       attempt += 1;
       // ループして再試行
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Model-not-found フォールバック機構
+// ---------------------------------------------------------------------------
+
+export interface GroqFallbackOptions {
+  /**
+   * 呼び出し用途タグ（ログ集計用）。省略可。
+   */
+  tag?: string;
+  /**
+   * ログ出力先。省略した場合はログなし。
+   * 注意: フォールバック発生は必ずログに残すこと（無言フォールバック禁止）。
+   * Slack 通知が不要な場合でも warn レベルのログは必須。
+   */
+  logger?: {
+    warn: (obj: unknown, msg: string) => void;
+    info?: (obj: unknown, msg: string) => void;
+  };
+  /**
+   * Slack 通知コールバック。省略可。
+   * フォールバック発生時に呼び出されるので、Slack 通知が必要なら渡すこと。
+   */
+  onFallback?: (originalModel: string, fallbackModel: string) => void;
+}
+
+/**
+ * Groq 呼び出しに 404 / model_not_found が返った場合、カタログ定義のフォールバック先へ
+ * 自動退避するラッパー。
+ *
+ * - フォールバックチェーンは `src/config/groqModels.ts` の `GROQ_FALLBACK_CHAIN` を参照。
+ * - フォールバック発生時は必ず warn ログを出力する（無言フォールバック禁止）。
+ * - チェーン終端（退避先なし）または非 model_not_found エラーはそのまま上位へ投げる。
+ * - 最大フォールバック回数は GROQ_FALLBACK_CHAIN の深さ（現在 2 段）に依存する。
+ *
+ * @param params   Groq 呼び出しパラメータ（model はフォールバックで上書きされる）
+ * @param options  ログ・Slack 通知オプション
+ * @returns        最初に成功したモデルの応答テキスト
+ */
+export async function callGroqWithModelFallback(
+  params: GroqCallParams,
+  options: GroqFallbackOptions = {},
+): Promise<string> {
+  const { logger, onFallback } = options;
+  let currentModel = params.model;
+  // フォールバック済みモデルを追跡（循環ループ防止）
+  const visited = new Set<string>([currentModel]);
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      const result = await groqClient.call({ ...params, model: currentModel });
+      if (currentModel !== params.model) {
+        // 最終的にフォールバック先で成功した場合は info ログ
+        logger?.info?.(
+          { originalModel: params.model, resolvedModel: currentModel, tag: params.tag },
+          '[groq-fallback] call succeeded on fallback model',
+        );
+      }
+      return result;
+    } catch (err) {
+      if (!(err instanceof GroqModelNotFoundError)) {
+        // model_not_found 以外のエラーはそのまま上位へ
+        throw err;
+      }
+
+      const fallbackModel = getFallbackGroqModel(currentModel);
+
+      if (fallbackModel === null) {
+        // フォールバックチェーン終端: これ以上退避できない
+        logger?.warn?.(
+          {
+            originalModel: params.model,
+            failedModel: currentModel,
+            tag: params.tag,
+            status: err.status,
+          },
+          '[groq-fallback] model_not_found and no fallback available, giving up',
+        );
+        throw err;
+      }
+
+      if (visited.has(fallbackModel)) {
+        // 循環ループ検知（カタログ設定ミスへの防衛）
+        logger?.warn?.(
+          {
+            originalModel: params.model,
+            failedModel: currentModel,
+            fallbackModel,
+            visited: [...visited],
+            tag: params.tag,
+          },
+          '[groq-fallback] fallback cycle detected, giving up',
+        );
+        throw err;
+      }
+
+      // フォールバック発生を必ずログに残す（無言フォールバック禁止）
+      logger?.warn?.(
+        {
+          originalModel: params.model,
+          failedModel: currentModel,
+          fallbackModel,
+          tag: params.tag,
+          status: err.status,
+          bodySnippet: err.bodySnippet,
+        },
+        '[groq-fallback] model_not_found, falling back to alternative model',
+      );
+
+      // Slack 通知コールバックが設定されていれば呼ぶ
+      onFallback?.(currentModel, fallbackModel);
+
+      visited.add(fallbackModel);
+      currentModel = fallbackModel;
+      // ループして代替モデルで再試行
     }
   }
 }
