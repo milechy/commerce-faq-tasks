@@ -25,7 +25,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src admin-ui/src --max-warnings 63",
-    "test": "jest --runInBand",
+    "test": "jest --maxWorkers=2 --workerIdleMemoryLimit=1500mb",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:visual": "playwright test --project=admin-ui tests/e2e/visual-regression.spec.ts",
