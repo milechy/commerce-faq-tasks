@@ -162,6 +162,21 @@ export default function TuningRulesPage() {
     }
   }, [searchParams]);
 
+  // ─── Auto-open edit modal from URL params (from AI evaluation detail) ────────
+  useEffect(() => {
+    const editIdStr = searchParams.get("editId");
+    if (!editIdStr) return;
+    const editId = Number(editIdStr);
+    if (!Number.isFinite(editId) || editId <= 0) return;
+    // Wait until rules are loaded, then open the edit modal for the matching rule
+    if (loading) return;
+    const target = rules.find((r) => r.id === editId);
+    if (target) {
+      setEditTarget(target);
+      window.history.replaceState({}, "", "/admin/tuning");
+    }
+  }, [searchParams, rules, loading]);
+
   // ─── Modal success ──────────────────────────────────────────────────────────
   // モーダルが保存API を自身で呼び出してTuningRuleを返す。
   // ここではリスト更新とトーストのみ行い、モーダルは閉じない（テスト返答フェーズへ遷移）。

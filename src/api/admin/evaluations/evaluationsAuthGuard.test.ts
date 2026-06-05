@@ -21,7 +21,7 @@ jest.mock('./evaluationsRepository', () => ({
   getEvaluationById: jest.fn().mockResolvedValue(null),
   checkAlreadyEvaluated: jest.fn().mockResolvedValue(false),
   updateSuggestedRuleStatus: jest.fn().mockResolvedValue({ id: 1 }),
-  insertTuningRuleFromSuggestion: jest.fn().mockResolvedValue(undefined),
+  insertTuningRuleFromSuggestion: jest.fn().mockResolvedValue(1),
 }));
 
 import express from 'express';

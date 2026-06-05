@@ -641,7 +641,7 @@ export async function insertTuningRuleFromSuggestion(
   tenantId: string,
   ruleText: string,
   options?: { editedText?: string; editedBy?: string },
-): Promise<void> {
+): Promise<number | null> {
   const pool = getPool();
   const finalText = options?.editedText ?? ruleText;
   const originalText = options?.editedText ? ruleText : null;
@@ -649,21 +649,23 @@ export async function insertTuningRuleFromSuggestion(
   const editedAt = options?.editedText ? "NOW()" : null;
 
   if (editedAt) {
-    await pool.query(
+    const result = await pool.query<{ id: number }>(
       `INSERT INTO tuning_rules
          (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
           original_text, edited_by, edited_at)
        VALUES ($1, $2, $2, 0, true, $3, $4, NOW())
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING RETURNING id`,
       [tenantId, finalText, originalText, editedBy],
     );
+    return result.rows[0]?.id ?? null;
   } else {
-    await pool.query(
+    const result = await pool.query<{ id: number }>(
       `INSERT INTO tuning_rules
          (tenant_id, trigger_pattern, expected_behavior, priority, is_active)
        VALUES ($1, $2, $2, 0, true)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING RETURNING id`,
       [tenantId, finalText],
     );
+    return result.rows[0]?.id ?? null;
   }
 }
