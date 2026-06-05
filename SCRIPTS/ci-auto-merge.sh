@@ -122,17 +122,18 @@ decline() { log "SKIP #$PR_NUMBER ($1): $TITLE"; exit 0; }
 has_block_label "$LABELS"  && decline "block-label ($LABELS)"
 night_frozen               && decline "night-freeze (22:00-07:00 JST)"
 
-# Tier 判定: ループ生成 PR (auto/tier-N-*) はブランチ名で確定、それ以外は scorer にフォールバック
+# Tier 判定: Tier S のみ human merge required。Tier A/B は全て auto-merge 対象。
 # auto/s-* = Tier S → human merge required (merge しない)
-# auto/a-* = Tier A → auto-merge eligible (scorer スキップ)
-# auto/b-* = Tier B → auto-merge eligible (scorer スキップ)
-# それ以外 (手動PR等) → scorer で判定 (従来動作)
+# auto/a-* = Tier A loop PR → auto-merge eligible (scorer スキップ)
+# auto/b-* = Tier B loop PR → auto-merge eligible (scorer スキップ)
+# feature/* 等 (手動PR) → scorer で risk=high なら Tier S 相当として decline
 [[ "$HEAD_REF" =~ ^auto/s- ]] && decline "Tier S — human merge required (branch: $HEAD_REF)"
 if [[ "$HEAD_REF" =~ ^auto/[ab]- ]]; then
     log "Tier A/B loop PR — auto-merge eligible (branch: $HEAD_REF)"
 else
-    ELIGIBLE="$(bash "$SCORER" "$PR_NUMBER" --json-only 2>/dev/null | jq -r '.auto_merge_eligible')" || decline "scorer失敗"
-    [[ "$ELIGIBLE" == "true" ]] || decline "not auto-merge eligible (auto_merge_eligible=$ELIGIBLE)"
+    PR_RISK="$(bash "$SCORER" "$PR_NUMBER" --json-only 2>/dev/null | jq -r '.risk')" || decline "scorer失敗"
+    [[ "$PR_RISK" == "high" ]] && decline "Tier S 相当 (risk=high) — human merge required"
+    log "risk=$PR_RISK — Tier A/B 相当、auto-merge eligible"
 fi
 
 # 必須チェック全 green
