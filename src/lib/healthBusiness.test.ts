@@ -59,16 +59,28 @@ describe("buildWarnings", () => {
     expect(warnings.some((w) => w.includes("7-day average"))).toBe(false);
   });
 
-  it("warns when last_chat_message_at is null", () => {
+  it("warns when last_chat_message_at is null AND chat_messages_7d > 0 (traffic existed)", () => {
     const warnings = buildWarnings({
       last_chat_message_at: null,
       chat_messages_24h: 0,
-      chat_messages_7d: 0,
+      chat_messages_7d: 700,
       cv_events_24h: 0,
       rag_searches_24h: 10,
       tenants_active_24h: [],
     });
     expect(warnings.some((w) => w.includes("last_chat_message_at is null"))).toBe(true);
+  });
+
+  it("does NOT warn when last_chat_message_at is null AND chat_messages_7d is 0 (fresh DB)", () => {
+    const warnings = buildWarnings({
+      last_chat_message_at: null,
+      chat_messages_24h: 0,
+      chat_messages_7d: 0,
+      cv_events_24h: 0,
+      rag_searches_24h: 0,
+      tenants_active_24h: [],
+    });
+    expect(warnings.some((w) => w.includes("last_chat_message_at is null"))).toBe(false);
   });
 
   it("warns when last_chat_message_at is older than 6 hours", () => {
@@ -105,6 +117,18 @@ describe("buildWarnings", () => {
       tenants_active_24h: ["carnation"],
     });
     expect(warnings.some((w) => w.includes("CRITICAL") && w.includes("rag_searches_24h is 0"))).toBe(true);
+  });
+
+  it("does NOT emit CRITICAL when rag_searches_24h is 0 AND chat_messages_24h is 0 (no activity)", () => {
+    const warnings = buildWarnings({
+      last_chat_message_at: null,
+      chat_messages_24h: 0,
+      chat_messages_7d: 0,
+      cv_events_24h: 0,
+      rag_searches_24h: 0,
+      tenants_active_24h: [],
+    });
+    expect(warnings.some((w) => w.includes("CRITICAL"))).toBe(false);
   });
 
   it("does NOT emit CRITICAL warning when rag_searches_24h > 0", () => {

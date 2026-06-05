@@ -92,8 +92,11 @@ export function buildWarnings(metrics: BusinessMetrics): string[] {
   }
 
   // last_chat_message_at が 6 時間以上前
+  // 7日間にメッセージ実績がある場合のみ: 過去にトラフィックあり → 24h 無しは異常
   if (metrics.last_chat_message_at === null) {
-    warnings.push("last_chat_message_at is null: no messages recorded");
+    if (metrics.chat_messages_7d > 0) {
+      warnings.push("last_chat_message_at is null: no messages recorded");
+    }
   } else {
     const lastAt = new Date(metrics.last_chat_message_at).getTime();
     if (Date.now() - lastAt > SIX_HOURS_MS) {
@@ -101,8 +104,9 @@ export function buildWarnings(metrics: BusinessMetrics): string[] {
     }
   }
 
-  // rag_searches_24h が 0
-  if (metrics.rag_searches_24h === 0) {
+  // rag_searches_24h が 0 — chat トラフィックがある場合のみ CRITICAL
+  // chat_messages_24h = 0 の場合は RAG 稼働を判定不能 (空 DB / 深夜帯)
+  if (metrics.rag_searches_24h === 0 && metrics.chat_messages_24h > 0) {
     warnings.push("CRITICAL: rag_searches_24h is 0 — RAG pipeline may be down");
   }
 
