@@ -55,7 +55,7 @@ const HINT_MAP: HintMap = {
  * SalesFlowステージと温度感レベルから最適な心理原則ヒントを選択する。
  * 未知のステージは _default にフォールバック。
  */
-function selectPsychologyHints(
+export function selectPsychologyHints(
   salesStage: string | null,
   tempLevel: TempLevel,
 ): PsychologySearchHint {

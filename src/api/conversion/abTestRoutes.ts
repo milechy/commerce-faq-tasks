@@ -33,7 +33,7 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 const ADMIN_AUTH = [supabaseAuthMiddleware, roleAuthMiddleware, requireRole('super_admin', 'client_admin')];
 
 /** visitor_idの決定的なvariant割り当て（同一IDは常に同じvariant） */
-function assignVariant(visitorId: string, trafficSplit: number): 'a' | 'b' {
+export function assignVariant(visitorId: string, trafficSplit: number): 'a' | 'b' {
   let hash = 0;
   for (let i = 0; i < visitorId.length; i++) {
     hash = (hash * 31 + visitorId.charCodeAt(i)) >>> 0;
