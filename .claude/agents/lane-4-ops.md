@@ -2,7 +2,7 @@
 name: lane-4-ops
 description: R2C 運用スクリプト変更 (SCRIPTS/, ecosystem.config.cjs) を担当する Lane 4 エージェント。Tier B skill タスクを処理。
 model: claude-sonnet-4-6
-memory: local
+memory: project
 tools:
   - Bash
   - Read

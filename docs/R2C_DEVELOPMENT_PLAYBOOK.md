@@ -883,6 +883,74 @@ stuck-detector (Asana 1214954523638712) は本 PR では触らず、以下の共
 
 ---
 
+## 15.6 auto-memory ディレクトリ設定（MEMORY.md 運用）
+
+> 追加: 2026-06-05 (GID 1214886037602478)
+
+### 概要
+
+R2C は Claude Code ビルトインの auto-memory システムを使用する。
+Lane Pool の各 Lane エージェントが学習した罠・preference をセッション横断で共有する唯一の書き込み先。
+
+### ストレージパス
+
+```
+~/.claude-r2c-config/projects/-Users-hkobayashi-projects-commerce-faq-tasks/memory/
+```
+
+`CLAUDE_CONFIG_DIR=~/.claude-r2c-config` 環境変数で R2C 専用 config dir に隔離済み。
+パスは Claude Code が自動導出するため、手動設定は不要。
+
+### 有効化設定
+
+| ファイル | キー | 値 | 備考 |
+|---|---|---|---|
+| `.claude/settings.json` | `autoMemoryEnabled` | `true` | プロジェクトレベル（正本） |
+| `~/.claude-r2c-config/settings.json` | `autoMemoryEnabled` | `true` | グローバルレベル（明示） |
+
+### Lane エージェントの memory スコープ
+
+全 5 Lane エージェントに `memory: project` を設定し、共有 MEMORY.md へ書き込む。
+
+| エージェント | memory スコープ | 共有 MEMORY.md |
+|---|---|---|
+| lane-1-docs | `project` | ✅ |
+| lane-2-api | `project` | ✅ |
+| lane-3-test | `project` | ✅ |
+| lane-4-ops | `project` | ✅ |
+| lane-5-security | `project` | ✅ |
+
+### メモリ 4 層アーキテクチャ
+
+R2C の永続記憶は以下の 4 層で構成される:
+
+```
+Layer 1: MEMORY.md (auto-memory)
+  └── 唯一の書き込み可能領域（全 Lane + TeamLead が読み書き）
+  └── feedback / project / user / reference 型
+  └── 3 問フィルタ必須（Q1:コードで分かる / Q2:2週後正しい / Q3:罠回避になる）
+
+Layer 2: .wolf/anatomy.md
+  └── ファイルインデックス・トークン見積り（Read-Only, 累計 16.7M tok 削減）
+
+Layer 3: .wolf/buglog.json
+  └── 構造化バグログ 6000+ 件（Read-Only）
+
+Layer 4: .wolf/cerebrum.md
+  └── 長期学習（key learnings / do-not-repeat）（Read-Only, 24h 自走中）
+```
+
+**24h 自走中のルール**: Layer 1 のみ書き込み可。Layer 2-4 は参照専用。
+
+### 書き込み先確認コマンド
+
+```bash
+ls ~/.claude-r2c-config/projects/-Users-hkobayashi-projects-commerce-faq-tasks/memory/
+# MEMORY.md と各メモリファイルが存在すれば正常
+```
+
+---
+
 ## 16. Lane retry / Pushover 通知仕様
 
 24h ループの Lane 失敗時 retry 戦略と Pushover priority マッピングの詳細は以下を参照:
