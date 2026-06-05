@@ -8,8 +8,15 @@ import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
 import BookChunksPanel from "./BookChunksPanel";
 import KnowledgeAttributionTab from "../../../components/knowledge/KnowledgeAttributionTab";
+import { KNOWLEDGE_TENANT_STORAGE_KEY } from "./index";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
+
+interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
+}
 
 interface KnowledgeItem {
   id: number;
@@ -2185,11 +2192,28 @@ export default function TenantKnowledgePage() {
       : "list"
   );
 
+  // テナント一覧（Super Admin のみ使用）
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    fetchWithAuth(`${API_BASE}/v1/admin/tenants`)
+      .then((res) => res.json() as Promise<{ tenants?: Tenant[]; items?: Tenant[] }>)
+      .then((data) => setTenants(data.tenants ?? data.items ?? []))
+      .catch(() => {/* best-effort */});
+  }, [isSuperAdmin]);
+
   // tenantId の解決: URL params → pathnameの末尾 → JWTのtenantId
   // /admin/knowledge/global のように固定パスの場合 useParams では undefined になるため
   // pathname から取得するフォールバックを追加
   const pathTenantId = tenantId ?? location.pathname.split("/").pop() ?? "";
   const resolvedTenantId = pathTenantId || user?.tenantId || "";
+
+  // テナント切り替え時に localStorage に保存
+  useEffect(() => {
+    if (isSuperAdmin && resolvedTenantId) {
+      localStorage.setItem(KNOWLEDGE_TENANT_STORAGE_KEY, resolvedTenantId);
+    }
+  }, [isSuperAdmin, resolvedTenantId]);
 
   useEffect(() => {
     void (async () => {
@@ -2208,6 +2232,16 @@ export default function TenantKnowledgePage() {
 
   const isGlobalTenant = resolvedTenantId === "global";
 
+  const handleTenantChange = (newTenantId: string) => {
+    localStorage.setItem(KNOWLEDGE_TENANT_STORAGE_KEY, newTenantId);
+    const tabSuffix = activeTab !== "list" ? `?tab=${activeTab}` : "";
+    navigate(`/admin/knowledge/${newTenantId}${tabSuffix}`);
+  };
+
+  const testUrl = isGlobalTenant
+    ? "/admin/chat-test?scope=global"
+    : `/admin/chat-test?tenantId=${encodeURIComponent(resolvedTenantId)}`;
+
   return (
     <div
       style={{
@@ -2222,26 +2256,57 @@ export default function TenantKnowledgePage() {
       <header style={{ marginBottom: 28 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
           <button
-            onClick={() => navigate(isSuperAdmin ? "/admin/knowledge" : "/admin")}
+            onClick={() => navigate("/admin")}
             style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "8px 14px", minHeight: 44, borderRadius: 999, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer", fontWeight: 500 }}
           >
-            {isSuperAdmin ? t("nav.back_knowledge") : t("nav.back_dashboard")}
+            {t("nav.back_dashboard")}
           </button>
           <LangSwitcher />
         </div>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
           {t("knowledge.title")}
         </h1>
-        <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
-          {isGlobalTenant
-            ? t("knowledge.global_desc")
-            : t("knowledge.subtitle")}
-          {resolvedTenantId && !isGlobalTenant && (
-            <span style={{ marginLeft: 8, fontFamily: "monospace", color: "#6b7280", fontSize: 12 }}>
-              ({resolvedTenantId})
-            </span>
-          )}
-        </p>
+        {isSuperAdmin ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+            <select
+              value={resolvedTenantId}
+              onChange={(e) => handleTenantChange(e.target.value)}
+              style={{
+                flex: 1, padding: "10px 12px", minHeight: 44, borderRadius: 10,
+                border: "1px solid #374151", background: "rgba(15,23,42,0.8)",
+                color: "#e5e7eb", fontSize: 15, cursor: "pointer",
+              }}
+            >
+              <option value="global">🌐 グローバルナレッジ</option>
+              {tenants.map((tn) => (
+                <option key={tn.id} value={tn.id}>{tn.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => navigate(testUrl)}
+              style={{
+                padding: "10px 16px", minHeight: 44, borderRadius: 10,
+                border: "1px solid rgba(59,130,246,0.3)", background: "rgba(59,130,246,0.08)",
+                color: "#93c5fd", fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+              }}
+            >
+              💬 テスト
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+            <button
+              onClick={() => navigate(testUrl)}
+              style={{
+                padding: "10px 16px", minHeight: 44, borderRadius: 10,
+                border: "1px solid rgba(59,130,246,0.3)", background: "rgba(59,130,246,0.08)",
+                color: "#93c5fd", fontSize: 14, fontWeight: 600, cursor: "pointer",
+              }}
+            >
+              💬 テスト
+            </button>
+          </div>
+        )}
       </header>
 
       {/* タブ */}
