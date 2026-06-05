@@ -92,17 +92,19 @@ export function buildWarnings(metrics: BusinessMetrics): string[] {
   }
 
   // last_chat_message_at が 6 時間以上前
-  if (metrics.last_chat_message_at === null) {
+  // 7日間に実績がある場合のみ警告 (ゼロトラフィック環境での誤報を防ぐ)
+  if (metrics.chat_messages_7d > 0 && metrics.last_chat_message_at === null) {
     warnings.push("last_chat_message_at is null: no messages recorded");
-  } else {
+  } else if (metrics.last_chat_message_at !== null) {
     const lastAt = new Date(metrics.last_chat_message_at).getTime();
     if (Date.now() - lastAt > SIX_HOURS_MS) {
       warnings.push("last_chat_message_at is older than 6 hours");
     }
   }
 
-  // rag_searches_24h が 0
-  if (metrics.rag_searches_24h === 0) {
+  // rag_searches_24h が 0 — トラフィックがある場合のみ警告
+  // chat_messages_24h=0 の場合は RAG が呼ばれないのは当然なので除外
+  if (metrics.rag_searches_24h === 0 && metrics.chat_messages_24h > 0) {
     warnings.push("CRITICAL: rag_searches_24h is 0 — RAG pipeline may be down");
   }
 
