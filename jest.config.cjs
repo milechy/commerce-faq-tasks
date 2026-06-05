@@ -2,18 +2,17 @@
 
 /** @type {import('jest').Config} */
 module.exports = {
-  preset: "ts-jest",
   testEnvironment: "node",
-  globals: {
-    "ts-jest": {
+  transform: {
+    "^.+\\.tsx?$": ["ts-jest", {
       // Mirror tsc --noEmit behaviour: emit warnings but don't fail the test suite
       diagnostics: { warnOnly: true },
       // 型チェックを test 実行から外しトランスパイルのみ行う (メモリ単調増加→OOM の根治)。
       // 150 スイート × jest --runInBand で ts-jest の per-file 型チェックがヒープを
       // 累積させ、6GB でも JS heap OOM (exit 134) していた。型安全性は別ステップ
       // `pnpm typecheck` (tsc --noEmit) が担保するため、test 側での型チェックは冗長。
-      isolatedModules: true,
-    },
+      // isolatedModules は tsconfig.json に移動済み (ts-jest v29.4+ の推奨)
+    }],
   },
 
   // Only run tests for the main workspace (avoid archived contexts / nested sample apps)

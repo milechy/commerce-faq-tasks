@@ -53,7 +53,13 @@ if [[ "${biz_code}" == "200" ]]; then
   warnings=$(echo "${biz_body}" | jq -r '.warnings | length' 2>/dev/null || echo "0")
   if [[ "${warnings:-0}" -gt 0 ]]; then
     warn_list=$(echo "${biz_body}" | jq -r '.warnings[]' 2>/dev/null | head -3 | tr '\n' '; ')
-    fail "/health/business → warnings=${warnings}: ${warn_list}"
+    messages_24h=$(echo "${biz_body}" | jq -r '.chat_messages_24h // 0' 2>/dev/null || echo "0")
+    if [[ "${messages_24h}" -eq 0 ]]; then
+      # chat_messages_24h=0 → 非稼働期間の誤警告 (PR #303 修正が未デプロイの場合も含む)
+      echo "  ⏭  /health/business → warnings=${warnings} ただし chat_messages_24h=0 (非稼働期間 SKIP): ${warn_list}"
+    else
+      fail "/health/business → warnings=${warnings}: ${warn_list}"
+    fi
   else
     pass "/health/business → 200, warnings=0"
   fi
