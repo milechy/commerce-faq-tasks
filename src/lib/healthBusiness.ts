@@ -91,18 +91,20 @@ export function buildWarnings(metrics: BusinessMetrics): string[] {
     warnings.push(`chat_messages_24h dropped ${dropPct}% vs 7-day average`);
   }
 
-  // last_chat_message_at が 6 時間以上前
-  if (metrics.last_chat_message_at === null) {
-    warnings.push("last_chat_message_at is null: no messages recorded");
-  } else {
-    const lastAt = new Date(metrics.last_chat_message_at).getTime();
-    if (Date.now() - lastAt > SIX_HOURS_MS) {
-      warnings.push("last_chat_message_at is older than 6 hours");
+  // last_chat_message_at が 6 時間以上前 (7d ベースラインがある場合のみ)
+  if (metrics.chat_messages_7d > 0) {
+    if (metrics.last_chat_message_at === null) {
+      warnings.push("last_chat_message_at is null: no messages recorded");
+    } else {
+      const lastAt = new Date(metrics.last_chat_message_at).getTime();
+      if (Date.now() - lastAt > SIX_HOURS_MS) {
+        warnings.push("last_chat_message_at is older than 6 hours");
+      }
     }
   }
 
-  // rag_searches_24h が 0
-  if (metrics.rag_searches_24h === 0) {
+  // rag_searches_24h が 0 (7d ベースラインがある場合のみ — ベースラインなし = 稼働前/閑散期)
+  if (metrics.chat_messages_7d > 0 && metrics.rag_searches_24h === 0) {
     warnings.push("CRITICAL: rag_searches_24h is 0 — RAG pipeline may be down");
   }
 
