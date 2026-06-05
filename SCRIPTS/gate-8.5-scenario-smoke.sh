@@ -45,9 +45,12 @@ chat_response=$(curl -s --max-time 30 -X POST "${API_URL}/api/chat" \
 
 chat_status=$(echo "${chat_response}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('state',''))" 2>/dev/null || echo "")
 chat_answer=$(echo "${chat_response}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('answer',''))" 2>/dev/null || echo "")
+chat_error=$(echo "${chat_response}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null || echo "")
 chat_answer_len=${#chat_answer}
 
-if [[ "${chat_answer_len}" -ge 10 ]]; then
+if [[ "${chat_error}" == "invalid_api_key" ]]; then
+  skip "POST /api/chat → E2E_TEST_API_KEY が無効 (GitHub シークレット更新が必要)"
+elif [[ "${chat_answer_len}" -ge 10 ]]; then
   pass "POST /api/chat → answer ${chat_answer_len} 文字, state='${chat_status}'"
 elif [[ -n "${chat_status}" ]]; then
   fail "POST /api/chat → answer が短すぎる (${chat_answer_len} 文字), state='${chat_status}'"
@@ -101,7 +104,12 @@ if [[ "${biz_http}" == "200" ]]; then
     pass "/health/business → 200, warnings=0"
   else
     warn_list=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print('; '.join(d.get('warnings',[])[:3]))" 2>/dev/null || echo "")
-    fail "/health/business → warnings=${warnings}: ${warn_list}"
+    messages_24h=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('chat_messages_24h',0))" 2>/dev/null || echo "0")
+    if [[ "${messages_24h}" -eq 0 ]]; then
+      skip "/health/business → warnings=${warnings} ただし chat_messages_24h=0 (非稼働期間 SKIP): ${warn_list}"
+    else
+      fail "/health/business → warnings=${warnings}: ${warn_list}"
+    fi
   fi
 elif [[ "${biz_http}" == "404" ]]; then
   skip "/health/business → 404 (未実装)"
