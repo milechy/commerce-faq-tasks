@@ -1,0 +1,36 @@
+name: Gate 8.5 — シナリオ smoke (post-merge)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  gate-8-5-smoke:
+    name: Gate 8.5 Scenario Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Gate 8.5 scenario smoke
+        env:
+          API_URL: https://api.r2c.biz
+          E2E_TEST_API_KEY: ${{ secrets.E2E_TEST_API_KEY }}
+          E2E_TEST_TENANT_ID: ${{ secrets.E2E_TEST_TENANT_ID }}
+        run: bash SCRIPTS/gate-8.5-scenario-smoke.sh
+
+      - name: Slack alert on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_R2C }}
+        run: |
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="⛔ *Gate 8.5 FAIL* (scenario smoke post-merge)\ncommit: \`${SHORT_SHA}\`\nmsg: ${{ github.event.head_commit.message }}\n\nチャット応答・テナント分離・レート制限のいずれかが異常です。\n🤖 ci-failure-watcher が5分以内に自動修正タスクをキューに投入します。\n<${RUN_URL}|Actions ログ>"
+          if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+            curl -s -X POST "${SLACK_WEBHOOK_URL}" \
+              -H 'Content-type: application/json' \
+              --data "{\"text\":\"${MSG}\"}" || true
+          fi

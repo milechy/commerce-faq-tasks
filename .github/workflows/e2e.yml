@@ -1,0 +1,73 @@
+name: E2E + Visual Regression (Gate 4b / Phase C)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'admin-ui/src/**'
+      - 'public/**'
+      - 'tests/e2e/**'
+      - 'playwright.config.ts'
+
+jobs:
+  e2e:
+    name: E2E — Playwright (authenticated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright (chromium only)
+        run: npx playwright install --with-deps chromium
+
+      # Phase A: Supabase 認証 → storageState 生成
+      # 秘匿情報未設定の場合は空の storageState を生成してテストを graceful skip
+      - name: Auth setup
+        env:
+          TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
+          TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}
+          E2E_ENABLED: '1'
+        run: npx playwright test --project=setup
+
+      # E2E テスト (admin-ui project + public project)
+      - name: Run E2E tests
+        env:
+          E2E_ENABLED: '1'
+          TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
+          TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}
+        run: npx playwright test --project=admin-ui --project=chromium
+
+      # Phase C: ビジュアルリグレッション（linux baseline が存在する場合のみ）
+      - name: Visual regression (skip if no baseline)
+        env:
+          E2E_ENABLED: '1'
+        run: |
+          SNAPSHOT_DIR="tests/e2e/visual-regression.spec.ts-snapshots"
+          if ls "${SNAPSHOT_DIR}"/*-linux.png 2>/dev/null | grep -q .; then
+            echo "▶ linux baseline 存在 → visual regression 実行"
+            npx playwright test --project=visual-regression
+          else
+            echo "⏭ linux baseline 未作成 → visual regression スキップ"
+            echo "  初回作成: npx playwright test --project=visual-regression --update-snapshots"
+            echo "  生成された *-linux.png をコミットしてください"
+          fi
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 7
