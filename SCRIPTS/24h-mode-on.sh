@@ -119,7 +119,7 @@ CHECKS_JSON=$(printf '%s' "$STATUS_CHECKS" | jq -Rcs 'split(",") | map(gsub("^\\
 PROTECTION_PAYLOAD=$(jq -nc \
     --argjson checks "$CHECKS_JSON" \
     '{
-        required_status_checks: { strict: true, checks: $checks },
+        required_status_checks: { strict: false, checks: $checks },
         enforce_admins: false,
         required_pull_request_reviews: {
             dismiss_stale_reviews: true,
