@@ -133,10 +133,10 @@
     '  bottom: 24px;',
     '  right: 24px;',
     '  z-index: 2147483647;',
-    '  min-width: 64px;',
-    '  min-height: 64px;',
-    '  width: 64px;',
-    '  height: 64px;',
+    '  min-width: 80px;',
+    '  min-height: 80px;',
+    '  width: 80px;',
+    '  height: 80px;',
     '  border-radius: 50%;',
     '  border: none;',
     '  background-color: #2563eb;',
@@ -418,7 +418,7 @@
     /* アバターエリア（avatar=true テナントのみ表示） */
     '.avatar-area {',
     '  width: calc(100% - 16px);',
-    '  height: 220px;',
+    '  height: 300px;',
     '  margin: 8px;',
     '  border-radius: 12px;',
     '  background: linear-gradient(160deg, #0f0f1a 0%, #1a1a2e 60%, #0d1117 100%);',
@@ -473,7 +473,7 @@
     '}',
 
     /* モバイル最適化 */
-    '@media (max-width: 390px) { .avatar-area { height: 180px; } }',
+    '@media (max-width: 390px) { .avatar-area { height: 240px; } }',
 
     /* ───── avatar-active: PC 横並び2パネル / モバイル縦スプリット ───── */
 
@@ -643,8 +643,8 @@
     '  .panel.avatar-active .avatar-close-btn { display: flex; }',
     '  .panel.avatar-active .avatar-area {',
     '    grid-column: unset; grid-row: unset;',
-    '    width: 100%; height: 45%;',
-    '    min-height: 200px; max-height: 320px;',
+    '    width: 100%; height: 55%;',
+    '    min-height: 280px; max-height: 400px;',
     '    border-radius: 0;',
     '  }',
     '  .panel.avatar-active .messages {',
