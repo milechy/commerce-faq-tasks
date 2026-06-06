@@ -128,8 +128,8 @@ export async function bridgeConversionEvents(
     try {
       await db.query(
         `INSERT INTO conversion_attributions
-           (tenant_id, session_id, conversion_type, conversion_value, created_at)
-         VALUES ($1, $2::uuid, $3, $4, now())`,
+           (tenant_id, session_id, conversion_type, conversion_value, event_id, created_at)
+         VALUES ($1, $2::uuid, $3, $4, gen_random_uuid(), now())`,
         [
           tenantId,
           sessionIdForAttribution,
