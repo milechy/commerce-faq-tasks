@@ -1,22 +1,33 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { API_BASE } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import { useAuth } from "../../auth/useAuth";
-import { API_BASE } from "../../lib/api";
+import GapQuestionBanner from "./GapQuestionBanner";
 import GlobalKnowledgeCheckbox from "./GlobalKnowledgeCheckbox";
 import {
-  type FaqEntry,
-  type ScrapePreviewItem,
-  type Category,
   fetchWithAuth,
+  resolveKnowledgeGap,
   CARD_STYLE,
   BTN_PRIMARY,
   TEXTAREA_STYLE,
   SELECT_STYLE,
-  CATEGORY_LABEL_MAP,
+  CATEGORY_LABELS,
+  type FaqEntry,
+  type ScrapePreviewItem,
 } from "./shared";
 
-export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: string; onCommitSuccess: () => void }) {
+export default function ScrapeTab({
+  tenantId,
+  onCommitSuccess,
+  gapQuestion,
+  gapId,
+}: {
+  tenantId: string;
+  onCommitSuccess: () => void;
+  gapQuestion?: string;
+  gapId?: number;
+}) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
@@ -35,13 +46,40 @@ export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: 
   ];
 
   const [urls, setUrls] = useState("");
-  const [category, setCategory] = useState<Category>("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [category, setCategory] = useState<string>("");
+  const [isGlobal, setIsGlobal] = useState(tenantId === "global");
+  useEffect(() => { setIsGlobal(tenantId === "global"); }, [tenantId]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ScrapePreviewItem[] | null>(null);
   const [committing, setCommitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<{ url: string; idx: number } | null>(null);
+  const [editQuestion, setEditQuestion] = useState("");
+  const [editAnswer, setEditAnswer] = useState("");
+  const [editCategory, setEditCategory] = useState<string>("");
+
+  const handleStartEdit = (url: string, idx: number, faq: FaqEntry) => {
+    setEditingKey({ url, idx });
+    setEditQuestion(faq.question);
+    setEditAnswer(faq.answer);
+    setEditCategory(faq.category ?? "");
+  };
+  const handleSaveEdit = () => {
+    if (!editingKey || !preview) return;
+    setPreview(preview.map((item) =>
+      item.url === editingKey.url
+        ? { ...item, faqs: item.faqs.map((f, i) => i === editingKey.idx ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim(), category: editCategory || undefined } : f) }
+        : item
+    ));
+    setEditingKey(null);
+  };
+  const handleDeleteFaq = (url: string, idx: number) => {
+    if (!preview) return;
+    setPreview(preview.map((item) =>
+      item.url === url ? { ...item, faqs: item.faqs.filter((_, i) => i !== idx) } : item
+    ));
+  };
 
   const handleFetch = async () => {
     const urlList = urls
@@ -103,7 +141,12 @@ export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: 
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      if (gapId) {
+        await resolveKnowledgeGap(gapId).catch(() => {/* silent */});
+        setSuccess("✅ ナレッジを追加し、未回答の質問を解決済みにしました");
+      } else {
+        setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      }
       setPreview(null);
       setUrls("");
       onCommitSuccess();
@@ -122,6 +165,7 @@ export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {gapQuestion && <GapQuestionBanner question={gapQuestion} />}
       {!preview && (
         <>
           <div style={CARD_STYLE}>
@@ -145,7 +189,7 @@ export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: 
             </label>
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value as Category)}
+              onChange={(e) => setCategory(e.target.value)}
               style={SELECT_STYLE}
             >
               {CATEGORIES.map((c) => (
@@ -159,7 +203,7 @@ export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: 
             )}
             {isSuperAdmin && (
               <div style={{ marginTop: 16 }}>
-                <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+                <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} disabled={tenantId === "global"} />
               </div>
             )}
           </div>
@@ -219,73 +263,95 @@ export default function UrlScrapeTab({ tenantId, onCommitSuccess }: { tenantId: 
                 <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 13 }}>
                   {t("knowledge.scrape_fetch_failed", { error: item.error })}
                 </div>
+              ) : item.faqs.length === 0 ? (
+                <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 13 }}>
+                  {t("knowledge.preview_empty")}
+                </div>
               ) : (
                 <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
-                  {item.faqs.map((faq: FaqEntry, idx: number) => {
-                    const categoryLabel = faq.category ? CATEGORY_LABEL_MAP[faq.category]?.ja : null;
-                    return (
-                      <div
-                        key={idx}
-                        style={{
-                          padding: "14px 18px",
-                          borderBottom: idx === item.faqs.length - 1 ? "none" : "1px solid #111827",
-                        }}
-                      >
-                        <span style={{
-                          display: "inline-block",
-                          padding: "2px 8px",
-                          borderRadius: 6,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          background: "rgba(34,197,94,0.15)",
-                          color: "#4ade80",
-                          border: "1px solid rgba(34,197,94,0.3)",
-                          marginBottom: 4,
-                        }}>
-                          {categoryLabel || faq.category || "自動判定"}
-                        </span>
-                        <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                          Q: {faq.question}
-                        </p>
-                        <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                          A: {faq.answer}
-                        </p>
-                        <select
-                          value={faq.category || ""}
-                          onChange={(e) => {
-                            setPreview((prev) =>
-                              prev
-                                ? prev.map((p) =>
-                                    p.url === item.url
-                                      ? {
-                                          ...p,
-                                          faqs: p.faqs.map((f, i) =>
-                                            i === idx ? { ...f, category: e.target.value || undefined } : f
-                                          ),
-                                        }
-                                      : p
-                                  )
-                                : prev
-                            );
-                          }}
-                          style={{
-                            fontSize: 12,
-                            padding: "3px 8px",
-                            borderRadius: 6,
-                            border: "1px solid #374151",
-                            background: "rgba(15,23,42,0.8)",
-                            color: "#9ca3af",
-                            marginTop: 6,
-                          }}
-                        >
-                          <option value="">🤖 AI自動判定</option>
-                          {CATEGORIES.filter((c) => c.value !== "").map((c) => (
-                            <option key={c.value} value={c.value}>{c.label}</option>
-                          ))}
-                        </select>
-                      </div>
-                    );
-                  })}
+                  {item.faqs.map((faq, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: "14px 18px",
+                        borderBottom: idx === item.faqs.length - 1 ? "none" : "1px solid #111827",
+                      }}
+                    >
+                      {editingKey?.url === item.url && editingKey?.idx === idx ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <input
+                            value={editQuestion}
+                            onChange={(e) => setEditQuestion(e.target.value)}
+                            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#f9fafb", fontSize: 14 }}
+                          />
+                          <textarea
+                            value={editAnswer}
+                            onChange={(e) => setEditAnswer(e.target.value)}
+                            rows={3}
+                            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#9ca3af", fontSize: 13, resize: "vertical" }}
+                          />
+                          <select
+                            value={editCategory}
+                            onChange={(e) => setEditCategory(e.target.value)}
+                            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#d1d5db", fontSize: 13 }}
+                          >
+                            {CATEGORIES.map((c) => (
+                              <option key={c.value} value={c.value}>{c.label}</option>
+                            ))}
+                          </select>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              onClick={handleSaveEdit}
+                              style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                            >
+                              {t("knowledge.preview_edit_save")}
+                            </button>
+                            <button
+                              onClick={() => setEditingKey(null)}
+                              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+                            >
+                              {t("common.cancel")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
+                            Q: {faq.question}
+                          </p>
+                          <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 8px", lineHeight: 1.5 }}>
+                            A: {faq.answer}
+                          </p>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                            {faq.category && (
+                              <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600 }}>
+                                {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
+                              </span>
+                            )}
+                            {faq.duplicate && (
+                              <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(120,53,15,0.4)", border: "1px solid rgba(251,191,36,0.4)", color: "#fbbf24", fontSize: 11, fontWeight: 600 }}>
+                                ⚠️ 重複の可能性: 「{faq.duplicate.existingQuestion.slice(0, 30)}{faq.duplicate.existingQuestion.length > 30 ? "…" : ""}」
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              onClick={() => handleStartEdit(item.url, idx, faq)}
+                              style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #374151", background: "transparent", color: "#93c5fd", fontSize: 12, cursor: "pointer" }}
+                            >
+                              {t("knowledge.edit")}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteFaq(item.url, idx)}
+                              style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid rgba(248,113,113,0.3)", background: "transparent", color: "#fca5a5", fontSize: 12, cursor: "pointer" }}
+                            >
+                              {t("knowledge.preview_remove")}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
