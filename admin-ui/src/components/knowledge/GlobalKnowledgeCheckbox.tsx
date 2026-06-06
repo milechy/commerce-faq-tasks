@@ -3,9 +3,11 @@ import { useLang } from "../../i18n/LangContext";
 export default function GlobalKnowledgeCheckbox({
   isGlobal,
   onChange,
+  disabled = false,
 }: {
   isGlobal: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   const { t } = useLang();
   return (
@@ -14,7 +16,7 @@ export default function GlobalKnowledgeCheckbox({
         display: "flex",
         alignItems: "center",
         gap: 10,
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
         padding: "12px 14px",
         borderRadius: 10,
         border: `1px solid ${isGlobal ? "rgba(234,179,8,0.4)" : "#374151"}`,
@@ -25,13 +27,15 @@ export default function GlobalKnowledgeCheckbox({
         fontWeight: isGlobal ? 600 : 400,
         transition: "all 0.15s",
         userSelect: "none",
+        opacity: disabled ? 0.85 : 1,
       }}
     >
       <input
         type="checkbox"
         checked={isGlobal}
         onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 18, height: 18, accentColor: "#fbbf24", cursor: "pointer" }}
+        disabled={disabled}
+        style={{ width: 18, height: 18, accentColor: "#fbbf24", cursor: disabled ? "default" : "pointer" }}
       />
       📚 {t("knowledge.global_label")}
     </label>

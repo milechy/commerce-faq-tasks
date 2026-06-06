@@ -7,6 +7,8 @@ import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
 import BookChunksPanel from "./BookChunksPanel";
 import KnowledgeAttributionTab from "../../../components/knowledge/KnowledgeAttributionTab";
+import GapQuestionBanner from "../../../components/knowledge/GapQuestionBanner";
+import GlobalKnowledgeCheckbox from "../../../components/knowledge/GlobalKnowledgeCheckbox";
 import {
   getAccessToken,
   fetchWithAuth,
@@ -72,76 +74,6 @@ interface ScrapePreviewItem {
 type Tab = "list" | "text" | "scrape" | "pdf" | "attribution";
 type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
 type Category = string;
-
-// ─── ナレッジギャップバナー ────────────────────────────────────────────────────
-
-function GapQuestionBanner({ question }: { question: string }) {
-  return (
-    <div
-      style={{
-        padding: "14px 18px",
-        borderRadius: 12,
-        border: "1px solid rgba(234,179,8,0.4)",
-        background: "rgba(120,53,15,0.25)",
-        marginBottom: 4,
-      }}
-    >
-      <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 700, color: "#fbbf24" }}>
-        ❓ ユーザーの質問
-      </p>
-      <p style={{ margin: "0 0 6px", fontSize: 15, color: "#f9fafb", fontWeight: 600, lineHeight: 1.5 }}>
-        「{question}」
-      </p>
-      <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", lineHeight: 1.5 }}>
-        この質問に回答できる情報をナレッジに追加してください。登録後、未回答の質問が自動的に解決済みになります。
-      </p>
-    </div>
-  );
-}
-
-// ─── グローバルナレッジチェックボックス（Super Admin専用） ────────────────────
-
-function GlobalKnowledgeCheckbox({
-  isGlobal,
-  onChange,
-  disabled = false,
-}: {
-  isGlobal: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  const { t } = useLang();
-  return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        cursor: disabled ? "default" : "pointer",
-        padding: "12px 14px",
-        borderRadius: 10,
-        border: `1px solid ${isGlobal ? "rgba(234,179,8,0.4)" : "#374151"}`,
-        background: isGlobal ? "rgba(234,179,8,0.08)" : "rgba(0,0,0,0.2)",
-        marginBottom: 16,
-        fontSize: 14,
-        color: isGlobal ? "#fbbf24" : "#9ca3af",
-        fontWeight: isGlobal ? 600 : 400,
-        transition: "all 0.15s",
-        userSelect: "none",
-        opacity: disabled ? 0.85 : 1,
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={isGlobal}
-        onChange={(e) => onChange(e.target.checked)}
-        disabled={disabled}
-        style={{ width: 18, height: 18, accentColor: "#fbbf24", cursor: disabled ? "default" : "pointer" }}
-      />
-      📚 {t("knowledge.global_label")}
-    </label>
-  );
-}
 
 // ─── タブ1: ナレッジ一覧 ────────────────────────────────────────────────────
 
