@@ -140,16 +140,19 @@ chat-history / tenants / avatar系 / TuningRuleModal / AvatarWizard / feedback /
 ## A1 照合結果 (2026-06-06 実機確認) — **方針確定**
 
 ### 決定的事実
+
 - ルータ `/admin/knowledge/:tenantId` → `TenantKnowledgePage` (`[tenantId].tsx`) → **ローカル版タブをレンダリング** (line 2240 の `<KnowledgeListTab>` はローカル関数 line 148 を解決)。
 - `components/knowledge/` の `KnowledgeListTab.tsx`(878)/`TextInputTab.tsx`/`UrlScrapeTab.tsx`/`GlobalKnowledgeCheckbox.tsx`/`BulkActionBar`/`ExcludeSearchToggle`/`Pagination`/`FaqSearchBar` は **どこからも import されていない = デッドコード**。生きているのは `shared.ts` と `KnowledgeAttributionTab` のみ。
 
 ### 結論 (A2 以降の抽出方針)
+
 | 判定 | 内容 |
 |---|---|
 | **抽出元** | **ページのローカル版** (= 本番で動いている実装) |
 | **デッド component の扱い** | 分岐しているため「ページを既存 component へ差し替え」は**機能変更**になり不可。参考に留め、ローカル版から新規抽出する。import が無いので**上書き/削除は安全** (他に consumer 無し)。ただし下記 ⚠️ の KnowledgeListTab は除外機能の検証完了まで保留 |
 
 ### ⚠️ 副次発見 (本リファクタの scope 外・別タスク候補)
+
 component `KnowledgeListTab.tsx` は 2026-05-31 に「検索除外チェックボックス」(Phase69-2-B) を追加済だが、**生きているローカル版には除外 UI が存在しない** (`excluded` 参照ゼロ)。Phase69-2-B は「完了・本番稼働」。
 
 → **Phase69-2-B の『ナレッジ管理除外チェックボックス』UI がデッド component にのみ実装され本番未配線の疑い**。`import 無し = 穴` の早断は禁止 (テナント設定 `default_excluded_ids` 側での担保可能性あり) のため、実画面検証で確定させてから別 Asana タスク化を判断する。
