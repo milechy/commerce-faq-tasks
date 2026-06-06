@@ -8,6 +8,13 @@
 //
 //   # 全テナント（faq_docsに存在するtenant_id全件）
 //   DATABASE_URL=... ES_URL=... pnpm ts-node SCRIPTS/sync-es.ts --all
+//
+// 【alias-swap 方式 (2026-06-06〜)】消失再発防止:
+//   旧来の delete-first（DELETE faq_<tenant> → CREATE → bulk）は、bulk が途中失敗すると
+//   index が「消えたまま」になり本番検索が停止した（docs/ES_PROD_DURABILITY.md）。
+//   現在は「新 index faq_<tenant>_<ts> を作成 → bulk 全件成功 → alias faq_<tenant> を原子的に
+//   張り替え → 旧 index 削除」とする。途中失敗時は新 index のみ掃除し、現行 index/alias は無傷で残す。
+//   論理名 `faq_<tenant>` は alias になり、app の read/write は単一 index alias 経由で透過動作する。
 
 // @ts-ignore - pg types なしで require する
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -216,42 +223,117 @@ async function bulkIndex(index: string, rows: any[]): Promise<number> {
   return successCount;
 }
 
-/** 1テナント分をESに同期 */
+/** テナントの faq_docs 件数（swap 可否の判定に使う） */
+async function countTenantDocs(tenantId: string): Promise<number> {
+  const r = await pool.query(
+    "SELECT count(*)::int AS c FROM faq_docs WHERE tenant_id = $1",
+    [tenantId]
+  );
+  return r.rows[0].c as number;
+}
+
+type AliasState = { kind: "absent" | "concrete" | "alias"; oldIndices: string[] };
+
+/** 論理名 `name` の現在状態を解決する: 不在 / 同名の実体index(旧来) / alias */
+async function resolveAliasState(name: string): Promise<AliasState> {
+  const res = await fetch(`${esUrl}/_alias/${name}`, { headers: ES_HEADERS });
+  if (res.status === 404) return { kind: "absent", oldIndices: [] };
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`alias 解決失敗 ${name}: ${res.status} ${body}`);
+  }
+  const data = (await res.json()) as Record<string, { aliases?: Record<string, unknown> }>;
+  const keys = Object.keys(data);
+  // 同名の実体 index（alias を持たない）= 旧来スキーム。alias 化のため先に削除が必要。
+  if (keys.length === 1 && keys[0] === name && Object.keys(data[name].aliases || {}).length === 0) {
+    return { kind: "concrete", oldIndices: [name] };
+  }
+  return { kind: "alias", oldIndices: keys };
+}
+
+/** _aliases の原子的アクションを実行 */
+async function postAliases(actions: unknown[]): Promise<void> {
+  const res = await fetch(`${esUrl}/_aliases`, {
+    method: "POST",
+    headers: ES_HEADERS,
+    body: JSON.stringify({ actions }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`_aliases 失敗: ${res.status} ${body}`);
+  }
+}
+
+/** alias を newIndex に張り替え、旧 index を削除する */
+async function swapAlias(alias: string, newIndex: string, state: AliasState): Promise<void> {
+  if (state.kind === "concrete") {
+    // alias 名と同名の実体 index があると alias を張れない。一回限りの移行として先に削除。
+    // （新 index は populate 済みなので、この瞬間に落ちてもデータは失われない）
+    console.log(`  [ALIAS] 旧来の実体 index ${alias} を削除して alias 化`);
+    await deleteIndex(alias);
+    await postAliases([{ add: { index: newIndex, alias } }]);
+  } else {
+    // 原子的に張り替え（読み書きは常に旧 or 新のいずれかを指し、無index状態を作らない）
+    const actions: unknown[] = [{ add: { index: newIndex, alias } }];
+    for (const old of state.oldIndices) actions.push({ remove: { index: old, alias } });
+    await postAliases(actions);
+    for (const old of state.oldIndices) await deleteIndex(old);
+  }
+  console.log(`  [ALIAS] ${alias} → ${newIndex}`);
+}
+
+/** 1テナント分をESに同期（alias-swap 方式） */
 async function syncTenant(tenantId: string): Promise<void> {
-  const index = `faq_${tenantId}`;
-  console.log(`\n[SYNC] tenant: ${tenantId} → index: ${index}`);
+  const alias = `faq_${tenantId}`;
+  const newIndex = `${alias}_${Date.now()}`;
+  console.log(`\n[SYNC] tenant: ${tenantId} → alias: ${alias} (new index: ${newIndex})`);
 
-  // 1. インデックス削除
-  await deleteIndex(index);
+  const expected = await countTenantDocs(tenantId);
 
-  // 2. インデックス作成
-  await createIndex(index);
+  // 1. 新インデックス作成（旧 index/alias には一切触れない）
+  await createIndex(newIndex);
 
-  // 3. faq_docs を100件ずつバルクINSERT
+  // 2. faq_docs を100件ずつバルクINSERT（失敗時は新 index を掃除して中断）
   const BATCH_SIZE = 100;
   let offset = 0;
   let totalSuccess = 0;
+  try {
+    while (true) {
+      const res = await pool.query(
+        "SELECT * FROM faq_docs WHERE tenant_id = $1 ORDER BY id LIMIT $2 OFFSET $3",
+        [tenantId, BATCH_SIZE, offset]
+      );
+      const rows: any[] = res.rows;
+      if (rows.length === 0) break;
 
-  while (true) {
-    const res = await pool.query(
-      "SELECT * FROM faq_docs WHERE tenant_id = $1 ORDER BY id LIMIT $2 OFFSET $3",
-      [tenantId, BATCH_SIZE, offset]
-    );
-    const rows: any[] = res.rows;
-    if (rows.length === 0) break;
+      const count = await bulkIndex(newIndex, rows);
+      totalSuccess += count;
+      offset += rows.length;
 
-    const count = await bulkIndex(index, rows);
-    totalSuccess += count;
-    offset += rows.length;
+      console.log(
+        `  [PROGRESS] offset=${offset}, batch=${rows.length}, total_success=${totalSuccess}`
+      );
 
-    console.log(
-      `  [PROGRESS] offset=${offset}, batch=${rows.length}, total_success=${totalSuccess}`
-    );
-
-    if (rows.length < BATCH_SIZE) break;
+      if (rows.length < BATCH_SIZE) break;
+    }
+  } catch (e) {
+    await deleteIndex(newIndex);
+    throw e;
   }
 
-  console.log(`[DONE] ${tenantId}: ${totalSuccess} docs indexed`);
+  // 3. 全件成功したときだけ alias を張り替える。部分失敗は旧 index を温存して中断。
+  if (totalSuccess !== expected) {
+    console.error(
+      `  [ABORT] ${tenantId}: indexed ${totalSuccess}/${expected} → alias 張り替えを中止し旧 index を温存`
+    );
+    await deleteIndex(newIndex);
+    throw new Error(`sync incomplete for ${tenantId}: ${totalSuccess}/${expected}`);
+  }
+
+  const state = await resolveAliasState(alias);
+  await swapAlias(alias, newIndex, state);
+
+  console.log(`[DONE] ${tenantId}: ${totalSuccess} docs indexed → alias ${alias} → ${newIndex}`);
 }
 
 /** メイン処理 */
