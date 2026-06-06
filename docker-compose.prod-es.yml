@@ -1,0 +1,22 @@
+# VPS 本番 ES 専用 compose — 既存 es-commfaq を置き換える
+# 参照: docs/ES_PROD_DURABILITY.md §3.2 / §4
+# 使い方: cd /opt/rajiuce-infra/es && docker compose -f docker-compose.prod-es.yml up -d
+services:
+  es-commfaq:
+    build:
+      context: .
+      dockerfile: Dockerfile.es
+    image: es-commfaq-kuromoji:8.15.0
+    container_name: es-commfaq
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+    ports:
+      - "9200:9200"
+    restart: unless-stopped
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+
+volumes:
+  esdata:
