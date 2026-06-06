@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { API_BASE } from "../../../lib/api";
-import { supabase } from "../../../lib/supabaseClient";
 import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../../../components/KnowledgeFaqEditModal";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
 import BookChunksPanel from "./BookChunksPanel";
 import KnowledgeAttributionTab from "../../../components/knowledge/KnowledgeAttributionTab";
+import {
+  getAccessToken,
+  fetchWithAuth,
+  resolveKnowledgeGap,
+  formatDate,
+  CARD_STYLE,
+  BTN_PRIMARY,
+  BTN_DANGER,
+  TEXTAREA_STYLE,
+  SELECT_STYLE,
+} from "../../../components/knowledge/shared";
 import { KNOWLEDGE_TENANT_STORAGE_KEY } from "./index";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
@@ -62,119 +72,6 @@ interface ScrapePreviewItem {
 type Tab = "list" | "text" | "scrape" | "pdf" | "attribution";
 type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
 type Category = string;
-
-// ─── ユーティリティ ───────────────────────────────────────────────────────────
-
-async function getAccessToken(): Promise<string | null> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error || !data.session) return null;
-  return data.session.access_token;
-}
-
-async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
-  let token = await getAccessToken();
-  if (!token) {
-    const { data } = await supabase.auth.refreshSession();
-    token = data.session?.access_token ?? null;
-  }
-  if (!token) throw new Error("__AUTH_REQUIRED__");
-
-  const makeRequest = (t: string) =>
-    fetch(url, {
-      ...options,
-      headers: {
-        ...(options.headers as Record<string, string>),
-        Authorization: `Bearer ${t}`,
-      },
-    });
-
-  const res = await makeRequest(token);
-
-  if (res.status === 401 || res.status === 403) {
-    const { data } = await supabase.auth.refreshSession();
-    const refreshedToken = data.session?.access_token ?? null;
-    if (!refreshedToken) throw new Error("__AUTH_REQUIRED__");
-    return makeRequest(refreshedToken);
-  }
-
-  return res;
-}
-
-/** ナレッジギャップを「解決済み」に更新する（fire-and-forget 向け） */
-async function resolveKnowledgeGap(gapId: number): Promise<void> {
-  await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/gaps/${gapId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status: "resolved" }),
-  });
-}
-
-function formatDate(iso: string, locale: string): string {
-  return new Date(iso).toLocaleDateString(locale, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// ─── スタイル定数 ─────────────────────────────────────────────────────────────
-
-const CARD_STYLE: React.CSSProperties = {
-  borderRadius: 14,
-  border: "1px solid #1f2937",
-  background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
-  padding: "20px 18px",
-};
-
-const BTN_PRIMARY: React.CSSProperties = {
-  padding: "16px 24px",
-  minHeight: 56,
-  borderRadius: 12,
-  border: "none",
-  background: "linear-gradient(135deg, #22c55e 0%, #4ade80 50%, #22c55e 100%)",
-  color: "#022c22",
-  fontSize: 17,
-  fontWeight: 700,
-  cursor: "pointer",
-  width: "100%",
-};
-
-const BTN_DANGER: React.CSSProperties = {
-  padding: "10px 16px",
-  minHeight: 44,
-  borderRadius: 10,
-  border: "1px solid #7f1d1d",
-  background: "rgba(127,29,29,0.2)",
-  color: "#fca5a5",
-  fontSize: 14,
-  cursor: "pointer",
-  fontWeight: 500,
-};
-
-const TEXTAREA_STYLE: React.CSSProperties = {
-  width: "100%",
-  minHeight: 180,
-  padding: "14px 16px",
-  borderRadius: 10,
-  border: "1px solid #374151",
-  background: "rgba(15,23,42,0.8)",
-  color: "#e5e7eb",
-  fontSize: 16,
-  fontFamily: "inherit",
-  resize: "vertical",
-  boxSizing: "border-box",
-};
-
-const SELECT_STYLE: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 10,
-  border: "1px solid #374151",
-  background: "rgba(15,23,42,0.8)",
-  color: "#e5e7eb",
-  fontSize: 16,
-  minHeight: 48,
-};
 
 // ─── ナレッジギャップバナー ────────────────────────────────────────────────────
 

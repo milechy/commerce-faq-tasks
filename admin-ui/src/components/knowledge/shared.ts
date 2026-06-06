@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { API_BASE } from "../../lib/api";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,15 @@ export function formatDate(iso: string, locale: string): string {
     year: "numeric",
     month: "short",
     day: "numeric",
+  });
+}
+
+/** ナレッジギャップを「解決済み」に更新する（fire-and-forget 向け） */
+export async function resolveKnowledgeGap(gapId: number): Promise<void> {
+  await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/gaps/${gapId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "resolved" }),
   });
 }
 
