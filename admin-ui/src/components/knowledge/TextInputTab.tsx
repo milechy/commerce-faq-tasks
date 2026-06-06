@@ -1,21 +1,30 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { API_BASE } from "../../lib/api";
 import { useLang } from "../../i18n/LangContext";
 import { useAuth } from "../../auth/useAuth";
-import { API_BASE } from "../../lib/api";
+import GapQuestionBanner from "./GapQuestionBanner";
 import GlobalKnowledgeCheckbox from "./GlobalKnowledgeCheckbox";
 import {
-  type FaqEntry,
-  type Category,
   fetchWithAuth,
+  resolveKnowledgeGap,
   CARD_STYLE,
   BTN_PRIMARY,
   TEXTAREA_STYLE,
   SELECT_STYLE,
-  CATEGORY_LABEL_MAP,
+  CATEGORY_LABELS,
+  type FaqEntry,
 } from "./shared";
 
-export default function TextInputTab({ tenantId }: { tenantId: string }) {
+export default function TextInputTab({
+  tenantId,
+  gapQuestion,
+  gapId,
+}: {
+  tenantId: string;
+  gapQuestion?: string;
+  gapId?: number;
+}) {
   const navigate = useNavigate();
   const { t } = useLang();
   const { isSuperAdmin } = useAuth();
@@ -34,13 +43,37 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
   ];
 
   const [text, setText] = useState("");
-  const [category, setCategory] = useState<Category>("");
-  const [isGlobal, setIsGlobal] = useState(false);
+  const [category, setCategory] = useState<string>("");
+  const [isGlobal, setIsGlobal] = useState(tenantId === "global");
+  useEffect(() => { setIsGlobal(tenantId === "global"); }, [tenantId]);
   const [converting, setConverting] = useState(false);
   const [preview, setPreview] = useState<FaqEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editQuestion, setEditQuestion] = useState("");
+  const [editAnswer, setEditAnswer] = useState("");
+  const [editCategory, setEditCategory] = useState<string>("");
+
+  const handleStartEdit = (idx: number, faq: FaqEntry) => {
+    setEditingIndex(idx);
+    setEditQuestion(faq.question);
+    setEditAnswer(faq.answer);
+    setEditCategory(faq.category ?? "");
+  };
+  const handleSaveEdit = () => {
+    if (editingIndex === null || !preview) return;
+    const updated = preview.map((f, i) =>
+      i === editingIndex ? { ...f, question: editQuestion.trim(), answer: editAnswer.trim(), category: editCategory || undefined } : f
+    );
+    setPreview(updated);
+    setEditingIndex(null);
+  };
+  const handleDeleteFaq = (idx: number) => {
+    if (!preview) return;
+    setPreview(preview.filter((_, i) => i !== idx));
+  };
 
   const handleConvert = async () => {
     if (text.trim().length < 50) {
@@ -86,7 +119,13 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
       });
       const data = (await res.json()) as { ok?: boolean; inserted?: number; error?: string };
       if (!res.ok) throw new Error(data.error ?? t("knowledge.load_error"));
-      setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      // ギャップが紐付いていれば自動解決
+      if (gapId) {
+        await resolveKnowledgeGap(gapId).catch(() => {/* silent */});
+        setSuccess("✅ ナレッジを追加し、未回答の質問を解決済みにしました");
+      } else {
+        setSuccess(t("knowledge.committed", { n: data.inserted ?? 0 }));
+      }
       setPreview(null);
       setText("");
     } catch (err) {
@@ -102,6 +141,7 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {gapQuestion && <GapQuestionBanner question={gapQuestion} />}
       <div style={CARD_STYLE}>
         <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 6px" }}>
           {t("knowledge.text_title")}
@@ -112,20 +152,17 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={t("knowledge.text_placeholder")}
+          placeholder={
+            gapQuestion
+              ? `「${gapQuestion}」に回答できる情報を入力してください`
+              : t("knowledge.text_placeholder")
+          }
+          maxLength={10000}
           style={TEXTAREA_STYLE}
         />
-        <div style={{ textAlign: "right", marginTop: 6, fontSize: 12 }}>
-          {text.trim().length < 50 ? (
-            <span style={{ color: "#fb923c" }}>
-              {t("knowledge.char_count_need", { n: 50 - text.trim().length })}
-            </span>
-          ) : (
-            <span style={{ color: "#6b7280" }}>
-              {t("knowledge.char_count_ok", { n: text.trim().length })}
-            </span>
-          )}
-        </div>
+        <p style={{ textAlign: "right", fontSize: 12, color: text.length > 9000 ? "#ef4444" : "#6b7280", marginTop: 4 }}>
+          {text.length.toLocaleString()} / 10,000
+        </p>
       </div>
 
       <div style={CARD_STYLE}>
@@ -134,7 +171,7 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
         </label>
         <select
           value={category}
-          onChange={(e) => setCategory(e.target.value as Category)}
+          onChange={(e) => setCategory(e.target.value)}
           style={SELECT_STYLE}
         >
           {CATEGORIES.map((c) => (
@@ -148,7 +185,7 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
         )}
         {isSuperAdmin && (
           <div style={{ marginTop: 16 }}>
-            <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} />
+            <GlobalKnowledgeCheckbox isGlobal={isGlobal} onChange={setIsGlobal} disabled={tenantId === "global"} />
           </div>
         )}
       </div>
@@ -179,7 +216,7 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
         </button>
       )}
 
-      {preview && preview.length > 0 && (
+      {preview && (
         <div>
           <h3 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 12px" }}>
             {t("knowledge.preview_title", { n: preview.length })}
@@ -187,10 +224,13 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
           <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 16px" }}>
             {t("knowledge.preview_desc")}
           </p>
-          <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden", marginBottom: 16 }}>
-            {preview.map((faq, idx) => {
-              const categoryLabel = faq.category ? CATEGORY_LABEL_MAP[faq.category]?.ja : null;
-              return (
+          {preview.length === 0 ? (
+            <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 14, marginBottom: 16 }}>
+              {t("knowledge.preview_empty")}
+            </div>
+          ) : (
+            <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden", marginBottom: 16 }}>
+              {preview.map((faq, idx) => (
                 <div
                   key={idx}
                   style={{
@@ -198,52 +238,83 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
                     borderBottom: idx === preview.length - 1 ? "none" : "1px solid #111827",
                   }}
                 >
-                  <span style={{
-                    display: "inline-block",
-                    padding: "2px 8px",
-                    borderRadius: 6,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    background: "rgba(34,197,94,0.15)",
-                    color: "#4ade80",
-                    border: "1px solid rgba(34,197,94,0.3)",
-                    marginBottom: 4,
-                  }}>
-                    {categoryLabel || faq.category || "自動判定"}
-                  </span>
-                  <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
-                    Q: {faq.question}
-                  </p>
-                  <p style={{ fontSize: 13, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
-                    A: {faq.answer}
-                  </p>
-                  <select
-                    value={faq.category || ""}
-                    onChange={(e) => {
-                      const updated = preview.map((f, i) =>
-                        i === idx ? { ...f, category: e.target.value || undefined } : f
-                      );
-                      setPreview(updated);
-                    }}
-                    style={{
-                      fontSize: 12,
-                      padding: "3px 8px",
-                      borderRadius: 6,
-                      border: "1px solid #374151",
-                      background: "rgba(15,23,42,0.8)",
-                      color: "#9ca3af",
-                      marginTop: 6,
-                    }}
-                  >
-                    <option value="">🤖 AI自動判定</option>
-                    {CATEGORIES.filter((c) => c.value !== "").map((c) => (
-                      <option key={c.value} value={c.value}>{c.label}</option>
-                    ))}
-                  </select>
+                  {editingIndex === idx ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <input
+                        value={editQuestion}
+                        onChange={(e) => setEditQuestion(e.target.value)}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#f9fafb", fontSize: 14 }}
+                      />
+                      <textarea
+                        value={editAnswer}
+                        onChange={(e) => setEditAnswer(e.target.value)}
+                        rows={3}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#9ca3af", fontSize: 13, resize: "vertical" }}
+                      />
+                      <select
+                        value={editCategory}
+                        onChange={(e) => setEditCategory(e.target.value)}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #374151", background: "#1f2937", color: "#d1d5db", fontSize: 13 }}
+                      >
+                        {CATEGORIES.map((c) => (
+                          <option key={c.value} value={c.value}>{c.label}</option>
+                        ))}
+                      </select>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={handleSaveEdit}
+                          style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+                        >
+                          {t("knowledge.preview_edit_save")}
+                        </button>
+                        <button
+                          onClick={() => setEditingIndex(null)}
+                          style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+                        >
+                          {t("common.cancel")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 6px" }}>
+                        Q: {faq.question}
+                      </p>
+                      <p style={{ fontSize: 13, color: "#9ca3af", margin: "0 0 8px", lineHeight: 1.5 }}>
+                        A: {faq.answer}
+                      </p>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                        {faq.category && (
+                          <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(37,99,235,0.25)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd", fontSize: 11, fontWeight: 600 }}>
+                            {CATEGORY_LABELS[faq.category]?.ja ?? faq.category}
+                          </span>
+                        )}
+                        {faq.duplicate && (
+                          <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, background: "rgba(120,53,15,0.4)", border: "1px solid rgba(251,191,36,0.4)", color: "#fbbf24", fontSize: 11, fontWeight: 600 }}>
+                            ⚠️ 重複の可能性: 「{faq.duplicate.existingQuestion.slice(0, 30)}{faq.duplicate.existingQuestion.length > 30 ? "…" : ""}」
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => handleStartEdit(idx, faq)}
+                          style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid #374151", background: "transparent", color: "#93c5fd", fontSize: 12, cursor: "pointer" }}
+                        >
+                          {t("knowledge.edit")}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteFaq(idx)}
+                          style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid rgba(248,113,113,0.3)", background: "transparent", color: "#fca5a5", fontSize: 12, cursor: "pointer" }}
+                        >
+                          {t("knowledge.preview_remove")}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 10 }}>
             <button
               onClick={() => setPreview(null)}
@@ -253,8 +324,8 @@ export default function TextInputTab({ tenantId }: { tenantId: string }) {
             </button>
             <button
               onClick={handleCommit}
-              disabled={committing}
-              style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: committing ? 0.6 : 1 }}
+              disabled={committing || preview.length === 0}
+              style={{ ...BTN_PRIMARY, flex: 2, width: "auto", opacity: (committing || preview.length === 0) ? 0.6 : 1, cursor: (committing || preview.length === 0) ? "not-allowed" : "pointer" }}
             >
               {committing ? t("knowledge.committing") : t("knowledge.commit")}
             </button>
