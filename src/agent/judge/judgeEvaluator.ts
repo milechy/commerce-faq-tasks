@@ -254,6 +254,24 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
       ],
     );
 
+    // 6b. Phase71-A: 高スコア会話を learned_memory に蒸留 (fire-and-forget)
+    //     書込み Feature Flag + スコア閾値のガードは distillAndPromote 内で行う。
+    setImmediate(() => {
+      import('../memory/memoryDistiller').then(({ distillAndPromote }) =>
+        distillAndPromote({
+          tenantId,
+          sessionId,
+          judgeScore: result.overall_score,
+          messages: messages.map((m: ChatMessageRow) => ({
+            role: m.role,
+            content: m.content,
+          })),
+        }),
+      ).catch((err: unknown) => {
+        logger.warn({ err, sessionId }, 'learnedMemory.distill.failed (non-blocking)');
+      });
+    });
+
     // 7. If score below threshold, seed tuning_rules
     const threshold = parseInt(process.env['JUDGE_SCORE_THRESHOLD'] ?? '60', 10);
     if (result.overall_score < threshold && result.suggested_rules.length > 0) {
