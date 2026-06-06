@@ -175,3 +175,17 @@ export const CATEGORY_LABEL_MAP: Record<string, { ja: string; en: string }> = {
   warranty:     { ja: "保証・アフターサービス", en: "Warranty / After-service" },
   general:      { ja: "よくある質問・一般",     en: "General / FAQ" },
 };
+
+// knowledge ページ ([tenantId].tsx) が利用する短縮ラベル版（未知カテゴリはキーをそのまま表示）。
+// CATEGORY_LABEL_MAP とは文言が異なる（ページ実装由来）。将来 A1 照合で統合候補。
+export const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
+  product_info: { ja: "商品・サービス", en: "Product/Service" },
+  pricing: { ja: "料金・価格", en: "Pricing" },
+  store_info: { ja: "店舗情報", en: "Store Info" },
+  campaign: { ja: "キャンペーン", en: "Campaign" },
+  inventory: { ja: "在庫・車両", en: "Inventory" },
+  coupon: { ja: "クーポン", en: "Coupon" },
+  booking: { ja: "予約・申し込み", en: "Booking" },
+  warranty: { ja: "保証・サポート", en: "Warranty" },
+  general: { ja: "一般", en: "General" },
+};
