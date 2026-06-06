@@ -54,6 +54,7 @@ describe('bridgeConversionEvents', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain('INSERT INTO conversion_attributions');
+    expect(sql).toContain('event_id');
     expect(params[0]).toBe('tenant-1');
     expect(params[2]).toBe('inquiry');
     expect(params[3]).toBe(0);

@@ -57,8 +57,8 @@ export function registerConversionRoutes(
         `INSERT INTO conversion_attributions
            (tenant_id, session_id, psychology_principle_used, trigger_type, trigger_rule_id,
             temp_score_at_conversion, conversion_type, conversion_value,
-            sales_stage_at_conversion, message_count, session_duration_sec)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            sales_stage_at_conversion, message_count, session_duration_sec, event_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, gen_random_uuid())`,
         [
           tenantId,
           d.session_id ?? null,
