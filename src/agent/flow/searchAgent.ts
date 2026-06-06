@@ -3,6 +3,8 @@
 
 import { searchPgVector, type PgvectorSearchItem } from "../../search/pgvectorSearch";
 import { embedTextOpenAI } from "../llm/openaiEmbeddingClient";
+import { createLearnedMemoryRepository, type LearnedMemoryHit } from "../memory/learnedMemoryRepository";
+import { isLearnedMemoryReadEnabled, getLearnedMemoryWeight } from "../memory/featureFlag";
 import { rerankTool } from "../tools/rerankTool";
 import { searchTool } from "../tools/searchTool";
 import { synthesizeAnswer } from "../tools/synthesisTool";
@@ -55,20 +57,40 @@ export async function runSearchAgent(
   });
 
   // 2) pgvector search (Phase7 A-mode: pgvector → ES)
+  //    Phase71-A: 同じ埋め込みを使い learned_memory も並列取得する。
   let pgVectorItems: PgvectorSearchItem[] = [];
   let pgVectorMs = 0;
   let pgVectorError = false;
+  let learnedItems: LearnedMemoryHit[] = [];
   try {
     const tPg0 = performance.now();
     const embedding = await embedTextOpenAI(plan.searchQuery ?? q);
-    const pgRes = await searchPgVector({
-      tenantId: effectiveTenantId,
-      embedding,
-      topK: plan.topK ?? topK,
-      excludedIds,
-    });
+    const learnedReadEnabled = isLearnedMemoryReadEnabled(effectiveTenantId);
+    const [pgRes, learnedRes] = await Promise.all([
+      searchPgVector({
+        tenantId: effectiveTenantId,
+        embedding,
+        topK: plan.topK ?? topK,
+        excludedIds,
+      }),
+      learnedReadEnabled
+        ? createLearnedMemoryRepository()
+            .searchLearnedMemory({
+              tenantId: effectiveTenantId,
+              embedding,
+              topK: plan.topK ?? topK,
+              weight: getLearnedMemoryWeight(),
+            })
+            .catch((err) => {
+              // 学習メモリ検索の失敗は致命的でないため握りつぶす
+              logger.error("[runSearchAgent] learned_memory search failed", err);
+              return [] as LearnedMemoryHit[];
+            })
+        : Promise.resolve([] as LearnedMemoryHit[]),
+    ]);
     const tPg1 = performance.now();
     pgVectorItems = pgRes.items ?? [];
+    learnedItems = learnedRes ?? [];
     pgVectorMs = pgRes.ms ?? Math.round(tPg1 - tPg0);
   } catch (err) {
     pgVectorError = true;
@@ -85,11 +107,20 @@ export async function runSearchAgent(
   });
   const tSearch1 = performance.now();
 
-  // Aモード: pgvector → ES の順でマージ
+  // Aモード: pgvector → learned_memory → ES の順でマージ
+  // learned_memory は pgvector 経路で取得するため Hit.source は "pg" に揃え、
+  // 学習データである provenance は metadata.source="learned" に保持する。
   const mergedItems = [
     ...pgVectorItems.map((hit) => ({
       ...hit,
       source: "pg" as const,
+    })),
+    ...learnedItems.map((hit) => ({
+      id: hit.id,
+      text: hit.text,
+      score: hit.score,
+      source: "pg" as const,
+      metadata: hit.metadata,
     })),
     ...(baseSearchResult.items || []),
   ];
