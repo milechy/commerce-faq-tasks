@@ -24,6 +24,11 @@
   var apiKey = currentScript ? currentScript.getAttribute('data-api-key') : '';
   var avatarConfigId = currentScript ? (currentScript.getAttribute('data-avatar-config-id') || '') : '';
   var posthogKey = currentScript ? (currentScript.getAttribute('data-posthog-key') || '') : '';
+  var accentColor = currentScript ? (currentScript.getAttribute('data-accent-color') || '#2563eb') : '#2563eb';
+  var greetingText = currentScript ? (currentScript.getAttribute('data-greeting') || 'ご質問はお気軽にどうぞ') : 'ご質問はお気軽にどうぞ';
+  var placeholderText = currentScript ? (currentScript.getAttribute('data-placeholder') || 'メッセージを入力…') : 'メッセージを入力…';
+  var proactiveMessage = currentScript ? (currentScript.getAttribute('data-proactive-message') || '') : '';
+  var proactiveDelay = currentScript ? parseInt(currentScript.getAttribute('data-proactive-delay') || '5000', 10) : 5000;
 
   if (!tenantId) {
     console.warn('[FAQ Widget] data-tenant 属性が必要です。例: data-tenant="your-tenant-id"');
@@ -124,7 +129,7 @@
 
   var styleEl = document.createElement('style');
   styleEl.textContent = [
-    ':host { all: initial; font-family: system-ui, -apple-system, sans-serif; }',
+    ':host { all: initial; font-family: system-ui, -apple-system, sans-serif; --accent: ' + accentColor + '; }',
     '*,*::before,*::after { box-sizing: border-box; }',
 
     /* FABボタン */
@@ -139,10 +144,10 @@
     '  height: 80px;',
     '  border-radius: 50%;',
     '  border: none;',
-    '  background-color: #2563eb;',
+    '  background-color: var(--accent);',
     '  color: #fff;',
     '  cursor: pointer;',
-    '  box-shadow: 0 4px 16px rgba(37,99,235,0.4);',
+    '  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 40%, transparent);',
     '  display: flex;',
     '  align-items: center;',
     '  justify-content: center;',
@@ -150,7 +155,7 @@
     '  overflow: hidden;',
     '  transition: ' + (prefersReducedMotion ? 'none' : 'transform 0.15s, box-shadow 0.15s') + ';',
     '}',
-    '.fab:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(37,99,235,0.5); }',
+    '.fab:hover { transform: scale(1.05); box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 50%, transparent); }',
     '.fab:active { transform: scale(0.95); }',
     '.fab:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }',
     /* FABアバター接続中ローディング状態 */
@@ -193,6 +198,46 @@
     '  object-fit: cover;',
     '}',
 
+    /* プロアクティブバブル */
+    '.proactive-bubble {',
+    '  position: fixed;',
+    '  bottom: 112px;',
+    '  right: 24px;',
+    '  z-index: 2147483646;',
+    '  background: #fff;',
+    '  border-radius: 16px 16px 4px 16px;',
+    '  padding: 12px 16px;',
+    '  box-shadow: 0 4px 20px rgba(0,0,0,0.12);',
+    '  font-size: 14px;',
+    '  color: #1e293b;',
+    '  max-width: 240px;',
+    '  line-height: 1.4;',
+    '  cursor: pointer;',
+    '  animation: bubble-in 0.3s cubic-bezier(0.34,1.56,0.64,1) forwards;',
+    '  border: 1px solid #e2e8f0;',
+    '}',
+    '.proactive-bubble-dismiss {',
+    '  position: absolute;',
+    '  top: -8px;',
+    '  right: -8px;',
+    '  width: 20px;',
+    '  height: 20px;',
+    '  border-radius: 50%;',
+    '  background: #64748b;',
+    '  border: none;',
+    '  color: #fff;',
+    '  font-size: 11px;',
+    '  cursor: pointer;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '  line-height: 1;',
+    '}',
+    '@keyframes bubble-in {',
+    '  from { opacity: 0; transform: scale(0.8) translateY(8px); }',
+    '  to   { opacity: 1; transform: scale(1) translateY(0); }',
+    '}',
+
     /* チャットパネル */
     '.panel {',
     '  position: fixed;',
@@ -225,7 +270,7 @@
     '  align-items: center;',
     '  justify-content: space-between;',
     '  padding: 16px 20px;',
-    '  background-color: #2563eb;',
+    '  background-color: var(--accent);',
     '  color: #fff;',
     '  flex-shrink: 0;',
     '}',
@@ -271,7 +316,7 @@
     '  white-space: pre-wrap;',
     '}',
     '.bubble.user {',
-    '  background-color: #2563eb;',
+    '  background-color: var(--accent);',
     '  color: #fff;',
     '  border-radius: 18px 18px 4px 18px;',
     '}',
@@ -290,7 +335,7 @@
     '  min-height: 44px;',
     '  border: none;',
     '  border-radius: 10px;',
-    '  background: #2563eb;',
+    '  background: var(--accent);',
     '  color: #fff;',
     '  padding: 10px 14px;',
     '  font-size: 16px;',
@@ -369,7 +414,7 @@
     '  overflow-y: auto;',
     '  transition: border-color 0.15s;',
     '}',
-    'textarea:focus { border-color: #2563eb; background: #fff; }',
+    'textarea:focus { border-color: var(--accent); background: #fff; }',
     'textarea:disabled { opacity: 0.6; }',
     '.send-btn {',
     '  min-width: 44px;',
@@ -378,7 +423,7 @@
     '  height: 44px;',
     '  border-radius: 50%;',
     '  border: none;',
-    '  background: #2563eb;',
+    '  background: var(--accent);',
     '  color: #fff;',
     '  cursor: pointer;',
     '  display: flex;',
@@ -409,7 +454,7 @@
     '  padding: 0;',
     '  transition: background-color 0.15s, color 0.15s;',
     '}',
-    '.mic-btn:hover { background: #e2e8f0; color: #2563eb; }',
+    '.mic-btn:hover { background: #e2e8f0; color: var(--accent); }',
     '.mic-btn.recording { background: #fef2f2; color: #dc2626; }',
     '.mic-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
     '@keyframes mic-shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-4px)} 40%{transform:translateX(4px)} 60%{transform:translateX(-4px)} 80%{transform:translateX(4px)} }',
@@ -465,7 +510,7 @@
     '.voice-mode-indicator {',
     '  padding: 4px 12px;',
     '  background: #eff6ff;',
-    '  color: #2563eb;',
+    '  color: var(--accent);',
     '  font-size: 12px;',
     '  text-align: center;',
     '  border-bottom: 1px solid #dbeafe;',
@@ -565,7 +610,7 @@
     '  border-radius: 16px 16px 16px 4px;',
     '}',
     '.panel.avatar-active .bubble.user {',
-    '  background: rgba(37,99,235,0.7);',
+    '  background: color-mix(in srgb, var(--accent) 70%, transparent);',
     '  color: #fff;',
     '  border-radius: 16px 16px 4px 16px;',
     '}',
@@ -611,7 +656,7 @@
     '.panel.avatar-active .mic-btn:hover { background: rgba(255,255,255,0.25); color: #fff; }',
     '.panel.avatar-active .mic-btn.recording { background: rgba(220,38,38,0.6); color: #fff; }',
     '.panel.avatar-active .mic-btn.error { background: rgba(220,38,38,0.4); color: #fff; }',
-    '.panel.avatar-active .send-btn { background: rgba(37,99,235,0.8); }',
+    '.panel.avatar-active .send-btn { background: color-mix(in srgb, var(--accent) 80%, transparent); }',
     '.panel.avatar-active .send-btn:disabled { background: rgba(255,255,255,0.2); cursor: not-allowed; }',
 
     /* エラーバナー: パネル絶対配置 */
@@ -766,7 +811,7 @@
 
   /* --- ヘッダ --- */
   var headerTitleEl = el('p', { className: 'header-title' }, 'サポートチャット');
-  var headerMetaEl = el('p', { className: 'header-meta' }, 'ご質問はお気軽にどうぞ');
+  var headerMetaEl = el('p', { className: 'header-meta' }, greetingText);
   var headerInfo = el('div', {}, [headerTitleEl, headerMetaEl]);
   var closeBtn = el('button', { className: 'close-btn', type: 'button', 'aria-label': 'チャットを閉じる' });
   closeBtn.appendChild(CLOSE_SVG.cloneNode(true));
@@ -805,7 +850,7 @@
 
   /* --- 入力エリア --- */
   var textarea = el('textarea', {
-    placeholder: 'メッセージを入力…',
+    placeholder: placeholderText,
     rows: '1',
     maxlength: '2000',
     'aria-label': 'メッセージ',
@@ -854,6 +899,58 @@
   });
   fab.appendChild(svgIcon(CHAT_SVG_PATH));
   shadow.appendChild(fab);
+
+  /* ------------------------------------------------------------------ */
+  /* 5b. プロアクティブバブル                                              */
+  /* ------------------------------------------------------------------ */
+  var proactiveBubbleEl = null;
+  var proactiveDismissed = false;
+
+  function dismissProactiveBubble() {
+    if (proactiveBubbleEl) {
+      proactiveBubbleEl.style.opacity = '0';
+      proactiveBubbleEl.style.transform = 'scale(0.8) translateY(8px)';
+      proactiveBubbleEl.style.transition = 'opacity 0.2s, transform 0.2s';
+      setTimeout(function () {
+        if (proactiveBubbleEl && proactiveBubbleEl.parentNode) {
+          proactiveBubbleEl.parentNode.removeChild(proactiveBubbleEl);
+        }
+        proactiveBubbleEl = null;
+      }, 200);
+    }
+    proactiveDismissed = true;
+  }
+
+  if (proactiveMessage) {
+    setTimeout(function () {
+      if (proactiveDismissed) return;
+      proactiveBubbleEl = document.createElement('div');
+      proactiveBubbleEl.className = 'proactive-bubble';
+      proactiveBubbleEl.setAttribute('role', 'status');
+      proactiveBubbleEl.setAttribute('aria-live', 'polite');
+
+      var msgText = document.createElement('span');
+      msgText.textContent = proactiveMessage;
+      proactiveBubbleEl.appendChild(msgText);
+
+      var dismissBubbleBtn = document.createElement('button');
+      dismissBubbleBtn.className = 'proactive-bubble-dismiss';
+      dismissBubbleBtn.setAttribute('aria-label', 'バブルを閉じる');
+      dismissBubbleBtn.textContent = '✕';
+      dismissBubbleBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        dismissProactiveBubble();
+      });
+      proactiveBubbleEl.appendChild(dismissBubbleBtn);
+
+      proactiveBubbleEl.addEventListener('click', function () {
+        dismissProactiveBubble();
+        fab.click();
+      });
+
+      shadow.appendChild(proactiveBubbleEl);
+    }, proactiveDelay);
+  }
 
   /* ------------------------------------------------------------------ */
   /* 6. 状態管理                                                          */
@@ -1327,7 +1424,7 @@
           voiceModeIndicator.style.display = '';
 
           panel.classList.add('avatar-active');
-          textarea.setAttribute('placeholder', 'メッセージを入力…');
+          textarea.setAttribute('placeholder', placeholderText);
 
           // 右上フローティング閉じるボタン
           var avatarCloseBtn = el('button', {
@@ -1579,7 +1676,7 @@
         // フルスクリーンモード解除
         panel.classList.remove('avatar-active');
         document.body.style.overflow = '';
-        textarea.setAttribute('placeholder', 'メッセージを入力…');
+        textarea.setAttribute('placeholder', placeholderText);
         // 閉じるボタンを削除
         var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
         for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }
@@ -1630,7 +1727,7 @@
 
           // フルスクリーンアバターUIへ切り替え
           panel.classList.add('avatar-active');
-          textarea.setAttribute('placeholder', 'メッセージを入力…');
+          textarea.setAttribute('placeholder', placeholderText);
 
           // 右上フローティング閉じるボタンを生成
           var avatarCloseBtn = el('button', {
@@ -1822,6 +1919,7 @@
   var avatarCacheKey = 'rajiuce-avatar-' + tenantId;
 
   function openPanel() {
+    dismissProactiveBubble();
     isOpen = true;
     panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
