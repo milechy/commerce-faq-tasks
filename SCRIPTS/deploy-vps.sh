@@ -92,13 +92,16 @@ echo "[0/5] VPSファイル所有者正常化..."
 ssh "${VPS}" "chown -R root:root ${REMOTE_DIR} 2>/dev/null || true"
 echo "  ✅ VPSファイル所有者: root:root に正規化完了"
 
-echo "[1/5] Syncing repository to VPS..."
+echo "[1/5] Building API server locally (VPS OOM対策: ローカルtsc → dist/をrsync転送)..."
+pnpm build
+echo "  ✅ Local build complete: dist/ ready"
+
+echo "[2/5] Syncing repository to VPS..."
 # NOTE: --exclude '.env*' prevents rsync --delete from wiping VPS env files.
 # VPS holds the authoritative .env with production secrets.
 rsync -avz --delete \
   --exclude 'node_modules/' \
   --exclude '.pnpm-store/' \
-  --exclude 'dist/' \
   --exclude 'admin-ui/node_modules/' \
   --exclude 'admin-ui/dist/' \
   --exclude '.env' \
@@ -122,11 +125,9 @@ rsync -avz --delete \
 ssh "${VPS}" "chown -R root:root ${REMOTE_DIR} 2>/dev/null || true"
 echo "  ✅ rsync後VPSファイル所有者: root:root に正規化完了"
 
-echo "[2/5] Installing dependencies on VPS..."
-ssh "${VPS}" "cd ${REMOTE_DIR} && corepack enable && pnpm install --frozen-lockfile"
-
-echo "[3/5] Building API server..."
-ssh "${VPS}" "cd ${REMOTE_DIR} && pnpm build"
+echo "[3/5] Installing dependencies on VPS (runtime only)..."
+ssh "${VPS}" "cd ${REMOTE_DIR} && corepack enable && pnpm install --frozen-lockfile --prod"
+echo "  ✅ API build: dist/ transferred via rsync — VPS tsc build skipped (OOM prevention)"
 
 echo "[3.5/5] Updating avatar-agent Python dependencies..."
 ssh "${VPS}" "cd ${REMOTE_DIR}/avatar-agent && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip -q && pip install -r requirements.txt -q"
