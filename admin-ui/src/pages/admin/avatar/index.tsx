@@ -30,7 +30,7 @@ type SortKey = "name_asc" | "created_desc" | "created_asc" | "active_first" | "i
 type TypeFilter = "all" | "default" | "custom";
 type StatusFilter = "all" | "active" | "inactive";
 
-const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
+const BG = "var(--background)";
 
 // ── AvatarWarningModal ─────────────────────────────────────────────────────
 interface WarningTarget { id: string; tenantId: string; name: string }
@@ -74,30 +74,30 @@ function AvatarWarningModal({ target, onClose }: { target: WarningTarget; onClos
     finally { setSending(false); }
   };
 
-  const INPUT_STYLE: React.CSSProperties = { padding: "8px 10px", minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "#020617", color: "#e5e7eb", fontSize: 13 };
+  const INPUT_STYLE: React.CSSProperties = { padding: "8px 10px", minHeight: 44, borderRadius: 8, border: "1px solid var(--border)", background: "var(--input)", color: "var(--foreground)", fontSize: 13 };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ width: "min(480px, 100%)", borderRadius: 16, background: "#0f172a", border: "1px solid rgba(239,68,68,0.3)", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ width: "min(480px, 100%)", borderRadius: 16, background: "var(--background)", border: "1px solid rgba(239,68,68,0.3)", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: 0 }}>⚠️ 警告メッセージを送信</h2>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 20, cursor: "pointer", padding: 4, lineHeight: 1 }}>×</button>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--foreground)", margin: 0 }}>⚠️ 警告メッセージを送信</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 20, cursor: "pointer", padding: 4, lineHeight: 1 }}>×</button>
         </div>
-        <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>テナントに警告通知を送信します。対象: <strong style={{ color: "#e5e7eb" }}>{target.name}</strong></p>
+        <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)" }}>テナントに警告通知を送信します。対象: <strong style={{ color: "var(--foreground)" }}>{target.name}</strong></p>
 
         {sent ? (
           <div style={{ textAlign: "center", padding: "20px 0", color: "#4ade80", fontSize: 16, fontWeight: 700 }}>✅ 送信しました</div>
         ) : (
           <>
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={{ fontSize: 13, color: "#d1d5db" }}>警告理由</span>
+              <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>警告理由</span>
               <select value={reason} onChange={(e) => setReason(e.target.value)} style={INPUT_STYLE}>
                 {WARNING_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
             </label>
 
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={{ fontSize: 13, color: "#d1d5db" }}>対応期限</span>
+              <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>対応期限</span>
               <select value={deadlineDays} onChange={(e) => setDeadlineDays(Number(e.target.value))} style={INPUT_STYLE}>
                 {WARNING_DEADLINES.map((d) => (
                   <option key={d.days} value={d.days}>
@@ -108,20 +108,20 @@ function AvatarWarningModal({ target, onClose }: { target: WarningTarget; onClos
             </label>
 
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={{ fontSize: 13, color: "#d1d5db" }}>メモ（任意）</span>
-              <textarea value={memo} onChange={(e) => setMemo(e.target.value)} rows={3} placeholder="詳細な説明やリンクなど..." style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #374151", background: "#020617", color: "#e5e7eb", fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
+              <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>メモ（任意）</span>
+              <textarea value={memo} onChange={(e) => setMemo(e.target.value)} rows={3} placeholder="詳細な説明やリンクなど..." style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input)", color: "var(--foreground)", fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
             </label>
 
             <div style={{ padding: 12, borderRadius: 10, background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.2)" }}>
-              <p style={{ margin: "0 0 4px", fontSize: 12, color: "#9ca3af", fontWeight: 600 }}>プレビュー</p>
+              <p style={{ margin: "0 0 4px", fontSize: 12, color: "var(--muted-foreground)", fontWeight: 600 }}>プレビュー</p>
               <p style={{ margin: 0, fontSize: 13, color: "#fca5a5", fontWeight: 700 }}>{previewTitle}</p>
-              <p style={{ margin: "4px 0 0", fontSize: 12, color: "#d1d5db", whiteSpace: "pre-line", lineHeight: 1.7 }}>{previewMessage}</p>
+              <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--muted-foreground)", whiteSpace: "pre-line", lineHeight: 1.7 }}>{previewMessage}</p>
             </div>
 
             {sendError && <div style={{ color: "#fca5a5", fontSize: 13 }}>{sendError}</div>}
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button onClick={onClose} style={{ padding: "10px 18px", minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
+              <button onClick={onClose} style={{ padding: "10px 18px", minHeight: 44, borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
               <button onClick={() => void handleSend()} disabled={sending} style={{ padding: "10px 18px", minHeight: 44, borderRadius: 8, border: "none", background: sending ? "#4b5563" : "#dc2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: sending ? "not-allowed" : "pointer" }}>
                 {sending ? "送信中..." : "⚠️ 警告を送信"}
               </button>
@@ -335,7 +335,7 @@ export default function AvatarListPage() {
     padding: "8px 14px",
     minHeight: 44,
     borderRadius: 8,
-    border: active ? "1px solid rgba(99,102,241,0.6)" : "1px solid #374151",
+    border: active ? "1px solid rgba(99,102,241,0.6)" : "1px solid var(--border)",
     background: active ? "rgba(99,102,241,0.2)" : "transparent",
     color: active ? "#a5b4fc" : "#9ca3af",
     fontSize: 13,
@@ -345,7 +345,7 @@ export default function AvatarListPage() {
   });
 
   return (
-    <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: BG, color: "var(--foreground)", padding: "24px 20px", maxWidth: 1200, margin: "0 auto" }}>
       <style>{`
         .av-grid {
           display: grid;
@@ -451,17 +451,17 @@ export default function AvatarListPage() {
       <header style={{ marginBottom: 28 }}>
         <button
           onClick={() => navigate("/admin")}
-          style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, display: "block" }}
+          style={{ background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, display: "block" }}
         >
           {lang === "ja" ? "← 管理画面に戻る" : "← Back to Admin"}
         </button>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
+            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)", display: "flex", alignItems: "center", gap: 8 }}>
               🎭 {lang === "ja" ? "アバター設定" : "Avatar Configs"}
             </h1>
             {!loading && (
-              <p style={{ fontSize: 13, color: "#6b7280", margin: "4px 0 0" }}>
+              <p style={{ fontSize: 13, color: "var(--muted-foreground)", margin: "4px 0 0" }}>
                 {isSuperAdmin
                   ? (lang === "ja" ? `全テナント: ${displayedConfigs.length}/${total}件` : `All tenants: ${displayedConfigs.length}/${total}`)
                   : (lang === "ja" ? `${total}件の設定` : `${total} config${total !== 1 ? "s" : ""}`)
@@ -515,11 +515,11 @@ export default function AvatarListPage() {
           padding: "16px 20px",
           borderRadius: 14,
           border: "1px solid rgba(99,102,241,0.3)",
-          background: "rgba(15,23,42,0.8)",
+          background: "var(--card)",
         }}>
           {/* ソート */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+            <span style={{ fontSize: 13, color: "var(--muted-foreground)", minWidth: 48 }}>
               {lang === "ja" ? "ソート:" : "Sort:"}
             </span>
             <select
@@ -529,9 +529,9 @@ export default function AvatarListPage() {
                 padding: "8px 12px",
                 minHeight: 44,
                 borderRadius: 8,
-                border: "1px solid #374151",
-                background: "#111827",
-                color: "#e5e7eb",
+                border: "1px solid var(--border)",
+                background: "var(--input)",
+                color: "var(--foreground)",
                 fontSize: 13,
                 cursor: "pointer",
               }}
@@ -548,7 +548,7 @@ export default function AvatarListPage() {
           {/* フィルタ: テナント（Super Adminのみ） */}
           {isSuperAdmin && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+              <span style={{ fontSize: 13, color: "var(--muted-foreground)", minWidth: 48 }}>
                 {lang === "ja" ? "テナント:" : "Tenant:"}
               </span>
               <select
@@ -558,9 +558,9 @@ export default function AvatarListPage() {
                   padding: "8px 12px",
                   minHeight: 44,
                   borderRadius: 8,
-                  border: "1px solid #374151",
-                  background: "#111827",
-                  color: "#e5e7eb",
+                  border: "1px solid var(--border)",
+                  background: "var(--input)",
+                  color: "var(--foreground)",
                   fontSize: 13,
                   cursor: "pointer",
                   maxWidth: 220,
@@ -576,7 +576,7 @@ export default function AvatarListPage() {
 
           {/* フィルタ: タイプ */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+            <span style={{ fontSize: 13, color: "var(--muted-foreground)", minWidth: 48 }}>
               {lang === "ja" ? "タイプ:" : "Type:"}
             </span>
             {(["all", "default", "custom"] as TypeFilter[]).map((v) => (
@@ -588,7 +588,7 @@ export default function AvatarListPage() {
 
           {/* フィルタ: ステータス */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, color: "#9ca3af", minWidth: 48 }}>
+            <span style={{ fontSize: 13, color: "var(--muted-foreground)", minWidth: 48 }}>
               {lang === "ja" ? "状態:" : "Status:"}
             </span>
             {(["all", "active", "inactive"] as StatusFilter[]).map((v) => (
@@ -615,8 +615,8 @@ export default function AvatarListPage() {
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <div>
-              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "#f9fafb" }}>🤖 AIアバター機能</h2>
-              <p style={{ fontSize: 14, color: "#9ca3af", margin: "6px 0 0" }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>🤖 AIアバター機能</h2>
+              <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0" }}>
                 ONにすると、チャットウィジェットにAIアバターが表示されます
               </p>
             </div>
@@ -680,7 +680,7 @@ export default function AvatarListPage() {
 
       {/* ローディング */}
       {loading ? (
-        <div style={{ textAlign: "center", color: "#6b7280", paddingTop: 60, fontSize: 15 }}>
+        <div style={{ textAlign: "center", color: "var(--muted-foreground)", paddingTop: 60, fontSize: 15 }}>
           {lang === "ja" ? "読み込み中..." : "Loading..."}
         </div>
       ) : displayedConfigs.length === 0 ? (
@@ -689,7 +689,7 @@ export default function AvatarListPage() {
           padding: "60px 20px",
           borderRadius: 14,
           border: "1px dashed #374151",
-          color: "#6b7280",
+          color: "var(--muted-foreground)",
           fontSize: 15,
         }}>
           {configs.length === 0
@@ -707,8 +707,8 @@ export default function AvatarListPage() {
               className="av-card"
               style={{
                 borderRadius: 14,
-                border: cfg.is_active ? "1px solid rgba(34,197,94,0.5)" : "1px solid #1f2937",
-                background: "rgba(15,23,42,0.95)",
+                border: cfg.is_active ? "1px solid rgba(34,197,94,0.5)" : "1px solid var(--border)",
+                background: "var(--card)",
                 overflow: "hidden",
                 display: "flex",
                 flexDirection: "column",
@@ -784,7 +784,7 @@ export default function AvatarListPage() {
                       borderRadius: 999,
                       background: "rgba(107,114,128,0.15)",
                       border: "1px solid rgba(107,114,128,0.4)",
-                      color: "#9ca3af",
+                      color: "var(--muted-foreground)",
                       fontSize: 11,
                       fontWeight: 700,
                       flexShrink: 0,
@@ -809,7 +809,7 @@ export default function AvatarListPage() {
                 </div>
 
                 {/* 作成日 */}
-                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                   {lang === "ja" ? "作成日: " : "Created: "}{formatDate(cfg.created_at)}
                 </span>
 
@@ -843,9 +843,9 @@ export default function AvatarListPage() {
                       style={{
                         minHeight: 44,
                         borderRadius: 8,
-                        border: "1px solid #374151",
+                        border: "1px solid var(--border)",
                         background: "transparent",
-                        color: "#9ca3af",
+                        color: "var(--muted-foreground)",
                         fontWeight: 600,
                         cursor: "pointer",
                       }}
@@ -901,7 +901,7 @@ export default function AvatarListPage() {
                       <button
                         className="av-btn-sm"
                         onClick={() => navigate(`/admin/avatar/studio/${cfg.id}`)}
-                        style={{ minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontWeight: 600, cursor: "pointer" }}
+                        style={{ minHeight: 44, borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", fontWeight: 600, cursor: "pointer" }}
                       >
                         編集
                       </button>

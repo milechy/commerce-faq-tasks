@@ -36,11 +36,11 @@ interface ABExperiment {
 // ------------------------------------------------------------------ //
 // Styles
 // ------------------------------------------------------------------ //
-const PAGE: CSSProperties = { padding: "80px 24px 48px", maxWidth: 960, margin: "0 auto", color: "#f9fafb", fontFamily: "system-ui, sans-serif" };
-const CARD: CSSProperties = { background: "rgba(15,23,42,0.8)", border: "1px solid #1f2937", borderRadius: 12, padding: "20px 24px", marginBottom: 16 };
+const PAGE: CSSProperties = { padding: "80px 24px 48px", maxWidth: 960, margin: "0 auto", color: "var(--foreground)", fontFamily: "system-ui, sans-serif" };
+const CARD: CSSProperties = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px", marginBottom: 16 };
 const GRID4: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 14, marginBottom: 24 };
-const KPI: CSSProperties = { background: "rgba(15,23,42,0.8)", border: "1px solid #1f2937", borderRadius: 12, padding: "16px 20px" };
-const SECTION_TITLE: CSSProperties = { fontSize: 15, fontWeight: 700, color: "#f9fafb", marginBottom: 14 };
+const KPI: CSSProperties = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" };
+const SECTION_TITLE: CSSProperties = { fontSize: 15, fontWeight: 700, color: "var(--foreground)", marginBottom: 14 };
 
 const STATUS_COLORS: Record<string, string> = {
   draft: "#6b7280",
@@ -55,9 +55,9 @@ const STATUS_COLORS: Record<string, string> = {
 function KpiCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
     <div style={KPI}>
-      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 800, color: "#f9fafb", lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>{sub}</div>}
+      <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: "var(--foreground)", lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
@@ -72,10 +72,10 @@ function BarChart({ items }: { items: { label: string; value: number }[] }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {items.map((item) => (
         <div key={item.label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 120, fontSize: 12, color: "#d1d5db", textAlign: "right", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div style={{ width: 120, fontSize: 12, color: "var(--muted-foreground)", textAlign: "right", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {item.label}
           </div>
-          <div style={{ flex: 1, background: "#1e293b", borderRadius: 4, height: 20, overflow: "hidden" }}>
+          <div style={{ flex: 1, background: "var(--muted)", borderRadius: 4, height: 20, overflow: "hidden" }}>
             <div
               style={{
                 width: `${Math.round((item.value / max) * 100)}%`,
@@ -87,7 +87,7 @@ function BarChart({ items }: { items: { label: string; value: number }[] }) {
               }}
             />
           </div>
-          <div style={{ width: 32, fontSize: 12, color: "#9ca3af", textAlign: "right", flexShrink: 0 }}>
+          <div style={{ width: 32, fontSize: 12, color: "var(--muted-foreground)", textAlign: "right", flexShrink: 0 }}>
             {item.value}
           </div>
         </div>
@@ -198,7 +198,7 @@ export default function ConversionDashboardPage() {
               {p === '7d' ? '7日' : p === '30d' ? '30日' : '90日'}
             </button>
           ))}
-          {loading && <span style={{ fontSize: 12, color: "#6b7280" }}>読み込み中...</span>}
+          {loading && <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>読み込み中...</span>}
         </div>
       </div>
 
@@ -214,7 +214,7 @@ export default function ConversionDashboardPage() {
       <div style={CARD}>
         <div style={SECTION_TITLE}>🧠 {t("conversion.effectiveness")}</div>
         {rankings.length === 0 ? (
-          <p style={{ color: "#6b7280", fontSize: 14 }}>{t("conversion.no_data")}</p>
+          <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>{t("conversion.no_data")}</p>
         ) : (
           <BarChart items={chartData} />
         )}
@@ -232,11 +232,11 @@ export default function ConversionDashboardPage() {
           </button>
         </div>
         {experiments.length === 0 ? (
-          <p style={{ color: "#6b7280", fontSize: 14 }}>{t("conversion.no_data")}</p>
+          <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>{t("conversion.no_data")}</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {experiments.slice(0, 5).map((exp) => (
-              <div key={exp.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#1e293b", borderRadius: 8 }}>
+              <div key={exp.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--muted)", borderRadius: 8 }}>
                 <span
                   style={{
                     padding: "3px 8px",
@@ -251,8 +251,8 @@ export default function ConversionDashboardPage() {
                 >
                   {statusLabel(exp.status)}
                 </span>
-                <span style={{ flex: 1, fontSize: 14, color: "#e5e7eb" }}>{exp.name}</span>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                <span style={{ flex: 1, fontSize: 14, color: "var(--foreground)" }}>{exp.name}</span>
+                <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                   最小サンプル: {exp.min_sample_size}件
                 </span>
               </div>
@@ -265,7 +265,7 @@ export default function ConversionDashboardPage() {
       <div style={CARD}>
         <div style={SECTION_TITLE}>💡 {t("conversion.suggestions")}</div>
         {suggestions.length === 0 ? (
-          <p style={{ color: "#6b7280", fontSize: 14 }}>{t("conversion.no_suggestions")}</p>
+          <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>{t("conversion.no_suggestions")}</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {suggestions.map((s, i) => (
@@ -285,9 +285,9 @@ export default function ConversionDashboardPage() {
                   {s.type === 'judge_repeated' ? '🔁' : s.type === 'ab_winner' ? '🏆' : '⭐'}
                 </span>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, color: "#e5e7eb", marginBottom: 4 }}>{s.description}</div>
+                  <div style={{ fontSize: 14, color: "var(--foreground)", marginBottom: 4 }}>{s.description}</div>
                   {s.suggestedAction && (
-                    <div style={{ fontSize: 12, color: "#6b7280" }}>提案: {s.suggestedAction}</div>
+                    <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>提案: {s.suggestedAction}</div>
                   )}
                 </div>
                 <button

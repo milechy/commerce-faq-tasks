@@ -289,7 +289,7 @@ export default function AnalyticsDashboardPage() {
           {
             data: evaluations.score_distribution.map((s) => s.count),
             backgroundColor: ["#f87171", "#fb923c", "#fbbf24", "#60a5fa", "#4ade80"],
-            borderColor: "rgba(15,23,42,0.5)",
+            borderColor: "var(--card)",
             borderWidth: 2,
           },
         ],
@@ -358,7 +358,7 @@ export default function AnalyticsDashboardPage() {
               sentimentColors.neutral,
               sentimentColors.negative,
             ],
-            borderColor: "rgba(15,23,42,0.5)",
+            borderColor: "var(--card)",
             borderWidth: 2,
           },
         ],
@@ -398,7 +398,7 @@ export default function AnalyticsDashboardPage() {
               "rgba(248,113,113,0.8)",
               "rgba(167,139,250,0.8)",
             ],
-            borderColor: "rgba(15,23,42,0.5)",
+            borderColor: "var(--card)",
             borderWidth: 2,
           },
         ],
@@ -437,8 +437,8 @@ export default function AnalyticsDashboardPage() {
   const cardStyle: CSSProperties = {
     flex: "1 1 160px",
     borderRadius: 14,
-    border: "1px solid #1f2937",
-    background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+    border: "1px solid var(--border)",
+    background: "linear-gradient(145deg, var(--card), var(--card))",
     padding: "20px 18px",
     display: "flex",
     flexDirection: "column",
@@ -448,8 +448,8 @@ export default function AnalyticsDashboardPage() {
 
   const chartCardStyle: CSSProperties = {
     borderRadius: 14,
-    border: "1px solid #1f2937",
-    background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+    border: "1px solid var(--border)",
+    background: "linear-gradient(145deg, var(--card), var(--card))",
     padding: "20px",
     boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
     marginBottom: 20,
@@ -459,8 +459,8 @@ export default function AnalyticsDashboardPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+        background: "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 960,
         margin: "0 auto",
@@ -483,7 +483,7 @@ export default function AnalyticsDashboardPage() {
             style={{
               background: "none",
               border: "none",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               padding: 0,
@@ -493,15 +493,15 @@ export default function AnalyticsDashboardPage() {
           >
             ← 管理画面へ戻る
           </button>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             📈 会話分析ダッシュボード
             {isSuperAdmin && (
-              <span style={{ fontSize: 16, fontWeight: 400, color: "#9ca3af", marginLeft: 10 }}>
+              <span style={{ fontSize: 16, fontWeight: 400, color: "var(--muted-foreground)", marginLeft: 10 }}>
                 — {selectedTenantName}
               </span>
             )}
           </h1>
-          <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+          <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
             KPI・トレンド・センチメントを可視化します
           </p>
         </div>
@@ -515,9 +515,9 @@ export default function AnalyticsDashboardPage() {
               style={{
                 padding: "8px 12px",
                 borderRadius: 8,
-                border: "1px solid #374151",
-                background: "rgba(15,23,42,0.8)",
-                color: "#e5e7eb",
+                border: "1px solid var(--border)",
+                background: "var(--card)",
+                color: "var(--foreground)",
                 fontSize: 14,
                 minWidth: 160,
                 minHeight: 44,
@@ -539,9 +539,9 @@ export default function AnalyticsDashboardPage() {
             style={{
               padding: "8px 12px",
               borderRadius: 8,
-              border: "1px solid #374151",
-              background: "rgba(15,23,42,0.8)",
-              color: "#e5e7eb",
+              border: "1px solid var(--border)",
+              background: "var(--card)",
+              color: "var(--foreground)",
               fontSize: 14,
               minHeight: 44,
               cursor: "pointer",
@@ -572,7 +572,7 @@ export default function AnalyticsDashboardPage() {
       )}
 
       {loading ? (
-        <div style={{ padding: 60, textAlign: "center", color: "#6b7280" }}>
+        <div style={{ padding: 60, textAlign: "center", color: "var(--muted-foreground)" }}>
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
           読み込み中...
         </div>
@@ -583,10 +583,10 @@ export default function AnalyticsDashboardPage() {
             {/* 総会話数 */}
             <div style={cardStyle}>
               <span style={{ fontSize: 24 }}>💬</span>
-              <span style={{ fontSize: 28, fontWeight: 700, color: "#f9fafb", lineHeight: 1 }}>
+              <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", lineHeight: 1 }}>
                 {summary?.total_sessions ?? "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>総会話数</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>総会話数</span>
               {summary && (
                 <span
                   style={{
@@ -616,18 +616,18 @@ export default function AnalyticsDashboardPage() {
                   ? `${summary.avg_judge_score.toFixed(1)}`
                   : "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>平均Judgeスコア</span>
-              <span style={{ fontSize: 12, color: "#6b7280" }}>/100</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>平均Judgeスコア</span>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>/100</span>
             </div>
 
             {/* Knowledge Gap件数 */}
             <div style={cardStyle}>
               <span style={{ fontSize: 24 }}>🔍</span>
-              <span style={{ fontSize: 28, fontWeight: 700, color: "#f9fafb", lineHeight: 1 }}>
+              <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", lineHeight: 1 }}>
                 {summary?.total_knowledge_gaps ?? "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>Knowledge Gap</span>
-              <span style={{ fontSize: 12, color: "#6b7280" }}>件</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>Knowledge Gap</span>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>件</span>
             </div>
 
             {/* アバター利用率 */}
@@ -638,8 +638,8 @@ export default function AnalyticsDashboardPage() {
                   ? `${(summary.avatar_rate * 100).toFixed(1)}%`
                   : "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>アバター利用率</span>
-              <span style={{ fontSize: 12, color: "#6b7280" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>アバター利用率</span>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                 {summary?.avatar_session_count ?? 0}件 / 全会話
               </span>
             </div>
@@ -657,8 +657,8 @@ export default function AnalyticsDashboardPage() {
               >
                 {summary?.cv_count_30d ?? "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>CV件数(30日)</span>
-              <span style={{ fontSize: 12, color: "#6b7280" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>CV件数(30日)</span>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                 ¥{(summary?.cv_total_value_30d ?? 0).toLocaleString("ja-JP")}
               </span>
             </div>
@@ -678,10 +678,10 @@ export default function AnalyticsDashboardPage() {
                   ? `${(knowledgeTop3AvgRate * 100).toFixed(1)}%`
                   : "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>
                 ナレッジ貢献度
               </span>
-              <span style={{ fontSize: 12, color: "#6b7280" }}>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                 Top3 平均CV率
               </span>
             </div>
@@ -709,8 +709,8 @@ export default function AnalyticsDashboardPage() {
                         ? `${(positiveRate * 100).toFixed(1)}%`
                         : "—"}
                     </span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>顧客感情</span>
-                    <span style={{ fontSize: 12, color: "#6b7280" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>顧客感情</span>
+                    <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                       ポジティブ率
                     </span>
                   </>
@@ -729,11 +729,11 @@ export default function AnalyticsDashboardPage() {
                 marginBottom: 24,
                 padding: "12px 16px",
                 borderRadius: 10,
-                border: "1px solid #1f2937",
-                background: "rgba(15,23,42,0.6)",
+                border: "1px solid var(--border)",
+                background: "var(--card)",
               }}
             >
-              <span style={{ fontSize: 12, color: "#6b7280", alignSelf: "center", marginRight: 4 }}>CV内訳:</span>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)", alignSelf: "center", marginRight: 4 }}>CV内訳:</span>
               {(
                 [
                   ["purchase", "購入", "#34d399"],
@@ -766,7 +766,7 @@ export default function AnalyticsDashboardPage() {
           {/* Line Chart: 会話数トレンド */}
           {lineData && (
             <div style={chartCardStyle}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, color: "#d1d5db", margin: "0 0 16px 0" }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
                 会話数トレンド
               </h3>
               <div style={{ height: 220 }}>
@@ -778,11 +778,11 @@ export default function AnalyticsDashboardPage() {
                     plugins: { legend: { display: false } },
                     scales: {
                       x: {
-                        ticks: { color: "#6b7280", maxTicksLimit: 8, font: { size: 11 } },
+                        ticks: { color: "var(--muted-foreground)", maxTicksLimit: 8, font: { size: 11 } },
                         grid: { color: "rgba(255,255,255,0.05)" },
                       },
                       y: {
-                        ticks: { color: "#6b7280", font: { size: 11 } },
+                        ticks: { color: "var(--muted-foreground)", font: { size: 11 } },
                         grid: { color: "rgba(255,255,255,0.05)" },
                         beginAtZero: true,
                       },
@@ -796,7 +796,7 @@ export default function AnalyticsDashboardPage() {
           {/* Sentiment Stacked Bar Chart */}
           {stackedBarData && (
             <div style={chartCardStyle}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, color: "#d1d5db", margin: "0 0 16px 0" }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
                 センチメント推移
               </h3>
               <div style={{ height: 220 }}>
@@ -808,18 +808,18 @@ export default function AnalyticsDashboardPage() {
                     plugins: {
                       legend: {
                         position: "bottom",
-                        labels: { color: "#9ca3af", font: { size: 11 }, padding: 10 },
+                        labels: { color: "var(--muted-foreground)", font: { size: 11 }, padding: 10 },
                       },
                     },
                     scales: {
                       x: {
                         stacked: true,
-                        ticks: { color: "#6b7280", maxTicksLimit: 8, font: { size: 11 } },
+                        ticks: { color: "var(--muted-foreground)", maxTicksLimit: 8, font: { size: 11 } },
                         grid: { color: "rgba(255,255,255,0.05)" },
                       },
                       y: {
                         stacked: true,
-                        ticks: { color: "#6b7280", font: { size: 11 } },
+                        ticks: { color: "var(--muted-foreground)", font: { size: 11 } },
                         grid: { color: "rgba(255,255,255,0.05)" },
                         beginAtZero: true,
                       },
@@ -842,7 +842,7 @@ export default function AnalyticsDashboardPage() {
             {/* Doughnut: スコア分布 */}
             {doughnutData && (
               <div style={{ ...chartCardStyle, flex: "1 1 280px", marginBottom: 0 }}>
-                <h3 style={{ fontSize: 15, fontWeight: 600, color: "#d1d5db", margin: "0 0 16px 0" }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
                   Judgeスコア分布
                 </h3>
                 <div style={{ height: 200, display: "flex", justifyContent: "center" }}>
@@ -854,7 +854,7 @@ export default function AnalyticsDashboardPage() {
                       plugins: {
                         legend: {
                           position: "bottom",
-                          labels: { color: "#9ca3af", font: { size: 11 }, padding: 10 },
+                          labels: { color: "var(--muted-foreground)", font: { size: 11 }, padding: 10 },
                         },
                       },
                     }}
@@ -866,7 +866,7 @@ export default function AnalyticsDashboardPage() {
             {/* Radar: 4軸平均 */}
             {radarData && (
               <div style={{ ...chartCardStyle, flex: "1 1 280px", marginBottom: 0 }}>
-                <h3 style={{ fontSize: 15, fontWeight: 600, color: "#d1d5db", margin: "0 0 16px 0" }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
                   4軸平均スコア
                 </h3>
                 <div style={{ height: 200 }}>
@@ -879,10 +879,10 @@ export default function AnalyticsDashboardPage() {
                         r: {
                           min: 0,
                           max: 100,
-                          ticks: { color: "#6b7280", font: { size: 10 }, stepSize: 25 },
+                          ticks: { color: "var(--muted-foreground)", font: { size: 10 }, stepSize: 25 },
                           grid: { color: "rgba(255,255,255,0.08)" },
                           angleLines: { color: "rgba(255,255,255,0.08)" },
-                          pointLabels: { color: "#9ca3af", font: { size: 11 } },
+                          pointLabels: { color: "var(--muted-foreground)", font: { size: 11 } },
                         },
                       },
                       plugins: {
@@ -897,7 +897,7 @@ export default function AnalyticsDashboardPage() {
             {/* Pie: センチメント分布 */}
             {sentimentPieData && (
               <div style={{ ...chartCardStyle, flex: "1 1 280px", marginBottom: 0 }}>
-                <h3 style={{ fontSize: 15, fontWeight: 600, color: "#d1d5db", margin: "0 0 16px 0" }}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
                   センチメント分布
                 </h3>
                 <div style={{ height: 200, display: "flex", justifyContent: "center" }}>
@@ -909,7 +909,7 @@ export default function AnalyticsDashboardPage() {
                       plugins: {
                         legend: {
                           position: "bottom",
-                          labels: { color: "#9ca3af", font: { size: 11 }, padding: 10 },
+                          labels: { color: "var(--muted-foreground)", font: { size: 11 }, padding: 10 },
                         },
                       },
                     }}
@@ -922,20 +922,20 @@ export default function AnalyticsDashboardPage() {
           {/* Low Score Sessions Table */}
           {evaluations && evaluations.low_score_sessions.length > 0 && (
             <div style={chartCardStyle}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, color: "#d1d5db", margin: "0 0 16px 0" }}>
+              <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
                 低スコア会話
               </h3>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
-                    <tr style={{ borderBottom: "1px solid #1f2937" }}>
+                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
                       {["セッションID", "スコア", "評価日時", "メッセージ数", "フィードバック"].map((h) => (
                         <th
                           key={h}
                           style={{
                             padding: "8px 12px",
                             textAlign: "left",
-                            color: "#6b7280",
+                            color: "var(--muted-foreground)",
                             fontWeight: 600,
                             whiteSpace: "nowrap",
                           }}
@@ -973,7 +973,7 @@ export default function AnalyticsDashboardPage() {
                             {s.score}
                           </span>
                         </td>
-                        <td style={{ padding: "10px 12px", color: "#9ca3af", whiteSpace: "nowrap" }}>
+                        <td style={{ padding: "10px 12px", color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
                           {new Date(s.evaluated_at).toLocaleDateString("ja-JP", {
                             month: "short",
                             day: "numeric",
@@ -981,13 +981,13 @@ export default function AnalyticsDashboardPage() {
                             minute: "2-digit",
                           })}
                         </td>
-                        <td style={{ padding: "10px 12px", color: "#9ca3af", textAlign: "center" }}>
+                        <td style={{ padding: "10px 12px", color: "var(--muted-foreground)", textAlign: "center" }}>
                           {s.message_count}
                         </td>
                         <td
                           style={{
                             padding: "10px 12px",
-                            color: "#d1d5db",
+                            color: "var(--muted-foreground)",
                             maxWidth: 240,
                             overflow: "hidden",
                             textOverflow: "ellipsis",
@@ -1012,10 +1012,10 @@ export default function AnalyticsDashboardPage() {
                 style={{
                   fontSize: 18,
                   fontWeight: 700,
-                  color: "#f9fafb",
+                  color: "var(--foreground)",
                   marginTop: 40,
                   marginBottom: 16,
-                  borderBottom: "1px solid #1f2937",
+                  borderBottom: "1px solid var(--border)",
                   paddingBottom: 10,
                 }}
               >
@@ -1026,17 +1026,17 @@ export default function AnalyticsDashboardPage() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 24 }}>
                 <div style={cardStyle}>
                   <span style={{ fontSize: 24 }}>📊</span>
-                  <span style={{ fontSize: 28, fontWeight: 700, color: "#f9fafb", lineHeight: 1 }}>
+                  <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", lineHeight: 1 }}>
                     {conversion.summary.total_sessions}
                   </span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>総セッション数</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>総セッション数</span>
                 </div>
                 <div style={cardStyle}>
                   <span style={{ fontSize: 24 }}>✅</span>
                   <span style={{ fontSize: 28, fontWeight: 700, color: "#34d399", lineHeight: 1 }}>
                     {conversion.summary.recorded_outcomes}
                   </span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>記録済み成果</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>記録済み成果</span>
                 </div>
                 <div style={cardStyle}>
                   <span style={{ fontSize: 24 }}>📝</span>
@@ -1055,7 +1055,7 @@ export default function AnalyticsDashboardPage() {
                   >
                     {conversion.summary.recording_rate.toFixed(1)}%
                   </span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>記録率</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>記録率</span>
                 </div>
                 {/* コンバージョン率: 離脱・不明を除いた割合 */}
                 {(() => {
@@ -1080,8 +1080,8 @@ export default function AnalyticsDashboardPage() {
                       >
                         {convRate.toFixed(1)}%
                       </span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>コンバージョン率</span>
-                      <span style={{ fontSize: 12, color: "#6b7280" }}>離脱・不明を除く</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>コンバージョン率</span>
+                      <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>離脱・不明を除く</span>
                     </div>
                   );
                 })()}
@@ -1092,7 +1092,7 @@ export default function AnalyticsDashboardPage() {
                 {/* Conversion rate trend */}
                 {convTrendLineData && (
                   <div style={{ ...chartCardStyle, flex: "2 1 320px", marginBottom: 0 }}>
-                    <div style={{ fontWeight: 600, color: "#d1d5db", marginBottom: 12, fontSize: 14 }}>
+                    <div style={{ fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12, fontSize: 14 }}>
                       コンバージョン率推移
                     </div>
                     <div style={{ height: 200 }}>
@@ -1104,11 +1104,11 @@ export default function AnalyticsDashboardPage() {
                           plugins: { legend: { display: false } },
                           scales: {
                             x: {
-                              ticks: { color: "#6b7280", maxTicksLimit: 7 },
+                              ticks: { color: "var(--muted-foreground)", maxTicksLimit: 7 },
                               grid: { color: "rgba(75,85,99,0.2)" },
                             },
                             y: {
-                              ticks: { color: "#6b7280", callback: (v) => `${v}%` },
+                              ticks: { color: "var(--muted-foreground)", callback: (v) => `${v}%` },
                               grid: { color: "rgba(75,85,99,0.2)" },
                               min: 0,
                             },
@@ -1122,7 +1122,7 @@ export default function AnalyticsDashboardPage() {
                 {/* Outcome pie */}
                 {outcomePieData && (
                   <div style={{ ...chartCardStyle, flex: "1 1 220px", marginBottom: 0 }}>
-                    <div style={{ fontWeight: 600, color: "#d1d5db", marginBottom: 12, fontSize: 14 }}>
+                    <div style={{ fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12, fontSize: 14 }}>
                       成果内訳
                     </div>
                     <div style={{ height: 200 }}>
@@ -1134,7 +1134,7 @@ export default function AnalyticsDashboardPage() {
                           plugins: {
                             legend: {
                               position: "bottom",
-                              labels: { color: "#9ca3af", font: { size: 11 }, boxWidth: 12 },
+                              labels: { color: "var(--muted-foreground)", font: { size: 11 }, boxWidth: 12 },
                             },
                           },
                         }}
@@ -1155,7 +1155,7 @@ export default function AnalyticsDashboardPage() {
                       marginBottom: 12,
                     }}
                   >
-                    <span style={{ fontWeight: 600, color: "#d1d5db", fontSize: 14 }}>
+                    <span style={{ fontWeight: 600, color: "var(--muted-foreground)", fontSize: 14 }}>
                       テクニック別効果
                     </span>
                   </div>
@@ -1169,7 +1169,7 @@ export default function AnalyticsDashboardPage() {
                               style={{
                                 padding: "8px 12px",
                                 textAlign: "left",
-                                color: "#6b7280",
+                                color: "var(--muted-foreground)",
                                 fontWeight: 600,
                                 whiteSpace: "nowrap",
                               }}
@@ -1181,7 +1181,7 @@ export default function AnalyticsDashboardPage() {
                             style={{
                               padding: "8px 12px",
                               textAlign: "left",
-                              color: "#6b7280",
+                              color: "var(--muted-foreground)",
                               fontWeight: 600,
                               whiteSpace: "nowrap",
                               cursor: "pointer",
@@ -1196,13 +1196,13 @@ export default function AnalyticsDashboardPage() {
                       <tbody>
                         {sortedTechniques.map((t) => (
                           <tr key={t.technique} style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}>
-                            <td style={{ padding: "10px 12px", fontWeight: 600, color: "#e5e7eb" }}>
+                            <td style={{ padding: "10px 12px", fontWeight: 600, color: "var(--foreground)" }}>
                               {t.technique}
                             </td>
-                            <td style={{ padding: "10px 12px", color: "#9ca3af", textAlign: "center" }}>
+                            <td style={{ padding: "10px 12px", color: "var(--muted-foreground)", textAlign: "center" }}>
                               {t.sessions_used}
                             </td>
-                            <td style={{ padding: "10px 12px", color: "#9ca3af", textAlign: "center" }}>
+                            <td style={{ padding: "10px 12px", color: "var(--muted-foreground)", textAlign: "center" }}>
                               {t.converted}
                             </td>
                             <td style={{ padding: "10px 12px" }}>
@@ -1231,7 +1231,7 @@ export default function AnalyticsDashboardPage() {
               {/* Stage dropout bar chart */}
               {stageDropoutBarData && (
                 <div style={chartCardStyle}>
-                  <div style={{ fontWeight: 600, color: "#d1d5db", marginBottom: 12, fontSize: 14 }}>
+                  <div style={{ fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12, fontSize: 14 }}>
                     ステージ別離脱分析
                   </div>
                   <div style={{ height: 180 }}>
@@ -1243,11 +1243,11 @@ export default function AnalyticsDashboardPage() {
                         plugins: { legend: { display: false } },
                         scales: {
                           x: {
-                            ticks: { color: "#9ca3af" },
+                            ticks: { color: "var(--muted-foreground)" },
                             grid: { display: false },
                           },
                           y: {
-                            ticks: { color: "#6b7280" },
+                            ticks: { color: "var(--muted-foreground)" },
                             grid: { color: "rgba(75,85,99,0.2)" },
                           },
                         },

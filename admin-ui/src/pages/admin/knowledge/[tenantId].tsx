@@ -99,8 +99,8 @@ export default function TenantKnowledgePage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+        background: "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 900,
         margin: "0 auto",
@@ -110,13 +110,13 @@ export default function TenantKnowledgePage() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
           <button
             onClick={() => navigate("/admin")}
-            style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "8px 14px", minHeight: 44, borderRadius: 999, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer", fontWeight: 500 }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "8px 14px", minHeight: 44, borderRadius: 999, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer", fontWeight: 500 }}
           >
             {t("nav.back_dashboard")}
           </button>
           <LangSwitcher />
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
           {t("knowledge.title")}
         </h1>
         {isSuperAdmin ? (
@@ -126,8 +126,8 @@ export default function TenantKnowledgePage() {
               onChange={(e) => handleTenantChange(e.target.value)}
               style={{
                 flex: 1, padding: "10px 12px", minHeight: 44, borderRadius: 10,
-                border: "1px solid #374151", background: "rgba(15,23,42,0.8)",
-                color: "#e5e7eb", fontSize: 15, cursor: "pointer",
+                border: "1px solid var(--border)", background: "var(--card)",
+                color: "var(--foreground)", fontSize: 15, cursor: "pointer",
               }}
             >
               <option value="global">🌐 グローバルナレッジ</option>
@@ -163,7 +163,7 @@ export default function TenantKnowledgePage() {
       </header>
 
       {/* タブ */}
-      <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid #1f2937" }}>
+      <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: "1px solid var(--border)" }}>
         {tabs.map((tab) => (
           <button
             key={tab.id}

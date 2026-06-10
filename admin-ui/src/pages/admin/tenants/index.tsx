@@ -66,8 +66,8 @@ async function createTenant(data: { name: string; slug: string }): Promise<Tenan
 
 const CARD_STYLE: React.CSSProperties = {
   borderRadius: 14,
-  border: "1px solid #1f2937",
-  background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+  border: "1px solid var(--border)",
+  background: "linear-gradient(145deg, var(--card), var(--card))",
   padding: "20px 18px",
 };
 
@@ -111,9 +111,9 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
     width: "100%",
     padding: "14px 16px",
     borderRadius: 10,
-    border: "1px solid #374151",
+    border: "1px solid var(--border)",
     background: "rgba(0,0,0,0.3)",
-    color: "#f9fafb",
+    color: "var(--foreground)",
     fontSize: 16,
     outline: "none",
     boxSizing: "border-box",
@@ -123,7 +123,7 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
     display: "block",
     fontSize: 13,
     fontWeight: 600,
-    color: "#9ca3af",
+    color: "var(--muted-foreground)",
     marginBottom: 6,
   };
 
@@ -143,15 +143,15 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
     >
       <div
         style={{
-          background: "#0f172a",
-          border: "1px solid #1f2937",
+          background: "var(--background)",
+          border: "1px solid var(--border)",
           borderRadius: 16,
           padding: "28px 24px",
           maxWidth: 480,
           width: "100%",
         }}
       >
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#f9fafb", margin: "0 0 24px" }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: "var(--foreground)", margin: "0 0 24px" }}>
           {t("tenants.modal_title")}
         </h2>
 
@@ -233,9 +233,9 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
                 padding: "14px 24px",
                 minHeight: 48,
                 borderRadius: 12,
-                border: "1px solid #374151",
+                border: "1px solid var(--border)",
                 background: "transparent",
-                color: "#9ca3af",
+                color: "var(--muted-foreground)",
                 fontSize: 15,
                 fontWeight: 600,
                 cursor: "pointer",
@@ -339,8 +339,8 @@ export default function TenantsPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+        background: "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 900,
         margin: "0 auto",
@@ -356,7 +356,7 @@ export default function TenantsPage() {
             transform: "translateX(-50%)",
             padding: "14px 24px",
             borderRadius: 12,
-            background: "rgba(15,23,42,0.98)",
+            background: "var(--card)",
             border: "1px solid #22c55e",
             color: "#4ade80",
             fontSize: 15,
@@ -379,9 +379,9 @@ export default function TenantsPage() {
               padding: "8px 14px",
               minHeight: 44,
               borderRadius: 999,
-              border: "1px solid #374151",
+              border: "1px solid var(--border)",
               background: "transparent",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               fontWeight: 500,
@@ -394,10 +394,10 @@ export default function TenantsPage() {
           </button>
           <LangSwitcher />
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "#f9fafb" }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "var(--foreground)" }}>
           {t("tenants.title")}
         </h1>
-        <p style={{ fontSize: 14, color: "#9ca3af", margin: 0 }}>
+        <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: 0 }}>
           {t("tenants.subtitle")}
         </p>
       </header>
@@ -412,9 +412,9 @@ export default function TenantsPage() {
           width: "100%",
           padding: "12px 16px",
           borderRadius: 10,
-          border: "1px solid #374151",
-          background: "rgba(15,23,42,0.8)",
-          color: "#e5e7eb",
+          border: "1px solid var(--border)",
+          background: "var(--card)",
+          color: "var(--foreground)",
           fontSize: 14,
           outline: "none",
           boxSizing: "border-box",
@@ -459,8 +459,8 @@ export default function TenantsPage() {
               onClick={() => setStatusFilter(val)}
               style={{
                 padding: "7px 14px", minHeight: 36, borderRadius: 10, cursor: "pointer",
-                border: active ? "1px solid rgba(96,165,250,0.5)" : "1px solid #374151",
-                background: active ? "rgba(96,165,250,0.1)" : "rgba(15,23,42,0.8)",
+                border: active ? "1px solid rgba(96,165,250,0.5)" : "1px solid var(--border)",
+                background: active ? "rgba(96,165,250,0.1)" : "var(--card)",
                 color: active ? "#60a5fa" : "#9ca3af",
                 fontSize: 13, fontWeight: active ? 700 : 400, whiteSpace: "nowrap",
               }}
@@ -470,13 +470,13 @@ export default function TenantsPage() {
           );
         })}
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 8 }}>
-          <span style={{ fontSize: 12, color: "#6b7280" }}>並び替え:</span>
+          <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>並び替え:</span>
           <SortableHeader label="名前" sortKey="name" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
           <SortableHeader label="作成日" sortKey="createdAt" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
         </div>
-        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280", whiteSpace: "nowrap" }}>
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
           全{tenants.length}件中{" "}
-          <span style={{ color: "#d1d5db", fontWeight: 700 }}>{filteredTenants.length}</span>件表示
+          <span style={{ color: "var(--muted-foreground)", fontWeight: 700 }}>{filteredTenants.length}</span>件表示
         </span>
       </div>
 
@@ -505,7 +505,7 @@ export default function TenantsPage() {
             alignItems: "center",
             justifyContent: "center",
             minHeight: 120,
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 15,
           }}
         >
@@ -519,7 +519,7 @@ export default function TenantsPage() {
               style={{
                 ...CARD_STYLE,
                 textAlign: "center",
-                color: "#6b7280",
+                color: "var(--muted-foreground)",
                 fontSize: 15,
                 padding: "40px 20px",
               }}
@@ -541,7 +541,7 @@ export default function TenantsPage() {
                 {/* テナント情報 */}
                 <div style={{ flex: "1 1 200px", minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb" }}>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)" }}>
                       {tenant.name}
                     </span>
                     {/* 状態バッジ */}
@@ -579,14 +579,14 @@ export default function TenantsPage() {
                         );
                       }
                       return (
-                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(107,114,128,0.15)", color: "#6b7280", border: "1px solid rgba(107,114,128,0.3)" }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(107,114,128,0.15)", color: "var(--muted-foreground)", border: "1px solid rgba(107,114,128,0.3)" }}>
                           {t("tenants.billing_inactive")}
                         </span>
                       );
                     })()}
                   </div>
-                  <div style={{ fontSize: 13, color: "#6b7280" }}>
-                    slug: <span style={{ fontFamily: "monospace", color: "#9ca3af" }}>{tenant.slug}</span>
+                  <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
+                    slug: <span style={{ fontFamily: "monospace", color: "var(--muted-foreground)" }}>{tenant.slug}</span>
                   </div>
                 </div>
 
@@ -597,14 +597,14 @@ export default function TenantsPage() {
                     gap: 20,
                     flexWrap: "wrap",
                     fontSize: 13,
-                    color: "#9ca3af",
+                    color: "var(--muted-foreground)",
                   }}
                 >
                   <div>
-                    <span style={{ color: "#6b7280" }}>{t("tenants.api_keys", { n: tenant.apiKeyCount ?? 0 })}</span>
+                    <span style={{ color: "var(--muted-foreground)" }}>{t("tenants.api_keys", { n: tenant.apiKeyCount ?? 0 })}</span>
                   </div>
                   <div>
-                    <span style={{ color: "#6b7280" }}>
+                    <span style={{ color: "var(--muted-foreground)" }}>
                       {(() => {
                         const d = tenant.createdAt ? new Date(tenant.createdAt) : null;
                         const dateStr = d && !isNaN(d.getTime())
@@ -623,9 +623,9 @@ export default function TenantsPage() {
                     padding: "10px 18px",
                     minHeight: 44,
                     borderRadius: 10,
-                    border: "1px solid #374151",
+                    border: "1px solid var(--border)",
                     background: "rgba(0,0,0,0.3)",
-                    color: "#d1d5db",
+                    color: "var(--muted-foreground)",
                     fontSize: 14,
                     fontWeight: 600,
                     cursor: "pointer",

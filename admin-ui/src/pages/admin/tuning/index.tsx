@@ -228,8 +228,8 @@ export default function TuningRulesPage() {
       style={{
         minHeight: "100vh",
         background:
-          "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+          "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 900,
         margin: "0 auto",
@@ -252,7 +252,7 @@ export default function TuningRulesPage() {
             style={{
               background: "none",
               border: "none",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               padding: 0,
@@ -263,14 +263,14 @@ export default function TuningRulesPage() {
             {t("tuning.back")}
           </button>
           <h1
-            style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}
+            style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}
           >
             {t("tuning.title")}
           </h1>
           <p
             style={{
               fontSize: 14,
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               marginTop: 4,
               marginBottom: 0,
             }}
@@ -334,7 +334,7 @@ export default function TuningRulesPage() {
           style={{
             fontSize: 15,
             fontWeight: 600,
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             marginBottom: 12,
           }}
         >
@@ -345,7 +345,7 @@ export default function TuningRulesPage() {
       {/* List */}
       {loading ? (
         <div
-          style={{ padding: 40, textAlign: "center", color: "#6b7280" }}
+          style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)" }}
         >
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>
             ⏳
@@ -359,7 +359,7 @@ export default function TuningRulesPage() {
             textAlign: "center",
             borderRadius: 14,
             border: "1px dashed #374151",
-            background: "rgba(15,23,42,0.4)",
+            background: "var(--card)",
           }}
         >
           <span
@@ -371,7 +371,7 @@ export default function TuningRulesPage() {
             style={{
               fontSize: 16,
               fontWeight: 600,
-              color: "#d1d5db",
+              color: "var(--muted-foreground)",
               margin: 0,
             }}
           >
@@ -380,7 +380,7 @@ export default function TuningRulesPage() {
           <p
             style={{
               fontSize: 13,
-              color: "#6b7280",
+              color: "var(--muted-foreground)",
               marginTop: 6,
               marginBottom: 0,
             }}
@@ -397,8 +397,8 @@ export default function TuningRulesPage() {
                 borderRadius: 14,
                 border: `1px solid ${rule.is_active ? "#1f2937" : "#374151"}`,
                 background: rule.is_active
-                  ? "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))"
-                  : "rgba(15,23,42,0.4)",
+                  ? "linear-gradient(145deg, var(--card), var(--card))"
+                  : "var(--card)",
                 padding: "18px 20px",
                 boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
                 opacity: rule.is_active ? 1 : 0.65,
@@ -433,7 +433,7 @@ export default function TuningRulesPage() {
                 </span>
 
                 <span
-                  style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}
+                  style={{ fontSize: 11, color: "var(--muted-foreground)", marginLeft: "auto" }}
                 >
                   {formatDate(rule.created_at)}
                 </span>
@@ -468,7 +468,7 @@ export default function TuningRulesPage() {
                   style={{
                     fontSize: 12,
                     fontWeight: 600,
-                    color: "#9ca3af",
+                    color: "var(--muted-foreground)",
                     display: "block",
                     marginBottom: 4,
                   }}
@@ -497,7 +497,7 @@ export default function TuningRulesPage() {
                   <span
                     style={{
                       fontSize: 13,
-                      color: "#6b7280",
+                      color: "var(--muted-foreground)",
                       fontStyle: "italic",
                     }}
                   >
@@ -512,7 +512,7 @@ export default function TuningRulesPage() {
                   style={{
                     fontSize: 12,
                     fontWeight: 600,
-                    color: "#9ca3af",
+                    color: "var(--muted-foreground)",
                     display: "block",
                     marginBottom: 4,
                   }}
@@ -522,7 +522,7 @@ export default function TuningRulesPage() {
                 <p
                   style={{
                     fontSize: 14,
-                    color: "#e5e7eb",
+                    color: "var(--foreground)",
                     margin: 0,
                     lineHeight: 1.6,
                   }}
@@ -632,8 +632,8 @@ export default function TuningRulesPage() {
         >
           <div
             style={{
-              background: "#0f172a",
-              border: "1px solid #1f2937",
+              background: "var(--background)",
+              border: "1px solid var(--border)",
               borderRadius: 16,
               padding: "28px 24px",
               maxWidth: 420,
@@ -645,7 +645,7 @@ export default function TuningRulesPage() {
               style={{
                 fontSize: 18,
                 fontWeight: 700,
-                color: "#f9fafb",
+                color: "var(--foreground)",
                 margin: "0 0 12px",
               }}
             >
@@ -654,7 +654,7 @@ export default function TuningRulesPage() {
             <p
               style={{
                 fontSize: 14,
-                color: "#d1d5db",
+                color: "var(--muted-foreground)",
                 margin: "0 0 6px",
               }}
             >
@@ -663,7 +663,7 @@ export default function TuningRulesPage() {
             <p
               style={{
                 fontSize: 13,
-                color: "#9ca3af",
+                color: "var(--muted-foreground)",
                 margin: "0 0 20px",
                 lineHeight: 1.6,
               }}
@@ -693,9 +693,9 @@ export default function TuningRulesPage() {
                   padding: "14px",
                   minHeight: 56,
                   borderRadius: 10,
-                  border: "1px solid #374151",
+                  border: "1px solid var(--border)",
                   background: "transparent",
-                  color: "#e5e7eb",
+                  color: "var(--foreground)",
                   fontSize: 15,
                   fontWeight: 600,
                   cursor: "pointer",

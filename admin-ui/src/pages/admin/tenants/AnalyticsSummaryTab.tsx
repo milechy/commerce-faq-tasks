@@ -42,7 +42,7 @@ export default function AnalyticsSummaryTab({ tenantId }: { tenantId: string }) 
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Period selector */}
       <div style={{ ...CARD_STYLE, display: "flex", gap: 10, alignItems: "center" }}>
-        <span style={{ fontSize: 14, color: "#9ca3af", fontWeight: 600 }}>期間:</span>
+        <span style={{ fontSize: 14, color: "var(--muted-foreground)", fontWeight: 600 }}>期間:</span>
         {(["last_7d", "last_30d", "last_90d"] as const).map((p) => (
           <button
             key={p}
@@ -52,7 +52,7 @@ export default function AnalyticsSummaryTab({ tenantId }: { tenantId: string }) 
               padding: "8px 16px",
               minHeight: 36,
               borderRadius: 8,
-              border: period === p ? "1px solid #4ade80" : "1px solid #374151",
+              border: period === p ? "1px solid #4ade80" : "1px solid var(--border)",
               background: period === p ? "rgba(34,197,94,0.15)" : "rgba(0,0,0,0.3)",
               color: period === p ? "#4ade80" : "#9ca3af",
               fontSize: 13,
@@ -65,22 +65,22 @@ export default function AnalyticsSummaryTab({ tenantId }: { tenantId: string }) 
         ))}
       </div>
 
-      {loading && <div style={{ color: "#6b7280", textAlign: "center", padding: 32 }}>読み込み中...</div>}
+      {loading && <div style={{ color: "var(--muted-foreground)", textAlign: "center", padding: 32 }}>読み込み中...</div>}
       {error && <div style={{ color: "#f87171", padding: 16 }}>{error}</div>}
 
       {data && !loading && (
         <>
           {/* Conversations */}
           <div style={{ ...CARD_STYLE }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>💬 会話数</h3>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>💬 会話数</h3>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               {[
                 { label: "総会話数", value: data.conversations.total.toLocaleString() },
                 { label: "1日平均", value: `${data.conversations.avg_per_day}件` },
               ].map(({ label, value }) => (
-                <div key={label} style={{ padding: "16px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid #1f2937" }}>
-                  <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>{label}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#e5e7eb" }}>{value}</div>
+                <div key={label} style={{ padding: "16px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}>
+                  <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 6 }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--foreground)" }}>{value}</div>
                 </div>
               ))}
             </div>
@@ -88,7 +88,7 @@ export default function AnalyticsSummaryTab({ tenantId }: { tenantId: string }) 
 
           {/* CV */}
           <div style={{ ...CARD_STYLE }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>🎯 コンバージョン</h3>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>🎯 コンバージョン</h3>
             <div style={{ display: "grid", gap: 10 }}>
               {[
                 { label: "マクロCV (r2c_db)", value: data.cv.macro.r2c_db },
@@ -98,9 +98,9 @@ export default function AnalyticsSummaryTab({ tenantId }: { tenantId: string }) 
                 { label: "マイクロCV (GA4)", value: data.cv.micro.ga4 },
                 { label: "ランクA (3ソース確認済)", value: data.cv.macro.ranked_a },
               ].map(({ label, value }) => (
-                <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid #1f2937", fontSize: 14 }}>
-                  <span style={{ color: "#9ca3af" }}>{label}</span>
-                  <span style={{ color: "#e5e7eb", fontWeight: 600 }}>{value}</span>
+                <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", fontSize: 14 }}>
+                  <span style={{ color: "var(--muted-foreground)" }}>{label}</span>
+                  <span style={{ color: "var(--foreground)", fontWeight: 600 }}>{value}</span>
                 </div>
               ))}
             </div>
@@ -109,15 +109,15 @@ export default function AnalyticsSummaryTab({ tenantId }: { tenantId: string }) 
           {/* LLM Usage */}
           {data.llm_usage && (
             <div style={{ ...CARD_STYLE }}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>🤖 LLM使用量（今月）</h3>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>🤖 LLM使用量（今月）</h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                 {[
                   { label: "総トークン", value: data.llm_usage.tokens.toLocaleString() },
                   { label: "推定コスト", value: `¥${data.llm_usage.cost_jpy.toLocaleString()}` },
                   { label: "生成回数", value: data.llm_usage.generations.toLocaleString() },
                 ].map(({ label, value }) => (
-                  <div key={label} style={{ padding: "14px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid #1f2937" }}>
-                    <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>{label}</div>
+                  <div key={label} style={{ padding: "14px", borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}>
+                    <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginBottom: 4 }}>{label}</div>
                     <div style={{ fontSize: 18, fontWeight: 700, color: "#4ade80" }}>{value}</div>
                   </div>
                 ))}

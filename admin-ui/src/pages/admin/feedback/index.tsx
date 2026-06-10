@@ -32,7 +32,7 @@ interface AdminFeedback {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
+const BG = "var(--background)";
 
 const STATUS_COLORS: Record<AdminFeedback["status"], { bg: string; border: string; text: string; label_ja: string; label_en: string }> = {
   new: { bg: "rgba(59,130,246,0.15)", border: "rgba(59,130,246,0.45)", text: "#60a5fa", label_ja: "未対応", label_en: "New" },
@@ -104,9 +104,9 @@ const selectStyle: React.CSSProperties = {
   padding: "8px 12px",
   minHeight: 44,
   borderRadius: 8,
-  border: "1px solid #374151",
-  background: "rgba(15,23,42,0.9)",
-  color: "#e5e7eb",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
+  color: "var(--foreground)",
   fontSize: 14,
   cursor: "pointer",
   outline: "none",
@@ -245,8 +245,8 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
           maxHeight: "90vh",
           overflowY: "auto",
           borderRadius: 16,
-          border: "1px solid #1f2937",
-          background: "rgba(15,23,42,0.98)",
+          border: "1px solid var(--border)",
+          background: "var(--card)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
           padding: "24px 24px 20px",
           display: "flex",
@@ -259,7 +259,7 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
             <StatusBadge status={status} lang={lang} />
             <PriorityBadge priority={priority} lang={lang} />
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
               {lang === "ja" ? catLabel.ja : catLabel.en}
             </span>
           </div>
@@ -267,9 +267,9 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
             onClick={onClose}
             style={{
               background: "none",
-              border: "1px solid #374151",
+              border: "1px solid var(--border)",
               borderRadius: 8,
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 18,
               cursor: "pointer",
               padding: "4px 10px",
@@ -283,7 +283,7 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
         </div>
 
         {/* Meta */}
-        <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "var(--muted-foreground)", display: "flex", gap: 16, flexWrap: "wrap" }}>
           <span>{new Date(item.created_at).toLocaleString(locale, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
           {item.user_email && <span>{item.user_email}</span>}
           <span style={{ fontFamily: "monospace", opacity: 0.6 }}>{item.id.slice(0, 8)}…</span>
@@ -291,16 +291,16 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
 
         {/* Message */}
         <div>
-          <p style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>
+          <p style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 6 }}>
             {lang === "ja" ? "メッセージ" : "Message"}
           </p>
           <div style={{
             padding: "12px 14px",
             borderRadius: 10,
-            border: "1px solid #1f2937",
+            border: "1px solid var(--border)",
             background: "rgba(0,0,0,0.25)",
             fontSize: 14,
-            color: "#f9fafb",
+            color: "var(--foreground)",
             lineHeight: 1.7,
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
@@ -312,7 +312,7 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
         {/* AI response */}
         {item.ai_response && (
           <div>
-            <p style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 6 }}>
               {lang === "ja" ? "AI回答" : "AI Response"}
               {item.ai_answered && (
                 <span style={{ marginLeft: 8, color: "#4ade80", fontSize: 11 }}>
@@ -339,7 +339,7 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
         {/* Status + Priority editors */}
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 180px" }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", display: "block", marginBottom: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)", display: "block", marginBottom: 6 }}>
               {lang === "ja" ? "ステータス" : "Status"}
             </label>
             <select value={status} onChange={(e) => setStatus(e.target.value as AdminFeedback["status"])} style={{ ...selectStyle, width: "100%" }}>
@@ -350,7 +350,7 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
             </select>
           </div>
           <div style={{ flex: "1 1 140px" }}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", display: "block", marginBottom: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)", display: "block", marginBottom: 6 }}>
               {lang === "ja" ? "優先度" : "Priority"}
             </label>
             <select value={priority} onChange={(e) => setPriority(e.target.value as AdminFeedback["priority"])} style={{ ...selectStyle, width: "100%" }}>
@@ -422,7 +422,7 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
 
         {/* Admin notes */}
         <div>
-          <label style={{ fontSize: 12, fontWeight: 600, color: "#9ca3af", display: "block", marginBottom: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)", display: "block", marginBottom: 6 }}>
             {lang === "ja" ? "管理者メモ" : "Admin Notes"}
           </label>
           <textarea
@@ -434,9 +434,9 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
               width: "100%",
               padding: "10px 12px",
               borderRadius: 8,
-              border: "1px solid #374151",
+              border: "1px solid var(--border)",
               background: "rgba(0,0,0,0.3)",
-              color: "#e5e7eb",
+              color: "var(--foreground)",
               fontSize: 14,
               fontFamily: "inherit",
               lineHeight: 1.6,
@@ -472,7 +472,7 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
                 padding: "10px 16px",
                 minHeight: 44,
                 borderRadius: 8,
-                border: confirmDelete ? "1px solid rgba(239,68,68,0.7)" : "1px solid #374151",
+                border: confirmDelete ? "1px solid rgba(239,68,68,0.7)" : "1px solid var(--border)",
                 background: confirmDelete ? "rgba(239,68,68,0.15)" : "transparent",
                 color: confirmDelete ? "#f87171" : "#6b7280",
                 fontSize: 14,
@@ -492,9 +492,9 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
                 padding: "10px 20px",
                 minHeight: 44,
                 borderRadius: 8,
-                border: "1px solid #374151",
+                border: "1px solid var(--border)",
                 background: "transparent",
-                color: "#9ca3af",
+                color: "var(--muted-foreground)",
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: "pointer",
@@ -619,20 +619,20 @@ export default function FeedbackPage() {
     new Date(iso).toLocaleString(locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
   return (
-    <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 1100, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: BG, color: "var(--foreground)", padding: "24px 20px", maxWidth: 1100, margin: "0 auto" }}>
       {/* Header */}
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
           <button
             onClick={() => navigate("/admin")}
-            style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 8, display: "block" }}
+            style={{ background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 8, display: "block" }}
           >
             ← {lang === "ja" ? "管理画面に戻る" : "Back to Dashboard"}
           </button>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)", display: "flex", alignItems: "center", gap: 8 }}>
             📝 {lang === "ja" ? "お客様の声" : "Customer Feedback"}
           </h1>
-          <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+          <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
             {lang === "ja" ? "チャット中にお客様が送ったフィードバックを管理します" : "Manage feedback submitted by customers during chat"}
           </p>
         </div>
@@ -682,16 +682,16 @@ export default function FeedbackPage() {
             padding: "6px 14px",
             minHeight: 36,
             borderRadius: 8,
-            border: "1px solid #374151",
+            border: "1px solid var(--border)",
             background: "transparent",
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 13,
             cursor: "pointer",
           }}
         >
           ↻ {lang === "ja" ? "更新" : "Refresh"}
         </button>
-        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280" }}>
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted-foreground)" }}>
           {!loading && `${filteredItems.length} ${lang === "ja" ? "件" : "items"}`}
         </span>
       </div>
@@ -721,7 +721,7 @@ export default function FeedbackPage() {
 
       {/* List */}
       {loading ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 160, color: "#6b7280", fontSize: 15 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 160, color: "var(--muted-foreground)", fontSize: 15 }}>
           <span style={{ marginRight: 8 }}>⏳</span>
           {lang === "ja" ? "読み込み中..." : "Loading..."}
         </div>
@@ -732,7 +732,7 @@ export default function FeedbackPage() {
           alignItems: "center",
           justifyContent: "center",
           minHeight: 200,
-          color: "#6b7280",
+          color: "var(--muted-foreground)",
           fontSize: 15,
           gap: 8,
         }}>
@@ -752,8 +752,8 @@ export default function FeedbackPage() {
                   padding: "14px 16px",
                   minHeight: 44,
                   borderRadius: 12,
-                  border: "1px solid #1f2937",
-                  background: "rgba(15,23,42,0.95)",
+                  border: "1px solid var(--border)",
+                  background: "var(--card)",
                   cursor: "pointer",
                   textAlign: "left",
                   display: "flex",
@@ -763,16 +763,16 @@ export default function FeedbackPage() {
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLButtonElement).style.borderColor = "#374151";
-                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(15,23,42,1)";
+                  (e.currentTarget as HTMLButtonElement).style.background = "var(--card)";
                 }}
                 onMouseLeave={(e) => {
                   (e.currentTarget as HTMLButtonElement).style.borderColor = "#1f2937";
-                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(15,23,42,0.95)";
+                  (e.currentTarget as HTMLButtonElement).style.background = "var(--card)";
                 }}
               >
                 {/* Date column */}
                 <div style={{ flexShrink: 0, minWidth: 90, paddingTop: 2 }}>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>{formatDate(item.created_at)}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{formatDate(item.created_at)}</span>
                 </div>
 
                 {/* Badges */}
@@ -783,7 +783,7 @@ export default function FeedbackPage() {
 
                 {/* Category */}
                 <div style={{ flexShrink: 0, paddingTop: 4, minWidth: 80 }}>
-                  <span style={{ fontSize: 12, color: "#9ca3af", fontWeight: 500 }}>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)", fontWeight: 500 }}>
                     {lang === "ja" ? catLabel.ja : catLabel.en}
                   </span>
                 </div>
@@ -792,7 +792,7 @@ export default function FeedbackPage() {
                 <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
                   <span style={{
                     fontSize: 14,
-                    color: "#f9fafb",
+                    color: "var(--foreground)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -801,7 +801,7 @@ export default function FeedbackPage() {
                     {item.message.slice(0, 60)}{item.message.length > 60 ? "…" : ""}
                   </span>
                   {item.user_email && (
-                    <span style={{ fontSize: 12, color: "#6b7280" }}>{item.user_email}</span>
+                    <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{item.user_email}</span>
                   )}
                 </div>
 

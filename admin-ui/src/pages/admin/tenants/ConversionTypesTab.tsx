@@ -63,7 +63,7 @@ export default function ConversionTypesTab({
 
   return (
     <div>
-      <p style={{ fontSize: 14, color: "#9ca3af", marginBottom: 20 }}>
+      <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginBottom: 20 }}>
         お客様の行動結果のカテゴリを設定します。会話詳細ページでこのカテゴリを選んで成果を記録できます。
       </p>
       {saveMsg && (
@@ -86,14 +86,14 @@ export default function ConversionTypesTab({
             {t}
             <button
               onClick={() => removeType(t)}
-              style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}
+              style={{ background: "none", border: "none", color: "var(--muted-foreground)", cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}
               title="削除"
             >
               ×
             </button>
           </span>
         ))}
-        {types.length === 0 && <span style={{ fontSize: 14, color: "#6b7280" }}>タイプが登録されていません</span>}
+        {types.length === 0 && <span style={{ fontSize: 14, color: "var(--muted-foreground)" }}>タイプが登録されていません</span>}
       </div>
       {/* 追加フォーム */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
@@ -106,8 +106,8 @@ export default function ConversionTypesTab({
           maxLength={50}
           style={{
             flex: 1, padding: "10px 14px", borderRadius: 8,
-            border: "1px solid #374151", background: "rgba(255,255,255,0.05)",
-            color: "#f9fafb", fontSize: 14,
+            border: "1px solid var(--border)", background: "rgba(255,255,255,0.05)",
+            color: "var(--foreground)", fontSize: 14,
           }}
         />
         <button
@@ -122,7 +122,7 @@ export default function ConversionTypesTab({
           ＋ 追加
         </button>
       </div>
-      <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 20 }}>最大10件、各50文字以内。現在 {types.length}/10 件</p>
+      <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 20 }}>最大10件、各50文字以内。現在 {types.length}/10 件</p>
       <button
         onClick={handleSave}
         disabled={saving}
