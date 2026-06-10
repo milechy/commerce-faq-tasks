@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>R2C AI デモ</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #0a0a12; overflow: hidden; }
+    #hint {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center; color: rgba(255,255,255,0.25);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px; pointer-events: none;
+      transition: opacity 0.4s ease;
+    }
+    #hint.hidden { opacity: 0; }
+  </style>
+</head>
+<body>
+  <div id="hint">
+    <div style="font-size:28px;margin-bottom:8px">🤖</div>
+    <div>読み込み中...</div>
+  </div>
+
+  <script
+    src="/widget.js"
+    data-api-key="rjc_77aaa951edede3a8faa44161a6f505eca44f4c0517e051ec1f8bb6bc9f22b29b"
+    data-accent-color="#7c3aed"
+    data-greeting="こんにちは！R2Cについて何でも聞いてください 😊"
+  ></script>
+
+  <script>
+    function tryOpen() {
+      window.postMessage({ source: 'faq-widget-host', type: 'open' }, window.location.origin);
+      document.getElementById('hint').classList.add('hidden');
+    }
+    // widget.js の初期化完了を待ってから開く
+    setTimeout(tryOpen, 1200);
+  </script>
+</body>
+</html>
