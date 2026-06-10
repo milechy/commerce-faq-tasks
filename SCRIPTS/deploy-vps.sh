@@ -125,8 +125,8 @@ rsync -avz --delete \
 ssh "${VPS}" "chown -R root:root ${REMOTE_DIR} 2>/dev/null || true"
 echo "  ✅ rsync後VPSファイル所有者: root:root に正規化完了"
 
-echo "[3/5] Installing dependencies on VPS (runtime only)..."
-ssh "${VPS}" "cd ${REMOTE_DIR} && corepack enable && pnpm install --frozen-lockfile --prod"
+echo "[3/5] Installing dependencies on VPS..."
+ssh "${VPS}" "cd ${REMOTE_DIR} && corepack enable && pnpm install --frozen-lockfile"
 echo "  ✅ API build: dist/ transferred via rsync — VPS tsc build skipped (OOM prevention)"
 
 echo "[3.5/5] Updating avatar-agent Python dependencies..."
