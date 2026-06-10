@@ -107,7 +107,7 @@ export default function ApiKeysTab({ tenantId }: { tenantId: string }) {
             transform: "translateX(-50%)",
             padding: "14px 24px",
             borderRadius: 12,
-            background: "rgba(15,23,42,0.98)",
+            background: "var(--card)",
             border: "1px solid #22c55e",
             color: "#4ade80",
             fontSize: 15,
@@ -151,7 +151,7 @@ export default function ApiKeysTab({ tenantId }: { tenantId: string }) {
             alignItems: "center",
             justifyContent: "center",
             minHeight: 80,
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 15,
           }}
         >
@@ -163,7 +163,7 @@ export default function ApiKeysTab({ tenantId }: { tenantId: string }) {
           style={{
             ...CARD_STYLE,
             textAlign: "center",
-            color: "#6b7280",
+            color: "var(--muted-foreground)",
             fontSize: 15,
             padding: "32px 20px",
           }}
@@ -242,7 +242,7 @@ export default function ApiKeysTab({ tenantId }: { tenantId: string }) {
                     {key.status === "active" ? t("tenant_detail.key_status_active") : t("tenant_detail.key_status_revoked")}
                   </span>
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 12, color: "var(--muted-foreground)", display: "flex", gap: 16, flexWrap: "wrap" }}>
                   <span>{t("tenant_detail.key_created_at", { date: formatDate(key.createdAt) })}</span>
                   <span>
                     {key.lastUsedAt

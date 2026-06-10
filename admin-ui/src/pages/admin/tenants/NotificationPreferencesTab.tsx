@@ -58,24 +58,24 @@ export default function NotificationPreferencesTab({ tenantId }: { tenantId: str
     }
   };
 
-  if (loading) return <div style={{ color: "#6b7280", textAlign: "center", padding: 32 }}>読み込み中...</div>;
+  if (loading) return <div style={{ color: "var(--muted-foreground)", textAlign: "center", padding: 32 }}>読み込み中...</div>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {toast && (
-        <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(15,23,42,0.98)", border: "1px solid #22c55e", color: "#4ade80", fontSize: 14, fontWeight: 600 }}>
+        <div style={{ padding: "12px 16px", borderRadius: 10, background: "var(--card)", border: "1px solid #22c55e", color: "#4ade80", fontSize: 14, fontWeight: 600 }}>
           {toast}
         </div>
       )}
       <div style={{ ...CARD_STYLE }}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>🔔 通知設定</h3>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>🔔 通知設定</h3>
         <div style={{ display: "grid", gap: 8 }}>
           {DEFAULT_NOTIFICATION_TYPES.map(({ type, label }) => {
             const pref = prefs[type] ?? { notification_type: type, email_enabled: true, in_app_enabled: true, threshold: null };
             const isSavingThis = saving === type;
             return (
-              <div key={type} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid #1f2937" }}>
-                <span style={{ fontSize: 14, color: "#d1d5db", fontWeight: 500 }}>{label}</span>
+              <div key={type} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)" }}>
+                <span style={{ fontSize: 14, color: "var(--muted-foreground)", fontWeight: 500 }}>{label}</span>
                 <div style={{ display: "flex", gap: 12 }}>
                   {(["email_enabled", "in_app_enabled"] as const).map((field) => (
                     <button
@@ -87,7 +87,7 @@ export default function NotificationPreferencesTab({ tenantId }: { tenantId: str
                         padding: "6px 14px",
                         minHeight: 32,
                         borderRadius: 6,
-                        border: pref[field] ? "1px solid #4ade80" : "1px solid #374151",
+                        border: pref[field] ? "1px solid #4ade80" : "1px solid var(--border)",
                         background: pref[field] ? "rgba(34,197,94,0.15)" : "rgba(0,0,0,0.3)",
                         color: pref[field] ? "#4ade80" : "#6b7280",
                         fontSize: 12,

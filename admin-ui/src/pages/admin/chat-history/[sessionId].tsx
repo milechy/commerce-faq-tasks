@@ -123,7 +123,7 @@ function SuggestedRulesCard({
               gap: 8,
             }}
           >
-            <p style={{ margin: 0, fontSize: 13, color: "#e5e7eb", lineHeight: 1.6 }}>
+            <p style={{ margin: 0, fontSize: 13, color: "var(--foreground)", lineHeight: 1.6 }}>
               {rule.rule_text}
             </p>
             {isApproved ? (
@@ -403,8 +403,8 @@ export default function ChatHistorySessionPage() {
       <div
         style={{
           minHeight: "100vh",
-          background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-          color: "#e5e7eb",
+          background: "var(--background)",
+          color: "var(--foreground)",
           padding: "24px 20px",
           maxWidth: 900,
           margin: "0 auto",
@@ -415,7 +415,7 @@ export default function ChatHistorySessionPage() {
           style={{
             background: "none",
             border: "none",
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 14,
             cursor: "pointer",
             padding: 0,
@@ -462,8 +462,8 @@ export default function ChatHistorySessionPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+        background: "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 900,
         margin: "0 auto",
@@ -477,7 +477,7 @@ export default function ChatHistorySessionPage() {
             style={{
               background: "none",
               border: "none",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               padding: 0,
@@ -534,8 +534,8 @@ export default function ChatHistorySessionPage() {
         <div
           style={{
             borderRadius: 14,
-            border: "1px solid #1f2937",
-            background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+            border: "1px solid var(--border)",
+            background: "linear-gradient(145deg, var(--card), var(--card))",
             padding: "18px 20px",
             display: "flex",
             flexWrap: "wrap",
@@ -558,12 +558,12 @@ export default function ChatHistorySessionPage() {
               >
                 {sessionInfo.tenant_id}
               </span>
-              <span style={{ fontSize: 13, color: "#6b7280" }}>
+              <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
                 🕐 {formatDateTime(sessionInfo.started_at)}
               </span>
             </>
           )}
-          <span style={{ fontSize: 13, color: "#6b7280" }}>
+          <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
             💬{" "}
             {t("chat_history.message_count").replace(
               "{n}",
@@ -588,7 +588,7 @@ export default function ChatHistorySessionPage() {
             transform: "translateX(-50%)",
             padding: "14px 24px",
             borderRadius: 12,
-            background: "rgba(15,23,42,0.98)",
+            background: "var(--card)",
             border: "1px solid #22c55e",
             color: "#4ade80",
             fontSize: 15,
@@ -626,8 +626,8 @@ export default function ChatHistorySessionPage() {
         >
           <div
             style={{
-              background: "#0f172a",
-              border: "1px solid #1f2937",
+              background: "var(--background)",
+              border: "1px solid var(--border)",
               borderRadius: 16,
               padding: "28px 24px",
               maxWidth: 480,
@@ -655,7 +655,7 @@ export default function ChatHistorySessionPage() {
             {/* Step 1: 警告・確認 */}
             {deleteStep === "step1" && (
               <>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
                   🗑️ セッションを完全に削除しますか?
                 </h2>
                 <div
@@ -673,7 +673,7 @@ export default function ChatHistorySessionPage() {
                 >
                   ⚠️ この操作は取り消せません。チャット履歴・評価データがすべて完全に削除されます。
                 </div>
-                <p style={{ fontSize: 15, color: "#d1d5db", marginBottom: 24, lineHeight: 1.6 }}>
+                <p style={{ fontSize: 15, color: "var(--muted-foreground)", marginBottom: 24, lineHeight: 1.6 }}>
                   GDPR（忘れられる権利）または個人情報保護法に基づいて削除を行う場合は「次へ」を押してください。
                 </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -704,9 +704,9 @@ export default function ChatHistorySessionPage() {
                       padding: "14px 24px",
                       minHeight: 48,
                       borderRadius: 12,
-                      border: "1px solid #374151",
+                      border: "1px solid var(--border)",
                       background: "transparent",
-                      color: "#9ca3af",
+                      color: "var(--muted-foreground)",
                       fontSize: 15,
                       fontWeight: 600,
                       cursor: "pointer",
@@ -722,7 +722,7 @@ export default function ChatHistorySessionPage() {
             {/* Step 2: 削除理由入力 + セッションID確認 */}
             {deleteStep === "step2" && (
               <>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
                   削除の詳細確認
                 </h2>
 
@@ -730,10 +730,10 @@ export default function ChatHistorySessionPage() {
                 <div style={{ marginBottom: 20 }}>
                   <label
                     htmlFor="delete-reason"
-                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}
+                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 8 }}
                   >
                     削除理由 <span style={{ color: "#f87171" }}>*</span>
-                    <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: 4 }}>(5〜500文字)</span>
+                    <span style={{ fontWeight: 400, color: "var(--muted-foreground)", marginLeft: 4 }}>(5〜500文字)</span>
                   </label>
                   <textarea
                     id="delete-reason"
@@ -747,9 +747,9 @@ export default function ChatHistorySessionPage() {
                       width: "100%",
                       padding: "12px 14px",
                       borderRadius: 10,
-                      border: "1px solid #374151",
-                      background: "rgba(15,23,42,0.9)",
-                      color: "#e5e7eb",
+                      border: "1px solid var(--border)",
+                      background: "var(--card)",
+                      color: "var(--foreground)",
                       fontSize: 14,
                       lineHeight: 1.6,
                       resize: "vertical",
@@ -758,7 +758,7 @@ export default function ChatHistorySessionPage() {
                       outline: "none",
                     }}
                   />
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                     {deleteReason.trim().length} / 500文字
                   </span>
                 </div>
@@ -767,7 +767,7 @@ export default function ChatHistorySessionPage() {
                 <div style={{ marginBottom: 24 }}>
                   <label
                     htmlFor="delete-confirm-id"
-                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#d1d5db", marginBottom: 8 }}
+                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 8 }}
                   >
                     確認のため、セッションIDを入力してください <span style={{ color: "#f87171" }}>*</span>
                   </label>
@@ -775,9 +775,9 @@ export default function ChatHistorySessionPage() {
                     style={{
                       fontFamily: "monospace",
                       fontSize: 12,
-                      color: "#9ca3af",
+                      color: "var(--muted-foreground)",
                       background: "rgba(0,0,0,0.4)",
-                      border: "1px solid #1f2937",
+                      border: "1px solid var(--border)",
                       borderRadius: 8,
                       padding: "6px 10px",
                       marginBottom: 8,
@@ -802,9 +802,9 @@ export default function ChatHistorySessionPage() {
                       border:
                         deleteConfirmId && deleteConfirmId !== sessionId
                           ? "1px solid rgba(248,113,113,0.5)"
-                          : "1px solid #374151",
-                      background: "rgba(15,23,42,0.9)",
-                      color: "#e5e7eb",
+                          : "1px solid var(--border)",
+                      background: "var(--card)",
+                      color: "var(--foreground)",
                       fontSize: 14,
                       fontFamily: "monospace",
                       boxSizing: "border-box",
@@ -861,9 +861,9 @@ export default function ChatHistorySessionPage() {
                       padding: "14px 24px",
                       minHeight: 48,
                       borderRadius: 12,
-                      border: "1px solid #374151",
+                      border: "1px solid var(--border)",
                       background: "transparent",
-                      color: "#9ca3af",
+                      color: "var(--muted-foreground)",
                       fontSize: 15,
                       fontWeight: 600,
                       cursor: deleteSubmitting ? "not-allowed" : "pointer",
@@ -881,7 +881,7 @@ export default function ChatHistorySessionPage() {
 
       {/* Loading */}
       {loading ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
+        <div style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)" }}>
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
           {t("chat_history.loading")}
         </div>
@@ -901,7 +901,7 @@ export default function ChatHistorySessionPage() {
               <span
                 style={{
                   fontSize: 12,
-                  color: "#6b7280",
+                  color: "var(--muted-foreground)",
                   marginBottom: 4,
                   paddingLeft: msg.role === "user" ? 0 : 4,
                   paddingRight: msg.role === "user" ? 4 : 0,
@@ -935,7 +935,7 @@ export default function ChatHistorySessionPage() {
                     border:
                       msg.role === "user"
                         ? "none"
-                        : "1px solid #374151",
+                        : "1px solid var(--border)",
                     color: msg.role === "user" ? "#fff" : "#e5e7eb",
                     fontSize: 15,
                     lineHeight: 1.6,
@@ -958,7 +958,7 @@ export default function ChatHistorySessionPage() {
                             borderRadius: 999,
                             background: "rgba(55,65,81,0.8)",
                             border: "1px solid #4b5563",
-                            color: "#9ca3af",
+                            color: "var(--muted-foreground)",
                             fontSize: 11,
                             fontFamily: "monospace",
                           }}
@@ -993,9 +993,9 @@ export default function ChatHistorySessionPage() {
                       padding: "6px 10px",
                       minHeight: 44,
                       borderRadius: 10,
-                      border: "1px solid #374151",
-                      background: "rgba(15,23,42,0.8)",
-                      color: "#9ca3af",
+                      border: "1px solid var(--border)",
+                      background: "var(--card)",
+                      color: "var(--muted-foreground)",
                       fontSize: 13,
                       cursor: "pointer",
                       whiteSpace: "nowrap",
@@ -1025,18 +1025,18 @@ export default function ChatHistorySessionPage() {
               marginTop: 8,
               padding: "20px 18px",
               borderRadius: 14,
-              border: "1px solid #1f2937",
-              background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+              border: "1px solid var(--border)",
+              background: "linear-gradient(145deg, var(--card), var(--card))",
             }}
           >
-            <p style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: "#e5e7eb" }}>
+            <p style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>
               🤖 AI品質評価 (Judge)
             </p>
             {evaluation == null ? (
               <span style={{
                 display: "inline-flex", alignItems: "center", padding: "4px 12px",
                 borderRadius: 999, fontSize: 12, fontWeight: 700,
-                background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "#9ca3af",
+                background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "var(--muted-foreground)",
               }}>未評価</span>
             ) : (() => {
               const overall = evaluation.overall_score ?? evaluation.score;
@@ -1067,7 +1067,7 @@ export default function ChatHistorySessionPage() {
                       return (
                         <span key={key} style={{
                           padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
-                          background: "rgba(31,41,55,0.8)", border: "1px solid #374151", color: c,
+                          background: "rgba(31,41,55,0.8)", border: "1px solid var(--border)", color: c,
                         }}>
                           {label}: {s}
                         </span>
@@ -1075,7 +1075,7 @@ export default function ChatHistorySessionPage() {
                     })}
                   </div>
                   {evaluation.feedback?.summary && (
-                    <p style={{ margin: 0, fontSize: 13, color: "#d1d5db", lineHeight: 1.6, padding: "10px 12px", borderRadius: 8, background: "rgba(31,41,55,0.6)", border: "1px solid #374151" }}>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)", lineHeight: 1.6, padding: "10px 12px", borderRadius: 8, background: "rgba(31,41,55,0.6)", border: "1px solid var(--border)" }}>
                       {evaluation.feedback.summary}
                     </p>
                   )}
@@ -1097,8 +1097,8 @@ export default function ChatHistorySessionPage() {
               marginTop: 8,
               padding: "20px 18px",
               borderRadius: 14,
-              border: "1px solid #1f2937",
-              background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+              border: "1px solid var(--border)",
+              background: "linear-gradient(145deg, var(--card), var(--card))",
             }}
           >
             <p
@@ -1106,7 +1106,7 @@ export default function ChatHistorySessionPage() {
                 margin: "0 0 14px",
                 fontSize: 15,
                 fontWeight: 700,
-                color: "#e5e7eb",
+                color: "var(--foreground)",
               }}
             >
               この会話の営業結果を記録
@@ -1143,7 +1143,7 @@ export default function ChatHistorySessionPage() {
                     border:
                       outcome === value
                         ? "1px solid rgba(74,222,128,0.5)"
-                        : "1px solid #374151",
+                        : "1px solid var(--border)",
                     background:
                       outcome === value
                         ? "rgba(34,197,94,0.2)"

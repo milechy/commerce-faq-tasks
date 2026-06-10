@@ -176,8 +176,8 @@ export default function MonitoringPage() {
       style={{
         minHeight: "100vh",
         background:
-          "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+          "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 960,
         margin: "0 auto",
@@ -201,10 +201,10 @@ export default function MonitoringPage() {
               gap: 6,
               padding: "3px 10px",
               borderRadius: 999,
-              background: "rgba(15,23,42,0.9)",
-              border: "1px solid #1f2937",
+              background: "var(--card)",
+              border: "1px solid var(--border)",
               fontSize: 12,
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               marginBottom: 8,
             }}
           >
@@ -219,10 +219,10 @@ export default function MonitoringPage() {
             />
             {error ? "接続エラー" : "接続中"}
           </div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
             KPI 監視ダッシュボード
           </h1>
-          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+          <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
             サービスの品質指標をリアルタイムで確認できます
           </p>
         </div>
@@ -234,9 +234,9 @@ export default function MonitoringPage() {
               padding: "10px 16px",
               minHeight: 44,
               borderRadius: 999,
-              border: "1px solid #374151",
+              border: "1px solid var(--border)",
               background: "transparent",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               fontWeight: 500,
@@ -245,7 +245,7 @@ export default function MonitoringPage() {
             ← 管理画面に戻る
           </button>
           {lastUpdated && (
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
               最終更新: {lastUpdated.toLocaleTimeString("ja-JP")}
             </span>
           )}
@@ -279,7 +279,7 @@ export default function MonitoringPage() {
             alignItems: "center",
             justifyContent: "center",
             minHeight: 240,
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 16,
             flexDirection: "column",
             gap: 16,
@@ -306,7 +306,7 @@ export default function MonitoringPage() {
               style={{
                 fontSize: 15,
                 fontWeight: 600,
-                color: "#9ca3af",
+                color: "var(--muted-foreground)",
                 marginBottom: 16,
                 marginTop: 0,
               }}
@@ -326,7 +326,7 @@ export default function MonitoringPage() {
                 style={{
                   fontSize: 15,
                   fontWeight: 600,
-                  color: "#9ca3af",
+                  color: "var(--muted-foreground)",
                   marginBottom: 16,
                   marginTop: 0,
                 }}

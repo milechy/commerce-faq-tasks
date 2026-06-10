@@ -82,15 +82,15 @@ export default function DeepResearchTab({
         >
           <div
             style={{
-              background: "#111827", borderRadius: 14,
-              border: "1px solid #374151",
+              background: "var(--card)", borderRadius: 14,
+              border: "1px solid var(--border)",
               padding: "28px 24px", maxWidth: 400, width: "100%",
             }}
           >
-            <p style={{ color: "#e5e7eb", fontSize: 15, fontWeight: 600, margin: "0 0 12px" }}>
+            <p style={{ color: "var(--foreground)", fontSize: 15, fontWeight: 600, margin: "0 0 12px" }}>
               ディープリサーチをONにしますか？
             </p>
-            <p style={{ color: "#9ca3af", fontSize: 13, margin: "0 0 24px", lineHeight: 1.6 }}>
+            <p style={{ color: "var(--muted-foreground)", fontSize: 13, margin: "0 0 24px", lineHeight: 1.6 }}>
               ディープリサーチをONにすると、追加コスト（月$3〜8程度）が発生します。よろしいですか？
             </p>
             <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
@@ -99,8 +99,8 @@ export default function DeepResearchTab({
                 onClick={() => setConfirmPending(false)}
                 style={{
                   padding: "10px 18px", borderRadius: 8,
-                  border: "1px solid #374151", background: "transparent",
-                  color: "#9ca3af", fontSize: 14, cursor: "pointer",
+                  border: "1px solid var(--border)", background: "transparent",
+                  color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer",
                 }}
               >
                 キャンセル
@@ -132,10 +132,10 @@ export default function DeepResearchTab({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "#e5e7eb", fontSize: 15 }}>
+          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "var(--foreground)", fontSize: 15 }}>
             🔬 ディープリサーチ（AI提案の精度向上）
           </p>
-          <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)" }}>
             AIの改善提案に最新の市場動向・心理学研究を反映します
           </p>
         </div>
@@ -193,10 +193,10 @@ export default function DeepResearchTab({
       <div
         style={{
           borderRadius: 10,
-          border: "1px solid #1f2937",
+          border: "1px solid var(--border)",
           background: "rgba(17,24,39,0.5)",
           padding: "12px 16px",
-          fontSize: 12, color: "#6b7280", lineHeight: 1.6,
+          fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.6,
         }}
       >
         <p style={{ margin: "0 0 4px" }}>💰 コスト目安：月あたり約 $3〜8 の追加（提案1回あたり約 $0.05〜0.10）</p>

@@ -127,8 +127,8 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
   const hasPropertyId = (statusData?.ga4_property_id ?? "").length > 0;
 
   const CARD: React.CSSProperties = {
-    background: "rgba(15,23,42,0.7)",
-    border: "1px solid #1f2937",
+    background: "var(--card)",
+    border: "1px solid var(--border)",
     borderRadius: 14,
     padding: "24px 28px",
     marginBottom: 20,
@@ -157,9 +157,9 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
     padding: "10px 20px",
     minHeight: 44,
     borderRadius: 10,
-    border: "1px solid #374151",
+    border: "1px solid var(--border)",
     background: "transparent",
-    color: "#9ca3af",
+    color: "var(--muted-foreground)",
     fontSize: 14,
     fontWeight: 500,
     cursor: "pointer",
@@ -167,7 +167,7 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
 
   function StatusBadge({ status }: { status: Ga4Status }) {
     const map: Record<Ga4Status, { label: string; color: string; bg: string }> = {
-      not_configured: { label: "未設定", color: "#9ca3af", bg: "rgba(156,163,175,0.1)" },
+      not_configured: { label: "未設定", color: "var(--muted-foreground)", bg: "rgba(156,163,175,0.1)" },
       pending: { label: "設定中", color: "#fbbf24", bg: "rgba(251,191,36,0.1)" },
       connected: { label: "✅ 連携中", color: "#4ade80", bg: "rgba(74,222,128,0.1)" },
       error: { label: "❌ エラー", color: "#f87171", bg: "rgba(248,113,113,0.1)" },
@@ -203,7 +203,7 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
 
   if (loading) {
     return (
-      <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
+      <div style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)" }}>
         ⏳ 読み込み中...
       </div>
     );
@@ -213,7 +213,7 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
     <div style={{ paddingTop: 4 }}>
       {/* トースト */}
       {toast && (
-        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", padding: "14px 24px", borderRadius: 12, background: "rgba(15,23,42,0.98)", border: "1px solid #22c55e", color: "#4ade80", fontSize: 15, fontWeight: 600, zIndex: 3000, whiteSpace: "nowrap" }}>
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", padding: "14px 24px", borderRadius: 12, background: "var(--card)", border: "1px solid #22c55e", color: "#4ade80", fontSize: 15, fontWeight: 600, zIndex: 3000, whiteSpace: "nowrap" }}>
           {toast}
         </div>
       )}
@@ -221,10 +221,10 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
       {/* 確認モーダル */}
       {showDisconnectConfirm && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ background: "#0f172a", border: "1px solid #374151", borderRadius: 16, padding: 32, maxWidth: 400, width: "90%", textAlign: "center" }}>
+          <div style={{ background: "var(--background)", border: "1px solid var(--border)", borderRadius: 16, padding: 32, maxWidth: 400, width: "90%", textAlign: "center" }}>
             <div style={{ fontSize: 36, marginBottom: 16 }}>⚠️</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#f1f5f9", marginBottom: 8 }}>GA4連携を解除しますか？</div>
-            <div style={{ color: "#9ca3af", fontSize: 14, marginBottom: 28 }}>設定した識別番号と連携情報が削除されます。</div>
+            <div style={{ color: "var(--muted-foreground)", fontSize: 14, marginBottom: 28 }}>設定した識別番号と連携情報が削除されます。</div>
             <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
               <button style={{ ...BTN_SECONDARY }} onClick={() => setShowDisconnectConfirm(false)}>キャンセル</button>
               <button style={{ ...BTN_PRIMARY, background: "linear-gradient(135deg,#dc2626,#ef4444)" }} onClick={() => void handleDisconnect()}>解除する</button>
@@ -237,7 +237,7 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
       <div style={{ ...CARD, display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f1f5f9", margin: "0 0 8px" }}>📊 Google Analytics 4 連携</h2>
-          <div style={{ color: "#9ca3af", fontSize: 14 }}>
+          <div style={{ color: "var(--muted-foreground)", fontSize: 14 }}>
             GA4のデータをR2Cに連携することで、成果（コンバージョン）の計測精度が上がります。
           </div>
         </div>
@@ -246,11 +246,11 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
 
       {/* ステップ1: サービスアカウント案内 */}
       <div style={CARD}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
           ステップ 1 — R2Cのメールアドレスに閲覧権限を付与する
         </h3>
-        <div style={{ color: "#9ca3af", fontSize: 14, lineHeight: 1.8, marginBottom: 16 }}>
-          GA4の管理画面で、以下のメールアドレスに <strong style={{ color: "#e5e7eb" }}>「閲覧者」</strong> 権限を付与してください。
+        <div style={{ color: "var(--muted-foreground)", fontSize: 14, lineHeight: 1.8, marginBottom: 16 }}>
+          GA4の管理画面で、以下のメールアドレスに <strong style={{ color: "var(--foreground)" }}>「閲覧者」</strong> 権限を付与してください。
         </div>
         {serviceAccountEmail ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -270,7 +270,7 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
           <summary style={{ cursor: "pointer", color: "#60a5fa", fontSize: 13, userSelect: "none" }}>
             📖 GA4での権限付与手順を見る
           </summary>
-          <ol style={{ color: "#9ca3af", fontSize: 13, lineHeight: 2, marginTop: 10, paddingLeft: 20 }}>
+          <ol style={{ color: "var(--muted-foreground)", fontSize: 13, lineHeight: 2, marginTop: 10, paddingLeft: 20 }}>
             <li>GA4管理画面（analytics.google.com）にログイン</li>
             <li>左下の「管理」→「アカウントのアクセス管理」をクリック</li>
             <li>右上の「＋」ボタン →「ユーザーを追加」</li>
@@ -282,32 +282,32 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
 
       {/* ステップ2: Property ID入力 */}
       <div style={CARD}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
           ステップ 2 — GA4の識別番号を入力する
         </h3>
-        <div style={{ color: "#9ca3af", fontSize: 14, marginBottom: 16 }}>
+        <div style={{ color: "var(--muted-foreground)", fontSize: 14, marginBottom: 16 }}>
           GA4管理画面の「プロパティ詳細」ページに表示されている数字（例: <code style={{ color: "#a5b4fc" }}>123456789</code>）を入力してください。
         </div>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>GA4識別番号 (数字のみ)</label>
+            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", marginBottom: 6 }}>GA4識別番号 (数字のみ)</label>
             <input
               type="text"
               inputMode="numeric"
               placeholder="例: 123456789"
               value={propertyId}
               onChange={(e) => setPropertyId(e.target.value.replace(/\D/g, ""))}
-              style={{ width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #374151", background: "#0f172a", color: "#f1f5f9", fontSize: 15, boxSizing: "border-box" }}
+              style={{ width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--background)", color: "#f1f5f9", fontSize: 15, boxSizing: "border-box" }}
             />
           </div>
           <div style={{ flex: 1, minWidth: 220 }}>
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>連絡先メールアドレス (任意)</label>
+            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", marginBottom: 6 }}>連絡先メールアドレス (任意)</label>
             <input
               type="email"
               placeholder="例: partner@example.com"
               value={contactEmail}
               onChange={(e) => setContactEmail(e.target.value)}
-              style={{ width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid #374151", background: "#0f172a", color: "#f1f5f9", fontSize: 15, boxSizing: "border-box" }}
+              style={{ width: "100%", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--background)", color: "#f1f5f9", fontSize: 15, boxSizing: "border-box" }}
             />
           </div>
         </div>
@@ -325,10 +325,10 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
       {/* ステップ3: 接続テスト */}
       {hasPropertyId && (
         <div style={CARD}>
-          <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 16px" }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
             ステップ 3 — 接続テスト
           </h3>
-          <div style={{ color: "#9ca3af", fontSize: 14, marginBottom: 16 }}>
+          <div style={{ color: "var(--muted-foreground)", fontSize: 14, marginBottom: 16 }}>
             識別番号: <code style={{ color: "#a5b4fc", fontSize: 14 }}>{statusData?.ga4_property_id}</code>
           </div>
           <button
@@ -361,20 +361,20 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
       {isConnected && (
         <div style={CARD}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: 0 }}>🔗 連携情報</h3>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: 0 }}>🔗 連携情報</h3>
             <button style={{ ...BTN_SECONDARY, color: "#f87171", borderColor: "#f8717133" }} onClick={() => setShowDisconnectConfirm(true)}>
               🔌 連携を解除
             </button>
           </div>
           <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
             {statusData?.ga4_connected_at && (
-              <div style={{ fontSize: 13, color: "#9ca3af" }}>
-                ✅ 接続日時: <span style={{ color: "#d1d5db" }}>{new Date(statusData.ga4_connected_at).toLocaleString("ja-JP")}</span>
+              <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
+                ✅ 接続日時: <span style={{ color: "var(--muted-foreground)" }}>{new Date(statusData.ga4_connected_at).toLocaleString("ja-JP")}</span>
               </div>
             )}
             {statusData?.ga4_last_sync_at && (
-              <div style={{ fontSize: 13, color: "#9ca3af" }}>
-                🔄 最終同期: <span style={{ color: "#d1d5db" }}>{new Date(statusData.ga4_last_sync_at).toLocaleString("ja-JP")}</span>
+              <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
+                🔄 最終同期: <span style={{ color: "var(--muted-foreground)" }}>{new Date(statusData.ga4_last_sync_at).toLocaleString("ja-JP")}</span>
               </div>
             )}
           </div>
@@ -384,7 +384,7 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
       {/* エラー時のガイド */}
       {(currentStatus === "error" || currentStatus === "timeout" || currentStatus === "permission_revoked") && (
         <div style={CARD}>
-          <h3 style={{ fontSize: 15, fontWeight: 700, color: "#d1d5db", margin: "0 0 4px" }}>⚠️ 接続エラー</h3>
+          <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 4px" }}>⚠️ 接続エラー</h3>
           <ErrorGuide status={currentStatus} message={statusData?.ga4_error_message} />
         </div>
       )}
@@ -392,12 +392,12 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
       {/* テスト履歴 */}
       {(statusData?.recent_tests ?? []).length > 0 && (
         <div style={CARD}>
-          <h3 style={{ fontSize: 14, fontWeight: 600, color: "#9ca3af", margin: "0 0 12px" }}>接続テスト履歴</h3>
+          <h3 style={{ fontSize: 14, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 12px" }}>接続テスト履歴</h3>
           <div style={{ display: "grid", gap: 6 }}>
             {statusData!.recent_tests.map((t, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid #1f2937", fontSize: 13 }}>
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)", border: "1px solid var(--border)", fontSize: 13 }}>
                 <span style={{ color: t.success ? "#4ade80" : "#f87171" }}>{t.success ? "✅" : "❌"} {t.success ? "成功" : (t.error_message ?? "失敗")}</span>
-                <span style={{ color: "#6b7280" }}>{new Date(t.tested_at).toLocaleString("ja-JP")}</span>
+                <span style={{ color: "var(--muted-foreground)" }}>{new Date(t.tested_at).toLocaleString("ja-JP")}</span>
               </div>
             ))}
           </div>

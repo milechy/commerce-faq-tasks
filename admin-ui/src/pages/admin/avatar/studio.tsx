@@ -32,12 +32,12 @@ interface VoiceRecommendation {
   score: number;
 }
 
-const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
+const BG = "var(--background)";
 
 const SECTION_STYLE: React.CSSProperties = {
   borderRadius: 14,
-  border: "1px solid #1f2937",
-  background: "rgba(15,23,42,0.95)",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
   padding: "20px 22px",
   marginBottom: 20,
 };
@@ -46,7 +46,7 @@ const LABEL_STYLE: React.CSSProperties = {
   display: "block",
   fontSize: 13,
   fontWeight: 600,
-  color: "#9ca3af",
+  color: "var(--muted-foreground)",
   marginBottom: 6,
 };
 
@@ -54,9 +54,9 @@ const INPUT_STYLE: React.CSSProperties = {
   width: "100%",
   padding: "10px 12px",
   borderRadius: 8,
-  border: "1px solid #374151",
+  border: "1px solid var(--border)",
   background: "rgba(30,41,59,0.8)",
-  color: "#f9fafb",
+  color: "var(--foreground)",
   fontSize: 14,
   outline: "none",
   boxSizing: "border-box",
@@ -86,9 +86,9 @@ const BTN_SECONDARY: React.CSSProperties = {
   padding: "10px 18px",
   minHeight: 44,
   borderRadius: 10,
-  border: "1px solid #374151",
+  border: "1px solid var(--border)",
   background: "transparent",
-  color: "#9ca3af",
+  color: "var(--muted-foreground)",
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",
@@ -430,28 +430,28 @@ export default function AvatarStudioPage() {
 
   if (loadingEdit) {
     return (
-      <div style={{ minHeight: "100vh", background: BG, color: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>
+      <div style={{ minHeight: "100vh", background: BG, color: "var(--muted-foreground)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>
         {lang === "ja" ? "読み込み中..." : "Loading..."}
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 800, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: BG, color: "var(--foreground)", padding: "24px 20px", maxWidth: 800, margin: "0 auto" }}>
       {/* ヘッダー */}
       <header style={{ marginBottom: 28 }}>
         <button
           onClick={() => navigate("/admin/avatar")}
-          style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, display: "block" }}
+          style={{ background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, display: "block" }}
         >
           {lang === "ja" ? "← アバター一覧に戻る" : "← Back to Avatar List"}
         </button>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
           {isEdit
             ? (lang === "ja" ? "アバター編集" : "Edit Avatar")
             : (lang === "ja" ? "アバタースタジオ" : "Avatar Studio")}
         </h1>
-        <p style={{ fontSize: 13, color: "#6b7280", marginTop: 4, marginBottom: 0 }}>
+        <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
           {lang === "ja"
             ? "アバターの外見・声・パーソナリティを設定します"
             : "Configure avatar appearance, voice, and personality"}
@@ -472,7 +472,7 @@ export default function AvatarStudioPage() {
 
       {/* 1. 基本設定 */}
       <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
           {lang === "ja" ? "1. 基本設定" : "1. Basic Settings"}
         </h2>
         <div style={{ marginBottom: 14 }}>
@@ -494,7 +494,7 @@ export default function AvatarStudioPage() {
 
       {/* 2. アバター画像 */}
       <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
           {lang === "ja" ? "2. アバター画像" : "2. Avatar Image"}
         </h2>
 
@@ -536,7 +536,7 @@ export default function AvatarStudioPage() {
                 padding: "8px 18px",
                 minHeight: 44,
                 borderRadius: 10,
-                border: imageTab === tab ? "2px solid #3b82f6" : "1px solid #374151",
+                border: imageTab === tab ? "2px solid #3b82f6" : "1px solid var(--border)",
                 background: imageTab === tab ? "rgba(59,130,246,0.15)" : "transparent",
                 color: imageTab === tab ? "#93c5fd" : "#9ca3af",
                 fontSize: 13,
@@ -584,7 +584,7 @@ export default function AvatarStudioPage() {
 
             {generatedImages.length > 0 && (
               <div style={{ marginTop: 16 }}>
-                <p style={{ fontSize: 13, color: "#9ca3af", marginBottom: 10 }}>
+                <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginBottom: 10 }}>
                   {lang === "ja" ? "使用する画像を選択してください" : "Select an image to use"}
                 </p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
@@ -598,7 +598,7 @@ export default function AvatarStudioPage() {
                         border: selectedImageIdx === idx ? "2px solid #3b82f6" : "2px solid transparent",
                         cursor: "pointer",
                         aspectRatio: "1",
-                        background: "#111827",
+                        background: "var(--muted)",
                       }}
                     >
                       <img
@@ -617,7 +617,7 @@ export default function AvatarStudioPage() {
         {/* 写真をアップロードタブ */}
         {imageTab === 'upload' && (
           <div>
-            <p style={{ color: "#9ca3af", marginBottom: 12 }}>
+            <p style={{ color: "var(--muted-foreground)", marginBottom: 12 }}>
               {lang === "ja" ? "顔がはっきり写った正面の写真が最適です" : "A clear front-facing photo works best"}
             </p>
 
@@ -632,7 +632,7 @@ export default function AvatarStudioPage() {
                 <button
                   type="button"
                   onClick={handleResetUpload}
-                  style={{ background: "none", border: "none", color: "#6b7280", fontSize: 13, cursor: "pointer", textDecoration: "underline" }}
+                  style={{ background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 13, cursor: "pointer", textDecoration: "underline" }}
                 >
                   {lang === "ja" ? "別の画像を選ぶ" : "Choose a different image"}
                 </button>
@@ -669,10 +669,10 @@ export default function AvatarStudioPage() {
                       <p style={{ fontSize: 18, color: "white", margin: "0 0 8px" }}>
                         {lang === "ja" ? "ここに画像をドラッグ" : "Drag image here"}
                       </p>
-                      <p style={{ color: "#9ca3af", margin: "0 0 8px" }}>
+                      <p style={{ color: "var(--muted-foreground)", margin: "0 0 8px" }}>
                         {lang === "ja" ? "または クリックしてファイルを選択" : "or click to select a file"}
                       </p>
-                      <p style={{ color: "#6b7280", fontSize: 14, margin: 0 }}>
+                      <p style={{ color: "var(--muted-foreground)", fontSize: 14, margin: 0 }}>
                         JPG, PNG{lang === "ja" ? "（最大5MB）" : " (max 5MB)"}
                       </p>
                     </>
@@ -733,7 +733,7 @@ export default function AvatarStudioPage() {
 
       {/* 3. 声マッチング */}
       <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
           {lang === "ja" ? "3. 声マッチング" : "3. Voice Matching"}
         </h2>
         <div style={{ marginBottom: 12 }}>
@@ -763,7 +763,7 @@ export default function AvatarStudioPage() {
 
         {voiceRecs.length > 0 && (
           <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
-            <p style={{ fontSize: 13, color: "#9ca3af", marginBottom: 4 }}>
+            <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginBottom: 4 }}>
               {lang === "ja" ? "使用する声を選択してください" : "Select a voice to use"}
             </p>
             {voiceRecs.map((rec) => (
@@ -775,7 +775,7 @@ export default function AvatarStudioPage() {
                   borderRadius: 10,
                   border: selectedVoiceId === rec.id
                     ? "1px solid rgba(99,102,241,0.7)"
-                    : "1px solid #374151",
+                    : "1px solid var(--border)",
                   background: selectedVoiceId === rec.id
                     ? "rgba(99,102,241,0.1)"
                     : "rgba(30,41,59,0.6)",
@@ -783,12 +783,12 @@ export default function AvatarStudioPage() {
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: "#f9fafb" }}>{rec.title}</span>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: "var(--foreground)" }}>{rec.title}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                     {Math.round(rec.score * 100)}%
                   </span>
                 </div>
-                <p style={{ fontSize: 12, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>{rec.description}</p>
+                <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: 0, lineHeight: 1.5 }}>{rec.description}</p>
               </div>
             ))}
           </div>
@@ -808,7 +808,7 @@ export default function AvatarStudioPage() {
               readOnly={isDefault}
               style={{
                 ...INPUT_STYLE,
-                ...(isDefault ? { background: "rgba(15,23,42,0.6)", color: "#6b7280", cursor: "default" } : {}),
+                ...(isDefault ? { background: "var(--card)", color: "var(--muted-foreground)", cursor: "default" } : {}),
               }}
             />
             {isDefault && (
@@ -822,7 +822,7 @@ export default function AvatarStudioPage() {
 
       {/* 4. パーソナリティ */}
       <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", margin: "0 0 16px" }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
           {lang === "ja" ? "4. パーソナリティ" : "4. Personality"}
         </h2>
         <div style={{ marginBottom: 12 }}>
@@ -862,7 +862,7 @@ export default function AvatarStudioPage() {
             style={{
               ...TEXTAREA_STYLE,
               minHeight: 120,
-              ...(isDefault ? { background: "rgba(15,23,42,0.6)", color: "#9ca3af", cursor: "default" } : {}),
+              ...(isDefault ? { background: "var(--card)", color: "var(--muted-foreground)", cursor: "default" } : {}),
             }}
           />
           {isDefault && (
@@ -881,7 +881,7 @@ export default function AvatarStudioPage() {
               <textarea
                 value={agentPrompt}
                 readOnly
-                style={{ ...TEXTAREA_STYLE, background: "rgba(15,23,42,0.6)", color: "#9ca3af", cursor: "default", fontStyle: "italic" }}
+                style={{ ...TEXTAREA_STYLE, background: "var(--card)", color: "var(--muted-foreground)", cursor: "default", fontStyle: "italic" }}
               />
               <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
                 {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
@@ -894,7 +894,7 @@ export default function AvatarStudioPage() {
               <textarea
                 value={agentIdlePrompt}
                 readOnly
-                style={{ ...TEXTAREA_STYLE, background: "rgba(15,23,42,0.6)", color: "#9ca3af", cursor: "default", fontStyle: "italic" }}
+                style={{ ...TEXTAREA_STYLE, background: "var(--card)", color: "var(--muted-foreground)", cursor: "default", fontStyle: "italic" }}
               />
               <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
                 {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}

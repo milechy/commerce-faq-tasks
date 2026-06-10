@@ -55,7 +55,7 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
   const CODE_STYLE: React.CSSProperties = {
     fontFamily: "monospace",
     background: "rgba(0,0,0,0.5)",
-    border: "1px solid #374151",
+    border: "1px solid var(--border)",
     borderRadius: 10,
     padding: "16px",
     fontSize: 13,
@@ -100,14 +100,14 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
         </div>
       )}
       <div style={CARD_STYLE}>
-        <p style={{ fontSize: 14, color: "#9ca3af", marginBottom: 16, lineHeight: 1.6 }}>
+        <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginBottom: 16, lineHeight: 1.6 }}>
           {t("tenant_detail.embed_desc")}
         </p>
         <pre
           style={{
             fontFamily: "monospace",
             background: "rgba(0,0,0,0.5)",
-            border: "1px solid #374151",
+            border: "1px solid var(--border)",
             borderRadius: 10,
             padding: "16px",
             fontSize: 13,
@@ -157,15 +157,15 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
 
       {/* ─── コンバージョン計測タグ ─── */}
       <div style={{ ...CARD_STYLE, marginTop: 16 }}>
-        <p style={{ fontSize: 15, fontWeight: 700, color: "#f9fafb", marginBottom: 8 }}>
+        <p style={{ fontSize: 15, fontWeight: 700, color: "var(--foreground)", marginBottom: 8 }}>
           コンバージョン計測タグ
         </p>
-        <p style={{ fontSize: 13, color: "#9ca3af", marginBottom: 16, lineHeight: 1.6 }}>
+        <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginBottom: 16, lineHeight: 1.6 }}>
           購入完了ページや問い合わせ完了ページに追加すると、チャット経由の成果を自動で計測できます。
           ウィジェット（widget.js）を読み込んだページでのみ動作します。
         </p>
 
-        <p style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginBottom: 6 }}>
+        <p style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 6 }}>
           購入完了ページ用
         </p>
         <pre style={CODE_STYLE}>{purchaseTag}</pre>
@@ -173,7 +173,7 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
           {copiedPurchase ? "コピーしました ✓" : "コードをコピー"}
         </button>
 
-        <p style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 16, marginBottom: 6 }}>
+        <p style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 16, marginBottom: 6 }}>
           問い合わせ完了ページ用
         </p>
         <pre style={CODE_STYLE}>{inquiryTag}</pre>

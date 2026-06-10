@@ -125,9 +125,9 @@ function exportCsv(data: DailyUsage[], tenantName: string, month: string, header
 // ─── スタイル定数 ─────────────────────────────────────────
 const CARD: React.CSSProperties = {
   borderRadius: 14,
-  border: "1px solid #1f2937",
+  border: "1px solid var(--border)",
   background:
-    "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+    "linear-gradient(145deg, var(--card), var(--card))",
   padding: "20px 18px",
   boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
 };
@@ -139,9 +139,9 @@ const BTN_LINK: React.CSSProperties = {
   padding: "10px 18px",
   minHeight: 44,
   borderRadius: 10,
-  border: "1px solid #374151",
+  border: "1px solid var(--border)",
   background: "transparent",
-  color: "#e5e7eb",
+  color: "var(--foreground)",
   fontSize: 15,
   fontWeight: 600,
   cursor: "pointer",
@@ -565,7 +565,7 @@ export default function BillingPage() {
       draft: {
         label: t("billing.invoice_draft"),
         bg: "rgba(107,114,128,0.15)",
-        color: "#9ca3af",
+        color: "var(--muted-foreground)",
         border: "rgba(107,114,128,0.3)",
       },
     };
@@ -601,8 +601,8 @@ export default function BillingPage() {
       style={{
         minHeight: "100vh",
         background:
-          "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+          "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 900,
         margin: "0 auto",
@@ -626,15 +626,15 @@ export default function BillingPage() {
               ...BTN_LINK,
               marginBottom: 12,
               fontSize: 14,
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
             }}
           >
             {t("billing.back")}
           </button>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
             {t("billing.title")}
           </h1>
-          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+          <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
             {t("billing.subtitle")}
           </p>
         </div>
@@ -666,7 +666,7 @@ export default function BillingPage() {
             <div style={{ flex: "1 1 200px" }}>
               <label
                 htmlFor="tenant-select"
-                style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}
+                style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}
               >
                 {t("billing.tenant_select")}
               </label>
@@ -679,9 +679,9 @@ export default function BillingPage() {
                   padding: "12px 14px",
                   minHeight: 44,
                   borderRadius: 10,
-                  border: "1px solid #374151",
+                  border: "1px solid var(--border)",
                   background: "rgba(0,0,0,0.3)",
-                  color: "#e5e7eb",
+                  color: "var(--foreground)",
                   fontSize: 15,
                   cursor: "pointer",
                 }}
@@ -698,7 +698,7 @@ export default function BillingPage() {
           <div style={{ flex: "1 1 160px" }}>
             <label
               htmlFor="month-select"
-              style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}
+              style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}
             >
               {t("billing.month_select")}
             </label>
@@ -712,9 +712,9 @@ export default function BillingPage() {
                 padding: "12px 14px",
                 minHeight: 44,
                 borderRadius: 10,
-                border: "1px solid #374151",
+                border: "1px solid var(--border)",
                 background: "rgba(0,0,0,0.3)",
-                color: "#e5e7eb",
+                color: "var(--foreground)",
                 fontSize: 15,
                 boxSizing: "border-box",
               }}
@@ -743,8 +743,8 @@ export default function BillingPage() {
         {isSuperAdmin && selectedTenantId && (() => {
           const st = tenants.find((t) => t.id === selectedTenantId);
           return (
-            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap", borderTop: "1px solid #1f2937", paddingTop: 16 }}>
-              <span style={{ fontSize: 13, color: "#6b7280", alignSelf: "center", fontWeight: 600 }}>⚙️ 請求管理:</span>
+            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap", borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+              <span style={{ fontSize: 13, color: "var(--muted-foreground)", alignSelf: "center", fontWeight: 600 }}>⚙️ 請求管理:</span>
               <button
                 onClick={() => { setAdjustAmount(""); setAdjustReason(""); setAdjustType("discount"); setAdjustModalOpen(true); }}
                 style={{ ...BTN_LINK, fontSize: 13, padding: "8px 14px", borderColor: "#a855f7", color: "#d8b4fe" }}
@@ -792,7 +792,7 @@ export default function BillingPage() {
             alignItems: "center",
             justifyContent: "center",
             minHeight: 160,
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 15,
           }}
         >
@@ -803,17 +803,17 @@ export default function BillingPage() {
         <>
           {/* 概要カード */}
           <section style={{ marginBottom: 20 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12 }}>
               {summaryTitle}
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               {/* リクエスト数 */}
               <div style={{ ...CARD, flex: "1 1 140px" }}>
                 <div style={{ fontSize: 26, marginBottom: 4 }}>📊</div>
-                <div style={{ fontSize: 26, fontWeight: 700, color: "#f9fafb", lineHeight: 1 }}>
+                <div style={{ fontSize: 26, fontWeight: 700, color: "var(--foreground)", lineHeight: 1 }}>
                   {fmtNum(summary.total_requests)}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
                   {t("billing.total_requests")}
                 </div>
               </div>
@@ -824,7 +824,7 @@ export default function BillingPage() {
                   <span style={{ fontSize: 26 }}>🤖</span>
                   <span
                     title="AIが文章を読み書きした量です"
-                    style={{ fontSize: 13, color: "#6b7280", cursor: "help" }}
+                    style={{ fontSize: 13, color: "var(--muted-foreground)", cursor: "help" }}
                   >
                     (?)
                   </span>
@@ -832,10 +832,10 @@ export default function BillingPage() {
                 <div style={{ fontSize: 22, fontWeight: 700, color: "#a78bfa", lineHeight: 1 }}>
                   {fmtNum(summary.total_input_tokens + summary.total_output_tokens)}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
                   AIの処理量
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
                   AIが文章を読み書きした量
                 </div>
               </div>
@@ -846,10 +846,10 @@ export default function BillingPage() {
                 <div style={{ fontSize: 26, fontWeight: 700, color: "#60a5fa", lineHeight: 1 }}>
                   {fmtCents(summary.cost_llm_cents)}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
                   {t("billing.ai_cost")}
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
                   {t("billing.ai_cost_sub")}
                 </div>
               </div>
@@ -860,10 +860,10 @@ export default function BillingPage() {
                 <div style={{ fontSize: 26, fontWeight: 700, color: "#4ade80", lineHeight: 1 }}>
                   {fmtCents(summary.cost_total_cents)}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
                   {t("billing.total_amount")}
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
                   {t("billing.total_amount_sub")}
                 </div>
               </div>
@@ -874,10 +874,10 @@ export default function BillingPage() {
                 <div style={{ marginTop: 4 }}>
                   {statusBadge(summary.billing_status)}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db", marginTop: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 8 }}>
                   {t("billing.payment_status")}
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
                   {t("billing.payment_status_sub")}
                 </div>
               </div>
@@ -888,7 +888,7 @@ export default function BillingPage() {
           {daily.length > 0 && (
             <section style={{ ...CARD, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-                <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
+                <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: 0 }}>
                   {t("billing.chart_title")}
                 </h2>
                 <div style={{ display: "flex", gap: 8 }}>
@@ -933,7 +933,7 @@ export default function BillingPage() {
           {/* コスト内訳 */}
           {costBreakdown && costBreakdown.total_yen > 0 && (
             <section style={{ ...CARD, marginBottom: 20 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 16px" }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
                 コスト内訳
               </h2>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -947,7 +947,7 @@ export default function BillingPage() {
                   return (
                     <div key={feature}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13 }}>
-                        <span style={{ color: "#d1d5db", fontWeight: 600 }}>{item.label}</span>
+                        <span style={{ color: "var(--muted-foreground)", fontWeight: 600 }}>{item.label}</span>
                         <span style={{ color }}>¥{item.cost_yen.toLocaleString("ja-JP")} ({item.percentage}%)</span>
                       </div>
                       <div style={{ height: 8, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
@@ -972,7 +972,7 @@ export default function BillingPage() {
           {daily.length > 0 && (
             <section style={{ ...CARD, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-                <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: 0 }}>
+                <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: 0 }}>
                   {t("billing.daily_title")}
                 </h2>
                 <button
@@ -994,7 +994,7 @@ export default function BillingPage() {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 480 }}>
                   <thead>
-                    <tr style={{ borderBottom: "1px solid #1f2937" }}>
+                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
                       {[t("billing.col_date"), t("billing.col_requests"), t("billing.col_cost")].map((h) => (
                         <th
                           key={h}
@@ -1003,7 +1003,7 @@ export default function BillingPage() {
                             textAlign: "left",
                             fontSize: 12,
                             fontWeight: 600,
-                            color: "#6b7280",
+                            color: "var(--muted-foreground)",
                             whiteSpace: "nowrap",
                           }}
                         >
@@ -1018,8 +1018,8 @@ export default function BillingPage() {
                         key={d.date}
                         style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}
                       >
-                        <td style={{ padding: "10px 12px", color: "#d1d5db" }}>{fmtDate(d.date)}</td>
-                        <td style={{ padding: "10px 12px", color: "#f9fafb", fontWeight: 600 }}>
+                        <td style={{ padding: "10px 12px", color: "var(--muted-foreground)" }}>{fmtDate(d.date)}</td>
+                        <td style={{ padding: "10px 12px", color: "var(--foreground)", fontWeight: 600 }}>
                           {fmtNum(d.requests)}
                         </td>
                         <td style={{ padding: "10px 12px", color: "#4ade80", fontWeight: 600 }}>
@@ -1029,9 +1029,9 @@ export default function BillingPage() {
                     ))}
                   </tbody>
                   <tfoot>
-                    <tr style={{ borderTop: "1px solid #374151" }}>
-                      <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>{t("billing.total")}</td>
-                      <td style={{ padding: "12px", fontWeight: 700, color: "#f9fafb" }}>
+                    <tr style={{ borderTop: "1px solid var(--border)" }}>
+                      <td style={{ padding: "12px", fontWeight: 700, color: "var(--foreground)" }}>{t("billing.total")}</td>
+                      <td style={{ padding: "12px", fontWeight: 700, color: "var(--foreground)" }}>
                         {fmtNum(summary.total_requests)}
                       </td>
                       <td style={{ padding: "12px", fontWeight: 700, color: "#4ade80" }}>
@@ -1048,18 +1048,18 @@ export default function BillingPage() {
           {daily.length === 0 && summary.total_requests === 0 && (
             <section style={{ ...CARD, marginBottom: 20, textAlign: "center", padding: "32px 20px" }}>
               <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
-              <div style={{ fontSize: 15, color: "#6b7280" }}>{t("billing.no_data")}</div>
+              <div style={{ fontSize: 15, color: "var(--muted-foreground)" }}>{t("billing.no_data")}</div>
             </section>
           )}
 
           {/* 請求履歴 */}
           <section style={{ ...CARD, marginBottom: 32 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 16, margin: "0 0 16px" }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 16, margin: "0 0 16px" }}>
               {t("billing.invoice_title")}
             </h2>
 
             {invoices.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "24px", color: "#6b7280", fontSize: 14 }}>
+              <div style={{ textAlign: "center", padding: "24px", color: "var(--muted-foreground)", fontSize: 14 }}>
                 {t("billing.invoice_empty")}
               </div>
             ) : (
@@ -1076,17 +1076,17 @@ export default function BillingPage() {
                         alignItems: "center",
                         padding: "14px 16px",
                         borderRadius: 10,
-                        border: "1px solid #1f2937",
+                        border: "1px solid var(--border)",
                         background: "rgba(0,0,0,0.2)",
                         flexWrap: "wrap",
                         gap: 12,
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb" }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--foreground)" }}>
                           {t("billing.invoice_month", { month: monthLabel })}
                         </div>
-                        <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 2 }}>
+                        <div style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 2 }}>
                           {t("billing.invoice_amount", { amount: fmtCents(inv.amount_cents) })} &nbsp;|&nbsp;{" "}
                           {invoiceStatusBadge(inv.status)}
                         </div>
@@ -1119,7 +1119,7 @@ export default function BillingPage() {
                               fontSize: 13,
                               padding: "8px 14px",
                               borderColor: "#374151",
-                              color: "#9ca3af",
+                              color: "var(--muted-foreground)",
                             }}
                           >
                             📥 PDF
@@ -1152,7 +1152,7 @@ export default function BillingPage() {
           {/* Super Admin: 金額調整履歴 */}
           {isSuperAdmin && adjustments.length > 0 && (
             <section style={{ ...CARD, marginBottom: 20 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 16px" }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
                 💰 金額調整履歴
               </h2>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1162,7 +1162,7 @@ export default function BillingPage() {
                     style={{
                       display: "flex", justifyContent: "space-between", alignItems: "center",
                       padding: "12px 16px", borderRadius: 10,
-                      border: "1px solid #1f2937", background: "rgba(0,0,0,0.2)",
+                      border: "1px solid var(--border)", background: "rgba(0,0,0,0.2)",
                       flexWrap: "wrap", gap: 8,
                     }}
                   >
@@ -1175,11 +1175,11 @@ export default function BillingPage() {
                           ? `▼ ¥${Math.abs(adj.amount).toLocaleString("ja-JP")} 割引`
                           : `▲ ¥${adj.amount.toLocaleString("ja-JP")} 追加`}
                       </span>
-                      <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 2 }}>{adj.reason}</div>
+                      <div style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 2 }}>{adj.reason}</div>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>{adj.adjusted_by}</div>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{adj.adjusted_by}</div>
+                      <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                         {new Date(adj.created_at).toLocaleDateString("ja-JP")}
                       </div>
                     </div>
@@ -1192,13 +1192,13 @@ export default function BillingPage() {
           {/* Super Admin: テナント横断利用状況 */}
           {isSuperAdmin && crossTenantRows.length > 0 && (
             <section style={{ ...CARD, marginBottom: 32 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", margin: "0 0 16px" }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
                 テナント別利用状況（今月）
               </h2>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 400 }}>
                   <thead>
-                    <tr style={{ borderBottom: "1px solid #1f2937" }}>
+                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
                       {["テナントID", "リクエスト数", "今月のご利用額"].map((h) => (
                         <th
                           key={h}
@@ -1207,7 +1207,7 @@ export default function BillingPage() {
                             textAlign: "left",
                             fontSize: 12,
                             fontWeight: 600,
-                            color: "#6b7280",
+                            color: "var(--muted-foreground)",
                           }}
                         >
                           {h}
@@ -1225,7 +1225,7 @@ export default function BillingPage() {
                         <td style={{ padding: "10px 12px", color: "#60a5fa", fontWeight: 600 }}>
                           {row.tenant_id}
                         </td>
-                        <td style={{ padding: "10px 12px", color: "#f9fafb" }}>
+                        <td style={{ padding: "10px 12px", color: "var(--foreground)" }}>
                           {fmtNum(row.total_requests)}
                         </td>
                         <td style={{ padding: "10px 12px", color: "#4ade80", fontWeight: 600 }}>
@@ -1244,7 +1244,7 @@ export default function BillingPage() {
           style={{
             textAlign: "center",
             padding: "48px 20px",
-            color: "#6b7280",
+            color: "var(--muted-foreground)",
             fontSize: 15,
           }}
         >
@@ -1267,7 +1267,7 @@ export default function BillingPage() {
             padding: "28px 24px", width: "100%", maxWidth: 440,
             boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
           }}>
-            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>💰 金額調整</h3>
+            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "var(--foreground)" }}>💰 金額調整</h3>
 
             {/* タイプ切替 */}
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -1294,7 +1294,7 @@ export default function BillingPage() {
             </div>
 
             {/* 金額 */}
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
               金額（円）
             </label>
             <input
@@ -1305,13 +1305,13 @@ export default function BillingPage() {
               placeholder="例: 1000"
               style={{
                 width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
-                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
-                color: "#e5e7eb", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
+                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
+                color: "var(--foreground)", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
               }}
             />
 
             {/* 理由 */}
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
               理由（必須）
             </label>
             <textarea
@@ -1321,8 +1321,8 @@ export default function BillingPage() {
               rows={3}
               style={{
                 width: "100%", padding: "12px 14px", borderRadius: 10,
-                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
-                color: "#e5e7eb", fontSize: 14, resize: "vertical",
+                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
+                color: "var(--foreground)", fontSize: 14, resize: "vertical",
                 boxSizing: "border-box", marginBottom: 20, fontFamily: "inherit",
               }}
             />
@@ -1346,8 +1346,8 @@ export default function BillingPage() {
                 onClick={() => setAdjustModalOpen(false)}
                 style={{
                   flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10,
-                  border: "1px solid #374151", background: "transparent",
-                  color: "#9ca3af", fontSize: 15, fontWeight: 600, cursor: "pointer",
+                  border: "1px solid var(--border)", background: "transparent",
+                  color: "var(--muted-foreground)", fontSize: 15, fontWeight: 600, cursor: "pointer",
                 }}
               >キャンセル</button>
               <button
@@ -1382,7 +1382,7 @@ export default function BillingPage() {
             padding: "28px 24px", width: "100%", maxWidth: 400,
             boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
           }}>
-            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "#f9fafb" }}>🎁 無料期間の設定</h3>
+            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "var(--foreground)" }}>🎁 無料期間の設定</h3>
 
             {/* 現在の設定 */}
             {(() => {
@@ -1405,7 +1405,7 @@ export default function BillingPage() {
             })()}
 
             {/* 開始日 */}
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
               開始日
             </label>
             <input
@@ -1414,13 +1414,13 @@ export default function BillingPage() {
               onChange={(e) => setFreeFrom(e.target.value)}
               style={{
                 width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
-                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
-                color: "#e5e7eb", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
+                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
+                color: "var(--foreground)", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
               }}
             />
 
             {/* 終了日 */}
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
+            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
               終了日
             </label>
             <input
@@ -1429,11 +1429,11 @@ export default function BillingPage() {
               onChange={(e) => setFreeUntil(e.target.value)}
               style={{
                 width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
-                border: "1px solid #374151", background: "rgba(0,0,0,0.3)",
-                color: "#e5e7eb", fontSize: 15, boxSizing: "border-box", marginBottom: 8,
+                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
+                color: "var(--foreground)", fontSize: 15, boxSizing: "border-box", marginBottom: 8,
               }}
             />
-            <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 20 }}>
+            <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 20 }}>
               空欄にすると設定を解除します
             </p>
 
@@ -1442,8 +1442,8 @@ export default function BillingPage() {
                 onClick={() => setFreePeriodModalOpen(false)}
                 style={{
                   flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10,
-                  border: "1px solid #374151", background: "transparent",
-                  color: "#9ca3af", fontSize: 15, fontWeight: 600, cursor: "pointer",
+                  border: "1px solid var(--border)", background: "transparent",
+                  color: "var(--muted-foreground)", fontSize: 15, fontWeight: 600, cursor: "pointer",
                 }}
               >キャンセル</button>
               <button
