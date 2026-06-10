@@ -12,7 +12,7 @@ const ja = {
 
   // Nav
   "nav.dashboard": "管理ダッシュボード",
-  "nav.knowledge": "ナレッジ管理",
+  "nav.knowledge": "AIの知識データ",
   "nav.tenants": "テナント管理",
   "nav.billing": "請求・使用量",
 
@@ -44,7 +44,7 @@ const ja = {
   "dashboard.error": "少し問題が起きました。もう一度試してみてください 🙏",
 
   // Knowledge page
-  "knowledge.title": "ナレッジ管理",
+  "knowledge.title": "AIの知識データ",
   "knowledge.subtitle": "在庫・キャンペーン・クーポン情報を登録してAIに覚えさせましょう",
   "knowledge.add_faq": "新しいFAQを追加する",
   "knowledge.category_filter": "カテゴリ絞り込み:",
@@ -266,12 +266,12 @@ const ja = {
   "preview.enter": "🔍 クライアントビューで見る",
 
   // Knowledge global
-  "knowledge.global_label": "グローバルナレッジとして登録（全テナント共通）",
+  "knowledge.global_label": "全店舗共通の知識データとして登録（全テナント共通）",
   "tenants.load_error": "テナント一覧の読み込みに失敗しました",
 
   // Knowledge tenant selector
   "knowledge.select_tenant": "管理するテナントを選択してください",
-  "knowledge.global": "📚 グローバルナレッジ（全テナント共通）",
+  "knowledge.global": "📚 全店舗共通の知識データ（グローバル）",
   "knowledge.global_desc": "パートナーの書籍・資料はこちらから登録します",
   "knowledge.tenant_faqs": "{count}件のFAQ",
   "knowledge.search_tenant": "テナント名で検索...",
@@ -370,7 +370,7 @@ const ja = {
 
   // Tuning rules
   "tuning.back": "← ダッシュボードに戻る",
-  "tuning.title": "AIチューニングルール",
+  "tuning.title": "AIへの指示ルール",
   "tuning.subtitle": "AIの回答スタイルや禁止事項をルールで細かく制御できます",
   "tuning.add_rule": "新しいルールを追加する",
   "tuning.load_error": "ルールの読み込みに失敗しました。もう一度お試しください 🙏",
@@ -472,15 +472,15 @@ const ja = {
   "engagement.back": "← 声がけ設定に戻る",
 
   // Conversion (Phase58)
-  "conversion.title": "コンバージョン分析",
+  "conversion.title": "成約・効果分析",
   "conversion.summary": "成果のまとめ",
-  "conversion.effectiveness": "効果が高い心理アプローチ",
+  "conversion.effectiveness": "効果が高い接客アプローチ",
   "conversion.ab_tests": "A/Bテスト",
   "conversion.suggestions": "AIからの改善提案",
   "conversion.apply": "この提案を適用する",
-  "conversion.total": "合計CV数",
-  "conversion.avg_temp": "平均温度感スコア",
-  "conversion.top_principle": "トップ心理原則",
+  "conversion.total": "合計成約数",
+  "conversion.avg_temp": "平均購買意欲スコア",
+  "conversion.top_principle": "トップ接客アプローチ",
   "conversion.no_data": "まだデータがありません",
   "conversion.no_suggestions": "現在、改善提案はありません",
   "conversion.back": "← コンバージョン分析に戻る",

@@ -50,22 +50,22 @@ const MAIN_SECTIONS: NavSection[] = [
     title: "会話・ナレッジ",
     items: [
       { label: "会話履歴", path: "/admin/chat-history", icon: MessageSquare },
-      { label: "ナレッジ管理", path: "/admin/knowledge", icon: BookOpen },
+      { label: "AIの知識データ", path: "/admin/knowledge", icon: BookOpen },
     ],
   },
   {
     title: "分析・成果",
     items: [
       { label: "会話分析", path: "/admin/analytics", icon: BarChart2 },
-      { label: "コンバージョン", path: "/admin/conversion", icon: TrendingUp },
-      { label: "声がけ設定", path: "/admin/engagement", icon: Zap },
+      { label: "成約・効果分析", path: "/admin/conversion", icon: TrendingUp },
+      { label: "自動メッセージ設定", path: "/admin/engagement", icon: Zap },
     ],
   },
   {
     title: "設定",
     items: [
       { label: "アバター設定", path: "/admin/avatar", icon: Palette },
-      { label: "チューニングルール", path: "/admin/tuning", icon: SlidersHorizontal },
+      { label: "AIへの指示ルール", path: "/admin/tuning", icon: SlidersHorizontal },
       { label: "テストチャット", path: "/admin/chat-test", icon: FlaskConical },
     ],
   },
@@ -483,7 +483,7 @@ export function MobileHeader() {
 const BOTTOM_NAV: { path: string; icon: React.ElementType; label: string; end?: boolean }[] = [
   { path: "/admin", icon: LayoutDashboard, label: "ホーム", end: true },
   { path: "/admin/chat-history", icon: MessageSquare, label: "会話" },
-  { path: "/admin/knowledge", icon: BookOpen, label: "知識" },
+  { path: "/admin/knowledge", icon: BookOpen, label: "知識データ" },
   { path: "/admin/analytics", icon: BarChart2, label: "分析" },
   { path: "/admin/tuning", icon: SlidersHorizontal, label: "設定" },
 ];
