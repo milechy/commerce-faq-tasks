@@ -55,6 +55,16 @@ export async function runDialogGraph(
     'dialog.run.start',
   );
 
+  // Phase47-C: OpenClaw Workspace 初期化 (fire-and-forget)
+  //     Feature Flag ガードは getOrBuildWorkspace 内で行う。
+  setImmediate(() => {
+    import('../openclaw/workspaceCache').then(({ getOrBuildWorkspace }) =>
+      getOrBuildWorkspace(input.tenantId),
+    ).catch((err: unknown) => {
+      logger.warn({ err, tenantId: input.tenantId }, 'openclaw.workspace.failed (non-blocking)');
+    });
+  });
+
   // -------------------------
   // Phase22: Flow Controller
   // -------------------------
