@@ -1,6 +1,7 @@
 import React from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { AdminNavBar } from "./components/AdminNavBar";
+import { AppSidebar, MobileHeader, MobileBottomBar } from "./components/AppSidebar";
+import { ThemeProvider } from "./contexts/ThemeContext";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
 import { AuthProvider, useAuth } from "./auth/useAuth";
@@ -78,18 +79,26 @@ function AppInner() {
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
   const isAdmin = location.pathname.startsWith("/admin") || location.pathname === "/";
-  return (
-    <>
-      {isAdmin && <AdminNavBar />}
-      {/* ナビバー分の余白 (admin pages) */}
-      {isAdmin && <div style={{ height: 52 }} />}
+  const isLogin =
+    location.pathname === "/login" || location.pathname === "/reset-password";
+
+  if (isLogin) {
+    return (
       <Routes>
-
-        {/* ログイン画面 */}
         <Route path="/login" element={<Login />} />
-
-        {/* パスワードリセット コールバック */}
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  return (
+    <div className="app-layout">
+      {isAdmin && <AppSidebar />}
+      <div className="app-main">
+        {isAdmin && <MobileHeader />}
+        {isAdmin && <MobileBottomBar />}
+        <Routes>
 
         {/* ルートは管理ダッシュボードへリダイレクト */}
         <Route path="/" element={<Navigate to="/admin" replace />} />
@@ -169,7 +178,8 @@ function AppInner() {
       </Routes>
       {/* 管理AIチャット — Client Admin、chat-testページを除く */}
       {showAIChat && <AdminAIChat />}
-    </>
+      </div>
+    </div>
   );
 }
 
@@ -180,6 +190,7 @@ export default function App() {
   }
 
   return (
+    <ThemeProvider>
     <LangProvider>
     <BrowserRouter>
       <AuthProvider>
@@ -187,5 +198,6 @@ export default function App() {
       </AuthProvider>
     </BrowserRouter>
     </LangProvider>
+    </ThemeProvider>
   );
 }

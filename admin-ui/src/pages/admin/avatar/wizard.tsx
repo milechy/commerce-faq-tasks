@@ -1,7 +1,6 @@
 // admin-ui/src/pages/admin/avatar/wizard.tsx
 // Phase64 タスク4: アバター生成ウィザードページ
 
-import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../../auth/useAuth";
 import { AvatarWizard } from "../../../components/avatar-wizard/AvatarWizard";
