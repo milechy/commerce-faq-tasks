@@ -83,6 +83,7 @@ import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
+import { registerLeadInquiryRoutes } from "./api/public/leadInquiry";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -554,6 +555,8 @@ registerNotificationRoutes(app);
 registerOptionRoutes(app);
 // フィードバックチャット API
 registerFeedbackRoutes(app);
+// LP 見込み顧客問い合わせ API（認証不要・公開エンドポイント）
+registerLeadInquiryRoutes(app);
 
 // Avatar: Widget → LiveKit Room トークン発行 API
 registerLiveKitTokenRoutes(app, apiStack);
