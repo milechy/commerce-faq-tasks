@@ -381,21 +381,21 @@ export default function ChatTestPage() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)", color: "#e5e7eb", padding: "24px 20px", maxWidth: 900, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: "var(--background)", color: "var(--foreground)", padding: "24px 20px", maxWidth: 900, margin: "0 auto" }}>
       <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32, flexWrap: "wrap" }}>
         <button
           onClick={() => navigate("/admin")}
-          style={{ padding: "10px 16px", minHeight: 44, borderRadius: 999, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer", fontWeight: 500 }}
+          style={{ padding: "10px 16px", minHeight: 44, borderRadius: 999, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer", fontWeight: 500 }}
         >
           {t("common.back_to_dashboard")}
         </button>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb" }}>{t("chat_test.title")}</h1>
-          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>{t("chat_test.description")}</p>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>{t("chat_test.title")}</h1>
+          <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>{t("chat_test.description")}</p>
         </div>
       </header>
 
-      <section style={{ borderRadius: 16, border: "1px solid #1f2937", background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))", padding: "32px 24px" }}>
+      <section style={{ borderRadius: 16, border: "1px solid var(--border)", background: "linear-gradient(145deg, var(--card), var(--card))", padding: "32px 24px" }}>
         {/* グローバルナレッジバナー */}
         {scopeGlobal && (
           <div style={{ marginBottom: 24, padding: "14px 18px", borderRadius: 12, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.4)", color: "#4ade80", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
@@ -406,7 +406,7 @@ export default function ChatTestPage() {
         {/* Super Admin: テナント選択 */}
         {isSuperAdmin && !scopeGlobal && (
           <div style={{ marginBottom: 24 }}>
-            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 8 }}>{t("chat_test.select_tenant")}</label>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 8 }}>{t("chat_test.select_tenant")}</label>
             {tenantFetchError ? (
               <div style={{ color: "#fca5a5", fontSize: 14, padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(248,113,113,0.3)", background: "rgba(127,29,29,0.3)" }}>
                 ⚠️ テナント一覧の取得に失敗しました。ページを再読み込みしてください。
@@ -415,7 +415,7 @@ export default function ChatTestPage() {
               <select
                 value={selectedTenantId}
                 onChange={(e) => handleTenantChange(e.target.value)}
-                style={{ width: "100%", padding: "12px 14px", borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#e5e7eb", fontSize: 15, outline: "none", cursor: "pointer" }}
+                style={{ width: "100%", padding: "12px 14px", borderRadius: 10, border: "1px solid var(--border)", background: "var(--card)", color: "var(--foreground)", fontSize: 15, outline: "none", cursor: "pointer" }}
               >
                 <option value="">— テナントを選択 —</option>
                 {tenants.map((ten) => <option key={ten.id} value={ten.id}>{ten.name}</option>)}
@@ -427,11 +427,11 @@ export default function ChatTestPage() {
         {/* アバター選択ドロップダウン */}
         {effectiveTenantId && !scopeGlobal && (
           <div style={{ marginBottom: 24 }}>
-            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 8 }}>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 8 }}>
               🎭 テストするアバター
             </label>
             {availableAvatars.length === 0 ? (
-              <p style={{ fontSize: 14, color: "#6b7280", padding: "8px 0", margin: 0 }}>
+              <p style={{ fontSize: 14, color: "var(--muted-foreground)", padding: "8px 0", margin: 0 }}>
                 このテナントにはアバターがありません。テキストチャットでテスト可能です。
               </p>
             ) : (
@@ -439,7 +439,7 @@ export default function ChatTestPage() {
                 <select
                   value={selectedAvatarConfigId ?? ""}
                   onChange={(e) => setSelectedAvatarConfigId(e.target.value || null)}
-                  style={{ flex: 1, minWidth: 200, padding: "12px 14px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#e5e7eb", fontSize: 15, outline: "none", cursor: "pointer" }}
+                  style={{ flex: 1, minWidth: 200, padding: "12px 14px", minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card)", color: "var(--foreground)", fontSize: 15, outline: "none", cursor: "pointer" }}
                 >
                   <option value="">— アバターなし（テキストのみ）—</option>
                   {availableAvatars.map((av) => (
@@ -461,7 +461,7 @@ export default function ChatTestPage() {
                   );
                 })()}
                 {!selectedAvatarConfigId && (
-                  <span style={{ fontSize: 13, color: "#6b7280" }}>テキストチャットのみ</span>
+                  <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>テキストチャットのみ</span>
                 )}
               </div>
             )}
@@ -469,17 +469,17 @@ export default function ChatTestPage() {
         )}
 
         {!effectiveTenantId && !scopeGlobal && (
-          <p style={{ textAlign: "center", color: "#6b7280", fontSize: 15, padding: "32px 0" }}>{t("chat_test.select_tenant")}</p>
+          <p style={{ textAlign: "center", color: "var(--muted-foreground)", fontSize: 15, padding: "32px 0" }}>{t("chat_test.select_tenant")}</p>
         )}
 
         {effectiveTenantId && (
           <>
-            <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 20 }}>
-              {t("chat_test.tenant_label")}: <strong style={{ color: "#9ca3af" }}>{displayTenantName}</strong>
+            <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginBottom: 20 }}>
+              {t("chat_test.tenant_label")}: <strong style={{ color: "var(--muted-foreground)" }}>{displayTenantName}</strong>
             </p>
 
             {gettingToken && (
-              <div style={{ textAlign: "center", padding: "32px 0", color: "#6b7280", fontSize: 15 }}>
+              <div style={{ textAlign: "center", padding: "32px 0", color: "var(--muted-foreground)", fontSize: 15 }}>
                 <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
                 {t("chat_test.getting_token")}
               </div>
@@ -496,9 +496,9 @@ export default function ChatTestPage() {
 
             {token && !gettingToken && (
               <>
-                <p style={{ textAlign: "center", color: "#9ca3af", fontSize: 15, marginBottom: 16 }}>👇 右下のボタンからチャットを開けます</p>
+                <p style={{ textAlign: "center", color: "var(--muted-foreground)", fontSize: 15, marginBottom: 16 }}>👇 右下のボタンからチャットを開けます</p>
                 <div style={{ textAlign: "center" }}>
-                  <button onClick={handleReload} style={{ padding: "12px 24px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer" }}>
+                  <button onClick={handleReload} style={{ padding: "12px 24px", minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer" }}>
                     {t("chat_test.reset")}
                   </button>
                 </div>
@@ -510,26 +510,26 @@ export default function ChatTestPage() {
 
       {/* ── Admin Chat Panel ── */}
       {token && effectiveTenantId && (
-        <section style={{ marginTop: 24, borderRadius: 16, border: "1px solid #1f2937", background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))", padding: "20px 24px" }}>
+        <section style={{ marginTop: 24, borderRadius: 16, border: "1px solid var(--border)", background: "linear-gradient(145deg, var(--card), var(--card))", padding: "20px 24px" }}>
           <button
             onClick={() => setAdminChatOpen((v) => !v)}
-            style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: "#9ca3af", fontSize: 15, fontWeight: 600, cursor: "pointer", padding: 0 }}
+            style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 15, fontWeight: 600, cursor: "pointer", padding: 0 }}
           >
             💬 管理者チャット（会話を選択→AIの回答を改善）
-            <span style={{ fontSize: 12, color: "#6b7280" }}>{adminChatOpen ? "▲ 閉じる" : "▼ 開く"}</span>
+            <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{adminChatOpen ? "▲ 閉じる" : "▼ 開く"}</span>
           </button>
 
           {adminChatOpen && (
             <div style={{ marginTop: 16 }}>
               {/* 使い方ヒント */}
-              <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 10, margin: "0 0 10px" }}>
+              <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 10, margin: "0 0 10px" }}>
                 💡 質問の左にあるチェックボックスを選ぶと、その質問とAIの返答がセットで選択されます
               </p>
 
               {/* メッセージ一覧 */}
               <div style={{ minHeight: 100, maxHeight: 360, overflowY: "auto", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
                 {adminMessages.length === 0 && (
-                  <p style={{ color: "#6b7280", fontSize: 14, textAlign: "center", padding: "24px 0" }}>メッセージを送信して会話を始めてください</p>
+                  <p style={{ color: "var(--muted-foreground)", fontSize: 14, textAlign: "center", padding: "24px 0" }}>メッセージを送信して会話を始めてください</p>
                 )}
                 {adminMessages.map((msg, idx) => {
                   const autoHighlight = msg.role === "assistant" && isAutoIncluded(idx);
@@ -544,7 +544,7 @@ export default function ChatTestPage() {
                         gap: 10,
                         padding: "10px 12px",
                         borderRadius: 10,
-                        border: highlighted ? "1px solid rgba(59,130,246,0.5)" : "1px solid #1f2937",
+                        border: highlighted ? "1px solid rgba(59,130,246,0.5)" : "1px solid var(--border)",
                         background: highlighted
                           ? "rgba(59,130,246,0.08)"
                           : (msg.role === "user" ? "rgba(37,99,235,0.1)" : "rgba(30,41,59,0.6)"),
@@ -570,14 +570,14 @@ export default function ChatTestPage() {
                         </div>
                       )}
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>{msg.role === "user" ? "あなた" : "AI"}</div>
-                        <div style={{ fontSize: 14, color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
+                        <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginBottom: 2 }}>{msg.role === "user" ? "あなた" : "AI"}</div>
+                        <div style={{ fontSize: 14, color: "var(--foreground)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
                       </div>
                     </div>
                   );
                 })}
                 {adminSending && (
-                  <div style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #1f2937", background: "rgba(30,41,59,0.6)", color: "#6b7280", fontSize: 14 }}>AI応答中...</div>
+                  <div style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(30,41,59,0.6)", color: "var(--muted-foreground)", fontSize: 14 }}>AI応答中...</div>
                 )}
               </div>
 
@@ -592,7 +592,7 @@ export default function ChatTestPage() {
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !adminIsComposing && e.nativeEvent.keyCode !== 229) { e.preventDefault(); void handleAdminSend(); } }}
                   placeholder="メッセージを入力..."
                   disabled={adminSending}
-                  style={{ flex: 1, padding: "10px 14px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#e5e7eb", fontSize: 14, outline: "none" }}
+                  style={{ flex: 1, padding: "10px 14px", minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: "var(--card)", color: "var(--foreground)", fontSize: 14, outline: "none" }}
                 />
                 <button
                   onClick={() => void handleAdminSend()}
@@ -619,7 +619,7 @@ export default function ChatTestPage() {
           gap: 12,
           padding: "12px 20px",
           borderRadius: 999,
-          background: "rgba(15,23,42,0.95)",
+          background: "var(--card)",
           border: "1px solid rgba(59,130,246,0.5)",
           boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
           zIndex: 1000,
@@ -636,7 +636,7 @@ export default function ChatTestPage() {
           </button>
           <button
             onClick={() => setAdminMessages((prev) => prev.map((m) => ({ ...m, checked: false })))}
-            style={{ padding: "8px 14px", minHeight: 44, borderRadius: 999, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}
+            style={{ padding: "8px 14px", minHeight: 44, borderRadius: 999, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", fontSize: 13, cursor: "pointer" }}
           >
             解除
           </button>
@@ -646,9 +646,9 @@ export default function ChatTestPage() {
       {/* ── AIの回答改善モーダル ── */}
       {tuningModalOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-          <div style={{ width: "100%", maxWidth: 580, borderRadius: 16, background: "#0f172a", border: "1px solid #1f2937", padding: "24px", maxHeight: "85vh", overflowY: "auto" }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#f9fafb", margin: "0 0 4px" }}>AIの回答を改善</h2>
-            <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 16px" }}>選択した会話をもとに、AIの応答ルールを登録します</p>
+          <div style={{ width: "100%", maxWidth: 580, borderRadius: 16, background: "var(--background)", border: "1px solid var(--border)", padding: "24px", maxHeight: "85vh", overflowY: "auto" }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--foreground)", margin: "0 0 4px" }}>AIの回答を改善</h2>
+            <p style={{ fontSize: 13, color: "var(--muted-foreground)", margin: "0 0 16px" }}>選択した会話をもとに、AIの応答ルールを登録します</p>
 
             {/* 選択ペアのプレビュー */}
             <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 10, background: "rgba(59,130,246,0.07)", border: "1px solid rgba(59,130,246,0.2)", fontSize: 13 }}>
@@ -657,12 +657,12 @@ export default function ChatTestPage() {
               </div>
               {checkedPairs.map((pair, i) => (
                 <div key={pair.question.id} style={{ marginBottom: i < checkedPairs.length - 1 ? 10 : 0 }}>
-                  <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 2 }}>
+                  <div style={{ color: "var(--muted-foreground)", fontSize: 12, marginBottom: 2 }}>
                     <span style={{ background: "rgba(59,130,246,0.2)", borderRadius: 4, padding: "1px 6px", marginRight: 6 }}>Q</span>
                     {pair.question.content.slice(0, 80)}{pair.question.content.length > 80 ? "…" : ""}
                   </div>
                   {pair.answer && (
-                    <div style={{ color: "#6b7280", fontSize: 12, paddingLeft: 8 }}>
+                    <div style={{ color: "var(--muted-foreground)", fontSize: 12, paddingLeft: 8 }}>
                       <span style={{ background: "rgba(34,197,94,0.15)", borderRadius: 4, padding: "1px 6px", marginRight: 6, color: "#4ade80" }}>A</span>
                       {pair.answer.content.slice(0, 80)}{pair.answer.content.length > 80 ? "…" : ""}
                     </div>
@@ -682,7 +682,7 @@ export default function ChatTestPage() {
                       padding: "8px 16px",
                       minHeight: 44,
                       borderRadius: 8,
-                      border: saveMode === mode ? "1px solid rgba(99,102,241,0.6)" : "1px solid #374151",
+                      border: saveMode === mode ? "1px solid rgba(99,102,241,0.6)" : "1px solid var(--border)",
                       background: saveMode === mode ? "rgba(99,102,241,0.15)" : "transparent",
                       color: saveMode === mode ? "#a5b4fc" : "#9ca3af",
                       fontSize: 13,
@@ -700,22 +700,22 @@ export default function ChatTestPage() {
             {saveMode === "combined" && (
               <>
                 <div style={{ marginBottom: 14 }}>
-                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>ルール名</label>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 6 }}>ルール名</label>
                   <input
                     type="text"
                     value={combinedRuleName}
                     onChange={(e) => setCombinedRuleName(e.target.value)}
-                    style={{ width: "100%", padding: "10px 12px", minHeight: 44, borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", boxSizing: "border-box" }}
+                    style={{ width: "100%", padding: "10px 12px", minHeight: 44, borderRadius: 8, border: "1px solid var(--border)", background: "rgba(30,41,59,0.8)", color: "var(--foreground)", fontSize: 14, outline: "none", boxSizing: "border-box" }}
                   />
                 </div>
                 <div style={{ marginBottom: 20 }}>
-                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#9ca3af", marginBottom: 6 }}>AIへの改善指示</label>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 6 }}>AIへの改善指示</label>
                   <textarea
                     value={combinedBehavior}
                     onChange={(e) => setCombinedBehavior(e.target.value)}
                     rows={4}
                     placeholder="この質問にAIがどう答えるべきか書いてください"
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #374151", background: "rgba(30,41,59,0.8)", color: "#f9fafb", fontSize: 14, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "rgba(30,41,59,0.8)", color: "var(--foreground)", fontSize: 14, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
                   />
                 </div>
               </>
@@ -725,12 +725,12 @@ export default function ChatTestPage() {
             {saveMode === "individual" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 20 }}>
                 {checkedPairs.map((pair, i) => (
-                  <div key={pair.question.id} style={{ padding: "14px", borderRadius: 10, border: "1px solid #1f2937", background: "rgba(30,41,59,0.4)" }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+                  <div key={pair.question.id} style={{ padding: "14px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(30,41,59,0.4)" }}>
+                    <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 10 }}>
                       ペア {i + 1}: {pair.question.content.slice(0, 40)}{pair.question.content.length > 40 ? "…" : ""}
                     </div>
                     <div style={{ marginBottom: 10 }}>
-                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>ルール名</label>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 4 }}>ルール名</label>
                       <input
                         type="text"
                         value={pairRules[i]?.ruleName ?? ""}
@@ -738,11 +738,11 @@ export default function ChatTestPage() {
                           const v = e.target.value;
                           setPairRules((prev) => prev.map((r, ri) => ri === i ? { ...r, ruleName: v } : r));
                         }}
-                        style={{ width: "100%", padding: "8px 10px", minHeight: 40, borderRadius: 8, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#f9fafb", fontSize: 13, outline: "none", boxSizing: "border-box" }}
+                        style={{ width: "100%", padding: "8px 10px", minHeight: 40, borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)", color: "var(--foreground)", fontSize: 13, outline: "none", boxSizing: "border-box" }}
                       />
                     </div>
                     <div>
-                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>AIへの改善指示</label>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 4 }}>AIへの改善指示</label>
                       <textarea
                         value={pairRules[i]?.behavior ?? ""}
                         onChange={(e) => {
@@ -751,7 +751,7 @@ export default function ChatTestPage() {
                         }}
                         rows={3}
                         placeholder="この質問にAIがどう答えるべきか書いてください"
-                        style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #374151", background: "rgba(15,23,42,0.9)", color: "#f9fafb", fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
+                        style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)", color: "var(--foreground)", fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, boxSizing: "border-box" }}
                       />
                     </div>
                   </div>
@@ -765,7 +765,7 @@ export default function ChatTestPage() {
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button
                 onClick={() => setTuningModalOpen(false)}
-                style={{ padding: "10px 20px", minHeight: 44, borderRadius: 10, border: "1px solid #374151", background: "transparent", color: "#9ca3af", fontSize: 14, cursor: "pointer" }}
+                style={{ padding: "10px 20px", minHeight: 44, borderRadius: 10, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer" }}
               >
                 キャンセル
               </button>

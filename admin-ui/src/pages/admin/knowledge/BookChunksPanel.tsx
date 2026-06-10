@@ -96,9 +96,9 @@ const PANEL: CSSProperties = {
   width: "100%",
   maxWidth: 640,
   borderRadius: 16,
-  border: "1px solid #1f2937",
-  background: "linear-gradient(145deg, #0f172a, #020617)",
-  color: "#e5e7eb",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
+  color: "var(--foreground)",
   display: "flex",
   flexDirection: "column",
   maxHeight: "90vh",
@@ -110,9 +110,9 @@ const TEXTAREA_SM: CSSProperties = {
   minHeight: 64,
   padding: "10px 12px",
   borderRadius: 8,
-  border: "1px solid #374151",
-  background: "rgba(15,23,42,0.8)",
-  color: "#e5e7eb",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
+  color: "var(--foreground)",
   fontSize: 14,
   fontFamily: "inherit",
   resize: "vertical",
@@ -305,7 +305,7 @@ export default function BookChunksPanel({
         <div
           style={{
             padding: "20px 20px 16px",
-            borderBottom: "1px solid #1f2937",
+            borderBottom: "1px solid var(--border)",
             display: "flex",
             alignItems: "center",
             gap: 12,
@@ -317,7 +317,7 @@ export default function BookChunksPanel({
               style={{
                 fontSize: 18,
                 fontWeight: 700,
-                color: "#f9fafb",
+                color: "var(--foreground)",
                 wordBreak: "break-word",
               }}
             >
@@ -328,7 +328,7 @@ export default function BookChunksPanel({
                 {STATUS_LABEL[bookStatus] ?? bookStatus}
               </span>
               {!loading && (
-                <span style={{ fontSize: 13, color: "#6b7280" }}>
+                <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
                   {chunks.length}件の分割テキスト
                 </span>
               )}
@@ -338,16 +338,16 @@ export default function BookChunksPanel({
                 <div style={{ color: "#60a5fa", marginBottom: 2 }}>
                   📊 コンテンツ種類: {bookDetail.content_type_label}
                   {bookDetail.schema_confidence != null && (
-                    <span style={{ color: "#6b7280", marginLeft: 6 }}>
+                    <span style={{ color: "var(--muted-foreground)", marginLeft: 6 }}>
                       （確信度: {(bookDetail.schema_confidence * 100).toFixed(0)}%）
                     </span>
                   )}
                 </div>
                 {bookDetail.schema_reasoning && (
-                  <div style={{ color: "#9ca3af", marginBottom: 2 }}>💡 {bookDetail.schema_reasoning}</div>
+                  <div style={{ color: "var(--muted-foreground)", marginBottom: 2 }}>💡 {bookDetail.schema_reasoning}</div>
                 )}
                 {activeSchema.length > 0 && (
-                  <div style={{ color: "#9ca3af" }}>
+                  <div style={{ color: "var(--muted-foreground)" }}>
                     📋 構造化フィールド: {activeSchema.map((f) => f.label).join(" / ")}
                   </div>
                 )}
@@ -361,9 +361,9 @@ export default function BookChunksPanel({
               minHeight: 44,
               minWidth: 44,
               borderRadius: 8,
-              border: "1px solid #374151",
+              border: "1px solid var(--border)",
               background: "transparent",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               flexShrink: 0,
@@ -376,7 +376,7 @@ export default function BookChunksPanel({
         {/* チャンク一覧 */}
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 20px" }}>
           {loading ? (
-            <div style={{ padding: 32, textAlign: "center", color: "#6b7280" }}>
+            <div style={{ padding: 32, textAlign: "center", color: "var(--muted-foreground)" }}>
               読み込み中...
             </div>
           ) : error ? (
@@ -399,7 +399,7 @@ export default function BookChunksPanel({
                 textAlign: "center",
                 borderRadius: 12,
                 border: "1px dashed #374151",
-                color: "#6b7280",
+                color: "var(--muted-foreground)",
                 fontSize: 14,
               }}
             >
@@ -497,7 +497,7 @@ function ChunkCard({
         border: `1px solid ${isEditing ? "rgba(74,222,128,0.3)" : "#1f2937"}`,
         background: isEditing
           ? "rgba(5,46,22,0.15)"
-          : "rgba(15,23,42,0.6)",
+          : "var(--card)",
         padding: "14px 16px",
         transition: "border-color 0.15s",
       }}
@@ -517,7 +517,7 @@ function ChunkCard({
             <div
               style={{
                 fontSize: 13,
-                color: "#6b7280",
+                color: "var(--muted-foreground)",
                 lineHeight: 1.6,
                 marginBottom: 8,
                 display: "flex",
@@ -591,9 +591,9 @@ function ChunkCard({
                 padding: "8px 14px",
                 minHeight: 44,
                 borderRadius: 8,
-                border: "1px solid #374151",
+                border: "1px solid var(--border)",
                 background: "transparent",
-                color: "#9ca3af",
+                color: "var(--muted-foreground)",
                 fontSize: 13,
                 fontWeight: 600,
                 cursor: "pointer",
@@ -646,9 +646,9 @@ function ChunkCard({
                 padding: "12px",
                 minHeight: 44,
                 borderRadius: 8,
-                border: "1px solid #374151",
+                border: "1px solid var(--border)",
                 background: "transparent",
-                color: "#9ca3af",
+                color: "var(--muted-foreground)",
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: deleting ? "not-allowed" : "pointer",
@@ -695,7 +695,7 @@ function ChunkCard({
                   style={{
                     display: "block",
                     fontSize: 12,
-                    color: "#9ca3af",
+                    color: "var(--muted-foreground)",
                     marginBottom: 4,
                     fontWeight: 600,
                   }}
@@ -726,9 +726,9 @@ function ChunkCard({
                 padding: "12px",
                 minHeight: 44,
                 borderRadius: 8,
-                border: "1px solid #374151",
+                border: "1px solid var(--border)",
                 background: "transparent",
-                color: "#9ca3af",
+                color: "var(--muted-foreground)",
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: saving ? "not-allowed" : "pointer",

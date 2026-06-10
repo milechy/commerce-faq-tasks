@@ -43,7 +43,7 @@ export interface ApiKey {
 
 export const CARD_STYLE: CSSProperties = {
   borderRadius: 14,
-  border: "1px solid #1f2937",
-  background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
   padding: "20px 18px",
 };

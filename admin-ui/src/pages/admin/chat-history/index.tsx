@@ -153,8 +153,8 @@ export default function ChatHistoryPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+        background: "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 900,
         margin: "0 auto",
@@ -177,7 +177,7 @@ export default function ChatHistoryPage() {
             style={{
               background: "none",
               border: "none",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               padding: 0,
@@ -187,10 +187,10 @@ export default function ChatHistoryPage() {
           >
             {t("chat_history.back")}
           </button>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
             {t("chat_history.title")}
           </h1>
-          <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+          <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
             {t("chat_history.subtitle")}
           </p>
         </div>
@@ -244,8 +244,8 @@ export default function ChatHistoryPage() {
             onChange={(e) => { setSelectedTenantFilter(e.target.value); setOffset(0); }}
             style={{
               padding: "8px 12px", minHeight: 38, borderRadius: 10,
-              border: "1px solid #374151", background: "rgba(15,23,42,0.8)",
-              color: "#e5e7eb", fontSize: 13, cursor: "pointer",
+              border: "1px solid var(--border)", background: "var(--card)",
+              color: "var(--foreground)", fontSize: 13, cursor: "pointer",
             }}
           >
             <option value="">すべてのテナント</option>
@@ -259,8 +259,8 @@ export default function ChatHistoryPage() {
           onChange={(e) => { setSentiment(e.target.value as SentimentFilter); setOffset(0); }}
           style={{
             padding: "8px 12px", minHeight: 38, borderRadius: 10,
-            border: "1px solid #374151", background: "rgba(15,23,42,0.8)",
-            color: "#e5e7eb", fontSize: 13, cursor: "pointer",
+            border: "1px solid var(--border)", background: "var(--card)",
+            color: "var(--foreground)", fontSize: 13, cursor: "pointer",
           }}
         >
           <option value="">すべての感情</option>
@@ -277,23 +277,23 @@ export default function ChatHistoryPage() {
 
       {/* Sort bar */}
       <div style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, color: "#6b7280" }}>並び替え:</span>
+        <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>並び替え:</span>
         <SortableHeader label="最終メッセージ" sortKey="last_message_at" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
         <SortableHeader label="メッセージ数" sortKey="message_count" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
         <SortableHeader label="スコア" sortKey="score" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
-        <span style={{ marginLeft: "auto", fontSize: 13, color: "#6b7280" }}>
-          合計 <span style={{ color: "#d1d5db", fontWeight: 700 }}>{total}</span> 件
+        <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted-foreground)" }}>
+          合計 <span style={{ color: "var(--muted-foreground)", fontWeight: 700 }}>{total}</span> 件
         </span>
       </div>
 
       {/* Section title */}
-      <h2 style={{ fontSize: 15, fontWeight: 600, color: "#9ca3af", marginBottom: 12 }}>
+      <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12 }}>
         {t("chat_history.sessions")}
       </h2>
 
       {/* Loading */}
       {loading ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
+        <div style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)" }}>
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
           {t("chat_history.loading")}
         </div>
@@ -302,11 +302,11 @@ export default function ChatHistoryPage() {
           style={{
             padding: "48px 24px",
             textAlign: "center",
-            color: "#6b7280",
+            color: "var(--muted-foreground)",
             fontSize: 15,
             borderRadius: 14,
-            border: "1px solid #1f2937",
-            background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+            border: "1px solid var(--border)",
+            background: "linear-gradient(145deg, var(--card), var(--card))",
           }}
         >
           {t("chat_history.no_sessions")}
@@ -318,8 +318,8 @@ export default function ChatHistoryPage() {
               key={session.id}
               style={{
                 borderRadius: 14,
-                border: "1px solid #1f2937",
-                background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+                border: "1px solid var(--border)",
+                background: "linear-gradient(145deg, var(--card), var(--card))",
                 padding: "18px 20px",
                 display: "flex",
                 alignItems: "center",
@@ -359,7 +359,7 @@ export default function ChatHistoryPage() {
                   <span
                     style={{
                       fontSize: 15,
-                      color: "#e5e7eb",
+                      color: "var(--foreground)",
                       fontWeight: 500,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -372,10 +372,10 @@ export default function ChatHistoryPage() {
 
                 {/* Date + message count + UUID (auxiliary) */}
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-                  <span style={{ fontSize: 13, color: "#6b7280" }}>
+                  <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
                     🕐 {formatDate(session.last_message_at)}
                   </span>
-                  <span style={{ fontSize: 13, color: "#6b7280" }}>
+                  <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
                     💬{" "}
                     {t("chat_history.message_count").replace(
                       "{n}",
@@ -395,9 +395,9 @@ export default function ChatHistoryPage() {
                   padding: "10px 18px",
                   minHeight: 44,
                   borderRadius: 10,
-                  border: "1px solid #374151",
-                  background: "rgba(15,23,42,0.8)",
-                  color: "#e5e7eb",
+                  border: "1px solid var(--border)",
+                  background: "var(--card)",
+                  color: "var(--foreground)",
                   fontSize: 14,
                   fontWeight: 600,
                   cursor: "pointer",

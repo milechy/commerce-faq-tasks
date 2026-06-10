@@ -41,8 +41,8 @@ export default function CvStatusPage() {
   const cardStyle: React.CSSProperties = {
     flex: "1 1 140px",
     borderRadius: 14,
-    border: "1px solid #1f2937",
-    background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+    border: "1px solid var(--border)",
+    background: "linear-gradient(145deg, var(--card), var(--card))",
     padding: "20px 18px",
     display: "flex",
     flexDirection: "column",
@@ -54,8 +54,8 @@ export default function CvStatusPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+        background: "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 960,
         margin: "0 auto",
@@ -67,7 +67,7 @@ export default function CvStatusPage() {
           style={{
             background: "none",
             border: "none",
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 14,
             cursor: "pointer",
             padding: 0,
@@ -77,10 +77,10 @@ export default function CvStatusPage() {
         >
           ← 分析ダッシュボードへ戻る
         </button>
-        <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+        <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
           📉 CV発火状況一覧
         </h1>
-        <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 4, marginBottom: 0 }}>
+        <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
           過去30日間のCV記録状況をテナント別に確認できます（Super Admin専用）
         </p>
       </header>
@@ -101,7 +101,7 @@ export default function CvStatusPage() {
       )}
 
       {loading ? (
-        <div style={{ padding: 60, textAlign: "center", color: "#6b7280" }}>
+        <div style={{ padding: 60, textAlign: "center", color: "var(--muted-foreground)" }}>
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
           読み込み中...
         </div>
@@ -111,17 +111,17 @@ export default function CvStatusPage() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 28 }}>
             <div style={cardStyle}>
               <span style={{ fontSize: 24 }}>🏢</span>
-              <span style={{ fontSize: 28, fontWeight: 700, color: "#f9fafb", lineHeight: 1 }}>
+              <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", lineHeight: 1 }}>
                 {data.total_tenants}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>総テナント数</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>総テナント数</span>
             </div>
             <div style={cardStyle}>
               <span style={{ fontSize: 24 }}>✅</span>
               <span style={{ fontSize: 28, fontWeight: 700, color: "#34d399", lineHeight: 1 }}>
                 {data.fired_tenants}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>CV発火済み</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>CV発火済み</span>
             </div>
             <div style={cardStyle}>
               <span style={{ fontSize: 24 }}>📉</span>
@@ -135,7 +135,7 @@ export default function CvStatusPage() {
               >
                 {data.not_fired_tenants}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#d1d5db" }}>未発火</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>未発火</span>
             </div>
           </div>
 
@@ -143,27 +143,27 @@ export default function CvStatusPage() {
           <div
             style={{
               borderRadius: 14,
-              border: "1px solid #1f2937",
-              background: "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))",
+              border: "1px solid var(--border)",
+              background: "linear-gradient(145deg, var(--card), var(--card))",
               overflow: "hidden",
             }}
           >
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid #1f2937" }}>
-              <span style={{ fontSize: 15, fontWeight: 600, color: "#d1d5db" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)" }}>
+              <span style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)" }}>
                 テナント別CV状況
               </span>
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
-                  <tr style={{ borderBottom: "1px solid #1f2937" }}>
+                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
                     {["テナント名", "経過日数", "CV件数(30日)", "最終CV日時", "ステータス", ""].map((h) => (
                       <th
                         key={h}
                         style={{
                           padding: "10px 14px",
                           textAlign: "left",
-                          color: "#6b7280",
+                          color: "var(--muted-foreground)",
                           fontWeight: 600,
                           whiteSpace: "nowrap",
                         }}
@@ -179,10 +179,10 @@ export default function CvStatusPage() {
                       key={t.tenant_id}
                       style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}
                     >
-                      <td style={{ padding: "12px 14px", fontWeight: 600, color: "#e5e7eb" }}>
+                      <td style={{ padding: "12px 14px", fontWeight: 600, color: "var(--foreground)" }}>
                         {t.tenant_name}
                       </td>
-                      <td style={{ padding: "12px 14px", color: "#9ca3af", textAlign: "center" }}>
+                      <td style={{ padding: "12px 14px", color: "var(--muted-foreground)", textAlign: "center" }}>
                         {t.days_since_effective_start}日
                       </td>
                       <td
@@ -195,7 +195,7 @@ export default function CvStatusPage() {
                       >
                         {t.cv_count_30d}
                       </td>
-                      <td style={{ padding: "12px 14px", color: "#9ca3af", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: "12px 14px", color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
                         {t.last_cv_at
                           ? new Date(t.last_cv_at).toLocaleDateString("ja-JP", {
                               month: "short",
@@ -233,7 +233,7 @@ export default function CvStatusPage() {
                           style={{
                             padding: "4px 10px",
                             borderRadius: 6,
-                            border: "1px solid #374151",
+                            border: "1px solid var(--border)",
                             background: "transparent",
                             color: "#60a5fa",
                             fontSize: 12,

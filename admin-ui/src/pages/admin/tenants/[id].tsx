@@ -161,9 +161,9 @@ const INPUT_STYLE: React.CSSProperties = {
   width: "100%",
   padding: "14px 16px",
   borderRadius: 10,
-  border: "1px solid #374151",
+  border: "1px solid var(--border)",
   background: "rgba(0,0,0,0.3)",
-  color: "#f9fafb",
+  color: "var(--foreground)",
   fontSize: 16,
   outline: "none",
   boxSizing: "border-box",
@@ -173,7 +173,7 @@ const LABEL_STYLE: React.CSSProperties = {
   display: "block",
   fontSize: 13,
   fontWeight: 600,
-  color: "#9ca3af",
+  color: "var(--muted-foreground)",
   marginBottom: 6,
 };
 
@@ -270,10 +270,10 @@ function AvatarTab({
         }}
       >
         <div>
-          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "#e5e7eb", fontSize: 15 }}>
+          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "var(--foreground)", fontSize: 15 }}>
             AIアバターを有効にする
           </p>
-          <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)" }}>
             {avatarEnabled ? "アバター表示が有効（Widget側で表示されます）" : "現在はテキストチャットのみ"}
           </p>
         </div>
@@ -303,10 +303,10 @@ function AvatarTab({
         }}
       >
         <div>
-          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "#e5e7eb", fontSize: 15 }}>
+          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "var(--foreground)", fontSize: 15 }}>
             音声会話を有効にする
           </p>
-          <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)" }}>
             {!avatarEnabled
               ? "AIアバターを有効にすると使用できます"
               : voiceEnabled
@@ -327,7 +327,7 @@ function AvatarTab({
       {/* Lemonslice Agent ID */}
       <div style={CARD_STYLE}>
         <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
-        <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 8px", lineHeight: 1.5 }}>
+        <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: "0 0 8px", lineHeight: 1.5 }}>
           Lemonslice管理画面で発行したエージェントIDを入力してください。空欄の場合はアバターが起動しません。
         </p>
         <input
@@ -421,9 +421,9 @@ function BillingSection({
   const dateInputStyle: React.CSSProperties = {
     padding: "10px 14px",
     borderRadius: 8,
-    border: "1px solid #374151",
+    border: "1px solid var(--border)",
     background: "rgba(0,0,0,0.3)",
-    color: "#f9fafb",
+    color: "var(--foreground)",
     fontSize: 15,
     outline: "none",
     minHeight: 44,
@@ -432,14 +432,14 @@ function BillingSection({
   return (
     <div
       style={{
-        border: "1px solid #374151",
+        border: "1px solid var(--border)",
         borderRadius: 12,
         padding: "20px 18px",
         marginTop: 24,
         background: "rgba(0,0,0,0.2)",
       }}
     >
-      <h3 style={{ fontSize: 17, fontWeight: 700, margin: "0 0 16px", color: "#f9fafb" }}>
+      <h3 style={{ fontSize: 17, fontWeight: 700, margin: "0 0 16px", color: "var(--foreground)" }}>
         {t("billing_mgmt.title")}
       </h3>
 
@@ -471,10 +471,10 @@ function BillingSection({
         }}
       >
         <div>
-          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "#e5e7eb", fontSize: 15 }}>
+          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "var(--foreground)", fontSize: 15 }}>
             {t("billing_mgmt.status")}
           </p>
-          <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)" }}>
             {billingEnabled ? t("billing_mgmt.enabled_desc") : t("billing_mgmt.disabled_desc")}
           </p>
         </div>
@@ -499,15 +499,15 @@ function BillingSection({
 
       {/* 無料期間（開始日〜終了日） */}
       <div>
-        <p style={{ margin: "0 0 4px", fontWeight: 600, color: "#e5e7eb", fontSize: 15 }}>
+        <p style={{ margin: "0 0 4px", fontWeight: 600, color: "var(--foreground)", fontSize: 15 }}>
           {t("billing_mgmt.free_period")}
         </p>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: "#9ca3af" }}>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--muted-foreground)" }}>
           {t("billing_mgmt.free_period_desc")}
         </p>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
           <div>
-            <p style={{ margin: "0 0 6px", fontSize: 12, color: "#9ca3af", fontWeight: 600 }}>
+            <p style={{ margin: "0 0 6px", fontSize: 12, color: "var(--muted-foreground)", fontWeight: 600 }}>
               {t("billing_mgmt.free_from_label")}
             </p>
             <input
@@ -517,9 +517,9 @@ function BillingSection({
               style={dateInputStyle}
             />
           </div>
-          <span style={{ color: "#6b7280", fontSize: 18, paddingBottom: 10, fontWeight: 700 }}>〜</span>
+          <span style={{ color: "var(--muted-foreground)", fontSize: 18, paddingBottom: 10, fontWeight: 700 }}>〜</span>
           <div>
-            <p style={{ margin: "0 0 6px", fontSize: 12, color: "#9ca3af", fontWeight: 600 }}>
+            <p style={{ margin: "0 0 6px", fontSize: 12, color: "var(--muted-foreground)", fontWeight: 600 }}>
               {t("billing_mgmt.free_until_label")}
             </p>
             <input
@@ -681,7 +681,7 @@ function SettingsTab({
                   padding: "12px 16px",
                   minHeight: 44,
                   borderRadius: 10,
-                  border: status === s ? `1px solid ${s === "active" ? "#4ade80" : "#9ca3af"}` : "1px solid #374151",
+                  border: status === s ? `1px solid ${s === "active" ? "#4ade80" : "#9ca3af"}` : "1px solid var(--border)",
                   background: status === s
                     ? s === "active" ? "rgba(34,197,94,0.15)" : "rgba(107,114,128,0.15)"
                     : "rgba(0,0,0,0.3)",
@@ -701,7 +701,7 @@ function SettingsTab({
 
         <div>
           <label style={LABEL_STYLE}>{t("tenant_detail.allowed_origins_label")}</label>
-          <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 8px", lineHeight: 1.5 }}>
+          <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: "0 0 8px", lineHeight: 1.5 }}>
             {t("tenant_detail.allowed_origins_desc")}
           </p>
           <textarea
@@ -733,14 +733,14 @@ function SettingsTab({
               lineHeight: 1.6,
             }}
           />
-          <p style={{ fontSize: 12, color: "#6b7280", margin: "4px 0 0", textAlign: "right" }}>
+          <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: "4px 0 0", textAlign: "right" }}>
             {systemPrompt.length} / 5000
           </p>
         </div>
 
         <div>
           <label style={LABEL_STYLE}>担当者メールアドレス</label>
-          <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 8px", lineHeight: 1.5 }}>
+          <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: "0 0 8px", lineHeight: 1.5 }}>
             GA4エラー通知・請求通知の送信先
           </p>
           <input
@@ -922,8 +922,8 @@ export default function TenantDetailPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
-        color: "#e5e7eb",
+        background: "var(--background)",
+        color: "var(--foreground)",
         padding: "24px 20px",
         maxWidth: 900,
         margin: "0 auto",
@@ -939,7 +939,7 @@ export default function TenantDetailPage() {
             transform: "translateX(-50%)",
             padding: "14px 24px",
             borderRadius: 12,
-            background: "rgba(15,23,42,0.98)",
+            background: "var(--card)",
             border: "1px solid #22c55e",
             color: "#4ade80",
             fontSize: 15,
@@ -962,9 +962,9 @@ export default function TenantDetailPage() {
               padding: "8px 14px",
               minHeight: 44,
               borderRadius: 999,
-              border: "1px solid #374151",
+              border: "1px solid var(--border)",
               background: "transparent",
-              color: "#9ca3af",
+              color: "var(--muted-foreground)",
               fontSize: 14,
               cursor: "pointer",
               fontWeight: 500,
@@ -1000,11 +1000,11 @@ export default function TenantDetailPage() {
             <LangSwitcher />
           </div>
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "#f9fafb" }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "var(--foreground)" }}>
           {loading ? t("tenant_detail.loading") : (tenant?.name ?? t("tenant_detail.not_found"))}
         </h1>
         {tenant && tenant.slug && (
-          <p style={{ fontSize: 14, color: "#9ca3af", margin: 0 }}>
+          <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: 0 }}>
             slug: <span style={{ fontFamily: "monospace" }}>{tenant.slug}</span>
           </p>
         )}
@@ -1017,7 +1017,7 @@ export default function TenantDetailPage() {
             alignItems: "center",
             justifyContent: "center",
             minHeight: 120,
-            color: "#9ca3af",
+            color: "var(--muted-foreground)",
             fontSize: 15,
           }}
         >
@@ -1031,8 +1031,8 @@ export default function TenantDetailPage() {
             style={{
               overflowX: "auto",
               marginBottom: 24,
-              background: "rgba(15,23,42,0.8)",
-              border: "1px solid #1f2937",
+              background: "var(--card)",
+              border: "1px solid var(--border)",
               borderRadius: 12,
               padding: 4,
               WebkitOverflowScrolling: "touch" as const,
@@ -1133,7 +1133,7 @@ export default function TenantDetailPage() {
           style={{
             padding: "32px 20px",
             borderRadius: 14,
-            border: "1px solid #1f2937",
+            border: "1px solid var(--border)",
             background: "rgba(127,29,29,0.2)",
             color: "#fca5a5",
             textAlign: "center",

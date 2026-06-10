@@ -40,13 +40,13 @@ const PAGE: CSSProperties = {
   padding: "80px 24px 48px",
   maxWidth: 900,
   margin: "0 auto",
-  color: "#f9fafb",
+  color: "var(--foreground)",
   fontFamily: "system-ui, sans-serif",
 };
 
 const CARD: CSSProperties = {
-  background: "rgba(15,23,42,0.8)",
-  border: "1px solid #1f2937",
+  background: "var(--card)",
+  border: "1px solid var(--border)",
   borderRadius: 12,
   padding: "20px 24px",
   marginBottom: 16,
@@ -68,9 +68,9 @@ const BTN_GHOST: CSSProperties = {
   padding: "8px 14px",
   minHeight: 44,
   background: "none",
-  border: "1px solid #374151",
+  border: "1px solid var(--border)",
   borderRadius: 8,
-  color: "#9ca3af",
+  color: "var(--muted-foreground)",
   fontSize: 13,
   cursor: "pointer",
 };
@@ -98,8 +98,8 @@ const OVERLAY: CSSProperties = {
 };
 
 const MODAL: CSSProperties = {
-  background: "#0f172a",
-  border: "1px solid #1f2937",
+  background: "var(--background)",
+  border: "1px solid var(--border)",
   borderRadius: 16,
   width: "100%",
   maxWidth: 560,
@@ -175,7 +175,7 @@ function ConfigForm({
     const v = (config["threshold"] as number) ?? 75;
     return (
       <div>
-        <label style={{ fontSize: 13, color: "#9ca3af" }}>スクロール深度のしきい値</label>
+        <label style={{ fontSize: 13, color: "var(--muted-foreground)" }}>スクロール深度のしきい値</label>
         <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
           {[25, 50, 75, 100].map((t) => (
             <button
@@ -212,7 +212,7 @@ function ConfigForm({
     ];
     return (
       <div>
-        <label style={{ fontSize: 13, color: "#9ca3af" }}>滞在時間のしきい値</label>
+        <label style={{ fontSize: 13, color: "var(--muted-foreground)" }}>滞在時間のしきい値</label>
         <select
           value={v}
           onChange={(e) => onChange({ seconds: Number(e.target.value) })}
@@ -222,10 +222,10 @@ function ConfigForm({
             width: "100%",
             padding: "12px 14px",
             minHeight: 44,
-            background: "#1e293b",
-            border: "1px solid #374151",
+            background: "var(--muted)",
+            border: "1px solid var(--border)",
             borderRadius: 8,
-            color: "#f9fafb",
+            color: "var(--foreground)",
             fontSize: 14,
           }}
         >
@@ -260,7 +260,7 @@ function ConfigForm({
     const v = (config["pattern"] as string) ?? "";
     return (
       <div>
-        <label style={{ fontSize: 13, color: "#9ca3af" }}>URLパターン（globで指定）</label>
+        <label style={{ fontSize: 13, color: "var(--muted-foreground)" }}>URLパターン（globで指定）</label>
         <input
           type="text"
           value={v}
@@ -272,15 +272,15 @@ function ConfigForm({
             width: "100%",
             padding: "12px 14px",
             minHeight: 44,
-            background: "#1e293b",
-            border: "1px solid #374151",
+            background: "var(--muted)",
+            border: "1px solid var(--border)",
             borderRadius: 8,
-            color: "#f9fafb",
+            color: "var(--foreground)",
             fontSize: 14,
             boxSizing: "border-box",
           }}
         />
-        <p style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>
+        <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 8 }}>
           例: <code>/products/*</code>（商品一覧）、<code>/products/shoes/**</code>（靴カテゴリ以下全て）
         </p>
       </div>
@@ -297,14 +297,14 @@ function WidgetPreview({ message }: { message: string }) {
   return (
     <div
       style={{
-        background: "#0f172a",
-        border: "1px solid #1f2937",
+        background: "var(--background)",
+        border: "1px solid var(--border)",
         borderRadius: 12,
         padding: 16,
         marginTop: 16,
       }}
     >
-      <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>お客様への表示イメージ</p>
+      <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 10 }}>お客様への表示イメージ</p>
       <div
         style={{
           display: "flex",
@@ -329,12 +329,12 @@ function WidgetPreview({ message }: { message: string }) {
         </div>
         <div
           style={{
-            background: "#1e293b",
-            border: "1px solid #374151",
+            background: "var(--muted)",
+            border: "1px solid var(--border)",
             borderRadius: "4px 12px 12px 12px",
             padding: "10px 14px",
             fontSize: 14,
-            color: "#f9fafb",
+            color: "var(--foreground)",
             maxWidth: 280,
             lineHeight: 1.5,
           }}
@@ -499,10 +499,10 @@ export default function EngagementPage() {
     <div style={PAGE}>
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: "#f9fafb" }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: "var(--foreground)" }}>
           💬 {t("engagement.title")}
         </h1>
-        <p style={{ color: "#6b7280", fontSize: 14, marginTop: 6 }}>
+        <p style={{ color: "var(--muted-foreground)", fontSize: 14, marginTop: 6 }}>
           {t("engagement.description")}
         </p>
       </div>
@@ -515,7 +515,7 @@ export default function EngagementPage() {
 
       {/* Rules list */}
       {loading ? (
-        <p style={{ color: "#6b7280" }}>{t("common.loading")}</p>
+        <p style={{ color: "var(--muted-foreground)" }}>{t("common.loading")}</p>
       ) : rules.length === 0 ? (
         <div
           style={{
@@ -525,7 +525,7 @@ export default function EngagementPage() {
           }}
         >
           <div style={{ fontSize: 40, marginBottom: 12 }}>🌟</div>
-          <p style={{ color: "#9ca3af", fontSize: 15, marginBottom: 20 }}>
+          <p style={{ color: "var(--muted-foreground)", fontSize: 15, marginBottom: 20 }}>
             {t("engagement.empty")}
           </p>
           <button style={BTN_PRIMARY} onClick={openCreate}>
@@ -539,10 +539,10 @@ export default function EngagementPage() {
               {/* Icon + trigger info */}
               <span style={{ fontSize: 24 }}>{TRIGGER_META[rule.trigger_type].icon}</span>
               <div style={{ flex: 1, minWidth: 160 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "#f9fafb" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "var(--foreground)" }}>
                   {triggerLabel(rule.trigger_type, t)}
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
                   {configSummary(rule)}
                 </div>
               </div>
@@ -553,8 +553,8 @@ export default function EngagementPage() {
                   flex: 2,
                   minWidth: 140,
                   fontSize: 13,
-                  color: "#d1d5db",
-                  background: "#1e293b",
+                  color: "var(--muted-foreground)",
+                  background: "var(--muted)",
                   borderRadius: 8,
                   padding: "8px 12px",
                   maxWidth: 320,
@@ -572,8 +572,8 @@ export default function EngagementPage() {
               <span
                 style={{
                   fontSize: 11,
-                  color: "#9ca3af",
-                  background: "#1e293b",
+                  color: "var(--muted-foreground)",
+                  background: "var(--muted)",
                   padding: "3px 8px",
                   borderRadius: 6,
                   whiteSpace: "nowrap",
@@ -650,7 +650,7 @@ export default function EngagementPage() {
             {/* Step 1: trigger type selection */}
             {modal.step === 1 && (
               <div>
-                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, color: "#f9fafb" }}>
+                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, color: "var(--foreground)" }}>
                   どんな時に声をかけますか？
                 </h2>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -671,9 +671,9 @@ export default function EngagementPage() {
                           padding: "18px 14px",
                           minHeight: 90,
                           borderRadius: 12,
-                          border: `2px solid ${selected ? "#3b82f6" : "#374151"}`,
-                          background: selected ? "rgba(59,130,246,0.1)" : "#1e293b",
-                          color: selected ? "#93c5fd" : "#9ca3af",
+                          border: `2px solid ${selected ? "#3b82f6" : "var(--border)"}`,
+                          background: selected ? "rgba(59,130,246,0.1)" : "var(--muted)",
+                          color: selected ? "#93c5fd" : "var(--muted-foreground)",
                           cursor: "pointer",
                           textAlign: "left",
                           display: "flex",
@@ -707,7 +707,7 @@ export default function EngagementPage() {
             {/* Step 2: config */}
             {modal.step === 2 && modal.triggerType && (
               <div>
-                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20, color: "#f9fafb" }}>
+                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20, color: "var(--foreground)" }}>
                   {TRIGGER_META[modal.triggerType].icon} {t(TRIGGER_META[modal.triggerType].labelKey)}
                 </h2>
                 <ConfigForm
@@ -716,7 +716,7 @@ export default function EngagementPage() {
                   onChange={(cfg) => setModal((m) => ({ ...m, triggerConfig: cfg }))}
                 />
                 <div style={{ marginTop: 16 }}>
-                  <label style={{ fontSize: 13, color: "#9ca3af" }}>優先度（高いほど先にチェック）</label>
+                  <label style={{ fontSize: 13, color: "var(--muted-foreground)" }}>優先度（高いほど先にチェック）</label>
                   <input
                     type="number"
                     min={0}
@@ -729,10 +729,10 @@ export default function EngagementPage() {
                       width: "100px",
                       padding: "10px 12px",
                       minHeight: 44,
-                      background: "#1e293b",
-                      border: "1px solid #374151",
+                      background: "var(--muted)",
+                      border: "1px solid var(--border)",
                       borderRadius: 8,
-                      color: "#f9fafb",
+                      color: "var(--foreground)",
                       fontSize: 14,
                     }}
                   />
@@ -754,7 +754,7 @@ export default function EngagementPage() {
             {/* Step 3: message */}
             {modal.step === 3 && (
               <div>
-                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, color: "#f9fafb" }}>
+                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, color: "var(--foreground)" }}>
                   どんなメッセージを送りますか？
                 </h2>
                 <textarea
@@ -765,10 +765,10 @@ export default function EngagementPage() {
                   style={{
                     width: "100%",
                     padding: "12px 14px",
-                    background: "#1e293b",
-                    border: "1px solid #374151",
+                    background: "var(--muted)",
+                    border: "1px solid var(--border)",
                     borderRadius: 8,
-                    color: "#f9fafb",
+                    color: "var(--foreground)",
                     fontSize: 14,
                     resize: "vertical",
                     boxSizing: "border-box",

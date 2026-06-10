@@ -78,14 +78,14 @@ export default function PostHogIntegrationTab({ tenantId }: { tenantId: string }
   };
 
   const cardStyle: React.CSSProperties = {
-    background: "#1e293b", borderRadius: 8, padding: "20px 24px", marginBottom: 16,
+    background: "var(--muted)", borderRadius: 8, padding: "20px 24px", marginBottom: 16,
   };
   const labelStyle: React.CSSProperties = {
     display: "block", color: "#9ca3af", fontSize: 12, marginBottom: 6,
   };
   const inputStyle: React.CSSProperties = {
-    width: "100%", background: "#0f172a", border: "1px solid #334155",
-    borderRadius: 6, color: "#e2e8f0", fontSize: 14, padding: "8px 12px",
+    width: "100%", background: "var(--input)", border: "1px solid var(--border)",
+    borderRadius: 6, color: "var(--foreground)", fontSize: 14, padding: "8px 12px",
   };
   const btnStyle = (color: string): React.CSSProperties => ({
     background: color, color: "#fff", border: "none", borderRadius: 6,
@@ -199,11 +199,11 @@ export default function PostHogIntegrationTab({ tenantId }: { tenantId: string }
           position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
           display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
         }}>
-          <div style={{ background: "#1e293b", borderRadius: 8, padding: 24, maxWidth: 400, width: "90%" }}>
-            <div style={{ color: "#e2e8f0", fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
+          <div style={{ background: "var(--card)", borderRadius: 8, padding: 24, maxWidth: 400, width: "90%" }}>
+            <div style={{ color: "var(--foreground)", fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
               PostHog 連携を解除しますか？
             </div>
-            <div style={{ color: "#9ca3af", fontSize: 13, marginBottom: 16 }}>
+            <div style={{ color: "var(--muted-foreground)", fontSize: 13, marginBottom: 16 }}>
               Project API Key が削除されます。ウィジェットからのイベント送信が停止します。
             </div>
             <button style={btnStyle("#dc2626")} onClick={handleDisconnect} disabled={disconnecting}>

@@ -23,12 +23,12 @@ const DEFAULT_TEMPLATES: TemplateSlot[] = [
   { id: 'default_08', name: 'つむぎ' },
 ];
 
-const BG = "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)";
+const BG = "var(--background)";
 
 const CARD_STYLE: React.CSSProperties = {
   borderRadius: 14,
-  border: "1px solid #1f2937",
-  background: "rgba(15,23,42,0.95)",
+  border: "1px solid var(--border)",
+  background: "var(--card)",
   overflow: "hidden",
   display: "flex",
   flexDirection: "column",
@@ -138,19 +138,19 @@ export default function AvatarDefaultsPage() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: BG, color: "#e5e7eb", padding: "24px 20px", maxWidth: 1000, margin: "0 auto" }}>
+    <div style={{ minHeight: "100vh", background: BG, color: "var(--foreground)", padding: "24px 20px", maxWidth: 1000, margin: "0 auto" }}>
       {/* ヘッダー */}
       <header style={{ marginBottom: 28 }}>
         <button
           onClick={() => navigate("/admin")}
-          style={{ background: "none", border: "none", color: "#9ca3af", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, display: "block" }}
+          style={{ background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 14, cursor: "pointer", padding: 0, marginBottom: 10, display: "block" }}
         >
           {lang === "ja" ? "← 管理画面に戻る" : "← Back to Admin"}
         </button>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
           {lang === "ja" ? "デフォルトアバター管理" : "Default Avatar Management"}
         </h1>
-        <p style={{ fontSize: 13, color: "#6b7280", marginTop: 4, marginBottom: 0 }}>
+        <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
           {lang === "ja"
             ? "8種類のデフォルトアバターテンプレートの画像を管理します（Super Admin専用）"
             : "Manage images for 8 default avatar templates (Super Admin only)"}
@@ -192,10 +192,10 @@ export default function AvatarDefaultsPage() {
               <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
                 {/* テンプレートID + 名前 */}
                 <div>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", display: "block" }}>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", display: "block" }}>
                     {tmpl.name}
                   </span>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>{tmpl.id}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{tmpl.id}</span>
                 </div>
 
                 {/* フィードバック */}
@@ -224,7 +224,7 @@ export default function AvatarDefaultsPage() {
                     padding: "10px 16px",
                     minHeight: 44,
                     borderRadius: 10,
-                    border: "1px solid #374151",
+                    border: "1px solid var(--border)",
                     background: isUploading ? "rgba(30,41,59,0.4)" : "rgba(30,41,59,0.8)",
                     color: isUploading ? "#6b7280" : "#e5e7eb",
                     fontSize: 14,

@@ -116,11 +116,11 @@ export default function OptionManagementPage() {
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const currentPage = Math.floor(offset / LIMIT) + 1;
 
-  const PAGE_BG = "#0f172a";
-  const CARD_BG = "rgba(255,255,255,0.03)";
-  const BORDER = "#1f2937";
-  const TEXT_MAIN = "#f9fafb";
-  const TEXT_SUB = "#9ca3af";
+  const PAGE_BG = "var(--background)";
+  const CARD_BG = "var(--card)";
+  const BORDER = "var(--border)";
+  const TEXT_MAIN = "var(--foreground)";
+  const TEXT_SUB = "var(--muted-foreground)";
 
   const FILTER_TABS: { label: string; value: StatusFilter }[] = [
     { label: "すべて", value: "" },
@@ -363,7 +363,7 @@ function OrderDetailModal({
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div style={{
-        background: "#111827", border: `1px solid ${BORDER}`, borderRadius: 12,
+        background: "var(--card)", border: `1px solid ${BORDER}`, borderRadius: 12,
         width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto", padding: 24,
       }}>
         {/* ヘッダー */}
