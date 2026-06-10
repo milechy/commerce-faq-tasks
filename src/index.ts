@@ -148,13 +148,17 @@ app.use(
       "Content-Security-Policy",
       [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-        "style-src 'self' 'unsafe-inline'",
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.tailwindcss.com",
+        "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com",
         "img-src 'self' data: https://cdn.leonardo.ai",
         "connect-src 'self' https://api.r2c.biz wss://*.livekit.cloud",
         "media-src 'self' https: blob:",
+        "frame-ancestors 'self'",
       ].join("; ")
     );
+    // LP の demo-frame.html は同一オリジン iframe で埋め込むため SAMEORIGIN に緩和
+    // (グローバルの securityHeadersMiddleware が DENY を設定するため上書き必須)
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
     // widget.js はデプロイのたびに変わるため必ず再取得させる
     if (_req.path === "/widget.js") {
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
