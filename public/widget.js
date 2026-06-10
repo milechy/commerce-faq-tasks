@@ -1103,6 +1103,13 @@
     if (avatarConfigFetched || !apiKey) return;
     avatarConfigFetched = true;
 
+    // LiveKit SDK を API 応答待ちと並行して先読み込み（CDN ロードを API 待ちに重ねる）
+    if (!window.LivekitClient && !document.querySelector('script[src="' + LIVEKIT_SDK_URL + '"]')) {
+      var _preloadScript = document.createElement('script');
+      _preloadScript.src = LIVEKIT_SDK_URL;
+      document.head.appendChild(_preloadScript);
+    }
+
     // まず Anam セッションを試みる
     fetch(apiBase + '/api/avatar/anam-session', {
       method: 'POST',
@@ -1499,8 +1506,12 @@
       return;
     }
 
-    // スクリプトタグが既に DOM にある（ロード中）なら追加しない
-    if (document.querySelector('script[src="' + LIVEKIT_SDK_URL + '"]')) {
+    // スクリプトタグが既に DOM にある（先読み込み or ロード中）
+    var existingScript = document.querySelector('script[src="' + LIVEKIT_SDK_URL + '"]');
+    if (existingScript) {
+      // 先読み込みスクリプトが load 済みかもしれない — イベント登録後に再チェック（race 対策）
+      existingScript.addEventListener('load', function () { connectLiveKit(); });
+      if (window.LivekitClient) { connectLiveKit(); }
       return;
     }
 
