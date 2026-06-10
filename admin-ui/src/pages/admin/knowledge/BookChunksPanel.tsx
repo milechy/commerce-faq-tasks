@@ -66,7 +66,7 @@ const STATUS_LABEL: Record<string, string> = {
   uploaded: "アップロード済",
   processing: "処理中",
   chunked: "分割完了",
-  embedded: "埋め込み完了",
+  embedded: "登録完了",
   failed: "失敗",
 };
 

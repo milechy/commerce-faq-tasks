@@ -130,7 +130,7 @@ export default function TenantKnowledgePage() {
                 color: "var(--foreground)", fontSize: 15, cursor: "pointer",
               }}
             >
-              <option value="global">🌐 グローバルナレッジ</option>
+              <option value="global">🌐 全店舗共通の知識データ</option>
               {tenants.map((tn) => (
                 <option key={tn.id} value={tn.id}>{tn.name}</option>
               ))}

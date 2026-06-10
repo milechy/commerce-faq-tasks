@@ -87,7 +87,7 @@ export default function ChatTestPage() {
       ? selectedTenantId
       : (user?.tenantId ?? (previewMode ? (previewTenantId ?? "") : ""));
   const displayTenantName = scopeGlobal
-    ? "グローバルナレッジ"
+    ? "全店舗共通の知識データ"
     : isSuperAdmin
       ? (tenants.find((ten) => ten.id === selectedTenantId)?.name ?? selectedTenantId)
       : (previewMode ? (previewTenantName ?? effectiveTenantId) : (user?.tenantName ?? effectiveTenantId));
@@ -399,7 +399,7 @@ export default function ChatTestPage() {
         {/* グローバルナレッジバナー */}
         {scopeGlobal && (
           <div style={{ marginBottom: 24, padding: "14px 18px", borderRadius: 12, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.4)", color: "#4ade80", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
-            <span>🌐</span><span>グローバルナレッジでテスト中</span>
+            <span>🌐</span><span>全店舗共通の知識データでテスト中</span>
           </div>
         )}
 

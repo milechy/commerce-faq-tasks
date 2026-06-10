@@ -24,7 +24,7 @@ const STATUS_LABEL: Record<string, string> = {
   uploaded: "アップロード済",
   processing: "処理中",
   chunked: "分割完了",
-  embedded: "埋め込み完了",
+  embedded: "登録完了",
   failed: "失敗",
 };
 const STATUS_COLOR: Record<string, string> = {
@@ -175,7 +175,7 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
                 )}
                 {book.status === "embedded" && (
                   <div style={{ fontSize: 12, color: "#4ade80", marginTop: 4 }}>
-                    ✅ {book.chunk_count ?? 0}件の分割テキスト埋め込み完了
+                    ✅ {book.chunk_count ?? 0}件の分割テキスト登録完了
                   </div>
                 )}
               </div>
