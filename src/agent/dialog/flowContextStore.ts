@@ -71,6 +71,13 @@ export function getOrInitFlowSessionMeta(key: FlowSessionKey): FlowSessionMeta {
   return init;
 }
 
+// Phase47-B: 副作用なしの読み取り専用 getter（reward signal 用）
+export function peekFlowSessionMeta(
+  key: FlowSessionKey
+): FlowSessionMeta | undefined {
+  return sessionStore.get(toInternalKey(key));
+}
+
 export function setFlowSessionMeta(
   key: FlowSessionKey,
   meta: FlowSessionMeta
