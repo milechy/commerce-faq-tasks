@@ -13,12 +13,6 @@ interface AvatarConfig {
   tenant_name?: string;
   name: string;
   image_url: string | null;
-  image_prompt: string | null;
-  voice_id: string | null;
-  voice_description: string | null;
-  personality_prompt: string | null;
-  behavior_description: string | null;
-  emotion_tags: string[];
   lemonslice_agent_id: string | null;
   is_active: boolean;
   is_default: boolean;
@@ -748,6 +742,7 @@ export default function AvatarListPage() {
                   <img
                     src={cfg.image_url}
                     alt={cfg.name}
+                    loading="lazy"
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).style.display = "none";
                     }}
