@@ -170,6 +170,7 @@ button {
   }
   .app-main {
     margin-left: 0;
+    padding-bottom: calc(60px + env(safe-area-inset-bottom));
   }
   .mobile-header {
     display: flex;
@@ -182,6 +183,9 @@ button {
     position: sticky;
     top: 0;
     z-index: 30;
+  }
+  .mobile-bottom-bar {
+    display: flex !important;
   }
 }
 

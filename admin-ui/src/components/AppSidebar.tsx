@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -475,5 +475,65 @@ export function MobileHeader() {
         </>
       )}
     </>
+  );
+}
+
+// ─── Mobile bottom bar ────────────────────────────────────────────────
+
+const BOTTOM_NAV: { path: string; icon: React.ElementType; label: string; end?: boolean }[] = [
+  { path: "/admin", icon: LayoutDashboard, label: "ホーム", end: true },
+  { path: "/admin/chat-history", icon: MessageSquare, label: "会話" },
+  { path: "/admin/knowledge", icon: BookOpen, label: "知識" },
+  { path: "/admin/analytics", icon: BarChart2, label: "分析" },
+  { path: "/admin/tuning", icon: SlidersHorizontal, label: "設定" },
+];
+
+export function MobileBottomBar() {
+  const location = useLocation();
+
+  return (
+    <nav
+      style={{
+        display: "none",
+        position: "fixed",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 60,
+        background: "var(--sidebar)",
+        borderTop: "1px solid var(--sidebar-border)",
+        zIndex: 40,
+        paddingBottom: "env(safe-area-inset-bottom)",
+      }}
+      className="mobile-bottom-bar"
+    >
+      {BOTTOM_NAV.map(({ path, icon: Icon, label, end }) => {
+        const isActive = end ? location.pathname === path : location.pathname.startsWith(path);
+        return (
+          <NavLink
+            key={path}
+            to={path}
+            end={end}
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 3,
+              textDecoration: "none",
+              color: isActive ? "var(--sidebar-primary)" : "var(--muted-foreground)",
+              fontSize: 10,
+              fontWeight: isActive ? 600 : 400,
+              minHeight: 44,
+              transition: "color 0.12s",
+            }}
+          >
+            <Icon size={20} />
+            <span>{label}</span>
+          </NavLink>
+        );
+      })}
+    </nav>
   );
 }

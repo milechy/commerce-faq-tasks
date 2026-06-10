@@ -1,6 +1,6 @@
 import React from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { AppSidebar, MobileHeader } from "./components/AppSidebar";
+import { AppSidebar, MobileHeader, MobileBottomBar } from "./components/AppSidebar";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
@@ -97,6 +97,7 @@ function AppInner() {
       {isAdmin && <AppSidebar />}
       <div className="app-main">
         {isAdmin && <MobileHeader />}
+        {isAdmin && <MobileBottomBar />}
         <Routes>
 
         {/* ルートは管理ダッシュボードへリダイレクト */}

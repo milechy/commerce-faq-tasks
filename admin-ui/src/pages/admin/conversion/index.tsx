@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import type { CSSProperties } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
 import { useLang } from "../../../i18n/LangContext";
@@ -109,7 +109,9 @@ export default function ConversionDashboardPage() {
   const [experiments, setExperiments] = useState<ABExperiment[]>([]);
   const [suggestions, setSuggestions] = useState<Array<{ description: string; suggestedAction: string; type: string }>>([]);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState<'7d' | '30d' | '90d'>('30d');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const period = (searchParams.get("period") ?? "30d") as "7d" | "30d" | "90d";
+  const setPeriod = (p: "7d" | "30d" | "90d") => setSearchParams({ period: p }, { replace: true });
   const tenantParam = !isSuperAdmin && user?.tenantId ? `&tenant_id=${user.tenantId}` : '';
 
   const loadData = useCallback(async () => {
