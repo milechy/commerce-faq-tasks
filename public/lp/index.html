@@ -691,13 +691,14 @@
     <div style="position:absolute; top:-80px; left:-80px; width:300px; height:300px; background:radial-gradient(circle, rgba(124,58,237,0.1), transparent 70%); pointer-events:none;"></div>
     <div style="position:absolute; bottom:-80px; right:-80px; width:300px; height:300px; background:radial-gradient(circle, rgba(6,182,212,0.06), transparent 70%); pointer-events:none;"></div>
 
-    <div id="demo-widget-area" class="widget-demo-area" style="border-radius:10px; overflow:hidden; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.06); display:flex; align-items:center; justify-content:center;">
-      <div style="text-align:center; color:var(--muted); padding:40px;">
-        <div style="width:56px; height:56px; border-radius:50%; background:rgba(124,58,237,0.2); display:flex; align-items:center; justify-content:center; font-size:28px; margin:0 auto 16px;">🤖</div>
-        <div style="font-size:15px; color:#fff; margin-bottom:6px; font-weight:600;">R2C AI デモ</div>
-        <div style="font-size:13px; margin-bottom:4px;">上のボタンをクリックするか、右下のウィジェットから話しかけてください。</div>
-        <div style="font-size:12px; color:#64748b; margin-top:8px;">このデモはLP専用のサンドボックス環境です。</div>
-      </div>
+    <div id="demo-widget-area" class="widget-demo-area" style="border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.06);">
+      <iframe
+        id="demo-frame"
+        src="/lp/demo-frame.html"
+        style="width:100%; height:520px; border:none; display:block; border-radius:10px;"
+        title="R2C AI アシスタント デモ"
+        loading="eager"
+      ></iframe>
     </div>
   </div>
 
@@ -1264,57 +1265,18 @@
 
   // ===== 4. Example Question Buttons =====
   window.sendExampleQuestion = function(text) {
-    // Scroll to demo section first
+    // Scroll to demo section
     var demoSection = document.getElementById('demo');
     if (demoSection) {
       demoSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-
-    // Try to send via postMessage to widget
-    var widgetScript = document.getElementById('r2c-widget-script');
-    window.postMessage({
-      type: 'r2c:send_message',
-      text: text
-    }, '*');
-
-    // Try direct Shadow DOM access
+    // Send question to demo iframe widget
     setTimeout(function() {
-      var widgetEl = document.querySelector('r2c-widget');
-      if (widgetEl && widgetEl.shadowRoot) {
-        // Try to find input and send button
-        var input = widgetEl.shadowRoot.querySelector('input[type="text"], textarea, input:not([type="hidden"])');
-        var sendBtn = widgetEl.shadowRoot.querySelector('button[type="submit"], button[class*="send"], [class*="send-btn"]');
-
-        if (input) {
-          // Set value using native input setter for React-managed inputs
-          var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-          if (!nativeInputValueSetter) {
-            nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-          }
-          if (nativeInputValueSetter) {
-            nativeInputValueSetter.set.call(input, text);
-          } else {
-            input.value = text;
-          }
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-
-          if (sendBtn) {
-            setTimeout(function() { sendBtn.click(); }, 100);
-          } else {
-            // Try Enter key
-            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-            input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
-          }
-        }
+      var frame = document.getElementById('demo-frame');
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage({ source: 'faq-widget-host', type: 'send', text: text }, window.location.origin);
       }
-
-      // Also try to open the widget if it's floating/closed
-      var widgetToggle = document.querySelector('[class*="widget-toggle"], [class*="fab"], [id*="r2c-fab"]');
-      if (widgetToggle) {
-        widgetToggle.click();
-      }
-    }, 500);
+    }, 400);
   };
 
   // ===== 5. Intersection Observer: Hero widget → floating switch =====

@@ -32,12 +32,55 @@
   ></script>
 
   <script>
-    function tryOpen() {
+    var widgetReady = false;
+
+    function getWidgetShadow() {
+      // widget.js は document.body の最初の子 div に Shadow DOM を作成
+      var host = document.body.querySelector('div');
+      return host ? host.shadowRoot : null;
+    }
+
+    function openWidget() {
       window.postMessage({ source: 'faq-widget-host', type: 'open' }, window.location.origin);
       document.getElementById('hint').classList.add('hidden');
+      widgetReady = true;
     }
-    // widget.js の初期化完了を待ってから開く
-    setTimeout(tryOpen, 1200);
+
+    function injectText(text) {
+      var shadow = getWidgetShadow();
+      if (!shadow) return;
+      var textarea = shadow.querySelector('textarea');
+      if (!textarea) return;
+
+      // パネルが閉じていたら先に開く
+      if (!widgetReady) openWidget();
+
+      setTimeout(function() {
+        var shadow2 = getWidgetShadow();
+        if (!shadow2) return;
+        var ta = shadow2.querySelector('textarea');
+        if (!ta) return;
+        ta.value = text;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        var sendBtn = shadow2.querySelector('.send-btn');
+        if (sendBtn && !sendBtn.disabled) {
+          setTimeout(function() { sendBtn.click(); }, 100);
+        }
+      }, 300);
+    }
+
+    // LP 親ページからの質問注入を受け取る
+    window.addEventListener('message', function(e) {
+      if (e.origin !== window.location.origin) return;
+      var d = e.data;
+      if (!d || typeof d !== 'object' || d.source !== 'faq-widget-host') return;
+      if (d.type === 'send' && typeof d.text === 'string') {
+        injectText(d.text);
+      }
+    });
+
+    // ウィジェット初期化完了後にパネルを自動展開
+    setTimeout(openWidget, 1200);
   </script>
 </body>
 </html>
