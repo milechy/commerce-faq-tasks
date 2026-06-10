@@ -195,12 +195,12 @@ export function registerLiveKitTokenRoutes(
         }
       }
 
-      // Room 作成 + Agent Dispatch（SDK 経由 — await して結果をログ、失敗してもトークンは返す）
-      try {
-        await dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, verifiedAvatarConfigId ?? undefined);
-      } catch (err) {
-        logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err);
-      }
+      // Room 作成 + Agent Dispatch — fire-and-forget（await しない）
+      // クライアントへのトークン返却を先に行い、LiveKit Cloud API 待ちを排除する。
+      // LiveKit SDK CDN ロード（~500ms-2s）の間に dispatch が完了するため、
+      // agent は room.connect() 前後に到達する。
+      dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, verifiedAvatarConfigId ?? undefined)
+        .catch(err => logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err));
 
       return res.json({
         enabled: true,
