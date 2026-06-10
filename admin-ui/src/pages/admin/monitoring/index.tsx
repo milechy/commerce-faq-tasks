@@ -125,7 +125,7 @@ export default function MonitoringPage() {
           description: "お客様との会話が正常に完了した割合",
         },
         {
-          name: "ループ検出率",
+          name: "同じ質問の繰り返し率",
           value: data.loopRate.toFixed(1),
           unit: "%",
           threshold: `${sla.loopRateMax}% 以下`,
@@ -133,7 +133,7 @@ export default function MonitoringPage() {
           description: "同じ質問が繰り返された会話の割合",
         },
         {
-          name: "フォールバック率",
+          name: "AIが答えられなかった割合",
           value: data.fallbackRate.toFixed(1),
           unit: "%",
           threshold: `${sla.fallbackRateMax}% 以下`,
@@ -220,10 +220,10 @@ export default function MonitoringPage() {
             {error ? "接続エラー" : "接続中"}
           </div>
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
-            KPI 監視ダッシュボード
+            システム稼働状況
           </h1>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
-            サービスの品質指標をリアルタイムで確認できます
+            AIサービスの品質指標をリアルタイムで確認できます
           </p>
         </div>
 

@@ -80,7 +80,7 @@ export default function TenantKnowledgePage() {
     { id: "text", label: t("knowledge.tab_text"), icon: "✏️" },
     { id: "scrape", label: t("knowledge.tab_scrape"), icon: "🌐" },
     { id: "pdf", label: "PDFアップロード", icon: "📚" },
-    { id: "attribution", label: "CV影響度", icon: "📈" },
+    { id: "attribution", label: "成約への貢献度", icon: "📈" },
   ];
 
   const isGlobalTenant = resolvedTenantId === "global";

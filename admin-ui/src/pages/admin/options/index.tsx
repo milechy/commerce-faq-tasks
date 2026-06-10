@@ -133,7 +133,7 @@ export default function OptionManagementPage() {
     <div style={{ minHeight: "100vh", background: PAGE_BG, color: TEXT_MAIN, fontFamily: "system-ui, -apple-system, sans-serif", padding: "24px 16px" }}>
       {/* ヘッダー */}
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>💼 オプション代行管理</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>💼 代行作業の依頼・管理</h1>
         <p style={{ fontSize: 13, color: TEXT_SUB, marginBottom: 20 }}>テナントから依頼された代行作業の管理・金額確定・完了処理を行います</p>
 
         {/* フィルタータブ */}
@@ -164,7 +164,7 @@ export default function OptionManagementPage() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${BORDER}`, background: "rgba(255,255,255,0.02)" }}>
-                {["テナント", "作業内容", "LLM見積", "確定金額", "ステータス", "発注日時"].map((h) => (
+                {["テナント", "作業内容", "AI処理コスト見積", "確定金額", "ステータス", "発注日時"].map((h) => (
                   <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: TEXT_SUB, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>

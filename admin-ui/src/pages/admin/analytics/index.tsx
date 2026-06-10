@@ -298,7 +298,7 @@ export default function AnalyticsDashboardPage() {
 
   const radarData = evaluations
     ? {
-        labels: ["心理学適合", "顧客反応", "ステージ進行", "タブー違反"],
+        labels: ["接客スタイルの適合度", "お客様の反応", "会話の進み具合", "禁止事項の遵守率"],
         datasets: [
           {
             label: "平均スコア",
@@ -408,10 +408,10 @@ export default function AnalyticsDashboardPage() {
   const stageDropoutBarData = conversion
     ? {
         labels: ["clarify", "answer", "confirm", "terminal"].map((s) => ({
-          clarify: "クラリファイ",
-          answer: "アンサー",
-          confirm: "コンファーム",
-          terminal: "ターミナル",
+          clarify: "質問確認",
+          answer: "回答",
+          confirm: "クロージング",
+          terminal: "完了",
         }[s] ?? s)),
         datasets: [
           {
@@ -494,7 +494,7 @@ export default function AnalyticsDashboardPage() {
             ← 管理画面へ戻る
           </button>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            📈 会話分析ダッシュボード
+            📈 チャット成績レポート
             {isSuperAdmin && (
               <span style={{ fontSize: 16, fontWeight: 400, color: "var(--muted-foreground)", marginLeft: 10 }}>
                 — {selectedTenantName}
@@ -502,7 +502,7 @@ export default function AnalyticsDashboardPage() {
             )}
           </h1>
           <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
-            KPI・トレンド・センチメントを可視化します
+            会話の件数・品質・お客様の反応を確認できます
           </p>
         </div>
 
@@ -616,7 +616,7 @@ export default function AnalyticsDashboardPage() {
                   ? `${summary.avg_judge_score.toFixed(1)}`
                   : "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>平均Judgeスコア</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>AI応答品質スコア</span>
               <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>/100</span>
             </div>
 
@@ -626,7 +626,7 @@ export default function AnalyticsDashboardPage() {
               <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", lineHeight: 1 }}>
                 {summary?.total_knowledge_gaps ?? "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>Knowledge Gap</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>AIが答えられなかった質問</span>
               <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>件</span>
             </div>
 
@@ -638,7 +638,7 @@ export default function AnalyticsDashboardPage() {
                   ? `${(summary.avatar_rate * 100).toFixed(1)}%`
                   : "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>アバター利用率</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>動画AI接客の利用割合</span>
               <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                 {summary?.avatar_session_count ?? 0}件 / 全会話
               </span>
@@ -657,7 +657,7 @@ export default function AnalyticsDashboardPage() {
               >
                 {summary?.cv_count_30d ?? "—"}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>CV件数(30日)</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>成約件数（30日）</span>
               <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                 ¥{(summary?.cv_total_value_30d ?? 0).toLocaleString("ja-JP")}
               </span>
@@ -679,10 +679,10 @@ export default function AnalyticsDashboardPage() {
                   : "—"}
               </span>
               <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>
-                ナレッジ貢献度
+                知識データの成約貢献度
               </span>
               <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                Top3 平均CV率
+                Top3 平均成約率
               </span>
             </div>
 
@@ -709,7 +709,7 @@ export default function AnalyticsDashboardPage() {
                         ? `${(positiveRate * 100).toFixed(1)}%`
                         : "—"}
                     </span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>顧客感情</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>お客様の反応</span>
                     <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
                       ポジティブ率
                     </span>
@@ -733,7 +733,7 @@ export default function AnalyticsDashboardPage() {
                 background: "var(--card)",
               }}
             >
-              <span style={{ fontSize: 12, color: "var(--muted-foreground)", alignSelf: "center", marginRight: 4 }}>CV内訳:</span>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)", alignSelf: "center", marginRight: 4 }}>成約の内訳:</span>
               {(
                 [
                   ["purchase", "購入", "#34d399"],
@@ -767,7 +767,7 @@ export default function AnalyticsDashboardPage() {
           {lineData && (
             <div style={chartCardStyle}>
               <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
-                会話数トレンド
+                会話数の変化
               </h3>
               <div style={{ height: 220 }}>
                 <Line
@@ -797,7 +797,7 @@ export default function AnalyticsDashboardPage() {
           {stackedBarData && (
             <div style={chartCardStyle}>
               <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
-                センチメント推移
+                お客様の反応の変化
               </h3>
               <div style={{ height: 220 }}>
                 <Bar
@@ -843,7 +843,7 @@ export default function AnalyticsDashboardPage() {
             {doughnutData && (
               <div style={{ ...chartCardStyle, flex: "1 1 280px", marginBottom: 0 }}>
                 <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
-                  Judgeスコア分布
+                  AI応答品質スコアの分布
                 </h3>
                 <div style={{ height: 200, display: "flex", justifyContent: "center" }}>
                   <Doughnut
@@ -867,7 +867,7 @@ export default function AnalyticsDashboardPage() {
             {radarData && (
               <div style={{ ...chartCardStyle, flex: "1 1 280px", marginBottom: 0 }}>
                 <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
-                  4軸平均スコア
+                  AI対応の4項目評価
                 </h3>
                 <div style={{ height: 200 }}>
                   <Radar
@@ -898,7 +898,7 @@ export default function AnalyticsDashboardPage() {
             {sentimentPieData && (
               <div style={{ ...chartCardStyle, flex: "1 1 280px", marginBottom: 0 }}>
                 <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
-                  センチメント分布
+                  お客様の反応の分布
                 </h3>
                 <div style={{ height: 200, display: "flex", justifyContent: "center" }}>
                   <Pie
@@ -923,7 +923,7 @@ export default function AnalyticsDashboardPage() {
           {evaluations && evaluations.low_score_sessions.length > 0 && (
             <div style={chartCardStyle}>
               <h3 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px 0" }}>
-                低スコア会話
+                AI応答品質が低い会話
               </h3>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -1036,7 +1036,7 @@ export default function AnalyticsDashboardPage() {
                   <span style={{ fontSize: 28, fontWeight: 700, color: "#34d399", lineHeight: 1 }}>
                     {conversion.summary.recorded_outcomes}
                   </span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>記録済み成果</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>成果記録数</span>
                 </div>
                 <div style={cardStyle}>
                   <span style={{ fontSize: 24 }}>📝</span>
@@ -1055,7 +1055,7 @@ export default function AnalyticsDashboardPage() {
                   >
                     {conversion.summary.recording_rate.toFixed(1)}%
                   </span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>記録率</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>成果記録率</span>
                 </div>
                 {/* コンバージョン率: 離脱・不明を除いた割合 */}
                 {(() => {
@@ -1080,7 +1080,7 @@ export default function AnalyticsDashboardPage() {
                       >
                         {convRate.toFixed(1)}%
                       </span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>コンバージョン率</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>成約率</span>
                       <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>離脱・不明を除く</span>
                     </div>
                   );
@@ -1093,7 +1093,7 @@ export default function AnalyticsDashboardPage() {
                 {convTrendLineData && (
                   <div style={{ ...chartCardStyle, flex: "2 1 320px", marginBottom: 0 }}>
                     <div style={{ fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12, fontSize: 14 }}>
-                      コンバージョン率推移
+                      成約率の変化
                     </div>
                     <div style={{ height: 200 }}>
                       <Line
@@ -1156,14 +1156,14 @@ export default function AnalyticsDashboardPage() {
                     }}
                   >
                     <span style={{ fontWeight: 600, color: "var(--muted-foreground)", fontSize: 14 }}>
-                      テクニック別効果
+                      AIテクニック別 成約率
                     </span>
                   </div>
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                       <thead>
                         <tr>
-                          {["テクニック", "使用セッション", "コンバージョン"].map((h) => (
+                          {["テクニック", "使用会話数", "成約数"].map((h) => (
                             <th
                               key={h}
                               style={{
@@ -1232,7 +1232,7 @@ export default function AnalyticsDashboardPage() {
               {stageDropoutBarData && (
                 <div style={chartCardStyle}>
                   <div style={{ fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12, fontSize: 14 }}>
-                    ステージ別離脱分析
+                    会話ステージ別の離脱分析
                   </div>
                   <div style={{ height: 180 }}>
                     <Bar
