@@ -224,7 +224,7 @@ const PREMIUM_STEPS = [
   "完了！",
 ];
 
-export function AvatarWizard({ tenantId, onComplete, onCancel }: Props) {
+export function AvatarWizard({ tenantId: _tenantId, onComplete, onCancel }: Props) {
   const [step, setStep] = useState(1);
   const [state, setState] = useState<WizardState>(INITIAL);
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);

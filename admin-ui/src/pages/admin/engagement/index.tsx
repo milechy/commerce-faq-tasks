@@ -6,6 +6,7 @@ import type { CSSProperties } from "react";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
 import { useLang } from "../../../i18n/LangContext";
+import type { TranslationKey } from "../../../i18n/ja";
 
 // ------------------------------------------------------------------ //
 // Types
@@ -110,14 +111,14 @@ const MODAL: CSSProperties = {
 // ------------------------------------------------------------------ //
 // Trigger type metadata
 // ------------------------------------------------------------------ //
-const TRIGGER_META: Record<TriggerType, { icon: string; labelKey: string }> = {
-  scroll_depth: { icon: "📜", labelKey: "engagement.trigger_scroll" },
-  idle_time:    { icon: "⏱️", labelKey: "engagement.trigger_idle" },
-  exit_intent:  { icon: "🚪", labelKey: "engagement.trigger_exit" },
-  page_url_match: { icon: "🔗", labelKey: "engagement.trigger_url" },
+const TRIGGER_META: Record<TriggerType, { icon: string; labelKey: TranslationKey }> = {
+  scroll_depth: { icon: "📜", labelKey: "engagement.trigger_scroll" as TranslationKey },
+  idle_time:    { icon: "⏱️", labelKey: "engagement.trigger_idle" as TranslationKey },
+  exit_intent:  { icon: "🚪", labelKey: "engagement.trigger_exit" as TranslationKey },
+  page_url_match: { icon: "🔗", labelKey: "engagement.trigger_url" as TranslationKey },
 };
 
-function triggerLabel(type: TriggerType, t: (key: string) => string): string {
+function triggerLabel(type: TriggerType, t: (key: TranslationKey) => string): string {
   return t(TRIGGER_META[type].labelKey);
 }
 
