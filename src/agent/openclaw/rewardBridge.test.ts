@@ -21,6 +21,18 @@ afterEach(() => {
 });
 
 describe("sendRewardSignal", () => {
+  it("OPENCLAW_ENABLED=false は許可テナントでも何もしない", async () => {
+    process.env.OPENCLAW_ENABLED = "false";
+    await sendRewardSignal({
+      tenantId: "carnation",
+      sessionId: "sess-000",
+      variantId: "v1",
+      score: 80,
+      outcome: "replied",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("Feature Flag オフのテナントは何もしない", async () => {
     await sendRewardSignal({
       tenantId: "other-tenant",
