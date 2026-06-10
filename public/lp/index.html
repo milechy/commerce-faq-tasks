@@ -1119,19 +1119,7 @@
   </div>
 </footer>
 
-<!-- ===================== WIDGET EMBED ===================== -->
-<!-- TODO: LP_DEMO_API_KEY を実際のキーに置き換えてください -->
-<script
-  id="r2c-widget-script"
-  src="https://api.r2c.biz/widget.js"
-  data-api-key="rjc_77aaa951edede3a8faa44161a6f505eca44f4c0517e051ec1f8bb6bc9f22b29b"
-  data-tenant="r2c_default"
-  data-accent-color="#7c3aed"
-  data-greeting="こんにちは！R2Cのデモです。料金・機能・導入方法など、何でも聞いてください。"
-  data-proactive-message="ご検討中ですか？何でもお気軽にどうぞ！"
-  data-proactive-delay="8000"
-  defer>
-</script>
+<!-- ウィジェットは Hero iframe + Demo iframe の2箇所に埋め込み済み。LP本体への浮遊ウィジェット追加は不要（3重表示防止）。 -->
 
 <!-- ===================== INLINE JS ===================== -->
 <script>
@@ -1217,52 +1205,6 @@
   });
 
   // Fallback: MutationObserver on widget shadow root (if accessible)
-  function observeWidgetMessages() {
-    var widgetEl = document.querySelector('r2c-widget');
-    if (!widgetEl || !widgetEl.shadowRoot) return;
-
-    var observer = new MutationObserver(function(mutations) {
-      mutations.forEach(function(mutation) {
-        mutation.addedNodes.forEach(function(node) {
-          if (node.nodeType === 1) {
-            // Look for assistant message elements
-            var isAssistantMsg =
-              node.classList && (
-                node.classList.contains('assistant-message') ||
-                node.classList.contains('bot-message') ||
-                node.dataset.role === 'assistant'
-              );
-            if (isAssistantMsg) {
-              r2cMessageCount++;
-              window.r2cMessageCount = r2cMessageCount;
-              if (r2cMessageCount >= 3) {
-                showCtaBanner();
-              }
-            }
-          }
-        });
-      });
-    });
-
-    // Try to find the chat container inside shadow DOM
-    var chatContainer = widgetEl.shadowRoot.querySelector('.chat-messages, .message-list, [class*="chat"]');
-    if (chatContainer) {
-      observer.observe(chatContainer, { childList: true, subtree: true });
-    } else {
-      // Observe entire shadow root as fallback
-      observer.observe(widgetEl.shadowRoot, { childList: true, subtree: true });
-    }
-  }
-
-  // Attempt to set up observer after widget loads
-  document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(observeWidgetMessages, 2000);
-
-    // Also listen for widget ready event
-    document.addEventListener('r2c:widget:ready', observeWidgetMessages);
-    window.addEventListener('r2c:widget:ready', observeWidgetMessages);
-  });
-
   // ===== 4. Example Question Buttons =====
   window.sendExampleQuestion = function(text) {
     // Scroll to demo section
