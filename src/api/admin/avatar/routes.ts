@@ -269,7 +269,9 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
     }
     try {
       const result = await db.query(
-        `SELECT ac.*, COALESCE(t.name, ac.tenant_id) AS tenant_name
+        `SELECT ac.id, ac.tenant_id, ac.name, ac.image_url, ac.is_active, ac.is_default,
+                ac.created_at, ac.avatar_provider, ac.lemonslice_agent_id,
+                COALESCE(t.name, ac.tenant_id) AS tenant_name
          FROM avatar_configs ac
          LEFT JOIN tenants t ON t.id = ac.tenant_id
          ORDER BY t.name ASC, ac.created_at DESC`
@@ -277,6 +279,32 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       return res.json({ configs: result.rows, total: result.rows.length });
     } catch (err) {
       logger.warn("[GET /v1/admin/avatar/configs/all]", err);
+      return res.status(500).json({ error: "アバター設定の取得に失敗しました" });
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // GET /v1/admin/avatar/configs/:id — 単体フル取得 (edit用)
+  // -----------------------------------------------------------------------
+  app.get("/v1/admin/avatar/configs/:id", async (req: Request, res: Response) => {
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedAvatarRole(role)) {
+      return denyAvatarRole(req, res, su, role);
+    }
+    const { id } = req.params;
+    try {
+      const result = isSuperAdmin
+        ? await db.query("SELECT * FROM avatar_configs WHERE id = $1", [id])
+        : await db.query(
+            "SELECT * FROM avatar_configs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'r2c_default')",
+            [id, tenantId]
+          );
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "設定が見つかりません" });
+      }
+      return res.json(result.rows[0]);
+    } catch (err) {
+      logger.warn("[GET /v1/admin/avatar/configs/:id]", err);
       return res.status(500).json({ error: "アバター設定の取得に失敗しました" });
     }
   });
@@ -303,16 +331,17 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
 
     try {
       let result;
+      const listCols = "id, tenant_id, name, image_url, is_active, is_default, created_at, avatar_provider, lemonslice_agent_id";
       if (filterTenantId) {
         result = await db.query(
-          `SELECT * FROM avatar_configs
+          `SELECT ${listCols} FROM avatar_configs
            WHERE (tenant_id = $1 OR tenant_id = 'r2c_default')
            ORDER BY is_default ASC, created_at DESC`,
           [filterTenantId]
         );
       } else {
         result = await db.query(
-          "SELECT * FROM avatar_configs ORDER BY created_at DESC"
+          `SELECT ${listCols} FROM avatar_configs ORDER BY created_at DESC`
         );
       }
       return res.json({ configs: result.rows, total: result.rows.length });

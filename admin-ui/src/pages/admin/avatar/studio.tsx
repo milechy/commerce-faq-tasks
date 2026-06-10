@@ -164,10 +164,9 @@ export default function AvatarStudioPage() {
     if (!id) return;
     setLoadingEdit(true);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs`);
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${id}`);
       if (!res.ok) return;
-      const data = await res.json() as { configs: AvatarConfig[] };
-      const found = data.configs.find((c) => c.id === id);
+      const found = await res.json() as AvatarConfig;
       if (found) {
         setName(found.name);
         setLemonsliceAgentId(found.lemonslice_agent_id ?? "");
