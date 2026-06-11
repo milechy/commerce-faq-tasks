@@ -3,6 +3,7 @@ import "./config/env";
 
 import { pool as db } from "./lib/db";
 import { alertEngine } from "./lib/alerts/alertEngine";
+import { startOpenClawHeartbeat } from "./agent/openclaw/heartbeatHandler";
 import express from "express";
 import multer from "multer";
 import path from "node:path";
@@ -680,6 +681,10 @@ async function startServer() {
   // Phase23: AlertEngine — 60秒周期で KPI を評価し Slack アラートを送信
   alertEngine.start();
   logger.info("[startup] AlertEngine started");
+
+  // Phase47-D: OpenClaw Heartbeat — flow 統計を30分周期で監視（Flag 判定は handler 内部）
+  startOpenClawHeartbeat();
+  logger.info("[startup] OpenClaw Heartbeat initialized");
 
   // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）
   if (db && process.env.STRIPE_SECRET_KEY) {

@@ -90,6 +90,11 @@ export function resetFlowSessionMeta(key: FlowSessionKey): void {
   sessionStore.delete(toInternalKey(key));
 }
 
+// Phase47-D: heartbeat 集計用の読み取り専用 snapshot（副作用なし）
+export function snapshotFlowSessionMetas(): FlowSessionMeta[] {
+  return Array.from(sessionStore.values());
+}
+
 /**
  * Clarify の「同一質問繰り返し」検知用シグネチャ。
  * Phase22 では「賢く解消」より「止まる」を優先するため、
