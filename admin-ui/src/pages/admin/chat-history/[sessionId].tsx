@@ -1047,7 +1047,7 @@ export default function ChatHistorySessionPage() {
                 { key: "psychology_fit_score" as const, label: "心理対応力" },
                 { key: "customer_reaction_score" as const, label: "顧客対応力" },
                 { key: "stage_progress_score" as const, label: "商談進行力" },
-                { key: "taboo_violation_score" as const, label: "NG行為" },
+                { key: "taboo_violation_score" as const, label: "禁止事項の遵守率" },
               ];
               return (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
