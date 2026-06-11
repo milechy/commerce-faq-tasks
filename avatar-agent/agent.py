@@ -23,6 +23,7 @@ os.environ.setdefault("LIBVA_DRIVER_NAME", "dummy")
 import asyncio
 import json
 import logging
+import time
 import aiohttp
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession
@@ -248,6 +249,8 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
                 request_body["reference_id"] = self._reference_id
 
             logger.info(f"[TTS] requesting Fish Audio: text={self._input_text[:60]!r} ref={self._reference_id}")
+            started_at = time.monotonic()
+            total_bytes = 0
             async with aiohttp.ClientSession() as http_session:
                 async with http_session.post(
                     "https://api.fish.audio/v1/tts",
@@ -263,16 +266,26 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
                         error_text = await resp.text()
                         logger.error(f"[TTS] Fish Audio error {resp.status}: {error_text[:300]}")
                         return
-                    audio_bytes = await resp.read()
 
-            logger.info(f"[TTS] got {len(audio_bytes)} bytes, first4={audio_bytes[:4]!r}")
-            if len(audio_bytes) < 1000:
-                logger.warning(f"[TTS] Fish Audio returned suspiciously small audio ({len(audio_bytes)} bytes), skipping (will retry)")
-                return
+                    # Phase B-1: chunk 受信ごとに push して TTFA を短縮
+                    # （公式 openai プラグイン ChunkedStream と同パターン。
+                    #   capabilities.streaming は False のまま — True にすると
+                    #   フレームワークが未実装の stream() を直接呼び NotImplementedError になる）
+                    first_chunk_at: float | None = None
+                    async for chunk in resp.content.iter_chunked(4096):
+                        if not chunk:
+                            continue
+                        if first_chunk_at is None:
+                            first_chunk_at = time.monotonic()
+                            logger.info(f"[TTS] TTFA: {(first_chunk_at - started_at) * 1000:.1f}ms")
+                        output_emitter.push(chunk)
+                        total_bytes += len(chunk)
 
-            output_emitter.push(audio_bytes)
+            if total_bytes < 1000:
+                # 旧実装は一括受信後に skip できたが、streaming では既に push 済みのため警告のみ
+                logger.warning(f"[TTS] Fish Audio returned suspiciously small audio ({total_bytes} bytes)")
             output_emitter.flush()
-            logger.info("[TTS] pushed to emitter OK")
+            logger.info(f"[TTS] streamed {total_bytes} bytes to emitter OK")
 
             # 使用量レポート（fire-and-forget）
             if self._tenant_id:
