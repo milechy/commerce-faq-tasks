@@ -8,6 +8,7 @@ import type { Evaluation, Message, DeleteStep } from "./types";
 import { DeleteSessionModal } from "./DeleteSessionModal";
 import { MessageList } from "./MessageList";
 import { JudgeEvaluationSection } from "./JudgeEvaluationSection";
+import { OutcomeSection } from "./OutcomeSection";
 
 const DEFAULT_CONVERSION_TYPES = ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
 
@@ -501,76 +502,17 @@ export default function ChatHistorySessionPage() {
           />
 
           {/* 営業結果入力（Client Adminのみ表示） */}
-          {!isSuperAdmin && <div
-            style={{
-              marginTop: 8,
-              padding: "20px 18px",
-              borderRadius: 14,
-              border: "1px solid var(--border)",
-              background: "linear-gradient(145deg, var(--card), var(--card))",
-            }}
-          >
-            <p
-              style={{
-                margin: "0 0 14px",
-                fontSize: 15,
-                fontWeight: 700,
-                color: "var(--foreground)",
-              }}
-            >
-              この会話の営業結果を記録
-            </p>
-            {/* 記録済み情報 */}
-            {outcome && outcomeRecordedAt && (
-              <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, background: "rgba(5,46,22,0.4)", border: "1px solid rgba(74,222,128,0.2)", fontSize: 12, color: "#86efac" }}>
-                ✓ 記録済み: {new Date(outcomeRecordedAt).toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                {outcomeRecordedBy && ` by ${outcomeRecordedBy}`}
-                <button
-                  onClick={() => { setOutcome(null); setOutcomeRecordedAt(null); setOutcomeRecordedBy(null); }}
-                  style={{ marginLeft: 8, background: "none", border: "none", color: "#4ade80", fontSize: 11, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                >
-                  変更
-                </button>
-              </div>
-            )}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(2, 1fr)",
-                gap: 10,
-              }}
-            >
-              {conversionTypes.map((value) => (
-                <button
-                  key={value}
-                  onClick={() => void handleOutcome(value)}
-                  disabled={outcomeSubmitting}
-                  style={{
-                    padding: "14px 12px",
-                    minHeight: 52,
-                    borderRadius: 10,
-                    border:
-                      outcome === value
-                        ? "1px solid rgba(74,222,128,0.5)"
-                        : "1px solid var(--border)",
-                    background:
-                      outcome === value
-                        ? "rgba(34,197,94,0.2)"
-                        : "rgba(31,41,55,0.5)",
-                    color: outcome === value ? "#4ade80" : "#9ca3af",
-                    fontSize: 15,
-                    fontWeight: outcome === value ? 700 : 500,
-                    cursor: outcomeSubmitting ? "not-allowed" : "pointer",
-                    opacity: outcomeSubmitting && outcome !== value ? 0.6 : 1,
-                    transition: "all 0.15s",
-                    width: "100%",
-                  }}
-                >
-                  {outcome === value ? `✓ ${value}` : value}
-                </button>
-              ))}
-            </div>
-          </div>}
+          {!isSuperAdmin && <OutcomeSection
+            outcome={outcome}
+            outcomeRecordedAt={outcomeRecordedAt}
+            outcomeRecordedBy={outcomeRecordedBy}
+            setOutcome={setOutcome}
+            setOutcomeRecordedAt={setOutcomeRecordedAt}
+            setOutcomeRecordedBy={setOutcomeRecordedBy}
+            conversionTypes={conversionTypes}
+            outcomeSubmitting={outcomeSubmitting}
+            handleOutcome={handleOutcome}
+          />}
         </div>
       )}
     </div>
