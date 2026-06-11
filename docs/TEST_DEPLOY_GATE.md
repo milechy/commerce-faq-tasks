@@ -54,6 +54,11 @@ Gate 4b: Playwright MCP ブラウザテスト（UI変更Phase: 必須）
   │  ★ UI変更がないPhaseではスキップ可
   │
   ▼
+Gate 4c: Mobile MCP widget.js 実機相当テスト（widget変更Phase: 必須）
+  │  M1-M4 共通チェック（390px / Touch 44px / Shadow DOM）
+  │  ★ widget.js 変更がないPhaseではスキップ可
+  │
+  ▼
 デプロイ: bash SCRIPTS/deploy-vps.sh
   │  ★ DBマイグレーション必要な場合は先にVPSでSQL実行
   │
@@ -252,6 +257,49 @@ Playwright MCPを使って https://admin.r2c.biz にアクセスし、B1〜B5の
 ### スキップ条件
 
 API追加のみ・DBマイグレーションのみ・バックグラウンド処理のみなど、Admin UIに変更がないPhaseではスキップ可。
+
+---
+
+## 6b. Gate 4c: Mobile MCP widget.js 実機相当テスト（widget変更Phase: 必須）
+
+git push後、デプロイ前に実施。`public/widget.js` を変更したPhaseで必須。
+
+### Mobile MCP 接続手順
+
+Mobile MCP は **デフォルト未接続**。`.claude/settings.json` に設定済みのため、セッション再起動で自動接続される。
+手動追加が必要な場合:
+
+```bash
+claude mcp add --scope project mobile-mcp npx @mobilenext/mcp@latest
+```
+
+接続確認:
+
+```bash
+claude mcp list | grep mobile-mcp
+# 出力例: mobile-mcp: npx @mobilenext/mcp@latest (connected)
+```
+
+### 実行方法
+
+Mobile MCP を使って widget.js を 390px 相当の viewport で動作確認する。
+mobilenext.ai はクラウド上の実デバイス（iOS/Android）を API 経由で制御するため、実機がなくても実行可能。
+
+```
+Mobile MCPを使ってwidget.jsの基本動作をiOS Safari 390px viewportで確認して:
+M1〜M4の共通チェックを実施
+```
+
+### 共通チェック（M1-M4）
+
+- [ ] M1: widget が 390px viewport で正常に展開される（FABボタン表示 → クリック → チャット展開）
+- [ ] M2: Touch target が ≥44px（FABボタン、送信ボタン、閉じるボタン）
+- [ ] M3: フォントサイズが ≥16px（iOS Safariの自動ズーム防止）
+- [ ] M4: Shadow DOM 内のレイアウト崩れなし（viewport scale / スクロール挙動）
+
+### スキップ条件
+
+`public/widget.js` に変更がない Phase（API追加のみ、Admin UI のみ等）はスキップ可。
 
 ---
 

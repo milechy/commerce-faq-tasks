@@ -110,6 +110,14 @@
         "--mcp-server"
       ],
       "type": "stdio"
+    },
+    "mobile-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mobilenext/mcp@latest"
+      ],
+      "type": "stdio"
     }
   }
 }
