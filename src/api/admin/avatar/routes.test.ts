@@ -271,3 +271,35 @@ describe("DELETE /v1/admin/avatar/configs/:id", () => {
     expect(res.status).toBe(403);
   });
 });
+
+// --------------------------------------------------------------------------
+// POST /v1/admin/avatar/configs — emotion_tags バリデーション（Phase47-A 構文保護）
+// --------------------------------------------------------------------------
+
+describe("POST /v1/admin/avatar/configs — emotion_tags validation", () => {
+  it("emotion_tags に [ ] を含むタグがあると 400 を返す", async () => {
+    const db = { query: jest.fn() };
+    const app = makeApp(db, "client_admin");
+
+    const res = await request(app)
+      .post("/v1/admin/avatar/configs")
+      .send({ name: "テスト", emotion_tags: ["happy", "[injection]"] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("emotion_tags が通常の英単語/日本語タグなら schema を通過する", async () => {
+    const db = {
+      query: jest.fn().mockResolvedValue({ rows: [{ ...CONFIG_ROW, is_active: false }] }),
+    };
+    const app = makeApp(db, "client_admin");
+
+    const res = await request(app)
+      .post("/v1/admin/avatar/configs")
+      .send({ name: "テスト", emotion_tags: ["happy", "落ち着き"] });
+
+    expect(res.status).not.toBe(400);
+  });
+});

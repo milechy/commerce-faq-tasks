@@ -107,6 +107,14 @@ async function uploadBase64ToStorage(
 // Zod スキーマ
 // ---------------------------------------------------------------------------
 
+// Phase47-A: emotion_tags は TTS テキスト先頭に [tag] 形式で注入されるため、
+// 構文を壊す角括弧・改行を拒否する（既存の英単語/日本語タグは許容）
+const emotionTagSchema = z
+  .string()
+  .min(1)
+  .max(30)
+  .regex(/^[^[\]\r\n]+$/, "emotion_tags に [ ] や改行は使用できません");
+
 const createSchema = z.object({
   name: z.string().min(1).max(100),
   image_url: z.string().optional(),
@@ -115,7 +123,7 @@ const createSchema = z.object({
   voice_description: z.string().optional(),
   personality_prompt: z.string().optional(),
   behavior_description: z.string().optional(),
-  emotion_tags: z.array(z.string()).optional(),
+  emotion_tags: z.array(emotionTagSchema).optional(),
   lemonslice_agent_id: z.string().optional(),
   anam_avatar_id: z.string().optional(),
   anam_voice_id: z.string().optional(),
@@ -132,7 +140,7 @@ const updateSchema = z.object({
   voice_description: z.string().optional(),
   personality_prompt: z.string().optional(),
   behavior_description: z.string().optional(),
-  emotion_tags: z.array(z.string()).optional(),
+  emotion_tags: z.array(emotionTagSchema).optional(),
   lemonslice_agent_id: z.string().optional(),
   anam_avatar_id: z.string().optional(),
   anam_voice_id: z.string().optional(),
