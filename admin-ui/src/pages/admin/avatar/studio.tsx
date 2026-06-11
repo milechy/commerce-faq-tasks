@@ -6,6 +6,13 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { containsBannedWord } from "../../../lib/contentGuard";
+import type { VoiceRecommendation } from "./types";
+import { BG } from "./types";
+import { StudioBasicSection } from "./StudioBasicSection";
+import { StudioImageSection } from "./StudioImageSection";
+import { StudioVoiceSection } from "./StudioVoiceSection";
+import { StudioPersonalitySection } from "./StudioPersonalitySection";
+import { StudioFooterActions } from "./StudioFooterActions";
 
 interface AvatarConfig {
   id: string;
@@ -24,75 +31,6 @@ interface AvatarConfig {
   agent_prompt: string | null;
   agent_idle_prompt: string | null;
 }
-
-interface VoiceRecommendation {
-  id: string;
-  title: string;
-  description: string;
-  score: number;
-}
-
-const BG = "var(--background)";
-
-const SECTION_STYLE: React.CSSProperties = {
-  borderRadius: 14,
-  border: "1px solid var(--border)",
-  background: "var(--card)",
-  padding: "20px 22px",
-  marginBottom: 20,
-};
-
-const LABEL_STYLE: React.CSSProperties = {
-  display: "block",
-  fontSize: 13,
-  fontWeight: 600,
-  color: "var(--muted-foreground)",
-  marginBottom: 6,
-};
-
-const INPUT_STYLE: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid var(--border)",
-  background: "rgba(30,41,59,0.8)",
-  color: "var(--foreground)",
-  fontSize: 14,
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const TEXTAREA_STYLE: React.CSSProperties = {
-  ...INPUT_STYLE,
-  resize: "vertical",
-  minHeight: 90,
-  fontFamily: "inherit",
-  lineHeight: 1.5,
-};
-
-const BTN_PRIMARY: React.CSSProperties = {
-  padding: "10px 20px",
-  minHeight: 44,
-  borderRadius: 10,
-  border: "none",
-  background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-  color: "#fff",
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const BTN_SECONDARY: React.CSSProperties = {
-  padding: "10px 18px",
-  minHeight: 44,
-  borderRadius: 10,
-  border: "1px solid var(--border)",
-  background: "transparent",
-  color: "var(--muted-foreground)",
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: "pointer",
-};
 
 export default function AvatarStudioPage() {
   const navigate = useNavigate();
@@ -470,516 +408,77 @@ export default function AvatarStudioPage() {
       )}
 
       {/* 1. 基本設定 */}
-      <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
-          {lang === "ja" ? "1. 基本設定" : "1. Basic Settings"}
-        </h2>
-        <div style={{ marginBottom: 14 }}>
-          <label style={LABEL_STYLE}>{lang === "ja" ? "アバター名 *" : "Avatar Name *"}</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={lang === "ja" ? "例: サポートアシスタント" : "e.g. Support Assistant"}
-            style={INPUT_STYLE}
-          />
-        </div>
-        <div>
-          <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
-          <input type="text" value={lemonsliceAgentId} onChange={(e) => setLemonsliceAgentId(e.target.value)}
-            placeholder="agent_xxxxxxxxxx" style={INPUT_STYLE} />
-        </div>
-      </div>
+      <StudioBasicSection
+        name={name}
+        setName={setName}
+        lemonsliceAgentId={lemonsliceAgentId}
+        setLemonsliceAgentId={setLemonsliceAgentId}
+      />
 
       {/* 2. アバター画像 */}
-      <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
-          {lang === "ja" ? "2. アバター画像" : "2. Avatar Image"}
-        </h2>
-
-        {/* デフォルトアバターは画像変更不可 */}
-        {isDefault ? (
-          <div style={{
-            padding: "14px 16px",
-            borderRadius: 10,
-            background: "rgba(59,130,246,0.08)",
-            border: "1px solid rgba(59,130,246,0.3)",
-            color: "#93c5fd",
-            fontSize: 14,
-            marginBottom: 8,
-          }}>
-            {lang === "ja"
-              ? "デフォルトアバターの画像は変更できません"
-              : "Default avatar images cannot be changed"}
-            {imageUrl && (
-              <div style={{ marginTop: 12, textAlign: "center" }}>
-                <img
-                  src={imageUrl}
-                  alt="avatar"
-                  style={{ maxHeight: 160, borderRadius: 10, display: "block", margin: "0 auto" }}
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                />
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-        {/* タブ切り替え */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-          {(['generate', 'upload'] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setImageTab(tab)}
-              style={{
-                padding: "8px 18px",
-                minHeight: 44,
-                borderRadius: 10,
-                border: imageTab === tab ? "2px solid #3b82f6" : "1px solid var(--border)",
-                background: imageTab === tab ? "rgba(59,130,246,0.15)" : "transparent",
-                color: imageTab === tab ? "#93c5fd" : "#9ca3af",
-                fontSize: 13,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              {tab === 'generate'
-                ? (lang === "ja" ? "AIで生成" : "Generate with AI")
-                : (lang === "ja" ? "写真をアップロード" : "Upload Photo")}
-            </button>
-          ))}
-        </div>
-
-        {/* AIで生成タブ */}
-        {imageTab === 'generate' && (
-          <>
-            <div style={{ marginBottom: 12 }}>
-              <label style={LABEL_STYLE}>{lang === "ja" ? "アバターの説明" : "Avatar Description"}</label>
-              <textarea
-                value={imageDesc}
-                onChange={(e) => { setImageDesc(e.target.value); if (imageDescError) setImageDescError(null); }}
-                placeholder={lang === "ja"
-                  ? "例: 30代の日本人女性、ショートヘア、紺色のジャケット、笑顔"
-                  : "e.g. Japanese woman in 30s, short hair, navy jacket, smiling"}
-                style={TEXTAREA_STYLE}
-              />
-              {imageDescError && (
-                <p style={{ margin: "6px 0 0", fontSize: 12, color: "#f87171" }}>{imageDescError}</p>
-              )}
-            </div>
-            <button
-              onClick={() => void handleGenerateImage()}
-              disabled={generatingImage || !imageDesc.trim()}
-              style={{
-                ...BTN_PRIMARY,
-                opacity: generatingImage || !imageDesc.trim() ? 0.5 : 1,
-                cursor: generatingImage || !imageDesc.trim() ? "not-allowed" : "pointer",
-              }}
-            >
-              {generatingImage
-                ? (lang === "ja" ? "生成中..." : "Generating...")
-                : (lang === "ja" ? "画像を生成する (4枚)" : "Generate Images (4)")}
-            </button>
-
-            {generatedImages.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginBottom: 10 }}>
-                  {lang === "ja" ? "使用する画像を選択してください" : "Select an image to use"}
-                </p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
-                  {generatedImages.map((url, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => handleSelectImage(idx)}
-                      style={{
-                        borderRadius: 10,
-                        overflow: "hidden",
-                        border: selectedImageIdx === idx ? "2px solid #3b82f6" : "2px solid transparent",
-                        cursor: "pointer",
-                        aspectRatio: "1",
-                        background: "var(--muted)",
-                      }}
-                    >
-                      <img
-                        src={url}
-                        alt={`Generated ${idx + 1}`}
-                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* 写真をアップロードタブ */}
-        {imageTab === 'upload' && (
-          <div>
-            <p style={{ color: "var(--muted-foreground)", marginBottom: 12 }}>
-              {lang === "ja" ? "顔がはっきり写った正面の写真が最適です" : "A clear front-facing photo works best"}
-            </p>
-
-            {/* 確定済み: プレビュー + 差し替えリンク */}
-            {uploadConfirmed && uploadPreview ? (
-              <div style={{ textAlign: "center" }}>
-                <img
-                  src={uploadPreview}
-                  alt="selected"
-                  style={{ maxHeight: 300, borderRadius: 10, display: "block", margin: "0 auto 12px" }}
-                />
-                <button
-                  type="button"
-                  onClick={handleResetUpload}
-                  style={{ background: "none", border: "none", color: "var(--muted-foreground)", fontSize: 13, cursor: "pointer", textDecoration: "underline" }}
-                >
-                  {lang === "ja" ? "別の画像を選ぶ" : "Choose a different image"}
-                </button>
-              </div>
-            ) : (
-              <>
-                {/* ドラッグ&ドロップエリア */}
-                <div
-                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const file = e.dataTransfer.files[0];
-                    if (file && file.type.startsWith("image/")) handleFileUpload(file);
-                  }}
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{
-                    border: "2px dashed #4b5563",
-                    borderRadius: 12,
-                    padding: 40,
-                    textAlign: "center",
-                    cursor: "pointer",
-                    minHeight: 200,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  {uploadPreview ? (
-                    <img src={uploadPreview} alt="preview" style={{ maxHeight: 300, borderRadius: 8 }} />
-                  ) : (
-                    <>
-                      <p style={{ fontSize: 18, color: "white", margin: "0 0 8px" }}>
-                        {lang === "ja" ? "ここに画像をドラッグ" : "Drag image here"}
-                      </p>
-                      <p style={{ color: "var(--muted-foreground)", margin: "0 0 8px" }}>
-                        {lang === "ja" ? "または クリックしてファイルを選択" : "or click to select a file"}
-                      </p>
-                      <p style={{ color: "var(--muted-foreground)", fontSize: 14, margin: 0 }}>
-                        JPG, PNG{lang === "ja" ? "（最大5MB）" : " (max 5MB)"}
-                      </p>
-                    </>
-                  )}
-                </div>
-
-                {/* 「この画像を使う」確定ボタン */}
-                {uploadPreview && !uploadConfirmed && (
-                  <button
-                    type="button"
-                    onClick={handleConfirmUpload}
-                    style={{
-                      marginTop: 16,
-                      padding: "14px 32px",
-                      background: "#4f46e5",
-                      color: "white",
-                      border: "none",
-                      borderRadius: 8,
-                      fontSize: 16,
-                      cursor: "pointer",
-                      width: "100%",
-                    }}
-                  >
-                    {lang === "ja" ? "この画像を使う" : "Use this image"}
-                  </button>
-                )}
-              </>
-            )}
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/jpeg,image/png"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFileUpload(file);
-              }}
-            />
-          </div>
-        )}
-
-        {/* 選択中の画像URL（両タブ共通） */}
-        {imageUrl && (
-          <div style={{ marginTop: 14 }}>
-            <label style={LABEL_STYLE}>{lang === "ja" ? "選択中の画像URL" : "Selected Image URL"}</label>
-            <input
-              type="text"
-              value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
-              style={INPUT_STYLE}
-            />
-          </div>
-        )}
-          </>
-        )}
-      </div>
+      <StudioImageSection
+        isDefault={isDefault}
+        imageUrl={imageUrl}
+        setImageUrl={setImageUrl}
+        imageTab={imageTab}
+        setImageTab={setImageTab}
+        imageDesc={imageDesc}
+        setImageDesc={setImageDesc}
+        imageDescError={imageDescError}
+        setImageDescError={setImageDescError}
+        generatingImage={generatingImage}
+        generatedImages={generatedImages}
+        selectedImageIdx={selectedImageIdx}
+        handleGenerateImage={handleGenerateImage}
+        handleSelectImage={handleSelectImage}
+        uploadPreview={uploadPreview}
+        uploadConfirmed={uploadConfirmed}
+        handleFileUpload={handleFileUpload}
+        handleConfirmUpload={handleConfirmUpload}
+        handleResetUpload={handleResetUpload}
+        fileInputRef={fileInputRef}
+      />
 
       {/* 3. 声マッチング */}
-      <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
-          {lang === "ja" ? "3. 声マッチング" : "3. Voice Matching"}
-        </h2>
-        <div style={{ marginBottom: 12 }}>
-          <label style={LABEL_STYLE}>{lang === "ja" ? "声の説明" : "Voice Description"}</label>
-          <textarea
-            value={voiceDesc}
-            onChange={(e) => setVoiceDesc(e.target.value)}
-            placeholder={lang === "ja"
-              ? "例: 若い女性、明るく親しみやすい声、標準的な日本語"
-              : "e.g. Young female, bright and friendly, standard Japanese"}
-            style={TEXTAREA_STYLE}
-          />
-        </div>
-        <button
-          onClick={() => void handleMatchVoice()}
-          disabled={isDefault || matchingVoice || !voiceDesc.trim()}
-          style={{
-            ...BTN_PRIMARY,
-            opacity: isDefault || matchingVoice || !voiceDesc.trim() ? 0.5 : 1,
-            cursor: isDefault || matchingVoice || !voiceDesc.trim() ? "not-allowed" : "pointer",
-          }}
-        >
-          {matchingVoice
-            ? (lang === "ja" ? "マッチング中..." : "Matching...")
-            : (lang === "ja" ? "声を検索する" : "Find Voices")}
-        </button>
-
-        {voiceRecs.length > 0 && (
-          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
-            <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginBottom: 4 }}>
-              {lang === "ja" ? "使用する声を選択してください" : "Select a voice to use"}
-            </p>
-            {voiceRecs.map((rec) => (
-              <div
-                key={rec.id}
-                onClick={() => handleSelectVoice(rec)}
-                style={{
-                  padding: "12px 14px",
-                  borderRadius: 10,
-                  border: selectedVoiceId === rec.id
-                    ? "1px solid rgba(99,102,241,0.7)"
-                    : "1px solid var(--border)",
-                  background: selectedVoiceId === rec.id
-                    ? "rgba(99,102,241,0.1)"
-                    : "rgba(30,41,59,0.6)",
-                  cursor: "pointer",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: "var(--foreground)" }}>{rec.title}</span>
-                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                    {Math.round(rec.score * 100)}%
-                  </span>
-                </div>
-                <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: 0, lineHeight: 1.5 }}>{rec.description}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {(voiceId || isDefault) && (
-          <div style={{ marginTop: 14 }}>
-            <label style={LABEL_STYLE}>
-              {isDefault
-                ? (lang === "ja" ? "設定済みの声 (Voice ID)" : "Configured Voice (Voice ID)")
-                : "Voice ID"}
-            </label>
-            <input
-              type="text"
-              value={voiceId}
-              onChange={(e) => setVoiceId(e.target.value)}
-              readOnly={isDefault}
-              style={{
-                ...INPUT_STYLE,
-                ...(isDefault ? { background: "var(--card)", color: "var(--muted-foreground)", cursor: "default" } : {}),
-              }}
-            />
-            {isDefault && (
-              <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
-                {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
+      <StudioVoiceSection
+        isDefault={isDefault}
+        voiceDesc={voiceDesc}
+        setVoiceDesc={setVoiceDesc}
+        matchingVoice={matchingVoice}
+        handleMatchVoice={handleMatchVoice}
+        voiceRecs={voiceRecs}
+        selectedVoiceId={selectedVoiceId}
+        handleSelectVoice={handleSelectVoice}
+        voiceId={voiceId}
+        setVoiceId={setVoiceId}
+      />
 
       {/* 4. パーソナリティ */}
-      <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
-          {lang === "ja" ? "4. パーソナリティ" : "4. Personality"}
-        </h2>
-        <div style={{ marginBottom: 12 }}>
-          <label style={LABEL_STYLE}>{lang === "ja" ? "接客ルール・ペルソナ情報" : "Rules & Persona"}</label>
-          <textarea
-            value={promptRules}
-            onChange={(e) => setPromptRules(e.target.value)}
-            placeholder={lang === "ja"
-              ? "例: 丁寧な口調、商品の良い点を積極的にアピール、クレームには共感してから解決策を提示"
-              : "e.g. Polite tone, proactively highlight product benefits, empathize then resolve complaints"}
-            style={{ ...TEXTAREA_STYLE, minHeight: 100 }}
-          />
-        </div>
-        <button
-          onClick={() => void handleGeneratePrompt()}
-          disabled={isDefault || generatingPrompt || !promptRules.trim()}
-          style={{
-            ...BTN_PRIMARY,
-            opacity: isDefault || generatingPrompt || !promptRules.trim() ? 0.5 : 1,
-            cursor: isDefault || generatingPrompt || !promptRules.trim() ? "not-allowed" : "pointer",
-          }}
-        >
-          {generatingPrompt
-            ? (lang === "ja" ? "生成中..." : "Generating...")
-            : (lang === "ja" ? "プロンプトを生成する" : "Generate Prompt")}
-        </button>
-
-        <div style={{ marginTop: 16 }}>
-          <label style={LABEL_STYLE}>
-            {lang === "ja" ? "システムプロンプト" : "System Prompt"}
-          </label>
-          <textarea
-            value={personalityPrompt}
-            onChange={(e) => setPersonalityPrompt(e.target.value)}
-            readOnly={isDefault}
-            placeholder={lang === "ja" ? "AIが生成するか、直接入力してください" : "Auto-generated or enter manually"}
-            style={{
-              ...TEXTAREA_STYLE,
-              minHeight: 120,
-              ...(isDefault ? { background: "var(--card)", color: "var(--muted-foreground)", cursor: "default" } : {}),
-            }}
-          />
-          {isDefault && (
-            <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
-              {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
-            </p>
-          )}
-        </div>
-
-        {isDefault && (agentPrompt || agentIdlePrompt) && (
-          <>
-            <div style={{ marginTop: 14 }}>
-              <label style={LABEL_STYLE}>
-                {lang === "ja" ? "動作プロンプト（会話中）" : "Agent Prompt (During Conversation)"}
-              </label>
-              <textarea
-                value={agentPrompt}
-                readOnly
-                style={{ ...TEXTAREA_STYLE, background: "var(--card)", color: "var(--muted-foreground)", cursor: "default", fontStyle: "italic" }}
-              />
-              <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
-                {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
-              </p>
-            </div>
-            <div style={{ marginTop: 14 }}>
-              <label style={LABEL_STYLE}>
-                {lang === "ja" ? "動作プロンプト（待機中）" : "Agent Prompt (Idle)"}
-              </label>
-              <textarea
-                value={agentIdlePrompt}
-                readOnly
-                style={{ ...TEXTAREA_STYLE, background: "var(--card)", color: "var(--muted-foreground)", cursor: "default", fontStyle: "italic" }}
-              />
-              <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
-                {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
-              </p>
-            </div>
-          </>
-        )}
-
-        <div style={{ marginTop: 14 }}>
-          <label style={LABEL_STYLE}>
-            {lang === "ja" ? "行動説明" : "Behavior Description"}
-          </label>
-          <textarea
-            value={behaviorDescription}
-            onChange={(e) => setBehaviorDescription(e.target.value)}
-            placeholder={lang === "ja" ? "アバターの行動特性を記述します（任意）" : "Describe behavior characteristics (optional)"}
-            style={TEXTAREA_STYLE}
-          />
-        </div>
-
-        {emotionTags.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <label style={LABEL_STYLE}>
-              {lang === "ja" ? "感情タグ" : "Emotion Tags"}
-            </label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {emotionTags.map((tag) => (
-                <span
-                  key={tag}
-                  style={{
-                    padding: "3px 10px",
-                    borderRadius: 999,
-                    background: "rgba(99,102,241,0.15)",
-                    border: "1px solid rgba(99,102,241,0.4)",
-                    color: "#a5b4fc",
-                    fontSize: 12,
-                    fontWeight: 600,
-                  }}
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      <StudioPersonalitySection
+        isDefault={isDefault}
+        promptRules={promptRules}
+        setPromptRules={setPromptRules}
+        generatingPrompt={generatingPrompt}
+        handleGeneratePrompt={handleGeneratePrompt}
+        personalityPrompt={personalityPrompt}
+        setPersonalityPrompt={setPersonalityPrompt}
+        agentPrompt={agentPrompt}
+        agentIdlePrompt={agentIdlePrompt}
+        behaviorDescription={behaviorDescription}
+        setBehaviorDescription={setBehaviorDescription}
+        emotionTags={emotionTags}
+      />
 
       {/* 保存ボタン */}
-      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
-        {isEdit && isDefault && (
-          <button
-            onClick={() => void handleResetToDefault()}
-            disabled={resetting}
-            style={{
-              ...BTN_SECONDARY,
-              opacity: resetting ? 0.6 : 1,
-              cursor: resetting ? "not-allowed" : "pointer",
-              marginRight: "auto",
-            }}
-          >
-            {resetting
-              ? (lang === "ja" ? "リセット中..." : "Resetting...")
-              : (lang === "ja" ? "デフォルトに戻す" : "Reset to Default")}
-          </button>
-        )}
-        <button
-          onClick={() => navigate("/admin/avatar")}
-          style={BTN_SECONDARY}
-        >
-          {lang === "ja" ? "キャンセル" : "Cancel"}
-        </button>
-        <button
-          onClick={() => void handleSave()}
-          disabled={saving || !name.trim()}
-          style={{
-            ...BTN_PRIMARY,
-            minWidth: 120,
-            opacity: saving || !name.trim() ? 0.5 : 1,
-            cursor: saving || !name.trim() ? "not-allowed" : "pointer",
-          }}
-        >
-          {saving
-            ? (lang === "ja" ? "保存中..." : "Saving...")
-            : (lang === "ja" ? "保存する" : "Save")}
-        </button>
-      </div>
+      <StudioFooterActions
+        isEdit={isEdit}
+        isDefault={isDefault}
+        resetting={resetting}
+        handleResetToDefault={handleResetToDefault}
+        saving={saving}
+        name={name}
+        handleSave={handleSave}
+      />
     </div>
   );
 }
