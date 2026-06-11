@@ -19,8 +19,8 @@ import ConversionTypesTab from "./ConversionTypesTab";
 import AnalyticsSummaryTab from "./AnalyticsSummaryTab";
 import BillingInfoTab from "./BillingInfoTab";
 import NotificationPreferencesTab from "./NotificationPreferencesTab";
-import type { TenantFeatures, TenantDetail, ApiKey } from "./types";
-import { CARD_STYLE } from "./types";
+import type { TenantFeatures, TenantDetail, ApiKey, TabId } from "./types";
+import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE } from "./types";
 
 // ─── 型定義 (TenantFeatures, TenantDetail, ApiKey は ./types に移動) ──────────
 
@@ -155,27 +155,7 @@ async function updateBilling(
   } as TenantDetail;
 }
 
-// ─── スタイル定数 (CARD_STYLE は ./types に移動) ─────────────────────────────
-
-const INPUT_STYLE: React.CSSProperties = {
-  width: "100%",
-  padding: "14px 16px",
-  borderRadius: 10,
-  border: "1px solid var(--border)",
-  background: "rgba(0,0,0,0.3)",
-  color: "var(--foreground)",
-  fontSize: 16,
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const LABEL_STYLE: React.CSSProperties = {
-  display: "block",
-  fontSize: 13,
-  fontWeight: 600,
-  color: "var(--muted-foreground)",
-  marginBottom: 6,
-};
+// ─── スタイル定数 (CARD_STYLE, INPUT_STYLE, LABEL_STYLE は ./types に移動) ───
 
 // ─── タブ: アバター設定 ────────────────────────────────────────────────────────
 
@@ -782,9 +762,7 @@ function SettingsTab({
   );
 }
 
-// ─── メインページ ─────────────────────────────────────────────────────────────
-
-type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns" | "conversion" | "deep-research" | "tuning" | "test" | "ga4" | "posthog" | "analytics" | "billing-info" | "notification-prefs";
+// ─── メインページ (TabId は ./types に移動) ──────────────────────────────────
 
 export default function TenantDetailPage() {
   const navigate = useNavigate();
