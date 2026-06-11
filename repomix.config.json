@@ -1,0 +1,25 @@
+{
+  "output": {
+    "filePath": ".wolf/repomix-snapshot.xml",
+    "style": "xml",
+    "compress": true
+  },
+  "include": [
+    "src/**",
+    "admin-ui/src/**"
+  ],
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/*.spec.ts",
+      "dist/**",
+      "node_modules/**"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}
