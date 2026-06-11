@@ -1550,7 +1550,11 @@
 
     try {
       var LK = window.LivekitClient;
-      var room = new LK.Room({ adaptiveStream: true, dynacast: true });
+      var room = new LK.Room({
+        adaptiveStream: true,
+        dynacast: true,
+        audioCaptureDefaults: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
+      });
 
       // ミュートボタンを生成（SVGは createElement で — innerHTML 禁止）
       var avatarMuteBtn = document.createElement('button');
@@ -1759,10 +1763,13 @@
             var encoder = new TextEncoder();
             var localParticipant = room.localParticipant;
             if (localParticipant) {
-              localParticipant.publishData(
+              var sendPromise = localParticipant.publishData(
                 encoder.encode(JSON.stringify({ type: 'widget_connected' })),
                 { reliable: true }
               );
+              if (sendPromise && typeof sendPromise.catch === 'function') {
+                sendPromise.catch(function (e) { console.warn('[FAQ Widget] publishData error:', e); });
+              }
             }
           } catch (_e) {}
         })
