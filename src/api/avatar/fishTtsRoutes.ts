@@ -7,6 +7,7 @@
 
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
+import { getPool } from '../../lib/db';
 import { logger } from '../../lib/logger';
 
 const FISH_AUDIO_API = 'https://api.fish.audio/v1/tts';
@@ -26,9 +27,21 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
     }
 
     const fishApiKey = process.env.FISH_AUDIO_API_KEY?.trim();
-    const referenceId = process.env.FISH_AUDIO_REFERENCE_ID?.trim();
     if (!fishApiKey) {
       return res.status(500).json({ error: 'TTS not configured' });
+    }
+
+    // テナントのアクティブアバター voice_id を解決（avatarConfigRoutes と同一クエリ）
+    // body から voiceId は受けない（テナント越境防止）
+    let referenceId = process.env.FISH_AUDIO_REFERENCE_ID?.trim() || undefined;
+    try {
+      const result = await getPool().query<{ voice_id: string | null }>(
+        `SELECT voice_id FROM avatar_configs WHERE tenant_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1`,
+        [tenantId],
+      );
+      if (result.rows[0]?.voice_id) referenceId = result.rows[0].voice_id;
+    } catch (err) {
+      logger.warn({ err, tenantId }, '[fishTts] voice_id resolve failed — env fallback');
     }
 
     try {
@@ -40,7 +53,8 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
         },
         body: JSON.stringify({
           text: text,
-          reference_id: referenceId || '63bc41e652214372b15d9416a30a60b4',
+          model: 's2-pro',
+          ...(referenceId ? { reference_id: referenceId } : {}),
           format: 'mp3',
           latency: 'balanced',
         }),
