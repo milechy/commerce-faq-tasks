@@ -34,14 +34,32 @@ jest.mock('../../lib/crossTenantContext', () => ({
   formatCrossTenantContext: jest.fn().mockReturnValue(''),
 }));
 
+// Phase47-B: rewardBridge を no-op モック（fetch が走ると OOM/flaky の原因）
+jest.mock('../openclaw/rewardBridge', () => ({
+  sendRewardSignal: jest.fn().mockResolvedValue(undefined),
+}));
+
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
 import { evaluateSession } from './judgeEvaluator';
+import { sendRewardSignal } from '../openclaw/rewardBridge';
+import {
+  getOrInitFlowSessionMeta,
+  setFlowSessionMeta,
+  resetFlowSessionMeta,
+} from '../dialog/flowContextStore';
 
 const mockCallGroq = callGeminiJudge as jest.MockedFunction<typeof callGeminiJudge>;
 const mockGetPool = getPool as jest.MockedFunction<typeof getPool>;
 const mockReadFile = readFile as jest.MockedFunction<typeof readFile>;
+const mockSendRewardSignal = sendRewardSignal as jest.MockedFunction<typeof sendRewardSignal>;
+
+// Phase47-B: fire-and-forget (setImmediate + dynamic import) を消化する
+async function flushFireAndForget(): Promise<void> {
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+}
 
 const PROMPT_TEMPLATE =
   'Judge prompt template\n{{CONVERSATION_LOG}}\nOutput JSON only.';
@@ -86,7 +104,9 @@ function makeMockPool(queryImpl?: jest.Mock): jest.Mocked<{ query: jest.Mock }> 
 }
 
 describe('evaluateSession', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Phase47-B: 前テストの fire-and-forget (setImmediate) を消化してから mock をリセット
+    await flushFireAndForget();
     jest.clearAllMocks();
     // Default: prompt file loads successfully
     mockReadFile.mockResolvedValue(PROMPT_TEMPLATE as never);
@@ -98,7 +118,7 @@ describe('evaluateSession', () => {
 
     // chat_sessions query
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-123', tenant_id: 'tenant-abc' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-123', tenant_id: 'tenant-abc', prompt_variant_id: 'v-test-1' }] })
       // chat_messages query
       .mockResolvedValueOnce({
         rows: [
@@ -145,7 +165,7 @@ describe('evaluateSession', () => {
     mockGetPool.mockReturnValue(mockPool as any);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-low', tenant_id: 'tenant-low' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-low', tenant_id: 'tenant-low', prompt_variant_id: null }] })
       .mockResolvedValueOnce({
         rows: [
           { role: 'user', content: '商品が欲しい', created_at: new Date() },
@@ -183,7 +203,7 @@ describe('evaluateSession', () => {
     mockGetPool.mockReturnValue(mockPool as any);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-high', tenant_id: 'tenant-high' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-high', tenant_id: 'tenant-high', prompt_variant_id: null }] })
       .mockResolvedValueOnce({
         rows: [
           { role: 'user', content: '予算200万で家族4人', created_at: new Date() },
@@ -221,7 +241,7 @@ describe('evaluateSession', () => {
     mockGetPool.mockReturnValue(mockPool as any);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-fail', tenant_id: 'tenant-fail' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-fail', tenant_id: 'tenant-fail', prompt_variant_id: null }] })
       .mockResolvedValueOnce({
         rows: [
           { role: 'user', content: 'hi', created_at: new Date() },
@@ -256,7 +276,7 @@ describe('evaluateSession', () => {
     const longContent = 'あ'.repeat(300);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-trunc', tenant_id: 'tenant-trunc' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-trunc', tenant_id: 'tenant-trunc', prompt_variant_id: null }] })
       .mockResolvedValueOnce({
         rows: [
           { role: 'user', content: longContent, created_at: new Date() },
@@ -281,5 +301,83 @@ describe('evaluateSession', () => {
     expect(promptArg).toContain('あ'.repeat(200));
     // 201st char should not be present (300 chars would be present if not truncated)
     expect(promptArg).not.toContain('あ'.repeat(201));
+  });
+
+  // Phase47-B: 評価完了後の OpenClaw-RL reward signal 配線
+  it('7. Phase47-B: 評価成功時に sendRewardSignal が正しい payload で呼ばれる', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-reward', tenant_id: 'tenant-reward', prompt_variant_id: 'v-test-1' }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: '納期はいつですか？', created_at: new Date() },
+          { role: 'assistant', content: '最短で3日です。', created_at: new Date() },
+        ],
+      })
+      // Phase60-A: tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
+      // INSERT conversation_evaluations
+      .mockResolvedValueOnce({ rows: [] });
+
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 75 }));
+
+    // flowContextStore に terminalReason=completed を仕込む（key = tenantId::sessionId）
+    const flowKey = { tenantId: 'tenant-reward', conversationId: 'session-reward' };
+    const meta = getOrInitFlowSessionMeta(flowKey);
+    setFlowSessionMeta(flowKey, { ...meta, terminalReason: 'completed' });
+
+    try {
+      const result = await evaluateSession('session-reward');
+      expect(result).not.toBeNull();
+
+      await flushFireAndForget();
+
+      expect(mockSendRewardSignal).toHaveBeenCalledTimes(1);
+      expect(mockSendRewardSignal).toHaveBeenCalledWith({
+        tenantId: 'tenant-reward',
+        sessionId: 'session-reward',
+        variantId: 'v-test-1',
+        score: 75,
+        outcome: 'replied', // terminalReason=completed → replied
+      });
+    } finally {
+      resetFlowSessionMeta(flowKey);
+    }
+  });
+
+  it('8. Phase47-B: prompt_variant_id が null / flow メタ未存在なら variantId: null, outcome: unknown', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-novariant', tenant_id: 'tenant-novariant', prompt_variant_id: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: '在庫はありますか？', created_at: new Date() },
+          { role: 'assistant', content: 'ございます。', created_at: new Date() },
+        ],
+      })
+      // Phase60-A: tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
+      // INSERT conversation_evaluations
+      .mockResolvedValueOnce({ rows: [] });
+
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 80 }));
+
+    const result = await evaluateSession('session-novariant');
+    expect(result).not.toBeNull();
+
+    await flushFireAndForget();
+
+    expect(mockSendRewardSignal).toHaveBeenCalledTimes(1);
+    expect(mockSendRewardSignal).toHaveBeenCalledWith({
+      tenantId: 'tenant-novariant',
+      sessionId: 'session-novariant',
+      variantId: null,
+      score: 80,
+      outcome: 'unknown', // flow メタ未存在（プロセス再起動後・手動評価）は中立
+    });
   });
 });

@@ -60,6 +60,7 @@ interface ChatMessageRow {
 interface ChatSessionRow {
   id: string;
   tenant_id: string;
+  prompt_variant_id: string | null;
 }
 
 function clamp(v: number): number {
@@ -135,7 +136,7 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
 
     // 1. Fetch internal id + tenant_id from chat_sessions (session_id is the public text key)
     const sessionResult = await pool.query<ChatSessionRow>(
-      'SELECT id, tenant_id FROM chat_sessions WHERE session_id = $1 LIMIT 1',
+      'SELECT id, tenant_id, prompt_variant_id FROM chat_sessions WHERE session_id = $1 LIMIT 1',
       [sessionId],
     );
     if (sessionResult.rows.length === 0) {
@@ -144,6 +145,7 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
     }
     const internalId: string = sessionResult.rows[0]!.id;
     const tenantId: string = sessionResult.rows[0]!.tenant_id;
+    const variantId: string | null = sessionResult.rows[0]!.prompt_variant_id ?? null;
 
     // 2. Fetch all messages using internal UUID (chat_messages.session_id → chat_sessions.id)
     const msgResult = await pool.query<ChatMessageRow>(
@@ -269,6 +271,31 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
         }),
       ).catch((err: unknown) => {
         logger.warn({ err, sessionId }, 'learnedMemory.distill.failed (non-blocking)');
+      });
+    });
+
+    // 6c. Phase47-B: Judge評価完了後に OpenClaw-RL へ reward signal 送信 (fire-and-forget)
+    //     Feature Flag (isOpenClawEnabled) のガードは sendRewardSignal 内で行う。
+    setImmediate(() => {
+      Promise.all([
+        import('../openclaw/rewardBridge'),
+        import('../dialog/flowContextStore'),
+      ]).then(([{ sendRewardSignal }, { peekFlowSessionMeta }]) => {
+        const terminalReason = peekFlowSessionMeta({ tenantId, conversationId: sessionId })?.terminalReason;
+        const outcome =
+          terminalReason === 'completed' ? 'replied' :
+          terminalReason === 'aborted_user' || terminalReason === 'aborted_budget' ||
+          terminalReason === 'aborted_loop_detected' || terminalReason === 'failed_safe_mode' ? 'lost' :
+          'unknown'; // escalated_handoff / メタ未存在（プロセス再起動後・手動評価）は中立
+        return sendRewardSignal({
+          tenantId,
+          sessionId,
+          variantId,
+          score: result.overall_score,
+          outcome,
+        });
+      }).catch((err: unknown) => {
+        logger.warn({ err, sessionId }, 'openclaw.reward.failed (non-blocking)');
       });
     });
 
