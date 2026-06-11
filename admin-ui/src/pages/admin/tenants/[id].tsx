@@ -21,6 +21,7 @@ import NotificationPreferencesTab from "./NotificationPreferencesTab";
 import { AvatarTab } from "./AvatarTab";
 import { SettingsTab } from "./SettingsTab";
 import { TenantDetailHeader } from "./TenantDetailHeader";
+import { TenantDetailTabs } from "./TenantDetailTabs";
 import type { TenantFeatures, TenantDetail, ApiKey, TabId } from "./types";
 
 // ─── 型定義 (TenantFeatures, TenantDetail, ApiKey は ./types に移動) ──────────
@@ -353,41 +354,7 @@ export default function TenantDetailPage() {
       ) : tenant ? (
         <>
           {/* タブナビゲーション */}
-          <div
-            style={{
-              overflowX: "auto",
-              marginBottom: 24,
-              background: "var(--card)",
-              border: "1px solid var(--border)",
-              borderRadius: 12,
-              padding: 4,
-              WebkitOverflowScrolling: "touch" as const,
-            }}
-          >
-            <div style={{ display: "flex", gap: 4, minWidth: "max-content" }}>
-              {TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  style={{
-                    padding: "12px 16px",
-                    minHeight: 44,
-                    whiteSpace: "nowrap",
-                    borderRadius: 10,
-                    border: "none",
-                    background: activeTab === tab.id ? "rgba(34,197,94,0.15)" : "transparent",
-                    color: activeTab === tab.id ? "#4ade80" : "#9ca3af",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          <TenantDetailTabs TABS={TABS} activeTab={activeTab} setActiveTab={setActiveTab} />
 
           {/* タブコンテンツ */}
           {activeTab === "settings" && (
