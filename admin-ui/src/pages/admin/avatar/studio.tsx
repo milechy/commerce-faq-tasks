@@ -11,6 +11,7 @@ import { BG } from "./types";
 import { StudioBasicSection } from "./StudioBasicSection";
 import { StudioImageSection } from "./StudioImageSection";
 import { StudioVoiceSection } from "./StudioVoiceSection";
+import { StudioVoiceCloneSection } from "./StudioVoiceCloneSection";
 import { StudioPersonalitySection } from "./StudioPersonalitySection";
 import { StudioFooterActions } from "./StudioFooterActions";
 
@@ -452,6 +453,25 @@ export default function AvatarStudioPage() {
         voiceId={voiceId}
         setVoiceId={setVoiceId}
       />
+
+      {/* 3.5 音声クローン（FishAudio Phase C-1、編集時のみ — 作成前は対象 config が無い） */}
+      {isEdit && id && (
+        <StudioVoiceCloneSection
+          configId={id}
+          currentVoiceId={voiceId || null}
+          isDefault={isDefault}
+          onCloneSuccess={(newVoiceId) => {
+            // クローンは API 側で即時 DB 反映済み。voiceId state を新値に同期しておけば
+            // 「保存」ボタンは同値 UPDATE になり二重更新は無害。
+            setVoiceId(newVoiceId);
+            setSelectedVoiceId(null);
+            setError(null);
+            setSuccess(lang === "ja"
+              ? "音声クローンを作成しました。このアバターの声に設定済みです"
+              : "Voice clone created and set as this avatar's voice.");
+          }}
+        />
+      )}
 
       {/* 4. パーソナリティ */}
       <StudioPersonalitySection
