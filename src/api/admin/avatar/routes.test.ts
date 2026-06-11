@@ -537,3 +537,32 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+// --------------------------------------------------------------------------
+// resizeForLemonSlice — I-6 カスタム画像の 368x560 リサイズ
+// --------------------------------------------------------------------------
+
+describe("resizeForLemonSlice (I-6)", () => {
+  it("1024x1024 画像が 368x560 にリサイズされる", async () => {
+    const { resizeForLemonSlice } = await import("./routes");
+    const { default: sharp } = await import("sharp");
+
+    const src = await sharp({
+      create: { width: 1024, height: 1024, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .png()
+      .toBuffer();
+
+    const out = await resizeForLemonSlice(src);
+    const meta = await sharp(out).metadata();
+    expect(meta.width).toBe(368);
+    expect(meta.height).toBe(560);
+  });
+
+  it("画像でないバッファは元のまま返す（アップロード継続のフォールバック）", async () => {
+    const { resizeForLemonSlice } = await import("./routes");
+    const junk = Buffer.from("not-an-image");
+    const out = await resizeForLemonSlice(junk);
+    expect(out).toBe(junk);
+  });
+});
