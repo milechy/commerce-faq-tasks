@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithRetry } from './helpers/gotoRetry';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 const DEMO_BASE = 'https://api.r2c.biz/carnation-demo';
@@ -24,7 +25,7 @@ test.describe('Phase65 carnation-demo サイト', () => {
       const errors: string[] = [];
       page.on('pageerror', (err) => errors.push(err.message));
 
-      const res = await page.goto(`${DEMO_BASE}${path}`);
+      const res = await gotoWithRetry(page, `${DEMO_BASE}${path}`);
       expect(res?.status()).toBe(200);
 
       // widget.js ロードエラーは許容（ネットワーク制約の可能性あり）
@@ -47,7 +48,7 @@ test.describe('Phase65 carnation-demo サイト', () => {
       }
     });
 
-    await page.goto(`${DEMO_BASE}/inquiry-thanks.html`);
+    await gotoWithRetry(page, `${DEMO_BASE}/inquiry-thanks.html`);
     // polling最大5秒 + 余裕1秒
     await page.waitForTimeout(6000);
 
@@ -70,7 +71,7 @@ test.describe('Phase65 carnation-demo サイト', () => {
       }
     });
 
-    await page.goto(`${DEMO_BASE}/purchase-thanks.html?price=3190000`);
+    await gotoWithRetry(page, `${DEMO_BASE}/purchase-thanks.html?price=3190000`);
     await page.waitForTimeout(6000);
 
     // ヘッドレスCI環境ではwidgetが初期化されない場合があるため0件は許容
@@ -85,7 +86,7 @@ test.describe('Phase65 carnation-demo サイト', () => {
   // test 4b: 旧URL /carnation-demo.html が 301 で新URLへリダイレクトされること
   test('旧URL /carnation-demo.html が /carnation-demo/index.html へリダイレクトされる', async ({ page }) => {
     // Playwrightはリダイレクトを自動追跡するため、最終URLを確認する
-    await page.goto('https://api.r2c.biz/carnation-demo.html');
+    await gotoWithRetry(page, 'https://api.r2c.biz/carnation-demo.html');
     expect(page.url()).toContain('/carnation-demo/index.html');
     const title = await page.title();
     expect(title).toContain('BROSS新潟');
@@ -96,7 +97,7 @@ test.describe('Phase65 carnation-demo サイト', () => {
     await page.setViewportSize({ width: 390, height: 844 });
 
     for (const path of ['/index.html', '/stock.html', '/inquiry.html']) {
-      await page.goto(`${DEMO_BASE}${path}`);
+      await gotoWithRetry(page, `${DEMO_BASE}${path}`);
       // 水平スクロールが発生していないこと
       const scrollWidth = await page.evaluate(() => document.body.scrollWidth);
       const clientWidth = await page.evaluate(() => document.body.clientWidth);
