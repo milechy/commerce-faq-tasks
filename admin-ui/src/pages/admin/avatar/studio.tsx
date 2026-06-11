@@ -8,6 +8,7 @@ import { authFetch, API_BASE } from "../../../lib/api";
 import { containsBannedWord } from "../../../lib/contentGuard";
 import type { VoiceRecommendation } from "./types";
 import { BG, SECTION_STYLE, LABEL_STYLE, INPUT_STYLE, TEXTAREA_STYLE, BTN_PRIMARY, BTN_SECONDARY } from "./types";
+import { StudioBasicSection } from "./StudioBasicSection";
 
 interface AvatarConfig {
   id: string;
@@ -403,26 +404,12 @@ export default function AvatarStudioPage() {
       )}
 
       {/* 1. 基本設定 */}
-      <div style={SECTION_STYLE}>
-        <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
-          {lang === "ja" ? "1. 基本設定" : "1. Basic Settings"}
-        </h2>
-        <div style={{ marginBottom: 14 }}>
-          <label style={LABEL_STYLE}>{lang === "ja" ? "アバター名 *" : "Avatar Name *"}</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={lang === "ja" ? "例: サポートアシスタント" : "e.g. Support Assistant"}
-            style={INPUT_STYLE}
-          />
-        </div>
-        <div>
-          <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
-          <input type="text" value={lemonsliceAgentId} onChange={(e) => setLemonsliceAgentId(e.target.value)}
-            placeholder="agent_xxxxxxxxxx" style={INPUT_STYLE} />
-        </div>
-      </div>
+      <StudioBasicSection
+        name={name}
+        setName={setName}
+        lemonsliceAgentId={lemonsliceAgentId}
+        setLemonsliceAgentId={setLemonsliceAgentId}
+      />
 
       {/* 2. アバター画像 */}
       <div style={SECTION_STYLE}>
