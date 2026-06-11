@@ -7,11 +7,12 @@ import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { containsBannedWord } from "../../../lib/contentGuard";
 import type { VoiceRecommendation } from "./types";
-import { BG, BTN_PRIMARY, BTN_SECONDARY } from "./types";
+import { BG } from "./types";
 import { StudioBasicSection } from "./StudioBasicSection";
 import { StudioImageSection } from "./StudioImageSection";
 import { StudioVoiceSection } from "./StudioVoiceSection";
 import { StudioPersonalitySection } from "./StudioPersonalitySection";
+import { StudioFooterActions } from "./StudioFooterActions";
 
 interface AvatarConfig {
   id: string;
@@ -469,44 +470,15 @@ export default function AvatarStudioPage() {
       />
 
       {/* 保存ボタン */}
-      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
-        {isEdit && isDefault && (
-          <button
-            onClick={() => void handleResetToDefault()}
-            disabled={resetting}
-            style={{
-              ...BTN_SECONDARY,
-              opacity: resetting ? 0.6 : 1,
-              cursor: resetting ? "not-allowed" : "pointer",
-              marginRight: "auto",
-            }}
-          >
-            {resetting
-              ? (lang === "ja" ? "リセット中..." : "Resetting...")
-              : (lang === "ja" ? "デフォルトに戻す" : "Reset to Default")}
-          </button>
-        )}
-        <button
-          onClick={() => navigate("/admin/avatar")}
-          style={BTN_SECONDARY}
-        >
-          {lang === "ja" ? "キャンセル" : "Cancel"}
-        </button>
-        <button
-          onClick={() => void handleSave()}
-          disabled={saving || !name.trim()}
-          style={{
-            ...BTN_PRIMARY,
-            minWidth: 120,
-            opacity: saving || !name.trim() ? 0.5 : 1,
-            cursor: saving || !name.trim() ? "not-allowed" : "pointer",
-          }}
-        >
-          {saving
-            ? (lang === "ja" ? "保存中..." : "Saving...")
-            : (lang === "ja" ? "保存する" : "Save")}
-        </button>
-      </div>
+      <StudioFooterActions
+        isEdit={isEdit}
+        isDefault={isDefault}
+        resetting={resetting}
+        handleResetToDefault={handleResetToDefault}
+        saving={saving}
+        name={name}
+        handleSave={handleSave}
+      />
     </div>
   );
 }
