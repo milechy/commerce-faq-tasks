@@ -56,6 +56,51 @@ SYSTEM_PROMPT = (
     "- 特徴: 全車両整備済み・保証付き、ファイナンス相談可能\n"
 )
 
+# --- LemonSlice I-4: In-Call Dynamic Update ---
+# avatar.start() の戻り値（LemonSlice session_id）を保持。Control API 呼び出しに使用。
+_lemonslice_session_id: str | None = None
+
+# フロー状態 → 表情・動作プロンプトのマッピング（Phase22 State Machine + SalesFlow 互換）
+STATE_AGENT_PROMPTS = {
+    "clarify": "attentive and curious, leaning in slightly",
+    "answer": "confident and helpful",
+    "confirm": "enthusiastic and persuasive",
+    "terminal": "warm and appreciative, gentle bow",
+    # SalesFlow（/api/chat パスの salesContextStore currentStage 由来）
+    "propose": "enthusiastic and persuasive",
+    "recommend": "confident and persuasive, presenting options",
+    "close": "joyful and celebratory",
+}
+
+
+async def control_lemonslice(event: str, **kwargs) -> bool:
+    """LemonSlice Control API への fire-and-forget ラッパー（失敗は warning のみ・non-fatal）。
+
+    注意: session_id / API キーはログに出さないこと。
+    """
+    if not _lemonslice_session_id:
+        logger.debug("[lemonslice-control] session_id not available, skipping")
+        return False
+    api_key = os.environ.get("LEMONSLICE_API_KEY")
+    if not api_key:
+        logger.warning("[lemonslice-control] LEMONSLICE_API_KEY not set, skipping")
+        return False
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(
+                f"https://lemonslice.com/api/liveai/sessions/{_lemonslice_session_id}/control",
+                headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+                json={"event": event, **kwargs},
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                ok = resp.status == 200
+                if not ok:
+                    logger.warning(f"[lemonslice-control] {event} → {resp.status}")
+                return ok
+    except Exception as e:
+        logger.warning(f"[lemonslice-control] {event} error (non-fatal): {e}")
+        return False
+
 
 # --- Groq LLM 直接呼び出し ---
 async def fetch_avatar_config(tenant_id: str, api_url: str, avatar_config_id: str | None = None) -> dict | None:
@@ -460,6 +505,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 if text:
                     logger.info(f"[data_channel] chat received (fallback): {text[:80]}")
                     asyncio.create_task(handle_chat(text))
+            elif msg_type == "state_change":
+                # I-4: フロー状態に応じて表情プロンプトを差し替え（fire-and-forget）
+                state = msg.get("state")
+                prompt = STATE_AGENT_PROMPTS.get(state) if isinstance(state, str) else None
+                if prompt:
+                    logger.info(f"[data_channel] state_change received: state={state}")
+                    asyncio.create_task(
+                        control_lemonslice("update_agent_prompt", agent_prompt=prompt)
+                    )
+                else:
+                    logger.debug(f"[data_channel] state_change with unknown state, skipping: {state!r}")
             elif msg_type == "widget_connected":
                 logger.info("[data_channel] widget_connected received")
                 # 挨拶は AgentSession が自動的に行うため、手動呼び出し不要
@@ -508,8 +564,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "simulcast": True,  # I-3: 同上
             }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)
-        await avatar.start(session, room=ctx.room)
+        # I-4: avatar.start() の戻り値が LemonSlice session_id（plugin avatar.py:132）
+        global _lemonslice_session_id
+        _lemonslice_session_id = await avatar.start(session, room=ctx.room)
         logger.info("=== LEMONSLICE AVATAR STARTED ===")
+        logger.info(f"[lemonslice] session_id={'SET' if _lemonslice_session_id else 'NOT_AVAILABLE'}")
 
         # LiveKit 1.5.17: アバターの room 参加を待機（失敗しても続行）
         try:

@@ -28,6 +28,15 @@ export interface ChatMessage {
   modelUsed?: GroqModel;
   timestamp: number;
   tenantId: string;
+  /** LemonSlice I-4: 会話フロー状態（アバター表情連動用、Phase22 + SalesFlow） */
+  flowState?:
+    | "clarify"
+    | "answer"
+    | "confirm"
+    | "terminal"
+    | "propose"
+    | "recommend"
+    | "close";
 }
 
 export interface ChatAction {

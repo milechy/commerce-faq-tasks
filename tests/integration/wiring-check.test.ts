@@ -113,6 +113,14 @@ import { searchPgVector } from "../../src/search/pgvector";
 
 import { createChatHandler } from "../../src/api/chat/route";
 import { runDialogTurn } from "../../src/agent/dialog/dialogAgent";
+import {
+  setFlowSessionMeta,
+  resetFlowSessionMeta,
+} from "../../src/agent/dialog/flowContextStore";
+import {
+  setSalesSessionMeta,
+  clearSalesSessionMeta,
+} from "../../src/agent/dialog/salesContextStore";
 import { searchTool } from "../../src/agent/tools/searchTool";
 import { synthesizeAnswer } from "../../src/agent/tools/synthesisTool";
 import { getActiveRulesForTenant } from "../../src/api/admin/tuning/tuningRulesRepository";
@@ -223,6 +231,89 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
         tenantId: "test-tenant",
       })
     );
+  });
+
+  it("POST /api/chat returns flowState from flowContextStore (LemonSlice I-4)", async () => {
+    const SESSION_ID = "session-flowstate-i4-test";
+    const FLOW_KEY = { tenantId: "test-tenant", conversationId: SESSION_ID };
+
+    jest.spyOn(
+      require("../../src/agent/dialog/dialogAgent"),
+      "runDialogTurn"
+    ).mockResolvedValue({
+      answer: "確認です。来店予約を進めてよろしいですか？",
+      needsClarification: false,
+      clarifyingQuestions: [],
+      detectedIntents: {},
+      meta: { gapSignal: { hitCount: 1, topScore: 0.9 } },
+    });
+
+    // flowContextStore に confirm 状態をセット（langGraph パスが書き込む想定の状態を再現）
+    setFlowSessionMeta(FLOW_KEY, {
+      state: "confirm",
+      turnIndex: 2,
+      sameStateRepeats: 0,
+      clarifyRepeats: 0,
+      confirmRepeats: 1,
+      recentStates: ["answer", "confirm"],
+      lastUpdatedAt: new Date().toISOString(),
+    });
+
+    try {
+      const app = buildChatApp();
+      const res = await request(app)
+        .post("/api/chat")
+        .set("x-api-key", "test-api-key")
+        .send({ message: "予約をお願いします", sessionId: SESSION_ID });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.flowState).toBe("confirm");
+    } finally {
+      resetFlowSessionMeta(FLOW_KEY);
+    }
+  });
+
+  it("POST /api/chat prefers salesContextStore currentStage over flowContextStore (LemonSlice I-4)", async () => {
+    const SESSION_ID = "session-flowstate-i4-sales-test";
+    const SALES_KEY = { tenantId: "test-tenant", sessionId: SESSION_ID };
+    const FLOW_KEY = { tenantId: "test-tenant", conversationId: SESSION_ID };
+
+    jest.spyOn(
+      require("../../src/agent/dialog/dialogAgent"),
+      "runDialogTurn"
+    ).mockResolvedValue({
+      answer: "体験レッスンはいかがですか？",
+      needsClarification: false,
+      clarifyingQuestions: [],
+      detectedIntents: {},
+      meta: { gapSignal: { hitCount: 1, topScore: 0.9 } },
+    });
+
+    // sales store に propose、flow store に confirm を投入 → sales が優先されること
+    setSalesSessionMeta(SALES_KEY, { currentStage: "propose" });
+    setFlowSessionMeta(FLOW_KEY, {
+      state: "confirm",
+      turnIndex: 2,
+      sameStateRepeats: 0,
+      clarifyRepeats: 0,
+      confirmRepeats: 1,
+      recentStates: ["answer", "confirm"],
+      lastUpdatedAt: new Date().toISOString(),
+    });
+
+    try {
+      const app = buildChatApp();
+      const res = await request(app)
+        .post("/api/chat")
+        .set("x-api-key", "test-api-key")
+        .send({ message: "レッスンに興味があります", sessionId: SESSION_ID });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.flowState).toBe("propose");
+    } finally {
+      clearSalesSessionMeta(SALES_KEY);
+      resetFlowSessionMeta(FLOW_KEY);
+    }
   });
 
   it("chat handler returns 400 for an empty message", async () => {

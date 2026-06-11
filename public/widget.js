@@ -2156,6 +2156,19 @@
         console.log('[FAQ Widget] sendMessage after API: avatarProvider=' + avatarProvider + ' roomState=' + (lkRoom ? lkRoom.state : 'null') + ' hasParticipant=' + !!(lkRoom && lkRoom.localParticipant));
         if (avatarProvider === 'lemonslice' && lkRoom && lkRoom.localParticipant) {
           sendTTSRequest(assistantContent);
+          // I-4: フロー状態をアバターエージェントへ通知（表情プロンプト差し替え用）
+          if (json.data && typeof json.data.flowState === 'string') {
+            try {
+              var stateEncoder = new TextEncoder();
+              var statePayload = stateEncoder.encode(JSON.stringify({ type: 'state_change', state: json.data.flowState }));
+              var statePromise = lkRoom.localParticipant.publishData(statePayload, { reliable: true });
+              if (statePromise && typeof statePromise.catch === 'function') {
+                statePromise.catch(function (err) { console.warn('[FAQ Widget] state_change publishData rejected:', err && (err.message || err)); });
+              }
+            } catch (e) {
+              console.warn('[FAQ Widget] state_change send error:', e && (e.message || e));
+            }
+          }
         }
 
         emitToHost('assistant:message', { messageLength: assistantContent.length });
