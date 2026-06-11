@@ -66,8 +66,9 @@ STATE_AGENT_PROMPTS = {
     "answer": "confident and helpful",
     "confirm": "enthusiastic and persuasive",
     "terminal": "warm and appreciative, gentle bow",
-    # SalesFlow 互換（将来値）
+    # SalesFlow（/api/chat パスの salesContextStore currentStage 由来）
     "propose": "enthusiastic and persuasive",
+    "recommend": "confident and persuasive, presenting options",
     "close": "joyful and celebratory",
 }
 
