@@ -9,6 +9,27 @@ export interface VoiceRecommendation {
   score: number;
 }
 
+// ─── 型（index.tsx から移動） ─────────────────────────────────────────────────
+
+export interface AvatarConfig {
+  id: string;
+  tenant_id: string;
+  tenant_name?: string;
+  name: string;
+  image_url: string | null;
+  lemonslice_agent_id: string | null;
+  is_active: boolean;
+  is_default: boolean;
+  created_at: string;
+  avatar_provider: string | null;
+}
+
+export type SortKey = "name_asc" | "created_desc" | "created_asc" | "active_first" | "inactive_first" | "default_first";
+export type TypeFilter = "all" | "default" | "custom";
+export type StatusFilter = "all" | "active" | "inactive";
+
+export interface WarningTarget { id: string; tenantId: string; name: string }
+
 // ─── スタイル定数（studio.tsx から移動） ──────────────────────────────────────
 
 export const BG = "var(--background)";

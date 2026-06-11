@@ -6,28 +6,11 @@ import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
-
-interface AvatarConfig {
-  id: string;
-  tenant_id: string;
-  tenant_name?: string;
-  name: string;
-  image_url: string | null;
-  lemonslice_agent_id: string | null;
-  is_active: boolean;
-  is_default: boolean;
-  created_at: string;
-  avatar_provider: string | null;
-}
-
-type SortKey = "name_asc" | "created_desc" | "created_asc" | "active_first" | "inactive_first" | "default_first";
-type TypeFilter = "all" | "default" | "custom";
-type StatusFilter = "all" | "active" | "inactive";
-
-const BG = "var(--background)";
+import type { AvatarConfig, SortKey, TypeFilter, StatusFilter, WarningTarget } from "./types";
+import { BG } from "./types";
+import { toggleBtnStyle } from "./utils";
 
 // ── AvatarWarningModal ─────────────────────────────────────────────────────
-interface WarningTarget { id: string; tenantId: string; name: string }
 
 const WARNING_REASONS = ["利用規約違反の疑い", "不適切なコンテンツ", "システムリソース過剰使用", "その他"];
 const WARNING_DEADLINES = [{ label: "3日以内", days: 3 }, { label: "7日以内", days: 7 }, { label: "14日以内", days: 14 }];
@@ -324,19 +307,6 @@ export default function AvatarListPage() {
 
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
-
-  const toggleBtnStyle = (active: boolean) => ({
-    padding: "8px 14px",
-    minHeight: 44,
-    borderRadius: 8,
-    border: active ? "1px solid rgba(99,102,241,0.6)" : "1px solid var(--border)",
-    background: active ? "rgba(99,102,241,0.2)" : "transparent",
-    color: active ? "#a5b4fc" : "#9ca3af",
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: "pointer",
-    whiteSpace: "nowrap" as const,
-  });
 
   return (
     <div style={{ minHeight: "100vh", background: BG, color: "var(--foreground)", padding: "24px 20px", maxWidth: 1200, margin: "0 auto" }}>
