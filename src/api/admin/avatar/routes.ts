@@ -65,6 +65,28 @@ async function ensureBucketExists(): Promise<void> {
   }
 }
 
+// I-6: LemonSlice agent_image_url の推奨サイズ（縦型・全身）
+const LEMONSLICE_IMAGE_WIDTH = 368;
+const LEMONSLICE_IMAGE_HEIGHT = 560;
+
+// I-6: アップロード画像を LemonSlice 推奨サイズにリサイズする。
+// 失敗時は元バッファを返す（リサイズ不能でもアップロード自体は継続）。
+// export はテスト用（routes.test.ts）。
+export async function resizeForLemonSlice(buffer: Buffer): Promise<Buffer> {
+  try {
+    const { default: sharp } = await import("sharp");
+    return await sharp(buffer)
+      .resize(LEMONSLICE_IMAGE_WIDTH, LEMONSLICE_IMAGE_HEIGHT, {
+        fit: "cover", // アスペクト比を保ちながらクロップ
+        position: "top", // 全身画像の顔が上部にある前提
+      })
+      .toBuffer();
+  } catch (err) {
+    logger.warn("[avatar-storage] resize failed — uploading original:", (err as Error).message);
+    return buffer;
+  }
+}
+
 async function uploadBase64ToStorage(
   dataUrl: string,
   tenantId: string,
@@ -80,7 +102,7 @@ async function uploadBase64ToStorage(
 
   const mimeType = match[1] as string;
   const base64Data = match[2] as string;
-  const buffer = Buffer.from(base64Data, "base64");
+  const buffer = await resizeForLemonSlice(Buffer.from(base64Data, "base64"));
 
   const ext =
     mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
