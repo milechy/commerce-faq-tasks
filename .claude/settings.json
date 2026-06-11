@@ -115,7 +115,15 @@
       "command": "npx",
       "args": [
         "-y",
-        "@mobilenext/mcp@latest"
+        "@mobilenext/mobile-mcp@latest"
+      ],
+      "type": "stdio"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest"
       ],
       "type": "stdio"
     }
