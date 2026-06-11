@@ -100,5 +100,16 @@
         ]
       }
     ]
+  },
+  "mcpServers": {
+    "repomix": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "repomix",
+        "--mcp-server"
+      ],
+      "type": "stdio"
+    }
   }
 }
