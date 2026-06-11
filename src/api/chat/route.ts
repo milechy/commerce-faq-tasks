@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { runDialogTurn } from "../../agent/dialog/dialogAgent";
+import { peekFlowSessionMeta } from "../../agent/dialog/flowContextStore";
 import { trackUsage } from "../../lib/billing/usageTracker";
 import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts";
 import { t } from "../i18n/messages";
@@ -250,6 +251,9 @@ export function createChatHandler(logger: Logger) {
         });
       }
 
+      // LemonSlice I-4: フロー状態を応答に含める（アバター表情連動用、read-only peek）
+      const flowState = peekFlowSessionMeta({ tenantId, conversationId: sessionId })?.state;
+
       const chatMessage: ChatMessage = {
         id: requestId,
         role: "assistant",
@@ -257,6 +261,7 @@ export function createChatHandler(logger: Logger) {
         actions: actions.length > 0 ? actions : undefined,
         timestamp: Date.now(),
         tenantId,
+        flowState,
       };
 
       logger.info(
