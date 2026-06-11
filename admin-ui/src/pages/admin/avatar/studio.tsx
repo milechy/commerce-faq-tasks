@@ -6,6 +6,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { containsBannedWord } from "../../../lib/contentGuard";
+import type { VoiceRecommendation } from "./types";
+import { BG, SECTION_STYLE, LABEL_STYLE, INPUT_STYLE, TEXTAREA_STYLE, BTN_PRIMARY, BTN_SECONDARY } from "./types";
 
 interface AvatarConfig {
   id: string;
@@ -24,75 +26,6 @@ interface AvatarConfig {
   agent_prompt: string | null;
   agent_idle_prompt: string | null;
 }
-
-interface VoiceRecommendation {
-  id: string;
-  title: string;
-  description: string;
-  score: number;
-}
-
-const BG = "var(--background)";
-
-const SECTION_STYLE: React.CSSProperties = {
-  borderRadius: 14,
-  border: "1px solid var(--border)",
-  background: "var(--card)",
-  padding: "20px 22px",
-  marginBottom: 20,
-};
-
-const LABEL_STYLE: React.CSSProperties = {
-  display: "block",
-  fontSize: 13,
-  fontWeight: 600,
-  color: "var(--muted-foreground)",
-  marginBottom: 6,
-};
-
-const INPUT_STYLE: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid var(--border)",
-  background: "rgba(30,41,59,0.8)",
-  color: "var(--foreground)",
-  fontSize: 14,
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const TEXTAREA_STYLE: React.CSSProperties = {
-  ...INPUT_STYLE,
-  resize: "vertical",
-  minHeight: 90,
-  fontFamily: "inherit",
-  lineHeight: 1.5,
-};
-
-const BTN_PRIMARY: React.CSSProperties = {
-  padding: "10px 20px",
-  minHeight: 44,
-  borderRadius: 10,
-  border: "none",
-  background: "linear-gradient(135deg, #3b82f6, #6366f1)",
-  color: "#fff",
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
-};
-
-const BTN_SECONDARY: React.CSSProperties = {
-  padding: "10px 18px",
-  minHeight: 44,
-  borderRadius: 10,
-  border: "1px solid var(--border)",
-  background: "transparent",
-  color: "var(--muted-foreground)",
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: "pointer",
-};
 
 export default function AvatarStudioPage() {
   const navigate = useNavigate();
