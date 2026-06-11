@@ -492,6 +492,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "agent_idle_prompt": effective_agent_idle_prompt,
                 "width": 1920,
                 "height": 1080,
+                # I-3: LemonSlice API 公式パラメータ。明示 kwarg ではなく **kwargs →
+                # extra_payload 経由で API payload にマージされる (plugin avatar.py:55)
+                "simulcast": True,
             }
         else:
             avatar_kwargs = {
@@ -502,6 +505,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "agent_idle_prompt": effective_agent_idle_prompt,
                 "width": 1920,
                 "height": 1080,
+                "simulcast": True,  # I-3: 同上
             }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)
         await avatar.start(session, room=ctx.room)
