@@ -303,3 +303,237 @@ describe("POST /v1/admin/avatar/configs — emotion_tags validation", () => {
     expect(res.status).not.toBe(400);
   });
 });
+
+// --------------------------------------------------------------------------
+// POST /v1/admin/avatar/configs/:id/voice-clone — FishAudio Phase B-2
+// --------------------------------------------------------------------------
+
+describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
+  const AUDIO_BUFFER = Buffer.from("dummy-audio-bytes");
+  let fetchSpy: jest.SpyInstance;
+
+  // makeApp で role なしユーザーを再現するためのバリアント
+  function makeAppNoRole(db: any) {
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res: any, next: any) => {
+      req.supabaseUser = { app_metadata: {} };
+      next();
+    });
+    registerAvatarConfigRoutes(app, db);
+    return app;
+  }
+
+  beforeEach(() => {
+    process.env.FISH_AUDIO_API_KEY = "test-fish-key";
+    fetchSpy = jest.spyOn(global, "fetch" as any).mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ _id: "fish-voice-123" }),
+      text: async () => "",
+    } as any);
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    delete process.env.FISH_AUDIO_API_KEY;
+  });
+
+  it("正常系: client_admin + 自テナント config → Fish Audio 呼び出し + voice_id UPDATE + 200", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] })   // 所有チェック SELECT
+      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] });  // UPDATE RETURNING id
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ voiceId: "fish-voice-123" });
+
+    // Fish Audio へ FormData で POST されている
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.fish.audio/model");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    const fd = init.body as FormData;
+    expect(fd.get("visibility")).toBe("private");
+    expect(fd.get("type")).toBe("tts");
+    expect(fd.get("title")).toBe("マイボイス");
+    expect(fd.get("voices")).toBeTruthy();
+
+    // 所有チェック + UPDATE の両方が tenant スコープ付き
+    const [checkSql, checkParams] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(checkSql).toContain("tenant_id = $2");
+    expect(checkParams).toEqual(["config-1", "tenant-a"]);
+
+    const [updateSql, updateParams] = dbQuery.mock.calls[1] as [string, unknown[]];
+    expect(updateSql).toContain("UPDATE avatar_configs SET voice_id = $1");
+    expect(updateSql).toContain("updated_at = NOW()");
+    expect(updateSql).toContain("tenant_id = $3");
+    expect(updateParams).toEqual(["fish-voice-123", "config-1", "tenant-a"]);
+  });
+
+  it("認証エラー: role なし → 403、DB・fetch に到達しない", async () => {
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeAppNoRole(db))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("AUTHZ_ROLE_DENIED");
+    expect(dbQuery).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション: audio ファイルなし → 400、DB・fetch に到達しない", async () => {
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス");
+
+    expect(res.status).toBe(400);
+    expect(dbQuery).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション: name が 101 字 → 400", async () => {
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "あ".repeat(101))
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(dbQuery).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション: 許可外 MIME タイプ → 400、fetch に到達しない", async () => {
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "evil.txt",
+        contentType: "text/plain",
+      });
+
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("テナント越境: 他テナント configId → 404、Fish Audio に到達しない", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] }); // 所有チェック SELECT → 0 件
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/other-tenant-config/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(404);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // UPDATE は呼ばれない（SELECT のみ）
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("super_admin は他テナント config も操作可（tenant スコープなし — PATCH と同規則）", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] })
+      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] });
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .post("/v1/admin/avatar/configs/config-x/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.wav",
+        contentType: "audio/wav",
+      });
+
+    expect(res.status).toBe(200);
+    const [checkSql] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(checkSql).not.toContain("tenant_id");
+    const [updateSql] = dbQuery.mock.calls[1] as [string, unknown[]];
+    expect(updateSql).not.toContain("tenant_id");
+  });
+
+  it("Fish Audio エラー: ok=false → 502、DB UPDATE に到達しない・外部エラー本文を返さない", async () => {
+    fetchSpy.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "internal fish error detail",
+      json: async () => ({}),
+    } as any);
+
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] }); // 所有チェックは通る
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(502);
+    expect(JSON.stringify(res.body)).not.toContain("internal fish error detail");
+    // UPDATE は実行されない（SELECT のみ）
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("FISH_AUDIO_API_KEY 未設定 → 503、DB・fetch に到達しない", async () => {
+    delete process.env.FISH_AUDIO_API_KEY;
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(503);
+    expect(dbQuery).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

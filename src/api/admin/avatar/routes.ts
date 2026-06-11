@@ -132,6 +132,18 @@ const createSchema = z.object({
   avatar_provider: z.enum(['lemonslice', 'anam']).optional(),
 });
 
+// Phase B-2: 音声クローン作成（multipart fields）
+const voiceCloneSchema = z.object({
+  name: z.string().min(1).max(100),
+});
+
+const ALLOWED_VOICE_MIME_TYPES = [
+  "audio/mpeg",
+  "audio/wav",
+  "audio/mp4",
+  "audio/ogg",
+] as const;
+
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   image_url: z.string().optional(),
@@ -685,6 +697,129 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       } catch (err) {
         logger.warn('[POST /v1/admin/avatar/configs/:id/reset-to-default]', err);
         return res.status(500).json({ error: 'リセットに失敗しました' });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/avatar/configs/:id/voice-clone — FishAudio Phase B-2
+  // 音声サンプルをアップロードし Fish Audio に永続クローンを作成、
+  // voice_id を avatar_configs に保存する
+  // -----------------------------------------------------------------------
+  const voiceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+  });
+
+  app.post(
+    "/v1/admin/avatar/configs/:id/voice-clone",
+    voiceUpload.single("audio"),
+    async (req: Request, res: Response) => {
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
+      const id = req.params["id"];
+
+      const parsed = voiceCloneSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ error: "invalid_request", details: parsed.error.issues });
+      }
+      const { name } = parsed.data;
+
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) {
+        return res.status(400).json({ error: "音声ファイルが必要です" });
+      }
+      if (!(ALLOWED_VOICE_MIME_TYPES as readonly string[]).includes(file.mimetype)) {
+        return res.status(400).json({
+          error: "対応していない音声形式です（MP3 / WAV / MP4 / OGG をご利用ください）",
+        });
+      }
+
+      const fishApiKey = process.env.FISH_AUDIO_API_KEY?.trim();
+      if (!fishApiKey) {
+        return res.status(503).json({ error: "音声クローン機能が現在利用できません" });
+      }
+
+      try {
+        // 対象 config の存在 + テナント所有を先に確認
+        // （他テナント config への外部 API 呼び出しを防ぐ。tenant スコープは PATCH と同規則:
+        //   super_admin は全テナント可、client_admin は自テナントのみ）
+        let checkQuery = "SELECT id FROM avatar_configs WHERE id = $1";
+        const checkValues: unknown[] = [id];
+        if (!isSuperAdmin) {
+          checkQuery += " AND tenant_id = $2";
+          checkValues.push(tenantId);
+        }
+        const existing = await db.query(checkQuery, checkValues);
+        if (existing.rows.length === 0) {
+          return res
+            .status(404)
+            .json({ error: "設定が見つからないかアクセス権限がありません" });
+        }
+
+        // Fish Audio POST /model — 永続クローン作成
+        const fd = new FormData();
+        fd.append("visibility", "private");
+        fd.append("type", "tts");
+        fd.append("title", name);
+        fd.append(
+          "voices",
+          new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }),
+          file.originalname || "voice-sample"
+        );
+
+        const fishRes = await fetch("https://api.fish.audio/model", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${fishApiKey}` },
+          body: fd,
+        });
+
+        if (!fishRes.ok) {
+          // 外部エラー本文はログのみ（レスポンスに含めない）
+          const detail = await fishRes.text().catch(() => "");
+          logger.warn({
+            event: "voice_clone_fish_error",
+            status: fishRes.status,
+            detail: detail.slice(0, 300),
+          }, "[POST /v1/admin/avatar/configs/:id/voice-clone] Fish Audio API error");
+          return res.status(502).json({ error: "音声クローンの作成に失敗しました" });
+        }
+
+        const fishData = (await fishRes.json()) as Record<string, unknown>;
+        const voiceId = typeof fishData["_id"] === "string" ? fishData["_id"] : "";
+        if (!voiceId) {
+          logger.warn({
+            event: "voice_clone_fish_error",
+            reason: "missing_id_in_response",
+          }, "[POST /v1/admin/avatar/configs/:id/voice-clone] Fish Audio response has no _id");
+          return res.status(502).json({ error: "音声クローンの作成に失敗しました" });
+        }
+
+        // voice_id 保存（UPDATE にも同じ tenant スコープを適用 — 防御的二重化）
+        const updateValues: unknown[] = [voiceId, id];
+        let updateQuery =
+          "UPDATE avatar_configs SET voice_id = $1, updated_at = NOW() WHERE id = $2";
+        if (!isSuperAdmin) {
+          updateValues.push(tenantId);
+          updateQuery += " AND tenant_id = $3";
+        }
+        updateQuery += " RETURNING id";
+
+        const result = await db.query(updateQuery, updateValues);
+        if (result.rows.length === 0) {
+          return res
+            .status(404)
+            .json({ error: "設定が見つからないかアクセス権限がありません" });
+        }
+
+        return res.json({ voiceId });
+      } catch (err) {
+        logger.warn("[POST /v1/admin/avatar/configs/:id/voice-clone]", err);
+        return res.status(500).json({ error: "音声クローンの作成に失敗しました" });
       }
     }
   );
