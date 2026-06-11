@@ -2,151 +2,31 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, authFetch } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
-import UsageChart from "../../../components/UsageChart";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
+import type {
+  Tenant,
+  BillingAdjustment,
+  BillingSummary,
+  DailyUsage,
+  Invoice,
+  CostBreakdown,
+  CrossTenantRow,
+} from "./types";
 
-// ─── 型定義 ────────────────────────────────────────────────
-interface Tenant {
-  id: string;
-  name: string;
-  is_active?: boolean;
-  billing_free_from?: string | null;
-  billing_free_until?: string | null;
-}
-
-interface BillingAdjustment {
-  id: number;
-  amount: number;
-  reason: string;
-  adjusted_by: string;
-  created_at: string;
-}
-
-interface BillingSummary {
-  tenant_id: string;
-  month: string;
-  total_requests: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  cost_llm_cents: number;
-  cost_total_cents: number;
-  billing_status: "pending" | "invoiced" | "error";
-}
-
-interface DailyUsage {
-  date: string;
-  requests: number;
-  input_tokens: number;
-  output_tokens: number;
-  cost_total_cents: number;
-}
-
-interface Invoice {
-  id: string;
-  month: string;
-  amount_cents: number;
-  status: "paid" | "open" | "draft";
-  hosted_invoice_url: string | null;
-  invoice_pdf: string | null;
-  portal_url: string;
-}
-
-interface CostBreakdownItem {
-  label: string;
-  cost_yen: number;
-  request_count: number;
-  percentage: number;
-}
-
-interface CostBreakdown {
-  total_yen: number;
-  breakdown: Record<string, CostBreakdownItem>;
-}
-
-interface CrossTenantRow {
-  tenant_id: string;
-  total_requests: number;
-  cost_total_cents: number;
-}
-
-// ─── ユーティリティ ────────────────────────────────────────
-function fmtCents(cents: number): string {
-  return `¥${Math.round(cents / 100).toLocaleString("ja-JP")}`;
-}
-
-function fmtNum(n: number): string {
-  return n.toLocaleString("ja-JP");
-}
-
-function fmtDate(dateStr: string): string {
-  const s = dateStr.slice(0, 10); // normalize ISO to "YYYY-MM-DD"
-  const [y, m, d] = s.split("-");
-  return `${y}年${m}月${d}日`;
-}
-
-/** YYYY-MM → from/to の日付範囲を返す */
-function monthToDateRange(month: string): { from: string; to: string } {
-  const [year, mon] = month.split("-").map(Number);
-  const from = `${year}-${String(mon).padStart(2, "0")}-01`;
-  const nextMonth = mon === 12 ? new Date(year + 1, 0, 1) : new Date(year, mon, 1);
-  const to = nextMonth.toISOString().slice(0, 10);
-  return { from, to };
-}
-
-/** Unix timestamp (秒) → "YYYY-MM" */
-function tsToYearMonth(ts: number): string {
-  const d = new Date(ts * 1000);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-// ─── CSVエクスポート ───────────────────────────────────────
-function exportCsv(data: DailyUsage[], tenantName: string, month: string, header: string) {
-  const rows = data.map((d) =>
-    [
-      d.date,
-      d.requests,
-      d.input_tokens,
-      d.output_tokens,
-      Math.round(d.cost_total_cents / 100),
-    ].join(",")
-  );
-  const csv = [header, ...rows].join("\n");
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `usage_${tenantName}_${month}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ─── スタイル定数 ─────────────────────────────────────────
-const CARD: React.CSSProperties = {
-  borderRadius: 14,
-  border: "1px solid var(--border)",
-  background:
-    "linear-gradient(145deg, var(--card), var(--card))",
-  padding: "20px 18px",
-  boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
-};
-
-const BTN_LINK: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "10px 18px",
-  minHeight: 44,
-  borderRadius: 10,
-  border: "1px solid var(--border)",
-  background: "transparent",
-  color: "var(--foreground)",
-  fontSize: 15,
-  fontWeight: 600,
-  cursor: "pointer",
-  textDecoration: "none",
-};
+import {
+  monthToDateRange,
+  tsToYearMonth,
+  exportCsv,
+  CARD,
+  BTN_LINK,
+} from "./utils";
+import { BillingSummaryCards } from "./BillingSummaryCards";
+import { UsageChartSection } from "./UsageChartSection";
+import { DailyUsageTable } from "./DailyUsageTable";
+import { BillingMainContent } from "./BillingMainContent";
+import { AdminBillingModals } from "./AdminBillingModals";
 
 // ─── メインページ ─────────────────────────────────────────
 export default function BillingPage() {
@@ -802,132 +682,16 @@ export default function BillingPage() {
       ) : summary ? (
         <>
           {/* 概要カード */}
-          <section style={{ marginBottom: 20 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 12 }}>
-              {summaryTitle}
-            </h2>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-              {/* リクエスト数 */}
-              <div style={{ ...CARD, flex: "1 1 140px" }}>
-                <div style={{ fontSize: 26, marginBottom: 4 }}>📊</div>
-                <div style={{ fontSize: 26, fontWeight: 700, color: "var(--foreground)", lineHeight: 1 }}>
-                  {fmtNum(summary.total_requests)}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
-                  {t("billing.total_requests")}
-                </div>
-              </div>
-
-              {/* AI処理量 */}
-              <div style={{ ...CARD, flex: "1 1 140px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                  <span style={{ fontSize: 26 }}>🤖</span>
-                  <span
-                    title="AIが文章を読み書きした量です"
-                    style={{ fontSize: 13, color: "var(--muted-foreground)", cursor: "help" }}
-                  >
-                    (?)
-                  </span>
-                </div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#a78bfa", lineHeight: 1 }}>
-                  {fmtNum(summary.total_input_tokens + summary.total_output_tokens)}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
-                  AIの処理量
-                </div>
-                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                  AIが文章を読み書きした量
-                </div>
-              </div>
-
-              {/* LLMコスト（原価） */}
-              <div style={{ ...CARD, flex: "1 1 140px" }}>
-                <div style={{ fontSize: 26, marginBottom: 4 }}>💹</div>
-                <div style={{ fontSize: 26, fontWeight: 700, color: "#60a5fa", lineHeight: 1 }}>
-                  {fmtCents(summary.cost_llm_cents)}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
-                  {t("billing.ai_cost")}
-                </div>
-                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                  {t("billing.ai_cost_sub")}
-                </div>
-              </div>
-
-              {/* 請求額 */}
-              <div style={{ ...CARD, flex: "1 1 140px" }}>
-                <div style={{ fontSize: 26, marginBottom: 4 }}>🧾</div>
-                <div style={{ fontSize: 26, fontWeight: 700, color: "#4ade80", lineHeight: 1 }}>
-                  {fmtCents(summary.cost_total_cents)}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
-                  {t("billing.total_amount")}
-                </div>
-                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                  {t("billing.total_amount_sub")}
-                </div>
-              </div>
-
-              {/* お支払い状況 */}
-              <div style={{ ...CARD, flex: "1 1 140px" }}>
-                <div style={{ fontSize: 26, marginBottom: 4 }}>💳</div>
-                <div style={{ marginTop: 4 }}>
-                  {statusBadge(summary.billing_status)}
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 8 }}>
-                  {t("billing.payment_status")}
-                </div>
-                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                  {t("billing.payment_status_sub")}
-                </div>
-              </div>
-            </div>
-          </section>
+          <BillingSummaryCards
+            summaryTitle={summaryTitle}
+            summary={summary}
+            statusBadge={statusBadge}
+            t={t}
+          />
 
           {/* 使用量グラフ */}
           {daily.length > 0 && (
-            <section style={{ ...CARD, marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-                <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: 0 }}>
-                  {t("billing.chart_title")}
-                </h2>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    onClick={() => setChartMode("requests")}
-                    style={{
-                      padding: "6px 14px",
-                      minHeight: 36,
-                      borderRadius: 8,
-                      border: "none",
-                      background: chartMode === "requests" ? "#22c55e" : "rgba(255,255,255,0.05)",
-                      color: chartMode === "requests" ? "#022c22" : "#9ca3af",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {t("billing.requests")}
-                  </button>
-                  <button
-                    onClick={() => setChartMode("cost")}
-                    style={{
-                      padding: "6px 14px",
-                      minHeight: 36,
-                      borderRadius: 8,
-                      border: "none",
-                      background: chartMode === "cost" ? "#22c55e" : "rgba(255,255,255,0.05)",
-                      color: chartMode === "cost" ? "#022c22" : "#9ca3af",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {t("billing.cost")}
-                  </button>
-                </div>
-              </div>
-              <UsageChart data={daily} mode={chartMode} />
-            </section>
+            <UsageChartSection daily={daily} chartMode={chartMode} setChartMode={setChartMode} t={t} />
           )}
 
           {/* コスト内訳 */}
@@ -970,274 +734,30 @@ export default function BillingPage() {
 
           {/* 日次使用量テーブル */}
           {daily.length > 0 && (
-            <section style={{ ...CARD, marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-                <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: 0 }}>
-                  {t("billing.daily_title")}
-                </h2>
-                <button
-                  onClick={() => {
-                    exportCsv(daily, selectedTenant?.name ?? "tenant", selectedMonth, t("billing.csv_header"));
-                    showToast(t("billing.csv_downloaded"));
-                  }}
-                  style={{
-                    ...BTN_LINK,
-                    fontSize: 14,
-                    padding: "8px 16px",
-                    minHeight: 44,
-                  }}
-                >
-                  {t("billing.csv_download")}
-                </button>
-              </div>
-
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 480 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                      {[t("billing.col_date"), t("billing.col_requests"), t("billing.col_cost")].map((h) => (
-                        <th
-                          key={h}
-                          style={{
-                            padding: "10px 12px",
-                            textAlign: "left",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: "var(--muted-foreground)",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {daily.map((d) => (
-                      <tr
-                        key={d.date}
-                        style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}
-                      >
-                        <td style={{ padding: "10px 12px", color: "var(--muted-foreground)" }}>{fmtDate(d.date)}</td>
-                        <td style={{ padding: "10px 12px", color: "var(--foreground)", fontWeight: 600 }}>
-                          {fmtNum(d.requests)}
-                        </td>
-                        <td style={{ padding: "10px 12px", color: "#4ade80", fontWeight: 600 }}>
-                          {fmtCents(d.cost_total_cents)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr style={{ borderTop: "1px solid var(--border)" }}>
-                      <td style={{ padding: "12px", fontWeight: 700, color: "var(--foreground)" }}>{t("billing.total")}</td>
-                      <td style={{ padding: "12px", fontWeight: 700, color: "var(--foreground)" }}>
-                        {fmtNum(summary.total_requests)}
-                      </td>
-                      <td style={{ padding: "12px", fontWeight: 700, color: "#4ade80" }}>
-                        {fmtCents(summary.cost_total_cents)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </section>
+            <DailyUsageTable
+              daily={daily}
+              summary={summary}
+              onCsvDownload={() => {
+                exportCsv(daily, selectedTenant?.name ?? "tenant", selectedMonth, t("billing.csv_header"));
+                showToast(t("billing.csv_downloaded"));
+              }}
+              t={t}
+            />
           )}
 
-          {/* データなし */}
-          {daily.length === 0 && summary.total_requests === 0 && (
-            <section style={{ ...CARD, marginBottom: 20, textAlign: "center", padding: "32px 20px" }}>
-              <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
-              <div style={{ fontSize: 15, color: "var(--muted-foreground)" }}>{t("billing.no_data")}</div>
-            </section>
-          )}
-
-          {/* 請求履歴 */}
-          <section style={{ ...CARD, marginBottom: 32 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 16, margin: "0 0 16px" }}>
-              {t("billing.invoice_title")}
-            </h2>
-
-            {invoices.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "24px", color: "var(--muted-foreground)", fontSize: 14 }}>
-                {t("billing.invoice_empty")}
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {invoices.map((inv) => {
-                  const [year, mon] = inv.month.split("-");
-                  const monthLabel = `${year}/${mon}`;
-                  return (
-                    <div
-                      key={inv.id}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "14px 16px",
-                        borderRadius: 10,
-                        border: "1px solid var(--border)",
-                        background: "rgba(0,0,0,0.2)",
-                        flexWrap: "wrap",
-                        gap: 12,
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--foreground)" }}>
-                          {t("billing.invoice_month", { month: monthLabel })}
-                        </div>
-                        <div style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 2 }}>
-                          {t("billing.invoice_amount", { amount: fmtCents(inv.amount_cents) })} &nbsp;|&nbsp;{" "}
-                          {invoiceStatusBadge(inv.status)}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {inv.hosted_invoice_url && (
-                          <a
-                            href={inv.hosted_invoice_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              ...BTN_LINK,
-                              fontSize: 13,
-                              padding: "8px 14px",
-                              borderColor: "#22c55e",
-                              color: "#4ade80",
-                            }}
-                          >
-                            {t("billing.view_detail")}
-                          </a>
-                        )}
-                        {inv.invoice_pdf && (
-                          <a
-                            href={inv.invoice_pdf}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            download
-                            style={{
-                              ...BTN_LINK,
-                              fontSize: 13,
-                              padding: "8px 14px",
-                              borderColor: "#374151",
-                              color: "var(--muted-foreground)",
-                            }}
-                          >
-                            📥 PDF
-                          </a>
-                        )}
-                        {isSuperAdmin && inv.status === "open" && (
-                          <button
-                            onClick={() => void handleRetryInvoice(inv.id)}
-                            disabled={retryLoadingId === inv.id}
-                            style={{
-                              ...BTN_LINK,
-                              fontSize: 13,
-                              padding: "8px 14px",
-                              borderColor: "rgba(234,179,8,0.5)",
-                              color: "#fbbf24",
-                              opacity: retryLoadingId === inv.id ? 0.6 : 1,
-                              cursor: retryLoadingId === inv.id ? "not-allowed" : "pointer",
-                            }}
-                          >
-                            {retryLoadingId === inv.id ? "処理中..." : "🔄 再請求"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-          {/* Super Admin: 金額調整履歴 */}
-          {isSuperAdmin && adjustments.length > 0 && (
-            <section style={{ ...CARD, marginBottom: 20 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
-                💰 金額調整履歴
-              </h2>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {adjustments.map((adj) => (
-                  <div
-                    key={adj.id}
-                    style={{
-                      display: "flex", justifyContent: "space-between", alignItems: "center",
-                      padding: "12px 16px", borderRadius: 10,
-                      border: "1px solid var(--border)", background: "rgba(0,0,0,0.2)",
-                      flexWrap: "wrap", gap: 8,
-                    }}
-                  >
-                    <div>
-                      <span style={{
-                        fontSize: 15, fontWeight: 700,
-                        color: adj.amount < 0 ? "#a78bfa" : "#f87171",
-                      }}>
-                        {adj.amount < 0
-                          ? `▼ ¥${Math.abs(adj.amount).toLocaleString("ja-JP")} 割引`
-                          : `▲ ¥${adj.amount.toLocaleString("ja-JP")} 追加`}
-                      </span>
-                      <div style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 2 }}>{adj.reason}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{adj.adjusted_by}</div>
-                      <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                        {new Date(adj.created_at).toLocaleDateString("ja-JP")}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Super Admin: テナント横断利用状況 */}
-          {isSuperAdmin && crossTenantRows.length > 0 && (
-            <section style={{ ...CARD, marginBottom: 32 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
-                テナント別利用状況（今月）
-              </h2>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 400 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                      {["テナントID", "リクエスト数", "今月のご利用額"].map((h) => (
-                        <th
-                          key={h}
-                          style={{
-                            padding: "10px 12px",
-                            textAlign: "left",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: "var(--muted-foreground)",
-                          }}
-                        >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {crossTenantRows.map((row) => (
-                      <tr
-                        key={row.tenant_id}
-                        style={{ borderBottom: "1px solid rgba(31,41,55,0.5)", cursor: "pointer" }}
-                        onClick={() => setSelectedTenantId(row.tenant_id)}
-                      >
-                        <td style={{ padding: "10px 12px", color: "#60a5fa", fontWeight: 600 }}>
-                          {row.tenant_id}
-                        </td>
-                        <td style={{ padding: "10px 12px", color: "var(--foreground)" }}>
-                          {fmtNum(row.total_requests)}
-                        </td>
-                        <td style={{ padding: "10px 12px", color: "#4ade80", fontWeight: 600 }}>
-                          {fmtCents(row.cost_total_cents)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
+          <BillingMainContent
+            daily={daily}
+            summary={summary}
+            invoices={invoices}
+            isSuperAdmin={isSuperAdmin}
+            retryLoadingId={retryLoadingId}
+            handleRetryInvoice={handleRetryInvoice}
+            invoiceStatusBadge={invoiceStatusBadge}
+            adjustments={adjustments}
+            crossTenantRows={crossTenantRows}
+            setSelectedTenantId={setSelectedTenantId}
+            t={t}
+          />
         </>
       ) : !loadingData && !error ? (
         <div
@@ -1252,215 +772,29 @@ export default function BillingPage() {
         </div>
       ) : null}
 
-      {/* 金額調整モーダル */}
-      {adjustModalOpen && (
-        <div
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 3000,
-            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
-          }}
-          onClick={(e) => { if (e.target === e.currentTarget) setAdjustModalOpen(false); }}
-        >
-          <div style={{
-            background: "linear-gradient(145deg,#0f172a,#1e293b)",
-            border: "1px solid #334155", borderRadius: 16,
-            padding: "28px 24px", width: "100%", maxWidth: 440,
-            boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
-          }}>
-            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "var(--foreground)" }}>💰 金額調整</h3>
-
-            {/* タイプ切替 */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              <button
-                onClick={() => setAdjustType("discount")}
-                style={{
-                  flex: 1, padding: "10px 0", minHeight: 44, borderRadius: 10,
-                  border: `1px solid ${adjustType === "discount" ? "rgba(168,85,247,0.5)" : "#374151"}`,
-                  background: adjustType === "discount" ? "rgba(168,85,247,0.15)" : "transparent",
-                  color: adjustType === "discount" ? "#d8b4fe" : "#9ca3af",
-                  fontWeight: 700, fontSize: 14, cursor: "pointer",
-                }}
-              >▼ 割引（値引き）</button>
-              <button
-                onClick={() => setAdjustType("add")}
-                style={{
-                  flex: 1, padding: "10px 0", minHeight: 44, borderRadius: 10,
-                  border: `1px solid ${adjustType === "add" ? "rgba(239,68,68,0.5)" : "#374151"}`,
-                  background: adjustType === "add" ? "rgba(239,68,68,0.15)" : "transparent",
-                  color: adjustType === "add" ? "#f87171" : "#9ca3af",
-                  fontWeight: 700, fontSize: 14, cursor: "pointer",
-                }}
-              >▲ 追加請求</button>
-            </div>
-
-            {/* 金額 */}
-            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
-              金額（円）
-            </label>
-            <input
-              type="number"
-              min="1"
-              value={adjustAmount}
-              onChange={(e) => setAdjustAmount(e.target.value)}
-              placeholder="例: 1000"
-              style={{
-                width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
-                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
-                color: "var(--foreground)", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
-              }}
-            />
-
-            {/* 理由 */}
-            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
-              理由（必須）
-            </label>
-            <textarea
-              value={adjustReason}
-              onChange={(e) => setAdjustReason(e.target.value)}
-              placeholder="調整の理由を入力してください"
-              rows={3}
-              style={{
-                width: "100%", padding: "12px 14px", borderRadius: 10,
-                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
-                color: "var(--foreground)", fontSize: 14, resize: "vertical",
-                boxSizing: "border-box", marginBottom: 20, fontFamily: "inherit",
-              }}
-            />
-
-            {/* プレビュー */}
-            {adjustAmount && parseInt(adjustAmount, 10) > 0 && (
-              <div style={{
-                padding: "12px 16px", borderRadius: 10, marginBottom: 20,
-                background: adjustType === "discount" ? "rgba(168,85,247,0.1)" : "rgba(239,68,68,0.1)",
-                border: `1px solid ${adjustType === "discount" ? "rgba(168,85,247,0.3)" : "rgba(239,68,68,0.3)"}`,
-                fontSize: 14, color: adjustType === "discount" ? "#d8b4fe" : "#f87171", fontWeight: 600,
-              }}>
-                {adjustType === "discount"
-                  ? `¥${parseInt(adjustAmount, 10).toLocaleString("ja-JP")} を割引します`
-                  : `¥${parseInt(adjustAmount, 10).toLocaleString("ja-JP")} を追加請求します`}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                onClick={() => setAdjustModalOpen(false)}
-                style={{
-                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10,
-                  border: "1px solid var(--border)", background: "transparent",
-                  color: "var(--muted-foreground)", fontSize: 15, fontWeight: 600, cursor: "pointer",
-                }}
-              >キャンセル</button>
-              <button
-                onClick={() => void handleAdjust()}
-                disabled={adjustLoading || !adjustAmount || !adjustReason.trim()}
-                style={{
-                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10, border: "none",
-                  background: adjustLoading || !adjustAmount || !adjustReason.trim()
-                    ? "#374151" : "linear-gradient(135deg,#a855f7,#7c3aed)",
-                  color: adjustLoading || !adjustAmount || !adjustReason.trim() ? "#6b7280" : "#fff",
-                  fontSize: 15, fontWeight: 700,
-                  cursor: adjustLoading || !adjustAmount || !adjustReason.trim() ? "not-allowed" : "pointer",
-                }}
-              >{adjustLoading ? "送信中..." : "調整を送信"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 無料期間設定モーダル */}
-      {freePeriodModalOpen && (
-        <div
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 3000,
-            display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
-          }}
-          onClick={(e) => { if (e.target === e.currentTarget) setFreePeriodModalOpen(false); }}
-        >
-          <div style={{
-            background: "linear-gradient(145deg,#0f172a,#1e293b)",
-            border: "1px solid #334155", borderRadius: 16,
-            padding: "28px 24px", width: "100%", maxWidth: 400,
-            boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
-          }}>
-            <h3 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "var(--foreground)" }}>🎁 無料期間の設定</h3>
-
-            {/* 現在の設定 */}
-            {(() => {
-              const st = tenants.find((t) => t.id === selectedTenantId);
-              if (st?.billing_free_from || st?.billing_free_until) {
-                return (
-                  <div style={{
-                    padding: "10px 14px", borderRadius: 10, marginBottom: 20,
-                    background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)",
-                    fontSize: 13, color: "#fcd34d",
-                  }}>
-                    現在の設定:{" "}
-                    {st.billing_free_from ? st.billing_free_from.slice(0, 10) : "—"}
-                    {" 〜 "}
-                    {st.billing_free_until ? st.billing_free_until.slice(0, 10) : "—"}
-                  </div>
-                );
-              }
-              return null;
-            })()}
-
-            {/* 開始日 */}
-            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
-              開始日
-            </label>
-            <input
-              type="date"
-              value={freeFrom}
-              onChange={(e) => setFreeFrom(e.target.value)}
-              style={{
-                width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
-                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
-                color: "var(--foreground)", fontSize: 15, boxSizing: "border-box", marginBottom: 16,
-              }}
-            />
-
-            {/* 終了日 */}
-            <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
-              終了日
-            </label>
-            <input
-              type="date"
-              value={freeUntil}
-              onChange={(e) => setFreeUntil(e.target.value)}
-              style={{
-                width: "100%", padding: "12px 14px", minHeight: 44, borderRadius: 10,
-                border: "1px solid var(--border)", background: "rgba(0,0,0,0.3)",
-                color: "var(--foreground)", fontSize: 15, boxSizing: "border-box", marginBottom: 8,
-              }}
-            />
-            <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 20 }}>
-              空欄にすると設定を解除します
-            </p>
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                onClick={() => setFreePeriodModalOpen(false)}
-                style={{
-                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10,
-                  border: "1px solid var(--border)", background: "transparent",
-                  color: "var(--muted-foreground)", fontSize: 15, fontWeight: 600, cursor: "pointer",
-                }}
-              >キャンセル</button>
-              <button
-                onClick={() => void handleFreePeriod()}
-                disabled={freePeriodLoading}
-                style={{
-                  flex: 1, padding: "12px 0", minHeight: 44, borderRadius: 10, border: "none",
-                  background: freePeriodLoading ? "#374151" : "linear-gradient(135deg,#f59e0b,#d97706)",
-                  color: freePeriodLoading ? "#6b7280" : "#1a0a00",
-                  fontSize: 15, fontWeight: 700,
-                  cursor: freePeriodLoading ? "not-allowed" : "pointer",
-                }}
-              >{freePeriodLoading ? "保存中..." : "保存する"}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 金額調整 / 無料期間モーダル */}
+      <AdminBillingModals
+        adjustModalOpen={adjustModalOpen}
+        setAdjustModalOpen={setAdjustModalOpen}
+        adjustType={adjustType}
+        setAdjustType={setAdjustType}
+        adjustAmount={adjustAmount}
+        setAdjustAmount={setAdjustAmount}
+        adjustReason={adjustReason}
+        setAdjustReason={setAdjustReason}
+        adjustLoading={adjustLoading}
+        handleAdjust={handleAdjust}
+        freePeriodModalOpen={freePeriodModalOpen}
+        setFreePeriodModalOpen={setFreePeriodModalOpen}
+        freeFrom={freeFrom}
+        setFreeFrom={setFreeFrom}
+        freeUntil={freeUntil}
+        setFreeUntil={setFreeUntil}
+        freePeriodLoading={freePeriodLoading}
+        handleFreePeriod={handleFreePeriod}
+        tenants={tenants}
+        selectedTenantId={selectedTenantId}
+      />
 
       {/* トースト */}
       {toast && (
