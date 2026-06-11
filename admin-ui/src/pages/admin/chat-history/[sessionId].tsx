@@ -4,37 +4,11 @@ import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
+import type { SuggestedRule, Evaluation, Message, DeleteStep } from "./types";
 
 const DEFAULT_CONVERSION_TYPES = ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
 
-// ─── 型定義 ───────────────────────────────────────────────────────────────────
-
-interface SuggestedRule {
-  rule_text: string;
-  status?: string;
-  tuning_rule_id?: number;
-}
-
-interface Evaluation {
-  id: number;
-  overall_score?: number;
-  score: number;
-  psychology_fit_score?: number;
-  customer_reaction_score?: number;
-  stage_progress_score?: number;
-  taboo_violation_score?: number;
-  feedback?: { summary?: string };
-  evaluated_at: string;
-  suggested_rules?: SuggestedRule[];
-}
-
-interface Message {
-  id: number;
-  role: "user" | "assistant";
-  content: string;
-  created_at: string;
-  metadata: Record<string, unknown>;
-}
+// ─── 型定義 (SuggestedRule, Evaluation, Message, DeleteStep は ./types に移動) ─
 
 interface SessionInfo {
   id: string;
@@ -201,7 +175,6 @@ export default function ChatHistorySessionPage() {
   const [outcomeToast, setOutcomeToast] = useState<string | null>(null);
 
   // ─── セッション完全削除（GDPR Art.17 / 個情法30条） ────────────────────────
-  type DeleteStep = "idle" | "step1" | "step2";
   const [deleteStep, setDeleteStep] = useState<DeleteStep>("idle");
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState("");
