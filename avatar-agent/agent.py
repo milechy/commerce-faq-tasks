@@ -172,7 +172,13 @@ async def _report_tts_usage(tenant_id: str, tts_text_bytes: int) -> None:
 
 
 class FishAudioTTS(agents_tts.TTS):
-    def __init__(self, api_key: str, reference_id: str | None = None, tenant_id: str | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        reference_id: str | None = None,
+        tenant_id: str | None = None,
+        emotion_tags: list[str] | None = None,
+    ):
         super().__init__(
             capabilities=agents_tts.TTSCapabilities(streaming=False),
             sample_rate=44100,
@@ -181,7 +187,8 @@ class FishAudioTTS(agents_tts.TTS):
         self._api_key = api_key
         self._reference_id = reference_id
         self._tenant_id = tenant_id
-        logger.info(f"[TTS] FishAudioTTS initialized: ref={self._reference_id} tenant={self._tenant_id}")
+        self._emotion_tags = emotion_tags or []
+        logger.info(f"[TTS] FishAudioTTS initialized: ref={self._reference_id} tenant={self._tenant_id} emotion_tags={self._emotion_tags}")
 
     def synthesize(
         self,
@@ -189,9 +196,11 @@ class FishAudioTTS(agents_tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> "FishAudioChunkedStream":
+        # S2-Pro 感情タグ注入: [empathetic][calm] 形式でテキスト先頭に付与（最大3個）
+        prefix = "".join(f"[{t}]" for t in self._emotion_tags[:3]) if self._emotion_tags else ""
         return FishAudioChunkedStream(
             tts=self,
-            input_text=text,
+            input_text=prefix + text,
             conn_options=conn_options,
             api_key=self._api_key,
             reference_id=self._reference_id,
@@ -230,6 +239,7 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
         try:
             request_body = {
                 "text": self._input_text,
+                "model": "s2-pro",  # Phase A: S2-Pro 明示指定（デフォルト依存を排除）
                 "format": "mp3",   # Fish Audio デフォルト形式。WAV より確実。
                 "normalize": True,
                 "latency": "balanced",
@@ -345,13 +355,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar_config.get("image_url") if avatar_config and avatar_config.get("image_url")
         else None
     )
+    # emotion_tags: DB には JSON 文字列で格納される場合と list で届く場合の両対応
+    effective_emotion_tags = avatar_config.get("emotion_tags") if avatar_config else None
+    if isinstance(effective_emotion_tags, str):
+        try:
+            effective_emotion_tags = json.loads(effective_emotion_tags)
+        except Exception:
+            logger.warning(f"[entrypoint] emotion_tags JSON parse failed: {effective_emotion_tags!r}")
+            effective_emotion_tags = None
+    if not isinstance(effective_emotion_tags, list):
+        effective_emotion_tags = []
+    effective_emotion_tags = [str(t) for t in effective_emotion_tags if t]
 
-    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}")
+    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}, emotion_tags={len(effective_emotion_tags)} {effective_emotion_tags}")
 
     fish_tts = FishAudioTTS(
         api_key=os.environ["FISH_AUDIO_API_KEY"],
         reference_id=effective_reference_id,
         tenant_id=tenant_id,
+        emotion_tags=effective_emotion_tags,
     )
 
     session = AgentSession(
