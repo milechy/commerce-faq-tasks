@@ -72,6 +72,9 @@ OpenClaw Memory 形式（YAML/Markdown）に変換して PostgreSQL JSONB また
 - `src/agent/openclaw/memoryBridge.ts` が変換・書き出しを担当
 - 蒸留対象: `score >= 70` の会話のみ（高品質会話のみMemory化）
 
+> **⚠️ 2026-06-11 更新（Phase47-E）**: 本統合ポイントは**実装しない**と判定。
+> learned_memory（Phase71-A）が上位互換として実装済みのため。詳細は「Phase47-E 判定」セクション参照。
+
 ### 統合ポイント3: Heartbeat ↔ Phase22 flowContextStore
 
 **OpenClaw側**: 30分ごとに HEARTBEAT.md を読んでプロアクティブ起動
@@ -167,6 +170,39 @@ MetaClaw LoRA学習は制約超過のため Phase49 以降で再検討。
 | OpenClaw 本体（Workspace/Memory） | **統合可能** | TypeScript一致、MIT、コスト$0 |
 | OpenClaw-RL（Reward Signal） | **統合可能（CPUモード）** | Python APIサーバー化で接続可。既存VPS内で動作 |
 | MetaClaw LoRA | **Phase47では断念** | GPU租借$20-30/月で予算超過。Phase49以降で再検討 |
+
+---
+
+## Phase47-E 判定: memoryBridge は実装しない（2026-06-11 追記）
+
+**判定: 実装不要 — learned_memory（Phase71-A）が代替・上位互換**
+
+### 根拠
+
+1. **OpenClaw-RL は Memory ファイルを参照しない**
+   - 実装済みの統合は `rewardBridge.ts` の `POST /reward`（tenant_id / session_id / variant_id / reward / raw_score / outcome の送信）のみ
+   - OpenClaw-RL は reward スコアと outcome のみを学習に使用し、会話ログ・Memory ファイルを読む経路が存在しない
+   - Phase47-B〜D（rewardBridge / workspaceAdapter / heartbeatHandler）のいずれも Memory ファイルを前提にしていない
+
+2. **learned_memory（Phase71-A）が機能を上位互換でカバー**
+
+   | 機能 | memoryBridge 構想 | learned_memory 実装 |
+   |---|---|---|
+   | トリガー | FlowState=terminal | Judge 高スコア（judgeEvaluator.ts の distillAndPromote フック） |
+   | 蒸留 | 会話ログ → YAML/Markdown | 会話ログ → Groq Q&A 抽出（memoryDistiller.ts） |
+   | 永続化 | JSONB / ファイルシステム | PostgreSQL pgvector（ANN 検索対応）+ 暗号化 |
+   | 検索統合 | 想定のみ | RAG パイプラインに統合済み（searchAgent.ts） |
+   | テナント分離 | 構想のみ | tenant_id WHERE 句で実装済み |
+
+3. **CVE-2026-25253（OpenClaw 本体 BAN — #172）**
+   - OpenClaw npm package は禁止対象（docs/SECURITY_SCAN_ALLOWLIST.md 参照）。OpenClaw-RL（Python API）は別物で BAN 対象外
+   - memoryBridge が OpenClaw Memory ファイル形式に依存すると、BAN 済みエコシステムへの依存を再導入するリスクがある
+
+### 帰結
+
+- Memory 機能は learned_memory に一本化する
+- OpenClaw-RL との統合は rewardBridge（reward score 送信）に限定する
+- 統合ポイント2（Memory ↔ chat_sessions 蒸留）はクローズ
 
 ---
 
