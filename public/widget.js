@@ -1028,7 +1028,7 @@
   /* アバター — LiveKit接続                                               */
   /* ------------------------------------------------------------------ */
 
-  var LIVEKIT_SDK_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.9.1/dist/livekit-client.umd.min.js';
+  var LIVEKIT_SDK_URL = 'https://cdn.jsdelivr.net/npm/livekit-client@2.19.2/dist/livekit-client.umd.min.js';
 
   function showAvatarPlaceholder(imageUrl) {
     if (!imageUrl || typeof imageUrl !== 'string') return;
