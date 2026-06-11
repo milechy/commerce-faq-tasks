@@ -426,7 +426,7 @@ app.post(
 
     // "global" は super_admin のみ許可
     if (target === "global" && (req as any).user?.role !== "super_admin") {
-      res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+      res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
       return;
     }
 

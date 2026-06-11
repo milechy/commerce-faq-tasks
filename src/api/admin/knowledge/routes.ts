@@ -388,7 +388,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       if (recordTenantId === "global") {
         const user = (req as KnowledgeReq).user;
         if (user?.role !== "super_admin") {
-          return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ削除可能です" });
+          return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ削除可能です" });
         }
       }
 
@@ -517,7 +517,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     // "global" は super_admin のみ許可
     if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
-      return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+      return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
     }
 
     // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ
@@ -680,7 +680,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
     // "global" は super_admin のみ許可
     if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
-      return res.status(403).json({ error: "グローバルナレッジはSuper Adminのみ登録可能です" });
+      return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
     }
 
     // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ

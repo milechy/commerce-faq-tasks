@@ -65,13 +65,13 @@ describe("global guard — knowledge routes source", () => {
   });
 
   it("global ガードのエラーメッセージが含まれる", () => {
-    const globalGuardCount = (source.match(/グローバルナレッジはSuper Adminのみ/g) || []).length;
+    const globalGuardCount = (source.match(/全店舗共通の知識データはSuper Adminのみ/g) || []).length;
     // PDF route + text/commit + scrape/commit = 少なくとも3箇所
     expect(globalGuardCount).toBeGreaterThanOrEqual(3);
   });
 
   it("DELETE guard で global の super_admin チェックがある", () => {
-    expect(source).toContain("グローバルナレッジはSuper Adminのみ削除可能です");
+    expect(source).toContain("全店舗共通の知識データはSuper Adminのみ削除可能です");
   });
 
   it("DELETE で recordTenantId を使って削除する", () => {
