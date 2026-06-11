@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
-import LangSwitcher from "../../../components/LangSwitcher";
 import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 import { useAuth } from "../../../auth/useAuth";
@@ -21,6 +20,7 @@ import BillingInfoTab from "./BillingInfoTab";
 import NotificationPreferencesTab from "./NotificationPreferencesTab";
 import { AvatarTab } from "./AvatarTab";
 import { SettingsTab } from "./SettingsTab";
+import { TenantDetailHeader } from "./TenantDetailHeader";
 import type { TenantFeatures, TenantDetail, ApiKey, TabId } from "./types";
 
 // ─── 型定義 (TenantFeatures, TenantDetail, ApiKey は ./types に移動) ──────────
@@ -328,61 +328,13 @@ export default function TenantDetailPage() {
       )}
 
       {/* ヘッダー */}
-      <header style={{ marginBottom: 32 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-          <button
-            onClick={() => navigate("/admin/tenants")}
-            style={{
-              padding: "8px 14px",
-              minHeight: 44,
-              borderRadius: 999,
-              border: "1px solid var(--border)",
-              background: "transparent",
-              color: "var(--muted-foreground)",
-              fontSize: 14,
-              cursor: "pointer",
-              fontWeight: 500,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            {t("tenant_detail.back")}
-          </button>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {tenant && (
-              <button
-                onClick={handleEnterPreview}
-                style={{
-                  padding: "8px 14px",
-                  minHeight: 44,
-                  borderRadius: 999,
-                  border: "1px solid rgba(234,179,8,0.4)",
-                  background: "rgba(234,179,8,0.1)",
-                  color: "#fbbf24",
-                  fontSize: 14,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                {t("preview.enter")}
-              </button>
-            )}
-            <LangSwitcher />
-          </div>
-        </div>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "var(--foreground)" }}>
-          {loading ? t("tenant_detail.loading") : (tenant?.name ?? t("tenant_detail.not_found"))}
-        </h1>
-        {tenant && tenant.slug && (
-          <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: 0 }}>
-            slug: <span style={{ fontFamily: "monospace" }}>{tenant.slug}</span>
-          </p>
-        )}
-      </header>
+      <TenantDetailHeader
+        loading={loading}
+        tenant={tenant}
+        navigate={navigate}
+        handleEnterPreview={handleEnterPreview}
+        t={t}
+      />
 
       {loading ? (
         <div
