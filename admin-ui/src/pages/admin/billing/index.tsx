@@ -6,70 +6,15 @@ import UsageChart from "../../../components/UsageChart";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
-
-// ─── 型定義 ────────────────────────────────────────────────
-interface Tenant {
-  id: string;
-  name: string;
-  is_active?: boolean;
-  billing_free_from?: string | null;
-  billing_free_until?: string | null;
-}
-
-interface BillingAdjustment {
-  id: number;
-  amount: number;
-  reason: string;
-  adjusted_by: string;
-  created_at: string;
-}
-
-interface BillingSummary {
-  tenant_id: string;
-  month: string;
-  total_requests: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  cost_llm_cents: number;
-  cost_total_cents: number;
-  billing_status: "pending" | "invoiced" | "error";
-}
-
-interface DailyUsage {
-  date: string;
-  requests: number;
-  input_tokens: number;
-  output_tokens: number;
-  cost_total_cents: number;
-}
-
-interface Invoice {
-  id: string;
-  month: string;
-  amount_cents: number;
-  status: "paid" | "open" | "draft";
-  hosted_invoice_url: string | null;
-  invoice_pdf: string | null;
-  portal_url: string;
-}
-
-interface CostBreakdownItem {
-  label: string;
-  cost_yen: number;
-  request_count: number;
-  percentage: number;
-}
-
-interface CostBreakdown {
-  total_yen: number;
-  breakdown: Record<string, CostBreakdownItem>;
-}
-
-interface CrossTenantRow {
-  tenant_id: string;
-  total_requests: number;
-  cost_total_cents: number;
-}
+import type {
+  Tenant,
+  BillingAdjustment,
+  BillingSummary,
+  DailyUsage,
+  Invoice,
+  CostBreakdown,
+  CrossTenantRow,
+} from "./types";
 
 // ─── ユーティリティ ────────────────────────────────────────
 function fmtCents(cents: number): string {
