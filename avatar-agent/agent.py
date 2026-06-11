@@ -493,6 +493,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar = lemonslice.AvatarSession(**avatar_kwargs)
         await avatar.start(session, room=ctx.room)
         logger.info("=== LEMONSLICE AVATAR STARTED ===")
+
+        # LiveKit 1.5.17: アバターの room 参加を待機（失敗しても続行）
+        try:
+            await avatar.wait_for_join(timeout=10.0)
+            logger.info("=== AVATAR PARTICIPANT JOINED ROOM ===")
+        except Exception as e:
+            logger.warning(f"[avatar] wait_for_join timeout (continuing): {e}")
+
+        # LiveKit 1.5.17: job shutdown 時に aclose してゾンビアバターを防止
+        # (wait_for_shutdown は 1.5.17 に存在しないため add_shutdown_callback を使用)
+        async def _close_avatar() -> None:
+            try:
+                await avatar.aclose()
+                logger.info("[avatar] aclose completed")
+            except Exception as e:
+                logger.warning(f"[avatar] aclose error: {e}")
+
+        ctx.add_shutdown_callback(_close_avatar)
     except Exception as e:
         logger.warning(f"Lemonslice avatar failed (text-only fallback): {e}")
 
