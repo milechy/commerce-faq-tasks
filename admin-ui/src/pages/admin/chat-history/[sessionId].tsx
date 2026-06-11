@@ -4,37 +4,15 @@ import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
+import type { Evaluation, Message, DeleteStep } from "./types";
+import { DeleteSessionModal } from "./DeleteSessionModal";
+import { MessageList } from "./MessageList";
+import { JudgeEvaluationSection } from "./JudgeEvaluationSection";
+import { OutcomeSection } from "./OutcomeSection";
 
 const DEFAULT_CONVERSION_TYPES = ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
 
-// ─── 型定義 ───────────────────────────────────────────────────────────────────
-
-interface SuggestedRule {
-  rule_text: string;
-  status?: string;
-  tuning_rule_id?: number;
-}
-
-interface Evaluation {
-  id: number;
-  overall_score?: number;
-  score: number;
-  psychology_fit_score?: number;
-  customer_reaction_score?: number;
-  stage_progress_score?: number;
-  taboo_violation_score?: number;
-  feedback?: { summary?: string };
-  evaluated_at: string;
-  suggested_rules?: SuggestedRule[];
-}
-
-interface Message {
-  id: number;
-  role: "user" | "assistant";
-  content: string;
-  created_at: string;
-  metadata: Record<string, unknown>;
-}
+// ─── 型定義 (SuggestedRule, Evaluation, Message, DeleteStep は ./types に移動) ─
 
 interface SessionInfo {
   id: string;
@@ -59,125 +37,7 @@ async function fetchMessages(
   return data.messages as Message[];
 }
 
-// ─── AI提案ルール承認カード (Super Admin only) ─────────────────────────────────
-
-function SuggestedRulesCard({
-  evaluationId,
-  rules,
-  onUpdate,
-}: {
-  evaluationId: number;
-  rules: SuggestedRule[];
-  onUpdate: (updated: SuggestedRule[]) => void;
-}) {
-  const navigate = useNavigate();
-  const [processing, setProcessing] = useState<number | null>(null);
-
-  const pending = rules.filter((r) => !r.status || r.status === "pending");
-  const approved = rules.filter((r) => r.status === "approved");
-  if (pending.length === 0 && approved.length === 0) return null;
-
-  const handleAction = async (ruleIndex: number, action: "approve" | "reject") => {
-    setProcessing(ruleIndex);
-    try {
-      const res = await authFetch(
-        `${API_BASE}/v1/admin/evaluations/${evaluationId}/rules/${ruleIndex}`,
-        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) },
-      );
-      if (res.ok) {
-        const json = await res.json() as { tuning_rule_id?: number };
-        const updated = rules.map((r, i) =>
-          i === ruleIndex
-            ? { ...r, status: action === "approve" ? "approved" : "rejected", tuning_rule_id: json.tuning_rule_id }
-            : r,
-        );
-        onUpdate(updated);
-      }
-    } finally {
-      setProcessing(null);
-    }
-  };
-
-  const totalShown = pending.length + approved.length;
-
-  return (
-    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-      <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#c4b5fd" }}>
-        💡 AI提案ルール ({totalShown}件)
-      </p>
-      {rules.map((rule, idx) => {
-        const isApproved = rule.status === "approved";
-        const isPending = !rule.status || rule.status === "pending";
-        if (!isPending && !isApproved) return null;
-        const busy = processing === idx;
-        return (
-          <div
-            key={idx}
-            style={{
-              padding: "12px 14px",
-              borderRadius: 10,
-              background: isApproved ? "rgba(34,197,94,0.06)" : "rgba(124,58,237,0.08)",
-              border: `1px solid ${isApproved ? "rgba(74,222,128,0.2)" : "rgba(196,181,253,0.2)"}`,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <p style={{ margin: 0, fontSize: 13, color: "var(--foreground)", lineHeight: 1.6 }}>
-              {rule.rule_text}
-            </p>
-            {isApproved ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 13, color: "#4ade80", fontWeight: 600 }}>✅ 承認済み</span>
-                <button
-                  onClick={() => {
-                    const params = new URLSearchParams();
-                    if (rule.tuning_rule_id) params.set("editId", String(rule.tuning_rule_id));
-                    navigate(`/admin/tuning?${params.toString()}`);
-                  }}
-                  style={{
-                    padding: "6px 12px", minHeight: 32, borderRadius: 6,
-                    border: "1px solid rgba(148,163,184,0.3)", background: "rgba(148,163,184,0.1)",
-                    color: "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                  }}
-                >
-                  ✏️ 編集
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  onClick={() => void handleAction(idx, "approve")}
-                  disabled={busy}
-                  style={{
-                    flex: 1, padding: "10px 12px", minHeight: 44, borderRadius: 8,
-                    border: "1px solid rgba(74,222,128,0.4)", background: "rgba(34,197,94,0.15)",
-                    color: "#4ade80", fontSize: 14, fontWeight: 700,
-                    cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
-                  }}
-                >
-                  ✅ 承認してルールに追加
-                </button>
-                <button
-                  onClick={() => void handleAction(idx, "reject")}
-                  disabled={busy}
-                  style={{
-                    padding: "10px 16px", minHeight: 44, borderRadius: 8,
-                    border: "1px solid rgba(248,113,113,0.4)", background: "rgba(239,68,68,0.15)",
-                    color: "#f87171", fontSize: 14, fontWeight: 700,
-                    cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
-                  }}
-                >
-                  ❌ 却下
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// ─── AI提案ルール承認カード (SuggestedRulesCard は ./SuggestedRulesCard.tsx に移動) ─
 
 export default function ChatHistorySessionPage() {
   const navigate = useNavigate();
@@ -201,7 +61,6 @@ export default function ChatHistorySessionPage() {
   const [outcomeToast, setOutcomeToast] = useState<string | null>(null);
 
   // ─── セッション完全削除（GDPR Art.17 / 個情法30条） ────────────────────────
-  type DeleteStep = "idle" | "step1" | "step2";
   const [deleteStep, setDeleteStep] = useState<DeleteStep>("idle");
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState("");
@@ -604,279 +463,21 @@ export default function ChatHistorySessionPage() {
 
       {/* ─── 完全削除モーダル ──────────────────────────────────────────────────── */}
       {deleteStep !== "idle" && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="セッション完全削除"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !deleteSubmitting) {
-              setDeleteStep("idle");
-            }
-          }}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 2000,
-            padding: 20,
-          }}
-        >
-          <div
-            style={{
-              background: "var(--background)",
-              border: "1px solid var(--border)",
-              borderRadius: 16,
-              padding: "28px 24px",
-              maxWidth: 480,
-              width: "100%",
-            }}
-          >
-            {/* エラー表示 */}
-            {deleteError && (
-              <div
-                style={{
-                  marginBottom: 16,
-                  padding: "12px 16px",
-                  borderRadius: 10,
-                  background: "rgba(127,29,29,0.4)",
-                  border: "1px solid rgba(248,113,113,0.3)",
-                  color: "#fca5a5",
-                  fontSize: 14,
-                  lineHeight: 1.6,
-                }}
-              >
-                {deleteError}
-              </div>
-            )}
-
-            {/* Step 1: 警告・確認 */}
-            {deleteStep === "step1" && (
-              <>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
-                  🗑️ セッションを完全に削除しますか?
-                </h2>
-                <div
-                  style={{
-                    padding: "12px 16px",
-                    borderRadius: 10,
-                    background: "rgba(120,53,15,0.4)",
-                    border: "1px solid rgba(251,191,36,0.3)",
-                    color: "#fbbf24",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    marginBottom: 20,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  ⚠️ この操作は取り消せません。チャット履歴・評価データがすべて完全に削除されます。
-                </div>
-                <p style={{ fontSize: 15, color: "var(--muted-foreground)", marginBottom: 24, lineHeight: 1.6 }}>
-                  GDPR（忘れられる権利）または個人情報保護法に基づいて削除を行う場合は「次へ」を押してください。
-                </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <button
-                    onClick={() => {
-                      setDeleteError(null);
-                      setDeleteStep("step2");
-                      setTimeout(() => deleteReasonRef.current?.focus(), 50);
-                    }}
-                    style={{
-                      padding: "16px 24px",
-                      minHeight: 52,
-                      borderRadius: 12,
-                      border: "1px solid rgba(239,68,68,0.5)",
-                      background: "rgba(127,29,29,0.3)",
-                      color: "#f87171",
-                      fontSize: 16,
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      width: "100%",
-                    }}
-                  >
-                    次へ（削除理由を入力）
-                  </button>
-                  <button
-                    onClick={() => setDeleteStep("idle")}
-                    style={{
-                      padding: "14px 24px",
-                      minHeight: 48,
-                      borderRadius: 12,
-                      border: "1px solid var(--border)",
-                      background: "transparent",
-                      color: "var(--muted-foreground)",
-                      fontSize: 15,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      width: "100%",
-                    }}
-                  >
-                    やめる
-                  </button>
-                </div>
-              </>
-            )}
-
-            {/* Step 2: 削除理由入力 + セッションID確認 */}
-            {deleteStep === "step2" && (
-              <>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--foreground)", margin: "0 0 16px" }}>
-                  削除の詳細確認
-                </h2>
-
-                {/* 削除理由 */}
-                <div style={{ marginBottom: 20 }}>
-                  <label
-                    htmlFor="delete-reason"
-                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 8 }}
-                  >
-                    削除理由 <span style={{ color: "#f87171" }}>*</span>
-                    <span style={{ fontWeight: 400, color: "var(--muted-foreground)", marginLeft: 4 }}>(5〜500文字)</span>
-                  </label>
-                  <textarea
-                    id="delete-reason"
-                    ref={deleteReasonRef}
-                    value={deleteReason}
-                    onChange={(e) => setDeleteReason(e.target.value)}
-                    placeholder="例: GDPR Art.17に基づくデータ削除要求（ユーザーID: xxx、受付日: 2026-05-31）"
-                    rows={4}
-                    disabled={deleteSubmitting}
-                    style={{
-                      width: "100%",
-                      padding: "12px 14px",
-                      borderRadius: 10,
-                      border: "1px solid var(--border)",
-                      background: "var(--card)",
-                      color: "var(--foreground)",
-                      fontSize: 14,
-                      lineHeight: 1.6,
-                      resize: "vertical",
-                      minHeight: 96,
-                      boxSizing: "border-box",
-                      outline: "none",
-                    }}
-                  />
-                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                    {deleteReason.trim().length} / 500文字
-                  </span>
-                </div>
-
-                {/* セッションID確認 */}
-                <div style={{ marginBottom: 24 }}>
-                  <label
-                    htmlFor="delete-confirm-id"
-                    style={{ display: "block", fontSize: 14, fontWeight: 600, color: "var(--muted-foreground)", marginBottom: 8 }}
-                  >
-                    確認のため、セッションIDを入力してください <span style={{ color: "#f87171" }}>*</span>
-                  </label>
-                  <div
-                    style={{
-                      fontFamily: "monospace",
-                      fontSize: 12,
-                      color: "var(--muted-foreground)",
-                      background: "rgba(0,0,0,0.4)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      padding: "6px 10px",
-                      marginBottom: 8,
-                      wordBreak: "break-all",
-                      userSelect: "text",
-                    }}
-                  >
-                    {sessionId}
-                  </div>
-                  <input
-                    id="delete-confirm-id"
-                    ref={deleteConfirmRef}
-                    type="text"
-                    value={deleteConfirmId}
-                    onChange={(e) => setDeleteConfirmId(e.target.value)}
-                    placeholder="上記のセッションIDをそのまま入力"
-                    disabled={deleteSubmitting}
-                    style={{
-                      width: "100%",
-                      padding: "12px 14px",
-                      borderRadius: 10,
-                      border:
-                        deleteConfirmId && deleteConfirmId !== sessionId
-                          ? "1px solid rgba(248,113,113,0.5)"
-                          : "1px solid var(--border)",
-                      background: "var(--card)",
-                      color: "var(--foreground)",
-                      fontSize: 14,
-                      fontFamily: "monospace",
-                      boxSizing: "border-box",
-                      outline: "none",
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <button
-                    onClick={() => void handleDeleteSubmit()}
-                    disabled={
-                      deleteSubmitting ||
-                      deleteReason.trim().length < 5 ||
-                      deleteConfirmId.trim() !== sessionId
-                    }
-                    style={{
-                      padding: "16px 24px",
-                      minHeight: 52,
-                      borderRadius: 12,
-                      border: "1px solid rgba(239,68,68,0.5)",
-                      background:
-                        deleteSubmitting ||
-                        deleteReason.trim().length < 5 ||
-                        deleteConfirmId.trim() !== sessionId
-                          ? "rgba(127,29,29,0.2)"
-                          : "rgba(127,29,29,0.5)",
-                      color:
-                        deleteSubmitting ||
-                        deleteReason.trim().length < 5 ||
-                        deleteConfirmId.trim() !== sessionId
-                          ? "rgba(248,113,113,0.5)"
-                          : "#f87171",
-                      fontSize: 16,
-                      fontWeight: 700,
-                      cursor:
-                        deleteSubmitting ||
-                        deleteReason.trim().length < 5 ||
-                        deleteConfirmId.trim() !== sessionId
-                          ? "not-allowed"
-                          : "pointer",
-                      width: "100%",
-                    }}
-                  >
-                    {deleteSubmitting ? "⏳ 削除中..." : "🗑️ 完全に削除する"}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setDeleteError(null);
-                      setDeleteStep("step1");
-                    }}
-                    disabled={deleteSubmitting}
-                    style={{
-                      padding: "14px 24px",
-                      minHeight: 48,
-                      borderRadius: 12,
-                      border: "1px solid var(--border)",
-                      background: "transparent",
-                      color: "var(--muted-foreground)",
-                      fontSize: 15,
-                      fontWeight: 600,
-                      cursor: deleteSubmitting ? "not-allowed" : "pointer",
-                      width: "100%",
-                    }}
-                  >
-                    戻る
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <DeleteSessionModal
+          deleteStep={deleteStep}
+          setDeleteStep={setDeleteStep}
+          deleteReason={deleteReason}
+          setDeleteReason={setDeleteReason}
+          deleteConfirmId={deleteConfirmId}
+          setDeleteConfirmId={setDeleteConfirmId}
+          deleteSubmitting={deleteSubmitting}
+          deleteError={deleteError}
+          setDeleteError={setDeleteError}
+          deleteReasonRef={deleteReasonRef}
+          deleteConfirmRef={deleteConfirmRef}
+          sessionId={sessionId}
+          handleDeleteSubmit={handleDeleteSubmit}
+        />
       )}
 
       {/* Loading */}
@@ -888,280 +489,30 @@ export default function ChatHistorySessionPage() {
       ) : (
         /* Messages */
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: msg.role === "user" ? "flex-end" : "flex-start",
-              }}
-            >
-              {/* Role label */}
-              <span
-                style={{
-                  fontSize: 12,
-                  color: "var(--muted-foreground)",
-                  marginBottom: 4,
-                  paddingLeft: msg.role === "user" ? 0 : 4,
-                  paddingRight: msg.role === "user" ? 4 : 0,
-                }}
-              >
-                {msg.role === "user"
-                  ? t("chat_history.user_message")
-                  : t("chat_history.assistant_message")}
-                {" · "}
-                {formatTime(msg.created_at)}
-              </span>
-
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "flex-end",
-                  gap: 8,
-                  flexDirection: msg.role === "user" ? "row-reverse" : "row",
-                  maxWidth: "80%",
-                }}
-              >
-                {/* Bubble */}
-                <div
-                  style={{
-                    padding: "12px 16px",
-                    borderRadius: msg.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-                    background:
-                      msg.role === "user"
-                        ? "linear-gradient(135deg, #2563eb, #3b82f6)"
-                        : "rgba(31,41,55,0.9)",
-                    border:
-                      msg.role === "user"
-                        ? "none"
-                        : "1px solid var(--border)",
-                    color: msg.role === "user" ? "#fff" : "#e5e7eb",
-                    fontSize: 15,
-                    lineHeight: 1.6,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    boxShadow: msg.role === "user"
-                      ? "0 4px 12px rgba(37,99,235,0.3)"
-                      : "0 4px 12px rgba(0,0,0,0.2)",
-                  }}
-                >
-                  {msg.content}
-
-                  {/* Metadata badges for assistant */}
-                  {msg.role === "assistant" && msg.metadata && (
-                    <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                      {typeof msg.metadata.model === "string" && (
-                        <span
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            background: "rgba(55,65,81,0.8)",
-                            border: "1px solid #4b5563",
-                            color: "var(--muted-foreground)",
-                            fontSize: 11,
-                            fontFamily: "monospace",
-                          }}
-                        >
-                          {msg.metadata.model}
-                        </span>
-                      )}
-                      {typeof msg.metadata.route === "string" && (
-                        <span
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            background: "rgba(34,197,94,0.1)",
-                            border: "1px solid rgba(34,197,94,0.25)",
-                            color: "#4ade80",
-                            fontSize: 11,
-                          }}
-                        >
-                          {msg.metadata.route}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Create rule button for assistant messages */}
-                {msg.role === "assistant" && (
-                  <button
-                    onClick={() => handleCreateRule(msg)}
-                    title={t("chat_history.create_rule")}
-                    style={{
-                      padding: "6px 10px",
-                      minHeight: 44,
-                      borderRadius: 10,
-                      border: "1px solid var(--border)",
-                      background: "var(--card)",
-                      color: "var(--muted-foreground)",
-                      fontSize: 13,
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                      flexShrink: 0,
-                      transition: "border-color 0.15s, color 0.15s",
-                    }}
-                    onMouseEnter={(e) => {
-                      const btn = e.currentTarget as HTMLButtonElement;
-                      btn.style.borderColor = "#4b5563";
-                      btn.style.color = "#e5e7eb";
-                    }}
-                    onMouseLeave={(e) => {
-                      const btn = e.currentTarget as HTMLButtonElement;
-                      btn.style.borderColor = "#374151";
-                      btn.style.color = "#9ca3af";
-                    }}
-                  >
-                    🎛️
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+          <MessageList
+            messages={messages}
+            formatTime={formatTime}
+            handleCreateRule={handleCreateRule}
+          />
           {/* Judge評価セクション */}
-          <div
-            style={{
-              marginTop: 8,
-              padding: "20px 18px",
-              borderRadius: 14,
-              border: "1px solid var(--border)",
-              background: "linear-gradient(145deg, var(--card), var(--card))",
-            }}
-          >
-            <p style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>
-              🤖 AI品質評価 (Judge)
-            </p>
-            {evaluation == null ? (
-              <span style={{
-                display: "inline-flex", alignItems: "center", padding: "4px 12px",
-                borderRadius: 999, fontSize: 12, fontWeight: 700,
-                background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "var(--muted-foreground)",
-              }}>未評価</span>
-            ) : (() => {
-              const overall = evaluation.overall_score ?? evaluation.score;
-              const scoreColor = overall >= 80 ? "#4ade80" : overall >= 60 ? "#fbbf24" : "#f87171";
-              const scoreBg = overall >= 80 ? "rgba(34,197,94,0.15)" : overall >= 60 ? "rgba(251,191,36,0.15)" : "rgba(248,113,113,0.15)";
-              const scoreBorder = overall >= 80 ? "rgba(34,197,94,0.3)" : overall >= 60 ? "rgba(251,191,36,0.3)" : "rgba(248,113,113,0.3)";
-              const AXES = [
-                { key: "psychology_fit_score" as const, label: "心理対応力" },
-                { key: "customer_reaction_score" as const, label: "顧客対応力" },
-                { key: "stage_progress_score" as const, label: "商談進行力" },
-                { key: "taboo_violation_score" as const, label: "禁止事項の遵守率" },
-              ];
-              return (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <span style={{
-                    display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 14px",
-                    borderRadius: 999, fontSize: 15, fontWeight: 700,
-                    background: scoreBg, border: `1px solid ${scoreBorder}`, color: scoreColor,
-                    width: "fit-content",
-                  }}>
-                    総合スコア {overall}/100
-                  </span>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {AXES.map(({ key, label }) => {
-                      const s = evaluation[key];
-                      if (s == null) return null;
-                      const c = s >= 80 ? "#4ade80" : s >= 60 ? "#fbbf24" : "#f87171";
-                      return (
-                        <span key={key} style={{
-                          padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
-                          background: "rgba(31,41,55,0.8)", border: "1px solid var(--border)", color: c,
-                        }}>
-                          {label}: {s}
-                        </span>
-                      );
-                    })}
-                  </div>
-                  {evaluation.feedback?.summary && (
-                    <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)", lineHeight: 1.6, padding: "10px 12px", borderRadius: 8, background: "rgba(31,41,55,0.6)", border: "1px solid var(--border)" }}>
-                      {evaluation.feedback.summary}
-                    </p>
-                  )}
-                  {isSuperAdmin && Array.isArray(evaluation.suggested_rules) && evaluation.suggested_rules.length > 0 && (
-                    <SuggestedRulesCard
-                      evaluationId={evaluation.id}
-                      rules={evaluation.suggested_rules}
-                      onUpdate={(updated) => setEvaluation((prev) => prev ? { ...prev, suggested_rules: updated } : prev)}
-                    />
-                  )}
-                </div>
-              );
-            })()}
-          </div>
+          <JudgeEvaluationSection
+            evaluation={evaluation}
+            isSuperAdmin={isSuperAdmin}
+            setEvaluation={setEvaluation}
+          />
 
           {/* 営業結果入力（Client Adminのみ表示） */}
-          {!isSuperAdmin && <div
-            style={{
-              marginTop: 8,
-              padding: "20px 18px",
-              borderRadius: 14,
-              border: "1px solid var(--border)",
-              background: "linear-gradient(145deg, var(--card), var(--card))",
-            }}
-          >
-            <p
-              style={{
-                margin: "0 0 14px",
-                fontSize: 15,
-                fontWeight: 700,
-                color: "var(--foreground)",
-              }}
-            >
-              この会話の営業結果を記録
-            </p>
-            {/* 記録済み情報 */}
-            {outcome && outcomeRecordedAt && (
-              <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, background: "rgba(5,46,22,0.4)", border: "1px solid rgba(74,222,128,0.2)", fontSize: 12, color: "#86efac" }}>
-                ✓ 記録済み: {new Date(outcomeRecordedAt).toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                {outcomeRecordedBy && ` by ${outcomeRecordedBy}`}
-                <button
-                  onClick={() => { setOutcome(null); setOutcomeRecordedAt(null); setOutcomeRecordedBy(null); }}
-                  style={{ marginLeft: 8, background: "none", border: "none", color: "#4ade80", fontSize: 11, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                >
-                  変更
-                </button>
-              </div>
-            )}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(2, 1fr)",
-                gap: 10,
-              }}
-            >
-              {conversionTypes.map((value) => (
-                <button
-                  key={value}
-                  onClick={() => void handleOutcome(value)}
-                  disabled={outcomeSubmitting}
-                  style={{
-                    padding: "14px 12px",
-                    minHeight: 52,
-                    borderRadius: 10,
-                    border:
-                      outcome === value
-                        ? "1px solid rgba(74,222,128,0.5)"
-                        : "1px solid var(--border)",
-                    background:
-                      outcome === value
-                        ? "rgba(34,197,94,0.2)"
-                        : "rgba(31,41,55,0.5)",
-                    color: outcome === value ? "#4ade80" : "#9ca3af",
-                    fontSize: 15,
-                    fontWeight: outcome === value ? 700 : 500,
-                    cursor: outcomeSubmitting ? "not-allowed" : "pointer",
-                    opacity: outcomeSubmitting && outcome !== value ? 0.6 : 1,
-                    transition: "all 0.15s",
-                    width: "100%",
-                  }}
-                >
-                  {outcome === value ? `✓ ${value}` : value}
-                </button>
-              ))}
-            </div>
-          </div>}
+          {!isSuperAdmin && <OutcomeSection
+            outcome={outcome}
+            outcomeRecordedAt={outcomeRecordedAt}
+            outcomeRecordedBy={outcomeRecordedBy}
+            setOutcome={setOutcome}
+            setOutcomeRecordedAt={setOutcomeRecordedAt}
+            setOutcomeRecordedBy={setOutcomeRecordedBy}
+            conversionTypes={conversionTypes}
+            outcomeSubmitting={outcomeSubmitting}
+            handleOutcome={handleOutcome}
+          />}
         </div>
       )}
     </div>
