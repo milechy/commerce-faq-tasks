@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import type { TenantFeatures, TenantDetail } from "./types";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE } from "./types";
@@ -19,6 +20,7 @@ export function AvatarTab({
   ) => Promise<TenantDetail>;
 }) {
   const { t } = useLang();
+  const navigate = useNavigate();
   const [avatarEnabled, setAvatarEnabled] = useState(tenant.features.avatar);
   const [voiceEnabled, setVoiceEnabled] = useState(tenant.features.voice);
   const [preDispatchEnabled, setPreDispatchEnabled] = useState(tenant.features.pre_dispatch ?? false);
@@ -228,6 +230,25 @@ export function AvatarTab({
           style={{ ...INPUT_STYLE, fontFamily: "monospace", fontSize: 14 }}
         />
       </div>
+
+      <button
+        type="button"
+        onClick={() => navigate(`/admin/avatar/studio?tenant=${encodeURIComponent(tenant.id)}`)}
+        style={{
+          padding: "14px 24px",
+          minHeight: 48,
+          borderRadius: 12,
+          border: "1px solid rgba(99,102,241,0.4)",
+          background: "rgba(99,102,241,0.12)",
+          color: "#a5b4fc",
+          fontSize: 15,
+          fontWeight: 700,
+          cursor: "pointer",
+          width: "100%",
+        }}
+      >
+        🎭 このテナントにアバターを新規作成
+      </button>
 
       <button
         type="button"

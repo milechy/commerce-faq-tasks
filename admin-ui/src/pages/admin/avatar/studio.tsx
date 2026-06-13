@@ -2,7 +2,7 @@
 // Phase41: Avatar Customization Studio — 新規作成 / 編集
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { containsBannedWord } from "../../../lib/contentGuard";
@@ -36,6 +36,8 @@ interface AvatarConfig {
 export default function AvatarStudioPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id?: string }>();
+  const [searchParams] = useSearchParams();
+  const tenantQueryParam = searchParams.get("tenant") ?? undefined;
   const { lang } = useLang();
   const isEdit = Boolean(id);
 
@@ -341,6 +343,8 @@ export default function AvatarStudioPage() {
       emotion_tags: emotionTags.length > 0 ? emotionTags : undefined,
       lemonslice_agent_id: lemonsliceAgentId || undefined,
       avatar_provider: 'lemonslice' as const,
+      // super_admin 用: URL ?tenant= でテナントを指定 (編集時は不要)
+      ...(!isEdit && tenantQueryParam ? { tenant_id: tenantQueryParam } : {}),
     };
     try {
       const url = isEdit
