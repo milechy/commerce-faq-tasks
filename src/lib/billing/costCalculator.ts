@@ -1,7 +1,7 @@
 // src/lib/billing/costCalculator.ts
 // Phase32: コスト計算（金額はセント単位の整数で管理）
 
-export type ModelKey = 'groq-8b' | 'groq-70b' | 'openai-embedding';
+export type ModelKey = 'groq-8b' | 'groq-70b' | 'openai-embedding' | 'gemini-2.5-flash';
 
 export interface ModelCost {
   /** USD per 1M tokens */
@@ -12,9 +12,10 @@ export interface ModelCost {
 
 /** LLM単価テーブル（USD / 1M tokens） */
 export const LLM_COSTS: Record<ModelKey, ModelCost> = {
-  'groq-8b':          { inputPerMillion: 0.05,  outputPerMillion: 0.08 },
-  'groq-70b':         { inputPerMillion: 0.59,  outputPerMillion: 0.79 },
-  'openai-embedding': { inputPerMillion: 0.02,  outputPerMillion: 0.0  },
+  'groq-8b':           { inputPerMillion: 0.05,  outputPerMillion: 0.08 },
+  'groq-70b':          { inputPerMillion: 0.59,  outputPerMillion: 0.79 },
+  'openai-embedding':  { inputPerMillion: 0.02,  outputPerMillion: 0.0  },
+  'gemini-2.5-flash':  { inputPerMillion: 0.075, outputPerMillion: 0.30 },
 };
 
 /** サーバーコスト: $0.0001 / リクエスト（VPS按分） */
@@ -80,6 +81,7 @@ export interface UsageRecord {
 export function normalizeModelKey(model: string): ModelKey | undefined {
   const lower = model.toLowerCase();
   if (lower.includes('embedding')) return 'openai-embedding';
+  if (lower.includes('gemini')) return 'gemini-2.5-flash';
   if (lower.includes('70b') || lower.includes('mixtral')) return 'groq-70b';
   if (
     lower.includes('8b') ||

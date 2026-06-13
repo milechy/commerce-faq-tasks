@@ -36,6 +36,12 @@ describe('normalizeModelKey', () => {
     expect(normalizeModelKey('openai-embedding-ada')).toBe('openai-embedding');
   });
 
+  it('gemini 系は gemini-2.5-flash に正規化する', () => {
+    expect(normalizeModelKey('gemini-2.5-flash')).toBe('gemini-2.5-flash');
+    expect(normalizeModelKey('gemini-2.0-pro')).toBe('gemini-2.5-flash');
+    expect(normalizeModelKey('GEMINI-1.5-FLASH')).toBe('gemini-2.5-flash');
+  });
+
   it('不明モデルは undefined を返す', () => {
     expect(normalizeModelKey('unknown-model-v99')).toBeUndefined();
     expect(normalizeModelKey('')).toBeUndefined();
@@ -108,6 +114,24 @@ describe('calculateLLMCostCents', () => {
         outputTokens: 999_999,
       });
       expect(result).toBe(2);
+    });
+  });
+
+  describe('gemini-2.5-flash', () => {
+    it('1,000,000 input + 1,000,000 output tokens のコストが正確', () => {
+      // input:  1_000_000 * 0.075 / 1_000_000 = $0.075 = 7.5 cents
+      // output: 1_000_000 * 0.30  / 1_000_000 = $0.30  = 30 cents
+      // total: 37.5 cents → Math.ceil = 38
+      const result = calculateLLMCostCents({
+        model: 'gemini-2.5-flash', inputTokens: 1_000_000, outputTokens: 1_000_000,
+      });
+      expect(result).toBe(38);
+    });
+
+    it('output は input より単価が高い', () => {
+      const inputOnly  = calculateLLMCostCents({ model: 'gemini-2.5-flash', inputTokens: 1_000_000, outputTokens: 0 });
+      const outputOnly = calculateLLMCostCents({ model: 'gemini-2.5-flash', inputTokens: 0, outputTokens: 1_000_000 });
+      expect(outputOnly).toBeGreaterThan(inputOnly);
     });
   });
 

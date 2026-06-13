@@ -42,6 +42,7 @@ jest.mock("../../src/search/rerank", () => ({
 }));
 jest.mock("../../src/agent/llm/openaiEmbeddingClient", () => ({
   embedText: jest.fn(),
+  embedTextWithUsage: jest.fn(),
 }));
 jest.mock("../../src/search/pgvector", () => ({
   searchPgVector: jest.fn(),
@@ -108,7 +109,7 @@ import { hybridSearch } from "../../src/search/hybrid";
 import { rerank } from "../../src/search/rerank";
 import { groqClient } from "../../src/agent/llm/groqClient";
 import { callGeminiJudge } from "../../src/lib/gemini/client";
-import { embedText } from "../../src/agent/llm/openaiEmbeddingClient";
+import { embedText, embedTextWithUsage } from "../../src/agent/llm/openaiEmbeddingClient";
 import { searchPgVector } from "../../src/search/pgvector";
 
 import { createChatHandler } from "../../src/api/chat/route";
@@ -347,8 +348,8 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
 // ===========================================================================
 
 describe("Flow 2: searchTool wires to hybridSearch (ES/pgvector fallback)", () => {
-  it("searchTool falls back to hybridSearch when embedText throws", async () => {
-    (embedText as jest.Mock).mockRejectedValueOnce(new Error("embedding unavailable"));
+  it("searchTool falls back to hybridSearch when embedTextWithUsage throws", async () => {
+    (embedTextWithUsage as jest.Mock).mockRejectedValueOnce(new Error("embedding unavailable"));
     (hybridSearch as jest.Mock).mockResolvedValueOnce(MOCK_SEARCH_RESULT);
 
     const result = await searchTool({ query: "返品", tenantId: "test-tenant" });
@@ -359,8 +360,8 @@ describe("Flow 2: searchTool wires to hybridSearch (ES/pgvector fallback)", () =
     expect(result.items[0]).toHaveProperty("score");
   });
 
-  it("searchTool returns pgvector results when embedText succeeds", async () => {
-    (embedText as jest.Mock).mockResolvedValueOnce([0.1, 0.2, 0.3]);
+  it("searchTool returns pgvector results when embedTextWithUsage succeeds", async () => {
+    (embedTextWithUsage as jest.Mock).mockResolvedValueOnce({ embedding: [0.1, 0.2, 0.3], totalTokens: 5 });
     // Mock searchPgVector to return a hit directly
     (searchPgVector as jest.Mock).mockResolvedValueOnce({
       items: [{ id: "faq-pg-1", text: "在庫あります", score: 0.85 }],
