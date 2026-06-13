@@ -89,7 +89,7 @@ export function registerFalGenerationRoutes(app: Express): void {
         return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
       }
 
-      const { prompt, negativePrompt, numImages } = parsed.data;
+      const { prompt, numImages } = parsed.data;
 
       const su = (req as AuthReq).supabaseUser;
       const suMeta = su?.app_metadata as Record<string, unknown> | undefined;
@@ -112,12 +112,9 @@ export function registerFalGenerationRoutes(app: Express): void {
           },
           body: JSON.stringify({
             prompt,
-            negative_prompt: negativePrompt ?? "blurry, distorted, watermark, nsfw, low quality",
             num_images: numImages,
             image_size: "portrait_4_3",
-            guidance_scale: 3.5,
-            num_inference_steps: 28,
-            enable_safety_checker: true,
+            safety_tolerance: "2",
             output_format: "jpeg",
           }),
         });
@@ -125,7 +122,17 @@ export function registerFalGenerationRoutes(app: Express): void {
         if (!falRes.ok) {
           const errText = await falRes.text();
           logger.warn("[fal/generate] API error", { status: falRes.status, body: errText.slice(0, 300) });
-          return res.status(502).json({ error: "画像生成サービスでエラーが発生しました" });
+          const statusMsg =
+            falRes.status === 401 || falRes.status === 403
+              ? "FAL APIキーが無効です。管理者にご確認ください"
+              : falRes.status === 402
+              ? "FAL APIのクレジットが不足しています"
+              : falRes.status === 422
+              ? `リクエストが無効です: ${errText.slice(0, 120)}`
+              : falRes.status === 429
+              ? "レート制限に達しました。しばらく待ってから再試行してください"
+              : `画像生成サービスでエラーが発生しました (${falRes.status})`;
+          return res.status(502).json({ error: statusMsg });
         }
 
         const falData = await falRes.json() as {
