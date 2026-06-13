@@ -25,6 +25,7 @@ const featuresSchema = z.object({
   voice: z.boolean(),
   rag: z.boolean(),
   deep_research: z.boolean().optional(),
+  pre_dispatch: z.boolean().optional(),
 });
 
 const updateTenantSchema = z.object({
@@ -138,6 +139,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         voice: z.boolean(),
         rag: z.boolean(),
         deep_research: z.boolean().optional(),
+        pre_dispatch: z.boolean().optional(),
       }),
     });
     const parsed = bodySchema.safeParse(req.body ?? {});

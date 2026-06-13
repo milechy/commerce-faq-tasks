@@ -110,7 +110,7 @@ export function registerLiveKitTokenRoutes(
       }
 
       const row = result.rows[0] as {
-        features: { avatar?: boolean; voice?: boolean; rag?: boolean } | null;
+        features: { avatar?: boolean; voice?: boolean; rag?: boolean; pre_dispatch?: boolean } | null;
         lemonslice_agent_id: string | null;
         is_active: boolean;
       };
@@ -195,12 +195,17 @@ export function registerLiveKitTokenRoutes(
         }
       }
 
-      // Room 作成 + Agent Dispatch — fire-and-forget（await しない）
-      // クライアントへのトークン返却を先に行い、LiveKit Cloud API 待ちを排除する。
-      // LiveKit SDK CDN ロード（~500ms-2s）の間に dispatch が完了するため、
-      // agent は room.connect() 前後に到達する。
-      dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, verifiedAvatarConfigId ?? undefined)
-        .catch(err => logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err));
+      const preDispatchEnabled = row.features?.pre_dispatch === true;
+      // connect=true はウィジェットがパネルを開いた瞬間の呼び出しを示す（pre_dispatch=false 時のオンデマンド起動）
+      const connectRequested = req.body?.connect === true;
+      const shouldDispatch = preDispatchEnabled || connectRequested;
+
+      if (shouldDispatch) {
+        dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, verifiedAvatarConfigId ?? undefined)
+          .catch(err => logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err));
+      } else {
+        logger.info(`[livekitTokenRoutes] pre_dispatch=false, connect=false — skipping agent dispatch for tenant: ${tenantId}`);
+      }
 
       return res.json({
         enabled: true,
@@ -210,6 +215,7 @@ export function registerLiveKitTokenRoutes(
         agentId,
         imageUrl,
         avatarName,
+        preDispatchEnabled,
       });
     } catch (err: any) {
       // カラム未存在エラー (42703) = マイグレーション未実行
