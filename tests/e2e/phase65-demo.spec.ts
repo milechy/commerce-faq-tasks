@@ -94,6 +94,7 @@ test.describe('Phase65 carnation-demo サイト', () => {
 
   // test 4: モバイル幅(390px)で表示崩れがないこと
   test('モバイル幅390pxで主要ページが崩れない', async ({ page }) => {
+    test.setTimeout(90_000); // 3 paths × gotoWithRetry(max 27s each) = 81s max
     await page.setViewportSize({ width: 390, height: 844 });
 
     for (const path of ['/index.html', '/stock.html', '/inquiry.html']) {

@@ -11,11 +11,11 @@ export async function gotoWithRetry(
   let lastError: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      return await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 8_000 });
     } catch (e) {
       lastError = e;
       if (i < attempts - 1) {
-        await page.waitForTimeout(3_000 * (i + 1));
+        await page.waitForTimeout(1_000 * (i + 1));
       }
     }
   }
