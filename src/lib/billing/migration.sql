@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS stripe_usage_reports (
 ALTER TABLE usage_logs
   ADD COLUMN IF NOT EXISTS tts_text_bytes  INTEGER,
   ADD COLUMN IF NOT EXISTS avatar_credits  INTEGER,
-  ADD COLUMN IF NOT EXISTS avatar_session_ms INTEGER;
+  ADD COLUMN IF NOT EXISTS avatar_session_ms INTEGER,
+  ADD COLUMN IF NOT EXISTS anam_session_seconds INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_usage_logs_tenant_id ON usage_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);

@@ -178,7 +178,11 @@ async function buildBusinessFaqAnswer(
       searchKnowledgeForSuggestion(tenantId, message),
       getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
       deepResearchEnabled
-        ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: message }), 'ja') ?? Promise.resolve(null)).catch(() => null)
+        ? (getResearchProvider()?.search(
+            buildResearchQuery({ userMessage: message }),
+            'ja',
+            { tenantId, requestId: `ai-assist-${tenantId}-${Date.now()}` },
+          ) ?? Promise.resolve(null)).catch(() => null)
         : Promise.resolve(null),
     ]);
     const crossTenantSection = formatCrossTenantContext(crossTenantCtx);

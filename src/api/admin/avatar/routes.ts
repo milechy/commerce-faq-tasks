@@ -8,6 +8,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import multer from 'multer';
 import { logger } from '../../../lib/logger';
+import { trackUsage } from '../../../lib/billing/usageTracker';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
@@ -842,6 +843,16 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
             .status(404)
             .json({ error: "設定が見つからないかアクセス権限がありません" });
         }
+
+        trackUsage({
+          tenantId: tenantId ?? 'unknown',
+          requestId: (req as any).requestId ?? `vc-${id}-${Date.now()}`,
+          model: 'fish-audio-s2-pro',
+          inputTokens: 0,
+          outputTokens: 0,
+          featureUsed: 'avatar_config_voice',
+          marginOverride: 1,
+        });
 
         return res.json({ voiceId });
       } catch (err) {

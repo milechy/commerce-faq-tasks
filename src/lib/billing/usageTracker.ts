@@ -54,6 +54,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
   const {
     tenantId, requestId, model, inputTokens, outputTokens,
     featureUsed, marginOverride, ttsTextBytes, avatarCredits, avatarSessionMs, imageCount,
+    anam_session_seconds,
   } = params;
 
   let costLlmCents = 0;
@@ -63,7 +64,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     costTotalCents = calculateBillingAmountCents({
       model, inputTokens, outputTokens, marginOverride,
       ttsTextBytes, avatarCredits, avatarSessionMs,
-      featureUsed, imageCount,
+      featureUsed, imageCount, anam_session_seconds,
     });
   } catch (err) {
     _logger?.warn({ err, requestId }, '[usageTracker] cost calculation error, defaulting to 0');
@@ -74,12 +75,13 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
       `INSERT INTO usage_logs
          (tenant_id, request_id, model, input_tokens, output_tokens,
           feature_used, cost_llm_cents, cost_total_cents,
-          tts_text_bytes, avatar_credits, avatar_session_ms)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          tts_text_bytes, avatar_credits, avatar_session_ms, anam_session_seconds)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (request_id) DO NOTHING`,
       [tenantId, requestId, model, inputTokens, outputTokens,
        featureUsed, costLlmCents, costTotalCents,
-       ttsTextBytes ?? null, avatarCredits ?? null, avatarSessionMs ?? null]
+       ttsTextBytes ?? null, avatarCredits ?? null, avatarSessionMs ?? null,
+       anam_session_seconds ?? null]
     );
     _logger?.debug(
       { tenantId, requestId, costLlmCents, costTotalCents },

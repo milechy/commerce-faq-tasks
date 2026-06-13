@@ -9,8 +9,13 @@ export interface ResearchResult {
   cachedAt?: string;     // キャッシュ日時（ISO）
 }
 
+export interface ResearchBillingContext {
+  tenantId: string;
+  requestId: string;
+}
+
 export interface ExternalResearchProvider {
-  search(query: string, locale: string): Promise<ResearchResult | null>;
+  search(query: string, locale: string, billingContext?: ResearchBillingContext): Promise<ResearchResult | null>;
   name: string;
   costPerQuery: number; // USD概算
 }
