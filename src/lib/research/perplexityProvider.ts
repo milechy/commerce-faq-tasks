@@ -2,7 +2,8 @@
 // Phase60-C: Perplexity sonar-pro クライアント（24時間TTLキャッシュ付き）
 
 import { logger } from '../logger';
-import type { ExternalResearchProvider, ResearchResult } from './types';
+import { trackUsage } from '../billing/usageTracker';
+import type { ExternalResearchProvider, ResearchBillingContext, ResearchResult } from './types';
 
 // ─── キャッシュ ───────────────────────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ export class PerplexityProvider implements ExternalResearchProvider {
   readonly name = 'perplexity';
   readonly costPerQuery = 0.005; // $0.005 / query (sonar-pro)
 
-  async search(query: string, locale: string): Promise<ResearchResult | null> {
+  async search(query: string, locale: string, billingContext?: ResearchBillingContext): Promise<ResearchResult | null> {
     const apiKey = process.env['PERPLEXITY_API_KEY']?.trim();
     if (!apiKey) {
       logger.warn('[perplexityProvider] PERPLEXITY_API_KEY is not set');
@@ -74,6 +75,19 @@ export class PerplexityProvider implements ExternalResearchProvider {
       const choices = data['choices'] as Array<Record<string, unknown>> | undefined;
       const rawSummary: string = (choices?.[0]?.['message'] as Record<string, unknown>)?.['content'] as string ?? '';
       const rawCitations = (data['citations'] as string[] | undefined) ?? [];
+      const usage = data['usage'] as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+
+      if (billingContext) {
+        trackUsage({
+          tenantId: billingContext.tenantId,
+          requestId: billingContext.requestId,
+          model: 'perplexity-sonar-pro',
+          inputTokens: usage?.prompt_tokens ?? 0,
+          outputTokens: usage?.completion_tokens ?? 0,
+          featureUsed: 'option_service',
+          marginOverride: 1,
+        });
+      }
 
       const result: ResearchResult = {
         summary: rawSummary.slice(0, 500),

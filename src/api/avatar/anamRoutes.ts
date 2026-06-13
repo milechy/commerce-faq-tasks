@@ -12,6 +12,7 @@ import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { pool as globalPool } from '../../lib/db';
 import { logger } from '../../lib/logger';
+import { trackUsage } from '../../lib/billing/usageTracker';
 
 const ANAM_API_BASE = 'https://api.anam.ai';
 
@@ -134,5 +135,33 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
       logger.error('[POST /api/avatar/anam-session]', err);
       return res.json({ enabled: false, avatarProvider: 'lemonslice' });
     }
+  });
+
+  // POST /api/avatar/anam-session-end
+  // クライアントがAnamセッション終了時に実際のセッション秒数を報告する（課金記録用）
+  app.post('/api/avatar/anam-session-end', ...apiStack, async (req: Request, res: Response) => {
+    const tenantId = (req as AuthedRequest).tenantId;
+    if (!tenantId) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    const sessionSeconds = typeof req.body?.sessionSeconds === 'number'
+      ? req.body.sessionSeconds
+      : 0;
+    if (sessionSeconds < 0) {
+      return res.status(400).json({ error: 'sessionSeconds must be >= 0' });
+    }
+
+    trackUsage({
+      tenantId,
+      requestId: (req as any).requestId ?? `anam-end-${Date.now()}`,
+      model: 'anam-ai',
+      inputTokens: 0,
+      outputTokens: 0,
+      featureUsed: 'anam_session',
+      anam_session_seconds: sessionSeconds,
+    });
+
+    return res.json({ ok: true });
   });
 }

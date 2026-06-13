@@ -63,7 +63,11 @@ export async function generateRecommendations(
     searchKnowledgeForSuggestion(tenantId, representativeQuery).catch(() => ({ results: [] })),
     getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
     deepResearchEnabled
-      ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: representativeQuery }), 'ja') ?? Promise.resolve(null)).catch(() => null)
+      ? (getResearchProvider()?.search(
+          buildResearchQuery({ userMessage: representativeQuery }),
+          'ja',
+          { tenantId, requestId: `gap-rec-${tenantId}-${Date.now()}` },
+        ) ?? Promise.resolve(null)).catch(() => null)
       : Promise.resolve(null),
   ]);
   const faqSummary = formatKnowledgeContext(knowledgeCtx) || '（既存ナレッジなし）';

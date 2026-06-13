@@ -1,7 +1,7 @@
 // src/lib/billing/costCalculator.ts
 // Phase32: コスト計算（金額はセント単位の整数で管理）
 
-export type ModelKey = 'groq-8b' | 'groq-70b' | 'openai-embedding' | 'gemini-2.5-flash';
+export type ModelKey = 'groq-8b' | 'groq-70b' | 'openai-embedding' | 'gemini-2.5-flash' | 'perplexity-sonar-pro';
 
 export interface ModelCost {
   /** USD per 1M tokens */
@@ -15,7 +15,8 @@ export const LLM_COSTS: Record<ModelKey, ModelCost> = {
   'groq-8b':           { inputPerMillion: 0.05,  outputPerMillion: 0.08 },
   'groq-70b':          { inputPerMillion: 0.59,  outputPerMillion: 0.79 },
   'openai-embedding':  { inputPerMillion: 0.02,  outputPerMillion: 0.0  },
-  'gemini-2.5-flash':  { inputPerMillion: 0.075, outputPerMillion: 0.30 },
+  'gemini-2.5-flash':     { inputPerMillion: 0.075, outputPerMillion: 0.30  },
+  'perplexity-sonar-pro': { inputPerMillion: 3.0,   outputPerMillion: 15.0  },
 };
 
 /** サーバーコスト: $0.0001 / リクエスト（VPS按分） */
@@ -72,6 +73,8 @@ export interface UsageRecord {
   featureUsed?: string;
   /** Phase53: 生成画像枚数（DALL-E / Leonardo 等）。原価のみ。 */
   imageCount?: number;
+  /** Phase42: Anamセッション時間（秒） */
+  anam_session_seconds?: number;
 }
 
 /**
@@ -82,6 +85,7 @@ export function normalizeModelKey(model: string): ModelKey | undefined {
   const lower = model.toLowerCase();
   if (lower.includes('embedding')) return 'openai-embedding';
   if (lower.includes('gemini')) return 'gemini-2.5-flash';
+  if (lower.includes('perplexity')) return 'perplexity-sonar-pro';
   if (lower.includes('70b') || lower.includes('mixtral')) return 'groq-70b';
   if (
     lower.includes('8b') ||
@@ -168,6 +172,9 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
   const ttsUSD   = (usage.ttsTextBytes  ?? 0) * FISH_AUDIO_COST_PER_BYTE_USD;
   const avtrUSD  = (usage.avatarCredits ?? 0) * LEMONSLICE_COST_PER_CREDIT_USD;
   const imgUSD   = (usage.imageCount    ?? 0) * IMAGE_GENERATION_COST_USD;
-  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD;
+  const anamUSD  = (usage.anam_session_seconds ?? 0) > 0
+    ? calculateAnamSessionCostCents(usage.anam_session_seconds!) / 100
+    : 0;
+  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD;
   return Math.ceil(totalUSD * margin * 100);
 }

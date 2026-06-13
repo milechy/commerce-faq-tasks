@@ -9,6 +9,7 @@ import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { getPool } from '../../lib/db';
 import { logger } from '../../lib/logger';
+import { trackUsage } from '../../lib/billing/usageTracker';
 
 const FISH_AUDIO_API = 'https://api.fish.audio/v1/tts';
 
@@ -81,6 +82,16 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
         res.write(value);
       }
       res.end();
+
+      trackUsage({
+        tenantId,
+        requestId: (req as any).requestId ?? `tts-${Date.now()}`,
+        model: 'fish-audio-s2-pro',
+        inputTokens: 0,
+        outputTokens: 0,
+        featureUsed: 'voice',
+        ttsTextBytes: Buffer.byteLength(text, 'utf8'),
+      });
 
     } catch (err) {
       logger.error('[fishTts] Error:', err);
