@@ -2,7 +2,7 @@
 
 import { hybridSearch, type Hit } from '../../search/hybrid';
 import { searchPgVector } from '../../search/pgvector';
-import { embedText } from '../llm/openaiEmbeddingClient';
+import { embedTextWithUsage } from '../llm/openaiEmbeddingClient';
 
 export interface SearchToolInput {
   query: string;
@@ -15,6 +15,8 @@ export interface SearchToolOutput {
   items: Hit[];
   ms: number;
   note?: string;
+  /** embedding呼び出しで消費したトークン数（課金合算用） */
+  embeddingTokens?: number;
 }
 
 export async function searchTool(
@@ -25,7 +27,7 @@ export async function searchTool(
 
   // 1) Try pgvector (Groq embeddings + pgvector)
   try {
-    const embedding = await embedText(query);
+    const { embedding, totalTokens } = await embedTextWithUsage(query);
     const vecResult = await searchPgVector({
       tenantId: effectiveTenantId,
       embedding,
@@ -47,6 +49,7 @@ export async function searchTool(
         items,
         ms: vecResult.ms,
         note: vecResult.note ?? 'pgvector',
+        embeddingTokens: totalTokens,
       };
     }
   } catch (err) {

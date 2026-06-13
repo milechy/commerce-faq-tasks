@@ -2,7 +2,7 @@
 
 
 import { searchPgVector, type PgvectorSearchItem } from "../../search/pgvectorSearch";
-import { embedTextOpenAI } from "../llm/openaiEmbeddingClient";
+import { embedTextWithUsage } from "../llm/openaiEmbeddingClient";
 import { createLearnedMemoryRepository, type LearnedMemoryHit } from "../memory/learnedMemoryRepository";
 import { isLearnedMemoryReadEnabled, getLearnedMemoryWeight } from "../memory/featureFlag";
 import { rerankTool } from "../tools/rerankTool";
@@ -62,9 +62,11 @@ export async function runSearchAgent(
   let pgVectorMs = 0;
   let pgVectorError = false;
   let learnedItems: LearnedMemoryHit[] = [];
+  let embeddingTokens = 0;
   try {
     const tPg0 = performance.now();
-    const embedding = await embedTextOpenAI(plan.searchQuery ?? q);
+    const { embedding, totalTokens: _et } = await embedTextWithUsage(plan.searchQuery ?? q);
+    embeddingTokens = _et;
     const learnedReadEnabled = isLearnedMemoryReadEnabled(effectiveTenantId);
     const [pgRes, learnedRes] = await Promise.all([
       searchPgVector({
@@ -243,7 +245,12 @@ export async function runSearchAgent(
     ragStats,
     ragSources,
     gapSignal: synth.gapSignal,
-    llmUsage: synth.llmUsage,
+    llmUsage: synth.llmUsage
+      ? {
+          prompt_tokens:     (synth.llmUsage.prompt_tokens ?? 0) + embeddingTokens,
+          completion_tokens: synth.llmUsage.completion_tokens ?? 0,
+        }
+      : undefined,
     debug: {
       query: {
         original: q,

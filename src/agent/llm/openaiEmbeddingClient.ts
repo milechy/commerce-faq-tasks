@@ -1,11 +1,18 @@
 // src/agent/llm/openaiEmbeddingClient.ts
 // OpenAI Embeddings を REST API 経由で呼ぶラッパー（SDK 不使用）
 
-export async function embedText(text: string): Promise<number[]> {
-  // In test mode, avoid calling external OpenAI API and return a dummy vector.
+export interface EmbedTextResult {
+  embedding: number[];
+  /** OpenAI total_tokens（課金合算用）。テストモードでは 0。 */
+  totalTokens: number;
+}
+
+export async function embedTextWithUsage(text: string): Promise<EmbedTextResult> {
   if (process.env.NODE_ENV === "test") {
-    // 1536-dim dummy embedding (matches text-embedding-3-* default size)
-    return Array.from({ length: 1536 }, () => Math.random());
+    return {
+      embedding: Array.from({ length: 1536 }, () => Math.random()),
+      totalTokens: 0,
+    };
   }
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -32,16 +39,24 @@ export async function embedText(text: string): Promise<number[]> {
     throw new Error(`OpenAI embeddings failed: ${res.status} ${snippet}`);
   }
 
-  const json = await res.json() as { data?: Array<{ embedding?: unknown[] }> };
+  const json = await res.json() as {
+    data?: Array<{ embedding?: unknown[] }>;
+    usage?: { total_tokens?: number };
+  };
   const embedding = json?.data?.[0]?.embedding;
   if (!Array.isArray(embedding)) {
     throw new Error("OpenAI embedding not found in response");
   }
 
-  // 念のため number 配列に正規化
-  return embedding.map((v) =>
-    typeof v === "number" ? v : Number(v) || 0
-  );
+  return {
+    embedding: embedding.map((v) => (typeof v === "number" ? v : Number(v) || 0)),
+    totalTokens: json?.usage?.total_tokens ?? 0,
+  };
+}
+
+export async function embedText(text: string): Promise<number[]> {
+  const { embedding } = await embedTextWithUsage(text);
+  return embedding;
 }
 
 // Backward compatibility: older code expects embedTextOpenAI()
