@@ -200,7 +200,11 @@ export async function runDialogTurn(
       clarifyingQuestions:
         orchestrated.clarifyingQuestions ?? multiStepPlan.clarifyingQuestions,
       gapSignal: orchestrated.gapSignal,
+      // synthesis + query埋め込み（searchAgent で合算済み）。CHAT_LLM_MODEL レートで課金。
       llmUsage: orchestrated.llmUsage,
+      // Subtask 3: マルチステップ planner LLM（GPT-OSS 20B/120B）は chat とは
+      // 別モデル単価のため、合算せず各モデルを実レートで別 usage_log として課金する。
+      plannerLlmUsages: multiStepPlan.llmUsages,
       ragSources: orchestrated.ragSources,
     },
   };

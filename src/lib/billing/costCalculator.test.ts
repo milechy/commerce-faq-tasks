@@ -42,6 +42,18 @@ describe('normalizeModelKey', () => {
     expect(normalizeModelKey('GEMINI-1.5-FLASH')).toBe('gemini-2.5-flash');
   });
 
+  it('gpt-oss 系は 120b/20b を正しく分離する（"120b" は "20b" を部分文字列に含む罠）', () => {
+    expect(normalizeModelKey('openai/gpt-oss-20b')).toBe('gpt-oss-20b');
+    expect(normalizeModelKey('openai/gpt-oss-120b')).toBe('gpt-oss-120b');
+    expect(normalizeModelKey('GPT-OSS-120B')).toBe('gpt-oss-120b');
+  });
+
+  it('gpt-oss は provider prefix / suffix 付き env override でも拾う', () => {
+    expect(normalizeModelKey('groq/gpt-oss-20b')).toBe('gpt-oss-20b');
+    expect(normalizeModelKey('gpt-oss-120b-128k')).toBe('gpt-oss-120b');
+    expect(normalizeModelKey('gpt-oss')).toBe('gpt-oss-20b'); // 120 を含まなければ 20b 扱い
+  });
+
   it('不明モデルは undefined を返す', () => {
     expect(normalizeModelKey('unknown-model-v99')).toBeUndefined();
     expect(normalizeModelKey('')).toBeUndefined();
@@ -135,6 +147,34 @@ describe('calculateLLMCostCents', () => {
     });
   });
 
+  describe('gpt-oss（planner LLM）', () => {
+    it('gpt-oss-20b: 1M input + 1M output のコストが正確', () => {
+      // input:  1_000_000 * 0.075 / 1_000_000 = $0.075 = 7.5 cents
+      // output: 1_000_000 * 0.30  / 1_000_000 = $0.30  = 30 cents
+      // total: 37.5 cents → Math.ceil = 38
+      const result = calculateLLMCostCents({
+        model: 'openai/gpt-oss-20b', inputTokens: 1_000_000, outputTokens: 1_000_000,
+      });
+      expect(result).toBe(38);
+    });
+
+    it('gpt-oss-120b: 1M input + 1M output のコストが正確（20b の2倍単価）', () => {
+      // input:  1_000_000 * 0.15 / 1_000_000 = $0.15 = 15 cents
+      // output: 1_000_000 * 0.60 / 1_000_000 = $0.60 = 60 cents
+      // total: 75 cents → Math.ceil = 75
+      const result = calculateLLMCostCents({
+        model: 'openai/gpt-oss-120b', inputTokens: 1_000_000, outputTokens: 1_000_000,
+      });
+      expect(result).toBe(75);
+    });
+
+    it('120b は 20b より高コスト（誤正規化していれば破綻する）', () => {
+      const cost20b  = calculateLLMCostCents({ model: 'openai/gpt-oss-20b',  inputTokens: 1_000_000, outputTokens: 1_000_000 });
+      const cost120b = calculateLLMCostCents({ model: 'openai/gpt-oss-120b', inputTokens: 1_000_000, outputTokens: 1_000_000 });
+      expect(cost120b).toBeGreaterThan(cost20b);
+    });
+  });
+
   describe('エッジケース', () => {
     it('ゼロトークンは 0 を返す', () => {
       expect(calculateLLMCostCents({ model: 'llama-3.1-70b-versatile', inputTokens: 0, outputTokens: 0 })).toBe(0);
@@ -178,6 +218,43 @@ describe('calculateBillingAmountCents', () => {
     });
     expect(result).toBe(1);
     expect(Number.isInteger(result)).toBe(true);
+  });
+
+  it('extraLlmUsages: planner 分をモデル別実レートで本行に内包する（サーバーコストは二重計上しない）', () => {
+    // chat 本体: 70B 0トークン → server cost のみ。+ planner: gpt-oss-120b 1M/1M。
+    // planner LLM USD = 0.15 + 0.60 = 0.75。server = 0.0001。margin = 5（chat）。
+    // total USD = (0.75 + 0.0001) * 5 = 3.7505 → cents = Math.ceil(375.05) = 376
+    const withExtra = calculateBillingAmountCents({
+      model:        'llama-3.1-70b-versatile',
+      inputTokens:  0,
+      outputTokens: 0,
+      featureUsed:  'chat',
+      extraLlmUsages: [
+        { model: 'openai/gpt-oss-120b', inputTokens: 1_000_000, outputTokens: 1_000_000 },
+      ],
+    });
+    expect(withExtra).toBe(376);
+
+    // サーバーコストは1回のみ（extra を増やしても server 分は増えない）
+    const base = calculateBillingAmountCents({
+      model: 'llama-3.1-70b-versatile', inputTokens: 0, outputTokens: 0, featureUsed: 'chat',
+    });
+    // 差分 = planner LLM USD × margin（server 分は含まれない）
+    expect(withExtra - base).toBe(375); // 0.75 * 5 * 100
+  });
+
+  it('extraLlmUsages: 複数モデル（20B parse失敗→120B）をそれぞれ実レートで合算する', () => {
+    // cost_llm_cents 相当: 20B(1M/1M)=0.375 + 120B(1M/1M)=0.75 = 1.125 USD → ceil(112.5)=113
+    const cents = calculateLLMCostCents({
+      model: 'llama-3.1-70b-versatile',
+      inputTokens: 0,
+      outputTokens: 0,
+      extraLlmUsages: [
+        { model: 'openai/gpt-oss-20b',  inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        { model: 'openai/gpt-oss-120b', inputTokens: 1_000_000, outputTokens: 1_000_000 },
+      ],
+    });
+    expect(cents).toBe(113);
   });
 
   it('groq-8b (1000/500): マージン適用後の金額が正確', () => {

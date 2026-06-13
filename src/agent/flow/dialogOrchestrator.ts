@@ -66,6 +66,10 @@ export async function runDialogOrchestrator(
       needsClarification: true,
       clarifyingQuestions: plan.clarifyingQuestions ?? [],
       final: false,
+      // Subtask 3: chat モデル（synthesis）は走っていないため実トークンは 0。
+      // 課金経路に「chat LLM 未実行」を明示し、char/4 推定の架空課金を防ぐ。
+      // 聞き返し文を LLM planner が生成した場合のコストは plannerLlmUsages 側で計上。
+      llmUsage: { prompt_tokens: 0, completion_tokens: 0 },
     }
   }
 
@@ -83,6 +87,8 @@ export async function runDialogOrchestrator(
       steps: plan.steps,
       needsClarification: false,
       final: true,
+      // Subtask 3: 検索も synthesis も走らない経路。chat LLM 実トークンは 0。
+      llmUsage: { prompt_tokens: 0, completion_tokens: 0 },
     }
   }
 

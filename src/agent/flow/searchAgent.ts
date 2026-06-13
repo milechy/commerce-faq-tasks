@@ -245,12 +245,13 @@ export async function runSearchAgent(
     ragStats,
     ragSources,
     gapSignal: synth.gapSignal,
-    llmUsage: synth.llmUsage
-      ? {
-          prompt_tokens:     (synth.llmUsage.prompt_tokens ?? 0) + embeddingTokens,
-          completion_tokens: synth.llmUsage.completion_tokens ?? 0,
-        }
-      : undefined,
+    // Subtask 3: synthesis が usage を返さない場合（GROQ キー無し / fallback / エラー）でも
+    // 既に消費済みの embedding トークンを課金に残すため、llmUsage は常に返す。
+    // chat LLM が完全に未実行なら {0,0} となり、上位で「chat 実トークン 0」を表す。
+    llmUsage: {
+      prompt_tokens:     (synth.llmUsage?.prompt_tokens ?? 0) + embeddingTokens,
+      completion_tokens: synth.llmUsage?.completion_tokens ?? 0,
+    },
     debug: {
       query: {
         original: q,
