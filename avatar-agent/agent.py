@@ -598,6 +598,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
     logger.info("=== SESSION STARTED ===")
 
+    # LemonSlice idle animation は最初の TTS サイクルまで静止する。
+    # session.start() 直後に短い挨拶を送り idle アニメーションを即起動する。
+    await asyncio.sleep(1.5)
+    initial_greeting = (
+        (avatar_config.get("initial_greeting") if avatar_config else None)
+        or "こんにちは！何かご質問はありますか？"
+    )
+    session.say(initial_greeting)
+    logger.info(f"[avatar] idle animation kickstart: {initial_greeting!r}")
+
 
 if __name__ == "__main__":
     agents.cli.run_app(

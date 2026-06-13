@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import type { TenantFeatures, TenantDetail } from "./types";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE } from "./types";
@@ -19,8 +20,10 @@ export function AvatarTab({
   ) => Promise<TenantDetail>;
 }) {
   const { t } = useLang();
+  const navigate = useNavigate();
   const [avatarEnabled, setAvatarEnabled] = useState(tenant.features.avatar);
   const [voiceEnabled, setVoiceEnabled] = useState(tenant.features.voice);
+  const [preDispatchEnabled, setPreDispatchEnabled] = useState(tenant.features.pre_dispatch ?? false);
   const [agentId, setAgentId] = useState(tenant.lemonslice_agent_id ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +34,7 @@ export function AvatarTab({
     try {
       const updated = await updateAvatarSettings(
         tenant.id,
-        { avatar: avatarEnabled, voice: voiceEnabled, rag: tenant.features.rag },
+        { avatar: avatarEnabled, voice: voiceEnabled, rag: tenant.features.rag, pre_dispatch: preDispatchEnabled },
         agentId.trim() || null
       );
       onUpdate(updated);
@@ -156,6 +159,63 @@ export function AvatarTab({
         </button>
       </div>
 
+      {/* アバター事前起動（Pre-dispatch）トグル */}
+      <div
+        style={{
+          ...CARD_STYLE,
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 12,
+          opacity: avatarEnabled ? 1 : 0.6,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ margin: "0 0 4px", fontWeight: 600, color: "var(--foreground)", fontSize: 15 }}>
+            アバター事前起動（高速表示）
+          </p>
+          <p style={{ margin: "0 0 8px", fontSize: 13, color: "var(--muted-foreground)" }}>
+            {preDispatchEnabled
+              ? "ページ表示時にアバターを起動 — チャットを開くと即座に表示されます"
+              : "チャットを開いた時点でアバターを起動（デフォルト）"}
+          </p>
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 8,
+              background: preDispatchEnabled
+                ? "rgba(234,179,8,0.08)"
+                : "rgba(107,114,128,0.08)",
+              border: `1px solid ${preDispatchEnabled ? "rgba(234,179,8,0.25)" : "rgba(107,114,128,0.2)"}`,
+              fontSize: 12,
+              color: preDispatchEnabled ? "#fbbf24" : "var(--muted-foreground)",
+              lineHeight: 1.6,
+            }}
+          >
+            {preDispatchEnabled ? (
+              <>
+                ⚠️ <strong>コスト増加あり</strong>：チャットを開かなかったページ閲覧でもLemonSlice APIが起動します。
+                ページ表示1回あたり約30〜60秒分のアバターセッションコストが発生します。
+                チャット開封率が高いテナント向けです。
+              </>
+            ) : (
+              <>
+                💡 チャットを開いたユーザーのみコストが発生します。初回表示は数秒の読み込みが入ります。
+              </>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => { if (avatarEnabled) setPreDispatchEnabled((v) => !v); }}
+          disabled={!avatarEnabled}
+          style={toggleStyle(preDispatchEnabled, !avatarEnabled)}
+        >
+          {preDispatchEnabled ? "⚡ 有効" : "⏸️ 無効"}
+        </button>
+      </div>
+
       {/* Lemonslice Agent ID */}
       <div style={CARD_STYLE}>
         <label style={LABEL_STYLE}>Lemonslice Agent ID</label>
@@ -170,6 +230,25 @@ export function AvatarTab({
           style={{ ...INPUT_STYLE, fontFamily: "monospace", fontSize: 14 }}
         />
       </div>
+
+      <button
+        type="button"
+        onClick={() => navigate(`/admin/avatar/studio?tenant=${encodeURIComponent(tenant.id)}`)}
+        style={{
+          padding: "14px 24px",
+          minHeight: 48,
+          borderRadius: 12,
+          border: "1px solid rgba(99,102,241,0.4)",
+          background: "rgba(99,102,241,0.12)",
+          color: "#a5b4fc",
+          fontSize: 15,
+          fontWeight: 700,
+          cursor: "pointer",
+          width: "100%",
+        }}
+      >
+        🎭 このテナントにアバターを新規作成
+      </button>
 
       <button
         type="button"

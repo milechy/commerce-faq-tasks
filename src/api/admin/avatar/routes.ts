@@ -397,12 +397,17 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   // POST /v1/admin/avatar/configs — 新規作成
   // -----------------------------------------------------------------------
   app.post("/v1/admin/avatar/configs", async (req: Request, res: Response) => {
-    const { su, role, tenantId } = extractAuth(req);
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
     if (!isAllowedAvatarRole(role)) {
       return denyAvatarRole(req, res, su, role);
     }
 
-    if (!tenantId) {
+    // super_admin は body.tenant_id を使用。client_admin は JWT 由来のみ。
+    const effectiveTenantId = isSuperAdmin
+      ? ((req.body?.tenant_id as string | undefined)?.trim() || tenantId)
+      : tenantId;
+
+    if (!effectiveTenantId) {
       return res.status(403).json({ error: "テナント情報が取得できません" });
     }
 
@@ -436,7 +441,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       if (resolvedImageUrl?.startsWith("data:")) {
         const uploaded = await uploadBase64ToStorage(
           resolvedImageUrl,
-          tenantId,
+          effectiveTenantId,
           `avatar-${Date.now()}`
         );
         resolvedImageUrl = uploaded ?? resolvedImageUrl;
@@ -450,7 +455,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING *`,
         [
-          tenantId,
+          effectiveTenantId,
           name,
           resolvedImageUrl,
           image_prompt ?? null,

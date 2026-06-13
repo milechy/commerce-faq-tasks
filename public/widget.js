@@ -1135,7 +1135,7 @@
         fetch(apiBase + '/api/avatar/room-token', {
           method: 'POST',
           headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
-          body: avatarConfigId ? JSON.stringify({ avatarConfigId: avatarConfigId }) : undefined,
+          body: JSON.stringify(Object.assign(avatarConfigId ? { avatarConfigId: avatarConfigId } : {}, { connect: isOpen })),
         })
           .then(function (r) { return r.json(); })
           .then(function (lkData) {
@@ -1143,6 +1143,11 @@
             if (!lkData.enabled) return;
             avatarConfig = lkData;
             currentAvatarName = lkData.avatarName || null;
+            if (!lkData.preDispatchEnabled && !isOpen) {
+              showAvatarPlaceholder(lkData.imageUrl);
+              avatarConfigFetched = false;
+              return;
+            }
             startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
@@ -1163,7 +1168,7 @@
         fetch(apiBase + '/api/avatar/room-token', {
           method: 'POST',
           headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
-          body: avatarConfigId ? JSON.stringify({ avatarConfigId: avatarConfigId }) : undefined,
+          body: JSON.stringify(Object.assign(avatarConfigId ? { avatarConfigId: avatarConfigId } : {}, { connect: isOpen })),
         })
           .then(function (r) { return r.json(); })
           .then(function (lkData) {
@@ -1171,6 +1176,11 @@
             if (!lkData.enabled) return;
             avatarConfig = lkData;
             currentAvatarName = lkData.avatarName || null;
+            if (!lkData.preDispatchEnabled && !isOpen) {
+              showAvatarPlaceholder(lkData.imageUrl);
+              avatarConfigFetched = false;
+              return;
+            }
             startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
