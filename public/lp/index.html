@@ -116,6 +116,73 @@
       position: relative;
     }
 
+    /* アバターショーケース共通スタイル */
+    @keyframes lp-ring-pulse {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.06); opacity: 0.4; }
+    }
+    .lp-avatar-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid rgba(124,58,237,0.4);
+      animation: lp-ring-pulse 2.6s ease-in-out infinite;
+    }
+    .lp-avatar-circle {
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 50%, #6d28d9 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 40px rgba(124,58,237,0.35), inset 0 1px 0 rgba(255,255,255,0.12);
+      position: relative;
+      z-index: 1;
+    }
+
+    /* デモセクション 2カラム */
+    .demo-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      border-radius: 12px;
+      overflow: hidden;
+      min-height: 520px;
+    }
+    @media (max-width: 767px) {
+      .demo-layout { grid-template-columns: 1fr; }
+      .demo-avatar-panel { display: none; }
+    }
+    .demo-avatar-panel {
+      background: linear-gradient(160deg, #0d0720 0%, #0a0a18 60%, #06060f 100%);
+      border-right: 1px solid rgba(124,58,237,0.15);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 32px 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    .demo-avatar-panel::before {
+      content: '';
+      position: absolute;
+      top: -60px; left: -60px;
+      width: 240px; height: 240px;
+      background: radial-gradient(circle, rgba(124,58,237,0.15), transparent 70%);
+      pointer-events: none;
+    }
+    .demo-avatar-panel::after {
+      content: '';
+      position: absolute;
+      bottom: -40px; right: -40px;
+      width: 180px; height: 180px;
+      background: radial-gradient(circle, rgba(6,182,212,0.08), transparent 70%);
+      pointer-events: none;
+    }
+    .demo-chat-panel {
+      background: #0a0a12;
+    }
+
     /* Accordion */
     .accordion-content {
       max-height: 0;
@@ -341,7 +408,7 @@
       </div>
     </div>
 
-    <!-- Right: Widget card (desktop only) -->
+    <!-- Right: Avatar showcase + Widget card (desktop only) -->
     <div id="hero-widget-col" class="desktop-only">
       <div class="glass-card" style="border-radius:16px; padding:20px; position:relative; overflow:hidden;">
         <!-- Glow effect -->
@@ -352,10 +419,27 @@
           <span style="font-size:12px; color:var(--muted); font-weight:500;">▼ 実際のR2Cウィジェット</span>
         </div>
 
+        <!-- アバタープレビューバー -->
+        <div style="display:flex; align-items:center; gap:16px; background:linear-gradient(135deg,rgba(76,29,149,0.25),rgba(124,58,237,0.15)); border:1px solid rgba(124,58,237,0.3); border-radius:12px; padding:14px 18px; margin-bottom:14px;">
+          <div style="position:relative; width:52px; height:52px; flex-shrink:0;">
+            <div class="lp-avatar-ring" style="inset:-8px; animation-delay:0s;"></div>
+            <div class="lp-avatar-ring" style="inset:-16px; border-color:rgba(124,58,237,0.2); animation-delay:1.3s;"></div>
+            <div class="lp-avatar-circle" style="width:52px; height:52px; font-size:24px;">🤖</div>
+          </div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:14px; font-weight:700; color:#fff; margin-bottom:2px;">AIアバター接客</div>
+            <div style="font-size:12px; color:#c4b5fd; line-height:1.4;">顔・声のあるAIが24時間自動接客。テキストボットより3倍の会話継続率。</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:5px; background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.3); border-radius:999px; padding:4px 10px; flex-shrink:0;">
+            <div class="blink" style="width:6px; height:6px; border-radius:50%; background:#22c55e;"></div>
+            <span style="font-size:11px; color:#4ade80; font-weight:600;">LIVE</span>
+          </div>
+        </div>
+
         <div class="widget-inline-area" id="hero-widget-area" style="border-radius:10px; overflow:hidden; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.06);">
           <iframe
             src="/lp/demo-frame.html"
-            style="width:100%; height:480px; border:none; display:block; border-radius:10px;"
+            style="width:100%; height:420px; border:none; display:block; border-radius:10px;"
             title="R2C AI アシスタント デモ"
             loading="eager"
             allow="microphone"
@@ -633,9 +717,22 @@
         @media (max-width: 560px) { .feat-grid { grid-template-columns: 1fr !important; } }
       </style>
       <div class="feat-grid" style="display:contents;">
-        <div class="glass-card" style="border-radius:14px; padding:26px; transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(139,92,246,0.35)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">
-          <div style="font-size:32px; margin-bottom:14px;">🎭</div>
-          <div style="font-weight:700; font-size:15px; color:#fff; margin-bottom:8px;">AIアバター</div>
+        <div class="glass-card" style="border-radius:14px; padding:26px; transition:border-color 0.2s; border-color:rgba(124,58,237,0.25);" onmouseover="this.style.borderColor='rgba(139,92,246,0.5)'" onmouseout="this.style.borderColor='rgba(124,58,237,0.25)'">
+          <!-- アバターイメージ -->
+          <div style="display:flex; align-items:center; gap:14px; margin-bottom:16px;">
+            <div style="position:relative; width:56px; height:56px; flex-shrink:0;">
+              <div class="lp-avatar-ring" style="inset:-7px; animation-delay:0s;"></div>
+              <div class="lp-avatar-ring" style="inset:-15px; border-color:rgba(124,58,237,0.18); animation-delay:1.3s;"></div>
+              <div class="lp-avatar-circle" style="width:56px; height:56px; font-size:26px;">🤖</div>
+            </div>
+            <div>
+              <div style="font-weight:700; font-size:15px; color:#fff; margin-bottom:2px;">AIアバター</div>
+              <div style="display:flex; align-items:center; gap:5px;">
+                <div class="blink" style="width:6px; height:6px; border-radius:50%; background:#a78bfa;"></div>
+                <span style="font-size:11px; color:#a78bfa; font-weight:600;">有料オプション</span>
+              </div>
+            </div>
+          </div>
           <div style="font-size:13px; color:var(--muted); line-height:1.65;">顔・声のあるAIが親しみやすく接客。テキストボットより<strong style="color:#c4b5fd;">3倍の会話継続率</strong>を実現。</div>
         </div>
         <div class="glass-card" style="border-radius:14px; padding:26px; transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(139,92,246,0.35)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">
@@ -687,20 +784,69 @@
     <button onclick="sendExampleQuestion('人間スタッフとの連携はどうなりますか？')" style="background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.3); color:#c4b5fd; padding:9px 18px; border-radius:999px; font-size:13px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.12)'">人間スタッフとの連携はどうなりますか？</button>
   </div>
 
-  <!-- Widget demo area -->
-  <div class="glass-card" style="border-radius:16px; padding:24px; position:relative; overflow:hidden;">
-    <div style="position:absolute; top:-80px; left:-80px; width:300px; height:300px; background:radial-gradient(circle, rgba(124,58,237,0.1), transparent 70%); pointer-events:none;"></div>
-    <div style="position:absolute; bottom:-80px; right:-80px; width:300px; height:300px; background:radial-gradient(circle, rgba(6,182,212,0.06), transparent 70%); pointer-events:none;"></div>
+  <!-- Widget demo area: 2カラム（左=アバター, 右=チャット） -->
+  <div class="glass-card" style="border-radius:16px; padding:0; position:relative; overflow:hidden;">
+    <div class="demo-layout">
+      <!-- 左: アバターショーケース -->
+      <div class="demo-avatar-panel">
+        <!-- アバター本体 -->
+        <div style="position:relative; width:130px; height:130px; flex-shrink:0;">
+          <div class="lp-avatar-ring" style="inset:-12px; animation-delay:0s;"></div>
+          <div class="lp-avatar-ring" style="inset:-24px; border-color:rgba(124,58,237,0.2); animation-delay:0.9s;"></div>
+          <div class="lp-avatar-ring" style="inset:-38px; border-color:rgba(124,58,237,0.1); animation-delay:1.8s;"></div>
+          <div class="lp-avatar-circle" style="width:130px; height:130px; font-size:60px;">🤖</div>
+        </div>
 
-    <div id="demo-widget-area" class="widget-demo-area" style="border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.06);">
-      <iframe
-        id="demo-frame"
-        src="/lp/demo-frame.html"
-        style="width:100%; height:520px; border:none; display:block; border-radius:10px;"
-        title="R2C AI アシスタント デモ"
-        loading="eager"
-        allow="microphone"
-      ></iframe>
+        <!-- ライブバッジ -->
+        <div style="display:flex; align-items:center; gap:6px; background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.3); border-radius:999px; padding:5px 14px;">
+          <div class="blink" style="width:7px; height:7px; border-radius:50%; background:#22c55e;"></div>
+          <span style="font-size:12px; color:#4ade80; font-weight:600;">LIVE デモ稼働中</span>
+        </div>
+
+        <!-- 名前・役割 -->
+        <div style="text-align:center;">
+          <div style="font-size:18px; font-weight:700; color:#fff; margin-bottom:4px;">AIアシスタント</div>
+          <div style="font-size:12px; color:rgba(196,181,253,0.8);">R2C — 24時間自動接客AI</div>
+        </div>
+
+        <!-- プリセット質問 -->
+        <div style="font-size:11px; color:rgba(196,181,253,0.6); text-align:center; line-height:1.6; max-width:200px;">
+          右側のチャットから<br>話しかけてみてください 💬
+        </div>
+
+        <!-- スピーチバブル -->
+        <div
+          id="demo-avatar-bubble"
+          style="background:rgba(124,58,237,0.1); border:1px solid rgba(124,58,237,0.3); border-radius:12px; padding:10px 16px; font-size:12px; color:#e9d5ff; line-height:1.6; max-width:200px; text-align:center; transition:background 0.4s ease, border-color 0.4s ease;"
+        >
+          右のチャットに話しかけてください 💬
+        </div>
+
+        <!-- アバター機能一覧 -->
+        <div style="display:flex; flex-direction:column; gap:8px; width:100%; max-width:200px;">
+          <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:rgba(196,181,253,0.7);">
+            <span style="color:#a78bfa;">🎭</span> リアルタイム映像で接客
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:rgba(196,181,253,0.7);">
+            <span style="color:#a78bfa;">🎤</span> 音声でも話しかけられる
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:rgba(196,181,253,0.7);">
+            <span style="color:#a78bfa;">⚡</span> 3秒以内に即回答
+          </div>
+        </div>
+      </div>
+
+      <!-- 右: チャットウィジェット -->
+      <div class="demo-chat-panel">
+        <iframe
+          id="demo-frame"
+          src="/lp/demo-frame.html"
+          style="width:100%; height:520px; border:none; display:block;"
+          title="R2C AI アシスタント デモ"
+          loading="eager"
+          allow="microphone"
+        ></iframe>
+      </div>
     </div>
   </div>
 
@@ -1266,7 +1412,28 @@
   });
 
   // ===== 4. Example Question Buttons =====
+  // アバタースピーチバブル: プリセット質問の回答をデモ左パネルに表示
+  var DEMO_AVATAR_REPLIES = {
+    '月いくらかかりますか？': '完全従量課金で1対話あたり5円〜。初月は完全無料です！',
+    '最短で何日で導入できますか？': '最短3日で本番稼働できます！',
+    'うちのECサイトに合いますか？': 'ECサイトに特に強いです。離脱防止・深夜対応を全自動化！',
+    '人間スタッフとの連携はどうなりますか？': 'AIから人間スタッフへシームレスに引き継げます。'
+  };
+  function setDemoAvatarBubble(text) {
+    var bubble = document.getElementById('demo-avatar-bubble');
+    if (!bubble) return;
+    bubble.textContent = text;
+    bubble.style.borderColor = 'rgba(124,58,237,0.6)';
+    bubble.style.background = 'rgba(124,58,237,0.2)';
+    setTimeout(function() {
+      bubble.style.borderColor = 'rgba(124,58,237,0.3)';
+      bubble.style.background = 'rgba(124,58,237,0.1)';
+    }, 2500);
+  }
+
   window.sendExampleQuestion = function(text) {
+    // アバターバブルを更新
+    if (DEMO_AVATAR_REPLIES[text]) setDemoAvatarBubble(DEMO_AVATAR_REPLIES[text]);
     // Scroll to demo section
     var demoSection = document.getElementById('demo');
     if (demoSection) {
