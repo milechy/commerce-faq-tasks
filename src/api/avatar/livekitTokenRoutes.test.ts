@@ -155,7 +155,7 @@ describe("POST /api/avatar/room-token", () => {
       const app = makeApp("tenant-a");
       const res = await request(app)
         .post("/api/avatar/room-token")
-        .send({ avatarConfigId: UUID_SAM });
+        .send({ avatarConfigId: UUID_SAM, connect: true });
 
       expect(res.body.enabled).toBe(true);
       expect(res.body.imageUrl).toBeNull();
@@ -277,7 +277,7 @@ describe("POST /api/avatar/room-token", () => {
       const app = makeApp("tenant-a");
       await request(app)
         .post("/api/avatar/room-token")
-        .send({ avatarConfigId: UUID_SAM });
+        .send({ avatarConfigId: UUID_SAM, connect: true });
 
       expect(mockCreateRoom).toHaveBeenCalledTimes(1);
       const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
@@ -294,7 +294,7 @@ describe("POST /api/avatar/room-token", () => {
       const app = makeApp("tenant-a");
       await request(app)
         .post("/api/avatar/room-token")
-        .send({});
+        .send({ connect: true });
 
       expect(mockCreateRoom).toHaveBeenCalledTimes(1);
       const createRoomArg = mockCreateRoom.mock.calls[0][0] as { metadata?: string };
@@ -309,7 +309,7 @@ describe("POST /api/avatar/room-token", () => {
       const app = makeApp("tenant-a");
       await request(app)
         .post("/api/avatar/room-token")
-        .send({ avatarConfigId: UUID_OTHER });
+        .send({ avatarConfigId: UUID_OTHER, connect: true });
 
       // Q2 SQL が tenant_id = $2 で tenant-a 以外を排除していることを検証
       const q2Call = mockQuery.mock.calls[1];

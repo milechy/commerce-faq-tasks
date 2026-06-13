@@ -51,6 +51,7 @@ const MAIN_SECTIONS: NavSection[] = [
     items: [
       { label: "会話履歴", path: "/admin/chat-history", icon: MessageSquare },
       { label: "AIの知識データ", path: "/admin/knowledge", icon: BookOpen },
+      { label: "AI学習・貢献分析", path: "/admin/knowledge-analytics", icon: BarChart2 },
     ],
   },
   {

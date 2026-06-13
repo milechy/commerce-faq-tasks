@@ -6,6 +6,7 @@ export interface TenantFeatures {
   voice: boolean;
   rag: boolean;
   deep_research?: boolean;
+  pre_dispatch?: boolean;
 }
 
 export interface TenantDetail {
