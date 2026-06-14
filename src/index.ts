@@ -522,6 +522,8 @@ if (db) registerNotificationPreferencesRoutes(app, db);
 
 // Phase32: 課金管理API
 if (db) initUsageTracker(db, logger);
+// Phase72-C: フロー遷移ログ
+if (db) initFlowLogger(db, logger);
 
 // Phase72-C: State Machine 遷移ログ
 if (db) initFlowLogger(db, logger);

@@ -49,8 +49,13 @@ const TENANT_SCOPED_ROUTES = [
   '/v1/admin/analytics/events',
 ];
 
-// All routes including super_admin-only cv-status
-const ALL_ROUTES = [...TENANT_SCOPED_ROUTES, '/v1/admin/analytics/cv-status'];
+// All routes including super_admin-only endpoints (cv-status, avatar-settings-summary, flow-transitions)
+const ALL_ROUTES = [
+  ...TENANT_SCOPED_ROUTES,
+  '/v1/admin/analytics/cv-status',
+  '/v1/admin/analytics/avatar-settings-summary',
+  '/v1/admin/analytics/flow-transitions',
+];
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -173,6 +178,19 @@ describe('analytics routes — logger.warn structured payload on 403 (observabil
   it('/v1/admin/analytics/cv-status — client_admin (insufficient role) → logger.warn with AUTH_ROLE_INSUFFICIENT', async () => {
     const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
     await request(app).get('/v1/admin/analytics/cv-status');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'analytics_access_denied',
+        reason: 'insufficient_role',
+        errorCode: 'AUTH_ROLE_INSUFFICIENT',
+      }),
+      expect.any(String),
+    );
+  });
+
+  it('/v1/admin/analytics/avatar-settings-summary — client_admin (insufficient role) → logger.warn with AUTH_ROLE_INSUFFICIENT', async () => {
+    const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
+    await request(app).get('/v1/admin/analytics/avatar-settings-summary');
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'analytics_access_denied',

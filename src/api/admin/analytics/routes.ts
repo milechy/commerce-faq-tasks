@@ -1365,6 +1365,126 @@ export function registerAnalyticsRoutes(app: Express): void {
   );
 
   // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/avatar-settings-summary  (Phase72-B: super_admin only)
+  // アバター設定利用率の横断集計
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/avatar-settings-summary",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'insufficient_role',
+          actorRole,
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          errorCode: 'AUTH_ROLE_INSUFFICIENT',
+        }, "Admin analytics access denied: super_admin required");
+        return res.status(403).json({ error: "アクセス権限がありません", code: 'AUTH_ROLE_INSUFFICIENT' });
+      }
+
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      try {
+        // メイン集計: CTE で一括計算
+        const summaryResult = await pool.query(
+          `WITH base AS (
+             SELECT
+               COUNT(DISTINCT tenant_id) AS total_tenants,
+               COUNT(DISTINCT CASE WHEN is_active = true THEN tenant_id END) AS tenants_with_avatar,
+               COUNT(*) AS total_configs,
+               COUNT(CASE WHEN agent_idle_prompt IS NOT NULL AND agent_idle_prompt != '' THEN 1 END) AS idle_prompt_count,
+               COUNT(CASE WHEN personality_prompt IS NOT NULL AND personality_prompt != '' THEN 1 END) AS custom_prompt_count,
+               COUNT(CASE WHEN voice_id IS NOT NULL AND voice_id != '' THEN 1 END) AS custom_voice_count
+             FROM avatar_configs
+           )
+           SELECT
+             total_tenants,
+             tenants_with_avatar,
+             total_configs,
+             CASE WHEN total_configs > 0
+               THEN ROUND(idle_prompt_count::numeric / NULLIF(total_configs, 0) * 100, 1)
+               ELSE NULL
+             END AS idle_prompt_configured_rate,
+             CASE WHEN total_configs > 0
+               THEN ROUND(custom_prompt_count::numeric / NULLIF(total_configs, 0) * 100, 1)
+               ELSE NULL
+             END AS custom_prompt_rate,
+             CASE WHEN total_configs > 0
+               THEN ROUND(custom_voice_count::numeric / NULLIF(total_configs, 0) * 100, 1)
+               ELSE NULL
+             END AS custom_voice_rate
+           FROM base`
+        );
+
+        // プロバイダ分布
+        const providerResult = await pool.query(
+          `SELECT
+             COALESCE(avatar_provider, 'unknown') AS provider,
+             COUNT(*)::int AS count
+           FROM avatar_configs
+           GROUP BY avatar_provider
+           ORDER BY count DESC`
+        );
+
+        // テンプレートトップ10 (lemonslice_agent_id別)
+        const top10Result = await pool.query(
+          `SELECT
+             lemonslice_agent_id AS id,
+             name,
+             COUNT(*)::int AS count
+           FROM avatar_configs
+           WHERE lemonslice_agent_id IS NOT NULL AND lemonslice_agent_id != ''
+           GROUP BY lemonslice_agent_id, name
+           ORDER BY count DESC
+           LIMIT 10`
+        );
+
+        const row = summaryResult.rows[0];
+
+        return res.json({
+          total_tenants: Number(row?.total_tenants ?? 0),
+          tenants_with_avatar: Number(row?.tenants_with_avatar ?? 0),
+          idle_prompt_configured_rate: row?.idle_prompt_configured_rate != null
+            ? Number(row.idle_prompt_configured_rate)
+            : null,
+          custom_prompt_rate: row?.custom_prompt_rate != null
+            ? Number(row.custom_prompt_rate)
+            : null,
+          custom_voice_rate: row?.custom_voice_rate != null
+            ? Number(row.custom_voice_rate)
+            : null,
+          avatar_provider_distribution: providerResult.rows.map((r: any) => ({
+            provider: r.provider as string,
+            count: r.count as number,
+          })),
+          template_id_top10: top10Result.rows.map((r: any) => ({
+            id: r.id as string,
+            name: r.name as string | null,
+            count: r.count as number,
+          })),
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/avatar-settings-summary]", err);
+        return res.status(500).json({ error: "アバター設定の集計に失敗しました" });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // GET /v1/admin/analytics/metrics-history  (Phase72-D: super_admin only)
   // query: metric (required), period (1d|7d|30d, default 7d),
   //        tenant_id (optional), granularity (1h|6h|24h, default 1h)
