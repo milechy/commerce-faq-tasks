@@ -103,7 +103,7 @@ export async function searchPgVector(
     left join faq_docs fd
       on fe.metadata->>'faq_id' ~ '^[0-9]+$'
      and fd.id = (fe.metadata->>'faq_id')::bigint
-    where (fe.tenant_id = $1 OR fe.tenant_id = 'global')
+    where (fe.tenant_id = $1 OR fe.tenant_id = 'global' OR fe.tenant_id = 'r2c_docs')
       and (
         (
           fe.metadata->>'faq_id' ~ '^[0-9]+$'
