@@ -78,7 +78,11 @@ export function AvatarCard({
             alt={cfg.name}
             loading="lazy"
             onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = "none";
+              const wrap = (e.currentTarget as HTMLImageElement).closest('.av-img-wrap') as HTMLElement | null;
+              if (wrap) {
+                wrap.className = 'av-img-placeholder';
+                wrap.innerHTML = '👤';
+              }
             }}
           />
           <div className="av-img-overlay" />
