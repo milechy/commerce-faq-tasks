@@ -14,6 +14,7 @@ import type { AuthedRequest } from "./agent/http/authMiddleware";
 import { runOcrPipeline } from "./lib/ocrPipeline";
 import { INTERNAL_REQUEST_HEADER } from "./lib/metrics/kpiDefinitions";
 import { metricsRegistry } from "./lib/metrics/promExporter";
+import { initMetricsFlush } from "./lib/metrics/metricsFlush";
 import { createChatHandler } from "./api/chat/route";
 import { healthHandler } from "./lib/health";
 import { businessHealthHandler } from "./lib/healthBusiness";
@@ -674,8 +675,12 @@ async function startServer() {
     logger.info({ port, env: process.env.NODE_ENV }, "server listening");
   });
 
+  // Phase72-D: Prometheus メトリクス → metrics_snapshots DB 永続化（5分周期）
+  const stopMetricsFlush = initMetricsFlush(db, logger);
+
   const onShutdown = (signal: string) => () => {
     logger.info({ signal }, "[shutdown] graceful shutdown initiated");
+    stopMetricsFlush();
     server.close();
     flushPostHog()
       .catch((err) => logger.error({ err }, "[shutdown] flushPostHog failed"))
