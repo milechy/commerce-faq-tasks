@@ -76,7 +76,7 @@ describe("flushOnce", () => {
     await flushOnce(pool, logger);
     expect(pool.query).toHaveBeenCalledTimes(1);
 
-    pool.query.mockClear();
+    (pool.query as jest.Mock).mockClear();
     pool._queries.length = 0;
 
     // 2回目: 増分なし → INSERT しない
