@@ -19,6 +19,7 @@ import {
   Monitor,
   BellRing,
   X,
+  GitBranch,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
@@ -32,6 +33,7 @@ interface NavItem {
   path: string;
   icon: React.ElementType;
   end?: boolean;
+  superAdminOnly?: boolean;
 }
 
 interface NavSection {
@@ -60,6 +62,7 @@ const MAIN_SECTIONS: NavSection[] = [
       { label: "会話分析", path: "/admin/analytics", icon: BarChart2 },
       { label: "成約・効果分析", path: "/admin/conversion", icon: TrendingUp },
       { label: "自動メッセージ設定", path: "/admin/engagement", icon: Zap },
+      { label: "フロー遷移分析", path: "/admin/analytics/flow", icon: GitBranch, superAdminOnly: true },
     ],
   },
   {
