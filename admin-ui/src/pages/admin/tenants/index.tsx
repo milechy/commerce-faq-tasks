@@ -55,7 +55,7 @@ async function fetchTenants(): Promise<Tenant[]> {
 async function createTenant(data: { name: string; slug: string }): Promise<Tenant> {
   const res = await authFetch(`${API_BASE}/v1/admin/tenants`, {
     method: "POST",
-    body: JSON.stringify({ ...data, plan: "starter" }),
+    body: JSON.stringify({ id: data.slug, name: data.name, plan: "starter" }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = (await res.json()) as { tenant?: Tenant } | Tenant;
