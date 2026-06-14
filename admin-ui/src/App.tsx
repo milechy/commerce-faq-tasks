@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppSidebar, MobileHeader, MobileBottomBar } from "./components/AppSidebar";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -20,6 +20,8 @@ import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAIChat from "./components/AdminAIChat";
+import AdminAgentButton from "./components/AdminAgent/AdminAgentButton";
+import AdminAgentPanel from "./components/AdminAgent/AdminAgentPanel";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarWizardPage from "./pages/admin/avatar/wizard";
@@ -76,7 +78,8 @@ function ConfigErrorScreen() {
 }
 
 function AppInner() {
-  const { isClientAdmin } = useAuth();
+  const { isClientAdmin, isSuperAdmin, user } = useAuth();
+  const [agentOpen, setAgentOpen] = useState(false);
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
   const isAdmin = location.pathname.startsWith("/admin") || location.pathname === "/";
@@ -182,6 +185,21 @@ function AppInner() {
       </Routes>
       {/* 管理AIチャット — Client Admin、chat-testページを除く */}
       {showAIChat && <AdminAIChat />}
+      {/* R2C AIアシスタント — super_admin/client_admin 共通、chat-testページを除く */}
+      {showAIChat && (
+        <>
+          <AdminAgentButton
+            onClick={() => setAgentOpen((v) => !v)}
+            isOpen={agentOpen}
+          />
+          <AdminAgentPanel
+            isOpen={agentOpen}
+            onClose={() => setAgentOpen(false)}
+            tenantId={user?.tenantId ?? null}
+            isSuperAdmin={isSuperAdmin}
+          />
+        </>
+      )}
       </div>
     </div>
   );
