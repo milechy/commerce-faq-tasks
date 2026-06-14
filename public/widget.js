@@ -962,6 +962,7 @@
   /* ------------------------------------------------------------------ */
 
   var isOpen = false;
+  var _fabRestored = false; // closePanel後の非同期resetFabIcon呼び出しを防ぐフラグ
   var isLoading = false;
   var messages = [];
 
@@ -975,6 +976,7 @@
   var avatarPlaceholderImg = null; // LiveKit接続前のアバター画像プレースホルダー
   var fabMediaContainer = null;  // FABメディアコンテナ（アバター映像/静止画）
   var fabVideoEl = null;         // LiveKitビデオ要素（FAB↔avatarAreaで移動）
+  var lastAvatarImageUrl = null; // 最後に確認されたアバター画像URL（closePanel時のフォールバック）
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -1037,6 +1039,7 @@
 
   function showAvatarPlaceholder(imageUrl) {
     if (!imageUrl || typeof imageUrl !== 'string') return;
+    lastAvatarImageUrl = imageUrl;
     if (avatarPlaceholderImg) return; // 既に表示中
     var img = document.createElement('img');
     img.src = imageUrl;
@@ -1961,6 +1964,7 @@
   var avatarCacheKey = 'rajiuce-avatar-' + tenantId;
 
   function openPanel() {
+    _fabRestored = false;
     dismissProactiveBubble();
     isOpen = true;
     panel.classList.add('open');
@@ -2024,11 +2028,19 @@
       // 静止画アバター: openPanel で fab から切り離された fabMediaContainer を復元
       while (fab.firstChild) { fab.removeChild(fab.firstChild); }
       fab.appendChild(fabMediaContainer);
+    } else if (lastAvatarImageUrl) {
+      // Disconnected イベントが先に fabMediaContainer を null にした場合のフォールバック
+      var _closeImg = document.createElement('img');
+      _closeImg.src = lastAvatarImageUrl;
+      _closeImg.alt = 'アバター';
+      _closeImg.onerror = function () { resetFabIcon(); };
+      showFabMedia(_closeImg);
     } else {
       // アバターなし: チャットアイコン
       while (fab.firstChild) { fab.removeChild(fab.firstChild); }
       fab.appendChild(svgIcon(CHAT_SVG_PATH));
     }
+    _fabRestored = true; // 以降の非同期resetFabIcon呼び出しをブロック
     emitToHost('widget:closed', {});
     capturePostHog('widget_closed', {});
     // LiveKit Room を切断（次回開閉時に新規接続で安定化）
