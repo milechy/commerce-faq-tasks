@@ -29,6 +29,7 @@ import {
   createTenantContextMiddleware,
   getTenantByApiKeyHash,
   seedTenantsFromEnv,
+  seedTenantsFromDB,
 } from "./lib/tenant-context";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerKnowledgeGapRoutes } from "./api/admin/knowledge/knowledgeGapRoutes";
@@ -85,6 +86,7 @@ import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
+import { registerAdminAgentRoutes } from "./api/admin/agent/agentRoutes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -102,9 +104,14 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 app.locals.db = db;
 
 // ---------------------------------------------------------------------------
-// Seed tenant registry (env / JSON) — must run before middleware init
+// Seed tenant registry: env vars first, then DB (env takes precedence)
 // ---------------------------------------------------------------------------
 seedTenantsFromEnv();
+if (db) {
+  seedTenantsFromDB(db, logger).catch((err) =>
+    logger.warn({ err }, "seedTenantsFromDB failed at startup")
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Global middleware (applied to ALL requests, order matters)
@@ -517,6 +524,9 @@ if (db) initUsageTracker(db, logger);
 // Phase72-C: フロー遷移ログ
 if (db) initFlowLogger(db, logger);
 
+// Phase72-C: State Machine 遷移ログ
+if (db) initFlowLogger(db, logger);
+
 // Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
 app.post(
   "/v1/billing/webhook",
@@ -587,6 +597,9 @@ if (db) registerAvatarConfigRoutes(app, db);
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 if (db) registerAvatarGenerationRoutes(app, db);
+
+// Phase B-Admin: AIエージェント管理チャット API
+if (db) registerAdminAgentRoutes(app, db);
 
 // Phase64: fal.ai Flux Pro アバター画像生成API
 registerFalGenerationRoutes(app);

@@ -7,11 +7,12 @@ export async function gotoWithRetry(
   page: Page,
   url: string,
   attempts = 3,
+  timeoutMs = 8_000,
 ): Promise<Response | null> {
   let lastError: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 8_000 });
+      return await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     } catch (e) {
       lastError = e;
       if (i < attempts - 1) {

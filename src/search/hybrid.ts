@@ -96,7 +96,11 @@ export async function hybridSearch(
     const esIndices = LANG_SEARCH_ENABLED && tenantId
       ? resolveFallbackIndices(tenantId, resolvedLang)
       : [`faq_${tenantId ?? "demo"}`];
-    const esIndex = esIndices[0]; // まずプライマリを試す
+    const esIndexPrimary = esIndices[0]; // まずプライマリを試す
+    // r2c_docs グローバル知識ベースを常に含める（自テナントでない場合のみ追加）
+    const esIndex = tenantId && tenantId !== 'r2c_docs'
+      ? `${esIndexPrimary},faq_r2c_docs`
+      : esIndexPrimary;
 
     const esRes = await es.search(
       {
@@ -111,6 +115,7 @@ export async function hybridSearch(
                     should: [
                       { term: { tenant_id: tenantId } },
                       { term: { tenant_id: "global" } },
+                      { term: { tenant_id: "r2c_docs" } },
                     ],
                     minimum_should_match: 1,
                     must: [

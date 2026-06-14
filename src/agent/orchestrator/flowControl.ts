@@ -309,6 +309,14 @@ export function applyPhase22FlowAfterGeneration(params: {
       lastUpdatedAt: new Date().toISOString(),
     };
     setFlowSessionMeta(flowKey, next);
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: prevFlow.state,
+      toState: 'terminal',
+      turnIndex,
+      metadata: { reason: 'aborted_loop_detected' },
+    });
 
     logger.info(
       {
@@ -388,6 +396,14 @@ export function applyPhase22FlowAfterGeneration(params: {
       lastUpdatedAt: new Date().toISOString(),
     };
     setFlowSessionMeta(flowKey, next);
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: prevFlow.state,
+      toState: 'terminal',
+      turnIndex,
+      metadata: { reason: 'aborted_budget' },
+    });
 
     logger.info(
       { event: 'flow.terminal_reached', meta: { flow: next } },
@@ -454,6 +470,13 @@ export function applyPhase22FlowAfterGeneration(params: {
     lastUpdatedAt: new Date().toISOString(),
   };
   setFlowSessionMeta(flowKey, next);
+  logFlowTransition({
+    tenantId: flowKey.tenantId,
+    sessionId: flowKey.conversationId,
+    fromState: prevFlow.state,
+    toState: nextState,
+    turnIndex,
+  });
 
   // Phase22: Log entry to new state
   if (prevFlow.state !== nextState) {
