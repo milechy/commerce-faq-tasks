@@ -51,7 +51,7 @@ const MAIN_SECTIONS: NavSection[] = [
     items: [
       { label: "会話履歴", path: "/admin/chat-history", icon: MessageSquare },
       { label: "AIの知識データ", path: "/admin/knowledge", icon: BookOpen },
-      { label: "AI学習・貢献分析", path: "/admin/knowledge-analytics", icon: BarChart2 },
+      { label: "AI学習・貢献分析", path: "/admin/knowledge-analytics", icon: BarChart2, superAdminOnly: true },
     ],
   },
   {
@@ -202,9 +202,11 @@ function SidebarContent({ onClose }: SidebarContentProps) {
   // Override knowledge path in nav items
   const patchedSections = MAIN_SECTIONS.map((section) => ({
     ...section,
-    items: section.items.map((item) =>
-      item.path === "/admin/knowledge" ? { ...item, path: knowledgePath } : item
-    ),
+    items: section.items
+      .filter((item) => isSuperAdmin || !item.superAdminOnly)
+      .map((item) =>
+        item.path === "/admin/knowledge" ? { ...item, path: knowledgePath } : item
+      ),
   }));
 
   const allSections = isSuperAdmin
