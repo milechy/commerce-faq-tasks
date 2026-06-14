@@ -1,11 +1,12 @@
 import { timingSafeEqual, createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import type { Logger } from "pino";
+import type { Pool } from "pg";
 import type { TenantConfig } from "../types/contracts";
 import type { AuthedRequest } from "../agent/http/authMiddleware";
 
 // ---------------------------------------------------------------------------
-// In-memory tenant registry (will be backed by DB in a future phase)
+// In-memory tenant registry (DB-backed via seedTenantsFromDB at startup)
 // ---------------------------------------------------------------------------
 const tenantStore = new Map<string, TenantConfig>();
 
@@ -98,6 +99,64 @@ export function seedTenantsFromEnv(): void {
       },
       enabled: true,
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Seed from DB (tenant_api_keys + tenants JOIN) — call once at startup
+// ---------------------------------------------------------------------------
+export async function seedTenantsFromDB(pool: Pool, logger?: Logger): Promise<void> {
+  try {
+    const result = await pool.query<{
+      tenant_id: string;
+      name: string;
+      plan: string;
+      is_active: boolean;
+      features: Record<string, boolean>;
+      allowed_origins: string[];
+      key_hash: string;
+      rate_limit: number | null;
+    }>(`
+      SELECT
+        t.id            AS tenant_id,
+        t.name,
+        t.plan,
+        t.is_active,
+        t.features,
+        t.allowed_origins,
+        k.key_hash,
+        NULL::int       AS rate_limit
+      FROM tenant_api_keys k
+      JOIN tenants t ON t.id = k.tenant_id
+      WHERE k.is_active = true
+        AND (k.expires_at IS NULL OR k.expires_at > NOW())
+        AND t.is_active = true
+    `);
+
+    let count = 0;
+    for (const row of result.rows) {
+      const existing = tenantStore.get(row.tenant_id);
+      // env-var entries take precedence over DB entries
+      if (existing) continue;
+      registerTenant({
+        tenantId: row.tenant_id,
+        name: row.name || row.tenant_id,
+        plan: (["starter", "growth", "enterprise"].includes(row.plan) ? row.plan : "starter") as TenantConfig["plan"],
+        features: (row.features as TenantConfig["features"]) ?? { avatar: false, voice: false, rag: true },
+        security: {
+          apiKeyHash: row.key_hash,
+          hashAlgorithm: "sha256",
+          allowedOrigins: row.allowed_origins ?? [],
+          rateLimit: row.rate_limit ?? 100,
+          rateLimitWindowMs: 60_000,
+        },
+        enabled: true,
+      });
+      count++;
+    }
+    logger?.info({ count }, "seedTenantsFromDB: loaded tenant API keys from DB");
+  } catch (err) {
+    logger?.warn({ err }, "seedTenantsFromDB: failed to load tenants from DB");
   }
 }
 

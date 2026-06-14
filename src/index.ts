@@ -29,6 +29,7 @@ import {
   createTenantContextMiddleware,
   getTenantByApiKeyHash,
   seedTenantsFromEnv,
+  seedTenantsFromDB,
 } from "./lib/tenant-context";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
 import { registerKnowledgeGapRoutes } from "./api/admin/knowledge/knowledgeGapRoutes";
@@ -101,9 +102,14 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 app.locals.db = db;
 
 // ---------------------------------------------------------------------------
-// Seed tenant registry (env / JSON) — must run before middleware init
+// Seed tenant registry: env vars first, then DB (env takes precedence)
 // ---------------------------------------------------------------------------
 seedTenantsFromEnv();
+if (db) {
+  seedTenantsFromDB(db, logger).catch((err) =>
+    logger.warn({ err }, "seedTenantsFromDB failed at startup")
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Global middleware (applied to ALL requests, order matters)
