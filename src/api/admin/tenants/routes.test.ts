@@ -224,3 +224,67 @@ describe("GET /v1/admin/tenants/:id/settings-history — 権限チェック", ()
     expect(db.query).not.toHaveBeenCalled();
   });
 });
+
+// --------------------------------------------------------------------------
+// ④ limit=invalid (非数値) は NaN になるがクラッシュせず 200 を返す
+// --------------------------------------------------------------------------
+
+describe("GET /v1/admin/tenants/:id/settings-history — limit バリデーション", () => {
+  it("非数値の limit を渡してもクラッシュせず 200 を返す", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [{ total: 0 }], rowCount: 1 });
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .get("/v1/admin/tenants/tenant-a/settings-history?limit=invalid")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.history).toEqual([]);
+    expect(dbQuery).toHaveBeenCalled();
+  });
+});
+
+// --------------------------------------------------------------------------
+// ⑤ PATCH → changed_by に supabaseUser.email が記録される
+// --------------------------------------------------------------------------
+
+describe("PATCH /v1/admin/tenants/:id — changed_by にメールが入る", () => {
+  it("INSERT の $2 パラメータが supabaseUser.email と一致する", async () => {
+    const BEFORE_ROW = { id: "tenant-a", plan: "starter", features: null, billing_enabled: false, is_active: true };
+    const AFTER_ROW = {
+      ...BEFORE_ROW, plan: "growth", name: "Test", allowed_origins: [], system_prompt: null,
+      billing_free_from: null, billing_free_until: null, lemonslice_agent_id: null,
+      conversion_types: [], tenant_contact_email: null,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [BEFORE_ROW], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [AFTER_ROW], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = dbQuery.mock.calls as Array<[string, unknown[]]>;
+    const insertCall = calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO tenant_settings_history")
+    );
+    expect(insertCall).toBeDefined();
+    // $2 = changed_by = supabaseUser.email
+    expect(insertCall![1][1]).toBe("admin@example.com");
+  });
+});
