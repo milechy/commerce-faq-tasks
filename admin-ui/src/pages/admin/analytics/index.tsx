@@ -32,6 +32,7 @@ import { LowScoreSessionsTable } from "./LowScoreSessionsTable";
 import { ConversionSection } from "./ConversionSection";
 import { AvatarSettingsSection } from "./AvatarSettingsSection";
 import { FlowFunnelSection } from "./FlowFunnelSection";
+import { MetricsTimeseriesSection } from "./MetricsTimeseriesSection";
 
 ChartJS.register(
   CategoryScale,
@@ -413,6 +414,8 @@ export default function AnalyticsDashboardPage() {
             tenantId={tenantId}
             isSuperAdmin={isSuperAdmin}
           />
+          {/* Phase72-D: メトリクス時系列（super_admin のみ表示） */}
+          {isSuperAdmin && <MetricsTimeseriesSection isSuperAdmin={isSuperAdmin} />}
         </>
       )}
     </div>
