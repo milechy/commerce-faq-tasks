@@ -51,11 +51,12 @@ const TENANT_SCOPED_ROUTES = [
   '/v1/admin/analytics/flow-transitions',
 ];
 
-// All routes including super_admin-only endpoints (cv-status, avatar-settings-summary)
+// All routes including super_admin-only endpoints (cv-status, avatar-settings-summary, metrics-history)
 const ALL_ROUTES = [
   ...TENANT_SCOPED_ROUTES,
   '/v1/admin/analytics/cv-status',
   '/v1/admin/analytics/avatar-settings-summary',
+  '/v1/admin/analytics/metrics-history',
 ];
 
 beforeEach(() => {

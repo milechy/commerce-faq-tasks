@@ -1624,4 +1624,137 @@ export function registerAnalyticsRoutes(app: Express): void {
       }
     },
   );
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/metrics-history  (Phase72-D: super_admin only)
+  // Prometheus スナップショットの時系列集計
+  //   - metric: rajiuce_ prefix メトリクス名（必須）
+  //   - period: 1d | 7d | 30d（デフォルト 7d）
+  //   - tenant_id: テナント絞り込み（任意）
+  //   - granularity: 1h | 6h | 24h（デフォルト 1h）
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/metrics-history",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'insufficient_role',
+          actorRole,
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          errorCode: 'AUTH_ROLE_INSUFFICIENT',
+        }, "Admin analytics access denied: super_admin required");
+        return res.status(403).json({ error: "アクセス権限がありません", code: 'AUTH_ROLE_INSUFFICIENT' });
+      }
+
+      // バリデーション: metric 必須
+      const metric = (req.query["metric"] as string | undefined)?.trim();
+      if (!metric) {
+        return res.status(400).json({ error: "metric パラメータは必須です" });
+      }
+
+      // period 検証
+      const periodRaw = (req.query["period"] as string | undefined) ?? "7d";
+      const VALID_PERIODS = ["1d", "7d", "30d"] as const;
+      type ValidPeriod = typeof VALID_PERIODS[number];
+      if (!VALID_PERIODS.includes(periodRaw as ValidPeriod)) {
+        return res.status(400).json({ error: "period は 1d | 7d | 30d のいずれかを指定してください" });
+      }
+      const period = periodRaw as ValidPeriod;
+
+      // granularity 検証（allow-list で SQL インジェクション防止）
+      // 1h/24h は DATE_TRUNC('hour'/'day', …) で対応。
+      // 6h は DATE_TRUNC が 'hour' 単位しか受け付けないため
+      // DATE_BIN('6 hours', …, TIMESTAMPTZ '2000-01-01') を使用（PG14+/本番PG16対応）。
+      const granularityRaw = (req.query["granularity"] as string | undefined) ?? "1h";
+      type GranularityKey = "1h" | "6h" | "24h";
+      const VALID_GRANULARITIES: ReadonlyArray<string> = ["1h", "6h", "24h"];
+      if (!VALID_GRANULARITIES.includes(granularityRaw)) {
+        return res.status(400).json({ error: "granularity は 1h | 6h | 24h のいずれかを指定してください" });
+      }
+      const granularity = granularityRaw as GranularityKey;
+
+      // バケット式を granularity 別に組み立て（固定値 allow-list のみ使用）
+      const BUCKET_EXPR: Record<GranularityKey, string> = {
+        "1h":  "DATE_TRUNC('hour', snapshot_at)",
+        "6h":  "DATE_BIN('6 hours', snapshot_at, TIMESTAMPTZ '2000-01-01')",
+        "24h": "DATE_TRUNC('day', snapshot_at)",
+      };
+      const bucketExpr = BUCKET_EXPR[granularity];
+
+      const tenantIdFilter = (req.query["tenant_id"] as string | undefined)?.trim() || null;
+
+      const periodIntervalMap: Record<ValidPeriod, string> = {
+        "1d": "1 day",
+        "7d": "7 days",
+        "30d": "30 days",
+      };
+      const interval = periodIntervalMap[period];
+
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      try {
+        const params: (string | null)[] = [metric, interval];
+        let tenantClause: string;
+        if (tenantIdFilter) {
+          params.push(tenantIdFilter);
+          tenantClause = "AND tenant_id = $3";
+        } else {
+          tenantClause = "";
+        }
+
+        const result = await pool.query(
+          `SELECT
+             ${bucketExpr} AS bucket,
+             SUM(value)::float AS value,
+             labels
+           FROM metrics_snapshots
+           WHERE metric_name = $1
+             AND snapshot_at >= NOW() - $2::interval
+             ${tenantClause}
+           GROUP BY ${bucketExpr}, labels
+           ORDER BY bucket ASC`,
+          params,
+        );
+
+        type SnapshotRow = {
+          bucket: Date | string;
+          value: number;
+          labels: Record<string, string>;
+        };
+
+        const series = (result.rows as SnapshotRow[]).map((row) => ({
+          timestamp: row.bucket instanceof Date
+            ? row.bucket.toISOString()
+            : String(row.bucket),
+          value: row.value ?? 0,
+          labels: row.labels ?? {},
+        }));
+
+        return res.json({
+          metric,
+          period,
+          granularity,
+          series,
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/metrics-history]", err);
+        return res.status(500).json({ error: "メトリクス履歴の取得に失敗しました" });
+      }
+    },
+  );
 }
