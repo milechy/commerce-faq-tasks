@@ -13,6 +13,7 @@ import {
 import { detectStatePatternLoop } from '../flow/loopDetector';
 import type { PlannerPlan } from '../dialog/types';
 import type { PlannerRoute, RouteContextV2 } from '../llm/modelRouter';
+import { logFlowTransition } from '../../lib/analytics/flowLogger';
 
 const logger = pino();
 
@@ -333,6 +334,16 @@ export function applyPhase22FlowAfterGeneration(params: {
       'phase22.flow.terminal_reached',
     );
 
+    // Phase72-C: loop_abort 強制 terminal をフロー遷移 DB ログに記録
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: prevFlow.state,
+      toState: 'terminal',
+      turnIndex,
+      metadata: { terminalReason: 'aborted_loop_detected' },
+    });
+
     // Phase45 Stream B: fire-and-forget with judgeEvaluator
     if (process.env['JUDGE_AUTO_EVALUATE'] === 'true') {
       const sid = input.conversationId;
@@ -382,6 +393,16 @@ export function applyPhase22FlowAfterGeneration(params: {
       { event: 'flow.terminal_reached', meta: { flow: next } },
       'phase22.flow.terminal_reached',
     );
+
+    // Phase72-C: budget 超過強制 terminal をフロー遷移 DB ログに記録
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: prevFlow.state,
+      toState: 'terminal',
+      turnIndex,
+      metadata: { terminalReason: 'aborted_budget' },
+    });
 
     // Phase45 Stream B: fire-and-forget with judgeEvaluator
     if (process.env['JUDGE_AUTO_EVALUATE'] === 'true') {
@@ -448,6 +469,14 @@ export function applyPhase22FlowAfterGeneration(params: {
       },
       'phase22.flow.enter_state',
     );
+    // Phase72-C: フロー遷移を DB に非同期記録（fire-and-forget）
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: prevFlow.state,
+      toState: nextState,
+      turnIndex,
+    });
   }
 
   logger.info(
