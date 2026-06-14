@@ -29,6 +29,11 @@
   var placeholderText = currentScript ? (currentScript.getAttribute('data-placeholder') || 'メッセージを入力…') : 'メッセージを入力…';
   var proactiveMessage = currentScript ? (currentScript.getAttribute('data-proactive-message') || '') : '';
   var proactiveDelay = currentScript ? parseInt(currentScript.getAttribute('data-proactive-delay') || '5000', 10) : 5000;
+  var scriptedResponsesRaw = currentScript ? currentScript.getAttribute('data-scripted-responses') : '';
+  var scriptedResponses = null;
+  if (scriptedResponsesRaw) {
+    try { scriptedResponses = JSON.parse(scriptedResponsesRaw); } catch(e) { console.warn('[FAQ Widget] data-scripted-responses JSON parse failed:', e); }
+  }
 
   if (!tenantId) {
     console.warn('[FAQ Widget] data-tenant 属性が必要です。例: data-tenant="your-tenant-id"');
@@ -2063,6 +2068,24 @@
   /* 10. API 呼び出し                                                      */
   /* ------------------------------------------------------------------ */
 
+  function findScriptedAnswer(userText, responses) {
+    if (!responses || !Array.isArray(responses)) return null;
+    var normalized = userText.toLowerCase().replace(/[？?！!。、\s]/g, '');
+    for (var i = 0; i < responses.length; i++) {
+      var item = responses[i];
+      var kws = item.keywords || [];
+      if (kws.indexOf('*') !== -1) continue; // wildcard/fallback handled last
+      for (var j = 0; j < kws.length; j++) {
+        if (normalized.indexOf(kws[j].toLowerCase().replace(/[？?！!。、\s]/g, '')) !== -1) return item.answer;
+      }
+    }
+    var fallback = null;
+    for (var k = 0; k < responses.length; k++) {
+      if (responses[k].keywords && responses[k].keywords.indexOf('*') !== -1) { fallback = responses[k].answer; break; }
+    }
+    return fallback;
+  }
+
   function sendMessage(text) {
     if (!text || !text.trim() || isLoading) return;
 
@@ -2097,6 +2120,24 @@
       updateSendButton();
       textarea.focus();
       return;
+    }
+
+    // スクリプトモード: pre-programmed Q&A — API / LLM 呼び出しをスキップ
+    if (scriptedResponses) {
+      var scriptedAnswer = findScriptedAnswer(text.trim(), scriptedResponses);
+      if (scriptedAnswer) {
+        var sMsg = { id: generateMsgId(), role: 'assistant', content: scriptedAnswer, timestamp: Date.now() };
+        messages.push(sMsg);
+        var lkRoomS = window.__rajiuceRoom;
+        if (avatarProvider === 'lemonslice' && lkRoomS && lkRoomS.localParticipant) sendTTSRequest(scriptedAnswer);
+        isLoading = false;
+        textarea.disabled = false;
+        renderMessages();
+        updateSendButton();
+        textarea.focus();
+        scrollToBottom(true);
+        return;
+      }
     }
 
     if (currentAbortController) {
