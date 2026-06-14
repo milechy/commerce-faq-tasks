@@ -47,6 +47,7 @@ import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
 import { initFlowLogger } from "./lib/analytics/flowLogger";
+import { initMetricsFlush } from "./lib/metrics/metricsFlush";
 import { reportUsageToStripe } from "./lib/billing/stripeSync";
 import { pipelineQueue } from "./lib/book-pipeline/pipelineQueue";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
@@ -516,6 +517,8 @@ if (db) registerNotificationPreferencesRoutes(app, db);
 if (db) initUsageTracker(db, logger);
 // Phase72-C: フロー遷移ログ
 if (db) initFlowLogger(db, logger);
+// Phase72-D: Prometheus メトリクス DB フラッシュ
+const cleanupMetricsFlush = initMetricsFlush(db, logger);
 
 // Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
 app.post(
@@ -673,6 +676,7 @@ async function startServer() {
 
   const onShutdown = (signal: string) => () => {
     logger.info({ signal }, "[shutdown] graceful shutdown initiated");
+    cleanupMetricsFlush();
     server.close();
     flushPostHog()
       .catch((err) => logger.error({ err }, "[shutdown] flushPostHog failed"))
