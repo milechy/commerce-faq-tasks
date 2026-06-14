@@ -127,6 +127,19 @@ export default function AvatarListPage() {
     // テナントフィルタ（strict tenant_id 一致のみ）
     if (tenantFilter !== "all") {
       result = result.filter((c) => (c.tenant_id ?? "") === tenantFilter);
+    } else {
+      // 全テナント表示時: デフォルトアバターはテナント分コピーされ重複するため、
+      // 名前単位で1枚に集約する（カスタムアバターはテナントごとに全件表示）。
+      // r2c_default のコピーを優先的に代表として残す。
+      const seenDefaults = new Set<string>();
+      result = [...result]
+        .sort((a, b) => (a.tenant_id === "r2c_default" ? -1 : 0) - (b.tenant_id === "r2c_default" ? -1 : 0))
+        .filter((c) => {
+          if (!c.is_default) return true;
+          if (seenDefaults.has(c.name)) return false;
+          seenDefaults.add(c.name);
+          return true;
+        });
     }
     // タイプフィルタ
     if (typeFilter === "default") result = result.filter((c) => c.is_default);
