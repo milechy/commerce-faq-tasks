@@ -282,9 +282,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         fileSizeLimit: 5 * 1024 * 1024,
       }).catch(() => {}); // already exists は無視
 
+      const resizedBuffer = await resizeForLemonSlice(file.buffer);
       const { error } = await supabaseAdmin.storage
         .from(DEFAULT_AVATARS_BUCKET)
-        .upload(filePath, file.buffer, { contentType: file.mimetype, upsert: true });
+        .upload(filePath, resizedBuffer, { contentType: 'image/png', upsert: true });
 
       if (error) {
         logger.warn('[POST /v1/admin/avatar/defaults/upload] upload error:', error.message);
