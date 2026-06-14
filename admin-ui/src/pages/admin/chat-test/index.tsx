@@ -35,6 +35,26 @@ interface QAPair {
   answer: AdminChatMessage | null;
 }
 
+// widget.js が window へ発火する 'r2c-avatar-status' イベントの payload
+interface AvatarStatusDetail {
+  enabled: boolean;
+  provider?: string;
+  reason?: string;
+  avatarName?: string | null;
+}
+
+// アバターが表示できなかった理由 → パートナー向けの優しい日本語（専門用語を出さない）
+const AVATAR_REASON_MESSAGES: Record<string, string> = {
+  avatar_disabled: "このテナントはアバター機能がオフになっています。「アバター設定」でオンにしてから、もう一度お試しください。",
+  agent_not_configured: "アバターのキャラクター設定がまだ完了していません。「アバター設定」を保存してから、もう一度お試しください。",
+  livekit_not_configured: "アバターを映すための接続設定（サーバー側）がまだ完了していません。運営にお問い合わせください。",
+  tenant_inactive: "このテナントは現在停止中のため、アバターを表示できません。",
+  tenant_not_found: "テナントの情報が見つかりませんでした。設定をご確認ください。",
+  migration_required: "アバター用のデータ準備（サーバー側）がまだ完了していません。運営にお問い合わせください。",
+  server_error: "アバターの準備中に問題が発生しました。少し待ってから、もう一度お試しください。",
+  unknown: "アバターを表示できませんでした。設定をご確認のうえ、もう一度お試しください。",
+};
+
 async function fetchChatTestToken(tenantId: string): Promise<ChatTestToken> {
   const res = await authFetch(
     `${API_BASE}/v1/admin/chat-test/token?tenantId=${encodeURIComponent(tenantId)}`
@@ -69,6 +89,8 @@ export default function ChatTestPage() {
   const [selectedAvatarConfigId, setSelectedAvatarConfigId] = useState<string | null>(null);
   // avatar config fetch が完了するまで widget 注入を待機するフラグ
   const [avatarConfigsReady, setAvatarConfigsReady] = useState(false);
+  // widget.js から通知されるアバター起動結果（成功/失敗理由）
+  const [avatarStatus, setAvatarStatus] = useState<AvatarStatusDetail | null>(null);
 
   // トークン状態
   const [token, setToken] = useState<string | null>(null);
@@ -185,6 +207,8 @@ export default function ChatTestPage() {
     // tokenForTenantRef で stale-token（テナント切替直後の古いトークン）注入を防止
     if (!token || !effectiveTenantId || !avatarConfigsReady || tokenForTenantRef.current !== effectiveTenantId) return;
     cleanupWidget();
+    // 再注入のたびに前回の起動結果をクリア（古い理由が残らないように）
+    setAvatarStatus(null);
     const script = document.createElement("script");
     script.src = `${API_BASE}/widget.js`;
     script.setAttribute("data-tenant", effectiveTenantId);
@@ -204,6 +228,17 @@ export default function ChatTestPage() {
       if (tokenExpiryRef.current) clearTimeout(tokenExpiryRef.current);
     };
   }, [cleanupWidget]);
+
+  // widget.js のアバター起動結果を購読し、テストチャット側で可視化する
+  // （本番埋め込みページはこのイベントを購読しないため、従来どおりサイレントにフォールバックする）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<AvatarStatusDetail>).detail;
+      if (detail) setAvatarStatus(detail);
+    };
+    window.addEventListener("r2c-avatar-status", handler as EventListener);
+    return () => window.removeEventListener("r2c-avatar-status", handler as EventListener);
+  }, []);
 
   // ── Admin Chat ──────────────────────────────────────────────────────────
   const [adminChatOpen, setAdminChatOpen] = useState(false);
@@ -465,6 +500,19 @@ export default function ChatTestPage() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* アバター起動結果バナー — アバターを選んでいるのに表示できなかった理由を可視化 */}
+        {selectedAvatarConfigId && avatarStatus && !avatarStatus.enabled && (
+          <div style={{ marginBottom: 24, padding: "16px 20px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 14, lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>🎭 アバターを表示できませんでした</div>
+            <div>{AVATAR_REASON_MESSAGES[avatarStatus.reason ?? "unknown"] ?? AVATAR_REASON_MESSAGES.unknown}</div>
+          </div>
+        )}
+        {selectedAvatarConfigId && avatarStatus?.enabled && (
+          <div style={{ marginBottom: 24, padding: "14px 18px", borderRadius: 12, background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.35)", color: "#4ade80", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>✅</span><span>アバターを起動しました{avatarStatus.avatarName ? `（${avatarStatus.avatarName}）` : ""}</span>
           </div>
         )}
 

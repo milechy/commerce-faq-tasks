@@ -1107,6 +1107,17 @@
     while (fab.firstChild) { fab.removeChild(fab.firstChild); }
   }
 
+  /**
+   * アバターの起動結果を window イベントで通知する。
+   * 本番埋め込みページにはリスナーが無いため無害（従来どおりサイレントにテキストへフォールバック）。
+   * 管理画面のテストチャットだけがこのイベントを購読し、失敗理由を表示する。
+   */
+  function emitAvatarStatus(detail) {
+    try {
+      window.dispatchEvent(new CustomEvent('r2c-avatar-status', { detail: detail }));
+    } catch (_e) { /* CustomEvent 非対応環境では無視 */ }
+  }
+
   function fetchAvatarConfig() {
     if (avatarConfigFetched || !apiKey) return;
     avatarConfigFetched = true;
@@ -1129,6 +1140,7 @@
           // Anam フロー
           avatarProvider = 'anam';
           currentAvatarName = data.avatarName || null;
+          emitAvatarStatus({ enabled: true, provider: 'anam', avatarName: data.avatarName || null });
           try { sessionStorage.setItem(avatarCacheKey, 'true'); } catch (_e) {}
           startFabLoading();
           if (isOpen) {
@@ -1148,9 +1160,13 @@
           .then(function (r) { return r.json(); })
           .then(function (lkData) {
             try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
-            if (!lkData.enabled) return;
+            if (!lkData.enabled) {
+              emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: lkData.reason || 'unknown' });
+              return;
+            }
             avatarConfig = lkData;
             currentAvatarName = lkData.avatarName || null;
+            emitAvatarStatus({ enabled: true, provider: 'lemonslice', avatarName: lkData.avatarName || null });
             if (!lkData.preDispatchEnabled && !isOpen) {
               showAvatarPlaceholder(lkData.imageUrl);
               avatarConfigFetched = false;
@@ -1181,9 +1197,13 @@
           .then(function (r) { return r.json(); })
           .then(function (lkData) {
             try { sessionStorage.setItem(avatarCacheKey, lkData.enabled ? 'true' : 'false'); } catch (_e) {}
-            if (!lkData.enabled) return;
+            if (!lkData.enabled) {
+              emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: lkData.reason || 'unknown' });
+              return;
+            }
             avatarConfig = lkData;
             currentAvatarName = lkData.avatarName || null;
+            emitAvatarStatus({ enabled: true, provider: 'lemonslice', avatarName: lkData.avatarName || null });
             if (!lkData.preDispatchEnabled && !isOpen) {
               showAvatarPlaceholder(lkData.imageUrl);
               avatarConfigFetched = false;

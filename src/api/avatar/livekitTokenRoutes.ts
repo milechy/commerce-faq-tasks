@@ -89,7 +89,7 @@ export function registerLiveKitTokenRoutes(
   app.post("/api/avatar/room-token", ...apiStack, async (req: Request, res: Response) => {
     if (!pool) {
       logger.warn("[livekitTokenRoutes] DATABASE_URL not set.");
-      return res.json({ enabled: false });
+      return res.json({ enabled: false, reason: "server_error" });
     }
 
     const tenantId = (req as AuthedRequest).tenantId;
@@ -106,7 +106,7 @@ export function registerLiveKitTokenRoutes(
 
       if (result.rowCount === 0) {
         logger.warn(`[livekitTokenRoutes] tenant not found in DB: ${tenantId}`);
-        return res.json({ enabled: false });
+        return res.json({ enabled: false, reason: "tenant_not_found" });
       }
 
       const row = result.rows[0] as {
@@ -120,7 +120,7 @@ export function registerLiveKitTokenRoutes(
 
       if (!row.is_active) {
         logger.warn(`[livekitTokenRoutes] tenant inactive: ${tenantId}`);
-        return res.json({ enabled: false });
+        return res.json({ enabled: false, reason: "tenant_inactive" });
       }
 
       const avatarEnabled = row.features?.avatar === true;
@@ -128,12 +128,12 @@ export function registerLiveKitTokenRoutes(
 
       if (!avatarEnabled) {
         logger.warn(`[livekitTokenRoutes] avatar feature disabled for tenant: ${tenantId}`);
-        return res.status(403).json({ error: 'Avatar not enabled for this tenant' });
+        return res.status(403).json({ error: 'Avatar not enabled for this tenant', enabled: false, reason: "avatar_disabled" });
       }
 
       if (!agentId) {
         logger.warn(`[livekitTokenRoutes] lemonslice_agent_id missing for tenant: ${tenantId}`);
-        return res.json({ enabled: false });
+        return res.json({ enabled: false, reason: "agent_not_configured" });
       }
 
       // LiveKit 環境変数チェック
@@ -143,7 +143,7 @@ export function registerLiveKitTokenRoutes(
 
       if (!livekitUrl || !apiKey || !apiSecret) {
         logger.warn(`[livekitTokenRoutes] LiveKit env vars not set: LIVEKIT_URL=${!!livekitUrl} LIVEKIT_API_KEY=${!!apiKey} LIVEKIT_API_SECRET=${!!apiSecret}`);
-        return res.json({ enabled: false });
+        return res.json({ enabled: false, reason: "livekit_not_configured" });
       }
 
       const safeTenantId = tenantId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40);
@@ -221,10 +221,10 @@ export function registerLiveKitTokenRoutes(
       // カラム未存在エラー (42703) = マイグレーション未実行
       if (err?.code === "42703") {
         logger.error("[livekitTokenRoutes] Missing DB column — run migration_tenant_features.sql:", err.message);
-      } else {
-        logger.error("[POST /api/avatar/room-token]", err);
+        return res.json({ enabled: false, reason: "migration_required" });
       }
-      return res.json({ enabled: false });
+      logger.error("[POST /api/avatar/room-token]", err);
+      return res.json({ enabled: false, reason: "server_error" });
     }
   });
 }

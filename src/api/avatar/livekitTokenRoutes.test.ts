@@ -394,4 +394,82 @@ describe("POST /api/avatar/room-token", () => {
       expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
     });
   });
+
+  // enabled:false が返る各経路で reason コードが付与されることを検証
+  // （テストチャットがこの reason を優しい日本語へ変換して可視化する — サイレントフォールバック解消）
+  describe("enabled=false 時の reason コード", () => {
+    it("テナントが DB に存在しない → reason=tenant_not_found", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.body.enabled).toBe(false);
+      expect(res.body.reason).toBe("tenant_not_found");
+    });
+
+    it("テナントが is_active=false → reason=tenant_inactive", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...TENANT_ROW, is_active: false }], rowCount: 1 });
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.body.enabled).toBe(false);
+      expect(res.body.reason).toBe("tenant_inactive");
+    });
+
+    it("avatar 機能が無効 → 403 + reason=avatar_disabled", async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ ...TENANT_ROW, features: { avatar: false } }],
+        rowCount: 1,
+      });
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.status).toBe(403);
+      expect(res.body.reason).toBe("avatar_disabled");
+    });
+
+    it("lemonslice_agent_id 未設定 → reason=agent_not_configured", async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ ...TENANT_ROW, lemonslice_agent_id: null }],
+        rowCount: 1,
+      });
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.body.enabled).toBe(false);
+      expect(res.body.reason).toBe("agent_not_configured");
+    });
+
+    it("LiveKit 環境変数が未設定 → reason=livekit_not_configured", async () => {
+      delete process.env.LIVEKIT_URL;
+      delete process.env.LIVEKIT_API_KEY;
+      delete process.env.LIVEKIT_API_SECRET;
+      mockQuery.mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 });
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.body.enabled).toBe(false);
+      expect(res.body.reason).toBe("livekit_not_configured");
+    });
+
+    it("DB カラム未マイグレーション (42703) → reason=migration_required", async () => {
+      mockQuery.mockRejectedValueOnce(Object.assign(new Error("column missing"), { code: "42703" }));
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.body.enabled).toBe(false);
+      expect(res.body.reason).toBe("migration_required");
+    });
+
+    it("正常時は reason を含まず enabled=true を返す（後方互換）", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.reason).toBeUndefined();
+    });
+  });
 });
