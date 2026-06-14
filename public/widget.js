@@ -1059,7 +1059,7 @@
       var fabPreviewImg = document.createElement('img');
       fabPreviewImg.src = imageUrl;
       fabPreviewImg.alt = 'アバター';
-      fabPreviewImg.onerror = function () { resetFabIcon(); };
+      fabPreviewImg.onerror = function () { if (!_fabRestored) resetFabIcon(); };
       showFabMedia(fabPreviewImg);
     }
   }
@@ -1166,7 +1166,7 @@
           })
           .catch(function (e) {
             console.warn('[FAQ Widget] LiveKit config fetch failed:', e && e.message);
-            resetFabIcon();
+            if (!_fabRestored) resetFabIcon();
           });
       })
       .catch(function (e) {
@@ -1197,7 +1197,7 @@
             showAvatarPlaceholder(lkData.imageUrl);
             initLiveKitAvatar();
           })
-          .catch(function () { resetFabIcon(); });
+          .catch(function () { if (!_fabRestored) resetFabIcon(); });
       });
   }
 
@@ -1483,14 +1483,14 @@
         })
         .catch(function (e) {
           console.warn('[FAQ Widget] Anam stream failed:', e && e.message);
-          resetFabIcon();
+          if (!_fabRestored) resetFabIcon();
           avatarArea.style.display = 'none';
           panel.classList.remove('avatar-active');
         });
 
     } catch (e) {
       console.warn('[FAQ Widget] Anam init failed:', e && e.message);
-      resetFabIcon();
+      if (!_fabRestored) resetFabIcon();
       avatarArea.style.display = 'none';
     }
   }
@@ -1743,10 +1743,10 @@
           var _thumbImg = document.createElement('img');
           _thumbImg.src = _disconnectThumbUrl;
           _thumbImg.alt = 'アバター';
-          _thumbImg.onerror = function () { resetFabIcon(); };
+          _thumbImg.onerror = function () { if (!_fabRestored) resetFabIcon(); };
           showFabMedia(_thumbImg);
         } else {
-          resetFabIcon();
+          if (!_fabRestored) resetFabIcon();
         }
       });
 
