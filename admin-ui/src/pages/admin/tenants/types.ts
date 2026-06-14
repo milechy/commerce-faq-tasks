@@ -1,6 +1,15 @@
 import type * as React from "react";
 import type { CSSProperties } from "react";
 
+// プラン定義（バックエンド planValues と一致: starter/growth/enterprise）
+export type TenantPlan = "starter" | "growth" | "enterprise";
+
+export const PLAN_OPTIONS: { value: TenantPlan; label: string; multiplier: number; desc: string }[] = [
+  { value: "starter",    label: "Starter",    multiplier: 1.0, desc: "小規模サイト向け（〜500対話/月）" },
+  { value: "growth",     label: "Growth",     multiplier: 1.5, desc: "成長期のビジネス向け（〜3,000対話/月）" },
+  { value: "enterprise", label: "Enterprise", multiplier: 2.5, desc: "大規模・高品質要求向け（無制限）" },
+];
+
 export interface TenantFeatures {
   avatar: boolean;
   voice: boolean;
@@ -13,7 +22,7 @@ export interface TenantDetail {
   id: string;
   name: string;
   slug: string;
-  plan: "starter" | "pro";
+  plan: TenantPlan;
   status: "active" | "inactive";
   createdAt: string;
   widgetTitle: string;
