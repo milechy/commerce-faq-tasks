@@ -7,6 +7,7 @@ import {
   getOrInitFlowSessionMeta,
   setFlowSessionMeta,
 } from '../dialog/flowContextStore';
+import { logFlowTransition } from '../../lib/analytics/flowLogger';
 import { detectUserStop, detectYesNo } from '../flow/userSignals';
 import { evaluateAvatarPolicy } from '../avatar/avatarPolicy';
 import { logPhase22Event } from '../observability/phase22EventLogger';
@@ -86,6 +87,14 @@ export async function runDialogGraph(
       lastUpdatedAt: new Date().toISOString(),
     };
     setFlowSessionMeta(flowKey, next);
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: flow.state,
+      toState: 'terminal',
+      turnIndex,
+      metadata: { reason: 'aborted_budget' },
+    });
     logger.info(
       { event: 'flow.terminal_reached', meta: { flow: next } },
       'phase22.flow.terminal_reached',
@@ -134,6 +143,14 @@ export async function runDialogGraph(
         lastUpdatedAt: new Date().toISOString(),
       };
       setFlowSessionMeta(flowKey, next);
+      logFlowTransition({
+        tenantId: flowKey.tenantId,
+        sessionId: flowKey.conversationId,
+        fromState: flow.state,
+        toState: 'terminal',
+        turnIndex,
+        metadata: { reason: 'aborted_user' },
+      });
       logger.info(
         { event: 'flow.terminal_reached', meta: { flow: next } },
         'phase22.flow.terminal_reached',
@@ -165,6 +182,14 @@ export async function runDialogGraph(
         lastUpdatedAt: new Date().toISOString(),
       };
       setFlowSessionMeta(flowKey, next);
+      logFlowTransition({
+        tenantId: flowKey.tenantId,
+        sessionId: flowKey.conversationId,
+        fromState: flow.state,
+        toState: 'terminal',
+        turnIndex,
+        metadata: { reason: 'completed' },
+      });
       logger.info(
         { event: 'flow.terminal_reached', meta: { flow: next } },
         'phase22.flow.terminal_reached',
@@ -197,6 +222,14 @@ export async function runDialogGraph(
         lastUpdatedAt: new Date().toISOString(),
       };
       setFlowSessionMeta(flowKey, next);
+      logFlowTransition({
+        tenantId: flowKey.tenantId,
+        sessionId: flowKey.conversationId,
+        fromState: flow.state,
+        toState: 'terminal',
+        turnIndex,
+        metadata: { reason: 'aborted_user' },
+      });
       logger.info(
         { event: 'flow.terminal_reached', meta: { flow: next } },
         'phase22.flow.terminal_reached',
@@ -230,6 +263,14 @@ export async function runDialogGraph(
         lastUpdatedAt: new Date().toISOString(),
       };
       setFlowSessionMeta(flowKey, next);
+      logFlowTransition({
+        tenantId: flowKey.tenantId,
+        sessionId: flowKey.conversationId,
+        fromState: flow.state,
+        toState: 'terminal',
+        turnIndex,
+        metadata: { reason: 'aborted_budget' },
+      });
       logger.info(
         { event: 'flow.terminal_reached', meta: { flow: next } },
         'phase22.flow.terminal_reached',
@@ -260,6 +301,13 @@ export async function runDialogGraph(
       lastUpdatedAt: new Date().toISOString(),
     };
     setFlowSessionMeta(flowKey, next);
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: flow.state,
+      toState: 'confirm',
+      turnIndex,
+    });
     logger.info(
       { event: 'flow.enter_state', meta: { flow: next } },
       'phase22.flow.enter_state',

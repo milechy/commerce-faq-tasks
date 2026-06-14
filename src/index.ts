@@ -47,6 +47,7 @@ import { registerAvatarConfigRoutes } from "./api/admin/avatar/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
+import { initFlowLogger } from "./lib/analytics/flowLogger";
 import { reportUsageToStripe } from "./lib/billing/stripeSync";
 import { pipelineQueue } from "./lib/book-pipeline/pipelineQueue";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
@@ -519,6 +520,9 @@ if (db) registerNotificationPreferencesRoutes(app, db);
 
 // Phase32: 課金管理API
 if (db) initUsageTracker(db, logger);
+
+// Phase72-C: State Machine 遷移ログ
+if (db) initFlowLogger(db, logger);
 
 // Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
 app.post(

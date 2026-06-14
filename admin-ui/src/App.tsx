@@ -28,6 +28,7 @@ import BooksPage from "./pages/admin/knowledge/books";
 import KnowledgeAnalyticsPage from "./pages/admin/knowledge/analytics";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
 import CvStatusPage from "./pages/admin/analytics/cv-status";
+import FlowAnalyticsPage from "./pages/admin/analytics/FlowAnalyticsPage";
 import EngagementPage from "./pages/admin/engagement/index";
 import ConversionDashboardPage from "./pages/admin/conversion/index";
 import OptionManagementPage from "./pages/admin/options/index";
@@ -165,6 +166,8 @@ function AppInner() {
         <Route path="/admin/analytics" element={<RequireAuth><AnalyticsDashboardPage /></RequireAuth>} />
         {/* Phase65-3: CV発火状況 — super_admin 専用 */}
         <Route path="/admin/analytics/cv-status" element={<SuperAdminRoute><CvStatusPage /></SuperAdminRoute>} />
+        {/* Phase72-C: フロー遷移分析 — super_admin 専用 */}
+        <Route path="/admin/analytics/flow" element={<SuperAdminRoute><FlowAnalyticsPage /></SuperAdminRoute>} />
         <Route path="/admin/engagement" element={<RequireAuth><EngagementPage /></RequireAuth>} />
 
         {/* Phase58: コンバージョン最適化ダッシュボード */}
