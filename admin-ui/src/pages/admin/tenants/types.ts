@@ -61,7 +61,7 @@ export const CARD_STYLE: CSSProperties = {
 
 // ─── タブID（[id].tsx から移動） ──────────────────────────────────────────────
 
-export type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns" | "conversion" | "deep-research" | "tuning" | "test" | "ga4" | "posthog" | "analytics" | "billing-info" | "notification-prefs";
+export type TabId = "settings" | "apikeys" | "embed" | "avatar" | "ai-report" | "ab-test" | "objection-patterns" | "conversion" | "deep-research" | "tuning" | "test" | "ga4" | "posthog" | "analytics" | "billing-info" | "notification-prefs" | "settings-history";
 
 // ─── スタイル定数（[id].tsx から移動） ────────────────────────────────────────
 
