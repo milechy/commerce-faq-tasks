@@ -1409,6 +1409,15 @@
       shadowVideoEl.setAttribute('autoplay', '');
       shadowVideoEl.setAttribute('playsinline', '');
       shadowVideoEl.setAttribute('muted', '');
+      // 全身表示: object-fit coverはcenter topで顔だけ切り抜かれるためcontainに変更
+      shadowVideoEl.style.objectFit = 'contain';
+      shadowVideoEl.style.objectPosition = 'center top';
+      shadowVideoEl.style.position = 'absolute';
+      shadowVideoEl.style.top = '0';
+      shadowVideoEl.style.left = '0';
+      shadowVideoEl.style.width = '100%';
+      shadowVideoEl.style.height = '100%';
+      shadowVideoEl.style.zIndex = '2';
       avatarArea.appendChild(shadowVideoEl);
 
       // outerVideoにストリームが来たらshadowVideoにsrcObjectをミラー
