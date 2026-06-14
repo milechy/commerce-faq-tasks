@@ -1365,6 +1365,112 @@ export function registerAnalyticsRoutes(app: Express): void {
   );
 
   // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/metrics-history  (Phase72-D: super_admin only)
+  // query: metric (required), period (1d|7d|30d, default 7d),
+  //        tenant_id (optional), granularity (1h|6h|24h, default 1h)
+  // -------------------------------------------------------------------------
+  const VALID_METRICS = new Set([
+    "rajiuce_conversation_terminal_total",
+    "rajiuce_loop_detected_total",
+    "rajiuce_avatar_requests_total",
+    "rajiuce_rag_duration_ms",
+  ] as const);
+
+  const VALID_GRANULARITIES: Record<string, string> = {
+    "1h": "hour",
+    "6h": "6 hours",
+    "24h": "day",
+  };
+
+  const PERIOD_INTERVALS: Record<string, string> = {
+    "1d": "1 day",
+    "7d": "7 days",
+    "30d": "30 days",
+  };
+
+  app.get(
+    "/v1/admin/analytics/metrics-history",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: "AUTH_ROLE_INVALID" });
+      }
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin) {
+        return res.status(403).json({ error: "アクセス権限がありません", code: "AUTH_ROLE_INSUFFICIENT" });
+      }
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      const metricRaw = req.query["metric"] as string | undefined;
+      if (!metricRaw || !VALID_METRICS.has(metricRaw as any)) {
+        return res.status(400).json({
+          error: "metric パラメータが必要です。有効な値: rajiuce_conversation_terminal_total, rajiuce_loop_detected_total, rajiuce_avatar_requests_total, rajiuce_rag_duration_ms",
+        });
+      }
+      const metric = metricRaw;
+
+      const periodRaw = (req.query["period"] as string | undefined) ?? "7d";
+      const periodInterval = PERIOD_INTERVALS[periodRaw] ?? "7 days";
+
+      const granularityRaw = (req.query["granularity"] as string | undefined) ?? "1h";
+      const dateTruncUnit = VALID_GRANULARITIES[granularityRaw];
+      if (!dateTruncUnit) {
+        return res.status(400).json({ error: "granularity は 1h, 6h, 24h のいずれかを指定してください" });
+      }
+
+      const tenantIdFilter = req.query["tenant_id"] as string | undefined;
+
+      try {
+        const params: (string | number)[] = [metric, periodInterval];
+        const tenantClause = tenantIdFilter
+          ? `AND tenant_id = $${params.push(tenantIdFilter)}`
+          : "";
+
+        const result = await pool.query(
+          `SELECT
+             DATE_TRUNC($4, snapshot_at) AS timestamp,
+             SUM(value)::float AS value,
+             labels
+           FROM metrics_snapshots
+           WHERE metric_name = $1
+             AND snapshot_at > NOW() - $2::interval
+             ${tenantClause}
+           GROUP BY DATE_TRUNC($4, snapshot_at), labels
+           ORDER BY timestamp ASC`,
+          [...params, dateTruncUnit],
+        );
+
+        type SnapshotRow = {
+          timestamp: Date;
+          value: number;
+          labels: Record<string, string | number>;
+        };
+
+        const series = (result.rows as SnapshotRow[]).map((row) => ({
+          timestamp: row.timestamp instanceof Date
+            ? row.timestamp.toISOString()
+            : String(row.timestamp),
+          value: row.value,
+          labels: row.labels ?? {},
+        }));
+
+        return res.json({
+          metric,
+          period: periodRaw,
+          granularity: granularityRaw,
+          series,
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/metrics-history]", err);
+        return res.status(500).json({ error: "メトリクス履歴の取得に失敗しました" });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // GET /v1/admin/analytics/flow-transitions  (Phase72-C: super_admin only)
   // query: period=7d|30d|90d (default 30d), tenant_id (super_admin filter)
   // -------------------------------------------------------------------------
@@ -1408,12 +1514,10 @@ export function registerAnalyticsRoutes(app: Express): void {
         ? (rawPeriod as AllowedPeriod)
         : '30d';
 
-      // super_admin can filter by tenant_id via query
       const tenantFilter = typeof req.query['tenant_id'] === 'string' && req.query['tenant_id'].trim()
         ? req.query['tenant_id'].trim()
         : null;
 
-      // Map period to days integer for parameterized query
       const periodDays = period === '7d' ? 7 : period === '90d' ? 90 : 30;
 
       try {
@@ -1442,19 +1546,11 @@ export function registerAnalyticsRoutes(app: Express): void {
           transition_count: row.transition_count,
         }));
 
-        // Funnel rates: total sessions entering each state
         const totalRows = transitions.reduce((sum, r) => sum + r.transition_count, 0);
-        const toTerminal = transitions
-          .filter((r) => r.to_state === 'terminal')
-          .reduce((sum, r) => sum + r.transition_count, 0);
-        const toConfirm = transitions
-          .filter((r) => r.to_state === 'confirm')
-          .reduce((sum, r) => sum + r.transition_count, 0);
-        const toAnswer = transitions
-          .filter((r) => r.to_state === 'answer')
-          .reduce((sum, r) => sum + r.transition_count, 0);
+        const toTerminal = transitions.filter((r) => r.to_state === 'terminal').reduce((sum, r) => sum + r.transition_count, 0);
+        const toConfirm = transitions.filter((r) => r.to_state === 'confirm').reduce((sum, r) => sum + r.transition_count, 0);
+        const toAnswer = transitions.filter((r) => r.to_state === 'answer').reduce((sum, r) => sum + r.transition_count, 0);
 
-        // completed (terminal via 'completed' reason)
         const completedResult = await pool.query(
           `SELECT COUNT(*)::int AS cnt
            FROM conversation_flow_logs
