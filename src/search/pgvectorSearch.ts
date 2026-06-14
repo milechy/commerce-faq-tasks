@@ -54,7 +54,7 @@ export async function searchPgVector(
         metadata,
         1 - (embedding <-> $1::vector) / 2 AS score
       FROM faq_embeddings
-      WHERE (tenant_id = $2 OR tenant_id = 'global')
+      WHERE (tenant_id = $2 OR tenant_id = 'global' OR tenant_id = 'r2c_docs')
         AND (is_excluded_from_search IS NULL OR is_excluded_from_search = false)
         ${excludeClause}
       ORDER BY embedding <-> $1::vector
