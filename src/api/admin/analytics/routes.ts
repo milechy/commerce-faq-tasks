@@ -1483,4 +1483,145 @@ export function registerAnalyticsRoutes(app: Express): void {
       }
     },
   );
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/flow-transitions  (Phase72-C)
+  // State Machine 遷移ファネル集計
+  //   - super_admin: 全テナント / query ?tenant_id= で絞り込み可
+  //   - tenant_admin (client_admin): JWT 由来の自テナントのみ
+  //   - period: 7d | 30d | 90d（デフォルト 30d）
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/flow-transitions",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'invalid_role',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataRole: !!su?.app_metadata?.role,
+          hasUserMetadataRole: !!su?.user_metadata?.role,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_ROLE_INVALID',
+        }, "Admin analytics access denied: invalid actor role");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      // セキュリティ要件: テナントスコープも app_metadata.tenant_id のみを信頼する
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        logger.warn({
+          event: 'analytics_access_denied',
+          reason: 'tenant_id_missing',
+          actorEmail: su?.email ? String(su.email).slice(0, 3) + '***' : 'unknown',
+          hasAppMetadataTenantId: !!su?.app_metadata?.tenant_id,
+          hasUserMetadataTenantId: !!su?.user_metadata?.tenant_id,
+          tokenIssuedAt: su?.iat,
+          errorCode: 'AUTH_TENANT_INVALID',
+        }, "Admin analytics access denied: tenant_id missing for non-super-admin");
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
+
+      // RBAC: super_admin は ?tenant_id= で絞り込み可（省略時は全テナント）
+      //       tenant_admin (client_admin) は JWT の tenant_id を強制（自テナントのみ）
+      const tenantId = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
+
+      const period = (req.query["period"] as string | undefined) ?? "30d";
+      const interval = periodToInterval(period);
+
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      try {
+        const params: (string | number)[] = [`${interval}`];
+        const tenantClause = tenantId ? "AND tenant_id = $2" : "";
+        if (tenantId) params.push(tenantId);
+
+        // セッション総数（期間内）
+        const totalSessionsResult = await pool.query(
+          `SELECT COUNT(DISTINCT session_id) AS total_sessions
+           FROM conversation_flow_logs
+           WHERE logged_at >= NOW() - $1::interval
+           ${tenantClause}`,
+          params,
+        );
+        const totalSessions = parseInt(
+          totalSessionsResult.rows[0]?.total_sessions ?? "0",
+          10,
+        );
+
+        // 遷移ペア集計
+        const transitionsResult = await pool.query(
+          `SELECT
+             COALESCE(from_state, '(start)') AS from_state,
+             to_state,
+             COUNT(*)::int AS count
+           FROM conversation_flow_logs
+           WHERE logged_at >= NOW() - $1::interval
+           ${tenantClause}
+           GROUP BY from_state, to_state
+           ORDER BY count DESC`,
+          params,
+        );
+
+        // ファネル: 各 to_state に到達した DISTINCT session 数 / total_sessions
+        // ファネル: 各 to_state / terminalReason 別の DISTINCT session 数
+        const funnelResult = await pool.query(
+          `SELECT
+             to_state,
+             COUNT(DISTINCT session_id)::int AS reached_sessions
+           FROM conversation_flow_logs
+           WHERE logged_at >= NOW() - $1::interval
+           ${tenantClause}
+           GROUP BY to_state`,
+          params,
+        );
+
+        // loop_abort: metadata->>'terminalReason' が aborted_loop_detected のセッション数
+        const loopAbortResult = await pool.query(
+          `SELECT COUNT(DISTINCT session_id)::int AS cnt
+           FROM conversation_flow_logs
+           WHERE logged_at >= NOW() - $1::interval
+             AND to_state = 'terminal'
+             AND metadata->>'terminalReason' = 'aborted_loop_detected'
+           ${tenantClause}`,
+          params,
+        );
+        const loopAbortCount = parseInt(loopAbortResult.rows[0]?.cnt ?? "0", 10);
+
+        const reachedMap = new Map<string, number>();
+        for (const row of funnelResult.rows as Array<{ to_state: string; reached_sessions: number }>) {
+          reachedMap.set(row.to_state, row.reached_sessions);
+        }
+
+        const safeRate = (count: number): number =>
+          totalSessions > 0 ? count / totalSessions : 0;
+
+        type TransitionRow = { from_state: string; to_state: string; count: number };
+        return res.json({
+          period,
+          total_sessions: totalSessions,
+          transitions: (transitionsResult.rows as TransitionRow[]).map((r) => ({
+            from_state: r.from_state,
+            to_state: r.to_state,
+            count: r.count,
+          })),
+          funnel: {
+            clarify_rate: safeRate(reachedMap.get('clarify') ?? 0),
+            answer_rate: safeRate(reachedMap.get('answer') ?? 0),
+            confirm_rate: safeRate(reachedMap.get('confirm') ?? 0),
+            terminal_rate: safeRate(reachedMap.get('terminal') ?? 0),
+            loop_abort_rate: safeRate(loopAbortCount),
+          },
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/flow-transitions]", err);
+        return res.status(500).json({ error: "フロー遷移分析の取得に失敗しました" });
+      }
+    },
+  );
 }
