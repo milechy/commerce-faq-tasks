@@ -93,6 +93,38 @@ describe('usageTracker', () => {
       expect(Number.isInteger(params[7])).toBe(true);
       expect(params[7]).toBeGreaterThanOrEqual(params[6]);
     });
+
+    it('Subtask 3: extraLlmUsages の planner トークンを永続化列にも合算する', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId:     'test-tenant',
+        requestId:    'req-planner-001',
+        model:        'llama-3.1-70b-versatile',
+        inputTokens:  1000,
+        outputTokens: 500,
+        featureUsed:  'chat',
+        extraLlmUsages: [
+          { model: 'openai/gpt-oss-20b', inputTokens: 300, outputTokens: 60 },
+        ],
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-planner-001'
+      );
+      expect(insertCall).toBeDefined();
+      const [, params] = insertCall!;
+      // input/output_tokens 列に planner 分が合算されている（cost との整合）
+      expect(params[3]).toBe(1300); // 1000 + 300
+      expect(params[4]).toBe(560);  // 500 + 60
+      // model 列は chat 本体（代表モデル）のまま
+      expect(params[2]).toBe('llama-3.1-70b-versatile');
+    });
   });
 
   describe('pool 未初期化時', () => {

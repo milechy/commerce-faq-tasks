@@ -1,7 +1,7 @@
 // src/lib/billing/costCalculator.ts
 // Phase32: コスト計算（金額はセント単位の整数で管理）
 
-export type ModelKey = 'groq-8b' | 'groq-70b' | 'openai-embedding' | 'gemini-2.5-flash' | 'perplexity-sonar-pro';
+export type ModelKey = 'groq-8b' | 'groq-70b' | 'openai-embedding' | 'gemini-2.5-flash' | 'perplexity-sonar-pro' | 'gpt-oss-20b' | 'gpt-oss-120b';
 
 export interface ModelCost {
   /** USD per 1M tokens */
@@ -17,6 +17,9 @@ export const LLM_COSTS: Record<ModelKey, ModelCost> = {
   'openai-embedding':  { inputPerMillion: 0.02,  outputPerMillion: 0.0  },
   'gemini-2.5-flash':     { inputPerMillion: 0.075, outputPerMillion: 0.30  },
   'perplexity-sonar-pro': { inputPerMillion: 3.0,   outputPerMillion: 15.0  },
+  // Groq GPT-OSS（マルチステップ planner 用、2026 値下げ後の公式単価）
+  'gpt-oss-20b':          { inputPerMillion: 0.075, outputPerMillion: 0.30  },
+  'gpt-oss-120b':         { inputPerMillion: 0.15,  outputPerMillion: 0.60  },
 };
 
 /** サーバーコスト: $0.0001 / リクエスト（VPS按分） */
@@ -75,6 +78,28 @@ export interface UsageRecord {
   imageCount?: number;
   /** Phase42: Anamセッション時間（秒） */
   anam_session_seconds?: number;
+  /**
+   * Subtask 3: 同一リクエスト内の追加 LLM 呼び出し（マルチステップ planner 等）を
+   * モデル別の実レートで本行のコストに合算する。usage_logs は「1行=1リクエスト」
+   * （Stripe quantity=COUNT(*)）のため別行は作らず、本行の cost に内包する。
+   * 各要素はそれぞれ自分の model 単価で計算され、サーバーコストは加算しない。
+   */
+  extraLlmUsages?: Array<{ model: string; inputTokens: number; outputTokens: number }>;
+}
+
+/** Subtask 3: 追加 LLM 呼び出し（planner 等）の LLM コストを USD 合算する（モデル別実レート）。 */
+function _sumExtraLlmUsd(extras?: UsageRecord['extraLlmUsages']): number {
+  if (!extras || extras.length === 0) return 0;
+  return extras.reduce(
+    (sum, e) =>
+      sum +
+      _calculateLLMCostUSD({
+        model: e.model,
+        inputTokens: e.inputTokens,
+        outputTokens: e.outputTokens,
+      }),
+    0,
+  );
 }
 
 /**
@@ -86,6 +111,11 @@ export function normalizeModelKey(model: string): ModelKey | undefined {
   if (lower.includes('embedding')) return 'openai-embedding';
   if (lower.includes('gemini')) return 'gemini-2.5-flash';
   if (lower.includes('perplexity')) return 'perplexity-sonar-pro';
+  // gpt-oss は 70b/8b の汎用判定より先に評価する（"120b" は "20b" を部分文字列に含むため 120b を先に）。
+  // env override (LLM_MODEL_20B/120B) で provider prefix 等が変わっても拾えるよう gpt-oss 系を広めに判定。
+  if (lower.includes('gpt-oss')) {
+    return lower.includes('120') ? 'gpt-oss-120b' : 'gpt-oss-20b';
+  }
   if (lower.includes('70b') || lower.includes('mixtral')) return 'groq-70b';
   if (
     lower.includes('8b') ||
@@ -123,9 +153,10 @@ export function calculateLLMCostCents(usage: UsageRecord): number {
       `Invalid token counts: input=${usage.inputTokens}, output=${usage.outputTokens}`
     );
   }
-  if (usage.inputTokens === 0 && usage.outputTokens === 0) return 0;
+  const extraUSD = _sumExtraLlmUsd(usage.extraLlmUsages);
+  if (usage.inputTokens === 0 && usage.outputTokens === 0 && extraUSD === 0) return 0;
 
-  return Math.ceil(_calculateLLMCostUSD(usage) * 100);
+  return Math.ceil((_calculateLLMCostUSD(usage) + extraUSD) * 100);
 }
 
 /**
@@ -168,7 +199,8 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
 
   const isEndUser = usage.featureUsed === undefined || END_USER_FEATURES.has(usage.featureUsed);
   const margin   = usage.marginOverride ?? (isEndUser ? MARGIN_MULTIPLIER : 1);
-  const llmUSD   = _calculateLLMCostUSD(usage);
+  // 本行の LLM コスト + 同一リクエスト内の追加 LLM 呼び出し（planner 等）をモデル別実レートで合算。
+  const llmUSD   = _calculateLLMCostUSD(usage) + _sumExtraLlmUsd(usage.extraLlmUsages);
   const ttsUSD   = (usage.ttsTextBytes  ?? 0) * FISH_AUDIO_COST_PER_BYTE_USD;
   const avtrUSD  = (usage.avatarCredits ?? 0) * LEMONSLICE_COST_PER_CREDIT_USD;
   const imgUSD   = (usage.imageCount    ?? 0) * IMAGE_GENERATION_COST_USD;

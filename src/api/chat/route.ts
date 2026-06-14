@@ -326,12 +326,24 @@ export function createChatHandler(logger: Logger) {
       );
 
       // fire-and-forget: 使用量記録（APIレスポンスをブロックしない）
-      const llmUsage = result.meta?.llmUsage;
-      const historyText = (body.history ?? []).map((m) => m.content).join("\n");
-      const inputTokens = llmUsage?.prompt_tokens
-        ?? Math.max(1, Math.round((body.message.length + historyText.length) / 4));
-      const outputTokens = llmUsage?.completion_tokens
-        ?? Math.max(1, Math.round(content.length / 4));
+      // Subtask 3 構造修正: 回答経路（searchAgent/orchestrator）が chat モデルの実トークンを
+      // 常に報告する（chat LLM 未実行なら {0,0}、embedding 消費分は内包済み）。
+      // よって char/4 ヒューリスティック推定は廃止し、実 usage を唯一のソースにする。
+      const llmUsage = result.meta?.llmUsage ?? { prompt_tokens: 0, completion_tokens: 0 };
+      const inputTokens = llmUsage.prompt_tokens;
+      const outputTokens = llmUsage.completion_tokens;
+
+      // マルチステップ planner LLM（GPT-OSS 20B/120B）は chat 本体（70B）とはモデル単価が
+      // 異なる。usage_logs は「1行=1リクエスト」（Stripe quantity=COUNT(*)）のため別行は作らず、
+      // 本 chat 行の cost に planner 分をモデル別実レートで内包させる。
+      const extraLlmUsages = (result.meta?.plannerLlmUsages ?? [])
+        .filter((pu) => pu.prompt_tokens > 0 || pu.completion_tokens > 0)
+        .map((pu) => ({
+          model: pu.model,
+          inputTokens: pu.prompt_tokens,
+          outputTokens: pu.completion_tokens,
+        }));
+
       trackUsage({
         tenantId,
         requestId,
@@ -339,6 +351,7 @@ export function createChatHandler(logger: Logger) {
         inputTokens,
         outputTokens,
         featureUsed: "chat",
+        ...(extraLlmUsages.length > 0 ? { extraLlmUsages } : {}),
       });
     } catch (err) {
       logger.error(

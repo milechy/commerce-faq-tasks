@@ -53,6 +53,13 @@ export interface MultiStepQueryPlan {
   confidence: "low" | "medium" | "high";
   language?: "ja" | "en" | "other";
   raw?: unknown;
+  /**
+   * Subtask 3: LLM プランナー（GPT-OSS 20B/120B）が消費した実トークン数（モデル別）。
+   * Rule-based 経路や LLM 呼び出し失敗時は undefined。
+   * 20B parse 失敗 → 120B フォールバック等で複数モデルが消費した場合は複数要素になり、
+   * chat とは別モデル単価のため各モデルを実レートで別 usage_log として課金する。
+   */
+  llmUsages?: Array<{ model: string; prompt_tokens: number; completion_tokens: number }>;
 }
 
 // --- Moved here to break circular deps (was in dialogOrchestrator / salesPipeline / salesIntentDetector) ---
@@ -114,8 +121,13 @@ export interface DialogTurnMeta {
   orchestrationSteps?: OrchestratorStep[];
   /** ナレッジギャップ検出シグナル */
   gapSignal?: { hitCount: number; topScore: number };
-  /** Phase53: Groq API実トークン数 */
+  /** Phase53: Groq API実トークン数（synthesis + query埋め込み、CHAT_LLM_MODEL レートで課金） */
   llmUsage?: { prompt_tokens: number; completion_tokens: number };
+  /**
+   * Subtask 3: マルチステップ planner LLM（GPT-OSS 20B/120B）のモデル別 usage。
+   * chat とは別モデル単価のため、chat/route.ts が各モデルで別 trackUsage する。
+   */
+  plannerLlmUsages?: Array<{ model: string; prompt_tokens: number; completion_tokens: number }>;
   /** Phase68: 応答生成に使用された RAG チャンク */
   ragSources?: import("../types").RagSource[];
 }

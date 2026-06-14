@@ -6,6 +6,16 @@ import type { DialogMessage, MultiStepQueryPlan } from '../dialog/types'
 import type { MultiStepPlannerOptions } from './multiStepPlanner'
 import { planMultiStepQuery as planMultiStepQueryRuleBased } from './multiStepPlanner'
 
+/** Subtask 3: プランナー LLM が消費した実トークン数。 */
+type PlannerUsage = { prompt_tokens: number; completion_tokens: number }
+
+/**
+ * Subtask 3: プランナー LLM の実モデル別トークン消費。
+ * 20B parse 失敗 → 120B フォールバックのように複数モデルが消費した場合に
+ * それぞれ正しい単価で課金するため、モデルごとに分けて記録する。
+ */
+export type PlannerModelUsage = { model: string } & PlannerUsage
+
 export interface LlmMultiStepPlannerOptions extends MultiStepPlannerOptions {
   /**
    * LLM 用ルーティングコンテキスト。
@@ -146,10 +156,10 @@ async function fetchLlmPlan(
   input: string,
   options: LlmMultiStepPlannerOptions,
   history?: DialogMessage[],
-): Promise<{ plan: LlmMultiStepPlan | null; route: '20b' | '120b'; usedModel: string | null }> {
+): Promise<{ plan: LlmMultiStepPlan | null; route: '20b' | '120b'; usedModel: string | null; usages: PlannerModelUsage[] }> {
   const apiKey = process.env.LLM_API_KEY
   if (!apiKey) {
-    return { plan: null, route: '20b', usedModel: null }
+    return { plan: null, route: '20b', usedModel: null, usages: [] }
   }
 
   const baseUrl =
@@ -170,7 +180,13 @@ async function fetchLlmPlan(
 
   const { system, user } = buildPlannerPrompts(input, history)
 
+  // モデルごとの実トークン消費を蓄積する。HTTP 200 ならば JSON parse の成否に
+  // 関わらずトークンは消費済みなので、課金漏れを防ぐため usage を必ず保持する。
+  const usages: PlannerModelUsage[] = []
+
+  // 戻り値: plan は parse 成功時のみ非 null。usage は HTTP 200 + usage 取得時に push 済み。
   async function callModel(model: string): Promise<LlmMultiStepPlan | null> {
+    let usage: PlannerUsage | undefined
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -192,7 +208,18 @@ async function fetchLlmPlan(
         return null
       }
 
-      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> }
+      const data = await res.json() as {
+        choices?: Array<{ message?: { content?: string } }>
+        usage?: { prompt_tokens?: number; completion_tokens?: number }
+      }
+      // usage は parse より先に取り出す（後段の JSON.parse が throw しても課金に残す）。
+      if (data.usage) {
+        usage = {
+          prompt_tokens: data.usage.prompt_tokens ?? 0,
+          completion_tokens: data.usage.completion_tokens ?? 0,
+        }
+      }
+
       const content = data?.choices?.[0]?.message?.content
       if (!content || typeof content !== 'string') return null
 
@@ -202,24 +229,27 @@ async function fetchLlmPlan(
       return parsed
     } catch {
       return null
+    } finally {
+      if (usage) usages.push({ model, ...usage })
     }
   }
 
   // まずはルーティング結果に従って呼び出し
   const primaryPlan = await callModel(primaryModel)
   if (primaryPlan) {
-    return { plan: primaryPlan, route: routed, usedModel: primaryModel }
+    return { plan: primaryPlan, route: routed, usedModel: primaryModel, usages }
   }
 
   // 20B の失敗時のみ 120B へ 1 回だけフォールバック
   if (routed === '20b' && model120b && model120b !== primaryModel) {
     const fallbackPlan = await callModel(model120b)
     if (fallbackPlan) {
-      return { plan: fallbackPlan, route: '120b', usedModel: model120b }
+      return { plan: fallbackPlan, route: '120b', usedModel: model120b, usages }
     }
   }
 
-  return { plan: null, route: routed, usedModel: primaryModel }
+  // plan は取れなくても、消費済みトークンは課金に残す（usages は push 済み）。
+  return { plan: null, route: routed, usedModel: primaryModel, usages }
 }
 
 /**
@@ -230,6 +260,7 @@ function mergeLlmPlanIntoMultiStepPlan(
   llmPlan: LlmMultiStepPlan,
   route: '20b' | '120b',
   usedModel: string | null,
+  usages: PlannerModelUsage[],
 ): MultiStepQueryPlan {
   return {
     ...base,
@@ -247,6 +278,7 @@ function mergeLlmPlanIntoMultiStepPlan(
         : base.followupQueries,
     confidence: llmPlan.confidence ?? base.confidence,
     language: llmPlan.language ?? base.language,
+    llmUsages: usages.length > 0 ? usages : undefined,
     raw: {
       ...(base.raw ?? {}),
       llmPlan,
@@ -272,15 +304,16 @@ export async function planMultiStepQueryWithLlmAsync(
 ): Promise<MultiStepQueryPlan> {
   const basePlan = await planMultiStepQueryRuleBased(input, options, history)
 
-  const { plan: llmPlan, route, usedModel } = await fetchLlmPlan(
+  const { plan: llmPlan, route, usedModel, usages } = await fetchLlmPlan(
     input,
     options,
     history,
   )
 
   if (!llmPlan) {
-    return basePlan
+    // LLM プランが取れなくても Rule-based で継続するが、消費済みトークンは課金に残す。
+    return usages.length > 0 ? { ...basePlan, llmUsages: usages } : basePlan
   }
 
-  return mergeLlmPlanIntoMultiStepPlan(basePlan, llmPlan, route, usedModel)
+  return mergeLlmPlanIntoMultiStepPlan(basePlan, llmPlan, route, usedModel, usages)
 }
