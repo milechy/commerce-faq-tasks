@@ -47,15 +47,14 @@ const TENANT_SCOPED_ROUTES = [
   '/v1/admin/analytics/conversions',
   '/v1/admin/analytics/knowledge-attribution',
   '/v1/admin/analytics/events',
-  // Phase72-C: tenant_admin も自テナント分は参照可
-  '/v1/admin/analytics/flow-transitions',
 ];
 
-// All routes including super_admin-only endpoints (cv-status, avatar-settings-summary)
+// All routes including super_admin-only endpoints (cv-status, avatar-settings-summary, flow-transitions)
 const ALL_ROUTES = [
   ...TENANT_SCOPED_ROUTES,
   '/v1/admin/analytics/cv-status',
   '/v1/admin/analytics/avatar-settings-summary',
+  '/v1/admin/analytics/flow-transitions',
 ];
 
 beforeEach(() => {

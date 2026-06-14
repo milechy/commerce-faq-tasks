@@ -470,13 +470,6 @@ export function applyPhase22FlowAfterGeneration(params: {
     lastUpdatedAt: new Date().toISOString(),
   };
   setFlowSessionMeta(flowKey, next);
-  logFlowTransition({
-    tenantId: flowKey.tenantId,
-    sessionId: flowKey.conversationId,
-    fromState: prevFlow.state,
-    toState: nextState,
-    turnIndex,
-  });
 
   // Phase22: Log entry to new state
   if (prevFlow.state !== nextState) {
