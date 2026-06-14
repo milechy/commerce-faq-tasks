@@ -35,10 +35,31 @@ function cacheKey(metricName: string, labels: Record<string, string>): string {
 }
 
 // ---------------------------------------------------------------------------
-// flush 実行関数（1 回分）
+// tenantId ラベル抽出（PII anti-slop: tenantId を JSONB labels に含めない）
 // ---------------------------------------------------------------------------
 
-async function flushOnce(pool: Pool, logger: Logger): Promise<void> {
+/**
+ * Prometheus labels から tenantId を抜き出し、残りを返す。
+ * prom-client の labelNames は camelCase "tenantId" を使用しているため
+ * "tenantId" キーを対象とする。
+ */
+function extractTenantId(labels: Record<string, string>): {
+  tenantId: string | null;
+  labelsWithoutTenant: Record<string, string>;
+} {
+  const { tenantId, ...rest } = labels;
+  return {
+    tenantId: tenantId ?? null,
+    labelsWithoutTenant: rest,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// flush 実行関数（1 回分）
+// dryRun=true のときは prevCounterValues だけ充填して INSERT しない（warm-up 用）
+// ---------------------------------------------------------------------------
+
+async function flushOnce(pool: Pool, logger: Logger, dryRun = false): Promise<void> {
   let metrics: Awaited<ReturnType<typeof metricsRegistry.getMetricsAsJSON>>;
   try {
     metrics = await metricsRegistry.getMetricsAsJSON();
@@ -50,6 +71,7 @@ async function flushOnce(pool: Pool, logger: Logger): Promise<void> {
   const now = new Date();
   const rows: Array<{
     metric_name: string;
+    tenant_id: string | null;
     labels: Record<string, string>;
     value: number;
   }> = [];
@@ -60,36 +82,29 @@ async function flushOnce(pool: Pool, logger: Logger): Promise<void> {
     if (COUNTER_METRIC_NAMES.includes(name)) {
       // Counter: 各ラベルセットの delta を計算
       for (const value of metric.values ?? []) {
-        const labels = value.labels as Record<string, string>;
+        const rawLabels = value.labels as Record<string, string>;
         const currentVal = value.value as number;
-        const key = cacheKey(name, labels);
+        const key = cacheKey(name, rawLabels);
         const prev = prevCounterValues.get(key) ?? 0;
         const delta = currentVal - prev;
-        if (delta > 0) {
-          rows.push({ metric_name: name, labels, value: delta });
+        // dryRun でなく delta > 0 の場合のみ INSERT キューに積む
+        if (!dryRun && delta > 0) {
+          const { tenantId, labelsWithoutTenant } = extractTenantId(rawLabels);
+          rows.push({ metric_name: name, tenant_id: tenantId, labels: labelsWithoutTenant, value: delta });
         }
         prevCounterValues.set(key, currentVal);
       }
     } else if (HISTOGRAM_METRIC_NAMES.includes(name)) {
       // Histogram: sum と count から平均を計算
-      // prom-client は _sum / _count suffix サフィックスで別 metric として返す場合があるが
-      // getMetricsAsJSON は bucket 形式で返す。sum/count を label なしで集約する。
-      // 各 bucket エントリの value.value はバケット累積値。
-      // sum エントリは metricName_sum、count は metricName_count で提供される。
-      // ただし getMetricsAsJSON では values[].labels に le が付く bucket のほか、
-      // {count, sum} フィールドが values 配列に含まれない場合がある。
-      // → 同じ Registry から collect() → getMetricsAsJSON() の実体を使う。
-      //
-      // 実際の構造: { name, help, type: 'histogram', values: [{labels:{le:'50',...}, value: N}, ..., {labels:{}, value: sum}] }
-      // sum ラベル: le が無く、metricName_sum という名前 OR labels = {} で最後のエントリ。
-      //
-      // 安全な方法: labels.le が undefined のエントリで sum/count を取る。
-      // prom-client v15 では {labels:{}, value: N} が _sum と _count に対応する
-      // 2 エントリが末尾に現れる（順番は sum→count）。
-      //
-      // ここではラベル別に sum と count を集計し、count>0 の場合のみ INSERT する。
+      // prom-client v15 の getMetricsAsJSON 構造:
+      //   { name, type: 'histogram', values: [
+      //     {labels:{le:'50', phase:'embed', tenantId:'t1'}, value: N},  // bucket
+      //     ...
+      //     {labels:{le:'+Inf', phase:'embed', tenantId:'t1'}, value: C}, // count
+      //     {labels:{phase:'embed', tenantId:'t1'}, value: S},            // sum (le なし)
+      //   ]}
+      // le を除いたラベルセットごとに sum/count を集計し、count>0 の場合のみ INSERT。
 
-      // ラベル（le 除く）ごとに sum/count を集計するための Map
       const histAgg = new Map<string, { sum: number; count: number }>();
 
       for (const v of metric.values ?? []) {
@@ -106,41 +121,44 @@ async function flushOnce(pool: Pool, logger: Logger): Promise<void> {
           // +Inf バケットの累積値 = count
           entry.count = v.value as number;
         } else if (le === undefined) {
-          // le がない = _sum エントリ（prom-client が返す構造に依存）
+          // le がない = _sum エントリ
           entry.sum = v.value as number;
         }
         // 他バケット（le = 数値）はスキップ
       }
 
-      for (const [key, { sum, count }] of histAgg) {
-        if (count <= 0) continue; // divide-by-zero ガード
-        const avg = sum / count;
-        // key から labels を復元（cacheKey は name|JSON）
-        const labelsJson = key.slice(name.length + 1);
-        let parsedLabels: Record<string, string> = {};
-        try {
-          parsedLabels = JSON.parse(labelsJson) as Record<string, string>;
-        } catch {
-          // JSON 解析失敗は空ラベルで続行
+      if (!dryRun) {
+        for (const [key, { sum, count }] of histAgg) {
+          if (count <= 0) continue; // divide-by-zero ガード
+          const avg = sum / count;
+          // key から labels を復元（cacheKey は name|JSON）
+          const labelsJson = key.slice(name.length + 1);
+          let parsedLabels: Record<string, string> = {};
+          try {
+            parsedLabels = JSON.parse(labelsJson) as Record<string, string>;
+          } catch {
+            // JSON 解析失敗は空ラベルで続行
+          }
+          const { tenantId, labelsWithoutTenant } = extractTenantId(parsedLabels);
+          rows.push({ metric_name: name, tenant_id: tenantId, labels: labelsWithoutTenant, value: avg });
         }
-        rows.push({ metric_name: name, labels: parsedLabels, value: avg });
       }
     }
   }
 
-  if (rows.length === 0) return;
+  if (dryRun || rows.length === 0) return;
 
   try {
-    // バルク INSERT
+    // バルク INSERT（5カラム: metric_name, tenant_id, labels, value, snapshot_at）
     const valuesClause = rows
-      .map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`)
+      .map((_, i) => `($${i * 5 + 1}, $${i * 5 + 2}, $${i * 5 + 3}, $${i * 5 + 4}, $${i * 5 + 5})`)
       .join(", ");
-    const params: (string | number | object)[] = [];
+    const params: (string | number | object | null)[] = [];
     for (const row of rows) {
-      params.push(row.metric_name, row.labels, row.value, now.toISOString());
+      params.push(row.metric_name, row.tenant_id, row.labels, row.value, now.toISOString());
     }
     await pool.query(
-      `INSERT INTO metrics_snapshots (metric_name, labels, value, snapshot_at)
+      `INSERT INTO metrics_snapshots (metric_name, tenant_id, labels, value, snapshot_at)
        VALUES ${valuesClause}`,
       params,
     );
@@ -167,6 +185,10 @@ export function initMetricsFlush(
     logger.warn("[metricsFlush] pool not initialized, flush disabled");
     return () => {};
   }
+
+  // warm-up: 初回 flush 前に prevCounterValues を現在値で充填する。
+  // これにより再起動直後の初回 tick で Counter 累積値全量が delta として INSERT されるスパイクを防ぐ。
+  void flushOnce(pool, logger, /*dryRun=*/true);
 
   const timer = setInterval(() => {
     void flushOnce(pool, logger);
