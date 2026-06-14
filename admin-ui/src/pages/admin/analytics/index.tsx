@@ -31,6 +31,7 @@ import { QualityChartsRow } from "./QualityChartsRow";
 import { LowScoreSessionsTable } from "./LowScoreSessionsTable";
 import { ConversionSection } from "./ConversionSection";
 import { AvatarSettingsSection } from "./AvatarSettingsSection";
+import { FlowFunnelSection } from "./FlowFunnelSection";
 
 ChartJS.register(
   CategoryScale,
@@ -404,6 +405,14 @@ export default function AnalyticsDashboardPage() {
           {/* Phase72-B: アバター設定利用率分析 (super_admin only) */}
           {/* ============================================================ */}
           {isSuperAdmin && <AvatarSettingsSection />}
+          {/* ============================================================ */}
+          {/* Phase72-C: 会話フロー 遷移ファネル */}
+          {/* ============================================================ */}
+          <FlowFunnelSection
+            period={period}
+            tenantId={tenantId}
+            isSuperAdmin={isSuperAdmin}
+          />
         </>
       )}
     </div>
