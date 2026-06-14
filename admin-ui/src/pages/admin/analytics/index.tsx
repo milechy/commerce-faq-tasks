@@ -32,6 +32,7 @@ import { LowScoreSessionsTable } from "./LowScoreSessionsTable";
 import { ConversionSection } from "./ConversionSection";
 import { AvatarSettingsSection } from "./AvatarSettingsSection";
 import { FlowFunnelSection } from "./FlowFunnelSection";
+import { MetricsHistorySection } from "./MetricsHistorySection";
 
 ChartJS.register(
   CategoryScale,
@@ -413,6 +414,10 @@ export default function AnalyticsDashboardPage() {
             tenantId={tenantId}
             isSuperAdmin={isSuperAdmin}
           />
+          {/* ============================================================ */}
+          {/* Phase72-D: Prometheus メトリクス時系列グラフ (super_admin only) */}
+          {/* ============================================================ */}
+          {isSuperAdmin && <MetricsHistorySection />}
         </>
       )}
     </div>
