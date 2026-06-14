@@ -572,8 +572,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const rawOffset = parseInt(String(req.query.offset ?? "0"),  10);
     const fieldName = typeof req.query.field_name === "string" ? req.query.field_name : undefined;
 
-    const limit  = Math.min(Math.max(rawLimit,  1), 100);
-    const offset = Math.max(rawOffset, 0);
+    const limit  = Number.isNaN(rawLimit)  ? 20 : Math.min(Math.max(rawLimit, 1), 100);
+    const offset = Number.isNaN(rawOffset) ? 0  : Math.max(rawOffset, 0);
 
     try {
       const whereClauses = ["tenant_id = $1"];
