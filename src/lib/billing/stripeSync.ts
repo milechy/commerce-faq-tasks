@@ -17,6 +17,97 @@ export function planMultiplier(plan: string | null | undefined): number {
   return PLAN_MULTIPLIERS[plan ?? 'starter'] ?? 1.0;
 }
 
+/** 環境変数から LemonSlice 月額固定費(JPY)を取得。未設定/0 なら按分課金は無効。 */
+export function getLemonsliceMonthlyFeeJpy(): number {
+  return Number(process.env.LEMONSLICE_MONTHLY_FEE_JPY ?? '0') || 0;
+}
+
+/** 月額固定費を当月アバター利用テナント数で均等割りした1テナント分(JPY、切り上げ)。 */
+export function lemonsliceShareJpy(monthlyFeeJpy: number, tenantCount: number): number {
+  if (monthlyFeeJpy <= 0 || tenantCount <= 0) return 0;
+  return Math.ceil(monthlyFeeJpy / tenantCount);
+}
+
+/**
+ * LemonSlice 月額固定費を、当月アバターを利用したテナント間で均等割りして
+ * Stripe 請求に上乗せする（テナント単位・月1回・冪等）。
+ * - 対象: 当月 feature_used='avatar' の利用があり billing_enabled=true のテナント（仕様B）
+ * - 無効化: LEMONSLICE_MONTHLY_FEE_JPY 未設定/0 のとき何もしない（デフォルト OFF）
+ */
+async function _chargeLemonsliceMonthlyShare(
+  db: any,
+  stripe: any,
+  logger: pino.Logger,
+  tenantId: string,
+  periodYyyyMm: string,
+  startDate: string,
+  endDate: string,
+  customerId: string | null
+): Promise<void> {
+  const monthlyFeeJpy = getLemonsliceMonthlyFeeJpy();
+  if (monthlyFeeJpy <= 0) return; // デフォルト OFF
+  if (!customerId) {
+    logger.warn({ tenantId }, '[stripeSync] lemonslice monthly: no customerId, skipping');
+    return;
+  }
+
+  // このテナントが当月アバターを利用したか（仕様B）
+  const used = await db.query(
+    `SELECT 1 FROM usage_logs
+      WHERE tenant_id = $1 AND feature_used = 'avatar'
+        AND created_at >= $2 AND created_at < $3 LIMIT 1`,
+    [tenantId, startDate, endDate]
+  );
+  if (used.rows.length === 0) return;
+
+  // 当月アバターを利用した課金対象テナント数（按分の分母）
+  const cntRes = await db.query(
+    `SELECT COUNT(DISTINCT u.tenant_id)::integer AS cnt
+       FROM usage_logs u
+       JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.feature_used = 'avatar'
+        AND u.created_at >= $1 AND u.created_at < $2
+        AND t.billing_enabled = true`,
+    [startDate, endDate]
+  );
+  const tenantCount: number = Math.max(1, cntRes.rows[0]?.cnt ?? 1);
+  const share = lemonsliceShareJpy(monthlyFeeJpy, tenantCount);
+  if (share <= 0) return;
+
+  // 冪等: テナント×月で1回だけ。INSERT 成功時のみ Stripe 請求を作成する。
+  const ins = await db.query(
+    `INSERT INTO lemonslice_monthly_charges (tenant_id, period_yyyymm, amount_jpy, tenant_count)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (tenant_id, period_yyyymm) DO NOTHING
+     RETURNING tenant_id`,
+    [tenantId, periodYyyyMm, share, tenantCount]
+  );
+  if (ins.rows.length === 0) return; // 既に請求済み
+
+  try {
+    await stripe.invoiceItems.create(
+      {
+        customer:    customerId,
+        amount:      share, // JPY は最小単位=1円
+        currency:    'jpy',
+        description: `LemonSlice 月額按分 ${periodYyyyMm} (1/${tenantCount})`,
+      },
+      { idempotencyKey: `lemonslice-monthly:${tenantId}:${periodYyyyMm}` }
+    );
+    logger.info(
+      { tenantId, periodYyyyMm, share, tenantCount, monthlyFeeJpy },
+      '[stripeSync] lemonslice monthly share charged'
+    );
+  } catch (err) {
+    // Stripe 失敗時は冪等レコードを取り消して次回再試行できるようにする
+    await db.query(
+      `DELETE FROM lemonslice_monthly_charges WHERE tenant_id = $1 AND period_yyyymm = $2`,
+      [tenantId, periodYyyyMm]
+    );
+    logger.error({ err, tenantId, periodYyyyMm }, '[stripeSync] lemonslice monthly charge failed, rolled back');
+  }
+}
+
 function getStripeClient(): any {
   const secret = process.env.STRIPE_SECRET_KEY;
   if (!secret) throw new Error('STRIPE_SECRET_KEY is not set');
@@ -48,7 +139,7 @@ async function getSubscriptionItemId(
   tenantId: string,
   stripe: any,
   logger: pino.Logger
-): Promise<{ subscriptionId: string; itemId: string } | null> {
+): Promise<{ subscriptionId: string; itemId: string; customerId: string | null } | null> {
   const result = await db.query(
     `SELECT stripe_subscription_id
      FROM stripe_subscriptions
@@ -69,7 +160,10 @@ async function getSubscriptionItemId(
       logger.warn({ tenantId, subscriptionId }, '[stripeSync] subscription has no items');
       return null;
     }
-    return { subscriptionId, itemId: item.id };
+    const customerId = typeof subscription.customer === 'string'
+      ? subscription.customer
+      : (subscription.customer?.id ?? null);
+    return { subscriptionId, itemId: item.id, customerId };
   } catch (err) {
     logger.error({ err, tenantId, subscriptionId }, '[stripeSync] failed to retrieve subscription');
     return null;
@@ -227,6 +321,11 @@ async function _reportTenantUsage(
       logger.info(
         { tenantId, periodYyyyMm, totalRequests, billedQuantity, plan, multiplier, totalCostCents },
         '[stripeSync] usage reported to Stripe'
+      );
+
+      // LemonSlice 月額固定費の按分を上乗せ（デフォルト OFF・冪等・仕様B）
+      await _chargeLemonsliceMonthlyShare(
+        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId
       );
       return;
     } catch (err) {
