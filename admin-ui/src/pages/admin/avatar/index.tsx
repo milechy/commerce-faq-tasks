@@ -130,10 +130,12 @@ export default function AvatarListPage() {
     } else {
       // 全テナント表示時: デフォルトアバターはテナント分コピーされ重複するため、
       // 名前単位で1枚に集約する（カスタムアバターはテナントごとに全件表示）。
-      // r2c_default のコピーを優先的に代表として残す。
+      // Super Admin: r2c_default を代表として残す（正典参照用）。
+      // Client Admin: テナント自身のコピーを優先（有効化・カスタマイズ可能なため）。
+      const r2cWeight = isSuperAdmin ? -1 : 1;
       const seenDefaults = new Set<string>();
       result = [...result]
-        .sort((a, b) => (a.tenant_id === "r2c_default" ? -1 : 0) - (b.tenant_id === "r2c_default" ? -1 : 0))
+        .sort((a, b) => (a.tenant_id === "r2c_default" ? r2cWeight : 0) - (b.tenant_id === "r2c_default" ? r2cWeight : 0))
         .filter((c) => {
           if (!c.is_default) return true;
           if (seenDefaults.has(c.name)) return false;
@@ -169,7 +171,7 @@ export default function AvatarListPage() {
     });
 
     return result;
-  }, [configs, tenantFilter, typeFilter, statusFilter, sortKey]);
+  }, [configs, tenantFilter, typeFilter, statusFilter, sortKey, isSuperAdmin]);
 
   const handleActivate = async (id: string) => {
     if (activating) return;
