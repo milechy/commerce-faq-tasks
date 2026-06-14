@@ -6,6 +6,17 @@ import type pino from 'pino';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE_MS = 1000;
 
+// プラン倍率: Stripe に報告する数量に乗じる（リクエスト課金 × プラン別単価）。
+// admin-ui PLAN_OPTIONS と一致（Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
+export const PLAN_MULTIPLIERS: Record<string, number> = {
+  starter: 1.0,
+  growth: 1.5,
+  enterprise: 2.5,
+};
+export function planMultiplier(plan: string | null | undefined): number {
+  return PLAN_MULTIPLIERS[plan ?? 'starter'] ?? 1.0;
+}
+
 function getStripeClient(): any {
   const secret = process.env.STRIPE_SECRET_KEY;
   if (!secret) throw new Error('STRIPE_SECRET_KEY is not set');
@@ -103,12 +114,15 @@ async function _reportTenantUsage(
   periodYyyyMm: string
 ): Promise<void> {
   // Phase39: billing_enabled / billing_free_from / billing_free_until チェック
+  // プラン倍率算出のため plan も取得する。
   const tenantRow = await db.query(
-    `SELECT billing_enabled, billing_free_from, billing_free_until FROM tenants WHERE id = $1`,
+    `SELECT billing_enabled, billing_free_from, billing_free_until, plan FROM tenants WHERE id = $1`,
     [tenantId]
   );
+  let plan: string | null = null;
   if (tenantRow.rows.length > 0) {
     const tenant = tenantRow.rows[0];
+    plan = tenant.plan ?? null;
     if (!tenant.billing_enabled) {
       logger.info({ tenantId }, `[billing] ${tenantId}: billing not enabled, skipping Stripe report`);
       return;
@@ -147,6 +161,11 @@ async function _reportTenantUsage(
     return;
   }
 
+  // プラン倍率を Stripe 報告数量に適用（リクエスト課金 × プラン別単価）。
+  // 実リクエスト数は stripe_usage_reports.total_requests に保持し、請求数量のみ倍率適用する。
+  const multiplier = planMultiplier(plan);
+  const billedQuantity = Math.ceil(totalRequests * multiplier);
+
   const idempotencyKey = `billing:${tenantId}:${periodYyyyMm}`;
 
   // 既に送信済みならスキップ
@@ -181,7 +200,7 @@ async function _reportTenantUsage(
       const usageRecord = await stripe.subscriptionItems.createUsageRecord(
         subInfo.itemId,
         {
-          quantity:  totalRequests,
+          quantity:  billedQuantity,
           timestamp: Math.floor(Date.now() / 1000),
           action:    'set',
         },
@@ -206,7 +225,7 @@ async function _reportTenantUsage(
       );
 
       logger.info(
-        { tenantId, periodYyyyMm, totalRequests, totalCostCents },
+        { tenantId, periodYyyyMm, totalRequests, billedQuantity, plan, multiplier, totalCostCents },
         '[stripeSync] usage reported to Stripe'
       );
       return;
