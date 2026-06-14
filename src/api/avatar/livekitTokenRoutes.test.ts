@@ -327,4 +327,71 @@ describe("POST /api/avatar/room-token", () => {
       expect(createRoomArg.metadata).toBeUndefined();
     });
   });
+
+  describe("pre_dispatch フラグ分岐", () => {
+    it("pre_dispatch=true かつ connect=false → dispatchAgentToRoom が呼ばれ preDispatchEnabled=true", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [] }); // Q3: avatarConfigId 未指定 → fallback
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: false });
+
+      // レスポンス確認
+      expect(res.status).toBe(200);
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.preDispatchEnabled).toBe(true);
+
+      // dispatch が呼ばれていることを確認（fire-and-forget のため Promise 解決を待つ）
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("pre_dispatch=false かつ connect=false → dispatch 呼ばれず preDispatchEnabled=false", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: false } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [] }); // Q3 fallback
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: false });
+
+      expect(res.status).toBe(200);
+      expect(res.body.preDispatchEnabled).toBe(false);
+
+      // dispatch が呼ばれていないことを確認
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
+    });
+
+    it("features に pre_dispatch キー無し → dispatch スキップ、preDispatchEnabled=false（コスト発生なし）", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [] }); // Q3 fallback
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: false });
+
+      expect(res.status).toBe(200);
+      expect(res.body.preDispatchEnabled).toBe(false);
+
+      // pre_dispatch キーが存在しない場合は dispatch を呼ばない（デフォルト安全）
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
+    });
+  });
 });

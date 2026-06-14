@@ -48,6 +48,7 @@ import { registerAvatarConfigRoutes } from "./api/admin/avatar/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
+import { initFlowLogger } from "./lib/analytics/flowLogger";
 import { reportUsageToStripe } from "./lib/billing/stripeSync";
 import { pipelineQueue } from "./lib/book-pipeline/pipelineQueue";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
@@ -86,6 +87,7 @@ import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
+import { registerAdminAgentRoutes } from "./api/admin/agent/agentRoutes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -521,6 +523,9 @@ if (db) registerNotificationPreferencesRoutes(app, db);
 // Phase32: 課金管理API
 if (db) initUsageTracker(db, logger);
 
+// Phase72-C: State Machine 遷移ログ
+if (db) initFlowLogger(db, logger);
+
 // Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
 app.post(
   "/v1/billing/webhook",
@@ -591,6 +596,9 @@ if (db) registerAvatarConfigRoutes(app, db);
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 if (db) registerAvatarGenerationRoutes(app, db);
+
+// Phase B-Admin: AIエージェント管理チャット API
+if (db) registerAdminAgentRoutes(app, db);
 
 // Phase64: fal.ai Flux Pro アバター画像生成API
 registerFalGenerationRoutes(app);

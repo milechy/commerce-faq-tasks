@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppSidebar, MobileHeader, MobileBottomBar } from "./components/AppSidebar";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -20,6 +20,8 @@ import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAIChat from "./components/AdminAIChat";
+import AdminAgentButton from "./components/AdminAgent/AdminAgentButton";
+import AdminAgentPanel from "./components/AdminAgent/AdminAgentPanel";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarWizardPage from "./pages/admin/avatar/wizard";
@@ -28,6 +30,7 @@ import BooksPage from "./pages/admin/knowledge/books";
 import KnowledgeAnalyticsPage from "./pages/admin/knowledge/analytics";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
 import CvStatusPage from "./pages/admin/analytics/cv-status";
+import FlowAnalyticsPage from "./pages/admin/analytics/FlowAnalyticsPage";
 import EngagementPage from "./pages/admin/engagement/index";
 import ConversionDashboardPage from "./pages/admin/conversion/index";
 import OptionManagementPage from "./pages/admin/options/index";
@@ -76,7 +79,8 @@ function ConfigErrorScreen() {
 }
 
 function AppInner() {
-  const { isClientAdmin } = useAuth();
+  const { isClientAdmin, isSuperAdmin, user } = useAuth();
+  const [agentOpen, setAgentOpen] = useState(false);
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
   const isAdmin = location.pathname.startsWith("/admin") || location.pathname === "/";
@@ -165,6 +169,8 @@ function AppInner() {
         <Route path="/admin/analytics" element={<RequireAuth><AnalyticsDashboardPage /></RequireAuth>} />
         {/* Phase65-3: CV発火状況 — super_admin 専用 */}
         <Route path="/admin/analytics/cv-status" element={<SuperAdminRoute><CvStatusPage /></SuperAdminRoute>} />
+        {/* Phase72-C: フロー遷移分析 — super_admin 専用 */}
+        <Route path="/admin/analytics/flow" element={<SuperAdminRoute><FlowAnalyticsPage /></SuperAdminRoute>} />
         <Route path="/admin/engagement" element={<RequireAuth><EngagementPage /></RequireAuth>} />
 
         {/* Phase58: コンバージョン最適化ダッシュボード */}
@@ -182,6 +188,21 @@ function AppInner() {
       </Routes>
       {/* 管理AIチャット — Client Admin、chat-testページを除く */}
       {showAIChat && <AdminAIChat />}
+      {/* R2C AIアシスタント — super_admin/client_admin 共通、chat-testページを除く */}
+      {showAIChat && (
+        <>
+          <AdminAgentButton
+            onClick={() => setAgentOpen((v) => !v)}
+            isOpen={agentOpen}
+          />
+          <AdminAgentPanel
+            isOpen={agentOpen}
+            onClose={() => setAgentOpen(false)}
+            tenantId={user?.tenantId ?? null}
+            isSuperAdmin={isSuperAdmin}
+          />
+        </>
+      )}
       </div>
     </div>
   );

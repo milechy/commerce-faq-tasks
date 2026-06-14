@@ -28,7 +28,7 @@ async function deleteFromEs(tenantId: string, esDocId: string): Promise<void> {
 }
 
 /** embedding を非同期で挿入（fire-and-forget） */
-function insertEmbeddingAsync(
+export function insertEmbeddingAsync(
   db: Pool,
   tenantId: string,
   text: string,
@@ -47,7 +47,7 @@ function insertEmbeddingAsync(
 }
 
 /** ESにドキュメントをupsert（fire-and-forget） */
-function upsertToEsAsync(
+export function upsertToEsAsync(
   tenantId: string,
   faqId: number,
   question: string,
