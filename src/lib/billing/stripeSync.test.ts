@@ -1,7 +1,7 @@
 // src/lib/billing/stripeSync.test.ts
 // プラン倍率の課金数量算出ロジック検証（Phase2A: リクエスト課金 × プラン別単価）
 
-import { PLAN_MULTIPLIERS, planMultiplier } from './stripeSync';
+import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, getLemonsliceMonthlyFeeJpy } from './stripeSync';
 
 describe('planMultiplier', () => {
   it('プラン別の倍率を返す（Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
@@ -37,5 +37,36 @@ describe('billedQuantity 算出（Math.ceil(totalRequests * multiplier)）', () 
   it('Enterprise は 2.5 倍', () => {
     expect(billed(100, 'enterprise')).toBe(250);
     expect(billed(3, 'enterprise')).toBe(8); // 7.5 → 8
+  });
+});
+
+describe('lemonsliceShareJpy（月額固定費の均等割り・切り上げ）', () => {
+  it('テナント数で均等割り（切り上げ）', () => {
+    expect(lemonsliceShareJpy(1200, 1)).toBe(1200);
+    expect(lemonsliceShareJpy(1200, 3)).toBe(400);
+    expect(lemonsliceShareJpy(1000, 3)).toBe(334); // 333.3 → 334
+  });
+
+  it('fee=0 または テナント数=0 は 0（無効）', () => {
+    expect(lemonsliceShareJpy(0, 5)).toBe(0);
+    expect(lemonsliceShareJpy(1200, 0)).toBe(0);
+  });
+});
+
+describe('getLemonsliceMonthlyFeeJpy（デフォルト OFF）', () => {
+  const saved = process.env.LEMONSLICE_MONTHLY_FEE_JPY;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.LEMONSLICE_MONTHLY_FEE_JPY;
+    else process.env.LEMONSLICE_MONTHLY_FEE_JPY = saved;
+  });
+
+  it('未設定なら 0（按分課金は無効）', () => {
+    delete process.env.LEMONSLICE_MONTHLY_FEE_JPY;
+    expect(getLemonsliceMonthlyFeeJpy()).toBe(0);
+  });
+
+  it('数値を設定すると反映', () => {
+    process.env.LEMONSLICE_MONTHLY_FEE_JPY = '1200';
+    expect(getLemonsliceMonthlyFeeJpy()).toBe(1200);
   });
 });
