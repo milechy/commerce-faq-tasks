@@ -85,8 +85,9 @@ test.describe('Phase65 carnation-demo サイト', () => {
 
   // test 4b: 旧URL /carnation-demo.html が 301 で新URLへリダイレクトされること
   test('旧URL /carnation-demo.html が /carnation-demo/index.html へリダイレクトされる', async ({ page }) => {
+    test.setTimeout(90_000); // CI runner ↔ VPS の往復が遅い場合に対応: 3 × 25s + backoffs = 78s max
     // Playwrightはリダイレクトを自動追跡するため、最終URLを確認する
-    await gotoWithRetry(page, 'https://api.r2c.biz/carnation-demo.html');
+    await gotoWithRetry(page, 'https://api.r2c.biz/carnation-demo.html', 3, 25_000);
     expect(page.url()).toContain('/carnation-demo/index.html');
     const title = await page.title();
     expect(title).toContain('BROSS新潟');
