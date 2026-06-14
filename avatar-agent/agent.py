@@ -23,6 +23,7 @@ os.environ.setdefault("LIBVA_DRIVER_NAME", "dummy")
 import asyncio
 import json
 import logging
+import math
 import time
 import aiohttp
 from livekit import agents, rtc
@@ -215,6 +216,37 @@ async def _report_tts_usage(tenant_id: str, tts_text_bytes: int) -> None:
         logger.debug(f"[usage] TTS usage reported: tenant={tenant_id} bytes={tts_text_bytes}")
     except Exception as e:
         logger.warning(f"[usage] TTS usage report failed (non-critical): {e}")
+
+
+# LemonSlice は約24.5クレジット/分消費（料金表の割当 1000credit/41min・5400/220・15000/610 から逆算）。
+LEMONSLICE_CREDITS_PER_MINUTE = 24.5
+
+
+async def _report_avatar_usage(tenant_id: str, session_ms: int) -> None:
+    """LemonSlice アバターのセッション課金をRAJIUCE APIへ非同期レポート（fire-and-forget）。
+
+    セッション時間（ms）→ 分 → クレジット換算（約24.5credit/分）で avatarCredits を報告する。
+    本体側 costCalculator が avatarCredits × $0.007/credit で原価計上する。
+    """
+    if session_ms <= 0:
+        return
+    minutes = session_ms / 60000.0
+    credits = math.ceil(minutes * LEMONSLICE_CREDITS_PER_MINUTE)
+    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            await http_session.post(
+                f"{api_url}/api/internal/usage",
+                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
+                json={"tenantId": tenant_id, "avatarCredits": credits, "avatarSessionMs": session_ms},
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+        logger.info(
+            f"[usage] LemonSlice avatar usage reported: tenant={tenant_id} "
+            f"session_ms={session_ms} credits={credits}"
+        )
+    except Exception as e:
+        logger.warning(f"[usage] avatar usage report failed (non-critical): {e}")
 
 
 class FishAudioTTS(agents_tts.TTS):
@@ -567,6 +599,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # I-4: avatar.start() の戻り値が LemonSlice session_id（plugin avatar.py:132）
         global _lemonslice_session_id
         _lemonslice_session_id = await avatar.start(session, room=ctx.room)
+        # 課金: アバター起動成功時刻を記録（_close_avatar でセッション時間を算出）
+        _avatar_started_at = time.monotonic()
         logger.info("=== LEMONSLICE AVATAR STARTED ===")
         logger.info(f"[lemonslice] session_id={'SET' if _lemonslice_session_id else 'NOT_AVAILABLE'}")
 
@@ -580,6 +614,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # LiveKit 1.5.17: job shutdown 時に aclose してゾンビアバターを防止
         # (wait_for_shutdown は 1.5.17 に存在しないため add_shutdown_callback を使用)
         async def _close_avatar() -> None:
+            # 課金: セッション時間を算出して LemonSlice 使用量をレポート
+            try:
+                session_ms = int((time.monotonic() - _avatar_started_at) * 1000)
+                await _report_avatar_usage(tenant_id, session_ms)
+            except Exception as e:
+                logger.warning(f"[avatar] usage report on close error (non-fatal): {e}")
             try:
                 await avatar.aclose()
                 logger.info("[avatar] aclose completed")
