@@ -13,6 +13,7 @@ import {
 import { detectStatePatternLoop } from '../flow/loopDetector';
 import type { PlannerPlan } from '../dialog/types';
 import type { PlannerRoute, RouteContextV2 } from '../llm/modelRouter';
+import { logFlowTransition } from '../../lib/analytics/flowLogger';
 
 const logger = pino();
 
@@ -308,6 +309,14 @@ export function applyPhase22FlowAfterGeneration(params: {
       lastUpdatedAt: new Date().toISOString(),
     };
     setFlowSessionMeta(flowKey, next);
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: prevFlow.state,
+      toState: 'terminal',
+      turnIndex,
+      metadata: { reason: 'aborted_loop_detected' },
+    });
 
     logger.info(
       {
@@ -377,6 +386,14 @@ export function applyPhase22FlowAfterGeneration(params: {
       lastUpdatedAt: new Date().toISOString(),
     };
     setFlowSessionMeta(flowKey, next);
+    logFlowTransition({
+      tenantId: flowKey.tenantId,
+      sessionId: flowKey.conversationId,
+      fromState: prevFlow.state,
+      toState: 'terminal',
+      turnIndex,
+      metadata: { reason: 'aborted_budget' },
+    });
 
     logger.info(
       { event: 'flow.terminal_reached', meta: { flow: next } },
@@ -433,6 +450,13 @@ export function applyPhase22FlowAfterGeneration(params: {
     lastUpdatedAt: new Date().toISOString(),
   };
   setFlowSessionMeta(flowKey, next);
+  logFlowTransition({
+    tenantId: flowKey.tenantId,
+    sessionId: flowKey.conversationId,
+    fromState: prevFlow.state,
+    toState: nextState,
+    turnIndex,
+  });
 
   // Phase22: Log entry to new state
   if (prevFlow.state !== nextState) {
