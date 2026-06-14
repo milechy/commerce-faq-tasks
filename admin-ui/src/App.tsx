@@ -154,8 +154,8 @@ function AppInner() {
         {/* 書籍管理 */}
         <Route path="/admin/knowledge/books" element={<RequireAuth><BooksPage /></RequireAuth>} />
 
-        {/* AI学習・貢献分析 */}
-        <Route path="/admin/knowledge-analytics" element={<RequireAuth><KnowledgeAnalyticsPage /></RequireAuth>} />
+        {/* AI学習・貢献分析 — super_admin 専用（OpenClaw 横断分析） */}
+        <Route path="/admin/knowledge-analytics" element={<SuperAdminRoute><KnowledgeAnalyticsPage /></SuperAdminRoute>} />
 
         {/* Phase45: AI評価 — 廃止: /admin/chat-history にリダイレクト */}
         <Route path="/admin/evaluations" element={<Navigate to="/admin/chat-history" replace />} />
