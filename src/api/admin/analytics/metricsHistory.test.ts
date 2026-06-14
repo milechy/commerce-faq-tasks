@@ -190,4 +190,43 @@ describe("GET /v1/admin/analytics/metrics-history — 正常系", () => {
     expect(res.body.period).toBe("7d");
     expect(res.body.granularity).toBe("1h");
   });
+
+  // granularity 別の SQL バケット式検証（P1-1 regression guard）
+  it("granularity=1h のとき DATE_TRUNC('hour', ...) が SQL に使われる", async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const app = makeApp();
+    await request(app)
+      .get(`${ROUTE}?metric=rajiuce_conversation_terminal_total&granularity=1h`)
+      .set("x-role", "super_admin");
+
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/DATE_TRUNC\('hour'/i);
+    expect(sql).not.toMatch(/DATE_BIN/i);
+  });
+
+  it("granularity=6h のとき DATE_BIN('6 hours', ...) が SQL に使われる（PG16対応）", async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const app = makeApp();
+    await request(app)
+      .get(`${ROUTE}?metric=rajiuce_conversation_terminal_total&granularity=6h`)
+      .set("x-role", "super_admin");
+
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/DATE_BIN/i);
+    expect(sql).toMatch(/6 hours/i);
+    // DATE_TRUNC の不正な使い方になっていないこと
+    expect(sql).not.toMatch(/DATE_TRUNC\('6 hours'/i);
+  });
+
+  it("granularity=24h のとき DATE_TRUNC('day', ...) が SQL に使われる", async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const app = makeApp();
+    await request(app)
+      .get(`${ROUTE}?metric=rajiuce_conversation_terminal_total&granularity=24h`)
+      .set("x-role", "super_admin");
+
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/DATE_TRUNC\('day'/i);
+    expect(sql).not.toMatch(/DATE_BIN/i);
+  });
 });

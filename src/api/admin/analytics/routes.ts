@@ -1674,17 +1674,25 @@ export function registerAnalyticsRoutes(app: Express): void {
       }
       const period = periodRaw as ValidPeriod;
 
-      // granularity 検証（DATE_TRUNC に渡す値 — allow-list で SQL インジェクション防止）
+      // granularity 検証（allow-list で SQL インジェクション防止）
+      // 1h/24h は DATE_TRUNC('hour'/'day', …) で対応。
+      // 6h は DATE_TRUNC が 'hour' 単位しか受け付けないため
+      // DATE_BIN('6 hours', …, TIMESTAMPTZ '2000-01-01') を使用（PG14+/本番PG16対応）。
       const granularityRaw = (req.query["granularity"] as string | undefined) ?? "1h";
-      const GRANULARITY_MAP: Record<string, string> = {
-        "1h": "hour",
-        "6h": "6 hours",
-        "24h": "day",
-      };
-      if (!(granularityRaw in GRANULARITY_MAP)) {
+      type GranularityKey = "1h" | "6h" | "24h";
+      const VALID_GRANULARITIES: ReadonlyArray<string> = ["1h", "6h", "24h"];
+      if (!VALID_GRANULARITIES.includes(granularityRaw)) {
         return res.status(400).json({ error: "granularity は 1h | 6h | 24h のいずれかを指定してください" });
       }
-      const truncUnit = GRANULARITY_MAP[granularityRaw]!;
+      const granularity = granularityRaw as GranularityKey;
+
+      // バケット式を granularity 別に組み立て（固定値 allow-list のみ使用）
+      const BUCKET_EXPR: Record<GranularityKey, string> = {
+        "1h":  "DATE_TRUNC('hour', snapshot_at)",
+        "6h":  "DATE_BIN('6 hours', snapshot_at, TIMESTAMPTZ '2000-01-01')",
+        "24h": "DATE_TRUNC('day', snapshot_at)",
+      };
+      const bucketExpr = BUCKET_EXPR[granularity];
 
       const tenantIdFilter = (req.query["tenant_id"] as string | undefined)?.trim() || null;
 
@@ -1711,16 +1719,15 @@ export function registerAnalyticsRoutes(app: Express): void {
 
         const result = await pool.query(
           `SELECT
-             DATE_TRUNC($truncUnit_literal, snapshot_at) AS bucket,
+             ${bucketExpr} AS bucket,
              SUM(value)::float AS value,
              labels
            FROM metrics_snapshots
            WHERE metric_name = $1
              AND snapshot_at >= NOW() - $2::interval
              ${tenantClause}
-           GROUP BY DATE_TRUNC($truncUnit_literal, snapshot_at), labels
-           ORDER BY bucket ASC`
-            .replace(/\$truncUnit_literal/g, `'${truncUnit}'`),
+           GROUP BY ${bucketExpr}, labels
+           ORDER BY bucket ASC`,
           params,
         );
 
@@ -1741,7 +1748,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         return res.json({
           metric,
           period,
-          granularity: granularityRaw,
+          granularity,
           series,
         });
       } catch (err) {
