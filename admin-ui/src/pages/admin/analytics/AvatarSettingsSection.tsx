@@ -74,8 +74,6 @@ export function AvatarSettingsSection() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
     authFetch(`${API_BASE}/v1/admin/analytics/avatar-settings-summary`)
       .then((r) => {
         if (!r.ok) throw new Error("fetch_failed");
