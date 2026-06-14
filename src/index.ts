@@ -86,6 +86,7 @@ import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
+import { registerAdminAgentRoutes } from "./api/admin/agent/agentRoutes";
 import { roleAuthMiddleware, requireRole } from "./api/middleware/roleAuth";
 import { hybridSearch } from "./search/hybrid";
 import {
@@ -594,6 +595,9 @@ if (db) registerAvatarConfigRoutes(app, db);
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 if (db) registerAvatarGenerationRoutes(app, db);
+
+// Phase B-Admin: AIエージェント管理チャット API
+if (db) registerAdminAgentRoutes(app, db);
 
 // Phase64: fal.ai Flux Pro アバター画像生成API
 registerFalGenerationRoutes(app);
