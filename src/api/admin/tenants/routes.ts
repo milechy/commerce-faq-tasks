@@ -281,11 +281,12 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       return res.status(400).json({ error: "no_fields", message: "更新フィールドが必要です。" });
     }
     try {
-      // 存在チェック
-      const check = await db.query("SELECT id FROM tenants WHERE id = $1", [id]);
+      // 存在チェック + Phase72-A: 変更前の監査対象フィールドを取得
+      const check = await db.query("SELECT id, plan, features, billing_enabled, is_active FROM tenants WHERE id = $1", [id]);
       if (check.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
       }
+      const beforeRow = check.rows[0] as { plan: string; features: unknown; billing_enabled: boolean; is_active: boolean };
       const setClauses: string[] = [];
       const params: unknown[] = [];
       if (fields.name !== undefined) { params.push(fields.name); setClauses.push(`name = $${params.length}`); }
@@ -317,6 +318,30 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.system_prompt !== undefined) {
         invalidateWorkspaceCache(id);
       }
+      // Phase72-A: 監査対象フィールドの変更を tenant_settings_history に記録（fire-and-forget）
+      const su72 = (req as import("../../middleware/roleAuth").AuthedReq).supabaseUser;
+      const appMeta72 = su72?.app_metadata as Record<string, unknown> | undefined;
+      const changedBy72: string = su72?.email ?? (typeof appMeta72?.email === "string" ? appMeta72.email : "");
+      const afterRow = result.rows[0] as { plan: string; features: unknown; billing_enabled: boolean; is_active: boolean };
+      const auditFields: Array<{ field: string; before: unknown; after: unknown }> = [
+        { field: "plan",            before: beforeRow.plan,            after: afterRow.plan },
+        { field: "features",        before: beforeRow.features,        after: afterRow.features },
+        { field: "billing_enabled", before: beforeRow.billing_enabled, after: afterRow.billing_enabled },
+        { field: "is_active",       before: beforeRow.is_active,       after: afterRow.is_active },
+      ];
+      void (async () => {
+        for (const f of auditFields) {
+          const beforeJson = JSON.stringify(f.before);
+          const afterJson  = JSON.stringify(f.after);
+          if (beforeJson !== afterJson) {
+            await db.query(
+              `INSERT INTO tenant_settings_history (tenant_id, changed_by, field_name, old_value, new_value)
+               VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+              [id, changedBy72, f.field, beforeJson, afterJson]
+            ).catch((e: unknown) => logger.warn("[tenant_settings_history] insert failed", e));
+          }
+        }
+      })();
       return res.json(result.rows[0]);
     } catch (err) {
       logger.warn("[PATCH /v1/admin/tenants/:id]", err);
@@ -537,6 +562,50 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     } catch (err) {
       logger.warn("[POST /v1/admin/tenants/:id/invite]", err);
       return res.status(500).json({ error: "招待処理に失敗しました" });
+    }
+  });
+
+  // Phase72-A: GET /v1/admin/tenants/:id/settings-history — 設定変更履歴（super_admin のみ）
+  app.get("/v1/admin/tenants/:id/settings-history", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const rawLimit  = parseInt(String(req.query.limit  ?? "20"), 10);
+    const rawOffset = parseInt(String(req.query.offset ?? "0"),  10);
+    const fieldName = typeof req.query.field_name === "string" ? req.query.field_name : undefined;
+
+    const limit  = Number.isNaN(rawLimit)  ? 20 : Math.min(Math.max(rawLimit, 1), 100);
+    const offset = Number.isNaN(rawOffset) ? 0  : Math.max(rawOffset, 0);
+
+    try {
+      const whereClauses = ["tenant_id = $1"];
+      const params: unknown[] = [id];
+      if (fieldName) {
+        params.push(fieldName);
+        whereClauses.push(`field_name = $${params.length}`);
+      }
+      const whereStr = whereClauses.join(" AND ");
+
+      const [dataResult, countResult] = await Promise.all([
+        db.query(
+          `SELECT id, tenant_id, changed_by, field_name, old_value, new_value, changed_at
+           FROM tenant_settings_history
+           WHERE ${whereStr}
+           ORDER BY changed_at DESC
+           LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+          [...params, limit, offset]
+        ),
+        db.query(
+          `SELECT COUNT(*)::int AS total FROM tenant_settings_history WHERE ${whereStr}`,
+          params
+        ),
+      ]);
+
+      return res.json({
+        history: dataResult.rows,
+        total: (countResult.rows[0] as { total: number }).total,
+      });
+    } catch (err) {
+      logger.warn("[GET /v1/admin/tenants/:id/settings-history]", err);
+      return res.status(500).json({ error: "履歴の取得に失敗しました" });
     }
   });
 

@@ -89,7 +89,8 @@ describe("Tenant System Prompt API", () => {
     it("updates system_prompt and returns 200 with updated tenant", async () => {
       const newPrompt = "新しいシステムプロンプト";
       mockDb.query
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "demo-tenant" }] }) // existence check
+        // Phase72-A: existence check + beforeRow (plan/features/billing_enabled/is_active 必須)
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "demo-tenant", plan: "starter", features: { avatar: false, voice: false, rag: true }, billing_enabled: false, is_active: true }] })
         .mockResolvedValueOnce({ rows: [{ ...FULL_TENANT_ROW, system_prompt: newPrompt }] }); // update
 
       const res = await request(app)
@@ -103,7 +104,8 @@ describe("Tenant System Prompt API", () => {
 
     it('clears system_prompt with empty string "" and returns 200', async () => {
       mockDb.query
-        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "demo-tenant" }] }) // existence check
+        // Phase72-A: existence check + beforeRow (plan/features/billing_enabled/is_active 必須)
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "demo-tenant", plan: "starter", features: { avatar: false, voice: false, rag: true }, billing_enabled: false, is_active: true }] })
         .mockResolvedValueOnce({ rows: [{ ...FULL_TENANT_ROW, system_prompt: "" }] }); // update
 
       const res = await request(app)
