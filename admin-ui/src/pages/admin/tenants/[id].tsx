@@ -130,7 +130,8 @@ async function updateBilling(
   tenantId: string,
   billing_enabled: boolean,
   billing_free_from: string | null,
-  billing_free_until: string | null
+  billing_free_until: string | null,
+  plan?: TenantDetail["plan"]
 ): Promise<TenantDetail> {
   const body: Record<string, unknown> = {
     billing_enabled,
@@ -138,6 +139,7 @@ async function updateBilling(
     billing_free_from:  billing_free_from  ? new Date(billing_free_from).toISOString()  : null,
     billing_free_until: billing_free_until ? new Date(billing_free_until).toISOString() : null,
   };
+  if (plan !== undefined) body.plan = plan;
   const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
     method: "PATCH",
     body: JSON.stringify(body),

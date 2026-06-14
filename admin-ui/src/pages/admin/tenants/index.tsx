@@ -12,7 +12,7 @@ interface Tenant {
   id: string;
   name: string;
   slug: string;
-  plan: "starter" | "pro";
+  plan: "starter" | "growth" | "enterprise";
   status: "active" | "inactive";
   apiKeyCount: number;
   createdAt: string;

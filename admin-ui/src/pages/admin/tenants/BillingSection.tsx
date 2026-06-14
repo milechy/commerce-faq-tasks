@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLang } from "../../../i18n/LangContext";
-import type { TenantDetail } from "./types";
+import type { TenantDetail, TenantPlan } from "./types";
+import { PLAN_OPTIONS } from "./types";
 
 // ─── 課金管理セクション（Super Admin専用） ────────────────────────────────────
 
@@ -15,12 +16,14 @@ export function BillingSection({
     tenantId: string,
     billing_enabled: boolean,
     billing_free_from: string | null,
-    billing_free_until: string | null
+    billing_free_until: string | null,
+    plan?: TenantPlan
   ) => Promise<TenantDetail>;
 }) {
   const { t, lang } = useLang();
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const [billingEnabled, setBillingEnabled] = useState(tenant.billing_enabled);
+  const [plan, setPlan] = useState<TenantPlan>(tenant.plan);
   const [freeFromDate, setFreeFromDate] = useState<string>(
     tenant.billing_free_from ? tenant.billing_free_from.split("T")[0] : ""
   );
@@ -53,7 +56,8 @@ export function BillingSection({
         tenant.id,
         billingEnabled,
         freeFromDate  || null,
-        freeUntilDate || null
+        freeUntilDate || null,
+        plan
       );
       onUpdate(updated);
     } catch {
@@ -103,6 +107,46 @@ export function BillingSection({
           {error}
         </div>
       )}
+
+      {/* プラン選択 */}
+      <div style={{ marginBottom: 20 }}>
+        <p style={{ margin: "0 0 4px", fontWeight: 600, color: "var(--foreground)", fontSize: 15 }}>
+          プラン
+        </p>
+        <p style={{ margin: "0 0 10px", fontSize: 13, color: "var(--muted-foreground)" }}>
+          対話単価にプラン倍率が適用されます（Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          {PLAN_OPTIONS.map((opt) => {
+            const selected = plan === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setPlan(opt.value)}
+                style={{
+                  flex: "1 1 160px",
+                  textAlign: "left",
+                  padding: "12px 14px",
+                  minHeight: 44,
+                  borderRadius: 10,
+                  border: `1px solid ${selected ? "rgba(124,58,237,0.6)" : "var(--border)"}`,
+                  background: selected ? "rgba(124,58,237,0.15)" : "rgba(255,255,255,0.02)",
+                  color: "var(--foreground)",
+                  cursor: "pointer",
+                }}
+              >
+                <span style={{ display: "block", fontWeight: 700, fontSize: 14 }}>
+                  {opt.label} <span style={{ color: "#a78bfa" }}>×{opt.multiplier.toFixed(1)}</span>
+                </span>
+                <span style={{ display: "block", fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
+                  {opt.desc}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* 課金ステータストグル */}
       <div
