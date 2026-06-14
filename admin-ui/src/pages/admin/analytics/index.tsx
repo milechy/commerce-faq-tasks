@@ -30,6 +30,7 @@ import { TrendChartsSection } from "./TrendChartsSection";
 import { QualityChartsRow } from "./QualityChartsRow";
 import { LowScoreSessionsTable } from "./LowScoreSessionsTable";
 import { ConversionSection } from "./ConversionSection";
+import { MetricsTimeseriesSection } from "./MetricsTimeseriesSection";
 
 ChartJS.register(
   CategoryScale,
@@ -399,6 +400,9 @@ export default function AnalyticsDashboardPage() {
               setTechSortAsc={setTechSortAsc}
             />
           )}
+
+          {/* Phase72-D: メトリクス時系列（super_admin のみ表示） */}
+          {isSuperAdmin && <MetricsTimeseriesSection isSuperAdmin={isSuperAdmin} />}
         </>
       )}
     </div>
