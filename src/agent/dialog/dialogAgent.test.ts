@@ -52,7 +52,7 @@ const mockOrchestrator = runDialogOrchestrator as jest.MockedFunction<typeof run
 const mockPlanner = planMultiStepQuery as jest.MockedFunction<typeof planMultiStepQuery>;
 const mockSalesFlow = runSalesFlowWithLogging as jest.MockedFunction<typeof runSalesFlowWithLogging>;
 const mockDetectIntents = detectSalesIntents as jest.MockedFunction<typeof detectSalesIntents>;
-const mockPool = pool as { query: jest.Mock };
+const mockPool = pool as unknown as { query: jest.Mock };
 
 /** ベースとなる planner plan の戻り値 */
 const basePlan = {
