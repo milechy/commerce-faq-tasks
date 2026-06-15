@@ -60,6 +60,15 @@
     : [window.location.origin];
 
   /* ------------------------------------------------------------------ */
+  /* 1b. URL サニタイザー（商品カード等の外部 URL 検証）                   */
+  /* ------------------------------------------------------------------ */
+
+  // DB 値を信頼しない多層防御: https? スキーム以外の URL（javascript: 等）を拒否
+  function safeHttpUrl(u) {
+    return (typeof u === 'string' && /^https?:\/\//i.test(u.trim())) ? u.trim() : '';
+  }
+
+  /* ------------------------------------------------------------------ */
   /* 2a. PostHog SDK 読み込み + イベントキャプチャ                        */
   /* ------------------------------------------------------------------ */
 
@@ -706,6 +715,54 @@
     '    border-radius: 0;',
     '  }',
     '}',
+
+    /* 商品カード */
+    '@keyframes product-card-slide-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }',
+    '.product-card {',
+    '  margin-top: 8px;',
+    '  border-radius: 12px;',
+    '  border: 1px solid #e2e8f0;',
+    '  background: #fff;',
+    '  overflow: hidden;',
+    '  max-width: 280px;',
+    '  animation: product-card-slide-in 0.25s ease both;',
+    '}',
+    '.product-card-img {',
+    '  width: 100%;',
+    '  height: auto;',
+    '  display: block;',
+    '  object-fit: cover;',
+    '  max-height: 180px;',
+    '}',
+    '.product-card-body {',
+    '  padding: 10px 12px;',
+    '}',
+    '.product-card-name {',
+    '  font-size: 14px;',
+    '  font-weight: 600;',
+    '  color: #1e293b;',
+    '  margin: 0 0 4px;',
+    '}',
+    '.product-card-price {',
+    '  font-size: 14px;',
+    '  color: #475569;',
+    '  margin: 0 0 8px;',
+    '}',
+    '.product-cta {',
+    '  display: block;',
+    '  min-height: 44px;',
+    '  width: 100%;',
+    '  border: none;',
+    '  border-radius: 8px;',
+    '  background: var(--accent);',
+    '  color: #fff;',
+    '  font-size: 16px;',
+    '  cursor: pointer;',
+    '  padding: 10px 14px;',
+    '  text-align: center;',
+    '}',
+    '.product-cta:hover { opacity: 0.9; }',
+    '.product-cta:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
   ].join('\n');
 
   shadow.appendChild(styleEl);
@@ -1945,6 +2002,43 @@
       } else {
         inner.appendChild(bubble);
       }
+      // 商品カード（recommend ステージで productCard が設定されている場合）
+      if (msg.productCard) {
+        var pc = msg.productCard;
+        var cardEl = el('div', { className: 'product-card' });
+        var guardedImgUrl = safeHttpUrl(pc.image_url || '');
+        if (guardedImgUrl) {
+          var imgEl = el('img', { className: 'product-card-img', loading: 'lazy', alt: pc.name || '' });
+          imgEl.src = guardedImgUrl;
+          cardEl.appendChild(imgEl);
+        }
+        var bodyEl = el('div', { className: 'product-card-body' });
+        if (pc.name) {
+          var nameEl = el('div', { className: 'product-card-name' });
+          nameEl.textContent = pc.name;
+          bodyEl.appendChild(nameEl);
+        }
+        if (pc.price) {
+          var priceEl = el('div', { className: 'product-card-price' });
+          priceEl.textContent = pc.price;
+          bodyEl.appendChild(priceEl);
+        }
+        var guardedCtaUrl = safeHttpUrl(pc.cta_url || '');
+        if (guardedCtaUrl) {
+          var ctaBtn = el('button', { className: 'product-cta', type: 'button' });
+          ctaBtn.textContent = '詳細を見る';
+          ctaBtn.addEventListener('click', function () {
+            try {
+              window.open(guardedCtaUrl, '_blank', 'noopener,noreferrer');
+            } catch (_e) {
+              // ignore navigation failure
+            }
+          });
+          bodyEl.appendChild(ctaBtn);
+        }
+        cardEl.appendChild(bodyEl);
+        inner.appendChild(cardEl);
+      }
       var ts = el('div', { className: 'ts' });
       ts.textContent = formatTime(msg.timestamp);
       inner.appendChild(ts);
@@ -2262,6 +2356,21 @@
           ? json.data.content
           : '申し訳ありません。現在回答を生成できませんでした。再度お試しください。';
 
+        var rawCard = json.data && json.data.productCard;
+        var productCard = null;
+        if (rawCard && typeof rawCard === 'object') {
+          productCard = {
+            product_id: rawCard.product_id != null ? String(rawCard.product_id) : '',
+            name: rawCard.name != null ? String(rawCard.name) : '',
+            price: rawCard.price != null ? String(rawCard.price) : '',
+            image_url: safeHttpUrl(rawCard.image_url != null ? String(rawCard.image_url) : ''),
+            cta_url: safeHttpUrl(rawCard.cta_url != null ? String(rawCard.cta_url) : ''),
+          };
+          // image_url も cta_url も price も空の場合はカード自体を表示しない
+          if (!productCard.image_url && !productCard.cta_url && !productCard.price) {
+            productCard = null;
+          }
+        }
         var assistantMsg = {
           id: (json.data && json.data.id) || generateMsgId(),
           role: 'assistant',
@@ -2280,6 +2389,7 @@
                 })
               : undefined,
           timestamp: (json.data && json.data.timestamp) || Date.now(),
+          productCard: productCard || undefined,
         };
         messages.push(assistantMsg);
 
