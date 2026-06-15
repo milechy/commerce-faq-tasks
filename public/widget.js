@@ -977,6 +977,8 @@
   var fabMediaContainer = null;  // FABメディアコンテナ（アバター映像/静止画）
   var fabVideoEl = null;         // LiveKitビデオ要素（FAB↔avatarAreaで移動）
   var lastAvatarImageUrl = null; // 最後に確認されたアバター画像URL（closePanel時のフォールバック）
+  var avatarInactivityTimer = null;
+  var AVATAR_INACTIVITY_MS = 33000; // 大表示非アクティブタイムアウト（33秒）
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -1145,7 +1147,7 @@
           startFabLoading();
           if (isOpen) {
             avatarArea.style.display = 'flex';
-            panel.classList.add('avatar-active');
+            setAvatarActive();
           }
           initAnamAvatar(data.sessionToken);
           return;
@@ -1175,7 +1177,7 @@
             startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
-              panel.classList.add('avatar-active');
+              setAvatarActive();
             }
             showAvatarPlaceholder(lkData.imageUrl);
             initLiveKitAvatar();
@@ -1212,7 +1214,7 @@
             startFabLoading();
             if (isOpen) {
               avatarArea.style.display = 'flex';
-              panel.classList.add('avatar-active');
+              setAvatarActive();
             }
             showAvatarPlaceholder(lkData.imageUrl);
             initLiveKitAvatar();
@@ -1477,7 +1479,7 @@
           avatarStatusText.style.display = 'none';
           voiceModeIndicator.style.display = '';
 
-          panel.classList.add('avatar-active');
+          setAvatarActive();
           textarea.setAttribute('placeholder', placeholderText);
 
           // 右上フローティング閉じるボタン
@@ -1779,7 +1781,7 @@
         console.log('[FAQ Widget] LiveKit reconnected');
         if (isOpen) {
           avatarArea.style.display = 'flex';
-          panel.classList.add('avatar-active');
+          setAvatarActive();
         }
       });
 
@@ -1789,7 +1791,7 @@
           voiceModeIndicator.style.display = '';
 
           // フルスクリーンアバターUIへ切り替え
-          panel.classList.add('avatar-active');
+          setAvatarActive();
           textarea.setAttribute('placeholder', placeholderText);
 
           // 右上フローティング閉じるボタンを生成
@@ -2017,7 +2019,7 @@
     // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
     if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
       avatarArea.style.display = 'flex';
-      panel.classList.add('avatar-active');
+      setAvatarActive();
       document.body.style.overflow = 'hidden';
     } else {
       // avatarConfig が事前取得済み、またはセッションキャッシュがあれば即ダークUI適用
@@ -2027,7 +2029,7 @@
       }
       if (shouldDark) {
         avatarArea.style.display = 'flex';
-        panel.classList.add('avatar-active');
+        setAvatarActive();
         document.body.style.overflow = 'hidden';
       }
       fetchAvatarConfig();
@@ -2036,6 +2038,7 @@
 
   function closePanel() {
     isOpen = false;
+    if (avatarInactivityTimer) { clearTimeout(avatarInactivityTimer); avatarInactivityTimer = null; }
     panel.classList.remove('open');
     panel.setAttribute('aria-hidden', 'true');
     fab.setAttribute('aria-label', 'チャットを開く');
@@ -2123,8 +2126,40 @@
     return fallback;
   }
 
+  /* ------------------------------------------------------------------ */
+  /* アバター大表示 非アクティブタイマー                                     */
+  /* ------------------------------------------------------------------ */
+
+  function resetAvatarInactivityTimer() {
+    if (avatarInactivityTimer) { clearTimeout(avatarInactivityTimer); avatarInactivityTimer = null; }
+    if (!panel.classList.contains('avatar-active')) return;
+    avatarInactivityTimer = setTimeout(collapseAvatarLargeView, AVATAR_INACTIVITY_MS);
+  }
+
+  function collapseAvatarLargeView() {
+    avatarInactivityTimer = null;
+    panel.classList.remove('avatar-active');
+    avatarArea.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  function setAvatarActive() {
+    panel.classList.add('avatar-active');
+    resetAvatarInactivityTimer();
+  }
+
   function sendMessage(text) {
     if (!text || !text.trim() || isLoading) return;
+
+    // 非アクティブで大表示が折りたたまれていた場合は再展開（接続維持中のみ）
+    var _roomOk = window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected';
+    var _anamOk = avatarProvider === 'anam' && (anamClient || window.__anamClient);
+    if ((_roomOk || _anamOk) && !panel.classList.contains('avatar-active')) {
+      avatarArea.style.display = 'flex';
+      panel.classList.add('avatar-active');
+      document.body.style.overflow = 'hidden';
+    }
+    resetAvatarInactivityTimer();
 
     hideError();
 
@@ -2333,6 +2368,7 @@
       isRecording = true;
       micBtn.classList.add('recording');
       micBtn.setAttribute('aria-label', '録音中 — タップで停止');
+      resetAvatarInactivityTimer();
 
       var recognition = new SpeechRecognitionAPI();
       recognition.lang = 'ja-JP';
