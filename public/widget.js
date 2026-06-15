@@ -2246,6 +2246,17 @@
       fetchOptions.signal = currentAbortController.signal;
     }
 
+    // thinking_start: API応答待ち中の沈黙をフィラーで埋める（lemonslice 接続中のみ）
+    try {
+      var _tsRoom = window.__rajiuceRoom;
+      if (avatarProvider === 'lemonslice' && _tsRoom && _tsRoom.localParticipant) {
+        var _tsPayload = new TextEncoder().encode(JSON.stringify({ type: 'thinking_start' }));
+        _tsRoom.localParticipant.publishData(_tsPayload, { reliable: true });
+      }
+    } catch (_tsErr) {
+      // non-fatal: フィラー送信失敗は無視して通常フローを継続
+    }
+
     fetch(apiBase + '/api/chat', fetchOptions)
       .then(function (res) {
         if (!res.ok) {
