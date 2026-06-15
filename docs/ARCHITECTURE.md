@@ -266,3 +266,18 @@ Web Speech API の代替として Fish Audio の音声認識 API を導入。Fir
 - 実装: `src/api/avatar/fishAsrRoutes.ts`
 - `language: "ja"`, `ignore_timestamps: true` 固定
 - Widget の音声入力フローを Web Speech API から本エンドポイントへ完全置換
+
+### LemonSlice ペルソナスワップ × 商品カテゴリ（設計中 — Asana GID 1215698823592534）
+
+会話中に話題の商品カテゴリ（家電・ファッション等）が変わるタイミングで、LiveKit 接続を維持したままアバターの「人格」を切り替える機能。
+
+**変更軸（再接続なし）**:
+- 外見: LemonSlice Control API `update_image`（`agent_image_url` モードのみ）
+- 人格: `update_agent_prompt` / `update_idle_prompt`
+- 声質: Fish Audio `reference_id` を次回 TTS 合成から差し替え
+
+**データフロー**: RAG カテゴリ推定 → `ragCategory` をダイアログレスポンスに含める → Widget が `category_change` DataChannel イベントを agent.py へ送信 → `category_persona_map[category]` に応じて Control API を呼ぶ
+
+**DB**: `avatar_configs.category_persona_map JSONB`（カテゴリキー → `agent_image_url / agent_prompt / voice_id` のマッピング）
+
+詳細: `docs/LEMONSLICE_PERSONA_SWAP_CATEGORY_DESIGN.md`
