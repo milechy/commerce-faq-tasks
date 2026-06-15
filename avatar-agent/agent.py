@@ -601,8 +601,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "idle_timeout": 300,
                 "response_done_timeout": 4.0,  # 0.5→4.0: 複数センテンスTTS間の合成待ち(~1-2s)でアイドル遷移しないよう延長
                 "agent_idle_prompt": effective_agent_idle_prompt,
-                "width": 1080,
-                "height": 1920,
+                # width/height 省略 → LemonSlice デフォルト (368×560) を使用
                 # I-3: LemonSlice API 公式パラメータ。明示 kwarg ではなく **kwargs →
                 # extra_payload 経由で API payload にマージされる (plugin avatar.py:55)
                 "simulcast": True,
@@ -614,8 +613,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "idle_timeout": 300,
                 "response_done_timeout": 4.0,  # 0.5→4.0: 同上
                 "agent_idle_prompt": effective_agent_idle_prompt,
-                "width": 1080,
-                "height": 1920,
+                # width/height 省略 → LemonSlice デフォルト (368×560) を使用
                 "simulcast": True,  # I-3: 同上
             }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)

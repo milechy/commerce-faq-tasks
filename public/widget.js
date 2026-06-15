@@ -468,7 +468,7 @@
     /* アバターエリア（avatar=true テナントのみ表示） */
     '.avatar-area {',
     '  width: min(calc(100% - 16px), 260px);',
-    '  aspect-ratio: 9 / 16;',
+    '  aspect-ratio: 368 / 560;',
     '  margin: 8px auto;',
     '  border-radius: 12px;',
     '  background: linear-gradient(160deg, #0f0f1a 0%, #1a1a2e 60%, #0d1117 100%);',
@@ -561,7 +561,7 @@
     '  background: #000;',
     '  overflow: hidden;',
     '}',
-    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: auto; max-width: 100%; aspect-ratio: 9 / 16; object-fit: cover; object-position: center; margin: 0 auto; display: block; }',
+    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: auto; max-width: 100%; aspect-ratio: 368 / 560; object-fit: cover; object-position: center; margin: 0 auto; display: block; }',
 
     /* 閉じるボタン: アバターエリア右上 */
     '.avatar-close-btn {',
