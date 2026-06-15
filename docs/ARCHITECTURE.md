@@ -233,3 +233,11 @@ Widget                          agent.py
 - フィラー文言（"少々お待ちください"）はハードコード。多言語テナント対応は別タスク（P2）。
 - `thinking_start` 連打時のキュー管理（asyncio.Lock）は未実装。別タスク（P2）。
 - livekit-agents 1.6.0 へのバージョン bump と `ctx.with_filler()` ネイティブ移行も別タスク（P2）。
+
+### SalesFlow × 商品カード同期表示 — LiveKit Data Tracks（Asana #99021）
+
+`recommend` ステージで返す商品カードをアバターの発話開始タイミングと同期して表示する設計。REST レスポンス到着時に即時表示する現行方式の 500ms〜1s のズレを解消し、アバターが喋り始めた瞬間にカードが現れる体験を実現する。
+
+Data Flow の変更点: Widget が `tts_request` に `productCard` を同乗させ → agent.py がTTS 開始直後に `product_card` イベントを Data Channel で返送 → Widget が DataReceived で受信してカードを描画。
+
+詳細: `docs/SALESFLOW_PRODUCT_CARD_LIVEKIT.md`
