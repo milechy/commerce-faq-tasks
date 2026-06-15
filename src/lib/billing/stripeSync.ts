@@ -27,6 +27,16 @@ export function getLivekitMonthlyFeeJpy(): number {
   return Number(process.env.LIVEKIT_MONTHLY_FEE_JPY ?? '0') || 0;
 }
 
+/**
+ * 環境変数からプラットフォーム共通の月額固定費(JPY)を取得。未設定/0 なら按分課金は無効。
+ * Supabase / Cloudflare / Hetzner VPS / Elasticsearch 等、全テナントが共有するインフラ費の
+ * 合計額を1本で設定する（費目別の内訳は持たない）。アバター専用費(LemonSlice/LiveKit)とは
+ * 分母が異なり、全アクティブテナントで割る（scope='all'）。
+ */
+export function getPlatformMonthlyFeeJpy(): number {
+  return Number(process.env.PLATFORM_MONTHLY_FEE_JPY ?? '0') || 0;
+}
+
 /** 月額固定費を当月アバター利用テナント数で均等割りした1テナント分(JPY、切り上げ)。 */
 export function monthlyShareJpy(monthlyFeeJpy: number, tenantCount: number): number {
   if (monthlyFeeJpy <= 0 || tenantCount <= 0) return 0;
@@ -37,11 +47,14 @@ export function monthlyShareJpy(monthlyFeeJpy: number, tenantCount: number): num
 export const lemonsliceShareJpy = monthlyShareJpy;
 
 /**
- * アバター基盤の月額固定費（LemonSlice / LiveKit Ship など）を、当月アバターを
- * 利用したテナント間で均等割りして Stripe 請求に上乗せする共通ロジック。
- * テナント単位・月1回・冪等。両費目は同じ分母（当月 feature_used='avatar' かつ
- * billing_enabled=true のテナント数）で割られ、整合した割り勘になる（仕様B）。
+ * 月額固定費を当月アクティブなテナント間で均等割りして Stripe 請求に上乗せする共通ロジック。
+ * テナント単位・月1回・冪等。
  * - 無効化: 対象 feeJpy が未設定/0 のとき何もしない（デフォルト OFF）
+ * - cfg.scope で分母（割り勘の対象集合）を切り替える:
+ *   - 'avatar': アバター専用費（LemonSlice / LiveKit）。当月 feature_used='avatar' かつ
+ *     billing_enabled=true のテナントで割る（仕様B）。アバターを使ったテナントだけが負担。
+ *   - 'all': プラットフォーム共通費（Supabase/Cloudflare/Hetzner/ES）。当月に何らかの利用が
+ *     あり billing_enabled=true のテナントで割る。アバター有無を問わず全アクティブテナントが負担。
  *
  * cfg.table は in-code 定数のみ（ユーザー入力を渡さない）— SQL に直挿しするため。
  */
@@ -54,32 +67,35 @@ async function _chargeMonthlyFixedShare(
   startDate: string,
   endDate: string,
   customerId: string | null,
-  cfg: { feeJpy: number; table: string; label: string; idempotencyPrefix: string }
+  cfg: { feeJpy: number; table: string; label: string; idempotencyPrefix: string; scope: 'avatar' | 'all' }
 ): Promise<void> {
-  const { feeJpy, table, label, idempotencyPrefix } = cfg;
+  const { feeJpy, table, label, idempotencyPrefix, scope } = cfg;
   if (feeJpy <= 0) return; // デフォルト OFF
   if (!customerId) {
     logger.warn({ tenantId, fee: label }, '[stripeSync] monthly fixed: no customerId, skipping');
     return;
   }
 
-  // このテナントが当月アバターを利用したか（仕様B）
+  // scope='avatar' はアバター利用のみを対象にする。'all' は機能を問わない（in-code 定数）。
+  const featureFilter = scope === 'avatar' ? "AND feature_used = 'avatar'" : '';
+
+  // このテナントが当月に対象の利用をしたか
   const used = await db.query(
     `SELECT 1 FROM usage_logs
-      WHERE tenant_id = $1 AND feature_used = 'avatar'
+      WHERE tenant_id = $1 ${featureFilter}
         AND created_at >= $2 AND created_at < $3 LIMIT 1`,
     [tenantId, startDate, endDate]
   );
   if (used.rows.length === 0) return;
 
-  // 当月アバターを利用した課金対象テナント数（按分の分母）
+  // 当月の課金対象テナント数（按分の分母）
   const cntRes = await db.query(
     `SELECT COUNT(DISTINCT u.tenant_id)::integer AS cnt
        FROM usage_logs u
        JOIN tenants t ON t.id = u.tenant_id
-      WHERE u.feature_used = 'avatar'
-        AND u.created_at >= $1 AND u.created_at < $2
-        AND t.billing_enabled = true`,
+      WHERE u.created_at >= $1 AND u.created_at < $2
+        AND t.billing_enabled = true
+        ${scope === 'avatar' ? "AND u.feature_used = 'avatar'" : ''}`,
     [startDate, endDate]
   );
   const tenantCount: number = Math.max(1, cntRes.rows[0]?.cnt ?? 1);
@@ -335,8 +351,8 @@ async function _reportTenantUsage(
         '[stripeSync] usage reported to Stripe'
       );
 
-      // アバター基盤の月額固定費の按分を上乗せ（デフォルト OFF・冪等・仕様B）。
-      // 両費目とも同じ分母（当月アバター利用テナント数）で均等割りする。
+      // 月額固定費の按分を上乗せ（いずれもデフォルト OFF・冪等）。
+      // アバター専用費(LemonSlice/LiveKit)は scope='avatar'（アバター利用テナントで割る）。
       await _chargeMonthlyFixedShare(
         db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId,
         {
@@ -344,6 +360,7 @@ async function _reportTenantUsage(
           table:            'lemonslice_monthly_charges',
           label:            'LemonSlice',
           idempotencyPrefix:'lemonslice-monthly',
+          scope:            'avatar',
         }
       );
       // LiveKit (Ship プラン) 月額固定費の按分（LEMONSLICE と独立・冪等テーブルも別）
@@ -354,6 +371,19 @@ async function _reportTenantUsage(
           table:            'livekit_monthly_charges',
           label:            'LiveKit',
           idempotencyPrefix:'livekit-monthly',
+          scope:            'avatar',
+        }
+      );
+      // プラットフォーム共通費(Supabase/Cloudflare/Hetzner/ES の合計)の按分。
+      // scope='all'＝アバター有無を問わず当月アクティブな全テナントで均等割りする。
+      await _chargeMonthlyFixedShare(
+        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId,
+        {
+          feeJpy:           getPlatformMonthlyFeeJpy(),
+          table:            'platform_monthly_charges',
+          label:            'プラットフォーム基本料',
+          idempotencyPrefix:'platform-monthly',
+          scope:            'all',
         }
       );
       return;
