@@ -195,3 +195,41 @@ hkobayashi の環境で非決定的に失敗していたため。`anamRoutes.ts`
 SalesFlow の会話ステート（clarify / propose / recommend / close）に連動して、Fish Audio S2 の感情インラインタグを各発話に動的注入する機能。静的なテナント固定タグ（`avatar_configs.emotion_tags`）と独立した per-utterance 動的レイヤーを `avatar-agent/emotion_tags.py` が提供する。
 
 詳細: `docs/AVATAR_SALESFLOW_EMOTION_TAGS.md`
+
+### アバター沈黙ゼロ化 — thinking_start フィラー機構（PR #402）
+
+LLM 応答生成中にアバターが無音になる「沈黙」を DataChannel ベースのフィラー発話で埋める。
+
+#### フロー
+
+```
+Widget                          agent.py
+  │                                │
+  ├─ /api/chat 呼び出し直前         │
+  │   publishData({type:"thinking_start"}) ──→ on_data_received
+  │                                │     └─ session.say("少々お待ちください",
+  │                                │          allow_interruptions=True)
+  │                                │          → _filler_state["handle"] に保存
+  │                                │
+  ├─ /api/chat レスポンス受信        │
+  │   publishData({type:"tts_request", text:"…"}) ──→ handle_tts_request
+  │                                │     └─ _filler_state["handle"].interrupt()
+  │                                │          → session.say(prefix + reply_text)
+```
+
+#### 実装詳細
+
+- **Widget 側** (`public/widget.js`): `/api/chat` fetch 直前に `thinking_start` を DataChannel で publish。
+  条件: `avatarProvider === 'lemonslice'` かつ `window.__rajiuceRoom.localParticipant` が存在する場合のみ。
+  失敗は non-fatal（try/catch で無視してフロー継続）。
+- **Agent 側** (`avatar-agent/agent.py`): `_filler_state: dict = {"handle": None}` でフィラーハンドルを保持。
+  - `thinking_start` 受信 → `session.say("少々お待ちください", allow_interruptions=True)` 開始、ハンドルを保存。
+  - `tts_request` 受信 → `fh.interrupt()` でフィラーを中断し、本来の応答テキストを `session.say()` で再生。
+
+#### 設計上の注意
+
+- 当初タスク名の `ctx.with_filler()` は livekit-agents 1.6.0 の `RunContext` 専用 API であり、
+  現行 SDK (1.5.17) には存在しない。DataChannel 経由の代替設計で同等の体験を実現している。
+- フィラー文言（"少々お待ちください"）はハードコード。多言語テナント対応は別タスク（P2）。
+- `thinking_start` 連打時のキュー管理（asyncio.Lock）は未実装。別タスク（P2）。
+- livekit-agents 1.6.0 へのバージョン bump と `ctx.with_filler()` ネイティブ移行も別タスク（P2）。
