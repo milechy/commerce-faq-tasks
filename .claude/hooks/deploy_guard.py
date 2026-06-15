@@ -104,7 +104,6 @@ def is_blocked_in_24h_mode(cmd: str) -> bool:
 # The official deploy command is covered by ALLOWED_DEPLOY_COMMANDS allowlist.
 DEPLOY_KEYWORDS = [
     'pm2',
-    'git pull',
     # 'git push' is intentionally omitted — normal dev workflow, not a deploy action
     # 'pnpm build' / 'npm build' are omitted — local builds are normal dev workflow;
     # VPS builds are already caught via 'ssh root@' keyword
