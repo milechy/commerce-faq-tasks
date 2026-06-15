@@ -211,39 +211,61 @@ export async function runDialogTurn(
   };
 
   // Phase73: recommend ステージ時に faq_docs から商品メタを取得して productCard に設定
+  // 今ターンの ragSources（RAG で実際に使われた chunk）に含まれる faq_docs 行から
+  // product_image_url を持つ上位 ranked 行を選択する。
+  // 関連 chunk が存在しない / 商品メタがない場合は productCard を設定しない（fallback 禁止）。
   if (salesResult.nextStage === "recommend" && pool) {
     try {
-      const row = await pool.query<{
-        id: number;
-        question: string;
-        product_image_url: string | null;
-        product_price: string | null;
-        product_cta_url: string | null;
-      }>(
-        `SELECT id, question, product_image_url, product_price, product_cta_url
-         FROM faq_docs
-         WHERE tenant_id = $1
-           AND product_image_url IS NOT NULL
-         ORDER BY id DESC
-         LIMIT 1`,
-        [effectiveTenantId]
-      );
-      const meta = row.rows[0];
-      if (
-        meta &&
-        (meta.product_image_url || meta.product_price || meta.product_cta_url)
-      ) {
-        const card: ProductCard = {
-          product_id: String(meta.id),
-          name: meta.question.slice(0, 100),
-          price: meta.product_price ?? "",
-          image_url: meta.product_image_url ?? "",
-          cta_url: meta.product_cta_url ?? "",
-        };
-        result.productCard = card;
+      const ragSources = orchestrated.ragSources ?? [];
+      // faq ソース（書籍チャンクは faq_docs と無関係）の chunk_id のみ抽出し、
+      // rerank スコア順（降順）に並べる
+      const faqChunkIds = ragSources
+        .filter((s) => s.source === "faq")
+        .sort((a, b) => b.score - a.score)
+        .map((s) => s.chunk_id);
+
+      if (faqChunkIds.length === 0) {
+        // 関連 FAQ チャンクなし → productCard は設定しない
+      } else {
+        // faq_embeddings.id = chunk_id → metadata->>'faq_id' = faq_docs.id
+        // rerank スコア順を保持するために ORDER BY array_position を使用
+        const row = await pool.query<{
+          id: number;
+          question: string;
+          product_image_url: string | null;
+          product_price: string | null;
+          product_cta_url: string | null;
+        }>(
+          `SELECT fd.id, fd.question, fd.product_image_url, fd.product_price, fd.product_cta_url
+           FROM faq_embeddings fe
+           JOIN faq_docs fd
+             ON fe.metadata->>'faq_id' ~ '^[0-9]+$'
+            AND fd.id = (fe.metadata->>'faq_id')::bigint
+           WHERE fe.tenant_id = $1
+             AND fe.id = ANY($2)
+             AND fd.tenant_id = $1
+             AND fd.product_image_url IS NOT NULL
+           ORDER BY array_position($2, fe.id)
+           LIMIT 1`,
+          [effectiveTenantId, faqChunkIds]
+        );
+        const meta = row.rows[0];
+        if (
+          meta &&
+          (meta.product_image_url || meta.product_price || meta.product_cta_url)
+        ) {
+          const card: ProductCard = {
+            product_id: String(meta.id),
+            name: meta.question.slice(0, 100),
+            price: meta.product_price ?? "",
+            image_url: meta.product_image_url ?? "",
+            cta_url: meta.product_cta_url ?? "",
+          };
+          result.productCard = card;
+        }
       }
     } catch {
-      // non-fatal: DB 未適用環境（migration 未実行）でも動作を継続する
+      // non-fatal: DB 未適用環境（migration 未実行 / column not found）でも動作を継続する
     }
   }
 

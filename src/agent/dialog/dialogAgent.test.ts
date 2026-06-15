@@ -61,7 +61,7 @@ const basePlan = {
   confidence: "high" as const,
 };
 
-/** ベースとなる orchestrator の戻り値 */
+/** ベースとなる orchestrator の戻り値（ragSources なし） */
 const baseOrchestrated = {
   answer: "テスト回答",
   steps: [],
@@ -71,6 +71,16 @@ const baseOrchestrated = {
   gapSignal: undefined,
   llmUsage: { prompt_tokens: 0, completion_tokens: 0 },
   ragSources: undefined,
+};
+
+/** ragSources に faq チャンクを含む orchestrator の戻り値 */
+const orchestratedWithRagSources = {
+  ...baseOrchestrated,
+  ragSources: [
+    { chunk_id: "emb-100", source: "faq" as const, score: 0.95 },
+    { chunk_id: "emb-200", source: "faq" as const, score: 0.80 },
+    { chunk_id: "emb-300", source: "book" as const, score: 0.75 }, // book は除外される
+  ],
 };
 
 beforeEach(() => {
@@ -84,16 +94,16 @@ beforeEach(() => {
   mockOrchestrator.mockResolvedValue(baseOrchestrated);
 });
 
-describe("runDialogTurn — Phase73 productCard", () => {
-  it("recommend ステージで faq_docs に商品メタがある場合 productCard が設定される", async () => {
-    // salesFlow が recommend を返す
+describe("runDialogTurn — Phase73 productCard (RAG関連度マッチング)", () => {
+  it("recommend ステージ + ragSources に faq チャンクあり → 商品メタ行で productCard が設定される", async () => {
     mockSalesFlow.mockResolvedValue({
       nextStage: "recommend",
       prompt: "おすすめの商品はこちらです。",
       meta: {} as any,
     });
+    mockOrchestrator.mockResolvedValue(orchestratedWithRagSources);
 
-    // pool.query が商品メタ行を返す
+    // JOIN クエリが商品メタ行を返す（chunk_id=emb-100 → faq_docs.id=42）
     mockPool.query.mockResolvedValueOnce({
       rows: [
         {
@@ -117,20 +127,73 @@ describe("runDialogTurn — Phase73 productCard", () => {
     expect(result.productCard?.price).toBe("9800");
     expect(result.productCard?.image_url).toBe("https://example.com/img.jpg");
     expect(result.productCard?.cta_url).toBe("https://example.com/product");
+
+    // DB クエリに faq chunk_id 配列が渡されることを確認
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = mockPool.query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/faq_embeddings/);
+    expect(sql).toMatch(/faq_docs/);
+    // book チャンク emb-300 は除外され faq チャンクのみ渡される
+    expect(params[1]).toEqual(["emb-100", "emb-200"]);
   });
 
-  it("recommend ステージでも faq_docs に商品メタがない場合 productCard は undefined", async () => {
+  it("recommend ステージ + ragSources が undefined → DB クエリなし → productCard は undefined", async () => {
     mockSalesFlow.mockResolvedValue({
       nextStage: "recommend",
       prompt: "おすすめ商品",
       meta: {} as any,
     });
-
-    // pool.query が空行を返す
-    mockPool.query.mockResolvedValueOnce({ rows: [] });
+    // ragSources は undefined（orchestrator が返さなかった）
+    mockOrchestrator.mockResolvedValue({ ...baseOrchestrated, ragSources: undefined });
 
     const result = await runDialogTurn({
       sessionId: "test-session-2",
+      tenantId: "test-tenant",
+      message: "おすすめを教えて",
+    });
+
+    expect(result.productCard).toBeUndefined();
+    // 関連チャンクなし → DB クエリ不要
+    expect(mockPool.query).not.toHaveBeenCalled();
+  });
+
+  it("recommend ステージ + ragSources が book のみ → DB クエリなし → productCard は undefined", async () => {
+    mockSalesFlow.mockResolvedValue({
+      nextStage: "recommend",
+      prompt: "おすすめ商品",
+      meta: {} as any,
+    });
+    mockOrchestrator.mockResolvedValue({
+      ...baseOrchestrated,
+      ragSources: [
+        { chunk_id: "emb-999", source: "book" as const, score: 0.90 },
+      ],
+    });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-3",
+      tenantId: "test-tenant",
+      message: "おすすめを教えて",
+    });
+
+    expect(result.productCard).toBeUndefined();
+    // book チャンクのみで faq_docs JOIN は不要
+    expect(mockPool.query).not.toHaveBeenCalled();
+  });
+
+  it("recommend ステージ + ragSources あり + DB が空行 → productCard は undefined（最新商品へのフォールバックなし）", async () => {
+    mockSalesFlow.mockResolvedValue({
+      nextStage: "recommend",
+      prompt: "おすすめ商品",
+      meta: {} as any,
+    });
+    mockOrchestrator.mockResolvedValue(orchestratedWithRagSources);
+
+    // 該当チャンクの faq_docs に product_image_url がない
+    mockPool.query.mockResolvedValueOnce({ rows: [] });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-4",
       tenantId: "test-tenant",
       message: "おすすめを教えて",
     });
@@ -147,7 +210,7 @@ describe("runDialogTurn — Phase73 productCard", () => {
     });
 
     const result = await runDialogTurn({
-      sessionId: "test-session-3",
+      sessionId: "test-session-5",
       tenantId: "test-tenant",
       message: "価格を教えて",
     });
@@ -163,12 +226,13 @@ describe("runDialogTurn — Phase73 productCard", () => {
       prompt: "おすすめ",
       meta: {} as any,
     });
+    mockOrchestrator.mockResolvedValue(orchestratedWithRagSources);
 
     // DB 未適用環境を想定（migration 未実行 = column not found エラー）
     mockPool.query.mockRejectedValueOnce(new Error('column "product_image_url" does not exist'));
 
     const result = await runDialogTurn({
-      sessionId: "test-session-4",
+      sessionId: "test-session-6",
       tenantId: "test-tenant",
       message: "おすすめを教えて",
     });
