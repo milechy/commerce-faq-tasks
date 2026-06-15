@@ -532,9 +532,10 @@
     '  background: linear-gradient(135deg, #050510 0%, #0a0a1a 100%);',
     '  overscroll-behavior: contain;',
     '  display: grid;',
-    '  grid-template-columns: 3fr 2fr;',
+    '  grid-template-columns: auto minmax(280px, 1fr);',
     '  grid-template-rows: auto 1fr auto;',
     '  width: min(1080px, calc(100vw - 48px));',
+    '  height: min(640px, calc(100vh - 80px));',
     '}',
 
     /* ヘッダー: 右カラム上部（ダークテーマ） */
@@ -552,8 +553,10 @@
     '  grid-column: 1;',
     '  grid-row: 1 / 4;',
     '  position: relative;',
-    '  width: 100%;',
     '  height: 100%;',
+    '  width: auto;',
+    '  aspect-ratio: 368 / 560;',
+    '  max-width: 48%;',
     '  min-height: unset;',
     '  max-height: unset;',
     '  margin: 0;',
@@ -561,7 +564,7 @@
     '  background: #000;',
     '  overflow: hidden;',
     '}',
-    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: auto; max-width: 100%; aspect-ratio: 368 / 560; object-fit: cover; object-position: center; margin: 0 auto; display: block; }',
+    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: 100%; object-fit: cover; object-position: center top; display: block; }',
 
     /* 閉じるボタン: アバターエリア右上 */
     '.avatar-close-btn {',
@@ -694,6 +697,7 @@
     '  .panel.avatar-active .avatar-area {',
     '    grid-column: unset; grid-row: unset;',
     '    width: 100%; height: 55%;',
+    '    max-width: none; aspect-ratio: auto;',
     '    min-height: 280px; max-height: 400px;',
     '    border-radius: 0;',
     '  }',
