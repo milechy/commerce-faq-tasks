@@ -1,7 +1,7 @@
 // src/lib/billing/stripeSync.test.ts
 // プラン倍率の課金数量算出ロジック検証（Phase2A: リクエスト課金 × プラン別単価）
 
-import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy } from './stripeSync';
+import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy } from './stripeSync';
 
 describe('planMultiplier', () => {
   it('プラン別の倍率を返す（Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
@@ -93,5 +93,24 @@ describe('getLivekitMonthlyFeeJpy（LiveKit Ship 月額・デフォルト OFF）
     process.env.LIVEKIT_MONTHLY_FEE_JPY = '7500';
     expect(getLivekitMonthlyFeeJpy()).toBe(7500);
     expect(monthlyShareJpy(getLivekitMonthlyFeeJpy(), 3)).toBe(2500);
+  });
+});
+
+describe('getPlatformMonthlyFeeJpy（プラットフォーム共通費・全テナント按分・デフォルト OFF）', () => {
+  const saved = process.env.PLATFORM_MONTHLY_FEE_JPY;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.PLATFORM_MONTHLY_FEE_JPY;
+    else process.env.PLATFORM_MONTHLY_FEE_JPY = saved;
+  });
+
+  it('未設定なら 0（按分課金は無効）', () => {
+    delete process.env.PLATFORM_MONTHLY_FEE_JPY;
+    expect(getPlatformMonthlyFeeJpy()).toBe(0);
+  });
+
+  it('Supabase+Cloudflare+Hetzner+ES の合計を1本で設定し全テナントで割れる', () => {
+    process.env.PLATFORM_MONTHLY_FEE_JPY = '30000';
+    expect(getPlatformMonthlyFeeJpy()).toBe(30000);
+    expect(monthlyShareJpy(getPlatformMonthlyFeeJpy(), 4)).toBe(7500);
   });
 });
