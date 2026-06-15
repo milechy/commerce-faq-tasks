@@ -63,6 +63,7 @@ import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
 import { registerAnamRoutes } from "./api/avatar/anamRoutes";
 import { registerAnamChatStreamRoutes } from "./api/avatar/anamChatStreamRoutes";
 import { registerFishTtsRoutes } from "./api/avatar/fishTtsRoutes";
+import { registerFishAsrRoutes } from "./api/avatar/fishAsrRoutes";
 import { registerAvatarGenerationRoutes } from "./api/admin/avatar/generationRoutes";
 import { registerFalGenerationRoutes } from "./api/admin/avatar/falGenerationRoutes";
 import { registerPremiumGenerationRoutes } from "./api/admin/avatar/premiumGenerationRoutes";
@@ -583,6 +584,8 @@ registerAnamRoutes(app, apiStack);
 registerAnamChatStreamRoutes(app, apiStack);
 // Phase42: Fish Audio TTS (Anam内蔵TTS回避 — 自然な日本語音声)
 registerFishTtsRoutes(app, apiStack);
+// Fish Audio ASR: Web Speech API 置換 — Transcribe-1 で信頼性向上
+registerFishAsrRoutes(app, apiStack);
 
 // Internal: avatar-agent → TTS/Avatar使用量レポート（X-Internal-Request: 1 認証）
 registerInternalUsageRoutes(app);
