@@ -805,7 +805,7 @@
 
         <!-- 名前・役割 -->
         <div style="text-align:center;">
-          <div style="font-size:18px; font-weight:700; color:#fff; margin-bottom:4px;">AIアシスタント</div>
+          <div id="demo-avatar-name" style="font-size:18px; font-weight:700; color:#fff; margin-bottom:4px;">AIアシスタント</div>
           <div style="font-size:12px; color:rgba(196,181,253,0.8);">R2C — 24時間自動接客AI</div>
         </div>
 
@@ -1551,9 +1551,44 @@
     });
   };
 
+  // ===== 7. Avatar Image Loader =====
+  // r2c_default テナントのアバター設定から画像URLを取得し、LP上の全アバター円に表示
+  function loadAvatarImage() {
+    fetch('https://api.r2c.biz/api/avatar/room-token', {
+      method: 'POST',
+      headers: {
+        'x-api-key': 'rjc_77aaa951edede3a8faa44161a6f505eca44f4c0517e051ec1f8bb6bc9f22b29b',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ connect: false })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.enabled || !data.imageUrl) return;
+      var imageUrl = data.imageUrl;
+      var avatarName = data.avatarName || 'Rei';
+
+      // 全ての .lp-avatar-circle 要素の絵文字を画像に置き換え
+      document.querySelectorAll('.lp-avatar-circle').forEach(function(circle) {
+        var img = document.createElement('img');
+        img.src = imageUrl;
+        img.alt = avatarName;
+        img.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover;object-position:top center;display:block;';
+        circle.textContent = '';
+        circle.appendChild(img);
+      });
+
+      // デモセクション左パネルのアバター名も更新
+      var nameEl = document.getElementById('demo-avatar-name');
+      if (nameEl) nameEl.textContent = avatarName;
+    })
+    .catch(function() { /* フォールバック: 絵文字のまま */ });
+  }
+
   // ===== Initialize =====
   document.addEventListener('DOMContentLoaded', function() {
     setupIntersectionObserver();
+    loadAvatarImage();
 
     // Disable mobile auto-expand: widget should only float on mobile
     var isMobile = window.innerWidth < 768;

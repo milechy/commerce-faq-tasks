@@ -25,8 +25,8 @@
 
   <script
     src="/widget.js"
-    data-api-key="rjc_9c265687daa95378e33a9cf3f9fa41c3a5d90729c7000b52694e471c5a5dd4d6"
-    data-tenant="lp-demo"
+    data-api-key="rjc_77aaa951edede3a8faa44161a6f505eca44f4c0517e051ec1f8bb6bc9f22b29b"
+    data-tenant="r2c_default"
     data-accent-color="#7c3aed"
     data-greeting="こんにちは！R2Cについて何でも聞いてください 😊"
     data-scripted-responses='[{"keywords":["月","料金","費用","いくら","コスト","価格","いく"],"answer":"R2Cは完全従量課金制です！1対話あたり5円〜で、固定費ゼロ。初月は完全無料なのでリスクなく始められます。"},{"keywords":["日","期間","導入","最短","何日","いつから","スタート"],"answer":"最短3日で本番稼働できます！管理画面でFAQ・URLを登録するだけ。初期設定はR2Cチームが丁寧にサポートします。"},{"keywords":["ec","ショップ","通販","サイト","合い","対応","使え"],"answer":"ECサイトに特に強いです！深夜の商品Q&A対応、カート離脱防止、アップセル誘導を全自動化。導入後に離脱率が下がったケースが多数あります。"},{"keywords":["スタッフ","連携","人間","有人","エスカレーション","引き継"],"answer":"AIが対応しきれない場合はスタッフへシームレスに引き継げます。会話履歴もそのまま共有されるので、お客様に同じ説明を繰り返させません。"},{"keywords":["*"],"answer":"ご質問ありがとうございます！R2Cは1行のコードを貼るだけで、24時間AIが自動接客します。月々の費用は1対話5円〜、初月完全無料です。導入期間は最短3日。ぜひお気軽にご相談ください！"}]'
@@ -36,7 +36,13 @@
     var widgetReady = false;
 
     function getWidgetShadow() {
-      var host = document.body.querySelector('div');
+      var host = document.getElementById('faq-chat-widget-host');
+      if (!host) {
+        var divs = document.body.querySelectorAll('div');
+        for (var i = 0; i < divs.length; i++) {
+          if (divs[i].shadowRoot) { host = divs[i]; break; }
+        }
+      }
       return host ? host.shadowRoot : null;
     }
 
