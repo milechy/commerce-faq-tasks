@@ -162,9 +162,9 @@ Widget (widget.js)
 ### Avatar設定管理
 
 - `avatar_configs` テーブルでテナント別アバター設定を管理
-- Admin UI `/admin/avatar/studio` で設定（画像生成・声マッチング・プロンプト生成）
+- Admin UI `/admin/avatar/studio` で設定（画像生成・声マッチング・プロンプト生成・音声クローン作成）
 - 画像: Leonardo.ai で生成 → Supabase Storage にアップロード → HTTP URL を保存
-- 声: Fish Audio (language=ja フィルタ) で検索・選択
+- 声: Fish Audio (language=ja フィルタ) で検索・選択、またはテナント独自音声クローンを作成
 - `is_active = true` の設定が `/api/internal/avatar-config` 経由で agent.py に渡される
 
 ### avatar_provider フィールド
@@ -241,3 +241,28 @@ Widget                          agent.py
 Data Flow の変更点: Widget が `tts_request` に `productCard` を同乗させ → agent.py がTTS 開始直後に `product_card` イベントを Data Channel で返送 → Widget が DataReceived で受信してカードを描画。
 
 詳細: `docs/SALESFLOW_PRODUCT_CARD_LIVEKIT.md`
+
+### テナント別ブランド声質クローン — Fish Audio Voice Cloning（Phase A/B/C — PR #344/#358/#359/#365）
+
+テナントが自社専用の音声クローンをアバターに設定できる差別化機能。
+
+**TTS フロー**:
+- `avatar-agent/agent.py` の `FishAudioTTS` が `s2-pro` モデルを明示指定
+- `avatar_configs.voice_id` を `reference_id` として Fish Audio API に送信（テナント別声質）
+- HTTP chunk streaming（`iter_chunked(4096)`）で TTFA ~200ms を実現
+
+**音声クローン作成**:
+- `POST /v1/admin/avatar/configs/:id/voice-clone`（multipart: `audio` + `name`）
+- Fish Audio `POST /model` で永続クローン作成 → `voice_id` を DB 保存
+- Admin UI `/admin/avatar/studio` の `StudioVoiceCloneSection` から操作可能
+
+詳細: `docs/FISH_AUDIO_VOICE_CLONING.md`
+
+### Fish Audio ASR — Transcribe-1 音声認識（PR #410）
+
+Web Speech API の代替として Fish Audio の音声認識 API を導入。Firefox 非対応・ネットワーク依存の問題を解消。
+
+- エンドポイント: `POST /api/voice/asr`（multipart `audio`、最大 25MB）
+- 実装: `src/api/avatar/fishAsrRoutes.ts`
+- `language: "ja"`, `ignore_timestamps: true` 固定
+- Widget の音声入力フローを Web Speech API から本エンドポイントへ完全置換
