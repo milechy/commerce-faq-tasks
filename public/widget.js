@@ -467,9 +467,9 @@
 
     /* アバターエリア（avatar=true テナントのみ表示） */
     '.avatar-area {',
-    '  width: calc(100% - 16px);',
-    '  height: 300px;',
-    '  margin: 8px;',
+    '  width: min(calc(100% - 16px), 260px);',
+    '  aspect-ratio: 9 / 16;',
+    '  margin: 8px auto;',
     '  border-radius: 12px;',
     '  background: linear-gradient(160deg, #0f0f1a 0%, #1a1a2e 60%, #0d1117 100%);',
     '  overflow: hidden;',
@@ -484,7 +484,7 @@
     '  width: 100%;',
     '  height: 100%;',
     '  object-fit: cover;',
-    '  object-position: center top;',
+    '  object-position: center;',
     '  border-radius: 12px;',
     '}',
 
@@ -523,7 +523,7 @@
     '}',
 
     /* モバイル最適化 */
-    '@media (max-width: 390px) { .avatar-area { height: 240px; } }',
+    '@media (max-width: 390px) { .avatar-area { width: min(calc(100% - 16px), 200px); } }',
 
     /* ───── avatar-active: PC 横並び2パネル / モバイル縦スプリット ───── */
 
@@ -561,7 +561,7 @@
     '  background: #000;',
     '  overflow: hidden;',
     '}',
-    '.panel.avatar-active .avatar-video { border-radius: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; }',
+    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: auto; max-width: 100%; aspect-ratio: 9 / 16; object-fit: cover; object-position: center; margin: 0 auto; display: block; }',
 
     /* 閉じるボタン: アバターエリア右上 */
     '.avatar-close-btn {',
