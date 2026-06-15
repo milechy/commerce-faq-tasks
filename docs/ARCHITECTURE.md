@@ -189,3 +189,9 @@ Phase42 では Lemonslice から Anam.ai への一本化を試みたが、以下
 `ts-jest@29` + `jest@30` のバージョン不一致による `jest.mock` hoisting 問題により、
 hkobayashi の環境で非決定的に失敗していたため。`anamRoutes.ts` 本体は将来再検討のため残存。
 根本原因の解消は別タスク（ts-jest 30.x アップグレード）で検討予定。
+
+### SalesFlow × Fish Audio S2 感情タグ連動（PR #406）
+
+SalesFlow の会話ステート（clarify / propose / recommend / close）に連動して、Fish Audio S2 の感情インラインタグを各発話に動的注入する機能。静的なテナント固定タグ（`avatar_configs.emotion_tags`）と独立した per-utterance 動的レイヤーを `avatar-agent/emotion_tags.py` が提供する。
+
+詳細: `docs/AVATAR_SALESFLOW_EMOTION_TAGS.md`
