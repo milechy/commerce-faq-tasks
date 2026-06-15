@@ -22,19 +22,30 @@ export function getLemonsliceMonthlyFeeJpy(): number {
   return Number(process.env.LEMONSLICE_MONTHLY_FEE_JPY ?? '0') || 0;
 }
 
+/** 環境変数から LiveKit (Ship プラン) 月額固定費(JPY)を取得。未設定/0 なら按分課金は無効。 */
+export function getLivekitMonthlyFeeJpy(): number {
+  return Number(process.env.LIVEKIT_MONTHLY_FEE_JPY ?? '0') || 0;
+}
+
 /** 月額固定費を当月アバター利用テナント数で均等割りした1テナント分(JPY、切り上げ)。 */
-export function lemonsliceShareJpy(monthlyFeeJpy: number, tenantCount: number): number {
+export function monthlyShareJpy(monthlyFeeJpy: number, tenantCount: number): number {
   if (monthlyFeeJpy <= 0 || tenantCount <= 0) return 0;
   return Math.ceil(monthlyFeeJpy / tenantCount);
 }
 
+/** @deprecated 後方互換のためのエイリアス。新規は monthlyShareJpy を使う。 */
+export const lemonsliceShareJpy = monthlyShareJpy;
+
 /**
- * LemonSlice 月額固定費を、当月アバターを利用したテナント間で均等割りして
- * Stripe 請求に上乗せする（テナント単位・月1回・冪等）。
- * - 対象: 当月 feature_used='avatar' の利用があり billing_enabled=true のテナント（仕様B）
- * - 無効化: LEMONSLICE_MONTHLY_FEE_JPY 未設定/0 のとき何もしない（デフォルト OFF）
+ * アバター基盤の月額固定費（LemonSlice / LiveKit Ship など）を、当月アバターを
+ * 利用したテナント間で均等割りして Stripe 請求に上乗せする共通ロジック。
+ * テナント単位・月1回・冪等。両費目は同じ分母（当月 feature_used='avatar' かつ
+ * billing_enabled=true のテナント数）で割られ、整合した割り勘になる（仕様B）。
+ * - 無効化: 対象 feeJpy が未設定/0 のとき何もしない（デフォルト OFF）
+ *
+ * cfg.table は in-code 定数のみ（ユーザー入力を渡さない）— SQL に直挿しするため。
  */
-async function _chargeLemonsliceMonthlyShare(
+async function _chargeMonthlyFixedShare(
   db: any,
   stripe: any,
   logger: pino.Logger,
@@ -42,12 +53,13 @@ async function _chargeLemonsliceMonthlyShare(
   periodYyyyMm: string,
   startDate: string,
   endDate: string,
-  customerId: string | null
+  customerId: string | null,
+  cfg: { feeJpy: number; table: string; label: string; idempotencyPrefix: string }
 ): Promise<void> {
-  const monthlyFeeJpy = getLemonsliceMonthlyFeeJpy();
-  if (monthlyFeeJpy <= 0) return; // デフォルト OFF
+  const { feeJpy, table, label, idempotencyPrefix } = cfg;
+  if (feeJpy <= 0) return; // デフォルト OFF
   if (!customerId) {
-    logger.warn({ tenantId }, '[stripeSync] lemonslice monthly: no customerId, skipping');
+    logger.warn({ tenantId, fee: label }, '[stripeSync] monthly fixed: no customerId, skipping');
     return;
   }
 
@@ -71,12 +83,12 @@ async function _chargeLemonsliceMonthlyShare(
     [startDate, endDate]
   );
   const tenantCount: number = Math.max(1, cntRes.rows[0]?.cnt ?? 1);
-  const share = lemonsliceShareJpy(monthlyFeeJpy, tenantCount);
+  const share = monthlyShareJpy(feeJpy, tenantCount);
   if (share <= 0) return;
 
   // 冪等: テナント×月で1回だけ。INSERT 成功時のみ Stripe 請求を作成する。
   const ins = await db.query(
-    `INSERT INTO lemonslice_monthly_charges (tenant_id, period_yyyymm, amount_jpy, tenant_count)
+    `INSERT INTO ${table} (tenant_id, period_yyyymm, amount_jpy, tenant_count)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (tenant_id, period_yyyymm) DO NOTHING
      RETURNING tenant_id`,
@@ -90,21 +102,21 @@ async function _chargeLemonsliceMonthlyShare(
         customer:    customerId,
         amount:      share, // JPY は最小単位=1円
         currency:    'jpy',
-        description: `LemonSlice 月額按分 ${periodYyyyMm} (1/${tenantCount})`,
+        description: `${label} 月額按分 ${periodYyyyMm} (1/${tenantCount})`,
       },
-      { idempotencyKey: `lemonslice-monthly:${tenantId}:${periodYyyyMm}` }
+      { idempotencyKey: `${idempotencyPrefix}:${tenantId}:${periodYyyyMm}` }
     );
     logger.info(
-      { tenantId, periodYyyyMm, share, tenantCount, monthlyFeeJpy },
-      '[stripeSync] lemonslice monthly share charged'
+      { tenantId, periodYyyyMm, share, tenantCount, feeJpy, fee: label },
+      '[stripeSync] monthly fixed share charged'
     );
   } catch (err) {
     // Stripe 失敗時は冪等レコードを取り消して次回再試行できるようにする
     await db.query(
-      `DELETE FROM lemonslice_monthly_charges WHERE tenant_id = $1 AND period_yyyymm = $2`,
+      `DELETE FROM ${table} WHERE tenant_id = $1 AND period_yyyymm = $2`,
       [tenantId, periodYyyyMm]
     );
-    logger.error({ err, tenantId, periodYyyyMm }, '[stripeSync] lemonslice monthly charge failed, rolled back');
+    logger.error({ err, tenantId, periodYyyyMm, fee: label }, '[stripeSync] monthly fixed charge failed, rolled back');
   }
 }
 
@@ -323,9 +335,26 @@ async function _reportTenantUsage(
         '[stripeSync] usage reported to Stripe'
       );
 
-      // LemonSlice 月額固定費の按分を上乗せ（デフォルト OFF・冪等・仕様B）
-      await _chargeLemonsliceMonthlyShare(
-        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId
+      // アバター基盤の月額固定費の按分を上乗せ（デフォルト OFF・冪等・仕様B）。
+      // 両費目とも同じ分母（当月アバター利用テナント数）で均等割りする。
+      await _chargeMonthlyFixedShare(
+        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId,
+        {
+          feeJpy:           getLemonsliceMonthlyFeeJpy(),
+          table:            'lemonslice_monthly_charges',
+          label:            'LemonSlice',
+          idempotencyPrefix:'lemonslice-monthly',
+        }
+      );
+      // LiveKit (Ship プラン) 月額固定費の按分（LEMONSLICE と独立・冪等テーブルも別）
+      await _chargeMonthlyFixedShare(
+        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId,
+        {
+          feeJpy:           getLivekitMonthlyFeeJpy(),
+          table:            'livekit_monthly_charges',
+          label:            'LiveKit',
+          idempotencyPrefix:'livekit-monthly',
+        }
       );
       return;
     } catch (err) {
