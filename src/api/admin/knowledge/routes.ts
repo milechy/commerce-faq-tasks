@@ -39,6 +39,90 @@ interface FaqEntryWithDuplicate extends FaqEntry {
   } | null;
 }
 
+/** Phase73: スクレイプで抽出した商品メタ（OG/JSON-LD） */
+interface ProductMeta {
+  product_image_url: string | null;
+  product_price: string | null;
+  product_cta_url: string | null;
+}
+
+/**
+ * Phase73: HTML から OG/JSON-LD を regex で抽出して商品メタを返す。
+ * 依存追加禁止 — cheerio/jsdom 不使用、regex のみ。
+ * JSON-LD parse 失敗は non-fatal（握りつぶし）。
+ */
+function extractProductMeta(html: string, pageUrl: string): ProductMeta {
+  // og:image
+  const ogImageMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+  const ogImage = ogImageMatch?.[1] ?? null;
+
+  // 価格: og:price:amount → product:price:amount → JSON-LD
+  const ogPriceMatch = html.match(/<meta[^>]+property=["']og:price:amount["'][^>]+content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:amount["']/i)
+    ?? html.match(/<meta[^>]+property=["']product:price:amount["'][^>]+content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']product:price:amount["']/i);
+  let ogPrice = ogPriceMatch?.[1] ?? null;
+
+  // cta_url: og:url → fallback to pageUrl
+  const ogUrlMatch = html.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:url["']/i);
+  let ctaUrl = ogUrlMatch?.[1] ?? pageUrl;
+
+  // JSON-LD 優先採用（@type=Product の場合）
+  const ldJsonMatch = html.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+  if (ldJsonMatch) {
+    for (const block of ldJsonMatch) {
+      const inner = block.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim();
+      try {
+        const data = JSON.parse(inner) as Record<string, unknown>;
+        const objs = Array.isArray(data) ? data : [data];
+        for (const obj of objs) {
+          if (typeof obj !== 'object' || obj === null) continue;
+          const typed = obj as Record<string, unknown>;
+          if (typed['@type'] !== 'Product') continue;
+          // image 優先採用
+          let resolvedImage: string | null = ogImage;
+          if (typed['image']) {
+            const img = typed['image'];
+            if (typeof img === 'string') {
+              resolvedImage = img;
+            } else if (Array.isArray(img) && typeof img[0] === 'string') {
+              resolvedImage = img[0];
+            } else if (typeof img === 'object' && img !== null && typeof (img as Record<string, unknown>)['url'] === 'string') {
+              resolvedImage = (img as Record<string, unknown>)['url'] as string;
+            }
+          }
+          return {
+            product_image_url: resolvedImage,
+            product_price: extractJsonLdPrice(typed) ?? ogPrice,
+            product_cta_url: typeof typed['url'] === 'string' ? typed['url'] : ctaUrl,
+          };
+        }
+      } catch {
+        // non-fatal: JSON.parse 失敗は握りつぶす
+      }
+    }
+  }
+
+  return {
+    product_image_url: ogImage,
+    product_price: ogPrice,
+    product_cta_url: ctaUrl,
+  };
+}
+
+/** JSON-LD Product オブジェクトから offers.price を文字列として取得 */
+function extractJsonLdPrice(product: Record<string, unknown>): string | null {
+  const offers = product['offers'];
+  if (!offers || typeof offers !== 'object') return null;
+  const o = (Array.isArray(offers) ? offers[0] : offers) as Record<string, unknown>;
+  if (!o) return null;
+  const price = o['price'];
+  if (price === undefined || price === null) return null;
+  return String(price);
+}
+
 /** query/header からテナントIDを解決（bodyから取得禁止 — CLAUDE.md） */
 function resolveTenantId(req: Request): string | null {
   const fromQuery = (req.query.tenant || req.query.tenant_id) as string | undefined;
@@ -584,7 +668,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { urls, category } = parsed.data;
-    const results: { url: string; faqs: FaqEntryWithDuplicate[]; error?: string }[] = [];
+    const results: { url: string; faqs: FaqEntryWithDuplicate[]; productMeta?: ProductMeta; error?: string }[] = [];
 
     // 既存FAQ質問を一度だけ取得（重複防止のためプロンプトに渡す）
     let existingRows: { question: string; answer: string }[] = [];
@@ -605,6 +689,9 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           headers: { "User-Agent": "Mozilla/5.0 (compatible; R2C/1.0)" },
           signal: AbortSignal.timeout(10_000),
         }).then((r) => r.text());
+
+        // Phase73: OG/JSON-LD から商品メタを抽出（script/style 除去前の生 HTML を使う）
+        const productMeta = extractProductMeta(html, url);
 
         const text = html
           .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -635,7 +722,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
                 : null,
           };
         });
-        results.push({ url, faqs: faqsWithDuplicate });
+        results.push({ url, faqs: faqsWithDuplicate, productMeta });
       } catch (err) {
         results.push({ url, faqs: [], error: String(err).slice(0, 200) });
       }
@@ -663,6 +750,12 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
               .array(z.object({ question: z.string(), answer: z.string(), category: z.string().optional() }))
               .min(1)
               .max(20),
+            // Phase73: preview から引き継いだ商品メタ（省略可）
+            productMeta: z.object({
+              product_image_url: z.string().nullable().optional(),
+              product_price: z.string().nullable().optional(),
+              product_cta_url: z.string().nullable().optional(),
+            }).optional(),
           })
         )
         .min(1)
@@ -703,10 +796,12 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           continue;
         }
         const faqCategory = categoryOverride || faq.category || "general";
+        // Phase73: preview から引き継いだ商品メタを適用（各 item 単位）
+        const pm = item.productMeta;
         try {
           const r = await db.query(
-            `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published)
-             VALUES ($1, $2, $3, $4, $5, true)
+            `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published, product_image_url, product_price, product_cta_url)
+             VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8)
              RETURNING id`,
             [
               target,
@@ -714,6 +809,9 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
               faq.answer.slice(0, 2000),
               faqCategory,
               [item.url],
+              pm?.product_image_url ?? null,
+              pm?.product_price ?? null,
+              pm?.product_cta_url ?? null,
             ]
           );
           const faqId = r.rows[0].id as number;
