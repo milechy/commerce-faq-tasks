@@ -47,6 +47,13 @@ interface ProductMeta {
 }
 
 /**
+ * http(s) スキームのみを許可するガード。javascript:/data:/相対パス等は null に落とす。
+ * system boundary (外部 HTML からの抽出値) にのみ適用。
+ */
+const safeHttpUrl = (u: unknown): string | null =>
+  typeof u === 'string' && /^https?:\/\//i.test(u.trim()) ? u.trim() : null;
+
+/**
  * Phase73: HTML から OG/JSON-LD を regex で抽出して商品メタを返す。
  * 依存追加禁止 — cheerio/jsdom 不使用、regex のみ。
  * JSON-LD parse 失敗は non-fatal（握りつぶし）。
@@ -94,9 +101,9 @@ function extractProductMeta(html: string, pageUrl: string): ProductMeta {
             }
           }
           return {
-            product_image_url: resolvedImage,
+            product_image_url: safeHttpUrl(resolvedImage),
             product_price: extractJsonLdPrice(typed) ?? ogPrice,
-            product_cta_url: typeof typed['url'] === 'string' ? typed['url'] : ctaUrl,
+            product_cta_url: safeHttpUrl(typeof typed['url'] === 'string' ? typed['url'] : ctaUrl),
           };
         }
       } catch {
@@ -106,9 +113,9 @@ function extractProductMeta(html: string, pageUrl: string): ProductMeta {
   }
 
   return {
-    product_image_url: ogImage,
+    product_image_url: safeHttpUrl(ogImage),
     product_price: ogPrice,
-    product_cta_url: ctaUrl,
+    product_cta_url: safeHttpUrl(ctaUrl),
   };
 }
 
