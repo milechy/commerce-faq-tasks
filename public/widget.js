@@ -561,7 +561,7 @@
     '  background: #000;',
     '  overflow: hidden;',
     '}',
-    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: auto; max-width: 100%; aspect-ratio: 9 / 16; object-fit: cover; object-position: center; margin: 0 auto; display: block; }',
+    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: 100%; object-fit: cover; object-position: center top; display: block; }',
 
     /* 閉じるボタン: アバターエリア右上 */
     '.avatar-close-btn {',
