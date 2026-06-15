@@ -269,6 +269,8 @@ export function createChatHandler(logger: Logger) {
         timestamp: Date.now(),
         tenantId,
         flowState,
+        // Phase73: recommend ステージで productCard が設定されていれば転送
+        ...(result.productCard ? { productCard: result.productCard } : {}),
       };
 
       logger.info(

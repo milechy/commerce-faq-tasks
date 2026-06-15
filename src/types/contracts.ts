@@ -37,6 +37,14 @@ export interface ChatMessage {
     | "propose"
     | "recommend"
     | "close";
+  /** Phase73: recommend ステージ時に設定される商品カード情報 */
+  productCard?: {
+    product_id: string;
+    name: string;
+    price: string;
+    image_url: string;
+    cta_url: string;
+  };
 }
 
 export interface ChatAction {

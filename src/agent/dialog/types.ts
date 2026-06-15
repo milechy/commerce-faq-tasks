@@ -132,6 +132,15 @@ export interface DialogTurnMeta {
   ragSources?: import("../types").RagSource[];
 }
 
+/** Phase73: recommend ステージで乗せる商品カード情報 */
+export interface ProductCard {
+  product_id: string;
+  name: string;
+  price: string;
+  image_url: string;
+  cta_url: string;
+}
+
 export interface DialogTurnResult {
   sessionId: string;
   answer: string | null;
@@ -143,6 +152,8 @@ export interface DialogTurnResult {
   steps: (AgentStep | OrchestratorStep)[];
   final: boolean;
   meta?: DialogTurnMeta;
+  /** Phase73: SalesFlow recommend ステージ時に設定される商品カード情報 */
+  productCard?: ProductCard;
 }
 
 // --- Phase8: Sales-oriented Planner types ---

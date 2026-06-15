@@ -103,3 +103,75 @@ describe('knowledge — requireKnowledgeRole guard', () => {
     expect(res.status).not.toBe(403);
   });
 });
+
+// Phase73 — safeHttpUrl スキーム検証: POST /v1/admin/knowledge/scrape
+describe('scrape — product URL scheme guard (safeHttpUrl)', () => {
+  const SCRAPE_PATH = '/v1/admin/knowledge/scrape?tenant=t1';
+  const adminDecoded = { app_metadata: { role: 'super_admin', tenant_id: 't1' }, email: 't@t.com' };
+
+  function makeScrapeApp(html: string) {
+    const app = makeApp(adminDecoded);
+    // global fetch を mock: 指定 HTML を返す
+    global.fetch = jest.fn().mockResolvedValue({
+      text: () => Promise.resolve(html),
+      ok: true,
+    } as unknown as Response);
+    return app;
+  }
+
+  afterEach(() => {
+    // global.fetch を元に戻す
+    delete (global as Record<string, unknown>)['fetch'];
+  });
+
+  // body テキストは HTML タグ除去後に 50 文字以上必要（routes.ts の text.length < 50 チェック回避）
+  const BODY_PADDING = 'この商品の詳細説明文です。商品情報をここに記載しています。テキストを十分な長さにするためのパディング文章。';
+
+  it('javascript: スキームの og:url → product_cta_url が null', async () => {
+    const html = `<html><head>
+      <meta property="og:url" content="javascript:alert(1)" />
+      <meta property="og:image" content="javascript:xss()" />
+    </head><body>${BODY_PADDING}</body></html>`;
+    const app = makeScrapeApp(html);
+    const res = await request(app)
+      .post(SCRAPE_PATH)
+      .set('Authorization', 'Bearer fake')
+      .send({ urls: ['https://example.com/p/danger'] });
+    expect(res.status).toBe(200);
+    const preview = res.body.preview as Array<{ productMeta?: { product_cta_url: string | null; product_image_url: string | null } }>;
+    expect(preview[0]?.productMeta?.product_cta_url).toBeNull();
+    expect(preview[0]?.productMeta?.product_image_url).toBeNull();
+  });
+
+  it('https: スキームの og:url → product_cta_url にそのまま採用される', async () => {
+    const html = `<html><head>
+      <meta property="og:url" content="https://example.com/p/1" />
+      <meta property="og:image" content="https://cdn.example.com/img.jpg" />
+    </head><body>${BODY_PADDING}</body></html>`;
+    const app = makeScrapeApp(html);
+    const res = await request(app)
+      .post(SCRAPE_PATH)
+      .set('Authorization', 'Bearer fake')
+      .send({ urls: ['https://example.com/p/1'] });
+    expect(res.status).toBe(200);
+    const preview = res.body.preview as Array<{ productMeta?: { product_cta_url: string | null; product_image_url: string | null } }>;
+    expect(preview[0]?.productMeta?.product_cta_url).toBe('https://example.com/p/1');
+    expect(preview[0]?.productMeta?.product_image_url).toBe('https://cdn.example.com/img.jpg');
+  });
+
+  it('data: スキームの og:image → product_image_url が null、pageUrl フォールバックの cta_url は http(s) なら保持', async () => {
+    const html = `<html><head>
+      <meta property="og:image" content="data:image/png;base64,abc" />
+    </head><body>${BODY_PADDING}</body></html>`;
+    const app = makeScrapeApp(html);
+    const res = await request(app)
+      .post(SCRAPE_PATH)
+      .set('Authorization', 'Bearer fake')
+      .send({ urls: ['https://example.com/p/safe'] });
+    expect(res.status).toBe(200);
+    const preview = res.body.preview as Array<{ productMeta?: { product_cta_url: string | null; product_image_url: string | null } }>;
+    expect(preview[0]?.productMeta?.product_image_url).toBeNull();
+    // og:url なし → pageUrl('https://example.com/p/safe') にフォールバック → http(s) なので保持
+    expect(preview[0]?.productMeta?.product_cta_url).toBe('https://example.com/p/safe');
+  });
+});

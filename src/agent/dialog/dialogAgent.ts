@@ -15,7 +15,8 @@ import {
   updateSalesSessionMeta,
   type SalesSessionKey,
 } from "./salesContextStore";
-import type { DialogMessage, DialogTurnInput, DialogTurnResult } from "./types";
+import type { DialogMessage, DialogTurnInput, DialogTurnResult, ProductCard } from "./types";
+import { pool } from "../../lib/db";
 
 // ユーザー入力 + 会話履歴からざっくりトークン数を見積もる。
 // （Phase3 v1 では char/4 の雑な近似で十分）
@@ -208,6 +209,43 @@ export async function runDialogTurn(
       ragSources: orchestrated.ragSources,
     },
   };
+
+  // Phase73: recommend ステージ時に faq_docs から商品メタを取得して productCard に設定
+  if (salesResult.nextStage === "recommend" && pool) {
+    try {
+      const row = await pool.query<{
+        id: number;
+        question: string;
+        product_image_url: string | null;
+        product_price: string | null;
+        product_cta_url: string | null;
+      }>(
+        `SELECT id, question, product_image_url, product_price, product_cta_url
+         FROM faq_docs
+         WHERE tenant_id = $1
+           AND product_image_url IS NOT NULL
+         ORDER BY id DESC
+         LIMIT 1`,
+        [effectiveTenantId]
+      );
+      const meta = row.rows[0];
+      if (
+        meta &&
+        (meta.product_image_url || meta.product_price || meta.product_cta_url)
+      ) {
+        const card: ProductCard = {
+          product_id: String(meta.id),
+          name: meta.question.slice(0, 100),
+          price: meta.product_price ?? "",
+          image_url: meta.product_image_url ?? "",
+          cta_url: meta.product_cta_url ?? "",
+        };
+        result.productCard = card;
+      }
+    } catch {
+      // non-fatal: DB 未適用環境（migration 未実行）でも動作を継続する
+    }
+  }
 
   return result;
 }
