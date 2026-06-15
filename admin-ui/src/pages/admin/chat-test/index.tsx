@@ -52,6 +52,8 @@ const AVATAR_REASON_MESSAGES: Record<string, string> = {
   tenant_not_found: "テナントの情報が見つかりませんでした。設定をご確認ください。",
   migration_required: "アバター用のデータ準備（サーバー側）がまだ完了していません。運営にお問い合わせください。",
   server_error: "アバターの準備中に問題が発生しました。少し待ってから、もう一度お試しください。",
+  livekit_connect_failed: "アバター配信サービスに接続できませんでした。アクセスが混み合っているか、配信の利用上限に達している可能性があります。時間をおいて再度お試しいただくか、配信プランの状況をご確認ください。",
+  livekit_sdk_load_failed: "アバター配信に必要な部品の読み込みに失敗しました。通信環境をご確認のうえ、もう一度お試しください。",
   unknown: "アバターを表示できませんでした。設定をご確認のうえ、もう一度お試しください。",
 };
 
@@ -115,6 +117,12 @@ export default function ChatTestPage() {
       : (previewMode ? (previewTenantName ?? effectiveTenantId) : (user?.tenantName ?? effectiveTenantId));
 
   const cleanupWidget = useCallback(() => {
+    // DOM ホストを消す前に LiveKit Room を明示的に切断する。
+    // widget の Room は window.__rajiuceRoom（ホスト要素の外）に保持されるため、
+    // ホスト削除だけでは切断されず、再注入のたびに接続が残留して increment し、
+    // LiveKit Cloud に /rtc/validate を 429 でレート制限される(=アバターが出ない)。
+    const fw = (window as unknown as { FaqWidget?: { destroy?: () => void } }).FaqWidget;
+    if (fw && typeof fw.destroy === "function") fw.destroy();
     // querySelectorAll で同一IDの重複ホストを全て削除（getElementById は先頭1件のみ）
     document.querySelectorAll("#faq-chat-widget-host").forEach((host) => host.remove());
     if (widgetScriptRef.current) {

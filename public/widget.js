@@ -1569,6 +1569,7 @@
     script.onerror = function () {
       avatarArea.style.display = 'none';
       console.warn('[FAQ Widget] LiveKit SDK load failed');
+      emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'livekit_sdk_load_failed' });
     };
     document.head.appendChild(script);
   }
@@ -1823,12 +1824,16 @@
         .catch(function (e) {
           avatarArea.style.display = 'none';
           console.warn('[FAQ Widget] LiveKit connect failed:', e && e.message);
+          // 接続自体が確立できなかった（LiveKit Cloud のレート制限/上限超過=429 を含む）。
+          // room-token は enabled:true なので、この層の失敗はテストチャットでしか可視化されない。
+          emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'livekit_connect_failed' });
         });
 
       window.__rajiuceRoom = room;
     } catch (e) {
       avatarArea.style.display = 'none';
       console.warn('[FAQ Widget] LiveKit init failed:', e && e.message);
+      emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'livekit_connect_failed' });
     }
   }
 
@@ -2482,6 +2487,12 @@
     close: closePanel,
     toggle: togglePanel,
     getTenantId: function () { return tenantId; },
+    // 完全破棄: LiveKit Room を切断してから DOM ホストを除去する用。
+    // SPA(管理画面テストチャット)が widget を作り直す前に必ず呼ぶこと。
+    // beforeunload は SPA 再注入では発火しないため、これが無いと Room が
+    // window.__rajiuceRoom に残留し、再接続タイマーが回り続けて接続が増殖する
+    // (LiveKit Cloud が /rtc/validate を 429 でレート制限する原因になる)。
+    destroy: function () { try { cleanupLiveKit(); } catch (_e) {} },
   };
 
   // アバター設定を事前取得（パネルを開く前に完了させ、FABクリック時のフラッシュを防止）
