@@ -54,9 +54,14 @@ if [[ "${biz_code}" == "200" ]]; then
   if [[ "${warnings:-0}" -gt 0 ]]; then
     warn_list=$(echo "${biz_body}" | jq -r '.warnings[]' 2>/dev/null | head -3 | tr '\n' '; ')
     messages_24h=$(echo "${biz_body}" | jq -r '.chat_messages_24h // 0' 2>/dev/null || echo "0")
+    # last_chat_message_at 系を除いたインフラ/コード起因の警告数
+    real_warnings=$(echo "${biz_body}" | jq -r '[.warnings[] | select(contains("last_chat_message_at") | not)] | length' 2>/dev/null || echo "${warnings}")
     if [[ "${messages_24h}" -eq 0 ]]; then
       # chat_messages_24h=0 → 非稼働期間の誤警告 (PR #303 修正が未デプロイの場合も含む)
       echo "  ⏭  /health/business → warnings=${warnings} ただし chat_messages_24h=0 (非稼働期間 SKIP): ${warn_list}"
+    elif [[ "${real_warnings}" -eq 0 ]]; then
+      # last_chat_message_at のみ → off-hours CI の誤警告 SKIP (使用量ベースの閾値、コード問題ではない)
+      echo "  ⏭  /health/business → warnings=${warnings} (last_chat_message_at のみ・off-hours SKIP): ${warn_list}"
     else
       fail "/health/business → warnings=${warnings}: ${warn_list}"
     fi
