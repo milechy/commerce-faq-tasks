@@ -1696,6 +1696,11 @@
           if (isOpen) {
             // パネル展開中: avatarAreaに直接追加
             avatarArea.appendChild(videoEl);
+            // アバター映像が実際に表示された瞬間を 33 秒タイマーの起点にする。
+            // 接続成功(room.connect)時点で起動すると LemonSlice のコールドスタート
+            // (映像表示まで ~20s) 分だけ前倒しで折りたたまれ、「立ち上がって ~10 秒で消える」
+            // 症状になる。映像表示時に起動し直して全 33 秒を可視時間に充てる。
+            setAvatarActive();
           } else {
             // パネル閉鎖中: FABにビデオを表示（アイドルモーション表示）
             showFabMedia(videoEl);
