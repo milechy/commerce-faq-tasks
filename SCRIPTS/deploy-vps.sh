@@ -119,6 +119,9 @@ rsync -avz --delete \
   --exclude 'docs/investigation/' \
   --exclude '.wolf/' \
   --exclude 'slack-listener/' \
+  --exclude 'coverage/' \
+  --exclude '.claude/agent-memory/' \
+  --exclude '.claude/worktrees/' \
   ./ "${VPS}:${REMOTE_DIR}/"
 
 # rsync後の所有者正規化: Mac側UID(501)がrsync -a で転送されてもroot:rootに上書き

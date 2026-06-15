@@ -1737,19 +1737,25 @@
 
       room.on(LK.RoomEvent.Disconnected, function () {
         removeAvatarPlaceholder();
-        // フルスクリーンモード解除
-        panel.classList.remove('avatar-active');
-        document.body.style.overflow = '';
-        textarea.setAttribute('placeholder', placeholderText);
-        // 閉じるボタンを削除
+        // パネルが閉じている場合のみフルスクリーンモード解除。
+        // パネル開中（isOpen=true）は closePanel→disconnect のレース: ユーザーが再開したため
+        // 新規接続が始まっているので avatar-active / avatarArea を壊さない。
+        if (!isOpen) {
+          panel.classList.remove('avatar-active');
+          document.body.style.overflow = '';
+          textarea.setAttribute('placeholder', placeholderText);
+        }
+        // 旧 Room の閉じるボタンは常に除去（新接続成功時に新ボタンを追加するため）
         var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
         for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }
         // ミュートボタンをavatarAreaに戻す
         if (avatarMuteBtn && avatarMuteBtn.parentNode !== avatarArea) {
           avatarArea.appendChild(avatarMuteBtn);
         }
-        avatarArea.style.display = 'none';
-        voiceModeIndicator.style.display = 'none';
+        if (!isOpen) {
+          avatarArea.style.display = 'none';
+          voiceModeIndicator.style.display = 'none';
+        }
         window.__rajiuceRoom = null;
         // Room が切断されたら次のパネル開閉で再fetch可能にする
         avatarConfigFetched = false;
@@ -2037,6 +2043,7 @@
 
   function closePanel() {
     isOpen = false;
+    avatarConfigFetched = false; // 次回 openPanel() で再fetch・再接続できるようリセット
     if (avatarInactivityTimer) { clearTimeout(avatarInactivityTimer); avatarInactivityTimer = null; }
     panel.classList.remove('open');
     panel.setAttribute('aria-hidden', 'true');
