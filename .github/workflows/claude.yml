@@ -19,6 +19,8 @@ jobs:
     name: Claude PR Review
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # API クレジット切れ等の一時障害で PR をブロックしない (CI fix #99032)
+    continue-on-error: true
     # pull_request は全件実行、コメントは @claude メンション時のみ
     if: |
       github.event_name == 'pull_request' ||
