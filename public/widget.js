@@ -881,9 +881,8 @@
     micBtn.appendChild(svg);
   })();
 
-  // Web Speech API 非対応ブラウザ・HTTP環境では非表示
-  var SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognitionAPI || !window.isSecureContext) {
+  // MediaRecorder 非対応ブラウザ・HTTP環境では非表示
+  if (!window.MediaRecorder || !navigator.mediaDevices || !window.isSecureContext) {
     micBtn.style.display = 'none';
   }
 
@@ -2347,121 +2346,129 @@
     e.stopPropagation();
   }, { passive: true });
 
-  /* --- マイクボタン: Web Speech API 音声入力 --- */
-  if (SpeechRecognitionAPI) {
+  /* --- マイクボタン: Fish Audio ASR 音声入力 (Transcribe-1) --- */
+  if (window.MediaRecorder && navigator.mediaDevices && window.isSecureContext) {
     var isRecording = false;
-    var currentRecognition = null;
+    var currentRecorder = null;
+    var audioChunks = [];
 
-    function _stopRecognition() {
+    function _resetMicState() {
       isRecording = false;
-      micBtn.classList.remove('recording');
+      micBtn.classList.remove('recording', 'processing');
       micBtn.setAttribute('aria-label', '音声入力');
-      if (currentRecognition) {
-        try { currentRecognition.stop(); } catch (_e) {}
-        currentRecognition = null;
+      micBtn.disabled = false;
+      if (currentRecorder && currentRecorder.state !== 'inactive') {
+        try { currentRecorder.stop(); } catch (_e) {}
       }
-      // 途中の interim テキストをクリア
-      if (textarea.value) {
-        textarea.value = '';
-        autoResizeTextarea();
-        updateSendButton();
-      }
+      currentRecorder = null;
+      audioChunks = [];
+    }
+
+    function _sendAudioForTranscription(blob) {
+      micBtn.classList.remove('recording');
+      micBtn.classList.add('processing');
+      micBtn.setAttribute('aria-label', '変換中…');
+      micBtn.disabled = true;
+
+      var fd = new FormData();
+      fd.append('audio', blob, 'audio.webm');
+
+      fetch(apiBase + '/api/voice/asr', {
+        method: 'POST',
+        headers: { 'x-api-key': apiKey },
+        body: fd,
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          micBtn.classList.remove('processing');
+          micBtn.setAttribute('aria-label', '音声入力');
+          micBtn.disabled = false;
+          isRecording = false;
+          currentRecorder = null;
+          audioChunks = [];
+
+          var text = (data && data.text) ? data.text.trim() : '';
+          if (text) {
+            sendMessage(text);
+          }
+        })
+        .catch(function (err) {
+          console.warn('[FAQ Widget] ASR fetch error:', err && err.message);
+          micBtn.classList.remove('processing');
+          micBtn.classList.add('error');
+          setTimeout(function () { micBtn.classList.remove('error'); }, 500);
+          micBtn.setAttribute('aria-label', '音声入力');
+          micBtn.setAttribute('title', '音声認識に失敗しました');
+          micBtn.disabled = false;
+          isRecording = false;
+          currentRecorder = null;
+          audioChunks = [];
+        });
     }
 
     micBtn.addEventListener('click', function () {
       if (isRecording) {
-        // OFF: 即時リセット（onend を待たない）
-        _stopRecognition();
+        if (currentRecorder && currentRecorder.state === 'recording') {
+          currentRecorder.stop();
+        }
         return;
       }
 
-      // ON: 即時 UI フィードバック（二重クリック防止）
       isRecording = true;
       micBtn.classList.add('recording');
       micBtn.setAttribute('aria-label', '録音中 — タップで停止');
       resetAvatarInactivityTimer();
+      audioChunks = [];
 
-      var recognition = new SpeechRecognitionAPI();
-      recognition.lang = 'ja-JP';
-      recognition.continuous = false;
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
-      currentRecognition = recognition;
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(function (stream) {
+          var mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? 'audio/webm;codecs=opus'
+            : MediaRecorder.isTypeSupported('audio/webm')
+              ? 'audio/webm'
+              : '';
+          var options = mimeType ? { mimeType: mimeType } : {};
+          var recorder = new MediaRecorder(stream, options);
+          currentRecorder = recorder;
 
-      recognition.onstart = function () {
-        // UI は click 時に更新済み
-      };
+          recorder.ondataavailable = function (e) {
+            if (e.data && e.data.size > 0) audioChunks.push(e.data);
+          };
 
-      recognition.onresult = function (event) {
-        var interim = '';
-        var finalText = '';
-        for (var i = event.resultIndex; i < event.results.length; i++) {
-          if (event.results[i].isFinal) {
-            finalText += event.results[i][0].transcript;
-          } else {
-            interim += event.results[i][0].transcript;
-          }
-        }
-        // 途中結果を入力欄にプレビュー表示
-        if (interim) {
-          textarea.value = interim;
-          autoResizeTextarea();
-          updateSendButton();
-        }
-        // 確定結果 → 自動送信
-        if (finalText.trim()) {
-          textarea.value = '';
-          autoResizeTextarea();
-          updateSendButton();
-          sendMessage(finalText.trim());
-        }
-      };
+          recorder.onstop = function () {
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            if (audioChunks.length === 0) {
+              _resetMicState();
+              return;
+            }
+            var blob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+            _sendAudioForTranscription(blob);
+          };
 
-      recognition.onend = function () {
-        isRecording = false;
-        currentRecognition = null;
-        micBtn.classList.remove('recording');
-        micBtn.setAttribute('aria-label', '音声入力');
-        // interim が残っていればクリア
-        if (textarea.value) {
-          textarea.value = '';
-          autoResizeTextarea();
-          updateSendButton();
-        }
-      };
+          recorder.onerror = function (e) {
+            console.warn('[FAQ Widget] MediaRecorder error:', e);
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            _resetMicState();
+            micBtn.classList.add('error');
+            setTimeout(function () { micBtn.classList.remove('error'); }, 500);
+            micBtn.setAttribute('title', '録音に失敗しました');
+          };
 
-      recognition.onerror = function (event) {
-        var errCode = event && event.error;
-        console.warn('[FAQ Widget] Speech recognition error:', errCode);
-        isRecording = false;
-        currentRecognition = null;
-        micBtn.classList.remove('recording');
-        micBtn.classList.add('error');
-        setTimeout(function () { micBtn.classList.remove('error'); }, 500);
-        micBtn.setAttribute('aria-label', '音声入力');
-        var errMsg = errCode === 'not-allowed' || errCode === 'service-not-allowed'
-          ? 'マイク権限が必要です（HTTPS環境でのみ利用可能）'
-          : errCode === 'audio-capture'
-            ? 'マイクが見つかりません'
-            : errCode === 'network'
-              ? 'ネットワークエラーが発生しました'
-              : '音声認識に失敗しました';
-        micBtn.setAttribute('title', errMsg);
-      };
-
-      try {
-        recognition.start();
-      } catch (e) {
-        console.warn('[FAQ Widget] recognition.start() failed:', e && e.message);
-        isRecording = false;
-        currentRecognition = null;
-        micBtn.classList.remove('recording');
-        micBtn.classList.add('error');
-        setTimeout(function () { micBtn.classList.remove('error'); }, 500);
-        micBtn.setAttribute('title', '音声認識を開始できませんでした');
-      }
+          recorder.start();
+        })
+        .catch(function (err) {
+          console.warn('[FAQ Widget] getUserMedia error:', err && err.message);
+          _resetMicState();
+          micBtn.classList.add('error');
+          setTimeout(function () { micBtn.classList.remove('error'); }, 500);
+          var msg = (err && err.name === 'NotAllowedError')
+            ? 'マイク権限が必要です（HTTPS環境でのみ利用可能）'
+            : 'マイクが見つかりません';
+          micBtn.setAttribute('title', msg);
+        });
     });
   }
+
 
   textarea.addEventListener('input', function () {
     autoResizeTextarea();
