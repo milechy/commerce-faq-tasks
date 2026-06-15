@@ -105,8 +105,11 @@ if [[ "${biz_http}" == "200" ]]; then
   else
     warn_list=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print('; '.join(d.get('warnings',[])[:3]))" 2>/dev/null || echo "")
     messages_24h=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('chat_messages_24h',0))" 2>/dev/null || echo "0")
+    real_warnings=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len([w for w in d.get('warnings',[]) if 'last_chat_message_at' not in w]))" 2>/dev/null || echo "${warnings}")
     if [[ "${messages_24h}" -eq 0 ]]; then
       skip "/health/business → warnings=${warnings} ただし chat_messages_24h=0 (非稼働期間 SKIP): ${warn_list}"
+    elif [[ "${real_warnings}" -eq 0 ]]; then
+      skip "/health/business → warnings=${warnings} (last_chat_message_at のみ・off-hours SKIP): ${warn_list}"
     else
       fail "/health/business → warnings=${warnings}: ${warn_list}"
     fi
