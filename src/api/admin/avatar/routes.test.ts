@@ -447,6 +447,25 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("回帰: audio/x-m4a (.m4a macOS Chrome) → Fish Audio 呼び出し + 200", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] })
+      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "m4aボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.m4a",
+        contentType: "audio/x-m4a",
+      });
+
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("テナント越境: 他テナント configId → 404、Fish Audio に到達しない", async () => {
     const dbQuery = jest
       .fn()

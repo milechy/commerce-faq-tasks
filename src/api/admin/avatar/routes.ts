@@ -164,6 +164,8 @@ const ALLOWED_VOICE_MIME_TYPES = [
   "audio/mpeg",
   "audio/wav",
   "audio/mp4",
+  "audio/x-m4a",
+  "audio/m4a",
   "audio/ogg",
 ] as const;
 
