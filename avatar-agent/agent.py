@@ -491,9 +491,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 exc_info=inner_error,
             )
 
+    # フィラーハンドル保持（dict でクロージャ越しに再代入可能にする）
+    _filler_state: dict = {"handle": None}
+
     async def handle_tts_request(reply_text: str) -> None:
         """本体APIの応答テキストをそのままTTSに渡す（Groq呼び出しなし）。"""
         try:
+            # thinking_start フィラーが再生中なら interrupt して本来の発話に切り替える
+            fh = _filler_state["handle"]
+            if fh is not None:
+                try:
+                    fh.interrupt()
+                except Exception:
+                    pass
+                _filler_state["handle"] = None
             logger.info(f"[tts_request] TTS直渡し ({len(reply_text)} chars): {reply_text[:80]!r}")
             session.say(reply_text)
         except Exception as e:
@@ -525,7 +536,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         try:
             msg = json.loads(data_packet.data.decode())
             msg_type = msg.get("type", "")
-            if msg_type == "tts_request":
+            if msg_type == "thinking_start":
+                # フィラー再生: APIレスポンス到着まで沈黙を埋める
+                logger.info("[data_channel] thinking_start — filler started")
+                handle = session.say("少々お待ちください", allow_interruptions=True)
+                _filler_state["handle"] = handle
+            elif msg_type == "tts_request":
                 # Phase6-D: 本体APIの応答テキストをそのままTTSに渡す
                 text = msg.get("text", "").strip()
                 if text:
