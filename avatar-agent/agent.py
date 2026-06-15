@@ -32,6 +32,7 @@ from livekit.agents import tts as agents_tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.plugins import lemonslice
 from livekit.plugins import openai as openai_plugin
+from emotion_tags import sales_flow_emotion_prefix
 
 logger = logging.getLogger("rajiuce-avatar")
 logger.setLevel(logging.INFO)
@@ -493,6 +494,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # フィラーハンドル保持（dict でクロージャ越しに再代入可能にする）
     _filler_state: dict = {"handle": None}
+    # SalesFlow 現在ステート保持（dict でクロージャ越しに再代入可能にする）
+    _sales_state: dict = {"current": None}
 
     async def handle_tts_request(reply_text: str) -> None:
         """本体APIの応答テキストをそのままTTSに渡す（Groq呼び出しなし）。"""
@@ -505,8 +508,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 except Exception:
                     pass
                 _filler_state["handle"] = None
-            logger.info(f"[tts_request] TTS直渡し ({len(reply_text)} chars): {reply_text[:80]!r}")
-            session.say(reply_text)
+            prefix = sales_flow_emotion_prefix(_sales_state["current"])
+            logger.info(f"[tts_request] TTS直渡し state={_sales_state['current']!r} prefix={prefix!r} ({len(reply_text)} chars): {reply_text[:80]!r}")
+            session.say(prefix + reply_text)
         except Exception as e:
             logger.error(f"[handle_tts_request] error: {e}")
 
@@ -556,6 +560,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             elif msg_type == "state_change":
                 # I-4: フロー状態に応じて表情プロンプトを差し替え（fire-and-forget）
                 state = msg.get("state")
+                # SalesFlow 感情タグ注入のためステートを常に保存（STATE_AGENT_PROMPTS 未登録でも保存する）
+                if isinstance(state, str):
+                    _sales_state["current"] = state
                 prompt = STATE_AGENT_PROMPTS.get(state) if isinstance(state, str) else None
                 if prompt:
                     logger.info(f"[data_channel] state_change received: state={state}")
