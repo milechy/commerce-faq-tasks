@@ -531,11 +531,13 @@
     '.panel.avatar-active {',
     '  background: linear-gradient(135deg, #050510 0%, #0a0a1a 100%);',
     '  overscroll-behavior: contain;',
+    /* アバター列は LemonSlice 既定 368×560 をパネル高さから算出（auto+aspect-ratio の正方形潰れを回避） */
+    '  --avatar-h: min(640px, calc(100vh - 80px));',
     '  display: grid;',
-    '  grid-template-columns: auto minmax(280px, 1fr);',
+    '  grid-template-columns: calc(var(--avatar-h) * 368 / 560) minmax(280px, 1fr);',
     '  grid-template-rows: auto 1fr auto;',
     '  width: min(1080px, calc(100vw - 48px));',
-    '  height: min(640px, calc(100vh - 80px));',
+    '  height: var(--avatar-h);',
     '}',
 
     /* ヘッダー: 右カラム上部（ダークテーマ） */
@@ -554,9 +556,7 @@
     '  grid-row: 1 / 4;',
     '  position: relative;',
     '  height: 100%;',
-    '  width: auto;',
-    '  aspect-ratio: 368 / 560;',
-    '  max-width: 48%;',
+    '  width: 100%;',
     '  min-height: unset;',
     '  max-height: unset;',
     '  margin: 0;',
@@ -1691,6 +1691,7 @@
 
       room.on(LK.RoomEvent.TrackSubscribed, function (track) {
         if (track.kind === 'video') {
+          console.log('[FAQ Widget][DIAG] video TrackSubscribed source=' + track.source + ' sid=' + track.sid + ' t=' + Math.round(performance.now()) + 'ms');
           removeAvatarPlaceholder();
           var videoEl = track.attach();
           videoEl.className = 'avatar-video';
@@ -1734,6 +1735,7 @@
       });
 
       room.on(LK.RoomEvent.TrackUnsubscribed, function (track) {
+        console.warn('[FAQ Widget][DIAG] TrackUnsubscribed kind=' + track.kind + ' source=' + track.source + ' sid=' + track.sid + ' t=' + Math.round(performance.now()) + 'ms');
         if (track.kind === 'video') {
           var videos = avatarArea.querySelectorAll('.avatar-video');
           for (var i = 0; i < videos.length; i++) { videos[i].remove(); }
@@ -1744,7 +1746,9 @@
         }
       });
 
-      room.on(LK.RoomEvent.Disconnected, function () {
+      room.on(LK.RoomEvent.Disconnected, function (reason) {
+        console.warn('[FAQ Widget][DIAG] room Disconnected reason=' + reason + ' isOpen=' + isOpen + ' t=' + Math.round(performance.now()) + 'ms');
+        emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'disconnected:' + reason });
         removeAvatarPlaceholder();
         // パネルが閉じている場合のみフルスクリーンモード解除。
         // パネル開中（isOpen=true）は closePanel→disconnect のレース: ユーザーが再開したため
