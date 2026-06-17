@@ -7,12 +7,12 @@
 #   - check_suite / schedule トリガーは base リポジトリの trusted context で実行 (PR コードを checkout しない)
 #   - Tier 判定は pr-risk-scorer.sh (テスト済) を正典に再利用 → Tier S (src/ 等) は絶対に merge しない
 #   - high-risk / do-not-merge / needs-review ラベルで人間が即停止可能
-#   - 必須チェック (Gate 1 / security-scan / path-check / Claude PR Review) が全 green のときのみ merge
+#   - 必須チェック (Gate 1 / security-scan / gitleaks / Claude PR Review) が全 green のときのみ merge
 #   - GITHUB_TOKEN で merge (branch protection の必須チェックは GitHub 側でも二重に強制される)
 #
 # トリガー:
 #   - check_suite completed: CI 完了時に該当 PR を評価
-#   - schedule (30分毎): イベント取りこぼしの backstop sweep
+#   - schedule (2時間毎): イベント取りこぼしの backstop sweep (check_suite が主経路)
 #   - workflow_dispatch: 手動実行 (任意で pr 指定)
 
 name: Auto-merge Tier B
@@ -21,7 +21,7 @@ on:
   check_suite:
     types: [completed]
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
       pr:

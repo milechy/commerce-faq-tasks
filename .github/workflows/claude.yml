@@ -35,6 +35,8 @@ jobs:
       - uses: anthropics/claude-code-action@1b422b3517b51140e4484faab676c5e68b914866 # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 唯一の自動 LLM レビュー = 品質優先で最新 Opus に明示ピン (モデル進化に追従)
+          claude_args: "--model claude-opus-4-8"
           prompt: |
             このPRのコード変更をレビューしてください。
             プロジェクトの CLAUDE.md に定義されたセキュリティ基準・DoD基準で評価します。

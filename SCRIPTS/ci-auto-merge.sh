@@ -29,7 +29,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCORER="${SCRIPT_DIR}/pr-risk-scorer.sh"
 
-DEFAULT_REQUIRED='Gate 1 — typecheck + lint + test,security-scan,path-check,Claude PR Review'
+DEFAULT_REQUIRED='Gate 1 — typecheck + lint + test,security-scan,gitleaks,Claude PR Review'
 BLOCK_LABELS=("high-risk" "do-not-merge" "needs-review")
 
 log() { printf '[ci-auto-merge] %s\n' "$*" >&2; }
@@ -82,8 +82,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
   has_block_label "high-risk,foo" && echo "PASS block: high-risk 検出" || { echo "FAIL block high-risk"; fail=1; }
   has_block_label "needs-review" && echo "PASS block: needs-review 検出" || { echo "FAIL block needs-review"; fail=1; }
   if has_block_label "tier-b,docs"; then echo "FAIL: 無害ラベルを blocked 判定"; fail=1; else echo "PASS block: 無害ラベルは通す"; fi
-  ROLLUP_GREEN='[{"name":"Gate 1 — typecheck + lint + test","conclusion":"SUCCESS"},{"name":"security-scan","conclusion":"SUCCESS"},{"name":"path-check","conclusion":"SUCCESS"},{"name":"Claude PR Review","conclusion":"SUCCESS"}]'
-  ROLLUP_RED='[{"name":"Gate 1 — typecheck + lint + test","conclusion":"FAILURE"},{"name":"security-scan","conclusion":"SUCCESS"},{"name":"path-check","conclusion":"SUCCESS"},{"name":"Claude PR Review","conclusion":"SUCCESS"}]'
+  ROLLUP_GREEN='[{"name":"Gate 1 — typecheck + lint + test","conclusion":"SUCCESS"},{"name":"security-scan","conclusion":"SUCCESS"},{"name":"gitleaks","conclusion":"SUCCESS"},{"name":"Claude PR Review","conclusion":"SUCCESS"}]'
+  ROLLUP_RED='[{"name":"Gate 1 — typecheck + lint + test","conclusion":"FAILURE"},{"name":"security-scan","conclusion":"SUCCESS"},{"name":"gitleaks","conclusion":"SUCCESS"},{"name":"Claude PR Review","conclusion":"SUCCESS"}]'
   ROLLUP_MISSING='[{"name":"security-scan","conclusion":"SUCCESS"}]'
   if all_required_green "$ROLLUP_GREEN" "$DEFAULT_REQUIRED" 2>/dev/null; then echo "PASS green: 全 green 検出"; else echo "FAIL green all"; fail=1; fi
   if all_required_green "$ROLLUP_RED" "$DEFAULT_REQUIRED" 2>/dev/null; then echo "FAIL: red を green 判定"; fail=1; else echo "PASS green: red を検出"; fi
