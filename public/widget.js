@@ -531,10 +531,14 @@
     '.panel.avatar-active {',
     '  background: linear-gradient(135deg, #050510 0%, #0a0a1a 100%);',
     '  overscroll-behavior: contain;',
+    /* アバター列は LemonSlice ネイティブ 9:16 をパネル高さから算出（黒帯/正方形クロップ回避） */
+    '  --avatar-h: min(672px, calc(100vh - 120px));',
     '  display: grid;',
-    '  grid-template-columns: 3fr 2fr;',
+    '  grid-template-columns: calc(var(--avatar-h) * 9 / 16) minmax(320px, 420px);',
     '  grid-template-rows: auto 1fr auto;',
-    '  width: min(1080px, calc(100vw - 48px));',
+    '  height: var(--avatar-h);',
+    '  width: auto;',
+    '  max-width: calc(100vw - 48px);',
     '}',
 
     /* ヘッダー: 右カラム上部（ダークテーマ） */
@@ -561,7 +565,7 @@
     '  background: #000;',
     '  overflow: hidden;',
     '}',
-    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: 100%; object-fit: cover; object-position: center top; display: block; }',
+    '.panel.avatar-active .avatar-video { border-radius: 0; height: 100%; width: 100%; object-fit: cover; object-position: center; display: block; }',
 
     /* 閉じるボタン: アバターエリア右上 */
     '.avatar-close-btn {',
