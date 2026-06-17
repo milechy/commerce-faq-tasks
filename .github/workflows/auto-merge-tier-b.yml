@@ -7,7 +7,7 @@
 #   - check_suite / schedule トリガーは base リポジトリの trusted context で実行 (PR コードを checkout しない)
 #   - Tier 判定は pr-risk-scorer.sh (テスト済) を正典に再利用 → Tier S (src/ 等) は絶対に merge しない
 #   - high-risk / do-not-merge / needs-review ラベルで人間が即停止可能
-#   - 必須チェック (Gate 1 / security-scan / gitleaks / Claude PR Review) が全 green のときのみ merge
+#   - 必須チェック (Gate 1 / security-scan / gitleaks) が全 green のときのみ merge
 #   - GITHUB_TOKEN で merge (branch protection の必須チェックは GitHub 側でも二重に強制される)
 #
 # トリガー:
