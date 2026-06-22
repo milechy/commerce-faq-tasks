@@ -3,8 +3,23 @@
 // FAQ/書籍チャンクの利用頻度・CV寄与を可視化する。
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+} from "chart.js";
 import { Bar } from "react-chartjs-2";
 import { authFetch, API_BASE } from "../../lib/api";
+
+// react-chartjs-2 の <Bar> 描画に必要な Chart.js コンポーネントを登録（idempotent）。
+// 登録は analytics ページ側のモジュールでしか実行されておらず、analytics を先に開いて
+// いないセッションで知識データの「成約への貢献度」タブを開くと未登録で <Bar> が throw し、
+// エラーバウンダリが無いためページ全体が白くなる。本コンポーネントでも登録して防ぐ。
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 type Period = "7d" | "30d" | "90d";
 type SourceType = "all" | "faq" | "book";
