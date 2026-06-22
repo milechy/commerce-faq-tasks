@@ -2152,6 +2152,13 @@
   function resetAvatarInactivityTimer() {
     if (avatarInactivityTimer) { clearTimeout(avatarInactivityTimer); avatarInactivityTimer = null; }
     if (!panel.classList.contains('avatar-active')) return;
+    // 折りたたみタイマーは「ライブアバターが実際に表示されている時」だけ起動する。
+    // 接続前の静止画プレースホルダー表示中（fabVideoEl 未設定 / Anam 未ストリーム）に
+    // アームすると、映像が来ないまま 33 秒で大表示が畳まれ「大表示にしたのに静止画のまま、
+    // ~10 秒でアバターが消えて通常チャットに戻る」症状になる。#424 は映像到着パス（L1707）
+    // のみ対処しており、映像が来ない／アバター OFF パスはここで防ぐ。
+    var avatarLive = !!fabVideoEl || (avatarProvider === 'anam' && (anamClient || window.__anamClient));
+    if (!avatarLive) return;
     avatarInactivityTimer = setTimeout(collapseAvatarLargeView, AVATAR_INACTIVITY_MS);
   }
 
