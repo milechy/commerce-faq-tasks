@@ -669,6 +669,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     session.say(initial_greeting)
     logger.info(f"[avatar] idle animation kickstart: {initial_greeting!r}")
 
+    # 歓迎メッセージも通常返信(handle_chat)と同様に Data Channel へ送り、Widget の
+    # チャット吹き出し(messages UI)に表示させる。これが無いと session.say() の音声/字幕
+    # だけが出てチャット履歴に吹き出しが残らない（agent_reply 未送出の不整合）。
+    if ctx.room.local_participant:
+        payload = json.dumps({"type": "agent_reply", "text": initial_greeting}).encode()
+        await ctx.room.local_participant.publish_data(payload, reliable=True)
+        logger.info("[data_channel] initial_greeting agent_reply sent to widget")
+
 
 if __name__ == "__main__":
     agents.cli.run_app(
