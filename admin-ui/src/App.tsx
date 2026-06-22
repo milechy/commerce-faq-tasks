@@ -19,7 +19,6 @@ import ChatHistoryPage from "./pages/admin/chat-history/index";
 import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
 import FeedbackPage from "./pages/admin/feedback/index";
-import AdminAIChat from "./components/AdminAIChat";
 import AdminAgentButton from "./components/AdminAgent/AdminAgentButton";
 import AdminAgentPanel from "./components/AdminAgent/AdminAgentPanel";
 import AvatarListPage from "./pages/admin/avatar/index";
@@ -186,9 +185,8 @@ function AppInner() {
         {/* それ以外のパスは管理ダッシュボードへ */}
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
-      {/* 管理AIチャット — Client Admin、chat-testページを除く */}
-      {showAIChat && <AdminAIChat />}
-      {/* R2C AIアシスタント — super_admin/client_admin 共通、chat-testページを除く */}
+      {/* R2C AIアシスタント（✨）に一本化 — 旧サポートAI(AdminAIChat「?」)のFABは撤去 */}
+      {/* super_admin/client_admin 共通、chat-testページを除く */}
       {showAIChat && (
         <>
           <AdminAgentButton
