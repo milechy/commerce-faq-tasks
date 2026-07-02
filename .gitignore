@@ -53,6 +53,7 @@ SCRIPTS/*.local.sh
 test-results/
 Thumbs.db
 .playwright-mcp/
+tests/e2e/.auth/
 
 # 作業用スクリーンショット（ルート直下）
 /e[0-9]*.png

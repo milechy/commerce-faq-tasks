@@ -29,6 +29,7 @@ import { createSecurityPolicyMiddleware } from "./lib/security-policy";
 import {
   createTenantContextMiddleware,
   getTenantByApiKeyHash,
+  isOriginKnownToAnyTenant,
   seedTenantsFromEnv,
   seedTenantsFromDB,
 } from "./lib/tenant-context";
@@ -132,6 +133,7 @@ const defaultOrigins = process.env.ALLOWED_ORIGINS
 
 const corsMiddleware = createCorsMiddleware({
   defaultAllowedOrigins: defaultOrigins,
+  isKnownTenantOrigin: isOriginKnownToAnyTenant,
   logger,
 });
 app.use(corsMiddleware);

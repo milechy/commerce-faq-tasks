@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import type { Pool } from "pg";
 import type { TenantConfig } from "../types/contracts";
 import type { AuthedRequest } from "../agent/http/authMiddleware";
+import { isOriginAllowed } from "../api/middleware/originCheck";
 
 // ---------------------------------------------------------------------------
 // In-memory tenant registry (DB-backed via seedTenantsFromDB at startup)
@@ -34,6 +35,19 @@ export function getTenantByApiKeyHash(
     if (safeCompare(cfg.security.apiKeyHash, hash)) return cfg;
   }
   return undefined;
+}
+
+/**
+ * CORS preflight (OPTIONS) はテナントID未確定の段階で応答が必要なため、
+ * 単一テナントの allowedOrigins ではなく「いずれかのテナントが許可しているか」で判定する。
+ * 実リクエスト側の tenantContext / securityPolicy / originCheck が引き続きテナント単位の
+ * 厳密な検証を行うので、ここでの判定を緩めても最終的なアクセス制御は変わらない。
+ */
+export function isOriginKnownToAnyTenant(origin: string): boolean {
+  for (const cfg of tenantStore.values()) {
+    if (isOriginAllowed(origin, cfg.security.allowedOrigins)) return true;
+  }
+  return false;
 }
 
 /**
