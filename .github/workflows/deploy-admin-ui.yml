@@ -1,0 +1,51 @@
+name: Deploy admin-ui to Cloudflare Pages
+
+# Cloudflare Pagesのネイティブ GitHub 連携が2026-06-22頃から無応答になり、
+# main への push(#438/#439/#440)が一切自動デプロイされていなかったため、
+# wrangler経由の明示的デプロイに切り替える(ネイティブ連携の復旧待ちにしない)。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "admin-ui/**"
+      - ".github/workflows/deploy-admin-ui.yml"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    name: Build + Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: admin-ui/pnpm-lock.yaml
+
+      - name: Install admin-ui dependencies
+        working-directory: admin-ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build admin-ui
+        working-directory: admin-ui
+        env:
+          # 本番Supabase anon key・APIエンドポイントはクライアント埋め込み前提の公開値
+          # (RLSで保護される想定のキーであり秘匿対象ではない)。
+          VITE_API_BASE: https://api.r2c.biz
+          VITE_SUPABASE_URL: https://rpqrwifbrhlebbelyqog.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwcXJ3aWZicmhsZWJiZWx5cW9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM3ODA1NzcsImV4cCI6MjA3OTM1NjU3N30.zToHU4VNP1DTkl39BEUSOMI21D337BuXnoAK1OzGYSM
+        run: pnpm build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: b6d518fc9ad3c51d71c39426f531b1e8
+          command: pages deploy admin-ui/dist --project-name=r2c --branch=main --commit-dirty=true
