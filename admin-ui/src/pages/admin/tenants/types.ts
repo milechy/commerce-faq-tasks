@@ -16,6 +16,8 @@ export interface TenantFeatures {
   rag: boolean;
   deep_research?: boolean;
   pre_dispatch?: boolean;
+  // Phase75: Hermes Agent(会話ログ学習エージェント)へのデータ提供同意
+  hermes_raw_data_consent?: boolean;
 }
 
 export interface TenantDetail {
