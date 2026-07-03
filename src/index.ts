@@ -70,6 +70,7 @@ import { registerFalGenerationRoutes } from "./api/admin/avatar/falGenerationRou
 import { registerPremiumGenerationRoutes } from "./api/admin/avatar/premiumGenerationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
+import { registerInternalAvatarTranscriptRoutes } from "./api/internal/avatarTranscriptRoutes";
 import { registerGa4TenantRoutes } from "./api/admin/tenants/ga4Routes";
 import { registerPostHogTenantRoutes } from "./api/admin/tenants/posthogRoutes";
 import { flushPostHog } from "./lib/posthog/posthogClient";
@@ -86,6 +87,7 @@ import { registerEventRoutes } from "./api/events/eventRoutes";
 import { registerEngagementRoutes } from "./api/engagement/engagementRoutes";
 import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
+import { registerHermesMcpRoutes } from "./api/hermes-mcp/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
@@ -595,6 +597,9 @@ registerInternalUsageRoutes(app);
 // Internal: avatar-agent → テナント別アバター設定取得（X-Internal-Request: 1 認証）
 registerInternalAvatarConfigRoutes(app);
 
+// Phase75: Internal: avatar-agent(legacy Groqフォールバック経路) → 会話ログ永続化（X-Internal-Request: 1 認証）
+registerInternalAvatarTranscriptRoutes(app);
+
 // Phase A: GA4連携 内部API (Cloudflare Workers Cron用, HMAC認証)
 if (db) registerInternalGa4SyncRoutes(app, db);
 
@@ -625,6 +630,9 @@ registerEngagementRoutes(app, apiStack, db);
 // Phase58: コンバージョン最適化ループ
 registerConversionRoutes(app, apiStack, db);
 if (db) registerAbTestRoutes(app, db);
+
+// Phase75: Hermes Agent(外部, 別VPS)向けMCPデータエンドポイント(Bearer認証、同意ゲート)
+registerHermesMcpRoutes(app);
 
 // Phase55: Widget features check (event_tracking フラグ取得)
 app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: express.Response) => {

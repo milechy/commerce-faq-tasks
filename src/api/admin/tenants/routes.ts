@@ -26,6 +26,11 @@ const featuresSchema = z.object({
   rag: z.boolean(),
   deep_research: z.boolean().optional(),
   pre_dispatch: z.boolean().optional(),
+  // Phase75: Hermes Agent(CVR学習エージェント)が会話ログ生データを横断利用することへの
+  // テナント同意フラグ。既定false(未設定=同意なし、fail-safe)。同意は本来テナント自身が
+  // 行うべきものなので、super_admin用スキーマだけでなく client_admin 自己申告の
+  // PATCH /v1/admin/my-tenant(下記)にも同じキーを追加している。
+  hermes_raw_data_consent: z.boolean().optional(),
 });
 
 const updateTenantSchema = z.object({
@@ -140,6 +145,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         rag: z.boolean(),
         deep_research: z.boolean().optional(),
         pre_dispatch: z.boolean().optional(),
+        // Phase75: テナント自身によるHermes Agent向け生データ利用同意の自己申告
+        hermes_raw_data_consent: z.boolean().optional(),
       }),
     });
     const parsed = bodySchema.safeParse(req.body ?? {});

@@ -223,6 +223,33 @@ async def _report_tts_usage(tenant_id: str, tts_text_bytes: int) -> None:
 LEMONSLICE_CREDITS_PER_MINUTE = 24.5
 
 
+async def _report_avatar_transcript(
+    tenant_id: str, session_id: str, role: str, content: str
+) -> None:
+    """Phase75: legacy/fallbackパス(agent内でGroqを直接呼ぶ経路)の会話テキストを
+    RAJIUCE APIへ永続化リクエスト（fire-and-forget）。
+    LemonSlice経由の「本体API」応答パス(tts_request)はwidget側が既に
+    通常のchat APIでsaveMessage済みのため、ここでは呼ばない(二重保存防止)。
+    """
+    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            await http_session.post(
+                f"{api_url}/api/internal/avatar-transcript",
+                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
+                json={
+                    "tenantId": tenant_id,
+                    "sessionId": session_id,
+                    "role": role,
+                    "content": content,
+                },
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+        logger.debug(f"[transcript] reported: tenant={tenant_id} role={role}")
+    except Exception as e:
+        logger.warning(f"[transcript] report failed (non-critical): {e}")
+
+
 async def _report_avatar_usage(tenant_id: str, session_ms: int) -> None:
     """LemonSlice アバターのセッション課金をRAJIUCE APIへ非同期レポート（fire-and-forget）。
 
@@ -525,6 +552,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # 2. session.say() で FishAudio TTS パイプラインに渡す
             session.say(reply)
             logger.debug(f"[say] sent to TTS: {reply!r}")
+
+            # Phase75: 会話ログ永続化(fire-and-forget)。room名をsession_idとして使う。
+            if tenant_id:
+                asyncio.ensure_future(
+                    _report_avatar_transcript(tenant_id, ctx.room.name, "user", user_text)
+                )
+                if reply != FALLBACK_MSG:
+                    asyncio.ensure_future(
+                        _report_avatar_transcript(tenant_id, ctx.room.name, "assistant", reply)
+                    )
 
             # 3. Data Channel 経由で Widget にもテキスト送信（フォールバックメッセージはスキップ）
             if reply != FALLBACK_MSG and ctx.room.local_participant:
