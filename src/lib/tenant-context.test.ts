@@ -1,4 +1,10 @@
-import { seedTenantsFromEnv, getTenantConfig, registerTenant, updateTenantEnabled } from "./tenant-context";
+import {
+  seedTenantsFromEnv,
+  getTenantConfig,
+  registerTenant,
+  updateTenantEnabled,
+  isOriginKnownToAnyTenant,
+} from "./tenant-context";
 
 describe("seedTenantsFromEnv — numbered keys", () => {
   const savedEnv: Record<string, string | undefined> = {};
@@ -89,5 +95,48 @@ describe("updateTenantEnabled — kill-switch in-memory sync", () => {
     expect(cfg?.name).toBe("Kill Switch Test");
     expect(cfg?.plan).toBe("starter");
     expect(cfg?.security.apiKeyHash).toBe("dummyhash");
+  });
+});
+
+describe("isOriginKnownToAnyTenant — CORS preflight tenant-domain lookup", () => {
+  beforeEach(() => {
+    registerTenant({
+      tenantId: "origin-test-tenant",
+      name: "Origin Test Tenant",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: {
+        apiKeyHash: "dummyhash-origin",
+        hashAlgorithm: "sha256",
+        allowedOrigins: ["https://shop.example.com", "https://*.wildcard-shop.com"],
+        rateLimit: 100,
+        rateLimitWindowMs: 60_000,
+      },
+      enabled: true,
+    });
+  });
+
+  it("returns true for an origin registered on a tenant", () => {
+    expect(isOriginKnownToAnyTenant("https://shop.example.com")).toBe(true);
+  });
+
+  it("returns true for an origin matching a tenant's wildcard pattern", () => {
+    expect(isOriginKnownToAnyTenant("https://sub.wildcard-shop.com")).toBe(true);
+  });
+
+  it("returns false for an origin not registered on any tenant", () => {
+    expect(isOriginKnownToAnyTenant("https://unregistered-domain.example")).toBe(false);
+  });
+
+  it("returns false when checked against a tenant with no allowedOrigins", () => {
+    registerTenant({
+      tenantId: "no-origin-tenant",
+      name: "No Origin Tenant",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: "dummyhash-2", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    expect(isOriginKnownToAnyTenant("https://some-random-site.example")).toBe(false);
   });
 });

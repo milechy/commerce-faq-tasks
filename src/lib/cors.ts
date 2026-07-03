@@ -4,6 +4,14 @@ import type { Logger } from "pino";
 export interface CorsOptions {
   /** Origins allowed globally (fallback when tenant config is unavailable) */
   defaultAllowedOrigins?: string[];
+  /**
+   * Checks whether `origin` is registered as an allowed domain for at least
+   * one tenant (DB-backed, in-memory tenantStore). tenantId is not yet known
+   * at the OPTIONS preflight stage, so this can only confirm "some tenant
+   * allows this origin" — the actual request still goes through per-tenant
+   * enforcement (securityPolicy / originCheck) once tenantId is resolved.
+   */
+  isKnownTenantOrigin?: (origin: string) => boolean;
   logger?: Logger;
 }
 
@@ -25,9 +33,12 @@ const EXPOSED_HEADERS = [
 /**
  * CORS middleware — position 1 in the chain.
  *
- * Pre-auth: only the global allowlist is available.
- * Per-tenant origin enforcement is handled later by securityPolicyEnforcer
- * (position 5) once tenantConfig is loaded.
+ * Pre-auth: tenantId is not resolved yet, so OPTIONS preflight cannot do
+ * per-tenant enforcement. It allows origins that are either in the global
+ * ALLOWED_ORIGINS env allowlist or registered as an allowed domain for at
+ * least one tenant (isKnownTenantOrigin). The actual request still passes
+ * through per-tenant enforcement (securityPolicy / originCheck, later in
+ * apiStack) once tenantId is resolved from the API key/JWT.
  */
 export function createCorsMiddleware(opts: CorsOptions = {}) {
   const allowedSet = new Set(opts.defaultAllowedOrigins ?? []);
@@ -39,8 +50,14 @@ export function createCorsMiddleware(opts: CorsOptions = {}) {
   ): void {
     const origin = req.headers.origin;
 
-    if (origin && (allowedSet.size === 0 || allowedSet.has(origin))) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
+    const isAllowed =
+      !!origin &&
+      (allowedSet.size === 0 ||
+        allowedSet.has(origin) ||
+        (opts.isKnownTenantOrigin?.(origin) ?? false));
+
+    if (isAllowed) {
+      res.setHeader("Access-Control-Allow-Origin", origin as string);
       res.setHeader("Vary", "Origin");
     }
 
