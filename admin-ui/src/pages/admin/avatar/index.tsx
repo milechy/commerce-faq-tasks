@@ -11,6 +11,7 @@ import { AvatarWarningModal } from "./AvatarWarningModal";
 import { AvatarListHeader } from "./AvatarListHeader";
 import { AvatarFilterPanel } from "./AvatarFilterPanel";
 import { AvatarFeatureToggle } from "./AvatarFeatureToggle";
+import { HermesConsentToggle } from "./HermesConsentToggle";
 import { AvatarCard } from "./AvatarCard";
 
 export default function AvatarListPage() {
@@ -362,6 +363,9 @@ export default function AvatarListPage() {
           toggleToast={toggleToast}
         />
       )}
+
+      {/* ── Phase75: Hermes Agent学習への同意 ON/OFF トグル（Client Adminのみ）───────── */}
+      {!isSuperAdmin && user?.tenantId && <HermesConsentToggle />}
 
       {/* エラーメッセージ */}
       {error && (
