@@ -106,6 +106,45 @@ describe("insertProposal", () => {
   });
 });
 
+describe("getProposalById", () => {
+  it("IDから提案を1件取得しキャメルケースに変換する", async () => {
+    const query: QueryMock = jest.fn().mockResolvedValue({
+      rows: [
+        {
+          id: "5",
+          scope: "tenant",
+          tenant_id: "carnation",
+          proposal_type: "ab_winner",
+          title: "t",
+          rationale: "r",
+          suggested_action: "a",
+          evidence: {},
+          status: "pending",
+          dedup_key: "k",
+          created_at: new Date(),
+          decided_at: null,
+          decided_by: null,
+        },
+      ],
+    });
+    const repo = createHermesProposalRepository(makePool(query));
+
+    const proposal = await repo.getProposalById("5");
+
+    expect(proposal).toMatchObject({ id: "5", scope: "tenant", tenantId: "carnation" });
+    const [sql, args] = query.mock.calls[0]!;
+    expect(sql).toContain("WHERE id = $1");
+    expect(args).toEqual(["5"]);
+  });
+
+  it("該当なしはnull", async () => {
+    const query: QueryMock = jest.fn().mockResolvedValue({ rows: [] });
+    const repo = createHermesProposalRepository(makePool(query));
+
+    expect(await repo.getProposalById("999")).toBeNull();
+  });
+});
+
 describe("listProposals", () => {
   it("フィルタ無しでLIMIT付きSELECT", async () => {
     const query: QueryMock = jest.fn().mockResolvedValue({ rows: [] });

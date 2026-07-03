@@ -146,6 +146,23 @@ export function createHermesProposalRepository(pool?: InstanceType<typeof Pool>)
     },
 
     /**
+     * IDから提案を1件取得する。Admin API の approve/reject が、実行前に
+     * scope/tenant_id を見て越境チェックする(client_adminが他テナント/global提案を
+     * 決定できないようにする)ために使う。
+     */
+    async getProposalById(id: string): Promise<HermesProposal | null> {
+      const result = await getPool().query(
+        `SELECT id::text, scope, tenant_id, proposal_type, title, rationale,
+                suggested_action, evidence, status, dedup_key, created_at, decided_at, decided_by
+         FROM hermes_strategy_proposals
+         WHERE id = $1`,
+        [id],
+      );
+      const row = result.rows[0] as ProposalRow | undefined;
+      return row ? toProposal(row) : null;
+    },
+
+    /**
      * 提案一覧を取得する。scope/tenantId/status で絞り込み可能。
      * tenantId を渡した場合、呼び出し側の越境チェック(role != super_admin等)は
      * ルーティング層(Admin API)の責務とする。

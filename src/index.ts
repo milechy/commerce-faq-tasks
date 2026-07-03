@@ -87,6 +87,7 @@ import { registerEventRoutes } from "./api/events/eventRoutes";
 import { registerEngagementRoutes } from "./api/engagement/engagementRoutes";
 import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
+import { registerHermesRoutes } from "./api/admin/hermes/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
@@ -626,6 +627,9 @@ registerEngagementRoutes(app, apiStack, db);
 // Phase58: コンバージョン最適化ループ
 registerConversionRoutes(app, apiStack, db);
 if (db) registerAbTestRoutes(app, db);
+
+// Phase74: Hermes Agent — 戦略提案の承認ゲートAPI(system_prompt等は自動適用しない)
+registerHermesRoutes(app, db);
 
 // Phase55: Widget features check (event_tracking フラグ取得)
 app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: express.Response) => {
