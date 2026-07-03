@@ -177,6 +177,29 @@ describe("listProposals", () => {
   });
 });
 
+describe("findProposalIdByDedupKey", () => {
+  it("dedup_keyから最新のIDを取得する", async () => {
+    const query: QueryMock = jest.fn().mockResolvedValue({ rows: [{ id: "42" }] });
+    const repo = createHermesProposalRepository(makePool(query));
+
+    const id = await repo.findProposalIdByDedupKey("xt_principle:scarcity");
+
+    expect(id).toBe("42");
+    const [sql, args] = query.mock.calls[0]!;
+    expect(sql).toContain("WHERE dedup_key = $1");
+    expect(args).toEqual(["xt_principle:scarcity"]);
+  });
+
+  it("該当なしはnull", async () => {
+    const query: QueryMock = jest.fn().mockResolvedValue({ rows: [] });
+    const repo = createHermesProposalRepository(makePool(query));
+
+    const id = await repo.findProposalIdByDedupKey("nonexistent");
+
+    expect(id).toBeNull();
+  });
+});
+
 describe("updateProposalStatus", () => {
   it("UPDATE を発行しdecided_by/decided_atを設定", async () => {
     const query: QueryMock = jest.fn().mockResolvedValue({

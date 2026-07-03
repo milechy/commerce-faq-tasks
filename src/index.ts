@@ -4,6 +4,7 @@ import "./config/env";
 import { pool as db } from "./lib/db";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import { startOpenClawHeartbeat } from "./agent/openclaw/heartbeatHandler";
+import { startHermes } from "./agent/hermes/hermesAgent";
 import express from "express";
 import multer from "multer";
 import path from "node:path";
@@ -711,6 +712,10 @@ async function startServer() {
   // Phase47-D: OpenClaw Heartbeat — flow 統計を30分周期で監視（Flag 判定は handler 内部）
   startOpenClawHeartbeat();
   logger.info("[startup] OpenClaw Heartbeat initialized");
+
+  // Phase74: Hermes Agent — CVR向上の戦略提案を6時間周期で生成（Flag 判定は handler 内部、既定オフ）
+  startHermes();
+  logger.info("[startup] Hermes Agent scheduler initialized");
 
   // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）
   if (db && process.env.STRIPE_SECRET_KEY) {

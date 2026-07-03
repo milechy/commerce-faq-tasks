@@ -184,6 +184,23 @@ export function createHermesProposalRepository(pool?: InstanceType<typeof Pool>)
     },
 
     /**
+     * dedup_key から最新の提案IDを引く。insertProposal 直後に呼び出し元(hermesAgent)が
+     * 通知メタデータへ proposal_id を含めるために使う(insertProposal 自体は重複防止のため
+     * boolean のみ返す設計を変えない、追加専用のヘルパー)。
+     */
+    async findProposalIdByDedupKey(dedupKey: string): Promise<string | null> {
+      const result = await getPool().query(
+        `SELECT id::text FROM hermes_strategy_proposals
+         WHERE dedup_key = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [dedupKey],
+      );
+      const row = result.rows[0] as { id: string } | undefined;
+      return row?.id ?? null;
+    },
+
+    /**
      * 提案のステータスを更新する (承認/却下)。Hermes 自身はこれを呼ばない。
      * 管理者の意思決定を記録するのみで、system_prompt 等の実適用はしない。
      */
