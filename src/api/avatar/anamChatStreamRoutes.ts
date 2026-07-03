@@ -6,10 +6,12 @@
 //   widget.jsからの会話履歴を受け取り、Groq LLMでストリーミング応答を返す。
 //   Anam JS SDKのcreateTalkMessageStream()でTTS化される。
 
+import { randomUUID } from 'node:crypto';
 import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
+import { saveMessage } from '../admin/chat-history/chatHistoryRepository';
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -22,9 +24,30 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       return res.status(401).json({ error: 'unauthorized' });
     }
 
-    const { messages } = req.body as { messages?: Array<{ role: string; content: string }> };
+    const { messages, sessionId: bodySessionId } = req.body as {
+      messages?: Array<{ role: string; content: string }>;
+      sessionId?: string;
+    };
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array required' });
+    }
+
+    // Phase75: 会話ログ永続化。Widgetがsession_idを送ってこない場合、この呼び出し単位を
+    // 1セッションとして扱う(継続性は失うが、Hermes MCP等の学習用途には十分な単発Q&Aとして
+    // 記録できる)。将来widget.js側でsessionIdを継続送信するよう改修すれば自動的に連続化する。
+    const sessionId =
+      typeof bodySessionId === 'string' && bodySessionId.trim().length > 0
+        ? bodySessionId
+        : randomUUID();
+    const latestUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+    if (latestUserMessage?.content) {
+      saveMessage({
+        tenantId,
+        sessionId,
+        role: 'user',
+        content: latestUserMessage.content,
+        metadata: { source: 'avatar', channel: 'anam' },
+      }).catch((err) => logger.warn('[anamChatStream] saveMessage(user) failed:', err));
     }
 
     const groqApiKey = process.env.GROQ_API_KEY?.trim();
@@ -105,6 +128,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let assistantContent = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -126,6 +150,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
             };
             const content = parsed.choices?.[0]?.delta?.content ?? '';
             if (content) {
+              assistantContent += content;
               res.write(JSON.stringify({ content }) + '\n');
             }
           } catch {
@@ -135,6 +160,17 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       }
 
       res.end();
+
+      // Phase75: 会話ログ永続化(assistant側)。fire-and-forget、レスポンス送信後に実行。
+      if (assistantContent) {
+        saveMessage({
+          tenantId,
+          sessionId,
+          role: 'assistant',
+          content: assistantContent,
+          metadata: { source: 'avatar', channel: 'anam' },
+        }).catch((err) => logger.warn('[anamChatStream] saveMessage(assistant) failed:', err));
+      }
 
     } catch (err) {
       logger.error('[anamChatStream] Stream error:', err);

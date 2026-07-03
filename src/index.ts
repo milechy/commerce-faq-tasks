@@ -70,6 +70,7 @@ import { registerFalGenerationRoutes } from "./api/admin/avatar/falGenerationRou
 import { registerPremiumGenerationRoutes } from "./api/admin/avatar/premiumGenerationRoutes";
 import { registerInternalUsageRoutes } from "./api/internal/usageRoutes";
 import { registerInternalAvatarConfigRoutes } from "./api/internal/avatarConfigRoutes";
+import { registerInternalAvatarTranscriptRoutes } from "./api/internal/avatarTranscriptRoutes";
 import { registerGa4TenantRoutes } from "./api/admin/tenants/ga4Routes";
 import { registerPostHogTenantRoutes } from "./api/admin/tenants/posthogRoutes";
 import { flushPostHog } from "./lib/posthog/posthogClient";
@@ -594,6 +595,9 @@ registerInternalUsageRoutes(app);
 
 // Internal: avatar-agent → テナント別アバター設定取得（X-Internal-Request: 1 認証）
 registerInternalAvatarConfigRoutes(app);
+
+// Phase75: Internal: avatar-agent(legacy Groqフォールバック経路) → 会話ログ永続化（X-Internal-Request: 1 認証）
+registerInternalAvatarTranscriptRoutes(app);
 
 // Phase A: GA4連携 内部API (Cloudflare Workers Cron用, HMAC認証)
 if (db) registerInternalGa4SyncRoutes(app, db);
