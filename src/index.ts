@@ -87,6 +87,7 @@ import { registerEventRoutes } from "./api/events/eventRoutes";
 import { registerEngagementRoutes } from "./api/engagement/engagementRoutes";
 import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
+import { registerHermesMcpRoutes } from "./api/hermes-mcp/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
@@ -629,6 +630,9 @@ registerEngagementRoutes(app, apiStack, db);
 // Phase58: コンバージョン最適化ループ
 registerConversionRoutes(app, apiStack, db);
 if (db) registerAbTestRoutes(app, db);
+
+// Phase75: Hermes Agent(外部, 別VPS)向けMCPデータエンドポイント(Bearer認証、同意ゲート)
+registerHermesMcpRoutes(app);
 
 // Phase55: Widget features check (event_tracking フラグ取得)
 app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: express.Response) => {
