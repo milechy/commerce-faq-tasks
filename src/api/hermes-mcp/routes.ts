@@ -14,9 +14,14 @@ import type { Express, Request, Response } from "express";
 import { hermesMcpAuthMiddleware } from "./hermesMcpAuth";
 import { isHermesDataConsentGranted, listHermesConsentingTenantIds } from "../../lib/hermesConsent";
 import { searchConversations } from "./hermesMcpRepository";
+import { createHermesProposalRepository, type HermesProposalScope } from "./proposalRepository";
+import { createNotification } from "../../lib/notifications";
 import { logger } from "../../lib/logger";
 
 const MAX_QUERY_LEN = 200;
+const MAX_TEXT_LEN = 2000;
+
+const VALID_PROPOSAL_SCOPES: readonly HermesProposalScope[] = ["global", "tenant"];
 
 export function registerHermesMcpRoutes(app: Express): void {
   app.use("/v1/hermes-mcp", hermesMcpAuthMiddleware);
@@ -89,6 +94,96 @@ export function registerHermesMcpRoutes(app: Express): void {
       return res.json({ conversations });
     } catch (err) {
       logger.warn({ err }, "[hermes-mcp] search conversations failed");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  // ----------------------------------------------------------------
+  // POST /v1/hermes-mcp/proposals
+  // Hermes Agent(外部)がCVR改善提案を投稿するためのエンドポイント。
+  // system_prompt等は一切自動書き換えしない(提案→人間承認ゲート)。
+  // ----------------------------------------------------------------
+  app.post("/v1/hermes-mcp/proposals", async (req: Request, res: Response) => {
+    const body = req.body ?? {};
+    const { scope, tenant_id, title, rationale, suggested_action, evidence, dedup_key } = body as {
+      scope?: unknown;
+      tenant_id?: unknown;
+      title?: unknown;
+      rationale?: unknown;
+      suggested_action?: unknown;
+      evidence?: unknown;
+      dedup_key?: unknown;
+    };
+
+    if (typeof scope !== "string" || !VALID_PROPOSAL_SCOPES.includes(scope as HermesProposalScope)) {
+      return res.status(400).json({ error: "invalid_scope" });
+    }
+    if (scope === "tenant" && (typeof tenant_id !== "string" || !tenant_id)) {
+      return res.status(400).json({ error: "tenant_id required for scope=tenant" });
+    }
+    if (scope === "global" && tenant_id !== undefined) {
+      return res.status(400).json({ error: "tenant_id must be omitted for scope=global" });
+    }
+    if (typeof title !== "string" || !title.trim() || title.length > MAX_TEXT_LEN) {
+      return res.status(400).json({ error: "invalid_title" });
+    }
+    if (typeof rationale !== "string" || !rationale.trim() || rationale.length > MAX_TEXT_LEN) {
+      return res.status(400).json({ error: "invalid_rationale" });
+    }
+    if (typeof suggested_action !== "string" || !suggested_action.trim() || suggested_action.length > MAX_TEXT_LEN) {
+      return res.status(400).json({ error: "invalid_suggested_action" });
+    }
+    if (typeof dedup_key !== "string" || !dedup_key.trim()) {
+      return res.status(400).json({ error: "invalid_dedup_key" });
+    }
+    if (evidence !== undefined && (typeof evidence !== "object" || evidence === null || Array.isArray(evidence))) {
+      return res.status(400).json({ error: "invalid_evidence" });
+    }
+
+    // 同意チェック(defense in depth): search_conversationsは既に同意済みテナントしか
+    // 返さないが、Hermes側の実装ミス・改ざんに備えてここでも必ず再検証する。
+    if (scope === "tenant") {
+      const consented = await isHermesDataConsentGranted(tenant_id as string);
+      if (!consented) {
+        return res.status(403).json({ error: "tenant_not_consented" });
+      }
+    }
+
+    const repo = createHermesProposalRepository();
+    try {
+      const inserted = await repo.insertProposal({
+        scope: scope as HermesProposalScope,
+        tenantId: scope === "tenant" ? (tenant_id as string) : undefined,
+        title,
+        rationale,
+        suggestedAction: suggested_action,
+        evidence: (evidence as Record<string, unknown>) ?? {},
+        dedupKey: dedup_key,
+      });
+
+      if (!inserted) {
+        return res.json({ duplicate: true });
+      }
+
+      const proposalId = await repo.findProposalIdByDedupKey(dedup_key);
+
+      try {
+        await createNotification({
+          recipientRole: scope === "global" ? "super_admin" : "client_admin",
+          recipientTenantId: scope === "tenant" ? (tenant_id as string) : undefined,
+          type: "hermes_proposal",
+          title,
+          message: rationale,
+          link: scope === "global" ? "/admin/hermes" : "/admin/conversion",
+          metadata: { proposal_id: proposalId, dedup_key, scope },
+        });
+      } catch (err) {
+        logger.warn({ err }, "[hermes-mcp] proposal notification failed (non-fatal)");
+      }
+
+      return res.status(201).json({ proposal_id: proposalId, duplicate: false });
+    } catch (err) {
+      logger.warn({ err }, "[hermes-mcp] insert proposal failed");
       return res.status(500).json({ error: "internal_error" });
     }
   });
