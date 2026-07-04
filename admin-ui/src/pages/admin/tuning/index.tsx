@@ -8,6 +8,7 @@ import TuningRuleModal, {
   type TuningRule,
   type SourceConversation,
 } from "../../../components/tuning/TuningRuleModal";
+import { priorityToTier } from "../../../lib/tuningPriority";
 
 // ─── Tenant options (static — used for scope badge display) ───────────────────
 const MOCK_TENANTS = [
@@ -429,7 +430,7 @@ export default function TuningRulesPage() {
                     fontWeight: 600,
                   }}
                 >
-                  優先度 {rule.priority}
+                  {t(`tuning.priority_tier_${priorityToTier(rule.priority)}`)}
                 </span>
 
                 <span

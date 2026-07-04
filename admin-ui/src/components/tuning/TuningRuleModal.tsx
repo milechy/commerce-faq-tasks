@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLang } from "../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../lib/api";
+import { priorityToTier, PRIORITY_TIER_VALUE, type PriorityTier } from "../../lib/tuningPriority";
 
 import type {
   ApprovedResponse,
@@ -635,39 +636,41 @@ export default function TuningRuleModal({
             </div>
           )}
 
-          {/* 優先度 */}
+          {/* 優先度（3段階） */}
           <div>
-            <label style={LABEL_STYLE}>
-              {t("tuning.priority")}:{" "}
-              <span style={{ color: "#4ade80", fontWeight: 700 }}>{priority}</span>
-            </label>
+            <label style={LABEL_STYLE}>{t("tuning.priority")}</label>
             <p style={HINT_STYLE}>{t("tuning.priority_hint")}</p>
-            <input
-              type="range"
-              min={0}
-              max={10}
-              step={1}
-              value={priority}
-              onChange={(e) => setPriority(Number(e.target.value))}
-              style={{
-                width: "100%",
-                accentColor: "#22c55e",
-                cursor: "pointer",
-                height: 24,
-              }}
-            />
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                fontSize: 11,
-                color: "#6b7280",
-                marginTop: 4,
-              }}
-            >
-              <span>0</span>
-              <span>5</span>
-              <span>10</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              {(["low", "normal", "high"] as PriorityTier[]).map((tier) => {
+                const selected = priorityToTier(priority) === tier;
+                return (
+                  <button
+                    key={tier}
+                    type="button"
+                    onClick={() => setPriority(PRIORITY_TIER_VALUE[tier])}
+                    aria-pressed={selected}
+                    style={{
+                      flex: 1,
+                      minHeight: 48,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      border: selected
+                        ? "1px solid rgba(34,197,94,0.5)"
+                        : "1px solid #374151",
+                      background: selected
+                        ? "rgba(34,197,94,0.15)"
+                        : "rgba(15,23,42,0.6)",
+                      color: selected ? "#4ade80" : "#d1d5db",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {t(`tuning.priority_tier_${tier}`)}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
