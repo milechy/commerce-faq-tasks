@@ -151,7 +151,7 @@ function QuickAction({
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin, logout, previewMode, previewTenantId, previewTenantName, exitPreview } = useAuth();
+  const { user, isSuperAdmin, logout, previewMode, previewTenantId } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -251,51 +251,6 @@ export default function AdminDashboard() {
         maxWidth: 880,
       }}
     >
-      {previewMode && <div style={{ height: 44 }} />}
-
-      {/* Preview mode banner */}
-      {previewMode && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            zIndex: 9999,
-            background: "rgba(234,179,8,0.95)",
-            padding: "10px 20px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            fontSize: 14,
-            fontWeight: 600,
-            color: "#1c1917",
-            boxShadow: "0 2px 12px rgba(0,0,0,0.2)",
-          }}
-        >
-          <span>👁 {t("preview.mode_label")}</span>
-          <span style={{ color: "#78350f" }}>
-            {t("preview.viewing_as", { tenant: previewTenantName ?? "" })}
-          </span>
-          <button
-            onClick={exitPreview}
-            style={{
-              padding: "6px 14px",
-              borderRadius: 999,
-              border: "1px solid #78350f",
-              background: "rgba(0,0,0,0.15)",
-              color: "#1c1917",
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
-            {t("preview.exit")}
-          </button>
-        </div>
-      )}
-
       {/* Page header */}
       <header
         style={{
