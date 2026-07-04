@@ -3,7 +3,7 @@
 --       livekitTokenRoutes の Q2 クエリ (OR is_default=true) 経由でクロステナント誤表示が発生。
 --       専用テナント 'r2c_default' に分離することで構造的に解消する。
 --
--- 実行: psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' \
+-- 実行: psql 'postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq' \
 --           -f /opt/rajiuce/src/api/admin/tenants/migration_r2c_default.sql
 
 BEGIN;

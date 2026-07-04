@@ -47,4 +47,4 @@ bash SCRIPTS/deploy-vps.sh
    ssh root@65.108.159.161 "pm2 logs rajiuce-api --lines 20 --nostream 2>&1 | grep -i error | head -5"
 
 ## DBマイグレーションが必要な場合
-ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/<path_to_migration>.sql"
+ssh root@65.108.159.161 "psql 'postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/<path_to_migration>.sql"

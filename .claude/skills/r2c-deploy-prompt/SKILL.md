@@ -251,7 +251,7 @@ ssh root@65.108.159.161 "pm2 logs rajiuce-api --lines 20 --nostream 2>&1 | grep 
 | プロジェクトパス | `/opt/rajiuce` |
 | API URL | `https://api.r2c.biz` |
 | Admin UI URL | `https://admin.r2c.biz` |
-| DB 接続 | `postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq` |
+| DB 接続 | `postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq` |
 | Admin UI デプロイ | Cloudflare Pages auto-deploy from main |
 | PM2 processes | rajiuce-api (0) / rajiuce-avatar (5) / rajiuce-sentiment (6) |
 
