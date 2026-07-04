@@ -17,7 +17,10 @@ import { AvatarCard } from "./AvatarCard";
 export default function AvatarListPage() {
   const { lang } = useLang();
   const locale = lang === "en" ? "en-US" : "ja-JP";
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId } = useAuth();
+  // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+  // client_admin相当にフォールバックするため、実テナントIDはpreviewTenantIdから取る必要がある
+  const effectiveTenantId = previewMode ? previewTenantId : (user?.tenantId ?? null);
 
   const [configs, setConfigs] = useState<AvatarConfig[]>([]);
   const [total, setTotal] = useState(0);
@@ -45,8 +48,13 @@ export default function AvatarListPage() {
   };
 
   useEffect(() => {
-    if (!user?.tenantId || isSuperAdmin) return;
-    authFetch(`${API_BASE}/v1/admin/my-tenant`)
+    if (!effectiveTenantId || isSuperAdmin) return;
+    // プレビュー中は自テナント専用の /my-tenant ではなく、super_admin用の
+    // /tenants/:id で明示的にpreview対象テナントを指定して取得する
+    const url = previewMode
+      ? `${API_BASE}/v1/admin/tenants/${effectiveTenantId}`
+      : `${API_BASE}/v1/admin/my-tenant`;
+    authFetch(url)
       .then((r) => r.json())
       .then((data: { features?: { avatar?: boolean; voice?: boolean; rag?: boolean } }) => {
         const f = { avatar: data.features?.avatar ?? false, voice: data.features?.voice ?? false, rag: data.features?.rag ?? true };
@@ -54,14 +62,17 @@ export default function AvatarListPage() {
         setAvatarEnabled(f.avatar);
       })
       .catch(() => {});
-  }, [user?.tenantId, isSuperAdmin]);
+  }, [effectiveTenantId, isSuperAdmin, previewMode]);
 
   const handleAvatarToggle = async () => {
-    if (!user?.tenantId || !tenantFeatures || toggleLoading) return;
+    if (!effectiveTenantId || !tenantFeatures || toggleLoading) return;
     const next = !avatarEnabled;
     setToggleLoading(true);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`, {
+      const url = previewMode
+        ? `${API_BASE}/v1/admin/tenants/${effectiveTenantId}`
+        : `${API_BASE}/v1/admin/my-tenant`;
+      const res = await authFetch(url, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ features: { ...tenantFeatures, avatar: next } }),
@@ -86,9 +97,13 @@ export default function AvatarListPage() {
     setLoading(true);
     setError(null);
     try {
+      // プレビュー中は isSuperAdmin が false にフォールバックするため、
+      // super_adminの実JWTでも tenant クエリを明示しないと全テナント分が返ってしまう
       const url = isSuperAdmin
         ? `${API_BASE}/v1/admin/avatar/configs/all`
-        : `${API_BASE}/v1/admin/avatar/configs`;
+        : previewMode && previewTenantId
+          ? `${API_BASE}/v1/admin/avatar/configs?tenant=${previewTenantId}`
+          : `${API_BASE}/v1/admin/avatar/configs`;
       const res = await authFetch(url);
       if (!res.ok) {
         setError(lang === "ja" ? "設定の読み込みに失敗しました" : "Failed to load configs");
@@ -102,7 +117,7 @@ export default function AvatarListPage() {
     } finally {
       setLoading(false);
     }
-  }, [lang, isSuperAdmin]);
+  }, [lang, isSuperAdmin, previewMode, previewTenantId]);
 
   useEffect(() => { void fetchConfigs(); }, [fetchConfigs]);
 
@@ -353,8 +368,8 @@ export default function AvatarListPage() {
         />
       )}
 
-      {/* ── アバター機能 ON/OFF トグル（Client Adminのみ）─────────────────────────────── */}
-      {!isSuperAdmin && user?.tenantId && (
+      {/* ── アバター機能 ON/OFF トグル（Client Adminのみ / プレビュー中含む）─────────── */}
+      {!isSuperAdmin && effectiveTenantId && (
         <AvatarFeatureToggle
           avatarEnabled={avatarEnabled}
           toggleLoading={toggleLoading}
@@ -364,8 +379,12 @@ export default function AvatarListPage() {
         />
       )}
 
-      {/* ── Phase75: Hermes Agent学習への同意 ON/OFF トグル（Client Adminのみ）───────── */}
-      {!isSuperAdmin && user?.tenantId && <HermesConsentToggle />}
+      {/* ── Phase75: Hermes Agent学習への同意 ON/OFF トグル（Client Adminのみ / プレビュー中含む）── */}
+      {!isSuperAdmin && effectiveTenantId && (
+        <HermesConsentToggle
+          overrideTenantId={previewMode ? effectiveTenantId : undefined}
+        />
+      )}
 
       {/* エラーメッセージ */}
       {error && (

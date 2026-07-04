@@ -128,6 +128,28 @@ describe("HermesConsentToggle", () => {
     });
   });
 
+  it("T8: overrideTenantId指定時は /tenants/:id をGET/PATCHする(プレビュー対応, GID 1216273315887508)", async () => {
+    mockInitialFetch(false);
+    vi.mocked(authFetch).mockReturnValueOnce(
+      mockOk({ features: { avatar: true, voice: false, rag: true, hermes_raw_data_consent: true } }),
+    );
+    render(<HermesConsentToggle overrideTenantId="preview-tenant" />);
+
+    await waitFor(() => {
+      expect(vi.mocked(authFetch)).toHaveBeenCalledWith("http://localhost:3100/v1/admin/tenants/preview-tenant");
+    });
+
+    const btn = await screen.findByRole("button");
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      expect(vi.mocked(authFetch)).toHaveBeenCalledWith(
+        "http://localhost:3100/v1/admin/tenants/preview-tenant",
+        expect.objectContaining({ method: "PATCH" }),
+      );
+    });
+  });
+
   it("T7: saving中はボタンがdisabledになる", async () => {
     mockInitialFetch(false);
     let resolve!: (v: Response) => void;
