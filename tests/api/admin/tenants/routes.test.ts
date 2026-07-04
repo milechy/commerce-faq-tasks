@@ -29,6 +29,18 @@ const SUPER_ADMIN_TOKEN = makeDevJwt({
   app_metadata: { role: "super_admin" },
 });
 
+const CLIENT_ADMIN_TOKEN = makeDevJwt({
+  sub: "client-admin-user-id",
+  app_metadata: { role: "client_admin", tenant_id: "tenant1" },
+});
+
+// role が未設定/不正だが tenant_id claim だけは持つトークン
+// (GID 1216273277286371: role検証漏れの再発防止用)
+const NO_ROLE_WITH_TENANT_TOKEN = makeDevJwt({
+  sub: "no-role-user-id",
+  app_metadata: { tenant_id: "tenant1" },
+});
+
 describe("Tenant Admin Routes", () => {
   let app: express.Application;
   let mockDb: any;
@@ -120,6 +132,52 @@ describe("Tenant Admin Routes", () => {
         .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
       expect(res.body.keys[0].prefix).toMatch(/\*\*\*\*$/);
+    });
+  });
+
+  describe("GET /v1/admin/my-tenant", () => {
+    it("returns tenant info for client_admin", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [] }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .get("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe("tenant1");
+    });
+
+    it("rejects a request with tenant_id claim but no admin role (GID 1216273277286371)", async () => {
+      const res = await request(app)
+        .get("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${NO_ROLE_WITH_TENANT_TOKEN}`);
+      expect(res.status).toBe(403);
+      expect(mockDb.query).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("PATCH /v1/admin/my-tenant", () => {
+    it("updates features for client_admin", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: { avatar: true, voice: false, rag: true }, lemonslice_agent_id: null }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ features: { avatar: true, voice: false, rag: true } });
+      expect(res.status).toBe(200);
+      expect(res.body.features.avatar).toBe(true);
+    });
+
+    it("rejects a request with tenant_id claim but no admin role (GID 1216273277286371)", async () => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${NO_ROLE_WITH_TENANT_TOKEN}`)
+        .send({ features: { avatar: true, voice: false, rag: true } });
+      expect(res.status).toBe(403);
+      expect(mockDb.query).not.toHaveBeenCalled();
     });
   });
 

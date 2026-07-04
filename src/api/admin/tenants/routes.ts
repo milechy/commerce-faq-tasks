@@ -1,6 +1,7 @@
 // src/api/admin/tenants/routes.ts
 import type { Express, NextFunction, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
+import { isAllowedAdminRole } from "../../middleware/roleAuth";
 
 import { Pool } from "pg";
 import { z } from "zod";
@@ -107,10 +108,23 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     next();
   }
+
+  // セキュリティ要件: /v1/admin/my-tenant はロールを検証せずtenant_id claimのみで認可していた
+  // （どのロールの認証済みユーザーでもapp_metadata.tenant_idさえあれば通過できてしまう不具合）。
+  // super_admin / client_admin のみ許可する（roleAuth.ts の ALLOWED_ADMIN_ROLES と同じ判定）。
+  function requireAdminRole(req: Request, res: Response, next: NextFunction): void {
+    const su = (req as AuthedReq).supabaseUser;
+    const role = su?.app_metadata?.role;
+    if (!isAllowedAdminRole(role)) {
+      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
+      return;
+    }
+    next();
+  }
   // ─────────────────────────────────────────────────────────────────────────
 
   // GET /v1/admin/my-tenant — Client Admin専用: JWTのtenant_idで自分のテナント情報を返す
-  app.get("/v1/admin/my-tenant", tenantAuth, async (req: Request, res: Response) => {
+  app.get("/v1/admin/my-tenant", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
     const su = (req as AuthedReq).supabaseUser;
     const tenantId = su?.app_metadata?.tenant_id as string | undefined;
     if (!tenantId) {
@@ -132,7 +146,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   });
 
   // PATCH /v1/admin/my-tenant — Client Admin専用: featuresのavatar/voiceのみ更新可
-  app.patch("/v1/admin/my-tenant", tenantAuth, async (req: Request, res: Response) => {
+  app.patch("/v1/admin/my-tenant", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
     const su = (req as AuthedReq).supabaseUser;
     const tenantId = su?.app_metadata?.tenant_id as string | undefined;
     if (!tenantId) {
