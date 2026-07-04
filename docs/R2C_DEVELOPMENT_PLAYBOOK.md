@@ -520,7 +520,7 @@ grep -rn "metadata.*source" src/api/
 | プロジェクトパス | `/opt/rajiuce` |
 | API URL | `https://api.r2c.biz` |
 | Admin UI URL | `https://admin.r2c.biz` |
-| DB接続 | `postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq` |
+| DB接続 | `postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq` |
 | Supabase | `https://rpqrwifbrhlebbelyqog.supabase.co` |
 | Slack Channel | #r2c / #rajiuce-dev, ID: `C0AG07HFJTB` |
 | Asana Primary | GID: `1213607637045514` |

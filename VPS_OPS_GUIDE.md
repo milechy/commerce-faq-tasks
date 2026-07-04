@@ -3,6 +3,13 @@
 > 2026-03-18 作成。実際のインシデント対応から得られた教訓を文書化。
 > VPS: `root@65.108.159.161` | Project: `/opt/rajiuce`
 
+> **`<DB_PASSWORD>` について:** 本ドキュメント内のpsqlコマンド例に含まれる
+> `<DB_PASSWORD>` は、旧バージョンで実際のパスワードが平文記載されていたため
+> プレースホルダーに置換したもの。当該パスワードは漏洩済みとして扱い、
+> **Postgres側でのローテーションを推奨**（未対応の場合は要検討）。
+> 現在の値は以下でVPSの`.env`から取得する:
+> `ssh root@65.108.159.161 "grep '^DATABASE_URL=' /opt/rajiuce/.env"`
+
 ---
 
 ## 1. デプロイ後の必須確認事項
@@ -70,7 +77,7 @@ ssh root@65.108.159.161 "pm2 logs rajiuce-api --lines 50 --nostream 2>&1 | grep 
 find src/ -name "*.sql" -path "*/migration*"
 
 # 2. VPS で実行
-ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/<path_to_migration>.sql"
+ssh root@65.108.159.161 "psql 'postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/<path_to_migration>.sql"
 ```
 
 **既知のマイグレーション一覧:**
@@ -102,7 +109,7 @@ Phase45 E2E修正: Geminiエラー時に作られた不完全レコード（scor
 
 実行方法:
 ```bash
-ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/src/agent/judge/migration_cleanup_zero_scores.sql"
+ssh root@65.108.159.161 "psql 'postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/src/agent/judge/migration_cleanup_zero_scores.sql"
 ```
 
 ---
@@ -358,13 +365,13 @@ ssh root@65.108.159.161 "pm2 restart rajiuce-api"
 
 ```bash
 # migration_book_uploads.sql を実行（book_uploads テーブル + faq_embeddings インデックス）
-ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/src/api/admin/knowledge/migration_book_uploads.sql"
+ssh root@65.108.159.161 "psql 'postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq' -f /opt/rajiuce/src/api/admin/knowledge/migration_book_uploads.sql"
 
 # テーブル確認
-ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -c '\dt book_uploads'"
+ssh root@65.108.159.161 "psql 'postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq' -c '\dt book_uploads'"
 
 # インデックス確認
-ssh root@65.108.159.161 "psql 'postgresql://postgres:hezdus-4jygWy-pyqrub@127.0.0.1:5432/commerce_faq' -c '\di idx_faq_embeddings_*'"
+ssh root@65.108.159.161 "psql 'postgresql://postgres:<DB_PASSWORD>@127.0.0.1:5432/commerce_faq' -c '\di idx_faq_embeddings_*'"
 ```
 
 ### 6.4 Phase44 デプロイ後確認
