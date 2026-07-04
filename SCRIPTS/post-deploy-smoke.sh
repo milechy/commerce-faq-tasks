@@ -90,12 +90,18 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# ── 5c. nginx 経由の loopback (VPSローカルhttp 127.0.0.1) は 200 を返す ──
+# ── 5c. nginx 経由の loopback は 200 を返す ──────────────────────────────
 # Codex MEDIUM 反映: nginx の proxy_set_header 設定誤りで loopback 経由も
 # 200 を返せなくなる lockout を検出する。Pre-A 時点と Post-A 時点で意味が
 # 変わる(Post: nginx が "1" を注入してくれるのでヘッダなしでも 200)。
+# GID 1216274383891431: `location = /metrics` は listen 443 ssl ブロックにのみ
+# 定義されており、port 80 には対応する location が存在しない(:80 は
+# api.r2c.biz への301リダイレクトのみ)。素の http://127.0.0.1/metrics は
+# Hostヘッダがapi.r2c.bizと一致せず304リダイレクトにも入らないため常に404に
+# なる恒常的なバグだった。--resolve で正しいHost/SNIをloopbackに向けて
+# https でアクセスする。
 nginx_loopback_status=$(ssh "${VPS}" "curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-  http://127.0.0.1/metrics 2>/dev/null" 2>/dev/null || echo "000")
+  --resolve api.r2c.biz:443:127.0.0.1 https://api.r2c.biz/metrics 2>/dev/null" 2>/dev/null || echo "000")
 if [ "$nginx_loopback_status" = "200" ]; then
   echo "  ✅ /metrics via nginx loopback — $nginx_loopback_status"
   PASS=$((PASS + 1))
