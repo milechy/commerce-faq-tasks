@@ -86,6 +86,8 @@ export function CVUnfiredAlert() {
               fontSize: 13,
               fontWeight: 600,
               cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             一覧を見る
@@ -101,6 +103,7 @@ export function CVUnfiredAlert() {
               color: "#6b7280",
               fontSize: 13,
               cursor: "pointer",
+              flexShrink: 0,
             }}
           >
             ✕
@@ -157,6 +160,8 @@ export function CVUnfiredAlert() {
               fontSize: 13,
               fontWeight: 600,
               cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             搭載状況を確認
@@ -173,6 +178,7 @@ export function CVUnfiredAlert() {
             color: "#6b7280",
             fontSize: 13,
             cursor: "pointer",
+            flexShrink: 0,
           }}
         >
           ✕
