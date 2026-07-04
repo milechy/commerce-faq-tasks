@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppSidebar, MobileHeader, MobileBottomBar } from "./components/AppSidebar";
+import { PreviewModeBanner, PREVIEW_MODE_BANNER_HEIGHT } from "./components/PreviewModeBanner";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
@@ -78,7 +79,7 @@ function ConfigErrorScreen() {
 }
 
 function AppInner() {
-  const { isClientAdmin, isSuperAdmin, user } = useAuth();
+  const { isClientAdmin, isSuperAdmin, user, previewMode } = useAuth();
   const [agentOpen, setAgentOpen] = useState(false);
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
@@ -100,6 +101,8 @@ function AppInner() {
     <div className="app-layout">
       {isAdmin && <AppSidebar />}
       <div className="app-main">
+        <PreviewModeBanner />
+        {previewMode && <div style={{ height: PREVIEW_MODE_BANNER_HEIGHT }} />}
         {isAdmin && <MobileHeader />}
         {isAdmin && <MobileBottomBar />}
         <Routes>
