@@ -14,13 +14,23 @@ interface TenantFeatures {
   hermes_raw_data_consent?: boolean;
 }
 
-export function HermesConsentToggle() {
+interface HermesConsentToggleProps {
+  // super_adminの「クライアントビューで見る」プレビュー中のテナントID。
+  // 指定時は自テナント専用の /my-tenant ではなく super_admin用の /tenants/:id を使う。
+  overrideTenantId?: string;
+}
+
+export function HermesConsentToggle({ overrideTenantId }: HermesConsentToggleProps = {}) {
   const [features, setFeatures] = useState<TenantFeatures | null>(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
+  const endpoint = overrideTenantId
+    ? `${API_BASE}/v1/admin/tenants/${overrideTenantId}`
+    : `${API_BASE}/v1/admin/my-tenant`;
+
   useEffect(() => {
-    authFetch(`${API_BASE}/v1/admin/my-tenant`)
+    authFetch(endpoint)
       .then((r) => r.json())
       .then((data: { features?: TenantFeatures }) => {
         setFeatures({
@@ -33,7 +43,7 @@ export function HermesConsentToggle() {
         });
       })
       .catch(() => {});
-  }, []);
+  }, [endpoint]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -52,7 +62,7 @@ export function HermesConsentToggle() {
     setSaving(true);
 
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`, {
+      const res = await authFetch(endpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ features: { ...prev, hermes_raw_data_consent: next } }),
