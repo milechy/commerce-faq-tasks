@@ -288,3 +288,56 @@ describe("PATCH /v1/admin/tenants/:id — changed_by にメールが入る", () 
     expect(insertCall![1][1]).toBe("admin@example.com");
   });
 });
+
+// --------------------------------------------------------------------------
+// ⑥ GET /v1/admin/my-tenant — has_r2c2 (App Switcher 用、AaaS aaas_clients 連携)
+// --------------------------------------------------------------------------
+
+describe("GET /v1/admin/my-tenant — has_r2c2", () => {
+  const TENANT_ROW = { id: "tenant-a", name: "テストテナント", features: null, lemonslice_agent_id: null, conversion_types: [] };
+
+  it("aaas_clients に紐付くテナントは has_r2c2: true を返す", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ 1: 1 }], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .get("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.has_r2c2).toBe(true);
+  });
+
+  it("aaas_clients に紐付かないテナントは has_r2c2: false を返す", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .get("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.has_r2c2).toBe(false);
+  });
+
+  it("aaas_clients クエリが失敗しても(未マイグレーション等) 500にせず has_r2c2: false で返す", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+      .mockRejectedValueOnce(new Error('relation "aaas_clients" does not exist'));
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .get("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.has_r2c2).toBe(false);
+  });
+});

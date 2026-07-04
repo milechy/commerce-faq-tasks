@@ -24,6 +24,7 @@ import {
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
 import { NotificationBell } from "./common/NotificationBell";
+import AppSwitcher from "./AppSwitcher";
 import { cn } from "../lib/utils";
 
 // ─── Nav item types ───────────────────────────────────────────────────
@@ -263,6 +264,11 @@ function SidebarContent({ onClose }: SidebarContentProps) {
             </button>
           )}
         </div>
+      </div>
+
+      {/* App Switcher (R2C ⇄ R2C2) */}
+      <div style={{ padding: "10px 12px 0" }}>
+        <AppSwitcher />
       </div>
 
       {/* Nav */}
