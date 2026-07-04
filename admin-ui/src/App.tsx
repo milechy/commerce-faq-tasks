@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppSidebar, MobileHeader, MobileBottomBar } from "./components/AppSidebar";
 import { PreviewModeBanner, PREVIEW_MODE_BANNER_HEIGHT } from "./components/PreviewModeBanner";
@@ -35,6 +35,8 @@ import EngagementPage from "./pages/admin/engagement/index";
 import ConversionDashboardPage from "./pages/admin/conversion/index";
 import OptionManagementPage from "./pages/admin/options/index";
 import ResetPasswordPage from "./pages/ResetPassword";
+import AuthBridgePage from "./pages/AuthBridgePage";
+import { AdminAgentUIProvider, useAdminAgentUI } from "./contexts/AdminAgentUIContext";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
@@ -80,12 +82,21 @@ function ConfigErrorScreen() {
 
 function AppInner() {
   const { isClientAdmin, isSuperAdmin, user, previewMode } = useAuth();
-  const [agentOpen, setAgentOpen] = useState(false);
+  const { isOpen: agentOpen, seedQuery, toggle: toggleAgent, close: closeAgent } = useAdminAgentUI();
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
   const isAdmin = location.pathname.startsWith("/admin") || location.pathname === "/";
   const isLogin =
     location.pathname === "/login" || location.pathname === "/reset-password";
+  const isAuthBridge = location.pathname === "/auth/bridge";
+
+  if (isAuthBridge) {
+    return (
+      <Routes>
+        <Route path="/auth/bridge" element={<AuthBridgePage />} />
+      </Routes>
+    );
+  }
 
   if (isLogin) {
     return (
@@ -193,14 +204,15 @@ function AppInner() {
       {showAIChat && (
         <>
           <AdminAgentButton
-            onClick={() => setAgentOpen((v) => !v)}
+            onClick={toggleAgent}
             isOpen={agentOpen}
           />
           <AdminAgentPanel
             isOpen={agentOpen}
-            onClose={() => setAgentOpen(false)}
+            onClose={closeAgent}
             tenantId={user?.tenantId ?? null}
             isSuperAdmin={isSuperAdmin}
+            initialQuery={seedQuery}
           />
         </>
       )}
@@ -220,7 +232,9 @@ export default function App() {
     <LangProvider>
     <BrowserRouter>
       <AuthProvider>
-        <AppInner />
+        <AdminAgentUIProvider>
+          <AppInner />
+        </AdminAgentUIProvider>
       </AuthProvider>
     </BrowserRouter>
     </LangProvider>

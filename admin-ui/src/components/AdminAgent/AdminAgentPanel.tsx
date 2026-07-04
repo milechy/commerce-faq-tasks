@@ -8,6 +8,7 @@ interface AdminAgentPanelProps {
   onClose: () => void;
   tenantId: string | null;
   isSuperAdmin: boolean;
+  initialQuery?: string | null;
 }
 
 const INITIAL_MESSAGE = "こんにちは！設定の変更やFAQの追加など、何でもお手伝いします。";
@@ -17,12 +18,14 @@ export default function AdminAgentPanel({
   onClose,
   tenantId,
   isSuperAdmin,
+  initialQuery,
 }: AdminAgentPanelProps) {
   const { messages, isLoading, sendMessage } = useAdminAgent();
   const [input, setInput] = useState("");
   const [isComposing, setIsComposing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sentInitialQueryRef = useRef<string | null>(null);
 
   // 最新メッセージへ自動スクロール
   useEffect(() => {
@@ -35,6 +38,15 @@ export default function AdminAgentPanel({
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
+
+  // AppSwitcher のロックタブクリックなど、質問を種まきして開いた場合は自動送信
+  useEffect(() => {
+    if (!isOpen || !initialQuery) return;
+    if (sentInitialQueryRef.current === initialQuery) return;
+    sentInitialQueryRef.current = initialQuery;
+    const targetTenantId = isSuperAdmin ? (tenantId ?? undefined) : undefined;
+    void sendMessage(initialQuery, targetTenantId);
+  }, [isOpen, initialQuery, isSuperAdmin, tenantId, sendMessage]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();

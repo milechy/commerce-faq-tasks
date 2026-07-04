@@ -59,6 +59,22 @@ const updateTenantSchema = z.object({
   tenant_contact_email: z.string().email().nullable().optional(),
 });
 
+// aaas_clients は共有Supabaseプロジェクト内のAaaS(R2C2)側所有テーブル
+// (r2c_tenant_id で tenants.id を参照)。AaaS側マイグレーション未適用環境でも
+// /v1/admin/my-tenant 全体を壊さないよう、失敗時は「R2C2未契約」扱いにフォールバックする。
+async function checkHasR2c2(db: Pool, tenantId: string): Promise<boolean> {
+  try {
+    const result = await db.query(
+      `SELECT 1 FROM aaas_clients WHERE r2c_tenant_id = $1 LIMIT 1`,
+      [tenantId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (err) {
+    logger.warn("[checkHasR2c2] aaas_clients query failed (migration not applied yet?)", err);
+    return false;
+  }
+}
+
 export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   // ── インライン認証スタック（knowledge/routes.ts と同パターン） ──────────────
   function tenantAuth(req: Request, res: Response, next: NextFunction): void {
@@ -138,7 +154,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
       }
-      return res.json(result.rows[0]);
+      const has_r2c2 = await checkHasR2c2(db, tenantId);
+      return res.json({ ...result.rows[0], has_r2c2 });
     } catch (err) {
       logger.warn("[GET /v1/admin/my-tenant]", err);
       return res.status(500).json({ error: "取得に失敗しました" });
