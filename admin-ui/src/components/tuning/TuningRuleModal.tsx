@@ -80,6 +80,12 @@ export default function TuningRuleModal({
 }: Props) {
   const { t } = useLang();
 
+  // GID 1216287956004317: 1画面に全項目が並ぶ従来フォームを、SmartHRの年末調整のような
+  // 1画面1質問のステップ形式に分解する。編集時は既存の指示文を確認するのが主目的の
+  // ことが多いため、engagement(お客様への声がけ設定)の openEdit と同様にstep1を
+  // 飛ばしてstep2から開始する。
+  const [step, setStep] = useState<1 | 2 | 3>(mode === "edit" ? 2 : 1);
+
   const [triggerPattern, setTriggerPattern] = useState(
     initialData?.trigger_pattern ?? ""
   );
@@ -367,6 +373,35 @@ export default function TuningRuleModal({
             </div>
           )}
 
+          {/* ステップインジケーター */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {([1, 2, 3] as const).map((s) => (
+              <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: "50%",
+                    background: step >= s ? "#3b82f6" : "#374151",
+                    color: "#fff",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    flexShrink: 0,
+                  }}
+                >
+                  {s}
+                </div>
+                <span style={{ fontSize: 12, color: step >= s ? "#93c5fd" : "#6b7280", whiteSpace: "nowrap" }}>
+                  {t(`tuning.step${s}_label`)}
+                </span>
+                {s < 3 && <span style={{ color: "#374151" }}>›</span>}
+              </div>
+            ))}
+          </div>
+
           {/* AI提案バナー */}
           {suggesting && (
             <div
@@ -428,6 +463,7 @@ export default function TuningRuleModal({
                   setPriority(0);
                   setSuggestReason(null);
                   setAiSuggested(false);
+                  setStep(1);
                 }}
                 style={{
                   flexShrink: 0,
@@ -541,67 +577,160 @@ export default function TuningRuleModal({
             </div>
           )}
 
-          {/* トリガーパターン */}
-          <div>
-            <label style={LABEL_STYLE}>{t("tuning.trigger_pattern")}</label>
-            <p style={HINT_STYLE}>{t("tuning.trigger_pattern_hint")}</p>
-            {suggesting ? (
-              <div
-                style={{
-                  ...INPUT_STYLE,
-                  minHeight: 52,
-                  background: "rgba(37,99,235,0.08)",
-                  border: "1px solid rgba(59,130,246,0.2)",
-                }}
-              />
-            ) : (
-              <input
-                type="text"
-                value={triggerPattern}
-                onChange={(e) => setTriggerPattern(e.target.value)}
-                placeholder={t("tuning.trigger_pattern_placeholder")}
-                style={{
-                  ...INPUT_STYLE,
-                  ...(aiSuggested && triggerPattern
-                    ? { background: "rgba(37,99,235,0.08)", border: "1px solid rgba(59,130,246,0.35)" }
-                    : {}),
-                }}
-              />
-            )}
-          </div>
+          {/* Step 1: トリガーパターン */}
+          {step === 1 && (
+            <div>
+              <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 14px", color: "#f9fafb" }}>
+                {t("tuning.step1_heading")}
+              </h3>
+              <label style={LABEL_STYLE}>{t("tuning.trigger_pattern")}</label>
+              <p style={HINT_STYLE}>{t("tuning.trigger_pattern_hint")}</p>
+              {suggesting ? (
+                <div
+                  style={{
+                    ...INPUT_STYLE,
+                    minHeight: 52,
+                    background: "rgba(37,99,235,0.08)",
+                    border: "1px solid rgba(59,130,246,0.2)",
+                  }}
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={triggerPattern}
+                  onChange={(e) => setTriggerPattern(e.target.value)}
+                  placeholder={t("tuning.trigger_pattern_placeholder")}
+                  style={{
+                    ...INPUT_STYLE,
+                    ...(aiSuggested && triggerPattern
+                      ? { background: "rgba(37,99,235,0.08)", border: "1px solid rgba(59,130,246,0.35)" }
+                      : {}),
+                  }}
+                />
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20 }}>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={saving}
+                  style={{
+                    padding: "12px 20px",
+                    minHeight: 48,
+                    borderRadius: 10,
+                    border: "1px solid #374151",
+                    background: "transparent",
+                    color: "#9ca3af",
+                    fontSize: 15,
+                    fontWeight: 600,
+                    cursor: saving ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStep(2)}
+                  style={{
+                    padding: "12px 24px",
+                    minHeight: 48,
+                    borderRadius: 10,
+                    border: "none",
+                    background: "linear-gradient(135deg, #1d4ed8 0%, #3b82f6 50%, #1d4ed8 100%)",
+                    color: "#fff",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {t("tuning.next")}
+                </button>
+              </div>
+            </div>
+          )}
 
-          {/* 期待する応答方針 */}
-          <div>
-            <label style={LABEL_STYLE}>
-              {t("tuning.expected_behavior")}
-              <span style={{ color: "#ef4444", marginLeft: 4 }}>*</span>
-            </label>
-            {suggesting ? (
-              <div
-                style={{
-                  ...TEXTAREA_STYLE,
-                  minHeight: 100,
-                  background: "rgba(37,99,235,0.08)",
-                  border: "1px solid rgba(59,130,246,0.2)",
-                }}
-              />
-            ) : (
-              <textarea
-                required
-                value={expectedBehavior}
-                onChange={(e) => setExpectedBehavior(e.target.value)}
-                rows={4}
-                placeholder={t("tuning.expected_behavior_placeholder")}
-                style={{
-                  ...TEXTAREA_STYLE,
-                  ...(aiSuggested && expectedBehavior
-                    ? { background: "rgba(37,99,235,0.08)", border: "1px solid rgba(59,130,246,0.35)" }
-                    : {}),
-                }}
-              />
-            )}
-          </div>
+          {/* Step 2: 期待する応答方針 */}
+          {step === 2 && (
+            <div>
+              <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 14px", color: "#f9fafb" }}>
+                {t("tuning.step2_heading")}
+              </h3>
+              <label style={LABEL_STYLE}>
+                {t("tuning.expected_behavior")}
+                <span style={{ color: "#ef4444", marginLeft: 4 }}>*</span>
+              </label>
+              {suggesting ? (
+                <div
+                  style={{
+                    ...TEXTAREA_STYLE,
+                    minHeight: 100,
+                    background: "rgba(37,99,235,0.08)",
+                    border: "1px solid rgba(59,130,246,0.2)",
+                  }}
+                />
+              ) : (
+                <textarea
+                  required
+                  value={expectedBehavior}
+                  onChange={(e) => setExpectedBehavior(e.target.value)}
+                  rows={4}
+                  placeholder={t("tuning.expected_behavior_placeholder")}
+                  style={{
+                    ...TEXTAREA_STYLE,
+                    ...(aiSuggested && expectedBehavior
+                      ? { background: "rgba(37,99,235,0.08)", border: "1px solid rgba(59,130,246,0.35)" }
+                      : {}),
+                  }}
+                />
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20 }}>
+                <button
+                  type="button"
+                  onClick={() => setStep(1)}
+                  style={{
+                    padding: "12px 20px",
+                    minHeight: 48,
+                    borderRadius: 10,
+                    border: "1px solid #374151",
+                    background: "transparent",
+                    color: "#9ca3af",
+                    fontSize: 15,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  {t("tuning.step_back")}
+                </button>
+                <button
+                  type="button"
+                  disabled={!expectedBehavior.trim()}
+                  onClick={() => setStep(3)}
+                  style={{
+                    padding: "12px 24px",
+                    minHeight: 48,
+                    borderRadius: 10,
+                    border: "none",
+                    background: expectedBehavior.trim()
+                      ? "linear-gradient(135deg, #1d4ed8 0%, #3b82f6 50%, #1d4ed8 100%)"
+                      : "#1e3a5f",
+                    color: "#fff",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    cursor: expectedBehavior.trim() ? "pointer" : "not-allowed",
+                    opacity: expectedBehavior.trim() ? 1 : 0.6,
+                  }}
+                >
+                  {t("tuning.next")}
+                </button>
+              </div>
+            </div>
+          )}
 
+          {/* Step 3: 適用範囲・優先度・有効/無効・保存 */}
+          {step === 3 && (
+          <>
+          <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "#f9fafb" }}>
+            {t("tuning.step3_heading")}
+          </h3>
           {/* 適用範囲（会話詳細から呼び出し時は非表示 — tenant_idを自動セット） */}
           {!fromConversation && (
             <div>
@@ -739,7 +868,7 @@ export default function TuningRuleModal({
           <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => setStep(2)}
               disabled={saving}
               style={{
                 flex: 1,
@@ -754,7 +883,7 @@ export default function TuningRuleModal({
                 cursor: saving ? "not-allowed" : "pointer",
               }}
             >
-              {t("common.cancel")}
+              {t("tuning.step_back")}
             </button>
             <button
               type="submit"
@@ -801,6 +930,8 @@ export default function TuningRuleModal({
               )}
             </button>
           </div>
+          </>
+          )}
 
           {/* ── テスト返答セクション（保存後 or 編集時） ─────────────────────── */}
           {savedRule && (
