@@ -66,6 +66,7 @@ function mockConversionsQueries({
   // jest.clearAllMocks() only clears call records, not the once-queue; mockReset() clears everything.
   mockQuery.mockReset();
   mockQuery
+    .mockResolvedValueOnce({ rows: [{ plan: "growth" }] })   // GID: plan ゲート確認(client_admin)
     .mockResolvedValueOnce({ rows: summaryRows })            // 1. summaryResult (GROUP BY outcome)
     .mockResolvedValueOnce({ rows: [{ total: String(total) }] })  // 2. totalCountResult
     .mockResolvedValueOnce({ rows: [{ recorded: String(recorded) }] }) // 3. recordedResult
@@ -200,7 +201,7 @@ describe("3. period=7d — 7日以内のみ", () => {
       .get("/v1/admin/analytics/conversions?period=7d");
 
     // 最初の query 呼び出し (summaryResult) のパラメータを検証
-    const firstCall = mockQuery.mock.calls[0];
+    const firstCall = mockQuery.mock.calls[1];
     expect(firstCall[1]).toContain("7 days");
   });
 
@@ -210,7 +211,7 @@ describe("3. period=7d — 7日以内のみ", () => {
     await request(makeApp("client_admin", "tenant-a"))
       .get("/v1/admin/analytics/conversions?period=90d");
 
-    const firstCall = mockQuery.mock.calls[0];
+    const firstCall = mockQuery.mock.calls[1];
     expect(firstCall[1]).toContain("90 days");
   });
 });
@@ -258,7 +259,7 @@ describe("5. client_admin — テナント絞り込み", () => {
     await request(makeApp("client_admin", "tenant-x"))
       .get("/v1/admin/analytics/conversions");
 
-    const firstCall = mockQuery.mock.calls[0];
+    const firstCall = mockQuery.mock.calls[1];
     expect(firstCall[1]).toContain("tenant-x");
   });
 });

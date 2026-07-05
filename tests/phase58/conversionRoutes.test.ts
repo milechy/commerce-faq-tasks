@@ -138,7 +138,8 @@ describe('GET /v1/admin/conversion/attributions', () => {
   it('Client Admin → 自テナント 200', async () => {
     const { app } = makeApp({
       role: 'client_admin',
-      queryResponses: [{ rows: [] }, { rows: [] }, { rows: [{ total: '0', avg_temp_score: null }] }, { rows: [] }],
+      // GID: 先頭がplanゲート確認クエリ(client_admin)
+      queryResponses: [{ rows: [{ plan: 'growth' }] }, { rows: [] }, { rows: [] }, { rows: [{ total: '0', avg_temp_score: null }] }, { rows: [] }],
     });
     const res = await request(app).get('/v1/admin/conversion/attributions');
     expect(res.status).toBe(200);

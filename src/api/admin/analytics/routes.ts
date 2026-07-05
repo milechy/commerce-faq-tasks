@@ -3,12 +3,14 @@
 // Phase50 Stream A: Analytics集計API
 
 import type { Express, Request, Response } from "express";
+import type { Pool } from "pg";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { pool } from "../../../lib/db";
 import { createNotification, notificationExists } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 import { decryptText } from '../../../lib/crypto/textEncrypt';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
+import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,6 +119,28 @@ function resolveTenantFilter(
   return jwtTenantId || null;
 }
 
+/**
+ * GID: LP料金表(Growth〜: 高度なAnalytics)に基づくplan制限。
+ * client_adminのみ対象（super_adminの集約/横断ビューは対象外）。
+ * pool可用性チェックの後に呼ぶこと（DB障害時に503を403で覆い隠さないため）。
+ * 許可されなければ403を返し、呼び出し元は即returnすること。
+ */
+async function checkAnalyticsPlanAccess(
+  pool: Pick<Pool, "query">,
+  res: Response,
+  isSuperAdmin: boolean,
+  jwtTenantId: string,
+): Promise<boolean> {
+  if (isSuperAdmin) return true;
+  const plan = await queryTenantPlan(pool, jwtTenantId);
+  if (planHasFeature(plan, "analytics")) return true;
+  res.status(403).json({
+    error: "plan_upgrade_required",
+    message: "高度なAnalyticsはGrowthプラン以上でご利用いただけます",
+  });
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
@@ -168,6 +192,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (!pool) {
         return res.status(503).json({ error: "データベース接続が利用できません" });
       }
+      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId))) return;
 
       try {
         // Build tenant filter clauses
@@ -426,6 +451,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (!pool) {
         return res.status(503).json({ error: "データベース接続が利用できません" });
       }
+      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId))) return;
 
       try {
         const params: (string | number)[] = [`${interval}`];
@@ -576,6 +602,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (!pool) {
         return res.status(503).json({ error: "データベース接続が利用できません" });
       }
+      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId))) return;
 
       try {
         const params: (string | number)[] = [`${interval}`];
@@ -734,6 +761,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (!pool) {
         return res.status(503).json({ error: "データベース接続が利用できません" });
       }
+      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId))) return;
 
       try {
         const tenantClause = tenantId ? "AND s.tenant_id = $2" : "";

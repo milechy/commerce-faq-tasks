@@ -11,6 +11,28 @@ import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware';
 import { roleAuthMiddleware, requireRole } from '../middleware/roleAuth';
 import type { AuthenticatedUser } from '../middleware/roleAuth';
+import { planHasFeature, queryTenantPlan } from '../../lib/billing/planFeatures';
+
+/**
+ * GID: LP料金表(Growth〜: CV計測)に基づくplan制限。
+ * client_adminのみ対象（super_adminの集約/横断ビューは対象外）。
+ * db可用性チェックの後に呼ぶこと（DB障害時に503を403で覆い隠さないため）。
+ * 許可されなければ403を返し、呼び出し元は即returnすること。
+ */
+async function checkConversionPlanAccess(
+  db: Pool,
+  res: Response,
+  user: AuthenticatedUser,
+): Promise<boolean> {
+  if (user.role === 'super_admin') return true;
+  const plan = await queryTenantPlan(db, user.tenantId ?? "");
+  if (planHasFeature(plan, "conversion")) return true;
+  res.status(403).json({
+    error: "plan_upgrade_required",
+    message: "CV計測はGrowthプラン以上でご利用いただけます",
+  });
+  return false;
+}
 
 const VALID_CONVERSION_TYPES = ['purchase', 'inquiry', 'reservation', 'signup', 'other'] as const;
 
@@ -94,6 +116,7 @@ export function registerConversionRoutes(
     if (user.role === 'client_admin' && queryTenantId && queryTenantId !== user.tenantId) {
       return res.status(403).json({ error: 'forbidden' });
     }
+    if (!(await checkConversionPlanAccess(db, res, user))) return;
     const tenantId = user.role === 'super_admin' ? (queryTenantId ?? null) : user.tenantId;
 
     const period = (req.query['period'] as string | undefined) ?? '30d';
@@ -180,6 +203,7 @@ export function registerConversionRoutes(
     if (user.role === 'client_admin' && queryTenantId && queryTenantId !== user.tenantId) {
       return res.status(403).json({ error: 'forbidden' });
     }
+    if (!(await checkConversionPlanAccess(db, res, user))) return;
     const tenantId = user.role === 'super_admin' ? (queryTenantId ?? null) : user.tenantId;
 
     const period = (req.query['period'] as string | undefined) ?? '30d';

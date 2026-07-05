@@ -12,6 +12,7 @@ import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { DEFAULT_AVATARS } from "../avatar/routes";
 import { logger } from '../../../lib/logger';
+import { planHasFeature, type TenantPlan } from "../../../lib/billing/planFeatures";
 
 const planValues = ["starter", "growth", "enterprise"] as const;
 
@@ -154,7 +155,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `SELECT id, name, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (result.rowCount === 0) {
@@ -198,6 +199,20 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const fields = parsed.data;
     if (Object.keys(fields).length === 0) {
       return res.status(400).json({ error: "no_fields", message: "更新フィールドが必要です。" });
+    }
+    // GID: LP料金表(Growth〜: AIアバター)に基づくプラン制限。
+    // avatar/voiceをtrueにするにはGrowth以上のプランが必要（UIの非表示に加えAPI側でも防御）。
+    if (fields.features?.avatar === true || fields.features?.voice === true) {
+      const planResult = await db.query<{ plan: TenantPlan | null }>(
+        `SELECT plan FROM tenants WHERE id = $1`,
+        [tenantId]
+      );
+      if (!planHasFeature(planResult.rows[0]?.plan, "avatar")) {
+        return res.status(403).json({
+          error: "plan_upgrade_required",
+          message: "AIアバター機能はGrowthプラン以上でご利用いただけます",
+        });
+      }
     }
     try {
       const setClauses: string[] = [];

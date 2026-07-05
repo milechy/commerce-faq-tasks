@@ -12,12 +12,13 @@ import { AvatarListHeader } from "./AvatarListHeader";
 import { AvatarFilterPanel } from "./AvatarFilterPanel";
 import { AvatarFeatureToggle } from "./AvatarFeatureToggle";
 import { HermesConsentToggle } from "./HermesConsentToggle";
+import { planHasFeature } from "../../../lib/planFeatures";
 import { AvatarCard } from "./AvatarCard";
 
 export default function AvatarListPage() {
   const { lang } = useLang();
   const locale = lang === "en" ? "en-US" : "ja-JP";
-  const { user, isSuperAdmin, previewMode, previewTenantId } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, tenantPlan } = useAuth();
   // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
   // client_admin相当にフォールバックするため、実テナントIDはpreviewTenantIdから取る必要がある
   const effectiveTenantId = previewMode ? previewTenantId : (user?.tenantId ?? null);
@@ -368,8 +369,8 @@ export default function AvatarListPage() {
         />
       )}
 
-      {/* ── アバター機能 ON/OFF トグル（Client Adminのみ / プレビュー中含む）─────────── */}
-      {!isSuperAdmin && effectiveTenantId && (
+      {/* ── アバター機能 ON/OFF トグル（Client Adminのみ / プレビュー中含む、GID: LP料金表 Growth〜）── */}
+      {!isSuperAdmin && effectiveTenantId && planHasFeature(tenantPlan, "avatar") && (
         <AvatarFeatureToggle
           avatarEnabled={avatarEnabled}
           toggleLoading={toggleLoading}

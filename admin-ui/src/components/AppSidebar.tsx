@@ -28,6 +28,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { NotificationBell } from "./common/NotificationBell";
 import AppSwitcher from "./AppSwitcher";
 import { cn } from "../lib/utils";
+import { planHasFeature, type GatedFeature } from "../lib/planFeatures";
 
 // ─── Nav item types ───────────────────────────────────────────────────
 
@@ -37,6 +38,8 @@ interface NavItem {
   icon: React.ElementType;
   end?: boolean;
   superAdminOnly?: boolean;
+  /** GID: LP料金表に基づくplan制限。指定時、そのプラン以上でないと非表示(super_adminの自身の集約ビューは対象外)。 */
+  requiresPlan?: GatedFeature;
 }
 
 interface NavSection {
@@ -64,8 +67,8 @@ const MAIN_SECTIONS: NavSection[] = [
   {
     title: "分析・成果",
     items: [
-      { label: "会話分析", path: "/admin/analytics", icon: BarChart2 },
-      { label: "成約・効果分析", path: "/admin/conversion", icon: TrendingUp },
+      { label: "会話分析", path: "/admin/analytics", icon: BarChart2, requiresPlan: "analytics" },
+      { label: "成約・効果分析", path: "/admin/conversion", icon: TrendingUp, requiresPlan: "conversion" },
       { label: "お客様への声がけ設定", path: "/admin/engagement", icon: Zap },
       { label: "フロー遷移分析", path: "/admin/analytics/flow", icon: GitBranch, superAdminOnly: true },
     ],
@@ -195,7 +198,7 @@ interface SidebarContentProps {
 }
 
 function SidebarContent({ onClose }: SidebarContentProps) {
-  const { user, isSuperAdmin, logout } = useAuth();
+  const { user, isSuperAdmin, tenantPlan, logout } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -212,6 +215,7 @@ function SidebarContent({ onClose }: SidebarContentProps) {
     ...section,
     items: section.items
       .filter((item) => isSuperAdmin || !item.superAdminOnly)
+      .filter((item) => isSuperAdmin || !item.requiresPlan || planHasFeature(tenantPlan, item.requiresPlan))
       .map((item) =>
         item.path === "/admin/knowledge" ? { ...item, path: knowledgePath } : item
       ),

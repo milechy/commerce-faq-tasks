@@ -341,3 +341,89 @@ describe("GET /v1/admin/my-tenant — has_r2c2", () => {
     expect(res.body.has_r2c2).toBe(false);
   });
 });
+
+// --------------------------------------------------------------------------
+// ⑦ PATCH /v1/admin/my-tenant — avatar/voice の plan ゲート(LP料金表: Growth〜)
+// --------------------------------------------------------------------------
+
+describe("PATCH /v1/admin/my-tenant — avatar/voice plan ゲート", () => {
+  const UPDATED_ROW = { id: "tenant-a", name: "テストテナント", features: { avatar: true, voice: false, rag: true } };
+
+  it("plan=growth で features.avatar:true → 200(plan確認クエリ→UPDATE の順)", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] })
+      .mockResolvedValueOnce({ rows: [UPDATED_ROW], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ features: { avatar: true, voice: false, rag: true } });
+
+    expect(res.status).toBe(200);
+    expect(dbQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it("plan=starter で features.avatar:true → 403 plan_upgrade_required、UPDATEは呼ばれない", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ features: { avatar: true, voice: false, rag: true } });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("plan=starter で features.voice:true → 403", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ features: { avatar: false, voice: true, rag: true } });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("plan=starter でも features.avatar/voiceを両方falseにする(OFFにする)場合はplan確認をスキップして200", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ ...UPDATED_ROW, features: { avatar: false, voice: false, rag: true } }], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ features: { avatar: false, voice: false, rag: true } });
+
+    expect(res.status).toBe(200);
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("plan=starter でもfeatures以外のフィールド更新はplan確認をスキップする", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [UPDATED_ROW], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ faq_question_hint: "配送は何日かかりますか？" });
+
+    expect(res.status).toBe(200);
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("plan列が不正/取得不能(fail-safe: starter扱い) → 403", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ plan: null }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ features: { avatar: true, voice: false, rag: true } });
+
+    expect(res.status).toBe(403);
+  });
+});

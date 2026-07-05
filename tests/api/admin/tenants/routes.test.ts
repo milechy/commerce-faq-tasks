@@ -184,17 +184,29 @@ describe("Tenant Admin Routes", () => {
   });
 
   describe("PATCH /v1/admin/my-tenant", () => {
-    it("updates features for client_admin", async () => {
-      mockDb.query.mockResolvedValueOnce({
-        rows: [{ id: "tenant1", name: "Test", features: { avatar: true, voice: false, rag: true }, lemonslice_agent_id: null }],
-        rowCount: 1,
-      });
+    it("updates features for client_admin (plan=growth: avatar有効化を許可)", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: avatar/voice の plan ゲート確認クエリ
+        .mockResolvedValueOnce({
+          rows: [{ id: "tenant1", name: "Test", features: { avatar: true, voice: false, rag: true }, lemonslice_agent_id: null }],
+          rowCount: 1,
+        });
       const res = await request(app)
         .patch("/v1/admin/my-tenant")
         .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
         .send({ features: { avatar: true, voice: false, rag: true } });
       expect(res.status).toBe(200);
       expect(res.body.features.avatar).toBe(true);
+    });
+
+    it("rejects avatar有効化 for client_admin on plan=starter (GID: LP料金表 Growth〜)", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ features: { avatar: true, voice: false, rag: true } });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("plan_upgrade_required");
     });
 
     it("rejects a request with tenant_id claim but no admin role (GID 1216273277286371)", async () => {

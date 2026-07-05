@@ -49,12 +49,13 @@ function makeApp() {
   return app;
 }
 
-/** summary エンドポイントが呼ぶ 9 クエリのデフォルトモック (CV関連含む) */
+/** summary エンドポイントが呼ぶ 9 クエリ + client_admin用planゲート確認クエリのデフォルトモック (CV関連含む) */
 function mockSummaryQueries({
   cvRows = [] as Array<{ conversion_type: string; count: number; total_value: string }>,
   tenantAgeDays = 30,
 } = {}) {
   mockQuery
+    .mockResolvedValueOnce({ rows: [{ plan: 'growth' }] })            // GID: plan ゲート確認(client_admin)
     .mockResolvedValueOnce({ rows: [{ total_sessions: '0' }] })      // sessions
     .mockResolvedValueOnce({ rows: [{ prev_total_sessions: '0' }] }) // prev sessions
     .mockResolvedValueOnce({ rows: [{ avg_judge_score: null }] })     // judge score
