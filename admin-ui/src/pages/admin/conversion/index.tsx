@@ -102,7 +102,7 @@ function BarChart({ items }: { items: { label: string; value: number }[] }) {
 export default function ConversionDashboardPage() {
   const { t } = useLang();
   const navigate = useNavigate();
-  const { isSuperAdmin, user } = useAuth();
+  const { isSuperAdmin, user, previewMode, previewTenantId } = useAuth();
 
   const [summary, setSummary] = useState<ConversionSummary | null>(null);
   const [rankings, setRankings] = useState<EffectivenessRanking[]>([]);
@@ -112,7 +112,10 @@ export default function ConversionDashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const period = (searchParams.get("period") ?? "30d") as "7d" | "30d" | "90d";
   const setPeriod = (p: "7d" | "30d" | "90d") => setSearchParams({ period: p }, { replace: true });
-  const tenantParam = !isSuperAdmin && user?.tenantId ? `&tenant_id=${user.tenantId}` : '';
+  // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+  // client_admin相当にフォールバックするため、実テナントIDはpreviewTenantIdから取る必要がある
+  const effectiveTenantId = previewMode ? (previewTenantId ?? undefined) : (user?.tenantId ?? undefined);
+  const tenantParam = !isSuperAdmin && effectiveTenantId ? `&tenant_id=${effectiveTenantId}` : '';
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -120,7 +123,7 @@ export default function ConversionDashboardPage() {
       const [attrRes, effRes, expRes] = await Promise.all([
         authFetch(`${API_BASE}/v1/admin/conversion/attributions?period=${period}${tenantParam}`),
         authFetch(`${API_BASE}/v1/admin/conversion/effectiveness?period=${period}${tenantParam}`),
-        authFetch(`${API_BASE}/v1/admin/ab/experiments?${isSuperAdmin ? '' : `tenant_id=${user?.tenantId ?? ''}`}`),
+        authFetch(`${API_BASE}/v1/admin/ab/experiments?${isSuperAdmin ? '' : `tenant_id=${effectiveTenantId ?? ''}`}`),
       ]);
 
       if (attrRes.ok) {
@@ -140,7 +143,7 @@ export default function ConversionDashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [period, isSuperAdmin, user?.tenantId, tenantParam]);
+  }, [period, isSuperAdmin, effectiveTenantId, tenantParam]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 
