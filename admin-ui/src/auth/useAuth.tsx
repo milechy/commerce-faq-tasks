@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { authFetch, API_BASE } from "../lib/api";
 
 export interface AuthUser {
   id: string;
@@ -8,6 +9,9 @@ export interface AuthUser {
   tenantId: string | null;
   tenantName: string | null;
 }
+
+// LP(r2c.biz)料金表のプラン。backendのplanValues(src/api/admin/tenants/routes.ts)と一致させること。
+export type TenantPlan = "starter" | "growth" | "enterprise";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -20,6 +24,13 @@ interface AuthContextValue {
   previewTenantName: string | null;
   enterPreview: (tenantId: string, tenantName: string) => void;
   exitPreview: () => void;
+  /**
+   * 表示対象テナントの現在のプラン。
+   * - client_admin(プレビュー含む): 自テナント/プレビュー先テナントのプラン
+   * - super_adminの集約ビュー(プレビュー無し): 特定テナントに紐付かないため null
+   * - 未取得時は null（機能表示側はnullを「制限あり(未確認)」として扱うこと）
+   */
+  tenantPlan: TenantPlan | null;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -33,6 +44,7 @@ const AuthContext = createContext<AuthContextValue>({
   previewTenantName: null,
   enterPreview: () => {},
   exitPreview: () => {},
+  tenantPlan: null,
 });
 
 function parseRole(meta: Record<string, unknown>): AuthUser["role"] {
@@ -48,6 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [previewMode, setPreviewMode] = useState(false);
   const [previewTenantId, setPreviewTenantId] = useState<string | null>(null);
   const [previewTenantName, setPreviewTenantName] = useState<string | null>(null);
+  const [tenantPlan, setTenantPlan] = useState<TenantPlan | null>(null);
 
   const loadUser = useCallback(async () => {
     setIsLoading(true);
@@ -97,6 +110,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [loadUser]);
 
+  // 表示対象テナントのプランを取得する。プレビュー中はプレビュー先テナント、
+  // 通常のclient_adminは自テナント、それ以外(super_adminの集約ビュー)はnullのまま。
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTenantPlan() {
+      try {
+        if (previewMode && previewTenantId) {
+          const res = await authFetch(`${API_BASE}/v1/admin/tenants/${previewTenantId}`);
+          if (!res.ok) { if (!cancelled) setTenantPlan(null); return; }
+          const data = (await res.json()) as { plan?: TenantPlan };
+          if (!cancelled) setTenantPlan(data.plan ?? "starter");
+          return;
+        }
+        if (!previewMode && user?.role === "client_admin") {
+          const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
+          if (!res.ok) { if (!cancelled) setTenantPlan(null); return; }
+          const data = (await res.json()) as { plan?: TenantPlan };
+          if (!cancelled) setTenantPlan(data.plan ?? "starter");
+          return;
+        }
+        if (!cancelled) setTenantPlan(null);
+      } catch {
+        if (!cancelled) setTenantPlan(null);
+      }
+    }
+
+    void loadTenantPlan();
+    return () => { cancelled = true; };
+  }, [user, previewMode, previewTenantId]);
+
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -133,6 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       previewTenantName,
       enterPreview,
       exitPreview,
+      tenantPlan,
     }}>
       {children}
     </AuthContext.Provider>
