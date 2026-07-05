@@ -117,7 +117,7 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
             🧠 R2Cエージェント 学習への同意
           </h2>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0", maxWidth: 480 }}>
-            ONにすると、貴社の会話ログ(QA AI・アバターの応答)がR2Cエージェントの学習・CVR向上のための分析に利用されます。いつでもOFFに戻せます。
+            ONにすると、貴社の過去分を含む会話ログ(QA AI・アバターの応答)がR2Cエージェントの学習・CVR向上のための分析に利用されます。OFFにすると以降の新規データ提供は停止しますが、それまでに提供済みのデータへの反映は取り消せません。
           </p>
         </div>
         <button
