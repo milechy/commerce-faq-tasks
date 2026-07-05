@@ -41,6 +41,8 @@ jobs:
           VITE_API_BASE: https://api.r2c.biz
           VITE_SUPABASE_URL: https://rpqrwifbrhlebbelyqog.supabase.co
           VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwcXJ3aWZicmhsZWJiZWx5cW9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM3ODA1NzcsImV4cCI6MjA3OTM1NjU3N30.zToHU4VNP1DTkl39BEUSOMI21D337BuXnoAK1OzGYSM
+          # App Switcher (R2C ⇄ R2C2) の切り替え先。R2C2 Admin UI (Cloudflare Pages) の公開URL
+          VITE_AAAS_ADMIN_URL: https://admin.r2c2.r2c.biz
         run: pnpm build
 
       - name: Deploy to Cloudflare Pages
