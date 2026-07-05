@@ -330,6 +330,19 @@
     '  color: #1e293b;',
     '  border-radius: 18px 18px 18px 4px;',
     '}',
+    '.msg-wrapper.operator { justify-content: flex-start; }',
+    '.bubble.operator {',
+    '  background-color: #dcfce7;',
+    '  color: #14532d;',
+    '  border: 1px solid #86efac;',
+    '  border-radius: 18px 18px 18px 4px;',
+    '}',
+    '.escalate-row { padding: 6px 16px; border-bottom: 1px solid rgba(0,0,0,0.08); text-align: center; }',
+    '.escalate-btn {',
+    '  background: none; border: none; color: var(--accent);',
+    '  font-size: 13px; cursor: pointer; text-decoration: underline; padding: 4px;',
+    '}',
+    '.escalate-btn:disabled { color: #9ca3af; cursor: default; text-decoration: none; }',
     '.actions {',
     '  display: flex;',
     '  flex-wrap: wrap;',
@@ -834,6 +847,12 @@
   errorBanner.style.display = 'none';
   panel.appendChild(errorBanner);
 
+  /* --- GID 1216275508391900: 有人スタッフへのエスカレーション導線 --- */
+  var escalateBtn = el('button', { className: 'escalate-btn', type: 'button' });
+  escalateBtn.textContent = '🙋 有人スタッフに相談する';
+  var escalateRow = el('div', { className: 'escalate-row' }, [escalateBtn]);
+  panel.appendChild(escalateRow);
+
   /* --- アバターエリア（初期は非表示 — avatar=true テナントのみ使用） --- */
   var avatarArea = document.createElement('div');
   avatarArea.className = 'avatar-area';
@@ -968,6 +987,12 @@
   var _fabRestored = false; // closePanel後の非同期resetFabIcon呼び出しを防ぐフラグ
   var isLoading = false;
   var messages = [];
+
+  /* GID 1216275508391900: 有人チャットへのシームレスエスカレーション */
+  var escalated = false;
+  var escalatePending = false;
+  var escalatePollTimer = null;
+  var escalatePollSince = null;
 
   /* アバター状態 */
   var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId, imageUrl, avatarName }
@@ -1933,6 +1958,11 @@
         nameLabel.textContent = currentAvatarName || 'AIアシスタント';
         inner.appendChild(nameLabel);
       }
+      if (msg.role === 'operator') {
+        var opLabel = el('div', { className: 'avatar-name-label' });
+        opLabel.textContent = '🙋 スタッフ';
+        inner.appendChild(opLabel);
+      }
       var bubble = el('div', { className: 'bubble ' + msg.role });
       // textContent を使用（innerHTML 禁止）
       bubble.textContent = msg.content;
@@ -2359,6 +2389,86 @@
         textarea.focus();
       });
   }
+
+  /* ------------------------------------------------------------------ */
+  /* 10.5 GID 1216275508391900: 有人チャットへのシームレスエスカレーション */
+  /* ------------------------------------------------------------------ */
+
+  function setEscalateBtnState(text, disabled) {
+    escalateBtn.textContent = text;
+    escalateBtn.disabled = !!disabled;
+  }
+
+  function pollOperatorReplies() {
+    fetch(
+      apiBase + '/api/chat/poll?sessionId=' + encodeURIComponent(conversationId) +
+      (escalatePollSince ? '&since=' + encodeURIComponent(escalatePollSince) : ''),
+      { headers: apiKey ? { 'x-api-key': apiKey } : {} }
+    )
+      .then(function (r) { return r.ok ? r.json() : { messages: [] }; })
+      .then(function (data) {
+        var newMsgs = data.messages || [];
+        if (newMsgs.length === 0) return;
+        newMsgs.forEach(function (m) {
+          messages.push({
+            id: 'operator-' + m.id,
+            role: 'operator',
+            content: m.content,
+            timestamp: new Date(m.created_at).getTime(),
+          });
+          escalatePollSince = m.created_at;
+        });
+        renderMessages();
+        if (isOpen) scrollToBottom(true);
+      })
+      .catch(function () { /* ポーリング失敗は次回リトライに任せる */ });
+  }
+
+  function startEscalatePolling() {
+    if (escalatePollTimer) return;
+    escalatePollTimer = setInterval(pollOperatorReplies, 8000);
+    pollOperatorReplies();
+  }
+
+  function markEscalated() {
+    escalated = true;
+    setEscalateBtnState('🙋 スタッフにおつなぎしています…', true);
+    messages.push({
+      id: generateMsgId(),
+      role: 'assistant',
+      content: 'スタッフにおつなぎしています。少々お待ちください。',
+      timestamp: Date.now(),
+    });
+    renderMessages();
+    startEscalatePolling();
+  }
+
+  escalateBtn.addEventListener('click', function () {
+    if (escalated || escalatePending) return;
+    escalatePending = true;
+    setEscalateBtnState('接続中…', true);
+    fetch(apiBase + '/api/chat/escalate', {
+      method: 'POST',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        apiKey ? { 'x-api-key': apiKey } : {}
+      ),
+      body: JSON.stringify({ sessionId: conversationId }),
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        escalatePending = false;
+        if (data && data.ok) {
+          markEscalated();
+        } else {
+          setEscalateBtnState('🙋 有人スタッフに相談する', false);
+        }
+      })
+      .catch(function () {
+        escalatePending = false;
+        setEscalateBtnState('🙋 有人スタッフに相談する', false);
+      });
+  });
 
   /* ------------------------------------------------------------------ */
   /* 11. イベントリスナー                                                  */

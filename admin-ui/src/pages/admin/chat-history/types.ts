@@ -21,7 +21,8 @@ export interface Evaluation {
 
 export interface Message {
   id: number;
-  role: "user" | "assistant";
+  // GID 1216275508391900: "operator" = 有人オペレーターによる返信
+  role: "user" | "assistant" | "operator";
   content: string;
   created_at: string;
   metadata: Record<string, unknown>;

@@ -85,6 +85,7 @@ import { registerAnalyticsRoutes } from "./api/admin/analytics/routes";
 import { registerEventAnalyticsRoutes } from "./api/admin/analytics/eventAnalyticsRoutes";
 import { registerEventRoutes } from "./api/events/eventRoutes";
 import { registerEngagementRoutes } from "./api/engagement/engagementRoutes";
+import { registerEscalationRoutes } from "./api/chat/escalationRoutes";
 import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerHermesMcpRoutes } from "./api/hermes-mcp/routes";
@@ -627,6 +628,9 @@ if (db) registerEventRoutes(app, apiStack, db);
 
 // Phase56: プロアクティブエンゲージメント CRUD + Widget API
 registerEngagementRoutes(app, apiStack, db);
+
+// GID 1216275508391900: 有人チャットへのシームレスエスカレーション (Widget API)
+registerEscalationRoutes(app, apiStack);
 
 // Phase58: コンバージョン最適化ループ
 registerConversionRoutes(app, apiStack, db);

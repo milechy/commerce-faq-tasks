@@ -20,6 +20,7 @@ import {
   BellRing,
   X,
   GitBranch,
+  Headset,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
@@ -53,6 +54,7 @@ const MAIN_SECTIONS: NavSection[] = [
     title: "会話・ナレッジ",
     items: [
       { label: "会話履歴", path: "/admin/chat-history", icon: MessageSquare },
+      { label: "対応中の会話", path: "/admin/escalations", icon: Headset },
       { label: "AIの知識データ", path: "/admin/knowledge", icon: BookOpen },
       { label: "AI学習・貢献分析", path: "/admin/knowledge-analytics", icon: BarChart2, superAdminOnly: true },
     ],
