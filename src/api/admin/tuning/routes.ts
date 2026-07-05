@@ -130,6 +130,83 @@ ${knowledgePart}${rulesPart}${crossTenantPart}${researchPart}
   }
 }
 
+// GID 1216275447729242: 自然言語からのチューニングルール自動生成
+// 会話ペア(顧客の質問+AIの回答)ではなく、店舗管理者が書いた自然文の指示から
+// トリガー条件と対応指示を構造化して抽出する。
+export async function callGroq8bSuggestFromText(
+  freeText: string,
+  knowledgeSection: string = '',
+  existingRulesSection: string = '',
+  crossTenantSection: string = '',
+): Promise<SuggestRuleResponse> {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) {
+    return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+  }
+
+  const knowledgePart = knowledgeSection
+    ? `\n## 参考ナレッジ（心理学原則・FAQ）\n${knowledgeSection}\n`
+    : '';
+  const rulesPart = existingRulesSection
+    ? `\n## 既存チューニングルール（重複しないルールを提案すること）\n${existingRulesSection}\n`
+    : '';
+  const crossTenantPart = crossTenantSection
+    ? `\n${crossTenantSection}\n`
+    : '';
+
+  const prompt = `以下は店舗管理者が自然な言葉で書いた、AIチャットボットへの指示です。
+これを解析して、チャットボットのチューニングルール（トリガー条件＋AIへの具体的な指示）として構造化してください。
+
+【管理者の指示】
+${freeText.slice(0, 1000)}
+${knowledgePart}${rulesPart}${crossTenantPart}
+以下のJSON形式のみで回答してください（説明不要）:
+{
+  "trigger_pattern": "このルールが適用されるキーワードや状況（例: 保証について聞かれた場合）",
+  "instruction": "AIへの具体的な指示（管理者の意図を明確な指示文として書き直したもの）",
+  "priority": 緊急度・重要度（0〜10の整数）,
+  "reason": "この構造化内容にした理由（1〜2文）"
+}`;
+
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.4,
+        max_tokens: 400,
+      }),
+    });
+
+    if (!res.ok) {
+      return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+    }
+
+    const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const raw: string = data.choices?.[0]?.message?.content?.trim() ?? "";
+
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    return {
+      trigger_pattern: String(parsed["trigger_pattern"] ?? "").slice(0, 500),
+      instruction: String(parsed["instruction"] ?? "").slice(0, 2000),
+      priority: Math.max(0, Math.min(10, Number(parsed["priority"]) || 0)),
+      reason: String(parsed["reason"] ?? "").slice(0, 500),
+    };
+  } catch {
+    return { trigger_pattern: "", instruction: "", priority: 0, reason: "" };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Zod スキーマ
 // ---------------------------------------------------------------------------
@@ -193,14 +270,25 @@ export function registerTuningRoutes(app: Express): void {
         return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTHZ_ROLE_DENIED' });
       }
 
-      const { userMessage, aiMessage } = (req.body ?? {}) as Record<string, unknown>;
-      if (typeof userMessage !== "string" || typeof aiMessage !== "string") {
-        return res.status(400).json({ error: "userMessage and aiMessage are required strings" });
-      }
-      if (!userMessage.trim() || !aiMessage.trim()) {
-        return res.status(400).json({ error: "userMessage and aiMessage must not be empty" });
+      // GID 1216275447729242: {freeText} (自然文の指示) または
+      // {userMessage, aiMessage} (会話ペアからの提案・既存) のどちらかを受け付ける
+      const { userMessage, aiMessage, freeText } = (req.body ?? {}) as Record<string, unknown>;
+      const isFreeTextMode = typeof freeText === "string";
+
+      if (isFreeTextMode) {
+        if (!(freeText as string).trim()) {
+          return res.status(400).json({ error: "freeText must not be empty" });
+        }
+      } else {
+        if (typeof userMessage !== "string" || typeof aiMessage !== "string") {
+          return res.status(400).json({ error: "userMessage and aiMessage are required strings" });
+        }
+        if (!userMessage.trim() || !aiMessage.trim()) {
+          return res.status(400).json({ error: "userMessage and aiMessage must not be empty" });
+        }
       }
 
+      const anchorText = isFreeTextMode ? (freeText as string).trim() : (userMessage as string).trim();
       const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
 
       // deep_researchフラグ確認（DB失敗時はfalse）
@@ -209,14 +297,14 @@ export function registerTuningRoutes(app: Express): void {
       // ナレッジ検索・既存ルール取得・クロステナント統計・外部リサーチを並行実行
       const [knowledgeCtx, existingRules, crossTenantCtx, researchResult] = await Promise.all([
         tenantId
-          ? searchKnowledgeForSuggestion(tenantId, userMessage.trim()).catch(() => ({ results: [] }))
+          ? searchKnowledgeForSuggestion(tenantId, anchorText).catch(() => ({ results: [] }))
           : Promise.resolve({ results: [] }),
         tenantId
           ? listRules(tenantId).catch(() => [])
           : Promise.resolve([]),
         getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
         deepResearchEnabled
-          ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: userMessage.trim() }), 'ja') ?? Promise.resolve(null)).catch(() => null)
+          ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: anchorText }), 'ja') ?? Promise.resolve(null)).catch(() => null)
           : Promise.resolve(null),
       ]);
 
@@ -230,14 +318,21 @@ export function registerTuningRoutes(app: Express): void {
         ? `## 外部リサーチ（最新の市場動向・学術知見）\n${researchResult.summary}${researchResult.citations.length > 0 ? '\n参照: ' + researchResult.citations.slice(0, 3).join(', ') : ''}`
         : '';
 
-      const suggestion = await callGroq8bSuggest(
-        userMessage.trim(),
-        aiMessage.trim(),
-        knowledgeSection,
-        existingRulesSection,
-        crossTenantSection,
-        researchSection,
-      );
+      const suggestion = isFreeTextMode
+        ? await callGroq8bSuggestFromText(
+            anchorText,
+            knowledgeSection,
+            existingRulesSection,
+            crossTenantSection,
+          )
+        : await callGroq8bSuggest(
+            anchorText,
+            (aiMessage as string).trim(),
+            knowledgeSection,
+            existingRulesSection,
+            crossTenantSection,
+            researchSection,
+          );
       return res.json(suggestion);
     },
   );
