@@ -40,6 +40,12 @@ jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
 }));
 
+// usageTracker モック（GID 1215915182786983: admin_agent 課金計上のテスト用）
+const mockTrackUsage = jest.fn();
+jest.mock('../../../lib/billing/usageTracker', () => ({
+  trackUsage: (...args: any[]) => mockTrackUsage(...args),
+}));
+
 // ---------------------------------------------------------------------------
 // テスト対象を import
 // ---------------------------------------------------------------------------
@@ -72,7 +78,11 @@ const SUPER_ADMIN_USER = {
   app_metadata: { role: 'super_admin', tenant_id: '' },
 };
 
-function makeGroqResponse(content: string, tool_calls: any[] = []) {
+function makeGroqResponse(
+  content: string,
+  tool_calls: any[] = [],
+  usage: { prompt_tokens: number; completion_tokens: number } = { prompt_tokens: 10, completion_tokens: 5 },
+) {
   return {
     ok: true,
     json: async () => ({
@@ -84,6 +94,7 @@ function makeGroqResponse(content: string, tool_calls: any[] = []) {
           },
         },
       ],
+      usage,
     }),
     text: async () => content,
   };
@@ -252,6 +263,90 @@ describe('POST /v1/admin/agent/chat', () => {
       const fetchCallBody = JSON.parse(mockFetch.mock.calls[0][1].body as string);
       const systemMessage = fetchCallBody.messages.find((m: any) => m.role === 'system');
       expect(systemMessage?.content).toContain('tenant-target');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GID 1215915182786983: admin_agent の trackUsage 配線
+  // -------------------------------------------------------------------------
+  describe('usage tracking (admin_agent 原価計上)', () => {
+    it('tool_calls なし → featureUsed:admin_agent でtrackUsageが1回呼ばれる', async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeGroqResponse('設定を確認しました。', [], { prompt_tokens: 100, completion_tokens: 20 }),
+      );
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4の設定を教えて', sessionId: 'sess-010' });
+
+      expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'tenant-abc',
+          featureUsed: 'admin_agent',
+          inputTokens: 100,
+          outputTokens: 20,
+        }),
+      );
+    });
+
+    it('tool_calls あり → 第1回+第2回のトークンが合算されてtrackUsageに渡る', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    { id: 'call-001', type: 'function', function: { name: 'get_tenant_settings', arguments: '{}' } },
+                  ],
+                },
+              },
+            ],
+            usage: { prompt_tokens: 50, completion_tokens: 10 },
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('GA4は未設定です。', [], { prompt_tokens: 30, completion_tokens: 15 }));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ ga4_measurement_id: null, posthog_host: 'https://app.posthog.com', widget_theme: {} }],
+      });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を確認して', sessionId: 'sess-011' });
+
+      expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          featureUsed: 'admin_agent',
+          inputTokens: 80, // 50 + 30
+          outputTokens: 25, // 10 + 15
+        }),
+      );
+    });
+
+    it('super_admin がテナント未特定(targetTenantId省略) → trackUsageはスキップされる', async () => {
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('こんにちは'));
+
+      await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を確認して', sessionId: 'sess-012' });
+
+      expect(mockTrackUsage).not.toHaveBeenCalled();
+    });
+
+    it('GROQ_API_KEY 未設定（グレースフルダウングレード）→ trackUsageは呼ばれない', async () => {
+      delete process.env.GROQ_API_KEY;
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'hello', sessionId: 'sess-013' });
+
+      expect(mockTrackUsage).not.toHaveBeenCalled();
     });
   });
 
