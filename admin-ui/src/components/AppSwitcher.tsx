@@ -26,20 +26,33 @@ async function bridgeToR2C2() {
 }
 
 export default function AppSwitcher() {
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, isLoading } = useAuth();
   const { openWithQuery } = useAdminAgentUI();
   const [hasR2c2, setHasR2c2] = useState(isSuperAdmin);
 
   useEffect(() => {
+    // 認証ロード完了前は isSuperAdmin が一時的に false になる。ここで確定前に
+    // fetch すると super_admin でも /v1/admin/my-tenant が 403 になり、後から
+    // その古い応答が isSuperAdmin=true 判定後の setHasR2c2(true) を上書きしてしまう
+    // (race condition)。ロード完了を待ち、かつ ignore フラグで古い応答を捨てる。
+    if (isLoading) return;
     if (isSuperAdmin) {
       setHasR2c2(true);
       return;
     }
+    let ignore = false;
     authFetch(`${API_BASE}/v1/admin/my-tenant`)
       .then((r) => r.json())
-      .then((data: { has_r2c2?: boolean }) => setHasR2c2(Boolean(data.has_r2c2)))
-      .catch(() => setHasR2c2(false));
-  }, [isSuperAdmin]);
+      .then((data: { has_r2c2?: boolean }) => {
+        if (!ignore) setHasR2c2(Boolean(data.has_r2c2));
+      })
+      .catch(() => {
+        if (!ignore) setHasR2c2(false);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [isSuperAdmin, isLoading]);
 
   if (!AAAS_ADMIN_URL) return null;
 
