@@ -129,26 +129,28 @@ export async function analyzeTuningRules(
   for (const rule of suggestedRules) {
     if (!rule.triggerPattern || !rule.expectedBehavior) continue;
 
+    const evidence = {
+      evaluationIds,
+      effectivePrinciples,
+      failedPrinciples,
+      avgScore: Math.round(avgScore),
+    };
+
     try {
       // ON CONFLICT DO NOTHING で重複防止（trigger_pattern と tenant_id でユニーク判定）
       await pool.query(
         `INSERT INTO tuning_rules
            (tenant_id, trigger_pattern, expected_behavior, priority,
-            source, suggested_at)
-         VALUES ($1, $2, $3, $4, 'judge', NOW())
+            source, suggested_at, evidence)
+         VALUES ($1, $2, $3, $4, 'judge', NOW(), $5::jsonb)
          ON CONFLICT DO NOTHING`,
-        [tenantId, rule.triggerPattern, rule.expectedBehavior, 0],
+        [tenantId, rule.triggerPattern, rule.expectedBehavior, 0, JSON.stringify(evidence)],
       );
 
       result.push({
         triggerPattern: rule.triggerPattern,
         expectedBehavior: rule.expectedBehavior,
-        evidence: {
-          evaluationIds,
-          effectivePrinciples,
-          failedPrinciples,
-          avgScore: Math.round(avgScore),
-        },
+        evidence,
       });
     } catch (err) {
       logger.error({ err, tenantId, rule }, 'evaluationAnalyzer.insert.failed');

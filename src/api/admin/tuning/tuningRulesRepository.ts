@@ -14,6 +14,13 @@ export interface ApprovedResponse {
   approved_at: string;
 }
 
+export interface RuleEvidence {
+  evaluationIds?: number[];
+  effectivePrinciples?: string[];
+  failedPrinciples?: string[];
+  avgScore?: number;
+}
+
 export interface TuningRule {
   id: number;
   tenant_id: string;
@@ -26,6 +33,14 @@ export interface TuningRule {
   created_at: string;
   updated_at: string;
   approved_responses?: ApprovedResponse[];
+  source?: string;
+  status?: string;
+  evidence?: RuleEvidence | null;
+}
+
+export interface ListRulesFilters {
+  source?: string;
+  status?: string;
 }
 
 export interface CreateRuleParams {
@@ -55,20 +70,26 @@ export interface UpdateRuleParams {
  * - tenantId 未指定 (super_admin): 全ルールを返す
  * - ORDER: tenant_id = 'global' を後ろ、各グループ内で priority DESC
  */
-export async function listRules(tenantId?: string): Promise<TuningRule[]> {
+export async function listRules(tenantId?: string, filters?: ListRulesFilters): Promise<TuningRule[]> {
   const pool = getPool();
+
+  const args: string[] = tenantId ? [tenantId] : [];
+  const conditions: string[] = tenantId ? ["(tenant_id = $1 OR tenant_id = 'global')"] : [];
+  if (filters?.source) { args.push(filters.source); conditions.push(`source = $${args.length}`); }
+  if (filters?.status) { args.push(filters.status); conditions.push(`status = $${args.length}`); }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
   if (tenantId) {
     const result = await pool.query<TuningRule>(
       `SELECT id, tenant_id, trigger_pattern, expected_behavior,
               priority, is_active, created_by, source_message_id,
-              created_at, updated_at
+              created_at, updated_at, source, status, evidence
        FROM tuning_rules
-       WHERE tenant_id = $1 OR tenant_id = 'global'
+       ${whereClause}
        ORDER BY
          CASE WHEN tenant_id = 'global' THEN 1 ELSE 0 END ASC,
          priority DESC`,
-      [tenantId],
+      args,
     );
     return result.rows;
   }
@@ -77,11 +98,13 @@ export async function listRules(tenantId?: string): Promise<TuningRule[]> {
   const result = await pool.query<TuningRule>(
     `SELECT id, tenant_id, trigger_pattern, expected_behavior,
             priority, is_active, created_by, source_message_id,
-            created_at, updated_at
+            created_at, updated_at, source, status, evidence
      FROM tuning_rules
+     ${whereClause}
      ORDER BY
        CASE WHEN tenant_id = 'global' THEN 1 ELSE 0 END ASC,
        priority DESC`,
+    args,
   );
   return result.rows;
 }

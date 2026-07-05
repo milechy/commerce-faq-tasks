@@ -365,9 +365,11 @@ export function registerTuningRoutes(app: Express): void {
     const tenantFilter: string | undefined = isSuperAdmin
       ? ((req.query["tenant"] as string | undefined) || undefined)
       : jwtTenantId || undefined;
+    const sourceFilter = (req.query["source"] as string | undefined) || undefined;
+    const statusFilter = (req.query["status"] as string | undefined) || undefined;
 
     try {
-      const rules = await listRules(tenantFilter);
+      const rules = await listRules(tenantFilter, { source: sourceFilter, status: statusFilter });
       return res.json({ rules, total: rules.length });
     } catch (err) {
       logger.warn("[GET /v1/admin/tuning-rules]", err);

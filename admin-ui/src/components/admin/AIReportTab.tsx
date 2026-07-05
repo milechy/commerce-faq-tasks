@@ -27,7 +27,14 @@ interface SuggestedRule {
   id: string;
   trigger: string;
   response: string;
-  reason: string;
+  reason?: string;
+  evidence?: RuleEvidence | null;
+}
+
+interface TuningRuleApiRow {
+  id: number;
+  trigger_pattern: string;
+  expected_behavior: string;
   evidence?: RuleEvidence | null;
 }
 
@@ -99,21 +106,6 @@ function buildMockStats(days: 7 | 30): EvalStats {
     ],
   };
 }
-
-const MOCK_RULES: SuggestedRule[] = [
-  {
-    id: "r1",
-    trigger: "検討します",
-    response: "ご検討いただきありがとうございます。具体的なご要望をお聞かせいただけますか？",
-    reason: "返報性の原則：先に情報を提供することで、より具体的な返信を促します",
-  },
-  {
-    id: "r2",
-    trigger: "他社と比較中",
-    response: "比較検討されているとのこと、ありがとうございます。弊社の強みをご説明してもよろしいでしょうか？",
-    reason: "権威性の原則：専門知識をアピールし、差別化を図ります",
-  },
-];
 
 // ─── スタイル定数 ─────────────────────────────────────────────────────────────
 
@@ -377,9 +369,11 @@ function SuggestedRulesList({
             <p style={{ margin: "0 0 8px", fontSize: 14, color: "#e5e7eb" }}>「{rule.trigger}」</p>
             <p style={{ margin: "0 0 4px", fontSize: 13, color: "#9ca3af", fontWeight: 600 }}>提案返答</p>
             <p style={{ margin: "0 0 8px", fontSize: 14, color: "#e5e7eb", lineHeight: 1.6 }}>{rule.response}</p>
-            <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.5, fontStyle: "italic" }}>
-              💡 {rule.reason}
-            </p>
+            {rule.reason && (
+              <p style={{ margin: 0, fontSize: 12, color: "#6b7280", lineHeight: 1.5, fontStyle: "italic" }}>
+                💡 {rule.reason}
+              </p>
+            )}
             {rule.evidence && (
               <div
                 style={{
@@ -585,7 +579,7 @@ export default function AIReportTab({ tenantId }: { tenantId: string }) {
   const { isSuperAdmin } = useAuth();
   const [days, setDays] = useState<7 | 30>(7);
   const [stats, setStats] = useState<EvalStats | null>(null);
-  const [rules, setRules] = useState<SuggestedRule[]>(MOCK_RULES);
+  const [rules, setRules] = useState<SuggestedRule[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -682,15 +676,20 @@ export default function AIReportTab({ tenantId }: { tenantId: string }) {
     const loadRules = async () => {
       try {
         const res = await authFetch(
-          `${API_BASE}/v1/admin/tuning?tenantId=${tenantId}&source=judge&status=suggested`
+          `${API_BASE}/v1/admin/tuning-rules?tenant=${tenantId}&source=judge&status=pending`
         );
         if (res.ok) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const data = (await res.json()) as any;
-          setRules((data.rules as SuggestedRule[]) ?? MOCK_RULES);
+          const data = (await res.json()) as { rules?: TuningRuleApiRow[] };
+          const mapped: SuggestedRule[] = (data.rules ?? []).map((r) => ({
+            id: String(r.id),
+            trigger: r.trigger_pattern,
+            response: r.expected_behavior,
+            evidence: r.evidence ?? null,
+          }));
+          setRules(mapped);
         }
       } catch {
-        // keep mock
+        // 取得失敗時は既存の表示を維持（空状態のまま）
       }
     };
     void loadRules();
