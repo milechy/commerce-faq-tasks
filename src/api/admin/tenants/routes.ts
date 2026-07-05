@@ -57,6 +57,9 @@ const updateTenantSchema = z.object({
   conversion_types: z.array(z.string().max(50)).max(10).optional(),
   // Phase A Day 6: テナント担当者メールアドレス
   tenant_contact_email: z.string().email().nullable().optional(),
+  // GID 1216274385106667: FAQ登録フォームの質問/回答欄カスタムヒント（空文字/nullで既定プレースホルダーに戻す）
+  faq_question_hint: z.string().max(200).nullable().optional(),
+  faq_answer_hint: z.string().max(200).nullable().optional(),
 });
 
 // aaas_clients は共有Supabaseプロジェクト内のAaaS(R2C2)側所有テーブル
@@ -148,7 +151,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `SELECT id, name, features, lemonslice_agent_id, conversion_types FROM tenants WHERE id = $1`,
+        `SELECT id, name, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (result.rowCount === 0) {
@@ -178,17 +181,31 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         pre_dispatch: z.boolean().optional(),
         // Phase75: テナント自身によるHermes Agent向け生データ利用同意の自己申告
         hermes_raw_data_consent: z.boolean().optional(),
-      }),
+      }).optional(),
+      // GID 1216274385106667: FAQ登録フォームの質問/回答欄カスタムヒント（client_admin自己申告）
+      faq_question_hint: z.string().max(200).nullable().optional(),
+      faq_answer_hint: z.string().max(200).nullable().optional(),
     });
     const parsed = bodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
+    const fields = parsed.data;
+    if (Object.keys(fields).length === 0) {
+      return res.status(400).json({ error: "no_fields", message: "更新フィールドが必要です。" });
+    }
     try {
+      const setClauses: string[] = [];
+      const params: unknown[] = [];
+      if (fields.features !== undefined) { params.push(JSON.stringify(fields.features)); setClauses.push(`features = COALESCE(features, '{}'::jsonb) || $${params.length}::jsonb`); }
+      if ('faq_question_hint' in fields) { params.push(fields.faq_question_hint ?? null); setClauses.push(`faq_question_hint = $${params.length}`); }
+      if ('faq_answer_hint' in fields) { params.push(fields.faq_answer_hint ?? null); setClauses.push(`faq_answer_hint = $${params.length}`); }
+      setClauses.push(`updated_at = NOW()`);
+      params.push(tenantId);
       const result = await db.query(
-        `UPDATE tenants SET features = COALESCE(features, '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE id = $2
-         RETURNING id, name, features, lemonslice_agent_id`,
-        [JSON.stringify(parsed.data.features), tenantId]
+        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length}
+         RETURNING id, name, features, lemonslice_agent_id, faq_question_hint, faq_answer_hint`,
+        params
       );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
@@ -294,7 +311,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {
@@ -342,10 +359,12 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if ('lemonslice_agent_id' in fields) { params.push(fields.lemonslice_agent_id ?? null); setClauses.push(`lemonslice_agent_id = $${params.length}`); }
       if (fields.conversion_types !== undefined) { params.push(JSON.stringify(fields.conversion_types)); setClauses.push(`conversion_types = $${params.length}::jsonb`); }
       if ('tenant_contact_email' in fields) { params.push(fields.tenant_contact_email ?? null); setClauses.push(`tenant_contact_email = $${params.length}`); }
+      if ('faq_question_hint' in fields) { params.push(fields.faq_question_hint ?? null); setClauses.push(`faq_question_hint = $${params.length}`); }
+      if ('faq_answer_hint' in fields) { params.push(fields.faq_answer_hint ?? null); setClauses.push(`faq_answer_hint = $${params.length}`); }
       setClauses.push(`updated_at = NOW()`);
       params.push(id);
       const result = await db.query(
-        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, tenant_contact_email, created_at, updated_at`,
+        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, tenant_contact_email, faq_question_hint, faq_answer_hint, created_at, updated_at`,
         params
       );
       // in-memory store を即時同期 (is_active 変更が次リクエストから有効になる)

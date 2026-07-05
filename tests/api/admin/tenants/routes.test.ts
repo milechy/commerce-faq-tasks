@@ -155,6 +155,19 @@ describe("Tenant Admin Routes", () => {
       expect(res.status).toBe(403);
       expect(mockDb.query).not.toHaveBeenCalled();
     });
+
+    it("returns faq_question_hint/faq_answer_hint (GID 1216274385106667)", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [], faq_question_hint: "例: 保証期間は？", faq_answer_hint: "例: 3年間です" }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .get("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.faq_question_hint).toBe("例: 保証期間は？");
+      expect(res.body.faq_answer_hint).toBe("例: 3年間です");
+    });
   });
 
   describe("PATCH /v1/admin/my-tenant", () => {
@@ -178,6 +191,50 @@ describe("Tenant Admin Routes", () => {
         .send({ features: { avatar: true, voice: false, rag: true } });
       expect(res.status).toBe(403);
       expect(mockDb.query).not.toHaveBeenCalled();
+    });
+
+    it("updates faq_question_hint/faq_answer_hint for client_admin (GID 1216274385106667)", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, faq_question_hint: "例: 保証期間は？", faq_answer_hint: "例: 3年間です" }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ faq_question_hint: "例: 保証期間は？", faq_answer_hint: "例: 3年間です" });
+      expect(res.status).toBe(200);
+      expect(res.body.faq_question_hint).toBe("例: 保証期間は？");
+      const [sql] = mockDb.query.mock.calls[0];
+      expect(sql).toContain("faq_question_hint");
+      expect(sql).toContain("faq_answer_hint");
+    });
+
+    it("rejects an empty body with no_fields", async () => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("no_fields");
+    });
+  });
+
+  describe("PATCH /v1/admin/tenants/:id", () => {
+    it("updates faq_question_hint/faq_answer_hint for super_admin (GID 1216274385106667)", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "t1", plan: "starter", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true, faq_question_hint: "例: 保証期間は？", faq_answer_hint: "例: 3年間です" }],
+          rowCount: 1,
+        })
+        .mockResolvedValue({ rows: [], rowCount: 0 });
+      const res = await request(app)
+        .patch("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ faq_question_hint: "例: 保証期間は？", faq_answer_hint: "例: 3年間です" });
+      expect(res.status).toBe(200);
+      expect(res.body.faq_question_hint).toBe("例: 保証期間は？");
+      expect(res.body.faq_answer_hint).toBe("例: 3年間です");
     });
   });
 
