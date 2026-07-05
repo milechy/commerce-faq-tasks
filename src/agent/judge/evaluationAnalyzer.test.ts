@@ -147,6 +147,23 @@ describe('analyzeTuningRules', () => {
     expect(insertCalls[0][0]).toContain('ON CONFLICT DO NOTHING');
   });
 
+  it('3b. INSERT文にevidence列が含まれ、返り値と同じevidenceがJSON永続化される（GID 1215916762299598: 以前は計算のみでDB未保存だった）', async () => {
+    const mockRepo = createMockRepo(sampleEvaluations);
+    const mockPool = createMockPool();
+    mockCallGroq.mockResolvedValueOnce(mockRulesResponse);
+
+    const result = await analyzeTuningRules('tenant-test', mockRepo as any, mockPool as any);
+
+    const insertCalls = (mockPool.query as jest.Mock).mock.calls.filter(
+      (call: any[]) => call[0].includes('INSERT INTO tuning_rules'),
+    );
+    expect(insertCalls[0][0]).toContain('evidence');
+
+    const [, params] = insertCalls[0];
+    const persistedEvidence = JSON.parse(params[params.length - 1]);
+    expect(persistedEvidence).toEqual(result[0]!.evidence);
+  });
+
   it('4. 重複ルールは挿入されない（ON CONFLICT DO NOTHING）', async () => {
     const mockRepo = createMockRepo(sampleEvaluations);
     const mockPool = createMockPool();
