@@ -21,6 +21,7 @@ import {
   X,
   GitBranch,
   Headset,
+  HelpCircle,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
@@ -56,6 +57,7 @@ const MAIN_SECTIONS: NavSection[] = [
       { label: "会話履歴", path: "/admin/chat-history", icon: MessageSquare },
       { label: "対応中の会話", path: "/admin/escalations", icon: Headset },
       { label: "AIの知識データ", path: "/admin/knowledge", icon: BookOpen },
+      { label: "未回答質問", path: "/admin/knowledge-gaps", icon: HelpCircle },
       { label: "AI学習・貢献分析", path: "/admin/knowledge-analytics", icon: BarChart2, superAdminOnly: true },
     ],
   },

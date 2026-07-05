@@ -104,6 +104,8 @@ export default function TuningRulesPage() {
     useState<SourceConversation | null>(null);
   const [createFromConversation, setCreateFromConversation] = useState(false);
   const [presetTenantId, setPresetTenantId] = useState<string | undefined>(undefined);
+  // GID 1216275179995736: 未回答質問からの作成時、保存成功後に元のgapをresolvedにする
+  const [resolveGapId, setResolveGapId] = useState<number | undefined>(undefined);
 
   // ─── Delete state ───────────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -157,6 +159,11 @@ export default function TuningRulesPage() {
         setCreateFromConversation(true);
         setPresetTenantId(fromTenantId);
       }
+      const gapIdStr = searchParams.get("resolveGapId");
+      const gapId = gapIdStr ? Number(gapIdStr) : NaN;
+      if (Number.isFinite(gapId) && gapId > 0) {
+        setResolveGapId(gapId);
+      }
       setCreateMode(true);
       // Clean URL without reload
       window.history.replaceState({}, "", "/admin/tuning");
@@ -188,6 +195,14 @@ export default function TuningRulesPage() {
         : [rule, ...prev],
     );
     showToast(msg);
+    // GID 1216275179995736: 未回答質問からの作成であれば、元のgapをresolvedにする
+    if (resolveGapId) {
+      void authFetch(`${API_BASE}/v1/admin/knowledge/gaps/${resolveGapId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "resolved" }),
+      }).catch(() => {/* best-effort */});
+      setResolveGapId(undefined);
+    }
   };
 
   // ─── Toggle active ──────────────────────────────────────────────────────────
@@ -595,6 +610,7 @@ export default function TuningRulesPage() {
             setSourceConversation(null);
             setCreateFromConversation(false);
             setPresetTenantId(undefined);
+            setResolveGapId(undefined);
           }}
           onSuccess={handleModalSuccess}
         />

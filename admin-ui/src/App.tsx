@@ -20,6 +20,7 @@ import ChatHistoryPage from "./pages/admin/chat-history/index";
 import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
 import EscalationsPage from "./pages/admin/escalations/index";
 import EscalationDetailPage from "./pages/admin/escalations/[sessionId]";
+import KnowledgeGapsPage from "./pages/admin/knowledge-gaps/index";
 import TuningPage from "./pages/admin/tuning/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAgentButton from "./components/AdminAgent/AdminAgentButton";
@@ -159,8 +160,8 @@ function AppInner() {
         {/* チューニングルール */}
         <Route path="/admin/tuning" element={<RequireAuth><TuningPage /></RequireAuth>} />
 
-        {/* ナレッジギャップ — 廃止: /admin/chat-history にリダイレクト */}
-        <Route path="/admin/knowledge-gaps" element={<Navigate to="/admin/chat-history?has_knowledge_gaps=true" replace />} />
+        {/* GID 1216275179995736: 未回答質問からのワンクリック改善導線 */}
+        <Route path="/admin/knowledge-gaps" element={<RequireAuth><KnowledgeGapsPage /></RequireAuth>} />
 
         {/* フィードバック — Super Admin専用 */}
         <Route path="/admin/feedback" element={<SuperAdminRoute><FeedbackPage /></SuperAdminRoute>} />
