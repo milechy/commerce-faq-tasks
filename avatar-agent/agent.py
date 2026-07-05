@@ -345,7 +345,7 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
         try:
             request_body = {
                 "text": self._input_text,
-                "model": "s2-pro",  # Phase A: S2-Pro 明示指定（デフォルト依存を排除）
+                "model": "s2.1-pro-free",  # Phase A: S2.1 Pro (Free) 明示指定（デフォルト依存を排除、低遅延+多言語）
                 "format": "mp3",   # Fish Audio デフォルト形式。WAV より確実。
                 "normalize": True,
                 "latency": "balanced",

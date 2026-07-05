@@ -2,7 +2,7 @@
 // POST /api/avatar/tts — FishAudio Phase A の検証
 //
 // 検証内容:
-//   - S2-Pro モデル明示指定 (model: 's2-pro')
+//   - S2.1 Pro (Free) モデル明示指定 (model: 's2.1-pro-free')
 //   - ハードコード reference_id 撤去 → テナント voice_id を DB 解決
 //   - DB に voice_id がない場合は env FISH_AUDIO_REFERENCE_ID へフォールバック
 //   - 両方ない場合は reference_id フィールド自体を省略
@@ -72,7 +72,7 @@ describe("POST /api/avatar/tts", () => {
     process.env = savedEnv;
   });
 
-  it("正常系: DB の voice_id を reference_id に使い、model=s2-pro で Fish Audio を呼ぶ", async () => {
+  it("正常系: DB の voice_id を reference_id に使い、model=s2.1-pro-free で Fish Audio を呼ぶ", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ voice_id: "db-voice-123" }] });
     mockFishAudioOk();
 
@@ -91,7 +91,7 @@ describe("POST /api/avatar/tts", () => {
     expect(params).toEqual(["tenant-a"]);
 
     const body = sentBody();
-    expect(body.model).toBe("s2-pro");
+    expect(body.model).toBe("s2.1-pro-free");
     expect(body.reference_id).toBe("db-voice-123");
     // ハードコード ID が復活していないこと
     expect(JSON.stringify(body)).not.toContain("63bc41e652214372b15d9416a30a60b4");
@@ -139,7 +139,7 @@ describe("POST /api/avatar/tts", () => {
     expect(res.status).toBe(200);
     const body = sentBody();
     expect("reference_id" in body).toBe(false);
-    expect(body.model).toBe("s2-pro");
+    expect(body.model).toBe("s2.1-pro-free");
   });
 
   it("voice 解決: DB エラー時は env フォールバックで継続（500 にしない）", async () => {

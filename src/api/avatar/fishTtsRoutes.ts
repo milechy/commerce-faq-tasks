@@ -54,7 +54,7 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
         },
         body: JSON.stringify({
           text: text,
-          model: 's2-pro',
+          model: 's2.1-pro-free',
           ...(referenceId ? { reference_id: referenceId } : {}),
           format: 'mp3',
           latency: 'balanced',
@@ -86,7 +86,7 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
       trackUsage({
         tenantId,
         requestId: (req as any).requestId ?? `tts-${Date.now()}`,
-        model: 'fish-audio-s2-pro',
+        model: 'fish-audio-s2.1-pro-free',
         inputTokens: 0,
         outputTokens: 0,
         featureUsed: 'voice',
