@@ -9,8 +9,10 @@
 import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import type { Express, Request, Response } from 'express';
 import { INTERNAL_REQUEST_HEADER } from '../../lib/metrics/kpiDefinitions';
-import { trackUsage } from '../../lib/billing/usageTracker';
+import { trackUsage, type FeatureUsed } from '../../lib/billing/usageTracker';
 import { internalNetworkOnly } from '../middleware/internalNetworkOnly';
+
+const ALLOWED_FEATURES: readonly FeatureUsed[] = ['avatar', 'voice'];
 
 export function registerInternalUsageRoutes(app: Express): void {
   app.post('/api/internal/usage', internalNetworkOnly, (req: Request, res: Response) => {
@@ -19,7 +21,7 @@ export function registerInternalUsageRoutes(app: Express): void {
     }
 
     const body = req.body ?? {};
-    const { tenantId, requestId, ttsTextBytes, avatarCredits, avatarSessionMs } = body;
+    const { tenantId, requestId, ttsTextBytes, avatarCredits, avatarSessionMs, inputTokens, outputTokens, model, featureUsed } = body;
 
     if (!tenantId || typeof tenantId !== 'string') {
       return res.status(400).json({ error: 'tenantId required' });
@@ -31,13 +33,18 @@ export function registerInternalUsageRoutes(app: Express): void {
         ? requestId
         : `avatar-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+    const resolvedFeature: FeatureUsed =
+      typeof featureUsed === 'string' && (ALLOWED_FEATURES as readonly string[]).includes(featureUsed)
+        ? (featureUsed as FeatureUsed)
+        : 'avatar';
+
     trackUsage({
       tenantId,
       requestId: rid,
-      model: GROQ_VERSATILE_70B,  // avatarセッションのLLM
-      inputTokens: 0,
-      outputTokens: 0,
-      featureUsed: 'avatar',
+      model: typeof model === 'string' && model ? model : GROQ_VERSATILE_70B,
+      inputTokens: typeof inputTokens === 'number' && inputTokens >= 0 ? inputTokens : 0,
+      outputTokens: typeof outputTokens === 'number' && outputTokens >= 0 ? outputTokens : 0,
+      featureUsed: resolvedFeature,
       ttsTextBytes:
         typeof ttsTextBytes === 'number' && ttsTextBytes >= 0 ? ttsTextBytes : undefined,
       avatarCredits:
