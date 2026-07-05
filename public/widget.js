@@ -2765,7 +2765,7 @@
           matched = !!context.is_exit_intent;
           break;
         case 'page_url_match':
-          matched = this._matchUrl(window.location.href, rule.trigger_config.pattern);
+          matched = this._matchPatterns(rule.trigger_config);
           break;
       }
       if (matched) {
@@ -2779,9 +2779,55 @@
   TriggerEngine.prototype._matchUrl = function (url, pattern) {
     try {
       var pathname = new URL(url).pathname;
-      var regex = new RegExp('^' + pattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$');
+      return this._matchPathname(pathname, pattern);
+    } catch (_e) { return false; }
+  };
+
+  TriggerEngine.prototype._matchPathname = function (pathname, pattern) {
+    try {
+      // 注意: "**" → ".*" を先に置換すると生成された "." が次段の単一"*"置換に
+      // 誤って再ヒットするため（例: "shoes/**" → "shoes/.*" → "shoes/.[^/]*"）、
+      // プレースホルダーを挟んで二段置換の衝突を避ける。
+      var regexStr = pattern
+        .replace(/\*\*/g, '@@R2C_DBLSTAR@@')
+        .replace(/\*/g, '[^/]*')
+        .replace(/@@R2C_DBLSTAR@@/g, '.*');
+      var regex = new RegExp('^' + regexStr + '$');
       return regex.test(pathname);
     } catch (_e) { return false; }
+  };
+
+  // GID 1216275373432737: セッション内で閲覧したページ履歴を記録（AND条件判定に使用）
+  TriggerEngine.prototype._recordVisitedPage = function () {
+    try {
+      var pathname = window.location.pathname;
+      var visited = JSON.parse(sessionStorage.getItem('r2c_visited_pages') || '[]');
+      if (visited[visited.length - 1] !== pathname) {
+        visited.push(pathname);
+        if (visited.length > 30) visited = visited.slice(-30);
+        sessionStorage.setItem('r2c_visited_pages', JSON.stringify(visited));
+      }
+      return visited;
+    } catch (_e) {
+      return [window.location.pathname];
+    }
+  };
+
+  // GID 1216275373432737: patterns配列の全てに一致するページを、セッション内で
+  // （現在ページを含め）閲覧済みであればAND成立とみなす。
+  // 旧形式（単一 pattern 文字列）のルールにもフォールバック対応。
+  TriggerEngine.prototype._matchPatterns = function (config) {
+    var patterns = config.patterns || (config.pattern ? [config.pattern] : []);
+    if (patterns.length === 0) return false;
+    var visited = this._recordVisitedPage();
+    for (var i = 0; i < patterns.length; i++) {
+      var found = false;
+      for (var j = 0; j < visited.length; j++) {
+        if (this._matchPathname(visited[j], patterns[i])) { found = true; break; }
+      }
+      if (!found) return false;
+    }
+    return true;
   };
 
   TriggerEngine.prototype.onRuleFired = function (rule) {

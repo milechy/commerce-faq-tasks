@@ -158,12 +158,37 @@ describe('Admin CRUD: /v1/admin/engagement/rules', () => {
       expect(res.body.error).toBe('invalid_request');
     });
 
-    it('P1: page_url_match + patternあり → 201', async () => {
-      const { app } = makeApp({ rows: [{ id: 3, trigger_type: 'page_url_match', trigger_config: { pattern: '/products/*', match_type: 'glob' }, message_template: 'test', is_active: true, priority: 0 }] });
+    it('P1: page_url_match + patternsあり → 201', async () => {
+      const { app } = makeApp({ rows: [{ id: 3, trigger_type: 'page_url_match', trigger_config: { patterns: ['/products/*'], match_type: 'glob' }, message_template: 'test', is_active: true, priority: 0 }] });
+      const res = await request(app)
+        .post('/v1/admin/engagement/rules')
+        .send({ trigger_type: 'page_url_match', trigger_config: { patterns: ['/products/*'] }, message_template: 'test' });
+      expect(res.status).toBe(201);
+    });
+
+    // GID 1216275373432737: 複数URLパターンのAND条件
+    it('page_url_match + 複数patterns (AND条件) → 201', async () => {
+      const { app } = makeApp({ rows: [{ id: 4, trigger_type: 'page_url_match', trigger_config: { patterns: ['/products/*', '/cart'], match_type: 'glob' }, message_template: 'test', is_active: true, priority: 0 }] });
+      const res = await request(app)
+        .post('/v1/admin/engagement/rules')
+        .send({ trigger_type: 'page_url_match', trigger_config: { patterns: ['/products/*', '/cart'] }, message_template: 'test' });
+      expect(res.status).toBe(201);
+    });
+
+    it('page_url_match + 旧形式の単一pattern（互換なし）→ 400', async () => {
+      const { app } = makeApp({});
       const res = await request(app)
         .post('/v1/admin/engagement/rules')
         .send({ trigger_type: 'page_url_match', trigger_config: { pattern: '/products/*' }, message_template: 'test' });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(400);
+    });
+
+    it('page_url_match + patterns 6件以上 → 400', async () => {
+      const { app } = makeApp({});
+      const res = await request(app)
+        .post('/v1/admin/engagement/rules')
+        .send({ trigger_type: 'page_url_match', trigger_config: { patterns: ['/a', '/b', '/c', '/d', '/e', '/f'] }, message_template: 'test' });
+      expect(res.status).toBe(400);
     });
 
     it('client_admin 他テナント指定 → 403', async () => {

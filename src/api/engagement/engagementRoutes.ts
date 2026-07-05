@@ -44,8 +44,10 @@ const TriggerRuleSchema = z.discriminatedUnion('trigger_type', [
   }),
   z.object({
     trigger_type: z.literal('page_url_match'),
+    // GID 1216275373432737: 複数URLパターンのAND条件（セッション内で全パターンに一致するページを
+    // 閲覧済み＝AND成立）。旧形式の単一 `pattern` はwidget.js側で読み取り時にフォールバック対応。
     trigger_config: z.object({
-      pattern: z.string().min(1),
+      patterns: z.array(z.string().min(1)).min(1).max(5),
       match_type: z.enum(['glob', 'regex']).optional().default('glob'),
     }).strict(),
     ...COMMON_FIELDS,
