@@ -36,6 +36,8 @@ export function MessageList({
           >
             {msg.role === "user"
               ? t("chat_history.user_message")
+              : msg.role === "operator"
+              ? "🙋 スタッフ"
               : t("chat_history.assistant_message")}
             {" · "}
             {formatTime(msg.created_at)}
@@ -58,12 +60,16 @@ export function MessageList({
                 background:
                   msg.role === "user"
                     ? "linear-gradient(135deg, #2563eb, #3b82f6)"
+                    : msg.role === "operator"
+                    ? "rgba(34,197,94,0.12)"
                     : "rgba(31,41,55,0.9)",
                 border:
                   msg.role === "user"
                     ? "none"
+                    : msg.role === "operator"
+                    ? "1px solid rgba(34,197,94,0.3)"
                     : "1px solid var(--border)",
-                color: msg.role === "user" ? "#fff" : "#e5e7eb",
+                color: msg.role === "user" ? "#fff" : msg.role === "operator" ? "#86efac" : "#e5e7eb",
                 fontSize: 15,
                 lineHeight: 1.6,
                 whiteSpace: "pre-wrap",

@@ -7,7 +7,8 @@ import type { RagSource } from "../../../agent/types";
 export interface SaveMessageParams {
   tenantId: string;
   sessionId: string;
-  role: "user" | "assistant";
+  // GID 1216275508391900: "operator" = 有人オペレーターによる返信
+  role: "user" | "assistant" | "operator";
   content: string;
   metadata?: Record<string, unknown>;
   /** Phase46: A/Bテスト variant記録 */
@@ -190,7 +191,7 @@ export interface MessageListParams {
 
 export interface ChatHistoryMessage {
   id: number;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "operator";
   content: string;
   metadata: Record<string, unknown>;
   created_at: string;
@@ -232,4 +233,127 @@ export async function getMessages(
   );
 
   return msgResult.rows;
+}
+
+// ---------------------------------------------------------------------------
+// GID 1216275508391900: 有人チャットへのシームレスエスカレーション
+// ---------------------------------------------------------------------------
+
+export interface EscalatedSessionSummary {
+  id: string;              // chat_sessions.id (UUID)
+  tenant_id: string;
+  session_id: string;
+  escalated_at: string;
+  last_message_at: string;
+  message_count: number;
+  first_message_preview: string;
+}
+
+/** 対応中（未解決）のエスカレーション一覧を取得する。tenantId未指定 = 全テナント（super_admin用）。 */
+export async function getActiveEscalations(
+  tenantId?: string,
+): Promise<EscalatedSessionSummary[]> {
+  const pool = getPool();
+  const conditions = ["s.is_escalated = true", "s.escalation_resolved_at IS NULL"];
+  const args: unknown[] = [];
+  if (tenantId) {
+    args.push(tenantId);
+    conditions.push(`s.tenant_id = $${args.length}`);
+  }
+  const result = await pool.query<EscalatedSessionSummary>(
+    `SELECT
+       s.id, s.tenant_id, s.session_id, s.escalated_at, s.last_message_at, s.message_count,
+       COALESCE(LEFT(m.content, 80), '') AS first_message_preview
+     FROM chat_sessions s
+     LEFT JOIN LATERAL (
+       SELECT content FROM chat_messages
+       WHERE session_id = s.id AND role = 'user'
+       ORDER BY created_at DESC LIMIT 1
+     ) m ON TRUE
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY s.escalated_at DESC`,
+    args,
+  );
+  return result.rows;
+}
+
+/**
+ * セッションをエスカレーション状態にする（存在しなければ chat_sessions を作成）。
+ * 既にエスカレーション済みの場合は escalated_at を上書きしない（冪等）。
+ */
+export async function escalateSession(params: {
+  tenantId: string;
+  sessionId: string;
+}): Promise<{ dbSessionId: string; alreadyEscalated: boolean }> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count)
+     VALUES ($1, $2, NOW(), 0)
+     ON CONFLICT (tenant_id, session_id) DO NOTHING`,
+    [params.tenantId, params.sessionId],
+  );
+  const before = await pool.query<{ id: string; is_escalated: boolean }>(
+    `SELECT id, is_escalated FROM chat_sessions WHERE tenant_id = $1 AND session_id = $2`,
+    [params.tenantId, params.sessionId],
+  );
+  const row = before.rows[0];
+  const alreadyEscalated = !!row?.is_escalated;
+  await pool.query(
+    `UPDATE chat_sessions
+     SET is_escalated = true,
+         escalated_at = COALESCE(escalated_at, NOW()),
+         escalation_resolved_at = NULL
+     WHERE tenant_id = $1 AND session_id = $2`,
+    [params.tenantId, params.sessionId],
+  );
+  return { dbSessionId: row!.id, alreadyEscalated };
+}
+
+/** エスカレーション対応完了をマークする。tenantIdが一致しない場合はfalseを返す。 */
+export async function resolveEscalation(params: {
+  sessionDbId: string;
+  tenantId?: string; // undefined = super_admin（テナント検証省略）
+}): Promise<boolean> {
+  const pool = getPool();
+  const args: unknown[] = [params.sessionDbId];
+  let where = "id = $1";
+  if (params.tenantId) {
+    args.push(params.tenantId);
+    where += ` AND tenant_id = $${args.length}`;
+  }
+  const result = await pool.query(
+    `UPDATE chat_sessions SET escalation_resolved_at = NOW() WHERE ${where} RETURNING id`,
+    args,
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** 指定タイムスタンプ以降に投稿された operator ロールのメッセージを返す（ウィジェットのポーリング用）。 */
+export async function getNewOperatorMessages(params: {
+  tenantId: string;
+  sessionId: string;
+  since?: string;
+}): Promise<ChatHistoryMessage[]> {
+  const pool = getPool();
+  const sessionResult = await pool.query<{ id: string }>(
+    `SELECT id FROM chat_sessions WHERE tenant_id = $1 AND session_id = $2`,
+    [params.tenantId, params.sessionId],
+  );
+  const dbSessionId = sessionResult.rows[0]?.id;
+  if (!dbSessionId) return [];
+
+  const args: unknown[] = [dbSessionId];
+  let sinceClause = "";
+  if (params.since) {
+    args.push(params.since);
+    sinceClause = ` AND created_at > $${args.length}`;
+  }
+  const result = await pool.query<ChatHistoryMessage>(
+    `SELECT id, role, content, metadata, created_at
+     FROM chat_messages
+     WHERE session_id = $1 AND role = 'operator'${sinceClause}
+     ORDER BY created_at ASC`,
+    args,
+  );
+  return result.rows;
 }

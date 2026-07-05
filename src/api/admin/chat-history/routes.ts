@@ -5,11 +5,12 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
-import { getSessions, getMessages } from "./chatHistoryRepository";
+import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
 import { createNotification } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
+import { z } from "zod";
 
 /**
  * テナントIDをリクエストから解決する。
@@ -326,6 +327,121 @@ export function registerChatHistoryRoutes(app: Express): void {
       } catch (err) {
         logger.warn("[PATCH /v1/admin/chat-history/sessions/:id/outcome]", err);
         return res.status(500).json({ error: "結果の記録に失敗しました" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // GID 1216275508391900: 有人チャットへのシームレスエスカレーション
+  // -----------------------------------------------------------------------
+
+  // GET /v1/admin/chat-history/escalations — 対応中(未解決)の一覧
+  app.get(
+    "/v1/admin/chat-history/escalations",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && !jwtTenantId) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+      const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
+
+      try {
+        const escalations = await getActiveEscalations(tenantFilter);
+        return res.json({ escalations, total: escalations.length });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/chat-history/escalations]", err);
+        return res.status(500).json({ error: "一覧の取得に失敗しました" });
+      }
+    },
+  );
+
+  // POST /v1/admin/chat-history/sessions/:sessionId/reply — 有人オペレーターとして返信
+  app.post(
+    "/v1/admin/chat-history/sessions/:sessionId/reply",
+    async (req: Request, res: Response) => {
+      const pool = getPool();
+      const sessionDbId: string = req.params["sessionId"] ?? "";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+
+      if (!sessionDbId) {
+        return res.status(400).json({ error: "sessionId が必要です" });
+      }
+
+      const bodySchema = z.object({ content: z.string().min(1).max(2000) });
+      const parsed = bodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+      }
+
+      try {
+        const sessionResult = await pool.query<{ id: string; tenant_id: string; session_id: string }>(
+          `SELECT id, tenant_id, session_id FROM chat_sessions WHERE id = $1`,
+          [sessionDbId],
+        );
+        if (sessionResult.rowCount === 0) {
+          return res.status(404).json({ error: "セッションが見つかりません" });
+        }
+        const session = sessionResult.rows[0];
+        if (!isSuperAdmin && session.tenant_id !== jwtTenantId) {
+          return res.status(403).json({ error: "このセッションへのアクセス権がありません" });
+        }
+
+        await saveMessage({
+          tenantId: session.tenant_id,
+          sessionId: session.session_id,
+          role: "operator",
+          content: parsed.data.content,
+        });
+
+        return res.status(201).json({ ok: true });
+      } catch (err) {
+        logger.warn("[POST /v1/admin/chat-history/sessions/:id/reply]", err);
+        return res.status(500).json({ error: "返信の送信に失敗しました" });
+      }
+    },
+  );
+
+  // PATCH /v1/admin/chat-history/sessions/:sessionId/resolve-escalation — 対応完了にする
+  app.patch(
+    "/v1/admin/chat-history/sessions/:sessionId/resolve-escalation",
+    async (req: Request, res: Response) => {
+      const sessionDbId: string = req.params["sessionId"] ?? "";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+
+      if (!sessionDbId) {
+        return res.status(400).json({ error: "sessionId が必要です" });
+      }
+
+      try {
+        const resolved = await resolveEscalation({
+          sessionDbId,
+          tenantId: isSuperAdmin ? undefined : jwtTenantId,
+        });
+        if (!resolved) {
+          return res.status(404).json({ error: "セッションが見つかりません" });
+        }
+        return res.json({ ok: true });
+      } catch (err) {
+        logger.warn("[PATCH /v1/admin/chat-history/sessions/:id/resolve-escalation]", err);
+        return res.status(500).json({ error: "対応完了の記録に失敗しました" });
       }
     },
   );

@@ -18,6 +18,8 @@ import BillingPage from "./pages/admin/billing/index";
 import ChatTestPage from "./pages/admin/chat-test/index";
 import ChatHistoryPage from "./pages/admin/chat-history/index";
 import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
+import EscalationsPage from "./pages/admin/escalations/index";
+import EscalationDetailPage from "./pages/admin/escalations/[sessionId]";
 import TuningPage from "./pages/admin/tuning/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAgentButton from "./components/AdminAgent/AdminAgentButton";
@@ -149,6 +151,10 @@ function AppInner() {
         {/* 会話履歴 */}
         <Route path="/admin/chat-history" element={<RequireAuth><ChatHistoryPage /></RequireAuth>} />
         <Route path="/admin/chat-history/:sessionId" element={<RequireAuth><ChatHistorySessionPage /></RequireAuth>} />
+
+        {/* GID 1216275508391900: 有人チャットへのシームレスエスカレーション */}
+        <Route path="/admin/escalations" element={<RequireAuth><EscalationsPage /></RequireAuth>} />
+        <Route path="/admin/escalations/:sessionId" element={<RequireAuth><EscalationDetailPage /></RequireAuth>} />
 
         {/* チューニングルール */}
         <Route path="/admin/tuning" element={<RequireAuth><TuningPage /></RequireAuth>} />
