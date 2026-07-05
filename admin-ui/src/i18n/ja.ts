@@ -239,7 +239,7 @@ const ja = {
 
   // Chat test page
   "chat_test.button": "💬 チャットテスト",
-  "chat_test.title": "チャットをテストする",
+  "chat_test.title": "テストチャット",
   "chat_test.description": "お客様に見える画面を確認できます",
   "chat_test.start": "チャットを開始する",
   "chat_test.tenant_label": "テナント",

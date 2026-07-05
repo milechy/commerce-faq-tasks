@@ -62,7 +62,7 @@ const MAIN_SECTIONS: NavSection[] = [
     items: [
       { label: "会話分析", path: "/admin/analytics", icon: BarChart2 },
       { label: "成約・効果分析", path: "/admin/conversion", icon: TrendingUp },
-      { label: "自動メッセージ設定", path: "/admin/engagement", icon: Zap },
+      { label: "お客様への声がけ設定", path: "/admin/engagement", icon: Zap },
       { label: "フロー遷移分析", path: "/admin/analytics/flow", icon: GitBranch, superAdminOnly: true },
     ],
   },
@@ -82,9 +82,9 @@ const SUPER_ADMIN_SECTION: NavSection = {
   items: [
     { label: "テナント管理", path: "/admin/tenants", icon: Building2 },
     { label: "お客様の声", path: "/admin/feedback", icon: MessageCircleHeart },
-    { label: "オプション代行", path: "/admin/options", icon: FileText },
+    { label: "代行作業管理", path: "/admin/options", icon: FileText },
     { label: "請求・使用量", path: "/admin/billing", icon: CreditCard },
-    { label: "通知設定", path: "/admin/monitoring", icon: BellRing },
+    { label: "システム稼働状況", path: "/admin/monitoring", icon: BellRing },
   ],
 };
 
