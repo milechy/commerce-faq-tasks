@@ -52,7 +52,7 @@ export function AnalyticsHeader({
           ← 管理画面へ戻る
         </button>
         <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          📈 チャット成績レポート
+          📈 会話分析
           {isSuperAdmin && (
             <span style={{ fontSize: 16, fontWeight: 400, color: "var(--muted-foreground)", marginLeft: 10 }}>
               — {selectedTenantName}
