@@ -9,6 +9,7 @@ import { supabaseAdmin } from "../../../auth/supabaseClient";
 import multer from 'multer';
 import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import { tenantHasFeature } from '../../../lib/billing/planFeatures';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
@@ -749,6 +750,14 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
       if (!isAllowedAvatarRole(role)) {
         return denyAvatarRole(req, res, su, role);
+      }
+      // GID: LP料金表(Enterprise〜: カスタムアバター)に基づくplan制限。
+      // super_adminはテナント管理・サポート目的でバイパスする。
+      if (!isSuperAdmin && !(await tenantHasFeature(tenantId, "voice_clone"))) {
+        return res.status(403).json({
+          error: "plan_upgrade_required",
+          message: "音声クローン機能はEnterpriseプランでご利用いただけます",
+        });
       }
       const id = req.params["id"];
 

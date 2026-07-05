@@ -17,6 +17,11 @@ jest.mock("../../../auth/supabaseClient", () => ({
   supabaseAdmin: null,
 }));
 
+const mockTenantHasFeature = jest.fn().mockResolvedValue(true);
+jest.mock("../../../lib/billing/planFeatures", () => ({
+  tenantHasFeature: (...args: any[]) => mockTenantHasFeature(...args),
+}));
+
 // --------------------------------------------------------------------------
 // ヘルパー
 // --------------------------------------------------------------------------
@@ -326,6 +331,7 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
   beforeEach(() => {
     process.env.FISH_AUDIO_API_KEY = "test-fish-key";
+    mockTenantHasFeature.mockReset().mockResolvedValue(true);
     fetchSpy = jest.spyOn(global, "fetch" as any).mockResolvedValue({
       ok: true,
       status: 201,
@@ -508,6 +514,46 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
     expect(checkSql).not.toContain("tenant_id");
     const [updateSql] = dbQuery.mock.calls[1] as [string, unknown[]];
     expect(updateSql).not.toContain("tenant_id");
+  });
+
+  it("plan制限(GID: LP料金表 Enterprise〜): client_adminがvoice_clone不可プランだと403、DB所有チェックにも到達しない", async () => {
+    mockTenantHasFeature.mockResolvedValueOnce(false);
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(dbQuery).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mockTenantHasFeature).toHaveBeenCalledWith("tenant-a", "voice_clone");
+  });
+
+  it("super_adminはplan制限をバイパスする(tenantHasFeatureは呼ばれない)", async () => {
+    mockTenantHasFeature.mockResolvedValueOnce(false);
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] })
+      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .post("/v1/admin/avatar/configs/config-x/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.wav",
+        contentType: "audio/wav",
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockTenantHasFeature).not.toHaveBeenCalled();
   });
 
   it("Fish Audio エラー: ok=false → 502、DB UPDATE に到達しない・外部エラー本文を返さない", async () => {
