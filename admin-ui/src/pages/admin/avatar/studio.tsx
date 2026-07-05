@@ -287,7 +287,7 @@ export default function AvatarStudioPage() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar-configs/${id}/reset-to-default`, {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${id}/reset-to-default`, {
         method: "POST",
       });
       if (!res.ok) {

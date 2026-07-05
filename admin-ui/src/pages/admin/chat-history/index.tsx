@@ -56,7 +56,7 @@ function ScoreBadge({ score }: { score: number }) {
 export default function ChatHistoryPage() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId } = useAuth();
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [total, setTotal] = useState(0);
@@ -74,7 +74,13 @@ export default function ChatHistoryPage() {
   const [selectedTenantFilter, setSelectedTenantFilter] = useState<string>("");
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
-  const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+  // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+  // client_admin相当にフォールバックするため、実テナントIDはpreviewTenantIdから取る必要がある
+  const tenantId = previewMode
+    ? (previewTenantId ?? undefined)
+    : isSuperAdmin
+      ? undefined
+      : (user?.tenantId ?? undefined);
 
   // Phase2-A: fetch tenant list for super admin selector
   useEffect(() => {
@@ -135,7 +141,7 @@ export default function ChatHistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [tenantId, isSuperAdmin, selectedTenantFilter, offset, sortBy, sortOrder, period, sentiment, search]);
+  }, [tenantId, isSuperAdmin, previewMode, previewTenantId, selectedTenantFilter, offset, sortBy, sortOrder, period, sentiment, search]);
 
   useEffect(() => {
     void loadSessions();

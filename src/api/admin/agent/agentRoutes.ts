@@ -8,6 +8,8 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
+import { trackUsage } from '../../../lib/billing/usageTracker';
+import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 
 // ---------------------------------------------------------------------------
 // Auth helper（options/routes.ts と同パターンのローカル定義）
@@ -52,10 +54,15 @@ interface GroqToolCall {
   };
 }
 
+interface GroqUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
 async function callGroqWithTools(
   messages: GroqMessage[],
   tools: typeof ADMIN_AGENT_TOOLS
-): Promise<{ content: string | null; tool_calls: GroqToolCall[] }> {
+): Promise<{ content: string | null; tool_calls: GroqToolCall[]; usage: GroqUsage }> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) throw new Error('GROQ_API_KEY not configured');
 
@@ -66,7 +73,7 @@ async function callGroqWithTools(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: GROQ_VERSATILE_70B,
       messages,
       tools,
       tool_choice: 'auto',
@@ -85,10 +92,14 @@ async function callGroqWithTools(
   return {
     content: choice?.message?.content ?? null,
     tool_calls: choice?.message?.tool_calls ?? [],
+    usage: {
+      promptTokens: data.usage?.prompt_tokens ?? 0,
+      completionTokens: data.usage?.completion_tokens ?? 0,
+    },
   };
 }
 
-async function callGroqFinal(messages: GroqMessage[]): Promise<string> {
+async function callGroqFinal(messages: GroqMessage[]): Promise<{ reply: string; usage: GroqUsage }> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) throw new Error('GROQ_API_KEY not configured');
 
@@ -99,7 +110,7 @@ async function callGroqFinal(messages: GroqMessage[]): Promise<string> {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: GROQ_VERSATILE_70B,
       messages,
       max_tokens: 512,
       temperature: 0.2,
@@ -112,7 +123,13 @@ async function callGroqFinal(messages: GroqMessage[]): Promise<string> {
   }
 
   const data = (await res.json()) as any;
-  return data.choices?.[0]?.message?.content?.trim() ?? '';
+  return {
+    reply: data.choices?.[0]?.message?.content?.trim() ?? '',
+    usage: {
+      promptTokens: data.usage?.prompt_tokens ?? 0,
+      completionTokens: data.usage?.completion_tokens ?? 0,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +183,21 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
 
       // 第1回 Groq 呼び出し（tool_calls あり）
       const firstResponse = await callGroqWithTools(messages, ADMIN_AGENT_TOOLS);
+      let totalPromptTokens = firstResponse.usage.promptTokens;
+      let totalCompletionTokens = firstResponse.usage.completionTokens;
+
+      const reportUsage = () => {
+        // super_adminがテナント未特定（targetTenantId未指定）の場合は課金対象がないためスキップ
+        if (!effectiveTenantId) return;
+        trackUsage({
+          tenantId: effectiveTenantId,
+          requestId: `admin-agent-${sessionId}-${Date.now()}`,
+          model: GROQ_VERSATILE_70B,
+          inputTokens: totalPromptTokens,
+          outputTokens: totalCompletionTokens,
+          featureUsed: 'admin_agent',
+        });
+      };
 
       const actions: Array<{ tool: string; result: string }> = [];
 
@@ -205,11 +237,15 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         }
 
         // 第2回 Groq 呼び出し（最終 reply）
-        const finalReply = await callGroqFinal(messages);
-        return res.json({ reply: finalReply, actions });
+        const finalResponse = await callGroqFinal(messages);
+        totalPromptTokens += finalResponse.usage.promptTokens;
+        totalCompletionTokens += finalResponse.usage.completionTokens;
+        reportUsage();
+        return res.json({ reply: finalResponse.reply, actions });
       }
 
       // tool_calls がなかった場合はそのまま返す
+      reportUsage();
       return res.json({
         reply: firstResponse.content ?? '回答を生成できませんでした',
         actions: [],

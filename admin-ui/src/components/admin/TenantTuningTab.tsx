@@ -27,7 +27,7 @@ async function deleteRule(id: number): Promise<void> {
 
 async function toggleRule(id: number, is_active: boolean): Promise<void> {
   const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
-    method: "PATCH",
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ is_active }),
   });
