@@ -168,6 +168,19 @@ describe("Tenant Admin Routes", () => {
       expect(res.body.faq_question_hint).toBe("例: 保証期間は？");
       expect(res.body.faq_answer_hint).toBe("例: 3年間です");
     });
+
+    it("returns onboarding_industry/onboarding_completed_at (GID 1216274591838389)", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [], onboarding_industry: null, onboarding_completed_at: null }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .get("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.onboarding_industry).toBeNull();
+      expect(res.body.onboarding_completed_at).toBeNull();
+    });
   });
 
   describe("PATCH /v1/admin/my-tenant", () => {
@@ -207,6 +220,31 @@ describe("Tenant Admin Routes", () => {
       const [sql] = mockDb.query.mock.calls[0];
       expect(sql).toContain("faq_question_hint");
       expect(sql).toContain("faq_answer_hint");
+    });
+
+    it("sets onboarding_industry and onboarding_completed_at (GID 1216274591838389)", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, onboarding_industry: "auto", onboarding_completed_at: new Date() }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ onboarding_industry: "auto" });
+      expect(res.status).toBe(200);
+      expect(res.body.onboarding_industry).toBe("auto");
+      expect(res.body.onboarding_completed_at).toBeTruthy();
+      const [sql] = mockDb.query.mock.calls[0];
+      expect(sql).toContain("onboarding_industry");
+      expect(sql).toContain("onboarding_completed_at = NOW()");
+    });
+
+    it("rejects an invalid onboarding_industry value", async () => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ onboarding_industry: "not-a-real-industry" });
+      expect(res.status).toBe(400);
     });
 
     it("rejects an empty body with no_fields", async () => {

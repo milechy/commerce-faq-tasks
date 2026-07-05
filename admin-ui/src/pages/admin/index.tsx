@@ -8,6 +8,7 @@ import { useLang } from "../../i18n/LangContext";
 import LangSwitcher from "../../components/LangSwitcher";
 import { useAuth } from "../../auth/useAuth";
 import { CVUnfiredAlert } from "../../components/dashboard/CVUnfiredAlert";
+import OnboardingModal from "../../components/onboarding/OnboardingModal";
 
 interface DashboardStats {
   faqCount: number;
@@ -155,6 +156,19 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // GID 1216274591838389: 初回ログイン時オンボーディング（client_admin自身の未完了時のみ表示。
+  // previewMode中はisSuperAdminがfalseになるため previewMode を明示的に除外する）
+  useEffect(() => {
+    if (isSuperAdmin || previewMode || !user?.tenantId) return;
+    authFetch(`${API_BASE}/v1/admin/my-tenant`)
+      .then((r) => r.json())
+      .then((data: { onboarding_completed_at?: string | null }) => {
+        if (!data.onboarding_completed_at) setShowOnboarding(true);
+      })
+      .catch(() => {});
+  }, [isSuperAdmin, previewMode, user?.tenantId]);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -404,6 +418,10 @@ export default function AdminDashboard() {
           <QuickAction icon="📈" label="分析を見る" onClick={() => navigate("/admin/analytics")} variant="outline" />
         </div>
       </section>
+
+      {showOnboarding && user?.tenantId && (
+        <OnboardingModal tenantId={user.tenantId} onClose={() => setShowOnboarding(false)} />
+      )}
     </div>
   );
 }

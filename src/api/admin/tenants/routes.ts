@@ -15,6 +15,9 @@ import { logger } from '../../../lib/logger';
 
 const planValues = ["starter", "growth", "enterprise"] as const;
 
+// GID 1216274591838389: 初回ログイン時オンボーディングの業種選択肢
+const onboardingIndustryValues = ["auto", "beauty", "food", "realestate", "retail", "other"] as const;
+
 const createTenantSchema = z.object({
   id: z.string().min(3).max(50).regex(/^[a-z0-9_-]+$/, "IDは英小文字・数字・ハイフン・アンダースコアのみ"),
   name: z.string().min(1).max(100),
@@ -151,7 +154,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `SELECT id, name, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint FROM tenants WHERE id = $1`,
+        `SELECT id, name, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (result.rowCount === 0) {
@@ -185,6 +188,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       // GID 1216274385106667: FAQ登録フォームの質問/回答欄カスタムヒント（client_admin自己申告）
       faq_question_hint: z.string().max(200).nullable().optional(),
       faq_answer_hint: z.string().max(200).nullable().optional(),
+      // GID 1216274591838389: 初回ログインオンボーディングの回答業種（設定時にonboarding_completed_atも自動更新）
+      onboarding_industry: z.enum(onboardingIndustryValues).optional(),
     });
     const parsed = bodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -200,11 +205,16 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.features !== undefined) { params.push(JSON.stringify(fields.features)); setClauses.push(`features = COALESCE(features, '{}'::jsonb) || $${params.length}::jsonb`); }
       if ('faq_question_hint' in fields) { params.push(fields.faq_question_hint ?? null); setClauses.push(`faq_question_hint = $${params.length}`); }
       if ('faq_answer_hint' in fields) { params.push(fields.faq_answer_hint ?? null); setClauses.push(`faq_answer_hint = $${params.length}`); }
+      if (fields.onboarding_industry !== undefined) {
+        params.push(fields.onboarding_industry);
+        setClauses.push(`onboarding_industry = $${params.length}`);
+        setClauses.push(`onboarding_completed_at = NOW()`);
+      }
       setClauses.push(`updated_at = NOW()`);
       params.push(tenantId);
       const result = await db.query(
         `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length}
-         RETURNING id, name, features, lemonslice_agent_id, faq_question_hint, faq_answer_hint`,
+         RETURNING id, name, features, lemonslice_agent_id, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at`,
         params
       );
       if (result.rowCount === 0) {
