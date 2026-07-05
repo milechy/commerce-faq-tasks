@@ -302,14 +302,34 @@ export default function ChatHistoryPage() {
           style={{
             padding: "48px 24px",
             textAlign: "center",
-            color: "var(--muted-foreground)",
-            fontSize: 15,
             borderRadius: 14,
             border: "1px solid var(--border)",
             background: "linear-gradient(145deg, var(--card), var(--card))",
           }}
         >
-          {t("chat_history.no_sessions")}
+          <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
+          <p style={{ color: "var(--foreground)", fontSize: 15, fontWeight: 600, margin: "0 0 6px" }}>
+            {t("chat_history.no_sessions")}
+          </p>
+          <p style={{ color: "var(--muted-foreground)", fontSize: 13.5, margin: "0 0 20px" }}>
+            {t("chat_history.no_sessions_sub")}
+          </p>
+          <button
+            onClick={() => navigate("/admin/chat-test")}
+            style={{
+              padding: "10px 20px",
+              minHeight: 44,
+              borderRadius: 10,
+              border: "none",
+              background: "#2563eb",
+              color: "#fff",
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {t("chat_history.try_test_chat")}
+          </button>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

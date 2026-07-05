@@ -364,6 +364,8 @@ const en: Record<TranslationKey, string> = {
   "chat_history.sessions": "Conversation Sessions",
   "chat_history.loading": "Loading...",
   "chat_history.no_sessions": "No chat history yet",
+  "chat_history.no_sessions_sub": "Check your widget installation, or try the test chat to see it in action",
+  "chat_history.try_test_chat": "Try Test Chat →",
   "chat_history.message_count": "{n} messages",
   "chat_history.view_detail": "View Details →",
   "chat_history.user_message": "Customer",
