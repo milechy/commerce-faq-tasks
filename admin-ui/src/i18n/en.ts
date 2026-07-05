@@ -67,6 +67,14 @@ const en: Record<TranslationKey, string> = {
   "knowledge.load_error": "Failed to load. Please try again 🙏",
   "knowledge.delete_error": "Failed to delete. Please try again 🙏",
 
+  // GID 1216274385106667: FAQ registration form hint message settings
+  "knowledge.faq_hint_settings_title": "Customize question/answer field examples",
+  "knowledge.faq_hint_settings_desc": "Customize the example placeholder text shown in the Add FAQ form to match your store. Leave blank to use the default examples.",
+  "knowledge.faq_hint_question_label": "Example for the \"Question\" field",
+  "knowledge.faq_hint_answer_label": "Example for the \"Answer\" field",
+  "knowledge.faq_hint_saved": "✅ Examples saved",
+  "knowledge.faq_hint_save_error": "❌ Failed to save. Please try again.",
+
   // Tabs
   "knowledge.tab_list": "Knowledge List",
   "knowledge.tab_text": "Text Input",

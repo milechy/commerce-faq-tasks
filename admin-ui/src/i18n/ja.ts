@@ -65,6 +65,14 @@ const ja = {
   "knowledge.load_error": "読み込みに失敗しました。もう一度お試しください 🙏",
   "knowledge.delete_error": "削除に失敗しました。もう一度お試しください 🙏",
 
+  // GID 1216274385106667: FAQ登録フォームのヒントメッセージ設定
+  "knowledge.faq_hint_settings_title": "質問/回答欄の入力例をカスタマイズ",
+  "knowledge.faq_hint_settings_desc": "FAQを追加する画面で表示される入力例（プレースホルダー）を、店舗に合わせて変更できます。空欄のままにすると既定の入力例が使われます。",
+  "knowledge.faq_hint_question_label": "「質問」欄の入力例",
+  "knowledge.faq_hint_answer_label": "「回答」欄の入力例",
+  "knowledge.faq_hint_saved": "✅ 入力例を保存しました",
+  "knowledge.faq_hint_save_error": "❌ 保存に失敗しました。もう一度お試しください。",
+
   // Tabs
   "knowledge.tab_list": "ナレッジ一覧",
   "knowledge.tab_text": "テキスト入力",

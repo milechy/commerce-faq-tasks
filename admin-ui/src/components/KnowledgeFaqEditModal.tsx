@@ -21,6 +21,9 @@ interface Props {
   item?: KnowledgeFaqItem;
   onClose: () => void;
   onSuccess: (message: string) => void;
+  /** GID 1216274385106667: テナントごとにカスタマイズされた質問/回答欄の入力例 */
+  questionHint?: string | null;
+  answerHint?: string | null;
 }
 
 async function getToken(): Promise<string | null> {
@@ -56,7 +59,7 @@ const LABEL_STYLE: React.CSSProperties = {
   marginBottom: 8,
 };
 
-export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, onSuccess }: Props) {
+export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, onSuccess, questionHint, answerHint }: Props) {
   const { t } = useLang();
   const [question, setQuestion] = useState(item?.question ?? "");
   const [answer, setAnswer] = useState(item?.answer ?? "");
@@ -250,7 +253,7 @@ export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, o
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               rows={3}
-              placeholder={t("modal.question_placeholder")}
+              placeholder={questionHint || t("modal.question_placeholder")}
               style={TEXTAREA_STYLE}
             />
           </div>
@@ -266,7 +269,7 @@ export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, o
               value={answer}
               onChange={(e) => setAnswer(e.target.value)}
               rows={6}
-              placeholder={t("modal.answer_placeholder")}
+              placeholder={answerHint || t("modal.answer_placeholder")}
               style={TEXTAREA_STYLE}
             />
           </div>

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../KnowledgeFaqEditModal";
+import FaqHintSettings from "./FaqHintSettings";
 import { useLang } from "../../i18n/LangContext";
+import { useAuth } from "../../auth/useAuth";
 import { API_BASE } from "../../lib/api";
 import { fetchWithAuth, formatDate, CARD_STYLE, BTN_DANGER } from "./shared";
 
@@ -24,7 +26,12 @@ type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
 export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
   const navigate = useNavigate();
   const { t, lang } = useLang();
+  const { isSuperAdmin } = useAuth();
   const locale = lang === "en" ? "en-US" : "ja-JP";
+  const [faqHints, setFaqHints] = useState<{ questionHint: string | null; answerHint: string | null }>({
+    questionHint: null,
+    answerHint: null,
+  });
 
   const CATEGORIES = [
     { value: "inventory", label: t("category.inventory") },
@@ -149,6 +156,13 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
 
   return (
     <div>
+      {/* GID 1216274385106667: FAQ登録フォームの入力例カスタマイズ */}
+      <FaqHintSettings
+        tenantId={tenantId}
+        isSuperAdmin={isSuperAdmin}
+        onHintsLoaded={setFaqHints}
+      />
+
       {/* 新規追加ボタン */}
       <button
         onClick={() => setCreateMode(true)}
@@ -418,6 +432,8 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           item={editTarget}
           onClose={() => setEditTarget(null)}
           onSuccess={handleModalSuccess}
+          questionHint={faqHints.questionHint}
+          answerHint={faqHints.answerHint}
         />
       )}
 
@@ -427,6 +443,8 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           tenantId={tenantId}
           onClose={() => setCreateMode(false)}
           onSuccess={handleModalSuccess}
+          questionHint={faqHints.questionHint}
+          answerHint={faqHints.answerHint}
         />
       )}
 
