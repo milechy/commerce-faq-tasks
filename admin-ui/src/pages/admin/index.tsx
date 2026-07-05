@@ -379,7 +379,7 @@ export default function AdminDashboard() {
                 value={stats?.gapCount ?? 0}
                 accent={(stats?.gapCount ?? 0) > 0 ? "#f59e0b" : undefined}
                 sub="AIが答えられなかった質問数"
-                onClick={() => navigate("/admin/chat-history")}
+                onClick={() => navigate("/admin/knowledge-gaps")}
               />
               <StatCard
                 icon="🕐"
