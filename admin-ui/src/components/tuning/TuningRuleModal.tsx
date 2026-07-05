@@ -22,6 +22,8 @@ interface Props {
   mode: "create" | "edit";
   initialData?: TuningRule;
   sourceConversation?: SourceConversation;
+  /** GID 1216275447729242: 自然文からのルール自動生成時、管理者が書いた指示文 */
+  freeTextInstruction?: string;
   tenantId: string; // caller's tenant; "global" if super_admin
   isSuperAdmin: boolean;
   tenantOptions: { value: string; label: string }[];
@@ -70,6 +72,7 @@ export default function TuningRuleModal({
   mode,
   initialData,
   sourceConversation,
+  freeTextInstruction,
   tenantId,
   isSuperAdmin,
   tenantOptions,
@@ -115,9 +118,10 @@ export default function TuningRuleModal({
   const [approveReasons, setApproveReasons] = useState<Record<number, string>>({});
   const [approving, setApproving] = useState<number | null>(null);
 
-  // AI提案: モーダルが開いた時点でsourceConversationがあれば自動実行
+  // AI提案: モーダルが開いた時点でsourceConversationまたはfreeTextInstructionが
+  // あれば自動実行(GID 1216275447729242: 自然文からのルール自動生成)
   useEffect(() => {
-    if (mode !== "create" || !sourceConversation) return;
+    if (mode !== "create" || (!sourceConversation && !freeTextInstruction)) return;
     let cancelled = false;
 
     const suggest = async () => {
@@ -125,10 +129,14 @@ export default function TuningRuleModal({
       try {
         const res = await authFetch(`${API_BASE}/v1/admin/tuning/suggest-rule`, {
           method: "POST",
-          body: JSON.stringify({
-            userMessage: sourceConversation.userMsg,
-            aiMessage: sourceConversation.assistantMsg,
-          }),
+          body: JSON.stringify(
+            sourceConversation
+              ? {
+                  userMessage: sourceConversation.userMsg,
+                  aiMessage: sourceConversation.assistantMsg,
+                }
+              : { freeText: freeTextInstruction }
+          ),
         });
         if (cancelled) return;
         if (!res.ok) return; // 失敗時は手動入力にフォールバック
@@ -572,6 +580,60 @@ export default function TuningRuleModal({
                   }}
                 >
                   （この回答を改善するためにルールを作成しています）
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* GID 1216275447729242: 自然文の指示（自然文からのルール作成時のみ） */}
+          {freeTextInstruction && (
+            <div
+              style={{
+                borderRadius: 12,
+                border: "1px solid #374151",
+                background: "rgba(15,23,42,0.6)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderBottom: "1px solid #374151",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#9ca3af",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                📝 あなたの指示
+              </div>
+              <div style={{ padding: "14px" }}>
+                <div
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    background: "rgba(31,41,55,0.8)",
+                    border: "1px solid #374151",
+                    color: "#d1d5db",
+                    fontSize: 14,
+                    lineHeight: 1.5,
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {freeTextInstruction}
+                </div>
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: "#6b7280",
+                    marginTop: 8,
+                    marginBottom: 0,
+                    fontStyle: "italic",
+                  }}
+                >
+                  （この指示をルールとして構造化しています）
                 </p>
               </div>
             </div>

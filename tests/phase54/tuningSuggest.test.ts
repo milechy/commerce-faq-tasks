@@ -150,6 +150,64 @@ describe("1. POST /v1/admin/tuning/suggest-rule — 正常系", () => {
 });
 
 // ===========================================================================
+// 1.5. GID 1216275447729242: 自然文(freeText)からの生成
+// ===========================================================================
+
+describe("1.5. POST /v1/admin/tuning/suggest-rule — freeText モード", () => {
+  it("freeText のみで提案を返す", async () => {
+    mockGroqSuccess({
+      trigger_pattern: "保証について",
+      instruction: "保証期間は2年とお伝えする",
+      priority: 4,
+      reason: "管理者の指示を構造化",
+    });
+
+    const res = await request(makeApp("client_admin"))
+      .post("/v1/admin/tuning/suggest-rule")
+      .send({ freeText: "保証期間について聞かれたら2年とお伝えして" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.trigger_pattern).toBe("保証について");
+    expect(res.body.instruction).toBe("保証期間は2年とお伝えする");
+  });
+
+  it("freeText が空文字列 → 400", async () => {
+    const res = await request(makeApp("client_admin"))
+      .post("/v1/admin/tuning/suggest-rule")
+      .send({ freeText: "   " });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("freeText 指定時は userMessage/aiMessage が無くても通る", async () => {
+    mockGroqSuccess({
+      trigger_pattern: "定休日",
+      instruction: "定休日は水曜日と案内する",
+      priority: 2,
+      reason: "よくある質問",
+    });
+
+    const res = await request(makeApp("client_admin"))
+      .post("/v1/admin/tuning/suggest-rule")
+      .send({ freeText: "定休日を聞かれたら水曜日と案内して" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("Groq失敗時もfreeTextモードで500にならず空提案を返す", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+    const res = await request(makeApp("client_admin"))
+      .post("/v1/admin/tuning/suggest-rule")
+      .send({ freeText: "テスト指示" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.trigger_pattern).toBe("");
+  });
+});
+
+// ===========================================================================
 // 2. 認証エラー
 // ===========================================================================
 

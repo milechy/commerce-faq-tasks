@@ -106,6 +106,9 @@ export default function TuningRulesPage() {
   const [presetTenantId, setPresetTenantId] = useState<string | undefined>(undefined);
   // GID 1216275179995736: 未回答質問からの作成時、保存成功後に元のgapをresolvedにする
   const [resolveGapId, setResolveGapId] = useState<number | undefined>(undefined);
+  // GID 1216275447729242: 自然文からのルール自動生成
+  const [freeTextInstruction, setFreeTextInstruction] = useState<string | undefined>(undefined);
+  const [naturalLangDraft, setNaturalLangDraft] = useState("");
 
   // ─── Delete state ───────────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -297,10 +300,69 @@ export default function TuningRulesPage() {
         <LangSwitcher />
       </header>
 
+      {/* GID 1216275447729242: 自然文からのルール自動生成 */}
+      <div
+        style={{
+          borderRadius: 14,
+          border: "1px solid rgba(59,130,246,0.3)",
+          background: "rgba(59,130,246,0.06)",
+          padding: "16px 18px",
+          marginBottom: 16,
+        }}
+      >
+        <p style={{ fontSize: 14, fontWeight: 700, color: "#93c5fd", margin: "0 0 6px" }}>
+          🤖 自然文からルールを作成
+        </p>
+        <p style={{ fontSize: 13, color: "var(--muted-foreground)", margin: "0 0 10px" }}>
+          AIへの指示を普段の言葉で書くと、条件と指示文をAIが自動で組み立てます
+        </p>
+        <textarea
+          value={naturalLangDraft}
+          onChange={(e) => setNaturalLangDraft(e.target.value)}
+          placeholder="例: 保証期間について聞かれたら2年とお伝えして"
+          rows={2}
+          style={{
+            width: "100%",
+            padding: "12px 14px",
+            borderRadius: 10,
+            border: "1px solid #374151",
+            background: "rgba(15,23,42,0.8)",
+            color: "#e5e7eb",
+            fontSize: 15,
+            resize: "vertical",
+            boxSizing: "border-box",
+            marginBottom: 10,
+          }}
+        />
+        <button
+          onClick={() => {
+            if (!naturalLangDraft.trim()) return;
+            setSourceConversation(null);
+            setFreeTextInstruction(naturalLangDraft.trim());
+            setCreateMode(true);
+          }}
+          disabled={!naturalLangDraft.trim()}
+          style={{
+            padding: "10px 18px",
+            minHeight: 44,
+            borderRadius: 10,
+            border: "none",
+            background: naturalLangDraft.trim() ? "#1d4ed8" : "#1e3a5f",
+            color: "#fff",
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: naturalLangDraft.trim() ? "pointer" : "not-allowed",
+          }}
+        >
+          この指示でルールを作成する
+        </button>
+      </div>
+
       {/* Add button */}
       <button
         onClick={() => {
           setSourceConversation(null);
+          setFreeTextInstruction(undefined);
           setCreateMode(true);
         }}
         style={{
@@ -600,6 +662,7 @@ export default function TuningRulesPage() {
         <TuningRuleModal
           mode="create"
           sourceConversation={sourceConversation ?? undefined}
+          freeTextInstruction={freeTextInstruction}
           tenantId={tenantId}
           isSuperAdmin={isSuperAdmin}
           tenantOptions={tenantOptions}
@@ -611,6 +674,8 @@ export default function TuningRulesPage() {
             setCreateFromConversation(false);
             setPresetTenantId(undefined);
             setResolveGapId(undefined);
+            setFreeTextInstruction(undefined);
+            setNaturalLangDraft("");
           }}
           onSuccess={handleModalSuccess}
         />
