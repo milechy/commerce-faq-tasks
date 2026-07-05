@@ -6,6 +6,8 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { containsBannedWord } from "../../../lib/contentGuard";
+import { useAuth } from "../../../auth/useAuth";
+import { planHasFeature } from "../../../lib/planFeatures";
 import type { VoiceRecommendation } from "./types";
 import { BG } from "./types";
 import { StudioBasicSection } from "./StudioBasicSection";
@@ -39,6 +41,7 @@ export default function AvatarStudioPage() {
   const [searchParams] = useSearchParams();
   const tenantQueryParam = searchParams.get("tenant") ?? undefined;
   const { lang } = useLang();
+  const { isSuperAdmin, tenantPlan } = useAuth();
   const isEdit = Boolean(id);
 
   // フォーム状態
@@ -458,8 +461,8 @@ export default function AvatarStudioPage() {
         setVoiceId={setVoiceId}
       />
 
-      {/* 3.5 音声クローン（FishAudio Phase C-1、編集時のみ — 作成前は対象 config が無い） */}
-      {isEdit && id && (
+      {/* 3.5 音声クローン（FishAudio Phase C-1、編集時のみ — 作成前は対象 config が無い。GID: LP料金表 Enterprise〜） */}
+      {isEdit && id && (isSuperAdmin || planHasFeature(tenantPlan, "voice_clone")) && (
         <StudioVoiceCloneSection
           configId={id}
           currentVoiceId={voiceId || null}
