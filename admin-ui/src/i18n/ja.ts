@@ -362,6 +362,8 @@ const ja = {
   "chat_history.sessions": "会話セッション",
   "chat_history.loading": "読み込んでいます...",
   "chat_history.no_sessions": "まだ会話履歴がありません",
+  "chat_history.no_sessions_sub": "ウィジェットの設置状況を確認するか、テストチャットで動作を試してみましょう",
+  "chat_history.try_test_chat": "テストチャットを試す →",
   "chat_history.message_count": "{n}件のメッセージ",
   "chat_history.view_detail": "詳細を見る →",
   "chat_history.user_message": "お客様",
