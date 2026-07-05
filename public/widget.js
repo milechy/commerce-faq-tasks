@@ -2717,12 +2717,36 @@
   };
 
   // Phase56: TriggerEngine — プロアクティブエンゲージメント（LLM不使用）
+  // GID 1216275447733308: セッションあたりの声がけは1〜2回が最適、4回以上は逆効果という
+  // 知見に基づき、ルールの種類を問わずセッション全体で合計発火回数の上限を設ける。
+  // firedRuleIds/発火回数はページ遷移をまたいでも保持されるよう sessionStorage に永続化する。
+  var R2C_MAX_PROACTIVE_FIRES_PER_SESSION = 2;
+
   function TriggerEngine(tracker) {
     this.tracker = tracker;
     this.rules = [];
-    this.firedRuleIds = new Set();
     this.suppressedUntil = 0;
+    var persisted = this._loadFireState();
+    this.firedRuleIds = persisted.firedRuleIds;
+    this.fireCount = persisted.fireCount;
   }
+
+  TriggerEngine.prototype._loadFireState = function () {
+    try {
+      var ids = JSON.parse(sessionStorage.getItem('r2c_fired_rules') || '[]');
+      var count = Number(sessionStorage.getItem('r2c_fire_count') || '0');
+      return { firedRuleIds: new Set(ids), fireCount: Number.isFinite(count) ? count : 0 };
+    } catch (_e) {
+      return { firedRuleIds: new Set(), fireCount: 0 };
+    }
+  };
+
+  TriggerEngine.prototype._persistFireState = function () {
+    try {
+      sessionStorage.setItem('r2c_fired_rules', JSON.stringify(Array.from(this.firedRuleIds)));
+      sessionStorage.setItem('r2c_fire_count', String(this.fireCount));
+    } catch (_e) {}
+  };
 
   TriggerEngine.prototype.loadRules = function () {
     var self = this;
@@ -2750,6 +2774,7 @@
 
   TriggerEngine.prototype.checkRules = function (context) {
     if (Date.now() < this.suppressedUntil) return null;
+    if (this.fireCount >= R2C_MAX_PROACTIVE_FIRES_PER_SESSION) return null;
     for (var i = 0; i < this.rules.length; i++) {
       var rule = this.rules[i];
       if (this.firedRuleIds.has(rule.id)) continue;
@@ -2770,6 +2795,8 @@
       }
       if (matched) {
         this.firedRuleIds.add(rule.id);
+        this.fireCount += 1;
+        this._persistFireState();
         return rule;
       }
     }
