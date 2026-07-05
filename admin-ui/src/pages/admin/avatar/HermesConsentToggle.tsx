@@ -78,7 +78,7 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       setFeatures({ ...prev, ...updated.features });
       showToast(
         next
-          ? "✅ Hermes Agentへのデータ提供に同意しました"
+          ? "✅ R2Cエージェントへのデータ提供に同意しました"
           : "✅ 同意を取り消しました",
       );
     } catch {
@@ -114,10 +114,10 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       >
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
-            🧠 Hermes Agent 学習への同意
+            🧠 R2Cエージェント 学習への同意
           </h2>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0", maxWidth: 480 }}>
-            ONにすると、貴社の会話ログ(QA AI・アバターの応答)がHermes Agentの学習・CVR向上のための分析に利用されます。いつでもOFFに戻せます。
+            ONにすると、貴社の会話ログ(QA AI・アバターの応答)がR2Cエージェントの学習・CVR向上のための分析に利用されます。いつでもOFFに戻せます。
           </p>
         </div>
         <button
@@ -127,8 +127,8 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
           aria-pressed={consentGranted}
           aria-label={
             consentGranted
-              ? "Hermes Agentへのデータ提供同意を取り消す"
-              : "Hermes Agentへのデータ提供に同意する"
+              ? "R2Cエージェントへのデータ提供同意を取り消す"
+              : "R2Cエージェントへのデータ提供に同意する"
           }
           style={{
             padding: "12px 28px",
