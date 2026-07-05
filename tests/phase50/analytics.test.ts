@@ -50,7 +50,10 @@ function makeApp(role: Role = "client_admin", tenantId = "tenant-a") {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  // resetAllMocks: clearAllMocksだとmockResolvedValueOnceのキューが前テストから
+  // 持ち越されてしまい、planゲート確認クエリの追加でテスト間の呼び出し回数がずれた際に
+  // 意図しない値を消費してしまう。テストごとに完全にリセットする。
+  jest.resetAllMocks();
 });
 
 // ---------------------------------------------------------------------------
@@ -65,7 +68,7 @@ describe("1. GET /v1/admin/analytics/summary", () => {
     total_knowledge_gaps: string;
     avg_messages_per_session: string;
     avatar_session_count: string;
-  }> = {}) {
+  }> = {}, includePlanCheck = true) {
     const defaults = {
       total_sessions: "10",
       prev_total_sessions: "8",
@@ -76,6 +79,10 @@ describe("1. GET /v1/admin/analytics/summary", () => {
     };
     const vals = { ...defaults, ...overrides };
 
+    if (includePlanCheck) {
+      // GID: plan ゲート確認(client_admin)。super_adminはゲートをバイパスするため呼び出し不要。
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+    }
     mockQuery
       .mockResolvedValueOnce({ rows: [{ total_sessions: vals.total_sessions }] })
       .mockResolvedValueOnce({ rows: [{ prev_total_sessions: vals.prev_total_sessions }] })
@@ -127,6 +134,7 @@ describe("1. GET /v1/admin/analytics/summary", () => {
 
   it("returns null avg_judge_score when no evaluations", async () => {
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
       .mockResolvedValueOnce({ rows: [{ total_sessions: "0" }] })
       .mockResolvedValueOnce({ rows: [{ prev_total_sessions: "0" }] })
       .mockResolvedValueOnce({ rows: [{ avg_judge_score: null }] })
@@ -146,7 +154,7 @@ describe("1. GET /v1/admin/analytics/summary", () => {
   });
 
   it("super_admin can query without tenant filter", async () => {
-    setupSummaryMocks();
+    setupSummaryMocks({}, false);
     const res = await request(makeApp("super_admin"))
       .get("/v1/admin/analytics/summary");
 
@@ -155,7 +163,7 @@ describe("1. GET /v1/admin/analytics/summary", () => {
   });
 
   it("super_admin can filter by specific tenant", async () => {
-    setupSummaryMocks();
+    setupSummaryMocks({}, false);
     const res = await request(makeApp("super_admin"))
       .get("/v1/admin/analytics/summary?tenant=tenant-x");
 
@@ -174,7 +182,9 @@ describe("1. GET /v1/admin/analytics/summary", () => {
   });
 
   it("returns 500 on DB error", async () => {
-    mockQuery.mockRejectedValueOnce(new Error("DB error"));
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
+      .mockRejectedValueOnce(new Error("DB error"));
 
     const res = await request(makeApp())
       .get("/v1/admin/analytics/summary");
@@ -197,6 +207,7 @@ describe("2. GET /v1/admin/analytics/trends", () => {
 
   it("returns daily array with correct shape", async () => {
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
       .mockResolvedValueOnce({ rows: DAILY_ROWS })
       .mockResolvedValueOnce({ rows: [] }); // sentiment trends (Phase51)
 
@@ -218,6 +229,7 @@ describe("2. GET /v1/admin/analytics/trends", () => {
 
   it("avg_score is null when no evaluations for that day", async () => {
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
       .mockResolvedValueOnce({ rows: DAILY_ROWS })
       .mockResolvedValueOnce({ rows: [] }); // sentiment trends (Phase51)
 
@@ -230,6 +242,7 @@ describe("2. GET /v1/admin/analytics/trends", () => {
 
   it("returns empty daily array when no data", async () => {
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] }); // sentiment trends (Phase51)
 
@@ -241,7 +254,9 @@ describe("2. GET /v1/admin/analytics/trends", () => {
   });
 
   it("returns 500 on DB error", async () => {
-    mockQuery.mockRejectedValueOnce(new Error("DB error"));
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
+      .mockRejectedValueOnce(new Error("DB error"));
 
     const res = await request(makeApp())
       .get("/v1/admin/analytics/trends");
@@ -255,7 +270,11 @@ describe("2. GET /v1/admin/analytics/trends", () => {
 // ---------------------------------------------------------------------------
 
 describe("3. GET /v1/admin/analytics/evaluations", () => {
-  function setupEvalMocks() {
+  function setupEvalMocks(includePlanCheck = true) {
+    if (includePlanCheck) {
+      // GID: plan ゲート確認(client_admin)。super_adminはゲートをバイパスするため呼び出し不要。
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+    }
     // score distribution rows
     mockQuery
       .mockResolvedValueOnce({
@@ -351,7 +370,7 @@ describe("3. GET /v1/admin/analytics/evaluations", () => {
   });
 
   it("RBAC: super_admin can query other tenants", async () => {
-    setupEvalMocks();
+    setupEvalMocks(false);
 
     const res = await request(makeApp("super_admin"))
       .get("/v1/admin/analytics/evaluations?tenant=tenant-c");
@@ -361,7 +380,9 @@ describe("3. GET /v1/admin/analytics/evaluations", () => {
   });
 
   it("returns 500 on DB error", async () => {
-    mockQuery.mockRejectedValueOnce(new Error("DB error"));
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
+      .mockRejectedValueOnce(new Error("DB error"));
 
     const res = await request(makeApp())
       .get("/v1/admin/analytics/evaluations");

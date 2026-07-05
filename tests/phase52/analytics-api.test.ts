@@ -57,7 +57,11 @@ function makeUnauthApp() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function setupSummaryMocks() {
+function setupSummaryMocks(includePlanCheck = true) {
+  if (includePlanCheck) {
+    // GID: plan ゲート確認(client_admin)。super_adminはゲートをバイパスするため呼び出し不要。
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+  }
   mockQuery
     .mockResolvedValueOnce({ rows: [{ total_sessions: "12" }] })
     .mockResolvedValueOnce({ rows: [{ prev_total_sessions: "10" }] })
@@ -71,7 +75,10 @@ function setupSummaryMocks() {
 }
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  // resetAllMocks: clearAllMocksだとmockResolvedValueOnceのキューが前テストから
+  // 持ち越されてしまい、planゲート確認クエリの追加でテスト間の呼び出し回数がずれた際に
+  // 意図しない値を消費してしまう。テストごとに完全にリセットする。
+  jest.resetAllMocks();
   // Default: auth passes through
   mockAuthMiddleware.mockImplementation((_req: any, _res: any, next: any) => next());
 });
@@ -82,7 +89,7 @@ beforeEach(() => {
 
 describe("1. GET /v1/admin/analytics/summary — super_admin", () => {
   it("super_admin: tenant_id = null (全テナント)", async () => {
-    setupSummaryMocks();
+    setupSummaryMocks(false);
     const res = await request(makeApp("super_admin"))
       .get("/v1/admin/analytics/summary");
 
@@ -92,7 +99,7 @@ describe("1. GET /v1/admin/analytics/summary — super_admin", () => {
   });
 
   it("super_admin: ?tenant= で特定テナント絞り込み可", async () => {
-    setupSummaryMocks();
+    setupSummaryMocks(false);
     const res = await request(makeApp("super_admin"))
       .get("/v1/admin/analytics/summary?tenant=tenant-x");
 
@@ -150,6 +157,7 @@ describe("3. 未認証アクセス — 401", () => {
 describe("4. avg_judge_score — score=0 評価除外", () => {
   it("avg_judge_score が null → null として返す", async () => {
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
       .mockResolvedValueOnce({ rows: [{ total_sessions: "0" }] })
       .mockResolvedValueOnce({ rows: [{ prev_total_sessions: "0" }] })
       .mockResolvedValueOnce({ rows: [{ avg_judge_score: null }] }) // score>0フィルタ後 = null
@@ -171,8 +179,8 @@ describe("4. avg_judge_score — score=0 評価除外", () => {
     setupSummaryMocks();
     await request(makeApp()).get("/v1/admin/analytics/summary");
 
-    // 3番目のクエリが avg_judge_score のクエリ
-    const evalQuery = mockQuery.mock.calls[2]?.[0] as string;
+    // 4番目のクエリ(1番目はplanゲート確認)が avg_judge_score のクエリ
+    const evalQuery = mockQuery.mock.calls[3]?.[0] as string;
     expect(evalQuery).toContain("score > 0");
   });
 });
@@ -184,6 +192,7 @@ describe("4. avg_judge_score — score=0 評価除外", () => {
 describe("5. GET /v1/admin/analytics/evaluations — score>0フィルタ", () => {
   function setupEvalMocks() {
     mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "growth" }] }) // GID: plan ゲート確認(client_admin)
       .mockResolvedValueOnce({ rows: [{ range: "40-60", count: "5" }, { range: "60-80", count: "8" }] })
       .mockResolvedValueOnce({
         rows: [{ psychology_fit: "70.0", customer_reaction: "65.0", stage_progress: "72.0", taboo_violation: "88.0" }],
@@ -195,7 +204,7 @@ describe("5. GET /v1/admin/analytics/evaluations — score>0フィルタ", () =>
     setupEvalMocks();
     await request(makeApp()).get("/v1/admin/analytics/evaluations");
 
-    const distQuery = mockQuery.mock.calls[0]?.[0] as string;
+    const distQuery = mockQuery.mock.calls[1]?.[0] as string;
     expect(distQuery).toContain("score > 0");
   });
 
