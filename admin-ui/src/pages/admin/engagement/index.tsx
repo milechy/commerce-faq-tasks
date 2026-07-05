@@ -128,7 +128,10 @@ function configSummary(rule: TriggerRule): string {
     case "scroll_depth":    return `スクロール ${cfg["threshold"]}% 以上`;
     case "idle_time":       return `${cfg["seconds"]} 秒以上滞在`;
     case "exit_intent":     return "離脱検知";
-    case "page_url_match":  return `URL: ${cfg["pattern"]}`;
+    case "page_url_match": {
+      const patterns = (cfg["patterns"] as string[] | undefined) ?? (cfg["pattern"] ? [cfg["pattern"] as string] : []);
+      return `URL: ${patterns.join(" かつ ")}`;
+    }
     default:                return "";
   }
 }
@@ -257,31 +260,79 @@ function ConfigForm({
   }
 
   if (triggerType === "page_url_match") {
-    const v = (config["pattern"] as string) ?? "";
+    // GID 1216275373432737: 複数URLパターンのAND条件（セッション内で全パターンを閲覧済みなら成立）
+    const patterns = (config["patterns"] as string[] | undefined) ?? (config["pattern"] ? [config["pattern"] as string] : [""]);
+    const setPatterns = (next: string[]) => onChange({ patterns: next, match_type: "glob" });
     return (
       <div>
-        <label style={{ fontSize: 13, color: "var(--muted-foreground)" }}>URLパターン（globで指定）</label>
-        <input
-          type="text"
-          value={v}
-          placeholder="/products/*"
-          onChange={(e) => onChange({ pattern: e.target.value, match_type: "glob" })}
-          style={{
-            display: "block",
-            marginTop: 10,
-            width: "100%",
-            padding: "12px 14px",
-            minHeight: 44,
-            background: "var(--muted)",
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            color: "var(--foreground)",
-            fontSize: 14,
-            boxSizing: "border-box",
-          }}
-        />
+        <label style={{ fontSize: 13, color: "var(--muted-foreground)" }}>URLパターン（globで指定・最大5件のAND条件）</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          {patterns.map((p, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {i > 0 && <span style={{ fontSize: 12, color: "var(--muted-foreground)", flexShrink: 0 }}>AND</span>}
+              <input
+                type="text"
+                value={p}
+                placeholder="/products/*"
+                onChange={(e) => {
+                  const next = [...patterns];
+                  next[i] = e.target.value;
+                  setPatterns(next);
+                }}
+                style={{
+                  flex: 1,
+                  padding: "12px 14px",
+                  minHeight: 44,
+                  background: "var(--muted)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  color: "var(--foreground)",
+                  fontSize: 14,
+                  boxSizing: "border-box",
+                }}
+              />
+              {patterns.length > 1 && (
+                <button
+                  onClick={() => setPatterns(patterns.filter((_, idx) => idx !== i))}
+                  style={{
+                    flexShrink: 0,
+                    width: 36,
+                    height: 36,
+                    borderRadius: 8,
+                    border: "1px solid var(--border)",
+                    background: "none",
+                    color: "var(--muted-foreground)",
+                    cursor: "pointer",
+                  }}
+                  aria-label="この条件を削除"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        {patterns.length < 5 && (
+          <button
+            onClick={() => setPatterns([...patterns, ""])}
+            style={{
+              marginTop: 10,
+              padding: "8px 14px",
+              minHeight: 36,
+              borderRadius: 8,
+              border: "1px dashed var(--border)",
+              background: "none",
+              color: "#60a5fa",
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            + AND条件を追加
+          </button>
+        )}
         <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 8 }}>
-          例: <code>/products/*</code>（商品一覧）、<code>/products/shoes/**</code>（靴カテゴリ以下全て）
+          例: <code>/products/*</code>（商品一覧）、<code>/products/shoes/**</code>（靴カテゴリ以下全て）。
+          複数指定すると、セッション中に全パターンのページを閲覧した場合のみ配信されます。
         </p>
       </div>
     );
@@ -398,10 +449,16 @@ export default function EngagementPage() {
   };
 
   const openEdit = (rule: TriggerRule) => {
+    // GID 1216275373432737: 旧形式（単一 pattern）のルールは編集画面を開いた時点で
+    // 新形式（patterns配列）へ正規化しておく（未変更のまま保存してもバリデーションが通るように）
+    let triggerConfig = rule.trigger_config;
+    if (rule.trigger_type === "page_url_match" && !triggerConfig["patterns"] && triggerConfig["pattern"]) {
+      triggerConfig = { patterns: [triggerConfig["pattern"] as string], match_type: triggerConfig["match_type"] ?? "glob" };
+    }
     setModal({
       step: 2,
       triggerType: rule.trigger_type,
-      triggerConfig: rule.trigger_config,
+      triggerConfig,
       messageTemplate: rule.message_template,
       priority: rule.priority,
       editId: rule.id,
@@ -485,15 +542,18 @@ export default function EngagementPage() {
       case "scroll_depth":    return { threshold: 75 };
       case "idle_time":       return { seconds: 30 };
       case "exit_intent":     return {};
-      case "page_url_match":  return { pattern: "/products/*", match_type: "glob" };
+      case "page_url_match":  return { patterns: ["/products/*"], match_type: "glob" };
     }
   };
 
+  const urlMatchPatterns =
+    (modal.triggerConfig["patterns"] as string[] | undefined) ??
+    (modal.triggerConfig["pattern"] ? [modal.triggerConfig["pattern"] as string] : []);
   const canSave =
     modal.triggerType &&
     modal.messageTemplate.trim().length > 0 &&
     (modal.triggerType !== "page_url_match" ||
-      (modal.triggerConfig["pattern"] as string | undefined)?.trim());
+      (urlMatchPatterns.length > 0 && urlMatchPatterns.every((p) => p.trim().length > 0)));
 
   return (
     <div style={PAGE}>
