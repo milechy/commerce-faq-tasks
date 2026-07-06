@@ -9,6 +9,14 @@ import { chargeOneOffJpy } from '../../../lib/billing/stripeSync';
 import { createNotification } from '../../../lib/notifications';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import {
+  listSaiRules,
+  approveSaiRule,
+  rejectSaiRule,
+  getActiveSaiRulesForTenant,
+  matchesSaiTriggerPattern,
+  buildSaiPromptSection,
+} from '../../../lib/sai/saiTaskRulesRepository';
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
@@ -80,6 +88,7 @@ async function checkSaiMonthlyCostCeiling(pool: any): Promise<{ ok: true } | { o
 
 export function registerOptionRoutes(app: Express): void {
   app.use('/v1/admin/options', supabaseAuthMiddleware);
+  app.use('/v1/admin/sai-rules', supabaseAuthMiddleware);
 
   // -------------------------------------------------------------------------
   // GET /v1/admin/options
@@ -371,16 +380,28 @@ export function registerOptionRoutes(app: Express): void {
       }
 
       const orderResult = await pool.query(
-        `SELECT id, description FROM option_orders WHERE id = $1`,
+        `SELECT id, tenant_id, description FROM option_orders WHERE id = $1`,
         [id],
       );
       if (orderResult.rowCount === 0) {
         return res.status(404).json({ error: '発注が見つかりません' });
       }
-      const order = orderResult.rows[0] as { id: string; description: string };
+      const order = orderResult.rows[0] as { id: string; tenant_id: string; description: string };
+
+      // Phase6 (Sai Judge学習ループ): 承認済みルールがあれば作業内容に注入する。
+      // ルールが0件(現状)なら buildSaiPromptSection は空文字を返し、既存の挙動と完全に同じになる。
+      let description = order.description;
+      try {
+        const activeRules = await getActiveSaiRulesForTenant(order.tenant_id);
+        const matched = activeRules.filter((r) => matchesSaiTriggerPattern(order.description, r.trigger_pattern));
+        const guidance = buildSaiPromptSection(matched);
+        if (guidance) description = `${guidance}\n\n${order.description}`;
+      } catch (err: any) {
+        if (err?.code !== '42P01') logger.warn('[POST /v1/admin/options/:id/try-sai] sai_task_rules lookup failed', err);
+      }
 
       const { task_id } = await submitSaiTask({
-        description: order.description,
+        description,
         orderId: order.id,
         maxSteps: max_steps,
       });
@@ -468,6 +489,73 @@ export function registerOptionRoutes(app: Express): void {
       }
       logger.warn('[GET /v1/admin/options/:id/sai-task]', err);
       return res.status(502).json({ error: 'Saiエージェントの状態取得に失敗しました' });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase6 (Sai Judge学習ループ): sai_task_rules 一覧・承認・却下
+  // 現時点ではルールを自動提案するSai Judge本体は未実装(実行ログが十分に
+  // 蓄積してから着手)。ここでは配線(一覧・承認・却下・注入)のみを用意し、
+  // ルールが0件の間は何も注入せず既存の挙動と完全に同じになる。
+  // -------------------------------------------------------------------------
+
+  app.get('/v1/admin/sai-rules', async (req: Request, res: Response) => {
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
+    if (!isSuperAdmin) {
+      return denyInsufficient(req, res, su, role);
+    }
+
+    const source = req.query['source'] as string | undefined;
+    const status = req.query['status'] as string | undefined;
+
+    try {
+      const rules = await listSaiRules(undefined, { source, status });
+      return res.json({ items: rules });
+    } catch (err: any) {
+      if (err?.code === '42P01') return res.json({ items: [] });
+      logger.warn('[GET /v1/admin/sai-rules]', err);
+      return res.status(500).json({ error: 'ルール一覧の取得に失敗しました' });
+    }
+  });
+
+  app.put('/v1/admin/sai-rules/:id/approve', async (req: Request, res: Response) => {
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
+    if (!isSuperAdmin) {
+      return denyInsufficient(req, res, su, role);
+    }
+
+    try {
+      const rule = await approveSaiRule(Number(req.params['id']));
+      if (!rule) return res.status(404).json({ error: 'ルールが見つかりません' });
+      return res.json({ item: rule });
+    } catch (err: any) {
+      logger.warn('[PUT /v1/admin/sai-rules/:id/approve]', err);
+      return res.status(500).json({ error: '承認に失敗しました' });
+    }
+  });
+
+  app.put('/v1/admin/sai-rules/:id/reject', async (req: Request, res: Response) => {
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
+    if (!isSuperAdmin) {
+      return denyInsufficient(req, res, su, role);
+    }
+
+    try {
+      const rule = await rejectSaiRule(Number(req.params['id']));
+      if (!rule) return res.status(404).json({ error: 'ルールが見つかりません' });
+      return res.json({ item: rule });
+    } catch (err: any) {
+      logger.warn('[PUT /v1/admin/sai-rules/:id/reject]', err);
+      return res.status(500).json({ error: '却下に失敗しました' });
     }
   });
 }

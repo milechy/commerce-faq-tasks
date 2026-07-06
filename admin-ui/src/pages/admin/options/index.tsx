@@ -45,6 +45,19 @@ interface SaiTask {
   final_screenshot_base64?: string;
 }
 
+interface SaiTaskRule {
+  id: number;
+  tenant_id: string;
+  trigger_pattern: string;
+  expected_behavior: string;
+  priority: number;
+  is_active: boolean;
+  status: string;
+  source: string;
+  evidence: { taskIds?: string[]; orderIds?: string[]; outcome?: string; note?: string } | null;
+  created_at: string;
+}
+
 const SAI_OUTCOME_LABEL: Record<string, string> = {
   agent_reported_done: "Saiが完了を報告",
   agent_reported_fail: "Saiが失敗を報告",
@@ -161,6 +174,8 @@ export default function OptionManagementPage() {
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>💼 代行作業の依頼・管理</h1>
         <p style={{ fontSize: 13, color: TEXT_SUB, marginBottom: 20 }}>テナントから依頼された代行作業の管理・金額確定・完了処理を行います</p>
+
+        <SaiRulesPanel />
 
         {/* フィルタータブ */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -726,6 +741,108 @@ function SaiSection({ orderId }: { orderId: string }) {
               )}
             </>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase6 (Sai Judge学習ループ): 提案ルールの承認キュー
+//
+// 現時点ではルールを自動提案するSai Judge本体は未実装(実行ログが十分に蓄積
+// してから着手予定)のため、通常は「提案されたルールはありません」の空状態になる。
+// 承認・却下の配線と注入経路(saiClient呼び出し前のtry-saiハンドラ)だけを
+// 先行して用意しておく。
+// ---------------------------------------------------------------------------
+
+function SaiRulesPanel() {
+  const BORDER = "var(--border)";
+  const TEXT_MAIN = "var(--foreground)";
+  const TEXT_SUB = "var(--muted-foreground)";
+
+  const [rules, setRules] = useState<SaiTaskRule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [processingId, setProcessingId] = useState<number | null>(null);
+
+  const fetchRules = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/sai-rules?status=pending`);
+      if (!res.ok) return;
+      const data = await res.json() as { items: SaiTaskRule[] };
+      setRules(data.items ?? []);
+    } catch {
+      // silent
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void fetchRules(); }, [fetchRules]);
+
+  const handleDecision = async (id: number, action: "approve" | "reject") => {
+    setProcessingId(id);
+    try {
+      await authFetch(`${API_BASE}/v1/admin/sai-rules/${id}/${action}`, { method: "PUT" });
+      setRules((prev) => prev.filter((r) => r.id !== id));
+    } catch {
+      // silent
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  if (loading || rules.length === 0) return null; // 空状態はページを圧迫しないよう非表示
+
+  return (
+    <div style={{ marginBottom: 20, border: `1px solid ${BORDER}`, borderRadius: 10, overflow: "hidden" }}>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "12px 16px", background: "transparent", border: "none", cursor: "pointer",
+          color: TEXT_MAIN, fontSize: 14, fontWeight: 600,
+        }}
+      >
+        <span>🧠 Sai提案ルール — 承認待ち {rules.length}件</span>
+        <span style={{ color: TEXT_SUB, fontSize: 12 }}>{expanded ? "▲ 閉じる" : "▼ 開く"}</span>
+      </button>
+      {expanded && (
+        <div style={{ padding: "0 16px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {rules.map((rule) => (
+            <div key={rule.id} style={{ border: `1px solid ${BORDER}`, borderRadius: 8, padding: 12 }}>
+              <p style={{ fontSize: 12, color: TEXT_SUB, margin: "0 0 4px" }}>トリガー</p>
+              <p style={{ fontSize: 13, color: TEXT_MAIN, margin: "0 0 8px" }}>「{rule.trigger_pattern}」</p>
+              <p style={{ fontSize: 12, color: TEXT_SUB, margin: "0 0 4px" }}>提案内容</p>
+              <p style={{ fontSize: 13, color: TEXT_MAIN, margin: "0 0 10px", lineHeight: 1.6 }}>{rule.expected_behavior}</p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => void handleDecision(rule.id, "approve")}
+                  disabled={processingId === rule.id}
+                  style={{
+                    flex: 1, padding: "8px 14px", borderRadius: 8, border: "1px solid rgba(74,222,128,0.4)",
+                    background: "rgba(34,197,94,0.15)", color: "#4ade80", fontSize: 13, fontWeight: 600,
+                    cursor: processingId === rule.id ? "not-allowed" : "pointer", opacity: processingId === rule.id ? 0.6 : 1, minHeight: 36,
+                  }}
+                >
+                  ✅ 承認
+                </button>
+                <button
+                  onClick={() => void handleDecision(rule.id, "reject")}
+                  disabled={processingId === rule.id}
+                  style={{
+                    flex: 1, padding: "8px 14px", borderRadius: 8, border: "1px solid rgba(248,113,113,0.4)",
+                    background: "rgba(239,68,68,0.15)", color: "#f87171", fontSize: 13, fontWeight: 600,
+                    cursor: processingId === rule.id ? "not-allowed" : "pointer", opacity: processingId === rule.id ? 0.6 : 1, minHeight: 36,
+                  }}
+                >
+                  ❌ 却下
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

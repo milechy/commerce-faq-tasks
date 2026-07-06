@@ -34,6 +34,22 @@ jest.mock('../../../lib/billing/usageTracker', () => ({
   trackUsage: (...args: unknown[]) => mockTrackUsage(...args),
 }));
 
+// Phase6 (Sai Judge学習ループ): デフォルトはルール0件(=現状データなし)で既存挙動と同じにする
+const mockGetActiveSaiRulesForTenant = jest.fn().mockResolvedValue([]);
+const mockListSaiRules = jest.fn();
+const mockApproveSaiRule = jest.fn();
+const mockRejectSaiRule = jest.fn();
+jest.mock('../../../lib/sai/saiTaskRulesRepository', () => {
+  const actual = jest.requireActual('../../../lib/sai/saiTaskRulesRepository');
+  return {
+    ...actual,
+    getActiveSaiRulesForTenant: (...args: unknown[]) => mockGetActiveSaiRulesForTenant(...args),
+    listSaiRules: (...args: unknown[]) => mockListSaiRules(...args),
+    approveSaiRule: (...args: unknown[]) => mockApproveSaiRule(...args),
+    rejectSaiRule: (...args: unknown[]) => mockRejectSaiRule(...args),
+  };
+});
+
 function makeApp(role = 'client_admin', tenantId = 'tenant-x') {
   const app = express();
   app.use(express.json());
@@ -75,7 +91,7 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
   });
 
   it('Saiにタスクを投げ、sai_task_idを保存して202を返す', async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', description: 'FAQ登録代行' }] });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'FAQ登録代行' }] });
     mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
     mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // sai_task_id UPDATE
 
@@ -90,6 +106,32 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
       expect.stringContaining('UPDATE option_orders SET sai_task_id'),
       ['order-1', 'sai-task-1'],
     );
+  });
+
+  it('Phase6: 承認済みルールが0件なら作業内容はそのまま渡す(現状のデフォルト挙動)', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'FAQ登録代行' }] });
+    mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(mockGetActiveSaiRulesForTenant).toHaveBeenCalledWith('tenant-x');
+    expect(mockSubmitSaiTask).toHaveBeenCalledWith(expect.objectContaining({ description: 'FAQ登録代行' }));
+  });
+
+  it('Phase6: trigger_patternが一致する承認済みルールがあれば作業内容の先頭に注入する', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'FAQ登録代行をお願いします' }] });
+    mockGetActiveSaiRulesForTenant.mockResolvedValueOnce([
+      { id: 1, tenant_id: 'tenant-x', trigger_pattern: 'FAQ登録', expected_behavior: '保存ボタンは画面右上にある', priority: 0, is_active: true, status: 'active', source: 'sai_judge', evidence: null, created_by: null, approved_at: null, rejected_at: null, created_at: '', updated_at: '' },
+    ]);
+    mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    const sentDescription = mockSubmitSaiTask.mock.calls[0]![0].description as string;
+    expect(sentDescription).toContain('保存ボタンは画面右上にある');
+    expect(sentDescription).toContain('FAQ登録代行をお願いします');
   });
 
   it('SAI_MONTHLY_COST_CEILING_CENTS未設定時は上限チェックをスキップする(デフォルト無制限)', async () => {
@@ -201,5 +243,59 @@ describe('GET /v1/admin/options/:id/sai-task', () => {
         saiAgentSteps: 3,
       }),
     );
+  });
+});
+
+describe('Phase6 (Sai Judge学習ループ): /v1/admin/sai-rules', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetActiveSaiRulesForTenant.mockResolvedValue([]);
+  });
+
+  it('GET: super_admin以外は403', async () => {
+    const res = await request(makeApp()).get('/v1/admin/sai-rules');
+    expect(res.status).toBe(403);
+  });
+
+  it('GET: ルール一覧を返す(source/statusフィルタをクエリから渡す)', async () => {
+    mockListSaiRules.mockResolvedValueOnce([{ id: 1, trigger_pattern: 'x', expected_behavior: 'y' }]);
+
+    const res = await request(superAdminApp()).get('/v1/admin/sai-rules?source=sai_judge&status=pending');
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(mockListSaiRules).toHaveBeenCalledWith(undefined, { source: 'sai_judge', status: 'pending' });
+  });
+
+  it('PUT /:id/approve: super_admin以外は403', async () => {
+    const res = await request(makeApp()).put('/v1/admin/sai-rules/1/approve');
+    expect(res.status).toBe(403);
+    expect(mockApproveSaiRule).not.toHaveBeenCalled();
+  });
+
+  it('PUT /:id/approve: ルールを承認する', async () => {
+    mockApproveSaiRule.mockResolvedValueOnce({ id: 1, status: 'active', is_active: true });
+
+    const res = await request(superAdminApp()).put('/v1/admin/sai-rules/1/approve');
+
+    expect(res.status).toBe(200);
+    expect(res.body.item.status).toBe('active');
+    expect(mockApproveSaiRule).toHaveBeenCalledWith(1);
+  });
+
+  it('PUT /:id/approve: 存在しないルールは404', async () => {
+    mockApproveSaiRule.mockResolvedValueOnce(null);
+    const res = await request(superAdminApp()).put('/v1/admin/sai-rules/999/approve');
+    expect(res.status).toBe(404);
+  });
+
+  it('PUT /:id/reject: ルールを却下する', async () => {
+    mockRejectSaiRule.mockResolvedValueOnce({ id: 1, status: 'rejected', is_active: false });
+
+    const res = await request(superAdminApp()).put('/v1/admin/sai-rules/1/reject');
+
+    expect(res.status).toBe(200);
+    expect(res.body.item.status).toBe('rejected');
+    expect(mockRejectSaiRule).toHaveBeenCalledWith(1);
   });
 });
