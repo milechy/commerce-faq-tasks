@@ -167,7 +167,7 @@ app.use(
         "default-src 'self'",
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.tailwindcss.com",
         "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com",
-        "img-src 'self' data: https://cdn.leonardo.ai",
+        "img-src 'self' data: https://cdn.leonardo.ai https://rpqrwifbrhlebbelyqog.supabase.co",
         "connect-src 'self' https://api.r2c.biz wss://*.livekit.cloud",
         "media-src 'self' https: blob:",
         "frame-ancestors 'self'",
