@@ -524,6 +524,51 @@ describe('calculateBillingAmountCents: imageCount', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase3 (Sai接続ブリッジ): saiAgentSteps コスト組み込み
+// ---------------------------------------------------------------------------
+describe('calculateBillingAmountCents: saiAgentSteps', () => {
+  it('saiAgentSteps=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({
+      model: 'agent-s', inputTokens: 0, outputTokens: 0,
+    });
+    const withZero = calculateBillingAmountCents({
+      model: 'agent-s', inputTokens: 0, outputTokens: 0, saiAgentSteps: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('saiAgentSteps=3: SAI_AGENT_COST_PER_STEP_USD(デフォルト$0.05)の3ステップ分が加算される', () => {
+    // serverCost=0.0001, saiCost=3*0.05=0.15 → total=0.1501 USD → Math.ceil(15.01) = 16 cents
+    const result = calculateBillingAmountCents({
+      model: 'agent-s', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'sai_agent', saiAgentSteps: 3,
+    });
+    expect(result).toBe(16);
+  });
+
+  it('featureUsed=sai_agentはEND_USER_FEATURESに含まれないため原価のみ(×1)', () => {
+    const withMargin = calculateBillingAmountCents({
+      model: 'agent-s', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'sai_agent', saiAgentSteps: 1, marginOverride: 5,
+    });
+    const atCost = calculateBillingAmountCents({
+      model: 'agent-s', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'sai_agent', saiAgentSteps: 1,
+    });
+    // marginOverride を明示しない限り管理機能扱いで×1、明示すればそちらが優先される
+    expect(atCost).toBeLessThan(withMargin);
+  });
+
+  it('整数を返す', () => {
+    const result = calculateBillingAmountCents({
+      model: 'agent-s', inputTokens: 0, outputTokens: 0,
+      saiAgentSteps: 7,
+    });
+    expect(Number.isInteger(result)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase53: END_USER_FEATURES 定数チェック
 // ---------------------------------------------------------------------------
 describe('END_USER_FEATURES', () => {

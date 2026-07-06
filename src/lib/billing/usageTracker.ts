@@ -4,7 +4,7 @@
 import type pino from 'pino';
 import { calculateLLMCostCents, calculateBillingAmountCents, normalizeModelKey } from './costCalculator';
 
-export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'option_service' | 'premium_avatar_generation' | 'admin_agent';
+export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent';
 
 export interface TrackUsageParams {
   tenantId: string;
@@ -30,6 +30,8 @@ export interface TrackUsageParams {
    * モデル別の実レートで本行のコストに内包する（別 usage_log を作らず請求リクエスト数を保つ）。
    */
   extraLlmUsages?: Array<{ model: string; inputTokens: number; outputTokens: number }>;
+  /** Phase3 (Sai接続ブリッジ): Agent Sが実行したステップ数（社内原価集計のみ） */
+  saiAgentSteps?: number;
 }
 
 let _pool: any | null = null;
@@ -59,7 +61,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
   const {
     tenantId, requestId, model, inputTokens, outputTokens,
     featureUsed, marginOverride, ttsTextBytes, avatarCredits, avatarSessionMs, imageCount,
-    anam_session_seconds, extraLlmUsages,
+    anam_session_seconds, extraLlmUsages, saiAgentSteps,
   } = params;
 
   // Subtask 3: 追加 LLM（planner 等）に価格表に無いモデルが来た場合、コストは 0 計上になる。
@@ -82,7 +84,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     costTotalCents = calculateBillingAmountCents({
       model, inputTokens, outputTokens, marginOverride,
       ttsTextBytes, avatarCredits, avatarSessionMs,
-      featureUsed, imageCount, anam_session_seconds, extraLlmUsages,
+      featureUsed, imageCount, anam_session_seconds, extraLlmUsages, saiAgentSteps,
     });
   } catch (err) {
     _logger?.warn({ err, requestId }, '[usageTracker] cost calculation error, defaulting to 0');
