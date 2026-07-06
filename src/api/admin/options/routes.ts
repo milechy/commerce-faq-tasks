@@ -86,6 +86,61 @@ async function checkSaiMonthlyCostCeiling(pool: any): Promise<{ ok: true } | { o
   return { ok: true };
 }
 
+export type SaiAttemptResult =
+  | { ok: true; task_id: string }
+  | { ok: false; reason: 'ceiling' | 'not_configured' | 'api_error'; error: string };
+
+/**
+ * R2Cエージェント(Sai)への試行を実行する共通処理。
+ * 手動の「R2Cエージェントに依頼する」ボタン(try-sai)と、発注作成時の自動試行の
+ * 両方から呼ばれる。表示テキストは常に「R2Cエージェント」("Sai"という名称は出さない)。
+ */
+async function attemptSaiForOrder(
+  pool: any,
+  order: { id: string; tenant_id: string; description: string },
+  maxSteps?: number,
+): Promise<SaiAttemptResult> {
+  const ceilingCheck = await checkSaiMonthlyCostCeiling(pool);
+  if (!ceilingCheck.ok) {
+    logger.warn({ event: 'sai_cost_ceiling_blocked', ...ceilingCheck }, 'Sai attempt blocked: monthly cost ceiling reached');
+    return { ok: false, reason: 'ceiling', error: 'R2Cエージェント利用の月次コスト上限に達しています。管理者に確認してください。' };
+  }
+
+  // Phase6 (Sai Judge学習ループ): 承認済みルールがあれば作業内容に注入する。
+  // ルールが0件(現状)なら buildSaiPromptSection は空文字を返し、既存の挙動と完全に同じになる。
+  let description = order.description;
+  try {
+    const activeRules = await getActiveSaiRulesForTenant(order.tenant_id);
+    const matched = activeRules.filter((r) => matchesSaiTriggerPattern(order.description, r.trigger_pattern));
+    const guidance = buildSaiPromptSection(matched);
+    if (guidance) description = `${guidance}\n\n${order.description}`;
+  } catch (err: any) {
+    if (err?.code !== '42P01') logger.warn('[attemptSaiForOrder] sai_task_rules lookup failed', err);
+  }
+
+  try {
+    const { task_id } = await submitSaiTask({ description, orderId: order.id, maxSteps });
+
+    await pool
+      .query(
+        `UPDATE option_orders SET sai_task_id = $2, sai_outcome = NULL, sai_tried_at = NOW() WHERE id = $1`,
+        [order.id, task_id],
+      )
+      .catch((err: any) => {
+        if (err?.code !== '42703') throw err;
+        logger.warn('[attemptSaiForOrder] sai_* columns not migrated yet');
+      });
+
+    return { ok: true, task_id };
+  } catch (err: any) {
+    if (err?.message === 'SAI_API_KEY not set') {
+      return { ok: false, reason: 'not_configured', error: 'R2Cエージェントが設定されていません' };
+    }
+    logger.warn('[attemptSaiForOrder]', err);
+    return { ok: false, reason: 'api_error', error: 'R2Cエージェントへの依頼に失敗しました' };
+  }
+}
+
 export function registerOptionRoutes(app: Express): void {
   app.use('/v1/admin/options', supabaseAuthMiddleware);
   app.use('/v1/admin/sai-rules', supabaseAuthMiddleware);
@@ -195,7 +250,25 @@ export function registerOptionRoutes(app: Express): void {
         throw err;
       });
 
-      return res.status(201).json({ item: (result as any).rows[0] });
+      const order = (result as any).rows[0];
+
+      // R2Cエージェント(Sai) → 人間、の流れ: 一般作業は発注と同時に自動でR2Cエージェントに
+      // 試行させる(テナントへのレスポンスは待たせない fire-and-forget)。
+      // プレミアムアバター等は専用パイプラインがあるためGUI自動化の対象外。
+      if (orderType === 'general') {
+        const pool = getPool();
+        setImmediate(() => {
+          void attemptSaiForOrder(pool, { id: order.id, tenant_id: order.tenant_id, description: order.description })
+            .then((r) => {
+              if (!r.ok) {
+                logger.info({ event: 'sai_auto_attempt_skipped', orderId: order.id, reason: r.reason }, 'auto Sai attempt not started');
+              }
+            })
+            .catch((err: any) => logger.warn('[POST /v1/admin/options] auto sai attempt failed', err));
+        });
+      }
+
+      return res.status(201).json({ item: order });
     } catch (err: any) {
       logger.warn('[POST /v1/admin/options]', err);
       return res.status(500).json({ error: 'オプション発注の作成に失敗しました' });
@@ -373,12 +446,6 @@ export function registerOptionRoutes(app: Express): void {
     try {
       const pool = getPool();
 
-      const ceilingCheck = await checkSaiMonthlyCostCeiling(pool);
-      if (!ceilingCheck.ok) {
-        logger.warn({ event: 'sai_cost_ceiling_blocked', ...ceilingCheck }, 'try-sai blocked: monthly cost ceiling reached');
-        return res.status(429).json({ error: 'Sai利用の月次コスト上限に達しています。管理者に確認してください。' });
-      }
-
       const orderResult = await pool.query(
         `SELECT id, tenant_id, description FROM option_orders WHERE id = $1`,
         [id],
@@ -388,41 +455,16 @@ export function registerOptionRoutes(app: Express): void {
       }
       const order = orderResult.rows[0] as { id: string; tenant_id: string; description: string };
 
-      // Phase6 (Sai Judge学習ループ): 承認済みルールがあれば作業内容に注入する。
-      // ルールが0件(現状)なら buildSaiPromptSection は空文字を返し、既存の挙動と完全に同じになる。
-      let description = order.description;
-      try {
-        const activeRules = await getActiveSaiRulesForTenant(order.tenant_id);
-        const matched = activeRules.filter((r) => matchesSaiTriggerPattern(order.description, r.trigger_pattern));
-        const guidance = buildSaiPromptSection(matched);
-        if (guidance) description = `${guidance}\n\n${order.description}`;
-      } catch (err: any) {
-        if (err?.code !== '42P01') logger.warn('[POST /v1/admin/options/:id/try-sai] sai_task_rules lookup failed', err);
+      const result = await attemptSaiForOrder(pool, order, max_steps);
+      if (!result.ok) {
+        const status = result.reason === 'ceiling' ? 429 : result.reason === 'not_configured' ? 503 : 502;
+        return res.status(status).json({ error: result.error });
       }
 
-      const { task_id } = await submitSaiTask({
-        description,
-        orderId: order.id,
-        maxSteps: max_steps,
-      });
-
-      await pool
-        .query(
-          `UPDATE option_orders SET sai_task_id = $2, sai_outcome = NULL, sai_tried_at = NOW() WHERE id = $1`,
-          [id, task_id],
-        )
-        .catch((err: any) => {
-          if (err?.code !== '42703') throw err;
-          logger.warn('[POST /v1/admin/options/:id/try-sai] sai_* columns not migrated yet');
-        });
-
-      return res.status(202).json({ task_id, status: 'queued' });
+      return res.status(202).json({ task_id: result.task_id, status: 'queued' });
     } catch (err: any) {
-      if (err?.message === 'SAI_API_KEY not set') {
-        return res.status(503).json({ error: 'Saiエージェントが設定されていません' });
-      }
       logger.warn('[POST /v1/admin/options/:id/try-sai]', err);
-      return res.status(502).json({ error: 'Saiエージェントへの依頼に失敗しました' });
+      return res.status(502).json({ error: 'R2Cエージェントへの依頼に失敗しました' });
     }
   });
 
@@ -454,7 +496,7 @@ export function registerOptionRoutes(app: Express): void {
       const orderRow = orderResult.rows[0] as { tenant_id?: string; sai_task_id?: string } | undefined;
       const saiTaskId = orderRow?.sai_task_id;
       if (!saiTaskId) {
-        return res.status(404).json({ error: 'この発注はまだSaiで試行されていません' });
+        return res.status(404).json({ error: 'この発注はまだR2Cエージェントで試行されていません' });
       }
 
       const task = await getSaiTask(saiTaskId);
@@ -485,10 +527,10 @@ export function registerOptionRoutes(app: Express): void {
       return res.json({ task });
     } catch (err: any) {
       if (err?.message === 'SAI_API_KEY not set') {
-        return res.status(503).json({ error: 'Saiエージェントが設定されていません' });
+        return res.status(503).json({ error: 'R2Cエージェントが設定されていません' });
       }
       logger.warn('[GET /v1/admin/options/:id/sai-task]', err);
-      return res.status(502).json({ error: 'Saiエージェントの状態取得に失敗しました' });
+      return res.status(502).json({ error: 'R2Cエージェントの状態取得に失敗しました' });
     }
   });
 

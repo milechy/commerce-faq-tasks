@@ -20,13 +20,40 @@ jest.mock('../../../lib/notifications', () => ({
   createNotification: jest.fn(),
 }));
 
-const mockQuery = jest.fn();
+// R2Cエージェント自動試行(fire-and-forget)の副次クエリ等、テストが個別に
+// mockResolvedValueOnceを積んでいない呼び出しがあっても例外にならないよう
+// 無害なデフォルトを設定しておく(clearAllMocksでは消えない永続デフォルト)。
+const mockQuery = jest.fn().mockResolvedValue({ rowCount: 0, rows: [] });
 jest.mock('../../../lib/db', () => ({
   getPool: () => ({ query: mockQuery }),
 }));
 
+// R2Cエージェント(Sai) → 人間 自動試行(発注作成時のfire-and-forget)が
+// 実際のSai VPSへネットワーク接続しないよう必ずモックする。
+const mockSubmitSaiTask = jest.fn().mockResolvedValue({ task_id: 'sai-task-auto', status: 'queued' });
+jest.mock('../../../lib/sai/saiClient', () => ({
+  submitSaiTask: (...args: unknown[]) => mockSubmitSaiTask(...args),
+  getSaiTask: jest.fn(),
+}));
+jest.mock('../../../lib/sai/saiTaskRulesRepository', () => ({
+  getActiveSaiRulesForTenant: jest.fn().mockResolvedValue([]),
+  matchesSaiTriggerPattern: jest.fn().mockReturnValue(false),
+  buildSaiPromptSection: jest.fn().mockReturnValue(''),
+  listSaiRules: jest.fn(),
+  approveSaiRule: jest.fn(),
+  rejectSaiRule: jest.fn(),
+}));
+
 import { createNotification } from '../../../lib/notifications';
 const mockCreateNotification = createNotification as jest.Mock;
+// fire-and-forgetのattemptSaiForOrderは複数回のawaitを挟むため、
+// 1回のsetImmediateだけでは完全に完了しない。次のテストのjest.clearAllMocks()より
+// 前に必ず完了させるため、複数サイクル分flushする。
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
 
 // ── ヘルパー ───────────────────────────────────────────────────────────────────
 
@@ -101,6 +128,7 @@ describe('option_orders API', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.item.id).toBe('new-order-1');
+      await flushAsync(); // R2Cエージェント自動試行のfire-and-forgetを完了させてから次のテストへ
     });
 
     it('type=premium_avatar で注文を作成できる', async () => {
@@ -127,6 +155,51 @@ describe('option_orders API', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('description');
+    });
+
+    it('R2Cエージェント(Sai)→人間: 通常注文は作成と同時に自動でR2Cエージェントに試行させる', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'new-order-1', tenant_id: 'tenant-x', description: 'FAQ登録代行', type: 'general', status: 'pending' }],
+      });
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // sai_task_id UPDATE (fire-and-forget側)
+
+      const res = await request(makeApp())
+        .post('/v1/admin/options')
+        .send({ description: 'FAQ登録代行', llm_estimate_amount: 10000 });
+
+      expect(res.status).toBe(201);
+      await flushAsync();
+      expect(mockSubmitSaiTask).toHaveBeenCalledWith(
+        expect.objectContaining({ description: 'FAQ登録代行', orderId: 'new-order-1' }),
+      );
+    });
+
+    it('プレミアムアバター注文は自動試行の対象外(専用パイプラインのため)', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'premium-order-1', tenant_id: 'tenant-x', description: 'プレミアムアバター制作代行', type: 'premium_avatar', status: 'pending' }],
+      });
+
+      const res = await request(makeApp())
+        .post('/v1/admin/options')
+        .send({ description: 'プレミアムアバター制作代行', llm_estimate_amount: 5000, type: 'premium_avatar' });
+
+      expect(res.status).toBe(201);
+      await flushAsync();
+      expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+    });
+
+    it('自動試行が失敗してもテナントへのレスポンス(201)には影響しない', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'new-order-2', tenant_id: 'tenant-x', description: 'FAQ登録代行', type: 'general', status: 'pending' }],
+      });
+      mockSubmitSaiTask.mockRejectedValueOnce(new Error('SAI_API_KEY not set'));
+
+      const res = await request(makeApp())
+        .post('/v1/admin/options')
+        .send({ description: 'FAQ登録代行', llm_estimate_amount: 10000 });
+
+      expect(res.status).toBe(201);
+      await flushAsync();
     });
   });
 

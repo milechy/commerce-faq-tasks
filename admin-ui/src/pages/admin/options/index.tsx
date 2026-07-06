@@ -59,8 +59,8 @@ interface SaiTaskRule {
 }
 
 const SAI_OUTCOME_LABEL: Record<string, string> = {
-  agent_reported_done: "Saiが完了を報告",
-  agent_reported_fail: "Saiが失敗を報告",
+  agent_reported_done: "R2Cエージェントが完了を報告",
+  agent_reported_fail: "R2Cエージェントが失敗を報告",
   step_limit_reached: "ステップ上限に到達",
   error: "エラーで停止",
   unknown: "不明",
@@ -628,7 +628,7 @@ function SaiSection({ orderId }: { orderId: string }) {
       const res = await authFetch(`${API_BASE}/v1/admin/options/${orderId}/sai-task`);
       if (res.status === 404) return; // 未試行
       if (!res.ok) {
-        setError("Sai実行結果の取得に失敗しました");
+        setError("R2Cエージェントの実行結果の取得に失敗しました");
         return;
       }
       const data = await res.json() as { task: SaiTask };
@@ -637,7 +637,7 @@ function SaiSection({ orderId }: { orderId: string }) {
         pollTimer.current = setTimeout(() => { void fetchTask(true); }, 3000);
       }
     } catch {
-      setError("Sai実行結果の取得に失敗しました");
+      setError("R2Cエージェントの実行結果の取得に失敗しました");
     }
   }, [orderId]);
 
@@ -649,20 +649,20 @@ function SaiSection({ orderId }: { orderId: string }) {
   }, [orderId]);
 
   const handleTrySai = async () => {
-    if (!confirm("Saiエージェントにこの作業を試行させますか？\n実際にブラウザ操作等を行い、API利用コストが発生します。")) return;
+    if (!confirm("R2Cエージェントにこの作業を試行させますか？\n実際にブラウザ操作等を行い、API利用コストが発生します。")) return;
     setStarting(true);
     setError(null);
     try {
       const res = await authFetch(`${API_BASE}/v1/admin/options/${orderId}/try-sai`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError((body as { error?: string }).error ?? "Saiへの依頼に失敗しました");
+        setError((body as { error?: string }).error ?? "R2Cエージェントへの依頼に失敗しました");
         return;
       }
       clearPoll();
       void fetchTask(true);
     } catch {
-      setError("Saiへの依頼に失敗しました");
+      setError("R2Cエージェントへの依頼に失敗しました");
     } finally {
       setStarting(false);
     }
@@ -673,7 +673,7 @@ function SaiSection({ orderId }: { orderId: string }) {
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <p style={{ fontSize: 13, fontWeight: 600, color: TEXT_MAIN, margin: 0 }}>🤖 Sai(Agent S)による代行試行</p>
+        <p style={{ fontSize: 13, fontWeight: 600, color: TEXT_MAIN, margin: 0 }}>🤖 R2Cエージェントによる代行試行</p>
         <button
           onClick={() => void handleTrySai()}
           disabled={starting || !!isRunning}
@@ -684,7 +684,7 @@ function SaiSection({ orderId }: { orderId: string }) {
             opacity: starting || isRunning ? 0.6 : 1, minHeight: 32,
           }}
         >
-          {starting ? "依頼中..." : task ? "🔁 再試行" : "▶ Saiに依頼する"}
+          {starting ? "依頼中..." : task ? "🔁 再試行" : "▶ R2Cエージェントに依頼する"}
         </button>
       </div>
 
@@ -711,12 +711,12 @@ function SaiSection({ orderId }: { orderId: string }) {
           {task.status === "complete" && (
             <>
               <p style={{ fontSize: 11, color: "#fbbf24", margin: "0 0 8px" }}>
-                ⚠️ 上記は Sai の自己申告です。実際の成否は下のスクリーンショットを目視確認してから「完了マーク」で確定してください。
+                ⚠️ 上記は R2Cエージェントの自己申告です。実際の成否は下のスクリーンショットを目視確認してから「完了マーク」で確定してください。
               </p>
               {task.final_screenshot_base64 && (
                 <img
                   src={`data:image/png;base64,${task.final_screenshot_base64}`}
-                  alt="Sai実行後の最終スクリーンショット"
+                  alt="R2Cエージェント実行後の最終スクリーンショット"
                   style={{ width: "100%", borderRadius: 8, border: `1px solid ${BORDER}`, marginBottom: 8 }}
                 />
               )}
@@ -806,7 +806,7 @@ function SaiRulesPanel() {
           color: TEXT_MAIN, fontSize: 14, fontWeight: 600,
         }}
       >
-        <span>🧠 Sai提案ルール — 承認待ち {rules.length}件</span>
+        <span>🧠 R2Cエージェント提案ルール — 承認待ち {rules.length}件</span>
         <span style={{ color: TEXT_SUB, fontSize: 12 }}>{expanded ? "▲ 閉じる" : "▼ 開く"}</span>
       </button>
       {expanded && (

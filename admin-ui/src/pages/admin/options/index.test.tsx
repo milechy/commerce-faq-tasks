@@ -66,12 +66,12 @@ describe('OptionManagementPage — Sai(Agent S)セクション', () => {
     render(<OptionManagementPage />);
     await waitFor(() => expect(screen.queryByText('FAQ登録代行')).toBeTruthy());
     fireEvent.click(screen.getByText('FAQ登録代行'));
-    await waitFor(() => expect(screen.queryByText('▶ Saiに依頼する')).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText('▶ R2Cエージェントに依頼する')).toBeTruthy());
   }
 
   it('未試行の発注では「Saiに依頼する」ボタンが表示される', async () => {
     await openOrderDetail();
-    expect(screen.getByText('▶ Saiに依頼する')).toBeTruthy();
+    expect(screen.getByText('▶ R2Cエージェントに依頼する')).toBeTruthy();
   });
 
   it('依頼するとtry-saiを叩き、以後sai-taskをポーリングして状態を表示する', async () => {
@@ -87,7 +87,7 @@ describe('OptionManagementPage — Sai(Agent S)セクション', () => {
     });
 
     window.confirm = vi.fn().mockReturnValue(true);
-    fireEvent.click(screen.getByText('▶ Saiに依頼する'));
+    fireEvent.click(screen.getByText('▶ R2Cエージェントに依頼する'));
 
     await waitFor(() => expect(screen.queryByText('実行中')).toBeTruthy());
     expect(screen.getByText(/click\(100,200\)/)).toBeTruthy();
@@ -111,17 +111,17 @@ describe('OptionManagementPage — Sai(Agent S)セクション', () => {
     });
 
     window.confirm = vi.fn().mockReturnValue(true);
-    fireEvent.click(screen.getByText('▶ Saiに依頼する'));
+    fireEvent.click(screen.getByText('▶ R2Cエージェントに依頼する'));
 
-    await waitFor(() => expect(screen.queryByText('Saiが完了を報告')).toBeTruthy());
-    expect(screen.getByAltText('Sai実行後の最終スクリーンショット')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('R2Cエージェントが完了を報告')).toBeTruthy());
+    expect(screen.getByAltText('R2Cエージェント実行後の最終スクリーンショット')).toBeTruthy();
     expect(screen.getByText(/実際の成否は下のスクリーンショットを目視確認/)).toBeTruthy();
     // 完了マークボタンは既存のまま独立して存在する(Saiが自動で押すことはない)
     expect(screen.getByText('✅ 完了マーク')).toBeTruthy();
   });
 });
 
-describe('OptionManagementPage — Phase6 Sai提案ルール承認キュー', () => {
+describe('OptionManagementPage — Phase6 R2Cエージェント提案ルール承認キュー', () => {
   beforeEach(() => {
     vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN as ReturnType<typeof useAuth>);
     vi.mocked(authFetch).mockReset();
@@ -136,7 +136,7 @@ describe('OptionManagementPage — Phase6 Sai提案ルール承認キュー', ()
 
     render(<OptionManagementPage />);
     await waitFor(() => expect(screen.queryByText('該当する発注はありません')).toBeTruthy());
-    expect(screen.queryByText(/Sai提案ルール/)).toBeNull();
+    expect(screen.queryByText(/R2Cエージェント提案ルール/)).toBeNull();
   });
 
   it('承認待ちルールがある場合はパネルに件数を表示し、承認できる', async () => {
@@ -150,9 +150,9 @@ describe('OptionManagementPage — Phase6 Sai提案ルール承認キュー', ()
     });
 
     render(<OptionManagementPage />);
-    await waitFor(() => expect(screen.queryByText(/Sai提案ルール — 承認待ち 1件/)).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText(/R2Cエージェント提案ルール — 承認待ち 1件/)).toBeTruthy());
 
-    fireEvent.click(screen.getByText(/Sai提案ルール/));
+    fireEvent.click(screen.getByText(/R2Cエージェント提案ルール/));
     await waitFor(() => expect(screen.queryByText('「FAQ登録」')).toBeTruthy());
 
     fireEvent.click(screen.getByText('✅ 承認'));
