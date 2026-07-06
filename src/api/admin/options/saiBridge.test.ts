@@ -148,6 +148,7 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
 
   it('月次コスト上限に達している場合は429を返しSaiに依頼しない', async () => {
     process.env.SAI_MONTHLY_COST_CEILING_CENTS = '1000';
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'x' }] }); // 発注SELECT
     mockQuery.mockResolvedValueOnce({ rows: [{ total: '1000' }] }); // 上限チェックSELECT
 
     const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
@@ -158,8 +159,8 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
 
   it('月次コスト上限未満なら通常通りSaiに依頼する', async () => {
     process.env.SAI_MONTHLY_COST_CEILING_CENTS = '1000';
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'x' }] }); // 発注SELECT
     mockQuery.mockResolvedValueOnce({ rows: [{ total: '500' }] }); // 上限チェックSELECT
-    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', description: 'x' }] });
     mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
     mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
 
