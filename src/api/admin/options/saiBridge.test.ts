@@ -29,6 +29,11 @@ jest.mock('../../../lib/sai/saiClient', () => ({
   getSaiTask: (...args: unknown[]) => mockGetSaiTask(...args),
 }));
 
+const mockTrackUsage = jest.fn();
+jest.mock('../../../lib/billing/usageTracker', () => ({
+  trackUsage: (...args: unknown[]) => mockTrackUsage(...args),
+}));
+
 function makeApp(role = 'client_admin', tenantId = 'tenant-x') {
   const app = express();
   app.use(express.json());
@@ -113,19 +118,20 @@ describe('GET /v1/admin/options/:id/sai-task', () => {
   });
 
   it('実行中タスクの状態(スクリーンショットなし)を返す', async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ sai_task_id: 'sai-task-1' }] });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ tenant_id: 'tenant-x', sai_task_id: 'sai-task-1' }] });
     mockGetSaiTask.mockResolvedValueOnce({ status: 'running', steps: 2, description: 'x', max_steps: 15 });
 
     const res = await request(superAdminApp()).get('/v1/admin/options/order-1/sai-task');
 
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe('running');
-    // 完了前はDBを更新しない
+    // 完了前はDBを更新しない・課金記録もしない
     expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 
   it('完了タスクはfinal_screenshot_base64を含めて返し、sai_outcomeを保存する（自動完了はしない）', async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ sai_task_id: 'sai-task-1' }] });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ tenant_id: 'tenant-x', sai_task_id: 'sai-task-1' }] });
     mockGetSaiTask.mockResolvedValueOnce({
       status: 'complete', steps: 3, description: 'x', max_steps: 15,
       outcome: 'agent_reported_done', final_screenshot_base64: 'AAAA', steps_log: [],
@@ -141,5 +147,16 @@ describe('GET /v1/admin/options/:id/sai-task', () => {
       ['order-1', 'agent_reported_done'],
     );
     // status/final_amount/completed_atなどは一切更新しない = /complete エンドポイントとは別経路
+
+    // 社内原価集計: sai_agentとしてtrackUsageを呼ぶ(テナント請求には影響しない marginOverride:1)
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-x',
+        requestId: 'sai-task:sai-task-1',
+        featureUsed: 'sai_agent',
+        marginOverride: 1,
+        saiAgentSteps: 3,
+      }),
+    );
   });
 });

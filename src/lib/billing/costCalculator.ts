@@ -57,6 +57,13 @@ function calculateAnamSessionCostCents(sessionSeconds: number): number {
 /** Phase41: DALL-E 3 画像生成単価: $0.04/枚 */
 export const IMAGE_GENERATION_COST_USD = 0.04;
 
+/**
+ * Phase3 (Sai接続ブリッジ): GUI自動化エージェント1ステップあたりの原価見積もり(USD)。
+ * PoC時点ではClaude Opus(推論) + UI-TARS(grounding, OpenRouter経由)の実測コストが
+ * タスクの複雑さで大きく変動するため未確定(要検証)。env override で運用しながら調整する。
+ */
+export const SAI_AGENT_COST_PER_STEP_USD = Number(process.env.SAI_AGENT_COST_PER_STEP_USD ?? '0.05') || 0.05;
+
 export interface UsageRecord {
   model: string;
   inputTokens: number;
@@ -85,6 +92,8 @@ export interface UsageRecord {
    * 各要素はそれぞれ自分の model 単価で計算され、サーバーコストは加算しない。
    */
   extraLlmUsages?: Array<{ model: string; inputTokens: number; outputTokens: number }>;
+  /** Phase3 (Sai接続ブリッジ): Agent Sが実行したステップ数（社内原価集計のみ、テナント請求には使わない） */
+  saiAgentSteps?: number;
 }
 
 /** Subtask 3: 追加 LLM 呼び出し（planner 等）の LLM コストを USD 合算する（モデル別実レート）。 */
@@ -207,6 +216,7 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
   const anamUSD  = (usage.anam_session_seconds ?? 0) > 0
     ? calculateAnamSessionCostCents(usage.anam_session_seconds!) / 100
     : 0;
-  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD;
+  const saiUSD   = (usage.saiAgentSteps ?? 0) * SAI_AGENT_COST_PER_STEP_USD;
+  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD + saiUSD;
   return Math.ceil(totalUSD * margin * 100);
 }

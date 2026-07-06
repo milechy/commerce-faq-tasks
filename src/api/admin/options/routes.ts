@@ -8,6 +8,7 @@ import { logger } from '../../../lib/logger';
 import { chargeOneOffJpy } from '../../../lib/billing/stripeSync';
 import { createNotification } from '../../../lib/notifications';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
+import { trackUsage } from '../../../lib/billing/usageTracker';
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
@@ -394,14 +395,15 @@ export function registerOptionRoutes(app: Express): void {
     try {
       const pool = getPool();
       const orderResult = await pool.query(
-        `SELECT sai_task_id FROM option_orders WHERE id = $1`,
+        `SELECT tenant_id, sai_task_id FROM option_orders WHERE id = $1`,
         [id],
       ).catch((err: any) => {
         if (err?.code === '42703') return { rowCount: 0, rows: [] } as any;
         throw err;
       });
 
-      const saiTaskId = orderResult.rows[0]?.sai_task_id as string | undefined;
+      const orderRow = orderResult.rows[0] as { tenant_id?: string; sai_task_id?: string } | undefined;
+      const saiTaskId = orderRow?.sai_task_id;
       if (!saiTaskId) {
         return res.status(404).json({ error: 'この発注はまだSaiで試行されていません' });
       }
@@ -414,6 +416,21 @@ export function registerOptionRoutes(app: Express): void {
           .catch((err: any) => {
             if (err?.code !== '42703') throw err;
           });
+
+        // 社内原価集計のみ(テナント請求は既存の /complete → chargeOneOffJpy で完結)。
+        // requestIdをsai_task_idで固定し、再ポーリングでも二重計上しない(ON CONFLICT DO NOTHING)。
+        if (orderRow?.tenant_id) {
+          trackUsage({
+            tenantId: orderRow.tenant_id,
+            requestId: `sai-task:${saiTaskId}`,
+            model: 'agent-s',
+            inputTokens: 0,
+            outputTokens: 0,
+            featureUsed: 'sai_agent',
+            marginOverride: 1,
+            saiAgentSteps: task.steps,
+          });
+        }
       }
 
       return res.json({ task });
