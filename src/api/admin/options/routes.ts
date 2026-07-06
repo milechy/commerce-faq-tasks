@@ -57,6 +57,27 @@ function denyInsufficient(req: Request, res: Response, su: Record<string, any> |
   return res.status(403).json({ error: '権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
+// ---------------------------------------------------------------------------
+// Phase5 (Saiセキュリティ強化): 支出上限ガードレール
+// Sai VPS側の日次タスク数上限(SAI_MAX_TASKS_PER_DAY)とは独立した、
+// R2C本体側での月次コスト上限チェック(多層防御)。デフォルトOFF(未設定なら無制限)。
+// ---------------------------------------------------------------------------
+async function checkSaiMonthlyCostCeiling(pool: any): Promise<{ ok: true } | { ok: false; spentCents: number; ceilingCents: number }> {
+  const ceilingCents = Number(process.env.SAI_MONTHLY_COST_CEILING_CENTS ?? '0');
+  if (!ceilingCents || ceilingCents <= 0) return { ok: true };
+
+  const result = await pool.query(
+    `SELECT COALESCE(SUM(cost_total_cents), 0) AS total
+     FROM usage_logs
+     WHERE feature_used = 'sai_agent' AND created_at >= date_trunc('month', NOW())`,
+  );
+  const spentCents = parseInt(result.rows[0]?.total ?? '0', 10);
+  if (spentCents >= ceilingCents) {
+    return { ok: false, spentCents, ceilingCents };
+  }
+  return { ok: true };
+}
+
 export function registerOptionRoutes(app: Express): void {
   app.use('/v1/admin/options', supabaseAuthMiddleware);
 
@@ -342,6 +363,13 @@ export function registerOptionRoutes(app: Express): void {
 
     try {
       const pool = getPool();
+
+      const ceilingCheck = await checkSaiMonthlyCostCeiling(pool);
+      if (!ceilingCheck.ok) {
+        logger.warn({ event: 'sai_cost_ceiling_blocked', ...ceilingCheck }, 'try-sai blocked: monthly cost ceiling reached');
+        return res.status(429).json({ error: 'Sai利用の月次コスト上限に達しています。管理者に確認してください。' });
+      }
+
       const orderResult = await pool.query(
         `SELECT id, description FROM option_orders WHERE id = $1`,
         [id],

@@ -50,8 +50,16 @@ function superAdminApp() {
 }
 
 describe('POST /v1/admin/options/:id/try-sai', () => {
+  const savedCeiling = process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+  });
+
+  afterEach(() => {
+    if (savedCeiling === undefined) delete process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+    else process.env.SAI_MONTHLY_COST_CEILING_CENTS = savedCeiling;
   });
 
   it('super_admin以外は403', async () => {
@@ -82,6 +90,41 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
       expect.stringContaining('UPDATE option_orders SET sai_task_id'),
       ['order-1', 'sai-task-1'],
     );
+  });
+
+  it('SAI_MONTHLY_COST_CEILING_CENTS未設定時は上限チェックをスキップする(デフォルト無制限)', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', description: 'x' }] });
+    mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(res.status).toBe(202);
+    // 上限チェックのSELECTは発火しない(合計2回=発注SELECT+sai_task_id UPDATEのみ)
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('月次コスト上限に達している場合は429を返しSaiに依頼しない', async () => {
+    process.env.SAI_MONTHLY_COST_CEILING_CENTS = '1000';
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '1000' }] }); // 上限チェックSELECT
+
+    const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(res.status).toBe(429);
+    expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+  });
+
+  it('月次コスト上限未満なら通常通りSaiに依頼する', async () => {
+    process.env.SAI_MONTHLY_COST_CEILING_CENTS = '1000';
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '500' }] }); // 上限チェックSELECT
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', description: 'x' }] });
+    mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(res.status).toBe(202);
+    expect(mockSubmitSaiTask).toHaveBeenCalled();
   });
 
   it('SAI_API_KEY未設定時は503', async () => {
