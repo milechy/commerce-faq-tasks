@@ -120,3 +120,42 @@ describe('OptionManagementPage — Sai(Agent S)セクション', () => {
     expect(screen.getByText('✅ 完了マーク')).toBeTruthy();
   });
 });
+
+describe('OptionManagementPage — Phase6 Sai提案ルール承認キュー', () => {
+  beforeEach(() => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN as ReturnType<typeof useAuth>);
+    vi.mocked(authFetch).mockReset();
+  });
+
+  it('承認待ちルールが0件の場合はパネルを表示しない(現状のデフォルト)', async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes('/v1/admin/options?')) return mockOk({ items: [], total: 0 });
+      if (url.includes('/sai-rules')) return mockOk({ items: [] });
+      return mockOk({});
+    });
+
+    render(<OptionManagementPage />);
+    await waitFor(() => expect(screen.queryByText('該当する発注はありません')).toBeTruthy());
+    expect(screen.queryByText(/Sai提案ルール/)).toBeNull();
+  });
+
+  it('承認待ちルールがある場合はパネルに件数を表示し、承認できる', async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes('/v1/admin/options?')) return mockOk({ items: [], total: 0 });
+      if (url.includes('/sai-rules/1/approve')) return mockOk({ item: { id: 1, status: 'active' } });
+      if (url.includes('/sai-rules')) {
+        return mockOk({ items: [{ id: 1, tenant_id: 'global', trigger_pattern: 'FAQ登録', expected_behavior: '保存ボタンは右上にある', priority: 0, is_active: false, status: 'pending', source: 'sai_judge', evidence: null, created_at: '' }] });
+      }
+      return mockOk({});
+    });
+
+    render(<OptionManagementPage />);
+    await waitFor(() => expect(screen.queryByText(/Sai提案ルール — 承認待ち 1件/)).toBeTruthy());
+
+    fireEvent.click(screen.getByText(/Sai提案ルール/));
+    await waitFor(() => expect(screen.queryByText('「FAQ登録」')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('✅ 承認'));
+    await waitFor(() => expect(screen.queryByText('「FAQ登録」')).toBeNull());
+  });
+});
