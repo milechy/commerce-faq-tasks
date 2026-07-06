@@ -5,7 +5,7 @@ import type { Express, Request, Response } from 'express';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';
 import { getPool } from '../../../lib/db';
 import { logger } from '../../../lib/logger';
-import { trackUsage } from '../../../lib/billing/usageTracker';
+import { chargeOneOffJpy } from '../../../lib/billing/stripeSync';
 import { createNotification } from '../../../lib/notifications';
 
 // ---------------------------------------------------------------------------
@@ -227,7 +227,8 @@ export function registerOptionRoutes(app: Express): void {
   // PUT /v1/admin/options/:id/complete — 完了マーク（super_adminのみ）
   // 1. status='completed', completed_at=NOW()
   // 2. notifications テーブルに完了通知 INSERT
-  // 3. trackUsage() で option_service 課金記録
+  // 3. 確定金額をStripeに単発請求（reportUsageToStripeのリクエスト数課金とは別経路。
+  //    GID: option_serviceがcostCalculatorのModelKeyに存在せず金額が¥0扱いになっていた不具合の修正）
   // -------------------------------------------------------------------------
   app.put('/v1/admin/options/:id/complete', async (req: Request, res: Response) => {
     const { su, role, isSuperAdmin } = extractAuth(req);
@@ -298,18 +299,21 @@ export function registerOptionRoutes(app: Express): void {
         link: isPremiumAvatar ? '/admin/avatar' : '/admin/options',
       });
 
-      // 3. 課金トラッキング（fire-and-forget）
+      // 3. 確定金額をStripeに単発請求
       const amount = order.final_amount ?? order.llm_estimate_amount ?? 0;
-      trackUsage({
+      const charged = await chargeOneOffJpy(pool, logger, {
         tenantId: order.tenant_id,
-        requestId: `option-${order.id}`,
-        model: 'option_service',
-        inputTokens: 0,
-        outputTokens: amount,
-        featureUsed: 'option_service',
+        amountJpy: amount,
+        description: `代行作業: ${order.description.slice(0, 80)}`,
+        idempotencyKey: `option-complete:${order.id}`,
       });
+      if (charged) {
+        await pool
+          .query(`UPDATE option_orders SET stripe_usage_recorded = true WHERE id = $1`, [order.id])
+          .catch((err: any) => logger.warn('[PUT /v1/admin/options/:id/complete] stripe_usage_recorded update failed', err));
+      }
 
-      return res.json({ item: order, ok: true });
+      return res.json({ item: order, ok: true, stripe_charged: charged });
     } catch (err: any) {
       logger.warn('[PUT /v1/admin/options/:id/complete]', err);
       return res.status(500).json({ error: '完了処理に失敗しました' });

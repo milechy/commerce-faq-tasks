@@ -6,6 +6,13 @@ import type pino from 'pino';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE_MS = 1000;
 
+/** pino.Logger / AppLogger(lib/logger.ts)どちらでも渡せる最小限のロガー形状 */
+interface MinimalLogger {
+  info(obj: unknown, msg?: string): void;
+  warn(obj: unknown, msg?: string): void;
+  error(obj: unknown, msg?: string): void;
+}
+
 // プラン倍率: Stripe に報告する数量に乗じる（リクエスト課金 × プラン別単価）。
 // admin-ui PLAN_OPTIONS と一致（Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
 export const PLAN_MULTIPLIERS: Record<string, number> = {
@@ -143,6 +150,58 @@ function getStripeClient(): any {
   return new Stripe(secret, { apiVersion: '2024-06-20' });
 }
 
+/**
+ * テナントに単発のJPY金額をStripe Invoice Itemとして直接請求する。
+ * option_orders(代行作業)等、リクエスト数ベースの従量課金(reportUsageToStripe)には
+ * そぐわない一時金の請求に使う。冪等(idempotencyKeyで重複防止)、billing_enabled/
+ * 無料期間もreportUsageToStripeと同じ規則でチェックする。
+ * @returns 請求できたら true。billing無効・customerId不明・Stripeエラー時は false。
+ */
+export async function chargeOneOffJpy(
+  db: any,
+  logger: MinimalLogger,
+  opts: { tenantId: string; amountJpy: number; description: string; idempotencyKey: string },
+): Promise<boolean> {
+  const { tenantId, amountJpy, description, idempotencyKey } = opts;
+  if (amountJpy <= 0) return false;
+
+  try {
+    const tenantRow = await db.query(
+      `SELECT billing_enabled, billing_free_from, billing_free_until FROM tenants WHERE id = $1`,
+      [tenantId]
+    );
+    const tenant = tenantRow.rows[0];
+    if (!tenant?.billing_enabled) {
+      logger.info({ tenantId }, '[stripeSync] chargeOneOffJpy: billing not enabled, skipping');
+      return false;
+    }
+    const now = new Date();
+    const freeFrom  = tenant.billing_free_from  ? new Date(tenant.billing_free_from)  : null;
+    const freeUntil = tenant.billing_free_until ? new Date(tenant.billing_free_until) : null;
+    if (freeFrom && freeUntil && now >= freeFrom && now <= freeUntil) {
+      logger.info({ tenantId }, '[stripeSync] chargeOneOffJpy: free period, skipping');
+      return false;
+    }
+
+    const stripe = getStripeClient();
+    const subInfo = await getSubscriptionItemId(db, tenantId, stripe, logger);
+    if (!subInfo?.customerId) {
+      logger.warn({ tenantId }, '[stripeSync] chargeOneOffJpy: no customerId, skipping');
+      return false;
+    }
+
+    await stripe.invoiceItems.create(
+      { customer: subInfo.customerId, amount: Math.round(amountJpy), currency: 'jpy', description },
+      { idempotencyKey }
+    );
+    logger.info({ tenantId, amountJpy, description }, '[stripeSync] one-off charge created');
+    return true;
+  } catch (err) {
+    logger.error({ err, tenantId, amountJpy, description }, '[stripeSync] one-off charge failed');
+    return false;
+  }
+}
+
 function getPeriodYyyyMm(date: Date = new Date()): string {
   const y = date.getUTCFullYear();
   const m = String(date.getUTCMonth() + 1).padStart(2, '0');
@@ -166,7 +225,7 @@ async function getSubscriptionItemId(
   db: any,
   tenantId: string,
   stripe: any,
-  logger: pino.Logger
+  logger: MinimalLogger
 ): Promise<{ subscriptionId: string; itemId: string; customerId: string | null } | null> {
   const result = await db.query(
     `SELECT stripe_subscription_id

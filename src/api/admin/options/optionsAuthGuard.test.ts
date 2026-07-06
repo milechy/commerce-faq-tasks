@@ -8,8 +8,8 @@ jest.mock('../../../lib/db', () => ({
 jest.mock('../../../lib/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
-jest.mock('../../../lib/billing/usageTracker', () => ({
-  trackUsage: jest.fn(),
+jest.mock('../../../lib/billing/stripeSync', () => ({
+  chargeOneOffJpy: jest.fn(),
 }));
 jest.mock('../../../lib/notifications', () => ({
   createNotification: jest.fn(),
