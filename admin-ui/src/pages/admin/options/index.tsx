@@ -289,9 +289,9 @@ function OrderDetailModal({
   const [notifySending, setNotifySending] = useState(false);
   const [notifyMsg2, setNotifyMsg2] = useState<string | null>(null);
 
-  const BORDER = "#1f2937";
-  const TEXT_MAIN = "#f9fafb";
-  const TEXT_SUB = "#9ca3af";
+  const BORDER = "var(--border)";
+  const TEXT_MAIN = "var(--foreground)";
+  const TEXT_SUB = "var(--muted-foreground)";
 
   // お知らせフォームを開いたときにデフォルトメッセージを生成
   const handleOpenNotify = () => {
@@ -415,7 +415,7 @@ function OrderDetailModal({
           {/* 作業内容（全文） */}
           <div style={{ fontSize: 13 }}>
             <span style={{ color: TEXT_SUB, display: "block", marginBottom: 6 }}>作業内容</span>
-            <div style={{ color: TEXT_MAIN, background: "rgba(255,255,255,0.04)", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 12px", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            <div style={{ color: TEXT_MAIN, background: "var(--muted)", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 12px", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
               {order.description}
             </div>
           </div>
@@ -436,7 +436,7 @@ function OrderDetailModal({
               placeholder="例: 8000"
               style={{
                 width: "100%", padding: "8px 12px", borderRadius: 8, border: `1px solid ${BORDER}`,
-                background: "rgba(255,255,255,0.05)", color: TEXT_MAIN, fontSize: 14,
+                background: "var(--input)", color: TEXT_MAIN, fontSize: 14,
                 boxSizing: "border-box",
               }}
             />
@@ -450,7 +450,7 @@ function OrderDetailModal({
               onChange={(e) => setEditedStatus(e.target.value as OptionOrder["status"])}
               style={{
                 width: "100%", padding: "8px 12px", borderRadius: 8, border: `1px solid ${BORDER}`,
-                background: "#1f2937", color: TEXT_MAIN, fontSize: 14,
+                background: "var(--input)", color: TEXT_MAIN, fontSize: 14,
               }}
             >
               <option value="pending">未対応 (pending)</option>
@@ -519,7 +519,7 @@ function OrderDetailModal({
 
         {/* お知らせ送信フォーム */}
         {showNotifyForm && (
-          <div style={{ marginTop: 16, padding: 16, background: "rgba(255,255,255,0.03)", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
+          <div style={{ marginTop: 16, padding: 16, background: "var(--muted)", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
             <p style={{ fontSize: 13, fontWeight: 600, color: TEXT_MAIN, marginBottom: 12 }}>テナントへのお知らせ送信</p>
 
             <div style={{ marginBottom: 12, fontSize: 13 }}>
@@ -530,7 +530,7 @@ function OrderDetailModal({
                 onChange={(e) => setNotifyDate(e.target.value)}
                 style={{
                   width: "100%", padding: "8px 12px", borderRadius: 8, border: `1px solid ${BORDER}`,
-                  background: "rgba(255,255,255,0.05)", color: TEXT_MAIN, fontSize: 13,
+                  background: "var(--input)", color: TEXT_MAIN, fontSize: 13,
                   boxSizing: "border-box",
                 }}
               />
@@ -544,7 +544,7 @@ function OrderDetailModal({
                 rows={4}
                 style={{
                   width: "100%", padding: "8px 12px", borderRadius: 8, border: `1px solid ${BORDER}`,
-                  background: "rgba(255,255,255,0.05)", color: TEXT_MAIN, fontSize: 13,
+                  background: "var(--input)", color: TEXT_MAIN, fontSize: 13,
                   resize: "vertical", boxSizing: "border-box", lineHeight: 1.6,
                 }}
               />
@@ -591,9 +591,9 @@ function OrderDetailModal({
 // ---------------------------------------------------------------------------
 
 function SaiSection({ orderId }: { orderId: string }) {
-  const BORDER = "#1f2937";
-  const TEXT_MAIN = "#f9fafb";
-  const TEXT_SUB = "#9ca3af";
+  const BORDER = "var(--border)";
+  const TEXT_MAIN = "var(--foreground)";
+  const TEXT_SUB = "var(--muted-foreground)";
 
   const [task, setTask] = useState<SaiTask | null>(null);
   const [starting, setStarting] = useState(false);
