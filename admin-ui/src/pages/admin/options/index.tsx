@@ -1,7 +1,7 @@
 // admin-ui/src/pages/admin/options/index.tsx
 // Phase63: オプション代行管理ページ（super_admin専用）
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
@@ -26,6 +26,32 @@ interface OptionOrder {
 }
 
 type StatusFilter = "" | "pending" | "in_progress" | "completed";
+
+interface SaiTaskStep {
+  step: number;
+  action: string;
+  reflection?: string;
+  error?: string;
+}
+
+interface SaiTask {
+  status: "queued" | "running" | "complete";
+  steps: number;
+  max_steps: number;
+  description: string;
+  last_action?: string;
+  outcome?: "agent_reported_done" | "agent_reported_fail" | "step_limit_reached" | "error" | "unknown";
+  steps_log?: SaiTaskStep[];
+  final_screenshot_base64?: string;
+}
+
+const SAI_OUTCOME_LABEL: Record<string, string> = {
+  agent_reported_done: "Saiが完了を報告",
+  agent_reported_fail: "Saiが失敗を報告",
+  step_limit_reached: "ステップ上限に到達",
+  error: "エラーで停止",
+  unknown: "不明",
+};
 
 // ---------------------------------------------------------------------------
 // ステータスバッジ
@@ -483,6 +509,14 @@ function OrderDetailModal({
           </p>
         )}
 
+        {/* Sai(Agent S)セクション */}
+        {order.status !== "completed" && (
+          <>
+            <hr style={{ border: "none", borderTop: `1px solid ${BORDER}`, margin: "16px 0" }} />
+            <SaiSection orderId={order.id} />
+          </>
+        )}
+
         {/* お知らせ送信フォーム */}
         {showNotifyForm && (
           <div style={{ marginTop: 16, padding: 16, background: "rgba(255,255,255,0.03)", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
@@ -544,6 +578,156 @@ function OrderDetailModal({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sai(Agent S)セクション — GUI自動化エージェントへの試行・結果レビュー
+//
+// 重要: Saiの自己申告(outcome)は成否の確定情報ではない。最終スクリーンショットを
+// 人間(super_admin)が目視確認した上で、上の「完了マーク」ボタンで完了させる運用。
+// ここでは status/final_amount 等を一切自動更新しない。
+// ---------------------------------------------------------------------------
+
+function SaiSection({ orderId }: { orderId: string }) {
+  const BORDER = "#1f2937";
+  const TEXT_MAIN = "#f9fafb";
+  const TEXT_SUB = "#9ca3af";
+
+  const [task, setTask] = useState<SaiTask | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showLog, setShowLog] = useState(false);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearPoll = useCallback(() => {
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+  }, []);
+
+  const fetchTask = useCallback(async (schedule: boolean) => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/options/${orderId}/sai-task`);
+      if (res.status === 404) return; // 未試行
+      if (!res.ok) {
+        setError("Sai実行結果の取得に失敗しました");
+        return;
+      }
+      const data = await res.json() as { task: SaiTask };
+      setTask(data.task);
+      if (schedule && data.task.status !== "complete") {
+        pollTimer.current = setTimeout(() => { void fetchTask(true); }, 3000);
+      }
+    } catch {
+      setError("Sai実行結果の取得に失敗しました");
+    }
+  }, [orderId]);
+
+  // マウント時: 既に試行済みなら状態を復元してポーリング再開
+  useEffect(() => {
+    void fetchTask(true);
+    return () => clearPoll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId]);
+
+  const handleTrySai = async () => {
+    if (!confirm("Saiエージェントにこの作業を試行させますか？\n実際にブラウザ操作等を行い、API利用コストが発生します。")) return;
+    setStarting(true);
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/options/${orderId}/try-sai`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError((body as { error?: string }).error ?? "Saiへの依頼に失敗しました");
+        return;
+      }
+      clearPoll();
+      void fetchTask(true);
+    } catch {
+      setError("Saiへの依頼に失敗しました");
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const isRunning = task && task.status !== "complete";
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <p style={{ fontSize: 13, fontWeight: 600, color: TEXT_MAIN, margin: 0 }}>🤖 Sai(Agent S)による代行試行</p>
+        <button
+          onClick={() => void handleTrySai()}
+          disabled={starting || !!isRunning}
+          style={{
+            padding: "6px 14px", borderRadius: 8, border: "none",
+            background: "#7c3aed", color: "#fff", fontSize: 12, fontWeight: 600,
+            cursor: starting || isRunning ? "not-allowed" : "pointer",
+            opacity: starting || isRunning ? 0.6 : 1, minHeight: 32,
+          }}
+        >
+          {starting ? "依頼中..." : task ? "🔁 再試行" : "▶ Saiに依頼する"}
+        </button>
+      </div>
+
+      {error && <p style={{ fontSize: 12, color: "#f87171", margin: "0 0 8px" }}>{error}</p>}
+
+      {task && (
+        <div style={{ background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.25)", borderRadius: 10, padding: 12 }}>
+          <div style={{ display: "flex", gap: 12, fontSize: 12, color: TEXT_SUB, marginBottom: 8, flexWrap: "wrap" }}>
+            <span>状態: <strong style={{ color: TEXT_MAIN }}>
+              {task.status === "queued" ? "待機中" : task.status === "running" ? "実行中" : "完了"}
+            </strong></span>
+            <span>ステップ: <strong style={{ color: TEXT_MAIN }}>{task.steps} / {task.max_steps}</strong></span>
+            {task.outcome && (
+              <span>自己申告: <strong style={{ color: TEXT_MAIN }}>{SAI_OUTCOME_LABEL[task.outcome] ?? task.outcome}</strong></span>
+            )}
+          </div>
+
+          {isRunning && task.last_action && (
+            <p style={{ fontSize: 11, color: TEXT_SUB, fontFamily: "monospace", margin: "0 0 8px", wordBreak: "break-all" }}>
+              直近の操作: {task.last_action}
+            </p>
+          )}
+
+          {task.status === "complete" && (
+            <>
+              <p style={{ fontSize: 11, color: "#fbbf24", margin: "0 0 8px" }}>
+                ⚠️ 上記は Sai の自己申告です。実際の成否は下のスクリーンショットを目視確認してから「完了マーク」で確定してください。
+              </p>
+              {task.final_screenshot_base64 && (
+                <img
+                  src={`data:image/png;base64,${task.final_screenshot_base64}`}
+                  alt="Sai実行後の最終スクリーンショット"
+                  style={{ width: "100%", borderRadius: 8, border: `1px solid ${BORDER}`, marginBottom: 8 }}
+                />
+              )}
+              {task.steps_log && task.steps_log.length > 0 && (
+                <>
+                  <button
+                    onClick={() => setShowLog((v) => !v)}
+                    style={{ background: "none", border: "none", color: "#a78bfa", fontSize: 11, cursor: "pointer", padding: 0 }}
+                  >
+                    {showLog ? "▲ 操作ログを隠す" : "▼ 操作ログを見る"}
+                  </button>
+                  {showLog && (
+                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                      {task.steps_log.map((s) => (
+                        <div key={s.step} style={{ fontSize: 11, color: TEXT_SUB, fontFamily: "monospace", wordBreak: "break-all" }}>
+                          #{s.step} {s.error ? `error: ${s.error}` : s.action}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
