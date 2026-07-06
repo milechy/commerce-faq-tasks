@@ -11,8 +11,9 @@ jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
   supabaseAuthMiddleware: (_req: any, _res: any, next: any) => next(),
 }));
 
-jest.mock('../../../lib/billing/usageTracker', () => ({
-  trackUsage: jest.fn(),
+const mockChargeOneOffJpy = jest.fn();
+jest.mock('../../../lib/billing/stripeSync', () => ({
+  chargeOneOffJpy: (...args: unknown[]) => mockChargeOneOffJpy(...args),
 }));
 
 jest.mock('../../../lib/notifications', () => ({
@@ -175,6 +176,8 @@ describe('option_orders API', () => {
         }],
       });
       mockCreateNotification.mockResolvedValue(undefined);
+      mockChargeOneOffJpy.mockResolvedValueOnce(true);
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // stripe_usage_recorded UPDATE
 
       const res = await request(superAdminApp())
         .put('/v1/admin/options/order-1/complete')
@@ -197,6 +200,8 @@ describe('option_orders API', () => {
         }],
       });
       mockCreateNotification.mockResolvedValue(undefined);
+      mockChargeOneOffJpy.mockResolvedValueOnce(true);
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // stripe_usage_recorded UPDATE
 
       const res = await request(superAdminApp())
         .put('/v1/admin/options/premium-1/complete')
@@ -210,6 +215,60 @@ describe('option_orders API', () => {
           link: '/admin/avatar',
         })
       );
+    });
+
+    it('確定金額をchargeOneOffJpyへ渡し、成功時にstripe_usage_recordedを更新する(GID: option_service課金バグ修正)', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          id: 'order-2', tenant_id: 'tenant-x',
+          type: 'general', description: 'FAQ登録代行',
+          final_amount: 8000, llm_estimate_amount: 10000,
+        }],
+      });
+      mockCreateNotification.mockResolvedValue(undefined);
+      mockChargeOneOffJpy.mockResolvedValueOnce(true);
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      const res = await request(superAdminApp())
+        .put('/v1/admin/options/order-2/complete')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.stripe_charged).toBe(true);
+      expect(mockChargeOneOffJpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({
+          tenantId: 'tenant-x',
+          amountJpy: 8000, // final_amount優先(llm_estimate_amountではない)
+          idempotencyKey: 'option-complete:order-2',
+        }),
+      );
+      // stripe_usage_recorded UPDATE が呼ばれている(SELECT/UPDATE本体に続く2回目のmockQuery呼び出し)
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
+    it('chargeOneOffJpyが失敗(false)した場合はstripe_charged:falseを返しstripe_usage_recordedは更新しない', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          id: 'order-3', tenant_id: 'tenant-x',
+          type: 'general', description: 'FAQ登録代行',
+          final_amount: 8000, llm_estimate_amount: null,
+        }],
+      });
+      mockCreateNotification.mockResolvedValue(undefined);
+      mockChargeOneOffJpy.mockResolvedValueOnce(false);
+
+      const res = await request(superAdminApp())
+        .put('/v1/admin/options/order-3/complete')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.stripe_charged).toBe(false);
+      // stripe_usage_recorded の UPDATE は発火しない = mockQuery呼び出しは完了UPDATEの1回のみ
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     it('client_admin は complete を叩けない（403）', async () => {
