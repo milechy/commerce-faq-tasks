@@ -7,6 +7,7 @@ import { getPool } from '../../../lib/db';
 import { logger } from '../../../lib/logger';
 import { chargeOneOffJpy } from '../../../lib/billing/stripeSync';
 import { createNotification } from '../../../lib/notifications';
+import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
@@ -317,6 +318,111 @@ export function registerOptionRoutes(app: Express): void {
     } catch (err: any) {
       logger.warn('[PUT /v1/admin/options/:id/complete]', err);
       return res.status(500).json({ error: '完了処理に失敗しました' });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /v1/admin/options/:id/try-sai — SaiエージェントにGUI代行作業を試行させる（super_adminのみ）
+  // Saiの成否自己申告は信用しない設計のため、ここでは status/final_amount 等を一切更新しない。
+  // 結果はGET .../sai-task で取得し、人間が最終スクリーンショットを見て
+  // 既存の /complete フローで完了させるか判断する。
+  // -------------------------------------------------------------------------
+  app.post('/v1/admin/options/:id/try-sai', async (req: Request, res: Response) => {
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
+    if (!isSuperAdmin) {
+      return denyInsufficient(req, res, su, role);
+    }
+
+    const { id } = req.params;
+    const { max_steps } = req.body as { max_steps?: number };
+
+    try {
+      const pool = getPool();
+      const orderResult = await pool.query(
+        `SELECT id, description FROM option_orders WHERE id = $1`,
+        [id],
+      );
+      if (orderResult.rowCount === 0) {
+        return res.status(404).json({ error: '発注が見つかりません' });
+      }
+      const order = orderResult.rows[0] as { id: string; description: string };
+
+      const { task_id } = await submitSaiTask({
+        description: order.description,
+        orderId: order.id,
+        maxSteps: max_steps,
+      });
+
+      await pool
+        .query(
+          `UPDATE option_orders SET sai_task_id = $2, sai_outcome = NULL, sai_tried_at = NOW() WHERE id = $1`,
+          [id, task_id],
+        )
+        .catch((err: any) => {
+          if (err?.code !== '42703') throw err;
+          logger.warn('[POST /v1/admin/options/:id/try-sai] sai_* columns not migrated yet');
+        });
+
+      return res.status(202).json({ task_id, status: 'queued' });
+    } catch (err: any) {
+      if (err?.message === 'SAI_API_KEY not set') {
+        return res.status(503).json({ error: 'Saiエージェントが設定されていません' });
+      }
+      logger.warn('[POST /v1/admin/options/:id/try-sai]', err);
+      return res.status(502).json({ error: 'Saiエージェントへの依頼に失敗しました' });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/options/:id/sai-task — Sai実行結果の取得（super_adminのみ）
+  // 最終スクリーンショットを含む生の実行結果を返す。完了判断は人間が行う。
+  // -------------------------------------------------------------------------
+  app.get('/v1/admin/options/:id/sai-task', async (req: Request, res: Response) => {
+    const { su, role, isSuperAdmin } = extractAuth(req);
+    if (!isAllowedOptionRole(role)) {
+      return denyRole(req, res, su, role, ALLOWED_OPTION_ROLES);
+    }
+    if (!isSuperAdmin) {
+      return denyInsufficient(req, res, su, role);
+    }
+
+    const { id } = req.params;
+
+    try {
+      const pool = getPool();
+      const orderResult = await pool.query(
+        `SELECT sai_task_id FROM option_orders WHERE id = $1`,
+        [id],
+      ).catch((err: any) => {
+        if (err?.code === '42703') return { rowCount: 0, rows: [] } as any;
+        throw err;
+      });
+
+      const saiTaskId = orderResult.rows[0]?.sai_task_id as string | undefined;
+      if (!saiTaskId) {
+        return res.status(404).json({ error: 'この発注はまだSaiで試行されていません' });
+      }
+
+      const task = await getSaiTask(saiTaskId);
+
+      if (task.status === 'complete') {
+        await pool
+          .query(`UPDATE option_orders SET sai_outcome = $2 WHERE id = $1`, [id, task.outcome ?? 'unknown'])
+          .catch((err: any) => {
+            if (err?.code !== '42703') throw err;
+          });
+      }
+
+      return res.json({ task });
+    } catch (err: any) {
+      if (err?.message === 'SAI_API_KEY not set') {
+        return res.status(503).json({ error: 'Saiエージェントが設定されていません' });
+      }
+      logger.warn('[GET /v1/admin/options/:id/sai-task]', err);
+      return res.status(502).json({ error: 'Saiエージェントの状態取得に失敗しました' });
     }
   });
 }
