@@ -30,7 +30,7 @@
     <div class="form-page">
       <div id="car-summary"></div>
 
-      <form id="purchase-form" action="purchase-thanks.html" method="GET">
+      <form id="purchase-form" action="purchase-thanks.html" method="GET" novalidate>
         <input type="hidden" name="car_id" id="hidden-car-id" value="">
         <input type="hidden" name="car_name" id="hidden-car-name" value="">
         <input type="hidden" name="price" id="hidden-price" value="">
@@ -100,7 +100,17 @@
     }
 
     document.getElementById('purchase-form').addEventListener('submit', function(e) {
+      var name = document.getElementById('name').value.trim();
+      var address = document.getElementById('address').value.trim();
+      var phone = document.getElementById('phone').value.trim();
+      var payment = document.querySelector('input[name="payment"]:checked');
       var agree = document.getElementById('agree').checked;
+
+      if (!name || !address || !phone || !payment) {
+        e.preventDefault();
+        alert('お名前・ご住所・連絡先電話番号・お支払い方法は必須です。');
+        return false;
+      }
       if (!agree) {
         e.preventDefault();
         alert('個人情報の取り扱いへの同意が必要です。');
