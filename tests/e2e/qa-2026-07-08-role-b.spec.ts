@@ -38,7 +38,14 @@ test.describe('QA 2026-07-08 — Role B (client_admin) read-only sweep', () => {
   test('B4-1: ナレッジ一覧ページが表示される（自テナントへリダイレクト）', async ({ page }) => {
     const { res, errors } = await gotoAdmin(page, '/admin/knowledge');
     expect(res?.status()).toBeLessThan(400);
-    // client_admin は /admin/knowledge/:ownTenantId へ自動リダイレクトされる想定
+    // client_admin は /admin/knowledge/:ownTenantId へクライアントサイドでリダイレクトされる。
+    // CIのコールドスタート環境では反映に時間がかかることがあるため明示的に待つ
+    // （固定 waitForTimeout だけに頼らない）。
+    await page
+      .waitForURL((url) => url.pathname !== '/admin/knowledge' && url.pathname.startsWith('/admin/knowledge/'), {
+        timeout: 8000,
+      })
+      .catch(() => {});
     expect(page.url()).toContain('/admin/knowledge/');
     expect(page.url()).not.toContain('/global');
     expect(errors.filter((e) => !e.toLowerCase().includes('livekit'))).toHaveLength(0);
