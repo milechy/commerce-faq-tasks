@@ -1607,18 +1607,46 @@
   function connectLiveKit() {
     if (!avatarConfig || !window.LivekitClient) return;
 
-    // 切断済み・エラー状態の古いRoomを先にクリーンアップ
-    if (window.__rajiuceRoom && window.__rajiuceRoom.state !== 'connected') {
-      try { window.__rajiuceRoom.disconnect(); } catch (_e) {}
-      window.__rajiuceRoom = null;
-    }
     // 既に接続済みなら再利用
     if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
       avatarArea.style.display = 'flex';
       return;
     }
 
-    // 再接続前: Disconnected ハンドラが非同期で戻した stale 要素も含めて完全削除
+    // 切断済み・エラー状態の古いRoomを先にクリーンアップする。
+    // disconnect() の完了を待たずに新規Room.connect()を開始すると、WebRTCの
+    // ネゴシエーションが前後で競合し ("could not createOffer with closed peer
+    // connection" 等) 再接続が失敗しうる（GID: パネル高速開閉時のreconnect race fix）。
+    // disconnect完了を待ってから新規接続へ進む。closePanel() は window.__rajiuceRoom を
+    // 即座に null化するため、ローカル参照だけでなく window.__rajiuceRoomDisconnecting
+    // （closePanel/cleanupLiveKit が設定する共有Promise）も必ず待つ。
+    var _pendingDisconnect = window.__rajiuceRoomDisconnecting || Promise.resolve();
+    if (window.__rajiuceRoom) {
+      var _oldRoom = window.__rajiuceRoom;
+      window.__rajiuceRoom = null;
+      try {
+        var _dp = _oldRoom.disconnect();
+        if (_dp && typeof _dp.then === 'function') {
+          _pendingDisconnect = Promise.all([_pendingDisconnect, _dp]).then(function () {}, function () {});
+        }
+      } catch (_e) { /* 切断済み等は無視 */ }
+    }
+
+    Promise.resolve(_pendingDisconnect).catch(function () {}).then(function () {
+      _connectLiveKitAfterCleanup();
+    });
+  }
+
+  function _connectLiveKitAfterCleanup() {
+    // avatarConfig / LivekitClient が上のPromise待機中に失われるケース（パネル再クローズ等）に備える
+    if (!avatarConfig || !window.LivekitClient) return;
+    // 待機中に別の呼び出しが先に接続済みならそれを使う
+    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+      avatarArea.style.display = 'flex';
+      return;
+    }
+
+    // Disconnected ハンドラが非同期で戻した stale 要素も含めて完全削除
     var _rkClose = avatarArea.querySelectorAll('.avatar-close-btn');
     for (var _rki = 0; _rki < _rkClose.length; _rki++) { _rkClose[_rki].remove(); }
     var _rkMuteA = avatarArea.querySelectorAll('.avatar-mute-btn');
@@ -1915,12 +1943,18 @@
   }
 
   function cleanupLiveKit() {
-    // 明示的な完全終了用（ページ離脱など）
+    // 明示的な完全終了用（ページ離脱・SPA再注入前のdestroy()など）
     // 通常の closePanel() では呼ばない — Room は切断せず保持する
     try {
       if (window.__rajiuceRoom) {
-        window.__rajiuceRoom.disconnect();
+        var _cleanupRoom = window.__rajiuceRoom;
         window.__rajiuceRoom = null;
+        var _cleanupDp = _cleanupRoom.disconnect();
+        // SPA再注入で新しいwidgetインスタンスが直後にconnectLiveKit()する場合に備え、
+        // 完了をwindow越しに伝搬しておく（GID: reconnect race fix）
+        window.__rajiuceRoomDisconnecting = (_cleanupDp && typeof _cleanupDp.then === 'function')
+          ? _cleanupDp.catch(function () {})
+          : Promise.resolve();
       }
     } catch (_e) {}
     panel.classList.remove('avatar-active');
@@ -2120,10 +2154,21 @@
     _fabRestored = true; // 以降の非同期resetFabIcon呼び出しをブロック
     emitToHost('widget:closed', {});
     capturePostHog('widget_closed', {});
-    // LiveKit Room を切断（次回開閉時に新規接続で安定化）
+    // LiveKit Room を切断（次回開閉時に新規接続で安定化）。
+    // disconnect() は非同期なので、完了前に __rajiuceRoom を null化しても
+    // 次の connectLiveKit() が正しく待てるよう window.__rajiuceRoomDisconnecting に
+    // Promise を残しておく（GID: パネル高速開閉時のreconnect race fix）。
     if (window.__rajiuceRoom) {
-      try { window.__rajiuceRoom.disconnect(); } catch (_e) {}
+      var _closingRoom = window.__rajiuceRoom;
       window.__rajiuceRoom = null;
+      try {
+        var _closeDp = _closingRoom.disconnect();
+        window.__rajiuceRoomDisconnecting = (_closeDp && typeof _closeDp.then === 'function')
+          ? _closeDp.catch(function () {})
+          : Promise.resolve();
+      } catch (_e) {
+        window.__rajiuceRoomDisconnecting = Promise.resolve();
+      }
     }
     // アバターUI要素を同期的にクリーンアップ
     // （Disconnected イベントは非同期のため、ここで先に削除しておく）
@@ -2501,21 +2546,103 @@
       audioChunks = [];
     }
 
+    // MediaRecorder が出力する webm/opus 等は Fish Audio ASR の音声デコーダが
+    // "unsupported codec" として拒否するケースがある（GID: ASR 502 fix）。
+    // AudioContext.decodeAudioData でデコードし、ASR が確実に受理する
+    // 16bit PCM WAV に変換してから送信する。
+    function _blobToWav(blob) {
+      return blob.arrayBuffer().then(function (arrayBuffer) {
+        var AudioCtx = window.AudioContext || window.webkitAudioContext;
+        var ctx = new AudioCtx();
+        return ctx.decodeAudioData(arrayBuffer.slice(0)).then(function (audioBuffer) {
+          try { ctx.close(); } catch (_e) {}
+          return _encodeWav(audioBuffer);
+        }).catch(function (err) {
+          try { ctx.close(); } catch (_e) {}
+          throw err;
+        });
+      });
+    }
+
+    function _encodeWav(audioBuffer) {
+      var numChannels = audioBuffer.numberOfChannels;
+      var sampleRate = audioBuffer.sampleRate;
+      var numFrames = audioBuffer.length;
+      var bytesPerSample = 2; // 16-bit PCM
+      var blockAlign = numChannels * bytesPerSample;
+      var dataSize = numFrames * blockAlign;
+      var buffer = new ArrayBuffer(44 + dataSize);
+      var view = new DataView(buffer);
+
+      function writeString(offset, str) {
+        for (var i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+      }
+
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true); // fmt chunk size
+      view.setUint16(20, 1, true); // PCM
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * blockAlign, true); // byte rate
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bytesPerSample * 8, true); // bits per sample
+      writeString(36, 'data');
+      view.setUint32(40, dataSize, true);
+
+      var channelData = [];
+      for (var c = 0; c < numChannels; c++) channelData.push(audioBuffer.getChannelData(c));
+
+      var offset = 44;
+      for (var i = 0; i < numFrames; i++) {
+        for (var ch = 0; ch < numChannels; ch++) {
+          var sample = Math.max(-1, Math.min(1, channelData[ch][i]));
+          view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+          offset += 2;
+        }
+      }
+
+      return new Blob([buffer], { type: 'audio/wav' });
+    }
+
     function _sendAudioForTranscription(blob) {
       micBtn.classList.remove('recording');
       micBtn.classList.add('processing');
       micBtn.setAttribute('aria-label', '変換中…');
       micBtn.disabled = true;
 
-      var fd = new FormData();
-      fd.append('audio', blob, 'audio.webm');
+      function postAudio(audioBlob, filename) {
+        var fd = new FormData();
+        fd.append('audio', audioBlob, filename);
+        return fetch(apiBase + '/api/voice/asr', {
+          method: 'POST',
+          headers: { 'x-api-key': apiKey },
+          body: fd,
+        }).then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (data) {
+            if (!r.ok) {
+              var err = new Error((data && data.error) || ('ASR HTTP ' + r.status));
+              err.status = r.status;
+              throw err;
+            }
+            return data;
+          });
+        });
+      }
 
-      fetch(apiBase + '/api/voice/asr', {
-        method: 'POST',
-        headers: { 'x-api-key': apiKey },
-        body: fd,
-      })
-        .then(function (r) { return r.json(); })
+      _blobToWav(blob)
+        .catch(function (err) {
+          // デコード不可（非対応ブラウザ等）の場合は元のBlobで送信を試みる（フォールバック）
+          console.warn('[FAQ Widget] WAV変換に失敗、元フォーマットで送信します:', err && err.message);
+          return null;
+        })
+        .then(function (wavBlob) {
+          return wavBlob
+            ? postAudio(wavBlob, 'audio.wav')
+            : postAudio(blob, 'audio.webm');
+        })
         .then(function (data) {
           micBtn.classList.remove('processing');
           micBtn.setAttribute('aria-label', '音声入力');
@@ -2527,19 +2654,22 @@
           var text = (data && data.text) ? data.text.trim() : '';
           if (text) {
             sendMessage(text);
+          } else {
+            showError('音声を認識できませんでした。もう一度お話しください。');
           }
         })
         .catch(function (err) {
           console.warn('[FAQ Widget] ASR fetch error:', err && err.message);
           micBtn.classList.remove('processing');
           micBtn.classList.add('error');
-          setTimeout(function () { micBtn.classList.remove('error'); }, 500);
+          setTimeout(function () { micBtn.classList.remove('error'); }, 2000);
           micBtn.setAttribute('aria-label', '音声入力');
           micBtn.setAttribute('title', '音声認識に失敗しました');
           micBtn.disabled = false;
           isRecording = false;
           currentRecorder = null;
           audioChunks = [];
+          showError('音声認識に失敗しました。もう一度お試しください。');
         });
     }
 
