@@ -1,7 +1,7 @@
 // admin-ui/src/components/common/NotificationBell.tsx
 // Phase52h: In-App通知センター — ベルアイコン + ドロップダウン
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch, API_BASE } from "../../lib/api";
 
@@ -56,6 +56,11 @@ export function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // デフォルトは right:0（ベルの右端に揃える）。ただし幅240pxの左サイドバー内でベルを
+  // 開いた場合、320px幅のパネルがビューポート左端をはみ出す（GID: 通知パネル左はみ出しfix）。
+  // 開いた直後に実際の位置を測り、はみ出す場合だけ left 指定に切り替えて画面内に収める。
+  const [panelLeftPx, setPanelLeftPx] = useState<number | null>(null);
 
   const fetchNotifications = useCallback(async () => {
     try {
@@ -73,6 +78,25 @@ export function NotificationBell() {
   useEffect(() => {
     void fetchNotifications();
   }, [fetchNotifications]);
+
+  // パネルを開いた際、ビューポート左端をはみ出していないか測って補正する
+  useLayoutEffect(() => {
+    if (!open) {
+      setPanelLeftPx(null);
+      return;
+    }
+    const panel = panelRef.current;
+    const wrapper = dropRef.current;
+    if (!panel || !wrapper) return;
+    const margin = 8;
+    const panelRect = panel.getBoundingClientRect();
+    if (panelRect.left < margin) {
+      const wrapperRect = wrapper.getBoundingClientRect();
+      setPanelLeftPx(margin - wrapperRect.left);
+    } else {
+      setPanelLeftPx(null);
+    }
+  }, [open, items.length]);
 
   // 30秒ポーリング
   useEffect(() => {
@@ -188,10 +212,11 @@ export function NotificationBell() {
       {/* Dropdown */}
       {open && (
         <div
+          ref={panelRef}
           style={{
             position: "absolute",
             top: "calc(100% + 8px)",
-            right: 0,
+            ...(panelLeftPx !== null ? { left: panelLeftPx } : { right: 0 }),
             width: 320,
             maxWidth: "calc(100vw - 16px)",
             background: "rgba(9,14,28,0.98)",
