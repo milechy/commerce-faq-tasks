@@ -86,11 +86,16 @@ export default function TuningRulesPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId } = useAuth();
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
-  // super admin は JWT に tenantId がないため、MOCK_TENANTS の先頭をデフォルトにする
-  const tenantId = user?.tenantId ?? (isSuperAdmin ? (MOCK_TENANTS[0]?.value ?? "") : "");
+  // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+  // client_admin相当にフォールバックするため、実テナントIDはpreviewTenantIdから取る必要がある
+  // （chat-history/index.tsx と同パターン。未対応だと絞り込み先が空文字になりglobalルールしか出ない）。
+  // super admin(非プレビュー)は JWT に tenantId がないため、MOCK_TENANTS の先頭をデフォルトにする
+  const tenantId = previewMode
+    ? (previewTenantId ?? "")
+    : (user?.tenantId ?? (isSuperAdmin ? (MOCK_TENANTS[0]?.value ?? "") : ""));
 
   // ─── List state ─────────────────────────────────────────────────────────────
   const [rules, setRules] = useState<TuningRule[]>([]);
