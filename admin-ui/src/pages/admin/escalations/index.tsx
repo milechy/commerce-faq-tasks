@@ -23,7 +23,7 @@ const POLL_INTERVAL_MS = 8000;
 export default function EscalationsPage() {
   const navigate = useNavigate();
   const { t, lang } = useLang();
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, previewMode, previewTenantId } = useAuth();
 
   const [escalations, setEscalations] = useState<EscalationSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,7 +33,13 @@ export default function EscalationsPage() {
 
   const loadEscalations = useCallback(async () => {
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/chat-history/escalations`);
+      // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+      // client_admin相当にフォールバックするが、JWTは変わらないためバックエンドは
+      // ?tenant= を渡さない限り全テナントを返してしまう（GID 1216277595663810 と同パターン）。
+      const params = new URLSearchParams();
+      if (previewMode && previewTenantId) params.set("tenant", previewTenantId);
+      const qs = params.toString();
+      const res = await authFetch(`${API_BASE}/v1/admin/chat-history/escalations${qs ? `?${qs}` : ""}`);
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { escalations: EscalationSummary[] };
       setEscalations(data.escalations ?? []);
@@ -43,7 +49,7 @@ export default function EscalationsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [previewMode, previewTenantId]);
 
   useEffect(() => {
     void loadEscalations();
