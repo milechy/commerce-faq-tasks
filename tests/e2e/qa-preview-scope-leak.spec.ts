@@ -40,13 +40,12 @@ test.describe('Preview scope leak (known bug) — escalations が preview テナ
     test.skip(!saReady, 'super_admin storageState 未生成/期限切れ');
   });
 
-  test('C-LEAK-1: carnation プレビュー中の escalations に他テナント行が混入しない（現状=混入する）', async ({
+  test('C-LEAK-1: carnation プレビュー中の escalations に他テナント行が混入しない', async ({
     page,
   }) => {
-    // 既知バグ: escalations/index.tsx が previewTenantId を見ずバックエンドJWTスコープに依存するため、
-    // preview中も全テナントが返る。修正(chat-history と同じ previewTenantId スコープ適用)が入ると本
-    // アサーションは通り、test.fail により「失敗するはずが成功」で赤くなる → 修正検知＆本注釈の除去合図。
-    test.fail(true, '既知の preview スコープ漏洩バグ (escalations/index.tsx, GID 1216277595663810 と同パターン)');
+    // GID 1216643716725652 で修正済み（chat-history と同じ previewTenantId スコープを
+    // escalations/index.tsx に適用）。本番(admin.r2c.biz)で2026-07-17 に修正のデプロイと
+    // green化を確認 — 3回連続で他テナント混入なしを確認済み。回帰検知用の固定テストとして残す。
 
     // 1. テナント詳細を開き、プレビュー投入
     await page.goto(`${ADMIN}/admin/tenants/${PREVIEW_TENANT}`, { waitUntil: 'domcontentloaded' });
