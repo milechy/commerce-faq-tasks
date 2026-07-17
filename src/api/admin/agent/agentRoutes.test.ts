@@ -75,6 +75,19 @@ jest.mock('./engagementSuggest', () => ({
   suggestEngagementRuleFromText: (...args: any[]) => mockSuggestEngagementRuleFromText(...args),
 }));
 
+// request_sai_task / get_sai_task_status が使う依存をモック
+const mockCheckSaiMonthlyCostCeiling = jest.fn();
+jest.mock('../options/routes', () => ({
+  checkSaiMonthlyCostCeiling: (...args: any[]) => mockCheckSaiMonthlyCostCeiling(...args),
+}));
+
+const mockSubmitSaiTask = jest.fn();
+const mockGetSaiTask = jest.fn();
+jest.mock('../../../lib/sai/saiClient', () => ({
+  submitSaiTask: (...args: any[]) => mockSubmitSaiTask(...args),
+  getSaiTask: (...args: any[]) => mockGetSaiTask(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -156,6 +169,7 @@ describe('POST /v1/admin/agent/chat', () => {
     mockGetGaps.mockResolvedValue({ gaps: [], total: 0 });
     mockSearchKnowledgeForSuggestion.mockResolvedValue({ results: [] });
     mockFormatKnowledgeContext.mockReturnValue('');
+    mockCheckSaiMonthlyCostCeiling.mockResolvedValue({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -1209,6 +1223,121 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.reply).toBe('AIアシスタントは現在利用できません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Sai委譲(Tier A設計の土台): super_admin限定を維持、client_adminには開放しない
+  // -------------------------------------------------------------------------
+  describe('request_sai_task / get_sai_task_status', () => {
+    function toolCallResponse(name: string, args: Record<string, unknown>) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id: 'call-1', type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('client_admin が呼び出すと super_admin 限定メッセージが返り、Saiには依頼されない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '商品ページを更新して', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('現在は対応できません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '商品ページを更新して', sessionId: 'sess-090' });
+
+      expect(res.status).toBe(200);
+      expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('super_admin 限定');
+    });
+
+    it('super_admin: confirmed=false → 依頼されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '商品ページを更新して', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから依頼します。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '商品ページを更新して', sessionId: 'sess-091' });
+
+      expect(res.status).toBe(200);
+      expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('super_admin: 月次コスト上限に達している場合は依頼されない', async () => {
+      mockCheckSaiMonthlyCostCeiling.mockResolvedValueOnce({ ok: false, spentCents: 100000, ceilingCents: 100000 });
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '商品ページを更新して', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('上限に達しています。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '商品ページを更新して', sessionId: 'sess-092' });
+
+      expect(res.status).toBe(200);
+      expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('上限');
+    });
+
+    it('super_admin: confirmed=true かつ上限内 → Saiに依頼されタスクIDが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '商品ページの送料表記を更新して', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('依頼しました。'));
+
+      mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-99', status: 'queued' });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '商品ページの送料表記を更新して', sessionId: 'sess-093' });
+
+      expect(res.status).toBe(200);
+      expect(mockSubmitSaiTask).toHaveBeenCalledWith(
+        expect.objectContaining({ description: '商品ページの送料表記を更新して' }),
+      );
+      expect(res.body.actions[0].result).toContain('sai-task-99');
+    });
+
+    it('client_admin が get_sai_task_status を呼び出すと super_admin 限定メッセージが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-99' }))
+        .mockResolvedValueOnce(makeGroqResponse('現在は対応できません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '進捗を教えて', sessionId: 'sess-094' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetSaiTask).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('super_admin 限定');
+    });
+
+    it('super_admin: get_sai_task_status で状態と自己申告非信用の注記を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-99' }))
+        .mockResolvedValueOnce(makeGroqResponse('進捗を確認しました。'));
+
+      mockGetSaiTask.mockResolvedValueOnce({
+        status: 'complete', steps: 3, max_steps: 15, description: 'x',
+        outcome: 'agent_reported_done', last_action: 'click save button',
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '進捗を教えて', sessionId: 'sess-095' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('complete');
+      expect(result).toContain('自己申告は信用しない');
     });
   });
 });

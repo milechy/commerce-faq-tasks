@@ -70,7 +70,7 @@ function denyInsufficient(req: Request, res: Response, su: Record<string, any> |
 // Sai VPS側の日次タスク数上限(SAI_MAX_TASKS_PER_DAY)とは独立した、
 // R2C本体側での月次コスト上限チェック(多層防御)。デフォルトOFF(未設定なら無制限)。
 // ---------------------------------------------------------------------------
-async function checkSaiMonthlyCostCeiling(pool: any): Promise<{ ok: true } | { ok: false; spentCents: number; ceilingCents: number }> {
+export async function checkSaiMonthlyCostCeiling(pool: any): Promise<{ ok: true } | { ok: false; spentCents: number; ceilingCents: number }> {
   const ceilingCents = Number(process.env.SAI_MONTHLY_COST_CEILING_CENTS ?? '0');
   if (!ceilingCents || ceilingCents <= 0) return { ok: true };
 

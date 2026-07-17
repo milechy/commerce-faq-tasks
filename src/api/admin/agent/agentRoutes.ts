@@ -176,6 +176,7 @@ async function executeHopToolCalls(
   suggestedThisTurn: Set<string>,
   actions: Array<{ tool: string; result: string }>,
   messages: GroqMessage[],
+  isSuperAdmin: boolean,
 ): Promise<void> {
   for (const toolCall of toolCalls) {
     const { id, name, args } = toolCall;
@@ -186,7 +187,7 @@ async function executeHopToolCalls(
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
     } else {
-      result = await executeToolCall(name, args, effectiveTenantId, db);
+      result = await executeToolCall(name, args, effectiveTenantId, db, isSuperAdmin);
       if (name in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(name);
     }
 
@@ -440,7 +441,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             }));
 
             const beforeCount = actions.length;
-            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages);
+            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin);
             for (const action of actions.slice(beforeCount)) {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
@@ -521,7 +522,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           args: parseToolArgs(toolCall.function.arguments),
         }));
 
-        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages);
+        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin);
       }
 
       if (finalReply === null) {
