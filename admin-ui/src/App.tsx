@@ -44,6 +44,7 @@ import AuthBridgePage from "./pages/AuthBridgePage";
 import CopilotPreviewPage from "./pages/copilot-preview/index";
 import { AdminAgentUIProvider, useAdminAgentUI } from "./contexts/AdminAgentUIContext";
 import { supabaseConfigured } from "./lib/supabaseClient";
+import { isChatFirstDefaultEnabled } from "./lib/chatFirstDefault";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
 // supabaseConfigured=false の場合、Reactはマウントできるが
@@ -105,7 +106,12 @@ function AppInner() {
   const isAuthBridge = location.pathname === "/auth/bridge";
   // 【追加専用・プロトタイプ】チャット・ファースト管理画面のプレビュー。
   // 認証ゲートより手前で隔離返却するため、既存のルート/サイドバー/認可には触れない。
-  const isCopilotPreview = location.pathname === "/copilot-preview";
+  // Phase4: このブラウザだけの個人オプトイン(localStorage)で有効化した場合のみ、
+  // 従来のランディング(/ , /admin)からもこの画面に入る。既定は無効=従来のダッシュボードのまま。
+  // テナント全体・他ユーザーの挙動には一切影響しない。
+  const isLandingPath = location.pathname === "/" || location.pathname === "/admin";
+  const isCopilotPreview =
+    location.pathname === "/copilot-preview" || (isLandingPath && isChatFirstDefaultEnabled());
 
   if (isAuthBridge) {
     return (
@@ -116,11 +122,7 @@ function AppInner() {
   }
 
   if (isCopilotPreview) {
-    return (
-      <Routes>
-        <Route path="/copilot-preview" element={<CopilotPreviewPage />} />
-      </Routes>
-    );
+    return <CopilotPreviewPage />;
   }
 
   if (isLogin) {

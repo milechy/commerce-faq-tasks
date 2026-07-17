@@ -13,6 +13,8 @@ import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../l
 import { getGaps } from '../knowledge/knowledgeGapRepository';
 import { textToFaqs } from '../knowledge/routes';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
+import { checkSaiMonthlyCostCeiling } from '../options/routes';
+import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -65,7 +67,8 @@ export async function executeToolCall(
   toolName: string,
   args: Record<string, unknown>,
   tenantId: string,
-  db: Pool
+  db: Pool,
+  isSuperAdmin: boolean = false
 ): Promise<string> {
   // 結果は500字以内日本語
   const truncate = (s: string) => s.slice(0, 500);
@@ -649,6 +652,69 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] save_engagement_rule failed', err);
         return truncate('声がけルールの保存に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Sai委譲(Tier A設計の土台): 現時点では super_admin 限定を維持し、client_admin には
+    // 開放しない（信頼モデル変更は別途判断が必要なため、既存のtry-sai同様の認可を踏襲）。
+    case 'request_sai_task': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です。テナント管理者向けの代行依頼は「代行作業の依頼」からお願いします');
+      }
+
+      const confirmed = Boolean(args['confirmed']);
+      const description = String(args['description'] ?? '').trim().slice(0, 2000);
+      const maxStepsRaw = Number(args['max_steps']);
+      const maxSteps = Number.isFinite(maxStepsRaw) && maxStepsRaw > 0 ? Math.round(maxStepsRaw) : undefined;
+
+      if (!confirmed) {
+        return truncate('Saiへの依頼には確認が必要です。作業内容と発生しうる費用をユーザーに提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!description) {
+        return truncate('description は必須です');
+      }
+
+      try {
+        const ceilingCheck = await checkSaiMonthlyCostCeiling(db);
+        if (!ceilingCheck.ok) {
+          return truncate('Saiの月次コスト上限に達しているため、今回は依頼できません。管理者に確認してください');
+        }
+
+        const { task_id } = await submitSaiTask({ description, maxSteps });
+        return truncate(`Saiにタスクを依頼しました（タスクID: ${task_id}）。get_sai_task_status で進捗を確認できます`);
+      } catch (err: any) {
+        if (err?.message === 'SAI_API_KEY not set') {
+          return truncate('Saiが設定されていません');
+        }
+        logger.warn('[actionExecutor] request_sai_task failed', err);
+        return truncate('Saiへの依頼に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_sai_task_status': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const taskId = String(args['task_id'] ?? '').trim();
+      if (!taskId) {
+        return truncate('task_id は必須です');
+      }
+
+      try {
+        const task = await getSaiTask(taskId);
+        const lines = [
+          `状態: ${task.status}`,
+          `ステップ: ${task.steps}/${task.max_steps}`,
+        ];
+        if (task.outcome) lines.push(`自己申告: ${task.outcome}（自己申告は信用しない設計のため、最終スクリーンショットを目視確認してから完了させてください）`);
+        if (task.last_action) lines.push(`直近の操作: ${task.last_action}`);
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_sai_task_status failed', err);
+        return truncate('Saiタスクの状態取得に失敗しました');
       }
     }
 

@@ -343,4 +343,44 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'request_sai_task',
+      description:
+        'R2Cエージェント(Sai)にブラウザ操作の代行作業を依頼する。実際に外部サービスへの課金が発生する。現時点ではsuper_admin限定の機能で、それ以外のロールで呼び出すと拒否される。必ず先にユーザーに作業内容と発生しうる費用を提示し、明確な同意を得てから呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          description: {
+            type: 'string',
+            description: 'Saiに依頼する作業内容（具体的な手順や対象ページが分かるように）',
+          },
+          max_steps: {
+            type: 'number',
+            description: '許容する最大操作ステップ数（任意、省略時は既定値）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '依頼確認フラグ（true でのみ実行される）',
+          },
+        },
+        required: ['description', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_sai_task_status',
+      description: '依頼済みのSaiタスクの進捗・結果を取得する読み取り専用ツール。super_admin限定。',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: { type: 'string', description: 'request_sai_task の結果に含まれるタスクID' },
+        },
+        required: ['task_id'],
+      },
+    },
+  },
 ];

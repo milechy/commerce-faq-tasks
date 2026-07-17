@@ -14,6 +14,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
+import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
 
@@ -560,8 +561,11 @@ export default function CopilotPreviewPage() {
             <span style={{ fontSize: 15 }}>{c.icon}</span>{c.label}
           </button>
         ))}
-        <div style={{ marginTop: "auto", fontSize: 10.5, color: "var(--muted-foreground)", lineHeight: 1.5, padding: "8px" }}>
-          「くわしい設定」は従来画面のまま。会話UIは<strong style={{ color: "var(--foreground)" }}>追加</strong>で、既存は消していません。
+        <div style={{ marginTop: "auto" }}>
+          <Phase4DefaultToggle />
+          <div style={{ fontSize: 10.5, color: "var(--muted-foreground)", lineHeight: 1.5, padding: "8px" }}>
+            「くわしい設定」は従来画面のまま。会話UIは<strong style={{ color: "var(--foreground)" }}>追加</strong>で、既存は消していません。
+          </div>
         </div>
       </aside>
 
@@ -633,6 +637,49 @@ function AgentMark() {
       <div style={{ position: "absolute", inset: 3, borderRadius: "50%", background: "var(--card, var(--background))" }} />
       <span style={{ position: "relative", zIndex: 1, fontSize: 17 }}>✨</span>
     </div>
+  );
+}
+
+// Phase4: チャット・ファーストを既定ランディングにするかの個人オプトイン(このブラウザのみ)。
+// ONにすると次回以降 /admin, / を開いた時にこの画面が開くようになる。テナント全体・
+// 他ユーザーには一切影響しない。既定はOFF(従来のダッシュボードのまま)。
+function Phase4DefaultToggle() {
+  const [enabled, setEnabled] = useState(() => isChatFirstDefaultEnabled());
+
+  const toggle = () => {
+    const next = !enabled;
+    setChatFirstDefaultEnabled(next);
+    setEnabled(next);
+  };
+
+  return (
+    <button
+      onClick={toggle}
+      style={{
+        display: "flex", alignItems: "center", gap: 8, width: "calc(100% - 16px)", margin: "0 8px 8px",
+        padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)",
+        background: enabled ? AGENT_SOFT : "transparent", cursor: "pointer", textAlign: "left",
+      }}
+    >
+      <span
+        style={{
+          width: 30, height: 17, borderRadius: 999, background: enabled ? AGENT : "var(--border)",
+          position: "relative", flexShrink: 0, transition: "background 0.15s",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute", top: 2, left: enabled ? 15 : 2, width: 13, height: 13, borderRadius: "50%",
+            background: "#fff", transition: "left 0.15s",
+          }}
+        />
+      </span>
+      <span style={{ fontSize: 11, color: enabled ? AGENT : "var(--muted-foreground)", lineHeight: 1.4 }}>
+        これを既定の画面にする
+        <br />
+        <span style={{ fontSize: 9.5, opacity: 0.75 }}>このブラウザだけの設定です</span>
+      </span>
+    </button>
   );
 }
 
