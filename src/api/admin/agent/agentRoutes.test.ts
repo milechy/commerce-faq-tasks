@@ -53,6 +53,12 @@ jest.mock('../../../lib/knowledgeSearchUtil', () => ({
   formatKnowledgeContext: jest.fn().mockReturnValue(''),
 }));
 
+// get_weekly_briefing が使う依存をモック
+const mockGetGaps = jest.fn();
+jest.mock('../knowledge/knowledgeGapRepository', () => ({
+  getGaps: (...args: any[]) => mockGetGaps(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -127,6 +133,7 @@ describe('POST /v1/admin/agent/chat', () => {
     jest.clearAllMocks();
     process.env.GROQ_API_KEY = 'test-groq-key';
     mockListRules.mockResolvedValue([]);
+    mockGetGaps.mockResolvedValue({ gaps: [], total: 0 });
   });
 
   // -------------------------------------------------------------------------
@@ -573,6 +580,89 @@ describe('POST /v1/admin/agent/chat', () => {
         }),
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase2 (P7): get_weekly_briefing — 直近7日間の状況を1回で要約取得
+  // -------------------------------------------------------------------------
+  describe('get_weekly_briefing', () => {
+    it('会話数・前週比・品質スコア・成約・未回答質問トップ3を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-1',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週は会話が増えています。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 142 }] }) // 今週セッション数
+        .mockResolvedValueOnce({ rows: [{ n: 120 }] }) // 先週セッション数
+        .mockResolvedValueOnce({ rows: [{ avg: '82.4' }] }) // 平均スコア
+        .mockResolvedValueOnce({ rows: [{ n: 8, total: '96000' }] }); // 成約
+
+      mockGetGaps.mockResolvedValueOnce({
+        gaps: [
+          { id: 1, tenant_id: 'tenant-abc', user_question: '送料はいくらですか？', session_id: null, message_id: null, rag_hit_count: 0, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+        ],
+        total: 11,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-040' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetGaps).toHaveBeenCalledWith({ tenantId: 'tenant-abc', status: 'open', limit: 3 });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('142件');
+      expect(result).toContain('+18%'); // (142-120)/120 = 18.3% → 丸めて18%
+      expect(result).toContain('82/100');
+      expect(result).toContain('8件・¥96,000');
+      expect(result).toContain('11件');
+      expect(result).toContain('送料はいくらですか？');
+    });
+
+    it('super_admin がテナント未特定 → テナント特定を促すメッセージを返しDBクエリは発火しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-2',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '状況を教えて', sessionId: 'sess-041' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockGetGaps).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
     });
   });
 });

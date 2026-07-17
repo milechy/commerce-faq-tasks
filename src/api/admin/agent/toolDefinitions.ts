@@ -249,4 +249,17 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'get_weekly_briefing',
+      description:
+        '直近7日間のテナントの状況（会話数・前週比・応答品質スコア・成約・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
 ];

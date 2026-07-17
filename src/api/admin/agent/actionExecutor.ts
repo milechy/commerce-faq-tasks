@@ -10,6 +10,7 @@ import {
 import { callGroq8bSuggestFromText } from '../tuning/routes';
 import { listRules, createRule } from '../tuning/tuningRulesRepository';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
+import { getGaps } from '../knowledge/knowledgeGapRepository';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -425,6 +426,73 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] save_tuning_rule failed', err);
         return truncate('ルールの保存に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase2 (P7 プロアクティブ・ブリーフィング): 直近7日間の状況を1回で要約取得する
+    // 読み取り専用ツール。ログイン直後など能動的な状況説明に使う。
+    case 'get_weekly_briefing': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes] = await Promise.all([
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM chat_sessions
+             WHERE tenant_id = $1 AND started_at >= NOW() - INTERVAL '7 days'`,
+            [tenantId],
+          ),
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM chat_sessions
+             WHERE tenant_id = $1
+               AND started_at >= NOW() - INTERVAL '14 days'
+               AND started_at < NOW() - INTERVAL '7 days'`,
+            [tenantId],
+          ),
+          db.query(
+            `SELECT AVG(score) AS avg FROM conversation_evaluations
+             WHERE tenant_id = $1 AND evaluated_at >= NOW() - INTERVAL '7 days' AND score > 0`,
+            [tenantId],
+          ),
+          db.query(
+            `SELECT COUNT(*)::int AS n, COALESCE(SUM(conversion_value), 0)::numeric AS total
+             FROM conversion_attributions
+             WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`,
+            [tenantId],
+          ),
+          getGaps({ tenantId, status: 'open', limit: 3 }),
+        ]);
+
+        const totalSessions = Number(sessionsRes.rows[0]?.n ?? 0);
+        const prevSessions = Number(prevSessionsRes.rows[0]?.n ?? 0);
+        const changePct = prevSessions > 0 ? Math.round(((totalSessions - prevSessions) / prevSessions) * 100) : null;
+        const avgScoreRaw = evalRes.rows[0]?.avg;
+        const avgScore = avgScoreRaw != null ? Math.round(Number(avgScoreRaw)) : null;
+        const cvCount = Number(cvRes.rows[0]?.n ?? 0);
+        const cvTotal = Math.round(Number(cvRes.rows[0]?.total ?? 0));
+        const { gaps, total: gapsTotal } = gapsRes;
+
+        const lines: string[] = ['直近7日間の状況:'];
+        lines.push(
+          `会話数 ${totalSessions}件` +
+          (changePct !== null ? `（前週比 ${changePct >= 0 ? '+' : ''}${changePct}%）` : ''),
+        );
+        if (avgScore !== null) lines.push(`応答品質スコア ${avgScore}/100`);
+        lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
+        lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
+        if (gaps.length > 0) {
+          lines.push('うち上位:');
+          gaps.forEach((g, i) => {
+            lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
+          });
+        }
+
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_weekly_briefing failed', err);
+        return truncate('週次サマリーの取得に失敗しました');
       }
     }
 

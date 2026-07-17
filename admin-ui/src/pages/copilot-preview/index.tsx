@@ -31,6 +31,7 @@ type Card =
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
 const REAL_TOOL_LABEL: Record<string, string> = {
+  get_weekly_briefing: "週次ブリーフィングの取得",
   suggest_tuning_rule: "指示ルールの下書き提案",
   save_tuning_rule: "指示ルールの保存",
   get_tenant_settings: "テナント設定の取得",
@@ -44,6 +45,22 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_embed_code: "埋め込みコードの取得",
   set_widget_theme: "ウィジェットテーマの変更",
 };
+
+// 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
+const REAL_WRITE_TOOLS = new Set([
+  "save_tuning_rule",
+  "add_faq",
+  "update_faq",
+  "delete_faq",
+  "set_ga4_id",
+  "set_posthog",
+  "set_widget_theme",
+  "activate_avatar",
+]);
+
+// Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ
+const BOOTSTRAP_PROMPT =
+  "ログインしたところです。今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
 
 interface Chip {
   label: string;
@@ -80,29 +97,16 @@ const nextId = () => ++_uid;
 
 export default function CopilotPreviewPage() {
   const [active, setActive] = useState("assistant");
-  const [done, setDone] = useState(0); // 今週の改善 3件中 done件 完了
+  const [done, setDone] = useState(0); // モックデモ: 今週の改善 3件中 done件 完了
   const [input, setInput] = useState("");
-  const [msgs, setMsgs] = useState<Msg[]>(() => [
-    {
-      id: nextId(),
-      role: "ai",
-      text: "おはようございます、田中さん☀️ 今週のお店の様子をまとめました。",
-    },
-    {
-      id: nextId(),
-      role: "ai",
-      card: { kind: "briefing" },
-      chips: [
-        { label: "1番をやる", action: "do1", tone: "primary" },
-        { label: "あとで", action: "later", tone: "ghost" },
-      ],
-    },
-  ]);
+  // Phase2: 起動直後は空。bootstrap()が①実データのブリーフィング→②モックデモの順で積む
+  const [msgs, setMsgs] = useState<Msg[]>([]);
 
-  // Phase1: 自由入力欄だけが繋がる実チャットの状態(会話履歴・送信中フラグ)
+  // Phase1/2: 自由入力欄・起動時ブリーフィングが繋がる実チャットの状態
   const sessionIdRef = useRef<string>(crypto.randomUUID());
   const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [sending, setSending] = useState(false);
+  const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
 
   const threadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -121,11 +125,12 @@ export default function CopilotPreviewPage() {
   const consumeChips = (msgId: number) =>
     setMsgs((prev) => prev.map((m) => (m.id === msgId ? { ...m, chipsUsed: true } : m)));
 
-  // Phase1: 実際の R2Cエージェント API を呼ぶ（自由入力欄からのみ）。
-  // suggest_tuning_rule / save_tuning_rule ツールで、指示ルールの下書き提案〜保存が本物のDBに書き込まれる。
-  const sendReal = async (text: string) => {
+  // Phase1/2: 実際の R2Cエージェント API を呼ぶ（自由入力欄・起動時ブリーフィングから）。
+  // suggest_tuning_rule / save_tuning_rule / get_weekly_briefing 等が本物のDBを読み書きする。
+  // silent=true はページ起動時の自動キックオフ用（ユーザーが打った体で me() バブルを積まない）。
+  const sendReal = async (text: string, opts?: { silent?: boolean }) => {
     if (!text.trim() || sending) return;
-    push(me(text));
+    if (!opts?.silent) push(me(text));
     setSending(true);
     try {
       const body: { message: string; sessionId: string; history?: typeof realHistory } = {
@@ -160,6 +165,12 @@ export default function CopilotPreviewPage() {
         card: { kind: "agentAction", tool: a.tool, result: a.result },
       }));
 
+      // 実際にDBへ書き込んだ操作(確認ブロックで弾かれたものは除く)だけを実進捗としてカウントする
+      const writesThisTurn = (data.actions ?? []).filter(
+        (a) => REAL_WRITE_TOOLS.has(a.tool) && !a.result.includes("確認が必要"),
+      ).length;
+      if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
+
       // suggest_tuning_rule の下書きが出たら、そのまま自然文で確定できるチップを添える
       const suggested = data.actions?.some((a) => a.tool === "suggest_tuning_rule");
       const chips: Chip[] | undefined = suggested
@@ -180,6 +191,37 @@ export default function CopilotPreviewPage() {
       setSending(false);
     }
   };
+
+  // Phase2 (P7): マウント時に実データの週次ブリーフィングを自動取得 → その後にモックデモを積む
+  const bootstrapped = useRef(false);
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+
+    void (async () => {
+      push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
+      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+
+      push({
+        id: nextId(),
+        role: "ai",
+        text: "─────────────\nここから先は、将来のビジョンのデモです（バックエンド未接続のスクリプト固定・サンプルデータ）。",
+      });
+      push(
+        { id: nextId(), role: "ai", text: "おはようございます、田中さん☀️ 今週のお店の様子をまとめました。" },
+        {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "briefing" },
+          chips: [
+            { label: "1番をやる", action: "do1", tone: "primary" },
+            { label: "あとで", action: "later", tone: "ghost" },
+          ],
+        },
+      );
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const runAction = (action: string, fromMsgId: number, label: string) => {
     consumeChips(fromMsgId);
@@ -417,7 +459,10 @@ export default function CopilotPreviewPage() {
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 0 3px rgba(34,197,94,0.15)" }} />オンライン
             </div>
           </div>
-          <ProgressPill done={done} total={3} />
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <RealActionBadge count={realActionCount} />
+            <ProgressPill done={done} total={3} />
+          </div>
         </header>
 
         {/* スレッド */}
@@ -460,7 +505,7 @@ export default function CopilotPreviewPage() {
 function PreviewBadge() {
   return (
     <div style={{ margin: "6px 8px 10px", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "4px 8px", lineHeight: 1.4 }}>
-      PROTOTYPE ・ 左のブリーフィング/チップはモック。下の入力欄だけ実APIに接続
+      PROTOTYPE ・ 起動時ブリーフィング＋下の入力欄は実API接続。チップのデモ部分のみモック
     </div>
   );
 }
@@ -470,6 +515,15 @@ function AgentMark() {
     <div style={{ width: 38, height: 38, borderRadius: "50%", flexShrink: 0, position: "relative", background: `conic-gradient(from 140deg, ${AGENT}, #d99320, ${AGENT})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ position: "absolute", inset: 3, borderRadius: "50%", background: "var(--card, var(--background))" }} />
       <span style={{ position: "relative", zIndex: 1, fontSize: 17 }}>✨</span>
+    </div>
+  );
+}
+
+function RealActionBadge({ count }: { count: number }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: count > 0 ? "#16a34a" : "var(--muted-foreground)" }}>
+      <span style={{ fontSize: 11 }}>{count > 0 ? "✅" : "◦"}</span>
+      実際の操作 <strong style={{ fontVariantNumeric: "tabular-nums" }}>{count}</strong>件
     </div>
   );
 }
