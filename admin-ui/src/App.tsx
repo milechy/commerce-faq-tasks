@@ -84,7 +84,7 @@ function ConfigErrorScreen() {
 }
 
 function AppInner() {
-  const { isClientAdmin, isSuperAdmin, user, previewMode } = useAuth();
+  const { isClientAdmin, isSuperAdmin, user, previewMode, previewTenantId } = useAuth();
   const { isOpen: agentOpen, seedQuery, toggle: toggleAgent, close: closeAgent } = useAdminAgentUI();
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
@@ -214,10 +214,13 @@ function AppInner() {
             onClick={toggleAgent}
             isOpen={agentOpen}
           />
+          {/* previewMode中は isClientAdmin が true になり showAIChat が表示されるが、
+              実ログインユーザー(super_admin)の user?.tenantId は常にnullのため
+              previewTenantId を優先しないとAIアシスタントがテナント無しで動作してしまう */}
           <AdminAgentPanel
             isOpen={agentOpen}
             onClose={closeAgent}
-            tenantId={user?.tenantId ?? null}
+            tenantId={previewMode ? (previewTenantId ?? null) : (user?.tenantId ?? null)}
             isSuperAdmin={isSuperAdmin}
             initialQuery={seedQuery}
           />
