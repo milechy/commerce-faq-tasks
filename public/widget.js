@@ -997,6 +997,10 @@
   /* アバター状態 */
   var avatarConfig = null;      // { enabled, livekitUrl, token, roomName, agentId, imageUrl, avatarName }
   var avatarConfigFetched = false;
+  // ユーザー操作（パネルclose・再接続前クリーンアップ）による意図的な room.disconnect() の
+  // 直後に発火する RoomEvent.Disconnected を「接続失敗」として emitAvatarStatus しないための
+  // フラグ。意図的切断の直前に true にし、Disconnected ハンドラ内で読んだら即座に false へ戻す。
+  var _intentionalDisconnect = false;
   var avatarMuted = true;       // 音声ミュート状態（デフォルト: ミュート）
   var anamClient = null;         // Anam SDK クライアント
   var avatarProvider = null;     // 'anam' | 'lemonslice' | null
@@ -1625,6 +1629,7 @@
       var _oldRoom = window.__rajiuceRoom;
       window.__rajiuceRoom = null;
       try {
+        _intentionalDisconnect = true;
         var _dp = _oldRoom.disconnect();
         if (_dp && typeof _dp.then === 'function') {
           _pendingDisconnect = Promise.all([_pendingDisconnect, _dp]).then(function () {}, function () {});
@@ -1800,8 +1805,14 @@
       });
 
       room.on(LK.RoomEvent.Disconnected, function (reason) {
-        console.warn('[FAQ Widget][DIAG] room Disconnected reason=' + reason + ' isOpen=' + isOpen + ' t=' + Math.round(performance.now()) + 'ms');
-        emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'disconnected:' + reason });
+        console.warn('[FAQ Widget][DIAG] room Disconnected reason=' + reason + ' isOpen=' + isOpen + ' intentional=' + _intentionalDisconnect + ' t=' + Math.round(performance.now()) + 'ms');
+        // ユーザーがパネルを閉じた／再接続前にクリーンアップした等の意図的な切断では、
+        // テストチャット画面に「アバターを表示できませんでした」というエラーを誤表示しない。
+        if (_intentionalDisconnect) {
+          _intentionalDisconnect = false;
+        } else {
+          emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'disconnected:' + reason });
+        }
         removeAvatarPlaceholder();
         // パネルが閉じている場合のみフルスクリーンモード解除。
         // パネル開中（isOpen=true）は closePanel→disconnect のレース: ユーザーが再開したため
@@ -1949,6 +1960,7 @@
       if (window.__rajiuceRoom) {
         var _cleanupRoom = window.__rajiuceRoom;
         window.__rajiuceRoom = null;
+        _intentionalDisconnect = true;
         var _cleanupDp = _cleanupRoom.disconnect();
         // SPA再注入で新しいwidgetインスタンスが直後にconnectLiveKit()する場合に備え、
         // 完了をwindow越しに伝搬しておく（GID: reconnect race fix）
@@ -2162,6 +2174,7 @@
       var _closingRoom = window.__rajiuceRoom;
       window.__rajiuceRoom = null;
       try {
+        _intentionalDisconnect = true;
         var _closeDp = _closingRoom.disconnect();
         window.__rajiuceRoomDisconnecting = (_closeDp && typeof _closeDp.then === 'function')
           ? _closeDp.catch(function () {})
