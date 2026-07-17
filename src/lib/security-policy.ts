@@ -33,6 +33,15 @@ export function createSecurityPolicyMiddleware(
       return;
     }
 
+    // chat-test tokens are admin-issued (from /admin/chat-test); skip per-tenant
+    // origin enforcement here too — originCheck.ts already does this, but this
+    // middleware runs earlier in the apiStack and was rejecting chat-test avatar
+    // calls (anam-session / room-token) with origin_not_allowed before reaching it.
+    if ((req as any).isChatTestToken) {
+      next();
+      return;
+    }
+
     const authed = req as AuthedRequest;
     const config = authed.tenantConfig;
 
