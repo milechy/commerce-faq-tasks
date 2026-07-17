@@ -201,4 +201,52 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_tuning_rule',
+      description:
+        '店舗管理者の自然な言葉による指示を、AIチャットボットの「指示ルール」（トリガー条件・期待する応答方針・優先度）の下書きに変換する。書き込みは行わない読み取り専用ツール。提案内容は必ずユーザーに提示して明確な同意を得てから save_tuning_rule で保存すること。',
+      parameters: {
+        type: 'object',
+        properties: {
+          free_text: {
+            type: 'string',
+            description: '管理者が話した自然文の指示（例:「保証について聞かれたら2年とお伝えして」）',
+          },
+        },
+        required: ['free_text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_tuning_rule',
+      description:
+        '指示ルールをDBに保存する。破壊的な変更ではないが今後のAI応答に影響するため、必ず先に suggest_tuning_rule 等で内容をユーザーに提示し、明確な同意を得てから confirmed=true で呼び出すこと。confirmed=false または未指定では保存されない。',
+      parameters: {
+        type: 'object',
+        properties: {
+          trigger_pattern: {
+            type: 'string',
+            description: 'このルールが適用されるキーワードや状況',
+          },
+          expected_behavior: {
+            type: 'string',
+            description: 'AIへの具体的な指示',
+          },
+          priority: {
+            type: 'number',
+            description: '優先度（0〜10の整数、任意。省略時は5）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '保存確認フラグ（true でのみ実行される）',
+          },
+        },
+        required: ['trigger_pattern', 'expected_behavior', 'confirmed'],
+      },
+    },
+  },
 ];

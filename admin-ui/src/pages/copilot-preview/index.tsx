@@ -1,0 +1,684 @@
+// admin-ui/src/pages/copilot-preview/index.tsx
+//
+// 【プロトタイプ / 追加専用】テナント向けチャット・ファースト管理画面のUX検証用ページ。
+// 既存の管理画面(App.tsx の認証ルート群)には一切影響しない、認証ゲート外の隔離ルート。
+//   URL: /copilot-preview
+// 左のブリーフィング/カード群はスクリプト化したモック(①能動ブリーフィング ②確認カード
+// ③解決後の次へ導く循環(進捗つき) ④Sai委譲)で、体験の形を見せるためのもの。
+//
+// Phase1: 下部コンポーザ(自由入力)だけは実際の R2Cエージェント API
+// (POST /v1/admin/agent/chat, suggest_tuning_rule / save_tuning_rule ツール)に接続されている。
+// ログイン済みセッション(同一ブラウザの Supabase セッション)が必要。未ログインならその旨を案内する。
+// テーマは既存の CSS 変数に追従(light/dark両対応)。
+
+import { useState, useRef, useEffect, useCallback } from "react";
+import { authFetch, API_BASE } from "../../lib/api";
+
+// ─── モデル ──────────────────────────────────────────────────────────────────
+
+type Category =
+  | { key: string; label: string; icon: string; dim?: boolean };
+
+type Card =
+  | { kind: "briefing" }
+  | { kind: "faq"; question: string; answer: string; category: string }
+  | { kind: "rule"; trigger: string; behavior: string }
+  | { kind: "engagement"; when: string; message: string }
+  | { kind: "sai"; request: string; result: string; url: string }
+  | { kind: "success"; text: string }
+  | { kind: "analytics" }
+  | { kind: "agentAction"; tool: string; result: string };
+
+// 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
+const REAL_TOOL_LABEL: Record<string, string> = {
+  suggest_tuning_rule: "指示ルールの下書き提案",
+  save_tuning_rule: "指示ルールの保存",
+  get_tenant_settings: "テナント設定の取得",
+  set_ga4_id: "GA4設定の変更",
+  set_posthog: "PostHog設定の変更",
+  get_faq_list: "FAQ一覧の取得",
+  add_faq: "FAQの追加",
+  update_faq: "FAQの更新",
+  delete_faq: "FAQの削除",
+  activate_avatar: "アバターの有効化",
+  get_embed_code: "埋め込みコードの取得",
+  set_widget_theme: "ウィジェットテーマの変更",
+};
+
+interface Chip {
+  label: string;
+  action: string;
+  tone?: "primary" | "ghost";
+}
+
+interface Msg {
+  id: number;
+  role: "ai" | "me";
+  text?: string;
+  card?: Card;
+  chips?: Chip[];
+  chipsUsed?: boolean;
+}
+
+const AGENT = "#7c3aed";
+const AGENT_SOFT = "rgba(124,58,237,0.10)";
+const AGENT_BORDER = "rgba(124,58,237,0.30)";
+
+const CATEGORIES: Category[] = [
+  { key: "assistant", label: "アシスタント", icon: "✨" },
+  { key: "weekly", label: "今週のまとめ", icon: "📊" },
+  { key: "history", label: "会話の履歴", icon: "💬" },
+  { key: "knowledge", label: "知識データ", icon: "📚", dim: true },
+  { key: "rules", label: "指示ルール", icon: "🎛️", dim: true },
+  { key: "avatar", label: "アバター", icon: "🎭", dim: true },
+];
+
+// ─── ページ ──────────────────────────────────────────────────────────────────
+
+let _uid = 100;
+const nextId = () => ++_uid;
+
+export default function CopilotPreviewPage() {
+  const [active, setActive] = useState("assistant");
+  const [done, setDone] = useState(0); // 今週の改善 3件中 done件 完了
+  const [input, setInput] = useState("");
+  const [msgs, setMsgs] = useState<Msg[]>(() => [
+    {
+      id: nextId(),
+      role: "ai",
+      text: "おはようございます、田中さん☀️ 今週のお店の様子をまとめました。",
+    },
+    {
+      id: nextId(),
+      role: "ai",
+      card: { kind: "briefing" },
+      chips: [
+        { label: "1番をやる", action: "do1", tone: "primary" },
+        { label: "あとで", action: "later", tone: "ghost" },
+      ],
+    },
+  ]);
+
+  // Phase1: 自由入力欄だけが繋がる実チャットの状態(会話履歴・送信中フラグ)
+  const sessionIdRef = useRef<string>(crypto.randomUUID());
+  const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [sending, setSending] = useState(false);
+
+  const threadRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [msgs]);
+
+  const push = useCallback((...items: Msg[]) => {
+    setMsgs((prev) => [...prev, ...items]);
+  }, []);
+
+  const say = (text: string, chips?: Chip[]): Msg => ({ id: nextId(), role: "ai", text, chips });
+  const me = (text: string): Msg => ({ id: nextId(), role: "me", text });
+
+  // チップを押したら、そのメッセージのチップを使用済みにする
+  const consumeChips = (msgId: number) =>
+    setMsgs((prev) => prev.map((m) => (m.id === msgId ? { ...m, chipsUsed: true } : m)));
+
+  // Phase1: 実際の R2Cエージェント API を呼ぶ（自由入力欄からのみ）。
+  // suggest_tuning_rule / save_tuning_rule ツールで、指示ルールの下書き提案〜保存が本物のDBに書き込まれる。
+  const sendReal = async (text: string) => {
+    if (!text.trim() || sending) return;
+    push(me(text));
+    setSending(true);
+    try {
+      const body: { message: string; sessionId: string; history?: typeof realHistory } = {
+        message: text,
+        sessionId: sessionIdRef.current,
+      };
+      if (realHistory.length > 0) body.history = realHistory.slice(-20);
+
+      const res = await authFetch(`${API_BASE}/v1/admin/agent/chat`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({} as { error?: string }));
+        push(say(errBody.error ? `エラー: ${errBody.error}` : "うまく送信できませんでした。少し時間をおいてお試しください。"));
+        return;
+      }
+
+      const data = (await res.json()) as { reply: string; actions: { tool: string; result: string }[] };
+      setRealHistory((prev) =>
+        [
+          ...prev,
+          { role: "user" as const, content: text },
+          { role: "assistant" as const, content: data.reply },
+        ].slice(-20),
+      );
+
+      const actionMsgs: Msg[] = (data.actions ?? []).map((a) => ({
+        id: nextId(),
+        role: "ai",
+        card: { kind: "agentAction", tool: a.tool, result: a.result },
+      }));
+
+      // suggest_tuning_rule の下書きが出たら、そのまま自然文で確定できるチップを添える
+      const suggested = data.actions?.some((a) => a.tool === "suggest_tuning_rule");
+      const chips: Chip[] | undefined = suggested
+        ? [
+            { label: "保存して", action: "__real:保存してください", tone: "primary" },
+            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+          ]
+        : undefined;
+
+      push(...actionMsgs, { id: nextId(), role: "ai", text: data.reply || "（応答なし）", chips });
+    } catch (err: any) {
+      if (err?.message === "__AUTH_REQUIRED__") {
+        push(say("ログインが必要です。別タブで管理画面にログインしてから、もう一度お試しください。"));
+      } else {
+        push(say("うまく送信できませんでした。少し時間をおいてお試しください。"));
+      }
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const runAction = (action: string, fromMsgId: number, label: string) => {
+    consumeChips(fromMsgId);
+
+    // "__real:" プレフィックスは実APIへの返信（sendReal 側で me() を積むため、ここでは積まない）
+    if (action.startsWith("__real:")) {
+      void sendReal(action.slice("__real:".length));
+      return;
+    }
+
+    if (label) push(me(label));
+
+    switch (action) {
+      case "do1":
+        push(
+          say("いいですね。送料の質問に答えられるよう、こう登録します 👇 内容をご確認ください。"),
+          {
+            id: nextId(),
+            role: "ai",
+            card: {
+              kind: "faq",
+              question: "送料はいくらですか？",
+              answer:
+                "全国一律550円です。5,000円以上のお買い上げで送料無料になります。北海道・沖縄は追加で440円いただいております。",
+              category: "店舗情報 ・ すぐに公開",
+            },
+            chips: [
+              { label: "✓ この内容で登録", action: "confirmFaq", tone: "primary" },
+              { label: "文章を直したい", action: "editFaq", tone: "ghost" },
+            ],
+          },
+        );
+        break;
+
+      case "editFaq":
+        push(say("どこを直しましょう？ 例えば「北海道・沖縄も無料にして」のように話しかけてください。（このプロトタイプでは登録に進みます）", [
+          { label: "やっぱりこのまま登録", action: "confirmFaq", tone: "primary" },
+        ]));
+        break;
+
+      case "confirmFaq":
+        setDone(1);
+        push(
+          { id: nextId(), role: "ai", card: { kind: "success", text: "「送料はいくらですか？」への答えを登録しました。次から自動で答えます。" } },
+          say(
+            "直りました！ ✅（今週の改善 3件中 1件 完了）\n\nついでにもう一つ。最近「丁寧すぎて説明が長い」というお客様の反応が増えています。少しだけ短く話す設定にできますが、やりますか？",
+            [
+              { label: "お願い", action: "do2", tone: "primary" },
+              { label: "今日はここまで", action: "stop", tone: "ghost" },
+            ],
+          ),
+        );
+        break;
+
+      case "do2":
+        push(
+          say("承知しました。AIへの指示ルールをこう追加します 👇"),
+          {
+            id: nextId(),
+            role: "ai",
+            card: {
+              kind: "rule",
+              trigger: "商品説明・使い方の質問",
+              behavior: "要点を先に1〜2文で答え、詳細は必要な時だけ足す。前置きのあいさつは省く。",
+            },
+            chips: [
+              { label: "✓ この方針で適用", action: "confirmRule", tone: "primary" },
+              { label: "今日はここまで", action: "stop", tone: "ghost" },
+            ],
+          },
+        );
+        break;
+
+      case "confirmRule":
+        setDone(2);
+        push(
+          { id: nextId(), role: "ai", card: { kind: "success", text: "応答をやや簡潔にする指示ルールを適用しました。" } },
+          say(
+            "できました！ ✅（3件中 2件 完了）\n\n最後にもう一つ。夜21時台にサイトを離れるお客様が多めです。この時間に一言、声をかけると引き止められそうです。設定しますか？",
+            [
+              { label: "お願い", action: "do3", tone: "primary" },
+              { label: "今日はここまで", action: "stop", tone: "ghost" },
+            ],
+          ),
+        );
+        break;
+
+      case "do3":
+        push(
+          say("では、こんな声がけを用意します 👇"),
+          {
+            id: nextId(),
+            role: "ai",
+            card: {
+              kind: "engagement",
+              when: "サイトを離れそうな時（夜間に多い離脱を検知）",
+              message: "お探しのものは見つかりましたか？ よければ人気ランキングもご覧ください🎁",
+            },
+            chips: [
+              { label: "✓ この声がけを設定", action: "confirmEngage", tone: "primary" },
+              { label: "今日はここまで", action: "stop", tone: "ghost" },
+            ],
+          },
+        );
+        break;
+
+      case "confirmEngage":
+        setDone(3);
+        push(
+          { id: nextId(), role: "ai", card: { kind: "success", text: "離脱しそうなお客様への声がけを設定しました。" } },
+          say(
+            "今週の改善、3件ぜんぶ完了しました 🎉 これでAIはもっと賢く、取りこぼしも減ります。\n\nもう一つ、私が代わりにやっておけることがあります。あなたの商品ページの送料表記が古いままでした。R2Cが代わりに直しておきましょうか？（作業料 ¥3,000）",
+            [
+              { label: "お願いする", action: "saiYes", tone: "primary" },
+              { label: "あとで自分でやる", action: "saiLater", tone: "ghost" },
+            ],
+          ),
+        );
+        break;
+
+      case "saiYes":
+        push(say("承知しました。商品ページを開いて更新します…（30秒ほどお待ちください）"));
+        setTimeout(() => {
+          push(
+            say("完了しました。実際の画面がこちらです。仕上がりをご確認ください 👇"),
+            {
+              id: nextId(),
+              role: "ai",
+              card: {
+                kind: "sai",
+                request: "商品ページの送料表記を新しい内容に更新",
+                result: "送料の記載を「全国一律550円・5,000円以上で無料」に更新しました。",
+                url: "your-shop.example.com/products/123",
+              },
+              chips: [
+                { label: "✓ これでOK", action: "saiOk", tone: "primary" },
+                { label: "ちがう、直したい", action: "saiFix", tone: "ghost" },
+              ],
+            },
+          );
+        }, 1400);
+        break;
+
+      case "saiFix":
+        push(say("どこを直しましょう？ 「ここはこうして」と教えていただければ、その指示は次回から私が覚えて、同じ間違いをしなくなります。（このプロトタイプではここまで）"));
+        break;
+
+      case "saiOk":
+        push(say("ありがとうございます！ 反映しました。今日はここまでで大丈夫です。また何かあれば通知でお知らせしますね 🔔"));
+        break;
+
+      case "saiLater":
+      case "stop":
+      case "later":
+        push(say("承知しました。また通知でお声がけします。いつでも話しかけてください 🙌"));
+        break;
+
+      case "analytics":
+        push(
+          { id: nextId(), role: "ai", card: { kind: "analytics" } },
+          say("特に気になるのは夜21時台の離脱です。ここに声がけを1つ足すと拾えそうです。設定しますか？", [
+            { label: "設定する", action: "do3", tone: "primary" },
+            { label: "今はいい", action: "stop", tone: "ghost" },
+          ]),
+        );
+        break;
+
+      default:
+        break;
+    }
+  };
+
+  const handleCategory = (key: string) => {
+    setActive(key);
+    if (key === "weekly") {
+      push(me("今週のまとめを見せて"));
+      push({ id: nextId(), role: "ai", card: { kind: "analytics" } }, say("先週より会話は増えています。改善候補は3件、上から順にやると効果的です。", [
+        { label: "1番をやる", action: "do1", tone: "primary" },
+      ]));
+    } else if (key === "history") {
+      push(me("最近の会話を教えて"));
+      push(say("直近142件のうち、AIが答えに困ったのは11件でした。そのうち9件が「送料」に関する質問です。まずここを直しますか？", [
+        { label: "送料を直す", action: "do1", tone: "primary" },
+      ]));
+    }
+  };
+
+  // Phase1: 自由入力は実APIに接続（sendReal）。チップ操作は引き続きスクリプト化されたモック。
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    void sendReal(text);
+  };
+
+  // ─── レイアウト ───────────────────────────────────────────────────────────
+  return (
+    <div style={{ display: "flex", height: "100vh", background: "var(--background)", color: "var(--foreground)", fontFamily: "var(--font-sans, system-ui, sans-serif)", overflow: "hidden" }}>
+      {/* 左レール(=各カテゴリはAIブリーフィングの窓口) */}
+      <aside style={{ width: 208, flexShrink: 0, background: "var(--sidebar, var(--card))", borderRight: "1px solid var(--border)", padding: "16px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
+        <div style={{ fontWeight: 900, fontSize: 15, letterSpacing: "-0.03em", padding: "4px 8px 4px" }}>
+          R2C
+          <span style={{ fontSize: 9, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "1px 6px", borderRadius: 5, marginLeft: 6, letterSpacing: "0.04em" }}>店主モード</span>
+        </div>
+        <PreviewBadge />
+        {CATEGORIES.map((c) => (
+          <button
+            key={c.key}
+            onClick={() => handleCategory(c.key)}
+            style={{
+              display: "flex", alignItems: "center", gap: 9, textAlign: "left",
+              padding: "8px 10px", borderRadius: 8, border: "none", cursor: "pointer",
+              fontSize: 13, fontWeight: active === c.key ? 700 : 500,
+              color: active === c.key ? AGENT : "var(--muted-foreground)",
+              background: active === c.key ? AGENT_SOFT : "transparent",
+              opacity: c.dim ? 0.55 : 1, minHeight: 38,
+            }}
+          >
+            <span style={{ fontSize: 15 }}>{c.icon}</span>{c.label}
+          </button>
+        ))}
+        <div style={{ marginTop: "auto", fontSize: 10.5, color: "var(--muted-foreground)", lineHeight: 1.5, padding: "8px" }}>
+          「くわしい設定」は従来画面のまま。会話UIは<strong style={{ color: "var(--foreground)" }}>追加</strong>で、既存は消していません。
+        </div>
+      </aside>
+
+      {/* チャット本体 */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        {/* ヘッダー */}
+        <header style={{ display: "flex", alignItems: "center", gap: 11, padding: "13px 20px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          <AgentMark />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>R2Cエージェント</div>
+            <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 0 3px rgba(34,197,94,0.15)" }} />オンライン
+            </div>
+          </div>
+          <ProgressPill done={done} total={3} />
+        </header>
+
+        {/* スレッド */}
+        <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: "22px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ width: "100%", maxWidth: 640, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+            {msgs.map((m) => (
+              <MessageRow key={m.id} m={m} onChip={runAction} done={done} />
+            ))}
+          </div>
+        </div>
+
+        {/* コンポーザ（実API接続） */}
+        <div style={{ padding: "0 20px 18px", flexShrink: 0 }}>
+          <div style={{ maxWidth: 640, margin: "0 auto" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 10px 8px 16px", border: `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 12, background: "var(--input, var(--card))" }}>
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
+                placeholder="指示ルールを話しかけてみてください（例：保証について聞かれたら2年と答えて）"
+                disabled={sending}
+                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--foreground)", fontSize: 13.5, minHeight: 28 }}
+              />
+              <button onClick={handleSend} disabled={sending} aria-label="送信" style={{ width: 32, height: 32, borderRadius: 9, border: "none", background: AGENT, color: "#fff", cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.6 : 1, fontSize: 15 }}>
+                {sending ? "…" : "↑"}
+              </button>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 10.5, color: "var(--muted-foreground)", textAlign: "center" }}>
+              ここだけ実際の R2Cエージェント（指示ルール作成）に接続されています。要ログイン。
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// ─── 部品 ────────────────────────────────────────────────────────────────────
+
+function PreviewBadge() {
+  return (
+    <div style={{ margin: "6px 8px 10px", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "4px 8px", lineHeight: 1.4 }}>
+      PROTOTYPE ・ 左のブリーフィング/チップはモック。下の入力欄だけ実APIに接続
+    </div>
+  );
+}
+
+function AgentMark() {
+  return (
+    <div style={{ width: 38, height: 38, borderRadius: "50%", flexShrink: 0, position: "relative", background: `conic-gradient(from 140deg, ${AGENT}, #d99320, ${AGENT})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ position: "absolute", inset: 3, borderRadius: "50%", background: "var(--card, var(--background))" }} />
+      <span style={{ position: "relative", zIndex: 1, fontSize: 17 }}>✨</span>
+    </div>
+  );
+}
+
+function ProgressPill({ done, total }: { done: number; total: number }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--muted-foreground)" }}>
+      <span>今週の改善 <strong style={{ color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>{done}/{total}</strong></span>
+      <span style={{ display: "flex", gap: 3 }}>
+        {Array.from({ length: total }).map((_, i) => (
+          <span key={i} style={{ width: 16, height: 5, borderRadius: 3, background: i < done ? "#22c55e" : "var(--border)" }} />
+        ))}
+      </span>
+    </div>
+  );
+}
+
+function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number, label: string) => void; done: number }) {
+  const isMe = m.role === "me";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 8 }}>
+      {m.text && (
+        <div style={{ maxWidth: "90%", padding: "11px 14px", borderRadius: isMe ? "14px 14px 5px 14px" : "14px 14px 14px 5px", background: isMe ? AGENT : "var(--muted, rgba(120,120,140,0.12))", color: isMe ? "#fff" : "var(--foreground)", fontSize: 13.5, lineHeight: 1.65, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {m.text}
+        </div>
+      )}
+      {m.card && <CardView card={m.card} />}
+      {m.chips && !m.chipsUsed && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {m.chips.map((c, i) => (
+            <button
+              key={i}
+              onClick={() => onChip(c.action, m.id, c.label)}
+              style={{
+                fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
+                border: c.tone === "primary" ? "none" : "1px solid var(--border)",
+                background: c.tone === "primary" ? AGENT : "transparent",
+                color: c.tone === "primary" ? "#fff" : "var(--muted-foreground)",
+                minHeight: 38,
+              }}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CardShell({ hd, tone = "agent", children, foot }: { hd: React.ReactNode; tone?: "agent" | "brand" | "good"; children: React.ReactNode; foot?: React.ReactNode }) {
+  const border = tone === "good" ? "rgba(34,197,94,0.4)" : tone === "brand" ? "rgba(217,147,32,0.4)" : AGENT_BORDER;
+  const hdBg = tone === "good" ? "rgba(34,197,94,0.12)" : tone === "brand" ? "rgba(217,147,32,0.12)" : AGENT_SOFT;
+  const hdColor = tone === "good" ? "#16a34a" : tone === "brand" ? "#b45309" : AGENT;
+  return (
+    <div style={{ width: "100%", maxWidth: "100%", border: `1px solid ${border}`, borderRadius: 14, overflow: "hidden", background: "var(--card)", boxShadow: "0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.06)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: hdBg, borderBottom: `1px solid ${border}`, fontWeight: 700, fontSize: 12.5, color: hdColor }}>{hd}</div>
+      <div style={{ padding: "13px 14px", display: "flex", flexDirection: "column", gap: 10 }}>{children}</div>
+      {foot}
+    </div>
+  );
+}
+
+function Field({ k, v, quote, hi }: { k: string; v: string; quote?: boolean; hi?: boolean }) {
+  return (
+    <div style={{ fontSize: 13 }}>
+      <div style={{ fontSize: 11, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 3 }}>{k}</div>
+      <div style={{ color: "var(--foreground)", ...(quote ? { background: "var(--muted, rgba(120,120,140,0.1))", borderRadius: 8, padding: "8px 11px", borderLeft: `3px solid ${hi ? "#d99320" : AGENT}`, lineHeight: 1.6 } : {}) }}>{v}</div>
+    </div>
+  );
+}
+
+function CardView({ card }: { card: Card }) {
+  switch (card.kind) {
+    case "agentAction":
+      return (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "9px 13px", borderRadius: 10, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", fontSize: 12.5, lineHeight: 1.6, maxWidth: "90%" }}>
+          <span style={{ fontSize: 13, flexShrink: 0 }}>✅</span>
+          <span>
+            <strong style={{ color: "var(--foreground)" }}>{REAL_TOOL_LABEL[card.tool] ?? card.tool}</strong>
+            <span style={{ color: "var(--muted-foreground)" }}>：{card.result}</span>
+          </span>
+        </div>
+      );
+    case "briefing":
+      return (
+        <CardShell tone="brand" hd={<><span>📊</span>今週のまとめ<span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, color: "#b45309" }}>7日間</span></>}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <Stat n="142" label="件の会話（先週比 +18%）" />
+            <Stat n="8" label="件の成約 ・ ¥96,000" />
+            <Stat n="11" label="件、AIが答えられなかった質問" crit />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 0, marginTop: 4 }}>
+            <Todo i="1" text="「送料はいくら？」に9人が困っていました。" g="答えを教えれば解決します" />
+            <Todo i="2" text="丁寧すぎて長い、という反応が増加。" g="少し短く話す設定にできます" />
+            <Todo i="3" text="夜21時台の離脱が多め。" g="声がけを1つ足すと拾えます" />
+          </div>
+        </CardShell>
+      );
+    case "analytics":
+      return (
+        <CardShell tone="agent" hd={<><span>📈</span>会話分析 ・ 今週の要約</>}>
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+            <Kpi n="142" label="会話数" sub="+18%" />
+            <Kpi n="82" label="応答品質" sub="/100" />
+            <Kpi n="8" label="成約" sub="¥96,000" />
+            <Kpi n="11" label="未回答" sub="要対応" crit />
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+            数字の羅列ではなく、<strong style={{ color: "var(--foreground)" }}>「で、何を直すか」</strong>まで私がご提案します。
+          </div>
+        </CardShell>
+      );
+    case "faq":
+      return (
+        <CardShell hd={<><span>📚</span>新しい知識を登録します</>}
+          foot={<CardActionsNote note="登録するまで反映されません。内容はいつでも直せます。" />}>
+          <Field k="お客様の質問" v={card.question} />
+          <Field k="AIが答える内容" v={card.answer} quote />
+          <Field k="分類" v={card.category + "（AIが自動で判定）"} />
+        </CardShell>
+      );
+    case "rule":
+      return (
+        <CardShell hd={<><span>🎛️</span>AIへの指示ルールを追加します</>}
+          foot={<CardActionsNote note="「いつ・どう振る舞うか」を1つの指示にまとめました。" />}>
+          <Field k="どんな時に" v={card.trigger} />
+          <Field k="こう振る舞う" v={card.behavior} quote />
+        </CardShell>
+      );
+    case "engagement":
+      return (
+        <CardShell hd={<><span>⚡</span>お客様への声がけを設定します</>}
+          foot={<CardActionsNote note="離脱しそうなタイミングを検知して自動で表示します。" />}>
+          <Field k="いつ出すか" v={card.when} />
+          <Field k="表示する言葉" v={card.message} quote hi />
+        </CardShell>
+      );
+    case "sai":
+      return (
+        <CardShell tone="agent" hd={<><span>🤖</span>R2Cが代わりに直しました</>}
+          foot={<CardActionsNote note="画面を見て、これで良ければOKを押してください。" />}>
+          <Field k="依頼" v={card.request} />
+          <Screenshot url={card.url} />
+          <Field k="結果" v={card.result} />
+        </CardShell>
+      );
+    case "success":
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 13px", borderRadius: 11, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", color: "var(--foreground)", fontSize: 13 }}>
+          <span style={{ fontSize: 15 }}>✅</span>{card.text}
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+function CardActionsNote({ note }: { note: string }) {
+  // ボタン自体はメッセージのchipsが担うため、ここは補足文のみ
+  return (
+    <div style={{ padding: "9px 14px", borderTop: "1px solid var(--border)", background: "var(--muted, rgba(120,120,140,0.06))", fontSize: 11, color: "var(--muted-foreground)" }}>
+      {note}
+    </div>
+  );
+}
+
+function Stat({ n, label, crit }: { n: string; label: string; crit?: boolean }) {
+  return (
+    <div style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 13 }}>
+      <b style={{ fontVariantNumeric: "tabular-nums", fontWeight: 800, fontSize: 15, color: crit ? "#dc2626" : "var(--foreground)" }}>{n}</b>
+      <span style={{ color: "var(--muted-foreground)" }}>{label}</span>
+    </div>
+  );
+}
+
+function Kpi({ n, label, sub, crit }: { n: string; label: string; sub: string; crit?: boolean }) {
+  return (
+    <div>
+      <div style={{ fontSize: 20, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: crit ? "#dc2626" : "var(--foreground)", lineHeight: 1.1 }}>{n}</div>
+      <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{label} <span style={{ opacity: 0.7 }}>{sub}</span></div>
+    </div>
+  );
+}
+
+function Todo({ i, text, g }: { i: string; text: string; g: string }) {
+  return (
+    <div style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: "1px dashed var(--border)", fontSize: 12.5, alignItems: "flex-start" }}>
+      <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 700, color: AGENT, fontSize: 12 }}>{i}</span>
+      <span style={{ color: "var(--foreground)" }}>{text}<span style={{ color: "var(--muted-foreground)", fontSize: 11.5 }}> → {g}</span></span>
+    </div>
+  );
+}
+
+function Screenshot({ url }: { url: string }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "7px 10px", background: "var(--muted, rgba(120,120,140,0.1))", borderBottom: "1px solid var(--border)" }}>
+        <i style={{ width: 8, height: 8, borderRadius: "50%", background: "#e0697c", display: "inline-block" }} />
+        <i style={{ width: 8, height: 8, borderRadius: "50%", background: "#eeb84c", display: "inline-block" }} />
+        <i style={{ width: 8, height: 8, borderRadius: "50%", background: "#4bbd83", display: "inline-block" }} />
+        <span style={{ marginLeft: 8, fontFamily: "var(--font-mono, monospace)", fontSize: 10, color: "var(--muted-foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</span>
+      </div>
+      <div style={{ padding: 13, display: "flex", flexDirection: "column", gap: 7 }}>
+        <div style={{ height: 9, width: "55%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
+        <div style={{ height: 9, width: "88%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
+        <div style={{ height: 9, width: "66%", borderRadius: 4, background: "rgba(34,197,94,0.18)", border: "1px solid rgba(34,197,94,0.5)" }} />
+        <div style={{ height: 9, width: "40%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
+      </div>
+    </div>
+  );
+}

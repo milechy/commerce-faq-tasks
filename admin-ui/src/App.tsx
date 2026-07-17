@@ -39,6 +39,9 @@ import ConversionDashboardPage from "./pages/admin/conversion/index";
 import OptionManagementPage from "./pages/admin/options/index";
 import ResetPasswordPage from "./pages/ResetPassword";
 import AuthBridgePage from "./pages/AuthBridgePage";
+// 【追加専用・プロトタイプ】テナント向けチャット・ファースト管理画面のUX検証ページ。
+// 認証ゲート外の隔離ルート。既存の管理画面には一切影響しない。URL: /copilot-preview
+import CopilotPreviewPage from "./pages/copilot-preview/index";
 import { AdminAgentUIProvider, useAdminAgentUI } from "./contexts/AdminAgentUIContext";
 import { supabaseConfigured } from "./lib/supabaseClient";
 
@@ -100,11 +103,22 @@ function AppInner() {
   const isLogin =
     location.pathname === "/login" || location.pathname === "/reset-password";
   const isAuthBridge = location.pathname === "/auth/bridge";
+  // 【追加専用・プロトタイプ】チャット・ファースト管理画面のプレビュー。
+  // 認証ゲートより手前で隔離返却するため、既存のルート/サイドバー/認可には触れない。
+  const isCopilotPreview = location.pathname === "/copilot-preview";
 
   if (isAuthBridge) {
     return (
       <Routes>
         <Route path="/auth/bridge" element={<AuthBridgePage />} />
+      </Routes>
+    );
+  }
+
+  if (isCopilotPreview) {
+    return (
+      <Routes>
+        <Route path="/copilot-preview" element={<CopilotPreviewPage />} />
       </Routes>
     );
   }
