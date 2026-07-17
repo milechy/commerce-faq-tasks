@@ -1,23 +1,23 @@
 import { test, expect } from '@playwright/test';
 
-// 既知バグ再現: super_admin の「クライアントビューで見る」プレビュー中、escalations ページが
-// previewTenantId でスコープされず全テナントの対応中会話を返してしまう（chat-history で修正された
-// GID 1216277595663810 / PR #463 と同じパターンが escalations/index.tsx に未適用）。
+// 回帰検知用: super_admin の「クライアントビューで見る」プレビュー中に previewTenantId が
+// 正しく使われず、テナントスコープが壊れる/画面が空白になる不具合の恒久テスト群。
 //
-// escalations/index.tsx:36 は `/v1/admin/chat-history/escalations` を tenant パラメータ無しで呼ぶ。
-// preview はフロント専用(JWTは super_admin のまま)なので、バックエンドは全テナントを返す。
-// → carnation をプレビュー中でも r2c_default 等の escalation が混入する。
-//
-// 実データ前提: escalations は carnation=9 / r2c_default=1（2026-07-17 時点）。r2c_default の1件が
-// カナリア。プレビュー先=carnation の一覧にこれが出れば越境リーク。
+// C-LEAK-1: escalations が previewTenantId でスコープされず全テナントの対応中会話を返す不具合
+//   (chat-history で修正済みの GID 1216277595663810 / PR #463 と同パターンが escalations/index.tsx
+//   に未適用だった)。GID 1216643716725652 / PR #480 で修正・デプロイ確認済み(2026-07-17)。
+// C-LEAK-2: 「AIの知識データ」ナビ(AppSidebar.tsx)がリンク生成時に previewTenantId を見ず
+//   `/admin/knowledge/`(空のtenantId)になり画面が白紙になる不具合。
+//   GID 1216646499090814 / PR #481 で修正・デプロイ確認済み(2026-07-17)。
 //
 // 注: preview 状態は useAuth の in-memory state（永続化なし）。投入後にページを reload すると状態が
-// 消えるため、escalations へは SPA 内リンククリックで遷移する（page.goto は使わない）。
+// 消えるため、各ページへは SPA 内リンククリックで遷移する（page.goto は使わない）。
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 const ADMIN = 'https://admin.r2c.biz';
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';
 const PREVIEW_TENANT = 'carnation';
+const PREVIEW_TENANT_2 = 'lp-demo';
 
 // super_admin storageState の有効性チェック（未生成/期限切れなら skip）
 const fs = require('fs');
@@ -40,13 +40,12 @@ test.describe('Preview scope leak (known bug) — escalations が preview テナ
     test.skip(!saReady, 'super_admin storageState 未生成/期限切れ');
   });
 
-  test('C-LEAK-1: carnation プレビュー中の escalations に他テナント行が混入しない（現状=混入する）', async ({
+  test('C-LEAK-1: carnation プレビュー中の escalations に他テナント行が混入しない', async ({
     page,
   }) => {
-    // 既知バグ: escalations/index.tsx が previewTenantId を見ずバックエンドJWTスコープに依存するため、
-    // preview中も全テナントが返る。修正(chat-history と同じ previewTenantId スコープ適用)が入ると本
-    // アサーションは通り、test.fail により「失敗するはずが成功」で赤くなる → 修正検知＆本注釈の除去合図。
-    test.fail(true, '既知の preview スコープ漏洩バグ (escalations/index.tsx, GID 1216277595663810 と同パターン)');
+    // GID 1216643716725652 で修正済み（chat-history と同じ previewTenantId スコープを
+    // escalations/index.tsx に適用）。本番(admin.r2c.biz)で2026-07-17 に修正のデプロイと
+    // green化を確認済み。回帰検知用の固定テストとして残す。
 
     // 1. テナント詳細を開き、プレビュー投入
     await page.goto(`${ADMIN}/admin/tenants/${PREVIEW_TENANT}`, { waitUntil: 'domcontentloaded' });
@@ -76,5 +75,27 @@ test.describe('Preview scope leak (known bug) — escalations が preview テナ
       foreign,
       `プレビュー中(carnation)に他テナントの escalation が漏洩: ${JSON.stringify(foreign)}`,
     ).toHaveLength(0);
+  });
+
+  test('C-LEAK-2: lp-demo プレビュー中に「AIの知識データ」を開くと白紙にならず正しいテナントで表示される', async ({
+    page,
+  }) => {
+    // 1. テナント詳細を開き、プレビュー投入
+    await page.goto(`${ADMIN}/admin/tenants/${PREVIEW_TENANT_2}`, { waitUntil: 'domcontentloaded' });
+    const previewBtn = page.getByRole('button', { name: /クライアントビューで見る/ });
+    await previewBtn.waitFor({ timeout: 15000 });
+    await previewBtn.click();
+    await expect(page.getByText(/プレビューモード|元に戻す/).first()).toBeVisible({ timeout: 10000 });
+
+    // 2. SPA内リンククリックでナレッジへ（page.gotoはpreview状態をリセットしてしまうため使わない）
+    await page.getByText('AIの知識データ').first().click();
+    await page.waitForTimeout(1500);
+
+    // 3. URLがプレビュー先テナントに正しく解決されていること（空文字にフォールバックしない）
+    expect(page.url()).toBe(`${ADMIN}/admin/knowledge/${PREVIEW_TENANT_2}`);
+
+    // 4. 画面が白紙(不具合時 body長 ~200字)ではなく、ナレッジUI(タブ等)が描画されていること
+    await expect(page.getByText('ナレッジ一覧')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: /テキスト入力/ })).toBeVisible();
   });
 });
