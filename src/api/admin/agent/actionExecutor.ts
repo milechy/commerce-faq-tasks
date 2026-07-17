@@ -10,6 +10,9 @@ import {
 import { callGroq8bSuggestFromText } from '../tuning/routes';
 import { listRules, createRule } from '../tuning/tuningRulesRepository';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
+import { getGaps } from '../knowledge/knowledgeGapRepository';
+import { textToFaqs } from '../knowledge/routes';
+import { suggestEngagementRuleFromText } from './engagementSuggest';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -425,6 +428,227 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] save_tuning_rule failed', err);
         return truncate('ルールの保存に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase2 (P7 プロアクティブ・ブリーフィング): 直近7日間の状況を1回で要約取得する
+    // 読み取り専用ツール。ログイン直後など能動的な状況説明に使う。
+    case 'get_weekly_briefing': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes] = await Promise.all([
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM chat_sessions
+             WHERE tenant_id = $1 AND started_at >= NOW() - INTERVAL '7 days'`,
+            [tenantId],
+          ),
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM chat_sessions
+             WHERE tenant_id = $1
+               AND started_at >= NOW() - INTERVAL '14 days'
+               AND started_at < NOW() - INTERVAL '7 days'`,
+            [tenantId],
+          ),
+          db.query(
+            `SELECT AVG(score) AS avg FROM conversation_evaluations
+             WHERE tenant_id = $1 AND evaluated_at >= NOW() - INTERVAL '7 days' AND score > 0`,
+            [tenantId],
+          ),
+          db.query(
+            `SELECT COUNT(*)::int AS n, COALESCE(SUM(conversion_value), 0)::numeric AS total
+             FROM conversion_attributions
+             WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`,
+            [tenantId],
+          ),
+          getGaps({ tenantId, status: 'open', limit: 3 }),
+        ]);
+
+        const totalSessions = Number(sessionsRes.rows[0]?.n ?? 0);
+        const prevSessions = Number(prevSessionsRes.rows[0]?.n ?? 0);
+        const changePct = prevSessions > 0 ? Math.round(((totalSessions - prevSessions) / prevSessions) * 100) : null;
+        const avgScoreRaw = evalRes.rows[0]?.avg;
+        const avgScore = avgScoreRaw != null ? Math.round(Number(avgScoreRaw)) : null;
+        const cvCount = Number(cvRes.rows[0]?.n ?? 0);
+        const cvTotal = Math.round(Number(cvRes.rows[0]?.total ?? 0));
+        const { gaps, total: gapsTotal } = gapsRes;
+
+        const lines: string[] = ['直近7日間の状況:'];
+        lines.push(
+          `会話数 ${totalSessions}件` +
+          (changePct !== null ? `（前週比 ${changePct >= 0 ? '+' : ''}${changePct}%）` : ''),
+        );
+        if (avgScore !== null) lines.push(`応答品質スコア ${avgScore}/100`);
+        lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
+        lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
+        if (gaps.length > 0) {
+          lines.push('うち上位:');
+          gaps.forEach((g, i) => {
+            lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
+          });
+        }
+
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_weekly_briefing failed', err);
+        return truncate('週次サマリーの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase3: suggest_faq — 自然文からFAQ下書きを生成する読み取り専用ツール
+    case 'suggest_faq': {
+      const freeText = String(args['free_text'] ?? '').trim();
+      if (!freeText) return truncate('free_text は必須です');
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const existing = await db.query(
+          `SELECT question FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 40`,
+          [tenantId],
+        );
+        const existingQuestions = (existing.rows as { question: string }[]).map((r) => r.question);
+
+        const faqs = await textToFaqs(freeText, undefined, existingQuestions);
+        if (faqs.length === 0) {
+          return truncate('FAQの下書き生成に失敗しました。もう少し具体的に教えてください');
+        }
+
+        const top = faqs[0]!;
+        const lines = [
+          '提案:',
+          `質問: ${top.question}`,
+          `回答: ${top.answer}`,
+          `分類: ${top.category ?? '(自動判定)'}`,
+        ];
+        if (faqs.length > 1) lines.push(`（他に${faqs.length - 1}件の候補も生成されました。必要なら伝えてください）`);
+        lines.push('この内容でよいかユーザーに確認し、同意が得られたら save_faq を呼び出してください（question/answer/category は上記の提案値を使うこと）。');
+
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_faq failed', err);
+        return truncate('FAQの下書き生成に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase3: save_faq — confirmedゲート必須のFAQ保存(add_faqと同じINSERT経路)
+    case 'save_faq': {
+      const confirmed = Boolean(args['confirmed']);
+      const question = String(args['question'] ?? '').slice(0, 500);
+      const answer = String(args['answer'] ?? '').slice(0, 2000);
+      const category = typeof args['category'] === 'string' ? args['category'] : null;
+
+      if (!confirmed) {
+        return truncate('FAQの保存には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!question || !answer) {
+        return truncate('question と answer は必須です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const result = await db.query(
+          `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
+           VALUES ($1, $2, $3, $4, true)
+           RETURNING id, question, answer, is_published`,
+          [tenantId, question, answer, category],
+        );
+        const row = result.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
+
+        insertEmbeddingAsync(db, tenantId, `${row.question}\n${row.answer}`, row.id, {
+          source: 'admin_agent',
+          faq_id: row.id,
+        });
+        upsertToEsAsync(tenantId, row.id, row.question, row.answer, row.is_published);
+
+        return truncate(`FAQを保存しました（ID: ${row.id}）: ${row.question}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] save_faq failed', err);
+        return truncate('FAQの保存に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase3: suggest_engagement_rule — 自然文から声がけルールの下書きを生成する読み取り専用ツール
+    case 'suggest_engagement_rule': {
+      const freeText = String(args['free_text'] ?? '').trim();
+      if (!freeText) return truncate('free_text は必須です');
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const suggestion = await suggestEngagementRuleFromText(freeText);
+        if (!suggestion.message_template) {
+          return truncate('声がけの下書き生成に失敗しました。もう少し具体的に教えてください');
+        }
+
+        const lines = [
+          '提案:',
+          `トリガー種別: ${suggestion.trigger_type}`,
+          `トリガー設定: ${JSON.stringify(suggestion.trigger_config)}`,
+          `表示文言: ${suggestion.message_template}`,
+          `優先度: ${suggestion.priority}`,
+        ];
+        if (suggestion.reason) lines.push(`理由: ${suggestion.reason}`);
+        lines.push('この内容でよいかユーザーに確認し、同意が得られたら save_engagement_rule を呼び出してください（trigger_type/trigger_config/message_template/priority は上記の提案値を使うこと）。');
+
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_engagement_rule failed', err);
+        return truncate('声がけの下書き生成に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase3: save_engagement_rule — confirmedゲート必須の声がけルール保存(trigger_rules)
+    case 'save_engagement_rule': {
+      const confirmed = Boolean(args['confirmed']);
+      const triggerType = String(args['trigger_type'] ?? '');
+      const messageTemplate = String(args['message_template'] ?? '').slice(0, 500);
+      const priorityRaw = Number(args['priority']);
+      const priority = Number.isFinite(priorityRaw) ? Math.max(0, Math.min(100, Math.round(priorityRaw))) : 0;
+      const triggerConfigRaw = args['trigger_config'];
+
+      const VALID_TYPES = new Set(['scroll_depth', 'idle_time', 'exit_intent', 'page_url_match']);
+
+      if (!confirmed) {
+        return truncate('声がけルールの保存には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!VALID_TYPES.has(triggerType)) {
+        return truncate('trigger_type が不正です（scroll_depth/idle_time/exit_intent/page_url_match のいずれか）');
+      }
+      if (!messageTemplate) {
+        return truncate('message_template は必須です');
+      }
+      if (typeof triggerConfigRaw !== 'object' || triggerConfigRaw === null || Array.isArray(triggerConfigRaw)) {
+        return truncate('trigger_config はオブジェクト形式で指定してください');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const result = await db.query(
+          `INSERT INTO trigger_rules (tenant_id, trigger_type, trigger_config, message_template, is_active, priority)
+           VALUES ($1, $2, $3, $4, true, $5)
+           RETURNING id, trigger_type, message_template`,
+          [tenantId, triggerType, JSON.stringify(triggerConfigRaw), messageTemplate, priority],
+        );
+        const row = result.rows[0] as { id: number; trigger_type: string; message_template: string };
+
+        return truncate(`声がけルールを保存しました（ID: ${row.id}）: 「${row.trigger_type}」→ ${row.message_template}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] save_engagement_rule failed', err);
+        return truncate('声がけルールの保存に失敗しました');
       }
     }
 

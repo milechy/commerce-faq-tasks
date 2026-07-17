@@ -12,6 +12,7 @@
 // テーマは既存の CSS 変数に追従(light/dark両対応)。
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
@@ -31,8 +32,13 @@ type Card =
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
 const REAL_TOOL_LABEL: Record<string, string> = {
+  get_weekly_briefing: "週次ブリーフィングの取得",
   suggest_tuning_rule: "指示ルールの下書き提案",
   save_tuning_rule: "指示ルールの保存",
+  suggest_faq: "FAQの下書き提案",
+  save_faq: "FAQの保存",
+  suggest_engagement_rule: "声がけの下書き提案",
+  save_engagement_rule: "声がけの保存",
   get_tenant_settings: "テナント設定の取得",
   set_ga4_id: "GA4設定の変更",
   set_posthog: "PostHog設定の変更",
@@ -44,6 +50,107 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_embed_code: "埋め込みコードの取得",
   set_widget_theme: "ウィジェットテーマの変更",
 };
+
+// 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
+const REAL_WRITE_TOOLS = new Set([
+  "save_tuning_rule",
+  "save_faq",
+  "save_engagement_rule",
+  "add_faq",
+  "update_faq",
+  "delete_faq",
+  "set_ga4_id",
+  "set_posthog",
+  "set_widget_theme",
+  "activate_avatar",
+]);
+
+// Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ
+const BOOTSTRAP_PROMPT =
+  "ログインしたところです。今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
+
+// ─── 実APIのツール結果 → 見た目の良いカードへの変換 ────────────────────────────
+// actionExecutor.ts が返す日本語の定型文字列を軽くパースする。想定外の形式なら
+// null を返し、呼び出し側は汎用の agentAction カード（生テキスト）にフォールバックする。
+
+function parseSuggestFaq(result: string): { question: string; answer: string; category: string } | null {
+  const q = result.match(/質問:\s*(.+)/)?.[1]?.trim();
+  const a = result.match(/回答:\s*(.+)/)?.[1]?.trim();
+  if (!q || !a) return null;
+  const c = result.match(/分類:\s*(.+)/)?.[1]?.trim();
+  return { question: q, answer: a, category: c || "(自動判定)" };
+}
+
+function parseSuggestTuningRule(result: string): { trigger: string; behavior: string } | null {
+  const t = result.match(/トリガー:\s*(.+)/)?.[1]?.trim();
+  const b = result.match(/対応方針:\s*(.+)/)?.[1]?.trim();
+  if (!t || !b) return null;
+  return { trigger: t, behavior: b };
+}
+
+function describeEngagementTrigger(type: string, config: Record<string, unknown>): string {
+  switch (type) {
+    case "idle_time":
+      return `${config["seconds"] ?? "?"}秒間操作がない時`;
+    case "scroll_depth":
+      return `ページを${config["threshold"] ?? "?"}%スクロールした時`;
+    case "exit_intent":
+      return "サイトを離れようとした時";
+    case "page_url_match": {
+      const patterns = Array.isArray(config["patterns"]) ? (config["patterns"] as unknown[]).join("・") : "特定ページ";
+      return `${patterns} を見ている時`;
+    }
+    default:
+      return type;
+  }
+}
+
+function parseSuggestEngagementRule(result: string): { when: string; message: string } | null {
+  const type = result.match(/トリガー種別:\s*(.+)/)?.[1]?.trim();
+  const cfgRaw = result.match(/トリガー設定:\s*(\{.*\})/)?.[1];
+  const message = result.match(/表示文言:\s*(.+)/)?.[1]?.trim();
+  if (!type || !message) return null;
+  let config: Record<string, unknown> = {};
+  try {
+    config = cfgRaw ? (JSON.parse(cfgRaw) as Record<string, unknown>) : {};
+  } catch {
+    // パース失敗時はトリガー種別名だけで表示（フォールバック文言）
+  }
+  return { when: describeEngagementTrigger(type, config), message };
+}
+
+const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定)しました/;
+
+// ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
+//     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
+//     少しずつ表示するだけ。真のストリーミングにはバックエンドの
+//     SSE化(本番AdminAgentPanelと共有するエンドポイントの変更)が必要で別スコープ） ───
+
+function useTypewriter(setMsgs: Dispatch<SetStateAction<Msg[]>>) {
+  return useCallback(
+    (id: number, fullText: string, onDone?: () => void) => {
+      const reduceMotion =
+        typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (reduceMotion || !fullText) {
+        setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, text: fullText } : m)));
+        onDone?.();
+        return;
+      }
+      const chars = Array.from(fullText); // サロゲートペア・絵文字を考慮
+      let i = 0;
+      const CHARS_PER_TICK = 3;
+      const timer = setInterval(() => {
+        i = Math.min(chars.length, i + CHARS_PER_TICK);
+        setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, text: chars.slice(0, i).join("") } : m)));
+        if (i >= chars.length) {
+          clearInterval(timer);
+          onDone?.();
+        }
+      }, 16);
+    },
+    [setMsgs],
+  );
+}
 
 interface Chip {
   label: string;
@@ -80,29 +187,16 @@ const nextId = () => ++_uid;
 
 export default function CopilotPreviewPage() {
   const [active, setActive] = useState("assistant");
-  const [done, setDone] = useState(0); // 今週の改善 3件中 done件 完了
+  const [done, setDone] = useState(0); // モックデモ: 今週の改善 3件中 done件 完了
   const [input, setInput] = useState("");
-  const [msgs, setMsgs] = useState<Msg[]>(() => [
-    {
-      id: nextId(),
-      role: "ai",
-      text: "おはようございます、田中さん☀️ 今週のお店の様子をまとめました。",
-    },
-    {
-      id: nextId(),
-      role: "ai",
-      card: { kind: "briefing" },
-      chips: [
-        { label: "1番をやる", action: "do1", tone: "primary" },
-        { label: "あとで", action: "later", tone: "ghost" },
-      ],
-    },
-  ]);
+  // Phase2: 起動直後は空。bootstrap()が①実データのブリーフィング→②モックデモの順で積む
+  const [msgs, setMsgs] = useState<Msg[]>([]);
 
-  // Phase1: 自由入力欄だけが繋がる実チャットの状態(会話履歴・送信中フラグ)
+  // Phase1/2: 自由入力欄・起動時ブリーフィングが繋がる実チャットの状態
   const sessionIdRef = useRef<string>(crypto.randomUUID());
   const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [sending, setSending] = useState(false);
+  const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
 
   const threadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -114,6 +208,8 @@ export default function CopilotPreviewPage() {
     setMsgs((prev) => [...prev, ...items]);
   }, []);
 
+  const revealText = useTypewriter(setMsgs);
+
   const say = (text: string, chips?: Chip[]): Msg => ({ id: nextId(), role: "ai", text, chips });
   const me = (text: string): Msg => ({ id: nextId(), role: "me", text });
 
@@ -121,11 +217,12 @@ export default function CopilotPreviewPage() {
   const consumeChips = (msgId: number) =>
     setMsgs((prev) => prev.map((m) => (m.id === msgId ? { ...m, chipsUsed: true } : m)));
 
-  // Phase1: 実際の R2Cエージェント API を呼ぶ（自由入力欄からのみ）。
-  // suggest_tuning_rule / save_tuning_rule ツールで、指示ルールの下書き提案〜保存が本物のDBに書き込まれる。
-  const sendReal = async (text: string) => {
+  // Phase1/2: 実際の R2Cエージェント API を呼ぶ（自由入力欄・起動時ブリーフィングから）。
+  // suggest_tuning_rule / save_tuning_rule / get_weekly_briefing 等が本物のDBを読み書きする。
+  // silent=true はページ起動時の自動キックオフ用（ユーザーが打った体で me() バブルを積まない）。
+  const sendReal = async (text: string, opts?: { silent?: boolean }) => {
     if (!text.trim() || sending) return;
-    push(me(text));
+    if (!opts?.silent) push(me(text));
     setSending(true);
     try {
       const body: { message: string; sessionId: string; history?: typeof realHistory } = {
@@ -142,6 +239,7 @@ export default function CopilotPreviewPage() {
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({} as { error?: string }));
         push(say(errBody.error ? `エラー: ${errBody.error}` : "うまく送信できませんでした。少し時間をおいてお試しください。"));
+        setSending(false);
         return;
       }
 
@@ -154,14 +252,36 @@ export default function CopilotPreviewPage() {
         ].slice(-20),
       );
 
-      const actionMsgs: Msg[] = (data.actions ?? []).map((a) => ({
-        id: nextId(),
-        role: "ai",
-        card: { kind: "agentAction", tool: a.tool, result: a.result },
-      }));
+      // ツール結果を、可能なら提案書と同じ見た目のカードにパースする。
+      // 想定外の形式(下書き生成失敗時のエラー文など)は汎用の agentAction カードにフォールバック。
+      const actionMsgs: Msg[] = (data.actions ?? []).map((a) => {
+        if (a.tool === "suggest_faq") {
+          const parsed = parseSuggestFaq(a.result);
+          if (parsed) return { id: nextId(), role: "ai", card: { kind: "faq", ...parsed } };
+        } else if (a.tool === "suggest_tuning_rule") {
+          const parsed = parseSuggestTuningRule(a.result);
+          if (parsed) return { id: nextId(), role: "ai", card: { kind: "rule", ...parsed } };
+        } else if (a.tool === "suggest_engagement_rule") {
+          const parsed = parseSuggestEngagementRule(a.result);
+          if (parsed) return { id: nextId(), role: "ai", card: { kind: "engagement", ...parsed } };
+        } else if (
+          (a.tool === "save_faq" || a.tool === "save_tuning_rule" || a.tool === "save_engagement_rule") &&
+          SAVE_SUCCESS_RE.test(a.result)
+        ) {
+          return { id: nextId(), role: "ai", card: { kind: "success", text: a.result } };
+        }
+        return { id: nextId(), role: "ai", card: { kind: "agentAction", tool: a.tool, result: a.result } };
+      });
 
-      // suggest_tuning_rule の下書きが出たら、そのまま自然文で確定できるチップを添える
-      const suggested = data.actions?.some((a) => a.tool === "suggest_tuning_rule");
+      // 実際にDBへ書き込んだ操作(確認ブロックで弾かれたものは除く)だけを実進捗としてカウントする
+      const writesThisTurn = (data.actions ?? []).filter(
+        (a) => REAL_WRITE_TOOLS.has(a.tool) && !a.result.includes("確認が必要"),
+      ).length;
+      if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
+
+      // suggest系の下書きが出たら、そのまま自然文で確定できるチップを添える
+      const SUGGEST_TOOLS = new Set(["suggest_tuning_rule", "suggest_faq", "suggest_engagement_rule"]);
+      const suggested = data.actions?.some((a) => SUGGEST_TOOLS.has(a.tool));
       const chips: Chip[] | undefined = suggested
         ? [
             { label: "保存して", action: "__real:保存してください", tone: "primary" },
@@ -169,17 +289,56 @@ export default function CopilotPreviewPage() {
           ]
         : undefined;
 
-      push(...actionMsgs, { id: nextId(), role: "ai", text: data.reply || "（応答なし）", chips });
+      push(...actionMsgs);
+
+      // 最終返信だけを少しずつ流し込む(演出)。チップは流し込み完了後に表示する。
+      const replyId = nextId();
+      push({ id: replyId, role: "ai", text: "" });
+      revealText(replyId, data.reply || "（応答なし）", () => {
+        if (chips) setMsgs((prev) => prev.map((m) => (m.id === replyId ? { ...m, chips } : m)));
+        setSending(false);
+      });
+      return; // setSending(false) は revealText の完了コールバックに任せる
     } catch (err: any) {
       if (err?.message === "__AUTH_REQUIRED__") {
         push(say("ログインが必要です。別タブで管理画面にログインしてから、もう一度お試しください。"));
       } else {
         push(say("うまく送信できませんでした。少し時間をおいてお試しください。"));
       }
-    } finally {
-      setSending(false);
     }
+    setSending(false);
   };
+
+  // Phase2 (P7): マウント時に実データの週次ブリーフィングを自動取得 → その後にモックデモを積む
+  const bootstrapped = useRef(false);
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+
+    void (async () => {
+      push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
+      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+
+      push({
+        id: nextId(),
+        role: "ai",
+        text: "─────────────\nここから先は、将来のビジョンのデモです（バックエンド未接続のスクリプト固定・サンプルデータ）。",
+      });
+      push(
+        { id: nextId(), role: "ai", text: "おはようございます、田中さん☀️ 今週のお店の様子をまとめました。" },
+        {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "briefing" },
+          chips: [
+            { label: "1番をやる", action: "do1", tone: "primary" },
+            { label: "あとで", action: "later", tone: "ghost" },
+          ],
+        },
+      );
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const runAction = (action: string, fromMsgId: number, label: string) => {
     consumeChips(fromMsgId);
@@ -417,7 +576,10 @@ export default function CopilotPreviewPage() {
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 0 3px rgba(34,197,94,0.15)" }} />オンライン
             </div>
           </div>
-          <ProgressPill done={done} total={3} />
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <RealActionBadge count={realActionCount} />
+            <ProgressPill done={done} total={3} />
+          </div>
         </header>
 
         {/* スレッド */}
@@ -460,7 +622,7 @@ export default function CopilotPreviewPage() {
 function PreviewBadge() {
   return (
     <div style={{ margin: "6px 8px 10px", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "4px 8px", lineHeight: 1.4 }}>
-      PROTOTYPE ・ 左のブリーフィング/チップはモック。下の入力欄だけ実APIに接続
+      PROTOTYPE ・ 起動時ブリーフィング＋下の入力欄は実API接続。チップのデモ部分のみモック
     </div>
   );
 }
@@ -470,6 +632,15 @@ function AgentMark() {
     <div style={{ width: 38, height: 38, borderRadius: "50%", flexShrink: 0, position: "relative", background: `conic-gradient(from 140deg, ${AGENT}, #d99320, ${AGENT})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ position: "absolute", inset: 3, borderRadius: "50%", background: "var(--card, var(--background))" }} />
       <span style={{ position: "relative", zIndex: 1, fontSize: 17 }}>✨</span>
+    </div>
+  );
+}
+
+function RealActionBadge({ count }: { count: number }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: count > 0 ? "#16a34a" : "var(--muted-foreground)" }}>
+      <span style={{ fontSize: 11 }}>{count > 0 ? "✅" : "◦"}</span>
+      実際の操作 <strong style={{ fontVariantNumeric: "tabular-nums" }}>{count}</strong>件
     </div>
   );
 }

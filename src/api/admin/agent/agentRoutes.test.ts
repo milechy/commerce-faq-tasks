@@ -53,6 +53,24 @@ jest.mock('../../../lib/knowledgeSearchUtil', () => ({
   formatKnowledgeContext: jest.fn().mockReturnValue(''),
 }));
 
+// get_weekly_briefing が使う依存をモック
+const mockGetGaps = jest.fn();
+jest.mock('../knowledge/knowledgeGapRepository', () => ({
+  getGaps: (...args: any[]) => mockGetGaps(...args),
+}));
+
+// suggest_faq / save_faq が使う依存をモック
+const mockTextToFaqs = jest.fn();
+jest.mock('../knowledge/routes', () => ({
+  textToFaqs: (...args: any[]) => mockTextToFaqs(...args),
+}));
+
+// suggest_engagement_rule が使う依存をモック
+const mockSuggestEngagementRuleFromText = jest.fn();
+jest.mock('./engagementSuggest', () => ({
+  suggestEngagementRuleFromText: (...args: any[]) => mockSuggestEngagementRuleFromText(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -127,6 +145,7 @@ describe('POST /v1/admin/agent/chat', () => {
     jest.clearAllMocks();
     process.env.GROQ_API_KEY = 'test-groq-key';
     mockListRules.mockResolvedValue([]);
+    mockGetGaps.mockResolvedValue({ gaps: [], total: 0 });
   });
 
   // -------------------------------------------------------------------------
@@ -573,6 +592,358 @@ describe('POST /v1/admin/agent/chat', () => {
         }),
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase2 (P7): get_weekly_briefing — 直近7日間の状況を1回で要約取得
+  // -------------------------------------------------------------------------
+  describe('get_weekly_briefing', () => {
+    it('会話数・前週比・品質スコア・成約・未回答質問トップ3を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-1',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週は会話が増えています。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 142 }] }) // 今週セッション数
+        .mockResolvedValueOnce({ rows: [{ n: 120 }] }) // 先週セッション数
+        .mockResolvedValueOnce({ rows: [{ avg: '82.4' }] }) // 平均スコア
+        .mockResolvedValueOnce({ rows: [{ n: 8, total: '96000' }] }); // 成約
+
+      mockGetGaps.mockResolvedValueOnce({
+        gaps: [
+          { id: 1, tenant_id: 'tenant-abc', user_question: '送料はいくらですか？', session_id: null, message_id: null, rag_hit_count: 0, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+        ],
+        total: 11,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-040' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetGaps).toHaveBeenCalledWith({ tenantId: 'tenant-abc', status: 'open', limit: 3 });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('142件');
+      expect(result).toContain('+18%'); // (142-120)/120 = 18.3% → 丸めて18%
+      expect(result).toContain('82/100');
+      expect(result).toContain('8件・¥96,000');
+      expect(result).toContain('11件');
+      expect(result).toContain('送料はいくらですか？');
+    });
+
+    it('super_admin がテナント未特定 → テナント特定を促すメッセージを返しDBクエリは発火しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-2',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '状況を教えて', sessionId: 'sess-041' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockGetGaps).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase3: suggest_faq / save_faq
+  // -------------------------------------------------------------------------
+  describe('suggest_faq / save_faq', () => {
+    it('suggest_faq: 既存質問を渡してtextToFaqsを呼び、下書きをactionsに含める(DB書き込みなし)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sf-1',
+                  type: 'function',
+                  function: { name: 'suggest_faq', arguments: JSON.stringify({ free_text: '送料は550円、5000円以上で無料と答えて' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('こう提案します。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ question: '返品はできますか？' }] });
+      mockTextToFaqs.mockResolvedValueOnce([
+        { question: '送料はいくらですか？', answer: '550円です。5000円以上で無料になります。', category: 'store_info' },
+        { question: '送料無料の条件は？', answer: '5000円以上のお買い上げです。', category: 'store_info' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料は550円、5000円以上で無料と答えて', sessionId: 'sess-050' });
+
+      expect(res.status).toBe(200);
+      expect(mockTextToFaqs).toHaveBeenCalledWith(
+        '送料は550円、5000円以上で無料と答えて',
+        undefined,
+        ['返品はできますか？'],
+      );
+      expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('送料はいくらですか？');
+      expect(result).toContain('他に1件');
+    });
+
+    it('save_faq: confirmed=false → 保存されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sf-2',
+                  type: 'function',
+                  function: { name: 'save_faq', arguments: JSON.stringify({ question: 'q', answer: 'a', confirmed: false }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('確認してから保存します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-051' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('save_faq: confirmed=true → faq_docsにINSERTしtenant_idはJWT由来に固定される', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sf-3',
+                  type: 'function',
+                  function: {
+                    name: 'save_faq',
+                    arguments: JSON.stringify({ question: '送料はいくらですか？', answer: '550円です。', category: 'store_info', confirmed: true }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 99, question: '送料はいくらですか？', answer: '550円です。', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-052' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO faq_docs'),
+        ['tenant-abc', '送料はいくらですか？', '550円です。', 'store_info'],
+      );
+      expect(res.body.actions[0].result).toContain('ID: 99');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase3: suggest_engagement_rule / save_engagement_rule
+  // -------------------------------------------------------------------------
+  describe('suggest_engagement_rule / save_engagement_rule', () => {
+    it('suggest_engagement_rule: 下書きをactionsに含める(DB書き込みなし)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-se-1',
+                  type: 'function',
+                  function: { name: 'suggest_engagement_rule', arguments: JSON.stringify({ free_text: '商品ページを長く見てる人にランキングを勧めたい' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('こう提案します。'));
+
+      mockSuggestEngagementRuleFromText.mockResolvedValueOnce({
+        trigger_type: 'idle_time',
+        trigger_config: { seconds: 30 },
+        message_template: '人気ランキングもご覧ください🎁',
+        priority: 5,
+        reason: '長時間滞在は離脱の兆候のため',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '商品ページを長く見てる人にランキングを勧めたい', sessionId: 'sess-060' });
+
+      expect(res.status).toBe(200);
+      expect(mockSuggestEngagementRuleFromText).toHaveBeenCalledWith('商品ページを長く見てる人にランキングを勧めたい');
+      expect(mockQuery).not.toHaveBeenCalled();
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('idle_time');
+      expect(result).toContain('人気ランキングもご覧ください🎁');
+    });
+
+    it('save_engagement_rule: confirmed=false → 保存されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-se-2',
+                  type: 'function',
+                  function: {
+                    name: 'save_engagement_rule',
+                    arguments: JSON.stringify({ trigger_type: 'idle_time', trigger_config: { seconds: 30 }, message_template: 'x', confirmed: false }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('確認してから保存します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-061' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('save_engagement_rule: 不正なtrigger_type → 保存されずエラーメッセージを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-se-3',
+                  type: 'function',
+                  function: {
+                    name: 'save_engagement_rule',
+                    arguments: JSON.stringify({ trigger_type: 'evil_type', trigger_config: {}, message_template: 'x', confirmed: true }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('エラーです。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-062' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('trigger_type が不正');
+    });
+
+    it('save_engagement_rule: confirmed=true → trigger_rulesにINSERTしtenant_idはJWT由来に固定される', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-se-4',
+                  type: 'function',
+                  function: {
+                    name: 'save_engagement_rule',
+                    arguments: JSON.stringify({
+                      trigger_type: 'idle_time',
+                      trigger_config: { seconds: 30 },
+                      message_template: '人気ランキングもご覧ください🎁',
+                      priority: 5,
+                      confirmed: true,
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 7, trigger_type: 'idle_time', message_template: '人気ランキングもご覧ください🎁' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-063' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO trigger_rules'),
+        ['tenant-abc', 'idle_time', JSON.stringify({ seconds: 30 }), '人気ランキングもご覧ください🎁', 5],
+      );
+      expect(res.body.actions[0].result).toContain('ID: 7');
     });
   });
 });

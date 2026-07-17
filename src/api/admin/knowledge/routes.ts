@@ -26,7 +26,7 @@ type KnowledgeReq = Request & {
   user?: KnowledgeUser;
 };
 
-interface FaqEntry {
+export interface FaqEntry {
   question: string;
   answer: string;
   category?: string;
@@ -176,7 +176,7 @@ const DUPLICATE_THRESHOLD = 0.6;
  * 未指定（null/undefined）の場合はAIがカテゴリを自動判定する。
  * existingQuestions が指定された場合はプロンプトに組み込み重複生成を防止する。
  */
-async function textToFaqs(
+export async function textToFaqs(
   text: string,
   categoryOverride?: string | null,
   existingQuestions?: string[]
