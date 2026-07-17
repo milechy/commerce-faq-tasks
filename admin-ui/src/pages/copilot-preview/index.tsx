@@ -12,6 +12,7 @@
 // テーマは既存の CSS 変数に追従(light/dark両対応)。
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
@@ -67,6 +68,89 @@ const REAL_WRITE_TOOLS = new Set([
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ
 const BOOTSTRAP_PROMPT =
   "ログインしたところです。今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
+
+// ─── 実APIのツール結果 → 見た目の良いカードへの変換 ────────────────────────────
+// actionExecutor.ts が返す日本語の定型文字列を軽くパースする。想定外の形式なら
+// null を返し、呼び出し側は汎用の agentAction カード（生テキスト）にフォールバックする。
+
+function parseSuggestFaq(result: string): { question: string; answer: string; category: string } | null {
+  const q = result.match(/質問:\s*(.+)/)?.[1]?.trim();
+  const a = result.match(/回答:\s*(.+)/)?.[1]?.trim();
+  if (!q || !a) return null;
+  const c = result.match(/分類:\s*(.+)/)?.[1]?.trim();
+  return { question: q, answer: a, category: c || "(自動判定)" };
+}
+
+function parseSuggestTuningRule(result: string): { trigger: string; behavior: string } | null {
+  const t = result.match(/トリガー:\s*(.+)/)?.[1]?.trim();
+  const b = result.match(/対応方針:\s*(.+)/)?.[1]?.trim();
+  if (!t || !b) return null;
+  return { trigger: t, behavior: b };
+}
+
+function describeEngagementTrigger(type: string, config: Record<string, unknown>): string {
+  switch (type) {
+    case "idle_time":
+      return `${config["seconds"] ?? "?"}秒間操作がない時`;
+    case "scroll_depth":
+      return `ページを${config["threshold"] ?? "?"}%スクロールした時`;
+    case "exit_intent":
+      return "サイトを離れようとした時";
+    case "page_url_match": {
+      const patterns = Array.isArray(config["patterns"]) ? (config["patterns"] as unknown[]).join("・") : "特定ページ";
+      return `${patterns} を見ている時`;
+    }
+    default:
+      return type;
+  }
+}
+
+function parseSuggestEngagementRule(result: string): { when: string; message: string } | null {
+  const type = result.match(/トリガー種別:\s*(.+)/)?.[1]?.trim();
+  const cfgRaw = result.match(/トリガー設定:\s*(\{.*\})/)?.[1];
+  const message = result.match(/表示文言:\s*(.+)/)?.[1]?.trim();
+  if (!type || !message) return null;
+  let config: Record<string, unknown> = {};
+  try {
+    config = cfgRaw ? (JSON.parse(cfgRaw) as Record<string, unknown>) : {};
+  } catch {
+    // パース失敗時はトリガー種別名だけで表示（フォールバック文言）
+  }
+  return { when: describeEngagementTrigger(type, config), message };
+}
+
+const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定)しました/;
+
+// ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
+//     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
+//     少しずつ表示するだけ。真のストリーミングにはバックエンドの
+//     SSE化(本番AdminAgentPanelと共有するエンドポイントの変更)が必要で別スコープ） ───
+
+function useTypewriter(setMsgs: Dispatch<SetStateAction<Msg[]>>) {
+  return useCallback(
+    (id: number, fullText: string, onDone?: () => void) => {
+      const reduceMotion =
+        typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (reduceMotion || !fullText) {
+        setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, text: fullText } : m)));
+        onDone?.();
+        return;
+      }
+      const chars = Array.from(fullText); // サロゲートペア・絵文字を考慮
+      let i = 0;
+      const CHARS_PER_TICK = 3;
+      const timer = setInterval(() => {
+        i = Math.min(chars.length, i + CHARS_PER_TICK);
+        setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, text: chars.slice(0, i).join("") } : m)));
+        if (i >= chars.length) {
+          clearInterval(timer);
+          onDone?.();
+        }
+      }, 16);
+    },
+    [setMsgs],
+  );
+}
 
 interface Chip {
   label: string;
@@ -124,6 +208,8 @@ export default function CopilotPreviewPage() {
     setMsgs((prev) => [...prev, ...items]);
   }, []);
 
+  const revealText = useTypewriter(setMsgs);
+
   const say = (text: string, chips?: Chip[]): Msg => ({ id: nextId(), role: "ai", text, chips });
   const me = (text: string): Msg => ({ id: nextId(), role: "me", text });
 
@@ -153,6 +239,7 @@ export default function CopilotPreviewPage() {
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({} as { error?: string }));
         push(say(errBody.error ? `エラー: ${errBody.error}` : "うまく送信できませんでした。少し時間をおいてお試しください。"));
+        setSending(false);
         return;
       }
 
@@ -165,11 +252,26 @@ export default function CopilotPreviewPage() {
         ].slice(-20),
       );
 
-      const actionMsgs: Msg[] = (data.actions ?? []).map((a) => ({
-        id: nextId(),
-        role: "ai",
-        card: { kind: "agentAction", tool: a.tool, result: a.result },
-      }));
+      // ツール結果を、可能なら提案書と同じ見た目のカードにパースする。
+      // 想定外の形式(下書き生成失敗時のエラー文など)は汎用の agentAction カードにフォールバック。
+      const actionMsgs: Msg[] = (data.actions ?? []).map((a) => {
+        if (a.tool === "suggest_faq") {
+          const parsed = parseSuggestFaq(a.result);
+          if (parsed) return { id: nextId(), role: "ai", card: { kind: "faq", ...parsed } };
+        } else if (a.tool === "suggest_tuning_rule") {
+          const parsed = parseSuggestTuningRule(a.result);
+          if (parsed) return { id: nextId(), role: "ai", card: { kind: "rule", ...parsed } };
+        } else if (a.tool === "suggest_engagement_rule") {
+          const parsed = parseSuggestEngagementRule(a.result);
+          if (parsed) return { id: nextId(), role: "ai", card: { kind: "engagement", ...parsed } };
+        } else if (
+          (a.tool === "save_faq" || a.tool === "save_tuning_rule" || a.tool === "save_engagement_rule") &&
+          SAVE_SUCCESS_RE.test(a.result)
+        ) {
+          return { id: nextId(), role: "ai", card: { kind: "success", text: a.result } };
+        }
+        return { id: nextId(), role: "ai", card: { kind: "agentAction", tool: a.tool, result: a.result } };
+      });
 
       // 実際にDBへ書き込んだ操作(確認ブロックで弾かれたものは除く)だけを実進捗としてカウントする
       const writesThisTurn = (data.actions ?? []).filter(
@@ -177,7 +279,7 @@ export default function CopilotPreviewPage() {
       ).length;
       if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
 
-      // suggest_tuning_rule の下書きが出たら、そのまま自然文で確定できるチップを添える
+      // suggest系の下書きが出たら、そのまま自然文で確定できるチップを添える
       const SUGGEST_TOOLS = new Set(["suggest_tuning_rule", "suggest_faq", "suggest_engagement_rule"]);
       const suggested = data.actions?.some((a) => SUGGEST_TOOLS.has(a.tool));
       const chips: Chip[] | undefined = suggested
@@ -187,16 +289,24 @@ export default function CopilotPreviewPage() {
           ]
         : undefined;
 
-      push(...actionMsgs, { id: nextId(), role: "ai", text: data.reply || "（応答なし）", chips });
+      push(...actionMsgs);
+
+      // 最終返信だけを少しずつ流し込む(演出)。チップは流し込み完了後に表示する。
+      const replyId = nextId();
+      push({ id: replyId, role: "ai", text: "" });
+      revealText(replyId, data.reply || "（応答なし）", () => {
+        if (chips) setMsgs((prev) => prev.map((m) => (m.id === replyId ? { ...m, chips } : m)));
+        setSending(false);
+      });
+      return; // setSending(false) は revealText の完了コールバックに任せる
     } catch (err: any) {
       if (err?.message === "__AUTH_REQUIRED__") {
         push(say("ログインが必要です。別タブで管理画面にログインしてから、もう一度お試しください。"));
       } else {
         push(say("うまく送信できませんでした。少し時間をおいてお試しください。"));
       }
-    } finally {
-      setSending(false);
     }
+    setSending(false);
   };
 
   // Phase2 (P7): マウント時に実データの週次ブリーフィングを自動取得 → その後にモックデモを積む
