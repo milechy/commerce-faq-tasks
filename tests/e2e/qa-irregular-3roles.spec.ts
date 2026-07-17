@@ -68,8 +68,14 @@ test.describe('Irregular — Role A (anonymous public API)', () => {
 
   test('A-IRR-4: X-Tenant-ID ヘッダ偽装は無視され、応答は鍵のテナントにスコープされる', async ({ request }) => {
     expect(apiKey).not.toBe('');
+    // conversationId を省略すると src/api/chat/route.ts:135 の
+    // `body.conversationId ?? 'anon'` が全匿名リクエスト共有の 'anon' バケットに
+    // フォールバックし、同日中の他のテスト実行と合算されて「同じ内容が繰り返されています」
+    // (repeat_abuse, src/middleware/inputSanitizer.ts) に誤爆する。実際のwidgetは常に
+    // sessionStorage由来の固有 conversationId を送るため本番では起きないが、テストでは
+    // 明示的にユニークなIDを渡してこの共有バケットを回避する。
     const res = await request.post(`${API}/api/chat`, {
-      data: { message: 'こんにちは' },
+      data: { message: 'こんにちは', conversationId: crypto.randomUUID() },
       headers: {
         'content-type': 'application/json',
         'x-api-key': apiKey,
