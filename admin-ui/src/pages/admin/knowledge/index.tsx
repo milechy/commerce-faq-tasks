@@ -6,10 +6,18 @@ export const KNOWLEDGE_TENANT_STORAGE_KEY = "knowledge_last_tenant";
 
 export default function KnowledgePage() {
   const navigate = useNavigate();
-  const { user, isSuperAdmin, isLoading } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, isLoading } = useAuth();
 
   useEffect(() => {
     if (isLoading) return;
+    // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+    // client_admin相当にフォールバックし、かつ実ログインユーザー(super_admin)の
+    // user?.tenantId は常にnullのため、previewTenantId を優先しないとどちらの
+    // 分岐にも入らずリダイレクトされない（ナレッジ一覧が空白のまま表示される）。
+    if (previewMode) {
+      if (previewTenantId) navigate(`/admin/knowledge/${previewTenantId}`, { replace: true });
+      return;
+    }
     if (!isSuperAdmin && user?.tenantId) {
       navigate(`/admin/knowledge/${user.tenantId}`, { replace: true });
       return;
@@ -18,7 +26,7 @@ export default function KnowledgePage() {
       const last = localStorage.getItem(KNOWLEDGE_TENANT_STORAGE_KEY) ?? "global";
       navigate(`/admin/knowledge/${last}`, { replace: true });
     }
-  }, [isLoading, isSuperAdmin, user, navigate]);
+  }, [isLoading, isSuperAdmin, previewMode, previewTenantId, user, navigate]);
 
   return null;
 }

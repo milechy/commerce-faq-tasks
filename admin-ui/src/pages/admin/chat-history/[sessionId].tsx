@@ -43,7 +43,7 @@ export default function ChatHistorySessionPage() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
   const { t, lang } = useLang();
-  const { user, isSuperAdmin, isClientAdmin } = useAuth();
+  const { user, isSuperAdmin, isClientAdmin, previewMode, previewTenantId } = useAuth();
   const location = useLocation();
 
   const sessionFromState = (location.state as { session?: SessionInfo } | null)?.session ?? null;
@@ -70,7 +70,15 @@ export default function ChatHistorySessionPage() {
   const deleteConfirmRef = useRef<HTMLInputElement>(null);
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
-  const tenantId = isSuperAdmin ? undefined : (user?.tenantId ?? undefined);
+  // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+  // client_admin相当にフォールバックするため、previewTenantId を優先しないと
+  // tenant未指定＝バックエンド側で「実super_adminの全セッション閲覧可」扱いになり
+  // プレビュー中でも他テナントのセッションIDを直接指定すれば閲覧できてしまう。
+  const tenantId = previewMode
+    ? (previewTenantId ?? undefined)
+    : isSuperAdmin
+      ? undefined
+      : (user?.tenantId ?? undefined);
 
   const loadMessages = useCallback(async () => {
     if (!sessionId) return;
