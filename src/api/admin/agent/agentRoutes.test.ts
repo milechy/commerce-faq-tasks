@@ -48,9 +48,13 @@ jest.mock('../tuning/tuningRulesRepository', () => ({
   createRule: (...args: any[]) => mockCreateRule(...args),
 }));
 
+// 名前付きラッパーにする(jest.mock factory内の匿名 jest.fn() は resetAllMocks() で
+// 既定値ごと消えてしまい、beforeEachで再設定できないため他の依存と同じパターンに統一)
+const mockSearchKnowledgeForSuggestion = jest.fn();
+const mockFormatKnowledgeContext = jest.fn();
 jest.mock('../../../lib/knowledgeSearchUtil', () => ({
-  searchKnowledgeForSuggestion: jest.fn().mockResolvedValue({ results: [] }),
-  formatKnowledgeContext: jest.fn().mockReturnValue(''),
+  searchKnowledgeForSuggestion: (...args: any[]) => mockSearchKnowledgeForSuggestion(...args),
+  formatKnowledgeContext: (...args: any[]) => mockFormatKnowledgeContext(...args),
 }));
 
 // get_weekly_briefing が使う依存をモック
@@ -142,10 +146,16 @@ function makeGroqResponse(
 
 describe('POST /v1/admin/agent/chat', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    // resetAllMocks: clearAllMocksだとmockResolvedValue(永続的な既定値)がテストを跨いで
+    // 残り続け、後続テストのmockResolvedValueOnceキューを使い切った際にリークして
+    // 結果が汚染される(実際にこの不具合でテストがフレーキーになったため修正)。
+    // 実装(モック値)も含めて毎回完全にリセットする。
+    jest.resetAllMocks();
     process.env.GROQ_API_KEY = 'test-groq-key';
     mockListRules.mockResolvedValue([]);
     mockGetGaps.mockResolvedValue({ gaps: [], total: 0 });
+    mockSearchKnowledgeForSuggestion.mockResolvedValue({ results: [] });
+    mockFormatKnowledgeContext.mockReturnValue('');
   });
 
   // -------------------------------------------------------------------------
@@ -966,6 +976,34 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
+    it('実測されたGroqの挙動: 無引数ツールで arguments が文字列"null"で来てもクラッシュせず空引数扱いになる', async () => {
+      // 実際にGroq APIを叩いて観測した実データ形式: {"function":{"name":"get_tenant_settings","arguments":"null"}}
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'get_tenant_settings', arguments: 'null' } }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ ga4_measurement_id: null, posthog_host: null, widget_theme: {} }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を確認して', sessionId: 'sess-074' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].tool).toBe('get_tenant_settings');
+      expect(res.body.actions[0].result).not.toContain('失敗');
+    });
+
     it('3ホップ: ツール→ツール→最終応答 が正しく連鎖する', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-1', 'get_tenant_settings'))
@@ -1060,6 +1098,117 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockCreateRule).not.toHaveBeenCalled();
       const saveAction = res.body.actions.find((a: any) => a.tool === 'save_tuning_rule');
       expect(saveAction.result).toContain('同一ターン内での連続実行');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // SSE: 本物のトークンストリーミング (stream:true オプトイン)
+  // -------------------------------------------------------------------------
+  describe('SSE ストリーミング (stream:true)', () => {
+    function makeStreamingGroqResponse(fullSseText: string) {
+      const bytes = new TextEncoder().encode(fullSseText);
+      let sent = false;
+      return {
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (!sent) {
+                sent = true;
+                return { done: false, value: bytes };
+              }
+              return { done: true, value: undefined };
+            },
+          }),
+        },
+        text: async () => '',
+      };
+    }
+
+    it('content delta を逐次イベントとして送出し、event: done で最終replyを返す', async () => {
+      const sse =
+        'data: {"choices":[{"delta":{"content":"こん"}}]}\n\n' +
+        'data: {"choices":[{"delta":{"content":"にちは"}}]}\n\n' +
+        'data: {"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\n' +
+        'data: [DONE]\n\n';
+
+      mockFetch.mockResolvedValueOnce(makeStreamingGroqResponse(sse));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'hello', sessionId: 'sess-080', stream: true });
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/event-stream');
+      expect(res.text).toContain('event: delta');
+      expect(res.text).toContain('"text":"こん"');
+      expect(res.text).toContain('"text":"にちは"');
+      expect(res.text).toContain('event: done');
+      expect(res.text).toContain('"reply":"こんにちは"');
+      expect(mockTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ inputTokens: 10, outputTokens: 2, featureUsed: 'admin_agent' }),
+      );
+    });
+
+    it('tool_calls delta をindexごとに蓄積して実行し、event: action → event: done の順で送出する', async () => {
+      const hop1Sse =
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"get_tenant_settings","arguments":""}}]}}]}\n\n' +
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]}}]}\n\n' +
+        'data: [DONE]\n\n';
+      const hop2Sse = 'data: {"choices":[{"delta":{"content":"設定を確認しました。"}}]}\n\n' + 'data: [DONE]\n\n';
+
+      mockFetch
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop1Sse))
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop2Sse));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ ga4_measurement_id: null, posthog_host: null, widget_theme: {} }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を確認して', sessionId: 'sess-081', stream: true });
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('event: action');
+      expect(res.text).toContain('"tool":"get_tenant_settings"');
+      expect(res.text.indexOf('event: action')).toBeLessThan(res.text.indexOf('event: done'));
+      expect(res.text).toContain('設定を確認しました。');
+    });
+
+    it('stream:true でも suggest_faq→save_faq の同一ターン連鎖はブロックされ、DBに書き込まれない', async () => {
+      const hop1Sse =
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"suggest_faq","arguments":"{\\"free_text\\":\\"送料は550円\\"}"}}]}}]}\n\n' +
+        'data: [DONE]\n\n';
+      const hop2Sse =
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-2","function":{"name":"save_faq","arguments":"{\\"question\\":\\"q\\",\\"answer\\":\\"a\\",\\"confirmed\\":true}"}}]}}]}\n\n' +
+        'data: [DONE]\n\n';
+      const hop3Sse = 'data: {"choices":[{"delta":{"content":"確認をお願いします。"}}]}\n\n' + 'data: [DONE]\n\n';
+
+      mockFetch
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop1Sse))
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop2Sse))
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop3Sse));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ question: '既存FAQ' }] });
+      mockTextToFaqs.mockResolvedValueOnce([{ question: '送料はいくらですか？', answer: '550円です。' }]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料は550円で登録して', sessionId: 'sess-082', stream: true });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledTimes(1); // suggest_faq用のSELECTのみ、INSERTは発火しない
+      expect(res.text).toContain('同一ターン内での連続実行');
+    });
+
+    it('GROQ_API_KEY未設定でstream:trueでもJSONのグレースフルダウングレードを返す(SSEにはしない)', async () => {
+      delete process.env.GROQ_API_KEY;
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'hello', sessionId: 'sess-083', stream: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('AIアシスタントは現在利用できません');
     });
   });
 });
