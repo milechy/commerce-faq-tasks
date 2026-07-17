@@ -198,7 +198,7 @@ interface SidebarContentProps {
 }
 
 function SidebarContent({ onClose }: SidebarContentProps) {
-  const { user, isSuperAdmin, tenantPlan, logout } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, tenantPlan, logout } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -206,9 +206,13 @@ function SidebarContent({ onClose }: SidebarContentProps) {
     navigate("/login", { replace: true });
   };
 
+  // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+  // client_admin相当にフォールバックするが、実ログインユーザー(super_admin)の
+  // user?.tenantId は常にnullのため、previewTenantId を優先する必要がある
+  // （pages/admin/index.tsx の knowledgePath と同パターン）。
   const knowledgePath = isSuperAdmin
     ? "/admin/knowledge"
-    : `/admin/knowledge/${user?.tenantId ?? ""}`;
+    : `/admin/knowledge/${previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "")}`;
 
   // Override knowledge path in nav items
   const patchedSections = MAIN_SECTIONS.map((section) => ({
