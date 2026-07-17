@@ -34,6 +34,10 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_weekly_briefing: "週次ブリーフィングの取得",
   suggest_tuning_rule: "指示ルールの下書き提案",
   save_tuning_rule: "指示ルールの保存",
+  suggest_faq: "FAQの下書き提案",
+  save_faq: "FAQの保存",
+  suggest_engagement_rule: "声がけの下書き提案",
+  save_engagement_rule: "声がけの保存",
   get_tenant_settings: "テナント設定の取得",
   set_ga4_id: "GA4設定の変更",
   set_posthog: "PostHog設定の変更",
@@ -49,6 +53,8 @@ const REAL_TOOL_LABEL: Record<string, string> = {
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
 const REAL_WRITE_TOOLS = new Set([
   "save_tuning_rule",
+  "save_faq",
+  "save_engagement_rule",
   "add_faq",
   "update_faq",
   "delete_faq",
@@ -172,7 +178,8 @@ export default function CopilotPreviewPage() {
       if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
 
       // suggest_tuning_rule の下書きが出たら、そのまま自然文で確定できるチップを添える
-      const suggested = data.actions?.some((a) => a.tool === "suggest_tuning_rule");
+      const SUGGEST_TOOLS = new Set(["suggest_tuning_rule", "suggest_faq", "suggest_engagement_rule"]);
+      const suggested = data.actions?.some((a) => SUGGEST_TOOLS.has(a.tool));
       const chips: Chip[] | undefined = suggested
         ? [
             { label: "保存して", action: "__real:保存してください", tone: "primary" },

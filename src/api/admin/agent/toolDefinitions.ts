@@ -262,4 +262,85 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_faq',
+      description:
+        '店舗管理者の自然な言葉による指示から、FAQ（質問・回答・分類）の下書きを生成する。書き込みは行わない読み取り専用ツール。提案内容は必ずユーザーに提示して明確な同意を得てから save_faq で保存すること。',
+      parameters: {
+        type: 'object',
+        properties: {
+          free_text: {
+            type: 'string',
+            description: '管理者が話した自然文の指示（例:「送料は全国一律550円、5000円以上で無料と答えられるようにして」）',
+          },
+        },
+        required: ['free_text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_faq',
+      description:
+        'FAQをDBに保存し即座に公開する。必ず先に suggest_faq 等で内容をユーザーに提示し、明確な同意を得てから confirmed=true で呼び出すこと。confirmed=false または未指定では保存されない。',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: '質問文' },
+          answer: { type: 'string', description: '回答文' },
+          category: { type: 'string', description: 'カテゴリ（任意。省略時はAIが判定した値をそのまま使う）' },
+          confirmed: { type: 'boolean', description: '保存確認フラグ（true でのみ実行される）' },
+        },
+        required: ['question', 'answer', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_engagement_rule',
+      description:
+        '店舗管理者の自然な言葉による指示から、お客様への声がけ（いつ・どんな条件で・何を表示するか）の下書きを生成する。書き込みは行わない読み取り専用ツール。提案内容は必ずユーザーに提示して明確な同意を得てから save_engagement_rule で保存すること。',
+      parameters: {
+        type: 'object',
+        properties: {
+          free_text: {
+            type: 'string',
+            description: '管理者が話した自然文の指示（例:「商品ページを長く見てる人に、人気ランキングを勧めたい」）',
+          },
+        },
+        required: ['free_text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_engagement_rule',
+      description:
+        '声がけルールをDBに保存し即座に有効化する。必ず先に suggest_engagement_rule で内容をユーザーに提示し、明確な同意を得てから confirmed=true で呼び出すこと。trigger_type/trigger_config/message_template は suggest_engagement_rule の提案値をそのまま使うこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          trigger_type: {
+            type: 'string',
+            enum: ['scroll_depth', 'idle_time', 'exit_intent', 'page_url_match'],
+            description: 'トリガー種別',
+          },
+          trigger_config: {
+            type: 'object',
+            description:
+              'トリガー種別ごとの設定。scroll_depth: {"threshold": 1-100}, idle_time: {"seconds": 1-3600}, exit_intent: {}, page_url_match: {"patterns": ["/products/*"], "match_type": "glob"}',
+          },
+          message_template: { type: 'string', description: '表示する声がけ文言' },
+          priority: { type: 'number', description: '優先度（0〜100の整数、任意。省略時は0）' },
+          confirmed: { type: 'boolean', description: '保存確認フラグ（true でのみ実行される）' },
+        },
+        required: ['trigger_type', 'trigger_config', 'message_template', 'confirmed'],
+      },
+    },
+  },
 ];
