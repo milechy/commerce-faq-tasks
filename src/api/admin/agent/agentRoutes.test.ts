@@ -35,6 +35,24 @@ jest.mock('../knowledge/faqCrudRoutes', () => ({
   upsertToEsAsync: jest.fn(),
 }));
 
+// suggest_tuning_rule / save_tuning_rule が使う依存をモック（実DB/実Groq呼び出し回避）
+const mockCallGroq8bSuggestFromText = jest.fn();
+jest.mock('../tuning/routes', () => ({
+  callGroq8bSuggestFromText: (...args: any[]) => mockCallGroq8bSuggestFromText(...args),
+}));
+
+const mockListRules = jest.fn();
+const mockCreateRule = jest.fn();
+jest.mock('../tuning/tuningRulesRepository', () => ({
+  listRules: (...args: any[]) => mockListRules(...args),
+  createRule: (...args: any[]) => mockCreateRule(...args),
+}));
+
+jest.mock('../../../lib/knowledgeSearchUtil', () => ({
+  searchKnowledgeForSuggestion: jest.fn().mockResolvedValue({ results: [] }),
+  formatKnowledgeContext: jest.fn().mockReturnValue(''),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -108,6 +126,7 @@ describe('POST /v1/admin/agent/chat', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.GROQ_API_KEY = 'test-groq-key';
+    mockListRules.mockResolvedValue([]);
   });
 
   // -------------------------------------------------------------------------
@@ -364,6 +383,196 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.reply).toBe('AIアシスタントは現在利用できません');
       expect(res.body.actions).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase1 (G2): 会話履歴 — フロントから送られた history が Groq messages に含まれる
+  // -------------------------------------------------------------------------
+  describe('会話履歴(history)', () => {
+    it('history を渡すと system と最新 user の間に挿入される', async () => {
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('了解しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({
+          message: '保存して',
+          sessionId: 'sess-020',
+          history: [
+            { role: 'user', content: '保証について聞かれたら2年と答えて' },
+            { role: 'assistant', content: 'トリガー: 保証 / 対応方針: 2年と案内する / 優先度: 5' },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      const fetchCallBody = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      const roles = fetchCallBody.messages.map((m: any) => m.role);
+      expect(roles).toEqual(['system', 'user', 'assistant', 'user']);
+      expect(fetchCallBody.messages[1].content).toBe('保証について聞かれたら2年と答えて');
+      expect(fetchCallBody.messages[3].content).toBe('保存して');
+    });
+
+    it('history 未指定でも動く（後方互換）', async () => {
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('こんにちは'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'hello', sessionId: 'sess-021' });
+
+      expect(res.status).toBe(200);
+      const fetchCallBody = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      expect(fetchCallBody.messages.map((m: any) => m.role)).toEqual(['system', 'user']);
+    });
+
+    it('history が21件 → 400（上限20件）', async () => {
+      const history = Array.from({ length: 21 }, (_, i) => ({ role: 'user' as const, content: `msg${i}` }));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'hello', sessionId: 'sess-022', history });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase1: suggest_tuning_rule — 読み取り専用の下書き提案
+  // -------------------------------------------------------------------------
+  describe('suggest_tuning_rule', () => {
+    it('提案を生成し actions に含める（DB書き込みは行わない）', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-tr-1',
+                  type: 'function',
+                  function: { name: 'suggest_tuning_rule', arguments: JSON.stringify({ free_text: '保証について聞かれたら2年と答えて' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('こう提案します。保存してよいですか？'));
+
+      mockCallGroq8bSuggestFromText.mockResolvedValueOnce({
+        trigger_pattern: '保証',
+        instruction: '保証期間は2年とお伝えする',
+        priority: 5,
+        reason: '保証に関する問い合わせが多いため',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保証について聞かれたら2年と答えて', sessionId: 'sess-030' });
+
+      expect(res.status).toBe(200);
+      expect(mockCallGroq8bSuggestFromText).toHaveBeenCalledWith(
+        '保証について聞かれたら2年と答えて',
+        expect.any(String),
+        expect.any(String),
+      );
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].tool).toBe('suggest_tuning_rule');
+      expect(res.body.actions[0].result).toContain('保証期間は2年とお伝えする');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase1: save_tuning_rule — confirmed ゲート必須の書き込み
+  // -------------------------------------------------------------------------
+  describe('save_tuning_rule', () => {
+    it('confirmed=false → 保存されず確認を促すメッセージを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sv-1',
+                  type: 'function',
+                  function: {
+                    name: 'save_tuning_rule',
+                    arguments: JSON.stringify({ trigger_pattern: '保証', expected_behavior: '2年と案内する', confirmed: false }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('確認してから保存します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-031' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('confirmed=true → createRule が呼ばれ tenant_id は JWT 由来に固定される', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sv-2',
+                  type: 'function',
+                  function: {
+                    name: 'save_tuning_rule',
+                    arguments: JSON.stringify({
+                      trigger_pattern: '保証',
+                      expected_behavior: '2年と案内する',
+                      priority: 6,
+                      confirmed: true,
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockCreateRule.mockResolvedValueOnce({
+        id: 42,
+        tenant_id: 'tenant-abc',
+        trigger_pattern: '保証',
+        expected_behavior: '2年と案内する',
+        priority: 6,
+        is_active: true,
+        created_by: 'admin_agent',
+        source_message_id: null,
+        created_at: '',
+        updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-032' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenant_id: 'tenant-abc', // JWT由来。body由来のtargetTenantIdでは差し替わらない
+          trigger_pattern: '保証',
+          expected_behavior: '2年と案内する',
+          priority: 6,
+        }),
+      );
+      expect(res.body.actions[0].result).toContain('ID: 42');
     });
   });
 });

@@ -28,17 +28,27 @@ export function useAdminAgent(): UseAdminAgentResult {
   const sendMessage = useCallback(async (text: string, targetTenantId?: string) => {
     if (!text.trim() || isLoading) return;
 
+    // G2: サーバはステートレスなので、直近の会話履歴を毎回送ってマルチターンの文脈を持たせる
+    // （このターンで追加するユーザーメッセージより前の履歴。直近20件・各4000字までに制限）
+    const history = messages
+      .filter((m) => m.content.trim())
+      .slice(-20)
+      .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+
     // optimistic にユーザーメッセージを追加
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setIsLoading(true);
 
     try {
-      const body: { message: string; sessionId: string; targetTenantId?: string } = {
+      const body: { message: string; sessionId: string; targetTenantId?: string; history?: typeof history } = {
         message: text,
         sessionId,
       };
       if (targetTenantId) {
         body.targetTenantId = targetTenantId;
+      }
+      if (history.length > 0) {
+        body.history = history;
       }
 
       const res = await authFetch(`${API_BASE}/v1/admin/agent/chat`, {
@@ -83,7 +93,7 @@ export function useAdminAgent(): UseAdminAgentResult {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, sessionId]);
+  }, [isLoading, sessionId, messages]);
 
   return {
     messages,

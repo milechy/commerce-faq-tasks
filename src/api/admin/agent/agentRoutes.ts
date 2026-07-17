@@ -27,10 +27,18 @@ function extractAuth(req: Request) {
 // Zod スキーマ
 // ---------------------------------------------------------------------------
 
+// G2: 会話履歴はサーバに永続化せず、フロントが保持する直近の会話を毎リクエスト送る
+// （ステートレスサーバのまま最小コストでマルチターン文脈を実現する）
+const historyItemSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string().max(4000),
+});
+
 const chatSchema = z.object({
   message: z.string().min(1).max(2000),
   sessionId: z.string().min(1).max(100),
   targetTenantId: z.string().optional(),
+  history: z.array(historyItemSchema).max(20).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -153,7 +161,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
     }
 
-    const { message, sessionId, targetTenantId } = parsed.data;
+    const { message, sessionId, targetTenantId, history } = parsed.data;
 
     // effectiveTenantId: super_admin は targetTenantId を使用可、client_admin は JWT 由来のみ
     const effectiveTenantId = isSuperAdmin ? (targetTenantId ?? tenantId) : tenantId;
@@ -174,10 +182,19 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       const systemPrompt =
         `あなたはテナント管理AIエージェントです。テナントID "${effectiveTenantId}" の管理者をサポートします。` +
         `必要に応じてツールを呼び出して設定を確認・変更してください。回答は日本語で簡潔に行ってください。` +
+        `confirmed フラグを持つツール（save_tuning_rule, delete_faq 等）は、必ず先に内容をユーザーに要約提示し、` +
+        `明確な同意を得たターンでのみ confirmed=true を指定して呼び出してください。` +
         `セッションID: ${sessionId}`;
+
+      // G2: 直近の会話履歴をそのままシステムプロンプトの後に差し込み、マルチターンの文脈を持たせる
+      const historyMessages: GroqMessage[] = (history ?? []).map((h) => ({
+        role: h.role,
+        content: h.content,
+      }));
 
       const messages: GroqMessage[] = [
         { role: 'system', content: systemPrompt },
+        ...historyMessages,
         { role: 'user', content: message },
       ];
 

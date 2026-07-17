@@ -108,7 +108,7 @@ export default function AdminAgentPanel({
         <span style={{ fontSize: 18 }}>{"✨"}</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#f9fafb" }}>
-            R2C AIアシスタント
+            R2Cエージェント
           </div>
         </div>
         <button

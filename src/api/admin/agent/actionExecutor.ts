@@ -7,6 +7,9 @@ import {
   insertEmbeddingAsync,
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
+import { callGroq8bSuggestFromText } from '../tuning/routes';
+import { listRules, createRule } from '../tuning/tuningRulesRepository';
+import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -348,6 +351,80 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] set_widget_theme failed', err);
         return truncate('ウィジェットテーマの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'suggest_tuning_rule': {
+      const freeText = String(args['free_text'] ?? '').trim();
+      if (!freeText) {
+        return truncate('free_text は必須です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const [knowledgeCtx, existingRules] = await Promise.all([
+          searchKnowledgeForSuggestion(tenantId, freeText).catch(() => ({ results: [] })),
+          listRules(tenantId).catch(() => []),
+        ]);
+        const knowledgeSection = formatKnowledgeContext(knowledgeCtx);
+        const existingRulesSection = existingRules
+          .filter((r) => r.is_active)
+          .map((r) => `- [${r.trigger_pattern}] ${r.expected_behavior}`)
+          .join('\n');
+
+        const suggestion = await callGroq8bSuggestFromText(freeText, knowledgeSection, existingRulesSection);
+
+        if (!suggestion.trigger_pattern && !suggestion.instruction) {
+          return truncate('提案の生成に失敗しました。もう少し具体的に教えてください');
+        }
+
+        return truncate(
+          `提案:\n` +
+          `トリガー: ${suggestion.trigger_pattern || '（常時適用）'}\n` +
+          `対応方針: ${suggestion.instruction}\n` +
+          `優先度: ${suggestion.priority}\n` +
+          (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
+          `\nこの内容でよいかユーザーに確認し、同意が得られたら save_tuning_rule を呼び出してください（trigger_pattern/expected_behavior/priority は上記の提案値を使うこと）。`
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_tuning_rule failed', err);
+        return truncate('ルールの提案に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'save_tuning_rule': {
+      const confirmed = Boolean(args['confirmed']);
+      const triggerPattern = String(args['trigger_pattern'] ?? '').slice(0, 1000);
+      const expectedBehavior = String(args['expected_behavior'] ?? '').slice(0, 4000);
+      const priorityRaw = Number(args['priority']);
+      const priority = Number.isFinite(priorityRaw) ? Math.max(0, Math.min(10, Math.round(priorityRaw))) : 5;
+
+      if (!confirmed) {
+        return truncate('ルールの保存には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!triggerPattern || !expectedBehavior) {
+        return truncate('trigger_pattern と expected_behavior は必須です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const rule = await createRule({
+          tenant_id: tenantId,
+          trigger_pattern: triggerPattern,
+          expected_behavior: expectedBehavior,
+          priority,
+          created_by: 'admin_agent',
+        });
+        return truncate(`指示ルールを保存しました（ID: ${rule.id}）: 「${rule.trigger_pattern}」→ ${rule.expected_behavior}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] save_tuning_rule failed', err);
+        return truncate('ルールの保存に失敗しました');
       }
     }
 
