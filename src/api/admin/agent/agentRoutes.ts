@@ -141,6 +141,25 @@ async function callGroqFinal(messages: GroqMessage[]): Promise<{ reply: string; 
 }
 
 // ---------------------------------------------------------------------------
+// G1: 多段エージェントループの設定
+// ---------------------------------------------------------------------------
+
+// 1リクエストあたり許容する「tools付きGroq呼び出し」の最大回数。
+// 暴走・無限ループ防止のガード。上限に達しても収束しない場合は tools 無しの
+// 強制まとめ呼び出し(callGroqFinal)で必ず自然文の reply を返して終了する。
+const MAX_TOOL_HOPS = 4;
+
+// suggest_* → save_*(confirmed=true) の対応表。
+// G1導入により「suggest→save を同一ターン内で連鎖実行」が技術的に可能になったが、
+// これは人間の確認を経ないまま書き込みが確定してしまう抜け道になるため、
+// プロンプト任せにせずコードで明示的にブロックする（下記ループ内で使用）。
+const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
+  suggest_tuning_rule: 'save_tuning_rule',
+  suggest_faq: 'save_faq',
+  suggest_engagement_rule: 'save_engagement_rule',
+};
+
+// ---------------------------------------------------------------------------
 // ルート登録
 // ---------------------------------------------------------------------------
 
@@ -182,8 +201,11 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       const systemPrompt =
         `あなたはテナント管理AIエージェントです。テナントID "${effectiveTenantId}" の管理者をサポートします。` +
         `必要に応じてツールを呼び出して設定を確認・変更してください。回答は日本語で簡潔に行ってください。` +
+        `ツールの実行結果を見てから続けて別のツールを呼び出すこともできます（最大${MAX_TOOL_HOPS}回まで）。` +
         `confirmed フラグを持つツール（save_tuning_rule, delete_faq 等）は、必ず先に内容をユーザーに要約提示し、` +
         `明確な同意を得たターンでのみ confirmed=true を指定して呼び出してください。` +
+        `suggest_* で下書きを提案した直後に、同じターン内で対応する save_* を呼び出すことはできません` +
+        `（ユーザーが確認して次のメッセージを送るまで待つ必要があります）。` +
         `セッションID: ${sessionId}`;
 
       // G2: 直近の会話履歴をそのままシステムプロンプトの後に差し込み、マルチターンの文脈を持たせる
@@ -198,10 +220,8 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         { role: 'user', content: message },
       ];
 
-      // 第1回 Groq 呼び出し（tool_calls あり）
-      const firstResponse = await callGroqWithTools(messages, ADMIN_AGENT_TOOLS);
-      let totalPromptTokens = firstResponse.usage.promptTokens;
-      let totalCompletionTokens = firstResponse.usage.completionTokens;
+      let totalPromptTokens = 0;
+      let totalCompletionTokens = 0;
 
       const reportUsage = () => {
         // super_adminがテナント未特定（targetTenantId未指定）の場合は課金対象がないためスキップ
@@ -217,17 +237,31 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       };
 
       const actions: Array<{ tool: string; result: string }> = [];
+      // このリクエスト(ターン)内で suggest_* が呼ばれたツール名を記録し、
+      // 対応する save_* が同一ターン内で連鎖実行されるのを防ぐ（G1のリスク軽減策）
+      const suggestedThisTurn = new Set<string>();
+      let finalReply: string | null = null;
 
-      if (firstResponse.tool_calls.length > 0) {
-        // アシスタントメッセージをコンテキストに追加
+      // G1: tools付きGroq呼び出しを最大 MAX_TOOL_HOPS 回まで繰り返す。
+      // モデルがツール結果を見て追加のツールを呼ぶ「多段推論」を許容しつつ、
+      // 上限に達しても収束しない場合は必ず自然文の reply で終了させる。
+      for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
+        const hopResponse = await callGroqWithTools(messages, ADMIN_AGENT_TOOLS);
+        totalPromptTokens += hopResponse.usage.promptTokens;
+        totalCompletionTokens += hopResponse.usage.completionTokens;
+
+        if (hopResponse.tool_calls.length === 0) {
+          finalReply = hopResponse.content ?? '回答を生成できませんでした';
+          break;
+        }
+
         messages.push({
           role: 'assistant',
-          content: firstResponse.content,
-          tool_calls: firstResponse.tool_calls,
+          content: hopResponse.content,
+          tool_calls: hopResponse.tool_calls,
         });
 
-        // tool_calls を順次実行
-        for (const toolCall of firstResponse.tool_calls) {
+        for (const toolCall of hopResponse.tool_calls) {
           let toolArgs: Record<string, unknown> = {};
           try {
             toolArgs = JSON.parse(toolCall.function.arguments);
@@ -235,38 +269,39 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             toolArgs = {};
           }
 
-          const result = await executeToolCall(
-            toolCall.function.name,
-            toolArgs,
-            effectiveTenantId,
-            db
-          );
+          const toolName = toolCall.function.name;
+          const suggestCounterpart = Object.entries(SUGGEST_TO_SAVE_TOOL).find(([, save]) => save === toolName)?.[0];
 
-          actions.push({ tool: toolCall.function.name, result });
+          let result: string;
+          if (suggestCounterpart && suggestedThisTurn.has(suggestCounterpart)) {
+            // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
+            result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
+          } else {
+            result = await executeToolCall(toolName, toolArgs, effectiveTenantId, db);
+            if (toolName in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(toolName);
+          }
 
-          // tool 結果をコンテキストに追加
+          actions.push({ tool: toolName, result });
+
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            name: toolCall.function.name,
+            name: toolName,
             content: result,
           });
         }
-
-        // 第2回 Groq 呼び出し（最終 reply）
-        const finalResponse = await callGroqFinal(messages);
-        totalPromptTokens += finalResponse.usage.promptTokens;
-        totalCompletionTokens += finalResponse.usage.completionTokens;
-        reportUsage();
-        return res.json({ reply: finalResponse.reply, actions });
       }
 
-      // tool_calls がなかった場合はそのまま返す
+      if (finalReply === null) {
+        // MAX_TOOL_HOPS に達しても収束しなかった場合、tools無しで強制的にまとめさせる
+        const wrapUp = await callGroqFinal(messages);
+        totalPromptTokens += wrapUp.usage.promptTokens;
+        totalCompletionTokens += wrapUp.usage.completionTokens;
+        finalReply = wrapUp.reply;
+      }
+
       reportUsage();
-      return res.json({
-        reply: firstResponse.content ?? '回答を生成できませんでした',
-        actions: [],
-      });
+      return res.json({ reply: finalReply, actions });
     } catch (err) {
       logger.warn('[POST /v1/admin/agent/chat]', err);
       return res.status(500).json({ error: 'AIエージェントの応答生成に失敗しました' });

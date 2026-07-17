@@ -946,4 +946,120 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('ID: 7');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // G1: 多段エージェントループ
+  // -------------------------------------------------------------------------
+  describe('G1: 多段エージェントループ', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('3ホップ: ツール→ツール→最終応答 が正しく連鎖する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-1', 'get_tenant_settings'))
+        .mockResolvedValueOnce(toolCallResponse('call-2', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('設定とFAQを確認しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ ga4_measurement_id: null, posthog_host: null, widget_theme: {} }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q', answer: 'a' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定とFAQを両方確認して', sessionId: 'sess-070' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(res.body.actions.map((a: any) => a.tool)).toEqual(['get_tenant_settings', 'get_faq_list']);
+      expect(res.body.reply).toBe('設定とFAQを確認しました。');
+    });
+
+    it('MAX_TOOL_HOPS(4回)に達しても収束しない場合、tools無しの強制まとめ呼び出しで終了する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-1', 'get_tenant_settings'))
+        .mockResolvedValueOnce(toolCallResponse('call-2', 'get_tenant_settings'))
+        .mockResolvedValueOnce(toolCallResponse('call-3', 'get_tenant_settings'))
+        .mockResolvedValueOnce(toolCallResponse('call-4', 'get_tenant_settings'))
+        .mockResolvedValueOnce(makeGroqResponse('（強制まとめ）これ以上の確認はできませんでした。'));
+
+      mockQuery.mockResolvedValue({ rows: [{ ga4_measurement_id: null, posthog_host: null, widget_theme: {} }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ループしてみて', sessionId: 'sess-071' });
+
+      expect(res.status).toBe(200);
+      // 4ホップ(tools付き) + 1回の強制まとめ(tools無し) = 合計5回のGroq呼び出し
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+      expect(res.body.actions.length).toBe(4);
+      expect(res.body.reply).toBe('（強制まとめ）これ以上の確認はできませんでした。');
+    });
+
+    it('同一ターン内で suggest_faq → save_faq(confirmed=true) を連鎖しようとするとブロックされ、DBには書き込まれない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-1', 'suggest_faq', { free_text: '送料は550円' }))
+        .mockResolvedValueOnce(toolCallResponse('call-2', 'save_faq', { question: 'q', answer: 'a', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ question: '既存FAQ' }] }); // suggest_faq内の既存質問取得
+      mockTextToFaqs.mockResolvedValueOnce([{ question: '送料はいくらですか？', answer: '550円です。' }]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料は550円で登録して', sessionId: 'sess-072' });
+
+      expect(res.status).toBe(200);
+      // save_faq の INSERT が発火していないこと(suggest_faq用の1回のSELECTのみ)
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+
+      const saveAction = res.body.actions.find((a: any) => a.tool === 'save_faq');
+      expect(saveAction.result).toContain('同一ターン内での連続実行');
+    });
+
+    it('同一ホップ内で suggest_tuning_rule と save_tuning_rule(confirmed=true) が同時に来ても後者はブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [
+                  { id: 'call-1', type: 'function', function: { name: 'suggest_tuning_rule', arguments: JSON.stringify({ free_text: '保証は2年' }) } },
+                  { id: 'call-2', type: 'function', function: { name: 'save_tuning_rule', arguments: JSON.stringify({ trigger_pattern: '保証', expected_behavior: '2年', confirmed: true }) } },
+                ],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      mockCallGroq8bSuggestFromText.mockResolvedValueOnce({
+        trigger_pattern: '保証', instruction: '2年と伝える', priority: 5, reason: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保証は2年で登録して', sessionId: 'sess-073' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      const saveAction = res.body.actions.find((a: any) => a.tool === 'save_tuning_rule');
+      expect(saveAction.result).toContain('同一ターン内での連続実行');
+    });
+  });
 });
