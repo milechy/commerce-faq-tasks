@@ -83,6 +83,14 @@ function ConfigErrorScreen() {
   );
 }
 
+// build-hash cache-bust 2026-07-17: Cloudflare Pages エッジで /assets/*.js に
+// 誤って index.html の SPA fallback がキャッシュされる不整合(immutable設定のため
+// 自然回復しない)を、ファイル名ハッシュを変えて新規URLに切り替えることで回避する。
+// (console.* は vite.config.ts の terser drop_console:true で消えるため window 代入を使う)
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, string>).__r2cAdminBuildTag = "20260717-1";
+}
+
 function AppInner() {
   const { isClientAdmin, isSuperAdmin, user, previewMode, previewTenantId } = useAuth();
   const { isOpen: agentOpen, seedQuery, toggle: toggleAgent, close: closeAgent } = useAdminAgentUI();
