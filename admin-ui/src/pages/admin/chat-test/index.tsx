@@ -27,6 +27,7 @@ interface AvatarConfigOption {
   name: string;
   image_url: string | null;
   is_default: boolean;
+  is_active?: boolean;
   tenant_id: string;
 }
 
@@ -164,7 +165,14 @@ export default function ChatTestPage() {
     void authFetch(url)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data: { configs?: AvatarConfigOption[] }) => {
-        const configs = data.configs ?? [];
+        // is_active=false のアバターは選んでも実際には使われない（LiveKit room-token 発行時
+        // /api/avatar/room-token と avatar-agent 側 /api/internal/avatar-config が両方
+        // is_active=true を必須にしているため検証で弾かれ、環境変数の汎用デフォルトLemonSlice
+        // エージェントに無言でフォールバックしてしまう）。同名で is_active=false の重複が
+        // テナント作成時に自動生成される(tenants/routes.ts の DEFAULT_AVATARS seed)ため、
+        // このドロップダウンでは非アクティブな候補を最初から除外し、選んでも繋がらない状態を防ぐ。
+        const allConfigs = data.configs ?? [];
+        const configs = allConfigs.filter((c) => c.is_active !== false);
         setAvailableAvatars(configs);
         const urlMatch = configs.find((c) => c.id === queryAvatarConfigId);
         if (urlMatch) {
