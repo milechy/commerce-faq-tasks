@@ -152,7 +152,13 @@ export default function ChatTestPage() {
       setAvatarConfigsReady(true);
       return;
     }
-    const url = isSuperAdmin
+    // super_adminの「クライアントビューで見る」プレビュー中は isSuperAdmin が
+    // client_admin相当にフォールバックするが、実ログインユーザー(super_admin)のJWTは
+    // そのままのため、tenant未指定で叩くとバックエンドが全テナント混在の一覧を返してしまう
+    // （avatar/routes.ts:370-372 の isSuperAdmin 判定は実JWT基準）。previewMode中も
+    // effectiveTenantId(=previewTenantId) を明示的に渡し、他テナントのアバターが
+    // 誤って選択されテストチャットのアバター接続に失敗するのを防ぐ。
+    const url = (isSuperAdmin || previewMode)
       ? `${API_BASE}/v1/admin/avatar/configs?tenant=${encodeURIComponent(effectiveTenantId)}`
       : `${API_BASE}/v1/admin/avatar/configs`;
     void authFetch(url)
