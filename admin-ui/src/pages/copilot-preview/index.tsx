@@ -176,9 +176,9 @@ const CATEGORIES: Category[] = [
   { key: "assistant", label: "アシスタント", icon: "✨" },
   { key: "weekly", label: "今週のまとめ", icon: "📊" },
   { key: "history", label: "会話の履歴", icon: "💬" },
-  { key: "knowledge", label: "知識データ", icon: "📚", dim: true },
-  { key: "rules", label: "指示ルール", icon: "🎛️", dim: true },
-  { key: "avatar", label: "アバター", icon: "🎭", dim: true },
+  { key: "knowledge", label: "知識データ", icon: "📚" },
+  { key: "rules", label: "指示ルール", icon: "🎛️" },
+  { key: "avatar", label: "アバター", icon: "🎭" },
 ];
 
 // ─── ページ ──────────────────────────────────────────────────────────────────
@@ -543,6 +543,24 @@ export default function CopilotPreviewPage() {
       push(me("最近の会話を教えて"));
       push(say("直近142件のうち、AIが答えに困ったのは11件でした。そのうち9件が「送料」に関する質問です。まずここを直しますか？", [
         { label: "送料を直す", action: "do1", tone: "primary" },
+      ]));
+    } else if (key === "knowledge") {
+      push(me("知識データの状況を見せて"));
+      push(say("現在84件のFAQを登録済みです。直近1週間でAIが答えられなかった質問が11件あり、うち9件が「送料」に関するものでした。まずここから登録しますか？", [
+        { label: "登録する", action: "do1", tone: "primary" },
+        { label: "あとで", action: "later", tone: "ghost" },
+      ]));
+    } else if (key === "rules") {
+      push(me("指示ルールの状況を見せて"));
+      push(say("現在3件の指示ルールが有効です。最近「丁寧すぎて説明が長い」というお客様の反応が増えているので、応答を少し簡潔にするルールを追加できます。設定しますか？", [
+        { label: "設定する", action: "do2", tone: "primary" },
+        { label: "あとで", action: "later", tone: "ghost" },
+      ]));
+    } else if (key === "avatar") {
+      push(me("アバターの状況を見せて"));
+      push(say("アバターは稼働中です。今週は142件の会話のうち98件でアバターが応答しました(平均応答時間1.8秒)。夜21時台の離脱がやや多いので、声がけを1つ追加すると引き止められそうです。設定しますか？", [
+        { label: "設定する", action: "do3", tone: "primary" },
+        { label: "あとで", action: "later", tone: "ghost" },
       ]));
     }
   };
