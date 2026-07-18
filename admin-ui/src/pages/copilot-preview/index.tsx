@@ -539,10 +539,10 @@ export default function CopilotPreviewPage() {
   return (
     <div style={{ display: "flex", height: "100vh", background: "var(--background)", color: "var(--foreground)", fontFamily: "var(--font-sans, system-ui, sans-serif)", overflow: "hidden" }}>
       {/* 左レール(=各カテゴリはAIブリーフィングの窓口) */}
-      <aside style={{ width: 208, flexShrink: 0, background: "var(--sidebar, var(--card))", borderRight: "1px solid var(--border)", padding: "16px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-        <div style={{ fontWeight: 900, fontSize: 15, letterSpacing: "-0.03em", padding: "4px 8px 4px" }}>
+      <aside style={{ width: 184, flexShrink: 0, background: "var(--sidebar, var(--card))", borderRight: "1px solid var(--border)", padding: "12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ fontWeight: 900, fontSize: 13.5, letterSpacing: "-0.03em", padding: "3px 6px 3px" }}>
           R2C
-          <span style={{ fontSize: 9, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "1px 6px", borderRadius: 5, marginLeft: 6, letterSpacing: "0.04em" }}>店主モード</span>
+          <span style={{ fontSize: 9, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "1px 5px", borderRadius: 5, marginLeft: 5, letterSpacing: "0.04em" }}>店主モード</span>
         </div>
         <PreviewBadge />
         {CATEGORIES.map((c) => (
@@ -550,20 +550,20 @@ export default function CopilotPreviewPage() {
             key={c.key}
             onClick={() => handleCategory(c.key)}
             style={{
-              display: "flex", alignItems: "center", gap: 9, textAlign: "left",
-              padding: "8px 10px", borderRadius: 8, border: "none", cursor: "pointer",
-              fontSize: 13, fontWeight: active === c.key ? 700 : 500,
+              display: "flex", alignItems: "center", gap: 8, textAlign: "left",
+              padding: "6px 8px", borderRadius: 7, border: "none", cursor: "pointer",
+              fontSize: 12.5, fontWeight: active === c.key ? 700 : 500,
               color: active === c.key ? AGENT : "var(--muted-foreground)",
               background: active === c.key ? AGENT_SOFT : "transparent",
-              opacity: c.dim ? 0.55 : 1, minHeight: 38,
+              opacity: c.dim ? 0.55 : 1, minHeight: 30,
             }}
           >
-            <span style={{ fontSize: 15 }}>{c.icon}</span>{c.label}
+            <span style={{ fontSize: 13.5 }}>{c.icon}</span>{c.label}
           </button>
         ))}
         <div style={{ marginTop: "auto" }}>
           <Phase4DefaultToggle />
-          <div style={{ fontSize: 10.5, color: "var(--muted-foreground)", lineHeight: 1.5, padding: "8px" }}>
+          <div style={{ fontSize: 10, color: "var(--muted-foreground)", lineHeight: 1.45, padding: "6px" }}>
             「くわしい設定」は従来画面のまま。会話UIは<strong style={{ color: "var(--foreground)" }}>追加</strong>で、既存は消していません。
           </div>
         </div>
@@ -572,23 +572,23 @@ export default function CopilotPreviewPage() {
       {/* チャット本体 */}
       <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {/* ヘッダー */}
-        <header style={{ display: "flex", alignItems: "center", gap: 11, padding: "13px 20px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <header style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <AgentMark />
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>R2Cエージェント</div>
-            <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 0 3px rgba(34,197,94,0.15)" }} />オンライン
+            <div style={{ fontWeight: 700, fontSize: 13 }}>R2Cエージェント</div>
+            <div style={{ fontSize: 11, color: "var(--muted-foreground)", display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 0 3px rgba(34,197,94,0.15)" }} />オンライン
             </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
             <RealActionBadge count={realActionCount} />
             <ProgressPill done={done} total={3} />
           </div>
         </header>
 
         {/* スレッド */}
-        <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: "22px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ width: "100%", maxWidth: 640, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ width: "100%", maxWidth: 620, margin: "0 auto", display: "flex", flexDirection: "column", gap: 10 }}>
             {msgs.map((m) => (
               <MessageRow key={m.id} m={m} onChip={runAction} done={done} />
             ))}
@@ -596,22 +596,22 @@ export default function CopilotPreviewPage() {
         </div>
 
         {/* コンポーザ（実API接続） */}
-        <div style={{ padding: "0 20px 18px", flexShrink: 0 }}>
-          <div style={{ maxWidth: 640, margin: "0 auto" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 10px 8px 16px", border: `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 12, background: "var(--input, var(--card))" }}>
+        <div style={{ padding: "0 20px 14px", flexShrink: 0 }}>
+          <div style={{ maxWidth: 620, margin: "0 auto" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px 6px 13px", border: `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 11, background: "var(--input, var(--card))" }}>
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
                 placeholder="指示ルールを話しかけてみてください（例：保証について聞かれたら2年と答えて）"
                 disabled={sending}
-                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--foreground)", fontSize: 13.5, minHeight: 28 }}
+                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--foreground)", fontSize: 13, minHeight: 24 }}
               />
-              <button onClick={handleSend} disabled={sending} aria-label="送信" style={{ width: 32, height: 32, borderRadius: 9, border: "none", background: AGENT, color: "#fff", cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.6 : 1, fontSize: 15 }}>
+              <button onClick={handleSend} disabled={sending} aria-label="送信" style={{ width: 28, height: 28, borderRadius: 8, border: "none", background: AGENT, color: "#fff", cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.6 : 1, fontSize: 13.5 }}>
                 {sending ? "…" : "↑"}
               </button>
             </div>
-            <div style={{ marginTop: 6, fontSize: 10.5, color: "var(--muted-foreground)", textAlign: "center" }}>
+            <div style={{ marginTop: 5, fontSize: 10, color: "var(--muted-foreground)", textAlign: "center" }}>
               ここだけ実際の R2Cエージェント（指示ルール作成）に接続されています。要ログイン。
             </div>
           </div>
@@ -625,7 +625,7 @@ export default function CopilotPreviewPage() {
 
 function PreviewBadge() {
   return (
-    <div style={{ margin: "6px 8px 10px", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "4px 8px", lineHeight: 1.4 }}>
+    <div style={{ margin: "5px 6px 8px", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.03em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "3px 7px", lineHeight: 1.35 }}>
       PROTOTYPE ・ 起動時ブリーフィング＋下の入力欄は実API接続。チップのデモ部分のみモック
     </div>
   );
@@ -633,9 +633,9 @@ function PreviewBadge() {
 
 function AgentMark() {
   return (
-    <div style={{ width: 38, height: 38, borderRadius: "50%", flexShrink: 0, position: "relative", background: `conic-gradient(from 140deg, ${AGENT}, #d99320, ${AGENT})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div style={{ width: 32, height: 32, borderRadius: "50%", flexShrink: 0, position: "relative", background: `conic-gradient(from 140deg, ${AGENT}, #d99320, ${AGENT})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ position: "absolute", inset: 3, borderRadius: "50%", background: "var(--card, var(--background))" }} />
-      <span style={{ position: "relative", zIndex: 1, fontSize: 17 }}>✨</span>
+      <span style={{ position: "relative", zIndex: 1, fontSize: 14 }}>✨</span>
     </div>
   );
 }
@@ -656,25 +656,25 @@ function Phase4DefaultToggle() {
     <button
       onClick={toggle}
       style={{
-        display: "flex", alignItems: "center", gap: 8, width: "calc(100% - 16px)", margin: "0 8px 8px",
-        padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)",
+        display: "flex", alignItems: "center", gap: 7, width: "calc(100% - 12px)", margin: "0 6px 6px",
+        padding: "6px 8px", borderRadius: 7, border: "1px solid var(--border)",
         background: enabled ? AGENT_SOFT : "transparent", cursor: "pointer", textAlign: "left",
       }}
     >
       <span
         style={{
-          width: 30, height: 17, borderRadius: 999, background: enabled ? AGENT : "var(--border)",
+          width: 27, height: 15, borderRadius: 999, background: enabled ? AGENT : "var(--border)",
           position: "relative", flexShrink: 0, transition: "background 0.15s",
         }}
       >
         <span
           style={{
-            position: "absolute", top: 2, left: enabled ? 15 : 2, width: 13, height: 13, borderRadius: "50%",
+            position: "absolute", top: 2, left: enabled ? 14 : 2, width: 11, height: 11, borderRadius: "50%",
             background: "#fff", transition: "left 0.15s",
           }}
         />
       </span>
-      <span style={{ fontSize: 11, color: enabled ? AGENT : "var(--muted-foreground)", lineHeight: 1.4 }}>
+      <span style={{ fontSize: 10.5, color: enabled ? AGENT : "var(--muted-foreground)", lineHeight: 1.35 }}>
         これを既定の画面にする
         <br />
         <span style={{ fontSize: 9.5, opacity: 0.75 }}>このブラウザだけの設定です</span>
@@ -685,8 +685,8 @@ function Phase4DefaultToggle() {
 
 function RealActionBadge({ count }: { count: number }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: count > 0 ? "#16a34a" : "var(--muted-foreground)" }}>
-      <span style={{ fontSize: 11 }}>{count > 0 ? "✅" : "◦"}</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: count > 0 ? "#16a34a" : "var(--muted-foreground)" }}>
+      <span style={{ fontSize: 10.5 }}>{count > 0 ? "✅" : "◦"}</span>
       実際の操作 <strong style={{ fontVariantNumeric: "tabular-nums" }}>{count}</strong>件
     </div>
   );
@@ -694,11 +694,11 @@ function RealActionBadge({ count }: { count: number }) {
 
 function ProgressPill({ done, total }: { done: number; total: number }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--muted-foreground)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--muted-foreground)" }}>
       <span>今週の改善 <strong style={{ color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>{done}/{total}</strong></span>
       <span style={{ display: "flex", gap: 3 }}>
         {Array.from({ length: total }).map((_, i) => (
-          <span key={i} style={{ width: 16, height: 5, borderRadius: 3, background: i < done ? "#22c55e" : "var(--border)" }} />
+          <span key={i} style={{ width: 14, height: 4, borderRadius: 3, background: i < done ? "#22c55e" : "var(--border)" }} />
         ))}
       </span>
     </div>
@@ -708,25 +708,25 @@ function ProgressPill({ done, total }: { done: number; total: number }) {
 function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number, label: string) => void; done: number }) {
   const isMe = m.role === "me";
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 8 }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 6 }}>
       {m.text && (
-        <div style={{ maxWidth: "90%", padding: "11px 14px", borderRadius: isMe ? "14px 14px 5px 14px" : "14px 14px 14px 5px", background: isMe ? AGENT : "var(--muted, rgba(120,120,140,0.12))", color: isMe ? "#fff" : "var(--foreground)", fontSize: 13.5, lineHeight: 1.65, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <div style={{ maxWidth: "90%", padding: "9px 12px", borderRadius: isMe ? "12px 12px 4px 12px" : "12px 12px 12px 4px", background: isMe ? AGENT : "var(--muted, rgba(120,120,140,0.12))", color: isMe ? "#fff" : "var(--foreground)", fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {m.text}
         </div>
       )}
       {m.card && <CardView card={m.card} />}
       {m.chips && !m.chipsUsed && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {m.chips.map((c, i) => (
             <button
               key={i}
               onClick={() => onChip(c.action, m.id, c.label)}
               style={{
-                fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer",
+                fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
                 border: c.tone === "primary" ? "none" : "1px solid var(--border)",
                 background: c.tone === "primary" ? AGENT : "transparent",
                 color: c.tone === "primary" ? "#fff" : "var(--muted-foreground)",
-                minHeight: 38,
+                minHeight: 30,
               }}
             >
               {c.label}
@@ -743,9 +743,9 @@ function CardShell({ hd, tone = "agent", children, foot }: { hd: React.ReactNode
   const hdBg = tone === "good" ? "rgba(34,197,94,0.12)" : tone === "brand" ? "rgba(217,147,32,0.12)" : AGENT_SOFT;
   const hdColor = tone === "good" ? "#16a34a" : tone === "brand" ? "#b45309" : AGENT;
   return (
-    <div style={{ width: "100%", maxWidth: "100%", border: `1px solid ${border}`, borderRadius: 14, overflow: "hidden", background: "var(--card)", boxShadow: "0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.06)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: hdBg, borderBottom: `1px solid ${border}`, fontWeight: 700, fontSize: 12.5, color: hdColor }}>{hd}</div>
-      <div style={{ padding: "13px 14px", display: "flex", flexDirection: "column", gap: 10 }}>{children}</div>
+    <div style={{ width: "100%", maxWidth: "100%", border: `1px solid ${border}`, borderRadius: 12, overflow: "hidden", background: "var(--card)", boxShadow: "0 1px 2px rgba(0,0,0,0.04), 0 6px 16px rgba(0,0,0,0.05)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", background: hdBg, borderBottom: `1px solid ${border}`, fontWeight: 700, fontSize: 12, color: hdColor }}>{hd}</div>
+      <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>{children}</div>
       {foot}
     </div>
   );
@@ -753,9 +753,9 @@ function CardShell({ hd, tone = "agent", children, foot }: { hd: React.ReactNode
 
 function Field({ k, v, quote, hi }: { k: string; v: string; quote?: boolean; hi?: boolean }) {
   return (
-    <div style={{ fontSize: 13 }}>
-      <div style={{ fontSize: 11, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 3 }}>{k}</div>
-      <div style={{ color: "var(--foreground)", ...(quote ? { background: "var(--muted, rgba(120,120,140,0.1))", borderRadius: 8, padding: "8px 11px", borderLeft: `3px solid ${hi ? "#d99320" : AGENT}`, lineHeight: 1.6 } : {}) }}>{v}</div>
+    <div style={{ fontSize: 12.5 }}>
+      <div style={{ fontSize: 10.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 2 }}>{k}</div>
+      <div style={{ color: "var(--foreground)", ...(quote ? { background: "var(--muted, rgba(120,120,140,0.1))", borderRadius: 7, padding: "7px 10px", borderLeft: `3px solid ${hi ? "#d99320" : AGENT}`, lineHeight: 1.55 } : {}) }}>{v}</div>
     </div>
   );
 }
@@ -764,8 +764,8 @@ function CardView({ card }: { card: Card }) {
   switch (card.kind) {
     case "agentAction":
       return (
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "9px 13px", borderRadius: 10, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", fontSize: 12.5, lineHeight: 1.6, maxWidth: "90%" }}>
-          <span style={{ fontSize: 13, flexShrink: 0 }}>✅</span>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 7, padding: "7px 11px", borderRadius: 9, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", fontSize: 12, lineHeight: 1.55, maxWidth: "90%" }}>
+          <span style={{ fontSize: 12.5, flexShrink: 0 }}>✅</span>
           <span>
             <strong style={{ color: "var(--foreground)" }}>{REAL_TOOL_LABEL[card.tool] ?? card.tool}</strong>
             <span style={{ color: "var(--muted-foreground)" }}>：{card.result}</span>
@@ -837,8 +837,8 @@ function CardView({ card }: { card: Card }) {
       );
     case "success":
       return (
-        <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 13px", borderRadius: 11, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", color: "var(--foreground)", fontSize: 13 }}>
-          <span style={{ fontSize: 15 }}>✅</span>{card.text}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 11px", borderRadius: 10, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", color: "var(--foreground)", fontSize: 12.5 }}>
+          <span style={{ fontSize: 13.5 }}>✅</span>{card.text}
         </div>
       );
     default:
@@ -849,7 +849,7 @@ function CardView({ card }: { card: Card }) {
 function CardActionsNote({ note }: { note: string }) {
   // ボタン自体はメッセージのchipsが担うため、ここは補足文のみ
   return (
-    <div style={{ padding: "9px 14px", borderTop: "1px solid var(--border)", background: "var(--muted, rgba(120,120,140,0.06))", fontSize: 11, color: "var(--muted-foreground)" }}>
+    <div style={{ padding: "7px 12px", borderTop: "1px solid var(--border)", background: "var(--muted, rgba(120,120,140,0.06))", fontSize: 10.5, color: "var(--muted-foreground)" }}>
       {note}
     </div>
   );
@@ -857,8 +857,8 @@ function CardActionsNote({ note }: { note: string }) {
 
 function Stat({ n, label, crit }: { n: string; label: string; crit?: boolean }) {
   return (
-    <div style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 13 }}>
-      <b style={{ fontVariantNumeric: "tabular-nums", fontWeight: 800, fontSize: 15, color: crit ? "#dc2626" : "var(--foreground)" }}>{n}</b>
+    <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12.5 }}>
+      <b style={{ fontVariantNumeric: "tabular-nums", fontWeight: 800, fontSize: 14, color: crit ? "#dc2626" : "var(--foreground)" }}>{n}</b>
       <span style={{ color: "var(--muted-foreground)" }}>{label}</span>
     </div>
   );
@@ -867,35 +867,35 @@ function Stat({ n, label, crit }: { n: string; label: string; crit?: boolean }) 
 function Kpi({ n, label, sub, crit }: { n: string; label: string; sub: string; crit?: boolean }) {
   return (
     <div>
-      <div style={{ fontSize: 20, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: crit ? "#dc2626" : "var(--foreground)", lineHeight: 1.1 }}>{n}</div>
-      <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{label} <span style={{ opacity: 0.7 }}>{sub}</span></div>
+      <div style={{ fontSize: 18, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: crit ? "#dc2626" : "var(--foreground)", lineHeight: 1.1 }}>{n}</div>
+      <div style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>{label} <span style={{ opacity: 0.7 }}>{sub}</span></div>
     </div>
   );
 }
 
 function Todo({ i, text, g }: { i: string; text: string; g: string }) {
   return (
-    <div style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: "1px dashed var(--border)", fontSize: 12.5, alignItems: "flex-start" }}>
-      <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 700, color: AGENT, fontSize: 12 }}>{i}</span>
-      <span style={{ color: "var(--foreground)" }}>{text}<span style={{ color: "var(--muted-foreground)", fontSize: 11.5 }}> → {g}</span></span>
+    <div style={{ display: "flex", gap: 9, padding: "7px 0", borderTop: "1px dashed var(--border)", fontSize: 12, alignItems: "flex-start" }}>
+      <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 700, color: AGENT, fontSize: 11.5 }}>{i}</span>
+      <span style={{ color: "var(--foreground)" }}>{text}<span style={{ color: "var(--muted-foreground)", fontSize: 11 }}> → {g}</span></span>
     </div>
   );
 }
 
 function Screenshot({ url }: { url: string }) {
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "7px 10px", background: "var(--muted, rgba(120,120,140,0.1))", borderBottom: "1px solid var(--border)" }}>
-        <i style={{ width: 8, height: 8, borderRadius: "50%", background: "#e0697c", display: "inline-block" }} />
-        <i style={{ width: 8, height: 8, borderRadius: "50%", background: "#eeb84c", display: "inline-block" }} />
-        <i style={{ width: 8, height: 8, borderRadius: "50%", background: "#4bbd83", display: "inline-block" }} />
-        <span style={{ marginLeft: 8, fontFamily: "var(--font-mono, monospace)", fontSize: 10, color: "var(--muted-foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</span>
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 9px", background: "var(--muted, rgba(120,120,140,0.1))", borderBottom: "1px solid var(--border)" }}>
+        <i style={{ width: 7, height: 7, borderRadius: "50%", background: "#e0697c", display: "inline-block" }} />
+        <i style={{ width: 7, height: 7, borderRadius: "50%", background: "#eeb84c", display: "inline-block" }} />
+        <i style={{ width: 7, height: 7, borderRadius: "50%", background: "#4bbd83", display: "inline-block" }} />
+        <span style={{ marginLeft: 7, fontFamily: "var(--font-mono, monospace)", fontSize: 9.5, color: "var(--muted-foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</span>
       </div>
-      <div style={{ padding: 13, display: "flex", flexDirection: "column", gap: 7 }}>
-        <div style={{ height: 9, width: "55%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
-        <div style={{ height: 9, width: "88%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
-        <div style={{ height: 9, width: "66%", borderRadius: 4, background: "rgba(34,197,94,0.18)", border: "1px solid rgba(34,197,94,0.5)" }} />
-        <div style={{ height: 9, width: "40%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
+      <div style={{ padding: 11, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ height: 8, width: "55%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
+        <div style={{ height: 8, width: "88%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
+        <div style={{ height: 8, width: "66%", borderRadius: 4, background: "rgba(34,197,94,0.18)", border: "1px solid rgba(34,197,94,0.5)" }} />
+        <div style={{ height: 8, width: "40%", borderRadius: 4, background: "var(--muted, rgba(120,120,140,0.15))" }} />
       </div>
     </div>
   );
