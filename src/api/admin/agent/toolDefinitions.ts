@@ -252,6 +252,54 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_tuning_rules',
+      description:
+        '現在の指示ルール（AIの振る舞いルール）の一覧を取得する読み取り専用ツール。suggest_tuning_rule/save_tuning_ruleで作成済みのものも含め、有効/無効の状態ごと全件を確認したい時に使う。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_tuning_rule',
+      description:
+        '既存の指示ルールを編集する、または有効/無効を切り替える。編集する場合は trigger_pattern/expected_behavior を、有効/無効の切り替えのみの場合は is_active だけを指定する。必ず先に変更内容をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'get_tuning_rulesの結果に含まれるルールID' },
+          trigger_pattern: { type: 'string', description: '新しいトリガー内容（変更する場合のみ指定）' },
+          expected_behavior: { type: 'string', description: '新しい対応方針（変更する場合のみ指定）' },
+          is_active: { type: 'boolean', description: '有効/無効の切り替え（変更する場合のみ指定）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_tuning_rule',
+      description:
+        '指示ルールを削除する。必ず先にどのルールを削除するか提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'get_tuning_rulesの結果に含まれるルールID' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_weekly_briefing',
       description:
         '直近7日間のテナントの状況（会話数・前週比・応答品質スコア・成約・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',

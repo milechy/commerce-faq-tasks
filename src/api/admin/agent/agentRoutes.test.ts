@@ -43,9 +43,13 @@ jest.mock('../tuning/routes', () => ({
 
 const mockListRules = jest.fn();
 const mockCreateRule = jest.fn();
+const mockUpdateRule = jest.fn();
+const mockDeleteRule = jest.fn();
 jest.mock('../tuning/tuningRulesRepository', () => ({
   listRules: (...args: any[]) => mockListRules(...args),
   createRule: (...args: any[]) => mockCreateRule(...args),
+  updateRule: (...args: any[]) => mockUpdateRule(...args),
+  deleteRule: (...args: any[]) => mockDeleteRule(...args),
 }));
 
 // 名前付きラッパーにする(jest.mock factory内の匿名 jest.fn() は resetAllMocks() で
@@ -618,6 +622,165 @@ describe('POST /v1/admin/agent/chat', () => {
         }),
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_tuning_rules / update_tuning_rule / delete_tuning_rule
+  // -------------------------------------------------------------------------
+  describe('get_tuning_rules / update_tuning_rule / delete_tuning_rule', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('get_tuning_rules: 一覧を1つの結果文字列にまとめる（無効ルールは(無効)を付ける）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-1', 'get_tuning_rules', {}))
+        .mockResolvedValueOnce(makeGroqResponse('現在2件のルールがあります。'));
+
+      mockListRules.mockResolvedValueOnce([
+        { id: 1, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 5, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '' },
+        { id: 2, tenant_id: 'global', trigger_pattern: '価格交渉', expected_behavior: '応じない', priority: 3, is_active: false, created_by: null, source_message_id: null, created_at: '', updated_at: '' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '指示ルールを見せて', sessionId: 'sess-tr-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockListRules).toHaveBeenCalledWith('tenant-abc');
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('2件');
+      expect(result).toContain('保証');
+      expect(result).toContain('価格交渉');
+      expect(result).toContain('(無効)');
+    });
+
+    it('update_tuning_rule: confirmed=false → 更新されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-2', 'update_tuning_rule', { id: 1, is_active: false, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから更新します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を無効にして', sessionId: 'sess-tr-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('update_tuning_rule: client_admin・confirmed=true → tenant_idスコープ(super_admin以外はundefined渡さない)で更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-3', 'update_tuning_rule', { id: 1, is_active: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('無効にしました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 1, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 5, is_active: false, created_by: null, source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を無効にして', sessionId: 'sess-tr-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        1,
+        { trigger_pattern: undefined, expected_behavior: undefined, is_active: false },
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('現在無効');
+    });
+
+    it('update_tuning_rule: super_admin・confirmed=true → tenant_idスコープ無し(undefined)で更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-4', 'update_tuning_rule', { id: 2, is_active: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('有効にしました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 2, tenant_id: 'global', trigger_pattern: '価格交渉', expected_behavior: '応じない', priority: 3, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール2を有効にして', sessionId: 'sess-tr-04', targetTenantId: 'tenant-abc' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        2,
+        { trigger_pattern: undefined, expected_behavior: undefined, is_active: true },
+        undefined,
+      );
+    });
+
+    it('update_tuning_rule: 変更内容が空 → DB呼び出しせずその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-5', 'update_tuning_rule', { id: 1, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('変更内容を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を更新して', sessionId: 'sess-tr-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('変更する内容がありません');
+    });
+
+    it('delete_tuning_rule: confirmed=false → 削除されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-6', 'delete_tuning_rule', { id: 1, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから削除します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を削除して', sessionId: 'sess-tr-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockDeleteRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('delete_tuning_rule: confirmed=true → tenant_idスコープで削除される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-7', 'delete_tuning_rule', { id: 1, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockDeleteRule.mockResolvedValueOnce(true);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を削除して', sessionId: 'sess-tr-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockDeleteRule).toHaveBeenCalledWith(1, 'tenant-abc');
+      expect(res.body.actions[0].result).toContain('削除しました');
+    });
+
+    it('delete_tuning_rule: 対象が見つからない場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-8', 'delete_tuning_rule', { id: 999, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockDeleteRule.mockResolvedValueOnce(false);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール999を削除して', sessionId: 'sess-tr-08' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つからないかアクセス権限がありません');
     });
   });
 

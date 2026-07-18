@@ -8,7 +8,7 @@ import {
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
 import { callGroq8bSuggestFromText } from '../tuning/routes';
-import { listRules, createRule } from '../tuning/tuningRulesRepository';
+import { listRules, createRule, updateRule, deleteRule } from '../tuning/tuningRulesRepository';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
 import { textToFaqs } from '../knowledge/routes';
@@ -431,6 +431,89 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] save_tuning_rule failed', err);
         return truncate('ルールの保存に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_tuning_rules': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const rules = await listRules(tenantId);
+        if (rules.length === 0) {
+          return truncate('有効な指示ルールはありません');
+        }
+        const lines = rules.slice(0, 15).map((r) =>
+          `[${r.id}]${r.is_active ? '' : '(無効)'} 「${r.trigger_pattern.slice(0, 60)}」→ ${r.expected_behavior.slice(0, 100)}`
+        );
+        return truncate(`指示ルール一覧（${rules.length}件）:\n` + lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_tuning_rules failed', err);
+        return truncate('指示ルール一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'update_tuning_rule': {
+      const id = Number(args['id']);
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`指示ルール（ID: ${id}）の更新には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(id)) {
+        return truncate('id が不正です');
+      }
+
+      const triggerPattern = typeof args['trigger_pattern'] === 'string' ? args['trigger_pattern'].slice(0, 1000) : undefined;
+      const expectedBehavior = typeof args['expected_behavior'] === 'string' ? args['expected_behavior'].slice(0, 4000) : undefined;
+      const isActive = typeof args['is_active'] === 'boolean' ? args['is_active'] : undefined;
+
+      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined) {
+        return truncate('変更する内容がありません（trigger_pattern・expected_behavior・is_active のいずれかを指定してください）');
+      }
+
+      try {
+        const ownerFilter = isSuperAdmin ? undefined : tenantId;
+        const updated = await updateRule(
+          id,
+          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive },
+          ownerFilter,
+        );
+        if (!updated) {
+          return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        return truncate(`指示ルール（ID: ${id}）を更新しました: 「${updated.trigger_pattern}」${updated.is_active ? '' : '（現在無効）'}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] update_tuning_rule failed', err);
+        return truncate('指示ルールの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'delete_tuning_rule': {
+      const id = Number(args['id']);
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`指示ルール（ID: ${id}）の削除には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(id)) {
+        return truncate('id が不正です');
+      }
+
+      try {
+        const ownerFilter = isSuperAdmin ? undefined : tenantId;
+        const ok = await deleteRule(id, ownerFilter);
+        if (!ok) {
+          return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        return truncate(`指示ルール（ID: ${id}）を削除しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] delete_tuning_rule failed', err);
+        return truncate('指示ルールの削除に失敗しました');
       }
     }
 
