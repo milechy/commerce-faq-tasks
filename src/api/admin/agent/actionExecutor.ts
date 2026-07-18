@@ -786,6 +786,137 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    case 'get_engagement_rules': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const result = await db.query(
+          `SELECT id, trigger_type, message_template, is_active, priority
+           FROM trigger_rules WHERE tenant_id = $1
+           ORDER BY priority DESC, created_at DESC LIMIT 15`,
+          [tenantId],
+        );
+        if (result.rows.length === 0) {
+          return truncate('声がけルールは登録されていません');
+        }
+        const lines = (result.rows as { id: number; trigger_type: string; message_template: string; is_active: boolean; priority: number }[]).map(
+          (r) => `[${r.id}]${r.is_active ? '' : '(無効)'} ${r.trigger_type} → ${r.message_template.slice(0, 80)}`,
+        );
+        return truncate(`声がけルール一覧（${result.rows.length}件）:\n` + lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_engagement_rules failed', err);
+        return truncate('声がけルール一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'update_engagement_rule': {
+      const id = Number(args['id']);
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`声がけルール（ID: ${id}）の更新には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(id)) {
+        return truncate('id が不正です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      const VALID_TRIGGER_TYPES = new Set(['scroll_depth', 'idle_time', 'exit_intent', 'page_url_match']);
+      const triggerTypeRaw = args['trigger_type'];
+      if (triggerTypeRaw !== undefined && !VALID_TRIGGER_TYPES.has(String(triggerTypeRaw))) {
+        return truncate('trigger_type が不正です（scroll_depth/idle_time/exit_intent/page_url_match のいずれか）');
+      }
+      const triggerType = typeof triggerTypeRaw === 'string' ? triggerTypeRaw : undefined;
+      const triggerConfigRaw = args['trigger_config'];
+      const triggerConfig =
+        typeof triggerConfigRaw === 'object' && triggerConfigRaw !== null && !Array.isArray(triggerConfigRaw)
+          ? triggerConfigRaw
+          : undefined;
+      const messageTemplate = typeof args['message_template'] === 'string' ? args['message_template'].slice(0, 500) : undefined;
+      const priorityRaw = args['priority'];
+      const priority =
+        typeof priorityRaw === 'number' && Number.isFinite(priorityRaw)
+          ? Math.max(0, Math.min(100, Math.round(priorityRaw)))
+          : undefined;
+      const isActive = typeof args['is_active'] === 'boolean' ? args['is_active'] : undefined;
+
+      if (triggerType === undefined && triggerConfig === undefined && messageTemplate === undefined && priority === undefined && isActive === undefined) {
+        return truncate('変更する内容がありません（trigger_type・trigger_config・message_template・priority・is_active のいずれかを指定してください）');
+      }
+
+      try {
+        const existing = await db.query('SELECT id, tenant_id FROM trigger_rules WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+          return truncate(`声がけルール（ID: ${id}）が見つかりません`);
+        }
+        if (!isSuperAdmin && (existing.rows[0] as { tenant_id: string }).tenant_id !== tenantId) {
+          return truncate('この声がけルールへのアクセス権限がありません');
+        }
+
+        const result = await db.query(
+          `UPDATE trigger_rules SET
+             trigger_type   = COALESCE($1, trigger_type),
+             trigger_config = COALESCE($2::jsonb, trigger_config),
+             message_template = COALESCE($3, message_template),
+             priority       = COALESCE($4, priority),
+             is_active      = COALESCE($5, is_active)
+           WHERE id = $6
+           RETURNING id, trigger_type, message_template, is_active`,
+          [
+            triggerType ?? null,
+            triggerConfig ? JSON.stringify(triggerConfig) : null,
+            messageTemplate ?? null,
+            priority ?? null,
+            isActive ?? null,
+            id,
+          ],
+        );
+        const row = result.rows[0] as { id: number; trigger_type: string; message_template: string; is_active: boolean };
+        return truncate(`声がけルール（ID: ${id}）を更新しました: 「${row.trigger_type}」→ ${row.message_template}${row.is_active ? '' : '（現在無効）'}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] update_engagement_rule failed', err);
+        return truncate('声がけルールの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'delete_engagement_rule': {
+      const id = Number(args['id']);
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`声がけルール（ID: ${id}）の削除には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(id)) {
+        return truncate('id が不正です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const existing = await db.query('SELECT id, tenant_id FROM trigger_rules WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+          return truncate(`声がけルール（ID: ${id}）が見つかりません`);
+        }
+        if (!isSuperAdmin && (existing.rows[0] as { tenant_id: string }).tenant_id !== tenantId) {
+          return truncate('この声がけルールへのアクセス権限がありません');
+        }
+
+        await db.query('DELETE FROM trigger_rules WHERE id = $1', [id]);
+        return truncate(`声がけルール（ID: ${id}）を削除しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] delete_engagement_rule failed', err);
+        return truncate('声がけルールの削除に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // Sai委譲(Tier A設計の土台): 現時点では super_admin 限定を維持し、client_admin には
     // 開放しない（信頼モデル変更は別途判断が必要なため、既存のtry-sai同様の認可を踏襲）。
     case 'request_sai_task': {
