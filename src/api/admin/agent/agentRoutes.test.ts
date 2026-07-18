@@ -1704,6 +1704,59 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_legacy_ui_link
+  // -------------------------------------------------------------------------
+  describe('get_legacy_ui_link', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it.each([
+      ['billing', '請求管理', '/admin/billing'],
+      ['avatar_studio', 'アバタースタジオ', '/admin/avatar/studio'],
+      ['escalation_reply', 'エスカレーション対応', '/admin/escalations'],
+      ['session_deletion', '会話履歴', '/admin/chat-history'],
+    ])('feature=%s: 旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-1', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご対応ください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-lu-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain(label);
+      expect(result).toContain(path);
+    });
+
+    it('不明なfeatureの場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-5', 'get_legacy_ui_link', { feature: 'unknown_thing' }))
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '謎の機能について', sessionId: 'sess-lu-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('不明な案内先');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // G1: 多段エージェントループ
   // -------------------------------------------------------------------------
   describe('G1: 多段エージェントループ', () => {
