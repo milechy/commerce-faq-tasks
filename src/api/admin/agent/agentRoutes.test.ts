@@ -52,6 +52,12 @@ jest.mock('../tuning/tuningRulesRepository', () => ({
   deleteRule: (...args: any[]) => mockDeleteRule(...args),
 }));
 
+// generate_tuning_rule_test_responses が使う依存をモック
+const mockGenerateTestResponses = jest.fn();
+jest.mock('../tuning/testResponseRoutes', () => ({
+  generateTestResponses: (...args: any[]) => mockGenerateTestResponses(...args),
+}));
+
 // 名前付きラッパーにする(jest.mock factory内の匿名 jest.fn() は resetAllMocks() で
 // 既定値ごと消えてしまい、beforeEachで再設定できないため他の依存と同じパターンに統一)
 const mockSearchKnowledgeForSuggestion = jest.fn();
@@ -795,6 +801,180 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('見つからないかアクセス権限がありません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // generate_tuning_rule_test_responses / approve_tuning_rule_response / remove_approved_response
+  // -------------------------------------------------------------------------
+  describe('generate_tuning_rule_test_responses / approve_tuning_rule_response / remove_approved_response', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('generate_tuning_rule_test_responses: 3案を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-1', 'generate_tuning_rule_test_responses', { id: 1 }))
+        .mockResolvedValueOnce(makeGroqResponse('3案作りました。'));
+
+      mockGenerateTestResponses.mockResolvedValueOnce({
+        ok: true,
+        responses: [
+          { style: '丁寧版', text: '2年間の保証がございます。' },
+          { style: '簡潔版', text: '保証は2年です。' },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1のテスト返答を見せて', sessionId: 'sess-tt-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockGenerateTestResponses).toHaveBeenCalledWith(1, 'tenant-abc', false);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('丁寧版');
+      expect(result).toContain('2年間の保証がございます。');
+    });
+
+    it('generate_tuning_rule_test_responses: not_found → その旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-2', 'generate_tuning_rule_test_responses', { id: 999 }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockGenerateTestResponses.mockResolvedValueOnce({ ok: false, reason: 'not_found' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール999のテスト返答を見せて', sessionId: 'sess-tt-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+
+    it('approve_tuning_rule_response: confirmed=false → 保存されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-3', 'approve_tuning_rule_response', { id: 1, text: 'x', style: '丁寧版', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから採用します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'これを採用して', sessionId: 'sess-tt-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('approve_tuning_rule_response: confirmed=true・自テナント → 既存配列に追加してupdateRuleが呼ばれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-4', 'approve_tuning_rule_response', { id: 1, text: '2年です', style: '簡潔版', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('採用しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ tenant_id: 'tenant-abc', approved_responses: [{ text: '既存', style: '丁寧版', approved_at: '2026-01-01T00:00:00Z' }] }],
+      });
+      mockUpdateRule.mockResolvedValueOnce({ id: 1 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'これを採用して', sessionId: 'sess-tt-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        1,
+        { approved_responses: expect.arrayContaining([
+          expect.objectContaining({ text: '既存' }),
+          expect.objectContaining({ text: '2年です', style: '簡潔版' }),
+        ]) },
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('現在2件採用済み');
+    });
+
+    it('approve_tuning_rule_response: 他テナントのルール → アクセス権限がありませんと返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-5', 'approve_tuning_rule_response', { id: 1, text: 'x', style: '丁寧版', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('権限がありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ tenant_id: 'other-tenant', approved_responses: [] }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'これを採用して', sessionId: 'sess-tt-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('アクセス権限がありません');
+    });
+
+    it('remove_approved_response: confirmed=false → 取り消されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-6', 'remove_approved_response', { id: 1, index: 0, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから取り消します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '1番目の採用を取り消して', sessionId: 'sess-tt-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('remove_approved_response: confirmed=true・自テナント → 該当indexを除いた配列でupdateRuleが呼ばれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-8', 'remove_approved_response', { id: 1, index: 0, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('取り消しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ tenant_id: 'tenant-abc', approved_responses: [
+          { text: 'A', style: '丁寧版', approved_at: '2026-01-01T00:00:00Z' },
+          { text: 'B', style: '簡潔版', approved_at: '2026-01-02T00:00:00Z' },
+        ] }],
+      });
+      mockUpdateRule.mockResolvedValueOnce({ id: 1 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '1番目の採用を取り消して', sessionId: 'sess-tt-09' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        1,
+        { approved_responses: [expect.objectContaining({ text: 'B' })] },
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('残り1件');
+    });
+
+    it('remove_approved_response: 範囲外のindex → その旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tt-10', 'remove_approved_response', { id: 1, index: 5, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('存在しません。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ tenant_id: 'tenant-abc', approved_responses: [{ text: 'A', style: '丁寧版', approved_at: '2026-01-01T00:00:00Z' }] }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '6番目の採用を取り消して', sessionId: 'sess-tt-11' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('存在しません');
     });
   });
 

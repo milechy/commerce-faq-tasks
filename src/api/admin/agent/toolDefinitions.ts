@@ -300,6 +300,57 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'generate_tuning_rule_test_responses',
+      description:
+        '指示ルールが実際どう応答するかをAIで試作する読み取り専用ツール。丁寧版/簡潔版/提案型の3パターンを生成する（DBには保存されない）。ユーザーが気に入ったものがあれば approve_tuning_rule_response で採用できる。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'get_tuning_rulesの結果に含まれるルールID' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'approve_tuning_rule_response',
+      description:
+        'generate_tuning_rule_test_responsesで生成したテスト返答のひとつを、ルールの「採用済み返答」として保存する。必ず先にどの返答を採用するか提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'ルールID' },
+          text: { type: 'string', description: '採用する返答テキスト（generate_tuning_rule_test_responsesの結果からそのまま使うこと）' },
+          style: { type: 'string', description: '返答のスタイル（丁寧版/簡潔版/提案型など、生成結果からそのまま使うこと）' },
+          reason: { type: 'string', description: '採用理由（任意）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'text', 'style', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remove_approved_response',
+      description:
+        'ルールに既に採用済みの返答をひとつ取り消す。必ず先にどれを取り消すか提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'ルールID' },
+          index: { type: 'number', description: 'get_tuning_rulesまたは直前の会話で示された採用済み返答一覧内での位置（0始まり）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'index', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_weekly_briefing',
       description:
         '直近7日間のテナントの状況（会話数・前週比・応答品質スコア・成約・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
