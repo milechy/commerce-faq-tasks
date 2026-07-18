@@ -29,6 +29,7 @@ type Card =
   | { kind: "sai"; request: string; result: string; url: string }
   | { kind: "success"; text: string }
   | { kind: "analytics" }
+  | { kind: "link"; label: string; url: string; description: string }
   | { kind: "agentAction"; tool: string; result: string };
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
@@ -64,6 +65,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_chat_sessions: "会話セッション一覧の取得",
   get_escalations: "エスカレーション一覧の取得",
   get_monitoring_summary: "モニタリングサマリーの取得",
+  get_legacy_ui_link: "旧管理画面への案内",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -132,6 +134,14 @@ function parseSuggestEngagementRule(result: string): { when: string; message: st
     // パース失敗時はトリガー種別名だけで表示（フォールバック文言）
   }
   return { when: describeEngagementTrigger(type, config), message };
+}
+
+function parseLegacyUiLink(result: string): { label: string; url: string; description: string } | null {
+  const label = result.match(/画面:\s*(.+)/)?.[1]?.trim();
+  const url = result.match(/URL:\s*(.+)/)?.[1]?.trim();
+  const description = result.match(/説明:\s*(.+)/)?.[1]?.trim();
+  if (!label || !url || !description) return null;
+  return { label, url, description };
 }
 
 const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定)しました/;
@@ -281,6 +291,9 @@ export default function CopilotPreviewPage() {
         } else if (a.tool === "suggest_engagement_rule") {
           const parsed = parseSuggestEngagementRule(a.result);
           if (parsed) return { id: nextId(), role: "ai", card: { kind: "engagement", ...parsed } };
+        } else if (a.tool === "get_legacy_ui_link") {
+          const parsed = parseLegacyUiLink(a.result);
+          if (parsed) return { id: nextId(), role: "ai", card: { kind: "link", ...parsed } };
         } else if (
           (a.tool === "save_faq" || a.tool === "save_tuning_rule" || a.tool === "save_engagement_rule") &&
           SAVE_SUCCESS_RE.test(a.result)
@@ -892,6 +905,18 @@ function CardView({ card }: { card: Card }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderRadius: 12, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", color: "var(--foreground)", fontSize: 15 }}>
           <span style={{ fontSize: 17 }}>✅</span>{card.text}
         </div>
+      );
+    case "link":
+      return (
+        <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
+          <Field k="この操作について" v={card.description} />
+          <a
+            href={card.url}
+            style={{ display: "inline-flex", alignSelf: "flex-start", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 10, background: AGENT, color: "#fff", fontSize: 14, fontWeight: 700, textDecoration: "none" }}
+          >
+            {card.label}を開く →
+          </a>
+        </CardShell>
       );
     default:
       return null;

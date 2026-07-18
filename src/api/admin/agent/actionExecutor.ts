@@ -1093,6 +1093,39 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    case 'get_legacy_ui_link': {
+      const feature = String(args['feature'] ?? '');
+      const LEGACY_UI_LINKS: Record<string, { label: string; path: string; description: string }> = {
+        billing: {
+          label: '請求管理',
+          path: '/admin/billing',
+          description: '請求書の再送・金額調整・無料期間設定・一時停止/再開はこちらの画面で行えます',
+        },
+        avatar_studio: {
+          label: 'アバタースタジオ',
+          path: '/admin/avatar/studio',
+          description: '画像候補の選択・音声クローン・性格設定・ライブテストはこちらの画面で行えます',
+        },
+        escalation_reply: {
+          label: 'エスカレーション対応',
+          path: '/admin/escalations',
+          description: '有人での返信・対応記録はこちらの画面で行えます',
+        },
+        session_deletion: {
+          label: '会話履歴',
+          path: '/admin/chat-history',
+          description: '会話セッションの削除は一覧から該当の会話を開いてこちらの画面で行えます',
+        },
+      };
+
+      const link = LEGACY_UI_LINKS[feature];
+      if (!link) {
+        return truncate(`不明な案内先です: ${feature}`);
+      }
+      return truncate(`この操作はチャットでは対応していません。\n画面: ${link.label}\nURL: ${link.path}\n説明: ${link.description}`);
+    }
+
+    // -----------------------------------------------------------------------
     default:
       return truncate(`不明なツール: ${toolName}`);
   }
