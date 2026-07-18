@@ -1412,6 +1412,156 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_feedback_list / triage_feedback（super_admin限定）
+  // -------------------------------------------------------------------------
+  describe('get_feedback_list / triage_feedback', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('get_feedback_list: client_admin が呼び出すと super_admin 限定メッセージが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-1', 'get_feedback_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('現在は対応できません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'フィードバックを見せて', sessionId: 'sess-fb-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('super_admin 限定');
+    });
+
+    it('get_feedback_list: super_admin → 一覧を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-2', 'get_feedback_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('2件のフィードバックがあります。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: '11111111-aaaa-bbbb-cccc-111111111111', tenant_id: 'tenant-abc', message: 'FAQ検索がわかりにくい', status: 'new', category: 'bug_report', priority: 'high' },
+          { id: '22222222-aaaa-bbbb-cccc-222222222222', tenant_id: 'tenant-xyz', message: 'CSVエクスポートが欲しい', status: 'reviewed', category: 'feature_request', priority: 'normal' },
+        ],
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'フィードバックを見せて', sessionId: 'sess-fb-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('2件');
+      expect(result).toContain('FAQ検索がわかりにくい');
+      expect(result).toContain('CSVエクスポートが欲しい');
+    });
+
+    it('get_feedback_list: 0件の場合は「ありません」と返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-3', 'get_feedback_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('フィードバックはまだありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'フィードバックを見せて', sessionId: 'sess-fb-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('ありません');
+    });
+
+    it('triage_feedback: client_admin が呼び出すと super_admin 限定メッセージが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-4', 'triage_feedback', { id: '11111111-aaaa-bbbb-cccc-111111111111', status: 'resolved', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('現在は対応できません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '解決済みにして', sessionId: 'sess-fb-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('super_admin 限定');
+    });
+
+    it('triage_feedback: super_admin・confirmed=false → 更新されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-5', 'triage_feedback', { id: '11111111-aaaa-bbbb-cccc-111111111111', status: 'resolved', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから更新します。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '解決済みにして', sessionId: 'sess-fb-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('triage_feedback: super_admin・変更内容が空 → DB呼び出しせずその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-6', 'triage_feedback', { id: '11111111-aaaa-bbbb-cccc-111111111111', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('変更内容を教えてください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '更新して', sessionId: 'sess-fb-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('変更する内容がありません');
+    });
+
+    it('triage_feedback: super_admin・confirmed=true → status/priorityが更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-7', 'triage_feedback', { id: '11111111-aaaa-bbbb-cccc-111111111111', status: 'resolved', priority: 'low', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: '11111111-aaaa-bbbb-cccc-111111111111', status: 'resolved', priority: 'low' }],
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '解決済み・低優先度にして', sessionId: 'sess-fb-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE admin_feedback SET status = $1, priority = $2'),
+        ['resolved', 'low', '11111111-aaaa-bbbb-cccc-111111111111'],
+      );
+      expect(res.body.actions[0].result).toContain('status=resolved, priority=low');
+    });
+
+    it('triage_feedback: 対象が見つからない場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fb-8', 'triage_feedback', { id: '99999999-aaaa-bbbb-cccc-999999999999', status: 'resolved', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '更新して', sessionId: 'sess-fb-08' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // G1: 多段エージェントループ
   // -------------------------------------------------------------------------
   describe('G1: 多段エージェントループ', () => {

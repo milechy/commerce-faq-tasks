@@ -56,6 +56,8 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_engagement_rules: "声がけルール一覧の取得",
   update_engagement_rule: "声がけルールの更新",
   delete_engagement_rule: "声がけルールの削除",
+  get_feedback_list: "フィードバック一覧の取得",
+  triage_feedback: "フィードバックの更新",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
