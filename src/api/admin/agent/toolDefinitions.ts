@@ -265,6 +265,37 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_knowledge_gaps',
+      description:
+        'AIが答えられなかった質問（知識ギャップ、未対応=openのもの）の一覧を取得する読み取り専用ツール。件数や内容を確認したい時に使う。',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'dismiss_knowledge_gap',
+      description:
+        '知識ギャップを「対応不要」として片付ける（FAQ登録はしない、ステータスをdismissedに変更するだけ）。削除ではない。必ず先にどの質問を片付けるか提示し、明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'get_knowledge_gapsの結果に含まれるギャップID' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'suggest_faq',
       description:
         '店舗管理者の自然な言葉による指示から、FAQ（質問・回答・分類）の下書きを生成する。書き込みは行わない読み取り専用ツール。提案内容は必ずユーザーに提示して明確な同意を得てから save_faq で保存すること。',
