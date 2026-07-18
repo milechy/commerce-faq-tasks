@@ -58,6 +58,14 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   delete_engagement_rule: "声がけルールの削除",
   get_feedback_list: "フィードバック一覧の取得",
   triage_feedback: "フィードバックの更新",
+  get_knowledge_gaps: "知識ギャップの取得",
+  dismiss_knowledge_gap: "知識ギャップの片付け",
+  get_chat_sessions: "会話セッション一覧の取得",
+  get_escalations: "エスカレーション一覧の取得",
+  get_monitoring_summary: "モニタリングサマリーの取得",
+  get_sai_order_list: "代行注文一覧の取得",
+  request_sai_task: "Saiへの代行依頼",
+  get_sai_task_status: "Saiタスク状況の取得",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -553,11 +561,8 @@ export default function CopilotPreviewPage() {
         { label: "送料を直す", action: "do1", tone: "primary" },
       ]));
     } else if (key === "knowledge") {
-      push(me("知識データの状況を見せて"));
-      push(say("現在84件のFAQを登録済みです。直近1週間でAIが答えられなかった質問が11件あり、うち9件が「送料」に関するものでした。まずここから登録しますか？", [
-        { label: "登録する", action: "do1", tone: "primary" },
-        { label: "あとで", action: "later", tone: "ghost" },
-      ]));
+      // Phase E: get_faq_list/get_knowledge_gaps(実API)に接続。以前はモック固定文言だった
+      void sendReal("知識データの状況を教えて（FAQの件数と、AIが答えられなかった質問があれば教えて）");
     } else if (key === "rules") {
       // Phase B: get_tuning_rules(実API)に接続。以前はモック固定文言だった
       void sendReal("指示ルールの状況を教えて");
