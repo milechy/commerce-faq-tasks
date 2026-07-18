@@ -198,6 +198,8 @@ export default function CopilotPreviewPage() {
   const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [sending, setSending] = useState(false);
   const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
+  // モックデモ側の非同期待ち（saiYesの疑似処理中など）。sendingと合わせて「会話ビジー」を構成する。
+  const [pendingTimer, setPendingTimer] = useState(false);
 
   const threadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -462,7 +464,9 @@ export default function CopilotPreviewPage() {
 
       case "saiYes":
         push(say("承知しました。商品ページを開いて更新します…（30秒ほどお待ちください）"));
+        setPendingTimer(true);
         setTimeout(() => {
+          setPendingTimer(false);
           push(
             say("完了しました。実際の画面がこちらです。仕上がりをご確認ください 👇"),
             {
@@ -512,12 +516,23 @@ export default function CopilotPreviewPage() {
     }
   };
 
-  // 会話中(sending=true、実APIの応答待ち〜タイプライター演出完了まで)は、
-  // 今アクティブなカテゴリー以外への切り替えを禁止する。応答が同じスレッドに
-  // 割り込んで別カテゴリーの定型メッセージと混ざるのを防ぐため。
+  // 会話中は今アクティブなカテゴリー以外への切り替えを禁止する。応答が同じ
+  // スレッドに割り込んで別カテゴリーの定型メッセージと混ざるのを防ぐため。
+  // 「会話中」の定義:
+  //   - sending: 実APIの応答待ち〜タイプライター演出完了まで
+  //   - pendingTimer: モックデモのsaiYes疑似処理中(setTimeout待ち)
+  //   - awaitingUserDecision: 直前のAIメッセージにまだ選ばれていないチップが
+  //     残っている(＝「1番をやる」等のデモ会話がまだ途中で、ユーザーの選択待ち)
+  // いずれかがtrueの間はロックし、"stop"等の終端メッセージ(チップなし)に
+  // 達するか、実APIの応答が完了すると自動的に解放される。
+  const lastMsg = msgs[msgs.length - 1];
+  const awaitingUserDecision =
+    !!lastMsg && lastMsg.role === "ai" && !!lastMsg.chips && lastMsg.chips.length > 0 && !lastMsg.chipsUsed;
+  const busy = sending || pendingTimer || awaitingUserDecision;
+
   // ボタン側のdisabledで大半は弾かれるが、ここでも二重に防御する。
   const handleCategory = (key: string) => {
-    if (sending && key !== active) return;
+    if (busy && key !== active) return;
     setActive(key);
     if (key === "weekly") {
       push(me("今週のまとめを見せて"));
@@ -551,7 +566,7 @@ export default function CopilotPreviewPage() {
         </div>
         <PreviewBadge />
         {CATEGORIES.map((c) => {
-          const locked = sending && c.key !== active;
+          const locked = busy && c.key !== active;
           return (
             <button
               key={c.key}
