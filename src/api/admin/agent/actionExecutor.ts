@@ -18,6 +18,9 @@ import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { getSessions, getActiveEscalations } from '../chat-history/chatHistoryRepository';
 import { computeKpis } from '../monitoring/routes';
+import { chargeOneOffJpy } from '../../../lib/billing/stripeSync';
+import { createNotification } from '../../../lib/notifications';
+import { listSaiRules, approveSaiRule, rejectSaiRule } from '../../../lib/sai/saiTaskRulesRepository';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -1278,6 +1281,250 @@ export async function executeToolCall(
         }
         logger.warn('[actionExecutor] get_sai_order_list failed', err);
         return truncate('注文一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'update_sai_order': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const id = String(args['id'] ?? '').trim();
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`代行注文（ID: ${id.slice(0, 8)}）の更新には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!id) {
+        return truncate('id が不正です');
+      }
+
+      const VALID_STATUS = new Set(['pending', 'in_progress', 'completed']);
+      const statusRaw = args['status'];
+      if (statusRaw !== undefined && !VALID_STATUS.has(String(statusRaw))) {
+        return truncate('status が不正です（pending/in_progress/completed のいずれか）');
+      }
+      const status = typeof statusRaw === 'string' ? statusRaw : undefined;
+      const finalAmountRaw = args['final_amount'];
+      const finalAmount =
+        typeof finalAmountRaw === 'number' && Number.isFinite(finalAmountRaw) ? Math.round(finalAmountRaw) : undefined;
+
+      if (status === undefined && finalAmount === undefined) {
+        return truncate('変更する内容がありません（status・final_amount のいずれかを指定してください）');
+      }
+
+      try {
+        const result = await db.query(
+          `UPDATE option_orders SET
+             status       = COALESCE($1, status),
+             final_amount = COALESCE($2, final_amount),
+             updated_at   = NOW()
+           WHERE id = $3
+           RETURNING id, status, final_amount`,
+          [status ?? null, finalAmount ?? null, id],
+        );
+        if (result.rows.length === 0) {
+          return truncate(`代行注文（ID: ${id.slice(0, 8)}）が見つかりません`);
+        }
+        const row = result.rows[0] as { id: string; status: string; final_amount: number | null };
+        return truncate(
+          `代行注文（ID: ${id.slice(0, 8)}）を更新しました: status=${row.status}` +
+          (row.final_amount != null ? `, final_amount=¥${row.final_amount.toLocaleString('ja-JP')}` : ''),
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] update_sai_order failed', err);
+        return truncate('代行注文の更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'complete_sai_order': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const id = String(args['id'] ?? '').trim();
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!id) {
+        return truncate('id が不正です');
+      }
+
+      try {
+        const orderRes = await db.query(
+          `SELECT id, tenant_id, description, type, final_amount, llm_estimate_amount, status
+           FROM option_orders WHERE id = $1`,
+          [id],
+        );
+        if (orderRes.rows.length === 0) {
+          return truncate(`代行注文（ID: ${id.slice(0, 8)}）が見つかりません`);
+        }
+        const order = orderRes.rows[0] as {
+          id: string; tenant_id: string; description: string; type: string | null;
+          final_amount: number | null; llm_estimate_amount: number | null; status: string;
+        };
+
+        if (order.status === 'completed') {
+          return truncate(`代行注文（ID: ${id.slice(0, 8)}）は既に完了済みです`);
+        }
+
+        const amount = order.final_amount ?? order.llm_estimate_amount ?? 0;
+
+        if (!confirmed) {
+          return truncate(
+            `この代行作業を完了記録すると、テナント（${order.tenant_id}）に¥${amount.toLocaleString('ja-JP')}が請求されます（Stripe決済）。` +
+            'よろしければ confirmed=true を指定して再度実行してください',
+          );
+        }
+
+        // 二重完了防止(status != 'completed'のWHERE句がアトミックなガード)
+        const completeRes = await db.query(
+          `UPDATE option_orders SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+           WHERE id = $1 AND status != 'completed'
+           RETURNING tenant_id, description, type`,
+          [id],
+        );
+        if (completeRes.rows.length === 0) {
+          return truncate(`代行注文（ID: ${id.slice(0, 8)}）は既に完了済みです`);
+        }
+        const completed = completeRes.rows[0] as { tenant_id: string; description: string; type: string | null };
+        const isPremiumAvatar = completed.type === 'premium_avatar';
+
+        await createNotification({
+          recipientRole: 'client_admin',
+          recipientTenantId: completed.tenant_id,
+          type: isPremiumAvatar ? 'premium_avatar_completed' : 'option_completed',
+          title: isPremiumAvatar ? 'プレミアムアバターが完成しました' : 'オプションサービスが完了しました',
+          message: completed.description.slice(0, 100),
+          link: isPremiumAvatar ? '/admin/avatar' : '/admin/options',
+        });
+
+        const charged = await chargeOneOffJpy(db, logger, {
+          tenantId: completed.tenant_id,
+          amountJpy: amount,
+          description: `代行作業: ${completed.description.slice(0, 80)}`,
+          idempotencyKey: `option-complete:${id}`,
+        });
+        if (charged) {
+          await db
+            .query('UPDATE option_orders SET stripe_usage_recorded = true WHERE id = $1', [id])
+            .catch((err) => logger.warn('[actionExecutor] complete_sai_order stripe_usage_recorded update failed', err));
+        }
+
+        return truncate(
+          `代行注文（ID: ${id.slice(0, 8)}）を完了にしました。テナントへの請求: ¥${amount.toLocaleString('ja-JP')}` +
+          `（${charged ? 'Stripe決済実行済み' : '課金スキップ（無料期間等）'}）`,
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] complete_sai_order failed', err);
+        return truncate('代行注文の完了処理に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'send_sai_schedule_notice': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const orderId = String(args['order_id'] ?? '').trim();
+      const messageTemplate = String(args['message'] ?? '').trim().slice(0, 2000);
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate('通知の送信には確認が必要です。内容をユーザーに提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!orderId || !messageTemplate) {
+        return truncate('order_id・message は必須です');
+      }
+
+      try {
+        const orderRes = await db.query('SELECT tenant_id FROM option_orders WHERE id = $1', [orderId]);
+        if (orderRes.rows.length === 0) {
+          return truncate(`代行注文（ID: ${orderId.slice(0, 8)}）が見つかりません`);
+        }
+        const tenantIdForOrder = (orderRes.rows[0] as { tenant_id: string }).tenant_id;
+
+        const scheduledAtRaw = args['scheduled_at'];
+        const scheduledAt = typeof scheduledAtRaw === 'string' ? new Date(scheduledAtRaw) : undefined;
+        const dateText =
+          scheduledAt && !Number.isNaN(scheduledAt.getTime())
+            ? scheduledAt.toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+            : '後日ご連絡';
+        const resolvedMessage = messageTemplate.replace('{日時}', dateText);
+
+        await createNotification({
+          recipientRole: 'client_admin',
+          recipientTenantId: tenantIdForOrder,
+          type: 'option_scheduled',
+          title: '代行作業のスケジュールについて',
+          message: resolvedMessage,
+          link: '/admin/options',
+        });
+
+        return truncate(`テナント（${tenantIdForOrder}）にスケジュール通知を送信しました: 「${resolvedMessage.slice(0, 100)}」`);
+      } catch (err) {
+        logger.warn('[actionExecutor] send_sai_schedule_notice failed', err);
+        return truncate('通知の送信に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_sai_rule_proposals': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const status = typeof args['status'] === 'string' ? args['status'] : 'pending';
+
+      try {
+        const rules = await listSaiRules(undefined, { status });
+        if (rules.length === 0) {
+          return truncate(`${status}状態のSaiルール提案はありません`);
+        }
+        const lines = rules
+          .slice(0, 15)
+          .map((r) => `[${r.id}] (${r.tenant_id}) 「${r.trigger_pattern.slice(0, 60)}」→ ${r.expected_behavior.slice(0, 100)}`);
+        return truncate(`Saiルール提案一覧（${status}、${rules.length}件）:\n` + lines.join('\n'));
+      } catch (err: any) {
+        if (err?.code === '42P01') {
+          return truncate('Saiルール提案はありません');
+        }
+        logger.warn('[actionExecutor] get_sai_rule_proposals failed', err);
+        return truncate('Saiルール提案一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'review_sai_rule_proposal': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const id = Number(args['id']);
+      const action = String(args['action'] ?? '');
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`Saiルール提案（ID: ${id}）の${action === 'reject' ? '却下' : '承認'}には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(id)) {
+        return truncate('id が不正です');
+      }
+      if (action !== 'approve' && action !== 'reject') {
+        return truncate('action が不正です（approve/reject のいずれか）');
+      }
+
+      try {
+        const updated = action === 'approve' ? await approveSaiRule(id) : await rejectSaiRule(id);
+        if (!updated) {
+          return truncate(`Saiルール提案（ID: ${id}）が見つかりません`);
+        }
+        return truncate(`Saiルール提案（ID: ${id}）を${action === 'approve' ? '承認' : '却下'}しました: 「${updated.trigger_pattern.slice(0, 60)}」`);
+      } catch (err) {
+        logger.warn('[actionExecutor] review_sai_rule_proposal failed', err);
+        return truncate('Saiルール提案の処理に失敗しました');
       }
     }
 

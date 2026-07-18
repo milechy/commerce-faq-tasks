@@ -114,6 +114,27 @@ jest.mock('../monitoring/routes', () => ({
   computeKpis: (...args: any[]) => mockComputeKpis(...args),
 }));
 
+// complete_sai_order / send_sai_schedule_notice が使う依存をモック(実課金・実通知は厳禁のため必ずモック)
+const mockChargeOneOffJpy = jest.fn();
+jest.mock('../../../lib/billing/stripeSync', () => ({
+  chargeOneOffJpy: (...args: any[]) => mockChargeOneOffJpy(...args),
+}));
+
+const mockCreateNotification = jest.fn();
+jest.mock('../../../lib/notifications', () => ({
+  createNotification: (...args: any[]) => mockCreateNotification(...args),
+}));
+
+// get_sai_rule_proposals / review_sai_rule_proposal が使う依存をモック
+const mockListSaiRules = jest.fn();
+const mockApproveSaiRule = jest.fn();
+const mockRejectSaiRule = jest.fn();
+jest.mock('../../../lib/sai/saiTaskRulesRepository', () => ({
+  listSaiRules: (...args: any[]) => mockListSaiRules(...args),
+  approveSaiRule: (...args: any[]) => mockApproveSaiRule(...args),
+  rejectSaiRule: (...args: any[]) => mockRejectSaiRule(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -2032,6 +2053,279 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('ありません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // update_sai_order / complete_sai_order / send_sai_schedule_notice /
+  // get_sai_rule_proposals / review_sai_rule_proposal（全てsuper_admin限定）
+  // -------------------------------------------------------------------------
+  describe('update_sai_order / complete_sai_order / send_sai_schedule_notice / get_sai_rule_proposals / review_sai_rule_proposal', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+    const ORDER_ID = '33333333-aaaa-bbbb-cccc-333333333333';
+
+    // ── update_sai_order ──────────────────────────────────────────────────
+    it('update_sai_order: client_admin が呼び出すと super_admin 限定メッセージが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-1', 'update_sai_order', { id: ORDER_ID, status: 'in_progress', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('現在は対応できません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '注文を進行中にして', sessionId: 'sess-so-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('super_admin 限定');
+    });
+
+    it('update_sai_order: super_admin・confirmed=true → status/final_amountがCOALESCE更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-2', 'update_sai_order', { id: ORDER_ID, status: 'in_progress', final_amount: 5000, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: ORDER_ID, status: 'in_progress', final_amount: 5000 }] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '注文を進行中・5000円にして', sessionId: 'sess-so-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE option_orders'),
+        ['in_progress', 5000, ORDER_ID],
+      );
+      expect(res.body.actions[0].result).toContain('¥5,000');
+    });
+
+    // ── complete_sai_order: 金額開示・課金・二重完了防止の3点を明示確認 ────────
+    it('complete_sai_order: confirmed=false → 実行されず正確な金額（final_amount優先）が開示される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-4', 'complete_sai_order', { id: ORDER_ID }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから完了します。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: ORDER_ID, tenant_id: 'tenant-abc', description: '送料表記の更新', type: null, final_amount: 3000, llm_estimate_amount: 2500, status: 'in_progress' }],
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この注文を完了にして', sessionId: 'sess-so-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledTimes(1); // SELECTのみ、UPDATE/課金は発火しない
+      expect(mockChargeOneOffJpy).not.toHaveBeenCalled();
+      expect(mockCreateNotification).not.toHaveBeenCalled();
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('¥3,000'); // final_amount優先(llm_estimate_amountの2500ではない)
+      expect(result).toContain('請求されます');
+    });
+
+    it('complete_sai_order: llm_estimate_amountのみの場合はそちらが開示金額になる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-6', 'complete_sai_order', { id: ORDER_ID }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから完了します。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: ORDER_ID, tenant_id: 'tenant-abc', description: '送料表記の更新', type: null, final_amount: null, llm_estimate_amount: 2500, status: 'in_progress' }],
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この注文を完了にして', sessionId: 'sess-so-07' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('¥2,500');
+    });
+
+    it('complete_sai_order: confirmed=true → 完了更新・通知・課金の順で実行される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-8', 'complete_sai_order', { id: ORDER_ID, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('完了しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: ORDER_ID, tenant_id: 'tenant-abc', description: '送料表記の更新', type: null, final_amount: 3000, llm_estimate_amount: 2500, status: 'in_progress' }] }) // SELECT
+        .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-abc', description: '送料表記の更新', type: null }] }) // UPDATE (二重完了防止WHERE付き)
+        .mockResolvedValueOnce({ rows: [] }); // stripe_usage_recorded更新
+      mockCreateNotification.mockResolvedValueOnce(undefined);
+      mockChargeOneOffJpy.mockResolvedValueOnce(true);
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この注文を完了にして', sessionId: 'sess-so-09' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(2, expect.stringContaining("WHERE id = $1 AND status != 'completed'"), [ORDER_ID]);
+      expect(mockCreateNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientRole: 'client_admin', recipientTenantId: 'tenant-abc', type: 'option_completed' }),
+      );
+      expect(mockChargeOneOffJpy).toHaveBeenCalledWith(
+        mockDb,
+        expect.anything(),
+        expect.objectContaining({ tenantId: 'tenant-abc', amountJpy: 3000, idempotencyKey: `option-complete:${ORDER_ID}` }),
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('¥3,000');
+      expect(result).toContain('Stripe決済実行済み');
+    });
+
+    it('complete_sai_order: 既にstatus=completedの場合、confirmed有無に関わらず課金せず「既に完了済み」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-10', 'complete_sai_order', { id: ORDER_ID, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('既に完了しています。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: ORDER_ID, tenant_id: 'tenant-abc', description: 'x', type: null, final_amount: 3000, llm_estimate_amount: null, status: 'completed' }],
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この注文を完了にして', sessionId: 'sess-so-11' });
+
+      expect(res.status).toBe(200);
+      expect(mockChargeOneOffJpy).not.toHaveBeenCalled();
+      expect(mockCreateNotification).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('既に完了済み');
+    });
+
+    it('complete_sai_order: 二重完了防止WHERE句が0件返す競合ケース → 課金せず「既に完了済み」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-12', 'complete_sai_order', { id: ORDER_ID, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('既に完了しています。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: ORDER_ID, tenant_id: 'tenant-abc', description: 'x', type: null, final_amount: 3000, llm_estimate_amount: null, status: 'in_progress' }] }) // SELECT時点ではまだin_progress
+        .mockResolvedValueOnce({ rows: [] }); // 直後に他プロセスが完了させ、UPDATEのWHERE句が0件ヒット
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この注文を完了にして', sessionId: 'sess-so-13' });
+
+      expect(res.status).toBe(200);
+      expect(mockChargeOneOffJpy).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('既に完了済み');
+    });
+
+    // ── send_sai_schedule_notice ─────────────────────────────────────────
+    it('send_sai_schedule_notice: confirmed=false → 送信されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-14', 'send_sai_schedule_notice', { order_id: ORDER_ID, message: '対応は{日時}を予定しています', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから送信します。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '通知を送って', sessionId: 'sess-so-15' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateNotification).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('send_sai_schedule_notice: scheduled_at指定時は{日時}が日本語日時に置換される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-16', 'send_sai_schedule_notice', {
+          order_id: ORDER_ID, message: '対応は{日時}を予定しています', scheduled_at: '2026-08-01T10:00:00+09:00', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('送信しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '通知を送って', sessionId: 'sess-so-17' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipientTenantId: 'tenant-abc',
+          type: 'option_scheduled',
+          title: '代行作業のスケジュールについて',
+          message: expect.stringContaining('2026'),
+        }),
+      );
+      expect(mockCreateNotification.mock.calls[0][0].message).not.toContain('{日時}');
+    });
+
+    it('send_sai_schedule_notice: scheduled_at未指定時は「後日ご連絡」に置換される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-18', 'send_sai_schedule_notice', {
+          order_id: ORDER_ID, message: '対応は{日時}を予定しています', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('送信しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '通知を送って', sessionId: 'sess-so-19' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateNotification.mock.calls[0][0].message).toContain('後日ご連絡');
+    });
+
+    // ── get_sai_rule_proposals / review_sai_rule_proposal ───────────────
+    it('get_sai_rule_proposals: pending一覧を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-20', 'get_sai_rule_proposals', {}))
+        .mockResolvedValueOnce(makeGroqResponse('1件あります。'));
+
+      mockListSaiRules.mockResolvedValueOnce([
+        { id: 1, tenant_id: 'tenant-abc', trigger_pattern: '送料', expected_behavior: '一律550円と案内', priority: 0, is_active: false, status: 'pending', source: 'sai_judge', evidence: null, created_by: null, approved_at: null, rejected_at: null, created_at: '', updated_at: '' },
+      ]);
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'Saiのルール提案を見せて', sessionId: 'sess-so-21' });
+
+      expect(res.status).toBe(200);
+      expect(mockListSaiRules).toHaveBeenCalledWith(undefined, { status: 'pending' });
+      expect(res.body.actions[0].result).toContain('送料');
+    });
+
+    it('review_sai_rule_proposal: confirmed=true・action=approve → approveSaiRuleが呼ばれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-22', 'review_sai_rule_proposal', { id: 1, action: 'approve', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('承認しました。'));
+
+      mockApproveSaiRule.mockResolvedValueOnce({ id: 1, trigger_pattern: '送料', tenant_id: 'tenant-abc' });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を承認して', sessionId: 'sess-so-23' });
+
+      expect(res.status).toBe(200);
+      expect(mockApproveSaiRule).toHaveBeenCalledWith(1);
+      expect(mockRejectSaiRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('承認しました');
+    });
+
+    it('review_sai_rule_proposal: confirmed=true・action=reject → rejectSaiRuleが呼ばれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-24', 'review_sai_rule_proposal', { id: 1, action: 'reject', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('却下しました。'));
+
+      mockRejectSaiRule.mockResolvedValueOnce({ id: 1, trigger_pattern: '送料', tenant_id: 'tenant-abc' });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を却下して', sessionId: 'sess-so-25' });
+
+      expect(res.status).toBe(200);
+      expect(mockRejectSaiRule).toHaveBeenCalledWith(1);
+      expect(res.body.actions[0].result).toContain('却下しました');
     });
   });
 
