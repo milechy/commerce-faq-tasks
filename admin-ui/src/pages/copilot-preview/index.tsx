@@ -50,6 +50,9 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   activate_avatar: "アバターの有効化",
   get_embed_code: "埋め込みコードの取得",
   set_widget_theme: "ウィジェットテーマの変更",
+  get_tuning_rules: "指示ルール一覧の取得",
+  update_tuning_rule: "指示ルールの更新",
+  delete_tuning_rule: "指示ルールの削除",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -551,11 +554,8 @@ export default function CopilotPreviewPage() {
         { label: "あとで", action: "later", tone: "ghost" },
       ]));
     } else if (key === "rules") {
-      push(me("指示ルールの状況を見せて"));
-      push(say("現在3件の指示ルールが有効です。最近「丁寧すぎて説明が長い」というお客様の反応が増えているので、応答を少し簡潔にするルールを追加できます。設定しますか？", [
-        { label: "設定する", action: "do2", tone: "primary" },
-        { label: "あとで", action: "later", tone: "ghost" },
-      ]));
+      // Phase B: get_tuning_rules(実API)に接続。以前はモック固定文言だった
+      void sendReal("指示ルールの状況を教えて");
     } else if (key === "avatar") {
       push(me("アバターの状況を見せて"));
       push(say("アバターは稼働中です。今週は142件の会話のうち98件でアバターが応答しました(平均応答時間1.8秒)。夜21時台の離脱がやや多いので、声がけを1つ追加すると引き止められそうです。設定しますか？", [
