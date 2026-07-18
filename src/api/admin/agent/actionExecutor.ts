@@ -15,6 +15,8 @@ import { textToFaqs } from '../knowledge/routes';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
+import { getSessions, getActiveEscalations } from '../chat-history/chatHistoryRepository';
+import { computeKpis } from '../monitoring/routes';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -1009,6 +1011,101 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] triage_feedback failed', err);
         return truncate('フィードバックの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_chat_sessions': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+
+      try {
+        const { sessions, total } = await getSessions({ tenantId, limit });
+        if (sessions.length === 0) {
+          return truncate('会話セッションはありません');
+        }
+        const lines = sessions.map(
+          (s) => `[${s.session_id.slice(0, 8)}] ${s.started_at.slice(0, 10)} (${s.message_count}件) 「${s.first_message_preview}」`,
+        );
+        return truncate(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_chat_sessions failed', err);
+        return truncate('会話セッション一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_escalations': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const escalations = await getActiveEscalations(tenantId);
+        if (escalations.length === 0) {
+          return truncate('対応中のエスカレーションはありません');
+        }
+        const lines = escalations.map(
+          (e) => `[${e.session_id.slice(0, 8)}] ${e.escalated_at.slice(0, 16).replace('T', ' ')} 「${e.first_message_preview}」`,
+        );
+        return truncate(`対応中のエスカレーション（${escalations.length}件）:\n` + lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_escalations failed', err);
+        return truncate('エスカレーション一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_monitoring_summary': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const kpis = await computeKpis(db, tenantId);
+        return truncate(
+          `直近30日間のサマリー:\n会話数 ${kpis.totalSessions}件\n完了率 ${kpis.completionRate}%\nフォールバック率（AIが答えられなかった割合） ${kpis.fallbackRate}%`,
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] get_monitoring_summary failed', err);
+        return truncate('モニタリングサマリーの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_sai_order_list': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const status = typeof args['status'] === 'string' ? args['status'] : undefined;
+      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+
+      try {
+        const params: unknown[] = [];
+        const where = status ? `WHERE status = $${params.push(status)}` : '';
+        params.push(limit);
+        const result = await db.query(
+          `SELECT id, tenant_id, description, status, type, created_at
+           FROM option_orders ${where}
+           ORDER BY created_at DESC LIMIT $${params.length}`,
+          params,
+        );
+        if (result.rows.length === 0) {
+          return truncate('代行作業の注文はありません');
+        }
+        const lines = (result.rows as { id: string; tenant_id: string; description: string; status: string }[]).map(
+          (r) => `[${String(r.id).slice(0, 8)}] (${r.tenant_id}/${r.status}) ${r.description.slice(0, 80)}`,
+        );
+        return truncate(`代行作業の注文一覧（${result.rows.length}件）:\n` + lines.join('\n'));
+      } catch (err: any) {
+        if (err?.code === '42P01') {
+          return truncate('代行作業の注文はありません');
+        }
+        logger.warn('[actionExecutor] get_sai_order_list failed', err);
+        return truncate('注文一覧の取得に失敗しました');
       }
     }
 

@@ -25,7 +25,7 @@ const DEFAULT_SLA = {
 };
 
 /** 会話完了率・フォールバック率をDBから計算（30日間） */
-async function computeKpis(
+export async function computeKpis(
   db: { query: (sql: string, params: unknown[]) => Promise<{ rows: any[] }> },
   tenantFilter: string | null
 ): Promise<{

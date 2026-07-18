@@ -530,6 +530,63 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_chat_sessions',
+      description:
+        '最近の会話セッション一覧（開始日時・メッセージ数・最初の質問プレビュー）を取得する読み取り専用ツール。会話履歴の概要を確認したい時に使う。',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_escalations',
+      description:
+        '有人対応にエスカレーションされた、対応中（未解決）の会話一覧を取得する読み取り専用ツール。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_monitoring_summary',
+      description:
+        '直近30日間の会話完了率・フォールバック率（AIが答えられなかった割合）のサマリーを取得する読み取り専用ツール。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_sai_order_list',
+      description:
+        '代行作業（Sai）の注文一覧を取得する読み取り専用ツール。super_admin限定。ステータスで絞り込み可能。',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', description: 'ステータスで絞り込み（任意、例: pending/in_progress/completed）' },
+          limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'request_sai_task',
       description:
         'R2Cエージェント(Sai)にブラウザ操作の代行作業を依頼する。ユーザーが管理画面の操作に苦戦している、または苦戦しそうだと判断した場合にのみ、他の対応より先に「代わりに画面操作を行いましょうか？」と尋ねること。ユーザーが明確に依頼していない、または苦戦している様子がない状態で自発的に呼び出してはならない。実際に外部サービスへの課金が発生する。現時点ではsuper_admin限定の機能で、それ以外のロールで呼び出すと拒否される。必ず先にユーザーに作業内容と発生しうる費用を提示し、明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',

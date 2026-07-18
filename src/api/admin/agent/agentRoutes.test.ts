@@ -94,6 +94,20 @@ jest.mock('../../../lib/sai/saiClient', () => ({
   getSaiTask: (...args: any[]) => mockGetSaiTask(...args),
 }));
 
+// get_chat_sessions / get_escalations が使う依存をモック
+const mockGetSessions = jest.fn();
+const mockGetActiveEscalations = jest.fn();
+jest.mock('../chat-history/chatHistoryRepository', () => ({
+  getSessions: (...args: any[]) => mockGetSessions(...args),
+  getActiveEscalations: (...args: any[]) => mockGetActiveEscalations(...args),
+}));
+
+// get_monitoring_summary が使う依存をモック
+const mockComputeKpis = jest.fn();
+jest.mock('../monitoring/routes', () => ({
+  computeKpis: (...args: any[]) => mockComputeKpis(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -1558,6 +1572,166 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_chat_sessions / get_escalations / get_monitoring_summary / get_sai_order_list
+  // -------------------------------------------------------------------------
+  describe('get_chat_sessions / get_escalations / get_monitoring_summary / get_sai_order_list', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('get_chat_sessions: 一覧を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-1', 'get_chat_sessions', {}))
+        .mockResolvedValueOnce(makeGroqResponse('直近の会話は2件です。'));
+
+      mockGetSessions.mockResolvedValueOnce({
+        sessions: [
+          { id: 'db-1', tenant_id: 'tenant-abc', session_id: 'sess-aaaaaaaa-1111', started_at: '2026-07-17T10:00:00Z', last_message_at: '2026-07-17T10:05:00Z', message_count: 4, first_message_preview: '送料はいくらですか', outcome: null, outcome_recorded_at: null },
+        ],
+        total: 42,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '最近の会話を見せて', sessionId: 'sess-rd-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetSessions).toHaveBeenCalledWith({ tenantId: 'tenant-abc', limit: 10 });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('全42件中1件');
+      expect(result).toContain('送料はいくらですか');
+    });
+
+    it('get_chat_sessions: 0件の場合は「ありません」と返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-2', 'get_chat_sessions', {}))
+        .mockResolvedValueOnce(makeGroqResponse('まだ会話はありません。'));
+
+      mockGetSessions.mockResolvedValueOnce({ sessions: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '最近の会話を見せて', sessionId: 'sess-rd-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('ありません');
+    });
+
+    it('get_escalations: 対応中の一覧を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-4', 'get_escalations', {}))
+        .mockResolvedValueOnce(makeGroqResponse('1件対応中です。'));
+
+      mockGetActiveEscalations.mockResolvedValueOnce([
+        { id: 'db-2', tenant_id: 'tenant-abc', session_id: 'sess-bbbbbbbb-2222', escalated_at: '2026-07-17T12:00:00Z', last_message_at: '2026-07-17T12:05:00Z', message_count: 6, first_message_preview: '返品したいです' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'エスカレーションを見せて', sessionId: 'sess-rd-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetActiveEscalations).toHaveBeenCalledWith('tenant-abc');
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('1件');
+      expect(result).toContain('返品したいです');
+    });
+
+    it('get_escalations: 0件の場合は「ありません」と返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-6', 'get_escalations', {}))
+        .mockResolvedValueOnce(makeGroqResponse('対応中のものはありません。'));
+
+      mockGetActiveEscalations.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'エスカレーションを見せて', sessionId: 'sess-rd-07' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('ありません');
+    });
+
+    it('get_monitoring_summary: 完了率・フォールバック率を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-8', 'get_monitoring_summary', {}))
+        .mockResolvedValueOnce(makeGroqResponse('完了率は良好です。'));
+
+      mockComputeKpis.mockResolvedValueOnce({ completionRate: 92.5, fallbackRate: 3.2, totalSessions: 142 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '状況を見せて', sessionId: 'sess-rd-09' });
+
+      expect(res.status).toBe(200);
+      expect(mockComputeKpis).toHaveBeenCalledWith(mockDb, 'tenant-abc');
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('142件');
+      expect(result).toContain('92.5%');
+      expect(result).toContain('3.2%');
+    });
+
+    it('get_sai_order_list: client_admin が呼び出すと super_admin 限定メッセージが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-10', 'get_sai_order_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('現在は対応できません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '代行の注文を見せて', sessionId: 'sess-rd-11' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('super_admin 限定');
+    });
+
+    it('get_sai_order_list: super_admin → 一覧を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-12', 'get_sai_order_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('1件の注文があります。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: '33333333-aaaa-bbbb-cccc-333333333333', tenant_id: 'tenant-abc', description: '商品ページの送料表記を更新', status: 'pending' }],
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '代行の注文を見せて', sessionId: 'sess-rd-13' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('1件');
+      expect(result).toContain('商品ページの送料表記を更新');
+    });
+
+    it('get_sai_order_list: 0件の場合は「ありません」と返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-14', 'get_sai_order_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('注文はまだありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '代行の注文を見せて', sessionId: 'sess-rd-15' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('ありません');
     });
   });
 
