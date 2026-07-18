@@ -57,10 +57,12 @@ jest.mock('../../../lib/knowledgeSearchUtil', () => ({
   formatKnowledgeContext: (...args: any[]) => mockFormatKnowledgeContext(...args),
 }));
 
-// get_weekly_briefing が使う依存をモック
+// get_weekly_briefing / get_knowledge_gaps / dismiss_knowledge_gap が使う依存をモック
 const mockGetGaps = jest.fn();
+const mockUpdateGapStatus = jest.fn();
 jest.mock('../knowledge/knowledgeGapRepository', () => ({
   getGaps: (...args: any[]) => mockGetGaps(...args),
+  updateGapStatus: (...args: any[]) => mockUpdateGapStatus(...args),
 }));
 
 // suggest_faq / save_faq が使う依存をモック
@@ -699,6 +701,109 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).not.toHaveBeenCalled();
       expect(mockGetGaps).not.toHaveBeenCalled();
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_knowledge_gaps / dismiss_knowledge_gap
+  // -------------------------------------------------------------------------
+  describe('get_knowledge_gaps / dismiss_knowledge_gap', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('get_knowledge_gaps: 未対応の知識ギャップ一覧を1つの結果文字列にまとめる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-kg-1', 'get_knowledge_gaps', {}))
+        .mockResolvedValueOnce(makeGroqResponse('未対応の質問は2件あります。'));
+
+      mockGetGaps.mockResolvedValueOnce({
+        gaps: [
+          { id: 1, tenant_id: 'tenant-abc', user_question: '送料はいくらですか？', session_id: null, message_id: null, rag_hit_count: 9, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+          { id: 2, tenant_id: 'tenant-abc', user_question: '返品はできますか？', session_id: null, message_id: null, rag_hit_count: 2, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+        ],
+        total: 11,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '知識ギャップを見せて', sessionId: 'sess-kg-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetGaps).toHaveBeenCalledWith({ tenantId: 'tenant-abc', status: 'open', limit: 10 });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('未対応11件中2件');
+      expect(result).toContain('送料はいくらですか？');
+      expect(result).toContain('返品はできますか？');
+    });
+
+    it('get_knowledge_gaps: 0件の場合は「ありません」と返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-kg-2', 'get_knowledge_gaps', {}))
+        .mockResolvedValueOnce(makeGroqResponse('未対応の質問はありません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '知識ギャップを見せて', sessionId: 'sess-kg-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('ありません');
+    });
+
+    it('dismiss_knowledge_gap: confirmed=false → 更新されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-kg-4', 'dismiss_knowledge_gap', { id: 1, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから片付けます。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この質問は片付けて', sessionId: 'sess-kg-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateGapStatus).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('dismiss_knowledge_gap: confirmed=true → tenant_idスコープでdismissedに更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-kg-5', 'dismiss_knowledge_gap', { id: 1, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('片付けました。'));
+
+      mockUpdateGapStatus.mockResolvedValueOnce(true);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この質問は片付けて', sessionId: 'sess-kg-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateGapStatus).toHaveBeenCalledWith(1, 'dismissed', 'tenant-abc', null);
+      expect(res.body.actions[0].result).toContain('片付けました');
+    });
+
+    it('dismiss_knowledge_gap: 対象が見つからない場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-kg-6', 'dismiss_knowledge_gap', { id: 999, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockUpdateGapStatus.mockResolvedValueOnce(false);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この質問は片付けて', sessionId: 'sess-kg-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりません');
     });
   });
 

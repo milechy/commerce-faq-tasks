@@ -10,7 +10,7 @@ import {
 import { callGroq8bSuggestFromText } from '../tuning/routes';
 import { listRules, createRule } from '../tuning/tuningRulesRepository';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
-import { getGaps } from '../knowledge/knowledgeGapRepository';
+import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
 import { textToFaqs } from '../knowledge/routes';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
@@ -498,6 +498,53 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_weekly_briefing failed', err);
         return truncate('週次サマリーの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_knowledge_gaps': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+
+      try {
+        const { gaps, total } = await getGaps({ tenantId, status: 'open', limit });
+        if (gaps.length === 0) {
+          return truncate('未対応の知識ギャップはありません');
+        }
+        const lines = gaps.map((g) => `[${g.id}] ${g.user_question.slice(0, 100)}（${g.rag_hit_count}件ヒット）`);
+        return truncate(`知識ギャップ一覧（未対応${total}件中${gaps.length}件）:\n` + lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_knowledge_gaps failed', err);
+        return truncate('知識ギャップ一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'dismiss_knowledge_gap': {
+      const id = Number(args['id']);
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`知識ギャップ（ID: ${id}）を片付けるには確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(id)) {
+        return truncate('id が不正です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const ok = await updateGapStatus(id, 'dismissed', tenantId, null);
+        if (!ok) {
+          return truncate(`知識ギャップ（ID: ${id}）が見つかりません`);
+        }
+        return truncate(`知識ギャップ（ID: ${id}）を「対応不要」として片付けました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] dismiss_knowledge_gap failed', err);
+        return truncate('知識ギャップの更新に失敗しました');
       }
     }
 
