@@ -656,6 +656,94 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'update_sai_order',
+      description:
+        '代行作業（Sai）注文のステータスや確定金額を編集する。super_admin限定。変更したい項目だけを指定すればよい。必ず先に変更内容をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'get_sai_order_listの結果に含まれる注文ID' },
+          status: {
+            type: 'string',
+            enum: ['pending', 'in_progress', 'completed'],
+            description: '新しいステータス（変更する場合のみ指定。完了記録はcomplete_sai_orderの使用を推奨）',
+          },
+          final_amount: { type: 'number', description: '確定金額（円、変更する場合のみ指定）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'complete_sai_order',
+      description:
+        '代行作業（Sai）注文を完了として記録する。super_admin限定。完了記録すると、テナントへの完了通知送信と、確定金額（final_amount、未設定ならllm_estimate_amount）のStripe単発請求が実行される（実際にお金が動く）。confirmed=falseまたは未指定で呼び出すと、実行はせず正確な請求予定金額だけを返すので、必ずその金額をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'get_sai_order_listの結果に含まれる注文ID' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実際に完了処理と請求が実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_sai_schedule_notice',
+      description:
+        '代行作業（Sai）注文のテナントに、作業予定についてのお知らせ通知を送る。super_admin限定。必ず先に通知内容をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          order_id: { type: 'string', description: 'get_sai_order_listの結果に含まれる注文ID' },
+          message: { type: 'string', description: '通知本文。日時を入れたい箇所には literal な文字列 "{日時}" を含めること（scheduled_atがあれば自動的に日本語日時表記に置換され、なければ「後日ご連絡」に置換される）' },
+          scheduled_at: { type: 'string', description: '予定日時のISO 8601文字列（任意。指定しない場合は「後日ご連絡」という文言になる）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['order_id', 'message', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_sai_rule_proposals',
+      description:
+        'Saiの自己改善ルール提案（承認待ち）の一覧を取得する読み取り専用ツール。super_admin限定。',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', description: 'ステータスで絞り込み（任意、省略時は"pending"）' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'review_sai_rule_proposal',
+      description:
+        'Saiの自己改善ルール提案を承認または却下する。super_admin限定。必ず先にどのルールをどうするか提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'get_sai_rule_proposalsの結果に含まれるルールID' },
+          action: { type: 'string', enum: ['approve', 'reject'], description: '承認するか却下するか' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'action', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'request_sai_task',
       description:
         'R2Cエージェント(Sai)にブラウザ操作の代行作業を依頼する。ユーザーが管理画面の操作に苦戦している、または苦戦しそうだと判断した場合にのみ、他の対応より先に「代わりに画面操作を行いましょうか？」と尋ねること。ユーザーが明確に依頼していない、または苦戦している様子がない状態で自発的に呼び出してはならない。実際に外部サービスへの課金が発生する。現時点ではsuper_admin限定の機能で、それ以外のロールで呼び出すと拒否される。必ず先にユーザーに作業内容と発生しうる費用を提示し、明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',

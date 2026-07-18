@@ -68,6 +68,11 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_escalations: "エスカレーション一覧の取得",
   get_monitoring_summary: "モニタリングサマリーの取得",
   get_sai_order_list: "代行注文一覧の取得",
+  update_sai_order: "代行注文の更新",
+  complete_sai_order: "代行注文の完了記録",
+  send_sai_schedule_notice: "スケジュール通知の送信",
+  get_sai_rule_proposals: "Saiルール提案一覧の取得",
+  review_sai_rule_proposal: "Saiルール提案の承認/却下",
   request_sai_task: "Saiへの代行依頼",
   get_sai_task_status: "Saiタスク状況の取得",
 };
