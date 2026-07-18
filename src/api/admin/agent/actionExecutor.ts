@@ -1131,6 +1131,62 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    case 'create_deny_rule_from_feedback': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const feedbackId = String(args['feedback_id'] ?? '').trim();
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`拒否ルールの作成には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!feedbackId) {
+        return truncate('feedback_id が不正です');
+      }
+
+      const DEFAULT_DENY_BEHAVIOR =
+        'この種の質問には『申し訳ございませんが、当店ではお答えできかねます。ご了承ください。』と丁寧に断ってください';
+
+      try {
+        const feedbackRes = await db.query('SELECT tenant_id, message FROM admin_feedback WHERE id = $1', [feedbackId]);
+        if (feedbackRes.rows.length === 0) {
+          return truncate(`フィードバック（ID: ${feedbackId.slice(0, 8)}）が見つかりません`);
+        }
+        const feedbackRow = feedbackRes.rows[0] as { tenant_id: string; message: string };
+
+        const triggerPatternArg = args['trigger_pattern'];
+        const triggerPattern =
+          typeof triggerPatternArg === 'string' && triggerPatternArg.trim()
+            ? triggerPatternArg.trim().slice(0, 1000)
+            : feedbackRow.message.slice(0, 1000);
+        const expectedBehaviorArg = args['expected_behavior'];
+        const expectedBehavior =
+          typeof expectedBehaviorArg === 'string' && expectedBehaviorArg.trim()
+            ? expectedBehaviorArg.trim().slice(0, 4000)
+            : DEFAULT_DENY_BEHAVIOR;
+
+        const rule = await createRule({
+          tenant_id: feedbackRow.tenant_id,
+          trigger_pattern: triggerPattern,
+          expected_behavior: expectedBehavior,
+          priority: 8,
+          created_by: 'admin_agent',
+        });
+
+        await db.query('UPDATE admin_feedback SET status = $1 WHERE id = $2', ['resolved', feedbackId]);
+
+        return truncate(
+          `拒否ルールを作成しました（ルールID: ${rule.id}）: 「${rule.trigger_pattern.slice(0, 60)}」→ 丁寧に断る対応を設定しました。フィードバック（ID: ${feedbackId.slice(0, 8)}）はresolvedにしました`,
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] create_deny_rule_from_feedback failed', err);
+        return truncate('拒否ルールの作成に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     case 'get_chat_sessions': {
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
