@@ -59,22 +59,11 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_engagement_rules: "声がけルール一覧の取得",
   update_engagement_rule: "声がけルールの更新",
   delete_engagement_rule: "声がけルールの削除",
-  get_feedback_list: "フィードバック一覧の取得",
-  triage_feedback: "フィードバックの更新",
-  create_deny_rule_from_feedback: "拒否ルールの一発作成",
   get_knowledge_gaps: "知識ギャップの取得",
   dismiss_knowledge_gap: "知識ギャップの片付け",
   get_chat_sessions: "会話セッション一覧の取得",
   get_escalations: "エスカレーション一覧の取得",
   get_monitoring_summary: "モニタリングサマリーの取得",
-  get_sai_order_list: "代行注文一覧の取得",
-  update_sai_order: "代行注文の更新",
-  complete_sai_order: "代行注文の完了記録",
-  send_sai_schedule_notice: "スケジュール通知の送信",
-  get_sai_rule_proposals: "Saiルール提案一覧の取得",
-  review_sai_rule_proposal: "Saiルール提案の承認/却下",
-  request_sai_task: "Saiへの代行依頼",
-  get_sai_task_status: "Saiタスク状況の取得",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
