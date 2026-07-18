@@ -917,6 +917,102 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    case 'get_feedback_list': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const status = typeof args['status'] === 'string' ? args['status'] : undefined;
+      const VALID_STATUS = new Set(['new', 'reviewed', 'needs_improvement', 'resolved']);
+      if (status !== undefined && !VALID_STATUS.has(status)) {
+        return truncate('status が不正です（new/reviewed/needs_improvement/resolved のいずれか）');
+      }
+      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+
+      try {
+        const params: unknown[] = [];
+        const where = status ? `WHERE status = $${params.push(status)}` : '';
+        params.push(limit);
+        const result = await db.query(
+          `SELECT id, tenant_id, message, status, category, priority, created_at
+           FROM admin_feedback ${where}
+           ORDER BY created_at DESC LIMIT $${params.length}`,
+          params,
+        );
+        if (result.rows.length === 0) {
+          return truncate('フィードバックはありません');
+        }
+        const lines = (result.rows as { id: string; tenant_id: string; message: string; status: string; category: string; priority: string }[]).map(
+          (r) => `[${r.id.slice(0, 8)}] (${r.tenant_id}/${r.status}/${r.priority}) ${r.message.slice(0, 80)}`,
+        );
+        return truncate(`フィードバック一覧（${result.rows.length}件）:\n` + lines.join('\n'));
+      } catch (err: any) {
+        if (err?.code === '42P01') {
+          return truncate('フィードバックはありません');
+        }
+        logger.warn('[actionExecutor] get_feedback_list failed', err);
+        return truncate('フィードバック一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'triage_feedback': {
+      if (!isSuperAdmin) {
+        return truncate('この操作は現在 super_admin 限定です');
+      }
+
+      const id = String(args['id'] ?? '').trim();
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`フィードバック（ID: ${id.slice(0, 8)}）の更新には確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!id) {
+        return truncate('id が不正です');
+      }
+
+      const VALID_STATUS = new Set(['new', 'reviewed', 'needs_improvement', 'resolved']);
+      const VALID_PRIORITY = new Set(['low', 'normal', 'high']);
+      const statusRaw = args['status'];
+      if (statusRaw !== undefined && !VALID_STATUS.has(String(statusRaw))) {
+        return truncate('status が不正です（new/reviewed/needs_improvement/resolved のいずれか）');
+      }
+      const priorityRaw = args['priority'];
+      if (priorityRaw !== undefined && !VALID_PRIORITY.has(String(priorityRaw))) {
+        return truncate('priority が不正です（low/normal/high のいずれか）');
+      }
+      const status = typeof statusRaw === 'string' ? statusRaw : undefined;
+      const priority = typeof priorityRaw === 'string' ? priorityRaw : undefined;
+      const adminNotes = typeof args['admin_notes'] === 'string' ? args['admin_notes'].slice(0, 4000) : undefined;
+
+      if (status === undefined && priority === undefined && adminNotes === undefined) {
+        return truncate('変更する内容がありません（status・priority・admin_notes のいずれかを指定してください）');
+      }
+
+      try {
+        const setClauses: string[] = [];
+        const values: unknown[] = [];
+        if (status !== undefined) { values.push(status); setClauses.push(`status = $${values.length}`); }
+        if (priority !== undefined) { values.push(priority); setClauses.push(`priority = $${values.length}`); }
+        if (adminNotes !== undefined) { values.push(adminNotes); setClauses.push(`admin_notes = $${values.length}`); }
+        values.push(id);
+
+        const result = await db.query(
+          `UPDATE admin_feedback SET ${setClauses.join(', ')} WHERE id = $${values.length} RETURNING id, status, priority`,
+          values,
+        );
+        if (result.rows.length === 0) {
+          return truncate(`フィードバック（ID: ${id.slice(0, 8)}）が見つかりません`);
+        }
+        const row = result.rows[0] as { id: string; status: string; priority: string };
+        return truncate(`フィードバック（ID: ${row.id.slice(0, 8)}）を更新しました: status=${row.status}, priority=${row.priority}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] triage_feedback failed', err);
+        return truncate('フィードバックの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // Sai委譲(Tier A設計の土台): 現時点では super_admin 限定を維持し、client_admin には
     // 開放しない（信頼モデル変更は別途判断が必要なため、既存のtry-sai同様の認可を踏襲）。
     case 'request_sai_task': {

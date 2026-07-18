@@ -483,6 +483,53 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_feedback_list',
+      description:
+        '店舗管理者から寄せられたフィードバック（要望・不具合報告等）の一覧を取得する読み取り専用ツール。super_admin限定。',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: {
+            type: 'string',
+            enum: ['new', 'reviewed', 'needs_improvement', 'resolved'],
+            description: 'ステータスで絞り込み（任意、省略時は全件）',
+          },
+          limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'triage_feedback',
+      description:
+        'フィードバックのステータス・優先度・管理メモを更新する（トリアージ）。super_admin限定。変更したい項目だけを指定すればよい。必ず先に変更内容をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'get_feedback_listの結果に含まれるフィードバックID' },
+          status: {
+            type: 'string',
+            enum: ['new', 'reviewed', 'needs_improvement', 'resolved'],
+            description: '新しいステータス（変更する場合のみ指定）',
+          },
+          priority: {
+            type: 'string',
+            enum: ['low', 'normal', 'high'],
+            description: '新しい優先度（変更する場合のみ指定）',
+          },
+          admin_notes: { type: 'string', description: '管理メモ（変更する場合のみ指定）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'request_sai_task',
       description:
         'R2Cエージェント(Sai)にブラウザ操作の代行作業を依頼する。ユーザーが管理画面の操作に苦戦している、または苦戦しそうだと判断した場合にのみ、他の対応より先に「代わりに画面操作を行いましょうか？」と尋ねること。ユーザーが明確に依頼していない、または苦戦している様子がない状態で自発的に呼び出してはならない。実際に外部サービスへの課金が発生する。現時点ではsuper_admin限定の機能で、それ以外のロールで呼び出すと拒否される。必ず先にユーザーに作業内容と発生しうる費用を提示し、明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
