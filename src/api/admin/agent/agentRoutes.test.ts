@@ -1240,6 +1240,178 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_engagement_rules / update_engagement_rule / delete_engagement_rule
+  // -------------------------------------------------------------------------
+  describe('get_engagement_rules / update_engagement_rule / delete_engagement_rule', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('get_engagement_rules: 一覧を1つの結果文字列にまとめる（無効ルールは(無効)を付ける）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-1', 'get_engagement_rules', {}))
+        .mockResolvedValueOnce(makeGroqResponse('現在2件のルールがあります。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 1, trigger_type: 'idle_time', message_template: '人気ランキングもご覧ください🎁', is_active: true, priority: 5 },
+          { id: 2, trigger_type: 'exit_intent', message_template: 'お待ちください', is_active: false, priority: 0 },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '声がけルールを見せて', sessionId: 'sess-er-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('FROM trigger_rules WHERE tenant_id = $1'), ['tenant-abc']);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('2件');
+      expect(result).toContain('idle_time');
+      expect(result).toContain('exit_intent');
+      expect(result).toContain('(無効)');
+    });
+
+    it('get_engagement_rules: 0件の場合は「登録されていません」と返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-2', 'get_engagement_rules', {}))
+        .mockResolvedValueOnce(makeGroqResponse('声がけルールはまだありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '声がけルールを見せて', sessionId: 'sess-er-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('登録されていません');
+    });
+
+    it('update_engagement_rule: confirmed=false → 更新されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-3', 'update_engagement_rule', { id: 1, is_active: false, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから更新します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を無効にして', sessionId: 'sess-er-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('update_engagement_rule: 変更内容が空 → DB呼び出しせずその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-4', 'update_engagement_rule', { id: 1, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('変更内容を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を更新して', sessionId: 'sess-er-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('変更する内容がありません');
+    });
+
+    it('update_engagement_rule: client_admin・他テナントのルール → アクセス権限がありませんと返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-5', 'update_engagement_rule', { id: 1, is_active: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('権限がありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'other-tenant' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を無効にして', sessionId: 'sess-er-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledTimes(1); // SELECT のみ、UPDATE は発火しない
+      expect(res.body.actions[0].result).toContain('アクセス権限がありません');
+    });
+
+    it('update_engagement_rule: confirmed=true・自テナント → is_activeのみCOALESCE更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-6', 'update_engagement_rule', { id: 1, is_active: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('無効にしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] }) // SELECT ownership
+        .mockResolvedValueOnce({ rows: [{ id: 1, trigger_type: 'idle_time', message_template: 'x', is_active: false }] }); // UPDATE
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を無効にして', sessionId: 'sess-er-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenLastCalledWith(
+        expect.stringContaining('UPDATE trigger_rules'),
+        [null, null, null, null, false, 1],
+      );
+      expect(res.body.actions[0].result).toContain('現在無効');
+    });
+
+    it('delete_engagement_rule: confirmed=false → 削除されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-7', 'delete_engagement_rule', { id: 1, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから削除します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を削除して', sessionId: 'sess-er-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('delete_engagement_rule: confirmed=true・自テナント → 削除される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-8', 'delete_engagement_rule', { id: 1, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] }) // SELECT ownership
+        .mockResolvedValueOnce({ rows: [] }); // DELETE
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を削除して', sessionId: 'sess-er-08' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenLastCalledWith('DELETE FROM trigger_rules WHERE id = $1', [1]);
+      expect(res.body.actions[0].result).toContain('削除しました');
+    });
+
+    it('delete_engagement_rule: 対象が見つからない場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-9', 'delete_engagement_rule', { id: 999, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // SELECT: 見つからない
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール999を削除して', sessionId: 'sess-er-09' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // G1: 多段エージェントループ
   // -------------------------------------------------------------------------
   describe('G1: 多段エージェントループ', () => {

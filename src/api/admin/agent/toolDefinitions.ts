@@ -425,6 +425,64 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_engagement_rules',
+      description:
+        '現在の声がけルール（サイト上のプロアクティブな声がけ設定）の一覧を取得する読み取り専用ツール。suggest_engagement_rule/save_engagement_ruleで作成済みのものも含め、有効/無効の状態ごと全件を確認したい時に使う。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_engagement_rule',
+      description:
+        '既存の声がけルールを編集する、または有効/無効を切り替える。変更したい項目（trigger_type/trigger_config/message_template/priority/is_active）だけを指定すればよく、指定しなかった項目は変更されない。trigger_typeを変更する場合はtrigger_configも合わせて指定すること。必ず先に変更内容をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'get_engagement_rulesの結果に含まれるルールID' },
+          trigger_type: {
+            type: 'string',
+            enum: ['scroll_depth', 'idle_time', 'exit_intent', 'page_url_match'],
+            description: 'トリガー種別（変更する場合のみ指定、trigger_configとセットで）',
+          },
+          trigger_config: {
+            type: 'object',
+            description:
+              'トリガー種別ごとの設定（変更する場合のみ指定）。scroll_depth: {"threshold": 1-100}, idle_time: {"seconds": 1-3600}, exit_intent: {}, page_url_match: {"patterns": ["/products/*"], "match_type": "glob"}',
+          },
+          message_template: { type: 'string', description: '表示する声がけ文言（変更する場合のみ指定）' },
+          priority: { type: 'number', description: '優先度（0〜100の整数、変更する場合のみ指定）' },
+          is_active: { type: 'boolean', description: '有効/無効の切り替え（変更する場合のみ指定）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_engagement_rule',
+      description:
+        '声がけルールを削除する。必ず先にどのルールを削除するか提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'get_engagement_rulesの結果に含まれるルールID' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'request_sai_task',
       description:
         'R2Cエージェント(Sai)にブラウザ操作の代行作業を依頼する。ユーザーが管理画面の操作に苦戦している、または苦戦しそうだと判断した場合にのみ、他の対応より先に「代わりに画面操作を行いましょうか？」と尋ねること。ユーザーが明確に依頼していない、または苦戦している様子がない状態で自発的に呼び出してはならない。実際に外部サービスへの課金が発生する。現時点ではsuper_admin限定の機能で、それ以外のロールで呼び出すと拒否される。必ず先にユーザーに作業内容と発生しうる費用を提示し、明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',

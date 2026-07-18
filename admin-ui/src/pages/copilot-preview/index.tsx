@@ -53,6 +53,9 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_tuning_rules: "指示ルール一覧の取得",
   update_tuning_rule: "指示ルールの更新",
   delete_tuning_rule: "指示ルールの削除",
+  get_engagement_rules: "声がけルール一覧の取得",
+  update_engagement_rule: "声がけルールの更新",
+  delete_engagement_rule: "声がけルールの削除",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
