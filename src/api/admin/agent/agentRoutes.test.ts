@@ -1756,6 +1756,126 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // create_deny_rule_from_feedback（super_admin限定）
+  // -------------------------------------------------------------------------
+  describe('create_deny_rule_from_feedback', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+    const FEEDBACK_ID = '11111111-aaaa-bbbb-cccc-111111111111';
+
+    it('client_admin が呼び出すと super_admin 限定メッセージが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dr-1', 'create_deny_rule_from_feedback', { feedback_id: FEEDBACK_ID, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('現在は対応できません。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '拒否ルールを作って', sessionId: 'sess-dr-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('super_admin 限定');
+    });
+
+    it('super_admin・confirmed=false → 作成されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dr-2', 'create_deny_rule_from_feedback', { feedback_id: FEEDBACK_ID, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから作成します。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '拒否ルールを作って', sessionId: 'sess-dr-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('super_admin・confirmed=true・引数省略 → フィードバック本文と標準文言でルール作成しresolvedに更新', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dr-4', 'create_deny_rule_from_feedback', { feedback_id: FEEDBACK_ID, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('作成しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-abc', message: '返品ポリシーを教えてください' }] }) // SELECT feedback
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE admin_feedback
+      mockCreateRule.mockResolvedValueOnce({
+        id: 55, tenant_id: 'tenant-abc', trigger_pattern: '返品ポリシーを教えてください', expected_behavior: 'x', priority: 8, is_active: true, created_by: 'admin_agent', source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '拒否ルールを作って', sessionId: 'sess-dr-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenant_id: 'tenant-abc',
+          trigger_pattern: '返品ポリシーを教えてください',
+          expected_behavior: expect.stringContaining('お答えできかねます'),
+          priority: 8,
+        }),
+      );
+      expect(mockQuery).toHaveBeenLastCalledWith('UPDATE admin_feedback SET status = $1 WHERE id = $2', ['resolved', FEEDBACK_ID]);
+      expect(res.body.actions[0].result).toContain('ID: 55');
+      expect(res.body.actions[0].result).toContain('resolved');
+    });
+
+    it('super_admin・trigger_pattern/expected_behaviorを明示指定 → その内容でルール作成される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dr-6', 'create_deny_rule_from_feedback', {
+          feedback_id: FEEDBACK_ID, trigger_pattern: 'カスタムトリガー', expected_behavior: 'カスタム対応方針', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('作成しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ tenant_id: 'tenant-abc', message: '元の質問' }] })
+        .mockResolvedValueOnce({ rows: [] });
+      mockCreateRule.mockResolvedValueOnce({
+        id: 56, tenant_id: 'tenant-abc', trigger_pattern: 'カスタムトリガー', expected_behavior: 'カスタム対応方針', priority: 8, is_active: true, created_by: 'admin_agent', source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '拒否ルールを作って', sessionId: 'sess-dr-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).toHaveBeenCalledWith(
+        expect.objectContaining({ trigger_pattern: 'カスタムトリガー', expected_behavior: 'カスタム対応方針' }),
+      );
+    });
+
+    it('対象のフィードバックが見つからない場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dr-8', 'create_deny_rule_from_feedback', { feedback_id: '99999999-aaaa-bbbb-cccc-999999999999', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '拒否ルールを作って', sessionId: 'sess-dr-09' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // get_chat_sessions / get_escalations / get_monitoring_summary / get_sai_order_list
   // -------------------------------------------------------------------------
   describe('get_chat_sessions / get_escalations / get_monitoring_summary / get_sai_order_list', () => {

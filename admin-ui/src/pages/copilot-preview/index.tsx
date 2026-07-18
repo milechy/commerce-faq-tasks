@@ -61,6 +61,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   delete_engagement_rule: "声がけルールの削除",
   get_feedback_list: "フィードバック一覧の取得",
   triage_feedback: "フィードバックの更新",
+  create_deny_rule_from_feedback: "拒否ルールの一発作成",
   get_knowledge_gaps: "知識ギャップの取得",
   dismiss_knowledge_gap: "知識ギャップの片付け",
   get_chat_sessions: "会話セッション一覧の取得",

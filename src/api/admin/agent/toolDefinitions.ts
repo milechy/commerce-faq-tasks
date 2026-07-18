@@ -581,6 +581,24 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'create_deny_rule_from_feedback',
+      description:
+        '選択したフィードバックの内容をもとに、AIがその種の質問を丁寧に断るための指示ルールを作成し、フィードバックのステータスをresolvedにする（旧UIの「拒否ルールを作成」ボタンと同じ一発ショートカット）。super_admin限定。必ず先に作成するルール内容を提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          feedback_id: { type: 'string', description: 'get_feedback_listの結果に含まれるフィードバックID' },
+          trigger_pattern: { type: 'string', description: 'トリガー内容（省略時はフィードバックの本文をそのまま使う）' },
+          expected_behavior: { type: 'string', description: 'AIへの対応方針（省略時は標準の丁寧な拒否文言を使う）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['feedback_id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_chat_sessions',
       description:
         '最近の会話セッション一覧（開始日時・メッセージ数・最初の質問プレビュー）を取得する読み取り専用ツール。会話履歴の概要を確認したい時に使う。',
