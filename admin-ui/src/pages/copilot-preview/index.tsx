@@ -542,7 +542,7 @@ export default function CopilotPreviewPage() {
       <aside style={{ width: 184, flexShrink: 0, background: "var(--sidebar, var(--card))", borderRight: "1px solid var(--border)", padding: "12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
         <div style={{ fontWeight: 900, fontSize: 13.5, letterSpacing: "-0.03em", padding: "3px 6px 3px" }}>
           R2C
-          <span style={{ fontSize: 8.5, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "1px 5px", borderRadius: 5, marginLeft: 5, letterSpacing: "0.04em" }}>店主モード</span>
+          <span style={{ fontSize: 9, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "1px 5px", borderRadius: 5, marginLeft: 5, letterSpacing: "0.04em" }}>店主モード</span>
         </div>
         <PreviewBadge />
         {CATEGORIES.map((c) => (
@@ -625,7 +625,7 @@ export default function CopilotPreviewPage() {
 
 function PreviewBadge() {
   return (
-    <div style={{ margin: "5px 6px 8px", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.03em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "4px 7px", lineHeight: 1.35 }}>
+    <div style={{ margin: "5px 6px 8px", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.03em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 6, padding: "3px 7px", lineHeight: 1.35 }}>
       PROTOTYPE ・ 起動時ブリーフィング＋下の入力欄は実API接続。チップのデモ部分のみモック
     </div>
   );
@@ -669,7 +669,7 @@ function Phase4DefaultToggle() {
       >
         <span
           style={{
-            position: "absolute", top: 2, left: enabled ? 13 : 2, width: 11, height: 11, borderRadius: "50%",
+            position: "absolute", top: 2, left: enabled ? 14 : 2, width: 11, height: 11, borderRadius: "50%",
             background: "#fff", transition: "left 0.15s",
           }}
         />
@@ -677,7 +677,7 @@ function Phase4DefaultToggle() {
       <span style={{ fontSize: 10.5, color: enabled ? AGENT : "var(--muted-foreground)", lineHeight: 1.35 }}>
         これを既定の画面にする
         <br />
-        <span style={{ fontSize: 9, opacity: 0.75 }}>このブラウザだけの設定です</span>
+        <span style={{ fontSize: 9.5, opacity: 0.75 }}>このブラウザだけの設定です</span>
       </span>
     </button>
   );
@@ -765,7 +765,7 @@ function CardView({ card }: { card: Card }) {
     case "agentAction":
       return (
         <div style={{ display: "flex", alignItems: "flex-start", gap: 7, padding: "7px 11px", borderRadius: 9, background: "rgba(34,197,94,0.10)", border: "1px solid rgba(34,197,94,0.28)", fontSize: 12, lineHeight: 1.55, maxWidth: "90%" }}>
-          <span style={{ fontSize: 13, flexShrink: 0 }}>✅</span>
+          <span style={{ fontSize: 12.5, flexShrink: 0 }}>✅</span>
           <span>
             <strong style={{ color: "var(--foreground)" }}>{REAL_TOOL_LABEL[card.tool] ?? card.tool}</strong>
             <span style={{ color: "var(--muted-foreground)" }}>：{card.result}</span>
