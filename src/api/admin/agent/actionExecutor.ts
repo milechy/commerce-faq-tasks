@@ -8,7 +8,8 @@ import {
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
 import { callGroq8bSuggestFromText } from '../tuning/routes';
-import { listRules, createRule, updateRule, deleteRule } from '../tuning/tuningRulesRepository';
+import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse } from '../tuning/tuningRulesRepository';
+import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
 import { textToFaqs } from '../knowledge/routes';
@@ -516,6 +517,121 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] delete_tuning_rule failed', err);
         return truncate('指示ルールの削除に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'generate_tuning_rule_test_responses': {
+      const id = Number(args['id']);
+      if (!Number.isFinite(id)) {
+        return truncate('id が不正です');
+      }
+
+      try {
+        const result = await generateTestResponses(id, tenantId ?? '', isSuperAdmin);
+        if (!result.ok) {
+          switch (result.reason) {
+            case 'not_found':
+              return truncate(`指示ルール（ID: ${id}）が見つかりません`);
+            case 'forbidden':
+              return truncate('このルールへのアクセス権限がありません');
+            case 'no_api_key':
+              return truncate('テスト応答の生成機能が現在利用できません');
+            case 'llm_error':
+              return truncate('LLMとの通信に失敗しました。もう一度お試しください');
+            case 'invalid_output':
+              return truncate('テスト応答の生成に失敗しました。もう一度お試しください');
+          }
+        }
+        const lines = result.responses.map((r, i) => `${i + 1}. [${r.style}] ${r.text.slice(0, 200)}`);
+        return truncate(
+          `テスト応答案（ルールID: ${id}）:\n` + lines.join('\n') +
+          '\n\n採用する場合はユーザーに確認の上、approve_tuning_rule_response で保存してください。',
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] generate_tuning_rule_test_responses failed', err);
+        return truncate('テスト応答の生成に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'approve_tuning_rule_response': {
+      const id = Number(args['id']);
+      const text = String(args['text'] ?? '').trim().slice(0, 4000);
+      const style = String(args['style'] ?? '').trim().slice(0, 50);
+      const reason = typeof args['reason'] === 'string' ? args['reason'].trim().slice(0, 1000) || undefined : undefined;
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate('返答の採用には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!Number.isFinite(id) || !text || !style) {
+        return truncate('id・text・style は必須です');
+      }
+
+      try {
+        const existing = await db.query('SELECT tenant_id, approved_responses FROM tuning_rules WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+          return truncate(`指示ルール（ID: ${id}）が見つかりません`);
+        }
+        const row = existing.rows[0] as { tenant_id: string; approved_responses: ApprovedResponse[] | null };
+        if (!isSuperAdmin && row.tenant_id !== tenantId) {
+          return truncate('このルールへのアクセス権限がありません');
+        }
+
+        const current = row.approved_responses ?? [];
+        const next: ApprovedResponse[] = [...current, { text, style, reason, approved_at: new Date().toISOString() }];
+
+        const ownerFilter = isSuperAdmin ? undefined : tenantId;
+        const updated = await updateRule(id, { approved_responses: next }, ownerFilter);
+        if (!updated) {
+          return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        return truncate(`返答を採用しました（ルールID: ${id}、現在${next.length}件採用済み）: 「${text.slice(0, 100)}」`);
+      } catch (err) {
+        logger.warn('[actionExecutor] approve_tuning_rule_response failed', err);
+        return truncate('返答の採用に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'remove_approved_response': {
+      const id = Number(args['id']);
+      const index = Number(args['index']);
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate('採用済み返答の取消には確認が必要です。confirmed=true を指定して再度実行してください');
+      }
+      if (!Number.isFinite(id) || !Number.isFinite(index) || index < 0) {
+        return truncate('id・index が不正です');
+      }
+
+      try {
+        const existing = await db.query('SELECT tenant_id, approved_responses FROM tuning_rules WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+          return truncate(`指示ルール（ID: ${id}）が見つかりません`);
+        }
+        const row = existing.rows[0] as { tenant_id: string; approved_responses: ApprovedResponse[] | null };
+        if (!isSuperAdmin && row.tenant_id !== tenantId) {
+          return truncate('このルールへのアクセス権限がありません');
+        }
+
+        const current = row.approved_responses ?? [];
+        if (index >= current.length) {
+          return truncate(`採用済み返答（${current.length}件）に index ${index} は存在しません`);
+        }
+        const next = current.filter((_, i) => i !== index);
+
+        const ownerFilter = isSuperAdmin ? undefined : tenantId;
+        const updated = await updateRule(id, { approved_responses: next }, ownerFilter);
+        if (!updated) {
+          return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        return truncate(`採用済み返答を取り消しました（ルールID: ${id}、残り${next.length}件）`);
+      } catch (err) {
+        logger.warn('[actionExecutor] remove_approved_response failed', err);
+        return truncate('採用済み返答の取消に失敗しました');
       }
     }
 
