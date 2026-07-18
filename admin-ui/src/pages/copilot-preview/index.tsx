@@ -512,7 +512,12 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // 会話中(sending=true、実APIの応答待ち〜タイプライター演出完了まで)は、
+  // 今アクティブなカテゴリー以外への切り替えを禁止する。応答が同じスレッドに
+  // 割り込んで別カテゴリーの定型メッセージと混ざるのを防ぐため。
+  // ボタン側のdisabledで大半は弾かれるが、ここでも二重に防御する。
   const handleCategory = (key: string) => {
+    if (sending && key !== active) return;
     setActive(key);
     if (key === "weekly") {
       push(me("今週のまとめを見せて"));
@@ -545,22 +550,28 @@ export default function CopilotPreviewPage() {
           <span style={{ fontSize: 11, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "2px 8px", borderRadius: 6, marginLeft: 7, letterSpacing: "0.04em" }}>店主モード</span>
         </div>
         <PreviewBadge />
-        {CATEGORIES.map((c) => (
-          <button
-            key={c.key}
-            onClick={() => handleCategory(c.key)}
-            style={{
-              display: "flex", alignItems: "center", gap: 11, textAlign: "left",
-              padding: "11px 12px", borderRadius: 10, border: "none", cursor: "pointer",
-              fontSize: 15, fontWeight: active === c.key ? 700 : 500,
-              color: active === c.key ? AGENT : "var(--muted-foreground)",
-              background: active === c.key ? AGENT_SOFT : "transparent",
-              opacity: c.dim ? 0.55 : 1, minHeight: 44,
-            }}
-          >
-            <span style={{ fontSize: 18 }}>{c.icon}</span>{c.label}
-          </button>
-        ))}
+        {CATEGORIES.map((c) => {
+          const locked = sending && c.key !== active;
+          return (
+            <button
+              key={c.key}
+              onClick={() => handleCategory(c.key)}
+              disabled={locked}
+              title={locked ? "会話が完了するまで他のカテゴリーには切り替えられません" : undefined}
+              style={{
+                display: "flex", alignItems: "center", gap: 11, textAlign: "left",
+                padding: "11px 12px", borderRadius: 10, border: "none",
+                cursor: locked ? "not-allowed" : "pointer",
+                fontSize: 15, fontWeight: active === c.key ? 700 : 500,
+                color: active === c.key ? AGENT : "var(--muted-foreground)",
+                background: active === c.key ? AGENT_SOFT : "transparent",
+                opacity: locked ? 0.35 : c.dim ? 0.55 : 1, minHeight: 44,
+              }}
+            >
+              <span style={{ fontSize: 18 }}>{c.icon}</span>{c.label}
+            </button>
+          );
+        })}
         <div style={{ marginTop: "auto" }}>
           <Phase4DefaultToggle />
           <div style={{ fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.55, padding: "10px" }}>
