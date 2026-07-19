@@ -12,6 +12,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
+import { useAuth } from "../../auth/useAuth";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
 
@@ -208,6 +209,10 @@ let _uid = 100;
 const nextId = () => ++_uid;
 
 export default function CopilotPreviewPage() {
+  // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
+  // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
+  // tenantIdがサーバー側で使われるため、previewMode=falseのままで問題ない。
+  const { previewMode, previewTenantId } = useAuth();
   const [active, setActive] = useState("assistant");
   const [input, setInput] = useState("");
   // 起動直後は空。bootstrap()が実データの週次ブリーフィングを積む
@@ -246,11 +251,12 @@ export default function CopilotPreviewPage() {
     if (!opts?.silent) push(me(text));
     setSending(true);
     try {
-      const body: { message: string; sessionId: string; history?: typeof realHistory } = {
+      const body: { message: string; sessionId: string; history?: typeof realHistory; targetTenantId?: string } = {
         message: text,
         sessionId: sessionIdRef.current,
       };
       if (realHistory.length > 0) body.history = realHistory.slice(-20);
+      if (previewMode && previewTenantId) body.targetTenantId = previewTenantId;
 
       const res = await authFetch(`${API_BASE}/v1/admin/agent/chat`, {
         method: "POST",
