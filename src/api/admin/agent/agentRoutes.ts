@@ -393,6 +393,10 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         `ユーザーが管理画面の操作を代わりにやってほしいと頼んできた場合（例:「送料表記を直して」）は、` +
         `request_sai_task が使えます。他のLLM機能と同じ従量課金が発生するため、必ず先に依頼内容を要約提示し、` +
         `同意を得たターンでのみ confirmed=true で呼び出してください。進捗は get_sai_task_status で確認できます。` +
+        `新規テナントのオンボーディング中でユーザーが業種を答えてくれた場合は import_industry_faq_templates を` +
+        `使ってFAQのたたき台を提案・登録してください（confirmedゲート必須）。登録が完了したら、続けて` +
+        `get_avatar_status でアバターの状況を確認し、無効であれば有効化(activate_avatar)を提案し、最後に` +
+        `get_embed_code でウィジェットの埋め込みコードを案内する、という3ステップを自然な会話で順に進めてください。` +
         `セッションID: ${sessionId}`;
 
       // G2: 直近の会話履歴をそのままシステムプロンプトの後に差し込み、マルチターンの文脈を持たせる

@@ -158,6 +158,32 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'import_industry_faq_templates',
+      description:
+        '新規テナントのオンボーディングで、ユーザーが答えた業種に合わせたFAQのたたき台を一括登録する。' +
+        'ユーザーが業種（自動車販売・整備／美容・サロン／飲食／不動産／小売・EC／その他）を教えてくれた' +
+        '直後にのみ使用すること。confirmed=falseで呼ぶとテンプレート内容を提示するだけで登録はしない。' +
+        '内容をユーザーに提示し、同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          industry: {
+            type: 'string',
+            description: 'ユーザーが答えた業種',
+            enum: ['auto', 'beauty', 'food', 'realestate', 'retail', 'other'],
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['industry'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_avatar_status',
       description: 'アバターの稼働状況（有効/無効、稼働中の設定名）を取得する読み取り専用ツール。',
       parameters: {
