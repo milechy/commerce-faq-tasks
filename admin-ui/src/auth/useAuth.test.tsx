@@ -62,6 +62,18 @@ function Probe() {
   return <div data-testid="probe">plan={String(tenantPlan)} preview={String(previewMode)}</div>;
 }
 
+function PreviewProbe() {
+  const { isLoading, previewMode, previewTenantId, enterPreview, exitPreview } = useAuth();
+  if (isLoading) return <div>loading</div>;
+  return (
+    <div>
+      <div data-testid="preview-probe">preview={String(previewMode)} tenantId={String(previewTenantId)}</div>
+      <button onClick={() => enterPreview("tenant-b", "テナントB")}>enter</button>
+      <button onClick={() => exitPreview()}>exit</button>
+    </div>
+  );
+}
+
 describe("useAuth — tenantPlan", () => {
   beforeEach(() => {
     vi.mocked(authFetch).mockReset();
@@ -125,6 +137,89 @@ describe("useAuth — tenantPlan", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("probe").textContent).toContain("plan=null");
+    });
+  });
+});
+
+describe("useAuth — previewMode の sessionStorage永続化", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    window.sessionStorage.clear();
+    mockGetSession.mockResolvedValue(SUPER_ADMIN_SESSION());
+  });
+
+  it("enterPreview() でsessionStorageに保存され、ページ再読み込み(再マウント)後も復元される", async () => {
+    const { unmount } = render(
+      <AuthProvider>
+        <PreviewProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-probe").textContent).toContain("preview=false");
+    });
+
+    screen.getByText("enter").click();
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-probe").textContent).toContain("preview=true tenantId=tenant-b");
+    });
+    expect(window.sessionStorage.getItem("r2c_admin_preview_tenant")).toContain("tenant-b");
+
+    // ページ再読み込みを模擬(AuthProviderを再マウント)
+    unmount();
+    render(
+      <AuthProvider>
+        <PreviewProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-probe").textContent).toContain("preview=true tenantId=tenant-b");
+    });
+  });
+
+  it("exitPreview() でsessionStorageからも消え、再マウント後もプレビューなしのまま", async () => {
+    window.sessionStorage.setItem("r2c_admin_preview_tenant", JSON.stringify({ tenantId: "tenant-b", tenantName: "テナントB" }));
+
+    const { unmount } = render(
+      <AuthProvider>
+        <PreviewProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-probe").textContent).toContain("preview=true tenantId=tenant-b");
+    });
+
+    screen.getByText("exit").click();
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-probe").textContent).toContain("preview=false tenantId=null");
+    });
+    expect(window.sessionStorage.getItem("r2c_admin_preview_tenant")).toBeNull();
+
+    unmount();
+    render(
+      <AuthProvider>
+        <PreviewProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-probe").textContent).toContain("preview=false tenantId=null");
+    });
+  });
+
+  it("sessionStorageの内容が壊れている場合は無視してプレビューなしで起動する", async () => {
+    window.sessionStorage.setItem("r2c_admin_preview_tenant", "not-json");
+
+    render(
+      <AuthProvider>
+        <PreviewProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-probe").textContent).toContain("preview=false tenantId=null");
     });
   });
 });

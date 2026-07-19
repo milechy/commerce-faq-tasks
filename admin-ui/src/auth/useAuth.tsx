@@ -54,12 +54,49 @@ function parseRole(meta: Record<string, unknown>): AuthUser["role"] {
   return "anonymous";
 }
 
+// previewMode/previewTenantId は元々メモリ上のReact stateのみで管理していたため、
+// ページの再読み込みや直接URL入力(フルページ遷移)のたびにリセットされていた
+// (例: /copilot-previewはブックマーク/URL直打ちで開く前提のページのため、テナント
+// 詳細画面でプレビューに入ってもそこへ移動すると毎回プレビューが外れてしまっていた)。
+// sessionStorageに永続化することで、同一ブラウザタブのセッション内は再読み込みしても
+// 保持されるようにする(タブを閉じれば消える点はlocalStorageと差別化)。
+const PREVIEW_STORAGE_KEY = "r2c_admin_preview_tenant";
+
+interface StoredPreview {
+  tenantId: string;
+  tenantName: string;
+}
+
+function loadStoredPreview(): StoredPreview | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(PREVIEW_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredPreview>;
+    if (typeof parsed.tenantId !== "string" || typeof parsed.tenantName !== "string") return null;
+    return { tenantId: parsed.tenantId, tenantName: parsed.tenantName };
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredPreview(preview: StoredPreview | null): void {
+  try {
+    if (typeof window === "undefined") return;
+    if (preview) window.sessionStorage.setItem(PREVIEW_STORAGE_KEY, JSON.stringify(preview));
+    else window.sessionStorage.removeItem(PREVIEW_STORAGE_KEY);
+  } catch {
+    // sessionStorage無効環境(プライベートブラウズ等)では静かに無視
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [previewMode, setPreviewMode] = useState(false);
-  const [previewTenantId, setPreviewTenantId] = useState<string | null>(null);
-  const [previewTenantName, setPreviewTenantName] = useState<string | null>(null);
+  const storedPreview = loadStoredPreview();
+  const [previewMode, setPreviewMode] = useState(storedPreview !== null);
+  const [previewTenantId, setPreviewTenantId] = useState<string | null>(storedPreview?.tenantId ?? null);
+  const [previewTenantName, setPreviewTenantName] = useState<string | null>(storedPreview?.tenantName ?? null);
   const [tenantPlan, setTenantPlan] = useState<TenantPlan | null>(null);
 
   const loadUser = useCallback(async () => {
@@ -147,18 +184,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPreviewMode(false);
     setPreviewTenantId(null);
     setPreviewTenantName(null);
+    saveStoredPreview(null);
   }, []);
 
   const enterPreview = useCallback((tenantId: string, tenantName: string) => {
     setPreviewMode(true);
     setPreviewTenantId(tenantId);
     setPreviewTenantName(tenantName);
+    saveStoredPreview({ tenantId, tenantName });
   }, []);
 
   const exitPreview = useCallback(() => {
     setPreviewMode(false);
     setPreviewTenantId(null);
     setPreviewTenantName(null);
+    saveStoredPreview(null);
   }, []);
 
   const effectiveRole = previewMode ? "client_admin" : (user?.role ?? "anonymous");
