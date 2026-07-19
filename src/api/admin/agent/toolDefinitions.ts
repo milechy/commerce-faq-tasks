@@ -158,6 +158,18 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_avatar_status',
+      description: 'アバターの稼働状況（有効/無効、稼働中の設定名）を取得する読み取り専用ツール。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'activate_avatar',
       description: '指定した ID のアバター設定を有効化する（他のアバターは自動的に無効化される）',
       parameters: {
@@ -569,6 +581,48 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         type: 'object',
         properties: {},
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'request_sai_task',
+      description:
+        'R2Cエージェント（Sai）に、テナントの管理画面上での操作を代わりに実行するよう依頼する。' +
+        '例: 「送料表記を直して」「FAQのこの文章を直しておいて」等、ユーザーが直接操作するより代行を頼みたい場合に使う。' +
+        '利用量に応じた従量課金（他のLLM機能と同じ仕組み）が発生するため、必ず先に依頼内容をユーザーに要約提示し、' +
+        '同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          description: {
+            type: 'string',
+            description: 'Saiに依頼する作業内容（具体的に）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['description'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_sai_task_status',
+      description: 'request_sai_task で依頼したSaiタスクの進捗状況を取得する読み取り専用ツール。',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'request_sai_task が返したタスクID',
+          },
+        },
+        required: ['task_id'],
       },
     },
   },

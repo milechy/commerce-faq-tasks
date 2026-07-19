@@ -3,11 +3,8 @@
 // 【プロトタイプ / 追加専用】テナント向けチャット・ファースト管理画面のUX検証用ページ。
 // 既存の管理画面(App.tsx の認証ルート群)には一切影響しない、認証ゲート外の隔離ルート。
 //   URL: /copilot-preview
-// 左のブリーフィング/カード群はスクリプト化したモック(①能動ブリーフィング ②確認カード
-// ③解決後の次へ導く循環(進捗つき) ④Sai委譲)で、体験の形を見せるためのもの。
-//
-// Phase1: 下部コンポーザ(自由入力)だけは実際の R2Cエージェント API
-// (POST /v1/admin/agent/chat, suggest_tuning_rule / save_tuning_rule ツール)に接続されている。
+// サイドバー・自由入力欄とも、全て実際の R2Cエージェント API
+// (POST /v1/admin/agent/chat)に接続されている。モックの固定シナリオは廃止済み。
 // ログイン済みセッション(同一ブラウザの Supabase セッション)が必要。未ログインならその旨を案内する。
 // テーマは既存の CSS 変数に追従(light/dark両対応)。
 
@@ -22,13 +19,10 @@ type Category =
   | { key: string; label: string; icon: string; dim?: boolean };
 
 type Card =
-  | { kind: "briefing" }
   | { kind: "faq"; question: string; answer: string; category: string }
   | { kind: "rule"; trigger: string; behavior: string }
   | { kind: "engagement"; when: string; message: string }
-  | { kind: "sai"; request: string; result: string; url: string }
   | { kind: "success"; text: string }
-  | { kind: "analytics" }
   | { kind: "link"; label: string; url: string; description: string }
   | { kind: "agentAction"; tool: string; result: string };
 
@@ -66,6 +60,9 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_escalations: "エスカレーション一覧の取得",
   get_monitoring_summary: "モニタリングサマリーの取得",
   get_legacy_ui_link: "旧管理画面への案内",
+  get_avatar_status: "アバター稼働状況の取得",
+  request_sai_task: "Saiへの代行依頼",
+  get_sai_task_status: "Saiタスク状況の取得",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -212,18 +209,15 @@ const nextId = () => ++_uid;
 
 export default function CopilotPreviewPage() {
   const [active, setActive] = useState("assistant");
-  const [done, setDone] = useState(0); // モックデモ: 今週の改善 3件中 done件 完了
   const [input, setInput] = useState("");
-  // Phase2: 起動直後は空。bootstrap()が①実データのブリーフィング→②モックデモの順で積む
+  // 起動直後は空。bootstrap()が実データの週次ブリーフィングを積む
   const [msgs, setMsgs] = useState<Msg[]>([]);
 
-  // Phase1/2: 自由入力欄・起動時ブリーフィングが繋がる実チャットの状態
+  // 自由入力欄・起動時ブリーフィング・サイドバー各カテゴリーが繋がる実チャットの状態
   const sessionIdRef = useRef<string>(crypto.randomUUID());
   const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [sending, setSending] = useState(false);
   const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
-  // モックデモ側の非同期待ち（saiYesの疑似処理中など）。sendingと合わせて「会話ビジー」を構成する。
-  const [pendingTimer, setPendingTimer] = useState(false);
 
   const threadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -312,9 +306,18 @@ export default function CopilotPreviewPage() {
       // suggest系の下書きが出たら、そのまま自然文で確定できるチップを添える
       const SUGGEST_TOOLS = new Set(["suggest_tuning_rule", "suggest_faq", "suggest_engagement_rule"]);
       const suggested = data.actions?.some((a) => SUGGEST_TOOLS.has(a.tool));
+      // Saiへの依頼がconfirmed待ちでブロックされた場合も、そのまま同意できるチップを添える
+      const saiPendingConfirm = data.actions?.some(
+        (a) => a.tool === "request_sai_task" && a.result.includes("確認が必要"),
+      );
       const chips: Chip[] | undefined = suggested
         ? [
             { label: "保存して", action: "__real:保存してください", tone: "primary" },
+            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+          ]
+        : saiPendingConfirm
+        ? [
+            { label: "お願いする", action: "__real:はい、お願いします", tone: "primary" },
             { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
           ]
         : undefined;
@@ -339,7 +342,7 @@ export default function CopilotPreviewPage() {
     setSending(false);
   };
 
-  // Phase2 (P7): マウント時に実データの週次ブリーフィングを自動取得 → その後にモックデモを積む
+  // マウント時に実データの週次ブリーフィングを自動取得
   const bootstrapped = useRef(false);
   useEffect(() => {
     if (bootstrapped.current) return;
@@ -348,245 +351,47 @@ export default function CopilotPreviewPage() {
     void (async () => {
       push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
       await sendReal(BOOTSTRAP_PROMPT, { silent: true });
-
-      push({
-        id: nextId(),
-        role: "ai",
-        text: "─────────────\nここから先は、将来のビジョンのデモです（バックエンド未接続のスクリプト固定・サンプルデータ）。",
-      });
-      push(
-        { id: nextId(), role: "ai", text: "おはようございます、田中さん☀️ 今週のお店の様子をまとめました。" },
-        {
-          id: nextId(),
-          role: "ai",
-          card: { kind: "briefing" },
-          chips: [
-            { label: "1番をやる", action: "do1", tone: "primary" },
-            { label: "あとで", action: "later", tone: "ghost" },
-          ],
-        },
-      );
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const runAction = (action: string, fromMsgId: number, label: string) => {
+  const runAction = (action: string, fromMsgId: number) => {
     consumeChips(fromMsgId);
-
-    // "__real:" プレフィックスは実APIへの返信（sendReal 側で me() を積むため、ここでは積まない）
-    if (action.startsWith("__real:")) {
-      void sendReal(action.slice("__real:".length));
-      return;
-    }
-
-    if (label) push(me(label));
-
-    switch (action) {
-      case "do1":
-        push(
-          say("いいですね。送料の質問に答えられるよう、こう登録します 👇 内容をご確認ください。"),
-          {
-            id: nextId(),
-            role: "ai",
-            card: {
-              kind: "faq",
-              question: "送料はいくらですか？",
-              answer:
-                "全国一律550円です。5,000円以上のお買い上げで送料無料になります。北海道・沖縄は追加で440円いただいております。",
-              category: "店舗情報 ・ すぐに公開",
-            },
-            chips: [
-              { label: "✓ この内容で登録", action: "confirmFaq", tone: "primary" },
-              { label: "文章を直したい", action: "editFaq", tone: "ghost" },
-            ],
-          },
-        );
-        break;
-
-      case "editFaq":
-        push(say("どこを直しましょう？ 例えば「北海道・沖縄も無料にして」のように話しかけてください。（このプロトタイプでは登録に進みます）", [
-          { label: "やっぱりこのまま登録", action: "confirmFaq", tone: "primary" },
-        ]));
-        break;
-
-      case "confirmFaq":
-        setDone(1);
-        push(
-          { id: nextId(), role: "ai", card: { kind: "success", text: "「送料はいくらですか？」への答えを登録しました。次から自動で答えます。" } },
-          say(
-            "直りました！ ✅（今週の改善 3件中 1件 完了）\n\nついでにもう一つ。最近「丁寧すぎて説明が長い」というお客様の反応が増えています。少しだけ短く話す設定にできますが、やりますか？",
-            [
-              { label: "お願い", action: "do2", tone: "primary" },
-              { label: "今日はここまで", action: "stop", tone: "ghost" },
-            ],
-          ),
-        );
-        break;
-
-      case "do2":
-        push(
-          say("承知しました。AIへの指示ルールをこう追加します 👇"),
-          {
-            id: nextId(),
-            role: "ai",
-            card: {
-              kind: "rule",
-              trigger: "商品説明・使い方の質問",
-              behavior: "要点を先に1〜2文で答え、詳細は必要な時だけ足す。前置きのあいさつは省く。",
-            },
-            chips: [
-              { label: "✓ この方針で適用", action: "confirmRule", tone: "primary" },
-              { label: "今日はここまで", action: "stop", tone: "ghost" },
-            ],
-          },
-        );
-        break;
-
-      case "confirmRule":
-        setDone(2);
-        push(
-          { id: nextId(), role: "ai", card: { kind: "success", text: "応答をやや簡潔にする指示ルールを適用しました。" } },
-          say(
-            "できました！ ✅（3件中 2件 完了）\n\n最後にもう一つ。夜21時台にサイトを離れるお客様が多めです。この時間に一言、声をかけると引き止められそうです。設定しますか？",
-            [
-              { label: "お願い", action: "do3", tone: "primary" },
-              { label: "今日はここまで", action: "stop", tone: "ghost" },
-            ],
-          ),
-        );
-        break;
-
-      case "do3":
-        push(
-          say("では、こんな声がけを用意します 👇"),
-          {
-            id: nextId(),
-            role: "ai",
-            card: {
-              kind: "engagement",
-              when: "サイトを離れそうな時（夜間に多い離脱を検知）",
-              message: "お探しのものは見つかりましたか？ よければ人気ランキングもご覧ください🎁",
-            },
-            chips: [
-              { label: "✓ この声がけを設定", action: "confirmEngage", tone: "primary" },
-              { label: "今日はここまで", action: "stop", tone: "ghost" },
-            ],
-          },
-        );
-        break;
-
-      case "confirmEngage":
-        setDone(3);
-        push(
-          { id: nextId(), role: "ai", card: { kind: "success", text: "離脱しそうなお客様への声がけを設定しました。" } },
-          say(
-            "今週の改善、3件ぜんぶ完了しました 🎉 これでAIはもっと賢く、取りこぼしも減ります。\n\nもう一つ、私が代わりにやっておけることがあります。あなたの商品ページの送料表記が古いままでした。R2Cが代わりに直しておきましょうか？（作業料 ¥3,000）",
-            [
-              { label: "お願いする", action: "saiYes", tone: "primary" },
-              { label: "あとで自分でやる", action: "saiLater", tone: "ghost" },
-            ],
-          ),
-        );
-        break;
-
-      case "saiYes":
-        push(say("承知しました。商品ページを開いて更新します…（30秒ほどお待ちください）"));
-        setPendingTimer(true);
-        setTimeout(() => {
-          setPendingTimer(false);
-          push(
-            say("完了しました。実際の画面がこちらです。仕上がりをご確認ください 👇"),
-            {
-              id: nextId(),
-              role: "ai",
-              card: {
-                kind: "sai",
-                request: "商品ページの送料表記を新しい内容に更新",
-                result: "送料の記載を「全国一律550円・5,000円以上で無料」に更新しました。",
-                url: "your-shop.example.com/products/123",
-              },
-              chips: [
-                { label: "✓ これでOK", action: "saiOk", tone: "primary" },
-                { label: "ちがう、直したい", action: "saiFix", tone: "ghost" },
-              ],
-            },
-          );
-        }, 1400);
-        break;
-
-      case "saiFix":
-        push(say("どこを直しましょう？ 「ここはこうして」と教えていただければ、その指示は次回から私が覚えて、同じ間違いをしなくなります。（このプロトタイプではここまで）"));
-        break;
-
-      case "saiOk":
-        push(say("ありがとうございます！ 反映しました。今日はここまでで大丈夫です。また何かあれば通知でお知らせしますね 🔔"));
-        break;
-
-      case "saiLater":
-      case "stop":
-      case "later":
-        push(say("承知しました。また通知でお声がけします。いつでも話しかけてください 🙌"));
-        break;
-
-      case "analytics":
-        push(
-          { id: nextId(), role: "ai", card: { kind: "analytics" } },
-          say("特に気になるのは夜21時台の離脱です。ここに声がけを1つ足すと拾えそうです。設定しますか？", [
-            { label: "設定する", action: "do3", tone: "primary" },
-            { label: "今はいい", action: "stop", tone: "ghost" },
-          ]),
-        );
-        break;
-
-      default:
-        break;
-    }
+    // チップは全て実APIへの返信（sendReal 側で me() を積むため、ここでは積まない）
+    void sendReal(action.startsWith("__real:") ? action.slice("__real:".length) : action);
   };
 
   // 会話中は今アクティブなカテゴリー以外への切り替えを禁止する。応答が同じ
-  // スレッドに割り込んで別カテゴリーの定型メッセージと混ざるのを防ぐため。
+  // スレッドに割り込んで別カテゴリーの応答と混ざるのを防ぐため。
   // 「会話中」の定義:
   //   - sending: 実APIの応答待ち〜タイプライター演出完了まで
-  //   - pendingTimer: モックデモのsaiYes疑似処理中(setTimeout待ち)
-  //   - awaitingUserDecision: 直前のAIメッセージにまだ選ばれていないチップが
-  //     残っている(＝「1番をやる」等のデモ会話がまだ途中で、ユーザーの選択待ち)
-  // いずれかがtrueの間はロックし、"stop"等の終端メッセージ(チップなし)に
-  // 達するか、実APIの応答が完了すると自動的に解放される。
+  //   - awaitingUserDecision: 直前のAIメッセージにまだ選ばれていないチップが残っている
+  //     (＝suggest_*の下書きやSai依頼の確認待ちで、ユーザーの選択待ち)
+  // いずれかがtrueの間はロックし、実APIの応答が完了すると自動的に解放される。
   const lastMsg = msgs[msgs.length - 1];
   const awaitingUserDecision =
     !!lastMsg && lastMsg.role === "ai" && !!lastMsg.chips && lastMsg.chips.length > 0 && !lastMsg.chipsUsed;
-  const busy = sending || pendingTimer || awaitingUserDecision;
+  const busy = sending || awaitingUserDecision;
 
   // ボタン側のdisabledで大半は弾かれるが、ここでも二重に防御する。
   const handleCategory = (key: string) => {
     if (busy && key !== active) return;
     setActive(key);
     if (key === "weekly") {
-      push(me("今週のまとめを見せて"));
-      push({ id: nextId(), role: "ai", card: { kind: "analytics" } }, say("先週より会話は増えています。改善候補は3件、上から順にやると効果的です。", [
-        { label: "1番をやる", action: "do1", tone: "primary" },
-      ]));
+      void sendReal("今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。");
     } else if (key === "history") {
-      push(me("最近の会話を教えて"));
-      push(say("直近142件のうち、AIが答えに困ったのは11件でした。そのうち9件が「送料」に関する質問です。まずここを直しますか？", [
-        { label: "送料を直す", action: "do1", tone: "primary" },
-      ]));
+      void sendReal("最近の会話とエスカレーションの状況を教えて");
+    } else if (key === "avatar") {
+      void sendReal("アバターの稼働状況を教えて");
     } else if (key === "knowledge") {
       // Phase E: get_faq_list/get_knowledge_gaps(実API)に接続。以前はモック固定文言だった
       void sendReal("知識データの状況を教えて（FAQの件数と、AIが答えられなかった質問があれば教えて）");
     } else if (key === "rules") {
       // Phase B: get_tuning_rules(実API)に接続。以前はモック固定文言だった
       void sendReal("指示ルールの状況を教えて");
-    } else if (key === "avatar") {
-      push(me("アバターの状況を見せて"));
-      push(say("アバターは稼働中です。今週は142件の会話のうち98件でアバターが応答しました(平均応答時間1.8秒)。夜21時台の離脱がやや多いので、声がけを1つ追加すると引き止められそうです。設定しますか？", [
-        { label: "設定する", action: "do3", tone: "primary" },
-        { label: "あとで", action: "later", tone: "ghost" },
-      ]));
     }
   };
 
-  // Phase1: 自由入力は実APIに接続（sendReal）。チップ操作は引き続きスクリプト化されたモック。
   const handleSend = () => {
     const text = input.trim();
     if (!text || sending) return;
@@ -647,7 +452,6 @@ export default function CopilotPreviewPage() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>
             <RealActionBadge count={realActionCount} />
-            <ProgressPill done={done} total={3} />
           </div>
         </header>
 
@@ -655,7 +459,7 @@ export default function CopilotPreviewPage() {
         <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: "28px 28px", display: "flex", flexDirection: "column", gap: 18 }}>
           <div style={{ width: "100%", maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 18 }}>
             {msgs.map((m) => (
-              <MessageRow key={m.id} m={m} onChip={runAction} done={done} />
+              <MessageRow key={m.id} m={m} onChip={runAction} />
             ))}
           </div>
         </div>
@@ -677,7 +481,7 @@ export default function CopilotPreviewPage() {
               </button>
             </div>
             <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted-foreground)", textAlign: "center" }}>
-              ここだけ実際の R2Cエージェント（指示ルール作成）に接続されています。要ログイン。
+              実際の R2Cエージェントに接続されています。要ログイン。
             </div>
           </div>
         </div>
@@ -691,7 +495,7 @@ export default function CopilotPreviewPage() {
 function PreviewBadge() {
   return (
     <div style={{ margin: "6px 8px 10px", fontSize: 11.5, fontWeight: 700, letterSpacing: "0.03em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 8, padding: "6px 10px", lineHeight: 1.45 }}>
-      PROTOTYPE ・ 起動時ブリーフィング＋下の入力欄は実API接続。チップのデモ部分のみモック
+      PROTOTYPE ・ 全ての操作が実際のR2Cエージェント(実API)に接続されています
     </div>
   );
 }
@@ -757,20 +561,7 @@ function RealActionBadge({ count }: { count: number }) {
   );
 }
 
-function ProgressPill({ done, total }: { done: number; total: number }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13.5, color: "var(--muted-foreground)" }}>
-      <span>今週の改善 <strong style={{ color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>{done}/{total}</strong></span>
-      <span style={{ display: "flex", gap: 4 }}>
-        {Array.from({ length: total }).map((_, i) => (
-          <span key={i} style={{ width: 20, height: 6, borderRadius: 3, background: i < done ? "#22c55e" : "var(--border)" }} />
-        ))}
-      </span>
-    </div>
-  );
-}
-
-function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number, label: string) => void; done: number }) {
+function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => void }) {
   const isMe = m.role === "me";
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 10 }}>
@@ -785,7 +576,7 @@ function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number, lab
           {m.chips.map((c, i) => (
             <button
               key={i}
-              onClick={() => onChip(c.action, m.id, c.label)}
+              onClick={() => onChip(c.action, m.id)}
               style={{
                 fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, cursor: "pointer",
                 border: c.tone === "primary" ? "none" : "1px solid var(--border)",
@@ -837,35 +628,6 @@ function CardView({ card }: { card: Card }) {
           </span>
         </div>
       );
-    case "briefing":
-      return (
-        <CardShell tone="brand" hd={<><span>📊</span>今週のまとめ<span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: "#b45309" }}>7日間</span></>}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Stat n="142" label="件の会話（先週比 +18%）" />
-            <Stat n="8" label="件の成約 ・ ¥96,000" />
-            <Stat n="11" label="件、AIが答えられなかった質問" crit />
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 0, marginTop: 6 }}>
-            <Todo i="1" text="「送料はいくら？」に9人が困っていました。" g="答えを教えれば解決します" />
-            <Todo i="2" text="丁寧すぎて長い、という反応が増加。" g="少し短く話す設定にできます" />
-            <Todo i="3" text="夜21時台の離脱が多め。" g="声がけを1つ足すと拾えます" />
-          </div>
-        </CardShell>
-      );
-    case "analytics":
-      return (
-        <CardShell tone="agent" hd={<><span>📈</span>会話分析 ・ 今週の要約</>}>
-          <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
-            <Kpi n="142" label="会話数" sub="+18%" />
-            <Kpi n="82" label="応答品質" sub="/100" />
-            <Kpi n="8" label="成約" sub="¥96,000" />
-            <Kpi n="11" label="未回答" sub="要対応" crit />
-          </div>
-          <div style={{ fontSize: 15, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
-            数字の羅列ではなく、<strong style={{ color: "var(--foreground)" }}>「で、何を直すか」</strong>まで私がご提案します。
-          </div>
-        </CardShell>
-      );
     case "faq":
       return (
         <CardShell hd={<><span>📚</span>新しい知識を登録します</>}
@@ -889,15 +651,6 @@ function CardView({ card }: { card: Card }) {
           foot={<CardActionsNote note="離脱しそうなタイミングを検知して自動で表示します。" />}>
           <Field k="いつ出すか" v={card.when} />
           <Field k="表示する言葉" v={card.message} quote hi />
-        </CardShell>
-      );
-    case "sai":
-      return (
-        <CardShell tone="agent" hd={<><span>🤖</span>R2Cが代わりに直しました</>}
-          foot={<CardActionsNote note="画面を見て、これで良ければOKを押してください。" />}>
-          <Field k="依頼" v={card.request} />
-          <Screenshot url={card.url} />
-          <Field k="結果" v={card.result} />
         </CardShell>
       );
     case "success":
@@ -928,52 +681,6 @@ function CardActionsNote({ note }: { note: string }) {
   return (
     <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", background: "var(--muted, rgba(120,120,140,0.06))", fontSize: 13, color: "var(--muted-foreground)" }}>
       {note}
-    </div>
-  );
-}
-
-function Stat({ n, label, crit }: { n: string; label: string; crit?: boolean }) {
-  return (
-    <div style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 15 }}>
-      <b style={{ fontVariantNumeric: "tabular-nums", fontWeight: 800, fontSize: 17, color: crit ? "#dc2626" : "var(--foreground)" }}>{n}</b>
-      <span style={{ color: "var(--muted-foreground)" }}>{label}</span>
-    </div>
-  );
-}
-
-function Kpi({ n, label, sub, crit }: { n: string; label: string; sub: string; crit?: boolean }) {
-  return (
-    <div>
-      <div style={{ fontSize: 24, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: crit ? "#dc2626" : "var(--foreground)", lineHeight: 1.15 }}>{n}</div>
-      <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{label} <span style={{ opacity: 0.7 }}>{sub}</span></div>
-    </div>
-  );
-}
-
-function Todo({ i, text, g }: { i: string; text: string; g: string }) {
-  return (
-    <div style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px dashed var(--border)", fontSize: 14.5, alignItems: "flex-start" }}>
-      <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 700, color: AGENT, fontSize: 14 }}>{i}</span>
-      <span style={{ color: "var(--foreground)" }}>{text}<span style={{ color: "var(--muted-foreground)", fontSize: 13.5 }}> → {g}</span></span>
-    </div>
-  );
-}
-
-function Screenshot({ url }: { url: string }) {
-  return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 12px", background: "var(--muted, rgba(120,120,140,0.1))", borderBottom: "1px solid var(--border)" }}>
-        <i style={{ width: 9, height: 9, borderRadius: "50%", background: "#e0697c", display: "inline-block" }} />
-        <i style={{ width: 9, height: 9, borderRadius: "50%", background: "#eeb84c", display: "inline-block" }} />
-        <i style={{ width: 9, height: 9, borderRadius: "50%", background: "#4bbd83", display: "inline-block" }} />
-        <span style={{ marginLeft: 9, fontFamily: "var(--font-mono, monospace)", fontSize: 12, color: "var(--muted-foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{url}</span>
-      </div>
-      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 9 }}>
-        <div style={{ height: 11, width: "55%", borderRadius: 5, background: "var(--muted, rgba(120,120,140,0.15))" }} />
-        <div style={{ height: 11, width: "88%", borderRadius: 5, background: "var(--muted, rgba(120,120,140,0.15))" }} />
-        <div style={{ height: 11, width: "66%", borderRadius: 5, background: "rgba(34,197,94,0.18)", border: "1px solid rgba(34,197,94,0.5)" }} />
-        <div style={{ height: 11, width: "40%", borderRadius: 5, background: "var(--muted, rgba(120,120,140,0.15))" }} />
-      </div>
     </div>
   );
 }

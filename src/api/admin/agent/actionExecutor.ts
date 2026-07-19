@@ -16,6 +16,9 @@ import { textToFaqs } from '../knowledge/routes';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
 import { getSessions, getActiveEscalations } from '../chat-history/chatHistoryRepository';
 import { computeKpis } from '../monitoring/routes';
+import { checkSaiMonthlyCostCeiling } from '../options/routes';
+import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
+import { trackUsage } from '../../../lib/billing/usageTracker';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -293,6 +296,36 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] delete_faq failed', err);
         return truncate('FAQ の削除に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_avatar_status': {
+      try {
+        const tenantRes = await db.query(
+          `SELECT features->>'avatar' AS avatar_enabled FROM tenants WHERE id = $1`,
+          [tenantId],
+        );
+        if (tenantRes.rows.length === 0) {
+          return truncate('テナント設定が見つかりません');
+        }
+        const enabled = (tenantRes.rows[0] as { avatar_enabled: string | null }).avatar_enabled === 'true';
+        if (!enabled) {
+          return truncate('アバターは現在無効です');
+        }
+        const activeRes = await db.query(
+          `SELECT id, name FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId],
+        );
+        const active = activeRes.rows[0] as { id: string; name: string } | undefined;
+        return truncate(
+          active
+            ? `アバターは有効です（稼働中の設定: ${active.name}）`
+            : 'アバターは有効ですが、稼働中の設定がありません',
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] get_avatar_status failed', err);
+        return truncate('アバター状況の取得に失敗しました');
       }
     }
 
@@ -1089,6 +1122,78 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_monitoring_summary failed', err);
         return truncate('モニタリングサマリーの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Saiへの代行依頼: テナント(client_admin)・super_admin共通で利用可能。
+    // 費用は一回限りの即時課金ではなく、他のLLM機能(admin_agent等)と同じ従量課金
+    // (trackUsage → usage_logs → 月次Stripe請求)に計上される。
+    case 'request_sai_task': {
+      const confirmed = Boolean(args['confirmed']);
+      const description = String(args['description'] ?? '').trim().slice(0, 2000);
+
+      if (!confirmed) {
+        return truncate('Saiへの依頼には確認が必要です。作業内容をユーザーに提示し、同意を得てから confirmed=true で再度実行してください');
+      }
+      if (!description) {
+        return truncate('description は必須です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const ceilingCheck = await checkSaiMonthlyCostCeiling(db);
+        if (!ceilingCheck.ok) {
+          return truncate('Saiの月次コスト上限に達しているため、今回は依頼できません。管理者に確認してください');
+        }
+
+        const { task_id } = await submitSaiTask({ description });
+        return truncate(`Saiにタスクを依頼しました（タスクID: ${task_id}）。get_sai_task_status で進捗を確認できます`);
+      } catch (err: any) {
+        if (err?.message === 'SAI_API_KEY not set') {
+          return truncate('Saiが設定されていません');
+        }
+        logger.warn('[actionExecutor] request_sai_task failed', err);
+        return truncate('Saiへの依頼に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_sai_task_status': {
+      const taskId = String(args['task_id'] ?? '').trim();
+      if (!taskId) {
+        return truncate('task_id は必須です');
+      }
+
+      try {
+        const task = await getSaiTask(taskId);
+
+        // 完了時のみ、他のLLM機能と同じ従量課金ロジックでコストを計上する
+        // (requestIdをtask_idで固定し、再ポーリングでも二重計上しない)
+        if (task.status === 'complete' && tenantId) {
+          trackUsage({
+            tenantId,
+            requestId: `sai-agent-request:${taskId}`,
+            model: 'agent-s',
+            inputTokens: 0,
+            outputTokens: 0,
+            featureUsed: 'sai_agent',
+            saiAgentSteps: task.steps,
+          });
+        }
+
+        const lines = [
+          `状態: ${task.status}`,
+          `ステップ: ${task.steps}/${task.max_steps}`,
+        ];
+        if (task.outcome) lines.push(`自己申告: ${task.outcome}（自己申告は信用しない設計のため、最終スクリーンショットを目視確認してから完了させてください）`);
+        if (task.last_action) lines.push(`直近の操作: ${task.last_action}`);
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_sai_task_status failed', err);
+        return truncate('Saiタスクの状態取得に失敗しました');
       }
     }
 
