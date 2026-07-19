@@ -13,6 +13,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 import { useAuth } from "../../auth/useAuth";
+import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_avatar_status: "アバター稼働状況の取得",
   request_sai_task: "Saiへの代行依頼",
   get_sai_task_status: "Saiタスク状況の取得",
+  import_industry_faq_templates: "業種別FAQたたき台の登録",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -78,11 +80,20 @@ const REAL_WRITE_TOOLS = new Set([
   "set_posthog",
   "set_widget_theme",
   "activate_avatar",
+  "import_industry_faq_templates",
 ]);
 
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ
 const BOOTSTRAP_PROMPT =
   "ログインしたところです。今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
+
+// GID 1216274591838389 チャット版: 新規テナント(onboarding_completed_at未設定)の初回起動時、
+// 業種選択チップを添えた案内を出す(AIを介さないローカル表示。選択後の提案・登録は実API接続)。
+const INDUSTRY_CHIPS: Chip[] = ONBOARDING_INDUSTRIES.map((ind) => ({
+  label: `${ind.icon} ${ind.label}`,
+  action: `__real:業種は「${ind.label}」です。この業種のFAQテンプレートを提案してください。`,
+  tone: "ghost",
+}));
 
 // ─── 実APIのツール結果 → 見た目の良いカードへの変換 ────────────────────────────
 // actionExecutor.ts が返す日本語の定型文字列を軽くパースする。想定外の形式なら
@@ -212,7 +223,7 @@ export default function CopilotPreviewPage() {
   // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
   // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
   // tenantIdがサーバー側で使われるため、previewMode=falseのままで問題ない。
-  const { previewMode, previewTenantId } = useAuth();
+  const { user, previewMode, previewTenantId } = useAuth();
   const [active, setActive] = useState("assistant");
   const [input, setInput] = useState("");
   // 起動直後は空。bootstrap()が実データの週次ブリーフィングを積む
@@ -316,6 +327,10 @@ export default function CopilotPreviewPage() {
       const saiPendingConfirm = data.actions?.some(
         (a) => a.tool === "request_sai_task" && a.result.includes("確認が必要"),
       );
+      // オンボーディングのFAQテンプレート提案がconfirmed待ちでブロックされた場合も同様
+      const industryTemplatePendingConfirm = data.actions?.some(
+        (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
+      );
       const chips: Chip[] | undefined = suggested
         ? [
             { label: "保存して", action: "__real:保存してください", tone: "primary" },
@@ -325,6 +340,11 @@ export default function CopilotPreviewPage() {
         ? [
             { label: "お願いする", action: "__real:はい、お願いします", tone: "primary" },
             { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+          ]
+        : industryTemplatePendingConfirm
+        ? [
+            { label: "登録して", action: "__real:登録してください", tone: "primary" },
+            { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
           ]
         : undefined;
 
@@ -348,15 +368,37 @@ export default function CopilotPreviewPage() {
     setSending(false);
   };
 
-  // マウント時に実データの週次ブリーフィングを自動取得
+  // マウント時、新規テナント(onboarding_completed_at未設定)なら業種選択オンボーディングを、
+  // 既存テナントなら実データの週次ブリーフィングを自動取得する。
+  // super_admin(プレビュー中含む)はオンボーディング判定の対象外(常に週次ブリーフィング側)。
   const bootstrapped = useRef(false);
   useEffect(() => {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
     void (async () => {
-      push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
-      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+      let isNewTenant = false;
+      if (!previewMode && user?.role === "client_admin") {
+        try {
+          const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
+          if (res.ok) {
+            const data = (await res.json()) as { onboarding_completed_at?: string | null };
+            isNewTenant = !data.onboarding_completed_at;
+          }
+        } catch {
+          // 取得失敗時は通常の週次ブリーフィング側にフォールバック
+        }
+      }
+
+      if (isNewTenant) {
+        push(say(
+          "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
+          INDUSTRY_CHIPS,
+        ));
+      } else {
+        push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
+        await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

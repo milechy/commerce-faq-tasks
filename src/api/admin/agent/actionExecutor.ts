@@ -19,6 +19,7 @@ import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -296,6 +297,67 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] delete_faq failed', err);
         return truncate('FAQ の削除に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 新規テナントのオンボーディング(GID 1216274591838389のチャット版):
+    // 業種別FAQたたき台を一括登録し、旧UI(OnboardingModal)と同じ条件で
+    // onboarding_completed_at を更新する(業種選択のみで完了扱いになる仕様を踏襲)。
+    case 'import_industry_faq_templates': {
+      const industryRaw = args['industry'];
+      if (!isOnboardingIndustry(industryRaw)) {
+        return truncate(`不明な業種です: ${String(industryRaw)}`);
+      }
+      const confirmed = Boolean(args['confirmed']);
+      const templates = INDUSTRY_FAQ_TEMPLATES[industryRaw];
+      const label = ONBOARDING_INDUSTRY_LABELS[industryRaw];
+
+      if (!confirmed) {
+        const lines = templates.map((t, i) => `${i + 1}. Q: ${t.question} / A: ${t.answer}`);
+        return truncate(
+          `「${label}」向けのFAQたたき台を${templates.length}件ご用意しました:\n` +
+          lines.join('\n') +
+          `\nよろしければ登録しますか？（登録後も自由に編集・削除できます）`,
+        );
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        let inserted = 0;
+        for (const t of templates) {
+          try {
+            const result = await db.query(
+              `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
+               VALUES ($1, $2, $3, $4, true)
+               RETURNING id, question, answer, is_published`,
+              [tenantId, t.question, t.answer, t.category ?? 'general'],
+            );
+            const row = result.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
+            insertEmbeddingAsync(db, tenantId, `${row.question}\n${row.answer}`, row.id, {
+              source: 'admin_agent_onboarding',
+              faq_id: row.id,
+            });
+            upsertToEsAsync(tenantId, row.id, row.question, row.answer, row.is_published);
+            inserted++;
+          } catch (err) {
+            logger.warn('[actionExecutor] import_industry_faq_templates insert failed', err);
+          }
+        }
+
+        await db.query(
+          `UPDATE tenants SET onboarding_industry = $1, onboarding_completed_at = NOW() WHERE id = $2`,
+          [industryRaw, tenantId],
+        ).catch((err) => {
+          logger.warn('[actionExecutor] import_industry_faq_templates onboarding update failed', err);
+        });
+
+        return truncate(`「${label}」向けのFAQを${inserted}件登録しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] import_industry_faq_templates failed', err);
+        return truncate('FAQテンプレートの登録に失敗しました');
       }
     }
 

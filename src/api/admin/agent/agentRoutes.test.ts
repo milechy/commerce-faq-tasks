@@ -1771,6 +1771,81 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // import_industry_faq_templates
+  // -------------------------------------------------------------------------
+  describe('import_industry_faq_templates', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('confirmed=false → テンプレート一覧を提示するのみで登録されない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-1', 'import_industry_faq_templates', { industry: 'beauty', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらでよろしいですか？'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '美容室です', sessionId: 'sess-ind-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('美容・サロン');
+      expect(result).toContain('予約は必要ですか？');
+    });
+
+    it('不明な業種の場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-2', 'import_industry_faq_templates', { industry: 'space_travel', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '宇宙旅行業です', sessionId: 'sess-ind-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('不明な業種');
+    });
+
+    it('confirmed=true → 全テンプレートがINSERTされ、テナントのonboarding項目が更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-3', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+
+      for (let i = 0; i < 5; i++) {
+        mockQuery.mockResolvedValueOnce({
+          rows: [{ id: 100 + i, question: `q${i}`, answer: `a${i}`, is_published: true }],
+        });
+      }
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-03' });
+
+      expect(res.status).toBe(200);
+      const insertCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO faq_docs'));
+      expect(insertCalls).toHaveLength(5);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE tenants SET onboarding_industry'),
+        ['beauty', 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('5件登録しました');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // get_avatar_status
   // -------------------------------------------------------------------------
   describe('get_avatar_status', () => {
