@@ -87,6 +87,19 @@ jest.mock('./engagementSuggest', () => ({
   suggestEngagementRuleFromText: (...args: any[]) => mockSuggestEngagementRuleFromText(...args),
 }));
 
+// request_sai_task が使う依存をモック
+const mockCheckSaiMonthlyCostCeiling = jest.fn();
+jest.mock('../options/routes', () => ({
+  checkSaiMonthlyCostCeiling: (...args: any[]) => mockCheckSaiMonthlyCostCeiling(...args),
+}));
+
+const mockSubmitSaiTask = jest.fn();
+const mockGetSaiTask = jest.fn();
+jest.mock('../../../lib/sai/saiClient', () => ({
+  submitSaiTask: (...args: any[]) => mockSubmitSaiTask(...args),
+  getSaiTask: (...args: any[]) => mockGetSaiTask(...args),
+}));
+
 // get_chat_sessions / get_escalations が使う依存をモック
 const mockGetSessions = jest.fn();
 const mockGetActiveEscalations = jest.fn();
@@ -182,6 +195,7 @@ describe('POST /v1/admin/agent/chat', () => {
     mockGetGaps.mockResolvedValue({ gaps: [], total: 0 });
     mockSearchKnowledgeForSuggestion.mockResolvedValue({ results: [] });
     mockFormatKnowledgeContext.mockReturnValue('');
+    mockCheckSaiMonthlyCostCeiling.mockResolvedValue({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -1753,6 +1767,176 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('不明な案内先');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_avatar_status
+  // -------------------------------------------------------------------------
+  describe('get_avatar_status', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('有効かつ稼働中の設定がある場合はその名前を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-av-1', 'get_avatar_status', {}))
+        .mockResolvedValueOnce(makeGroqResponse('アバターは稼働中です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ avatar_enabled: 'true' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'av-1', name: '接客担当アバター' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの状況を教えて', sessionId: 'sess-av-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('有効');
+      expect(result).toContain('接客担当アバター');
+    });
+
+    it('無効な場合は無効である旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-av-2', 'get_avatar_status', {}))
+        .mockResolvedValueOnce(makeGroqResponse('アバターは無効です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ avatar_enabled: 'false' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの状況を教えて', sessionId: 'sess-av-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('無効');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // request_sai_task / get_sai_task_status
+  // -------------------------------------------------------------------------
+  describe('request_sai_task / get_sai_task_status', () => {
+    function toolCallResponse(name: string, args: Record<string, unknown>) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id: 'call-1', type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('client_admin: confirmed=false → 依頼されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから依頼します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料表記を直して', sessionId: 'sess-sai-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('client_admin: 月次コスト上限に達している場合は依頼されない', async () => {
+      mockCheckSaiMonthlyCostCeiling.mockResolvedValueOnce({ ok: false, spentCents: 100000, ceilingCents: 100000 });
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('上限に達しています。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料表記を直して', sessionId: 'sess-sai-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('上限');
+    });
+
+    it('client_admin: confirmed=true かつ上限内 → Saiに依頼されタスクIDが返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を新しい内容に更新', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('依頼しました。'));
+
+      mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-99', status: 'queued' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料表記を新しい内容に更新して', sessionId: 'sess-sai-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockSubmitSaiTask).toHaveBeenCalledWith(
+        expect.objectContaining({ description: '送料表記を新しい内容に更新' }),
+      );
+      expect(res.body.actions[0].result).toContain('sai-task-99');
+    });
+
+    it('client_admin: get_sai_task_status で状態と自己申告非信用の注記を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-99' }))
+        .mockResolvedValueOnce(makeGroqResponse('進捗を確認しました。'));
+
+      mockGetSaiTask.mockResolvedValueOnce({
+        status: 'in_progress', steps: 3, max_steps: 15, description: 'x',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '進捗を教えて', sessionId: 'sess-sai-04' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('in_progress');
+      expect(mockTrackUsage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ featureUsed: 'sai_agent' }),
+      );
+    });
+
+    it('タスク完了時のみ、他のLLM機能と同じtrackUsage(sai_agent)でコストが計上される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-100' }))
+        .mockResolvedValueOnce(makeGroqResponse('完了しました。'));
+
+      mockGetSaiTask.mockResolvedValueOnce({
+        status: 'complete', steps: 5, max_steps: 15, description: 'x',
+        outcome: 'agent_reported_done', last_action: 'click save button',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '進捗を教えて', sessionId: 'sess-sai-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('complete');
+      expect(result).toContain('自己申告は信用しない');
+      expect(mockTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'tenant-abc',
+          requestId: 'sai-agent-request:sai-task-100',
+          featureUsed: 'sai_agent',
+          saiAgentSteps: 5,
+        }),
+      );
     });
   });
 
