@@ -613,6 +613,9 @@
         <div style="display:flex; align-items:center; gap:10px; font-size:14px; color:#e5e7eb;">
           <span style="color:#4ade80;">✓</span> マニュアル不要。迷ったらAIに聞くだけ
         </div>
+        <div style="display:flex; align-items:center; gap:10px; font-size:14px; color:#e5e7eb;">
+          <span style="color:#4ade80;">✓</span> 複雑な設定変更は「R2Cエージェント」に依頼すれば管理画面のGUI操作まで代行（Enterprise）
+        </div>
       </div>
     </div>
 
@@ -709,11 +712,13 @@
       </div>
     </div>
 
-    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
+    <div class="pricing-grid" style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
       <style>
+        /* 既存バグ修正: display:contents な内側divにmedia queryが当たっていて767px以下で1カラム化されていなかった。
+           グリッドを実際に形成している外側divに .pricing-grid を付け替えて修正する。 */
         @media (max-width: 767px) { .pricing-grid { grid-template-columns: 1fr !important; } }
       </style>
-      <div class="pricing-grid" style="display:contents;">
+      <div style="display:contents;">
         <!-- Starter -->
         <div class="glass-card" style="border-radius:16px; padding:28px;">
           <div style="font-weight:700; font-size:18px; margin-bottom:6px;">Starter</div>
@@ -724,6 +729,10 @@
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> ウィジェット埋め込み</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> FAQ RAG（PDF/URL）</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> テキスト接客</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 心理学Sales AI</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 有人エスカレーション</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 未回答質問の自動抽出</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> プロアクティブ声がけ</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 基本ダッシュボード</li>
           </ul>
           <a href="#contact" style="display:block; text-align:center; background:rgba(124,58,237,0.15); border:1px solid rgba(124,58,237,0.35); color:#c4b5fd; text-decoration:none; font-weight:600; font-size:14px; padding:12px; border-radius:10px; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.15)'">無料で始める</a>
@@ -738,9 +747,11 @@
           <ul style="list-style:none; padding:0; margin:0 0 24px; display:flex; flex-direction:column; gap:10px;">
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> Starterの全機能</li>
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> AIアバター（顔・声）</li>
-            <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 心理学Sales AI</li>
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 高度なAnalytics</li>
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> CV計測</li>
+            <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> A/Bテスト</li>
+            <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> GA4・PostHog連携</li>
+            <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> プレミアムアバター生成（従量オプション）</li>
           </ul>
           <a href="#contact" style="display:block; text-align:center; background:linear-gradient(135deg,#7c3aed,#8b5cf6); color:#fff; text-decoration:none; font-weight:700; font-size:14px; padding:12px; border-radius:10px; transition:opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">無料で始める</a>
         </div>
@@ -757,9 +768,20 @@
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 専任サポート</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> SLA保証</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> カスタム開発対応</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> ディープリサーチ</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 事前ディスパッチ（低レイテンシ）</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> R2Cエージェントによる設定代行</li>
           </ul>
           <a href="#contact" style="display:block; text-align:center; background:rgba(124,58,237,0.15); border:1px solid rgba(124,58,237,0.35); color:#c4b5fd; text-decoration:none; font-weight:600; font-size:14px; padding:12px; border-radius:10px; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.15)'">お問い合わせ</a>
         </div>
+      </div>
+    </div>
+
+    <!-- 個別発注オプション(option_orders: Stripe別建て請求) -->
+    <div style="max-width:760px; margin:28px auto 0;">
+      <div class="glass-card" style="border-radius:12px; padding:18px 24px; font-size:13px; color:var(--muted); line-height:1.7; text-align:center;">
+        <strong style="color:#e5e7eb;">🎨 個別発注オプション（従量課金とは別建て）</strong><br>
+        プレミアムアバターの制作代行や、R2Cエージェントによる各種設定代行など、管理画面でAIと会話しながら依頼できる個別サービスがあります。これらは上記の対話課金とは別に、発注ごとにStripeで都度請求されます（金額は発注時にご案内）。
       </div>
     </div>
 
