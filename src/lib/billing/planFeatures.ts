@@ -7,6 +7,14 @@
 //   Growth〜: AIアバター（顔・声）、高度なAnalytics、CV計測、プレミアムアバター生成
 //   Enterprise〜: カスタムアバター（Fish Audio Voice Cloning）、ディープリサーチ、Sai代行（R2Cエージェント）
 // 「心理学Sales AI」は現状すべてのプランで提供するため、ここでは制限しない。
+//
+// GID 1216961878992581: super_admin バイパスの境界（意図的な区別。「割れている」わけではない）。
+// 新しいゲートを追加する際は、以下のどちらに当てはまるかで super_admin バイパスの可否を判断すること。
+//   - テナントの権能を永続的に付与する操作(features フラグを立てる等) → バイパス不可。
+//     super_admin であってもプランを超えた権能付与はさせない
+//     (例: activate_avatar — テナントの avatar 機能を有効化する操作、PR #533)。
+//   - 1回ごとに原価が発生する staff 起点の操作 → バイパス可。サポート業務を止めない
+//     (例: deep_research / premium_avatar / sai_task — その場限りの生成・代行実行、PR #538)。
 
 import type { Pool } from "pg";
 import { getPool } from "../db";
