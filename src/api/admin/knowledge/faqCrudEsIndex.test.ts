@@ -166,6 +166,62 @@ describe("FAQ CRUD ES write path — index 統一 (Phase69-2-E)", () => {
     expect(esDeletes[0].url).toContain(`/_doc/7_${TENANT}`);
   });
 
+  it("PATCH /faq/bulk-publish: 所有IDを一括更新し、faq_${tenantId}/_doc/ へES同期する", async () => {
+    const { pool } = makeMockPool();
+    (pool.query as jest.Mock).mockImplementation(async (sql: string) => {
+      if (/SELECT id FROM faq_docs WHERE id = ANY/.test(sql)) {
+        return { rows: [{ id: 1 }, { id: 2 }], rowCount: 2 };
+      }
+      if (/UPDATE faq_docs SET is_published/.test(sql)) {
+        return {
+          rows: [
+            { id: 1, question: "q1", answer: "a1", is_excluded_from_search: false },
+            { id: 2, question: "q2", answer: "a2", is_excluded_from_search: false },
+          ],
+          rowCount: 2,
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const app = makeApp(pool);
+
+    const res = await request(app)
+      .patch(`/v1/admin/knowledge/faq/bulk-publish?tenant=${TENANT}`)
+      .send({ ids: [1, 2], is_published: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: 2 });
+    await new Promise((r) => setImmediate(r));
+
+    const esWrites = captured.filter((c) => c.method === "PUT");
+    expect(esWrites.length).toBe(2);
+    const expectedIndex = resolveFaqWriteIndex(TENANT);
+    expect(esWrites[0].url).toContain(`/${expectedIndex}/_doc/1_${TENANT}`);
+    expect(esWrites[1].url).toContain(`/${expectedIndex}/_doc/2_${TENANT}`);
+  });
+
+  it("PATCH /faq/bulk-publish: 他テナントのIDが混じっている場合は400で拒否しUPDATEしない", async () => {
+    const { pool } = makeMockPool();
+    (pool.query as jest.Mock).mockImplementation(async (sql: string) => {
+      if (/SELECT id FROM faq_docs WHERE id = ANY/.test(sql)) {
+        return { rows: [{ id: 1 }], rowCount: 1 }; // id:2 は他テナント所有
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const app = makeApp(pool);
+
+    const res = await request(app)
+      .patch(`/v1/admin/knowledge/faq/bulk-publish?tenant=${TENANT}`)
+      .send({ ids: [1, 2], is_published: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.foreign_ids).toEqual([2]);
+    const updateCalls = (pool.query as jest.Mock).mock.calls.filter(([sql]) =>
+      /UPDATE faq_docs SET is_published/.test(sql)
+    );
+    expect(updateCalls.length).toBe(0);
+  });
+
   it("PATCH /exclude 後、同じ index に対する hybrid 読み取りパスと write index が一致する", () => {
     // write は faq_${tenantId}、read fallback の旧形式も faq_${tenantId}。
     // 両者が一致しないと exclude 同期が検索 index に届かない（Phase33-c バグ）。
