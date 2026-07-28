@@ -1331,9 +1331,16 @@ export async function executeToolCall(
       };
 
       // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測)に基づくプラン制限。
-      // AppSidebar.tsx の requiresPlan と同じ基準をここでも適用する（Starterには
-      // 旧UIでも非表示のため、案内リンクを返すこと自体がプランの存在を示唆してしまう）。
+      // AppSidebar.tsx(225行付近)とは異なり、ここでは super_admin もバイパスさせない。
+      // super_admin がこの新UIに入る経路は「クライアントビューで見る」(previewMode)であり、
+      // 目的はテナントに見えている状態の再現なので、Starterテナントのプレビューで
+      // Growth限定機能の案内を出すのは再現として誤り。読み取り専用の案内でしかなく、
+      // planFeatures.ts の GID 1216961878992581 が扱う「永続的な権能付与 vs 都度原価」の
+      // 判断軸（activate_avatar 等）にも当てはまらない。
       if (feature === 'analytics' || feature === 'conversion') {
+        if (!tenantId) {
+          return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+        }
         const plan = await queryTenantPlan(db, tenantId);
         if (!planHasFeature(plan, feature)) {
           return truncate('この機能はGrowthプラン以上でご利用いただけます');
