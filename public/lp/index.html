@@ -345,11 +345,11 @@
 <section style="background:rgba(255,255,255,0.02); border-top:1px solid rgba(255,255,255,0.06); border-bottom:1px solid rgba(255,255,255,0.06); padding:32px 20px;">
   <div style="max-width:1100px; margin:0 auto;">
     <!-- Stats -->
-    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:24px; margin-bottom:28px; text-align:center;">
+    <div class="stats-grid" style="display:grid; grid-template-columns:repeat(4,1fr); gap:24px; margin-bottom:28px; text-align:center;">
       <style>
         @media (max-width: 600px) { .stats-grid { grid-template-columns: repeat(2,1fr) !important; } }
       </style>
-      <div class="stats-grid" style="display:contents;">
+      <div style="display:contents;">
         <div>
           <div class="gradient-text" style="font-size:32px; font-weight:800;">24時間</div>
           <div style="font-size:12px; color:var(--muted); margin-top:4px;">休みなく稼働</div>
@@ -386,11 +386,11 @@
     <p style="color:var(--muted); font-size:15px; max-width:480px; margin:0 auto; line-height:1.7;">夜間・休日・繁忙期——答えられないタイミングで顧客は離れる。R2Cがそれを変えます。</p>
   </div>
 
-  <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px;">
+  <div class="prob-sol-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:24px;">
     <style>
       @media (max-width: 767px) { .prob-sol-grid { grid-template-columns: 1fr !important; } }
     </style>
-    <div class="prob-sol-grid" style="display:contents;">
+    <div style="display:contents;">
       <!-- Problem card -->
       <div class="glass-card" style="border-radius:14px; padding:28px; border-color:rgba(239,68,68,0.2);">
         <div style="font-size:13px; font-weight:700; color:#f87171; letter-spacing:1px; text-transform:uppercase; margin-bottom:20px; display:flex; align-items:center; gap:8px;">
@@ -470,11 +470,11 @@
     </div>
 
     <!-- Tab panels -->
-    <div id="uc-panel-0" style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
+    <div id="uc-panel-0" class="uc-cards" style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
       <style>
         @media (max-width: 767px) { .uc-cards { grid-template-columns: 1fr !important; } }
       </style>
-      <div class="uc-cards" style="display:contents;">
+      <div style="display:contents;">
         <div class="glass-card" style="border-radius:12px; padding:24px;">
           <div style="font-size:28px; margin-bottom:12px;">🛍️</div>
           <div style="font-weight:700; font-size:15px; margin-bottom:8px; color:#fff;">商品Q&A 24時間対応</div>
@@ -492,8 +492,8 @@
         </div>
       </div>
     </div>
-    <div id="uc-panel-1" style="display:none; grid-template-columns:repeat(3,1fr); gap:20px;">
-      <div class="uc-cards" style="display:contents;">
+    <div id="uc-panel-1" class="uc-cards" style="display:none; grid-template-columns:repeat(3,1fr); gap:20px;">
+      <div style="display:contents;">
         <div class="glass-card" style="border-radius:12px; padding:24px;">
           <div style="font-size:28px; margin-bottom:12px;">📅</div>
           <div style="font-weight:700; font-size:15px; margin-bottom:8px; color:#fff;">予約空き確認の自動化</div>
@@ -511,8 +511,8 @@
         </div>
       </div>
     </div>
-    <div id="uc-panel-2" style="display:none; grid-template-columns:repeat(3,1fr); gap:20px;">
-      <div class="uc-cards" style="display:contents;">
+    <div id="uc-panel-2" class="uc-cards" style="display:none; grid-template-columns:repeat(3,1fr); gap:20px;">
+      <div style="display:contents;">
         <div class="glass-card" style="border-radius:12px; padding:24px;">
           <div style="font-size:28px; margin-bottom:12px;">🩺</div>
           <div style="font-weight:700; font-size:15px; margin-bottom:8px; color:#fff;">初回ヒアリング自動化</div>
@@ -634,12 +634,12 @@
       <p style="color:var(--muted); font-size:15px; margin:0;">技術ではなく、あなたが得る成果にフォーカス</p>
     </div>
 
-    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
+    <div class="feat-grid" style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
       <style>
         @media (max-width: 900px) { .feat-grid { grid-template-columns: repeat(2,1fr) !important; } }
         @media (max-width: 560px) { .feat-grid { grid-template-columns: 1fr !important; } }
       </style>
-      <div class="feat-grid" style="display:contents;">
+      <div style="display:contents;">
         <div class="glass-card" style="border-radius:14px; padding:26px; transition:border-color 0.2s; border-color:rgba(124,58,237,0.25);" onmouseover="this.style.borderColor='rgba(139,92,246,0.5)'" onmouseout="this.style.borderColor='rgba(124,58,237,0.25)'">
           <!-- アバターイメージ -->
           <div style="display:flex; align-items:center; gap:14px; margin-bottom:16px;">
@@ -1009,11 +1009,11 @@
         <!-- Honeypot -->
         <input type="text" name="_hp" style="display:none;" tabindex="-1" autocomplete="off">
 
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+        <div class="form-2col" style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
           <style>
             @media (max-width: 560px) { .form-2col { grid-template-columns: 1fr !important; } }
           </style>
-          <div class="form-2col" style="display:contents;">
+          <div style="display:contents;">
             <div>
               <label style="display:block; font-size:13px; font-weight:600; color:var(--muted); margin-bottom:6px;">お名前 <span style="color:#f87171;">*</span></label>
               <input type="text" name="name" placeholder="山田 太郎" required>
