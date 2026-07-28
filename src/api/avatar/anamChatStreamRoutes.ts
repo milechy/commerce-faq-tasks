@@ -12,8 +12,41 @@ import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
 import { saveMessage } from '../admin/chat-history/chatHistoryRepository';
+import { trackUsage } from '../../lib/billing/usageTracker';
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
+
+/**
+ * Phase(Anam usage tracking): Groqストリーミング応答のusageをusage_logsへ記録する。
+ * fire-and-forget(trackUsage内部でsetImmediate)、レスポンスをブロックしない。
+ * requestId は req.requestId(requestIdMiddlewareが全リクエストに付与する安定キー)を使う。
+ * usage_logs は request_id UNIQUE + ON CONFLICT DO NOTHING のため、同一requestIdで
+ * 複数回呼ばれても(再接続・エラー後の二重呼び出し等)二重計上されない。
+ */
+function trackAnamChatUsage(params: {
+  tenantId: string;
+  requestId: string;
+  inputTokens: number | undefined;
+  outputTokens: number | undefined;
+}): void {
+  const { tenantId, requestId, inputTokens, outputTokens } = params;
+  if (inputTokens === undefined || outputTokens === undefined) {
+    // Groqがusageチャンクを返さないまま完了/中断した場合。
+    // silentに0計上せず、原価・請求が過少になり得ることを可視化する。
+    logger.warn(
+      { requestId, tenantId },
+      '[anamChatStream] Groq usage not returned — recording as 0 (cost/billing may be understated)',
+    );
+  }
+  trackUsage({
+    tenantId,
+    requestId,
+    model: GROQ_VERSATILE_70B,
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    featureUsed: 'chat',
+  });
+}
 
 export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHandler[]): void {
   logger.info('[anamChatStream] POST /api/avatar/chat-stream registered');
@@ -108,6 +141,8 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
           model: GROQ_VERSATILE_70B,
           messages: groqMessages,
           stream: true,
+          // usage計測: 最終チャンクにusage(prompt_tokens/completion_tokens)を含めてもらう。
+          stream_options: { include_usage: true },
           max_tokens: 150,
           temperature: 0.7,
         }),
@@ -129,34 +164,49 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       const decoder = new TextDecoder();
       let buffer = '';
       let assistantContent = '';
+      let inputTokens: number | undefined;
+      let outputTokens: number | undefined;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data: ')) continue;
-          const data = trimmed.slice(6);
-          if (data === '[DONE]') continue;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data: ')) continue;
+            const data = trimmed.slice(6);
+            if (data === '[DONE]') continue;
 
-          try {
-            const parsed = JSON.parse(data) as {
-              choices?: Array<{ delta?: { content?: string } }>;
-            };
-            const content = parsed.choices?.[0]?.delta?.content ?? '';
-            if (content) {
-              assistantContent += content;
-              res.write(JSON.stringify({ content }) + '\n');
+            try {
+              const parsed = JSON.parse(data) as {
+                choices?: Array<{ delta?: { content?: string } }>;
+                usage?: { prompt_tokens?: number; completion_tokens?: number };
+              };
+              const content = parsed.choices?.[0]?.delta?.content ?? '';
+              if (content) {
+                assistantContent += content;
+                res.write(JSON.stringify({ content }) + '\n');
+              }
+              // stream_options.include_usage時、最終チャンクはchoicesが空でusageのみを含む。
+              if (typeof parsed.usage?.prompt_tokens === 'number' && typeof parsed.usage?.completion_tokens === 'number') {
+                inputTokens = parsed.usage.prompt_tokens;
+                outputTokens = parsed.usage.completion_tokens;
+              }
+            } catch {
+              // JSON parse error — skip malformed chunk
             }
-          } catch {
-            // JSON parse error — skip malformed chunk
           }
         }
+      } finally {
+        // ストリームが正常完了/中断のどちらでも、ここまでに得たusage(未取得ならundefined)で計上する。
+        // requestId(req.requestId)は1リクエストにつき固定なので、再接続で二重にPOSTされない限り
+        // 二重計上は発生しない。二重POST自体はusage_logsのrequest_id UNIQUE制約で防がれる。
+        trackAnamChatUsage({ tenantId, requestId: req.requestId, inputTokens, outputTokens });
       }
 
       res.end();
