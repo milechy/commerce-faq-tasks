@@ -147,3 +147,17 @@ describe("AppSidebar — ご利用状況・お支払いの可視性", () => {
     expect(screen.getByText("ご利用状況・お支払い")).toBeTruthy();
   });
 });
+
+// GID: ThemeToggle を common/ThemeToggle.tsx へ切り出した際の回帰テスト。
+// 移設のみでスタイル・ロジックは変更していないため、フッターのテーマ切替
+// (ライト/ダーク/自動の3ボタン)が従来どおり描画されることだけを確認する。
+describe("AppSidebar — ThemeToggle切り出し後の回帰テスト", () => {
+  it("フッターにテーマ切替(ライト/ダーク/自動)が描画される", () => {
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
+    renderSidebar();
+
+    expect(screen.getByTitle("ライト")).toBeTruthy();
+    expect(screen.getByTitle("ダーク")).toBeTruthy();
+    expect(screen.getByTitle("自動")).toBeTruthy();
+  });
+});

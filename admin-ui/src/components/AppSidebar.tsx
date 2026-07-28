@@ -14,9 +14,6 @@ import {
   FileText,
   CreditCard,
   LogOut,
-  Sun,
-  Moon,
-  Monitor,
   BellRing,
   X,
   GitBranch,
@@ -24,8 +21,8 @@ import {
   HelpCircle,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
-import { useTheme } from "../contexts/ThemeContext";
 import { NotificationBell } from "./common/NotificationBell";
+import { ThemeToggle } from "./common/ThemeToggle";
 import AppSwitcher from "./AppSwitcher";
 import { cn } from "../lib/utils";
 import { planHasFeature, type GatedFeature } from "../lib/planFeatures";
@@ -97,54 +94,6 @@ const SUPER_ADMIN_SECTION: NavSection = {
     { label: "システム稼働状況", path: "/admin/monitoring", icon: BellRing },
   ],
 };
-
-// ─── Theme toggle ─────────────────────────────────────────────────────
-
-function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
-
-  const options: { value: "light" | "dark" | "system"; icon: React.ElementType; label: string }[] = [
-    { value: "light", icon: Sun, label: "ライト" },
-    { value: "dark", icon: Moon, label: "ダーク" },
-    { value: "system", icon: Monitor, label: "自動" },
-  ];
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: 2,
-        background: "var(--sidebar-accent)",
-        borderRadius: "var(--radius-md)",
-        padding: 2,
-      }}
-    >
-      {options.map(({ value, icon: Icon, label }) => (
-        <button
-          key={value}
-          onClick={() => setTheme(value)}
-          title={label}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 28,
-            height: 28,
-            borderRadius: "calc(var(--radius-md) - 2px)",
-            border: "none",
-            background: theme === value ? "var(--background)" : "transparent",
-            color: theme === value ? "var(--foreground)" : "var(--muted-foreground)",
-            cursor: "pointer",
-            boxShadow: theme === value ? "0 1px 3px rgba(0,0,0,0.12)" : "none",
-            transition: "all 0.15s",
-          }}
-        >
-          <Icon size={14} />
-        </button>
-      ))}
-    </div>
-  );
-}
 
 // ─── Sidebar nav item ─────────────────────────────────────────────────
 

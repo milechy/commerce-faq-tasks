@@ -17,6 +17,13 @@ import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib
 import { useAuth } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
 import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
+// 旧UI(AppSidebar)の共通シェル機能パリティ(残り4件)。既に独立コンポーネント化
+// 済みのものはそのままimportし、テーマ切替だけ common/ThemeToggle として新規に
+// 切り出した(旧UIとの共有コンポーネント。詳細は common/ThemeToggle.tsx 参照)。
+import { NotificationBell } from "../../components/common/NotificationBell";
+import { ThemeToggle } from "../../components/common/ThemeToggle";
+import LangSwitcher from "../../components/LangSwitcher";
+import AppSwitcher from "../../components/AppSwitcher";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
 
@@ -497,6 +504,10 @@ export default function CopilotPreviewPage() {
             ✕
           </button>
         </div>
+        {/* AppSwitcher (R2C ⇄ R2C2)。旧UI(AppSidebar)と同じくヘッダー直下に配置 */}
+        <div style={{ padding: "0 2px" }}>
+          <AppSwitcher />
+        </div>
         <PreviewBadge />
         {CATEGORIES.map((c) => {
           const locked = busy && c.key !== active;
@@ -524,6 +535,14 @@ export default function CopilotPreviewPage() {
           <Phase4DefaultToggle />
           <div style={{ fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.55, padding: "10px" }}>
             「くわしい設定」は従来画面のまま。会話UIは<strong style={{ color: "var(--foreground)" }}>追加</strong>で、既存は消していません。
+          </div>
+          {/* テーマ切替・言語切替。旧UI(AppSidebar)フッターと同じ並び(設定行→ログアウト) */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 8px", marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>テーマ</span>
+            <ThemeToggle />
+          </div>
+          <div style={{ padding: "0 8px", marginBottom: 10 }}>
+            <LangSwitcher />
           </div>
           <button
             onClick={() => void handleLogout()}
@@ -561,6 +580,9 @@ export default function CopilotPreviewPage() {
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 0 3px rgba(34,197,94,0.15)" }} />オンライン
             </div>
           </div>
+          {/* 通知ベル: モバイルではcp-railがドロワー化しoverflow-y:autoでポップオーバーが
+              見切れうるため、常時表示のcp-header側に置く(cp-railのoverflow影響を受けない) */}
+          <NotificationBell />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>
             <RealActionBadge count={realActionCount} />
           </div>
