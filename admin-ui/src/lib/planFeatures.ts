@@ -10,25 +10,13 @@ const PLAN_RANK: Record<TenantPlan, number> = {
   enterprise: 2,
 };
 
-export type GatedFeature =
-  | "avatar"
-  | "voice_clone"
-  | "analytics"
-  | "conversion"
-  | "deep_research"
-  | "premium_avatar"
-  | "sai_task"
-  | "pre_dispatch";
+export type GatedFeature = "avatar" | "voice_clone" | "analytics" | "conversion" | "pre_dispatch";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   avatar: "growth",
   voice_clone: "enterprise",
   analytics: "growth",
   conversion: "growth",
-  // GID 1216944249525907: 原価が跳ねる機能への新規プランゲート
-  deep_research: "enterprise",
-  premium_avatar: "growth",
-  sai_task: "enterprise",
   // GID 1216944004404664: 事前ディスパッチ(アバター高速表示)はLP表記どおりEnterprise限定
   pre_dispatch: "enterprise",
 };
