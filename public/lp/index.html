@@ -138,20 +138,6 @@
       z-index: 1;
     }
 
-    /* デモセクション: チャットウィジェット単一カラム、中央寄せ */
-    .demo-layout {
-      display: flex;
-      justify-content: center;
-      border-radius: 12px;
-      overflow: hidden;
-      min-height: 520px;
-    }
-    .demo-chat-panel {
-      background: #0a0a12;
-      width: 100%;
-      max-width: 480px;
-    }
-
     /* Accordion */
     .accordion-content {
       max-height: 0;
@@ -166,17 +152,6 @@
     }
     .accordion-chevron.open {
       transform: rotate(180deg);
-    }
-
-    /* CTA banner */
-    #cta-banner {
-      display: none;
-      opacity: 0;
-      transition: opacity 0.5s ease;
-    }
-    #cta-banner.visible {
-      display: flex;
-      opacity: 1;
     }
 
     /* Pricing highlight */
@@ -347,7 +322,7 @@
 
     <!-- CTA buttons -->
     <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-bottom:28px;">
-      <a href="#demo" style="background:linear-gradient(135deg,#7c3aed,#8b5cf6); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:13px 28px; border-radius:10px; display:inline-block; transition:opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">AIに話しかける</a>
+      <a href="#" onclick="if (window.FaqWidget) window.FaqWidget.open(); return false;" style="background:linear-gradient(135deg,#7c3aed,#8b5cf6); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:13px 28px; border-radius:10px; display:inline-block; transition:opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">AIに話しかける</a>
       <a href="#contact" style="color:#c4b5fd; text-decoration:none; font-weight:600; font-size:15px; padding:13px 24px; border-radius:10px; border:1px solid rgba(139,92,246,0.35); display:inline-block; transition:all 0.2s;" onmouseover="this.style.borderColor='rgba(139,92,246,0.7)'" onmouseout="this.style.borderColor='rgba(139,92,246,0.35)'">無料で導入相談 →</a>
     </div>
 
@@ -670,51 +645,6 @@
         </div>
       </div>
     </div>
-  </div>
-</section>
-
-<!-- ===================== LIVE DEMO ===================== -->
-<section id="demo" style="max-width:1100px; margin:0 auto; padding:80px 20px;">
-  <div style="text-align:center; margin-bottom:40px;">
-    <div style="display:inline-flex; align-items:center; gap:8px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.25); border-radius:999px; padding:6px 14px; margin-bottom:20px;">
-      <span class="blink" style="display:block; width:8px; height:8px; border-radius:50%; background:#22c55e; flex-shrink:0;"></span>
-      <span style="font-size:13px; color:#4ade80; font-weight:500;">LIVE DEMO — 実際のAIと会話できます</span>
-    </div>
-    <h2 style="font-size:clamp(22px,3vw,34px); font-weight:800; margin:0 0 12px;">実際に話しかけてみてください</h2>
-    <p style="color:var(--muted); font-size:15px; margin:0; max-width:480px; margin:0 auto;">デモ環境のAIが料金・機能・導入方法などにお答えします。</p>
-  </div>
-
-  <!-- Example question buttons -->
-  <div style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-bottom:28px;" id="example-questions">
-    <button onclick="sendExampleQuestion('月いくらかかりますか？')" style="background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.3); color:#c4b5fd; padding:9px 18px; border-radius:999px; font-size:13px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.12)'">月いくらかかりますか？</button>
-    <button onclick="sendExampleQuestion('最短で何日で導入できますか？')" style="background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.3); color:#c4b5fd; padding:9px 18px; border-radius:999px; font-size:13px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.12)'">最短で何日で導入できますか？</button>
-    <button onclick="sendExampleQuestion('うちのECサイトに合いますか？')" style="background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.3); color:#c4b5fd; padding:9px 18px; border-radius:999px; font-size:13px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.12)'">うちのECサイトに合いますか？</button>
-    <button onclick="sendExampleQuestion('人間スタッフとの連携はどうなりますか？')" style="background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.3); color:#c4b5fd; padding:9px 18px; border-radius:999px; font-size:13px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.12)'">人間スタッフとの連携はどうなりますか？</button>
-  </div>
-
-  <!-- Widget demo area: チャットウィジェット単一カラム -->
-  <div class="glass-card" style="border-radius:16px; padding:0; position:relative; overflow:hidden;">
-    <div class="demo-layout">
-      <div class="demo-chat-panel">
-        <iframe
-          id="demo-frame"
-          src="/lp/demo-frame.html"
-          style="width:100%; height:520px; border:none; display:block;"
-          title="R2C AI アシスタント デモ"
-          loading="eager"
-          allow="microphone"
-        ></iframe>
-      </div>
-    </div>
-  </div>
-
-  <!-- CTA Banner (appears after 3 turns) -->
-  <div id="cta-banner" style="margin-top:24px; background:linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.1)); border:1px solid rgba(124,58,237,0.4); border-radius:14px; padding:24px 28px; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px;">
-    <div>
-      <div style="font-weight:700; font-size:16px; color:#fff; margin-bottom:4px;">このAIをあなたのサイトにも導入してみませんか？</div>
-      <div style="font-size:13px; color:var(--muted);">無料デモ体験後、最短3日で本番稼働。初月は費用ゼロ。</div>
-    </div>
-    <a href="#contact" style="background:linear-gradient(135deg,#7c3aed,#8b5cf6); color:#fff; text-decoration:none; font-weight:700; font-size:14px; padding:12px 24px; border-radius:10px; white-space:nowrap; flex-shrink:0;">無料で導入を相談する →</a>
   </div>
 </section>
 
@@ -1186,103 +1116,6 @@
       content.classList.add('open');
       chevron.classList.add('open');
     }
-  };
-
-  // ===== 3. 3-turn CTA Banner =====
-  var r2cMessageCount = 0;
-  window.r2cMessageCount = r2cMessageCount;
-
-  function showCtaBanner() {
-    var banner = document.getElementById('cta-banner');
-    if (banner && banner.style.display === 'none') {
-      banner.style.display = 'flex';
-      // trigger reflow for transition
-      banner.offsetHeight;
-      banner.classList.add('visible');
-    }
-  }
-
-  // Listen for widget messages via postMessage
-  window.addEventListener('message', function(e) {
-    // Accept messages from widget iframe or same origin
-    if (!e.data) return;
-    var data = e.data;
-
-    // Widget may emit events with type 'r2c:message' or 'r2c:assistant_message'
-    if (
-      data.type === 'r2c:assistant_message' ||
-      data.type === 'r2c:message_received' ||
-      data.type === 'r2c:chat_response'
-    ) {
-      r2cMessageCount++;
-      window.r2cMessageCount = r2cMessageCount;
-      if (r2cMessageCount >= 3) {
-        showCtaBanner();
-      }
-    }
-  });
-
-  // Fallback: MutationObserver on widget shadow root (if accessible)
-  function observeWidgetMessages() {
-    var widgetEl = document.querySelector('r2c-widget');
-    if (!widgetEl || !widgetEl.shadowRoot) return;
-
-    var observer = new MutationObserver(function(mutations) {
-      mutations.forEach(function(mutation) {
-        mutation.addedNodes.forEach(function(node) {
-          if (node.nodeType === 1) {
-            // Look for assistant message elements
-            var isAssistantMsg =
-              node.classList && (
-                node.classList.contains('assistant-message') ||
-                node.classList.contains('bot-message') ||
-                node.dataset.role === 'assistant'
-              );
-            if (isAssistantMsg) {
-              r2cMessageCount++;
-              window.r2cMessageCount = r2cMessageCount;
-              if (r2cMessageCount >= 3) {
-                showCtaBanner();
-              }
-            }
-          }
-        });
-      });
-    });
-
-    // Try to find the chat container inside shadow DOM
-    var chatContainer = widgetEl.shadowRoot.querySelector('.chat-messages, .message-list, [class*="chat"]');
-    if (chatContainer) {
-      observer.observe(chatContainer, { childList: true, subtree: true });
-    } else {
-      // Observe entire shadow root as fallback
-      observer.observe(widgetEl.shadowRoot, { childList: true, subtree: true });
-    }
-  }
-
-  // Attempt to set up observer after widget loads
-  document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(observeWidgetMessages, 2000);
-
-    // Also listen for widget ready event
-    document.addEventListener('r2c:widget:ready', observeWidgetMessages);
-    window.addEventListener('r2c:widget:ready', observeWidgetMessages);
-  });
-
-  // ===== 4. Example Question Buttons =====
-  window.sendExampleQuestion = function(text) {
-    // Scroll to demo section
-    var demoSection = document.getElementById('demo');
-    if (demoSection) {
-      demoSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    // Send question to demo iframe widget
-    setTimeout(function() {
-      var frame = document.getElementById('demo-frame');
-      if (frame && frame.contentWindow) {
-        frame.contentWindow.postMessage({ source: 'faq-widget-host', type: 'send', text: text }, window.location.origin);
-      }
-    }, 400);
   };
 
   // ===== 6. Lead Form Submit =====
