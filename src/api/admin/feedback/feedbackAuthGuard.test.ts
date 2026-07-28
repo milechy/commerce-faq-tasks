@@ -100,10 +100,12 @@ const FB_ALL_ROUTES = [...FB_ANY_ADMIN_ROUTES, ...FB_SUPER_ADMIN_ONLY_ROUTES];
 const MGMT_ANY_ADMIN_ROUTES = [
   { method: 'get' as const, path: '/v1/admin/feedback' },
   { method: 'post' as const, path: '/v1/admin/feedback' },
+  { method: 'patch' as const, path: '/v1/admin/feedback/123/read' },
 ];
 const MGMT_SUPER_ADMIN_ONLY_ROUTES = [
   { method: 'patch' as const, path: '/v1/admin/feedback/123' },
   { method: 'delete' as const, path: '/v1/admin/feedback/123' },
+  { method: 'post' as const, path: '/v1/admin/feedback/123/reply' },
 ];
 const MGMT_ALL_ROUTES = [...MGMT_ANY_ADMIN_ROUTES, ...MGMT_SUPER_ADMIN_ONLY_ROUTES];
 
