@@ -9,11 +9,19 @@
 #   - high-risk / do-not-merge / needs-review ラベルで人間が即停止可能
 #   - 必須チェック (Gate 1 / security-scan / gitleaks) が全 green のときのみ merge
 #   - GITHUB_TOKEN で merge (branch protection の必須チェックは GitHub 側でも二重に強制される)
+#   - base≠main の PR は ci-auto-merge.sh 側で常に decline (スタックPRは対象外)
 #
 # トリガー:
 #   - check_suite completed: CI 完了時に該当 PR を評価
-#   - schedule (2時間毎): イベント取りこぼしの backstop sweep (check_suite が主経路)
+#   - schedule (2時間毎): イベント取りこぼしの backstop sweep (check_suite が主経路) +
+#     スタックPR再発防止スイープ (SCRIPTS/stacked-pr-guard.sh, GID 1216945618304983)
 #   - workflow_dispatch: 手動実行 (任意で pr 指定)
+#
+# スタックPR再発防止 (#528/#540/#539 事故の再発防止):
+#   base≠main の open PR のうち、base ブランチ自身が既に別PRとして main へ
+#   マージ済みのもの (= このPRをmergeしても実体がmainに届かない状態) を検出し、
+#   needs-review ラベル + 警告コメントを自動付与する。schedule sweep のみで実行
+#   (check_suite の度に走らせるとAPIコール過多になるため)。
 
 name: Auto-merge Tier B
 
@@ -32,6 +40,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
   checks: read
   statuses: read
 
@@ -84,3 +93,11 @@ jobs:
             bash SCRIPTS/ci-auto-merge.sh "$pr" || echo "  (#$pr は merge せず or エラー — 続行)"
             echo "::endgroup::"
           done
+
+      - name: スタックPR再発防止スイープ (base≠mainで親が既にmain入りのPRを警告)
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash SCRIPTS/stacked-pr-guard.sh || echo "  (stacked-pr-guard でエラー — 次回sweepで再試行)"

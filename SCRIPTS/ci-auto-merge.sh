@@ -76,6 +76,15 @@ night_frozen() {
   return 1
 }
 
+# スタックPR再発防止 (GID 1216945618304983): base が main 以外の PR は
+# 自動マージ対象外にする(状態を持たない確実な判定)。0=main(通過)、1=main以外(decline対象)。
+# 実際の事故(#528/#540/#539)は本スクリプト経由ではなく人力mergeが原因だったが、
+# 自前automationが同じ轍を踏まないことを保証するための最終防御として明示テストする。
+is_base_main() {
+  local base="$1"
+  [[ "$base" == "main" ]]
+}
+
 # ─── self-test ───────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--self-test" ]]; then
   fail=0
@@ -88,6 +97,9 @@ if [[ "${1:-}" == "--self-test" ]]; then
   if all_required_green "$ROLLUP_GREEN" "$DEFAULT_REQUIRED" 2>/dev/null; then echo "PASS green: 全 green 検出"; else echo "FAIL green all"; fail=1; fi
   if all_required_green "$ROLLUP_RED" "$DEFAULT_REQUIRED" 2>/dev/null; then echo "FAIL: red を green 判定"; fail=1; else echo "PASS green: red を検出"; fi
   if all_required_green "$ROLLUP_MISSING" "$DEFAULT_REQUIRED" 2>/dev/null; then echo "FAIL: 欠落 check を green 判定"; fail=1; else echo "PASS green: 欠落 check を検出"; fi
+  if is_base_main "main"; then echo "PASS base: base=main は通過"; else echo "FAIL base: base=main を誤ってdecline"; fail=1; fi
+  if is_base_main "feature/some-parent-branch"; then echo "FAIL base: base≠main を誤って通過"; fail=1; else echo "PASS base: base≠main(スタックPR)を検出してdecline"; fi
+  if is_base_main "feat/parent-of-parent"; then echo "FAIL base: 多段スタックのbase≠mainを誤って通過"; fail=1; else echo "PASS base: 多段スタックのbase≠mainを検出してdecline"; fi
   echo "---"; [[ "$fail" == 0 ]] && { echo "✅ self-test PASS"; exit 0; } || { echo "❌ self-test FAIL"; exit 1; }
 fi
 
@@ -118,7 +130,7 @@ decline() { log "SKIP #$PR_NUMBER ($1): $TITLE"; exit 0; }
 
 [[ "$STATE" == "OPEN" ]]   || decline "state=$STATE"
 [[ "$DRAFT" == "false" ]]  || decline "draft"
-[[ "$BASE" == "main" ]]    || decline "base=$BASE"
+is_base_main "$BASE"       || decline "base=$BASE (stacked PR — not main)"
 has_block_label "$LABELS"  && decline "block-label ($LABELS)"
 night_frozen               && decline "night-freeze (22:00-07:00 JST)"
 
