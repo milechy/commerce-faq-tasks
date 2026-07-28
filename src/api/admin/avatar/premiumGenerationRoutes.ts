@@ -8,6 +8,8 @@ import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
 import { upscaleWithMagnific } from "../../../lib/magnific";
 import { trackUsage } from "../../../lib/billing/usageTracker";
+import { getPool } from "../../../lib/db";
+import { queryTenantPlan, planHasFeature } from "../../../lib/billing/planFeatures";
 import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
@@ -117,6 +119,20 @@ export function registerPremiumGenerationRoutes(app: Express): void {
     const suMeta = su?.app_metadata as Record<string, unknown> | undefined;
     const tenantId = (suMeta?.tenant_id as string) ?? "";
     const requestId = (req as AuthReq).requestId ?? crypto.randomUUID();
+
+    // GID 1216944249525907: LP料金表(Growth〜: プレミアムアバター生成)に基づくプラン制限。
+    // super_adminは従来どおりバイパス。
+    // fail-safe: plan取得失敗時はqueryTenantPlanの既定挙動どおりstarter扱い(=拒否)。
+    const isSuperAdmin = (req as AuthedReq).user?.role === "super_admin";
+    if (!isSuperAdmin) {
+      const plan = await queryTenantPlan(getPool(), tenantId);
+      if (!planHasFeature(plan, "premium_avatar")) {
+        return res.status(403).json({
+          error: "plan_upgrade_required",
+          message: "プレミアムアバター生成はGrowthプラン以上でご利用いただけます",
+        });
+      }
+    }
 
     const falKey = process.env.FAL_KEY?.trim();
     if (!falKey) {

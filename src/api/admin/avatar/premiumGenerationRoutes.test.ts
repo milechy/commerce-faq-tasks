@@ -22,6 +22,11 @@ jest.mock("../../../lib/magnific", () => ({
   upscaleWithMagnific: jest.fn(),
 }));
 
+const mockQuery = jest.fn();
+jest.mock("../../../lib/db", () => ({
+  getPool: () => ({ query: mockQuery }),
+}));
+
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
 
@@ -30,11 +35,11 @@ const mockUpscale = upscaleWithMagnific as jest.Mock;
 
 // ── ヘルパー ──────────────────────────────────────────────────────────────────
 
-function makeApp(tenantId = "tenant-a") {
+function makeApp(tenantId = "tenant-a", role: "client_admin" | "super_admin" = "client_admin") {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res: any, next: any) => {
-    req.supabaseUser = { app_metadata: { tenant_id: tenantId, role: 'client_admin' } };
+    req.supabaseUser = { app_metadata: { tenant_id: tenantId, role } };
     req.requestId = "req-premium-001";
     next();
   });
@@ -56,6 +61,9 @@ describe("POST /v1/admin/avatar/generate-premium", () => {
     jest.clearAllMocks();
     process.env.FAL_KEY = "test-fal-key";
     delete process.env.FREEPIK_API_KEY;
+    // デフォルトはgrowthプラン（プラン制限に無関係な既存テストを壊さないため）。
+    // プラン制限そのものをテストするケースはmockResolvedValueOnceで上書きする。
+    mockQuery.mockResolvedValue({ rows: [{ plan: "growth" }] });
   });
 
   afterEach(() => {
@@ -199,5 +207,78 @@ describe("POST /v1/admin/avatar/generate-premium", () => {
     expect(res.body).toHaveProperty("imageUrl");
     expect(res.body).toHaveProperty("originalUrl");
     expect(res.body).toHaveProperty("enhancedUrl");
+  });
+});
+
+// GID 1216944249525907: LP料金表(Growth〜: プレミアムアバター生成)に基づくプラン制限の回帰テスト
+describe("POST /v1/admin/avatar/generate-premium — プラン制限", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.FAL_KEY = "test-fal-key";
+    delete process.env.FREEPIK_API_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.FAL_KEY;
+    delete process.env.FREEPIK_API_KEY;
+  });
+
+  it("starterプランは403(plan_upgrade_required)で拒否され、FAL APIも呼ばれない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/generate-premium")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("growthプランは生成できる", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => FAL_OK });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/generate-premium")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("enterpriseプランは生成できる", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "enterprise" }] });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => FAL_OK });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/generate-premium")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("plan取得失敗時はfail-safeでstarter扱いとなり403", async () => {
+    mockQuery.mockRejectedValueOnce(new Error("db down"));
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/generate-premium")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("super_adminはプラン(starter)に関わらずバイパスできる", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => FAL_OK });
+
+    const res = await request(makeApp("tenant-a", "super_admin"))
+      .post("/v1/admin/avatar/generate-premium")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(200);
+    // super_adminはプラン照会をバイパスするため、queryTenantPlan自体を呼ばない
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });
