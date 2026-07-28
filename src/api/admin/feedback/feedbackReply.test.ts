@@ -98,6 +98,38 @@ describe('POST /v1/admin/feedback/:id/reply', () => {
   });
 });
 
+describe('POST /v1/admin/feedback — parent_feedback_id', () => {
+  it('自テナントの既存行を parent に指定すると INSERT に含まれる', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'fb-parent' }] }) // 所有チェック
+      .mockResolvedValueOnce({ rows: [{ id: 'fb-2', parent_feedback_id: 'fb-parent' }] }); // INSERT
+
+    const res = await request(makeApp(CLIENT_ADMIN_A))
+      .post('/v1/admin/feedback')
+      .send({ message: 'まだ解決しません', parent_feedback_id: '11111111-1111-4111-8111-111111111111' });
+
+    expect(res.status).toBe(201);
+    const insertCall = mockQuery.mock.calls[1];
+    expect(insertCall[1]).toEqual(
+      expect.arrayContaining(['11111111-1111-4111-8111-111111111111'])
+    );
+  });
+
+  it('他テナントのIDを parent に指定すると所有チェックで弾かれ NULL として保存される', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] }) // 所有チェック: 他テナントなのでヒットしない
+      .mockResolvedValueOnce({ rows: [{ id: 'fb-2', parent_feedback_id: null }] });
+
+    await request(makeApp(CLIENT_ADMIN_A))
+      .post('/v1/admin/feedback')
+      .send({ message: 'まだ解決しません', parent_feedback_id: '22222222-2222-4222-8222-222222222222' });
+
+    const insertCall = mockQuery.mock.calls[1];
+    expect(insertCall[1]).toEqual(expect.arrayContaining([null]));
+    expect(insertCall[1]).not.toEqual(expect.arrayContaining(['22222222-2222-4222-8222-222222222222']));
+  });
+});
+
 describe('PATCH /v1/admin/feedback/:id/read', () => {
   it('client_admin の既読化は自テナント条件付きでUPDATEする', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ id: 'fb-1', reply_read_at: '2026-07-28T00:00:00Z' }] });

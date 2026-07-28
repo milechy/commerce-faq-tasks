@@ -47,6 +47,8 @@ const createSchema = z.object({
     .optional()
     .default("other"),
   priority: z.enum(["low", "normal", "high"]).optional().default("normal"),
+  /** 「まだ解決しません」で作られる続きの相談。親を1件だけ持つ */
+  parent_feedback_id: z.string().uuid().optional(),
 });
 
 const updateSchema = z.object({
@@ -230,14 +232,28 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
           .json({ error: "invalid_request", details: parsed.error.issues });
       }
 
-      const { message, ai_response, ai_answered, category, priority } = parsed.data;
+      const { message, ai_response, ai_answered, category, priority, parent_feedback_id } = parsed.data;
 
       try {
         const pool = getPool();
+
+        // parent_feedback_id を指定する場合、自テナントの行であることを確認する
+        // （他テナントの行IDへ紐付けて存在を詮索されるのを防ぐ）
+        let safeParentId: string | null = null;
+        if (parent_feedback_id) {
+          const parentCheck = await pool.query(
+            `SELECT id FROM admin_feedback WHERE id = $1 AND tenant_id = $2`,
+            [parent_feedback_id, tenantId]
+          );
+          if (parentCheck.rows.length > 0) {
+            safeParentId = parent_feedback_id;
+          }
+        }
+
         const result = await pool.query(
           `INSERT INTO admin_feedback
-             (tenant_id, user_email, message, ai_response, ai_answered, category, priority)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+             (tenant_id, user_email, message, ai_response, ai_answered, category, priority, parent_feedback_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *`,
           [
             tenantId,
@@ -247,6 +263,7 @@ export function registerAdminFeedbackManagementRoutes(app: Express): void {
             ai_answered ?? false,
             category,
             priority,
+            safeParentId,
           ]
         );
         // Phase52h: Trigger 4 — フィードバック受信通知
