@@ -118,9 +118,12 @@ function AppInner() {
   // Phase4: このブラウザだけの個人オプトイン(localStorage)で有効化した場合のみ、
   // 従来のランディング(/ , /admin)からもこの画面に入る。既定は無効=従来のダッシュボードのまま。
   // テナント全体・他ユーザーの挙動には一切影響しない。
+  // 追加: super_adminの「クライアントビューで見る」(previewMode)中は、このブラウザの
+  // オプトインフラグに関わらず常に新UI(copilot-preview)を表示する — 動作確認・デモ用途のため。
   const isLandingPath = location.pathname === "/" || location.pathname === "/admin";
   const isCopilotPreview =
-    location.pathname === "/copilot-preview" || (isLandingPath && isChatFirstDefaultEnabled());
+    location.pathname === "/copilot-preview" ||
+    (isLandingPath && (isChatFirstDefaultEnabled() || previewMode));
 
   if (isAuthBridge) {
     return (
@@ -131,7 +134,15 @@ function AppInner() {
   }
 
   if (isCopilotPreview) {
-    return <CopilotPreviewPage />;
+    // previewMode(クライアントビュー)中は「元に戻す」導線を残す必要がある。
+    // 実テナントの通常アクセス(previewMode=false)ではバナーを出さない。
+    return (
+      <>
+        {previewMode && <PreviewModeBanner />}
+        {previewMode && <div style={{ height: PREVIEW_MODE_BANNER_HEIGHT }} />}
+        <CopilotPreviewPage />
+      </>
+    );
   }
 
   if (isLogin) {
