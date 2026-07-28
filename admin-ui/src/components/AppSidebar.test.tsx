@@ -104,6 +104,28 @@ describe("AppSidebar — plan制限によるnav非表示", () => {
   });
 });
 
+describe("AppSidebar — Starterプランでも使える機能(誤ゲート防止の回帰テスト)", () => {
+  // GID 1216944004404664: LP未記載機能の正式プラン組み入れの過程で、
+  // 誤ってゲートを追加していないことを確認する。
+  it("client_admin + plan=starter → 対応中の会話/未回答質問/お客様への声がけ設定が表示される", () => {
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "starter" }));
+    renderSidebar();
+
+    expect(screen.getByText("対応中の会話")).toBeTruthy();
+    expect(screen.getByText("未回答質問")).toBeTruthy();
+    expect(screen.getByText("お客様への声がけ設定")).toBeTruthy();
+  });
+
+  it("client_admin + plan未取得(null) → 対応中の会話/未回答質問/お客様への声がけ設定は非ゲートのため表示される", () => {
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: null }));
+    renderSidebar();
+
+    expect(screen.getByText("対応中の会話")).toBeTruthy();
+    expect(screen.getByText("未回答質問")).toBeTruthy();
+    expect(screen.getByText("お客様への声がけ設定")).toBeTruthy();
+  });
+});
+
 describe("AppSidebar — ご利用状況・お支払いの可視性", () => {
   it("client_adminにも「ご利用状況・お支払い」が表示される（旧UIはsuper_admin限定表示ではなかった）", () => {
     vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
