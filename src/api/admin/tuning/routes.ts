@@ -25,6 +25,7 @@ import {
 import { getResearchProvider } from '../../../lib/research';
 import { isDeepResearchEnabled } from '../../../lib/research/featureCheck';
 import { buildResearchQuery } from '../../../lib/research/queryBuilder';
+import { trackUsage } from '../../../lib/billing/usageTracker';
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist
@@ -333,6 +334,25 @@ export function registerTuningRoutes(app: Express): void {
             crossTenantSection,
             researchSection,
           );
+
+      // GID 1216944003337186: callGroq8bSuggest/FromTextはactionExecutor.tsからも
+      // 共有呼び出しされる純粋関数のためtenantIdを持たない。Groqは実トークン数を返すが、
+      // ここでは呼び出し元(このハンドラ)でのみ計測し、文字数からの概算トークン数を使う。
+      // featureUsed='admin_tuning'はNON_BILLABLE_FEATURESのためStripe請求数量には含まれない
+      // （原価可視化のみ）。
+      if (tenantId) {
+        const promptChars = anchorText.length + knowledgeSection.length + existingRulesSection.length;
+        const outputChars = JSON.stringify(suggestion).length;
+        trackUsage({
+          tenantId,
+          requestId: `admin-tuning-suggest:${Date.now()}`,
+          model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+          inputTokens: Math.ceil(promptChars / 4),
+          outputTokens: Math.ceil(outputChars / 4),
+          featureUsed: 'admin_tuning',
+        });
+      }
+
       return res.json(suggestion);
     },
   );

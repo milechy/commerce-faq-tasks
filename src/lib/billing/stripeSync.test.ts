@@ -110,6 +110,83 @@ describe('billedQuantity（anam_session混在時の分数換算を加算・後�
   });
 });
 
+// GID 1216944003337186: usage_logs.billable=false（管理系LLM機能・chargeOneOffJpyで
+// 既に請求済みのsai_agent）の行はstripeSync._reportTenantUsageの集計SQL
+// (`AND billable = true`) で除外される。ここではその集計ロジックをJS側で再現して検証する
+// （_reportTenantUsageは非exportのため、SQLと同じ集計規則を純粋関数として再現する）。
+describe('billedQuantity（billable=falseの行を除外）', () => {
+  interface FakeUsageLogRow {
+    feature_used: string;
+    anam_session_seconds?: number;
+    billable: boolean;
+  }
+
+  /** stripeSync._reportTenantUsage の集計SQL（`AND billable = true` + billable_units CASE）と同じ規則 */
+  function simulateBillableUnits(rows: FakeUsageLogRow[]): number {
+    return rows
+      .filter((r) => r.billable)
+      .reduce(
+        (sum, r) =>
+          sum +
+          (r.feature_used === 'anam_session'
+            ? anamSessionBillableUnits(r.anam_session_seconds ?? 0)
+            : 1),
+        0,
+      );
+  }
+
+  it('billable=falseの管理系行(admin_tuning等)・sai_agentはbillableUnitsに含まれない', () => {
+    const rows: FakeUsageLogRow[] = [
+      { feature_used: 'chat', billable: true },
+      { feature_used: 'chat', billable: true },
+      { feature_used: 'admin_tuning', billable: false },
+      { feature_used: 'admin_ai_assist', billable: false },
+      { feature_used: 'sai_agent', billable: false },
+    ];
+    expect(simulateBillableUnits(rows)).toBe(2);
+  });
+
+  it('billable=trueのみのテナントは従来通り全行カウントされる（後方互換）', () => {
+    const rows: FakeUsageLogRow[] = [
+      { feature_used: 'chat', billable: true },
+      { feature_used: 'avatar', billable: true },
+      { feature_used: 'premium_avatar_generation', billable: true },
+    ];
+    expect(simulateBillableUnits(rows)).toBe(3);
+  });
+
+  it('billable=false行にanam_session混在時も、非billable分は0として扱われる', () => {
+    const rows: FakeUsageLogRow[] = [
+      { feature_used: 'anam_session', anam_session_seconds: 180, billable: true }, // 3分
+      { feature_used: 'anam_session', anam_session_seconds: 180, billable: false }, // 除外される3分
+      { feature_used: 'chat', billable: true },
+    ];
+    expect(simulateBillableUnits(rows)).toBe(4); // 3(billable anam) + 1(chat)、非billable分は含まれない
+  });
+
+  it('全行がbillable=falseなら0（Stripeに何も報告されない）', () => {
+    const rows: FakeUsageLogRow[] = [
+      { feature_used: 'admin_tuning', billable: false },
+      { feature_used: 'admin_option_estimator', billable: false },
+    ];
+    expect(simulateBillableUnits(rows)).toBe(0);
+  });
+});
+
+// GID 1216944003337186: マイグレーション後の既存行のデフォルト値検証
+// （生SQLテキストの検証。実際のDB適用結果はステージング/本番マイグレーション実行時に確認する）
+describe('migration_usage_logs_billable_flag.sql', () => {
+  it('billableカラムはNOT NULL DEFAULT trueで追加される（既存行は全てbillable=true扱い）', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const sql = fs.readFileSync(
+      path.join(__dirname, 'migration_usage_logs_billable_flag.sql'),
+      'utf-8',
+    );
+    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS billable BOOLEAN NOT NULL DEFAULT true/);
+  });
+});
+
 describe('lemonsliceShareJpy（月額固定費の均等割り・切り上げ）', () => {
   it('テナント数で均等割り（切り上げ）', () => {
     expect(lemonsliceShareJpy(1200, 1)).toBe(1200);

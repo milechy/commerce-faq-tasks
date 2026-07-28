@@ -185,6 +185,111 @@ describe('usageTracker', () => {
     });
   });
 
+  // GID 1216944003337186: usage_logs.billable フラグ（NON_BILLABLE_FEATURESから自動判定）
+  describe('billableフラグの自動判定・pass-through', () => {
+    it('featureUsed=chat（課金対象）はbillable=trueでINSERTされる', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-billable-chat',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 100,
+        outputTokens: 50,
+        featureUsed: 'chat',
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-billable-chat'
+      );
+      expect(insertCall).toBeDefined();
+      const [sql, params] = insertCall!;
+      expect(sql).toContain('billable');
+      expect(params[params.length - 1]).toBe(true);
+    });
+
+    it('featureUsed=admin_tuning（NON_BILLABLE_FEATURES）はbillable=falseでINSERTされ、costは0にならない', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-non-billable-tuning',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 1000,
+        outputTokens: 500,
+        featureUsed: 'admin_tuning',
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-non-billable-tuning'
+      );
+      expect(insertCall).toBeDefined();
+      const [, params] = insertCall!;
+      expect(params[params.length - 1]).toBe(false); // billable=false
+      expect(params[7]).toBeGreaterThan(0); // cost_total_centsは原価可視化のため0にならない
+    });
+
+    it('featureUsed=sai_agent（NON_BILLABLE_FEATURES）もbillable=falseになる', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-sai-agent-non-billable',
+        model: 'agent-s',
+        inputTokens: 0,
+        outputTokens: 0,
+        featureUsed: 'sai_agent',
+        saiAgentSteps: 3,
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-sai-agent-non-billable'
+      );
+      const [, params] = insertCall!;
+      expect(params[params.length - 1]).toBe(false);
+    });
+
+    it('billableを明示指定すると自動判定より優先される（オーバーライド）', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-explicit-billable-override',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 10,
+        outputTokens: 10,
+        featureUsed: 'chat', // 通常はbillable=trueになる機能
+        billable: false,     // 明示的にfalseを指定
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-explicit-billable-override'
+      );
+      const [, params] = insertCall!;
+      expect(params[params.length - 1]).toBe(false);
+    });
+  });
+
   describe('pool 未初期化時', () => {
     it('pool が null の場合は warn ログを出してクラッシュしない', async () => {
       // pool を null にリセット

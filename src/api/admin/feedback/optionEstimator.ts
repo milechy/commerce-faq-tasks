@@ -3,6 +3,7 @@
 
 import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import { logger } from '../../../lib/logger';
+import { trackUsage } from '../../../lib/billing/usageTracker';
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -30,13 +31,16 @@ const ESTIMATE_SYSTEM_PROMPT = `あなたはIT業務の料金見積もり専門�
 /** 作業内容の説明から料金を試算する */
 export async function estimateOptionPrice(
   taskDescription: string,
-  tenantContext?: string,
+  opts?: { tenantContext?: string; tenantId?: string },
 ): Promise<EstimateResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     logger.warn('[estimateOptionPrice] GROQ_API_KEY not set, using fallback');
     return fallback();
   }
+
+  const tenantContext = opts?.tenantContext;
+  const tenantId = opts?.tenantId;
 
   const userPrompt =
     `## 作業内容\n${taskDescription}` +
@@ -67,7 +71,21 @@ export async function estimateOptionPrice(
 
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
+
+    // GID 1216944003337186: featureUsed='admin_option_estimator'はNON_BILLABLE_FEATURES
+    // のためStripe請求数量には含まれない（原価可視化のみ）。
+    if (tenantId) {
+      trackUsage({
+        tenantId,
+        requestId: `admin-option-estimator:${tenantId}:${Date.now()}`,
+        model: process.env.GROQ_MODEL_70B ?? GROQ_VERSATILE_70B,
+        inputTokens: data.usage?.prompt_tokens ?? 0,
+        outputTokens: data.usage?.completion_tokens ?? 0,
+        featureUsed: 'admin_option_estimator',
+      });
+    }
 
     const content = data.choices?.[0]?.message?.content?.trim() ?? '';
     const jsonMatch = content.match(/\{[\s\S]*"estimated_amount"[\s\S]*\}/);

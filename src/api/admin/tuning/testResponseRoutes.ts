@@ -7,6 +7,7 @@ import type { AuthedReq } from "../../middleware/roleAuth";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
 import { logger } from "../../../lib/logger";
+import { trackUsage } from "../../../lib/billing/usageTracker";
 
 const GROQ_MODEL_70B = GROQ_VERSATILE_70B;
 
@@ -115,8 +116,21 @@ ${systemPrompt || "(未設定)"}
 
   const groqData = await groqRes.json() as {
     choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const raw = groqData.choices?.[0]?.message?.content?.trim() ?? "";
+
+  // GID 1216944003337186: このルートとactionExecutor.ts(チャットツール)の両方から呼ばれる
+  // 共通ロジックのため、ここで計測すれば両方の呼び出し元をカバーできる。
+  // featureUsed='admin_tuning'はNON_BILLABLE_FEATURESのためStripe請求数量には含まれない。
+  trackUsage({
+    tenantId: rule.tenant_id,
+    requestId: `admin-tuning-test-response:${id}:${Date.now()}`,
+    model: GROQ_MODEL_70B,
+    inputTokens: groqData.usage?.prompt_tokens ?? 0,
+    outputTokens: groqData.usage?.completion_tokens ?? 0,
+    featureUsed: 'admin_tuning',
+  });
 
   // JSON配列を抽出（markdown code block 対応）
   const jsonMatch = raw.match(/\[[\s\S]*\]/);

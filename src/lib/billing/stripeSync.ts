@@ -338,6 +338,8 @@ async function _reportTenantUsage(
 
   const { startDate, endDate } = periodToDateRange(periodYyyyMm);
 
+  // GID 1216944003337186: billable=false（管理系LLM機能・chargeOneOffJpyで別途請求済みの
+  // sai_agent等）は原価がusage_logsに記録されていてもStripe請求数量の集計対象から除外する。
   const aggResult = await db.query(
     `SELECT
        COUNT(*)::integer           AS total_requests,
@@ -352,7 +354,8 @@ async function _reportTenantUsage(
      WHERE tenant_id = $1
        AND created_at >= $2
        AND created_at <  $3
-       AND billing_status = 'pending'`,
+       AND billing_status = 'pending'
+       AND billable = true`,
     [tenantId, startDate, endDate]
   );
 
@@ -420,13 +423,17 @@ async function _reportTenantUsage(
         [usageRecord.id, idempotencyKey]
       );
 
+      // billable=false の行はこの集計・報告に含まれていないため 'reported' にはしない
+      // （'pending' のまま維持。原価可視化のための行であり、Stripeに送信済みという意味を
+      // 持たせない）。
       await db.query(
         `UPDATE usage_logs
          SET billing_status = 'reported'
          WHERE tenant_id = $1
            AND created_at >= $2
            AND created_at <  $3
-           AND billing_status = 'pending'`,
+           AND billing_status = 'pending'
+           AND billable = true`,
         [tenantId, startDate, endDate]
       );
 

@@ -34,6 +34,26 @@ export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
  */
 export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar', 'voice']);
 
+/**
+ * GID 1216944003337186: usage_logs の行として記録はする（cost_total_centsで原価は可視化する）が、
+ * stripeSync.ts の集計（Stripe請求数量 billedQuantity）からは除外する機能。
+ * usage_logs.billable カラムで制御する（デフォルトtrue、ここに含まれる機能のみfalseになる）。
+ *
+ * - admin_tuning / admin_ai_assist / admin_engagement_suggest / admin_option_estimator:
+ *   いずれもmooores社内の運用・チューニングツールで、テナントの直接操作によるリクエストではない。
+ *   請求リクエスト数を水増ししないよう非課金とする。
+ * - sai_agent: テナント請求は既に chargeOneOffJpy（代行作業完了時の単発JPY請求、
+ *   options/routes.ts の /complete エンドポイント）で完結している。ここでも
+ *   billedQuantityのCOUNT(*)に含めると二重計上になるため非課金とする。
+ */
+export const NON_BILLABLE_FEATURES: ReadonlySet<string> = new Set([
+  'admin_tuning',
+  'admin_ai_assist',
+  'admin_engagement_suggest',
+  'admin_option_estimator',
+  'sai_agent',
+]);
+
 /** Phase40: Fish Audio TTS単価: $15.00 / 1M UTF-8バイト */
 export const FISH_AUDIO_COST_PER_BYTE_USD = 15.0 / 1_000_000;
 

@@ -2,12 +2,15 @@
 // Phase32: API使用量の非同期記録（fire-and-forget）
 
 import type pino from 'pino';
-import { calculateLLMCostCents, calculateBillingAmountCents, normalizeModelKey } from './costCalculator';
+import { calculateLLMCostCents, calculateBillingAmountCents, normalizeModelKey, NON_BILLABLE_FEATURES } from './costCalculator';
 
-// DBのusage_logs_feature_used_check制約(migration_sai_agent_feature.sql)と一致させる。
+// DBのusage_logs_feature_used_check制約(migration_sai_agent_feature.sql /
+// migration_admin_tooling_feature.sql)と一致させる。
 // admin_guide / feedback_ai / book_analysis / book_structurize はDB側の制約には既に
-// 含まれていたがTS型に無く未使用だった値（GID 1216944049264977 / 1216944003337186 で配線）。
-export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'admin_guide' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'feedback_ai' | 'book_analysis' | 'book_structurize' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent';
+// 含まれていたがTS型に無く未使用だった値（GID 1216944049264977 で配線）。
+// admin_tuning / admin_ai_assist / admin_engagement_suggest / admin_option_estimator は
+// GID 1216944003337186 で新設（いずれもNON_BILLABLE_FEATURES、原価可視化のみが目的）。
+export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'admin_guide' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'feedback_ai' | 'book_analysis' | 'book_structurize' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent' | 'admin_tuning' | 'admin_ai_assist' | 'admin_engagement_suggest' | 'admin_option_estimator';
 
 export interface TrackUsageParams {
   tenantId: string;
@@ -45,6 +48,13 @@ export interface TrackUsageParams {
   fluxImageCount?: number;
   /** GID 1216944049264977: LemonSliceアバター登録（プロビジョニング）回数 */
   lemonsliceRegistrationCount?: number;
+  /**
+   * GID 1216944003337186: この行をStripe請求数量（billedQuantity）の対象にするか。
+   * 省略時は featureUsed が NON_BILLABLE_FEATURES に含まれるかどうかで自動判定する
+   * （明示的に渡した場合はそちらが優先される）。cost_total_cents は billable に関わらず
+   * 常に計算・記録される（原価の可視化自体は billable=false でも行う）。
+   */
+  billable?: boolean;
 }
 
 let _pool: any | null = null;
@@ -76,7 +86,11 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     featureUsed, marginOverride, ttsTextBytes, avatarCredits, avatarSessionMs, imageCount,
     anam_session_seconds, extraLlmUsages, saiAgentSteps,
     ocrPages, asrRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
+    billable,
   } = params;
+
+  // GID 1216944003337186: billable未指定時はfeatureUsedから自動判定する。
+  const isBillable = billable ?? !NON_BILLABLE_FEATURES.has(featureUsed);
 
   // Subtask 3: 追加 LLM（planner 等）に価格表に無いモデルが来た場合、コストは 0 計上になる。
   // env override 等で発生しうるため、サイレント未課金を避けるべく可視化ログを出す。
@@ -118,16 +132,16 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
       `INSERT INTO usage_logs
          (tenant_id, request_id, model, input_tokens, output_tokens,
           feature_used, cost_llm_cents, cost_total_cents,
-          tts_text_bytes, avatar_credits, avatar_session_ms, anam_session_seconds)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          tts_text_bytes, avatar_credits, avatar_session_ms, anam_session_seconds, billable)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (request_id) DO NOTHING`,
       [tenantId, requestId, model, totalInputTokens, totalOutputTokens,
        featureUsed, costLlmCents, costTotalCents,
        ttsTextBytes ?? null, avatarCredits ?? null, avatarSessionMs ?? null,
-       anam_session_seconds ?? null]
+       anam_session_seconds ?? null, isBillable]
     );
     _logger?.debug(
-      { tenantId, requestId, costLlmCents, costTotalCents },
+      { tenantId, requestId, costLlmCents, costTotalCents, billable: isBillable },
       '[usageTracker] logged'
     );
   } catch (err) {
