@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import type { TenantFeatures, TenantDetail } from "./types";
-import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE } from "./types";
+import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE, PLAN_OPTIONS } from "./types";
+import { planHasFeature } from "../../../lib/planFeatures";
 
 // ─── タブ: アバター設定 ────────────────────────────────────────────────────────
 
@@ -27,6 +28,10 @@ export function AvatarTab({
   const [agentId, setAgentId] = useState(tenant.lemonslice_agent_id ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // GID 1216944004404664: 事前ディスパッチはLP表記どおりEnterpriseプラン限定。
+  // 対象テナントのプランが未達の場合はトグルを無効化し理由を表示する。
+  const planAllowsPreDispatch = planHasFeature(tenant.plan, "pre_dispatch");
 
   const handleSave = async () => {
     setSaving(true);
@@ -205,12 +210,35 @@ export function AvatarTab({
               </>
             )}
           </div>
+          {!planAllowsPreDispatch && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 8,
+                background: "rgba(234,179,8,0.08)",
+                border: "1px solid rgba(234,179,8,0.3)",
+                fontSize: 12,
+                color: "#fbbf24",
+                lineHeight: 1.6,
+              }}
+            >
+              🔒 事前ディスパッチはEnterpriseプラン以上でご利用いただけます
+              （現在のプラン: {PLAN_OPTIONS.find((p) => p.value === tenant.plan)?.label ?? tenant.plan}）
+            </div>
+          )}
         </div>
         <button
           type="button"
-          onClick={() => { if (avatarEnabled) setPreDispatchEnabled((v) => !v); }}
-          disabled={!avatarEnabled}
-          style={toggleStyle(preDispatchEnabled, !avatarEnabled)}
+          onClick={() => {
+            if (!avatarEnabled) return;
+            // プラン未達でも「ON→OFF」は常に許可する（ダウングレード後に無効化できなくなるのを防ぐ）
+            if (!preDispatchEnabled && !planAllowsPreDispatch) return;
+            setPreDispatchEnabled((v) => !v);
+          }}
+          disabled={!avatarEnabled || (!preDispatchEnabled && !planAllowsPreDispatch)}
+          title={planAllowsPreDispatch ? undefined : "事前ディスパッチはEnterpriseプラン以上でご利用いただけます"}
+          style={toggleStyle(preDispatchEnabled, !avatarEnabled || (!preDispatchEnabled && !planAllowsPreDispatch))}
         >
           {preDispatchEnabled ? "⚡ 有効" : "⏸️ 無効"}
         </button>
