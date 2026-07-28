@@ -2098,6 +2098,7 @@ describe('POST /v1/admin/agent/chat', () => {
     });
 
     it('client_admin: 月次コスト上限に達している場合は依頼されない', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'enterprise' }] });
       mockCheckSaiMonthlyCostCeiling.mockResolvedValueOnce({ ok: false, spentCents: 100000, ceilingCents: 100000 });
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
@@ -2113,6 +2114,7 @@ describe('POST /v1/admin/agent/chat', () => {
     });
 
     it('client_admin: confirmed=true かつ上限内 → Saiに依頼されタスクIDが返る', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'enterprise' }] });
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を新しい内容に更新', confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('依頼しました。'));
@@ -2128,6 +2130,74 @@ describe('POST /v1/admin/agent/chat', () => {
         expect.objectContaining({ description: '送料表記を新しい内容に更新' }),
       );
       expect(res.body.actions[0].result).toContain('sai-task-99');
+    });
+
+    // -----------------------------------------------------------------------
+    // GID 1216944249525907: request_sai_task はEnterpriseプラン以上限定
+    // -----------------------------------------------------------------------
+    describe('request_sai_task: プラン制限', () => {
+      it('starterプランは依頼できず、Saiにも上限チェックにも到達しない', async () => {
+        mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
+          .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-sai-plan-01' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain('Enterpriseプラン以上');
+        expect(mockCheckSaiMonthlyCostCeiling).not.toHaveBeenCalled();
+        expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      });
+
+      it('growthプランはまだEnterprise未達のため依頼できない', async () => {
+        mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
+          .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-sai-plan-02' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain('Enterpriseプラン以上');
+        expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      });
+
+      it('planが未設定(null)の場合はfail-safeでstarter扱いとなり依頼できない', async () => {
+        mockQuery.mockResolvedValueOnce({ rows: [{ plan: null }] });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
+          .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-sai-plan-03' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain('Enterpriseプラン以上');
+        expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+      });
+
+      it('super_adminはプラン(starter)に関わらずバイパスできる', async () => {
+        mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
+          .mockResolvedValueOnce(makeGroqResponse('依頼しました。'));
+
+        mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-200', status: 'queued' });
+
+        const res = await request(makeApp(SUPER_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-sai-plan-04', targetTenantId: 'tenant-abc' });
+
+        expect(res.status).toBe(200);
+        expect(mockSubmitSaiTask).toHaveBeenCalled();
+        expect(res.body.actions[0].result).toContain('sai-task-200');
+      });
     });
 
     it('client_admin: get_sai_task_status で状態と自己申告非信用の注記を返す', async () => {

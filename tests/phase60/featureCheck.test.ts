@@ -17,23 +17,32 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
-// 10. features.deep_research=true → true
-it('10. features.deep_research=true → true', async () => {
-  mockDbQuery.mockResolvedValueOnce({ rows: [{ features: { deep_research: true } }] });
+// 10. features.deep_research=true かつ enterpriseプラン → true
+// GID 1216944249525907: deep_researchはEnterpriseプラン以上限定になったため、
+// フラグONだけでなくplan=enterpriseもモックする必要がある。
+it('10. features.deep_research=true かつ enterpriseプラン → true', async () => {
+  mockDbQuery.mockResolvedValueOnce({ rows: [{ features: { deep_research: true }, plan: 'enterprise' }] });
   const result = await isDeepResearchEnabled('tenant-test');
   expect(result).toBe(true);
 });
 
+// 10b. features.deep_research=true でもプランがEnterprise未満 → false
+it('10b. features.deep_research=true でもgrowthプラン → false', async () => {
+  mockDbQuery.mockResolvedValueOnce({ rows: [{ features: { deep_research: true }, plan: 'growth' }] });
+  const result = await isDeepResearchEnabled('tenant-test');
+  expect(result).toBe(false);
+});
+
 // 11. features.deep_research=false → false
 it('11. features.deep_research=false → false', async () => {
-  mockDbQuery.mockResolvedValueOnce({ rows: [{ features: { deep_research: false } }] });
+  mockDbQuery.mockResolvedValueOnce({ rows: [{ features: { deep_research: false }, plan: 'enterprise' }] });
   const result = await isDeepResearchEnabled('tenant-test');
   expect(result).toBe(false);
 });
 
 // 12. features未設定 → false（デフォルト）
 it('12. features=null → false（デフォルト）', async () => {
-  mockDbQuery.mockResolvedValueOnce({ rows: [{ features: null }] });
+  mockDbQuery.mockResolvedValueOnce({ rows: [{ features: null, plan: 'enterprise' }] });
   const result = await isDeepResearchEnabled('tenant-test');
   expect(result).toBe(false);
 });

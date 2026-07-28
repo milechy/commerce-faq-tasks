@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { authFetch, API_BASE } from "../../../lib/api";
 import type { TenantDetail, TenantFeatures } from "./types";
-import { CARD_STYLE } from "./types";
+import { CARD_STYLE, PLAN_OPTIONS } from "./types";
+import { planHasFeature } from "../../../lib/planFeatures";
 
 async function updateDeepResearchSettings(
   tenantId: string,
@@ -42,7 +43,12 @@ export default function DeepResearchTab({
   const [saving, setSaving] = useState(false);
   const [confirmPending, setConfirmPending] = useState(false);
 
+  // GID 1216944249525907: ディープリサーチはEnterpriseプラン以上限定。
+  // 対象テナントのプランが未達の場合はトグルを無効化し理由を表示する。
+  const planAllowsDeepResearch = planHasFeature(tenant.plan, "deep_research");
+
   const handleToggle = async () => {
+    if (!planAllowsDeepResearch) return;
     const next = !deepResearch;
     if (next) {
       // ON切り替え → 確認ダイアログ
@@ -142,17 +148,18 @@ export default function DeepResearchTab({
         <button
           type="button"
           onClick={handleToggle}
-          disabled={saving}
+          disabled={saving || !planAllowsDeepResearch}
           aria-label="ディープリサーチ切り替え"
+          title={planAllowsDeepResearch ? undefined : "ディープリサーチはEnterpriseプラン以上でご利用いただけます"}
           style={{
             position: "relative",
             display: "inline-flex", alignItems: "center",
             width: 56, height: 32, borderRadius: 16,
             border: "none",
             background: deepResearch ? "#2563eb" : "#374151",
-            cursor: saving ? "not-allowed" : "pointer",
+            cursor: saving || !planAllowsDeepResearch ? "not-allowed" : "pointer",
             transition: "background 0.2s", flexShrink: 0,
-            opacity: saving ? 0.6 : 1,
+            opacity: saving || !planAllowsDeepResearch ? 0.6 : 1,
           }}
         >
           <span
@@ -165,6 +172,22 @@ export default function DeepResearchTab({
           />
         </button>
       </div>
+
+      {/* プラン未達の理由表示 */}
+      {!planAllowsDeepResearch && (
+        <div
+          style={{
+            borderRadius: 10,
+            border: "1px solid rgba(234,179,8,0.3)",
+            background: "rgba(234,179,8,0.08)",
+            padding: "12px 16px",
+            fontSize: 13, color: "#fbbf24", lineHeight: 1.6,
+          }}
+        >
+          🔒 ディープリサーチはEnterpriseプラン以上でご利用いただけます
+          （現在のプラン: {PLAN_OPTIONS.find((p) => p.value === tenant.plan)?.label ?? tenant.plan}）
+        </div>
+      )}
 
       {/* ONにすると何が実現できるか */}
       <div

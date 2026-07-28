@@ -1216,6 +1216,15 @@ export async function executeToolCall(
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
+      // GID 1216944249525907: LP料金表(Enterprise〜: Sai代行)に基づくプラン制限。
+      // super_adminは従来どおりバイパス。fail-safe: plan取得失敗時はstarter扱い(=拒否)。
+      if (!isSuperAdmin) {
+        const plan = await queryTenantPlan(db, tenantId);
+        if (!planHasFeature(plan, 'sai_task')) {
+          return truncate('Saiへの代行依頼はEnterpriseプラン以上でご利用いただけます');
+        }
+      }
+
       try {
         const ceilingCheck = await checkSaiMonthlyCostCeiling(db, tenantId);
         if (!ceilingCheck.ok) {

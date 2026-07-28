@@ -1,10 +1,11 @@
 // src/lib/billing/planFeatures.ts
 // LP(r2c.biz)の料金表に対応するプラン別機能制限。
-// 表示側(admin-ui/src/pages/admin/tenants/types.ts の PLAN_OPTIONS)と一致させること。
+// 表示側(admin-ui/src/lib/planFeatures.ts と admin-ui/src/pages/admin/tenants/types.ts の
+// PLAN_OPTIONS)と一致させること。
 //
 // LPの機能マッピング:
-//   Growth〜: AIアバター（顔・声）、高度なAnalytics、CV計測
-//   Enterprise〜: カスタムアバター（Fish Audio Voice Cloning）
+//   Growth〜: AIアバター（顔・声）、高度なAnalytics、CV計測、プレミアムアバター生成
+//   Enterprise〜: カスタムアバター（Fish Audio Voice Cloning）、ディープリサーチ、Sai代行（R2Cエージェント）
 // 「心理学Sales AI」は現状すべてのプランで提供するため、ここでは制限しない。
 
 import type { Pool } from "pg";
@@ -18,13 +19,24 @@ const PLAN_RANK: Record<TenantPlan, number> = {
   enterprise: 2,
 };
 
-export type GatedFeature = "avatar" | "voice_clone" | "analytics" | "conversion";
+export type GatedFeature =
+  | "avatar"
+  | "voice_clone"
+  | "analytics"
+  | "conversion"
+  | "deep_research"
+  | "premium_avatar"
+  | "sai_task";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   avatar: "growth",
   voice_clone: "enterprise",
   analytics: "growth",
   conversion: "growth",
+  // GID 1216944249525907: 原価が跳ねる機能への新規プランゲート
+  deep_research: "enterprise",
+  premium_avatar: "growth",
+  sai_task: "enterprise",
 };
 
 function rank(plan: string | null | undefined): number {
