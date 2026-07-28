@@ -25,6 +25,7 @@ import TuningPage from "./pages/admin/tuning/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAgentButton from "./components/AdminAgent/AdminAgentButton";
 import AdminAgentPanel from "./components/AdminAgent/AdminAgentPanel";
+import { useFeedbackReplies } from "./components/AdminAgent/useFeedbackReplies";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarWizardPage from "./pages/admin/avatar/wizard";
@@ -100,6 +101,14 @@ function AppInner() {
   const { isOpen: agentOpen, seedQuery, toggle: toggleAgent, close: closeAgent } = useAdminAgentUI();
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
+  // previewMode中は isClientAdmin が true になり showAIChat が表示されるが、
+  // 実ログインユーザー(super_admin)の user?.tenantId は常にnullのため
+  // previewTenantId を優先しないとAIアシスタントがテナント無しで動作してしまう
+  const effectiveTenantId = previewMode ? (previewTenantId ?? null) : (user?.tenantId ?? null);
+  const { replies: feedbackReplies, markRead: markReplyRead } = useFeedbackReplies(
+    showAIChat ? effectiveTenantId : null,
+    isSuperAdmin
+  );
   const isAdmin = location.pathname.startsWith("/admin") || location.pathname === "/";
   const isLogin =
     location.pathname === "/login" || location.pathname === "/reset-password";
@@ -237,16 +246,16 @@ function AppInner() {
           <AdminAgentButton
             onClick={toggleAgent}
             isOpen={agentOpen}
+            hasUnread={feedbackReplies.length > 0}
           />
-          {/* previewMode中は isClientAdmin が true になり showAIChat が表示されるが、
-              実ログインユーザー(super_admin)の user?.tenantId は常にnullのため
-              previewTenantId を優先しないとAIアシスタントがテナント無しで動作してしまう */}
           <AdminAgentPanel
             isOpen={agentOpen}
             onClose={closeAgent}
-            tenantId={previewMode ? (previewTenantId ?? null) : (user?.tenantId ?? null)}
+            tenantId={effectiveTenantId}
             isSuperAdmin={isSuperAdmin}
             initialQuery={seedQuery}
+            replies={feedbackReplies}
+            onMarkReplyRead={markReplyRead}
           />
         </>
       )}
