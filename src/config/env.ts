@@ -91,9 +91,6 @@ const envSchema = z.object({
   FF_AVATAR_FORCE_OFF: boolEnv,
   KILL_SWITCH_AVATAR: boolEnv,
   KILL_SWITCH_REASON: z.string().optional(),
-  AVATAR_STORAGE_ROOT: z.string().optional(),
-  AVATAR_ENCRYPTION_KEY: z.string().optional(),
-  AVATAR_MAX_IMAGE_BYTES: numEnv,
   AVATAR_READINESS_TIMEOUT_MS: numEnv,
   ANAM_API_KEY: z.string().optional(),
   FISH_AUDIO_API_KEY: z.string().optional(),
@@ -106,8 +103,6 @@ const envSchema = z.object({
   LIVEKIT_ROOM_PREFIX: z.string().optional(),
   LIVEKIT_ACCESS_TOKEN: z.string().optional(),
   LEMON_SLICE_ENDPOINT: z.string().optional(),
-  LEMON_SLICE_API_TOKEN: z.string().optional(),
-  LEMON_SLICE_AVATAR_REGISTER_PATH: z.string().optional(),
   LEMON_SLICE_READINESS_URL: z.string().optional(),
 
   // ── OpenClaw / OpenViking ─────────────────────────────────────────────
