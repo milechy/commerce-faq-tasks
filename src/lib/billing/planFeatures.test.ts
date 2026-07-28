@@ -29,6 +29,9 @@ describe("planHasFeature", () => {
     ["starter", "sai_task", false],
     ["growth", "sai_task", false],
     ["enterprise", "sai_task", true],
+    ["starter", "pre_dispatch", false],
+    ["growth", "pre_dispatch", false],
+    ["enterprise", "pre_dispatch", true],
   ] as const)("%s プランで %s = %s", (plan, feature, expected) => {
     expect(planHasFeature(plan, feature)).toBe(expected);
   });
