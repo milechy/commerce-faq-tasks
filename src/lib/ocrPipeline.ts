@@ -1,12 +1,14 @@
 // src/lib/ocrPipeline.ts
 // OCR pipeline: PDF → pdf2pic(GraphicsMagick) → Qwen2.5-VL → embeddings → faq_embeddings
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fromPath } from "pdf2pic";
-import { embedTextOpenAI } from "../agent/llm/openaiEmbeddingClient";
+import { embedTextWithUsage } from "../agent/llm/openaiEmbeddingClient";
 import { encryptText } from "./crypto/textEncrypt";
+import { trackUsage } from "./billing/usageTracker";
 
 const CHUNK_SIZE = 500;
 const PAGE_DELAY_MS = 6000;
@@ -99,6 +101,7 @@ async function callQwenWithRetry(
   throw lastError ?? new Error("Qwen API failed after all retries");
 }
 
+/** @returns 埋め込みに使ったOpenAIトークン数（課金集計用、テストモードでは0） */
 async function saveChunk(
   pool: { query: (text: string, values: unknown[]) => Promise<unknown> },
   params: {
@@ -108,8 +111,8 @@ async function saveChunk(
     page: number;
     tenantId: string;
   }
-): Promise<void> {
-  const embedding = await embedTextOpenAI(params.chunkText);
+): Promise<number> {
+  const { embedding, totalTokens } = await embedTextWithUsage(params.chunkText);
   const embedLiteral = `[${embedding.join(",")}]`;
   const encryptedText = encryptText(params.chunkText);
 
@@ -129,6 +132,8 @@ async function saveChunk(
       },
     ]
   );
+
+  return totalTokens;
 }
 
 /**
@@ -178,6 +183,7 @@ export async function runOcrPipeline(
 
     const totalPages = imagePaths.length;
     let totalChunks = 0;
+    let totalEmbeddingTokens = 0;
 
     for (let i = 0; i < imagePaths.length; i++) {
       const pageNum = i + 1;
@@ -197,7 +203,7 @@ export async function runOcrPipeline(
       const chunks = splitIntoChunks(ocrText, CHUNK_SIZE);
 
       for (let j = 0; j < chunks.length; j++) {
-        await saveChunk(pool, {
+        totalEmbeddingTokens += await saveChunk(pool, {
           chunkText: chunks[j],
           chunkIndex: j,
           chunkCount: chunks.length,
@@ -207,6 +213,25 @@ export async function runOcrPipeline(
       }
 
       totalChunks += chunks.length;
+    }
+
+    // GID 1216944049264977: Qwen OCR(全ページ) + OpenAI embedding(全チャンク)は
+    // これまで未計測だった。請求は usage_logs の行数ベースのため、ページ/チャンク単位で
+    // 別行を作らず1回のPDF取り込みにつき1リクエストとしてまとめて記録する。
+    if (totalPages > 0) {
+      trackUsage({
+        tenantId,
+        requestId: `ocr-pipeline:${crypto.randomUUID()}`,
+        model: QWEN_MODEL,
+        inputTokens: 0,
+        outputTokens: 0,
+        featureUsed: "book_analysis",
+        ocrPages: totalPages,
+        extraLlmUsages:
+          totalEmbeddingTokens > 0
+            ? [{ model: "openai-embedding", inputTokens: totalEmbeddingTokens, outputTokens: 0 }]
+            : undefined,
+      });
     }
 
     return { pages: totalPages, chunks: totalChunks };

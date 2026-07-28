@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import type { StoredAvatarImage } from "./avatarStorage";
+import { trackUsage } from "../billing/usageTracker";
 
 export interface JwtTenantContext {
   tenantId: string;
@@ -70,7 +72,10 @@ function sanitizeDisplayName(name: string): string {
   return trimmed;
 }
 
-async function registerAvatarToLemonslice(
+// GID 1216944049264977: 現状どこからも呼ばれていない未配線の関数（SCRIPTS/dead-code-report.txt
+// で検出済み）。将来の配線に備えてtrackUsageは実装済みだが、配線されるまでは実際の課金漏れは
+// 発生しない。テスト容易性のためexportする（PR本文の「要判断」参照）。
+export async function registerAvatarToLemonslice(
   input: RegisterLemonsliceAvatarInput
 ): Promise<LemonsliceAvatarRegistrationResult> {
   assertTenantIdFromJwt(input.auth.tenantId);
@@ -126,6 +131,19 @@ async function registerAvatarToLemonslice(
   if (!avatarId) {
     throw new Error("アバター登録結果が不正です。");
   }
+
+  // GID 1216944049264977: LemonSliceアバター登録（トーク中の分課金とは別の、1回限りの
+  // プロビジョニング呼び出し）はこれまでtrackUsage対象外だった。管理機能(avatar_config_image)
+  // 扱いのため原価のみ(margin×1)で計上する。
+  trackUsage({
+    tenantId: input.auth.tenantId,
+    requestId: crypto.randomUUID(),
+    model: "lemon-slice-register",
+    inputTokens: 0,
+    outputTokens: 0,
+    featureUsed: "avatar_config_image",
+    lemonsliceRegistrationCount: 1,
+  });
 
   return {
     avatarId,

@@ -3,10 +3,12 @@
 //   認証: apiStack
 //   Fish Audio Transcribe-1 ASR → { text: string }
 
+import crypto from 'node:crypto';
 import multer from 'multer';
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
+import { trackUsage } from '../../lib/billing/usageTracker';
 
 const FISH_ASR_API = 'https://api.fish.audio/v1/asr';
 
@@ -71,6 +73,19 @@ export function registerFishAsrRoutes(app: Express, apiStack: RequestHandler[]):
 
         const data = (await fishRes.json()) as { text?: string };
         const text = (data.text ?? '').trim();
+
+        // GID 1216944049264977: Fish ASRは外部API課金経路だがこれまでtrackUsage対象外だった。
+        // voice入力の一部（ユーザー向け機能）なのでfeatureUsed='voice'扱い（MARGIN_MULTIPLIER適用）。
+        trackUsage({
+          tenantId,
+          requestId: crypto.randomUUID(),
+          model: 'fish-audio-asr',
+          inputTokens: 0,
+          outputTokens: 0,
+          featureUsed: 'voice',
+          asrRequestCount: 1,
+        });
+
         return res.json({ text });
 
       } catch (err) {

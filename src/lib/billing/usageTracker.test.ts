@@ -127,6 +127,64 @@ describe('usageTracker', () => {
     });
   });
 
+  // GID 1216944049264977: これまでtrackUsage対象外だった外部API課金経路
+  describe('未計測だった外部API課金経路のpass-through', () => {
+    it('extraLlmUsagesに価格表未登録のモデルが来てもwarnログを出しコスト0で黙って落ちない', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId:     'test-tenant',
+        requestId:    'req-unknown-model',
+        model:        'qwen-vl-max-latest',
+        inputTokens:  0,
+        outputTokens: 0,
+        featureUsed:  'book_analysis',
+        extraLlmUsages: [{ model: 'totally-unknown-model-xyz', inputTokens: 100, outputTokens: 0 }],
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: 'req-unknown-model', model: 'totally-unknown-model-xyz' }),
+        expect.stringContaining('no price entry'),
+      );
+      // warnを出しつつクラッシュせずINSERTは実行される（コストは黙って0になるが記録は続く）
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-unknown-model'
+      );
+      expect(insertCall).toBeDefined();
+    });
+
+    it('ocrPagesがcost_total_centsに反映される（costCalculator.test.tsのocrPages=3ケースと同額）', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId:     'test-tenant',
+        requestId:    'req-ocr-pages',
+        model:        'qwen-vl-max-latest',
+        inputTokens:  0,
+        outputTokens: 0,
+        featureUsed:  'book_analysis',
+        ocrPages:     3,
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-ocr-pages'
+      );
+      expect(insertCall).toBeDefined();
+      const [, params] = insertCall!;
+      expect(params[7]).toBe(4); // serverCost + 3ページ分のQWEN_OCR_COST_PER_PAGE_USD、切り上げ
+    });
+  });
+
   describe('pool 未初期化時', () => {
     it('pool が null の場合は warn ログを出してクラッシュしない', async () => {
       // pool を null にリセット

@@ -64,6 +64,46 @@ export const IMAGE_GENERATION_COST_USD = 0.04;
  */
 export const SAI_AGENT_COST_PER_STEP_USD = Number(process.env.SAI_AGENT_COST_PER_STEP_USD ?? '0.05') || 0.05;
 
+/**
+ * GID 1216944049264977: 未計測だった外部API課金経路の単価定数群。
+ * いずれも公式の確定単価が確認できていないため暫定値(要検証)。env override で運用しながら調整する。
+ */
+
+/**
+ * Qwen2.5-VL (Dashscope International, qwen-vl-max-latest) OCR 1ページあたりの原価見積もり(USD)。
+ * VLMは画像解像度でトークン数が可変のため正確な単価が未確認(要検証)。
+ */
+export const QWEN_OCR_COST_PER_PAGE_USD = Number(process.env.QWEN_OCR_COST_PER_PAGE_USD ?? '0.01') || 0.01;
+
+/**
+ * Fish Audio ASR (Transcribe-1) 1リクエストあたりの原価見積もり(USD)。
+ * ASR自体は音声長で変動しうるが、本APIは音声長を秒単位で計測していないため
+ * リクエスト単位の概算値で暫定計上する(要検証)。
+ */
+export const FISH_ASR_COST_PER_REQUEST_USD = Number(process.env.FISH_ASR_COST_PER_REQUEST_USD ?? '0.01') || 0.01;
+
+/**
+ * Freepik Magnific AI アップスケール1回あたりの原価見積もり(USD)。
+ * 出力解像度・アップスケール倍率(2x〜16x)で価格が変動する従量制のため、
+ * 本実装のデフォルト設定(scaleFactor=2, style=portrait)相当の概算値(要検証)。
+ */
+export const MAGNIFIC_UPSCALE_COST_USD = Number(process.env.MAGNIFIC_UPSCALE_COST_USD ?? '0.08') || 0.08;
+
+/**
+ * fal.ai Flux 2 Pro (flux-pro/v1.1) 1枚あたりの原価見積もり(USD)。
+ * 公式単価は$0.055/メガピクセルの従量制。本実装は portrait_4_3 (約1メガピクセル相当)で
+ * 1枚生成するため、1枚あたりの概算値として登録する(要検証)。
+ */
+export const FLUX_PRO_COST_PER_IMAGE_USD = Number(process.env.FLUX_PRO_COST_PER_IMAGE_USD ?? '0.055') || 0.055;
+
+/**
+ * LemonSlice アバター登録(トーク中の分課金とは別の、1回限りのプロビジョニング呼び出し)の
+ * 原価見積もり(USD)。公開単価情報が無く暫定値(要検証)。デフォルトは無料/未確定として0円。
+ * 実費が判明次第 env override で設定する。
+ */
+export const LEMONSLICE_AVATAR_REGISTRATION_COST_USD =
+  Number(process.env.LEMONSLICE_AVATAR_REGISTRATION_COST_USD ?? '0') || 0;
+
 export interface UsageRecord {
   model: string;
   inputTokens: number;
@@ -94,6 +134,16 @@ export interface UsageRecord {
   extraLlmUsages?: Array<{ model: string; inputTokens: number; outputTokens: number }>;
   /** Phase3 (Sai接続ブリッジ): Agent Sが実行したステップ数（社内原価集計のみ、テナント請求には使わない） */
   saiAgentSteps?: number;
+  /** GID 1216944049264977: Qwen OCRで処理したページ数 */
+  ocrPages?: number;
+  /** GID 1216944049264977: Fish Audio ASR呼び出し回数（通常1リクエスト=1) */
+  asrRequestCount?: number;
+  /** GID 1216944049264977: Magnificアップスケール実行回数 */
+  magnificUpscaleCount?: number;
+  /** GID 1216944049264977: Flux 2 Pro 画像生成枚数 */
+  fluxImageCount?: number;
+  /** GID 1216944049264977: LemonSliceアバター登録（プロビジョニング）回数 */
+  lemonsliceRegistrationCount?: number;
 }
 
 /** Subtask 3: 追加 LLM 呼び出し（planner 等）の LLM コストを USD 合算する（モデル別実レート）。 */
@@ -217,6 +267,13 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
     ? calculateAnamSessionCostCents(usage.anam_session_seconds!) / 100
     : 0;
   const saiUSD   = (usage.saiAgentSteps ?? 0) * SAI_AGENT_COST_PER_STEP_USD;
-  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD + saiUSD;
+  // GID 1216944049264977: これまでtrackUsage対象外だった外部API課金経路。
+  const ocrUSD      = (usage.ocrPages ?? 0) * QWEN_OCR_COST_PER_PAGE_USD;
+  const asrUSD       = (usage.asrRequestCount ?? 0) * FISH_ASR_COST_PER_REQUEST_USD;
+  const magnificUSD  = (usage.magnificUpscaleCount ?? 0) * MAGNIFIC_UPSCALE_COST_USD;
+  const fluxUSD      = (usage.fluxImageCount ?? 0) * FLUX_PRO_COST_PER_IMAGE_USD;
+  const lemonRegUSD  = (usage.lemonsliceRegistrationCount ?? 0) * LEMONSLICE_AVATAR_REGISTRATION_COST_USD;
+  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD + saiUSD
+    + ocrUSD + asrUSD + magnificUSD + fluxUSD + lemonRegUSD;
   return Math.ceil(totalUSD * margin * 100);
 }

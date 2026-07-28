@@ -14,6 +14,11 @@ import {
   LEMONSLICE_COST_PER_CREDIT_USD,
   IMAGE_GENERATION_COST_USD,
   END_USER_FEATURES,
+  QWEN_OCR_COST_PER_PAGE_USD,
+  FISH_ASR_COST_PER_REQUEST_USD,
+  MAGNIFIC_UPSCALE_COST_USD,
+  FLUX_PRO_COST_PER_IMAGE_USD,
+  LEMONSLICE_AVATAR_REGISTRATION_COST_USD,
 } from './costCalculator';
 
 // ---------------------------------------------------------------------------
@@ -569,6 +574,166 @@ describe('calculateBillingAmountCents: saiAgentSteps', () => {
 });
 
 // ---------------------------------------------------------------------------
+// GID 1216944049264977: これまでtrackUsage対象外だった外部API課金経路
+// (Qwen OCR / Fish Audio ASR / Magnific / Flux 2 Pro / LemonSliceアバター登録)
+// ---------------------------------------------------------------------------
+describe('calculateBillingAmountCents: ocrPages（Qwen OCR）', () => {
+  it('ocrPages=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({ model: 'qwen-vl-max-latest', inputTokens: 0, outputTokens: 0 });
+    const withZero = calculateBillingAmountCents({
+      model: 'qwen-vl-max-latest', inputTokens: 0, outputTokens: 0, ocrPages: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('ocrPages=1: QWEN_OCR_COST_PER_PAGE_USD(デフォルト$0.01)の1ページ分が加算される', () => {
+    // serverCost=0.0001, ocrCost=0.01 → total=0.0101 USD → Math.ceil(1.01) = 2 cents
+    const result = calculateBillingAmountCents({
+      model: 'qwen-vl-max-latest', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'book_analysis', ocrPages: 1,
+    });
+    expect(result).toBe(2);
+  });
+
+  it('ocrPages=3（3ページ取り込み）: 3ページ分のコストが加算される', () => {
+    // serverCost=0.0001, ocrCost=3*0.01=0.03 → total=0.0301 USD → Math.ceil(3.01) = 4 cents
+    const result = calculateBillingAmountCents({
+      model: 'qwen-vl-max-latest', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'book_analysis', ocrPages: 3,
+    });
+    expect(result).toBe(4);
+  });
+
+  it('埋め込み(extraLlmUsages: openai-embedding)を合算しても整数を返す', () => {
+    // 3ページ×3チャンク=9チャンク、1チャンックあたり50トークンと仮定
+    const result = calculateBillingAmountCents({
+      model: 'qwen-vl-max-latest', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'book_analysis', ocrPages: 3,
+      extraLlmUsages: [{ model: 'openai-embedding', inputTokens: 450, outputTokens: 0 }],
+    });
+    expect(Number.isInteger(result)).toBe(true);
+    expect(result).toBeGreaterThanOrEqual(4); // 埋め込み分だけ ocrPages=3 単体より高いか同じ
+  });
+
+  it('book_analysisはEND_USER_FEATURESに含まれないため原価のみ(×1)', () => {
+    const atCost = calculateBillingAmountCents({
+      model: 'qwen-vl-max-latest', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'book_analysis', ocrPages: 1,
+    });
+    const withMargin = calculateBillingAmountCents({
+      model: 'qwen-vl-max-latest', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'book_analysis', ocrPages: 1, marginOverride: 5,
+    });
+    expect(atCost).toBeLessThan(withMargin);
+  });
+});
+
+describe('calculateBillingAmountCents: asrRequestCount（Fish Audio ASR）', () => {
+  it('asrRequestCount=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({ model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0 });
+    const withZero = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0, asrRequestCount: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('asrRequestCount=1: FISH_ASR_COST_PER_REQUEST_USD(デフォルト$0.01)の1件分が加算される（voiceはEND_USER_FEATURESなのでMARGIN_MULTIPLIER×5適用）', () => {
+    // serverCost=0.0001, asrCost=0.01 → total=0.0101 USD × margin5 = 0.0505 → Math.ceil(5.05) = 6 cents
+    const result = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrRequestCount: 1,
+    });
+    expect(result).toBe(6);
+  });
+
+  it('asrRequestCount=2: 2件分のコストが加算される', () => {
+    // serverCost=0.0001, asrCost=2*0.01=0.02 → total=0.0201 USD × margin5 = 0.1005 → Math.ceil(10.05) = 11 cents
+    const result = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrRequestCount: 2,
+    });
+    expect(result).toBe(11);
+  });
+
+  it('featureUsed=voiceはEND_USER_FEATURESに含まれるためMARGIN_MULTIPLIERが適用される', () => {
+    expect(END_USER_FEATURES.has('voice')).toBe(true);
+    const withDefaultMargin = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrRequestCount: 1,
+    });
+    const atCost = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrRequestCount: 1, marginOverride: 1,
+    });
+    expect(withDefaultMargin).toBeGreaterThan(atCost);
+  });
+});
+
+describe('calculateBillingAmountCents: magnificUpscaleCount / fluxImageCount（プレミアムアバター生成）', () => {
+  it('magnificUpscaleCount=0・fluxImageCount=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({ model: 'flux-pro-v1.1', inputTokens: 0, outputTokens: 0 });
+    const withZero = calculateBillingAmountCents({
+      model: 'flux-pro-v1.1', inputTokens: 0, outputTokens: 0, magnificUpscaleCount: 0, fluxImageCount: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('fluxImageCount=1: FLUX_PRO_COST_PER_IMAGE_USD(デフォルト$0.055)の1枚分が加算される', () => {
+    // serverCost=0.0001, fluxCost=0.055 → total=0.0551 USD → Math.ceil(5.51) = 6 cents
+    const result = calculateBillingAmountCents({
+      model: 'flux-pro-v1.1', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'premium_avatar_generation', fluxImageCount: 1,
+    });
+    expect(result).toBe(6);
+  });
+
+  it('magnificUpscaleCount=1: MAGNIFIC_UPSCALE_COST_USD(デフォルト$0.08)の1回分が加算される', () => {
+    // serverCost=0.0001, magnificCost=0.08 → total=0.0801 USD → Math.ceil(8.01) = 9 cents
+    const result = calculateBillingAmountCents({
+      model: 'flux-pro-v1.1', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'premium_avatar_generation', magnificUpscaleCount: 1,
+    });
+    expect(result).toBe(9);
+  });
+
+  it('flux+magnific併用: 両方のコストが合算される', () => {
+    // serverCost=0.0001, fluxCost=0.055, magnificCost=0.08 → total=0.1351 USD → Math.ceil(13.51) = 14 cents
+    const result = calculateBillingAmountCents({
+      model: 'flux-pro-v1.1', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'premium_avatar_generation', fluxImageCount: 1, magnificUpscaleCount: 1,
+    });
+    expect(result).toBe(14);
+  });
+});
+
+describe('calculateBillingAmountCents: lemonsliceRegistrationCount（LemonSliceアバター登録）', () => {
+  it('lemonsliceRegistrationCount=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({ model: 'lemon-slice-register', inputTokens: 0, outputTokens: 0 });
+    const withZero = calculateBillingAmountCents({
+      model: 'lemon-slice-register', inputTokens: 0, outputTokens: 0, lemonsliceRegistrationCount: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('lemonsliceRegistrationCount=1: デフォルト単価$0未確定のためserverCostのみ計上される', () => {
+    // serverCost=0.0001, registrationCost=0 → total=0.0001 USD → Math.ceil(0.01) = 1 cent
+    const result = calculateBillingAmountCents({
+      model: 'lemon-slice-register', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'avatar_config_image', lemonsliceRegistrationCount: 1,
+    });
+    expect(result).toBe(1);
+  });
+
+  it('整数を返す', () => {
+    const result = calculateBillingAmountCents({
+      model: 'lemon-slice-register', inputTokens: 0, outputTokens: 0,
+      lemonsliceRegistrationCount: 2,
+    });
+    expect(Number.isInteger(result)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase53: END_USER_FEATURES 定数チェック
 // ---------------------------------------------------------------------------
 describe('END_USER_FEATURES', () => {
@@ -621,5 +786,14 @@ describe('定数', () => {
 
   it('LEMONSLICE_COST_PER_CREDIT_USD は $7/1000 クレジット', () => {
     expect(LEMONSLICE_COST_PER_CREDIT_USD).toBeCloseTo(7.0 / 1_000);
+  });
+
+  // GID 1216944049264977: いずれも公式単価未確定の暫定値（要検証）。0以上であることのみ保証する。
+  it('QWEN_OCR_COST_PER_PAGE_USD / FISH_ASR_COST_PER_REQUEST_USD / MAGNIFIC_UPSCALE_COST_USD / FLUX_PRO_COST_PER_IMAGE_USD / LEMONSLICE_AVATAR_REGISTRATION_COST_USD は非負の値', () => {
+    expect(QWEN_OCR_COST_PER_PAGE_USD).toBeGreaterThanOrEqual(0);
+    expect(FISH_ASR_COST_PER_REQUEST_USD).toBeGreaterThanOrEqual(0);
+    expect(MAGNIFIC_UPSCALE_COST_USD).toBeGreaterThanOrEqual(0);
+    expect(FLUX_PRO_COST_PER_IMAGE_USD).toBeGreaterThanOrEqual(0);
+    expect(LEMONSLICE_AVATAR_REGISTRATION_COST_USD).toBeGreaterThanOrEqual(0);
   });
 });
