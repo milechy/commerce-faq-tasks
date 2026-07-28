@@ -16,6 +16,7 @@ import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 import { useAuth } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
+import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
 
@@ -229,6 +230,8 @@ export default function CopilotPreviewPage() {
   const navigate = useNavigate();
   const [active, setActive] = useState("assistant");
   const [input, setInput] = useState("");
+  // モバイル用: 左レール(ドロワー)の開閉状態。デスクトップでは未使用(CSSで常時表示)。
+  const [railOpen, setRailOpen] = useState(false);
   // 起動直後は空。bootstrap()が実データの週次ブリーフィングを積む
   const [msgs, setMsgs] = useState<Msg[]>([]);
 
@@ -437,6 +440,7 @@ export default function CopilotPreviewPage() {
   const handleCategory = (key: string) => {
     if (busy && key !== active) return;
     setActive(key);
+    setRailOpen(false); // モバイル: カテゴリー選択でドロワーを閉じる(デスクトップでは無害)
     if (key === "weekly") {
       void sendReal("今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。");
     } else if (key === "history") {
@@ -461,12 +465,37 @@ export default function CopilotPreviewPage() {
 
   // ─── レイアウト ───────────────────────────────────────────────────────────
   return (
-    <div style={{ display: "flex", height: "100vh", background: "var(--background)", color: "var(--foreground)", fontFamily: "var(--font-sans, system-ui, sans-serif)", overflow: "hidden" }}>
-      {/* 左レール(=各カテゴリはAIブリーフィングの窓口) */}
-      <aside style={{ width: 248, flexShrink: 0, background: "var(--sidebar, var(--card))", borderRight: "1px solid var(--border)", padding: "20px 14px", display: "flex", flexDirection: "column", gap: 5 }}>
-        <div style={{ fontWeight: 900, fontSize: 18, letterSpacing: "-0.03em", padding: "4px 8px 6px" }}>
-          R2C
-          <span style={{ fontSize: 11, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "2px 8px", borderRadius: 6, marginLeft: 7, letterSpacing: "0.04em" }}>店主モード</span>
+    <div
+      className="cp-shell"
+      style={{
+        display: "flex",
+        background: "var(--background)",
+        color: "var(--foreground)",
+        fontFamily: "var(--font-sans, system-ui, sans-serif)",
+        overflow: "hidden",
+        // previewMode中はPreviewModeBanner分の高さをcp-shellのheight計算から差し引く(index.css参照)
+        ["--cp-banner-h" as string]: previewMode ? `${PREVIEW_MODE_BANNER_HEIGHT}px` : "0px",
+      } as React.CSSProperties}
+    >
+      {/* モバイル: ドロワーが開いている間の背景オーバーレイ。外側タップで閉じる */}
+      {railOpen && (
+        <div className="cp-rail-backdrop" onClick={() => setRailOpen(false)} aria-hidden="true" />
+      )}
+      {/* 左レール(=各カテゴリはAIブリーフィングの窓口)。モバイルではドロワー化(index.css参照) */}
+      <aside className={`cp-rail${railOpen ? " cp-rail-open" : ""}`} style={{ width: 248, flexShrink: 0, background: "var(--sidebar, var(--card))", borderRight: "1px solid var(--border)", padding: "20px 14px", display: "flex", flexDirection: "column", gap: 5 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ fontWeight: 900, fontSize: 18, letterSpacing: "-0.03em", padding: "4px 8px 6px" }}>
+            R2C
+            <span style={{ fontSize: 11, fontWeight: 700, color: AGENT, background: AGENT_SOFT, padding: "2px 8px", borderRadius: 6, marginLeft: 7, letterSpacing: "0.04em" }}>店主モード</span>
+          </div>
+          <button
+            className="cp-menu-btn"
+            onClick={() => setRailOpen(false)}
+            aria-label="メニューを閉じる"
+            style={{ border: "none", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer", minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center", fontSize: 18, borderRadius: 10, flexShrink: 0 }}
+          >
+            ✕
+          </button>
         </div>
         <PreviewBadge />
         {CATEGORIES.map((c) => {
@@ -515,7 +544,16 @@ export default function CopilotPreviewPage() {
       {/* チャット本体 */}
       <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {/* ヘッダー */}
-        <header style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 28px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <header className="cp-header" style={{ display: "flex", alignItems: "center", gap: 14, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          <button
+            className="cp-menu-btn"
+            onClick={() => setRailOpen(true)}
+            aria-label="メニューを開く"
+            aria-expanded={railOpen}
+            style={{ border: "none", background: "transparent", color: "var(--foreground)", cursor: "pointer", minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center", fontSize: 20, borderRadius: 10, flexShrink: 0 }}
+          >
+            ☰
+          </button>
           <AgentMark />
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 17 }}>R2Cエージェント</div>
@@ -529,7 +567,7 @@ export default function CopilotPreviewPage() {
         </header>
 
         {/* スレッド */}
-        <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: "28px 28px", display: "flex", flexDirection: "column", gap: 18 }}>
+        <div ref={threadRef} className="cp-thread" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}>
           <div style={{ width: "100%", maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 18 }}>
             {msgs.map((m) => (
               <MessageRow key={m.id} m={m} onChip={runAction} />
@@ -538,7 +576,7 @@ export default function CopilotPreviewPage() {
         </div>
 
         {/* コンポーザ（実API接続） */}
-        <div style={{ padding: "0 28px 24px", flexShrink: 0 }}>
+        <div className="cp-composer-wrap" style={{ flexShrink: 0 }}>
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 12px 12px 20px", border: `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 16, background: "var(--input, var(--card))" }}>
               <input

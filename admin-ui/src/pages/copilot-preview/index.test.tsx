@@ -102,3 +102,114 @@ describe("CopilotPreviewPage — ログアウト", () => {
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/login", { replace: true }));
   });
 });
+
+// GID: /copilot-preview のモバイル対応(左レールのドロワー化)の回帰テスト。
+// happy-dom ではレイアウトの実際の見た目(幅・position:fixed の描画結果等)は検証できないため、
+// ドロワーの開閉状態(className)・オーバーレイの有無・会話中ロックが維持されることを
+// 状態遷移として検証する。タイプライター演出は matchMedia で reduce-motion を強制して無効化し、
+// テストを決定的にしている。
+function getRail(): HTMLElement {
+  return document.querySelector(".cp-rail") as HTMLElement;
+}
+
+function getBackdrop(): HTMLElement | null {
+  return document.querySelector(".cp-rail-backdrop");
+}
+
+describe("CopilotPreviewPage — モバイル左レールのドロワー化", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation(() => mockOk({ reply: "今週も順調です", actions: [] }));
+    // タイプライター演出(setInterval)を無効化し、応答を同期的に確定させてテストを決定的にする
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  it("初期状態ではドロワーは閉じており、オーバーレイも存在しない", async () => {
+    // super_admin(client_admin以外)は my-tenant 判定をスキップして直接ブリーフィングへ進む
+    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+
+    expect(getRail().className).not.toContain("cp-rail-open");
+    expect(getBackdrop()).toBeNull();
+  });
+
+  it("ハンバーガーボタンでドロワーが開き、背景オーバーレイが表示される", async () => {
+    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
+
+    expect(getRail().className).toContain("cp-rail-open");
+    expect(getBackdrop()).not.toBeNull();
+  });
+
+  it("オーバーレイをタップするとドロワーが閉じる", async () => {
+    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
+    expect(getBackdrop()).not.toBeNull();
+
+    fireEvent.click(getBackdrop()!);
+
+    expect(getBackdrop()).toBeNull();
+    expect(getRail().className).not.toContain("cp-rail-open");
+  });
+
+  it("レール内の閉じるボタン(✕)でもドロワーが閉じる", async () => {
+    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
+    expect(getRail().className).toContain("cp-rail-open");
+
+    fireEvent.click(screen.getByRole("button", { name: "メニューを閉じる" }));
+    expect(getRail().className).not.toContain("cp-rail-open");
+  });
+
+  it("会話中でない状態でカテゴリーを選択するとドロワーが閉じる", async () => {
+    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    // bootstrap完了(送信ボタンのdisabled解除)を待ってから操作する
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
+    expect(getRail().className).toContain("cp-rail-open");
+
+    fireEvent.click(screen.getByRole("button", { name: /今週のまとめ/ }));
+    expect(getRail().className).not.toContain("cp-rail-open");
+  });
+
+  it("会話中(busy)は他カテゴリーへの切り替えロックがドロワー化後も維持される", async () => {
+    let resolveFetch: (v: Response) => void = () => {};
+    vi.mocked(authFetch).mockImplementation(
+      () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
+    );
+    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
+    expect(getRail().className).toContain("cp-rail-open");
+
+    // sending中は現在アクティブでないカテゴリーのボタンがdisabledのまま(ドロワー化前と同じロック)
+    const weeklyBtn = screen.getByRole("button", { name: /今週のまとめ/ }) as HTMLButtonElement;
+    expect(weeklyBtn.disabled).toBe(true);
+
+    // disabledボタンはクリックしても何も起きない(active・ドロワー状態とも変化しない)
+    fireEvent.click(weeklyBtn);
+    expect(getRail().className).toContain("cp-rail-open");
+
+    // 後片付け: pendingのfetchを解決し、タイマー等が残らないようにする
+    resolveFetch({ ok: true, status: 200, json: () => Promise.resolve({ reply: "ok", actions: [] }) } as unknown as Response);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  });
+});
