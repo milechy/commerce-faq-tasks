@@ -1832,6 +1832,8 @@ describe('POST /v1/admin/agent/chat', () => {
       ['avatar_studio', 'アバタースタジオ', '/admin/avatar/studio'],
       ['escalation_reply', 'エスカレーション対応', '/admin/escalations'],
       ['session_deletion', '会話履歴', '/admin/chat-history'],
+      ['chat_test', 'テストチャット', '/admin/chat-test'],
+      ['avatar_wizard', 'アバター新規作成', '/admin/avatar/wizard'],
     ])('feature=%s: 旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-lu-1', 'get_legacy_ui_link', { feature }))
@@ -1844,7 +1846,9 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
       expect(result).toContain(label);
-      expect(result).toContain(path);
+      // toContain(path) だけだと `/admin/chat-test` に対する `/admin/chat-tests` のような
+      // 末尾追加型のtypoを検出できないため、行末(\n)まで含めて厳密に検証する
+      expect(result).toContain(`URL: ${path}\n`);
     });
 
     it('不明なfeatureの場合はその旨を返す', async () => {
@@ -1858,6 +1862,69 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('不明な案内先');
+    });
+
+    // analytics / conversion はLP料金表上Growth〜の機能（AppSidebar.tsxのrequiresPlanと同じ基準）。
+    // activate_avatarと同様、旧UIへの案内リンク自体もプラン未満のテナントには返さない。
+    it.each([
+      ['analytics', '会話分析', '/admin/analytics'],
+      ['conversion', '成約・効果分析', '/admin/conversion'],
+    ])('feature=%s: growthプランなら旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-6', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご対応ください。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話の分析を見たい', sessionId: 'sess-lu-03' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain(label);
+      expect(result).toContain(`URL: ${path}\n`);
+    });
+
+    it.each([
+      ['analytics'],
+      ['conversion'],
+    ])('feature=%s: starterプランはリンクを返さずプラン制限メッセージを返す', async (feature) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-7', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話の分析を見たい', sessionId: 'sess-lu-04' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
+      // 押せないリンクカードが出ないよう、成功時の3行フォーマット(画面:/URL:/説明:)に一致しないこと
+      expect(result).not.toMatch(/画面:/);
+      expect(result).not.toMatch(/URL:/);
+    });
+
+    // super_admin が targetTenantId 未指定で呼ぶと effectiveTenantId が特定できないため、
+    // queryTenantPlan が fail-safe で starter 扱いになり「Growthプラン以上」という無関係な
+    // メッセージを返してしまう回帰を防ぐ（analytics/conversionの分岐内でのみガードする設計）
+    it('super_admin がテナント未特定でanalyticsを要求 → プラン制限メッセージではなく「テナントが特定できません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-8', 'get_legacy_ui_link', { feature: 'analytics' }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話の分析を見たい', sessionId: 'sess-lu-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('テナントが特定できません');
+      expect(result).not.toContain('Growthプラン以上');
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 

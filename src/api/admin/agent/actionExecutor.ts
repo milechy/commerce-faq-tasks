@@ -1308,7 +1308,44 @@ export async function executeToolCall(
           path: '/admin/chat-history',
           description: '会話セッションの削除は一覧から該当の会話を開いてこちらの画面で行えます',
         },
+        analytics: {
+          label: '会話分析',
+          path: '/admin/analytics',
+          description: '会話数・満足度スコア・品質指標の推移や低評価セッションの確認はこちらの画面で行えます',
+        },
+        conversion: {
+          label: '成約・効果分析',
+          path: '/admin/conversion',
+          description: '成約への貢献度・ABテスト・効果測定の確認はこちらの画面で行えます',
+        },
+        chat_test: {
+          label: 'テストチャット',
+          path: '/admin/chat-test',
+          description: '設定した内容を実際のチャットで試すのはこちらの画面で行えます',
+        },
+        avatar_wizard: {
+          label: 'アバター新規作成',
+          path: '/admin/avatar/wizard',
+          description: 'アバターを新しく作る手順（ウィザード）はこちらの画面で行えます',
+        },
       };
+
+      // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測)に基づくプラン制限。
+      // AppSidebar.tsx(225行付近)とは異なり、ここでは super_admin もバイパスさせない。
+      // super_admin がこの新UIに入る経路は「クライアントビューで見る」(previewMode)であり、
+      // 目的はテナントに見えている状態の再現なので、Starterテナントのプレビューで
+      // Growth限定機能の案内を出すのは再現として誤り。読み取り専用の案内でしかなく、
+      // planFeatures.ts の GID 1216961878992581 が扱う「永続的な権能付与 vs 都度原価」の
+      // 判断軸（activate_avatar 等）にも当てはまらない。
+      if (feature === 'analytics' || feature === 'conversion') {
+        if (!tenantId) {
+          return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+        }
+        const plan = await queryTenantPlan(db, tenantId);
+        if (!planHasFeature(plan, feature)) {
+          return truncate('この機能はGrowthプラン以上でご利用いただけます');
+        }
+      }
 
       const link = LEGACY_UI_LINKS[feature];
       if (!link) {
