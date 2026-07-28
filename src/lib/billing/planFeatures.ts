@@ -26,7 +26,8 @@ export type GatedFeature =
   | "conversion"
   | "deep_research"
   | "premium_avatar"
-  | "sai_task";
+  | "sai_task"
+  | "pre_dispatch";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   avatar: "growth",
@@ -37,6 +38,8 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   deep_research: "enterprise",
   premium_avatar: "growth",
   sai_task: "enterprise",
+  // GID 1216944004404664: 事前ディスパッチ(アバター高速表示)はLP表記どおりEnterprise限定
+  pre_dispatch: "enterprise",
 };
 
 function rank(plan: string | null | undefined): number {
