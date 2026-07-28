@@ -5,9 +5,10 @@
 interface AdminAgentButtonProps {
   onClick: () => void;
   isOpen: boolean;
+  hasUnread?: boolean;
 }
 
-export default function AdminAgentButton({ onClick, isOpen }: AdminAgentButtonProps) {
+export default function AdminAgentButton({ onClick, isOpen, hasUnread }: AdminAgentButtonProps) {
   return (
     <button
       onClick={onClick}
@@ -43,6 +44,20 @@ export default function AdminAgentButton({ onClick, isOpen }: AdminAgentButtonPr
       }}
     >
       {isOpen ? "✕" : "✨"}
+      {hasUnread && !isOpen && (
+        <span
+          style={{
+            position: "absolute",
+            top: 2,
+            right: 2,
+            width: 12,
+            height: 12,
+            borderRadius: "50%",
+            background: "#ef4444",
+            border: "2px solid #0f172a",
+          }}
+        />
+      )}
     </button>
   );
 }

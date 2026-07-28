@@ -2,11 +2,14 @@
 import { useState, useCallback } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
 
+export type AnsweredFrom = "faq_list" | "tool_action" | "general";
+
 export interface AgentMessage {
   role: "user" | "assistant";
   content: string;
   actions?: { tool: string; result: string }[];
   needsConfirmation?: boolean;
+  answeredFrom?: AnsweredFrom;
 }
 
 interface UseAdminAgentResult {
@@ -71,6 +74,7 @@ export function useAdminAgent(): UseAdminAgentResult {
       const data = (await res.json()) as {
         reply: string;
         actions: { tool: string; result: string }[];
+        answered_from?: AnsweredFrom;
       };
 
       setMessages((prev) => [
@@ -79,6 +83,7 @@ export function useAdminAgent(): UseAdminAgentResult {
           role: "assistant",
           content: data.reply,
           actions: data.actions,
+          answeredFrom: data.answered_from,
         },
       ]);
     } catch {

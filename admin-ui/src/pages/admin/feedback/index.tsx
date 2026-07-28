@@ -14,7 +14,7 @@ import { SearchBox } from "../../../components/common/SearchBox";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface AdminFeedback {
+export interface AdminFeedback {
   id: string;
   tenant_id: string;
   user_email: string | null;
@@ -26,6 +26,11 @@ interface AdminFeedback {
   priority: "low" | "normal" | "high";
   admin_notes: string | null;
   linked_knowledge_gap_id: string | null;
+  reply_body: string | null;
+  replied_at: string | null;
+  replied_by_email: string | null;
+  reply_read_at: string | null;
+  parent_feedback_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -120,7 +125,7 @@ const selectStyle: React.CSSProperties = {
 
 // ─── Detail Modal ─────────────────────────────────────────────────────────────
 
-interface DetailModalProps {
+export interface DetailModalProps {
   item: AdminFeedback;
   lang: string;
   isSuperAdmin: boolean;
@@ -129,7 +134,7 @@ interface DetailModalProps {
   onDeleted: (id: string) => void;
 }
 
-function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: DetailModalProps) {
+export function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: DetailModalProps) {
   const locale = lang === "en" ? "en-US" : "ja-JP";
   const [status, setStatus] = useState<AdminFeedback["status"]>(item.status);
   const [priority, setPriority] = useState<AdminFeedback["priority"]>(item.priority);
@@ -140,6 +145,12 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
   const [error, setError] = useState<string | null>(null);
   const [creatingRule, setCreatingRule] = useState(false);
   const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
+  const [replyBody, setReplyBody] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [sentReply, setSentReply] = useState<{ body: string; repliedAt: string } | null>(
+    item.reply_body ? { body: item.reply_body, repliedAt: item.replied_at ?? "" } : null
+  );
 
   const showToast = (text: string, ok: boolean) => {
     setToast({ text, ok });
@@ -203,6 +214,32 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
     }
   };
 
+  const handleSendReply = async () => {
+    if (!replyBody.trim()) return;
+    setSendingReply(true);
+    setReplyError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/feedback/${item.id}/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reply_body: replyBody.trim() }),
+      });
+      if (!res.ok) {
+        setReplyError(lang === "ja" ? "返信の送信に失敗しました" : "Failed to send reply");
+        return;
+      }
+      const updated = (await res.json()) as AdminFeedback;
+      setSentReply({ body: updated.reply_body ?? replyBody.trim(), repliedAt: updated.replied_at ?? "" });
+      setReplyBody("");
+      showToast(lang === "ja" ? "返信を送りました" : "Reply sent", true);
+      onSaved({ ...item, reply_body: updated.reply_body, replied_at: updated.replied_at });
+    } catch {
+      setReplyError(lang === "ja" ? "ネットワークエラー" : "Network error");
+    } finally {
+      setSendingReply(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!confirmDelete) { setConfirmDelete(true); return; }
     setDeleting(true);
@@ -262,6 +299,21 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
             <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
               {lang === "ja" ? catLabel.ja : catLabel.en}
             </span>
+            {item.parent_feedback_id && (
+              <span style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 700,
+                background: "rgba(139,92,246,0.12)",
+                border: "1px solid rgba(139,92,246,0.35)",
+                color: "#a78bfa",
+                whiteSpace: "nowrap",
+              }}>
+                {lang === "ja" ? "🔗 前回の続き" : "🔗 Follow-up"}
+              </span>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -446,6 +498,98 @@ function DetailModal({ item, lang, isSuperAdmin, onClose, onSaved, onDeleted }: 
             }}
           />
         </div>
+
+        {/* テナントへの返信 — super_admin限定(BE authz と一致)。管理者メモとは視覚的に明確に分離する（誤送信事故防止） */}
+        {isSuperAdmin && (
+        <div style={{
+          padding: "14px 16px",
+          borderRadius: 10,
+          border: "1px solid rgba(59,130,246,0.35)",
+          background: "rgba(59,130,246,0.06)",
+        }}>
+          <p style={{ fontSize: 12, fontWeight: 700, color: "#93c5fd", marginBottom: 4 }}>
+            {lang === "ja" ? "── テナントへの返信 ──" : "── Reply to Tenant ──"}
+          </p>
+          <p style={{ fontSize: 11, color: "#93c5fd", opacity: 0.85, marginBottom: 10 }}>
+            {lang === "ja"
+              ? "⚠️ ここに書いた内容はテナントに届きます"
+              : "⚠️ This will be sent directly to the tenant"}
+          </p>
+
+          {sentReply && (
+            <div style={{
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(74,222,128,0.3)",
+              background: "rgba(5,46,22,0.4)",
+              marginBottom: 10,
+            }}>
+              <p style={{ fontSize: 11, fontWeight: 600, color: "#86efac", marginBottom: 4 }}>
+                {lang === "ja" ? "✅ 送信済みの返信" : "✅ Sent Reply"}
+                {sentReply.repliedAt && (
+                  <span style={{ marginLeft: 8, fontWeight: 400, opacity: 0.8 }}>
+                    {new Date(sentReply.repliedAt).toLocaleString(locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                )}
+              </p>
+              <p style={{ fontSize: 13, color: "#d1fae5", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>
+                {sentReply.body}
+              </p>
+            </div>
+          )}
+
+          <textarea
+            value={replyBody}
+            onChange={(e) => setReplyBody(e.target.value)}
+            placeholder={
+              sentReply
+                ? (lang === "ja" ? "続けて返信する場合はこちらに..." : "Send a follow-up reply...")
+                : (lang === "ja" ? "テナントへの返信を入力..." : "Write a reply to the tenant...")
+            }
+            rows={3}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(59,130,246,0.3)",
+              background: "rgba(0,0,0,0.3)",
+              color: "var(--foreground)",
+              fontSize: 14,
+              fontFamily: "inherit",
+              lineHeight: 1.6,
+              resize: "vertical",
+              outline: "none",
+              boxSizing: "border-box",
+              marginBottom: 8,
+            }}
+          />
+
+          {replyError && (
+            <p style={{ fontSize: 12, color: "#fca5a5", marginBottom: 8 }}>{replyError}</p>
+          )}
+
+          <button
+            onClick={() => void handleSendReply()}
+            disabled={sendingReply || !replyBody.trim()}
+            style={{
+              padding: "10px 20px",
+              minHeight: 44,
+              borderRadius: 8,
+              border: "none",
+              background: sendingReply || !replyBody.trim()
+                ? "rgba(59,130,246,0.3)"
+                : "linear-gradient(135deg, #1d4ed8, #3b82f6)",
+              color: "#fff",
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: sendingReply || !replyBody.trim() ? "not-allowed" : "pointer",
+              opacity: sendingReply || !replyBody.trim() ? 0.7 : 1,
+            }}
+          >
+            {sendingReply ? (lang === "ja" ? "送信中..." : "Sending...") : (lang === "ja" ? "返信を送る" : "Send Reply")}
+          </button>
+        </div>
+        )}
 
         {/* Error */}
         {error && (
