@@ -8,6 +8,11 @@ import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
 import { upscaleWithMagnific } from "../../../lib/magnific";
 import { trackUsage } from "../../../lib/billing/usageTracker";
+import {
+  FLUX_PRO_COST_PER_IMAGE_USD,
+  MAGNIFIC_UPSCALE_COST_USD,
+  SERVER_COST_PER_REQUEST_USD,
+} from "../../../lib/billing/costCalculator";
 import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
@@ -182,6 +187,7 @@ export function registerPremiumGenerationRoutes(app: Express): void {
 
       // ── ステップ2: Magnific AI アップスケール（FREEPIK_API_KEY設定時のみ） ─
       let enhancedUrl = originalUrl;
+      let magnificRan = false; // GID 1216944003337122: 実際にMagnificで課金対象の処理が成功したか
       const freepikKey = process.env.FREEPIK_API_KEY?.trim();
 
       if (freepikKey) {
@@ -205,13 +211,14 @@ export function registerPremiumGenerationRoutes(app: Express): void {
               `premium-enhanced-${requestId}-${ts}`
             );
             enhancedUrl = savedUrl ?? originalUrl;
+            magnificRan = true;
             logger.info("[premium/generate] magnific done", {
               requestId,
               taskId: magnResult.taskId,
             });
           }
         } catch (magnErr) {
-          // Magnificエラーはフォールバック（オリジナル画像を使用）
+          // Magnificエラーはフォールバック（オリジナル画像を使用、課金もしない）
           logger.warn("[premium/generate] magnific failed, using original", { magnErr });
           enhancedUrl = originalUrl;
         }
@@ -220,7 +227,22 @@ export function registerPremiumGenerationRoutes(app: Express): void {
       }
 
       // ── 課金記録 ──────────────────────────────────────────────────────────
+      // GID 1216944003337122: marginOverrideは倍率であり金額(USD/セント)ではない。
+      // 従来は `PREMIUM_AVATAR_PRICE_CENTS / 100` (=1.0) をそのまま渡していたため
+      // 「マージン×1.0=原価のみ」を意味してしまい、しかも原価自体もDALL-E単価
+      // ($0.04固定, imageCount)で計算されておりFlux/Magnificの実単価と乖離していた
+      // (意図の1/20程度しか計上されない不具合)。
+      // 実際に使ったAPI(Flux 2 Pro / Magnific)の実単価を積み上げて原価を算出し、
+      // 「原価 × marginOverride = 意図した請求額(PREMIUM_AVATAR_PRICE_CENTS)」となるよう
+      // marginOverrideを逆算する。marginOverrideの「倍率」という意味自体は変えない。
       if (tenantId) {
+        const actualCostUSD =
+          FLUX_PRO_COST_PER_IMAGE_USD +
+          (magnificRan ? MAGNIFIC_UPSCALE_COST_USD : 0) +
+          SERVER_COST_PER_REQUEST_USD;
+        const targetChargeUSD = PREMIUM_AVATAR_PRICE_CENTS / 100;
+        const marginOverride = actualCostUSD > 0 ? targetChargeUSD / actualCostUSD : 1;
+
         trackUsage({
           tenantId,
           requestId,
@@ -228,8 +250,9 @@ export function registerPremiumGenerationRoutes(app: Express): void {
           inputTokens: 0,
           outputTokens: 0,
           featureUsed: "premium_avatar_generation",
-          imageCount: 1,
-          marginOverride: PREMIUM_AVATAR_PRICE_CENTS / 100, // $1.00相当
+          fluxImageCount: 1,
+          magnificUpscaleCount: magnificRan ? 1 : 0,
+          marginOverride,
         });
       }
 
