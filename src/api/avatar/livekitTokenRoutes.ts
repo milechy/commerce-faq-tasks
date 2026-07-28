@@ -17,6 +17,7 @@ import { pool } from "../../lib/db";
 import { RoomServiceClient, AgentDispatchClient } from "livekit-server-sdk";
 import type { AuthedRequest } from "../../agent/http/authMiddleware";
 import { logger } from '../../lib/logger';
+import { queryTenantPlan, planHasFeature } from "../../lib/billing/planFeatures";
 
 // ─── LiveKit JWT 生成 ─────────────────────────────────────────────────────────
 
@@ -195,8 +196,26 @@ export function registerLiveKitTokenRoutes(
         }
       }
 
-      const preDispatchEnabled = row.features?.pre_dispatch === true;
+      // GID 1216945619969548: features.pre_dispatch はテナント側フラグに過ぎず、
+      // プラン制限(Enterprise限定, GID 1216944004404664)はバックエンドで強制する。
+      // admin-ui のトグル表示制御だけでは、既に features.pre_dispatch=true が立っている
+      // Starter/Growth テナントでサーバ側の事前ディスパッチが動き続けてしまう
+      // （LiveKitセッション時間が先行発生する原価ゲート漏れ）。
+      // フラグが false の場合はプラン確認自体が不要なのでDBクエリをスキップする。
+      const preDispatchFeatureFlag = row.features?.pre_dispatch === true;
+      let preDispatchEnabled = false;
+      if (preDispatchFeatureFlag) {
+        // fail-safe: plan取得失敗時は queryTenantPlan が starter を返す(=事前ディスパッチしない)
+        const plan = await queryTenantPlan(pool, tenantId);
+        preDispatchEnabled = planHasFeature(plan, "pre_dispatch");
+        if (!preDispatchEnabled) {
+          logger.info(
+            `[livekitTokenRoutes] pre_dispatch feature flag is true but plan=${plan} does not include pre_dispatch — enforcing backend gate for tenant: ${tenantId}`
+          );
+        }
+      }
       // connect=true はウィジェットがパネルを開いた瞬間の呼び出しを示す（pre_dispatch=false 時のオンデマンド起動）
+      // オンデマンド起動はプラン制限の対象外 — 全プランで従来どおり動作させる。
       const connectRequested = req.body?.connect === true;
       const shouldDispatch = preDispatchEnabled || connectRequested;
 

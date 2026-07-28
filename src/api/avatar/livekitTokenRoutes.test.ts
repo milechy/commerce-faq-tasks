@@ -329,13 +329,14 @@ describe("POST /api/avatar/room-token", () => {
   });
 
   describe("pre_dispatch フラグ分岐", () => {
-    it("pre_dispatch=true かつ connect=false → dispatchAgentToRoom が呼ばれ preDispatchEnabled=true", async () => {
+    it("pre_dispatch=true かつ connect=false かつ enterprise プラン → dispatchAgentToRoom が呼ばれ preDispatchEnabled=true", async () => {
       mockQuery
         .mockResolvedValueOnce({
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
           rowCount: 1,
         })
-        .mockResolvedValueOnce({ rows: [] }); // Q3: avatarConfigId 未指定 → fallback
+        .mockResolvedValueOnce({ rows: [] }) // Q3: avatarConfigId 未指定 → fallback
+        .mockResolvedValueOnce({ rows: [{ plan: "enterprise" }] }); // queryTenantPlan
 
       const app = makeApp("tenant-a");
       const res = await request(app)
@@ -352,7 +353,7 @@ describe("POST /api/avatar/room-token", () => {
       expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
     });
 
-    it("pre_dispatch=false かつ connect=false → dispatch 呼ばれず preDispatchEnabled=false", async () => {
+    it("pre_dispatch=false かつ connect=false → dispatch 呼ばれず preDispatchEnabled=false（プラン確認自体スキップ）", async () => {
       mockQuery
         .mockResolvedValueOnce({
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: false } }],
@@ -371,6 +372,8 @@ describe("POST /api/avatar/room-token", () => {
       // dispatch が呼ばれていないことを確認
       await new Promise(resolve => setImmediate(resolve));
       expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
+      // フラグが既にfalseならプラン確認クエリ(3回目のquery)自体が発生しない
+      expect(mockQuery).toHaveBeenCalledTimes(2);
     });
 
     it("features に pre_dispatch キー無し → dispatch スキップ、preDispatchEnabled=false（コスト発生なし）", async () => {
@@ -392,6 +395,124 @@ describe("POST /api/avatar/room-token", () => {
       // pre_dispatch キーが存在しない場合は dispatch を呼ばない（デフォルト安全）
       await new Promise(resolve => setImmediate(resolve));
       expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
+    });
+  });
+
+  // GID 1216945619969548: pre_dispatch はfeaturesフラグに加えバックエンドでもEnterprise限定を強制する。
+  // admin-ui のトグル表示制御だけでは、既にfeatures.pre_dispatch=trueが立っているStarter/Growth
+  // テナントでサーバ側の事前ディスパッチ(LiveKitセッション時間の先行発生=原価)が動き続けてしまう不具合の修正。
+  describe("pre_dispatch バックエンドプランゲート強制", () => {
+    it.each(["starter", "growth"] as const)(
+      "%sプラン + features.pre_dispatch=true でも事前ディスパッチされない（バックエンド強制）",
+      async (plan) => {
+        mockQuery
+          .mockResolvedValueOnce({
+            rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [] }) // Q3 fallback
+          .mockResolvedValueOnce({ rows: [{ plan }] }); // queryTenantPlan
+
+        const app = makeApp("tenant-a");
+        const res = await request(app)
+          .post("/api/avatar/room-token")
+          .send({ connect: false });
+
+        expect(res.status).toBe(200);
+        expect(res.body.preDispatchEnabled).toBe(false);
+
+        await new Promise(resolve => setImmediate(resolve));
+        expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
+      }
+    );
+
+    it("enterprise プラン + features.pre_dispatch=true では従来どおり事前ディスパッチされる", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ plan: "enterprise" }] });
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: false });
+
+      expect(res.status).toBe(200);
+      expect(res.body.preDispatchEnabled).toBe(true);
+
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("plan取得失敗時はfail-safeでstarter扱いとなり事前ディスパッチされない", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [] }) // Q3 fallback
+        .mockRejectedValueOnce(new Error("db down")); // queryTenantPlan内部でcatchされstarter扱いになる
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: false });
+
+      expect(res.status).toBe(200);
+      expect(res.body.preDispatchEnabled).toBe(false);
+
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
+    });
+
+    it.each(["starter", "growth", "enterprise"] as const)(
+      "%sプランでもconnect=trueのオンデマンド起動は従来どおり動作する（回帰、pre_dispatchプラン制限の対象外）",
+      async (plan) => {
+        mockQuery
+          .mockResolvedValueOnce({
+            rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: false } }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [] }); // Q3 fallback
+        // pre_dispatch=false なので queryTenantPlan は呼ばれない(connect=trueの経路はplan判定を経由しない)
+
+        const app = makeApp("tenant-a");
+        const res = await request(app)
+          .post("/api/avatar/room-token")
+          .send({ connect: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body.enabled).toBe(true);
+
+        await new Promise(resolve => setImmediate(resolve));
+        expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it("connect=true はfeatures.pre_dispatch=trueかつプラン制限に引っかかる場合でも従来どおり動作する", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [] }) // Q3 fallback
+        .mockResolvedValueOnce({ rows: [{ plan: "starter" }] }); // queryTenantPlan → starterなのでpreDispatchEnabled=false
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.enabled).toBe(true);
+      // preDispatchEnabled自体はプラン制限でfalseだが、connect=trueなのでdispatchは実行される
+      expect(res.body.preDispatchEnabled).toBe(false);
+
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
     });
   });
 
