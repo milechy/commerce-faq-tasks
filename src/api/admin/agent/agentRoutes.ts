@@ -10,6 +10,51 @@ import { ADMIN_AGENT_TOOLS } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
+import { isUnanswered } from '../ai-assist/systemPrompt';
+
+// ---------------------------------------------------------------------------
+// answered_from: このターンの回答がどこから来たかをUIに伝える
+// ---------------------------------------------------------------------------
+
+type AnsweredFrom = 'faq_list' | 'tool_action' | 'general';
+
+function determineAnsweredFrom(actions: Array<{ tool: string; result: string }>): AnsweredFrom {
+  if (actions.some((a) => a.tool === 'get_faq_list')) return 'faq_list';
+  if (actions.length > 0) return 'tool_action';
+  return 'general';
+}
+
+// ---------------------------------------------------------------------------
+// 未回答質問の自動記録: ツール未使用かつ回答が「わかりません」系の場合のみ、
+// admin_feedback に knowledge_gap として記録する（ai-assist/routes.ts の
+// recordFeedback と同パターン）。失敗しても本処理は継続する。
+// ---------------------------------------------------------------------------
+
+async function recordUnansweredFeedback(
+  db: Pool,
+  params: {
+    tenantId: string;
+    email: string;
+    message: string;
+    reply: string;
+  }
+): Promise<void> {
+  const safeTenantId = params.tenantId || 'unknown';
+  try {
+    await db.query(
+      `INSERT INTO admin_feedback
+         (tenant_id, user_email, message, ai_response, ai_answered, category)
+       VALUES ($1, $2, $3, $4, false, 'knowledge_gap')`,
+      [safeTenantId, params.email || null, params.message, params.reply]
+    );
+  } catch (err: any) {
+    if (err?.code === '42P01') {
+      logger.warn('[admin-agent] admin_feedback table not found — run migration_admin_feedback.sql');
+    } else {
+      logger.error('[admin-agent] feedback INSERT failed:', err?.code, err?.message);
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Auth helper（options/routes.ts と同パターンのローカル定義）
@@ -348,7 +393,8 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
   app.use('/v1/admin/agent', supabaseAuthMiddleware);
 
   app.post('/v1/admin/agent/chat', async (req: Request, res: Response) => {
-    const { role, tenantId, isSuperAdmin } = extractAuth(req);
+    const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+    const email: string = su?.email ?? '';
 
     // ロールチェック
     if (role !== 'super_admin' && role !== 'client_admin') {
@@ -479,7 +525,12 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             });
           }
 
-          res.write(`event: done\ndata: ${JSON.stringify({ reply: finalReply, actions })}\n\n`);
+          const answeredFrom = determineAnsweredFrom(actions);
+          if (effectiveTenantId && actions.length === 0 && isUnanswered(finalReply)) {
+            await recordUnansweredFeedback(db, { tenantId: effectiveTenantId, email, message, reply: finalReply });
+          }
+
+          res.write(`event: done\ndata: ${JSON.stringify({ reply: finalReply, actions, answered_from: answeredFrom })}\n\n`);
           res.end();
         } catch (err) {
           logger.warn('[POST /v1/admin/agent/chat stream]', err);
@@ -547,7 +598,13 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       }
 
       reportUsage();
-      return res.json({ reply: finalReply, actions });
+
+      const answeredFrom = determineAnsweredFrom(actions);
+      if (effectiveTenantId && actions.length === 0 && isUnanswered(finalReply)) {
+        await recordUnansweredFeedback(db, { tenantId: effectiveTenantId, email, message, reply: finalReply });
+      }
+
+      return res.json({ reply: finalReply, actions, answered_from: answeredFrom });
     } catch (err) {
       logger.warn('[POST /v1/admin/agent/chat]', err);
       return res.status(500).json({ error: 'AIエージェントの応答生成に失敗しました' });
