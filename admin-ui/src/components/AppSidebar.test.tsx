@@ -103,3 +103,25 @@ describe("AppSidebar — plan制限によるnav非表示", () => {
     expect(screen.queryByText("成約・効果分析")).toBeNull();
   });
 });
+
+describe("AppSidebar — ご利用状況・お支払いの可視性", () => {
+  it("client_adminにも「ご利用状況・お支払い」が表示される（旧UIはsuper_admin限定表示ではなかった）", () => {
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
+    renderSidebar();
+
+    expect(screen.getByText("ご利用状況・お支払い")).toBeTruthy();
+  });
+
+  it("super_adminにも表示される", () => {
+    vi.mocked(useAuth).mockReturnValue(
+      baseAuth({
+        isSuperAdmin: true,
+        isClientAdmin: false,
+        user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null },
+      }),
+    );
+    renderSidebar();
+
+    expect(screen.getByText("ご利用状況・お支払い")).toBeTruthy();
+  });
+});

@@ -32,6 +32,11 @@ export function AvatarListHeader({
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "var(--foreground)", display: "flex", alignItems: "center", gap: 8 }}>
             🎭 {lang === "ja" ? "アバター設定" : "Avatar Configs"}
           </h1>
+          <p style={{ fontSize: 13, color: "var(--muted-foreground)", margin: "4px 0 0" }}>
+            {lang === "ja"
+              ? "接客アバターの見た目・声・性格を作成・管理できます"
+              : "Create and manage your chat avatar's appearance, voice, and personality"}
+          </p>
           {!loading && (
             <p style={{ fontSize: 13, color: "var(--muted-foreground)", margin: "4px 0 0" }}>
               {isSuperAdmin
