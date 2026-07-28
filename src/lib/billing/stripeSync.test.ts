@@ -10,7 +10,7 @@ jest.mock('stripe', () => {
   }));
 }, { virtual: true });
 
-import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy } from './stripeSync';
+import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits } from './stripeSync';
 
 describe('planMultiplier', () => {
   it('プラン別の倍率を返す（Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
@@ -46,6 +46,67 @@ describe('billedQuantity 算出（Math.ceil(totalRequests * multiplier)）', () 
   it('Enterprise は 2.5 倍', () => {
     expect(billed(100, 'enterprise')).toBe(250);
     expect(billed(3, 'enterprise')).toBe(8); // 7.5 → 8
+  });
+});
+
+// GID 1216944002701788: Anam.aiは$0.16/分の時間課金だが、Stripe報告数量は他機能と同じ
+// 「1行=1リクエスト」のままだと3分セッションが1リクエスト分の単価でしか請求されず赤字になる。
+// anam_session行のみ秒→分に換算して billable units に加算する（案A: 行数ベースは維持）。
+describe('anamSessionBillableUnits（anam_session行の秒→分換算・切り上げ）', () => {
+  it('0秒は0（対象外）', () => {
+    expect(anamSessionBillableUnits(0)).toBe(0);
+  });
+
+  it('59秒は1分に切り上げ', () => {
+    expect(anamSessionBillableUnits(59)).toBe(1);
+  });
+
+  it('60秒はちょうど1分', () => {
+    expect(anamSessionBillableUnits(60)).toBe(1);
+  });
+
+  it('61秒は2分に切り上げ', () => {
+    expect(anamSessionBillableUnits(61)).toBe(2);
+  });
+
+  it('3分(180秒)はちょうど3分', () => {
+    expect(anamSessionBillableUnits(180)).toBe(3);
+  });
+
+  it('null / undefined / 負値は0', () => {
+    expect(anamSessionBillableUnits(null)).toBe(0);
+    expect(anamSessionBillableUnits(undefined)).toBe(0);
+    expect(anamSessionBillableUnits(-5)).toBe(0);
+  });
+});
+
+describe('billedQuantity（anam_session混在時の分数換算を加算・後方互換）', () => {
+  // stripeSync._reportTenantUsage の集計SQL（billable_units）と同じ規則:
+  // billableUnits = 非anam行のCOUNT(*) + anam_session行のΣanamSessionBillableUnits(seconds)
+  const billed = (billableUnits: number, plan: string) =>
+    Math.ceil(billableUnits * planMultiplier(plan));
+
+  it('テキストのみのテナントは billableUnits === totalRequests のまま（現行と変わらない）', () => {
+    const billableUnits = 100; // anam_session行が無いのでCOUNT(*)と一致
+    expect(billed(billableUnits, 'starter')).toBe(100);
+    expect(billed(billableUnits, 'growth')).toBe(150);
+  });
+
+  it('chat 10件 + Anam 3分セッション1件（Starter）: 10 + 3 = 13', () => {
+    const billableUnits = 10 + anamSessionBillableUnits(180);
+    expect(billed(billableUnits, 'starter')).toBe(13);
+  });
+
+  it('chat 0件 + Anam 59秒セッション1件（Growth 1.5倍）: ceil(1 * 1.5) = 2', () => {
+    const billableUnits = anamSessionBillableUnits(59);
+    expect(billed(billableUnits, 'growth')).toBe(2);
+  });
+
+  it('Anam複数セッション(59秒+61秒+180秒)は行ごとに切り上げてから合算: 1+2+3=6', () => {
+    const billableUnits =
+      anamSessionBillableUnits(59) + anamSessionBillableUnits(61) + anamSessionBillableUnits(180);
+    expect(billableUnits).toBe(6);
+    expect(billed(billableUnits, 'enterprise')).toBe(15); // 6 * 2.5 = 15
   });
 });
 
