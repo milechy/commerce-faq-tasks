@@ -1308,7 +1308,37 @@ export async function executeToolCall(
           path: '/admin/chat-history',
           description: '会話セッションの削除は一覧から該当の会話を開いてこちらの画面で行えます',
         },
+        analytics: {
+          label: '会話分析',
+          path: '/admin/analytics',
+          description: '会話数・満足度スコア・品質指標の推移や低評価セッションの確認はこちらの画面で行えます',
+        },
+        conversion: {
+          label: '成約・効果分析',
+          path: '/admin/conversion',
+          description: '成約への貢献度・ABテスト・効果測定の確認はこちらの画面で行えます',
+        },
+        chat_test: {
+          label: 'テストチャット',
+          path: '/admin/chat-test',
+          description: '設定した内容を実際のチャットで試すのはこちらの画面で行えます',
+        },
+        avatar_wizard: {
+          label: 'アバター新規作成',
+          path: '/admin/avatar/wizard',
+          description: 'アバターを新しく作る手順（ウィザード）はこちらの画面で行えます',
+        },
       };
+
+      // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測)に基づくプラン制限。
+      // AppSidebar.tsx の requiresPlan と同じ基準をここでも適用する（Starterには
+      // 旧UIでも非表示のため、案内リンクを返すこと自体がプランの存在を示唆してしまう）。
+      if (feature === 'analytics' || feature === 'conversion') {
+        const plan = await queryTenantPlan(db, tenantId);
+        if (!planHasFeature(plan, feature)) {
+          return truncate('この機能はGrowthプラン以上でご利用いただけます');
+        }
+      }
 
       const link = LEGACY_UI_LINKS[feature];
       if (!link) {

@@ -659,7 +659,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       description:
         'チャットでは対応していない操作について、旧管理画面（従来のGUI）への案内リンクを返す読み取り専用ツール。' +
         '請求（請求書の再送・金額調整・無料期間設定・一時停止/再開）、アバタースタジオ（画像候補の選択・音声クローン・' +
-        '性格設定・ライブテスト）、エスカレーションへの有人返信、会話セッションの削除について尋ねられたら、' +
+        '性格設定・ライブテスト）、エスカレーションへの有人返信、会話セッションの削除、会話分析（会話数・満足度・' +
+        '品質指標の推移や低評価セッションの確認）、成約・効果分析（成約への貢献度・ABテスト・効果測定）、' +
+        'テストチャット（設定内容の動作確認）、アバター新規作成（ウィザード）について尋ねられたら、' +
         '無理にチャットで実行しようとせずこのツールを呼び出して案内すること。',
       parameters: {
         type: 'object',
@@ -667,7 +669,16 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           feature: {
             type: 'string',
             description: '案内先の機能',
-            enum: ['billing', 'avatar_studio', 'escalation_reply', 'session_deletion'],
+            enum: [
+              'billing',
+              'avatar_studio',
+              'escalation_reply',
+              'session_deletion',
+              'analytics',
+              'conversion',
+              'chat_test',
+              'avatar_wizard',
+            ],
           },
         },
         required: ['feature'],
