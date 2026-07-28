@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { useLang } from "../../i18n/LangContext";
 
 interface BulkActionBarProps {
   selectedCount: number;
+  onBulkUnpublish: () => void;
   onBulkDelete: () => void;
   onClearSelection: () => void;
   loading: boolean;
@@ -9,13 +11,27 @@ interface BulkActionBarProps {
 
 export default function BulkActionBar({
   selectedCount,
+  onBulkUnpublish,
   onBulkDelete,
   onClearSelection,
   loading,
 }: BulkActionBarProps) {
   const { t } = useLang();
+  // 削除は取り消せない操作のため、選択が変わるたびに確認state をリセットする
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  useEffect(() => {
+    setDeleteArmed(false);
+  }, [selectedCount]);
 
   if (selectedCount === 0) return null;
+
+  const handleDeleteClick = () => {
+    if (!deleteArmed) {
+      setDeleteArmed(true);
+      return;
+    }
+    onBulkDelete();
+  };
 
   return (
     <div
@@ -56,27 +72,50 @@ export default function BulkActionBar({
           {t("knowledge.clear_selection")}
         </button>
       </div>
-      <button
-        onClick={onBulkDelete}
-        disabled={loading}
-        style={{
-          padding: "12px 28px",
-          minHeight: 48,
-          borderRadius: 10,
-          border: "none",
-          background: loading
-            ? "rgba(127,29,29,0.4)"
-            : "linear-gradient(135deg, #991b1b, #dc2626)",
-          color: "#fee2e2",
-          fontSize: 15,
-          fontWeight: 700,
-          cursor: loading ? "not-allowed" : "pointer",
-        }}
-      >
-        {loading
-          ? t("common.deleting")
-          : t("knowledge.bulk_delete", { n: selectedCount })}
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          onClick={handleDeleteClick}
+          disabled={loading}
+          style={{
+            padding: "10px 16px",
+            minHeight: 44,
+            borderRadius: 10,
+            border: `1px solid ${deleteArmed ? "#dc2626" : "#7f1d1d"}`,
+            background: deleteArmed ? "rgba(153,27,27,0.35)" : "transparent",
+            color: "#fca5a5",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: loading ? "not-allowed" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {loading
+            ? t("common.deleting")
+            : deleteArmed
+            ? t("knowledge.bulk_delete_confirm")
+            : t("knowledge.bulk_delete", { n: selectedCount })}
+        </button>
+        <button
+          onClick={onBulkUnpublish}
+          disabled={loading}
+          style={{
+            padding: "12px 24px",
+            minHeight: 48,
+            borderRadius: 10,
+            border: "none",
+            background: loading
+              ? "rgba(21,94,55,0.5)"
+              : "linear-gradient(135deg, #15803d, #22c55e)",
+            color: "#f0fdf4",
+            fontSize: 15,
+            fontWeight: 700,
+            cursor: loading ? "not-allowed" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {loading ? t("common.deleting") : t("knowledge.bulk_unpublish", { n: selectedCount })}
+        </button>
+      </div>
     </div>
   );
 }
