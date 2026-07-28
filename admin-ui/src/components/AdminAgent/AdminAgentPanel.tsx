@@ -2,6 +2,9 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useAdminAgent } from "./useAdminAgent";
 import AdminAgentMessage from "./AdminAgentMessage";
+import FeedbackPrompt from "./FeedbackPrompt";
+import ReplyCard from "./ReplyCard";
+import { submitConsultation, type FeedbackReply } from "./useFeedbackReplies";
 
 interface AdminAgentPanelProps {
   isOpen: boolean;
@@ -9,9 +12,17 @@ interface AdminAgentPanelProps {
   tenantId: string | null;
   isSuperAdmin: boolean;
   initialQuery?: string | null;
+  replies: FeedbackReply[];
+  onMarkReplyRead: (id: string) => Promise<void>;
 }
 
 const INITIAL_MESSAGE = "こんにちは！設定の変更やFAQの追加など、何でもお手伝いします。";
+
+const ANSWERED_FROM_LABEL: Record<string, string> = {
+  faq_list: "📚 登録した知識データから回答しました",
+  tool_action: "⚙️ 操作を実行しました",
+  general: "💡 R2Cの使い方ガイドから回答しました",
+};
 
 export default function AdminAgentPanel({
   isOpen,
@@ -19,6 +30,8 @@ export default function AdminAgentPanel({
   tenantId,
   isSuperAdmin,
   initialQuery,
+  replies,
+  onMarkReplyRead,
 }: AdminAgentPanelProps) {
   const { messages, isLoading, sendMessage } = useAdminAgent();
   const [input, setInput] = useState("");
@@ -57,6 +70,15 @@ export default function AdminAgentPanel({
     await sendMessage(text, targetTenantId);
     setTimeout(() => inputRef.current?.focus(), 50);
   }, [input, isLoading, isSuperAdmin, tenantId, sendMessage]);
+
+  const handleReplyResolved = useCallback(async (reply: FeedbackReply) => {
+    await onMarkReplyRead(reply.id);
+  }, [onMarkReplyRead]);
+
+  const handleReplyNotResolved = useCallback(async (reply: FeedbackReply) => {
+    await onMarkReplyRead(reply.id);
+    await submitConsultation({ message: reply.message, parentFeedbackId: reply.id });
+  }, [onMarkReplyRead]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (
@@ -144,14 +166,40 @@ export default function AdminAgentPanel({
           gap: 10,
         }}
       >
+        {/* 担当者からのお返事（最新の未読1件のみ表示、他は件数バッジで案内） */}
+        {replies.length > 0 && (
+          <ReplyCard
+            reply={replies[0]}
+            extraCount={replies.length - 1}
+            onResolved={() => handleReplyResolved(replies[0])}
+            onNotResolved={() => handleReplyNotResolved(replies[0])}
+          />
+        )}
+
         {/* 初期メッセージ */}
         <AdminAgentMessage
           message={{ role: "assistant", content: INITIAL_MESSAGE }}
         />
 
-        {messages.map((msg, i) => (
-          <AdminAgentMessage key={i} message={msg} />
-        ))}
+        {messages.map((msg, i) => {
+          const isLastAssistantMessage =
+            !isLoading && i === messages.length - 1 && msg.role === "assistant";
+          return (
+            <div key={i}>
+              <AdminAgentMessage message={msg} />
+              {isLastAssistantMessage && msg.answeredFrom && (
+                <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, padding: "0 4px" }}>
+                  {ANSWERED_FROM_LABEL[msg.answeredFrom]}
+                </div>
+              )}
+              {isLastAssistantMessage && (
+                <div style={{ marginTop: 6 }}>
+                  <FeedbackPrompt question={messages[i - 1]?.content ?? msg.content} />
+                </div>
+              )}
+            </div>
+          );
+        })}
 
         {isLoading && (
           <div style={{ display: "flex", justifyContent: "flex-start" }}>
