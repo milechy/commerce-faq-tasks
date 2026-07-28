@@ -4,7 +4,10 @@
 import type pino from 'pino';
 import { calculateLLMCostCents, calculateBillingAmountCents, normalizeModelKey } from './costCalculator';
 
-export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent';
+// DBのusage_logs_feature_used_check制約(migration_sai_agent_feature.sql)と一致させる。
+// admin_guide / feedback_ai / book_analysis / book_structurize はDB側の制約には既に
+// 含まれていたがTS型に無く未使用だった値（GID 1216944049264977 / 1216944003337186 で配線）。
+export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'admin_guide' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'feedback_ai' | 'book_analysis' | 'book_structurize' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent';
 
 export interface TrackUsageParams {
   tenantId: string;
@@ -32,6 +35,16 @@ export interface TrackUsageParams {
   extraLlmUsages?: Array<{ model: string; inputTokens: number; outputTokens: number }>;
   /** Phase3 (Sai接続ブリッジ): Agent Sが実行したステップ数（社内原価集計のみ） */
   saiAgentSteps?: number;
+  /** GID 1216944049264977: Qwen OCRで処理したページ数 */
+  ocrPages?: number;
+  /** GID 1216944049264977: Fish Audio ASR呼び出し回数（通常1リクエスト=1) */
+  asrRequestCount?: number;
+  /** GID 1216944049264977: Magnificアップスケール実行回数 */
+  magnificUpscaleCount?: number;
+  /** GID 1216944049264977: Flux 2 Pro 画像生成枚数 */
+  fluxImageCount?: number;
+  /** GID 1216944049264977: LemonSliceアバター登録（プロビジョニング）回数 */
+  lemonsliceRegistrationCount?: number;
 }
 
 let _pool: any | null = null;
@@ -62,6 +75,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     tenantId, requestId, model, inputTokens, outputTokens,
     featureUsed, marginOverride, ttsTextBytes, avatarCredits, avatarSessionMs, imageCount,
     anam_session_seconds, extraLlmUsages, saiAgentSteps,
+    ocrPages, asrRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
   } = params;
 
   // Subtask 3: 追加 LLM（planner 等）に価格表に無いモデルが来た場合、コストは 0 計上になる。
@@ -85,6 +99,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
       model, inputTokens, outputTokens, marginOverride,
       ttsTextBytes, avatarCredits, avatarSessionMs,
       featureUsed, imageCount, anam_session_seconds, extraLlmUsages, saiAgentSteps,
+      ocrPages, asrRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
     });
   } catch (err) {
     _logger?.warn({ err, requestId }, '[usageTracker] cost calculation error, defaulting to 0');
