@@ -261,6 +261,96 @@ describe('POST /v1/admin/agent/chat', () => {
     });
   });
 
+  describe('answered_from / 未回答質問の自動記録', () => {
+    it('ツール未使用の通常回答 → answered_from は general、admin_feedback は記録されない', async () => {
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('設定を確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4の設定を教えて', sessionId: 'sess-af-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.answered_from).toBe('general');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('ツール未使用かつ回答が未回答フレーズを含む → answered_from は general、admin_feedback に knowledge_gap で記録される', async () => {
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('申し訳ございません、その情報は登録されていません。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '割引クーポンはありますか', sessionId: 'sess-af-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.answered_from).toBe('general');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const [sql, params] = mockQuery.mock.calls[0];
+      expect(sql).toContain('INSERT INTO admin_feedback');
+      expect(sql).toContain('knowledge_gap');
+      expect(params).toEqual([
+        'tenant-abc',
+        null,
+        '割引クーポンはありますか',
+        '申し訳ございません、その情報は登録されていません。',
+      ]);
+    });
+
+    it('get_faq_list を使って回答 → answered_from は faq_list', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'get_faq_list', arguments: '{}' } }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('送料についてのFAQが見つかりました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 1, question: 'q', answer: 'a' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料について教えて', sessionId: 'sess-af-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.answered_from).toBe('faq_list');
+    });
+
+    it('get_faq_list 以外のツールを使用 → answered_from は tool_action、回答が未回答フレーズでも記録されない', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'get_tenant_settings', arguments: '{}' } }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('申し訳ございません、確認できませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ ga4_measurement_id: null, posthog_host: null, widget_theme: {} }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を確認して', sessionId: 'sess-af-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.answered_from).toBe('tool_action');
+      // get_tenant_settings の SELECT 1回のみ。admin_feedback への INSERT は発火しない
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // -------------------------------------------------------------------------
   // 認証エラー: supabaseUser なし → 403
   // -------------------------------------------------------------------------
