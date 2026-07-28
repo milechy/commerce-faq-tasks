@@ -312,7 +312,8 @@
       color: #a78bfa;
       overflow-x: auto;
       line-height: 1.6;
-      white-space: pre;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
 
     /* Hero section padding for fixed nav */
@@ -324,17 +325,6 @@
       .step-connector { display: none; }
     }
 
-    /* Floating widget hint on mobile */
-    @media (max-width: 767px) {
-      .mobile-widget-hint {
-        display: flex;
-      }
-    }
-    @media (min-width: 768px) {
-      .mobile-widget-hint {
-        display: none;
-      }
-    }
   </style>
 </head>
 <body>
@@ -363,97 +353,48 @@
 </nav>
 
 <!-- ===================== HERO ===================== -->
-<section id="hero" style="max-width:1200px; margin:0 auto; padding:80px 20px 60px;">
-  <div style="display:grid; grid-template-columns:1fr 1fr; gap:60px; align-items:center;" class="hero-grid">
-    <style>
-      @media (max-width: 767px) {
-        .hero-grid { grid-template-columns: 1fr !important; gap: 40px !important; }
-      }
-    </style>
-
-    <!-- Left -->
-    <div>
-      <!-- Live badge -->
-      <div style="display:inline-flex; align-items:center; gap:8px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.25); border-radius:999px; padding:6px 14px; margin-bottom:28px;">
-        <div style="position:relative; width:8px; height:8px;">
-          <span class="pulse-ring" style="position:absolute; inset:0; border-radius:50%; background:#22c55e; display:block;"></span>
-          <span class="blink" style="position:absolute; inset:0; border-radius:50%; background:#22c55e; display:block;"></span>
-        </div>
-        <span style="font-size:13px; color:#4ade80; font-weight:500;">デモ稼働中 — 今すぐ話しかけられます</span>
+<section id="hero" style="max-width:720px; margin:0 auto; padding:80px 20px 60px; text-align:center;">
+  <div>
+    <!-- Live badge -->
+    <div style="display:inline-flex; align-items:center; gap:8px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.25); border-radius:999px; padding:6px 14px; margin-bottom:28px;">
+      <div style="position:relative; width:8px; height:8px;">
+        <span class="pulse-ring" style="position:absolute; inset:0; border-radius:50%; background:#22c55e; display:block;"></span>
+        <span class="blink" style="position:absolute; inset:0; border-radius:50%; background:#22c55e; display:block;"></span>
       </div>
-
-      <!-- H1 -->
-      <h1 style="font-size:clamp(28px,4vw,48px); font-weight:800; line-height:1.15; letter-spacing:-1px; margin:0 0 20px;">
-        あなたのサイトに、<br>
-        <span class="gradient-text">24時間365日</span><br>
-        休まず働くAIを。
-      </h1>
-
-      <!-- Sub copy -->
-      <p style="font-size:16px; color:var(--muted); line-height:1.75; margin:0 0 32px; max-width:480px;">
-        1行の埋め込みだけ。訪問者の「わからない」を3秒で解決し、購入・予約・問い合わせまで自動誘導。夜中の離脱を防ぎ、売上を逃さない。
-      </p>
-
-      <!-- CTA buttons -->
-      <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:28px;">
-        <a href="#demo" style="background:linear-gradient(135deg,#7c3aed,#8b5cf6); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:13px 28px; border-radius:10px; display:inline-block; transition:opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">AIに話しかける</a>
-        <a href="#contact" style="color:#c4b5fd; text-decoration:none; font-weight:600; font-size:15px; padding:13px 24px; border-radius:10px; border:1px solid rgba(139,92,246,0.35); display:inline-block; transition:all 0.2s;" onmouseover="this.style.borderColor='rgba(139,92,246,0.7)'" onmouseout="this.style.borderColor='rgba(139,92,246,0.35)'">無料で導入相談 →</a>
-      </div>
-
-      <!-- Badges -->
-      <div style="display:flex; flex-wrap:wrap; gap:10px;">
-        <span style="font-size:12px; color:#86efac; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:4px 10px;">✓ 初月無料</span>
-        <span style="font-size:12px; color:#86efac; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:4px 10px;">✓ 固定費ゼロ・従量課金</span>
-        <span style="font-size:12px; color:#86efac; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:4px 10px;">✓ 最短3日で本番稼働</span>
-      </div>
+      <span style="font-size:13px; color:#4ade80; font-weight:500;">デモ稼働中 — 今すぐ話しかけられます</span>
     </div>
 
-    <!-- Right: Avatar showcase + Widget card (desktop only) -->
-    <div id="hero-widget-col" class="desktop-only">
-      <div class="glass-card" style="border-radius:16px; padding:20px; position:relative; overflow:hidden;">
-        <!-- Glow effect -->
-        <div style="position:absolute; top:-60px; right:-60px; width:200px; height:200px; background:radial-gradient(circle, rgba(124,58,237,0.15), transparent 70%); pointer-events:none;"></div>
+    <!-- H1 -->
+    <h1 style="font-size:clamp(28px,4vw,48px); font-weight:800; line-height:1.15; letter-spacing:-1px; margin:0 0 20px;">
+      あなたのサイトに、<br>
+      <span class="gradient-text">24時間365日</span><br>
+      休まず働くAIを。
+    </h1>
 
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
-          <div style="width:8px; height:8px; border-radius:50%; background:#7c3aed;"></div>
-          <span style="font-size:12px; color:var(--muted); font-weight:500;">▼ 実際のR2Cウィジェット</span>
-        </div>
+    <!-- Sub copy -->
+    <p style="font-size:16px; color:var(--muted); line-height:1.75; margin:0 auto 32px; max-width:520px;">
+      1行の埋め込みだけ。訪問者の「わからない」を3秒で解決し、購入・予約・問い合わせまで自動誘導。夜中の離脱を防ぎ、売上を逃さない。
+    </p>
 
-        <!-- アバタープレビューバー -->
-        <div style="display:flex; align-items:center; gap:16px; background:linear-gradient(135deg,rgba(76,29,149,0.25),rgba(124,58,237,0.15)); border:1px solid rgba(124,58,237,0.3); border-radius:12px; padding:14px 18px; margin-bottom:14px;">
-          <div style="position:relative; width:52px; height:52px; flex-shrink:0;">
-            <div class="lp-avatar-ring" style="inset:-8px; animation-delay:0s;"></div>
-            <div class="lp-avatar-ring" style="inset:-16px; border-color:rgba(124,58,237,0.2); animation-delay:1.3s;"></div>
-            <div class="lp-avatar-circle" style="width:52px; height:52px; font-size:24px;">🤖</div>
-          </div>
-          <div style="flex:1; min-width:0;">
-            <div style="font-size:14px; font-weight:700; color:#fff; margin-bottom:2px;">AIアバター接客</div>
-            <div style="font-size:12px; color:#c4b5fd; line-height:1.4;">顔・声のあるAIが24時間自動接客。テキストボットより3倍の会話継続率。</div>
-          </div>
-          <div style="display:flex; align-items:center; gap:5px; background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.3); border-radius:999px; padding:4px 10px; flex-shrink:0;">
-            <div class="blink" style="width:6px; height:6px; border-radius:50%; background:#22c55e;"></div>
-            <span style="font-size:11px; color:#4ade80; font-weight:600;">LIVE</span>
-          </div>
-        </div>
-
-        <div class="widget-inline-area" id="hero-widget-area" style="border-radius:10px; overflow:hidden; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.06);">
-          <iframe
-            src="/lp/demo-frame.html"
-            style="width:100%; height:420px; border:none; display:block; border-radius:10px;"
-            title="R2C AI アシスタント デモ"
-            loading="eager"
-            allow="microphone"
-          ></iframe>
-        </div>
-      </div>
+    <!-- CTA buttons -->
+    <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-bottom:28px;">
+      <a href="#demo" style="background:linear-gradient(135deg,#7c3aed,#8b5cf6); color:#fff; text-decoration:none; font-weight:700; font-size:15px; padding:13px 28px; border-radius:10px; display:inline-block; transition:opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">AIに話しかける</a>
+      <a href="#contact" style="color:#c4b5fd; text-decoration:none; font-weight:600; font-size:15px; padding:13px 24px; border-radius:10px; border:1px solid rgba(139,92,246,0.35); display:inline-block; transition:all 0.2s;" onmouseover="this.style.borderColor='rgba(139,92,246,0.7)'" onmouseout="this.style.borderColor='rgba(139,92,246,0.35)'">無料で導入相談 →</a>
     </div>
 
-    <!-- Mobile widget hint -->
-    <div class="mobile-widget-hint" style="align-items:center; justify-content:center; text-align:center; padding:20px; glass-card border-radius:12px; background:rgba(124,58,237,0.08); border:1px solid rgba(124,58,237,0.2); border-radius:12px;">
-      <div>
-        <div style="font-size:32px; margin-bottom:8px;">💬</div>
-        <div style="font-size:14px; color:#c4b5fd; font-weight:600; margin-bottom:4px;">AIアシスタントが右下に起動しています</div>
-        <div style="font-size:12px; color:var(--muted);">画面右下のアイコンをタップして話しかけてみてください</div>
+    <!-- Badges -->
+    <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:10px; margin-bottom:36px;">
+      <span style="font-size:12px; color:#86efac; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:4px 10px;">✓ 初月無料</span>
+      <span style="font-size:12px; color:#86efac; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:4px 10px;">✓ 固定費ゼロ・従量課金</span>
+      <span style="font-size:12px; color:#86efac; background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:6px; padding:4px 10px;">✓ 最短3日で本番稼働</span>
+    </div>
+
+    <!-- Widget hint (all breakpoints) -->
+    <div style="display:flex; align-items:center; justify-content:center; gap:12px; padding:16px 20px; border-radius:12px; background:rgba(124,58,237,0.08); border:1px solid rgba(124,58,237,0.2);">
+      <div style="font-size:24px;">💬</div>
+      <div style="text-align:left;">
+        <div style="font-size:14px; color:#c4b5fd; font-weight:600; margin-bottom:2px;">AIアシスタントが右下に起動しています</div>
+        <div style="font-size:12px; color:var(--muted);">画面右下のアイコンをクリックして話しかけてみてください</div>
       </div>
     </div>
   </div>
@@ -660,19 +601,17 @@
 
   <div style="display:flex; align-items:flex-start; gap:0;">
     <!-- Step 1 -->
-    <div style="flex:1; text-align:center; padding:0 16px;">
+    <div style="flex:1; min-width:0; text-align:center; padding:0 16px;">
       <div style="width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,#7c3aed,#8b5cf6); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; color:#fff; margin:0 auto 16px;">1</div>
-      <div style="font-weight:700; font-size:15px; margin-bottom:10px;">1行のコードを貼る</div>
-      <div style="font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:14px;">サイトの&lt;/body&gt;直前に1行追加するだけ。</div>
-      <div class="code-block" style="text-align:left; font-size:11px;">&lt;script src="https://api.r2c.biz/widget.js"
-  data-api-key="rjc_77aaa951edede3a8faa44161a6f505eca44f4c0517e051ec1f8bb6bc9f22b29b"&gt;
-&lt;/script&gt;</div>
+      <div style="font-weight:700; font-size:15px; margin-bottom:10px;">コピペするだけ</div>
+      <div style="font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:14px;">表示されたコードをそのままコピーして貼るだけ。むずかしい設定は一切ありません。</div>
+      <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.2); border-radius:8px; padding:12px; font-size:12px; color:#86efac; line-height:1.5;">💡 コードの意味がわからなくても大丈夫<br>制作会社様やサイト担当者にお渡しいただくだけでOK</div>
     </div>
 
     <div class="step-connector" style="margin-top:20px;"></div>
 
     <!-- Step 2 -->
-    <div style="flex:1; text-align:center; padding:0 16px;">
+    <div style="flex:1; min-width:0; text-align:center; padding:0 16px;">
       <div style="width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,#8b5cf6,#d946ef); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; color:#fff; margin:0 auto 16px;">2</div>
       <div style="font-weight:700; font-size:15px; margin-bottom:10px;">PDFや商品URLを貼る</div>
       <div style="font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:14px;">FAQの手書き入力は不要。管理画面でURL / PDFを登録するだけで知識が自動登録。</div>
@@ -684,7 +623,7 @@
     <div class="step-connector" style="margin-top:20px;"></div>
 
     <!-- Step 3 -->
-    <div style="flex:1; text-align:center; padding:0 16px;">
+    <div style="flex:1; min-width:0; text-align:center; padding:0 16px;">
       <div style="width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,#d946ef,#06b6d4); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; color:#fff; margin:0 auto 16px;">3</div>
       <div style="font-weight:700; font-size:15px; margin-bottom:10px;">AIが24時間自動接客</div>
       <div style="font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:14px;">あとはR2Cが全自動。会話ログ・CV数・改善提案をダッシュボードで確認。</div>
@@ -1448,31 +1387,6 @@
     }, 400);
   };
 
-  // ===== 5. Intersection Observer: Hero widget → floating switch =====
-  function setupIntersectionObserver() {
-    var heroWidgetCol = document.getElementById('hero-widget-col');
-    if (!heroWidgetCol) return;
-
-    // The widget itself handles floating display.
-    // We use IO to toggle a class that can signal widget state if widget supports it.
-    var observer = new IntersectionObserver(function(entries) {
-      entries.forEach(function(entry) {
-        if (!entry.isIntersecting) {
-          // Hero widget is off-screen — signal widget to use floating mode
-          document.body.classList.add('hero-widget-offscreen');
-          window.postMessage({ type: 'r2c:hero_offscreen', value: true }, '*');
-        } else {
-          document.body.classList.remove('hero-widget-offscreen');
-          window.postMessage({ type: 'r2c:hero_offscreen', value: false }, '*');
-        }
-      });
-    }, {
-      threshold: 0.1
-    });
-
-    observer.observe(heroWidgetCol);
-  }
-
   // ===== 6. Lead Form Submit =====
   window.handleFormSubmit = function(e) {
     e.preventDefault();
@@ -1587,7 +1501,6 @@
 
   // ===== Initialize =====
   document.addEventListener('DOMContentLoaded', function() {
-    setupIntersectionObserver();
     loadAvatarImage();
 
     // Disable mobile auto-expand: widget should only float on mobile
