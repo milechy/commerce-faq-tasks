@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
 import { API_BASE } from "../../lib/api";
 import { useAuth } from "../../auth/useAuth";
-import { fetchWithAuth } from "./shared";
+import { useLang } from "../../i18n/LangContext";
+import { fetchWithAuth, getAccessToken } from "./shared";
 import BookChunksPanel from "../../pages/admin/knowledge/BookChunksPanel";
 
 // ─── PDFアップロードタブ ──────────────────────────────────────────────────────
@@ -20,13 +21,19 @@ interface BookUpload {
   created_at: string;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  uploaded: "アップロード済",
-  processing: "処理中",
-  chunked: "分割完了",
-  embedded: "登録完了",
-  failed: "失敗",
-};
+type TFunc = ReturnType<typeof useLang>["t"];
+
+function bookStatusLabel(status: string, t: TFunc): string {
+  const map: Record<string, string> = {
+    uploaded: t("knowledge.pdf_book_status_uploaded"),
+    processing: t("knowledge.pdf_book_status_processing"),
+    chunked: t("knowledge.pdf_book_status_chunked"),
+    embedded: t("knowledge.pdf_book_status_embedded"),
+    failed: t("knowledge.pdf_book_status_failed"),
+  };
+  return map[status] ?? status;
+}
+
 const STATUS_COLOR: Record<string, string> = {
   uploaded: "#9ca3af",
   processing: "#60a5fa",
@@ -38,6 +45,7 @@ const STATUS_COLOR: Record<string, string> = {
 // ─── BookUploadsSection: グローバルナレッジページ用書籍一覧 ───────────────────
 
 export function BookUploadsSection({ tenantId }: { tenantId: string }) {
+  const { t } = useLang();
   const [books, setBooks] = useState<BookUpload[]>([]);
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState<number | null>(null);
@@ -76,13 +84,13 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
       );
       if (!res.ok) {
         const err = (await res.json()) as { error?: string };
-        showToast(err.error ?? "処理の開始に失敗しました", false);
+        showToast(err.error ?? t("knowledge.pdf_process_start_failed"), false);
         return;
       }
-      showToast("処理を開始しました", true);
+      showToast(t("knowledge.pdf_process_started"), true);
       setTimeout(() => { void loadBooks(); }, 2000);
     } catch {
-      showToast("処理の開始に失敗しました", false);
+      showToast(t("knowledge.pdf_process_start_failed"), false);
     } finally {
       setProcessing(null);
     }
@@ -134,14 +142,14 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
       )}
 
       <h2 style={{ fontSize: 16, fontWeight: 700, color: "#f9fafb", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-        📚 アップロード済み書籍
+        {t("knowledge.pdf_uploaded_books_title")}
       </h2>
 
       {loading ? (
-        <div style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>読み込み中...</div>
+        <div style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>{t("knowledge.pdf_loading")}</div>
       ) : books.length === 0 ? (
         <div style={{ padding: 24, textAlign: "center", borderRadius: 12, border: "1px dashed #374151", color: "#6b7280", fontSize: 14 }}>
-          書籍PDFがありません
+          {t("knowledge.pdf_no_books")}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -158,7 +166,7 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", display: "flex", flexWrap: "wrap", gap: 8 }}>
                   <span style={statusBadgeStyle(book.status)}>
-                    {STATUS_LABEL[book.status] ?? book.status}
+                    {bookStatusLabel(book.status, t)}
                   </span>
                   {book.chunk_count != null && (
                     <span>{book.chunk_count}件の分割テキスト</span>
@@ -170,12 +178,12 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
                 </div>
                 {book.status === "failed" && (
                   <div style={{ fontSize: 12, color: "#f87171", marginTop: 4 }}>
-                    エラーが発生しました
+                    {t("knowledge.pdf_book_error")}
                   </div>
                 )}
                 {book.status === "embedded" && (
                   <div style={{ fontSize: 12, color: "#4ade80", marginTop: 4 }}>
-                    ✅ {book.chunk_count ?? 0}件の分割テキスト登録完了
+                    {t("knowledge.pdf_book_embedded_success", { n: book.chunk_count ?? 0 })}
                   </div>
                 )}
               </div>
@@ -193,7 +201,7 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    詳細
+                    {t("knowledge.pdf_detail")}
                   </button>
                 )}
                 {(book.status === "uploaded" || book.status === "failed") && (
@@ -210,7 +218,11 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {processing === book.id ? "処理中..." : book.status === "failed" ? "再処理" : "処理開始"}
+                    {processing === book.id
+                      ? t("knowledge.pdf_processing_btn")
+                      : book.status === "failed"
+                      ? t("knowledge.pdf_reprocess_btn")
+                      : t("knowledge.pdf_process_btn")}
                   </button>
                 )}
               </div>
@@ -230,6 +242,8 @@ interface QueuedFile {
   file: File;
   title: string;
   status: FileUploadStatus;
+  /** アップロード中の進捗率(0-100)。XHRのprogressイベントから更新 */
+  progress?: number;
   uploadedBookId?: number;
   errorMsg?: string;
   isZip?: boolean;
@@ -245,15 +259,58 @@ const FILE_STATUS_ICON: Record<FileUploadStatus, string> = {
   error: "❌",
 };
 
-const FILE_STATUS_LABEL: Record<FileUploadStatus, string> = {
-  pending: "待機中",
-  uploading: "アップロード中",
-  processing: "処理中",
-  embedded: "完了",
-  error: "エラー",
-};
+function fileStatusLabel(status: FileUploadStatus, t: TFunc): string {
+  const map: Record<FileUploadStatus, string> = {
+    pending: t("knowledge.pdf_status_pending"),
+    uploading: t("knowledge.pdf_status_uploading"),
+    processing: t("knowledge.pdf_status_processing"),
+    embedded: t("knowledge.pdf_status_embedded"),
+    error: t("knowledge.pdf_status_error"),
+  };
+  return map[status];
+}
+
+/** XHRのstatusコードからユーザー向けエラーメッセージを分類する */
+function classifyUploadError(status: number, t: TFunc, fallback?: string): string {
+  if (status === 401 || status === 403) return t("knowledge.pdf_error_auth");
+  if (status === 413) return t("knowledge.pdf_error_too_large");
+  return fallback || t("knowledge.pdf_error_generic");
+}
+
+/** FormDataをXHRで送信し、進捗(0-100)をonProgressへ通知する */
+function uploadWithProgress(
+  url: string,
+  form: FormData,
+  token: string | null,
+  onProgress: (pct: number) => void
+): Promise<{ status: number; body: unknown; networkError?: boolean }> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    });
+    xhr.addEventListener("load", () => {
+      let body: unknown = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        body = null;
+      }
+      resolve({ status: xhr.status, body });
+    });
+    xhr.addEventListener("error", () => {
+      resolve({ status: 0, body: null, networkError: true });
+    });
+    xhr.open("POST", url);
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.send(form);
+  });
+}
 
 export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
+  const { t } = useLang();
   const { isSuperAdmin } = useAuth();
   const [books, setBooks] = useState<BookUpload[]>([]);
   const [loadingBooks, setLoadingBooks] = useState(false);
@@ -264,6 +321,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const [selectedBook, setSelectedBook] = useState<BookUpload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dragCounterRef = useRef(0);
 
   const listUrl = isSuperAdmin
     ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(tenantId)}`
@@ -306,7 +364,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
               const serverBook = serverBooks.find((b) => b.id === q.uploadedBookId);
               if (!serverBook) return q;
               if (serverBook.status === "embedded") return { ...q, status: "embedded" as FileUploadStatus };
-              if (serverBook.status === "failed") return { ...q, status: "error" as FileUploadStatus, errorMsg: "処理に失敗しました" };
+              if (serverBook.status === "failed") return { ...q, status: "error" as FileUploadStatus, errorMsg: t("knowledge.pdf_book_error") };
               return { ...q, status: "processing" as FileUploadStatus };
             });
             // 全件が embedded or error になったらポーリング停止
@@ -324,7 +382,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
         }
       })();
     }, 5000);
-  }, [listUrl]);
+  }, [listUrl, t]);
 
   useEffect(() => {
     return () => {
@@ -343,7 +401,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
   const ZIP_TYPES = new Set(["application/zip", "application/x-zip-compressed", "application/x-zip"]);
   const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50MB
 
-  const validateAndAddFiles = (files: FileList | File[]) => {
+  const validateAndAddFiles = useCallback((files: FileList | File[]) => {
     const arr = Array.from(files);
     const newEntries: QueuedFile[] = [];
     for (const f of arr) {
@@ -351,13 +409,13 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
       const isPdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
 
       if (!isPdf && !isZip) {
-        showToast(`${f.name}: PDFまたはZIPファイルを選択してください`, false);
+        showToast(`${f.name}: ${t("knowledge.pdf_error_type")}`, false);
         continue;
       }
 
       if (isZip) {
         if (f.size > MAX_ZIP_SIZE) {
-          showToast(`${f.name}: ファイルが大きすぎます。50MB以下のZIPファイルを選択してください。`, false);
+          showToast(`${f.name}: ${t("knowledge.pdf_error_zip_size")}`, false);
           continue;
         }
         // ZIPはタイトル不要（サーバー側でファイル名から自動設定）
@@ -373,7 +431,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
 
       // PDF
       if (f.size > MAX_BOOK_PDF_SIZE) {
-        showToast(`${f.name}: ファイルサイズが10MBを超えています`, false);
+        showToast(`${f.name}: ${t("knowledge.pdf_error_size")}`, false);
         continue;
       }
       // デフォルトタイトル: ファイル名から拡張子除去
@@ -388,12 +446,28 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
     if (newEntries.length > 0) {
       setQueue((prev) => [...prev, ...newEntries]);
     }
-  };
+  }, [t]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    dragCounterRef.current = 0;
     setDragOver(false);
     validateAndAddFiles(e.dataTransfer.files);
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current += 1;
+    setDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setDragOver(false);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -403,6 +477,8 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
     }
   };
 
+  const openFilePicker = () => fileInputRef.current?.click();
+
   const removeFromQueue = (id: string) => {
     setQueue((prev) => prev.filter((q) => q.id !== id));
   };
@@ -411,22 +487,29 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
     setQueue((prev) => prev.map((q) => q.id === id ? { ...q, title } : q));
   };
 
-  // 順次アップロード実行
+  /** エラーになったアイテムを pending に戻して再送信可能にする */
+  const retryItem = (id: string) => {
+    setQueue((prev) =>
+      prev.map((q) => (q.id === id ? { ...q, status: "pending", errorMsg: undefined, progress: undefined } : q))
+    );
+  };
+
+  // 順次アップロード実行（XHRで進捗を取得）
   const handleUploadAll = async () => {
     const pendingItems = queue.filter((q) => q.status === "pending");
     if (pendingItems.length === 0) return;
     if (pendingItems.some((q) => !q.isZip && !q.title.trim())) {
-      showToast("全PDFファイルにタイトルを入力してください", false);
+      showToast(t("knowledge.pdf_error_missing_title"), false);
       return;
     }
 
     setRunning(true);
     let anyUploaded = false;
+    const token = await getAccessToken();
 
     for (const item of pendingItems) {
-      // statusを「uploading」に更新
       setQueue((prev) =>
-        prev.map((q) => q.id === item.id ? { ...q, status: "uploading" } : q)
+        prev.map((q) => q.id === item.id ? { ...q, status: "uploading", progress: 0 } : q)
       );
 
       try {
@@ -435,14 +518,29 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
         if (!item.isZip) {
           form.append("title", item.title.trim());
         }
-        const res = await fetchWithAuth(uploadUrl, { method: "POST", body: form });
 
-        if (!res.ok) {
-          const err = (await res.json()) as { error?: string };
+        const { status, body, networkError } = await uploadWithProgress(
+          uploadUrl,
+          form,
+          token,
+          (pct) => setQueue((prev) => prev.map((q) => (q.id === item.id ? { ...q, progress: pct } : q)))
+        );
+
+        if (networkError) {
+          setQueue((prev) =>
+            prev.map((q) =>
+              q.id === item.id ? { ...q, status: "error", errorMsg: t("knowledge.pdf_error_network") } : q
+            )
+          );
+          continue;
+        }
+
+        if (status < 200 || status >= 300) {
+          const errBody = body as { error?: string } | null;
           setQueue((prev) =>
             prev.map((q) =>
               q.id === item.id
-                ? { ...q, status: "error", errorMsg: err.error ?? "アップロードに失敗しました" }
+                ? { ...q, status: "error", errorMsg: classifyUploadError(status, t, errBody?.error) }
                 : q
             )
           );
@@ -451,7 +549,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
 
         if (item.isZip) {
           // ZIPレスポンス: { message, total, results }
-          const zipResp = (await res.json()) as {
+          const zipResp = body as {
             message?: string;
             total?: number;
             results?: Array<{ fileName: string; bookId?: number; status: "ok" | "error"; error?: string }>;
@@ -463,7 +561,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                 ? {
                     ...q,
                     status: successCount > 0 ? "processing" : "error",
-                    errorMsg: successCount === 0 ? "ZIPのPDFがアップロードできませんでした" : undefined,
+                    errorMsg: successCount === 0 ? t("knowledge.pdf_error_zip_empty") : undefined,
                     zipResults: zipResp.results,
                   }
                 : q
@@ -471,7 +569,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
           );
           if (successCount > 0) anyUploaded = true;
         } else {
-          const created = (await res.json()) as { id?: number };
+          const created = body as { id?: number };
           setQueue((prev) =>
             prev.map((q) =>
               q.id === item.id
@@ -485,7 +583,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
         setQueue((prev) =>
           prev.map((q) =>
             q.id === item.id
-              ? { ...q, status: "error", errorMsg: "アップロードに失敗しました" }
+              ? { ...q, status: "error", errorMsg: t("knowledge.pdf_error_generic") }
               : q
           )
         );
@@ -529,19 +627,30 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
         />
       )}
 
-      {/* ドラッグ＆ドロップゾーン（複数ファイル対応） */}
+      {/* ドラッグ＆ドロップゾーン（複数ファイル対応・キーボード操作対応） */}
       <div style={{ marginBottom: 20 }}>
         <div
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
+          role="button"
+          tabIndex={0}
+          aria-label={t("knowledge.pdf_dropzone_label")}
+          onDragEnter={handleDragEnter}
+          onDragOver={(e) => e.preventDefault()}
+          onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onClick={openFilePicker}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openFilePicker();
+            }
+          }}
           style={{
             border: `2px dashed ${dragOver ? "#60a5fa" : "#374151"}`,
             borderRadius: 12, padding: "28px 20px", textAlign: "center",
             background: dragOver ? "rgba(96,165,250,0.06)" : "rgba(255,255,255,0.02)",
             cursor: "pointer", transition: "all 0.15s",
+            outline: "none",
           }}
-          onClick={() => fileInputRef.current?.click()}
         >
           <input
             ref={fileInputRef}
@@ -549,14 +658,16 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
             accept=".pdf,.zip,application/pdf,application/zip"
             multiple
             style={{ display: "none" }}
+            aria-hidden="true"
+            tabIndex={-1}
             onChange={handleFileChange}
           />
           <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
           <div style={{ fontSize: 14, color: "#9ca3af" }}>
-            PDFまたはZIPをここにドラッグ＆ドロップ（複数可）
+            {t("knowledge.pdf_dropzone_hint")}
           </div>
           <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-            またはクリックして選択（PDF: 各10MB以内、ZIP: 50MB以内・最大20件）
+            {t("knowledge.pdf_dropzone_size_hint")}
           </div>
         </div>
       </div>
@@ -565,7 +676,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
       {hasQueue && (
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 13, color: "#9ca3af", marginBottom: 8, fontWeight: 600 }}>
-            アップロード予定のファイル（{queue.length}件）
+            {t("knowledge.pdf_queue_header", { n: queue.length })}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {queue.map((item) => (
@@ -603,11 +714,12 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                     whiteSpace: "nowrap",
                     flexShrink: 0,
                   }}>
-                    {FILE_STATUS_LABEL[item.status]}
+                    {fileStatusLabel(item.status, t)}
                   </span>
                   {item.status === "pending" && !running && (
                     <button
                       onClick={() => removeFromQueue(item.id)}
+                      aria-label="削除"
                       style={{
                         padding: "4px 8px", minHeight: 28,
                         borderRadius: 6, border: "1px solid #374151",
@@ -620,10 +732,25 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                   )}
                 </div>
 
+                {/* アップロード進捗バー */}
+                {item.status === "uploading" && (
+                  <div style={{ marginTop: 6, marginBottom: 2 }}>
+                    <div style={{ width: "100%", height: 5, borderRadius: 999, background: "#1f2937", overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", borderRadius: 999,
+                        background: "linear-gradient(90deg, #3b82f6, #60a5fa)",
+                        width: `${item.progress ?? 0}%`,
+                        transition: "width 0.2s ease",
+                      }} />
+                    </div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{item.progress ?? 0}%</div>
+                  </div>
+                )}
+
                 {/* ZIPの場合: 展開メッセージ表示 */}
                 {item.isZip && item.status === "pending" && (
                   <div style={{ fontSize: 12, color: "#60a5fa", marginTop: 4 }}>
-                    ZIPファイル内のPDFを自動展開してアップロードします（最大20件）
+                    {t("knowledge.pdf_zip_hint")}
                   </div>
                 )}
 
@@ -644,7 +771,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                     type="text"
                     value={item.title}
                     onChange={(e) => updateTitle(item.id, e.target.value)}
-                    placeholder="書籍タイトルを入力"
+                    placeholder={t("knowledge.pdf_title_placeholder")}
                     disabled={running}
                     style={{
                       width: "100%", padding: "8px 12px",
@@ -657,8 +784,22 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                 )}
 
                 {item.status === "error" && item.errorMsg && (
-                  <div style={{ fontSize: 12, color: "#fca5a5", marginTop: 4 }}>
-                    {item.errorMsg}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 12, color: "#fca5a5", flex: 1, minWidth: 0 }}>
+                      {item.errorMsg}
+                    </div>
+                    <button
+                      onClick={() => retryItem(item.id)}
+                      style={{
+                        padding: "4px 10px", minHeight: 28,
+                        borderRadius: 999, border: "1px solid #374151",
+                        background: "rgba(15,23,42,0.8)", color: "#e5e7eb",
+                        fontSize: 11, cursor: "pointer", fontWeight: 500,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {t("knowledge.pdf_retry")}
+                    </button>
                   </div>
                 )}
               </div>
@@ -681,8 +822,8 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
               }}
             >
               {running
-                ? "アップロード中..."
-                : `📤 ${pendingCount}件をアップロード`}
+                ? t("knowledge.pdf_uploading_btn")
+                : t("knowledge.pdf_upload_btn", { n: pendingCount })}
             </button>
           )}
 
@@ -698,7 +839,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                 cursor: "pointer",
               }}
             >
-              リストをクリア
+              {t("knowledge.pdf_clear_list")}
             </button>
           )}
         </div>
@@ -706,9 +847,9 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
 
       {/* 書籍一覧 */}
       {loadingBooks ? (
-        <div style={{ color: "#6b7280", fontSize: 14 }}>読み込み中...</div>
+        <div style={{ color: "#6b7280", fontSize: 14 }}>{t("knowledge.pdf_loading")}</div>
       ) : books.length === 0 ? (
-        <div style={{ color: "#6b7280", fontSize: 14 }}>書籍がまだ登録されていません</div>
+        <div style={{ color: "#6b7280", fontSize: 14 }}>{t("knowledge.pdf_no_books")}</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {books.map((book) => (
@@ -740,7 +881,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    詳細
+                    {t("knowledge.pdf_detail")}
                   </button>
                 )}
                 <span style={{
@@ -749,7 +890,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
                   border: `1px solid ${STATUS_COLOR[book.status] ?? "#374151"}22`,
                   whiteSpace: "nowrap",
                 }}>
-                  {STATUS_LABEL[book.status] ?? book.status}
+                  {bookStatusLabel(book.status, t)}
                 </span>
               </div>
             </div>
