@@ -4,6 +4,7 @@
 import express from 'express';
 import request from 'supertest';
 import { registerOptionRoutes, checkSaiMonthlyCostCeiling } from './routes';
+import { logger } from '../../../lib/logger';
 
 jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
   supabaseAuthMiddleware: (_req: any, _res: any, next: any) => next(),
@@ -446,6 +447,95 @@ describe('checkSaiMonthlyCostCeiling', () => {
 
     expect(result).toEqual({ ok: true });
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  // 安全弁は fail-safe(不正な設定ならデフォルトへフォールバック)であるべきで、
+  // fail-open(不正な設定で誤って無制限になる)を避ける。無制限にできるのは明示的な '0' のみ。
+  describe('不正なenv値はfail-safeでデフォルトにフォールバックする(fail-openしない)', () => {
+    let warnSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('空文字は不正値としてデフォルト値(5000セント)にフォールバックする(無制限にならない)', async () => {
+      process.env.SAI_MONTHLY_COST_CEILING_CENTS = '';
+      process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
+      const pool = { query: mockQuery };
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ total: '5000' }] }); // デフォルト上限ちょうど到達
+      const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+      expect(result).toEqual({ ok: false, reason: 'tenant', spentCents: 5000, ceilingCents: 5000 });
+    });
+
+    it("'abc'等のタイポ(NaN)はデフォルト値にフォールバックし、警告ログを出す", async () => {
+      process.env.SAI_MONTHLY_COST_CEILING_CENTS = 'abc';
+      process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
+      const pool = { query: mockQuery };
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ total: '100' }] });
+      const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+      expect(result).toEqual({ ok: true });
+      expect(mockQuery.mock.calls[0]![1]).toEqual(['tenant-a']);
+      // デフォルト値(5000セント)が使われたことを、上限超過ケースで確認
+      warnSpy.mockClear();
+      mockQuery.mockResolvedValueOnce({ rows: [{ total: '5000' }] });
+      const result2 = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+      expect(result2).toEqual({ ok: false, reason: 'tenant', spentCents: 5000, ceilingCents: 5000 });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ envValue: 'abc', label: 'SAI_MONTHLY_COST_CEILING_CENTS' }),
+        expect.stringContaining('invalid'),
+      );
+    });
+
+    it("'-100'(負値)はデフォルト値にフォールバックし、警告ログを出す", async () => {
+      process.env.SAI_MONTHLY_COST_CEILING_CENTS = '-100';
+      process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
+      const pool = { query: mockQuery };
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ total: '5000' }] }); // デフォルト上限ちょうど到達
+      const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+      expect(result).toEqual({ ok: false, reason: 'tenant', spentCents: 5000, ceilingCents: 5000 });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ envValue: '-100', label: 'SAI_MONTHLY_COST_CEILING_CENTS' }),
+        expect.stringContaining('invalid'),
+      );
+    });
+
+    it("正しい数値('10000')はそのまま使われ、警告ログは出ない", async () => {
+      process.env.SAI_MONTHLY_COST_CEILING_CENTS = '10000';
+      process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
+      const pool = { query: mockQuery };
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ total: '10000' }] });
+      const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+      expect(result).toEqual({ ok: false, reason: 'tenant', spentCents: 10000, ceilingCents: 10000 });
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('全体上限側も同じ規則が適用される(空文字→デフォルト20000セントにフォールバック)', async () => {
+      process.env.SAI_MONTHLY_COST_CEILING_CENTS = '0';
+      process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '';
+      const pool = { query: mockQuery };
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ total: '20000' }] }); // 全体デフォルト上限ちょうど到達
+      const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+      expect(result).toEqual({ ok: false, reason: 'global', spentCents: 20000, ceilingCents: 20000 });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ envValue: '', label: 'SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS' }),
+        expect.stringContaining('invalid'),
+      );
+    });
   });
 
   it('テナントAが上限超過していてもテナントBの判定には影響しない(テナント単位)', async () => {

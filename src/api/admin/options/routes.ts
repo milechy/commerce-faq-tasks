@@ -86,13 +86,40 @@ export type SaiCeilingCheckResult =
 const SAI_MONTHLY_COST_CEILING_CENTS_DEFAULT = 5000;
 const SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS_DEFAULT = 20000;
 
+/**
+ * Sai月次コスト上限のenv値を解決する。安全弁は fail-safe(不正な設定ならデフォルトへ
+ * フォールバック)であるべきで、fail-open(不正な設定で誤って無制限になる)を避ける。
+ *
+ * - 未設定(undefined) → デフォルト値
+ * - 明示的に '0' → 無制限(エスカレーション時の逃げ道。これだけが唯一の無制限手段)
+ * - 空文字・NaN・負値などの不正値 → デフォルト値にフォールバックし、warnログを出す
+ *   (黙ってデフォルトに戻すと運用者が設定ミスに気づけないため)
+ * - それ以外の正の数値 → その値をそのまま使う
+ */
+function resolveSaiCeilingCents(envValue: string | undefined, defaultCents: number, label: string): number {
+  if (envValue === undefined) return defaultCents;
+  if (envValue === '0') return 0;
+
+  const parsed = Number(envValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    logger.warn(
+      { envValue, label, fallbackCents: defaultCents },
+      `[options] invalid ${label} value — falling back to default (fail-safe, not fail-open)`,
+    );
+    return defaultCents;
+  }
+  return parsed;
+}
+
 export async function checkSaiMonthlyCostCeiling(pool: any, tenantId: string): Promise<SaiCeilingCheckResult> {
   // テナント単位の上限(主)。
   // env 未設定時はデフォルト値(安全弁)を適用する。env に明示的に '0' を渡した場合は
   // 従来どおり無制限にする(エスカレーション時の逃げ道を残す) — 「未設定」と「明示的に0」を区別する。
-  const tenantCeilingCents = process.env.SAI_MONTHLY_COST_CEILING_CENTS === undefined
-    ? SAI_MONTHLY_COST_CEILING_CENTS_DEFAULT
-    : Number(process.env.SAI_MONTHLY_COST_CEILING_CENTS);
+  const tenantCeilingCents = resolveSaiCeilingCents(
+    process.env.SAI_MONTHLY_COST_CEILING_CENTS,
+    SAI_MONTHLY_COST_CEILING_CENTS_DEFAULT,
+    'SAI_MONTHLY_COST_CEILING_CENTS',
+  );
   if (tenantCeilingCents > 0) {
     const tenantResult = await pool.query(
       `SELECT COALESCE(SUM(cost_total_cents), 0) AS total
@@ -108,9 +135,11 @@ export async function checkSaiMonthlyCostCeiling(pool: any, tenantId: string): P
 
   // 全体(自社防衛)上限(2段構えの補強)。
   // env 未設定時はデフォルト値を適用、明示的に '0' なら無制限(テナント上限と同じ規則)。
-  const globalCeilingCents = process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS === undefined
-    ? SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS_DEFAULT
-    : Number(process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS);
+  const globalCeilingCents = resolveSaiCeilingCents(
+    process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS,
+    SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS_DEFAULT,
+    'SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS',
+  );
   if (globalCeilingCents > 0) {
     const globalResult = await pool.query(
       `SELECT COALESCE(SUM(cost_total_cents), 0) AS total
