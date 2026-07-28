@@ -1217,9 +1217,14 @@ export async function executeToolCall(
       }
 
       try {
-        const ceilingCheck = await checkSaiMonthlyCostCeiling(db);
+        const ceilingCheck = await checkSaiMonthlyCostCeiling(db, tenantId);
         if (!ceilingCheck.ok) {
-          return truncate('Saiの月次コスト上限に達しているため、今回は依頼できません。管理者に確認してください');
+          logger.warn({ event: 'sai_cost_ceiling_blocked', tenantId, ...ceilingCheck }, 'request_sai_task blocked: monthly cost ceiling reached');
+          const msg =
+            ceilingCheck.reason === 'global'
+              ? 'Saiの全体月次コスト上限に達しているため、今回は依頼できません。管理者に確認してください'
+              : 'Saiの月次コスト上限に達しているため、今回は依頼できません。管理者に確認してください';
+          return truncate(msg);
         }
 
         const { task_id } = await submitSaiTask({ description });

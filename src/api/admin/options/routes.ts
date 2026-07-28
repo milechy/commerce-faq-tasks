@@ -69,20 +69,45 @@ function denyInsufficient(req: Request, res: Response, su: Record<string, any> |
 // Phase5 (Saiセキュリティ強化): 支出上限ガードレール
 // Sai VPS側の日次タスク数上限(SAI_MAX_TASKS_PER_DAY)とは独立した、
 // R2C本体側での月次コスト上限チェック(多層防御)。デフォルトOFF(未設定なら無制限)。
+//
+// バグ修正: 従来は usage_logs を feature_used='sai_agent' のみでテナント横断集計しており、
+// 1テナントが使い込むと他の全テナントのSaiが止まっていた。テナント単位の上限を主とし、
+// 自社防衛用の全体上限(任意・別env)を2段構えで持つ。どちらで止まったかを reason で区別する。
 // ---------------------------------------------------------------------------
-export async function checkSaiMonthlyCostCeiling(pool: any): Promise<{ ok: true } | { ok: false; spentCents: number; ceilingCents: number }> {
-  const ceilingCents = Number(process.env.SAI_MONTHLY_COST_CEILING_CENTS ?? '0');
-  if (!ceilingCents || ceilingCents <= 0) return { ok: true };
+export type SaiCeilingCheckResult =
+  | { ok: true }
+  | { ok: false; reason: 'tenant' | 'global'; spentCents: number; ceilingCents: number };
 
-  const result = await pool.query(
-    `SELECT COALESCE(SUM(cost_total_cents), 0) AS total
-     FROM usage_logs
-     WHERE feature_used = 'sai_agent' AND created_at >= date_trunc('month', NOW())`,
-  );
-  const spentCents = parseInt(result.rows[0]?.total ?? '0', 10);
-  if (spentCents >= ceilingCents) {
-    return { ok: false, spentCents, ceilingCents };
+export async function checkSaiMonthlyCostCeiling(pool: any, tenantId: string): Promise<SaiCeilingCheckResult> {
+  // テナント単位の上限(主)。未設定(0)なら従来どおり無制限。
+  const tenantCeilingCents = Number(process.env.SAI_MONTHLY_COST_CEILING_CENTS ?? '0');
+  if (tenantCeilingCents > 0) {
+    const tenantResult = await pool.query(
+      `SELECT COALESCE(SUM(cost_total_cents), 0) AS total
+       FROM usage_logs
+       WHERE feature_used = 'sai_agent' AND tenant_id = $1 AND created_at >= date_trunc('month', NOW())`,
+      [tenantId],
+    );
+    const tenantSpentCents = parseInt(tenantResult.rows[0]?.total ?? '0', 10);
+    if (tenantSpentCents >= tenantCeilingCents) {
+      return { ok: false, reason: 'tenant', spentCents: tenantSpentCents, ceilingCents: tenantCeilingCents };
+    }
   }
+
+  // 全体(自社防衛)上限(任意・2段構えの補強)。未設定(0)ならスキップ。
+  const globalCeilingCents = Number(process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS ?? '0');
+  if (globalCeilingCents > 0) {
+    const globalResult = await pool.query(
+      `SELECT COALESCE(SUM(cost_total_cents), 0) AS total
+       FROM usage_logs
+       WHERE feature_used = 'sai_agent' AND created_at >= date_trunc('month', NOW())`,
+    );
+    const globalSpentCents = parseInt(globalResult.rows[0]?.total ?? '0', 10);
+    if (globalSpentCents >= globalCeilingCents) {
+      return { ok: false, reason: 'global', spentCents: globalSpentCents, ceilingCents: globalCeilingCents };
+    }
+  }
+
   return { ok: true };
 }
 
@@ -100,10 +125,17 @@ async function attemptSaiForOrder(
   order: { id: string; tenant_id: string; description: string },
   maxSteps?: number,
 ): Promise<SaiAttemptResult> {
-  const ceilingCheck = await checkSaiMonthlyCostCeiling(pool);
+  const ceilingCheck = await checkSaiMonthlyCostCeiling(pool, order.tenant_id);
   if (!ceilingCheck.ok) {
-    logger.warn({ event: 'sai_cost_ceiling_blocked', ...ceilingCheck }, 'Sai attempt blocked: monthly cost ceiling reached');
-    return { ok: false, reason: 'ceiling', error: 'R2Cエージェント利用の月次コスト上限に達しています。管理者に確認してください。' };
+    logger.warn(
+      { event: 'sai_cost_ceiling_blocked', tenantId: order.tenant_id, ...ceilingCheck },
+      'Sai attempt blocked: monthly cost ceiling reached',
+    );
+    const error =
+      ceilingCheck.reason === 'global'
+        ? 'R2Cエージェント利用の全体月次コスト上限に達しています。管理者に確認してください。'
+        : 'R2Cエージェント利用の月次コスト上限に達しています。管理者に確認してください。';
+    return { ok: false, reason: 'ceiling', error };
   }
 
   // Phase6 (Sai Judge学習ループ): 承認済みルールがあれば作業内容に注入する。
