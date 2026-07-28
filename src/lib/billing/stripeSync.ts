@@ -258,6 +258,22 @@ async function getSubscriptionItemId(
 }
 
 /**
+ * anam_session 1行分の請求数量（分単位、切り上げ）を返す。
+ *
+ * Anam.ai は $0.16/分の時間課金だが、Stripe報告数量は他機能と同じ「1行=1リクエスト」の
+ * まま合算すると、3分セッション(原価 約$0.16×3)が「1リクエスト」分の単価でしか請求されず
+ * 赤字になる（GID 1216944002701788）。anam_session行のみ秒→分に換算して数量に加算する。
+ *
+ * 切り上げ規則: 0秒は0（対象外）。1秒でも経過すれば1分として計上する
+ * （例: 59秒→1分、60秒→1分、61秒→2分、180秒→3分）。負値は0を返す。
+ */
+export function anamSessionBillableUnits(sessionSeconds: number | null | undefined): number {
+  const seconds = sessionSeconds ?? 0;
+  if (seconds <= 0) return 0;
+  return Math.ceil(seconds / 60);
+}
+
+/**
  * 指定期間のテナント使用量を集計してStripeに報告する（冪等）。
  *
  * @param db  pg.Pool インスタンス
@@ -325,7 +341,13 @@ async function _reportTenantUsage(
   const aggResult = await db.query(
     `SELECT
        COUNT(*)::integer           AS total_requests,
-       COALESCE(SUM(cost_total_cents), 0)::integer AS total_cost_cents
+       COALESCE(SUM(cost_total_cents), 0)::integer AS total_cost_cents,
+       COALESCE(SUM(
+         CASE WHEN feature_used = 'anam_session'
+              THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
+              ELSE 1
+         END
+       ), 0)::integer AS billable_units
      FROM usage_logs
      WHERE tenant_id = $1
        AND created_at >= $2
@@ -336,6 +358,9 @@ async function _reportTenantUsage(
 
   const totalRequests: number = aggResult.rows[0].total_requests;
   const totalCostCents: number = aggResult.rows[0].total_cost_cents;
+  // anam_session行は秒→分換算（anamSessionBillableUnits と同じ切り上げ規則をSQL側でも適用）、
+  // それ以外は従来通り1行=1単位。テキストのみのテナントは billableUnits === totalRequests。
+  const billableUnits: number = aggResult.rows[0].billable_units;
 
   if (totalRequests === 0) {
     logger.debug({ tenantId, periodYyyyMm }, '[stripeSync] no pending usage');
@@ -345,7 +370,7 @@ async function _reportTenantUsage(
   // プラン倍率を Stripe 報告数量に適用（リクエスト課金 × プラン別単価）。
   // 実リクエスト数は stripe_usage_reports.total_requests に保持し、請求数量のみ倍率適用する。
   const multiplier = planMultiplier(plan);
-  const billedQuantity = Math.ceil(totalRequests * multiplier);
+  const billedQuantity = Math.ceil(billableUnits * multiplier);
 
   const idempotencyKey = `billing:${tenantId}:${periodYyyyMm}`;
 
@@ -406,7 +431,7 @@ async function _reportTenantUsage(
       );
 
       logger.info(
-        { tenantId, periodYyyyMm, totalRequests, billedQuantity, plan, multiplier, totalCostCents },
+        { tenantId, periodYyyyMm, totalRequests, billableUnits, billedQuantity, plan, multiplier, totalCostCents },
         '[stripeSync] usage reported to Stripe'
       );
 
