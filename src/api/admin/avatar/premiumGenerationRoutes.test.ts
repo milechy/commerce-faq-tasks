@@ -33,6 +33,12 @@ global.fetch = mockFetch;
 import { upscaleWithMagnific } from "../../../lib/magnific";
 const mockUpscale = upscaleWithMagnific as jest.Mock;
 
+import { trackUsage } from "../../../lib/billing/usageTracker";
+const mockTrackUsage = trackUsage as jest.Mock;
+
+// costCalculatorはモックしない（実際のcost_total_cents計算を検証するため）
+import { calculateBillingAmountCents } from "../../../lib/billing/costCalculator";
+
 // ── ヘルパー ──────────────────────────────────────────────────────────────────
 
 function makeApp(tenantId = "tenant-a", role: "client_admin" | "super_admin" = "client_admin") {
@@ -88,6 +94,15 @@ describe("POST /v1/admin/avatar/generate-premium", () => {
     // Magnificスキップ時はoriginal === enhanced
     expect(res.body.originalUrl).toBe(res.body.enhancedUrl);
     expect(mockUpscale).not.toHaveBeenCalled();
+
+    // GID 1216944003337122: Magnific未実行時はfluxImageCountのみでcost_total_centsが
+    // 意図額(PREMIUM_AVATAR_PRICE_CENTS デフォルト100セント=$1.00相当)になる
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect(call.featureUsed).toBe("premium_avatar_generation");
+    expect(call.fluxImageCount).toBe(1);
+    expect(call.magnificUpscaleCount).toBe(0);
+    expect(calculateBillingAmountCents(call)).toBe(100);
   });
 
   it("正常系（Magnific設定済み）: アップスケール結果を返す", async () => {
@@ -121,6 +136,15 @@ describe("POST /v1/admin/avatar/generate-premium", () => {
     expect(mockUpscale).toHaveBeenCalledWith(
       expect.objectContaining({ scaleFactor: 2, style: "portrait" })
     );
+
+    // GID 1216944003337122: Magnific実行時はflux+magnific両方のコストが積み上がっても
+    // marginOverrideの逆算により、意図額(PREMIUM_AVATAR_PRICE_CENTS デフォルト100セント)
+    // ちょうどが計上される
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect(call.fluxImageCount).toBe(1);
+    expect(call.magnificUpscaleCount).toBe(1);
+    expect(calculateBillingAmountCents(call)).toBe(100);
   });
 
   it("Magnificエラー時はoriginalUrlにフォールバック", async () => {
@@ -142,6 +166,11 @@ describe("POST /v1/admin/avatar/generate-premium", () => {
     // Magnificがエラーでも200でoriginalを返す
     expect(res.status).toBe(200);
     expect(res.body.imageUrl).toBeTruthy();
+
+    // GID 1216944003337122: Magnificが失敗した回はmagnificUpscaleCount=0（課金しない）
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect(call.magnificUpscaleCount).toBe(0);
+    expect(calculateBillingAmountCents(call)).toBe(100);
   });
 
   it("バリデーションエラー: prompt短すぎ", async () => {
