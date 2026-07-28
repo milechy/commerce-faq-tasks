@@ -32,16 +32,3 @@ export async function authFetch(
     },
   });
 }
-
-/**
- * @deprecated adminFetch は authFetch に統一されました。
- * path は API_BASE からの相対パス（例: "/admin/faqs"）。
- */
-export async function adminFetch(path: string, options: RequestInit = {}) {
-  const res = await authFetch(`${API_BASE}${path}`, options);
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`API error: ${res.status} - ${txt}`);
-  }
-  return res.json();
-}
