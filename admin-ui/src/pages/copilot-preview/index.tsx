@@ -10,6 +10,8 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { useNavigate } from "react-router-dom";
+import { LogOut } from "lucide-react";
 import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 import { useAuth } from "../../auth/useAuth";
@@ -223,7 +225,8 @@ export default function CopilotPreviewPage() {
   // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
   // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
   // tenantIdがサーバー側で使われるため、previewMode=falseのままで問題ない。
-  const { user, previewMode, previewTenantId } = useAuth();
+  const { user, previewMode, previewTenantId, logout } = useAuth();
+  const navigate = useNavigate();
   const [active, setActive] = useState("assistant");
   const [input, setInput] = useState("");
   // 起動直後は空。bootstrap()が実データの週次ブリーフィングを積む
@@ -403,6 +406,15 @@ export default function CopilotPreviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 新UI(サイドバー型ではないため)にはログアウト手段が無く、Phase4トグルで
+  // このブラウザの既定画面にすると詰む(GID: 新UI常用時にログアウトできない)。
+  // previewMode(super_adminのクライアントビュー)中も、実ログインユーザーは
+  // super_adminのため、ここでのログアウトは正しくsuper_admin自身を退出させる。
+  const handleLogout = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
+
   const runAction = (action: string, fromMsgId: number) => {
     consumeChips(fromMsgId);
     // チップは全て実APIへの返信（sendReal 側で me() を積むため、ここでは積まない）
@@ -484,6 +496,19 @@ export default function CopilotPreviewPage() {
           <div style={{ fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.55, padding: "10px" }}>
             「くわしい設定」は従来画面のまま。会話UIは<strong style={{ color: "var(--foreground)" }}>追加</strong>で、既存は消していません。
           </div>
+          <button
+            onClick={() => void handleLogout()}
+            title={previewMode ? "Super Adminとしてログアウトします（クライアントビューの「元に戻す」とは別の操作です）" : "ログアウト"}
+            style={{
+              display: "flex", alignItems: "center", gap: 10, width: "calc(100% - 16px)", margin: "2px 8px 0",
+              padding: "11px 12px", borderRadius: 10, border: "1px solid var(--border)",
+              background: "transparent", cursor: "pointer", textAlign: "left",
+              fontSize: 13, color: "var(--muted-foreground)", minHeight: 44,
+            }}
+          >
+            <LogOut size={16} />
+            ログアウト
+          </button>
         </div>
       </aside>
 
