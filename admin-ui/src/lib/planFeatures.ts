@@ -1,6 +1,14 @@
 // admin-ui/src/lib/planFeatures.ts
 // LP(r2c.biz)の料金表に対応するプラン別機能制限。
 // backend(src/lib/billing/planFeatures.ts)のロジックと一致させること。
+//
+// GID 1216961878992581: super_admin バイパスの境界（意図的な区別。「割れている」わけではない）。
+// 新しいゲートを追加する際は、以下のどちらに当てはまるかで super_admin バイパスの可否を判断すること。
+//   - テナントの権能を永続的に付与する操作(features フラグを立てる等) → バイパス不可。
+//     super_admin であってもプランを超えた権能付与はさせない
+//     (例: activate_avatar — テナントの avatar 機能を有効化する操作、PR #533)。
+//   - 1回ごとに原価が発生する staff 起点の操作 → バイパス可。サポート業務を止めない
+//     (例: deep_research / premium_avatar / sai_task — その場限りの生成・代行実行、PR #538)。
 
 import type { TenantPlan } from "../auth/useAuth";
 

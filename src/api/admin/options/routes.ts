@@ -68,7 +68,9 @@ function denyInsufficient(req: Request, res: Response, su: Record<string, any> |
 // ---------------------------------------------------------------------------
 // Phase5 (Saiセキュリティ強化): 支出上限ガードレール
 // Sai VPS側の日次タスク数上限(SAI_MAX_TASKS_PER_DAY)とは独立した、
-// R2C本体側での月次コスト上限チェック(多層防御)。デフォルトOFF(未設定なら無制限)。
+// R2C本体側での月次コスト上限チェック(多層防御)。
+// GID 1216947740906009: デフォルトはテナント単位$50/月・全体$200/月(env未設定時)。
+// env に明示的に '0' を渡すと無制限(エスカレーション時の逃げ道)。
 //
 // バグ修正: 従来は usage_logs を feature_used='sai_agent' のみでテナント横断集計しており、
 // 1テナントが使い込むと他の全テナントのSaiが止まっていた。テナント単位の上限を主とし、
@@ -78,9 +80,19 @@ export type SaiCeilingCheckResult =
   | { ok: true }
   | { ok: false; reason: 'tenant' | 'global'; spentCents: number; ceilingCents: number };
 
+// GID 1216947740906009: Sai($0.05/step暫定単価)の安全弁としてのデフォルト上限。
+// テナント単位: $50/月(月1000step相当)。全体(自社防衛): $200/月。
+// 実測が固まるまでの水準であり、env で明示的に上書きできる。
+const SAI_MONTHLY_COST_CEILING_CENTS_DEFAULT = 5000;
+const SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS_DEFAULT = 20000;
+
 export async function checkSaiMonthlyCostCeiling(pool: any, tenantId: string): Promise<SaiCeilingCheckResult> {
-  // テナント単位の上限(主)。未設定(0)なら従来どおり無制限。
-  const tenantCeilingCents = Number(process.env.SAI_MONTHLY_COST_CEILING_CENTS ?? '0');
+  // テナント単位の上限(主)。
+  // env 未設定時はデフォルト値(安全弁)を適用する。env に明示的に '0' を渡した場合は
+  // 従来どおり無制限にする(エスカレーション時の逃げ道を残す) — 「未設定」と「明示的に0」を区別する。
+  const tenantCeilingCents = process.env.SAI_MONTHLY_COST_CEILING_CENTS === undefined
+    ? SAI_MONTHLY_COST_CEILING_CENTS_DEFAULT
+    : Number(process.env.SAI_MONTHLY_COST_CEILING_CENTS);
   if (tenantCeilingCents > 0) {
     const tenantResult = await pool.query(
       `SELECT COALESCE(SUM(cost_total_cents), 0) AS total
@@ -94,8 +106,11 @@ export async function checkSaiMonthlyCostCeiling(pool: any, tenantId: string): P
     }
   }
 
-  // 全体(自社防衛)上限(任意・2段構えの補強)。未設定(0)ならスキップ。
-  const globalCeilingCents = Number(process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS ?? '0');
+  // 全体(自社防衛)上限(2段構えの補強)。
+  // env 未設定時はデフォルト値を適用、明示的に '0' なら無制限(テナント上限と同じ規則)。
+  const globalCeilingCents = process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS === undefined
+    ? SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS_DEFAULT
+    : Number(process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS);
   if (globalCeilingCents > 0) {
     const globalResult = await pool.query(
       `SELECT COALESCE(SUM(cost_total_cents), 0) AS total

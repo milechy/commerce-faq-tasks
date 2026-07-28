@@ -67,15 +67,22 @@ function superAdminApp() {
 
 describe('POST /v1/admin/options/:id/try-sai', () => {
   const savedCeiling = process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+  const savedGlobalCeiling = process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    delete process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+    // デフォルトは明示的に無制限('0')にしておき、上限そのものを検証したいテストだけが
+    // 個別に上書き/未設定化する(GID 1216947740906009 で未設定時のデフォルト上限が有効化された
+    // ため、上限チェックを意図しない既存テストへ副作用が及ぶのを防ぐ)。
+    process.env.SAI_MONTHLY_COST_CEILING_CENTS = '0';
+    process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
   });
 
   afterEach(() => {
     if (savedCeiling === undefined) delete process.env.SAI_MONTHLY_COST_CEILING_CENTS;
     else process.env.SAI_MONTHLY_COST_CEILING_CENTS = savedCeiling;
+    if (savedGlobalCeiling === undefined) delete process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS;
+    else process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = savedGlobalCeiling;
   });
 
   it('super_admin以外は403', async () => {
@@ -134,15 +141,59 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
     expect(sentDescription).toContain('FAQ登録代行をお願いします');
   });
 
-  it('SAI_MONTHLY_COST_CEILING_CENTS未設定時は上限チェックをスキップする(デフォルト無制限)', async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', description: 'x' }] });
+  // GID 1216947740906009: env未設定時はデフォルト上限(テナント$50/月・全体$200/月)が適用される。
+  it('SAI_MONTHLY_COST_CEILING_CENTS未設定時はデフォルト上限($50/月)が適用され、下回っていれば通常通り依頼できる', async () => {
+    delete process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+    delete process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS;
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'x' }] }); // 発注SELECT
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '100' }] }); // テナント上限チェックSELECT（$50未満）
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '100' }] }); // 全体上限チェックSELECT（$200未満）
+    mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // sai_task_id UPDATE
+
+    const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(res.status).toBe(202);
+    // env未設定でもデフォルト上限のチェックは行われる(発注SELECT+テナント上限SELECT+全体上限SELECT+UPDATE)
+    expect(mockQuery).toHaveBeenCalledTimes(4);
+  });
+
+  it('env未設定でテナント使用量がデフォルト上限($50=5000セント)以上なら429で拒否される', async () => {
+    delete process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+    delete process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS;
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'x' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '5000' }] }); // テナント上限ちょうど到達
+
+    const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(res.status).toBe(429);
+    expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+  });
+
+  it('env未設定でテナントは上限内だが全体使用量がデフォルト上限($200=20000セント)以上なら429で拒否される', async () => {
+    delete process.env.SAI_MONTHLY_COST_CEILING_CENTS;
+    delete process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS;
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'x' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '100' }] }); // テナント上限: 余裕あり
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '20000' }] }); // 全体上限ちょうど到達
+
+    const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(res.status).toBe(429);
+    expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+  });
+
+  it('env に明示的に"0"を渡すと従来どおり無制限になる(エスカレーション時の逃げ道)', async () => {
+    process.env.SAI_MONTHLY_COST_CEILING_CENTS = '0';
+    process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'x' }] });
     mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
     mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [] });
 
     const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
 
     expect(res.status).toBe(202);
-    // 上限チェックのSELECTは発火しない(合計2回=発注SELECT+sai_task_id UPDATEのみ)
+    // 明示的に0を渡すと上限チェックSELECTは発火しない(発注SELECT+UPDATEのみ)
     expect(mockQuery).toHaveBeenCalledTimes(2);
   });
 
@@ -356,7 +407,40 @@ describe('checkSaiMonthlyCostCeiling', () => {
     else process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = savedGlobalCeiling;
   });
 
-  it('両方未設定(0)なら従来どおり無制限で、DBクエリは一切発行しない(後方互換)', async () => {
+  // GID 1216947740906009: env未設定時はデフォルト上限(テナント5000セント=$50・全体20000セント=$200)が適用される。
+  it('両方未設定ならデフォルト上限($50/$200)が適用され、下回っていればokを返す', async () => {
+    const pool = { query: mockQuery };
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '100' }] }); // テナント: $50未満
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '100' }] }); // 全体: $200未満
+    const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+    expect(result).toEqual({ ok: true });
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('未設定時、テナント使用量がデフォルト上限(5000セント)以上なら reason=tenant で拒否する', async () => {
+    const pool = { query: mockQuery };
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '5000' }] });
+    const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+    expect(result).toEqual({ ok: false, reason: 'tenant', spentCents: 5000, ceilingCents: 5000 });
+  });
+
+  it('未設定時、テナント上限は未満だが全体使用量がデフォルト上限(20000セント)以上なら reason=global で拒否する', async () => {
+    const pool = { query: mockQuery };
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '100' }] }); // テナント: 余裕あり
+    mockQuery.mockResolvedValueOnce({ rows: [{ total: '20000' }] }); // 全体: 上限到達
+    const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
+
+    expect(result).toEqual({ ok: false, reason: 'global', spentCents: 20000, ceilingCents: 20000 });
+  });
+
+  it('明示的に"0"を渡すとテナント・全体とも無制限になり、DBクエリを一切発行しない(エスカレーション時の逃げ道)', async () => {
+    process.env.SAI_MONTHLY_COST_CEILING_CENTS = '0';
+    process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
     const pool = { query: mockQuery };
     const result = await checkSaiMonthlyCostCeiling(pool, 'tenant-a');
 
@@ -366,6 +450,7 @@ describe('checkSaiMonthlyCostCeiling', () => {
 
   it('テナントAが上限超過していてもテナントBの判定には影響しない(テナント単位)', async () => {
     process.env.SAI_MONTHLY_COST_CEILING_CENTS = '1000';
+    process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0'; // このテストの対象外(テナント単位の検証)
     const pool = { query: mockQuery };
 
     mockQuery.mockResolvedValueOnce({ rows: [{ total: '1500' }] });
@@ -392,8 +477,9 @@ describe('checkSaiMonthlyCostCeiling', () => {
     expect(result).toEqual({ ok: false, reason: 'global', spentCents: 5000, ceilingCents: 5000 });
   });
 
-  it('テナント上限のみ設定(全体上限は未設定)なら全体集計クエリは発行しない', async () => {
+  it('全体上限を明示的に0にすると全体集計クエリは発行しない(テナント上限のみ有効)', async () => {
     process.env.SAI_MONTHLY_COST_CEILING_CENTS = '1000';
+    process.env.SAI_MONTHLY_COST_CEILING_GLOBAL_CENTS = '0';
     const pool = { query: mockQuery };
 
     mockQuery.mockResolvedValueOnce({ rows: [{ total: '0' }] });
