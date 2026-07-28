@@ -8,8 +8,6 @@ import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { logger } from '../../../lib/logger';
 import { resolveFaqWriteIndex } from "../../../search/langIndex";
 
-const CATEGORIES = ["inventory", "campaign", "coupon", "store_info"] as const;
-
 /** query/header からテナントIDを解決（bodyから取得禁止 — CLAUDE.md） */
 function resolveTenantId(req: Request): string | null {
   const fromQuery = (req.query.tenant || req.query.tenant_id) as string | undefined;
@@ -103,10 +101,15 @@ const bulkDeleteSchema = z.object({
   ids: z.array(z.coerce.number().int().positive()).min(1).max(100),
 });
 
+const bulkPublishSchema = z.object({
+  ids: z.array(z.coerce.number().int().positive()).min(1).max(100),
+  is_published: z.boolean(),
+});
+
 const createSchema = z.object({
   question: z.string().min(1).max(500),
   answer: z.string().min(1).max(2000),
-  category: z.enum(CATEGORIES).optional(),
+  category: z.string().min(1).max(50).optional(),
   tags: z.array(z.string()).optional().default([]),
   is_published: z.boolean().optional().default(true),
 });
@@ -114,7 +117,7 @@ const createSchema = z.object({
 const updateSchema = z.object({
   question: z.string().min(1).max(500),
   answer: z.string().min(1).max(2000),
-  category: z.enum(CATEGORIES).optional(),
+  category: z.string().min(1).max(50).optional(),
   tags: z.array(z.string()).optional(),
   is_published: z.boolean().optional(),
   /** Phase69-2: 検索除外フラグ */
@@ -152,6 +155,7 @@ export function registerFaqCrudRoutes(
 
     const { limit, offset, search, sort, order, category } = parsed.data;
     const isPublishedRaw = req.query.is_published as string | undefined;
+    const isGlobalRaw = req.query.is_global as string | undefined;
 
     // ORDER BY — Zodのenum検証済み値を明示的なマッピングで二重保護
     const SORT_COLUMN_MAP: Record<string, string> = {
@@ -181,6 +185,12 @@ export function registerFaqCrudRoutes(
         whereClause += ` AND is_published = $${params.length}`;
       }
 
+      if (isGlobalRaw === "true") {
+        whereClause += ` AND is_global = true`;
+      } else if (isGlobalRaw === "false") {
+        whereClause += ` AND (is_global = false OR is_global IS NULL)`;
+      }
+
       const countResult = await db.query(
         `SELECT COUNT(*)::int AS total FROM faq_docs ${whereClause}`,
         params
@@ -190,7 +200,7 @@ export function registerFaqCrudRoutes(
       params.push(limit);
       params.push(offset);
       const itemsResult = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, is_global, created_at, updated_at
          FROM faq_docs
          ${whereClause}
          ORDER BY ${safeSortCol} ${safeOrder}
@@ -222,7 +232,7 @@ export function registerFaqCrudRoutes(
 
     try {
       const result = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, is_global, created_at, updated_at
          FROM faq_docs
          WHERE id = $1`,
         [id]
@@ -556,6 +566,65 @@ export function registerFaqCrudRoutes(
     } catch (err) {
       logger.warn("[DELETE /v1/admin/knowledge/faq/bulk]", err);
       return res.status(500).json({ error: "一括削除に失敗しました" });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // PATCH /v1/admin/knowledge/faq/bulk-publish
+  // FAQ一括公開状態切替（最大100件）
+  // -------------------------------------------------------------------------
+  app.patch("/v1/admin/knowledge/faq/bulk-publish", knowledgeAuth, requireKnowledgeRole, requireKnowledgeTenant, async (req: Request, res: Response) => {
+    const tenantId = resolveTenantId(req);
+    if (!tenantId) {
+      return res.status(400).json({ error: "tenant クエリパラメータが必要です" });
+    }
+
+    const parsed = bulkPublishSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+
+    const { ids, is_published } = parsed.data;
+
+    try {
+      // 全IDが指定テナントに属することを確認
+      const checkResult = await db.query(
+        `SELECT id FROM faq_docs WHERE id = ANY($1::int[]) AND tenant_id = $2`,
+        [ids, tenantId]
+      );
+      // BIGINT列はpgが文字列で返すため Number() で正規化して比較
+      const ownedIds = (checkResult.rows as { id: number | string }[]).map((r) => Number(r.id));
+      const foreignIds = ids.filter((id) => !ownedIds.includes(id));
+      if (foreignIds.length > 0) {
+        return res.status(400).json({
+          error: "指定されたIDの一部がテナントに属していません",
+          foreign_ids: foreignIds,
+        });
+      }
+
+      const updateResult = await db.query(
+        `UPDATE faq_docs SET is_published = $1, updated_at = NOW()
+         WHERE id = ANY($2::int[]) AND tenant_id = $3
+         RETURNING id, question, answer, is_excluded_from_search`,
+        [is_published, ids, tenantId]
+      );
+
+      const updatedRows = updateResult.rows as {
+        id: number;
+        question: string;
+        answer: string;
+        is_excluded_from_search: boolean | null;
+      }[];
+
+      // ES同期（best-effort、fire-and-forget — DB が source-of-truth）
+      for (const row of updatedRows) {
+        upsertToEsAsync(tenantId, row.id, row.question, row.answer, is_published, row.is_excluded_from_search ?? false);
+      }
+
+      return res.json({ updated: updatedRows.length });
+    } catch (err) {
+      logger.warn("[PATCH /v1/admin/knowledge/faq/bulk-publish]", err);
+      return res.status(500).json({ error: "一括更新に失敗しました" });
     }
   });
 
