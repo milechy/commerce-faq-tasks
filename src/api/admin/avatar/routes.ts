@@ -856,6 +856,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
             .json({ error: "設定が見つからないかアクセス権限がありません" });
         }
 
+        // GID 1216944003337122: marginOverride: 1 は「倍率×1=原価のみ」の意図で正しい
+        // （avatar_config_voiceは管理機能でEND_USER_FEATURESにも含まれないため、本来
+        // marginOverrideを省略しても同じ結果になるが、意図を明示するため残す）。
+        // premiumGenerationRoutes.tsのように「金額を倍率として渡す」誤用ではない。
         trackUsage({
           tenantId: tenantId ?? 'unknown',
           requestId: (req as any).requestId ?? `vc-${id}-${Date.now()}`,

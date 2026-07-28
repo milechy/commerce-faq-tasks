@@ -77,6 +77,9 @@ export class PerplexityProvider implements ExternalResearchProvider {
       const rawCitations = (data['citations'] as string[] | undefined) ?? [];
       const usage = data['usage'] as { prompt_tokens?: number; completion_tokens?: number } | undefined;
 
+      // GID 1216944003337122: marginOverride: 1 は「倍率×1=原価のみ」の意図で正しい
+      // （option_serviceはEND_USER_FEATURESに含まれず、代行作業原価の可視化が目的。
+      // premiumGenerationRoutes.tsのように「金額を倍率として渡す」誤用ではない）。
       if (billingContext) {
         trackUsage({
           tenantId: billingContext.tenantId,

@@ -542,6 +542,9 @@ export function registerOptionRoutes(app: Express): void {
 
         // 社内原価集計のみ(テナント請求は既存の /complete → chargeOneOffJpy で完結)。
         // requestIdをsai_task_idで固定し、再ポーリングでも二重計上しない(ON CONFLICT DO NOTHING)。
+        // GID 1216944003337122: marginOverride: 1 は「倍率×1=原価のみ」の意図で正しい
+        // （sai_agentはEND_USER_FEATURESに含まれず、テナント請求は上記の通り別経路で完結する
+        // ため、ここでのcost_total_centsは社内原価可視化のみが目的）。
         if (orderRow?.tenant_id) {
           trackUsage({
             tenantId: orderRow.tenant_id,
