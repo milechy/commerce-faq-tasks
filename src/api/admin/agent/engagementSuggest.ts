@@ -3,6 +3,7 @@
 // tuning/routes.ts の callGroq8bSuggestFromText と同型のパターン。
 
 import { GROQ_INSTANT_8B } from '../../../config/groqModels';
+import { trackUsage } from '../../../lib/billing/usageTracker';
 
 export type EngagementTriggerType = 'scroll_depth' | 'idle_time' | 'exit_intent' | 'page_url_match';
 
@@ -56,7 +57,10 @@ function normalizeTriggerConfig(triggerType: EngagementTriggerType, raw: unknown
  * 自然文の指示から、お客様への声がけ(trigger_rules)を構造化提案する。
  * GROQ_API_KEY未設定・LLM応答が不正な場合は空の提案(message_templateが空文字)を返す。
  */
-export async function suggestEngagementRuleFromText(freeText: string): Promise<EngagementSuggestion> {
+export async function suggestEngagementRuleFromText(
+  freeText: string,
+  tenantId?: string,
+): Promise<EngagementSuggestion> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) return { ...EMPTY_SUGGESTION };
 
@@ -98,8 +102,24 @@ trigger_type は次の4種類から最も適切なものを1つ選んでくだ�
 
     if (!res.ok) return { ...EMPTY_SUGGESTION };
 
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
     const raw: string = data.choices?.[0]?.message?.content?.trim() ?? '';
+
+    // GID 1216944003337186: featureUsed='admin_engagement_suggest'はNON_BILLABLE_FEATURES
+    // のためStripe請求数量には含まれない（原価可視化のみ）。
+    if (tenantId) {
+      trackUsage({
+        tenantId,
+        requestId: `admin-engagement-suggest:${tenantId}:${Date.now()}`,
+        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+        inputTokens: data.usage?.prompt_tokens ?? 0,
+        outputTokens: data.usage?.completion_tokens ?? 0,
+        featureUsed: 'admin_engagement_suggest',
+      });
+    }
 
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { ...EMPTY_SUGGESTION };

@@ -21,6 +21,7 @@ import {
 import { getResearchProvider } from '../../../lib/research';
 import { isDeepResearchEnabled } from '../../../lib/research/featureCheck';
 import { buildResearchQuery } from '../../../lib/research/queryBuilder';
+import { trackUsage } from '../../../lib/billing/usageTracker';
 
 
 // ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ function extractAuth(req: Request) {
 // インテント判定（Groq 8b — 軽量）
 // ---------------------------------------------------------------------------
 
-async function detectIntent(message: string): Promise<Intent> {
+async function detectIntent(message: string, tenantId: string): Promise<Intent> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) return "admin_guide";
 
@@ -73,6 +74,20 @@ async function detectIntent(message: string): Promise<Intent> {
     if (!res.ok) return "admin_guide";
     const data = (await res.json()) as any;
     const raw: string = data.choices?.[0]?.message?.content?.trim() ?? "";
+
+    // GID 1216944003337186: featureUsed='admin_ai_assist'はNON_BILLABLE_FEATURESのため
+    // Stripe請求数量には含まれない（原価可視化のみ）。
+    if (tenantId) {
+      trackUsage({
+        tenantId,
+        requestId: `admin-ai-assist-intent:${tenantId}:${Date.now()}`,
+        model: GROQ_INSTANT_8B,
+        inputTokens: data.usage?.prompt_tokens ?? 0,
+        outputTokens: data.usage?.completion_tokens ?? 0,
+        featureUsed: "admin_ai_assist",
+      });
+    }
+
     return raw.includes("business_faq") ? "business_faq" : "admin_guide";
   } catch {
     return "admin_guide"; // fail-safe
@@ -83,7 +98,7 @@ async function detectIntent(message: string): Promise<Intent> {
 // Groq LLM 呼び出し（llama-3.1-8b-instant）— admin_guide モード
 // ---------------------------------------------------------------------------
 
-async function callGroq8b(userMessage: string): Promise<string> {
+async function callGroq8b(userMessage: string, tenantId: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) throw new Error("GROQ_API_KEY not configured");
 
@@ -110,6 +125,18 @@ async function callGroq8b(userMessage: string): Promise<string> {
   }
 
   const data = (await res.json()) as any;
+
+  if (tenantId) {
+    trackUsage({
+      tenantId,
+      requestId: `admin-ai-assist-guide:${tenantId}:${Date.now()}`,
+      model: GROQ_INSTANT_8B,
+      inputTokens: data.usage?.prompt_tokens ?? 0,
+      outputTokens: data.usage?.completion_tokens ?? 0,
+      featureUsed: "admin_ai_assist",
+    });
+  }
+
   return data.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
@@ -117,7 +144,7 @@ async function callGroq8b(userMessage: string): Promise<string> {
 // Groq LLM 呼び出し（llama-3.3-70b-versatile）— business_faq モード
 // ---------------------------------------------------------------------------
 
-async function callGroq70b(userMessage: string, ragContext: string): Promise<string> {
+async function callGroq70b(userMessage: string, ragContext: string, tenantId: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) throw new Error("GROQ_API_KEY not configured");
 
@@ -158,6 +185,18 @@ ${ragContext}`
   }
 
   const data = (await res.json()) as any;
+
+  if (tenantId) {
+    trackUsage({
+      tenantId,
+      requestId: `admin-ai-assist-faq:${tenantId}:${Date.now()}`,
+      model: GROQ_VERSATILE_70B,
+      inputTokens: data.usage?.prompt_tokens ?? 0,
+      outputTokens: data.usage?.completion_tokens ?? 0,
+      featureUsed: "admin_ai_assist",
+    });
+  }
+
   return data.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
@@ -197,7 +236,7 @@ async function buildBusinessFaqAnswer(
 
     logger.info(`[ai-assist] pgvector search: ${knowledgeCtx.results.length} hits for tenant=${tenantId}`);
 
-    const answer = await callGroq70b(message, ragContext);
+    const answer = await callGroq70b(message, ragContext, tenantId);
     const aiAnswered = knowledgeCtx.results.length > 0 && !isUnanswered(answer);
     return { answer, aiAnswered };
   } catch (e) {
@@ -295,7 +334,7 @@ export function registerAdminAiAssistRoutes(app: Express): void {
       try {
         // 1. インテント判定（tenantId がある場合のみ business_faq を試みる）
         const intent: Intent =
-          tenantId ? await detectIntent(message) : "admin_guide";
+          tenantId ? await detectIntent(message, tenantId) : "admin_guide";
 
         // 2. インテント別回答生成
         let answer: string;
@@ -304,7 +343,7 @@ export function registerAdminAiAssistRoutes(app: Express): void {
         if (intent === "business_faq") {
           ({ answer, aiAnswered } = await buildBusinessFaqAnswer(message, tenantId));
         } else {
-          answer = await callGroq8b(message);
+          answer = await callGroq8b(message, tenantId);
           aiAnswered = answer ? !isUnanswered(answer) : false;
         }
 

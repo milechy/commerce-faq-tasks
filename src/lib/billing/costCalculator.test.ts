@@ -19,6 +19,7 @@ import {
   MAGNIFIC_UPSCALE_COST_USD,
   FLUX_PRO_COST_PER_IMAGE_USD,
   LEMONSLICE_AVATAR_REGISTRATION_COST_USD,
+  NON_BILLABLE_FEATURES,
 } from './costCalculator';
 
 // ---------------------------------------------------------------------------
@@ -747,6 +748,31 @@ describe('END_USER_FEATURES', () => {
     expect(END_USER_FEATURES.has('feedback_ai')).toBe(false);
     expect(END_USER_FEATURES.has('avatar_config_image')).toBe(false);
     expect(END_USER_FEATURES.has('book_structurize')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1216944003337186: NON_BILLABLE_FEATURES 定数チェック
+// ---------------------------------------------------------------------------
+describe('NON_BILLABLE_FEATURES', () => {
+  it('管理系LLM機能(tuning/ai-assist/engagement-suggest/option-estimator)が含まれる', () => {
+    expect(NON_BILLABLE_FEATURES.has('admin_tuning')).toBe(true);
+    expect(NON_BILLABLE_FEATURES.has('admin_ai_assist')).toBe(true);
+    expect(NON_BILLABLE_FEATURES.has('admin_engagement_suggest')).toBe(true);
+    expect(NON_BILLABLE_FEATURES.has('admin_option_estimator')).toBe(true);
+  });
+
+  it('sai_agentが含まれる（chargeOneOffJpyで既に請求済みのため二重計上防止）', () => {
+    expect(NON_BILLABLE_FEATURES.has('sai_agent')).toBe(true);
+  });
+
+  it('エンドユーザー向け機能・課金対象の管理機能は含まれない', () => {
+    expect(NON_BILLABLE_FEATURES.has('chat')).toBe(false);
+    expect(NON_BILLABLE_FEATURES.has('avatar')).toBe(false);
+    expect(NON_BILLABLE_FEATURES.has('voice')).toBe(false);
+    expect(NON_BILLABLE_FEATURES.has('admin_agent')).toBe(false);
+    expect(NON_BILLABLE_FEATURES.has('avatar_config_image')).toBe(false);
+    expect(NON_BILLABLE_FEATURES.has('premium_avatar_generation')).toBe(false);
   });
 });
 

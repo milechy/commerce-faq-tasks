@@ -232,7 +232,7 @@ export async function generateFeedbackReply(
     // ------------------------------------------------------------------
     const optionAction = parseOptionAction(reply);
     if (optionAction) {
-      const estimate = await estimateOptionPrice(optionAction.task_description);
+      const estimate = await estimateOptionPrice(optionAction.task_description, { tenantId });
       const amountFormatted = estimate.estimated_amount.toLocaleString('ja-JP');
       return (
         `作業内容: ${optionAction.task_description}\n` +

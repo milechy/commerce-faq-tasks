@@ -1406,7 +1406,8 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: '商品ページを長く見てる人にランキングを勧めたい', sessionId: 'sess-060' });
 
       expect(res.status).toBe(200);
-      expect(mockSuggestEngagementRuleFromText).toHaveBeenCalledWith('商品ページを長く見てる人にランキングを勧めたい');
+      // GID 1216944003337186: trackUsage計測のためtenantIdも渡すようになった
+      expect(mockSuggestEngagementRuleFromText).toHaveBeenCalledWith('商品ページを長く見てる人にランキングを勧めたい', 'tenant-abc');
       expect(mockQuery).not.toHaveBeenCalled();
       const result = res.body.actions[0].result as string;
       expect(result).toContain('idle_time');

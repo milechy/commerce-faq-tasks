@@ -941,7 +941,7 @@ export async function executeToolCall(
       }
 
       try {
-        const suggestion = await suggestEngagementRuleFromText(freeText);
+        const suggestion = await suggestEngagementRuleFromText(freeText, tenantId);
         if (!suggestion.message_template) {
           return truncate('声がけの下書き生成に失敗しました。もう少し具体的に教えてください');
         }
