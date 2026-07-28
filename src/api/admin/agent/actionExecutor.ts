@@ -19,6 +19,7 @@ import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 
 // ---------------------------------------------------------------------------
@@ -396,6 +397,16 @@ export async function executeToolCall(
       const id = String(args['id'] ?? '');
       if (!id) {
         return truncate('id は必須です');
+      }
+
+      // GID: LP料金表(Growth〜: AIアバター)に基づくプラン制限。
+      // tenants/routes.ts の features.avatar 更新チェックと同じ基準をここでも適用する
+      // （AIエージェント経由でのチャットからのアクティベートがプラン制限を素通りしないように）。
+      // 注入済みの db を使う（tenantHasFeature 経由だと内部で getPool() の実Poolを
+      // 使ってしまい、テストのモックPoolと食い違って汚染するため queryTenantPlan を直接使う）。
+      const plan = await queryTenantPlan(db, tenantId);
+      if (!planHasFeature(plan, 'avatar')) {
+        return truncate('AIアバター機能はGrowthプラン以上でご利用いただけます');
       }
 
       const client = await db.connect();

@@ -1990,6 +1990,81 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // activate_avatar — プラン制限(Growth〜)がチャット経由でも素通りしないことの回帰テスト
+  // -------------------------------------------------------------------------
+  describe('activate_avatar: プラン制限', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('starterプランは有効化できず、DB更新(db.connect)も発火しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-act-1', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-act-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    it('growthプランは有効化できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-act-2', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('有効化しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // deactivate all
+        .mockResolvedValueOnce({ rows: [{ id: 'av-1' }] }) // activate target
+        .mockResolvedValueOnce({ rows: [] }) // tenants.features sync
+        .mockResolvedValueOnce({ rows: [] }); // COMMIT
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-act-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('有効化しました');
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('planが未設定(null)の場合はfail-safeでstarter扱いとなり有効化できない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-act-3', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: null }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-act-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // request_sai_task / get_sai_task_status
   // -------------------------------------------------------------------------
   describe('request_sai_task / get_sai_task_status', () => {
