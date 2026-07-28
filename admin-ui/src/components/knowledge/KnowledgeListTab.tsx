@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../KnowledgeFaqEditModal";
 import FaqHintSettings from "./FaqHintSettings";
+import FaqSearchBar from "./FaqSearchBar";
+import BulkActionBar from "./BulkActionBar";
+import { Pagination } from "../common/Pagination";
 import { useLang } from "../../i18n/LangContext";
 import { useAuth } from "../../auth/useAuth";
 import { API_BASE } from "../../lib/api";
-import { fetchWithAuth, formatDate, CARD_STYLE, BTN_DANGER } from "./shared";
+import { fetchWithAuth, formatDate, CARD_STYLE, BTN_DANGER, CATEGORY_LABEL_MAP } from "./shared";
 
 interface KnowledgeItem {
   id: number;
@@ -16,10 +19,21 @@ interface KnowledgeItem {
   tags: string[] | null;
   is_published?: boolean;
   is_global?: boolean;
+  is_excluded_from_search?: boolean;
   created_at: string;
 }
 
 type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
+type SortOption = "newest" | "oldest" | "updated" | "category";
+
+const SORT_PARAMS: Record<SortOption, { sort: "created_at" | "updated_at" | "category"; order: "asc" | "desc" }> = {
+  newest: { sort: "created_at", order: "desc" },
+  oldest: { sort: "created_at", order: "asc" },
+  updated: { sort: "updated_at", order: "desc" },
+  category: { sort: "category", order: "asc" },
+};
+
+const PAGE_SIZE = 20;
 
 // ─── タブ1: ナレッジ一覧 ────────────────────────────────────────────────────
 
@@ -33,19 +47,19 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     answerHint: null,
   });
 
-  const CATEGORIES = [
-    { value: "inventory", label: t("category.inventory") },
-    { value: "campaign", label: t("category.campaign") },
-    { value: "coupon", label: t("category.coupon") },
-    { value: "store_info", label: t("category.store_info") },
-  ];
-
   const [items, setItems] = useState<KnowledgeItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [sortOption, setSortOption] = useState<SortOption>("newest");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [publishFilter, setPublishFilter] = useState<"all" | "published" | "draft">("all");
   const [globalFilter, setGlobalFilter] = useState<"all" | "global" | "tenant">("all");
+
   const [togglingId, setTogglingId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
     id: number;
@@ -57,33 +71,76 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
   const [createMode, setCreateMode] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  // 既定9カテゴリ + 実データで見つかった値を累積（フィルタを変えてもチップが消えない）
+  const [knownCategories, setKnownCategories] = useState<Set<string>>(
+    () => new Set(Object.keys(CATEGORY_LABEL_MAP))
+  );
+
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleModalSuccess = (msg: string) => {
-    setEditTarget(null);
-    setCreateMode(false);
-    showToast(msg);
-    void fetchItems();
-  };
+  // 検索入力の debounce（連打での過剰リクエストを防ぐ）
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // 絞り込み条件が変わったら1ページ目に戻す
+  useEffect(() => {
+    setOffset(0);
+  }, [search, sortOption, categoryFilter, publishFilter, globalFilter]);
+
+  const categoryLabel = useCallback(
+    (cat: string | null) => {
+      if (!cat) return t("knowledge.uncategorized");
+      return CATEGORY_LABEL_MAP[cat]?.[lang === "en" ? "en" : "ja"] ?? cat;
+    },
+    [t, lang]
+  );
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ tenant: tenantId });
+      const { sort, order } = SORT_PARAMS[sortOption];
+      const params = new URLSearchParams({
+        tenant: tenantId,
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
+        sort,
+        order,
+      });
+      if (search) params.set("search", search);
       if (categoryFilter !== "all") params.set("category", categoryFilter);
       if (publishFilter === "published") params.set("is_published", "true");
       if (publishFilter === "draft") params.set("is_published", "false");
       if (globalFilter === "global") params.set("is_global", "true");
       if (globalFilter === "tenant") params.set("is_global", "false");
 
-      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge?${params}`);
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/faq?${params}`);
       if (!res.ok) throw new Error(t("knowledge.load_error"));
-      const data = (await res.json()) as { items: KnowledgeItem[] };
-      setItems(data.items ?? []);
+      const data = (await res.json()) as { items: KnowledgeItem[]; total: number };
+      const fetchedItems = data.items ?? [];
+      setItems(fetchedItems);
+      setTotal(data.total ?? 0);
+      setKnownCategories((prev) => {
+        const next = new Set(prev);
+        for (const item of fetchedItems) if (item.category) next.add(item.category);
+        return next;
+      });
+      // 選択済みIDのうち、現在ページにまだ存在するものだけ残す
+      setSelectedIds((prev) => {
+        if (prev.size === 0) return prev;
+        const visibleIds = new Set(fetchedItems.map((i) => i.id));
+        const next = new Set<number>();
+        for (const id of prev) if (visibleIds.has(id)) next.add(id);
+        return next;
+      });
     } catch (err) {
       if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
         navigate("/login", { replace: true });
@@ -93,9 +150,24 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [navigate, tenantId, categoryFilter, publishFilter, globalFilter, t]);
+  }, [navigate, tenantId, offset, search, sortOption, categoryFilter, publishFilter, globalFilter, t]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  const handleModalSuccess = (msg: string) => {
+    setEditTarget(null);
+    setCreateMode(false);
+    showToast(msg);
+    void fetchItems();
+  };
+
+  const fetchAuthRequired = (err: unknown): boolean => {
+    if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
+      navigate("/login", { replace: true });
+      return true;
+    }
+    return false;
+  };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -103,18 +175,17 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     setDeleteTarget((prev) => prev ? { ...prev, state: "deleting" } : null);
     try {
       const res = await fetchWithAuth(
-        `${API_BASE}/v1/admin/knowledge/${deleteTarget.id}?tenant=${tenantId}`,
+        `${API_BASE}/v1/admin/knowledge/faq/${deleteTarget.id}?tenant=${tenantId}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error(t("knowledge.delete_error"));
       setDeleteTarget((prev) => prev ? { ...prev, state: "success" } : null);
-      setItems((prev) => prev.filter((i) => i.id !== deleteTarget.id));
-      setTimeout(() => setDeleteTarget(null), 2000);
+      setTimeout(() => {
+        setDeleteTarget(null);
+        void fetchItems();
+      }, 1500);
     } catch (err) {
-      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") {
-        navigate("/login", { replace: true });
-        return;
-      }
+      if (fetchAuthRequired(err)) return;
       setDeleteTarget((prev) =>
         prev ? { ...prev, state: "error", error: err instanceof Error ? err.message : t("knowledge.delete_error") } : null
       );
@@ -125,7 +196,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     setTogglingId(item.id);
     try {
       const newState = !item.is_published;
-      await fetchWithAuth(
+      const res = await fetchWithAuth(
         `${API_BASE}/v1/admin/knowledge/faq/${item.id}?tenant=${tenantId}`,
         {
           method: "PUT",
@@ -139,20 +210,80 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           }),
         }
       );
+      if (!res.ok) throw new Error();
       setItems((prev) =>
         prev.map((i) => (i.id === item.id ? { ...i, is_published: newState } : i))
       );
-    } catch {
-      // no-op
+    } catch (err) {
+      if (fetchAuthRequired(err)) return;
+      // no-op（既存動作踏襲: トグル失敗時は静かに戻す）
     } finally {
       setTogglingId(null);
     }
   };
 
-  const categoryLabel = (cat: string | null) => {
-    const found = CATEGORIES.find((c) => c.value === cat);
-    return found ? found.label : cat ?? t("knowledge.uncategorized");
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   };
+
+  const allOnPageSelected = items.length > 0 && items.every((i) => selectedIds.has(i.id));
+  const toggleSelectAll = () => {
+    setSelectedIds(allOnPageSelected ? new Set() : new Set(items.map((i) => i.id)));
+  };
+
+  const handleBulkUnpublish = async () => {
+    if (selectedIds.size === 0) return;
+    const n = selectedIds.size;
+    setBulkLoading(true);
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/faq/bulk-publish?tenant=${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds), is_published: false }),
+      });
+      if (!res.ok) throw new Error();
+      setSelectedIds(new Set());
+      showToast(t("knowledge.bulk_unpublish_success", { n }));
+      void fetchItems();
+    } catch (err) {
+      if (fetchAuthRequired(err)) return;
+      showToast(t("knowledge.bulk_action_error"));
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkLoading(true);
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/faq/bulk?tenant=${tenantId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) throw new Error();
+      setSelectedIds(new Set());
+      showToast(t("knowledge.deleted"));
+      void fetchItems();
+    } catch (err) {
+      if (fetchAuthRequired(err)) return;
+      showToast(t("knowledge.bulk_action_error"));
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const sortedKnownCategories = useMemo(() => Array.from(knownCategories).sort(), [knownCategories]);
+
+  const editCategories = useMemo(
+    () => sortedKnownCategories.map((c) => ({ value: c, label: categoryLabel(c) })),
+    [sortedKnownCategories, categoryLabel]
+  );
 
   return (
     <div>
@@ -189,10 +320,13 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
         {t("knowledge.add_faq")}
       </button>
 
-      {/* フィルター */}
+      {/* 検索 */}
+      <FaqSearchBar value={searchInput} onChange={setSearchInput} />
+
+      {/* カテゴリ絞り込み */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 14, color: "#9ca3af" }}>{t("knowledge.category_filter")}</span>
-        {[{ value: "all", label: t("knowledge.all") }, ...CATEGORIES].map((c) => (
+        {[{ value: "all", label: t("knowledge.all") }, ...sortedKnownCategories.map((c) => ({ value: c, label: categoryLabel(c) }))].map((c) => (
           <button
             key={c.value}
             onClick={() => setCategoryFilter(c.value)}
@@ -228,10 +362,37 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           {loading ? t("knowledge.refreshing") : t("common.refresh")}
         </button>
       </div>
-      {/* 公開状態フィルター */}
+
+      {/* 並び順 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+        <span style={{ fontSize: 13, color: "#6b7280" }}>{t("knowledge.sort_label")}</span>
+        <select
+          value={sortOption}
+          onChange={(e) => setSortOption(e.target.value as SortOption)}
+          style={{
+            padding: "6px 10px",
+            minHeight: 36,
+            borderRadius: 8,
+            border: "1px solid #374151",
+            background: "rgba(15,23,42,0.8)",
+            color: "#d1d5db",
+            fontSize: 13,
+          }}
+        >
+          <option value="newest">{t("knowledge.sort_newest")}</option>
+          <option value="oldest">{t("knowledge.sort_oldest")}</option>
+          <option value="updated">{t("knowledge.sort_updated")}</option>
+          <option value="category">{t("knowledge.sort_category")}</option>
+        </select>
+      </div>
+
+      {/* AI回答状態フィルター */}
       <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
         {(["all", "published", "draft"] as const).map((v) => {
-          const label = v === "all" ? (lang === "en" ? "All" : "すべて") : v === "published" ? (lang === "en" ? "Published" : "公開中") : (lang === "en" ? "Draft" : "非公開");
+          const label =
+            v === "all" ? t("knowledge.filter_status_all")
+              : v === "published" ? t("knowledge.filter_answering")
+              : t("knowledge.filter_not_answering");
           const active = publishFilter === v;
           return (
             <button
@@ -305,9 +466,27 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
         </div>
       ) : (
         <div style={{ ...CARD_STYLE, padding: 0, overflow: "hidden" }}>
-          <div style={{ padding: "12px 18px", borderBottom: "1px solid #111827", fontSize: 13, color: "#6b7280" }}>
-            {t("knowledge.count", { n: items.length })}
+          <div style={{ padding: "12px 18px", borderBottom: "1px solid #111827", fontSize: 13, color: "#6b7280", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: "#9ca3af" }}>
+              <input
+                type="checkbox"
+                checked={allOnPageSelected}
+                onChange={toggleSelectAll}
+                style={{ width: 18, height: 18, cursor: "pointer" }}
+              />
+              {t("knowledge.select_all")}
+            </label>
+            <span>
+              {total > 0
+                ? t("knowledge.showing", { total, from: offset + 1, to: Math.min(offset + items.length, total) })
+                : t("knowledge.count", { n: items.length })}
+            </span>
           </div>
+          {selectedIds.size === 0 && (
+            <div style={{ padding: "0 18px 12px", fontSize: 12, color: "#4b5563" }}>
+              {t("knowledge.bulk_select_hint")}
+            </div>
+          )}
           {items.map((item, idx) => (
             <div
               key={item.id}
@@ -322,6 +501,12 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                 transition: "opacity 0.2s",
               }}
             >
+              <input
+                type="checkbox"
+                checked={selectedIds.has(item.id)}
+                onChange={() => toggleSelect(item.id)}
+                style={{ width: 20, height: 20, marginTop: 2, flexShrink: 0, cursor: "pointer" }}
+              />
               <div style={{ flex: 1, minWidth: 200 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
                   <span style={{
@@ -345,8 +530,8 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                     fontWeight: 600,
                   }}>
                     {item.is_published === false
-                      ? (lang === "en" ? "⏸️ Draft" : "⏸️ 非公開")
-                      : (lang === "en" ? "✅ Published" : "✅ 公開中")}
+                      ? t("knowledge.badge_not_answering")
+                      : t("knowledge.badge_answering")}
                   </span>
                   {item.is_global && (
                     <span style={{
@@ -384,8 +569,8 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                   }}
                 >
                   {item.is_published === false
-                    ? (lang === "en" ? "Publish" : "公開する")
-                    : (lang === "en" ? "Unpublish" : "非公開にする")}
+                    ? t("knowledge.action_unmute")
+                    : t("knowledge.action_mute")}
                 </button>
                 <button
                   onClick={() =>
@@ -396,6 +581,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                       category: item.category,
                       tags: item.tags,
                       is_published: item.is_published,
+                      is_excluded_from_search: item.is_excluded_from_search,
                     })
                   }
                   style={{
@@ -425,6 +611,8 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
         </div>
       )}
 
+      <Pagination total={total} limit={PAGE_SIZE} offset={offset} onPageChange={setOffset} />
+
       {editTarget && (
         <KnowledgeFaqEditModal
           mode="edit"
@@ -434,6 +622,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           onSuccess={handleModalSuccess}
           questionHint={faqHints.questionHint}
           answerHint={faqHints.answerHint}
+          categories={editCategories}
         />
       )}
 
@@ -445,6 +634,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           onSuccess={handleModalSuccess}
           questionHint={faqHints.questionHint}
           answerHint={faqHints.answerHint}
+          categories={editCategories}
         />
       )}
 
@@ -470,6 +660,14 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           {toast}
         </div>
       )}
+
+      <BulkActionBar
+        selectedCount={selectedIds.size}
+        onBulkUnpublish={handleBulkUnpublish}
+        onBulkDelete={handleBulkDelete}
+        onClearSelection={() => setSelectedIds(new Set())}
+        loading={bulkLoading}
+      />
 
       {deleteTarget && (
         <div
