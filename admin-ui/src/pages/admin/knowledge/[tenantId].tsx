@@ -119,6 +119,9 @@ export default function TenantKnowledgePage() {
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
           {t("knowledge.title")}
         </h1>
+        <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginTop: 4, marginBottom: 0 }}>
+          {t("knowledge.subtitle")}
+        </p>
         {isSuperAdmin ? (
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
             <select

@@ -79,6 +79,10 @@ const MAIN_SECTIONS: NavSection[] = [
       { label: "アバター設定", path: "/admin/avatar", icon: Palette },
       { label: "AIへの指示ルール", path: "/admin/tuning", icon: SlidersHorizontal },
       { label: "テストチャット", path: "/admin/chat-test", icon: FlaskConical },
+      // GID: 旧UIでは全admin可視だったご利用状況・お支払いを復元。
+      // ルート自体は元々 AdminRoute (super/client 両方許可) だったが、
+      // サイドバーからはsuper_admin専用セクションに置かれていたためclient_adminから辿れなかった
+      { label: "ご利用状況・お支払い", path: "/admin/billing", icon: CreditCard },
     ],
   },
 ];
@@ -90,7 +94,6 @@ const SUPER_ADMIN_SECTION: NavSection = {
     { label: "テナント管理", path: "/admin/tenants", icon: Building2 },
     { label: "お客様の声", path: "/admin/feedback", icon: MessageCircleHeart },
     { label: "代行作業管理", path: "/admin/options", icon: FileText },
-    { label: "請求・使用量", path: "/admin/billing", icon: CreditCard },
     { label: "システム稼働状況", path: "/admin/monitoring", icon: BellRing },
   ],
 };
