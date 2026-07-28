@@ -10,31 +10,49 @@ jest.mock('../admin/chat-history/chatHistoryRepository', () => ({
   saveMessage: jest.fn(),
 }));
 
-import { saveMessage } from '../admin/chat-history/chatHistoryRepository';
-const mockSaveMessage = saveMessage as jest.Mock;
+jest.mock('../../lib/billing/usageTracker', () => ({
+  trackUsage: jest.fn(),
+}));
 
-// apiStack: テナントコンテキストをreqに注入するダミーミドルウェア
-function makeTenantStack(tenantId: string | null): RequestHandler[] {
+import { saveMessage } from '../admin/chat-history/chatHistoryRepository';
+import { trackUsage } from '../../lib/billing/usageTracker';
+const mockSaveMessage = saveMessage as jest.Mock;
+const mockTrackUsage = trackUsage as jest.Mock;
+
+// apiStack: テナントコンテキスト + requestId(requestIdMiddleware相当)をreqに注入するダミーミドルウェア
+let requestIdCounter = 0;
+function makeTenantStack(tenantId: string | null, requestId?: string): RequestHandler[] {
   return [
     (req, _res, next) => {
       (req as any).tenantId = tenantId;
+      (req as any).requestId = requestId ?? `req-anam-${++requestIdCounter}`;
       next();
     },
   ];
 }
 
-function makeApp(tenantId: string | null = 'carnation') {
+function makeApp(tenantId: string | null = 'carnation', requestId?: string) {
   const app = express();
   app.use(express.json());
-  registerAnamChatStreamRoutes(app, makeTenantStack(tenantId));
+  registerAnamChatStreamRoutes(app, makeTenantStack(tenantId, requestId));
   return app;
 }
 
-/** Groqのstreaming SSEレスポンスを模したReadableStream風オブジェクトを作る。 */
-function makeGroqStreamResponse(contentChunks: string[]) {
+/**
+ * Groqのstreaming SSEレスポンスを模したReadableStream風オブジェクトを作る。
+ * usage を渡すと、OpenAI互換のstream_options.include_usage同様、最終チャンクとして
+ * choicesなし・usageのみのdataを追加する。
+ */
+function makeGroqStreamResponse(
+  contentChunks: string[],
+  usage?: { prompt_tokens: number; completion_tokens: number },
+) {
   const lines = contentChunks.map(
     (c) => `data: ${JSON.stringify({ choices: [{ delta: { content: c } }] })}\n`,
   );
+  if (usage) {
+    lines.push(`data: ${JSON.stringify({ choices: [], usage })}\n`);
+  }
   lines.push('data: [DONE]\n');
   const fullText = lines.join('');
   const encoder = new TextEncoder();
@@ -55,9 +73,24 @@ function makeGroqStreamResponse(contentChunks: string[]) {
   };
 }
 
+/** ストリーム読み取り中にreader.read()が例外を投げる(接続断)ケースを模す。 */
+function makeGroqStreamInterrupted() {
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: async () => {
+          throw new Error('socket hang up');
+        },
+      }),
+    },
+  };
+}
+
 beforeEach(() => {
   mockSaveMessage.mockReset();
   mockSaveMessage.mockResolvedValue(undefined);
+  mockTrackUsage.mockReset();
   process.env.GROQ_API_KEY = 'test-groq-key';
   (global as any).fetch = jest.fn().mockResolvedValue(makeGroqStreamResponse(['こんにちは', '！']));
 });
@@ -137,5 +170,114 @@ describe('POST /api/avatar/chat-stream', () => {
 
     expect(res.status).toBe(400);
     expect(mockSaveMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/avatar/chat-stream — usage計測(trackUsage)', () => {
+  it('usageが返る場合: Groqの最終チャンクのprompt_tokens/completion_tokensでtrackUsageを1回呼ぶ', async () => {
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValue(
+        makeGroqStreamResponse(['こんにちは', '！'], { prompt_tokens: 42, completion_tokens: 7 }),
+      );
+
+    const res = await request(makeApp('carnation', 'req-usage-ok'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '保証はありますか' }], sessionId: 'sess-usage-1' });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith({
+      tenantId: 'carnation',
+      requestId: 'req-usage-ok',
+      model: 'llama-3.3-70b-versatile',
+      inputTokens: 42,
+      outputTokens: 7,
+      featureUsed: 'chat',
+    });
+  });
+
+  it('usageが返らない場合: silentに0計上せずlogger.warnを出しつつ0でtrackUsageする', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue(makeGroqStreamResponse(['こんにちは']));
+    const warnSpy = jest.spyOn(require('../../lib/logger').logger, 'warn').mockImplementation(() => {});
+
+    const res = await request(makeApp('carnation', 'req-usage-missing'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: 'こんにちは' }] });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'carnation',
+        requestId: 'req-usage-missing',
+        inputTokens: 0,
+        outputTokens: 0,
+        featureUsed: 'chat',
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'req-usage-missing', tenantId: 'carnation' }),
+      expect.stringContaining('usage not returned'),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('ストリーム中断(接続断)の場合でも0扱いでtrackUsageを1回呼び、warnを出す(例外はレスポンスに変換される)', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue(makeGroqStreamInterrupted());
+    const warnSpy = jest.spyOn(require('../../lib/logger').logger, 'warn').mockImplementation(() => {});
+
+    const res = await request(makeApp('carnation', 'req-usage-interrupted'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: 'こんにちは' }] });
+
+    // 最初のread()で例外なので、res.write前(headersSent=false)にouterのcatchへ抜け500になる。
+    expect(res.status).toBe(500);
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'carnation',
+        requestId: 'req-usage-interrupted',
+        inputTokens: 0,
+        outputTokens: 0,
+        featureUsed: 'chat',
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it('同一requestIdで再接続されても、trackUsageに渡すrequestIdは常に同じ安定キーになる(重複計上防止はDB側のON CONFLICTに委譲)', async () => {
+    // 各呼び出しごとに独立したstream/readerを返す(closureの使い回しでstate漏れしないように)。
+    (global as any).fetch = jest
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(
+          makeGroqStreamResponse(['再送されたテスト応答'], { prompt_tokens: 10, completion_tokens: 5 }),
+        ),
+      );
+
+    const app = makeApp('carnation', 'req-reconnect-stable');
+    await request(app)
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '1回目' }], sessionId: 'sess-reconnect' });
+    await request(app)
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '2回目(再接続)' }], sessionId: 'sess-reconnect' });
+
+    expect(mockTrackUsage).toHaveBeenCalledTimes(2);
+    for (const call of mockTrackUsage.mock.calls) {
+      expect(call[0]).toEqual(
+        expect.objectContaining({
+          requestId: 'req-reconnect-stable',
+          inputTokens: 10,
+          outputTokens: 5,
+        }),
+      );
+    }
+    // 実際のusage_logsは request_id UNIQUE + ON CONFLICT DO NOTHING (usageTracker.ts) により
+    // 同一requestIdでの複数呼び出しでも1行のみ保存される(usageTracker.test.ts で検証済み)。
   });
 });
