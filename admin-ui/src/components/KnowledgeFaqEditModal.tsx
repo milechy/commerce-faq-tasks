@@ -24,6 +24,8 @@ interface Props {
   /** GID 1216274385106667: テナントごとにカスタマイズされた質問/回答欄の入力例 */
   questionHint?: string | null;
   answerHint?: string | null;
+  /** 実データ由来の動的カテゴリ一覧（未指定時は既定4種にフォールバック） */
+  categories?: { value: string; label: string }[];
 }
 
 async function getToken(): Promise<string | null> {
@@ -59,7 +61,7 @@ const LABEL_STYLE: React.CSSProperties = {
   marginBottom: 8,
 };
 
-export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, onSuccess, questionHint, answerHint }: Props) {
+export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, onSuccess, questionHint, answerHint, categories }: Props) {
   const { t } = useLang();
   const [question, setQuestion] = useState(item?.question ?? "");
   const [answer, setAnswer] = useState(item?.answer ?? "");
@@ -70,12 +72,19 @@ export default function KnowledgeFaqEditModal({ mode, tenantId, item, onClose, o
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const CATEGORIES = [
+  const FALLBACK_CATEGORIES = [
     { value: "inventory", label: t("category.inventory") },
     { value: "campaign", label: t("category.campaign") },
     { value: "coupon", label: t("category.coupon") },
     { value: "store_info", label: t("category.store_info") },
   ];
+  const baseCategories = categories && categories.length > 0 ? categories : FALLBACK_CATEGORIES;
+  // 実データ由来のカテゴリ一覧に既存値が無い場合（PDF/URL取込・AIエージェント経由等）は
+  // 選択肢の先頭に追加し、保存時に別カテゴリへ黙って書き換わるのを防ぐ
+  const CATEGORIES =
+    item?.category && !baseCategories.some((c) => c.value === item.category)
+      ? [{ value: item.category, label: item.category }, ...baseCategories]
+      : baseCategories;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

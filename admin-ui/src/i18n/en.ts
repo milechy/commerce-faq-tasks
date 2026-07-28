@@ -289,7 +289,7 @@ const en: Record<TranslationKey, string> = {
   "nav.back_knowledge": "← Back to Knowledge",
 
   // Knowledge list search/sort/pagination/bulk
-  "knowledge.search_placeholder": "Search FAQs...",
+  "knowledge.search_placeholder": "Type a word to search (e.g. shipping)",
   "knowledge.sort_label": "Sort:",
   "knowledge.sort_newest": "Newest",
   "knowledge.sort_oldest": "Oldest",
@@ -297,12 +297,24 @@ const en: Record<TranslationKey, string> = {
   "knowledge.sort_category": "By Category",
   "knowledge.select_all": "Select All",
   "knowledge.selected_count": "{n} selected",
+  "knowledge.bulk_select_hint": "Select items to update them together",
+  "knowledge.bulk_unpublish": "Stop AI answering with {n} items",
+  "knowledge.bulk_unpublish_success": "AI will no longer answer with {n} items",
   "knowledge.bulk_delete": "Delete {n} items",
+  "knowledge.bulk_delete_confirm": "Are you sure?",
+  "knowledge.bulk_action_error": "Something went wrong. Please try again 🙏",
   "knowledge.clear_selection": "Clear",
   "knowledge.showing": "Showing {from}–{to} of {total}",
   "knowledge.page_of": "Page {current} of {total}",
   "knowledge.per_page": "per page",
   "knowledge.prev": "← Prev",
+  "knowledge.filter_status_all": "All",
+  "knowledge.filter_answering": "AI answers",
+  "knowledge.filter_not_answering": "AI doesn't answer",
+  "knowledge.badge_answering": "🤖 AI is answering",
+  "knowledge.badge_not_answering": "⏸️ AI won't answer",
+  "knowledge.action_mute": "Stop AI answering",
+  "knowledge.action_unmute": "Let AI answer",
   "knowledge.next": "Next →",
 
   // FAQ Edit Modal
