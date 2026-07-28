@@ -248,6 +248,9 @@ export async function generateFeedbackReply(
     // ------------------------------------------------------------------
     const safe = sanitizeOutput(reply);
 
+    // GID 1216944003337122: marginOverride: 1 は「倍率×1=原価のみ」の意図で正しい
+    // （社内向けフィードバックAIの原価可視化が目的。featureUsed='chat'はEND_USER_FEATURES
+    // に含まれ本来MARGIN_MULTIPLIERが適用されるため、意図的にmarginOverrideで打ち消している）。
     trackUsage({
       tenantId,
       requestId: 'feedback-ai',
