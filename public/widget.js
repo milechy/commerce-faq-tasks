@@ -24,6 +24,15 @@
   var apiKey = currentScript ? currentScript.getAttribute('data-api-key') : '';
   var avatarConfigId = currentScript ? (currentScript.getAttribute('data-avatar-config-id') || '') : '';
   var posthogKey = currentScript ? (currentScript.getAttribute('data-posthog-key') || '') : '';
+
+  // GID 1216978855735482 follow-up: アバターA/Bテストの割当は widgetGenerator.ts が
+  // GET /widget/:tenantSlug.js 生成時に window.__RAJIUCE_TENANT_CFG__ へ注入する
+  // （visitor近似のsticky keyでサーバー側決定済み。widget.js側では割当ロジックを持たない）。
+  // 静的 /widget.js 埋め込み（data-tenant方式）ではこのグローバルは存在しないため両方 null 安全に。
+  var _rajiuceTenantCfg = (typeof window !== 'undefined' && window.__RAJIUCE_TENANT_CFG__) || {};
+  var abExperimentId = _rajiuceTenantCfg.abExperimentId || null;
+  var abVariant = _rajiuceTenantCfg.abVariant || null;
+  var _abExposureSent = false;
   var accentColor = currentScript ? (currentScript.getAttribute('data-accent-color') || '#2563eb') : '#2563eb';
   var greetingText = currentScript ? (currentScript.getAttribute('data-greeting') || 'ご質問はお気軽にどうぞ') : 'ご質問はお気軽にどうぞ';
   var placeholderText = currentScript ? (currentScript.getAttribute('data-placeholder') || 'メッセージを入力…') : 'メッセージを入力…';
@@ -2262,6 +2271,40 @@
     resetAvatarInactivityTimer();
   }
 
+  /**
+   * GID 1216978855735482 follow-up: このセッションが割り当てられたアバターA/B実験の
+   * variantを一度だけサーバーに報告する（POST /v1/ab/avatar-exposure）。
+   * - 実験が無い/割当が無いテナントでは何もしない（abExperimentId/abVariant が null）
+   * - 本番稼働中の埋め込みスクリプトのため、失敗してもチャット機能に一切影響させない
+   *   （non-blocking・サイレントフェイル。トラッキング欠落はexposure記録の欠測に留まる）
+   * - (experiment_id, session_id) はサーバー側でユニーク制約により冪等なので、
+   *   多少の重複呼び出しがあっても実害はないが、_abExposureSent で通常は1回のみ送信する
+   */
+  function recordAbExposure() {
+    if (_abExposureSent || !abExperimentId || !abVariant || !apiKey) return;
+    _abExposureSent = true;
+    try {
+      fetch(apiBase + '/v1/ab/avatar-exposure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify({
+          experiment_id: abExperimentId,
+          variant: abVariant,
+          session_id: conversationId,
+        }),
+        keepalive: true,
+      }).then(function (res) {
+        if (!res.ok) {
+          console.warn('[R2C] avatar-exposure: server returned ' + res.status);
+        }
+      }).catch(function () {
+        /* silent fail — トラッキング失敗でウィジェット動作を止めない */
+      });
+    } catch (_e) {
+      /* fetch自体が例外を投げる環境でもチャット機能は継続させる */
+    }
+  }
+
   function sendMessage(text) {
     if (!text || !text.trim() || isLoading) return;
 
@@ -2284,6 +2327,9 @@
       timestamp: Date.now(),
     };
     messages.push(userMsg);
+    // 実際にチャットセッションが始まった時点（初回メッセージ送信時）でA/B露出を報告する。
+    // ページ読み込みだけの離脱訪問者はカウントしない（分母を chat_sessions と揃えるため）。
+    recordAbExposure();
     isLoading = true;
     renderMessages();
     scrollToBottom(true);  // ユーザー送信時は強制スクロール
