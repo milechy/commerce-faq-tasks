@@ -73,6 +73,8 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_escalations: "エスカレーション一覧の取得",
   get_monitoring_summary: "モニタリングサマリーの取得",
   get_legacy_ui_link: "旧管理画面への案内",
+  get_analytics_summary: "会話分析サマリーの取得",
+  get_conversion_summary: "成約・効果分析サマリーの取得",
   get_avatar_status: "アバター稼働状況の取得",
   request_sai_task: "Saiへの代行依頼",
   get_sai_task_status: "Saiタスク状況の取得",

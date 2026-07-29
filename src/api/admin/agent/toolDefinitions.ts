@@ -769,7 +769,10 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'テストチャット（設定内容の動作確認）、アバター新規作成（ウィザード）、PDFアップロードでの知識登録について' +
         '尋ねられたら、無理にチャットで実行しようとせずこのツールを呼び出して案内すること。' +
         'テキスト入力やURLからの知識登録は suggest_faq_import_from_text / suggest_faq_import_from_urls が' +
-        '使えるため、PDF以外ではこのツールを使わないこと。',
+        '使えるため、PDF以外ではこのツールを使わないこと。' +
+        'ただし会話分析・成約/効果分析の「数値サマリー」は get_analytics_summary / get_conversion_summary で' +
+        'チャット上に直接返せるため、まずそちらを使うこと。この2機能でこのツールを使うのは、' +
+        'グラフの詳細・個別の低評価セッション・ABテスト結果を旧UIで見たい場合に限る。',
       parameters: {
         type: 'object',
         properties: {
@@ -790,6 +793,50 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           },
         },
         required: ['feature'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_analytics_summary',
+      description:
+        '会話分析の数値サマリー（会話数・前期間比・満足度スコア・1会話あたりのメッセージ数・' +
+        '知識ギャップ件数・感情の内訳）をチャット上に直接返す読み取り専用ツール。' +
+        '「会話は増えている?」「満足度はどう?」のように数字で答えられる質問にはこのツールを使うこと。' +
+        'グラフの詳細や個別の低評価セッションを見たい場合のみ get_legacy_ui_link(analytics) で旧UIへ案内する。',
+      parameters: {
+        type: 'object',
+        properties: {
+          period: {
+            type: 'string',
+            description: '集計期間（既定は30d）',
+            enum: ['7d', '30d'],
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_conversion_summary',
+      description:
+        '成約・効果分析の数値サマリー（会話数・結果記録率・成約率の推移・成果につながった' +
+        'セールステクニック・離脱ステージ）をチャット上に直接返す読み取り専用ツール。' +
+        '「成約につながっている?」「どのくらい売れている?」のように数字で答えられる質問にはこのツールを使うこと。' +
+        'ABテスト結果や詳細グラフを見たい場合のみ get_legacy_ui_link(conversion) で旧UIへ案内する。',
+      parameters: {
+        type: 'object',
+        properties: {
+          period: {
+            type: 'string',
+            description: '集計期間（既定は30d）',
+            enum: ['7d', '30d'],
+          },
+        },
+        required: [],
       },
     },
   },

@@ -130,6 +130,14 @@ jest.mock('../monitoring/routes', () => ({
   computeKpis: (...args: any[]) => mockComputeKpis(...args),
 }));
 
+// get_analytics_summary / get_conversion_summary が使う依存をモック
+const mockFetchAnalyticsSummary = jest.fn();
+const mockFetchConversionSummary = jest.fn();
+jest.mock('../analytics/summaryQueries', () => ({
+  fetchAnalyticsSummary: (...args: any[]) => mockFetchAnalyticsSummary(...args),
+  fetchConversionSummary: (...args: any[]) => mockFetchConversionSummary(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -2466,6 +2474,200 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_analytics_summary / get_conversion_summary
+  // -------------------------------------------------------------------------
+  describe('get_analytics_summary / get_conversion_summary', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const ANALYTICS_SUMMARY = {
+      period: '30d',
+      tenant_id: 'tenant-abc',
+      total_sessions: 142,
+      avg_judge_score: 78.4,
+      total_knowledge_gaps: 5,
+      avg_messages_per_session: 6.25,
+      avatar_session_count: 20,
+      avatar_rate: 0.14,
+      prev_total_sessions: 100,
+      sessions_change_pct: 42,
+      sentiment_distribution: { positive: 60, negative: 12, neutral: 30, total: 102 },
+      cv_count_30d: 8,
+      cv_total_value_30d: 120000,
+      cv_types_breakdown: { purchase: 8, inquiry: 0, reservation: 0, signup: 0, other: 0 },
+      cv_fired_status: 'fired' as const,
+      cv_days_since_first_session: 90,
+    };
+
+    const CONVERSION_SUMMARY = {
+      summary: {
+        total_sessions: 142,
+        recorded_outcomes: 96,
+        recording_rate: 67.6,
+        outcomes: { 成約: 40, 検討中: 56 },
+      },
+      conversion_rate_trend: [{ date: '2026-07-01', total: 10, converted: 4, rate: 40 }],
+      technique_effectiveness: [
+        { technique: '社会的証明', sessions_used: 12, converted: 9, conversion_rate: 75 },
+        { technique: '希少性', sessions_used: 8, converted: 4, conversion_rate: 50 },
+      ],
+      stage_dropout: { clarify: 3, answer: 11, confirm: 2, terminal: 0 },
+    };
+
+    it('get_analytics_summary: growthプランなら実際の数値サマリーを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-as-1', 'get_analytics_summary', { period: '30d' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話は増えています。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAnalyticsSummary.mockResolvedValueOnce(ANALYTICS_SUMMARY);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話は増えている?', sessionId: 'sess-as-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchAnalyticsSummary).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '30d',
+      });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('142件');
+      expect(result).toContain('+42.0%');
+      expect(result).toContain('78.4');
+      expect(result).toContain('6.3件');
+      expect(result).toContain('ポジティブ60');
+    });
+
+    it('get_analytics_summary: period=7d を指定すると集計期間として渡される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-as-2', 'get_analytics_summary', { period: '7d' }))
+        .mockResolvedValueOnce(makeGroqResponse('直近1週間の状況です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'enterprise' }] });
+      mockFetchAnalyticsSummary.mockResolvedValueOnce({ ...ANALYTICS_SUMMARY, period: '7d' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '直近1週間はどう?', sessionId: 'sess-as-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchAnalyticsSummary).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '7d',
+      });
+      expect(res.body.actions[0].result).toContain('直近7日間');
+    });
+
+    it('get_conversion_summary: growthプランなら実際の数値サマリーを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cs-1', 'get_conversion_summary', {}))
+        .mockResolvedValueOnce(makeGroqResponse('成約は順調です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchConversionSummary.mockResolvedValueOnce(CONVERSION_SUMMARY);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '成約につながっている?', sessionId: 'sess-cs-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchConversionSummary).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '30d',
+      });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('142件');
+      expect(result).toContain('67.6%');
+      expect(result).toContain('成約 40件');
+      expect(result).toContain('社会的証明 75%');
+      expect(result).toContain('answer（11件）');
+    });
+
+    // get_legacy_ui_link(analytics/conversion) と同じ基準。プラン未満のテナントには
+    // 案内リンクだけでなく数値そのものも返さない。
+    it.each([
+      ['get_analytics_summary', 'sess-as-03'],
+      ['get_conversion_summary', 'sess-cs-03'],
+    ])('%s: starterプランは数値を返さずプラン制限メッセージを返す', async (toolName, sessionId) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pg-1', toolName, {}))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '分析を見せて', sessionId });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
+      expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
+      expect(mockFetchConversionSummary).not.toHaveBeenCalled();
+      // 数値が1つも漏れていないこと
+      expect(result).not.toMatch(/\d/);
+    });
+
+    // super_admin の「クライアントビューで見る」はテナントに見えている状態の再現が目的のため、
+    // get_legacy_ui_link(analytics/conversion) と同様プランゲートをバイパスさせない。
+    it.each([
+      ['get_analytics_summary', 'sess-as-04'],
+      ['get_conversion_summary', 'sess-cs-04'],
+    ])('%s: super_admin が starterテナントをプレビューしてもプラン制限メッセージを返す', async (toolName, sessionId) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pg-2', toolName, {}))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '分析を見せて', sessionId, targetTenantId: 'tenant-starter' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
+      expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
+      expect(mockFetchConversionSummary).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['get_analytics_summary', 'sess-as-05'],
+      ['get_conversion_summary', 'sess-cs-05'],
+    ])('%s: super_admin がテナント未特定 → プラン制限ではなく「テナントが特定できません」を返す', async (toolName, sessionId) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pg-3', toolName, {}))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '分析を見せて', sessionId });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('テナントが特定できません');
+      expect(result).not.toContain('Growthプラン以上');
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 
