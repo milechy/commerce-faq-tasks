@@ -81,6 +81,20 @@ jest.mock('../knowledge/routes', () => ({
   textToFaqs: (...args: any[]) => mockTextToFaqs(...args),
 }));
 
+// suggest_faq_import_from_text/urls / commit_faq_import が使う依存をモック
+// (actionExecutor.ts はこれらを '../knowledge/routes' 経由ではなく直接
+// '../../../lib/knowledge/faqImport' から import しているため別モックが必要)
+const mockGenerateTextFaqPreview = jest.fn();
+const mockGenerateScrapeFaqPreview = jest.fn();
+const mockCommitTextFaqs = jest.fn();
+const mockCommitScrapeFaqs = jest.fn();
+jest.mock('../../../lib/knowledge/faqImport', () => ({
+  generateTextFaqPreview: (...args: any[]) => mockGenerateTextFaqPreview(...args),
+  generateScrapeFaqPreview: (...args: any[]) => mockGenerateScrapeFaqPreview(...args),
+  commitTextFaqs: (...args: any[]) => mockCommitTextFaqs(...args),
+  commitScrapeFaqs: (...args: any[]) => mockCommitScrapeFaqs(...args),
+}));
+
 // suggest_engagement_rule が使う依存をモック
 const mockSuggestEngagementRuleFromText = jest.fn();
 jest.mock('./engagementSuggest', () => ({
@@ -130,6 +144,10 @@ jest.mock('../../../lib/billing/usageTracker', () => ({
 // ---------------------------------------------------------------------------
 
 import { registerAdminAgentRoutes } from './agentRoutes';
+// ステージング(knowledgeImportStaging.ts)はモックせず実物を使う。
+// suggest_faq_import_from_text/urls → commit_faq_import の2ターン検証、
+// TTL/上限とは独立にテスト間の状態リークを防ぐためのリセット関数として使う。
+import { getStagedFaqImport, __resetKnowledgeImportStagingForTest } from './knowledgeImportStaging';
 
 // ---------------------------------------------------------------------------
 // ヘルパー
@@ -196,6 +214,9 @@ describe('POST /v1/admin/agent/chat', () => {
     mockSearchKnowledgeForSuggestion.mockResolvedValue({ results: [] });
     mockFormatKnowledgeContext.mockReturnValue('');
     mockCheckSaiMonthlyCostCeiling.mockResolvedValue({ ok: true });
+    // knowledgeImportStaging はモックしない実物のモジュールなので、
+    // jest.resetAllMocks() では消えないプロセス内Mapをテストごとに明示的にリセットする。
+    __resetKnowledgeImportStagingForTest();
   });
 
   // -------------------------------------------------------------------------
@@ -1370,6 +1391,286 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // チャット版 FAQ一括取り込み: suggest_faq_import_from_text / suggest_faq_import_from_urls
+  // / commit_faq_import / discard_faq_import（プロセス内ステージング経由）
+  // -------------------------------------------------------------------------
+  describe('suggest_faq_import_from_text/urls / commit_faq_import / discard_faq_import', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const faq1 = { question: '送料はいくらですか？', answer: '550円です。', category: 'store_info', duplicate: null };
+    const faq2 = { question: '送料無料の条件は？', answer: '5000円以上です。', category: 'store_info', duplicate: null };
+
+    it('suggest_faq_import_from_text: プレビューを生成しステージングする(DB書き込みなし)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-1', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1, faq2]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このテキストからFAQを作って', sessionId: 'sess-fi-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('2件のFAQ案を作成しました');
+      expect(result).toContain('送料はいくらですか');
+
+      const staged = getStagedFaqImport('tenant-abc', 'sess-fi-01');
+      expect(staged).not.toBeNull();
+      expect(staged?.kind).toBe('text');
+    });
+
+    it('suggest_faq_import_from_text: text が短すぎる場合は生成せずエラーを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-2', 'suggest_faq_import_from_text', { text: '短い' }))
+        .mockResolvedValueOnce(makeGroqResponse('もう少し詳しく教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '短いテキストから作って', sessionId: 'sess-fi-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockGenerateTextFaqPreview).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('50文字以上');
+    });
+
+    it('suggest_faq_import_from_urls: 複数URLのプレビューを合算してステージングする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-4', 'suggest_faq_import_from_urls', { urls: ['https://example.com/p/1', 'https://example.com/p/2'] }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+
+      mockGenerateScrapeFaqPreview.mockResolvedValueOnce([
+        { url: 'https://example.com/p/1', faqs: [faq1] },
+        { url: 'https://example.com/p/2', faqs: [faq2] },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このURLたちからFAQを作って', sessionId: 'sess-fi-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('2件のURLから合計2件のFAQ案を作成しました');
+
+      const staged = getStagedFaqImport('tenant-abc', 'sess-fi-05');
+      expect(staged?.kind).toBe('scrape');
+    });
+
+    it('suggest_faq_import_from_urls: urlsが6件以上ならエラーを返しgenerateScrapeFaqPreviewは呼ばない', async () => {
+      const urls = Array.from({ length: 6 }, (_, i) => `https://example.com/p/${i}`);
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-6', 'suggest_faq_import_from_urls', { urls }))
+        .mockResolvedValueOnce(makeGroqResponse('URLは5件までです。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'たくさんのURLから作って', sessionId: 'sess-fi-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockGenerateScrapeFaqPreview).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('1〜5件');
+    });
+
+    it('commit_faq_import: プレビュー無しで呼ぶと弾かれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-8', 'commit_faq_import', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('先にプレビューが必要です。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-fi-09' });
+
+      expect(res.status).toBe(200);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      expect(mockCommitScrapeFaqs).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('プレビューがありません');
+    });
+
+    it('commit_faq_import: confirmed=false → 登録されずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-10', 'commit_faq_import', { confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから登録します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-fi-11' });
+
+      expect(res.status).toBe(200);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('suggest → commit の2ターンでテキスト由来のFAQが登録され、ステージングはクリアされる', async () => {
+      // ターン1: プレビュー生成
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-12a', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1, faq2]);
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このテキストからFAQを作って', sessionId: 'sess-fi-12' });
+
+      // ターン2: コミット（新しいHTTPリクエスト = 別ターン。同一 sessionId で継続）
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-12b', 'commit_faq_import', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 2, skipped: 0, insertedIds: [10, 11] });
+
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-fi-12' });
+
+      expect(res2.status).toBe(200);
+      expect(mockCommitTextFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-abc',
+        [faq1, faq2],
+        undefined,
+        'admin_agent_text_import',
+      );
+      expect(res2.body.actions[0].result).toContain('FAQを2件登録しました');
+      expect(getStagedFaqImport('tenant-abc', 'sess-fi-12')).toBeNull();
+    });
+
+    it('commit_faq_import: target=global はSuper Admin以外だと拒否される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-13a', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1]);
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って', sessionId: 'sess-fi-13' });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-13b', 'commit_faq_import', { confirmed: true, target: 'global' }))
+        .mockResolvedValueOnce(makeGroqResponse('拒否されました。'));
+
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '全店舗共通に登録して', sessionId: 'sess-fi-13' });
+
+      expect(res2.status).toBe(200);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      expect(res2.body.actions[0].result).toContain('Super Adminのみ登録可能');
+    });
+
+    it('別 sessionId のステージングは混ざらない（テナントは同じでもプレビュー無し扱いになる）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-14a', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1]);
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って', sessionId: 'sess-fi-15-a' });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-14b', 'commit_faq_import', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューが見つかりません。'));
+
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-fi-15-b' });
+
+      expect(res2.status).toBe(200);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      expect(res2.body.actions[0].result).toContain('プレビューがありません');
+    });
+
+    it('別テナントのステージングは混ざらない（テナント越境しない）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-16a', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1]);
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って', sessionId: 'sess-fi-17' });
+
+      // 同じ sessionId・別テナント(super_adminがtargetTenantIdで別テナントを指定)でcommitを試みる
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-16b', 'commit_faq_import', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューが見つかりません。'));
+
+      const res2 = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-fi-17', targetTenantId: 'tenant-other' });
+
+      expect(res2.status).toBe(200);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      expect(res2.body.actions[0].result).toContain('プレビューがありません');
+    });
+
+    it('discard_faq_import: ステージング済みプレビューを破棄し、以後のcommitはプレビュー無し扱いになる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-18a', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1]);
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って', sessionId: 'sess-fi-19' });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-18b', 'discard_faq_import', {}))
+        .mockResolvedValueOnce(makeGroqResponse('破棄しました。'));
+
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'やめておいて', sessionId: 'sess-fi-19' });
+
+      expect(res2.status).toBe(200);
+      expect(res2.body.actions[0].result).toContain('破棄しました');
+      expect(getStagedFaqImport('tenant-abc', 'sess-fi-19')).toBeNull();
+    });
+
+    it('同一ターン内で suggest_faq_import_from_text → commit_faq_import(confirmed=true) を連鎖しようとするとブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-20a', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(toolCallResponse('call-fi-20b', 'commit_faq_import', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って登録して', sessionId: 'sess-fi-21' });
+
+      expect(res.status).toBe(200);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      const commitAction = res.body.actions.find((a: any) => a.tool === 'commit_faq_import');
+      expect(commitAction.result).toContain('同一ターン内での連続実行');
+    });
+
+    it('テナント未特定: super_adminがtarget未指定でsuggest_faq_import_from_textを呼ぶと弾かれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-22', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って', sessionId: 'sess-fi-23' });
+
+      expect(res.status).toBe(200);
+      expect(mockGenerateTextFaqPreview).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Phase3: suggest_engagement_rule / save_engagement_rule
   // -------------------------------------------------------------------------
   describe('suggest_engagement_rule / save_engagement_rule', () => {
@@ -1834,6 +2135,7 @@ describe('POST /v1/admin/agent/chat', () => {
       ['session_deletion', '会話履歴', '/admin/chat-history'],
       ['chat_test', 'テストチャット', '/admin/chat-test'],
       ['avatar_wizard', 'アバター新規作成', '/admin/avatar/wizard'],
+      ['knowledge_pdf', 'PDFアップロード', '/admin/knowledge/tenant-abc?tab=pdf'],
     ])('feature=%s: 旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-lu-1', 'get_legacy_ui_link', { feature }))
@@ -1925,6 +2227,21 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('テナントが特定できません');
       expect(result).not.toContain('Growthプラン以上');
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    // knowledge_pdf は他のキーと違い path に tenantId を埋め込む必要があるため専用ガードがある
+    // (/admin/knowledge?tab=pdf だと KnowledgeIndexPage のリダイレクトで ?tab=pdf が失われるため)
+    it('feature=knowledge_pdf: super_admin がテナント未特定 → 「テナントが特定できません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-9', 'get_legacy_ui_link', { feature: 'knowledge_pdf' }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'PDFをアップロードしたい', sessionId: 'sess-lu-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
     });
   });
 

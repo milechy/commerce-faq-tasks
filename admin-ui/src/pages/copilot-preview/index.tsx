@@ -76,6 +76,10 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   request_sai_task: "Saiへの代行依頼",
   get_sai_task_status: "Saiタスク状況の取得",
   import_industry_faq_templates: "業種別FAQたたき台の登録",
+  suggest_faq_import_from_text: "テキストからのFAQ一括提案",
+  suggest_faq_import_from_urls: "URLからのFAQ一括提案",
+  commit_faq_import: "FAQの一括登録",
+  discard_faq_import: "FAQ一括提案の破棄",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -91,6 +95,7 @@ const REAL_WRITE_TOOLS = new Set([
   "set_widget_theme",
   "activate_avatar",
   "import_industry_faq_templates",
+  "commit_faq_import",
 ]);
 
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ

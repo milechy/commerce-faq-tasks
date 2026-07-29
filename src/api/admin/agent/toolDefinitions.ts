@@ -469,6 +469,90 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'suggest_faq_import_from_text',
+      description:
+        '管理者が貼り付けた長めのテキスト（商品説明・利用規約の抜粋など）から、FAQを複数まとめて生成しプレビューする。' +
+        '生成結果はサーバー側に一時保存される（この会話のセッション内でのみ有効）。書き込みは行わない読み取り専用ツール。' +
+        '内容を要約してユーザーに提示し、明確な同意を得てから commit_faq_import で登録すること。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: {
+            type: 'string',
+            description: 'FAQ化したいテキスト（50〜10000字）',
+          },
+          category: {
+            type: 'string',
+            description: '全FAQ共通のカテゴリ（任意。省略時はAIがFAQごとに自動判定する）',
+          },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_faq_import_from_urls',
+      description:
+        '商品ページなどのURL（1〜5件）を取得し、本文からFAQを複数まとめて生成しプレビューする。' +
+        '生成結果はサーバー側に一時保存される（この会話のセッション内でのみ有効）。書き込みは行わない読み取り専用ツール。' +
+        '内容を要約してユーザーに提示し、明確な同意を得てから commit_faq_import で登録すること。',
+      parameters: {
+        type: 'object',
+        properties: {
+          urls: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '取得するURL（1〜5件、http(s)で始まること）',
+          },
+          category: {
+            type: 'string',
+            description: '全FAQ共通のカテゴリ（任意。省略時はAIがFAQごとに自動判定する）',
+          },
+        },
+        required: ['urls'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'commit_faq_import',
+      description:
+        'suggest_faq_import_from_text または suggest_faq_import_from_urls でプレビュー済みのFAQをまとめてDBに登録し即座に公開する。' +
+        '既存FAQと類似する内容は自動でスキップされる。必ず先にプレビュー内容をユーザーに提示し、明確な同意を得てから' +
+        ' confirmed=true で呼び出すこと。confirmed=false または未指定では登録されない。プレビューが存在しない場合は失敗する。',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: {
+            type: 'string',
+            description: '登録先テナントID（任意。省略時は現在のテナント。"global"はSuper Adminのみ指定可）',
+          },
+          confirmed: { type: 'boolean', description: '登録確認フラグ（true でのみ実行される）' },
+        },
+        required: ['confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'discard_faq_import',
+      description:
+        'suggest_faq_import_from_text / suggest_faq_import_from_urls で作成した未登録のFAQプレビューを破棄する。' +
+        'ユーザーが「やめておく」等、登録を望まない意思を示した場合に呼び出す。DBへの書き込みは行っていないため確認は不要。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'suggest_engagement_rule',
       description:
         '店舗管理者の自然な言葉による指示から、お客様への声がけ（いつ・どんな条件で・何を表示するか）の下書きを生成する。書き込みは行わない読み取り専用ツール。提案内容は必ずユーザーに提示して明確な同意を得てから save_engagement_rule で保存すること。',
@@ -661,8 +745,10 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         '請求（請求書の再送・金額調整・無料期間設定・一時停止/再開）、アバタースタジオ（画像候補の選択・音声クローン・' +
         '性格設定・ライブテスト）、エスカレーションへの有人返信、会話セッションの削除、会話分析（会話数・満足度・' +
         '品質指標の推移や低評価セッションの確認）、成約・効果分析（成約への貢献度・ABテスト・効果測定）、' +
-        'テストチャット（設定内容の動作確認）、アバター新規作成（ウィザード）について尋ねられたら、' +
-        '無理にチャットで実行しようとせずこのツールを呼び出して案内すること。',
+        'テストチャット（設定内容の動作確認）、アバター新規作成（ウィザード）、PDFアップロードでの知識登録について' +
+        '尋ねられたら、無理にチャットで実行しようとせずこのツールを呼び出して案内すること。' +
+        'テキスト入力やURLからの知識登録は suggest_faq_import_from_text / suggest_faq_import_from_urls が' +
+        '使えるため、PDF以外ではこのツールを使わないこと。',
       parameters: {
         type: 'object',
         properties: {
@@ -678,6 +764,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
               'conversion',
               'chat_test',
               'avatar_wizard',
+              'knowledge_pdf',
             ],
           },
         },

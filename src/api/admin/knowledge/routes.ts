@@ -1,20 +1,27 @@
 // src/api/admin/knowledge/routes.ts
 
 // Phase29: カーネーション向けナレッジ管理API
-import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { pool } from "../../../lib/db";
 import jwt from "jsonwebtoken";
-import { groqClient } from "../../../agent/llm/groqClient";
-import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
-import { encryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
 import { resolveFaqWriteIndex } from "../../../search/langIndex";
 import type { SupabaseJwtUser } from '../../middleware/roleAuth';
+import {
+  generateTextFaqPreview,
+  generateScrapeFaqPreview,
+  commitTextFaqs,
+  commitScrapeFaqs,
+} from "../../../lib/knowledge/faqImport";
+
+// textToFaqs / FaqEntry の実体は src/lib/knowledge/faqImport.ts に移動済み。
+// actionExecutor.ts や agentRoutes.test.ts の既存モック(`jest.mock('../knowledge/routes', ...)`)が
+// このパスからの import に依存しているため、ここから再エクスポートする形で後方互換を維持する。
+export { textToFaqs, type FaqEntry } from "../../../lib/knowledge/faqImport";
 
 
 const CATEGORIES = ["inventory", "campaign", "coupon", "store_info", "product_info", "pricing", "booking", "warranty", "general"] as const;
@@ -26,235 +33,11 @@ type KnowledgeReq = Request & {
   user?: KnowledgeUser;
 };
 
-export interface FaqEntry {
-  question: string;
-  answer: string;
-  category?: string;
-}
-
-interface FaqEntryWithDuplicate extends FaqEntry {
-  duplicate: {
-    existingQuestion: string;
-    existingAnswer: string;
-  } | null;
-}
-
-/** Phase73: スクレイプで抽出した商品メタ（OG/JSON-LD） */
-interface ProductMeta {
-  product_image_url: string | null;
-  product_price: string | null;
-  product_cta_url: string | null;
-}
-
-/**
- * http(s) スキームのみを許可するガード。javascript:/data:/相対パス等は null に落とす。
- * system boundary (外部 HTML からの抽出値) にのみ適用。
- */
-const safeHttpUrl = (u: unknown): string | null =>
-  typeof u === 'string' && /^https?:\/\//i.test(u.trim()) ? u.trim() : null;
-
-/**
- * Phase73: HTML から OG/JSON-LD を regex で抽出して商品メタを返す。
- * 依存追加禁止 — cheerio/jsdom 不使用、regex のみ。
- * JSON-LD parse 失敗は non-fatal（握りつぶし）。
- */
-function extractProductMeta(html: string, pageUrl: string): ProductMeta {
-  // og:image
-  const ogImageMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
-    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
-  const ogImage = ogImageMatch?.[1] ?? null;
-
-  // 価格: og:price:amount → product:price:amount → JSON-LD
-  const ogPriceMatch = html.match(/<meta[^>]+property=["']og:price:amount["'][^>]+content=["']([^"']+)["']/i)
-    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:price:amount["']/i)
-    ?? html.match(/<meta[^>]+property=["']product:price:amount["'][^>]+content=["']([^"']+)["']/i)
-    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']product:price:amount["']/i);
-  let ogPrice = ogPriceMatch?.[1] ?? null;
-
-  // cta_url: og:url → fallback to pageUrl
-  const ogUrlMatch = html.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i)
-    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:url["']/i);
-  let ctaUrl = ogUrlMatch?.[1] ?? pageUrl;
-
-  // JSON-LD 優先採用（@type=Product の場合）
-  const ldJsonMatch = html.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
-  if (ldJsonMatch) {
-    for (const block of ldJsonMatch) {
-      const inner = block.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim();
-      try {
-        const data = JSON.parse(inner) as Record<string, unknown>;
-        const objs = Array.isArray(data) ? data : [data];
-        for (const obj of objs) {
-          if (typeof obj !== 'object' || obj === null) continue;
-          const typed = obj as Record<string, unknown>;
-          if (typed['@type'] !== 'Product') continue;
-          // image 優先採用
-          let resolvedImage: string | null = ogImage;
-          if (typed['image']) {
-            const img = typed['image'];
-            if (typeof img === 'string') {
-              resolvedImage = img;
-            } else if (Array.isArray(img) && typeof img[0] === 'string') {
-              resolvedImage = img[0];
-            } else if (typeof img === 'object' && img !== null && typeof (img as Record<string, unknown>)['url'] === 'string') {
-              resolvedImage = (img as Record<string, unknown>)['url'] as string;
-            }
-          }
-          return {
-            product_image_url: safeHttpUrl(resolvedImage),
-            product_price: extractJsonLdPrice(typed) ?? ogPrice,
-            product_cta_url: safeHttpUrl(typeof typed['url'] === 'string' ? typed['url'] : ctaUrl),
-          };
-        }
-      } catch {
-        // non-fatal: JSON.parse 失敗は握りつぶす
-      }
-    }
-  }
-
-  return {
-    product_image_url: safeHttpUrl(ogImage),
-    product_price: ogPrice,
-    product_cta_url: safeHttpUrl(ctaUrl),
-  };
-}
-
-/** JSON-LD Product オブジェクトから offers.price を文字列として取得 */
-function extractJsonLdPrice(product: Record<string, unknown>): string | null {
-  const offers = product['offers'];
-  if (!offers || typeof offers !== 'object') return null;
-  const o = (Array.isArray(offers) ? offers[0] : offers) as Record<string, unknown>;
-  if (!o) return null;
-  const price = o['price'];
-  if (price === undefined || price === null) return null;
-  return String(price);
-}
-
 /** query/header からテナントIDを解決（bodyから取得禁止 — CLAUDE.md） */
 function resolveTenantId(req: Request): string | null {
   const fromQuery = (req.query.tenant || req.query.tenant_id) as string | undefined;
   const fromHeader = req.headers["x-tenant-id"] as string | undefined;
   return fromQuery || fromHeader || null;
-}
-
-/** 重複チェック用の質問正規化（句読点・空白・大文字小文字・助詞末尾を無視） */
-function normalizeQuestion(q: string): string {
-  return q.toLowerCase().replace(/[？?。、！!　\s]+/g, "").trim();
-}
-
-/** 文字バイグラムセットを生成 */
-function bigrams(s: string): Set<string> {
-  const r = new Set<string>();
-  for (let i = 0; i < s.length - 1; i++) r.add(s.slice(i, i + 2));
-  return r;
-}
-
-/**
- * バイグラム包含度による類似度（0-1）
- * 短い方の文字列のバイグラムが長い方に何割含まれるかを返す。
- * 例: "営業時間は" vs "営業時間を教えてください" → 0.75
- */
-function bigramSimilarity(a: string, b: string): number {
-  const na = normalizeQuestion(a);
-  const nb = normalizeQuestion(b);
-  if (na === nb) return 1.0;
-  const ba = bigrams(na);
-  const bb = bigrams(nb);
-  if (ba.size === 0 || bb.size === 0) return 0;
-  const [shorter, longer] = ba.size <= bb.size ? [ba, bb] : [bb, ba];
-  let inter = 0;
-  for (const g of shorter) if (longer.has(g)) inter++;
-  // containment: shorter の bigram が longer に何割含まれるか
-  return inter / shorter.size;
-}
-
-const DUPLICATE_THRESHOLD = 0.6;
-
-/**
- * テキスト→FAQ変換。
- * categoryOverride が指定された場合は全FAQのカテゴリをその値で上書き。
- * 未指定（null/undefined）の場合はAIがカテゴリを自動判定する。
- * existingQuestions が指定された場合はプロンプトに組み込み重複生成を防止する。
- */
-export async function textToFaqs(
-  text: string,
-  categoryOverride?: string | null,
-  existingQuestions?: string[]
-): Promise<FaqEntry[]> {
-  const model = process.env.GROQ_FAQ_GEN_MODEL ?? GROQ_VERSATILE_70B;
-
-  const existingSection =
-    existingQuestions && existingQuestions.length > 0
-      ? `\n既にこのテナントに登録されているFAQの質問（重複禁止 — 以下と同じ内容は生成しないこと）:\n${existingQuestions
-          .slice(0, 40)
-          .map((q) => `- ${q}`)
-          .join("\n")}\n`
-      : "";
-
-  const prompt = `あなたはセールス支援FAQの専門家です。
-以下のテキストから、お客様がこの商品・サービスについて質問しそうなFAQを網羅的に生成してください。
-
-重要な原則:
-* テキストに含まれる全ての事実情報をFAQとしてカバーすること
-* お客様の購入・利用判断に影響する情報は必ずFAQ化すること
-* 1つのFAQには1つのトピックのみ（複数の情報を1つにまとめない）
-* テキストに書かれていない情報は推測しないこと
-* 各FAQに最も適切なカテゴリを自動で判定して付与すること
-
-具体的にFAQ化すべき情報の例:
-* 商品のスペック・仕様（各項目を個別のFAQに）
-* 価格・料金
-* 状態・品質に関する情報
-* 付属品・オプション
-* 保証・アフターサービス
-* 予約・購入方法
-* 店舗情報・営業時間
-* キャンペーン・割引
-${existingSection}
-カテゴリの判定基準:
-* 商品・サービスの詳細情報 → "product_info"
-* 料金・価格・支払い方法 → "pricing"
-* 店舗・アクセス・営業時間 → "store_info"
-* キャンペーン・セール・割引 → "campaign"
-* 在庫・車両情報 → "inventory"
-* クーポン・割引コード → "coupon"
-* 予約・申し込み方法 → "booking"
-* 保証・アフターサービス → "warranty"
-* よくある質問・一般 → "general"
-* 上記に当てはまらない場合 → 適切なカテゴリ名を英語スネークケースで生成
-
-テキスト:
-${text.slice(0, 4000)}
-
-出力形式: JSON配列のみ（他のテキストは含めない）
-[{"question": "...", "answer": "...", "category": "..."}]`;
-
-  const raw = await groqClient.call({
-    model,
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.2,
-    maxTokens: 3000,
-    tag: "knowledge-text-to-faq",
-  });
-
-  const jsonMatch = raw.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) throw new Error("LLMがJSON形式で回答しませんでした");
-
-  const parsed = JSON.parse(jsonMatch[0]) as unknown[];
-  if (!Array.isArray(parsed)) throw new Error("JSON形式が不正です");
-
-  const faqs = parsed.filter(
-    (f): f is FaqEntry => {
-      const r = f as Record<string, unknown>;
-      return typeof r.question === "string" && typeof r.answer === "string";
-    }
-  );
-
-  // カテゴリ強制上書き（手動指定の場合）
-  if (categoryOverride) {
-    return faqs.map((f) => ({ ...f, category: categoryOverride }));
-  }
-  return faqs;
 }
 
 /** ESインデックスからドキュメントを削除（best-effort）
@@ -265,24 +48,6 @@ async function deleteFromEs(tenantId: string, esDocId: string): Promise<void> {
   if (!esUrl || !esDocId) return;
   const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(esDocId)}`;
   await fetch(url, { method: "DELETE" }).catch(() => {});
-}
-
-/** embedding を非同期で挿入（fire-and-forget） */
-function insertEmbeddingAsync(
-  db: Pool,
-  tenantId: string,
-  text: string,
-  faqId: number,
-  meta: Record<string, unknown>
-): void {
-  embedText(text)
-    .then((vec) =>
-      db.query(
-        "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata) VALUES ($1, $2, $3::vector, $4::jsonb)",
-        [tenantId, encryptText(text), `[${vec.join(",")}]`, JSON.stringify(meta)]
-      )
-    )
-    .catch((e) => logger.warn("[knowledge] embedding insert failed", e));
 }
 
 export function registerKnowledgeAdminRoutes(app: Express): void {
@@ -540,42 +305,12 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     const { text, category } = parsed.data;
 
     try {
-      // 既存FAQ質問を取得（重複防止のためプロンプトに渡す）
-      let existingRows: { question: string; answer: string }[] = [];
-      if (db) {
-        try {
-          const r = await db.query(
-            "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50",
-            [tenantId]
-          );
-          existingRows = r.rows as { question: string; answer: string }[];
-        } catch { /* non-fatal */ }
-      }
-      const existingQuestions = existingRows.map((r) => r.question);
-
-      const faqs = await textToFaqs(text, category || null, existingQuestions);
-      if (faqs.length === 0) {
+      const preview = await generateTextFaqPreview(db, tenantId, text, category || null);
+      if (preview.length === 0) {
         return res.status(422).json({ error: "FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください。" });
       }
 
-      // 重複チェック: バイグラム類似度で既存FAQとのマッチを判定（同義表現も検出）
-      const previewWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
-        let bestMatch: { question: string; answer: string } | null = null;
-        let bestScore = 0;
-        for (const row of existingRows) {
-          const score = bigramSimilarity(faq.question, row.question);
-          if (score > bestScore) { bestScore = score; bestMatch = row; }
-        }
-        return {
-          ...faq,
-          duplicate:
-            bestMatch && bestScore >= DUPLICATE_THRESHOLD
-              ? { existingQuestion: bestMatch.question, existingAnswer: bestMatch.answer }
-              : null,
-        };
-      });
-
-      return res.json({ ok: true, preview: previewWithDuplicate, count: previewWithDuplicate.length });
+      return res.json({ ok: true, preview, count: preview.length });
     } catch (err) {
       logger.error("[POST /v1/admin/knowledge/text]", err);
       return res
@@ -617,46 +352,9 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
     }
 
-    // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ
-    let existingQuestionsAtCommit: string[] = [];
-    try {
-      const r = await db.query("SELECT question FROM faq_docs WHERE tenant_id = $1", [target]);
-      existingQuestionsAtCommit = (r.rows as { question: string }[]).map((row) => row.question);
-    } catch { /* non-fatal */ }
+    const result = await commitTextFaqs(db, target, faqs, categoryOverride, "text");
 
-    const inserted: number[] = [];
-    let skipped = 0;
-
-    for (const faq of faqs) {
-      const isDuplicate = existingQuestionsAtCommit.some(
-        (q) => bigramSimilarity(faq.question, q) >= DUPLICATE_THRESHOLD
-      );
-      if (isDuplicate) {
-        skipped++;
-        continue;
-      }
-      const faqCategory = categoryOverride || faq.category || "general";
-      try {
-        const r = await db.query(
-          `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
-           VALUES ($1, $2, $3, $4, true)
-           RETURNING id`,
-          [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), faqCategory]
-        );
-        const faqId = r.rows[0].id as number;
-        inserted.push(faqId);
-
-        const embText = `${faq.question}\n${faq.answer}`;
-        insertEmbeddingAsync(db, target, embText, faqId, {
-          source: "text",
-          faq_id: faqId,
-        });
-      } catch (err) {
-        logger.error("[commit] insert failed for faq:", faq.question, err);
-      }
-    }
-
-    return res.status(201).json({ ok: true, inserted: inserted.length, skipped });
+    return res.status(201).json({ ok: true, inserted: result.inserted, skipped: result.skipped });
   });
 
   // -------------------------------------------------------------------------
@@ -681,65 +379,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { urls, category } = parsed.data;
-    const results: { url: string; faqs: FaqEntryWithDuplicate[]; productMeta?: ProductMeta; error?: string }[] = [];
-
-    // 既存FAQ質問を一度だけ取得（重複防止のためプロンプトに渡す）
-    let existingRows: { question: string; answer: string }[] = [];
-    if (db) {
-      try {
-        const r = await db.query(
-          "SELECT question, answer FROM faq_docs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50",
-          [tenantId]
-        );
-        existingRows = r.rows as { question: string; answer: string }[];
-      } catch { /* non-fatal */ }
-    }
-    const existingQuestions = existingRows.map((r) => r.question);
-
-    for (const url of urls) {
-      try {
-        const html = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; R2C/1.0)" },
-          signal: AbortSignal.timeout(10_000),
-        }).then((r) => r.text());
-
-        // Phase73: OG/JSON-LD から商品メタを抽出（script/style 除去前の生 HTML を使う）
-        const productMeta = extractProductMeta(html, url);
-
-        const text = html
-          .replace(/<script[\s\S]*?<\/script>/gi, "")
-          .replace(/<style[\s\S]*?<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 5000);
-
-        if (text.length < 50) {
-          results.push({ url, faqs: [], error: "ページからテキストを取得できませんでした" });
-          continue;
-        }
-
-        const faqs = await textToFaqs(text, category || null, existingQuestions);
-        const faqsWithDuplicate: FaqEntryWithDuplicate[] = faqs.map((faq) => {
-          let bestMatch: { question: string; answer: string } | null = null;
-          let bestScore = 0;
-          for (const row of existingRows) {
-            const score = bigramSimilarity(faq.question, row.question);
-            if (score > bestScore) { bestScore = score; bestMatch = row; }
-          }
-          return {
-            ...faq,
-            duplicate:
-              bestMatch && bestScore >= DUPLICATE_THRESHOLD
-                ? { existingQuestion: bestMatch.question, existingAnswer: bestMatch.answer }
-                : null,
-          };
-        });
-        results.push({ url, faqs: faqsWithDuplicate, productMeta });
-      } catch (err) {
-        results.push({ url, faqs: [], error: String(err).slice(0, 200) });
-      }
-    }
+    const results = await generateScrapeFaqPreview(db, tenantId, urls, category || null);
 
     return res.json({ ok: true, preview: results });
   });
@@ -789,60 +429,9 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
     }
 
-    // コミット時の重複スキップ: バイグラム類似度が閾値以上の既存FAQはスキップ
-    let existingQuestionsAtScrapeCommit: string[] = [];
-    try {
-      const r = await db.query("SELECT question FROM faq_docs WHERE tenant_id = $1", [target]);
-      existingQuestionsAtScrapeCommit = (r.rows as { question: string }[]).map((row) => row.question);
-    } catch { /* non-fatal */ }
+    const result = await commitScrapeFaqs(db, target, items, categoryOverride, "scrape");
 
-    let totalInserted = 0;
-    let totalSkipped = 0;
-
-    for (const item of items) {
-      for (const faq of item.faqs) {
-        const isDuplicate = existingQuestionsAtScrapeCommit.some(
-          (q) => bigramSimilarity(faq.question, q) >= DUPLICATE_THRESHOLD
-        );
-        if (isDuplicate) {
-          totalSkipped++;
-          continue;
-        }
-        const faqCategory = categoryOverride || faq.category || "general";
-        // Phase73: preview から引き継いだ商品メタを適用（各 item 単位）
-        const pm = item.productMeta;
-        try {
-          const r = await db.query(
-            `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published, product_image_url, product_price, product_cta_url)
-             VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8)
-             RETURNING id`,
-            [
-              target,
-              faq.question.slice(0, 500),
-              faq.answer.slice(0, 2000),
-              faqCategory,
-              [item.url],
-              pm?.product_image_url ?? null,
-              pm?.product_price ?? null,
-              pm?.product_cta_url ?? null,
-            ]
-          );
-          const faqId = r.rows[0].id as number;
-          totalInserted++;
-
-          const embText = `${faq.question}\n${faq.answer}`;
-          insertEmbeddingAsync(db, target, embText, faqId, {
-            source: "scrape",
-            faq_id: faqId,
-            url: item.url,
-          });
-        } catch (err) {
-          logger.error("[scrape/commit] insert failed", err);
-        }
-      }
-    }
-
-    return res.status(201).json({ ok: true, inserted: totalInserted, skipped: totalSkipped });
+    return res.status(201).json({ ok: true, inserted: result.inserted, skipped: result.skipped });
   });
 
   // ─── Phase47 Stream B: 構造化ステータス ─────────────────────────────────

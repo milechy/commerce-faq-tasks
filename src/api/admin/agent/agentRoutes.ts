@@ -222,17 +222,23 @@ async function executeHopToolCalls(
   actions: Array<{ tool: string; result: string }>,
   messages: GroqMessage[],
   isSuperAdmin: boolean,
+  sessionId: string,
 ): Promise<void> {
   for (const toolCall of toolCalls) {
     const { id, name, args } = toolCall;
-    const suggestCounterpart = Object.entries(SUGGEST_TO_SAVE_TOOL).find(([, save]) => save === name)?.[0];
+    // この save/commit ツールを指す suggest キー(複数の可能性あり。例: commit_faq_importは
+    // suggest_faq_import_from_text/urls の両方から指される)のいずれかが今ターン既に呼ばれていないか。
+    const suggestCounterparts = Object.entries(SUGGEST_TO_SAVE_TOOL)
+      .filter(([, save]) => save === name)
+      .map(([suggest]) => suggest);
+    const alreadySuggestedThisTurn = suggestCounterparts.some((s) => suggestedThisTurn.has(s));
 
     let result: string;
-    if (suggestCounterpart && suggestedThisTurn.has(suggestCounterpart)) {
+    if (alreadySuggestedThisTurn) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
     } else {
-      result = await executeToolCall(name, args, effectiveTenantId, db, isSuperAdmin);
+      result = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
       if (name in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(name);
     }
 
@@ -370,10 +376,15 @@ const MAX_TOOL_HOPS = 4;
 // G1導入により「suggest→save を同一ターン内で連鎖実行」が技術的に可能になったが、
 // これは人間の確認を経ないまま書き込みが確定してしまう抜け道になるため、
 // プロンプト任せにせずコードで明示的にブロックする（下記ループ内で使用）。
+// suggest_faq_import_from_text / suggest_faq_import_from_urls は共に commit_faq_import へ
+// つながる多対一の対応のため、value(save側)は重複しうる点に注意
+// （下のブロック判定は「この save を指す suggest キーのいずれかが今ターン呼ばれたか」で見る）。
 const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
   suggest_tuning_rule: 'save_tuning_rule',
   suggest_faq: 'save_faq',
   suggest_engagement_rule: 'save_engagement_rule',
+  suggest_faq_import_from_text: 'commit_faq_import',
+  suggest_faq_import_from_urls: 'commit_faq_import',
 };
 
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ
@@ -433,6 +444,11 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         `明確な同意を得たターンでのみ confirmed=true を指定して呼び出してください。` +
         `suggest_* で下書きを提案した直後に、同じターン内で対応する save_* を呼び出すことはできません` +
         `（ユーザーが確認して次のメッセージを送るまで待つ必要があります）。` +
+        `商品説明文などの長いテキストやURLからFAQをまとめて登録したい場合は、1件ずつ add_faq/save_faq を` +
+        `使うのではなく suggest_faq_import_from_text（テキストから）または suggest_faq_import_from_urls` +
+        `（URL 1〜5件から）でプレビューを作成し、内容を要約提示のうえ同意を得たら commit_faq_import で` +
+        `登録してください（同じく同一ターン内での連鎖実行は避け、ユーザーの次のメッセージを待つこと）。` +
+        `PDFからの知識登録は get_legacy_ui_link(feature=knowledge_pdf) で旧管理画面へ案内してください。` +
         `請求（支払い操作）、アバタースタジオ（画像/音声/性格/ライブテスト）、エスカレーションへの有人返信、` +
         `会話セッションの削除、会話分析、成約・効果分析、テストチャット、アバター新規作成について尋ねられた場合は、` +
         `チャットで実行しようとせず get_legacy_ui_link を呼び出して旧管理画面へ案内してください。` +
@@ -497,7 +513,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             }));
 
             const beforeCount = actions.length;
-            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin);
+            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId);
             for (const action of actions.slice(beforeCount)) {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
@@ -583,7 +599,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           args: parseToolArgs(toolCall.function.arguments),
         }));
 
-        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin);
+        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId);
       }
 
       if (finalReply === null) {

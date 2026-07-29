@@ -13,6 +13,17 @@ import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
 import { textToFaqs } from '../knowledge/routes';
+import {
+  generateTextFaqPreview,
+  generateScrapeFaqPreview,
+  commitTextFaqs,
+  commitScrapeFaqs,
+} from '../../../lib/knowledge/faqImport';
+import {
+  setStagedFaqImport,
+  getStagedFaqImport,
+  clearStagedFaqImport,
+} from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
 import { getSessions, getActiveEscalations } from '../chat-history/chatHistoryRepository';
 import { computeKpis } from '../monitoring/routes';
@@ -21,6 +32,10 @@ import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
+
+// チャットでの一括インポートで一度に生成・コミットできるFAQ数の上限。
+// POST /v1/admin/knowledge/text/commit・/scrape/commit の zod スキーマ(max 20)と揃える。
+const MAX_IMPORT_FAQS = 20;
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -74,6 +89,7 @@ export async function executeToolCall(
   args: Record<string, unknown>,
   tenantId: string,
   db: Pool,
+  sessionId: string,
   isSuperAdmin: boolean = false
 ): Promise<string> {
   // 結果は500字以内日本語
@@ -932,6 +948,186 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // チャット版 FAQ一括取り込み(テキスト): 旧UIの「AIの知識データ」テキストタブと
+    // 同じ generateTextFaqPreview を使ってFAQ案を生成し、結果をサーバー側にステージングする
+    // (LLMに配列を持ち回らせない設計。詳細は knowledgeImportStaging.ts のコメント参照)。
+    // DB書き込みはしない読み取り専用ツール。登録は commit_faq_import で行う。
+    case 'suggest_faq_import_from_text': {
+      const text = String(args['text'] ?? '').trim();
+      const category = typeof args['category'] === 'string' ? args['category'] : null;
+
+      if (text.length < 50 || text.length > 10000) {
+        return truncate('text は50文字以上10000文字以内で入力してください');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        let faqs = await generateTextFaqPreview(db, tenantId, text, category);
+        if (faqs.length === 0) {
+          return truncate('FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください');
+        }
+
+        const truncated = faqs.length > MAX_IMPORT_FAQS;
+        if (truncated) faqs = faqs.slice(0, MAX_IMPORT_FAQS);
+
+        setStagedFaqImport(tenantId, sessionId, {
+          kind: 'text',
+          tenantId,
+          faqs,
+          categoryOverride: category,
+          truncated,
+          createdAt: Date.now(),
+        });
+
+        const dupCount = faqs.filter((f) => f.duplicate).length;
+        const examples = faqs.slice(0, 3).map((f) => `「${f.question.slice(0, 40)}」`).join('、');
+        const lines = [
+          `${faqs.length}件のFAQ案を作成しました。` +
+            (dupCount > 0 ? `うち${dupCount}件は既存と重複のため登録時にスキップされます。` : ''),
+          `例: ${examples}`,
+        ];
+        if (truncated) lines.push(`※ 生成数が上限(${MAX_IMPORT_FAQS}件)を超えたため、先頭${MAX_IMPORT_FAQS}件のみを対象にしています。`);
+        lines.push('登録してよろしければお知らせください。');
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_faq_import_from_text failed', err);
+        return truncate('FAQ案の生成に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // チャット版 FAQ一括取り込み(URL): 旧UIの「AIの知識データ」URLタブと同じ
+    // generateScrapeFaqPreview を使ってFAQ案を生成し、結果をサーバー側にステージングする。
+    // DB書き込みはしない読み取り専用ツール。登録は commit_faq_import で行う。
+    case 'suggest_faq_import_from_urls': {
+      const urlsRaw = args['urls'];
+      const category = typeof args['category'] === 'string' ? args['category'] : null;
+
+      if (!Array.isArray(urlsRaw) || urlsRaw.length === 0 || urlsRaw.length > 5) {
+        return truncate('urls は1〜5件のURLを配列で指定してください');
+      }
+      const urls = urlsRaw.map((u) => String(u));
+      const invalidUrl = urls.find((u) => !/^https?:\/\//i.test(u));
+      if (invalidUrl) {
+        return truncate(`URLの形式が不正です: ${invalidUrl.slice(0, 100)}`);
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const items = await generateScrapeFaqPreview(db, tenantId, urls, category);
+        let totalFaqs = items.reduce((sum, item) => sum + item.faqs.length, 0);
+        const errorItems = items.filter((item) => item.error);
+
+        if (totalFaqs === 0) {
+          const detail = errorItems.length > 0 ? `（${errorItems[0]!.error}）` : '';
+          return truncate(`指定されたURLからFAQを生成できませんでした${detail}`);
+        }
+
+        // 20件上限は item をまたいで先頭から詰める（末尾の item・faq から間引く）
+        let truncated = false;
+        if (totalFaqs > MAX_IMPORT_FAQS) {
+          truncated = true;
+          let remaining = MAX_IMPORT_FAQS;
+          for (const item of items) {
+            if (remaining <= 0) { item.faqs = []; continue; }
+            if (item.faqs.length > remaining) item.faqs = item.faqs.slice(0, remaining);
+            remaining -= item.faqs.length;
+          }
+          totalFaqs = MAX_IMPORT_FAQS;
+        }
+
+        setStagedFaqImport(tenantId, sessionId, {
+          kind: 'scrape',
+          tenantId,
+          items,
+          categoryOverride: category,
+          truncated,
+          createdAt: Date.now(),
+        });
+
+        const allFaqs = items.flatMap((item) => item.faqs);
+        const dupCount = allFaqs.filter((f) => f.duplicate).length;
+        const examples = allFaqs.slice(0, 3).map((f) => `「${f.question.slice(0, 40)}」`).join('、');
+        const lines = [
+          `${urls.length}件のURLから合計${totalFaqs}件のFAQ案を作成しました。` +
+            (dupCount > 0 ? `うち${dupCount}件は既存と重複のため登録時にスキップされます。` : ''),
+          `例: ${examples}`,
+        ];
+        if (errorItems.length > 0) lines.push(`取得できなかったURL: ${errorItems.length}件`);
+        if (truncated) lines.push(`※ 生成数が上限(${MAX_IMPORT_FAQS}件)を超えたため、先頭${MAX_IMPORT_FAQS}件のみを対象にしています。`);
+        lines.push('登録してよろしければお知らせください。');
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_faq_import_from_urls failed', err);
+        return truncate('FAQ案の生成に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // チャット版 FAQ一括取り込みのコミット: suggest_faq_import_from_text/urls で
+    // ステージング済みのFAQをDBに登録する。confirmedゲート必須。
+    case 'commit_faq_import': {
+      const confirmed = Boolean(args['confirmed']);
+      const targetRaw = typeof args['target'] === 'string' ? args['target'] : undefined;
+
+      if (!confirmed) {
+        return truncate('FAQの一括登録には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      const staged = getStagedFaqImport(tenantId, sessionId);
+      if (!staged) {
+        return truncate('プレビューがありません。先に suggest_faq_import_from_text または suggest_faq_import_from_urls でFAQ案を作成してください');
+      }
+
+      const target = targetRaw || tenantId;
+      if (target === 'global' && !isSuperAdmin) {
+        return truncate('全店舗共通の知識データはSuper Adminのみ登録可能です');
+      }
+
+      try {
+        const categoryOverride = staged.categoryOverride ?? undefined;
+        const result =
+          staged.kind === 'text'
+            ? await commitTextFaqs(db, target, staged.faqs, categoryOverride, 'admin_agent_text_import')
+            : await commitScrapeFaqs(db, target, staged.items, categoryOverride, 'admin_agent_scrape_import');
+
+        clearStagedFaqImport(tenantId, sessionId);
+
+        return truncate(
+          `FAQを${result.inserted}件登録しました` +
+            (result.skipped > 0 ? `（重複のため${result.skipped}件はスキップしました）` : ''),
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] commit_faq_import failed', err);
+        return truncate('FAQの一括登録に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // チャット版 FAQ一括取り込みのプレビュー破棄: 直前の suggest_faq_import_from_text/urls
+    // の結果を明示的に取り消す。TTL(30分)でも自動失効するが、続けて別の内容を試す前に
+    // 古いプレビューが残っていることでの誤登録を避けるための明示的な取消手段として用意する。
+    // 確認は不要(DBへの書き込みは何もしていない取り消しのため、他の削除系ツールと違いconfirmedゲートは設けない)。
+    case 'discard_faq_import': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const staged = getStagedFaqImport(tenantId, sessionId);
+      if (!staged) {
+        return truncate('破棄する対象のFAQ案はありません');
+      }
+      clearStagedFaqImport(tenantId, sessionId);
+      return truncate('FAQ案を破棄しました');
+    }
+
+    // -----------------------------------------------------------------------
     // Phase3: suggest_engagement_rule — 自然文から声がけルールの下書きを生成する読み取り専用ツール
     case 'suggest_engagement_rule': {
       const freeText = String(args['free_text'] ?? '').trim();
@@ -1328,6 +1524,16 @@ export async function executeToolCall(
           path: '/admin/avatar/wizard',
           description: 'アバターを新しく作る手順（ウィザード）はこちらの画面で行えます',
         },
+        // PDFアップロードはファイル選択がGUI固有の操作のためチャット化せず、旧UIへ誘導する。
+        // /admin/knowledge (tenantId無し)は KnowledgeIndexPage が navigate() で
+        // /admin/knowledge/:tenantId へリダイレクトする際に location.search を引き継がず
+        // ?tab=pdf が失われるため、他のキーと異なりここでは tenantId を path に含める必要がある
+        // (下のガードで !tenantId は事前に弾いている)。
+        knowledge_pdf: {
+          label: 'PDFアップロード',
+          path: `/admin/knowledge/${tenantId}?tab=pdf`,
+          description: 'PDFファイルからの知識登録はこちらの画面で行えます',
+        },
       };
 
       // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測)に基づくプラン制限。
@@ -1345,6 +1551,11 @@ export async function executeToolCall(
         if (!planHasFeature(plan, feature)) {
           return truncate('この機能はGrowthプラン以上でご利用いただけます');
         }
+      }
+
+      // knowledge_pdf は path に tenantId を埋め込む都合上、他のキーと違い必須。
+      if (feature === 'knowledge_pdf' && !tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
       const link = LEGACY_UI_LINKS[feature];
