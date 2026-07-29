@@ -19,6 +19,7 @@ import {
   GitBranch,
   Headset,
   HelpCircle,
+  Sparkles,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
 import { NotificationBell } from "./common/NotificationBell";
@@ -150,7 +151,7 @@ interface SidebarContentProps {
 }
 
 function SidebarContent({ onClose }: SidebarContentProps) {
-  const { user, isSuperAdmin, previewMode, previewTenantId, tenantPlan, logout } = useAuth();
+  const { user, isSuperAdmin, isClientAdmin, previewMode, previewTenantId, tenantPlan, logout } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -280,6 +281,41 @@ function SidebarContent({ onClose }: SidebarContentProps) {
           gap: 10,
         }}
       >
+        {/* 新UI(チャット)への復帰導線。
+            target="_blank" を無視する環境(アプリ内ブラウザ等)や、チャット・ファースト
+            既定がOFFのユーザーは旧UIから新UIへ戻る手段が無くなるため、常設リンクを置く。
+            条件は App.tsx の showAIChat と同じ isClientAdmin — テナントが解決できない
+            素のsuper_adminにとってはチャットが機能しないため意図的に非表示にする。 */}
+        {isClientAdmin && (
+          <NavLink
+            to="/copilot-preview"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "8px 12px",
+              borderRadius: "var(--radius-md)",
+              textDecoration: "none",
+              fontSize: 13.5,
+              fontWeight: 600,
+              color: "var(--sidebar-primary)",
+              background: "var(--sidebar-accent)",
+              transition: "opacity 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.opacity = "0.85";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.opacity = "1";
+            }}
+          >
+            <Sparkles size={16} style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              AIチャットに戻る
+            </span>
+          </NavLink>
+        )}
+
         {/* Theme toggle */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>テーマ</span>
