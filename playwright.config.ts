@@ -10,6 +10,11 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL || 'https://admin.r2c.biz',
     screenshot: 'only-on-failure',
     trace: 'on-first-retry',
+    // GID 1216970103691946: E2Eトラフィックであることをサーバ側(resolveTrafficSource)
+    // が判定できるようにする。本番へのE2E実行がchat_sessions等の集計指標
+    // (継続率・CV率・Judgeスコア)を汚染していた事故の再発防止。
+    // ブラウザコンテキストの全リクエスト(widget.jsのfetch含む)に付与される。
+    extraHTTPHeaders: { 'x-r2c-traffic-source': 'e2e' },
   },
   expect: {
     toHaveScreenshot: { maxDiffPixelRatio: 0.002 },

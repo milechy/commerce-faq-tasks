@@ -11,6 +11,7 @@ import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts
 import { t } from "../i18n/messages";
 import type { Lang } from "../i18n/messages";
 import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
+import { resolveTrafficSource, TRAFFIC_SOURCE_HEADER } from "../../lib/traffic/trafficSource";
 import { saveKnowledgeGap } from "../admin/knowledge/knowledgeGapRepository";
 import { analyzeSentiment } from "../../lib/sentiment/client";
 import { sanitizeInput, sanitizeOutput, blockReasonToMessage } from "../../lib/security/inputSanitizer";
@@ -91,6 +92,13 @@ export function createChatHandler(logger: Logger) {
     const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";
     // Phase33: lang は langDetectMiddleware が設定する（フォールバック: "ja"）
     const lang: Lang = (req as any).lang ?? "ja";
+    // GID 1216970103691946: 実ユーザー/E2E/chat-test/デモの判定（セッション新規作成時のみ記録）
+    const trafficSource = resolveTrafficSource({
+      headerValue: req.header(TRAFFIC_SOURCE_HEADER),
+      userAgent: req.header("user-agent"),
+      referer: req.header("referer"),
+      isChatTestToken: (req as any).isChatTestToken === true,
+    });
 
     // Zod バリデーション
     const parsed = ChatRequestSchema.safeParse(req.body);
@@ -176,6 +184,7 @@ export function createChatHandler(logger: Logger) {
       sessionId,
       role: "user",
       content: body.message,
+      trafficSource,
     }).catch((err) =>
       logger.warn({ err }, "[chat-history] save user message failed")
     );
@@ -323,6 +332,7 @@ export function createChatHandler(logger: Logger) {
           knowledge_gap: isKnowledgeGap(gapSignal) || isResponseGap(content),
         },
         ragSources: result.meta?.ragSources,
+        trafficSource,
       }).catch((err) =>
         logger.warn({ err }, "[chat-history] save assistant message failed")
       );

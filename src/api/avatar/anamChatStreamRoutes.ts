@@ -12,6 +12,7 @@ import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
 import { saveMessage } from '../admin/chat-history/chatHistoryRepository';
+import { resolveTrafficSource, TRAFFIC_SOURCE_HEADER } from '../../lib/traffic/trafficSource';
 import { trackUsage } from '../../lib/billing/usageTracker';
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
@@ -65,6 +66,14 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       return res.status(400).json({ error: 'messages array required' });
     }
 
+    // GID 1216970103691946: 実ユーザー/E2E/chat-test/デモの判定（セッション新規作成時のみ記録）
+    const trafficSource = resolveTrafficSource({
+      headerValue: req.header(TRAFFIC_SOURCE_HEADER),
+      userAgent: req.header('user-agent'),
+      referer: req.header('referer'),
+      isChatTestToken: (req as any).isChatTestToken === true,
+    });
+
     // Phase75: 会話ログ永続化。Widgetがsession_idを送ってこない場合、この呼び出し単位を
     // 1セッションとして扱う(継続性は失うが、Hermes MCP等の学習用途には十分な単発Q&Aとして
     // 記録できる)。将来widget.js側でsessionIdを継続送信するよう改修すれば自動的に連続化する。
@@ -80,6 +89,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
         role: 'user',
         content: latestUserMessage.content,
         metadata: { source: 'avatar', channel: 'anam' },
+        trafficSource,
       }).catch((err) => logger.warn('[anamChatStream] saveMessage(user) failed:', err));
     }
 
@@ -219,6 +229,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
           role: 'assistant',
           content: assistantContent,
           metadata: { source: 'avatar', channel: 'anam' },
+          trafficSource,
         }).catch((err) => logger.warn('[anamChatStream] saveMessage(assistant) failed:', err));
       }
 

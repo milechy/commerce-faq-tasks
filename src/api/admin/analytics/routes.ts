@@ -13,6 +13,45 @@ import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
 
 // ---------------------------------------------------------------------------
+// GID 1216970103691946: トラフィック汚染対策
+//
+// E2E/chat-test/デモ由来のセッションが chat_sessions.metadata.source に記録されるように
+// なった(src/lib/traffic/trafficSource.ts, src/api/chat/route.ts)。継続率・CV率・
+// Judgeスコアなど「実ユーザーの行動」を表す集計指標は source='user' のセッションのみを
+// 対象にする。過去データ(metadata.source未設定)は自動的に除外される
+// (`metadata->>'source' = 'user'` は NULL に対して常にfalseになるため)。
+//
+// chat_sessions を直接クエリする箇所は USER_SOURCE_CLAUSE(エイリアス指定)を、
+// conversation_evaluations / conversion_attributions など chat_sessions を経由しない
+// テーブルは USER_SOURCE_EXISTS(session_id列, tenant_id列)でEXISTS結合して絞り込む。
+// ---------------------------------------------------------------------------
+
+/** chat_sessions に直接エイリアス `alias` が張られているクエリに追加する条件。 */
+function userSourceClause(alias: string): string {
+  return `AND ${alias}.metadata->>'source' = 'user'`;
+}
+
+/**
+ * chat_sessions を経由しないテーブル(conversation_evaluations / conversion_attributions 等)
+ * から、session_id/tenant_id 経由で実ユーザーのセッションかどうかを判定するEXISTS句。
+ * conversation_evaluations.session_id は chat_sessions.session_id (TEXT) と対応し、
+ * conversion_attributions.session_id は chat_sessions.id (UUID) と対応するため、
+ * どちらの列と突き合わせるかを chatSessionsColumn で指定する。
+ */
+function userSourceExists(
+  sessionIdExpr: string,
+  tenantIdExpr: string,
+  chatSessionsColumn: "session_id" | "id" = "session_id",
+): string {
+  return `AND EXISTS (
+             SELECT 1 FROM chat_sessions cs
+             WHERE cs.${chatSessionsColumn} = ${sessionIdExpr}
+               AND cs.tenant_id = ${tenantIdExpr}
+               AND cs.metadata->>'source' = 'user'
+           )`;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -206,7 +245,8 @@ export function registerAnalyticsRoutes(app: Express): void {
           `SELECT COUNT(*) AS total_sessions
            FROM chat_sessions s
            WHERE s.started_at >= NOW() - $1::interval
-           ${tenantClause}`,
+           ${tenantClause}
+           ${userSourceClause("s")}`,
           params,
         );
 
@@ -219,11 +259,12 @@ export function registerAnalyticsRoutes(app: Express): void {
            FROM chat_sessions s
            WHERE s.started_at >= NOW() - 2 * ($1::interval)
              AND s.started_at < NOW() - $1::interval
-           ${prevTenantClause}`,
+           ${prevTenantClause}
+           ${userSourceClause("s")}`,
           prevParams,
         );
 
-        // Avg judge score
+        // Avg judge score (GID 1216970103691946: chat_sessions.metadata.source='user' のみ)
         const evalParams: (string | number)[] = [`${interval}`];
         if (tenantId) evalParams.push(tenantId);
         const evalTenantClause = tenantId ? "AND tenant_id = $2" : "";
@@ -232,7 +273,8 @@ export function registerAnalyticsRoutes(app: Express): void {
            FROM conversation_evaluations
            WHERE evaluated_at >= NOW() - $1::interval
              AND score > 0
-           ${evalTenantClause}`,
+           ${evalTenantClause}
+           ${userSourceExists("conversation_evaluations.session_id", "conversation_evaluations.tenant_id")}`,
           evalParams,
         );
 
@@ -259,6 +301,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              LEFT JOIN chat_messages m ON m.session_id = s.id
              WHERE s.started_at >= NOW() - $1::interval
              ${msgTenantClause}
+             ${userSourceClause("s")}
              GROUP BY s.session_id
            ) sub`,
           msgParams,
@@ -274,7 +317,8 @@ export function registerAnalyticsRoutes(app: Express): void {
            JOIN chat_messages m ON m.session_id = s.id
            WHERE s.started_at >= NOW() - $1::interval
              AND (m.content ILIKE '%livekit%' OR m.content ILIKE '%avatar%')
-           ${avatarTenantClause}`,
+           ${avatarTenantClause}
+           ${userSourceClause("s")}`,
           avatarParams,
         );
 
@@ -343,6 +387,18 @@ export function registerAnalyticsRoutes(app: Express): void {
            FROM conversion_attributions
            WHERE created_at > NOW() - INTERVAL '30 days'
            ${cvTenantClause}
+           -- GID 1216970103691946: session_idが無いイベント(セッション紐付けができない
+           -- 旧経路)は誤って除外しないよう温存し、session_idがある場合のみ実ユーザー
+           -- 判定する
+           AND (
+             session_id IS NULL
+             OR EXISTS (
+               SELECT 1 FROM chat_sessions cs
+               WHERE cs.id = conversion_attributions.session_id
+                 AND cs.tenant_id = conversion_attributions.tenant_id
+                 AND cs.metadata->>'source' = 'user'
+             )
+           )
            GROUP BY conversion_type`,
           cvQueryParams,
         );
@@ -481,6 +537,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              FROM chat_sessions s
              WHERE s.started_at >= NOW() - $1::interval
              ${tenantClause}
+             ${userSourceClause("s")}
              GROUP BY day
            ) s_count ON s_count.day = d.date
            LEFT JOIN (
@@ -489,6 +546,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              WHERE e.evaluated_at >= NOW() - $1::interval
                AND e.score > 0
              ${evalTenantClause}
+             ${userSourceExists("e.session_id", "e.tenant_id")}
              GROUP BY day
            ) e_avg ON e_avg.day = d.date
            LEFT JOIN (
@@ -624,6 +682,7 @@ export function registerAnalyticsRoutes(app: Express): void {
            WHERE evaluated_at >= NOW() - $1::interval
              AND score > 0
            ${tenantClause}
+           ${userSourceExists("conversation_evaluations.session_id", "conversation_evaluations.tenant_id")}
            GROUP BY range
            ORDER BY range`,
           params,
@@ -639,7 +698,8 @@ export function registerAnalyticsRoutes(app: Express): void {
            FROM conversation_evaluations
            WHERE evaluated_at >= NOW() - $1::interval
              AND score > 0
-           ${tenantClause}`,
+           ${tenantClause}
+           ${userSourceExists("conversation_evaluations.session_id", "conversation_evaluations.tenant_id")}`,
           params,
         );
 
@@ -665,6 +725,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              AND e.score > 0
              AND e.score < 40
            ${lowTenantClause}
+           ${userSourceExists("e.session_id", "e.tenant_id")}
            ORDER BY e.score ASC
            LIMIT 10`,
           lowScoreParams,
@@ -778,6 +839,7 @@ export function registerAnalyticsRoutes(app: Express): void {
            FROM chat_sessions s
            WHERE s.started_at >= NOW() - $1::interval
            ${tenantClause}
+           ${userSourceClause("s")}
            GROUP BY s.outcome`,
           params,
         );
@@ -786,13 +848,13 @@ export function registerAnalyticsRoutes(app: Express): void {
         // Dedup: get total from a separate count
         const totalCountResult = await pool.query(
           `SELECT COUNT(*) AS total FROM chat_sessions s
-           WHERE s.started_at >= NOW() - $1::interval ${tenantClause}`,
+           WHERE s.started_at >= NOW() - $1::interval ${tenantClause} ${userSourceClause("s")}`,
           params,
         );
         const total = parseInt(totalCountResult.rows[0]?.total ?? "0", 10);
         const recordedResult = await pool.query(
           `SELECT COUNT(*) AS recorded FROM chat_sessions s
-           WHERE s.started_at >= NOW() - $1::interval ${tenantClause} AND s.outcome IS NOT NULL`,
+           WHERE s.started_at >= NOW() - $1::interval ${tenantClause} AND s.outcome IS NOT NULL ${userSourceClause("s")}`,
           params,
         );
         const recorded = parseInt(recordedResult.rows[0]?.recorded ?? "0", 10);
@@ -803,6 +865,7 @@ export function registerAnalyticsRoutes(app: Express): void {
            FROM chat_sessions s
            WHERE s.started_at >= NOW() - $1::interval ${tenantClause}
              AND s.outcome IS NOT NULL
+           ${userSourceClause("s")}
            GROUP BY s.outcome
            ORDER BY cnt DESC`,
           params,
@@ -822,6 +885,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              COUNT(CASE WHEN s.outcome IS NOT NULL AND s.outcome NOT IN ('離脱', '不明') THEN 1 END) AS converted
            FROM chat_sessions s
            WHERE s.started_at >= NOW() - $1::interval ${tenantClause}
+           ${userSourceClause("s")}
            GROUP BY DATE(s.started_at)
            ORDER BY date ASC`,
           params,
@@ -853,7 +917,8 @@ export function registerAnalyticsRoutes(app: Express): void {
            JOIN chat_sessions s ON s.session_id = ce.session_id
            WHERE ce.evaluated_at >= NOW() - $1::interval
              ${techTenantClause}
-             AND ce.feedback IS NOT NULL`,
+             AND ce.feedback IS NOT NULL
+             ${userSourceClause("s")}`,
           techniqueParams,
         );
 
@@ -902,6 +967,7 @@ export function registerAnalyticsRoutes(app: Express): void {
              ${stageTenantClause}
              AND (s.outcome IS NULL OR s.outcome IN ('離脱', '不明'))
              AND cm.metadata->>'state' IS NOT NULL
+             ${userSourceClause("s")}
            GROUP BY cm.metadata->>'state'`,
           stageParams,
         );
