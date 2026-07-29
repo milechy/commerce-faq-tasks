@@ -1,5 +1,6 @@
 // src/agent/ab-test/variantSelector.test.ts
 
+import { randomUUID } from 'node:crypto';
 import { selectVariant } from './variantSelector';
 import type { PromptVariant } from './variantSelector';
 
@@ -62,5 +63,50 @@ describe('selectVariant', () => {
     // variantId が variants のいずれかの id と一致すること
     const validIds = [variantA.id, variantB.id];
     expect(validIds).toContain(result.variantId);
+  });
+
+  // GID 1216978855735482: sticky assignment（同一セッション内でvariantが揺れないこと）
+  describe('stickyKey指定時のsticky assignment', () => {
+    it('同一のstickyKeyは常に同じvariantを返す（100回連続呼び出しでも一致）', () => {
+      const sessionId = 'session-sticky-001';
+      const first = selectVariant([variantA, variantB], 'fallback', sessionId);
+      for (let i = 0; i < 100; i++) {
+        const result = selectVariant([variantA, variantB], 'fallback', sessionId);
+        expect(result.variantId).toBe(first.variantId);
+      }
+    });
+
+    it('異なるstickyKeyであれば分布として両方のvariantが選ばれ得る（統計的検証、実運用同様UUID形式のセッションIDを使用）', () => {
+      // "session-0", "session-1"... のような連番に近い文字列は先頭が共通し
+      // ハッシュ分布が偏るため、実運用のsession_idに近いUUID形式で検証する。
+      const counts: Record<string, number> = { variant_a: 0, variant_b: 0 };
+      for (let i = 0; i < 500; i++) {
+        const result = selectVariant([variantA, variantB], 'fallback', randomUUID());
+        if (result.variantId) counts[result.variantId] = (counts[result.variantId] ?? 0) + 1;
+      }
+      // weight[70,30]の分布に統計的に近いこと（ハッシュ由来なので緩めの範囲で確認）
+      const ratioA = counts['variant_a']! / 500;
+      expect(ratioA).toBeGreaterThan(0.5);
+      expect(ratioA).toBeLessThan(0.9);
+      expect(counts['variant_b']).toBeGreaterThan(0);
+    });
+
+    it('stickyKey省略時は従来どおりMath.random()ベースの後方互換動作のまま（既存呼び出し元を壊さない）', () => {
+      // stickyKeyを渡さない呼び出しが既存テスト(このファイル冒頭)と同じ統計的挙動を保つことを再確認
+      const counts: Record<string, number> = { variant_a: 0, variant_b: 0 };
+      for (let i = 0; i < 1000; i++) {
+        const result = selectVariant([variantA, variantB], 'fallback');
+        if (result.variantId) counts[result.variantId] = (counts[result.variantId] ?? 0) + 1;
+      }
+      const ratioA = counts['variant_a']! / 1000;
+      expect(ratioA).toBeGreaterThan(0.60);
+      expect(ratioA).toBeLessThan(0.80);
+    });
+
+    it('variantsが1つだけの場合はstickyKeyの有無に関わらず常にそのvariantを返す', () => {
+      const single: PromptVariant = { id: 'only_variant', name: '唯一版', prompt: '唯一プロンプト', weight: 100 };
+      const result = selectVariant([single], 'fallback', 'any-session-id');
+      expect(result.variantId).toBe('only_variant');
+    });
   });
 });

@@ -88,6 +88,7 @@ import { registerEngagementRoutes } from "./api/engagement/engagementRoutes";
 import { registerEscalationRoutes } from "./api/chat/escalationRoutes";
 import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
+import { registerAbExposureRoutes } from "./api/conversion/abExposureRoutes";
 import { registerHermesMcpRoutes } from "./api/hermes-mcp/routes";
 import { registerHermesProposalAdminRoutes } from "./api/admin/hermes/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
@@ -635,6 +636,9 @@ registerEscalationRoutes(app, apiStack);
 // Phase58: コンバージョン最適化ループ
 registerConversionRoutes(app, apiStack, db);
 if (db) registerAbTestRoutes(app, db);
+
+// GID 1216978855735482: アバターA/Bテストの露出記録 (Widget → Server)
+registerAbExposureRoutes(app, apiStack, db);
 
 // Phase75: Hermes Agent(外部, 別VPS)向けMCPデータエンドポイント(Bearer認証、同意ゲート)
 registerHermesMcpRoutes(app);

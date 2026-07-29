@@ -12,6 +12,10 @@ export interface TenantWidgetConfig {
   apiBaseUrl: string;
   themeColor?: string;
   avatarEnabled?: boolean;
+  /** GID 1216978855735482: アバターA/Bテストの割当実験ID（実験が無ければnull） */
+  abExperimentId?: number | null;
+  /** GID 1216978855735482: アバターA/Bテストの割当variant（実験が無ければnull） */
+  abVariant?: "a" | "b" | null;
 }
 
 const WIDGET_SRC_PATH = path.resolve(process.cwd(), "public", "widget.js");
@@ -54,6 +58,8 @@ export async function generateWidgetJs(config: TenantWidgetConfig): Promise<stri
     apiBase: ${JSON.stringify(config.apiBaseUrl)},
     themeColor: ${JSON.stringify(config.themeColor ?? "#22c55e")},
     avatarEnabled: ${JSON.stringify(config.avatarEnabled ?? false)},
+    abExperimentId: ${JSON.stringify(config.abExperimentId ?? null)},
+    abVariant: ${JSON.stringify(config.abVariant ?? null)},
     _wt: ${JSON.stringify(token)}
   };
   if (typeof window !== "undefined") {

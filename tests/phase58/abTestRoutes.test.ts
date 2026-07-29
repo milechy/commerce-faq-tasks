@@ -174,28 +174,81 @@ describe('PATCH /v1/admin/ab/experiments/:id/status', () => {
 });
 
 describe('GET /v1/admin/ab/experiments/:id/results', () => {
-  it('variant別 conversion rate 算出 → 200', async () => {
+  // GID 1216978855735482: reconcileAbResultOutcomes が結果集計の直前に呼ばれるようになった。
+  // 呼び出し順序: [0]tenant_id+min_sample_size取得 [1]metadata列存在確認
+  // [2]reached_two_plus_exchanges UPDATE [3]converted UPDATE [4]集計SELECT
+  function queryResponsesWithReconcile(
+    minSampleSize: number,
+    aggregationRows: any[],
+    tenantId = 'tenant-a',
+  ) {
+    return [
+      { rows: [{ tenant_id: tenantId, min_sample_size: minSampleSize }], rowCount: 1 },
+      { rows: [{ exists: false }] }, // metadata列なし（未移行環境を模す）
+      { rows: [], rowCount: 0 }, // reached_two_plus_exchanges UPDATE
+      { rows: [], rowCount: 0 }, // converted UPDATE
+      { rows: aggregationRows },
+    ];
+  }
+
+  it('variant別 conversion rate / 継続率(reached_two_plus_rate) 算出 → 200、サンプル十分でreliable=true', async () => {
     const { app } = makeApp({
-      queryResponses: [
-        { rows: [{ tenant_id: 'tenant-a' }], rowCount: 1 },
-        {
-          rows: [
-            { variant: 'a', total: 100, converted: 30, avg_judge_score: 75 },
-            { variant: 'b', total: 100, converted: 20, avg_judge_score: 65 },
-          ],
-        },
-      ],
+      queryResponses: queryResponsesWithReconcile(100, [
+        { variant: 'a', exposed: 100, reached_two_plus: 60, converted: 30, avg_judge_score: 75 },
+        { variant: 'b', exposed: 100, reached_two_plus: 40, converted: 20, avg_judge_score: 65 },
+      ]),
     });
     const res = await request(app).get('/v1/admin/ab/experiments/1/results');
     expect(res.status).toBe(200);
     expect(res.body.variants['a'].conversion_rate).toBe(30);
     expect(res.body.variants['b'].conversion_rate).toBe(20);
+    expect(res.body.variants['a'].reached_two_plus_rate).toBe(60);
+    expect(res.body.variants['b'].reached_two_plus_rate).toBe(40);
+    expect(res.body.total_exposed).toBe(200);
+    expect(res.body.min_sample_size).toBe(100);
+    expect(res.body.reliable).toBe(true);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  it('min_sample_size未到達 → reliable=false + warningを返す（生の件数は隠さない）', async () => {
+    const { app } = makeApp({
+      queryResponses: queryResponsesWithReconcile(1000, [
+        { variant: 'a', exposed: 5, reached_two_plus: 2, converted: 1, avg_judge_score: 80 },
+        { variant: 'b', exposed: 5, reached_two_plus: 1, converted: 0, avg_judge_score: null },
+      ]),
+    });
+    const res = await request(app).get('/v1/admin/ab/experiments/1/results');
+    expect(res.status).toBe(200);
+    expect(res.body.reliable).toBe(false);
+    expect(res.body.total_exposed).toBe(10);
+    expect(typeof res.body.warning).toBe('string');
+    expect(res.body.warning).toContain('1000');
+    // 生の件数自体は隠さない
+    expect(res.body.variants['a'].exposed).toBe(5);
   });
 
   it('存在しないID → 404', async () => {
     const { app } = makeApp({ queryResponses: [{ rows: [], rowCount: 0 }] });
     const res = await request(app).get('/v1/admin/ab/experiments/999/results');
     expect(res.status).toBe(404);
+  });
+
+  it('reconcile自体が例外を投げても集計は継続する(best-effort)', async () => {
+    // metadata列存在確認は内部でtry/catch済みのため常に成功扱い(false)になる。
+    // 1本目のUPDATE(reached_two_plus_exchanges)が例外を投げると reconcileAbResultOutcomes
+    // 全体がその場でrejectし、2本目のUPDATE(converted)は呼ばれない。呼び出し元(results
+    // ハンドラ)のtry/catchがこれを吸収し、次の実クエリ(集計SELECT)に進む。
+    const { app } = makeApp({
+      queryResponses: [
+        { rows: [{ tenant_id: 'tenant-a', min_sample_size: 10 }], rowCount: 1 },
+        { rows: [{ exists: false }] },
+        new Error('update failed'),
+        { rows: [{ variant: 'a', exposed: 20, reached_two_plus: 10, converted: 5, avg_judge_score: 70 }] },
+      ],
+    });
+    const res = await request(app).get('/v1/admin/ab/experiments/1/results');
+    expect(res.status).toBe(200);
+    expect(res.body.variants['a'].exposed).toBe(20);
   });
 });
 

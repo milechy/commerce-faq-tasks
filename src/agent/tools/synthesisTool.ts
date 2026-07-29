@@ -16,7 +16,9 @@ import type { SimilarPattern } from '../../api/events/similarUserMatcher';
 import { getPool } from '../../lib/db';
 import { buildSentimentHint } from '../../lib/sentiment/hint';
 
-async function getTenantsPromptWithVariant(tenantId: string): Promise<{
+// GID 1216978855735482: sessionId を sticky key として渡し、同一セッション内で
+// variant が揺れないようにする（Math.random()だと呼ばれるたびに選び直されていた）。
+async function getTenantsPromptWithVariant(tenantId: string, sessionId?: string): Promise<{
   prompt: string | null;
   variantId: string | null;
   variantName: string | null;
@@ -36,7 +38,7 @@ async function getTenantsPromptWithVariant(tenantId: string): Promise<{
     const variants = row.system_prompt_variants ?? [];
     const fallback = row.system_prompt?.trim() ?? '';
 
-    const selection = selectVariant(variants, fallback);
+    const selection = selectVariant(variants, fallback, sessionId);
     return {
       prompt: selection.prompt || null,
       variantId: selection.variantId,
@@ -186,7 +188,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
 
   // テナント固有のシステムプロンプトをA/Bバリアント込みで取得（tenantId がある場合のみ）
   const promptResult = tenantId
-    ? await getTenantsPromptWithVariant(tenantId)
+    ? await getTenantsPromptWithVariant(tenantId, input.sessionId)
     : { prompt: null, variantId: null, variantName: null };
   const tenantSystemPrompt = promptResult.prompt;
   const selectedVariantId = promptResult.variantId;
