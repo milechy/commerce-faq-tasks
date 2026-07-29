@@ -25,7 +25,7 @@ import {
   clearStagedFaqImport,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
-import { getSessions, getActiveEscalations, getMessages } from '../chat-history/chatHistoryRepository';
+import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation } from '../chat-history/chatHistoryRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
@@ -37,6 +37,10 @@ import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATE
 // チャットでの一括インポートで一度に生成・コミットできるFAQ数の上限。
 // POST /v1/admin/knowledge/text/commit・/scrape/commit の zod スキーマ(max 20)と揃える。
 const MAX_IMPORT_FAQS = 20;
+
+// 有人返信1件の最大文字数。POST /v1/admin/chat-history/sessions/:id/reply の
+// zod スキーマ(z.string().min(1).max(2000))と揃える。
+const MAX_OPERATOR_REPLY_LENGTH = 2000;
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -1463,6 +1467,86 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_escalations failed', err);
         return truncate('エスカレーション一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 有人返信 / 対応完了: 旧UI(/admin/escalations)と同じ書き込みをチャットから行う。
+    // セッションの特定は必ず resolveSessionByShortId 経由（tenant_id 条件込み）とし、
+    // 他テナントのセッションへ書き込む経路を作らない。
+    case 'reply_to_escalation': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const content = String(args['content'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      if (!content) {
+        return truncate('返信内容（content）は必須です');
+      }
+      if (content.length > MAX_OPERATOR_REPLY_LENGTH) {
+        return truncate(`返信内容は${MAX_OPERATOR_REPLY_LENGTH}文字以内で指定してください（現在${content.length}文字）`);
+      }
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        if (!confirmed) {
+          return truncate(
+            `お客様への返信には確認が必要です。セッション[${display}]に以下の文面を送信します。` +
+            'ユーザーに提示し、同意を得てから confirmed=true で再度実行してください\n' +
+            `返信内容: ${content}`,
+          );
+        }
+
+        await saveMessage({
+          tenantId,
+          sessionId: resolved.session.session_id,
+          role: 'operator',
+          content,
+        });
+        return truncate(`セッション[${display}]への返信を保存しました。お客様の画面に表示されます`);
+      } catch (err) {
+        logger.warn('[actionExecutor] reply_to_escalation failed', err);
+        return truncate('返信の送信に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'resolve_escalation': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        if (!confirmed) {
+          return truncate(
+            `対応完了にするには確認が必要です。セッション[${display}]を対応完了にすると、エスカレーション一覧から外れます。` +
+            'ユーザーに提示し、同意を得てから confirmed=true で再度実行してください',
+          );
+        }
+
+        const ok = await resolveEscalation({ sessionDbId: resolved.session.id, tenantId });
+        if (!ok) {
+          return truncate(`セッション[${display}]は見つかりません`);
+        }
+        return truncate(`セッション[${display}]のエスカレーションを対応完了に更新しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] resolve_escalation failed', err);
+        return truncate('対応完了の記録に失敗しました');
       }
     }
 

@@ -705,6 +705,60 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'reply_to_escalation',
+      description:
+        'エスカレーション中の会話に、有人担当者としてお客様へ返信する書き込みツール。' +
+        'get_escalations / get_chat_sessions が返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        '返信はお客様の画面にそのまま表示されるため、必ず先に返信文面をユーザーに要約提示し、' +
+        '同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_escalations の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+          content: {
+            type: 'string',
+            description: 'お客様へ送る返信本文（1〜2000文字）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['session_id', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'resolve_escalation',
+      description:
+        'エスカレーション中の会話を「対応完了」にする書き込みツール。完了にすると get_escalations の一覧から外れる。' +
+        'get_escalations / get_chat_sessions が返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        '必ず先にどの会話を対応完了にするかをユーザーに要約提示し、' +
+        '同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_escalations の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_monitoring_summary',
       description:
         '直近30日間の会話完了率・フォールバック率（AIが答えられなかった割合）のサマリーを取得する読み取り専用ツール。',
@@ -764,13 +818,16 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       description:
         'チャットでは対応していない操作について、旧管理画面（従来のGUI）への案内リンクを返す読み取り専用ツール。' +
         '請求（請求書の再送・金額調整・無料期間設定・一時停止/再開）、アバタースタジオ（画像候補の選択・音声クローン・' +
-        '性格設定・ライブテスト）、エスカレーションへの有人返信、会話セッションの削除、会話分析（会話数・満足度・' +
+        '性格設定・ライブテスト）、会話セッションの削除、会話分析（会話数・満足度・' +
         '品質指標の推移や低評価セッションの確認）、成約・効果分析（成約への貢献度・ABテスト・効果測定）、' +
         'テストチャット（設定内容の動作確認）、アバター新規作成（ウィザード）、PDFアップロードでの知識登録について' +
         '尋ねられたら、無理にチャットで実行しようとせずこのツールを呼び出して案内すること。' +
         'テキスト入力やURLからの知識登録は suggest_faq_import_from_text / suggest_faq_import_from_urls が' +
         '使えるため、PDF以外ではこのツールを使わないこと。' +
-        'ただし会話分析・成約/効果分析の「数値サマリー」は get_analytics_summary / get_conversion_summary で' +
+        'エスカレーションへの有人返信と対応完了はチャットから reply_to_escalation / resolve_escalation で' +
+        '直接実行できるため、feature="escalation_reply" は「旧画面で会話の履歴を見返したい」と' +
+        'ユーザーが明示した場合にのみ案内すること。' +
+        'また会話分析・成約/効果分析の「数値サマリー」は get_analytics_summary / get_conversion_summary で' +
         'チャット上に直接返せるため、まずそちらを使うこと。この2機能でこのツールを使うのは、' +
         'グラフの詳細・個別の低評価セッション・ABテスト結果を旧UIで見たい場合に限る。',
       parameters: {
