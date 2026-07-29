@@ -1675,7 +1675,7 @@ export async function executeToolCall(
         session_deletion: {
           label: '会話履歴',
           path: '/admin/chat-history',
-          description: '会話セッションの削除は一覧から該当の会話を開いてこちらの画面で行えます',
+          description: '会話内容の確認とその会話セッションの削除はこちらの画面で行えます',
         },
         analytics: {
           label: '会話分析',
@@ -1735,7 +1735,28 @@ export async function executeToolCall(
       if (!link) {
         return truncate(`不明な案内先です: ${feature}`);
       }
-      return truncate(`この操作はチャットでは対応していません。\n画面: ${link.label}\nURL: ${link.path}\n説明: ${link.description}`);
+
+      // session_deletion で対象の会話が分かっているときは、一覧ではなくその会話を直接開くリンクにする
+      // (一覧から探し直させないため)。解決できない場合(存在しない/曖昧/他テナント)は一覧へ素直に戻す。
+      let path = link.path;
+      if (feature === 'session_deletion' && tenantId) {
+        const shortId = String(args['session_id'] ?? '').trim();
+        if (shortId) {
+          try {
+            const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+            if (resolved.ok) {
+              path = `/admin/chat-history/${resolved.session.id}`;
+            }
+          } catch (err) {
+            logger.warn('[actionExecutor] get_legacy_ui_link session resolve failed', err);
+          }
+        }
+      }
+
+      // 冒頭は「できません」ではなく「どこでできるか」から始める(行き止まりに見せない)。
+      // 続く3行(画面:/URL:/説明:)は copilot-preview の parseLegacyUiLink が
+      // リンクカード描画のために正規表現で読む契約なので、順序・ラベルを変えないこと。
+      return truncate(`この操作は${link.label}画面から行えます。\n画面: ${link.label}\nURL: ${path}\n説明: ${link.description}`);
     }
 
     // -----------------------------------------------------------------------

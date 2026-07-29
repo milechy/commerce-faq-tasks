@@ -825,12 +825,18 @@ function CardView({ card }: { card: Card }) {
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
           <Field k="この操作について" v={card.description} />
+          {/* 同一SPA内のパスなので、target無しだとこのページごとアンマウントされ会話履歴(msgs/sessionIdRef)が消える */}
           <a
             href={card.url}
+            target="_blank"
+            rel="noopener noreferrer"
             style={{ display: "inline-flex", alignSelf: "flex-start", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 10, background: AGENT, color: "#fff", fontSize: 14, fontWeight: 700, textDecoration: "none" }}
           >
-            {card.label}を開く →
+            {card.label}を開く ↗
           </a>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+            別タブで開きます。この会話はそのまま残ります。
+          </div>
         </CardShell>
       );
     default:

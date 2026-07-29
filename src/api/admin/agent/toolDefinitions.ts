@@ -848,6 +848,12 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
               'knowledge_pdf',
             ],
           },
+          session_id: {
+            type: 'string',
+            description:
+              '対象の会話の短縮ID（get_chat_sessions や get_escalations が返す8文字のID）。' +
+              'session_deletion で使うと、その会話を直接開くリンクになる。',
+          },
         },
         required: ['feature'],
       },

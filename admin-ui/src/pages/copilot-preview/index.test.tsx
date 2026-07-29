@@ -280,3 +280,48 @@ describe("CopilotPreviewPage — 共通シェル機能パリティ(テーマ/言
     expect(screen.getByTestId("app-switcher-stub")).toBeTruthy();
   });
 });
+
+// GID: 旧UIへの案内リンクは /admin/* という同一SPA内のパスのため、同じタブで開くと
+// CopilotPreviewPage ごとアンマウントされて会話(msgs/sessionIdRef)が消えていた。
+// 別タブで開くこと(と、その旨がユーザーに伝わること)の回帰テスト。
+describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    // 起動時ブリーフィングも同じエンドポイントを叩くため、リンクカードは
+    // ユーザーが送った2回目以降の応答にだけ載せる(カードが1枚だけであることを保証する)
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      return mockOk({
+        reply: "請求管理画面をご案内しました。",
+        actions: [
+          {
+            tool: "get_legacy_ui_link",
+            result:
+              "この操作は請求管理画面から行えます。\n画面: 請求管理\nURL: /admin/billing\n" +
+              "説明: 請求書の再送・金額調整・無料期間設定・一時停止/再開はこちらの画面で行えます",
+          },
+        ],
+      });
+    });
+  });
+
+  it("リンクは別タブで開き、会話が残る旨の補足が添えられる", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "請求書を再送したい" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    const link = await screen.findByRole("link", { name: /請求管理を開く/ });
+    expect(link.getAttribute("href")).toBe("/admin/billing");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(screen.getByText("別タブで開きます。この会話はそのまま残ります。")).toBeTruthy();
+  });
+});
