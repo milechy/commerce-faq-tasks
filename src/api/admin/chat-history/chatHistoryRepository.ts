@@ -3,6 +3,7 @@
 
 import { getPool } from "../../../lib/db";
 import type { RagSource } from "../../../agent/types";
+import type { TrafficSource } from "../../../lib/traffic/trafficSource";
 
 export interface SaveMessageParams {
   tenantId: string;
@@ -20,6 +21,13 @@ export interface SaveMessageParams {
    * 既存テスト互換のため optional。
    */
   ragSources?: RagSource[];
+  /**
+   * GID 1216970103691946: セッション作成経路の判定結果(実ユーザー/E2E/chat-test/デモ)。
+   * chat_sessions.metadata.source に「セッション新規作成時のみ」記録する(2回目以降の
+   * メッセージでは既存値を保持し、上書きしない)。省略時は 'user' 扱い(既存呼び出し元との
+   * 後方互換のため。呼び出し元がトラフィック種別を判定できない場合の安全側デフォルト)。
+   */
+  trafficSource?: TrafficSource;
 }
 
 /**
@@ -30,16 +38,24 @@ export interface SaveMessageParams {
 export async function saveMessage(params: SaveMessageParams): Promise<void> {
   const pool = getPool();
 
-  // 1. chat_sessions を upsert（Phase46: variant情報も記録）
+  // 1. chat_sessions を upsert（Phase46: variant情報も記録 / GID 1216970103691946: source記録）
+  // metadata.source はセッション新規作成時(INSERT)にのみ確定させ、2回目以降のUPDATEでは
+  // 既存値を保持する(CASE ... WHEN metadata ? 'source' THEN 既存値 ELSE 新規値)。
+  // これにより「最初にどの経路でセッションが作られたか」がぶれずに残る。
+  const initialMetadata = JSON.stringify({ source: params.trafficSource ?? "user" });
   await pool.query(
-    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count, prompt_variant_id, prompt_variant_name)
-     VALUES ($1, $2, NOW(), 1, $3, $4)
+    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count, prompt_variant_id, prompt_variant_name, metadata)
+     VALUES ($1, $2, NOW(), 1, $3, $4, $5::jsonb)
      ON CONFLICT (tenant_id, session_id) DO UPDATE SET
        last_message_at = NOW(),
        message_count = chat_sessions.message_count + 1,
        prompt_variant_id = COALESCE(chat_sessions.prompt_variant_id, EXCLUDED.prompt_variant_id),
-       prompt_variant_name = COALESCE(chat_sessions.prompt_variant_name, EXCLUDED.prompt_variant_name)`,
-    [params.tenantId, params.sessionId, params.promptVariantId ?? null, params.promptVariantName ?? null],
+       prompt_variant_name = COALESCE(chat_sessions.prompt_variant_name, EXCLUDED.prompt_variant_name),
+       metadata = CASE
+         WHEN chat_sessions.metadata ? 'source' THEN chat_sessions.metadata
+         ELSE COALESCE(chat_sessions.metadata, '{}'::jsonb) || EXCLUDED.metadata
+       END`,
+    [params.tenantId, params.sessionId, params.promptVariantId ?? null, params.promptVariantName ?? null, initialMetadata],
   );
 
   // 2. chat_sessions の UUID を取得
