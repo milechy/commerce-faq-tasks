@@ -1090,6 +1090,13 @@ export async function executeToolCall(
       if (target === 'global' && !isSuperAdmin) {
         return truncate('全店舗共通の知識データはSuper Adminのみ登録可能です');
       }
+      // target は toolDefinitions でLLMに公開されているため、client_admin が自然文で
+      // 他テナントIDを指定できてしまう。'global' 以外の越境書き込みもここで塞ぐ
+      // （旧HTTPルート /text/commit の requireKnowledgeTenant は body の target を
+      // 見ないため同じ穴があるが、チャットからは自然文で到達可能なのでここで防ぐ）。
+      if (target !== tenantId && !isSuperAdmin) {
+        return truncate('他のテナントには登録できません');
+      }
 
       try {
         const categoryOverride = staged.categoryOverride ?? undefined;

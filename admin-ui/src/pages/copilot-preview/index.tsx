@@ -332,9 +332,15 @@ export default function CopilotPreviewPage() {
         return { id: nextId(), role: "ai", card: { kind: "agentAction", tool: a.tool, result: a.result } };
       });
 
-      // 実際にDBへ書き込んだ操作(確認ブロックで弾かれたものは除く)だけを実進捗としてカウントする
+      // 実際にDBへ書き込んだ操作(確認ブロックで弾かれたものは除く)だけを実進捗としてカウントする。
+      // ブロック理由は2種類あり、どちらも書き込みが起きていないため除外する:
+      //   1. confirmed=false        → 「確認が必要です」
+      //   2. 同一ターン内の連鎖ブロック → 「確認をスキップできません」(agentRoutes.ts:239)
       const writesThisTurn = (data.actions ?? []).filter(
-        (a) => REAL_WRITE_TOOLS.has(a.tool) && !a.result.includes("確認が必要"),
+        (a) =>
+          REAL_WRITE_TOOLS.has(a.tool) &&
+          !a.result.includes("確認が必要") &&
+          !a.result.includes("確認をスキップできません"),
       ).length;
       if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
 
