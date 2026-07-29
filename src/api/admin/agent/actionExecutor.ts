@@ -25,7 +25,7 @@ import {
   clearStagedFaqImport,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
-import { getSessions, getActiveEscalations } from '../chat-history/chatHistoryRepository';
+import { getSessions, getActiveEscalations, getMessages } from '../chat-history/chatHistoryRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
@@ -79,6 +79,55 @@ export async function activateAvatarConfig(
     throw err;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 会話セッションの短縮ID解決（get_chat_sessions が表示する [xxxxxxxx] を受け取る）
+// ---------------------------------------------------------------------------
+
+export type ResolveSessionResult =
+  | { ok: true; session: { id: string; session_id: string } }
+  | { ok: false; message: string };
+
+/** 短縮IDの前方一致でセッションを解決する。tenant_id 条件は省略不可（越境参照防止）。 */
+export async function resolveSessionByShortId(
+  db: Pool,
+  tenantId: string,
+  input: string
+): Promise<ResolveSessionResult> {
+  const shortId = input.trim();
+  if (!shortId) {
+    return { ok: false, message: 'セッションIDを指定してください' };
+  }
+  // LIKE のワイルドカードを無効化し、意図しない広域一致を防ぐ（Postgres の既定エスケープ文字は \）
+  const prefix = shortId.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+  const result = await db.query<{ id: string; session_id: string }>(
+    `SELECT id, session_id FROM chat_sessions
+     WHERE tenant_id = $1 AND session_id LIKE $2 || '%'
+     ORDER BY last_message_at DESC
+     LIMIT 6`,
+    [tenantId, prefix]
+  );
+
+  if (result.rows.length === 0) {
+    return { ok: false, message: `セッション[${shortId}]は見つかりません。get_chat_sessions で表示されたIDをご確認ください` };
+  }
+  if (result.rows.length > 1) {
+    // 8文字だと候補同士が同じ表示になりうるため、区別できるよう長めのIDを提示する
+    const candidates = result.rows.map((r) => `[${r.session_id.slice(0, 16)}]`).join(' ');
+    return {
+      ok: false,
+      message: `セッション[${shortId}]に一致する会話が${result.rows.length}件あります: ${candidates}\nどれか1つのIDをそのまま指定してください`,
+    };
+  }
+  return { ok: true, session: result.rows[0] };
+}
+
+const CHAT_ROLE_LABELS: Record<string, string> = {
+  user: 'お客様',
+  assistant: 'AI',
+  operator: '担当者',
+};
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -1360,6 +1409,38 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_sessions failed', err);
         return truncate('会話セッション一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_chat_session_messages': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const limitRaw = Number(args['limit'] ?? 20);
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 20;
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+
+        const messages = await getMessages({ sessionDbId: resolved.session.id, tenantId });
+        if (messages.length === 0) {
+          return truncate(`セッション[${resolved.session.session_id.slice(0, 8)}]にメッセージはありません`);
+        }
+
+        const recent = messages.slice(-limit);
+        const lines = recent.map((m) => `${CHAT_ROLE_LABELS[m.role] ?? m.role}: ${m.content}`);
+        return truncate(
+          `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
+          lines.join('\n'),
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] get_chat_session_messages failed', err);
+        return truncate('会話内容の取得に失敗しました');
       }
     }
 

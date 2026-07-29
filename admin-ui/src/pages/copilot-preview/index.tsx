@@ -69,6 +69,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_knowledge_gaps: "知識ギャップの取得",
   dismiss_knowledge_gap: "知識ギャップの片付け",
   get_chat_sessions: "会話セッション一覧の取得",
+  get_chat_session_messages: "会話の全文取得",
   get_escalations: "エスカレーション一覧の取得",
   get_monitoring_summary: "モニタリングサマリーの取得",
   get_legacy_ui_link: "旧管理画面への案内",

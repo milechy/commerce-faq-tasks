@@ -671,6 +671,27 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_chat_session_messages',
+      description:
+        '指定した会話セッションの本文（お客様とAI・担当者のやり取り）を取得する読み取り専用ツール。' +
+        'get_chat_sessions が返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        '「この会話の中身を見せて」「どんなやり取りだったか」と聞かれた時に使う。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+          limit: { type: 'number', description: '取得するメッセージ数の上限（任意、省略時20、最大50。新しい方から取得）' },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_escalations',
       description:
         '有人対応にエスカレーションされた、対応中（未解決）の会話一覧を取得する読み取り専用ツール。',

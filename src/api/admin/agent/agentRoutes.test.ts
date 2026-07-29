@@ -114,12 +114,14 @@ jest.mock('../../../lib/sai/saiClient', () => ({
   getSaiTask: (...args: any[]) => mockGetSaiTask(...args),
 }));
 
-// get_chat_sessions / get_escalations が使う依存をモック
+// get_chat_sessions / get_escalations / get_chat_session_messages が使う依存をモック
 const mockGetSessions = jest.fn();
 const mockGetActiveEscalations = jest.fn();
+const mockGetMessages = jest.fn();
 jest.mock('../chat-history/chatHistoryRepository', () => ({
   getSessions: (...args: any[]) => mockGetSessions(...args),
   getActiveEscalations: (...args: any[]) => mockGetActiveEscalations(...args),
+  getMessages: (...args: any[]) => mockGetMessages(...args),
 }));
 
 // get_monitoring_summary が使う依存をモック
@@ -2157,6 +2159,177 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('142件');
       expect(result).toContain('92.5%');
       expect(result).toContain('3.2%');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_chat_session_messages（短縮IDでの会話本文取得 / テナント境界）
+  // -------------------------------------------------------------------------
+  describe('get_chat_session_messages', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    type SessionRow = { id: string; tenant_id: string; session_id: string };
+
+    const OWN_SESSION: SessionRow = {
+      id: 'db-sess-own', tenant_id: 'tenant-abc', session_id: 'a1b2c3d4-1111-4aaa-8000-000000000001',
+    };
+    const OTHER_TENANT_SESSION: SessionRow = {
+      id: 'db-sess-other', tenant_id: 'tenant-zzz', session_id: 'ffeeddcc-9999-4bbb-8000-000000000002',
+    };
+    const DUP_A: SessionRow = {
+      id: 'db-sess-dup-a', tenant_id: 'tenant-abc', session_id: 'dupdup00-1111-4ccc-8000-000000000003',
+    };
+    const DUP_B: SessionRow = {
+      id: 'db-sess-dup-b', tenant_id: 'tenant-abc', session_id: 'dupdup00-2222-4ddd-8000-000000000004',
+    };
+
+    // resolveSessionByShortId の SQL（tenant_id = $1 AND session_id LIKE $2 || '%'）を
+    // 忠実に再現する。テナント越境が「SQLの条件で」防がれていることを検証するため、
+    // 固定の rows を返すのではなく tenant_id + 前方一致でフィルタする。
+    function seedSessions(rows: SessionRow[]) {
+      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
+        if (!Array.isArray(params)) return { rows: [] };
+        const [tenantId, prefix] = params as [string, string];
+        return {
+          rows: rows
+            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
+            .map((r) => ({ id: r.id, session_id: r.session_id })),
+        };
+      });
+    }
+
+    it('自テナントのセッションは短縮IDで本文を取得できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-1', 'get_chat_session_messages', { session_id: 'a1b2c3d4' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話内容はこちらです。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([
+        { id: 1, role: 'user', content: '送料はいくらですか', metadata: {}, created_at: '2026-07-17T10:00:00Z' },
+        { id: 2, role: 'assistant', content: '全国一律500円です', metadata: {}, created_at: '2026-07-17T10:00:10Z' },
+        { id: 3, role: 'operator', content: '担当より補足します', metadata: {}, created_at: '2026-07-17T10:01:00Z' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'a1b2c3d4の会話を見せて', sessionId: 'sess-cm-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetMessages).toHaveBeenCalledWith({ sessionDbId: 'db-sess-own', tenantId: 'tenant-abc' });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('お客様: 送料はいくらですか');
+      expect(result).toContain('AI: 全国一律500円です');
+      expect(result).toContain('担当者: 担当より補足します');
+      expect(result).toContain('全3件中3件');
+    });
+
+    it('limit で新しい方から件数を絞る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-2', 'get_chat_session_messages', { session_id: 'a1b2c3d4', limit: 2 }))
+        .mockResolvedValueOnce(makeGroqResponse('直近2件です。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([
+        { id: 1, role: 'user', content: '古い質問', metadata: {}, created_at: '2026-07-17T10:00:00Z' },
+        { id: 2, role: 'user', content: '新しい質問', metadata: {}, created_at: '2026-07-17T10:01:00Z' },
+        { id: 3, role: 'assistant', content: '新しい回答', metadata: {}, created_at: '2026-07-17T10:01:10Z' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '直近だけ見せて', sessionId: 'sess-cm-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('全3件中2件');
+      expect(result).toContain('新しい質問');
+      expect(result).not.toContain('古い質問');
+    });
+
+    it('他テナントのセッションIDは「見つかりません」となり本文を漏らさない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-3', 'get_chat_session_messages', { session_id: 'ffeeddcc' }))
+        .mockResolvedValueOnce(makeGroqResponse('そのセッションは見つかりませんでした。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ffeeddccの会話を見せて', sessionId: 'sess-cm-03' });
+
+      expect(res.status).toBe(200);
+      // 解決クエリは必ず tenant_id で絞られている
+      const [sql, params] = mockQuery.mock.calls[0];
+      expect(sql).toContain('tenant_id = $1');
+      expect(params[0]).toBe('tenant-abc');
+      // 他テナントのメッセージは一切取得しない
+      expect(mockGetMessages).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+
+    it('短縮IDが複数セッションに一致する場合は候補を提示し本文を返さない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-4', 'get_chat_session_messages', { session_id: 'dupdup00' }))
+        .mockResolvedValueOnce(makeGroqResponse('どちらの会話でしょうか。'));
+
+      seedSessions([OWN_SESSION, DUP_A, DUP_B]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'dupdup00の会話を見せて', sessionId: 'sess-cm-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetMessages).not.toHaveBeenCalled();
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('2件あります');
+      expect(result).toContain('[dupdup00-1111-4c]');
+      expect(result).toContain('[dupdup00-2222-4d]');
+    });
+
+    it('存在しない短縮IDは例外を投げずに「見つかりません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-5', 'get_chat_session_messages', { session_id: '00000000' }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '00000000の会話を見せて', sessionId: 'sess-cm-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetMessages).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+
+    it('session_id が空なら解決クエリを投げずに指定を促す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-6', 'get_chat_session_messages', { session_id: '  ' }))
+        .mockResolvedValueOnce(makeGroqResponse('セッションIDを教えてください。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話を見せて', sessionId: 'sess-cm-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockGetMessages).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('セッションIDを指定してください');
     });
   });
 
