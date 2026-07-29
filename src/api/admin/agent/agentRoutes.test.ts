@@ -1570,6 +1570,57 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res2.body.actions[0].result).toContain('Super Adminのみ登録可能');
     });
 
+    it('commit_faq_import: target=他テナントID はSuper Admin以外だと拒否される（越境書き込み防止）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-13c', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1]);
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って', sessionId: 'sess-fi-13c' });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-13d', 'commit_faq_import', { confirmed: true, target: 'tenant-other' }))
+        .mockResolvedValueOnce(makeGroqResponse('拒否されました。'));
+
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'tenant-otherに登録して', sessionId: 'sess-fi-13c' });
+
+      expect(res2.status).toBe(200);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      expect(res2.body.actions[0].result).toContain('他のテナントには登録できません');
+    });
+
+    it('commit_faq_import: super_admin は target=他テナントID を指定して登録できる（越境ガードはclient_admin限定）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-13e', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([faq1]);
+      await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを作って', sessionId: 'sess-fi-13e', targetTenantId: 'tenant-other' });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-13f', 'commit_faq_import', { confirmed: true, target: 'tenant-other' }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 1, skipped: 0, insertedIds: [20] });
+
+      const res2 = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-fi-13e', targetTenantId: 'tenant-other' });
+
+      expect(res2.status).toBe(200);
+      expect(mockCommitTextFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-other',
+        [faq1],
+        undefined,
+        'admin_agent_text_import',
+      );
+      expect(res2.body.actions[0].result).toContain('FAQを1件登録しました');
+    });
+
     it('別 sessionId のステージングは混ざらない（テナントは同じでもプレビュー無し扱いになる）', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-fi-14a', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
