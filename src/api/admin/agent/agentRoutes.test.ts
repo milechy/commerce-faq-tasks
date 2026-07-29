@@ -2467,6 +2467,105 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
     });
+
+    // 冒頭が「できません」で始まると、旧UIへの案内が行き止まりの謝罪に見えてしまう。
+    // 3行フォーマット(画面:/URL:/説明:)は parseLegacyUiLink の契約なので維持したまま、
+    // 導入文だけを「どこでできるか」に差し替えている。
+    it('冒頭文は謝罪ではなく案内先の画面から始まる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-10', 'get_legacy_ui_link', { feature: 'billing' }))
+        .mockResolvedValueOnce(makeGroqResponse('請求管理画面をご案内しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-lu-07' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).not.toContain('チャットでは対応していません');
+      expect(result.split('\n')[0]).toBe('この操作は請求管理画面から行えます。');
+      // 導入文の差し替えで3行フォーマットが壊れていないこと(先頭に紛れ込む偽の行も含む)
+      expect(result).toContain('画面: 請求管理\n');
+      expect(result).toContain('URL: /admin/billing\n');
+      expect(result.match(/画面:/g)).toHaveLength(1);
+      expect(result.match(/URL:/g)).toHaveLength(1);
+    });
+
+    // session_deletion の deep-link（resolveSessionByShortId で短縮IDを解決する）
+    type SessionRow = { id: string; tenant_id: string; session_id: string };
+
+    function seedSessions(rows: SessionRow[]) {
+      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
+        if (!Array.isArray(params)) return { rows: [] };
+        const [tenantId, prefix] = params as [string, string];
+        return {
+          rows: rows
+            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
+            .map((r) => ({ id: r.id, session_id: r.session_id })),
+        };
+      });
+    }
+
+    const OWN_SESSION: SessionRow = {
+      id: '8f14e45f-ceea-467a-9d0f-2b3c4d5e6f70', tenant_id: 'tenant-abc', session_id: 'a1b2c3d4-1111-4aaa-8000-000000000001',
+    };
+    const OTHER_TENANT_SESSION: SessionRow = {
+      id: 'deadbeef-0000-4000-8000-000000000099', tenant_id: 'tenant-zzz', session_id: 'ffeeddcc-9999-4bbb-8000-000000000002',
+    };
+
+    it('feature=session_deletion + session_id: 一覧ではなくその会話を直接開くURLを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-11', 'get_legacy_ui_link', { feature: 'session_deletion', session_id: 'a1b2c3d4' }))
+        .mockResolvedValueOnce(makeGroqResponse('該当の会話をご案内しました。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'a1b2c3d4の会話を削除したい', sessionId: 'sess-lu-08' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain(`URL: /admin/chat-history/${OWN_SESSION.id}\n`);
+    });
+
+    it('feature=session_deletion + 存在しないsession_id: エラーにせず一覧URLへフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-12', 'get_legacy_ui_link', { feature: 'session_deletion', session_id: 'nosuchid' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話履歴画面をご案内しました。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'nosuchidの会話を削除したい', sessionId: 'sess-lu-09' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('URL: /admin/chat-history\n');
+      expect(result).toContain('画面: 会話履歴\n');
+    });
+
+    it('feature=session_deletion + 他テナントのsession_id: 他テナントのIDをリンクに漏らさず一覧URLへフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-13', 'get_legacy_ui_link', { feature: 'session_deletion', session_id: 'ffeeddcc' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話履歴画面をご案内しました。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ffeeddccの会話を削除したい', sessionId: 'sess-lu-10' });
+
+      expect(res.status).toBe(200);
+      // 解決クエリは必ず tenant_id で絞られている
+      const [sql, params] = mockQuery.mock.calls[0];
+      expect(sql).toContain('tenant_id = $1');
+      expect(params[0]).toBe('tenant-abc');
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('URL: /admin/chat-history\n');
+      expect(result).not.toContain(OTHER_TENANT_SESSION.id);
+    });
   });
 
   // -------------------------------------------------------------------------
