@@ -16,6 +16,19 @@ vi.mock("../../auth/useAuth", () => ({
   useAuth: vi.fn(),
 }));
 
+// GID: 旧UI(AppSidebar)との共通シェルパリティ(通知ベル/AppSwitcher)の回帰テスト用。
+// AppSidebar.test.tsx と同じくスタブ化する — NotificationBell は実APIポーリングを、
+// AppSwitcher は useAdminAgentUI(AdminAgentUIProviderが必要)を持つため、ページ単体の
+// テストでは実体を必要としない。ThemeToggle/LangSwitcher は Context にデフォルト値が
+// あり Provider 無しで安全に描画できるため、実コンポーネントのまま検証する。
+vi.mock("../../components/common/NotificationBell", () => ({
+  NotificationBell: () => <div data-testid="notification-bell-stub" />,
+}));
+
+vi.mock("../../components/AppSwitcher", () => ({
+  default: () => <div data-testid="app-switcher-stub" />,
+}));
+
 const mockNavigate = vi.fn();
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -211,5 +224,59 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
     // 後片付け: pendingのfetchを解決し、タイマー等が残らないようにする
     resolveFetch({ ok: true, status: 200, json: () => Promise.resolve({ reply: "ok", actions: [] }) } as unknown as Response);
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  });
+});
+
+// GID: 新UI(/copilot-preview)には旧UI(AppSidebar)の共通シェル機能が丸ごと落ちていた
+// (App.tsx がAppSidebarより手前で早期returnするため)。ログアウト・モバイル対応に続き、
+// 残る4機能(テーマ切替/言語切替/通知ベル/AppSwitcher)の回帰テスト。
+describe("CopilotPreviewPage — 共通シェル機能パリティ(テーマ/言語/通知/AppSwitcher)", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  });
+
+  it("テーマ切替(ライト/ダーク/自動)が描画されている", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: /ログアウト/ })).toBeTruthy());
+
+    expect(screen.getByTitle("ライト")).toBeTruthy();
+    expect(screen.getByTitle("ダーク")).toBeTruthy();
+    expect(screen.getByTitle("自動")).toBeTruthy();
+  });
+
+  it("テーマ切替ボタンをクリックしてもエラーにならない(Provider無し=デフォルト値でも安全)", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: /ログアウト/ })).toBeTruthy());
+
+    expect(() => fireEvent.click(screen.getByTitle("ダーク"))).not.toThrow();
+  });
+
+  it("言語切替(日本語/English)が描画されている", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: /ログアウト/ })).toBeTruthy());
+
+    expect(screen.getByRole("button", { name: /日本語/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /English/ })).toBeTruthy();
+  });
+
+  it("通知ベルが描画されている", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: /ログアウト/ })).toBeTruthy());
+
+    expect(screen.getByTestId("notification-bell-stub")).toBeTruthy();
+  });
+
+  it("AppSwitcher(R2C⇄R2C2)が描画されている", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: /ログアウト/ })).toBeTruthy());
+
+    expect(screen.getByTestId("app-switcher-stub")).toBeTruthy();
   });
 });
