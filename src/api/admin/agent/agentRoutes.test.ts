@@ -114,20 +114,33 @@ jest.mock('../../../lib/sai/saiClient', () => ({
   getSaiTask: (...args: any[]) => mockGetSaiTask(...args),
 }));
 
-// get_chat_sessions / get_escalations / get_chat_session_messages が使う依存をモック
+// get_chat_sessions / get_escalations / get_chat_session_messages /
+// reply_to_escalation / resolve_escalation が使う依存をモック
 const mockGetSessions = jest.fn();
 const mockGetActiveEscalations = jest.fn();
 const mockGetMessages = jest.fn();
+const mockSaveMessage = jest.fn();
+const mockResolveEscalation = jest.fn();
 jest.mock('../chat-history/chatHistoryRepository', () => ({
   getSessions: (...args: any[]) => mockGetSessions(...args),
   getActiveEscalations: (...args: any[]) => mockGetActiveEscalations(...args),
   getMessages: (...args: any[]) => mockGetMessages(...args),
+  saveMessage: (...args: any[]) => mockSaveMessage(...args),
+  resolveEscalation: (...args: any[]) => mockResolveEscalation(...args),
 }));
 
 // get_monitoring_summary が使う依存をモック
 const mockComputeKpis = jest.fn();
 jest.mock('../monitoring/routes', () => ({
   computeKpis: (...args: any[]) => mockComputeKpis(...args),
+}));
+
+// get_analytics_summary / get_conversion_summary が使う依存をモック
+const mockFetchAnalyticsSummary = jest.fn();
+const mockFetchConversionSummary = jest.fn();
+jest.mock('../analytics/summaryQueries', () => ({
+  fetchAnalyticsSummary: (...args: any[]) => mockFetchAnalyticsSummary(...args),
+  fetchConversionSummary: (...args: any[]) => mockFetchConversionSummary(...args),
 }));
 
 // logger モック
@@ -2334,6 +2347,226 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // reply_to_escalation / resolve_escalation（confirmedゲート / テナント境界）
+  // -------------------------------------------------------------------------
+  describe('reply_to_escalation / resolve_escalation', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    type SessionRow = { id: string; tenant_id: string; session_id: string };
+
+    const OWN_SESSION: SessionRow = {
+      id: 'db-esc-own', tenant_id: 'tenant-abc', session_id: 'e5c0abcd-1111-4aaa-8000-000000000011',
+    };
+    const OTHER_TENANT_SESSION: SessionRow = {
+      id: 'db-esc-other', tenant_id: 'tenant-zzz', session_id: 'ffee0000-9999-4bbb-8000-000000000012',
+    };
+
+    // resolveSessionByShortId の SQL（tenant_id = $1 AND session_id LIKE $2 || '%'）を
+    // 忠実に再現し、テナント越境が「SQLの条件で」防がれていることを検証する。
+    function seedSessions(rows: SessionRow[]) {
+      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
+        if (!Array.isArray(params)) return { rows: [] };
+        const [tenantId, prefix] = params as [string, string];
+        return {
+          rows: rows
+            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
+            .map((r) => ({ id: r.id, session_id: r.session_id })),
+        };
+      });
+    }
+
+    it('reply: confirmed 未指定なら「確認が必要」を返し、返信を保存しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-1', 'reply_to_escalation', { session_id: 'e5c0abcd', content: '担当より折り返します' }))
+        .mockResolvedValueOnce(makeGroqResponse('この内容でよろしいですか。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'e5c0abcdに返信して', sessionId: 'sess-er-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockSaveMessage).not.toHaveBeenCalled();
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('確認が必要');
+      expect(result).toContain('担当より折り返します');
+    });
+
+    it('reply: confirmed=false でも保存しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-2', 'reply_to_escalation', { session_id: 'e5c0abcd', content: '確認中です', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから送ります。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'e5c0abcdに返信して', sessionId: 'sess-er-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockSaveMessage).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('reply: confirmed=true なら operator ロールで返信が保存される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-3', 'reply_to_escalation', { session_id: 'e5c0abcd', content: '在庫を確認しました。明日発送します', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('返信しました。'));
+
+      seedSessions([OWN_SESSION]);
+      mockSaveMessage.mockResolvedValueOnce(undefined);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'e5c0abcdに返信して', sessionId: 'sess-er-03' });
+
+      expect(res.status).toBe(200);
+      // 短縮IDではなく解決後の完全な session_id で保存されること
+      expect(mockSaveMessage).toHaveBeenCalledWith({
+        tenantId: 'tenant-abc',
+        sessionId: OWN_SESSION.session_id,
+        role: 'operator',
+        content: '在庫を確認しました。明日発送します',
+      });
+      expect(res.body.actions[0].result).toContain('返信を保存しました');
+    });
+
+    it('reply: 他テナントのセッションIDには返信できない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-4', 'reply_to_escalation', { session_id: 'ffee0000', content: '越境返信', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ffee0000に返信して', sessionId: 'sess-er-04' });
+
+      expect(res.status).toBe(200);
+      const [sql, params] = mockQuery.mock.calls[0];
+      expect(sql).toContain('tenant_id = $1');
+      expect(params[0]).toBe('tenant-abc');
+      expect(mockSaveMessage).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+
+    it('reply: 2000文字を超える返信は拒否され、解決クエリも保存も走らない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-5', 'reply_to_escalation', { session_id: 'e5c0abcd', content: 'あ'.repeat(2001), confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('長すぎました。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'e5c0abcdに長文で返信して', sessionId: 'sess-er-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockSaveMessage).not.toHaveBeenCalled();
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('2000文字以内');
+      expect(result).toContain('2001文字');
+    });
+
+    it('resolve: confirmed 未指定なら「確認が必要」を返し、対応完了にしない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-6', 'resolve_escalation', { session_id: 'e5c0abcd' }))
+        .mockResolvedValueOnce(makeGroqResponse('対応完了にしてよいですか。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'e5c0abcdを対応完了にして', sessionId: 'sess-er-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockResolveEscalation).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('resolve: 他テナントのセッションIDは対応完了にできない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-7', 'resolve_escalation', { session_id: 'ffee0000', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ffee0000を対応完了にして', sessionId: 'sess-er-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockResolveEscalation).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+
+    it('resolve: confirmed=true で対応完了になり、以降 get_escalations に出てこない', async () => {
+      seedSessions([OWN_SESSION]);
+
+      // chat_sessions.escalation_resolved_at の更新を模した最小のストア。
+      // 「対応完了にすると一覧から消える」ことを2ターンにまたがって検証する。
+      let resolvedAt: string | null = null;
+      mockResolveEscalation.mockImplementation(async (params: { sessionDbId: string; tenantId?: string }) => {
+        if (params.sessionDbId !== OWN_SESSION.id || params.tenantId !== OWN_SESSION.tenant_id) return false;
+        resolvedAt = '2026-07-18T09:00:00Z';
+        return true;
+      });
+      mockGetActiveEscalations.mockImplementation(async (tenantId: string) =>
+        resolvedAt || tenantId !== OWN_SESSION.tenant_id
+          ? []
+          : [{
+              id: OWN_SESSION.id,
+              tenant_id: OWN_SESSION.tenant_id,
+              session_id: OWN_SESSION.session_id,
+              escalated_at: '2026-07-18T08:00:00Z',
+              last_message_at: '2026-07-18T08:30:00Z',
+              message_count: 4,
+              first_message_preview: '返品したいです',
+            }],
+      );
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-8', 'resolve_escalation', { session_id: 'e5c0abcd', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('対応完了にしました。'));
+
+      const resolveRes = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'e5c0abcdを対応完了にして', sessionId: 'sess-er-08' });
+
+      expect(resolveRes.status).toBe(200);
+      expect(mockResolveEscalation).toHaveBeenCalledWith({ sessionDbId: OWN_SESSION.id, tenantId: 'tenant-abc' });
+      expect(resolvedAt).not.toBeNull();
+      expect(resolveRes.body.actions[0].result).toContain('対応完了に更新しました');
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-9', 'get_escalations', {}))
+        .mockResolvedValueOnce(makeGroqResponse('対応中のものはありません。'));
+
+      const listRes = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'エスカレーションを見せて', sessionId: 'sess-er-09' });
+
+      expect(listRes.status).toBe(200);
+      expect(listRes.body.actions[0].result).toContain('対応中のエスカレーションはありません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // get_legacy_ui_link
   // -------------------------------------------------------------------------
   describe('get_legacy_ui_link', () => {
@@ -2565,6 +2798,200 @@ describe('POST /v1/admin/agent/chat', () => {
       const result = res.body.actions[0].result as string;
       expect(result).toContain('URL: /admin/chat-history\n');
       expect(result).not.toContain(OTHER_TENANT_SESSION.id);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_analytics_summary / get_conversion_summary
+  // -------------------------------------------------------------------------
+  describe('get_analytics_summary / get_conversion_summary', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const ANALYTICS_SUMMARY = {
+      period: '30d',
+      tenant_id: 'tenant-abc',
+      total_sessions: 142,
+      avg_judge_score: 78.4,
+      total_knowledge_gaps: 5,
+      avg_messages_per_session: 6.25,
+      avatar_session_count: 20,
+      avatar_rate: 0.14,
+      prev_total_sessions: 100,
+      sessions_change_pct: 42,
+      sentiment_distribution: { positive: 60, negative: 12, neutral: 30, total: 102 },
+      cv_count_30d: 8,
+      cv_total_value_30d: 120000,
+      cv_types_breakdown: { purchase: 8, inquiry: 0, reservation: 0, signup: 0, other: 0 },
+      cv_fired_status: 'fired' as const,
+      cv_days_since_first_session: 90,
+    };
+
+    const CONVERSION_SUMMARY = {
+      summary: {
+        total_sessions: 142,
+        recorded_outcomes: 96,
+        recording_rate: 67.6,
+        outcomes: { 成約: 40, 検討中: 56 },
+      },
+      conversion_rate_trend: [{ date: '2026-07-01', total: 10, converted: 4, rate: 40 }],
+      technique_effectiveness: [
+        { technique: '社会的証明', sessions_used: 12, converted: 9, conversion_rate: 75 },
+        { technique: '希少性', sessions_used: 8, converted: 4, conversion_rate: 50 },
+      ],
+      stage_dropout: { clarify: 3, answer: 11, confirm: 2, terminal: 0 },
+    };
+
+    it('get_analytics_summary: growthプランなら実際の数値サマリーを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-as-1', 'get_analytics_summary', { period: '30d' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話は増えています。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAnalyticsSummary.mockResolvedValueOnce(ANALYTICS_SUMMARY);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話は増えている?', sessionId: 'sess-as-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchAnalyticsSummary).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '30d',
+      });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('142件');
+      expect(result).toContain('+42.0%');
+      expect(result).toContain('78.4');
+      expect(result).toContain('6.3件');
+      expect(result).toContain('ポジティブ60');
+    });
+
+    it('get_analytics_summary: period=7d を指定すると集計期間として渡される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-as-2', 'get_analytics_summary', { period: '7d' }))
+        .mockResolvedValueOnce(makeGroqResponse('直近1週間の状況です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'enterprise' }] });
+      mockFetchAnalyticsSummary.mockResolvedValueOnce({ ...ANALYTICS_SUMMARY, period: '7d' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '直近1週間はどう?', sessionId: 'sess-as-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchAnalyticsSummary).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '7d',
+      });
+      expect(res.body.actions[0].result).toContain('直近7日間');
+    });
+
+    it('get_conversion_summary: growthプランなら実際の数値サマリーを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cs-1', 'get_conversion_summary', {}))
+        .mockResolvedValueOnce(makeGroqResponse('成約は順調です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchConversionSummary.mockResolvedValueOnce(CONVERSION_SUMMARY);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '成約につながっている?', sessionId: 'sess-cs-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchConversionSummary).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '30d',
+      });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('142件');
+      expect(result).toContain('67.6%');
+      expect(result).toContain('成約 40件');
+      expect(result).toContain('社会的証明 75%');
+      expect(result).toContain('answer（11件）');
+    });
+
+    // get_legacy_ui_link(analytics/conversion) と同じ基準。プラン未満のテナントには
+    // 案内リンクだけでなく数値そのものも返さない。
+    it.each([
+      ['get_analytics_summary', 'sess-as-03'],
+      ['get_conversion_summary', 'sess-cs-03'],
+    ])('%s: starterプランは数値を返さずプラン制限メッセージを返す', async (toolName, sessionId) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pg-1', toolName, {}))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '分析を見せて', sessionId });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
+      expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
+      expect(mockFetchConversionSummary).not.toHaveBeenCalled();
+      // 数値が1つも漏れていないこと
+      expect(result).not.toMatch(/\d/);
+    });
+
+    // super_admin の「クライアントビューで見る」はテナントに見えている状態の再現が目的のため、
+    // get_legacy_ui_link(analytics/conversion) と同様プランゲートをバイパスさせない。
+    it.each([
+      ['get_analytics_summary', 'sess-as-04'],
+      ['get_conversion_summary', 'sess-cs-04'],
+    ])('%s: super_admin が starterテナントをプレビューしてもプラン制限メッセージを返す', async (toolName, sessionId) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pg-2', toolName, {}))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '分析を見せて', sessionId, targetTenantId: 'tenant-starter' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
+      expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
+      expect(mockFetchConversionSummary).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['get_analytics_summary', 'sess-as-05'],
+      ['get_conversion_summary', 'sess-cs-05'],
+    ])('%s: super_admin がテナント未特定 → プラン制限ではなく「テナントが特定できません」を返す', async (toolName, sessionId) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pg-3', toolName, {}))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '分析を見せて', sessionId });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('テナントが特定できません');
+      expect(result).not.toContain('Growthプラン以上');
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 

@@ -71,8 +71,12 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_chat_sessions: "会話セッション一覧の取得",
   get_chat_session_messages: "会話の全文取得",
   get_escalations: "エスカレーション一覧の取得",
+  reply_to_escalation: "エスカレーションへの返信",
+  resolve_escalation: "エスカレーションの対応完了",
   get_monitoring_summary: "モニタリングサマリーの取得",
   get_legacy_ui_link: "旧管理画面への案内",
+  get_analytics_summary: "会話分析サマリーの取得",
+  get_conversion_summary: "成約・効果分析サマリーの取得",
   get_avatar_status: "アバター稼働状況の取得",
   request_sai_task: "Saiへの代行依頼",
   get_sai_task_status: "Saiタスク状況の取得",
@@ -97,6 +101,8 @@ const REAL_WRITE_TOOLS = new Set([
   "activate_avatar",
   "import_industry_faq_templates",
   "commit_faq_import",
+  "reply_to_escalation",
+  "resolve_escalation",
 ]);
 
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ
@@ -352,6 +358,12 @@ export default function CopilotPreviewPage() {
       const saiPendingConfirm = data.actions?.some(
         (a) => a.tool === "request_sai_task" && a.result.includes("確認が必要"),
       );
+      // エスカレーションへの返信/対応完了がconfirmed待ちでブロックされた場合も同様
+      const escalationPendingConfirm = data.actions?.some(
+        (a) =>
+          (a.tool === "reply_to_escalation" || a.tool === "resolve_escalation") &&
+          a.result.includes("確認が必要"),
+      );
       // オンボーディングのFAQテンプレート提案がconfirmed待ちでブロックされた場合も同様
       const industryTemplatePendingConfirm = data.actions?.some(
         (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
@@ -364,6 +376,11 @@ export default function CopilotPreviewPage() {
         : saiPendingConfirm
         ? [
             { label: "お願いする", action: "__real:はい、お願いします", tone: "primary" },
+            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+          ]
+        : escalationPendingConfirm
+        ? [
+            { label: "実行して", action: "__real:はい、お願いします", tone: "primary" },
             { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
           ]
         : industryTemplatePendingConfirm

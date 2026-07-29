@@ -25,17 +25,22 @@ import {
   clearStagedFaqImport,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
-import { getSessions, getActiveEscalations, getMessages } from '../chat-history/chatHistoryRepository';
+import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation } from '../chat-history/chatHistoryRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
+import { fetchAnalyticsSummary, fetchConversionSummary } from '../analytics/summaryQueries';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 
 // チャットでの一括インポートで一度に生成・コミットできるFAQ数の上限。
 // POST /v1/admin/knowledge/text/commit・/scrape/commit の zod スキーマ(max 20)と揃える。
 const MAX_IMPORT_FAQS = 20;
+
+// 有人返信1件の最大文字数。POST /v1/admin/chat-history/sessions/:id/reply の
+// zod スキーマ(z.string().min(1).max(2000))と揃える。
+const MAX_OPERATOR_REPLY_LENGTH = 2000;
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -1466,6 +1471,86 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // 有人返信 / 対応完了: 旧UI(/admin/escalations)と同じ書き込みをチャットから行う。
+    // セッションの特定は必ず resolveSessionByShortId 経由（tenant_id 条件込み）とし、
+    // 他テナントのセッションへ書き込む経路を作らない。
+    case 'reply_to_escalation': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const content = String(args['content'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      if (!content) {
+        return truncate('返信内容（content）は必須です');
+      }
+      if (content.length > MAX_OPERATOR_REPLY_LENGTH) {
+        return truncate(`返信内容は${MAX_OPERATOR_REPLY_LENGTH}文字以内で指定してください（現在${content.length}文字）`);
+      }
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        if (!confirmed) {
+          return truncate(
+            `お客様への返信には確認が必要です。セッション[${display}]に以下の文面を送信します。` +
+            'ユーザーに提示し、同意を得てから confirmed=true で再度実行してください\n' +
+            `返信内容: ${content}`,
+          );
+        }
+
+        await saveMessage({
+          tenantId,
+          sessionId: resolved.session.session_id,
+          role: 'operator',
+          content,
+        });
+        return truncate(`セッション[${display}]への返信を保存しました。お客様の画面に表示されます`);
+      } catch (err) {
+        logger.warn('[actionExecutor] reply_to_escalation failed', err);
+        return truncate('返信の送信に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'resolve_escalation': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        if (!confirmed) {
+          return truncate(
+            `対応完了にするには確認が必要です。セッション[${display}]を対応完了にすると、エスカレーション一覧から外れます。` +
+            'ユーザーに提示し、同意を得てから confirmed=true で再度実行してください',
+          );
+        }
+
+        const ok = await resolveEscalation({ sessionDbId: resolved.session.id, tenantId });
+        if (!ok) {
+          return truncate(`セッション[${display}]は見つかりません`);
+        }
+        return truncate(`セッション[${display}]のエスカレーションを対応完了に更新しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] resolve_escalation failed', err);
+        return truncate('対応完了の記録に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     case 'get_monitoring_summary': {
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
@@ -1672,6 +1757,67 @@ export async function executeToolCall(
       // 続く3行(画面:/URL:/説明:)は copilot-preview の parseLegacyUiLink が
       // リンクカード描画のために正規表現で読む契約なので、順序・ラベルを変えないこと。
       return truncate(`この操作は${link.label}画面から行えます。\n画面: ${link.label}\nURL: ${path}\n説明: ${link.description}`);
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_analytics_summary':
+    case 'get_conversion_summary': {
+      const feature = toolName === 'get_analytics_summary' ? 'analytics' : 'conversion';
+
+      // get_legacy_ui_link の analytics/conversion と同じ扱い。super_admin もバイパスさせない
+      // （クライアントビューはテナントに見えている状態の再現が目的のため）。
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const plan = await queryTenantPlan(db, tenantId);
+      if (!planHasFeature(plan, feature)) {
+        return truncate('この機能はGrowthプラン以上でご利用いただけます');
+      }
+
+      const period = args['period'] === '7d' ? '7d' : '30d';
+      const periodLabel = period === '7d' ? '直近7日間' : '直近30日間';
+
+      try {
+        if (toolName === 'get_analytics_summary') {
+          const s = await fetchAnalyticsSummary({ db, tenantId, period });
+          const sent = s.sentiment_distribution;
+          const lines = [
+            `会話分析サマリー（${periodLabel}）`,
+            `• 会話数: ${s.total_sessions}件（前期間 ${s.prev_total_sessions}件 / ${s.sessions_change_pct >= 0 ? '+' : ''}${s.sessions_change_pct.toFixed(1)}%）`,
+            `• 満足度スコア: ${s.avg_judge_score != null ? s.avg_judge_score.toFixed(1) : '評価データなし'}`,
+            `• 1会話あたりのメッセージ数: ${s.avg_messages_per_session.toFixed(1)}件`,
+            `• 答えられなかった質問: ${s.total_knowledge_gaps}件`,
+          ];
+          if (sent.total > 0) {
+            lines.push(`• 感情の内訳: ポジティブ${sent.positive} / ネガティブ${sent.negative} / ニュートラル${sent.neutral}`);
+          }
+          return truncate(lines.join('\n'));
+        }
+
+        const c = await fetchConversionSummary({ db, tenantId, period });
+        const lines = [
+          `成約・効果分析サマリー（${periodLabel}）`,
+          `• 会話数: ${c.summary.total_sessions}件（うち結果記録済み ${c.summary.recorded_outcomes}件 / 記録率 ${c.summary.recording_rate}%）`,
+        ];
+        const outcomeEntries = Object.entries(c.summary.outcomes);
+        if (outcomeEntries.length > 0) {
+          lines.push(`• 結果の内訳: ${outcomeEntries.map(([k, v]) => `${k} ${v}件`).join(' / ')}`);
+        }
+        const topTechniques = c.technique_effectiveness.slice(0, 3);
+        if (topTechniques.length > 0) {
+          lines.push(`• 成果の高い話法: ${topTechniques.map((t) => `${t.technique} ${t.conversion_rate}%（${t.sessions_used}件）`).join(' / ')}`);
+        }
+        const topDropout = Object.entries(c.stage_dropout)
+          .filter(([, v]) => v > 0)
+          .sort((a, b) => b[1] - a[1])[0];
+        if (topDropout) {
+          lines.push(`• 離脱が最も多いステージ: ${topDropout[0]}（${topDropout[1]}件）`);
+        }
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn(`[actionExecutor] ${toolName} failed`, err);
+        return truncate('分析サマリーの取得に失敗しました');
+      }
     }
 
     // -----------------------------------------------------------------------
