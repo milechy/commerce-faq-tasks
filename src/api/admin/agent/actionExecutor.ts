@@ -31,6 +31,7 @@ import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
+import { fetchAnalyticsSummary, fetchConversionSummary } from '../analytics/summaryQueries';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 
 // チャットでの一括インポートで一度に生成・コミットできるFAQ数の上限。
@@ -1570,6 +1571,67 @@ export async function executeToolCall(
         return truncate(`不明な案内先です: ${feature}`);
       }
       return truncate(`この操作はチャットでは対応していません。\n画面: ${link.label}\nURL: ${link.path}\n説明: ${link.description}`);
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_analytics_summary':
+    case 'get_conversion_summary': {
+      const feature = toolName === 'get_analytics_summary' ? 'analytics' : 'conversion';
+
+      // get_legacy_ui_link の analytics/conversion と同じ扱い。super_admin もバイパスさせない
+      // （クライアントビューはテナントに見えている状態の再現が目的のため）。
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const plan = await queryTenantPlan(db, tenantId);
+      if (!planHasFeature(plan, feature)) {
+        return truncate('この機能はGrowthプラン以上でご利用いただけます');
+      }
+
+      const period = args['period'] === '7d' ? '7d' : '30d';
+      const periodLabel = period === '7d' ? '直近7日間' : '直近30日間';
+
+      try {
+        if (toolName === 'get_analytics_summary') {
+          const s = await fetchAnalyticsSummary({ db, tenantId, period });
+          const sent = s.sentiment_distribution;
+          const lines = [
+            `会話分析サマリー（${periodLabel}）`,
+            `• 会話数: ${s.total_sessions}件（前期間 ${s.prev_total_sessions}件 / ${s.sessions_change_pct >= 0 ? '+' : ''}${s.sessions_change_pct.toFixed(1)}%）`,
+            `• 満足度スコア: ${s.avg_judge_score != null ? s.avg_judge_score.toFixed(1) : '評価データなし'}`,
+            `• 1会話あたりのメッセージ数: ${s.avg_messages_per_session.toFixed(1)}件`,
+            `• 答えられなかった質問: ${s.total_knowledge_gaps}件`,
+          ];
+          if (sent.total > 0) {
+            lines.push(`• 感情の内訳: ポジティブ${sent.positive} / ネガティブ${sent.negative} / ニュートラル${sent.neutral}`);
+          }
+          return truncate(lines.join('\n'));
+        }
+
+        const c = await fetchConversionSummary({ db, tenantId, period });
+        const lines = [
+          `成約・効果分析サマリー（${periodLabel}）`,
+          `• 会話数: ${c.summary.total_sessions}件（うち結果記録済み ${c.summary.recorded_outcomes}件 / 記録率 ${c.summary.recording_rate}%）`,
+        ];
+        const outcomeEntries = Object.entries(c.summary.outcomes);
+        if (outcomeEntries.length > 0) {
+          lines.push(`• 結果の内訳: ${outcomeEntries.map(([k, v]) => `${k} ${v}件`).join(' / ')}`);
+        }
+        const topTechniques = c.technique_effectiveness.slice(0, 3);
+        if (topTechniques.length > 0) {
+          lines.push(`• 成果の高い話法: ${topTechniques.map((t) => `${t.technique} ${t.conversion_rate}%（${t.sessions_used}件）`).join(' / ')}`);
+        }
+        const topDropout = Object.entries(c.stage_dropout)
+          .filter(([, v]) => v > 0)
+          .sort((a, b) => b[1] - a[1])[0];
+        if (topDropout) {
+          lines.push(`• 離脱が最も多いステージ: ${topDropout[0]}（${topDropout[1]}件）`);
+        }
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn(`[actionExecutor] ${toolName} failed`, err);
+        return truncate('分析サマリーの取得に失敗しました');
+      }
     }
 
     // -----------------------------------------------------------------------
