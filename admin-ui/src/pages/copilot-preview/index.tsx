@@ -940,6 +940,14 @@ function Phase4DefaultToggle() {
     const next = !enabled;
     setChatFirstDefaultEnabled(next);
     setEnabled(next);
+    // 「オプトインした人が1ヶ月後も残っているか」を測るための計測だけの副回線
+    // (docs/AGENT_METRICS.md の chat_first_toggle)。トグルの実体はあくまで上の
+    // localStorage 側なので、await せず失敗も握り潰す。この通信の成否がトグルの
+    // 見た目・保存値・ユーザーへのエラー表示に影響してはならない。
+    void authFetch(`${API_BASE}/v1/admin/agent/ui-event`, {
+      method: "POST",
+      body: JSON.stringify({ event: "chat_first_toggle", enabled: next }),
+    }).catch(() => undefined);
   };
 
   return (

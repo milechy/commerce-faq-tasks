@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
   enum 値と、ツール名のような固定語彙だけ。
 - `snapshot_at`: DB 既定値（`NOW()`）に任せる。
 
-## メトリクス一覧（この5つのみ）
+## メトリクス一覧（この6つのみ）
 
 | metric_name | labels | value | 発火タイミング |
 | --- | --- | --- | --- |
@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
 | `agent_turn_hops` | `{ hit_limit: boolean }` | そのターンで実際に消費したツール呼び出しホップ数（`0` 以上） | ターン完了時（1ターン1行） |
 | `agent_legacy_handoff` | `{ feature: string }` | 常に `1` | `get_legacy_ui_link` が呼ばれたとき。「チャットがまだ旧UIへ何回受け渡しているか」の**分子** |
 | `agent_turn_completed` | `{ answered_from: string }` | 常に `1` | 結果に関わらずターンが完了したとき。handoff率の**分母** |
+| `chat_first_toggle` | `{ enabled: boolean }` | 常に `1` | 「これを既定の画面にする」トグルが切り替わったとき（`POST /v1/admin/agent/ui-event`） |
 
 ### `agent_tool_invoked`
 
@@ -137,6 +138,32 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
   **「完了ターンあたりの handoff 回数」であって「handoff を含んだターンの割合」ではない**
   （原理的に 1.0 を超えうる）。指標名や文書でこの2つを混同しないこと。
 
+### `chat_first_toggle`
+
+唯一の**UI操作**メトリクス（他の5つはエージェント自身の挙動）。
+`/copilot-preview` 左レールの「これを既定の画面にする」トグルが切り替わるたびに、
+フロント（`admin-ui/src/pages/copilot-preview/index.tsx` の `Phase4DefaultToggle`）が
+`POST /v1/admin/agent/ui-event` を投げて記録する。
+
+- `enabled`: 切り替え**後**の状態。`true` = オプトイン、`false` = オプトアウト。
+- `tenant_id`: JWT 由来のテナントのみ。**body の値は一切見ない**（このイベントに
+  `targetTenantId` 相当の概念はない。テナント未特定の super_admin は `NULL`）。
+- 計測目的は「チャットUIを既定のランディングにした人が、1ヶ月後もそのままか」を
+  数字で見ること。トグルの実体は依然として localStorage だけであり（`chatFirstDefault.ts`）、
+  **このメトリクスは現在の状態の source of truth ではない**。読めるのは
+  「いつ ON になり、いつ OFF に戻されたか」のイベント列だけで、
+  ラベルにユーザー識別子を持たない（PII 禁止）ため個人単位の継続率は出せない。
+  出せるのは期間ごとの `enabled=true` / `enabled=false` の件数と、その比の推移。
+- ブラウザ側からの送信なので**必ず取りこぼす**（オフライン、拡張機能によるブロック、
+  タブを閉じた直後など）。ON/OFF の絶対数ではなく傾向として読む。
+
+#### `event` は閉じた enum である
+
+`POST /v1/admin/agent/ui-event` が受け付ける `event` は `chat_first_toggle` のみで、
+それ以外は 400 を返す。任意の文字列を受けると、この endpoint が命名契約の外にある
+無管理の分析投入口になってしまうため。**UIイベントを増やす場合は、このドキュメントと
+`agentRoutes.ts` の `uiEventSchema` を同時に更新する**（コード側だけ広げてはならない）。
+
 ## 実装上の制約
 
 - 記録は **fire-and-forget**。`recordAgentMetric` は内部で try/catch し、失敗は
@@ -144,3 +171,7 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
   **計測の失敗がチャット応答のステータスコードや本文を変えてはならない。**
 - 計測は `agentRoutes.ts` にのみ実装する。`actionExecutor.ts` の 45 個の `case`
   分岐には手を入れない（1箇所で横断的に取れる形を保つ）。
+- `POST /v1/admin/agent/ui-event` は計測専用のため、想定外の例外でも 500 ではなく
+  `{ ok: true }` を返す（権限 403 とバリデーション 400 のみ明示的に返す）。
+  この endpoint の失敗がフロントのトグルの見た目・localStorage の値・
+  ユーザーへのエラー表示に影響してはならない。フロント側も応答を待たずに投げる。
