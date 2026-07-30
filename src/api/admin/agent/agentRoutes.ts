@@ -213,6 +213,16 @@ const chatSchema = z.object({
   stream: z.boolean().optional(),
 });
 
+// UIイベント計測の受け口。event は**閉じた enum** にしておく。自由記述のイベント名を
+// 受けると管理されない分析投入口になり、docs/AGENT_METRICS.md の命名契約が
+// 意味を失うため、値を増やすときは必ずこのリテラルとドキュメントを同時に更新する。
+// tenant_id は JWT 由来のみを使うので、body に tenantId 相当のキーは定義しない
+// （zod は未知キーを黙って捨てるため、送られてきても参照されることはない）。
+const uiEventSchema = z.object({
+  event: z.literal('chat_first_toggle'),
+  enabled: z.boolean(),
+});
+
 // ---------------------------------------------------------------------------
 // Groq function calling 呼び出し（tools 付き）
 // ---------------------------------------------------------------------------
@@ -846,6 +856,41 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
     } catch (err) {
       logger.warn('[POST /v1/admin/agent/chat]', err);
       return res.status(500).json({ error: 'AIエージェントの応答生成に失敗しました' });
+    }
+  });
+
+  // チャットUIの操作イベントを計測するためだけのベストエフォートな副回線。
+  // 「既定の画面にする」トグル(admin-ui/src/lib/chatFirstDefault.ts)は完全に
+  // localStorage 側で完結しており、この endpoint はその ON/OFF を数えるだけで
+  // 挙動には一切関与しない。したがって想定外の例外でも 500 を返さず ok を返す
+  // （フロントに「本物のエラー」と見えてしまうと、計測の失敗がトグルの不具合に
+  //   見える／トグル自体を壊す余地が生まれる）。
+  app.post('/v1/admin/agent/ui-event', (req: Request, res: Response) => {
+    try {
+      const { role, tenantId } = extractAuth(req);
+
+      if (role !== 'super_admin' && role !== 'client_admin') {
+        return res.status(403).json({ error: 'この操作を実行する権限がありません' });
+      }
+
+      const parsed = uiEventSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+      }
+
+      // テナントは JWT 由来のみ。body の値は（送られてきても）一切使わない。
+      // テナント未特定の super_admin は docs/AGENT_METRICS.md どおり NULL で記録する。
+      fireAgentMetric(db, {
+        metricName: 'chat_first_toggle',
+        tenantId: tenantId || null,
+        labels: { enabled: parsed.data.enabled },
+        value: 1,
+      });
+
+      return res.json({ ok: true });
+    } catch (err) {
+      logger.warn('[POST /v1/admin/agent/ui-event]', err);
+      return res.json({ ok: true });
     }
   });
 }

@@ -891,3 +891,107 @@ describe("CopilotPreviewPage — super_adminのテナント選択", () => {
     await waitFor(() => expect(screen.getByText(/テナント一覧を取得できませんでした/)).toBeTruthy());
   });
 });
+
+// 「これを既定の画面にする」トグルの計測(chat_first_toggle)。トグルの実体は localStorage
+// のままで、この通信は測るだけの副回線 — 成否がトグルの見た目・保存値に影響してはならない。
+describe("CopilotPreviewPage — 既定画面トグルの計測(chat_first_toggle)", () => {
+  const UI_EVENT_URL = "http://localhost:3100/v1/admin/agent/ui-event";
+
+  const uiEventCalls = () =>
+    vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/ui-event"));
+
+  const sentEvents = () => uiEventCalls().map(([, options]) => JSON.parse(String(options?.body)));
+
+  /** トグルのつまみの位置。ON=19px / OFF=3px（見た目の状態そのもの） */
+  const knobLeft = (button: HTMLElement) => (button.querySelector("span > span") as HTMLElement).style.left;
+
+  const getToggle = () =>
+    waitFor(() => screen.getByRole("button", { name: /これを既定の画面にする/ }));
+
+  // この環境(happy-dom)は window.localStorage を提供しないため、chatFirstDefault.test.ts と
+  // 同じくMapベースの最小実装で補う(トグルの保存値まで検証するため素通りモックにはしない)。
+  function installFakeLocalStorage() {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        clear: () => void store.clear(),
+      },
+    });
+  }
+
+  beforeEach(() => {
+    installFakeLocalStorage();
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (String(url).includes("/v1/admin/agent/ui-event")) return mockOk({ ok: true });
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  });
+
+  it("ONにすると enabled:true で ui-event が送られる", async () => {
+    renderPage();
+    const toggle = await getToggle();
+    expect(knobLeft(toggle)).toBe("3px");
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(uiEventCalls().length).toBe(1));
+    expect(uiEventCalls()[0][1]).toMatchObject({ method: "POST" });
+    expect(uiEventCalls()[0][0]).toBe(UI_EVENT_URL);
+    expect(sentEvents()).toEqual([{ event: "chat_first_toggle", enabled: true }]);
+    expect(knobLeft(toggle)).toBe("19px");
+    expect(window.localStorage.getItem("r2c_chat_first_default")).toBe("true");
+  });
+
+  it("OFFに戻すと enabled:false で ui-event が送られる", async () => {
+    window.localStorage.setItem("r2c_chat_first_default", "true");
+    renderPage();
+    const toggle = await getToggle();
+    expect(knobLeft(toggle)).toBe("19px");
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(uiEventCalls().length).toBe(1));
+    expect(sentEvents()).toEqual([{ event: "chat_first_toggle", enabled: false }]);
+    expect(knobLeft(toggle)).toBe("3px");
+    expect(window.localStorage.getItem("r2c_chat_first_default")).toBeNull();
+  });
+
+  it("送信が失敗してもトグルはONになったまま(巻き戻さない・エラーも出さない)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (String(url).includes("/v1/admin/agent/ui-event")) return Promise.reject(new Error("network down"));
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+
+    renderPage();
+    const toggle = await getToggle();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(uiEventCalls().length).toBe(1));
+    expect(knobLeft(toggle)).toBe("19px");
+    expect(window.localStorage.getItem("r2c_chat_first_default")).toBe("true");
+    expect(screen.queryByText(/エラー/)).toBeNull();
+    expect(screen.queryByText(/うまく送信できませんでした/)).toBeNull();
+  });
+
+  it("トグルを触らなければ ui-event は送られない", async () => {
+    renderPage();
+    await getToggle();
+
+    expect(uiEventCalls()).toEqual([]);
+  });
+});

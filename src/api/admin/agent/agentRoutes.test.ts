@@ -4308,3 +4308,138 @@ describe('POST /v1/admin/agent/chat', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// UIイベント計測（chat_first_toggle）。計測専用のベストエフォート副回線なので、
+// 「トグルの挙動を絶対に壊さない」ことが本体の契約（docs/AGENT_METRICS.md）。
+// ---------------------------------------------------------------------------
+
+describe('POST /v1/admin/agent/ui-event', () => {
+  beforeEach(() => {
+    jest.resetAllMocks();
+  });
+
+  it('enabled:true → 200 {ok:true} と chat_first_toggle(JWT由来テナント) を記録する', async () => {
+    const res = await request(makeApp(CLIENT_ADMIN_USER))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(recordedMetrics('chat_first_toggle')).toEqual([
+      {
+        metricName: 'chat_first_toggle',
+        tenantId: 'tenant-abc',
+        labels: { enabled: true },
+        value: 1,
+      },
+    ]);
+  });
+
+  it('enabled:false → 200 と chat_first_toggle(enabled:false) を記録する', async () => {
+    const res = await request(makeApp(CLIENT_ADMIN_USER))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(recordedMetrics('chat_first_toggle')).toEqual([
+      {
+        metricName: 'chat_first_toggle',
+        tenantId: 'tenant-abc',
+        labels: { enabled: false },
+        value: 1,
+      },
+    ]);
+  });
+
+  it('テナント未特定の super_admin → tenantId は NULL で記録される', async () => {
+    const res = await request(makeApp(SUPER_ADMIN_USER))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(recordedMetrics('chat_first_toggle')).toEqual([
+      { metricName: 'chat_first_toggle', tenantId: null, labels: { enabled: true }, value: 1 },
+    ]);
+  });
+
+  it('supabaseUser なし → 403（chat と同じ）', async () => {
+    const res = await request(makeApp(undefined))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: true });
+
+    expect(res.status).toBe(403);
+    expect(recordedMetrics('chat_first_toggle')).toEqual([]);
+  });
+
+  it('role が不正（viewer）→ 403', async () => {
+    const res = await request(makeApp({ app_metadata: { role: 'viewer', tenant_id: 'tenant-abc' } }))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: true });
+
+    expect(res.status).toBe(403);
+    expect(recordedMetrics('chat_first_toggle')).toEqual([]);
+  });
+
+  describe('バリデーション（event は閉じた enum）', () => {
+    it.each([
+      ['event が欠落', { enabled: true }],
+      ['event が未定義の値', { event: 'some_other_ui_event', enabled: true }],
+      ['enabled が欠落', { event: 'chat_first_toggle' }],
+      ['enabled が boolean でない', { event: 'chat_first_toggle', enabled: 'true' }],
+      ['空 body', {}],
+    ])('%s → 400 で何も記録しない', async (_label, body) => {
+      const res = await request(makeApp(CLIENT_ADMIN_USER)).post('/v1/admin/agent/ui-event').send(body);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      expect(mockRecordAgentMetric).not.toHaveBeenCalled();
+    });
+  });
+
+  it('body の tenantId は無視され JWT 由来テナントで記録される', async () => {
+    const res = await request(makeApp(CLIENT_ADMIN_USER))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: true, tenantId: 'evil-tenant-override' });
+
+    expect(res.status).toBe(200);
+    expect(recordedMetrics('chat_first_toggle')).toEqual([
+      { metricName: 'chat_first_toggle', tenantId: 'tenant-abc', labels: { enabled: true }, value: 1 },
+    ]);
+  });
+
+  it('recordAgentMetric が throw しても 200 {ok:true} を返す（計測失敗をトグルに見せない）', async () => {
+    mockRecordAgentMetric.mockImplementation(() => {
+      throw new Error('metrics sync boom');
+    });
+
+    const res = await request(makeApp(CLIENT_ADMIN_USER))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it('recordAgentMetric が reject しても 200 {ok:true} を返す', async () => {
+    mockRecordAgentMetric.mockImplementation(() => Promise.reject(new Error('metrics async boom')));
+
+    const res = await request(makeApp(CLIENT_ADMIN_USER))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it('Groq もDBも呼ばない（計測だけの副回線）', async () => {
+    const res = await request(makeApp(CLIENT_ADMIN_USER))
+      .post('/v1/admin/agent/ui-event')
+      .send({ event: 'chat_first_toggle', enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+});
