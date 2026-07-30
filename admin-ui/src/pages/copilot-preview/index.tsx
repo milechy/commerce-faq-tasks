@@ -14,6 +14,11 @@ import { useNavigate } from "react-router-dom";
 import { LogOut } from "lucide-react";
 import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
+import {
+  CHAT_SESSION_SURFACE_FULLSCREEN,
+  restoreChatSession,
+  saveChatSession,
+} from "../../lib/chatSessionStore";
 import { shouldSubmitOnEnter } from "../../lib/utils";
 import { useAuth } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
@@ -23,6 +28,8 @@ import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
 // 切り出した(旧UIとの共有コンポーネント。詳細は common/ThemeToggle.tsx 参照)。
 import { NotificationBell } from "../../components/common/NotificationBell";
 import { ThemeToggle } from "../../components/common/ThemeToggle";
+// レスポンス形は本番パネル(Surface A)と共有のため、型も一箇所から取る。
+import type { AgentAction } from "../../components/AdminAgent/useAdminAgent";
 import LangSwitcher from "../../components/LangSwitcher";
 import AppSwitcher from "../../components/AppSwitcher";
 
@@ -254,6 +261,11 @@ const CATEGORIES: Category[] = [
 let _uid = 100;
 const nextId = () => ++_uid;
 
+// 復元した会話のidと新規メッセージのidが衝突しないよう、採番を復元済みの最大値より後ろへ進める
+const reserveIds = (restored: Msg[]) => {
+  for (const m of restored) if (m.id > _uid) _uid = m.id;
+};
+
 export default function CopilotPreviewPage() {
   // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
   // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
@@ -364,7 +376,7 @@ export default function CopilotPreviewPage() {
         return;
       }
 
-      const data = (await res.json()) as { reply: string; actions: { tool: string; result: string }[] };
+      const data = (await res.json()) as { reply: string; actions: AgentAction[] };
       setRealHistory((prev) =>
         [
           ...prev,
@@ -376,6 +388,13 @@ export default function CopilotPreviewPage() {
       // ツール結果を、可能なら提案書と同じ見た目のカードにパースする。
       // 想定外の形式(下書き生成失敗時のエラー文など)は汎用の agentAction カードにフォールバック。
       const actionMsgs: Msg[] = (data.actions ?? []).map((a) => {
+        // 構造化カードが来ていればそれを直接描画する。自然文の言い回しが変わっても
+        // カードが黙って消えない経路。card が無いツール(現状 get_legacy_ui_link 以外の
+        // すべて)は、これまでどおり下の正規表現パースにフォールバックする。
+        if (a.card?.kind === "legacy_link") {
+          const { label, url, description } = a.card;
+          return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
+        }
         if (a.tool === "suggest_faq") {
           const parsed = parseSuggestFaq(a.result);
           if (parsed) return { id: nextId(), role: "ai", card: { kind: "faq", ...parsed } };
@@ -468,13 +487,27 @@ export default function CopilotPreviewPage() {
     setSending(false);
   };
 
-  // マウント時、新規テナント(onboarding_completed_at未設定)なら業種選択オンボーディングを、
-  // 既存テナントなら実データの週次ブリーフィングを自動取得する。
+  // マウント時、まず同一タブに保存済みの会話があれば復元する(リロード・ブラウザバック・
+  // モバイルのタブ破棄で会話が消えないように)。復元できた場合は既に進行中の会話がある
+  // ということなので、ブートストラップ(業種選択オンボーディング/週次ブリーフィングの
+  // 自動取得)は行わない。
+  //
+  // 復元できなかった場合は従来通り、新規テナント(onboarding_completed_at未設定)なら業種選択
+  // オンボーディングを、既存テナントなら実データの週次ブリーフィングを自動取得する。
   // super_admin(プレビュー中含む)はオンボーディング判定の対象外(常に週次ブリーフィング側)。
   const bootstrapped = useRef(false);
   useEffect(() => {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
+
+    const restored = restoreChatSession<Msg>(CHAT_SESSION_SURFACE_FULLSCREEN);
+    if (restored && restored.messages.length > 0) {
+      reserveIds(restored.messages);
+      sessionIdRef.current = restored.sessionId;
+      setMsgs(restored.messages);
+      setRealHistory(restored.history ?? []);
+      return;
+    }
 
     void (async () => {
       let isNewTenant = false;
@@ -502,6 +535,21 @@ export default function CopilotPreviewPage() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 会話が更新されるたびに同一タブへ保存する。タイプライター演出は16ms毎にmsgsを
+  // 書き換えるため、そのまま保存すると1応答で数百回の書き込みになる。少し待って
+  // 落ち着いた状態だけを書き込む。
+  useEffect(() => {
+    if (msgs.length === 0) return;
+    const timer = setTimeout(() => {
+      saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, {
+        sessionId: sessionIdRef.current,
+        messages: msgs,
+        history: realHistory,
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [msgs, realHistory]);
 
   // 新UI(サイドバー型ではないため)にはログアウト手段が無く、Phase4トグルで
   // このブラウザの既定画面にすると詰む(GID: 新UI常用時にログアウトできない)。

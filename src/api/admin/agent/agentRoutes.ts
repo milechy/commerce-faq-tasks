@@ -8,9 +8,11 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
+import type { ActionResult, LegacyLinkCardPayload } from './actionExecutor';
 import { requiresConfirmation } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
+import { recordAgentSettingsChange } from './agentAuditLog';
 import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import { isUnanswered } from '../ai-assist/systemPrompt';
 
@@ -47,6 +49,72 @@ function classifyToolResult(result: string): {
   return { outcome: 'ok' };
 }
 
+// ---------------------------------------------------------------------------
+// 設定変更の監査ログ（tenant_settings_history。旧UI PATCH /v1/admin/tenants/:id と同じテーブル）
+// ---------------------------------------------------------------------------
+
+// 「テナント単位の単一設定フィールドを変える」ツールだけを対象にする。
+// FAQ・指示ルール・エンゲージメントルール・エスカレーションは実体（エンティティ）の
+// 書き込みであり field_name/old_value/new_value の形に収まらないため対象外
+// （別テーブルが必要になるので将来の別タスク）。
+//
+// successMarker: classifyToolResult の ok/blocked 判定だけでは足りないため併用する。
+// 確認ゲート以外の理由で書き込みが行われなかったケース（activate_avatar のプラン制限、
+// set_ga4_id の形式不正、DB例外時の失敗メッセージ）は blocked マーカーを含まないため
+// outcome=ok に落ちる。それをそのまま記録すると「実際には変更されていない変更」が
+// 監査ログに残るので、各ツールの成功メッセージの一致も必須条件にする
+// （メッセージ変更で無言に記録が止まらないよう、4ツール分すべてを
+//  agentRoutes.test.ts の「設定変更の監査ログ」で固定している）。
+const AUDITED_SETTINGS_TOOLS: Record<
+  string,
+  { fieldName: string; successMarker: string; readNewValue: (args: Record<string, unknown>) => unknown }
+> = {
+  set_ga4_id: {
+    fieldName: 'ga4_measurement_id',
+    successMarker: 'に設定しました',
+    readNewValue: (args) => args['measurement_id'],
+  },
+  set_posthog: {
+    fieldName: 'posthog_host',
+    successMarker: 'に設定しました',
+    readNewValue: (args) => args['host'],
+  },
+  // 実装は既存 widget_theme への JSONB マージなので、記録されるのは「今回当てた差分」。
+  set_widget_theme: {
+    fieldName: 'widget_theme',
+    successMarker: 'を更新しました',
+    readNewValue: (args) => args['theme'],
+  },
+  // tenants の列ではないが、テナントで稼働中のアバター設定という単一の設定値。
+  activate_avatar: {
+    fieldName: 'active_avatar_config_id',
+    successMarker: 'を有効化しました',
+    readNewValue: (args) => args['id'],
+  },
+};
+
+/** 監査記録も fire-and-forget。記録の失敗をチャット応答に一切影響させない。 */
+function fireSettingsAudit(
+  db: Pool,
+  params: { tenantId: string; changedBy: string; fieldName: string; newValue: unknown },
+): void {
+  try {
+    void Promise.resolve(
+      recordAgentSettingsChange(db, {
+        tenantId: params.tenantId,
+        changedBy: params.changedBy,
+        fieldName: params.fieldName,
+        // 変更前の値は 45分岐の case 本体からは取り出せない（取り出すには case 側の
+        // 改変が必要になる）。migration の COMMENT どおり NULL =「初期値不明」として記録する。
+        oldValue: null,
+        newValue: params.newValue,
+      }),
+    ).catch(() => undefined);
+  } catch {
+    // 監査記録の失敗は応答に影響させない
+  }
+}
+
 function recordTurnCompleted(
   db: Pool,
   params: { tenantId: string | null; toolHops: number; hitHopLimit: boolean; answeredFrom: AnsweredFrom },
@@ -70,6 +138,10 @@ function recordTurnCompleted(
 // ---------------------------------------------------------------------------
 
 type AnsweredFrom = 'faq_list' | 'tool_action' | 'general';
+
+// クライアントへ返すツール実行結果。result(自然文)は構造化ツールでも必ず入るので
+// 既存クライアントと既存の正規表現パーサはそのまま動き、card は追加でのみ載る。
+type ChatAction = { tool: string; result: string; card?: LegacyLinkCardPayload };
 
 function determineAnsweredFrom(actions: Array<{ tool: string; result: string }>): AnsweredFrom {
   if (actions.some((a) => a.tool === 'get_faq_list')) return 'faq_list';
@@ -272,10 +344,11 @@ async function executeHopToolCalls(
   effectiveTenantId: string,
   db: Pool,
   suggestedThisTurn: Set<string>,
-  actions: Array<{ tool: string; result: string }>,
+  actions: ChatAction[],
   messages: GroqMessage[],
   isSuperAdmin: boolean,
   sessionId: string,
+  changedBy: string,
 ): Promise<void> {
   for (const toolCall of toolCalls) {
     const { id, name, args } = toolCall;
@@ -294,12 +367,14 @@ async function executeHopToolCalls(
     const blockSameTurnChain = alreadySuggestedThisTurn && requiresConfirmation(name);
 
     let result: string;
+    let card: LegacyLinkCardPayload | undefined;
     if (blockSameTurnChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
     } else {
+      let raw: ActionResult;
       try {
-        result = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
+        raw = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
       } catch (err) {
         fireAgentMetric(db, {
           metricName: 'agent_tool_invoked',
@@ -309,10 +384,20 @@ async function executeHopToolCalls(
         });
         throw err;
       }
+      // 構造化結果を「自然文 + 任意のカード」へ正規化する。これ以降の処理
+      // (LLMへの差し戻し・classifyToolResult による計測・answered_from)は
+      // 従来どおり自然文だけを見るため、構造化しても挙動は変わらない。
+      if (typeof raw === 'string') {
+        result = raw;
+      } else {
+        result = raw.text;
+        card = raw.card;
+      }
       if (name in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(name);
     }
 
-    actions.push({ tool: name, result });
+    // card を持たないツールでは JSON に card キー自体を出さない(既存レスポンス形と同一)。
+    actions.push(card ? { tool: name, result, card } : { tool: name, result });
     messages.push({ role: 'tool', tool_call_id: id, name, content: result });
 
     const metricTenantId = effectiveTenantId || null;
@@ -329,6 +414,22 @@ async function executeHopToolCalls(
         tenantId: metricTenantId,
         labels: { tool: name, reason },
         value: 1,
+      });
+    }
+    // 設定変更の監査記録。ブロックされた書き込み(outcome=blocked)は実際にDBを変えていないため
+    // 記録しない（記録すると監査ログに偽のエントリが残る）。
+    const auditedSetting = AUDITED_SETTINGS_TOOLS[name];
+    if (
+      auditedSetting &&
+      outcome === 'ok' &&
+      result.includes(auditedSetting.successMarker) &&
+      effectiveTenantId
+    ) {
+      fireSettingsAudit(db, {
+        tenantId: effectiveTenantId,
+        changedBy,
+        fieldName: auditedSetting.fieldName,
+        newValue: auditedSetting.readNewValue(args),
       });
     }
     if (name === 'get_legacy_ui_link') {
@@ -574,7 +675,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
 
       let totalPromptTokens = 0;
       let totalCompletionTokens = 0;
-      const actions: Array<{ tool: string; result: string }> = [];
+      const actions: ChatAction[] = [];
       // このリクエスト(ターン)内で suggest_* が呼ばれたツール名を記録し、
       // 対応する save_* が同一ターン内で連鎖実行されるのを防ぐ（G1のリスク軽減策）
       const suggestedThisTurn = new Set<string>();
@@ -614,7 +715,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             }));
 
             const beforeCount = actions.length;
-            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId);
+            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email);
             for (const action of actions.slice(beforeCount)) {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
@@ -711,7 +812,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           args: parseToolArgs(toolCall.function.arguments),
         }));
 
-        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId);
+        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email);
       }
 
       const hitHopLimit = finalReply === null;

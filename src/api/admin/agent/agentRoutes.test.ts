@@ -167,6 +167,17 @@ function recordedMetrics(metricName: string): Array<Record<string, any>> {
     .filter((input) => input?.metricName === metricName);
 }
 
+// agentAuditLog モック（設定変更の監査ログ。実DBへのINSERTを避けつつ記録内容を検証する）
+const mockRecordAgentSettingsChange = jest.fn();
+jest.mock('./agentAuditLog', () => ({
+  recordAgentSettingsChange: (...args: any[]) => mockRecordAgentSettingsChange(...args),
+}));
+
+/** mockRecordAgentSettingsChange に記録された監査入力を取り出す */
+function recordedSettingsChanges(): Array<Record<string, any>> {
+  return mockRecordAgentSettingsChange.mock.calls.map(([, input]) => input as Record<string, any>);
+}
+
 // ---------------------------------------------------------------------------
 // テスト対象を import
 // ---------------------------------------------------------------------------
@@ -2950,6 +2961,159 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 構造化カード(card)チャネル
+  //
+  // ツールが自然文に加えて構造化データを返せる経路。フロントが自然文を正規表現で
+  // 読み直さずにカードを描画できるようにするためのもので、現時点で card を返すのは
+  // get_legacy_ui_link だけ。残りのツールは素の文字列を返し続け、result のみが載る
+  // 従来のレスポンス形と完全に同じであること（=union型化が全ツールへ波及していないこと）
+  // をここで固定する。
+  // -------------------------------------------------------------------------
+  describe('構造化カード(card)チャネル', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const BILLING_DESCRIPTION = '請求書の再送・金額調整・無料期間設定・一時停止/再開はこちらの画面で行えます';
+
+    it('JSON経路: get_legacy_ui_link は自然文(result)に加えて card を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-card-1', 'get_legacy_ui_link', { feature: 'billing' }))
+        .mockResolvedValueOnce(makeGroqResponse('請求管理画面をご案内しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-card-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'legacy_link',
+        label: '請求管理',
+        url: '/admin/billing',
+        description: BILLING_DESCRIPTION,
+      });
+
+      // card は自然文の置き換えではなく追加。3行フォーマット(parseLegacyUiLink の契約)は
+      // 正規表現フォールバックのために残り続ける。
+      const result = res.body.actions[0].result as string;
+      expect(typeof result).toBe('string');
+      expect(result).toContain('画面: 請求管理\n');
+      expect(result).toContain('URL: /admin/billing\n');
+      expect(result).toContain(`説明: ${BILLING_DESCRIPTION}`);
+    });
+
+    it('SSE経路: event: done の actions にも同じ card が載る', async () => {
+      function makeStreamingGroqResponse(fullSseText: string) {
+        const bytes = new TextEncoder().encode(fullSseText);
+        let sent = false;
+        return {
+          ok: true,
+          body: {
+            getReader: () => ({
+              read: async () => {
+                if (!sent) {
+                  sent = true;
+                  return { done: false, value: bytes };
+                }
+                return { done: true, value: undefined };
+              },
+            }),
+          },
+          text: async () => '',
+        };
+      }
+
+      const hop1Sse =
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-card-2","function":{"name":"get_legacy_ui_link","arguments":""}}]}}]}\n\n' +
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"feature\\":\\"billing\\"}"}}]}}]}\n\n' +
+        'data: [DONE]\n\n';
+      const hop2Sse = 'data: {"choices":[{"delta":{"content":"請求管理画面をご案内しました。"}}]}\n\n' + 'data: [DONE]\n\n';
+
+      mockFetch
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop1Sse))
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop2Sse));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-card-02', stream: true });
+
+      expect(res.status).toBe(200);
+
+      const marker = 'event: done\ndata: ';
+      const start = res.text.indexOf(marker);
+      expect(start).toBeGreaterThan(-1);
+      const done = JSON.parse(res.text.slice(start + marker.length, res.text.indexOf('\n\n', start))) as {
+        actions: Array<{ tool: string; result: string; card?: Record<string, unknown> }>;
+      };
+
+      expect(done.actions[0].tool).toBe('get_legacy_ui_link');
+      expect(done.actions[0].card).toEqual({
+        kind: 'legacy_link',
+        label: '請求管理',
+        url: '/admin/billing',
+        description: BILLING_DESCRIPTION,
+      });
+      expect(done.actions[0].result).toContain('URL: /admin/billing\n');
+    });
+
+    it('素の文字列を返すツール(save_faq)は result のみで card キー自体を持たない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-card-3', 'save_faq', {
+            question: '送料はいくらですか？',
+            answer: '550円です。',
+            category: 'store_info',
+            confirmed: true,
+          }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 99, question: '送料はいくらですか？', answer: '550円です。', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-card-03' });
+
+      expect(res.status).toBe(200);
+      const action = res.body.actions[0];
+      expect(typeof action.result).toBe('string');
+      expect(action.result).toContain('ID: 99');
+      // キーの不在まで見る: 未移行ツールのレスポンス形が1バイトも変わっていないこと
+      expect(action.card).toBeUndefined();
+      expect(Object.keys(action)).toEqual(['tool', 'result']);
+    });
+
+    it('get_legacy_ui_link の失敗パス(プラン制限)では card を返さない(押せないカードを作らない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-card-4', 'get_legacy_ui_link', { feature: 'analytics' }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話の分析を見たい', sessionId: 'sess-card-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].card).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // get_analytics_summary / get_conversion_summary
   // -------------------------------------------------------------------------
   describe('get_analytics_summary / get_conversion_summary', () => {
@@ -3687,6 +3851,239 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockCreateRule).not.toHaveBeenCalled();
       const saveAction = res.body.actions.find((a: any) => a.tool === 'save_tuning_rule');
       expect(saveAction.result).toContain('同一ターン内での連続実行');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 設定変更の監査ログ (tenant_settings_history)
+  // チャット経由の設定変更が旧UIと同じテーブルに追跡できることの回帰テスト
+  // -------------------------------------------------------------------------
+  describe('設定変更の監査ログ (tenant_settings_history)', () => {
+    // extractAuth は su.email を changedBy に使うため、email 付きのユーザーで検証する
+    const AUDIT_USER = {
+      email: 'admin@example.com',
+      app_metadata: { role: 'client_admin', tenant_id: 'tenant-abc' },
+    };
+
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('set_ga4_id 成功時に ga4_measurement_id の変更を記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-1', 'set_ga4_id', { measurement_id: 'G-ABC123' }))
+        .mockResolvedValueOnce(makeGroqResponse('GA4 IDを設定しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4を G-ABC123 にして', sessionId: 'sess-audit-01' });
+
+      expect(res.status).toBe(200);
+      expect(recordedSettingsChanges()).toEqual([
+        {
+          tenantId: 'tenant-abc',
+          changedBy: 'admin@example.com',
+          fieldName: 'ga4_measurement_id',
+          oldValue: null,
+          newValue: 'G-ABC123',
+        },
+      ]);
+    });
+
+    it('set_posthog 成功時に posthog_host の変更を記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-2', 'set_posthog', { host: 'https://app.posthog.com' }))
+        .mockResolvedValueOnce(makeGroqResponse('PostHogを設定しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'PostHogを設定して', sessionId: 'sess-audit-02' });
+
+      expect(res.status).toBe(200);
+      expect(recordedSettingsChanges()).toEqual([
+        {
+          tenantId: 'tenant-abc',
+          changedBy: 'admin@example.com',
+          fieldName: 'posthog_host',
+          oldValue: null,
+          newValue: 'https://app.posthog.com',
+        },
+      ]);
+    });
+
+    it('set_widget_theme 成功時に widget_theme の差分を記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-au-3', 'set_widget_theme', { theme: { primaryColor: '#3B82F6' } }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('テーマを更新しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'テーマを青にして', sessionId: 'sess-audit-03' });
+
+      expect(res.status).toBe(200);
+      expect(recordedSettingsChanges()).toEqual([
+        {
+          tenantId: 'tenant-abc',
+          changedBy: 'admin@example.com',
+          fieldName: 'widget_theme',
+          oldValue: null,
+          newValue: { primaryColor: '#3B82F6' },
+        },
+      ]);
+    });
+
+    it('activate_avatar 成功時に active_avatar_config_id の変更を記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-4', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('アバターを有効化しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // deactivate all
+        .mockResolvedValueOnce({ rows: [{ id: 'av-1' }] }) // activate target
+        .mockResolvedValueOnce({ rows: [] }) // tenants.features sync
+        .mockResolvedValueOnce({ rows: [] }); // COMMIT
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-audit-04' });
+
+      expect(res.status).toBe(200);
+      expect(recordedSettingsChanges()).toEqual([
+        {
+          tenantId: 'tenant-abc',
+          changedBy: 'admin@example.com',
+          fieldName: 'active_avatar_config_id',
+          oldValue: null,
+          newValue: 'av-1',
+        },
+      ]);
+    });
+
+    it('activate_avatar がプラン制限でブロックされた場合は記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-5', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-audit-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(mockConnect).not.toHaveBeenCalled();
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('set_ga4_id が形式不正で書き込まれなかった場合は記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-5b', 'set_ga4_id', { measurement_id: 'INVALID' }))
+        .mockResolvedValueOnce(makeGroqResponse('形式が正しくありませんでした。'));
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4を INVALID にして', sessionId: 'sess-audit-05b' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('形式が不正です');
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('set_ga4_id の UPDATE が失敗した場合は記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-5c', 'set_ga4_id', { measurement_id: 'G-ABC123' }))
+        .mockResolvedValueOnce(makeGroqResponse('設定に失敗しました。'));
+      mockQuery.mockRejectedValueOnce(new Error('db down'));
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4を G-ABC123 にして', sessionId: 'sess-audit-05c' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('失敗しました');
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('確認ブロックされた書き込み(confirmed=false)は記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-6', 'save_faq', { question: 'q', answer: 'a', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを保存して', sessionId: 'sess-audit-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要です');
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('対象4ツール以外の書き込み(save_faq成功)は tenant_settings_history に記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-7', 'save_faq', { question: 'q', answer: 'a', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQを保存しました。'));
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, question: 'q', answer: 'a', is_published: true }],
+      });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを保存して', sessionId: 'sess-audit-07' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('FAQを保存しました');
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('監査記録が例外を投げてもチャット応答は 200 のまま返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-8', 'set_ga4_id', { measurement_id: 'G-ABC123' }))
+        .mockResolvedValueOnce(makeGroqResponse('GA4 IDを設定しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      mockRecordAgentSettingsChange.mockImplementation(() => {
+        throw new Error('audit boom');
+      });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4を G-ABC123 にして', sessionId: 'sess-audit-08' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('GA4 IDを設定しました。');
+      expect(res.body.actions[0].result).toContain('G-ABC123');
+    });
+
+    it('監査記録が reject してもチャット応答は 200 のまま返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-9', 'set_ga4_id', { measurement_id: 'G-ABC123' }))
+        .mockResolvedValueOnce(makeGroqResponse('GA4 IDを設定しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+      mockRecordAgentSettingsChange.mockRejectedValue(new Error('audit boom'));
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4を G-ABC123 にして', sessionId: 'sess-audit-09' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('GA4 IDを設定しました。');
     });
   });
 
