@@ -25,8 +25,14 @@ vi.mock("../../components/common/NotificationBell", () => ({
   NotificationBell: () => <div data-testid="notification-bell-stub" />,
 }));
 
+// スタブだが onSeedQuery は実体と同じ引数で呼ぶ(この画面がロックタブの質問を
+// 自分のチャットへ流せているかを検証するため)。質問文自体の固定は AppSwitcher.test.tsx 側。
 vi.mock("../../components/AppSwitcher", () => ({
-  default: () => <div data-testid="app-switcher-stub" />,
+  default: ({ onSeedQuery }: { onSeedQuery?: (query: string) => void }) => (
+    <button data-testid="app-switcher-stub" onClick={() => onSeedQuery?.("R2C2について教えて")}>
+      R2C2
+    </button>
+  ),
 }));
 
 // 会話の永続化(sessionStorage)はストアをモックして検証する。既定は「保存済みの会話なし」
@@ -327,6 +333,29 @@ describe("CopilotPreviewPage — 共通シェル機能パリティ(テーマ/言
     await waitFor(() => expect(screen.getByRole("button", { name: /ログアウト/ })).toBeTruthy());
 
     expect(screen.getByTestId("app-switcher-stub")).toBeTruthy();
+  });
+
+  // GID: この画面には旧UIのチャットパネル(Surface A)が無く、AppSwitcherのロックタブは
+  // openWithQuery(誰も見ていないContext)を叩くだけで無反応だった。
+  it("AppSwitcherのロックタブ(R2C2)の質問が、この画面自身のチャットに送られる", async () => {
+    renderPage();
+    // 起動時ブリーフィングの完了を待つ(sending中は sendReal が無視されるため)
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByTestId("app-switcher-stub"));
+
+    // 自分が送った質問として会話に積まれ、実APIにも送られている
+    expect(await screen.findByText("R2C2について教えて")).toBeTruthy();
+    await waitFor(() => {
+      const chatCall = vi
+        .mocked(authFetch)
+        .mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/v1/admin/agent/chat") &&
+            String((init as RequestInit | undefined)?.body).includes("R2C2について教えて"),
+        );
+      expect(chatCall).toBeTruthy();
+    });
   });
 });
 

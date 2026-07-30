@@ -25,9 +25,27 @@ async function bridgeToR2C2() {
   window.location.href = `${AAAS_ADMIN_URL}/auth/bridge#${hash}`;
 }
 
-export default function AppSwitcher() {
-  const { isSuperAdmin, isLoading } = useAuth();
+const R2C2_QUERY = "R2C2について教えて";
+
+/** ロックタブの質問を、どのチャットに流すか。
+ *
+ * 旧UI(AppSidebar配下)は AdminAgentUIProvider があるので openWithQuery で
+ * Surface A のパネルを開く。新UI(/copilot-preview)は App.tsx が旧UIツリーより
+ * 手前で早期returnするため Provider が存在せず、useAdminAgentUI() は throw する。
+ * そのため呼び出し側から onSeedQuery を受け取れるようにし、フックを呼ぶ経路自体を
+ * Provider がある場合だけに分離している。
+ */
+export default function AppSwitcher({ onSeedQuery }: { onSeedQuery?: (query: string) => void }) {
+  return onSeedQuery ? <AppSwitcherTabs onSeedQuery={onSeedQuery} /> : <AppSwitcherWithPanelSeed />;
+}
+
+function AppSwitcherWithPanelSeed() {
   const { openWithQuery } = useAdminAgentUI();
+  return <AppSwitcherTabs onSeedQuery={openWithQuery} />;
+}
+
+function AppSwitcherTabs({ onSeedQuery }: { onSeedQuery: (query: string) => void }) {
+  const { isSuperAdmin, isLoading } = useAuth();
   const [hasR2c2, setHasR2c2] = useState(isSuperAdmin);
 
   useEffect(() => {
@@ -78,7 +96,7 @@ export default function AppSwitcher() {
         R2C
       </span>
       <button
-        onClick={() => (hasR2c2 ? void bridgeToR2C2() : openWithQuery("R2C2について教えて"))}
+        onClick={() => (hasR2c2 ? void bridgeToR2C2() : onSeedQuery(R2C2_QUERY))}
         title={hasR2c2 ? "R2C2に切り替え" : "R2C2とは？ AIアシスタントに聞いてみる"}
         style={{
           flex: 1,
