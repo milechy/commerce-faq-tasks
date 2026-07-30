@@ -187,7 +187,11 @@ import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 // ステージング(knowledgeImportStaging.ts)はモックせず実物を使う。
 // suggest_faq_import_from_text/urls → commit_faq_import の2ターン検証、
 // TTL/上限とは独立にテスト間の状態リークを防ぐためのリセット関数として使う。
-import { getStagedFaqImport, __resetKnowledgeImportStagingForTest } from './knowledgeImportStaging';
+import {
+  getStagedFaqImport,
+  __resetKnowledgeImportStagingForTest,
+  __resetPlanLimitNoticesForTest,
+} from './knowledgeImportStaging';
 
 // ---------------------------------------------------------------------------
 // ヘルパー
@@ -257,6 +261,9 @@ describe('POST /v1/admin/agent/chat', () => {
     // knowledgeImportStaging はモックしない実物のモジュールなので、
     // jest.resetAllMocks() では消えないプロセス内Mapをテストごとに明示的にリセットする。
     __resetKnowledgeImportStagingForTest();
+    // プラン制限の「案内済み」フラグも同じプロセス内Mapのため、テストごとにリセットする
+    // (残っていると次のテストが2回目扱いになり短い文が返る)。
+    __resetPlanLimitNoticesForTest();
   });
 
   // -------------------------------------------------------------------------
@@ -3508,6 +3515,93 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('Growthプラン以上');
       expect(mockConnect).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GID 1217007275510096: 同じ会話の中で同じプラン制限の全文案内を毎回繰り返さない。
+  // 初回は従来の全文のまま、2回目以降は短い確認だけ。判定はセッション単位・機能単位。
+  // (制限そのものは変わらない = 数値やリンクは相変わらず返さない)
+  // -------------------------------------------------------------------------
+  describe('プラン制限メッセージの繰り返し抑制', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    // 他のAPI(analytics/routes.ts 等)と共有している既存の文言。この繰り返し抑制で
+    // 初回メッセージの文言が変わっていないことを1文字単位で固定する。
+    const FULL_GROWTH_NOTICE = 'この機能はGrowthプラン以上でご利用いただけます';
+    const FULL_AVATAR_NOTICE = 'AIアバター機能はGrowthプラン以上でご利用いただけます';
+
+    /** starterプランのテナントとしてプラン制限付きツールを1ターン実行し、その結果文字列を返す */
+    async function askGated(
+      toolName: string,
+      sessionId: string,
+      callId: string,
+      args: Record<string, unknown> = {},
+    ): Promise<string> {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse(callId, toolName, args))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '分析を見せて', sessionId });
+
+      expect(res.status).toBe(200);
+      return res.body.actions[0].result as string;
+    }
+
+    it('初回は既存の全文をそのまま返す', async () => {
+      const result = await askGated('get_analytics_summary', 'sess-plan-rep-01', 'call-rep-1');
+      expect(result).toBe(FULL_GROWTH_NOTICE);
+    });
+
+    it('同一セッション・同一機能の2回目は全文を繰り返さず短い文になる', async () => {
+      const first = await askGated('get_analytics_summary', 'sess-plan-rep-02', 'call-rep-2');
+      expect(first).toBe(FULL_GROWTH_NOTICE);
+
+      const second = await askGated('get_analytics_summary', 'sess-plan-rep-02', 'call-rep-3');
+      expect(second).not.toBe(FULL_GROWTH_NOTICE);
+      expect(second).not.toContain('Growthプラン以上');
+      expect(second.length).toBeLessThan(FULL_GROWTH_NOTICE.length * 0.8);
+      // 短くなっても制限は効いたまま(数値は一切返さない)
+      expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
+    });
+
+    it('別セッションなら同じ機能でも初回として全文を返す(グローバルな抑制ではない)', async () => {
+      expect(await askGated('get_analytics_summary', 'sess-plan-rep-03', 'call-rep-4')).toBe(FULL_GROWTH_NOTICE);
+      expect(await askGated('get_analytics_summary', 'sess-plan-rep-04', 'call-rep-5')).toBe(FULL_GROWTH_NOTICE);
+    });
+
+    it('同一セッションでも別の機能なら初回として全文を返す(機能ごとに1回ずつ案内する)', async () => {
+      expect(await askGated('get_analytics_summary', 'sess-plan-rep-05', 'call-rep-6')).toBe(FULL_GROWTH_NOTICE);
+      expect(await askGated('get_conversion_summary', 'sess-plan-rep-05', 'call-rep-7')).toBe(FULL_GROWTH_NOTICE);
+      expect(await askGated('activate_avatar', 'sess-plan-rep-05', 'call-rep-8', { id: 'av-1' })).toBe(FULL_AVATAR_NOTICE);
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    it('旧UI案内(get_legacy_ui_link)と数値サマリーは同じ機能の案内として1回に集約される', async () => {
+      const first = await askGated('get_legacy_ui_link', 'sess-plan-rep-06', 'call-rep-9', { feature: 'analytics' });
+      expect(first).toBe(FULL_GROWTH_NOTICE);
+
+      const second = await askGated('get_analytics_summary', 'sess-plan-rep-06', 'call-rep-10');
+      expect(second).not.toContain('Growthプラン以上');
+      // 押せないリンクカードが出ないことは短い文でも変わらない
+      expect(second).not.toMatch(/画面:/);
+      expect(second).not.toMatch(/URL:/);
     });
   });
 

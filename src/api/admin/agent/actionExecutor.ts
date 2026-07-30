@@ -23,6 +23,7 @@ import {
   setStagedFaqImport,
   getStagedFaqImport,
   clearStagedFaqImport,
+  recordPlanLimitMention,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
 import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation } from '../chat-history/chatHistoryRepository';
@@ -41,6 +42,40 @@ const MAX_IMPORT_FAQS = 20;
 // 有人返信1件の最大文字数。POST /v1/admin/chat-history/sessions/:id/reply の
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
+
+// ---------------------------------------------------------------------------
+// プラン制限の案内文
+// ---------------------------------------------------------------------------
+//
+// full は他のAPI(analytics/routes.ts, tenants/routes.ts 等)と同じ文言。変更しないこと。
+// 同じ会話の中で同じ機能について何度も full を返すと同じ売り込みの繰り返しになるため、
+// 2回目以降は short に切り替える(制限そのものは変わらない)。判定は
+// knowledgeImportStaging.ts の recordPlanLimitMention((tenantId, sessionId, feature)単位)。
+type PlanLimitedFeature = 'avatar' | 'analytics' | 'conversion' | 'sai_task';
+
+const PLAN_LIMIT_NOTICES: Record<PlanLimitedFeature, { full: string; short: string }> = {
+  avatar: {
+    full: 'AIアバター機能はGrowthプラン以上でご利用いただけます',
+    short: 'AIアバター機能はプラン対象外のままです',
+  },
+  analytics: {
+    full: 'この機能はGrowthプラン以上でご利用いただけます',
+    short: 'この機能はプラン対象外のままです',
+  },
+  conversion: {
+    full: 'この機能はGrowthプラン以上でご利用いただけます',
+    short: 'この機能はプラン対象外のままです',
+  },
+  sai_task: {
+    full: 'Saiへの代行依頼はEnterpriseプラン以上でご利用いただけます',
+    short: 'Saiへの代行依頼はプラン対象外のままです',
+  },
+};
+
+function planLimitNotice(tenantId: string, sessionId: string, feature: PlanLimitedFeature): string {
+  const notice = PLAN_LIMIT_NOTICES[feature];
+  return recordPlanLimitMention(tenantId, sessionId, feature) ? notice.short : notice.full;
+}
 
 // ---------------------------------------------------------------------------
 // Avatar activate（avatar/routes.ts は無改変、ここで再実装）
@@ -494,7 +529,7 @@ export async function executeToolCall(
       // 使ってしまい、テストのモックPoolと食い違って汚染するため queryTenantPlan を直接使う）。
       const plan = await queryTenantPlan(db, tenantId);
       if (!planHasFeature(plan, 'avatar')) {
-        return truncate('AIアバター機能はGrowthプラン以上でご利用いただけます');
+        return truncate(planLimitNotice(tenantId, sessionId, 'avatar'));
       }
 
       const client = await db.connect();
@@ -1608,7 +1643,7 @@ export async function executeToolCall(
       if (!isSuperAdmin) {
         const plan = await queryTenantPlan(db, tenantId);
         if (!planHasFeature(plan, 'sai_task')) {
-          return truncate('Saiへの代行依頼はEnterpriseプラン以上でご利用いただけます');
+          return truncate(planLimitNotice(tenantId, sessionId, 'sai_task'));
         }
       }
 
@@ -1740,7 +1775,7 @@ export async function executeToolCall(
         }
         const plan = await queryTenantPlan(db, tenantId);
         if (!planHasFeature(plan, feature)) {
-          return truncate('この機能はGrowthプラン以上でご利用いただけます');
+          return truncate(planLimitNotice(tenantId, sessionId, feature));
         }
       }
 
@@ -1796,7 +1831,7 @@ export async function executeToolCall(
       }
       const plan = await queryTenantPlan(db, tenantId);
       if (!planHasFeature(plan, feature)) {
-        return truncate('この機能はGrowthプラン以上でご利用いただけます');
+        return truncate(planLimitNotice(tenantId, sessionId, feature));
       }
 
       const period = args['period'] === '7d' ? '7d' : '30d';

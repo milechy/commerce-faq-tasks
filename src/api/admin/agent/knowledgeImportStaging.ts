@@ -99,3 +99,49 @@ export function clearStagedFaqImport(tenantId: string, sessionId: string): void 
 export function __resetKnowledgeImportStagingForTest(): void {
   staging.clear();
 }
+
+// ---------------------------------------------------------------------------
+// プラン制限の案内済みフラグ
+// ---------------------------------------------------------------------------
+//
+// プラン未満の機能を尋ねられるたびに同じ案内文を丸ごと返すと、1つの会話の中で
+// 同じ売り込み文を何度も読ませることになる（ダッシュボードのグレーアウトした
+// ボタンより体験が悪い）。初回だけ従来どおりの全文を返し、2回目以降は短い
+// 確認だけに切り替えるため、「もう案内したか」をここで覚えておく。
+//
+// 保存の仕組み・前提条件（単一プロセス運用）・TTL・エントリ数上限は上の
+// ステージングと同じ方針に揃えている。キーに feature を含めるのは、別の機能で
+// 制限に当たったときは初回として全文を出すため（機能ごとに1回ずつ案内する）。
+
+const planLimitNotices = new Map<string, number>();
+
+function planLimitKey(tenantId: string, sessionId: string, feature: string): string {
+  return `${tenantId}::${sessionId}::${feature}`;
+}
+
+/**
+ * 当該セッション・当該機能のプラン制限を「案内済み」として記録し、
+ * 2回目以降（＝すでに案内済み）なら true を返す。
+ * 呼び出し側は false なら従来の全文、true なら短い文に切り替える。
+ */
+export function recordPlanLimitMention(tenantId: string, sessionId: string, feature: string): boolean {
+  const now = Date.now();
+  for (const [key, createdAt] of planLimitNotices) {
+    if (now - createdAt > TTL_MS) planLimitNotices.delete(key);
+  }
+
+  const key = planLimitKey(tenantId, sessionId, feature);
+  if (planLimitNotices.has(key)) return true;
+
+  if (planLimitNotices.size >= MAX_ENTRIES) {
+    const oldestKey = planLimitNotices.keys().next().value;
+    if (oldestKey !== undefined) planLimitNotices.delete(oldestKey);
+  }
+  planLimitNotices.set(key, now);
+  return false;
+}
+
+/** テスト用: 内部Mapを空にする */
+export function __resetPlanLimitNoticesForTest(): void {
+  planLimitNotices.clear();
+}
