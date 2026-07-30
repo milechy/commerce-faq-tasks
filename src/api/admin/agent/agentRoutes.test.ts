@@ -154,11 +154,25 @@ jest.mock('../../../lib/billing/usageTracker', () => ({
   trackUsage: (...args: any[]) => mockTrackUsage(...args),
 }));
 
+// agentMetrics モック（挙動メトリクス。実DBへのINSERTを避けつつ発火内容を検証する）
+const mockRecordAgentMetric = jest.fn();
+jest.mock('../../../lib/metrics/agentMetrics', () => ({
+  recordAgentMetric: (...args: any[]) => mockRecordAgentMetric(...args),
+}));
+
+/** mockRecordAgentMetric に記録された指定 metric_name の入力だけを取り出す */
+function recordedMetrics(metricName: string): Array<Record<string, any>> {
+  return mockRecordAgentMetric.mock.calls
+    .map(([, input]) => input as Record<string, any>)
+    .filter((input) => input?.metricName === metricName);
+}
+
 // ---------------------------------------------------------------------------
 // テスト対象を import
 // ---------------------------------------------------------------------------
 
 import { registerAdminAgentRoutes } from './agentRoutes';
+import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 // ステージング(knowledgeImportStaging.ts)はモックせず実物を使う。
 // suggest_faq_import_from_text/urls → commit_faq_import の2ターン検証、
 // TTL/上限とは独立にテスト間の状態リークを防ぐためのリセット関数として使う。
@@ -294,6 +308,90 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].tool).toBe('get_tenant_settings');
       expect(typeof res.body.actions[0].result).toBe('string');
       expect(res.body).toHaveProperty('reply');
+
+      // 挙動メトリクス: 成功したツール呼び出しは outcome=ok、ターン完了で hops/completed も記録される
+      expect(recordedMetrics('agent_tool_invoked')).toEqual([
+        {
+          metricName: 'agent_tool_invoked',
+          tenantId: 'tenant-abc',
+          labels: { tool: 'get_tenant_settings', outcome: 'ok' },
+          value: 1,
+        },
+      ]);
+      expect(recordedMetrics('agent_write_blocked')).toEqual([]);
+      expect(recordedMetrics('agent_turn_hops')).toEqual([
+        {
+          metricName: 'agent_turn_hops',
+          tenantId: 'tenant-abc',
+          labels: { hit_limit: false },
+          value: 1,
+        },
+      ]);
+      expect(recordedMetrics('agent_turn_completed')).toEqual([
+        {
+          metricName: 'agent_turn_completed',
+          tenantId: 'tenant-abc',
+          labels: { answered_from: 'tool_action' },
+          value: 1,
+        },
+      ]);
+    });
+
+    it('ツール未使用のターンでも agent_turn_hops(0) と agent_turn_completed が記録される', async () => {
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('設定を確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'GA4の設定を教えて', sessionId: 'sess-metrics-01' });
+
+      expect(res.status).toBe(200);
+      expect(recordedMetrics('agent_tool_invoked')).toEqual([]);
+      expect(recordedMetrics('agent_turn_hops')).toEqual([
+        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false }, value: 0 },
+      ]);
+      expect(recordedMetrics('agent_turn_completed')).toEqual([
+        { metricName: 'agent_turn_completed', tenantId: 'tenant-abc', labels: { answered_from: 'general' }, value: 1 },
+      ]);
+    });
+
+    it('recordAgentMetric が throw / reject しても 200 と reply を返す（計測失敗は応答を壊さない）', async () => {
+      mockRecordAgentMetric
+        .mockImplementationOnce(() => {
+          throw new Error('metrics sync boom');
+        })
+        .mockImplementation(() => Promise.reject(new Error('metrics async boom')));
+
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-metrics-err',
+                  type: 'function',
+                  function: { name: 'get_tenant_settings', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('GA4は未設定です。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ ga4_measurement_id: null, posthog_host: null, widget_theme: {} }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を確認して', sessionId: 'sess-metrics-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('GA4は未設定です。');
+      expect(res.body.actions[0].tool).toBe('get_tenant_settings');
+      expect(res.body.answered_from).toBe('tool_action');
     });
   });
 
@@ -825,6 +923,24 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(mockUpdateRule).not.toHaveBeenCalled();
       expect(res.body.actions[0].result).toContain('確認が必要');
+
+      // 挙動メトリクス: 確認ゲートでのブロックは outcome=blocked + reason=unconfirmed
+      expect(recordedMetrics('agent_tool_invoked')).toEqual([
+        {
+          metricName: 'agent_tool_invoked',
+          tenantId: 'tenant-abc',
+          labels: { tool: 'update_tuning_rule', outcome: 'blocked' },
+          value: 1,
+        },
+      ]);
+      expect(recordedMetrics('agent_write_blocked')).toEqual([
+        {
+          metricName: 'agent_write_blocked',
+          tenantId: 'tenant-abc',
+          labels: { tool: 'update_tuning_rule', reason: 'unconfirmed' },
+          value: 1,
+        },
+      ]);
     });
 
     it('update_tuning_rule: client_admin・confirmed=true → tenant_idスコープ(super_admin以外はundefined渡さない)で更新される', async () => {
@@ -2570,6 +2686,18 @@ describe('POST /v1/admin/agent/chat', () => {
   // get_legacy_ui_link
   // -------------------------------------------------------------------------
   describe('get_legacy_ui_link', () => {
+    // 計測ラベルの語彙(agentRoutes の LEGACY_HANDOFF_FEATURES)は toolDefinitions の
+    // feature enum から導出している。ここに写しが復活すると、旧UIページ閉鎖でenumから
+    // 値を消しても閉鎖済みページ宛の handoff が 'unknown' に落ちず自分の名前で記録され続け、
+    // docs/LEGACY_UI_SUNSET.md のトリップワイヤーが無言で作動しなくなる。
+    // 同一参照であることを検証して、リテラル配列への差し戻しを失敗させる。
+    it('feature enum は LEGACY_UI_FEATURES から導出されている（写しを作らない）', () => {
+      const tool = ADMIN_AGENT_TOOLS.find((t) => t.function.name === 'get_legacy_ui_link');
+      expect(tool).toBeDefined();
+      const featureProp = tool!.function.parameters.properties['feature'] as { enum: unknown };
+      expect(featureProp.enum).toBe(LEGACY_UI_FEATURES);
+    });
+
     function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
       return {
         ok: true,
@@ -2608,6 +2736,16 @@ describe('POST /v1/admin/agent/chat', () => {
       // toContain(path) だけだと `/admin/chat-test` に対する `/admin/chat-tests` のような
       // 末尾追加型のtypoを検出できないため、行末(\n)まで含めて厳密に検証する
       expect(result).toContain(`URL: ${path}\n`);
+
+      // 挙動メトリクス: 旧UIへの受け渡しは agent_legacy_handoff として feature 付きで記録される
+      expect(recordedMetrics('agent_legacy_handoff')).toEqual([
+        {
+          metricName: 'agent_legacy_handoff',
+          tenantId: 'tenant-abc',
+          labels: { feature },
+          value: 1,
+        },
+      ]);
     });
 
     it('不明なfeatureの場合はその旨を返す', async () => {
@@ -2621,6 +2759,16 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('不明な案内先');
+
+      // ラベルの語彙を有界に保つため、未定義の feature は 'unknown' に丸めて記録する
+      expect(recordedMetrics('agent_legacy_handoff')).toEqual([
+        {
+          metricName: 'agent_legacy_handoff',
+          tenantId: 'tenant-abc',
+          labels: { feature: 'unknown' },
+          value: 1,
+        },
+      ]);
     });
 
     // analytics / conversion はLP料金表上Growth〜の機能（AppSidebar.tsxのrequiresPlanと同じ基準）。
@@ -3493,6 +3641,19 @@ describe('POST /v1/admin/agent/chat', () => {
 
       const saveAction = res.body.actions.find((a: any) => a.tool === 'save_faq');
       expect(saveAction.result).toContain('同一ターン内での連続実行');
+
+      // 挙動メトリクス: 連鎖ブロックは reason=chain として記録される
+      expect(recordedMetrics('agent_write_blocked')).toEqual([
+        {
+          metricName: 'agent_write_blocked',
+          tenantId: 'tenant-abc',
+          labels: { tool: 'save_faq', reason: 'chain' },
+          value: 1,
+        },
+      ]);
+      expect(recordedMetrics('agent_turn_hops')).toEqual([
+        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false }, value: 2 },
+      ]);
     });
 
     it('同一ホップ内で suggest_tuning_rule と save_tuning_rule(confirmed=true) が同時に来ても後者はブロックされる', async () => {
@@ -3600,6 +3761,22 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.text).toContain('"tool":"get_tenant_settings"');
       expect(res.text.indexOf('event: action')).toBeLessThan(res.text.indexOf('event: done'));
       expect(res.text).toContain('設定を確認しました。');
+
+      // 挙動メトリクス: SSE経路でも JSON経路と同じくツール呼び出しとターン完了が記録される
+      expect(recordedMetrics('agent_tool_invoked')).toEqual([
+        {
+          metricName: 'agent_tool_invoked',
+          tenantId: 'tenant-abc',
+          labels: { tool: 'get_tenant_settings', outcome: 'ok' },
+          value: 1,
+        },
+      ]);
+      expect(recordedMetrics('agent_turn_hops')).toEqual([
+        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false }, value: 1 },
+      ]);
+      expect(recordedMetrics('agent_turn_completed')).toEqual([
+        { metricName: 'agent_turn_completed', tenantId: 'tenant-abc', labels: { answered_from: 'tool_action' }, value: 1 },
+      ]);
     });
 
     it('stream:true でも suggest_faq→save_faq の同一ターン連鎖はブロックされ、DBに書き込まれない', async () => {
