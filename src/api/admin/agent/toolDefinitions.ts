@@ -14,6 +14,27 @@ export interface GroqTool {
   };
 }
 
+/**
+ * get_legacy_ui_link が案内できる旧管理画面の機能キー。
+ *
+ * 下の get_legacy_ui_link 定義の enum から参照し、計測側
+ * （agentRoutes.ts の agent_legacy_handoff ラベル語彙）もこの配列を import する。
+ * 旧UIページの閉鎖でここから値を削除すると、モデルがその feature を渡せなくなり、
+ * 万一渡しても計測側は自動的に 'unknown' へ丸める（docs/LEGACY_UI_SUNSET.md が
+ * 閉鎖後のトリップワイヤーとして依存している挙動）。値を二重管理しないこと。
+ */
+export const LEGACY_UI_FEATURES = [
+  'billing',
+  'avatar_studio',
+  'escalation_reply',
+  'session_deletion',
+  'analytics',
+  'conversion',
+  'chat_test',
+  'avatar_wizard',
+  'knowledge_pdf',
+] as const;
+
 export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
@@ -836,17 +857,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           feature: {
             type: 'string',
             description: '案内先の機能',
-            enum: [
-              'billing',
-              'avatar_studio',
-              'escalation_reply',
-              'session_deletion',
-              'analytics',
-              'conversion',
-              'chat_test',
-              'avatar_wizard',
-              'knowledge_pdf',
-            ],
+            enum: LEGACY_UI_FEATURES,
           },
           session_id: {
             type: 'string',

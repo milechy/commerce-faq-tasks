@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';
 import { logger } from '../../../lib/logger';
-import { ADMIN_AGENT_TOOLS } from './toolDefinitions';
+import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
@@ -22,19 +22,11 @@ import { isUnanswered } from '../ai-assist/systemPrompt';
 const BLOCKED_UNCONFIRMED_MARKER = '確認が必要です';
 const BLOCKED_CHAIN_MARKER = '確認をスキップできません';
 
-// ラベルの語彙を有界に保つためのホワイトリスト（toolDefinitions の feature enum と対応）。
-// モデルが未定義の値を渡した場合は 'unknown' に丸める。
-const LEGACY_HANDOFF_FEATURES = new Set([
-  'billing',
-  'avatar_studio',
-  'escalation_reply',
-  'session_deletion',
-  'analytics',
-  'conversion',
-  'chat_test',
-  'avatar_wizard',
-  'knowledge_pdf',
-]);
+// ラベルの語彙を有界に保つためのホワイトリスト。値は列挙し直さず toolDefinitions の
+// feature enum から導出する（ここに写しを持つと、旧UIページ閉鎖でenumから値を消しても
+// 閉鎖済みページ宛の handoff が 'unknown' に落ちず自分の名前で記録され続け、
+// docs/LEGACY_UI_SUNSET.md のトリップワイヤーが無言で作動しなくなる）。
+const LEGACY_HANDOFF_FEATURES = new Set<string>(LEGACY_UI_FEATURES);
 
 /** 計測は fire-and-forget。記録の失敗をチャット応答に一切影響させない。 */
 function fireAgentMetric(db: Pool, input: AgentMetricInput): void {

@@ -172,6 +172,7 @@ function recordedMetrics(metricName: string): Array<Record<string, any>> {
 // ---------------------------------------------------------------------------
 
 import { registerAdminAgentRoutes } from './agentRoutes';
+import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 // ステージング(knowledgeImportStaging.ts)はモックせず実物を使う。
 // suggest_faq_import_from_text/urls → commit_faq_import の2ターン検証、
 // TTL/上限とは独立にテスト間の状態リークを防ぐためのリセット関数として使う。
@@ -2685,6 +2686,18 @@ describe('POST /v1/admin/agent/chat', () => {
   // get_legacy_ui_link
   // -------------------------------------------------------------------------
   describe('get_legacy_ui_link', () => {
+    // 計測ラベルの語彙(agentRoutes の LEGACY_HANDOFF_FEATURES)は toolDefinitions の
+    // feature enum から導出している。ここに写しが復活すると、旧UIページ閉鎖でenumから
+    // 値を消しても閉鎖済みページ宛の handoff が 'unknown' に落ちず自分の名前で記録され続け、
+    // docs/LEGACY_UI_SUNSET.md のトリップワイヤーが無言で作動しなくなる。
+    // 同一参照であることを検証して、リテラル配列への差し戻しを失敗させる。
+    it('feature enum は LEGACY_UI_FEATURES から導出されている（写しを作らない）', () => {
+      const tool = ADMIN_AGENT_TOOLS.find((t) => t.function.name === 'get_legacy_ui_link');
+      expect(tool).toBeDefined();
+      const featureProp = tool!.function.parameters.properties['feature'] as { enum: unknown };
+      expect(featureProp.enum).toBe(LEGACY_UI_FEATURES);
+    });
+
     function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
       return {
         ok: true,

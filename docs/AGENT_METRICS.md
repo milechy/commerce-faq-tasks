@@ -99,6 +99,9 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
   `billing` / `avatar_studio` / `escalation_reply` / `session_deletion` /
   `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`。
   モデルが未定義の値を渡した場合はラベルの語彙を有界に保つため `unknown` に丸める。
+  この語彙は `toolDefinitions.ts` の `LEGACY_UI_FEATURES`（`get_legacy_ui_link` の
+  feature enum の実体）を import して導出しており、計測側に写しを持たない。
+  したがって enum から値を削除すれば、その feature は自動的に `unknown` へ丸まる。
 - `agent_tool_invoked{tool="get_legacy_ui_link"}` とは**重複して**発火する
   （前者はツール実行の記録、こちらは製品指標としての handoff 記録）。
 
