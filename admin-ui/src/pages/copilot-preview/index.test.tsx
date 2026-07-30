@@ -1,7 +1,7 @@
 // GID: 新UI(/copilot-preview)にログアウト手段が無く、Phase4トグルでこの画面を
 // 既定にすると詰む不具合の回帰テスト。左レール下部のログアウトボタンが
 // logout() → navigate("/login") を実行することを検証する。
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import CopilotPreviewPage from "./index";
@@ -46,6 +46,12 @@ vi.mock("../../lib/chatSessionStore", async () => {
     clearChatSession: vi.fn(),
   };
 });
+
+// PDF取り込みは multipart のため authFetch(常にJSONヘッダを付ける)ではなくXHRで送る。
+// トークン取得だけを差し替え、supabaseクライアントの実体はテストに持ち込まない。
+vi.mock("../../components/knowledge/shared", () => ({
+  getAccessToken: vi.fn(() => Promise.resolve("test-token")),
+}));
 
 const mockNavigate = vi.fn();
 vi.mock("react-router-dom", async () => {
@@ -889,6 +895,209 @@ describe("CopilotPreviewPage — super_adminのテナント選択", () => {
     renderPage(SUPER_ADMIN_NO_PREVIEW);
 
     await waitFor(() => expect(screen.getByText(/テナント一覧を取得できませんでした/)).toBeTruthy());
+  });
+});
+
+// GID 1217007387443283: GUI固有として旧UIへ丸投げしていたPDF取り込みを、会話の中の
+// カードとして完結させる最初の1件。受付条件(拡張子/MIME/サイズ)は旧UIのPDFタブと
+// lib/bookPdfUpload.ts を共有しているため、ここで見るのは「会話UIとして成立しているか」
+// (通信前に断れているか・失敗してもチャットが死なないか・成功が他の書き込み操作と
+// 同じ形で伝わるか)に絞る。
+type XhrListener = (...args: unknown[]) => void;
+
+class MockXHR {
+  static instances: MockXHR[] = [];
+  uploadListeners: Record<string, XhrListener[]> = {};
+  upload = {
+    addEventListener: (event: string, cb: XhrListener) => {
+      (this.uploadListeners[event] ??= []).push(cb);
+    },
+  };
+  listeners: Record<string, XhrListener[]> = {};
+  status = 0;
+  responseText = "";
+  open = vi.fn();
+  setRequestHeader = vi.fn();
+  send = vi.fn();
+
+  constructor() {
+    MockXHR.instances.push(this);
+  }
+
+  addEventListener(event: string, cb: XhrListener) {
+    (this.listeners[event] ??= []).push(cb);
+  }
+
+  fireProgress(loaded: number, total: number) {
+    for (const cb of this.uploadListeners["progress"] ?? []) {
+      cb({ lengthComputable: true, loaded, total });
+    }
+  }
+
+  fireLoad(status: number, body: unknown) {
+    this.status = status;
+    this.responseText = JSON.stringify(body);
+    for (const cb of this.listeners["load"] ?? []) cb();
+  }
+
+  fireError() {
+    for (const cb of this.listeners["error"] ?? []) cb();
+  }
+}
+
+function makeFile(name: string, type: string, size = 1024): File {
+  return new File([new Uint8Array(size)], name, { type });
+}
+
+/** コンポーザ(textareaと送信ボタンを含む枠)がドロップの受け皿 */
+function getComposerDropZone(): HTMLElement {
+  return getComposer().parentElement as HTMLElement;
+}
+
+function dropFiles(files: File[]) {
+  fireEvent.drop(getComposerDropZone(), {
+    dataTransfer: { files, items: [], types: ["Files"] },
+  });
+}
+
+describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロップ", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    MockXHR.instances = [];
+    vi.stubGlobal("XMLHttpRequest", MockXHR as unknown as typeof XMLHttpRequest);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+    // タイプライター演出を無効化して応答を同期的に確定させる
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function readyPage(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(overrides);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  }
+
+  it("PDFを落とすと旧UIと同じ既存エンドポイントへ送信が始まる(新APIを作らない)", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    const xhr = MockXHR.instances[0]!;
+    expect(xhr.open).toHaveBeenCalledWith("POST", "http://localhost:3100/v1/admin/knowledge/book-pdf");
+    expect(xhr.setRequestHeader).toHaveBeenCalledWith("Authorization", "Bearer test-token");
+    // 会話の中に進捗カードが出る
+    expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
+    expect(screen.getByText("料金表.pdf")).toBeTruthy();
+
+    xhr.fireProgress(40, 100);
+    expect(await screen.findByText("40%")).toBeTruthy();
+  });
+
+  it("previewMode中のsuper_adminはプレビュー対象テナント宛に送信する", async () => {
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
+
+    dropFiles([makeFile("manual.pdf", "application/pdf")]);
+
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    expect(MockXHR.instances[0]!.open).toHaveBeenCalledWith(
+      "POST",
+      "http://localhost:3100/v1/admin/knowledge/book-pdf?tenant=tenant-preview",
+    );
+  });
+
+  it("PDF以外を落とすと、通信せずやわらかい日本語で断る", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("メモ.txt", "text/plain")]);
+
+    expect(await screen.findByText("PDFを受け取れませんでした")).toBeTruthy();
+    expect(screen.getByText("PDFファイル（またはPDFをまとめたZIPファイル）を送ってください。")).toBeTruthy();
+    expect(MockXHR.instances.length).toBe(0);
+  });
+
+  it("上限を超えるPDFは通信する前に断る", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("大きい資料.pdf", "application/pdf", 11 * 1024 * 1024)]);
+
+    expect(await screen.findByText("PDFは1ファイル10MBまでです。分割してから送ってみてください。")).toBeTruthy();
+    expect(MockXHR.instances.length).toBe(0);
+  });
+
+  it("通信に失敗してもチャットは壊れず、そのまま次のメッセージを送れる", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    MockXHR.instances[0]!.fireError();
+
+    expect(
+      await screen.findByText("うまく送れませんでした。通信の状態を確かめて、もう一度お試しください。"),
+    ).toBeTruthy();
+    // 技術的な文言(ステータスコード等)は出さない
+    expect(screen.queryByText(/413|MIME|status/i)).toBeNull();
+
+    fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    expect(await screen.findByText("営業時間を教えて")).toBeTruthy();
+  });
+
+  it("サーバー側で失敗した場合もやわらかい案内カードになる", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    MockXHR.instances[0]!.fireLoad(401, { error: "unauthorized" });
+
+    expect(
+      await screen.findByText("ログインの有効期限が切れたようです。もう一度ログインしてからお試しください。"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/unauthorized/)).toBeNull();
+  });
+
+  it("成功すると成功カードが出て、他の書き込み操作と同じく実操作の件数に加算される", async () => {
+    await readyPage();
+    expect(screen.getByLabelText("実際の操作 0件")).toBeTruthy();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    MockXHR.instances[0]!.fireLoad(201, { id: 42, title: "料金表", status: "uploaded" });
+
+    expect(await screen.findByText("PDFを受け取りました")).toBeTruthy();
+    expect(
+      screen.getByText("読み込みが終わると、この資料の内容から答えられるようになります。"),
+    ).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText("実際の操作 1件")).toBeTruthy());
+  });
+
+  it("📎ボタンからでも同じ取り込みができる(ドラッグできない環境向け)", async () => {
+    await readyPage();
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(screen.getByLabelText("PDFを添付")).toBeTruthy();
+    fireEvent.change(input, { target: { files: [makeFile("料金表.pdf", "application/pdf")] } });
+
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
   });
 });
 

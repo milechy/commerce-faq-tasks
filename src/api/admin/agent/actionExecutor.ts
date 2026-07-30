@@ -1750,7 +1750,11 @@ export async function executeToolCall(
           path: '/admin/avatar/wizard',
           description: 'アバターを新しく作る手順（ウィザード）はこちらの画面で行えます',
         },
-        // PDFアップロードはファイル選択がGUI固有の操作のためチャット化せず、旧UIへ誘導する。
+        // PDFアップロードはファイル選択がGUI固有の操作のため、当初チャット化せず旧UIへ誘導していた。
+        // docs/CHAT_SURFACE_DECISION.md の方針に沿い、新UI(/copilot-preview)のコンポーザへの
+        // ドラッグ＆ドロップで会話内に取り込む経路を試作済み(同じ book-pdf エンドポイントを直接叩く)。
+        // ただし取り込み後の状態追跡・タイトル編集・書籍一覧はこの旧UIにしか無いため、案内先としては
+        // 引き続き有効。docs/LEGACY_UI_SUNSET.md のクローズ判定を通るまでこのキーは残す(追加のみ)。
         // /admin/knowledge (tenantId無し)は KnowledgeIndexPage が navigate() で
         // /admin/knowledge/:tenantId へリダイレクトする際に location.search を引き継がず
         // ?tab=pdf が失われるため、他のキーと異なりここでは tenantId を path に含める必要がある

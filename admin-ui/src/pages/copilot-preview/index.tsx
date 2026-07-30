@@ -24,6 +24,16 @@ import {
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
 import { shouldSubmitOnEnter } from "../../lib/utils";
+// PDF取り込みの受付ルール(拡張子/MIME/サイズ上限)と送信は旧UIのPDFタブと同じ実装を共有する。
+// 同じ操作が2面にある状態なので、片方だけ条件が緩む/厳しくなることを避けるため。
+import {
+  classifyUploadStatus,
+  defaultBookTitle,
+  uploadBookPdfWithProgress,
+  validateBookPdfFile,
+  type BookPdfRejection,
+} from "../../lib/bookPdfUpload";
+import { getAccessToken } from "../../components/knowledge/shared";
 import { useAuth } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
 import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
@@ -64,7 +74,17 @@ type Card =
   | { kind: "engagement"; when: string; message: string }
   | { kind: "success"; text: string }
   | { kind: "link"; label: string; url: string; description: string }
-  | { kind: "agentAction"; tool: string; result: string };
+  | { kind: "agentAction"; tool: string; result: string }
+  // GUI固有だった操作(PDF取り込み)を旧UIへ渡さず会話の中で完結させる最初の1件。
+  // 送信の進捗までしか追わない(取り込み完了までの追跡は旧UIのPDFタブが担当)ため、
+  // 状態は「送っている / 受け取った / 受け取れなかった」の3つで足りる。
+  | {
+      kind: "pdfUpload";
+      status: "uploading" | "success" | "error";
+      fileName: string;
+      progress?: number;
+      message?: string;
+    };
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
 const REAL_TOOL_LABEL: Record<string, string> = {
@@ -205,6 +225,22 @@ function parseLegacyUiLink(result: string): { label: string; url: string; descri
 
 const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定)しました/;
 
+// ─── PDF取り込みの案内文 ─────────────────────────────────────────────────────
+// 判定条件は lib/bookPdfUpload.ts で旧UIと共有し、文言だけをこの面の話し言葉に合わせる。
+// 店主に読ませるものなので、拡張子以外の技術用語(MIME・ステータスコード等)は出さない。
+
+const PDF_REJECTION_MESSAGE: Record<BookPdfRejection, string> = {
+  type: "PDFファイル（またはPDFをまとめたZIPファイル）を送ってください。",
+  pdf_size: "PDFは1ファイル10MBまでです。分割してから送ってみてください。",
+  zip_size: "ZIPファイルは50MBまでです。分けてから送ってみてください。",
+};
+
+const PDF_UPLOAD_AUTH_ERROR = "ログインの有効期限が切れたようです。もう一度ログインしてからお試しください。";
+const PDF_UPLOAD_TOO_LARGE_ERROR = "ファイルが大きすぎて受け取れませんでした。分割してから送ってみてください。";
+const PDF_UPLOAD_NETWORK_ERROR = "うまく送れませんでした。通信の状態を確かめて、もう一度お試しください。";
+const PDF_UPLOAD_GENERIC_ERROR = "うまく受け取れませんでした。少し時間をおいてお試しください。";
+const PDF_UPLOAD_ZIP_EMPTY_ERROR = "ZIPの中に取り込めるPDFが見つかりませんでした。";
+
 // ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
 //     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
 //     少しずつ表示するだけ。真のストリーミングにはバックエンドの
@@ -305,14 +341,15 @@ export default function CopilotPreviewPage() {
   const [sending, setSending] = useState(false);
   const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
 
-  // 左レールのバッジ用件数(旧UIと同じ既存エンドポイントの再利用)。
-  // テナントを特定できない場合(preview中でないsuper_admin)は取得しない。
-  // 全テナント横断の合計が「この店の件数」として出てしまうため。
-  const badgeTenantId = previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "");
+  // この画面が対象にしているテナント。左レールのバッジ件数とPDF取り込みの両方で使う。
+  // テナントを特定できない場合(preview中でないsuper_admin)は空になり、バッジは取得しない
+  // (全テナント横断の合計が「この店の件数」として出てしまうため)。なお、その状態では
+  // needsTenantSelection でチャット自体がまだ描画されないため、コンポーザは存在しない。
+  const scopedTenantId = previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "");
   const [railCounts, setRailCounts] = useState<RailCounts>({});
   useEffect(() => {
-    if (!badgeTenantId) return;
-    const qs = `?tenant=${encodeURIComponent(badgeTenantId)}`;
+    if (!scopedTenantId) return;
+    const qs = `?tenant=${encodeURIComponent(scopedTenantId)}`;
     void (async () => {
       // 失敗しても店主には何も見せない(バッジが出ないだけ)。片方だけ失敗しても
       // もう片方は出せるよう allSettled で個別に扱う。
@@ -331,7 +368,7 @@ export default function CopilotPreviewPage() {
       }
       setRailCounts(next);
     })();
-  }, [badgeTenantId]);
+  }, [scopedTenantId]);
 
   // textareaは行が増えても自動では伸びないため、入力量に応じて高さを合わせる
   // (伸ばさないと2行目以降を打った時に前の行が枠外へ隠れてしまう)
@@ -641,6 +678,141 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // ─── PDF取り込み(コンポーザへのドラッグ＆ドロップ / 📎ボタン) ─────────────────
+  // 会話ではなくファイルそのものが指示なので、LLMのツール呼び出しループは通さず、旧UIの
+  // PDFタブと同じ既存エンドポイントへ直接送る。エージェントに「アップロードするか」を
+  // 判断させる余地は無い(落とした行為が意思表示そのもの)。
+  const uploadUrl = isSuperAdmin && scopedTenantId
+    ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(scopedTenantId)}`
+    : `${API_BASE}/v1/admin/knowledge/book-pdf`;
+
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+  const [pdfDragOver, setPdfDragOver] = useState(false);
+  const pdfDragCounterRef = useRef(0);
+
+  const updatePdfCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "pdfUpload" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "pdfUpload" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  const acceptFiles = async (files: FileList | File[]) => {
+    const accepted: { file: File; isZip: boolean }[] = [];
+    for (const file of Array.from(files)) {
+      const verdict = validateBookPdfFile(file);
+      if (verdict.kind === "rejected") {
+        // 受け付けない形式・大きさは通信する前にこの場で断る
+        push({
+          id: nextId(),
+          role: "ai",
+          card: {
+            kind: "pdfUpload",
+            status: "error",
+            fileName: file.name,
+            message: PDF_REJECTION_MESSAGE[verdict.reason],
+          },
+        });
+        continue;
+      }
+      accepted.push({ file, isZip: verdict.kind === "zip" });
+    }
+    if (accepted.length === 0) return;
+
+    const token = await getAccessToken();
+
+    // 旧UIと同じく1件ずつ順に送る(同時送信で回線と取り込みキューを圧迫しないため)
+    for (const { file, isZip } of accepted) {
+      const cardId = nextId();
+      push({
+        id: cardId,
+        role: "ai",
+        card: { kind: "pdfUpload", status: "uploading", fileName: file.name, progress: 0 },
+      });
+
+      const form = new FormData();
+      form.append("file", file);
+      // ZIPはサーバー側が中の各PDFのファイル名からタイトルを付けるため送らない
+      if (!isZip) form.append("title", defaultBookTitle(file.name));
+
+      const { status, body, networkError } = await uploadBookPdfWithProgress(
+        uploadUrl,
+        form,
+        token,
+        (pct) => updatePdfCard(cardId, { progress: pct }),
+      );
+
+      if (networkError) {
+        updatePdfCard(cardId, { status: "error", message: PDF_UPLOAD_NETWORK_ERROR });
+        continue;
+      }
+
+      if (status < 200 || status >= 300) {
+        const kind = classifyUploadStatus(status);
+        const serverMessage = (body as { error?: string } | null)?.error;
+        updatePdfCard(cardId, {
+          status: "error",
+          message:
+            kind === "auth" ? PDF_UPLOAD_AUTH_ERROR
+            : kind === "too_large" ? PDF_UPLOAD_TOO_LARGE_ERROR
+            : serverMessage || PDF_UPLOAD_GENERIC_ERROR,
+        });
+        continue;
+      }
+
+      if (isZip) {
+        const results = (body as { results?: { status: string }[] } | null)?.results ?? [];
+        const okCount = results.filter((r) => r.status === "ok").length;
+        if (okCount === 0) {
+          updatePdfCard(cardId, { status: "error", message: PDF_UPLOAD_ZIP_EMPTY_ERROR });
+          continue;
+        }
+        updatePdfCard(cardId, {
+          status: "success",
+          message: `${okCount}件のPDFを受け取りました。読み込みが終わると、内容から答えられるようになります。`,
+        });
+      } else {
+        updatePdfCard(cardId, {
+          status: "success",
+          message: "読み込みが終わると、この資料の内容から答えられるようになります。",
+        });
+      }
+      // 他の書き込み操作と同じく、実際にDBへ入った件数としてヘッダーのバッジに反映する
+      setRealActionCount((n) => n + 1);
+    }
+  };
+
+  const handlePdfDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    pdfDragCounterRef.current = 0;
+    setPdfDragOver(false);
+    if (e.dataTransfer.files.length > 0) void acceptFiles(e.dataTransfer.files);
+  };
+
+  const handlePdfDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    pdfDragCounterRef.current += 1;
+    setPdfDragOver(true);
+  };
+
+  const handlePdfDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    pdfDragCounterRef.current -= 1;
+    if (pdfDragCounterRef.current <= 0) {
+      pdfDragCounterRef.current = 0;
+      setPdfDragOver(false);
+    }
+  };
+
+  // ドラッグ＆ドロップができない環境(モバイル・キーボード操作)向けの同等手段
+  const handlePdfInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      void acceptFiles(e.target.files);
+      e.target.value = "";
+    }
+  };
+
   // ─── レイアウト ───────────────────────────────────────────────────────────
   if (needsTenantSelection) {
     return (
@@ -786,10 +958,26 @@ export default function CopilotPreviewPage() {
           </div>
         </div>
 
-        {/* コンポーザ（実API接続） */}
+        {/* コンポーザ（実API接続）。PDFはここへ落とすと会話の中で取り込みが始まる */}
         <div className="cp-composer-wrap" style={{ flexShrink: 0 }}>
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 12px 12px 20px", border: `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 16, background: "var(--input, var(--card))" }}>
+            <div
+              onDragEnter={handlePdfDragEnter}
+              onDragOver={(e) => e.preventDefault()}
+              onDragLeave={handlePdfDragLeave}
+              onDrop={handlePdfDrop}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 12px 12px 20px", border: pdfDragOver ? `2px dashed ${AGENT}` : `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 16, background: pdfDragOver ? AGENT_SOFT : "var(--input, var(--card))" }}
+            >
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept=".pdf,.zip,application/pdf,application/zip"
+                multiple
+                style={{ display: "none" }}
+                aria-hidden="true"
+                tabIndex={-1}
+                onChange={handlePdfInputChange}
+              />
               {/* textarea(1行から始まり複数行も書ける)。Enterで送信、Shift+Enterで改行。
                   IME変換中のEnterは shouldSubmitOnEnter が弾く(旧UIパネルと共通実装) */}
               <textarea
@@ -804,12 +992,20 @@ export default function CopilotPreviewPage() {
                 disabled={sending}
                 style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--foreground)", fontSize: 16, maxHeight: 140, resize: "none", fontFamily: "inherit", lineHeight: 1.6, padding: 0, overflowY: "auto" }}
               />
+              <button
+                onClick={() => pdfInputRef.current?.click()}
+                aria-label="PDFを添付"
+                title="PDFを添付（ここへドラッグ＆ドロップでも取り込めます）"
+                style={{ width: 40, height: 40, borderRadius: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer", fontSize: 17, flexShrink: 0 }}
+              >
+                📎
+              </button>
               <button onClick={handleSend} disabled={sending} aria-label="送信" style={{ width: 40, height: 40, borderRadius: 12, border: "none", background: AGENT, color: "#fff", cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.6 : 1, fontSize: 18 }}>
                 {sending ? "…" : "↑"}
               </button>
             </div>
             <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted-foreground)", textAlign: "center" }}>
-              実際の R2Cエージェントに接続されています。要ログイン。
+              実際の R2Cエージェントに接続されています。要ログイン。PDFはここへドラッグ＆ドロップできます。
             </div>
           </div>
         </div>
@@ -973,7 +1169,7 @@ function Phase4DefaultToggle() {
 
 function RealActionBadge({ count }: { count: number }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: count > 0 ? "#16a34a" : "var(--muted-foreground)" }}>
+    <div aria-label={`実際の操作 ${count}件`} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: count > 0 ? "#16a34a" : "var(--muted-foreground)" }}>
       <span style={{ fontSize: 13 }}>{count > 0 ? "✅" : "◦"}</span>
       実際の操作 <strong style={{ fontVariantNumeric: "tabular-nums" }}>{count}</strong>件
     </div>
@@ -1013,10 +1209,10 @@ function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => 
   );
 }
 
-function CardShell({ hd, tone = "agent", children, foot }: { hd: React.ReactNode; tone?: "agent" | "brand" | "good"; children: React.ReactNode; foot?: React.ReactNode }) {
-  const border = tone === "good" ? "rgba(34,197,94,0.4)" : tone === "brand" ? "rgba(217,147,32,0.4)" : AGENT_BORDER;
-  const hdBg = tone === "good" ? "rgba(34,197,94,0.12)" : tone === "brand" ? "rgba(217,147,32,0.12)" : AGENT_SOFT;
-  const hdColor = tone === "good" ? "#16a34a" : tone === "brand" ? "#b45309" : AGENT;
+function CardShell({ hd, tone = "agent", children, foot }: { hd: React.ReactNode; tone?: "agent" | "brand" | "good" | "bad"; children: React.ReactNode; foot?: React.ReactNode }) {
+  const border = tone === "bad" ? "rgba(239,68,68,0.4)" : tone === "good" ? "rgba(34,197,94,0.4)" : tone === "brand" ? "rgba(217,147,32,0.4)" : AGENT_BORDER;
+  const hdBg = tone === "bad" ? "rgba(239,68,68,0.12)" : tone === "good" ? "rgba(34,197,94,0.12)" : tone === "brand" ? "rgba(217,147,32,0.12)" : AGENT_SOFT;
+  const hdColor = tone === "bad" ? "#dc2626" : tone === "good" ? "#16a34a" : tone === "brand" ? "#b45309" : AGENT;
   return (
     <div style={{ width: "100%", maxWidth: "100%", border: `1px solid ${border}`, borderRadius: 16, overflow: "hidden", background: "var(--card)", boxShadow: "0 2px 4px rgba(0,0,0,0.05), 0 10px 28px rgba(0,0,0,0.07)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", background: hdBg, borderBottom: `1px solid ${border}`, fontWeight: 700, fontSize: 15, color: hdColor }}>{hd}</div>
@@ -1078,6 +1274,8 @@ function CardView({ card }: { card: Card }) {
           <span style={{ fontSize: 17 }}>✅</span>{card.text}
         </div>
       );
+    case "pdfUpload":
+      return <PdfUploadCard card={card} />;
     case "link":
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
@@ -1099,6 +1297,52 @@ function CardView({ card }: { card: Card }) {
     default:
       return null;
   }
+}
+
+// PDF取り込みカード。旧UIのPDFタブと同じ3点(ファイル名・送信の進捗%・結果)を、
+// 会話の流れの中で見せる。成功時の見た目は他の書き込み操作の成功カードと同じ緑系に揃える。
+function PdfUploadCard({ card }: { card: Extract<Card, { kind: "pdfUpload" }> }) {
+  if (card.status === "uploading") {
+    const pct = card.progress ?? 0;
+    return (
+      <CardShell hd={<><span>📄</span>PDFを受け取っています</>}>
+        <Field k="ファイル" v={card.fileName} />
+        <div>
+          <div
+            role="progressbar"
+            aria-label="PDFの送信の進みぐあい"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            style={{ width: "100%", height: 6, borderRadius: 999, background: "var(--muted, rgba(120,120,140,0.15))", overflow: "hidden" }}
+          >
+            <div style={{ height: "100%", borderRadius: 999, background: AGENT, width: `${pct}%`, transition: "width 0.2s ease" }} />
+          </div>
+          <div style={{ marginTop: 5, fontSize: 12.5, color: "var(--muted-foreground)", fontVariantNumeric: "tabular-nums" }}>{pct}%</div>
+        </div>
+      </CardShell>
+    );
+  }
+
+  if (card.status === "success") {
+    return (
+      <CardShell tone="good" hd={<><span>📚</span>PDFを受け取りました</>}>
+        <Field k="ファイル" v={card.fileName} />
+        {card.message && <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+      </CardShell>
+    );
+  }
+
+  return (
+    <CardShell
+      tone="bad"
+      hd={<><span>📄</span>PDFを受け取れませんでした</>}
+      foot={<CardActionsNote note="会話はそのまま続けられます。もう一度ファイルを送るか、内容を文章で教えてください。" />}
+    >
+      <Field k="ファイル" v={card.fileName} />
+      {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+    </CardShell>
+  );
 }
 
 function CardActionsNote({ note }: { note: string }) {

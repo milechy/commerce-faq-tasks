@@ -3,11 +3,14 @@ import { API_BASE } from "../../lib/api";
 import { useAuth } from "../../auth/useAuth";
 import { useLang } from "../../i18n/LangContext";
 import { fetchWithAuth, getAccessToken } from "./shared";
+import {
+  classifyUploadStatus,
+  uploadBookPdfWithProgress,
+  validateBookPdfFile,
+} from "../../lib/bookPdfUpload";
 import BookChunksPanel from "../../pages/admin/knowledge/BookChunksPanel";
 
 // ─── PDFアップロードタブ ──────────────────────────────────────────────────────
-
-const MAX_BOOK_PDF_SIZE = 10 * 1024 * 1024; // 10MB フロントエンド制限
 
 interface BookUpload {
   id: number;
@@ -272,41 +275,14 @@ function fileStatusLabel(status: FileUploadStatus, t: TFunc): string {
 
 /** XHRのstatusコードからユーザー向けエラーメッセージを分類する */
 function classifyUploadError(status: number, t: TFunc, fallback?: string): string {
-  if (status === 401 || status === 403) return t("knowledge.pdf_error_auth");
-  if (status === 413) return t("knowledge.pdf_error_too_large");
-  return fallback || t("knowledge.pdf_error_generic");
-}
-
-/** FormDataをXHRで送信し、進捗(0-100)をonProgressへ通知する */
-function uploadWithProgress(
-  url: string,
-  form: FormData,
-  token: string | null,
-  onProgress: (pct: number) => void
-): Promise<{ status: number; body: unknown; networkError?: boolean }> {
-  return new Promise((resolve) => {
-    const xhr = new XMLHttpRequest();
-    xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable) {
-        onProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    });
-    xhr.addEventListener("load", () => {
-      let body: unknown = null;
-      try {
-        body = JSON.parse(xhr.responseText);
-      } catch {
-        body = null;
-      }
-      resolve({ status: xhr.status, body });
-    });
-    xhr.addEventListener("error", () => {
-      resolve({ status: 0, body: null, networkError: true });
-    });
-    xhr.open("POST", url);
-    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    xhr.send(form);
-  });
+  switch (classifyUploadStatus(status)) {
+    case "auth":
+      return t("knowledge.pdf_error_auth");
+    case "too_large":
+      return t("knowledge.pdf_error_too_large");
+    default:
+      return fallback || t("knowledge.pdf_error_generic");
+  }
 }
 
 export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
@@ -398,26 +374,22 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const ZIP_TYPES = new Set(["application/zip", "application/x-zip-compressed", "application/x-zip"]);
-  const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50MB
-
   const validateAndAddFiles = useCallback((files: FileList | File[]) => {
     const arr = Array.from(files);
     const newEntries: QueuedFile[] = [];
     for (const f of arr) {
-      const isZip = ZIP_TYPES.has(f.type) || f.name.toLowerCase().endsWith(".zip");
-      const isPdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+      const verdict = validateBookPdfFile(f);
 
-      if (!isPdf && !isZip) {
-        showToast(`${f.name}: ${t("knowledge.pdf_error_type")}`, false);
+      if (verdict.kind === "rejected") {
+        const messageKey =
+          verdict.reason === "type" ? "knowledge.pdf_error_type"
+          : verdict.reason === "zip_size" ? "knowledge.pdf_error_zip_size"
+          : "knowledge.pdf_error_size";
+        showToast(`${f.name}: ${t(messageKey)}`, false);
         continue;
       }
 
-      if (isZip) {
-        if (f.size > MAX_ZIP_SIZE) {
-          showToast(`${f.name}: ${t("knowledge.pdf_error_zip_size")}`, false);
-          continue;
-        }
+      if (verdict.kind === "zip") {
         // ZIPはタイトル不要（サーバー側でファイル名から自動設定）
         newEntries.push({
           id: `${Date.now()}-${Math.random()}`,
@@ -429,17 +401,11 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
         continue;
       }
 
-      // PDF
-      if (f.size > MAX_BOOK_PDF_SIZE) {
-        showToast(`${f.name}: ${t("knowledge.pdf_error_size")}`, false);
-        continue;
-      }
-      // デフォルトタイトル: ファイル名から拡張子除去
-      const defaultTitle = f.name.replace(/\.pdf$/i, "");
+      // デフォルトタイトル: ファイル名から拡張子除去（この面では利用者が上書きできる）
       newEntries.push({
         id: `${Date.now()}-${Math.random()}`,
         file: f,
-        title: defaultTitle,
+        title: f.name.replace(/\.pdf$/i, ""),
         status: "pending",
       });
     }
@@ -519,7 +485,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
           form.append("title", item.title.trim());
         }
 
-        const { status, body, networkError } = await uploadWithProgress(
+        const { status, body, networkError } = await uploadBookPdfWithProgress(
           uploadUrl,
           form,
           token,
