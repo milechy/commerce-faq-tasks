@@ -325,3 +325,130 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
     expect(screen.getByText("別タブで開きます。この会話はそのまま残ります。")).toBeTruthy();
   });
 });
+
+function getComposer(): HTMLTextAreaElement {
+  return screen.getByPlaceholderText(/指示ルール/) as HTMLTextAreaElement;
+}
+
+// 想定ユーザーは100%日本語入力の店主。かな漢字変換の確定Enterで未変換のまま
+// 送信されてしまう不具合の回帰テスト(判定条件自体は lib/utils.test.ts で検証済み)。
+describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+    // タイプライター演出を無効化して応答を同期的に確定させる
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  it("IME変換中(compositionStart後)のEnterでは送信しない", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    const composer = getComposer();
+    fireEvent.compositionStart(composer);
+    fireEvent.change(composer, { target: { value: "そうりょう" } });
+
+    const callsBefore = vi.mocked(authFetch).mock.calls.length;
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    expect(vi.mocked(authFetch).mock.calls.length).toBe(callsBefore);
+    expect(composer.value).toBe("そうりょう");
+  });
+
+  it("変換確定後(compositionEnd後)のEnterでは送信する", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    const composer = getComposer();
+    fireEvent.compositionStart(composer);
+    fireEvent.change(composer, { target: { value: "送料を教えて" } });
+    fireEvent.compositionEnd(composer);
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    await waitFor(() => expect(screen.getByText("送料を教えて")).toBeTruthy());
+    expect(getComposer().value).toBe("");
+  });
+
+  it("Shift+Enterでは送信しない(改行のため)", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    const composer = getComposer();
+    fireEvent.change(composer, { target: { value: "1行目" } });
+
+    const callsBefore = vi.mocked(authFetch).mock.calls.length;
+    fireEvent.keyDown(composer, { key: "Enter", shiftKey: true });
+
+    expect(vi.mocked(authFetch).mock.calls.length).toBe(callsBefore);
+    expect(composer.value).toBe("1行目");
+  });
+});
+
+// GID 1217007364341838: 下書き提案のチップ(保存して/やめておく)を押さずに別の話題を
+// 打った場合、未使用のチップが宙ぶらりんで残り、新しい応答の隣に古い選択肢が並んでいた。
+// 入力欄は塞がない(=チップを無視して打てる)まま、送信時にチップを使用済みにする。
+describe("CopilotPreviewPage — 保留中の下書きチップを無視して送信", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "こんな内容でどうでしょう？",
+          actions: [{ tool: "suggest_faq", result: "質問: 送料はいくら？\n回答: 全国一律550円です。\n分類: 配送" }],
+        });
+      }
+      return mockOk({ reply: "承知しました。", actions: [] });
+    });
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  it("チップを押さず自由入力を送ると、チップは使用済みになり新しいメッセージが送信される", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.change(getComposer(), { target: { value: "送料のFAQを作って" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存して" })).toBeTruthy());
+    // チップ待ちでも入力欄は塞がない(「やっぱりいいです」と打てる)
+    expect(getComposer().disabled).toBe(false);
+
+    fireEvent.change(getComposer(), { target: { value: "やっぱりやめて、営業時間を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    await waitFor(() => expect(screen.getByText("やっぱりやめて、営業時間を教えて")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "保存して" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "やめておく" })).toBeNull();
+  });
+});
