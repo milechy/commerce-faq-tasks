@@ -29,7 +29,19 @@ import AppSwitcher from "../../components/AppSwitcher";
 // ─── モデル ──────────────────────────────────────────────────────────────────
 
 type Category =
-  | { key: string; label: string; icon: string; dim?: boolean };
+  | { key: string; label: string; icon: string; dim?: boolean; badge?: RailBadgeKind };
+
+// 左レールのバッジに出す「何件あるか」の種別。旧ダッシュボードのstatカードが担っていた
+// 一目での「対応が必要な件数」の把握を、チャットUIに戻すためのもの。
+// 自然な件数が存在しないカテゴリー(アシスタント/指示ルール/アバター等)には付けない。
+type RailBadgeKind = "gaps" | "escalations";
+
+type RailCounts = Partial<Record<RailBadgeKind, number>>;
+
+const RAIL_BADGE_LABEL: Record<RailBadgeKind, string> = {
+  gaps: "未回答質問",
+  escalations: "対応中の会話",
+};
 
 type Card =
   | { kind: "faq"; question: string; answer: string; category: string }
@@ -231,8 +243,8 @@ const AGENT_BORDER = "rgba(124,58,237,0.30)";
 const CATEGORIES: Category[] = [
   { key: "assistant", label: "アシスタント", icon: "✨" },
   { key: "weekly", label: "今週のまとめ", icon: "📊" },
-  { key: "history", label: "会話の履歴", icon: "💬" },
-  { key: "knowledge", label: "知識データ", icon: "📚" },
+  { key: "history", label: "会話の履歴", icon: "💬", badge: "escalations" },
+  { key: "knowledge", label: "知識データ", icon: "📚", badge: "gaps" },
   { key: "rules", label: "指示ルール", icon: "🎛️" },
   { key: "avatar", label: "アバター", icon: "🎭" },
 ];
@@ -261,6 +273,34 @@ export default function CopilotPreviewPage() {
   const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [sending, setSending] = useState(false);
   const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
+
+  // 左レールのバッジ用件数(旧UIと同じ既存エンドポイントの再利用)。
+  // テナントを特定できない場合(preview中でないsuper_admin)は取得しない。
+  // 全テナント横断の合計が「この店の件数」として出てしまうため。
+  const badgeTenantId = previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "");
+  const [railCounts, setRailCounts] = useState<RailCounts>({});
+  useEffect(() => {
+    if (!badgeTenantId) return;
+    const qs = `?tenant=${encodeURIComponent(badgeTenantId)}`;
+    void (async () => {
+      // 失敗しても店主には何も見せない(バッジが出ないだけ)。片方だけ失敗しても
+      // もう片方は出せるよう allSettled で個別に扱う。
+      const [gapRes, escRes] = await Promise.allSettled([
+        authFetch(`${API_BASE}/v1/admin/knowledge/gaps/count${qs}`),
+        authFetch(`${API_BASE}/v1/admin/chat-history/escalations${qs}`),
+      ]);
+      const next: RailCounts = {};
+      if (gapRes.status === "fulfilled" && gapRes.value.ok) {
+        const data = (await gapRes.value.json().catch(() => null)) as { count?: number } | null;
+        if (typeof data?.count === "number") next.gaps = data.count;
+      }
+      if (escRes.status === "fulfilled" && escRes.value.ok) {
+        const data = (await escRes.value.json().catch(() => null)) as { escalations?: unknown[] } | null;
+        if (Array.isArray(data?.escalations)) next.escalations = data.escalations.length;
+      }
+      setRailCounts(next);
+    })();
+  }, [badgeTenantId]);
 
   // textareaは行が増えても自動では伸びないため、入力量に応じて高さを合わせる
   // (伸ばさないと2行目以降を打った時に前の行が枠外へ隠れてしまう)
@@ -569,6 +609,7 @@ export default function CopilotPreviewPage() {
         <PreviewBadge />
         {CATEGORIES.map((c) => {
           const locked = busy && c.key !== active;
+          const count = c.badge ? railCounts[c.badge] : undefined;
           return (
             <button
               key={c.key}
@@ -585,7 +626,12 @@ export default function CopilotPreviewPage() {
                 opacity: locked ? 0.35 : c.dim ? 0.55 : 1, minHeight: 44,
               }}
             >
-              <span style={{ fontSize: 18 }}>{c.icon}</span>{c.label}
+              <span style={{ fontSize: 18 }}>{c.icon}</span>
+              <span style={{ minWidth: 0 }}>{c.label}</span>
+              {/* 0件はバッジを出さない(「0」は情報ではなくノイズになる) */}
+              {c.badge && count !== undefined && count > 0 && (
+                <RailCountBadge count={count} label={RAIL_BADGE_LABEL[c.badge]} />
+              )}
             </button>
           );
         })}
@@ -694,6 +740,24 @@ function PreviewBadge() {
     <div style={{ margin: "6px 8px 10px", fontSize: 11.5, fontWeight: 700, letterSpacing: "0.03em", color: "#b45309", background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 8, padding: "6px 10px", lineHeight: 1.45 }}>
       PROTOTYPE ・ 全ての操作が実際のR2Cエージェント(実API)に接続されています
     </div>
+  );
+}
+
+// 左レールの件数バッジ。marginLeft:auto で行末に寄せ、flexShrink:0 で
+// ラベルに押し潰されないようにする(狭い幅ではラベル側が折り返す)。
+function RailCountBadge({ count, label }: { count: number; label: string }) {
+  return (
+    <span
+      aria-label={`${label} ${count}件`}
+      style={{
+        marginLeft: "auto", flexShrink: 0, minWidth: 24, padding: "1px 7px", borderRadius: 999,
+        fontSize: 13, fontWeight: 700, lineHeight: 1.5, textAlign: "center",
+        color: "#b45309", background: "rgba(245,158,11,0.16)", border: "1px solid rgba(245,158,11,0.35)",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {count}
+    </span>
   );
 }
 

@@ -43,6 +43,12 @@ import { authFetch } from "../../lib/api";
 const mockOk = (data: unknown): Promise<Response> =>
   Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) } as Response);
 
+// 左レールの件数バッジ用にマウント時に叩かれる2本(既存の /v1/admin/agent/chat の応答
+// シーケンスに割り込まないよう、既存テストでは常に0件で素通りさせる)
+const BADGE_URL_RE = /knowledge\/gaps\/count|chat-history\/escalations/;
+const isBadgeUrl = (url: unknown) => BADGE_URL_RE.test(String(url));
+const mockEmptyBadges = () => mockOk({ count: 0, escalations: [] });
+
 function baseAuth(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
   return {
     user: { id: "1", email: "a@example.com", role: "client_admin", tenantId: "tenant-a", tenantName: "Tenant A" },
@@ -75,6 +81,7 @@ describe("CopilotPreviewPage — ログアウト", () => {
     mockNavigate.mockReset();
     // マウント時のブリーフィング取得(sendReal)・オンボーディング判定を素通りさせる
     vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
@@ -133,7 +140,9 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
   beforeEach(() => {
     vi.mocked(authFetch).mockReset();
     mockNavigate.mockReset();
-    vi.mocked(authFetch).mockImplementation(() => mockOk({ reply: "今週も順調です", actions: [] }));
+    vi.mocked(authFetch).mockImplementation((url: string) =>
+      isBadgeUrl(url) ? mockEmptyBadges() : mockOk({ reply: "今週も順調です", actions: [] }),
+    );
     // タイプライター演出(setInterval)を無効化し、応答を同期的に確定させてテストを決定的にする
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: true,
@@ -235,6 +244,7 @@ describe("CopilotPreviewPage — 共通シェル機能パリティ(テーマ/言
     vi.mocked(authFetch).mockReset();
     mockNavigate.mockReset();
     vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
@@ -292,6 +302,7 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
     // ユーザーが送った2回目以降の応答にだけ載せる(カードが1枚だけであることを保証する)
     let agentCalls = 0;
     vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
@@ -337,6 +348,7 @@ describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
     vi.mocked(authFetch).mockReset();
     mockNavigate.mockReset();
     vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
@@ -408,6 +420,7 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
     mockNavigate.mockReset();
     let agentCalls = 0;
     vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
@@ -450,5 +463,126 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
     await waitFor(() => expect(screen.getByText("やっぱりやめて、営業時間を教えて")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "保存して" })).toBeNull();
     expect(screen.queryByRole("button", { name: "やめておく" })).toBeNull();
+  });
+});
+
+// GID 1217007275511487: 左レールが「今どれだけ溜まっているか」を一切示しておらず、
+// 旧ダッシュボードのstatカード無しでは対応漏れに気づけなかった。既存エンドポイント
+// (knowledge/gaps/count・chat-history/escalations)の件数をバッジで出す。
+// 0件・取得失敗時はバッジを出さない(店主に「0」やエラーを読ませない)。
+describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
+  // バッジ用件数の応答だけを差し替え、それ以外(オンボーディング判定・エージェント応答)は共通
+  function mockBadges(opts: { gaps?: unknown; escalations?: unknown; reject?: boolean }) {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      const u = String(url);
+      if (isBadgeUrl(u)) {
+        if (opts.reject) return Promise.reject(new Error("network down"));
+        if (u.includes("gaps/count")) return mockOk(opts.gaps ?? { count: 0 });
+        return mockOk(opts.escalations ?? { escalations: [] });
+      }
+      if (u.includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  it("未回答質問・対応中の会話が1件以上あればカテゴリーに件数バッジが出る", async () => {
+    mockBadges({
+      gaps: { count: 3 },
+      escalations: { escalations: [{ id: "e1" }, { id: "e2" }] },
+    });
+    renderPage();
+
+    expect(await screen.findByLabelText("未回答質問 3件")).toBeTruthy();
+    expect(screen.getByLabelText("対応中の会話 2件")).toBeTruthy();
+    // バッジはカテゴリーボタンの中に出る(独立した要素ではない)
+    expect(screen.getByRole("button", { name: /知識データ/ }).textContent).toContain("3");
+    expect(screen.getByRole("button", { name: /会話の履歴/ }).textContent).toContain("2");
+  });
+
+  it("テナントのIDでスコープした既存エンドポイントを叩く(新規APIを作らない)", async () => {
+    mockBadges({ gaps: { count: 1 }, escalations: { escalations: [] } });
+    renderPage();
+
+    await screen.findByLabelText("未回答質問 1件");
+    const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
+    expect(urls).toContain("http://localhost:3100/v1/admin/knowledge/gaps/count?tenant=tenant-a");
+    expect(urls).toContain("http://localhost:3100/v1/admin/chat-history/escalations?tenant=tenant-a");
+  });
+
+  it("previewMode中はプレビュー対象テナントの件数を取得する", async () => {
+    mockBadges({ gaps: { count: 5 }, escalations: { escalations: [] } });
+    renderPage({
+      previewMode: true,
+      previewTenantId: "tenant-preview",
+      previewTenantName: "Preview Tenant",
+      isSuperAdmin: true,
+    });
+
+    await screen.findByLabelText("未回答質問 5件");
+    const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
+    expect(urls).toContain("http://localhost:3100/v1/admin/knowledge/gaps/count?tenant=tenant-preview");
+  });
+
+  it("0件のカテゴリーにはバッジを出さない", async () => {
+    mockBadges({ gaps: { count: 0 }, escalations: { escalations: [] } });
+    renderPage();
+
+    // バッジ取得の完了を待つため、件数のある側(ここでは無い)ではなくボタン自体の描画を待つ
+    await waitFor(() => expect(screen.getByRole("button", { name: /知識データ/ })).toBeTruthy());
+    await waitFor(() =>
+      expect(vi.mocked(authFetch).mock.calls.some((c) => String(c[0]).includes("gaps/count"))).toBe(true),
+    );
+
+    expect(screen.queryByLabelText(/未回答質問 /)).toBeNull();
+    expect(screen.queryByLabelText(/対応中の会話 /)).toBeNull();
+    expect(screen.getByRole("button", { name: /知識データ/ }).textContent).not.toContain("0");
+  });
+
+  it("件数の取得に失敗してもエラーを出さず、チャットはそのまま使える", async () => {
+    mockBadges({ reject: true });
+    renderPage();
+
+    // チャットは通常どおり起動し、送信もできる
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "送料を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    await waitFor(() => expect(screen.getByText("送料を教えて")).toBeTruthy());
+
+    // バッジは出ず、技術的なエラー文言も一切出さない
+    expect(screen.queryByLabelText(/未回答質問 /)).toBeNull();
+    expect(screen.queryByLabelText(/対応中の会話 /)).toBeNull();
+    expect(screen.queryByText(/network down/)).toBeNull();
+    expect(screen.queryByText(/失敗/)).toBeNull();
+  });
+
+  it("テナントを特定できないsuper_admin(preview外)では件数を取得しない(全テナント合計を出さない)", async () => {
+    mockBadges({ gaps: { count: 7 }, escalations: { escalations: [{ id: "e1" }] } });
+    renderPage({
+      isSuperAdmin: true,
+      isClientAdmin: false,
+      user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null },
+    });
+
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
+    expect(urls.some(isBadgeUrl)).toBe(false);
+    expect(screen.queryByLabelText(/未回答質問 /)).toBeNull();
   });
 });
