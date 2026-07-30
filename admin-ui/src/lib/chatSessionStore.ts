@@ -10,10 +10,27 @@
 // (auth/useAuth.tsx の logout。多層防御)。
 //
 // パネル(components/AdminAgent/)と全画面(pages/copilot-preview/)の2面が同じ実装を共有する
-// ため、面ごとのキーを引数で受け取る形にしてこのファイルへ切り出している(片方の会話が
-// もう片方を上書きしないため)。2面で sessionId 自体を共有するか(=キーを1本にするか)は
-// チャット面の統合方針の決定待ちのため、ここでは面ごとに独立させている
-// (docs/CHAT_SURFACE_DECISION.md §5)。
+// ため、面ごとのキーを引数で受け取る形にしてこのファイルへ切り出している。
+//
+// 【キーが面ごとに分かれている理由 — 意図的な決定であり、書き忘れではない】
+// docs/CHAT_SURFACE_DECISION.md §5 は「共有ストア1本・ユーザー単位キー」と書いているが、
+// メッセージ列については現状それが成立しない。2面の保持するメッセージ型に共通部分が無いため:
+//   - パネル:   AgentMessage { role: "user" | "assistant"; content; actions?; ... }
+//   - 全画面:   Msg         { id: number; role: "ai" | "me"; text?; card?; chips?; ... }
+// role の語彙も本文のフィールド名(content / text)も別物で、Msg は数値 id を必須とする。
+// さらに下の restoreChatSession は sessionId が文字列か・messages が配列かだけを見て
+// 1件ごとの形は検証しない。したがってキーを1本にすると、他面が書いた会話が
+// 「復元成功」として通ってしまい、本文が空・左右が逆・React の key が全て undefined の
+// 壊れたスレッドが描画される(例外は出ないので気付けない)。
+// 2面は同時に描画されないが(App.tsx の早期 return)、旧UIページから /copilot-preview へ
+// SPA遷移するとパネルは unmount され、その後に全画面が同じキーを読む。同時ではなく
+// 順番に上書きし合う経路なので、同時描画されないことは理由にならない。
+// キー自体が面を表すため、会話に surface を併記する必要も無い。
+//
+// 単一キーにするには先にメッセージ表現の共通化(§4 の (a-2): copilot-preview/index.tsx を
+// components/agentChat/ へ分解する複数PR規模の作業)が必要で、それが単一キー化の前提条件。
+// この分離で塞がらない穴(sessionId を共有しないことによる knowledgeImportStaging の
+// 孤児化)は docs/CHAT_SURFACE_DECISION.md 「§5 補記」に既知の未解決事項として記録済み。
 
 export interface ChatHistoryEntry {
   role: "user" | "assistant";
