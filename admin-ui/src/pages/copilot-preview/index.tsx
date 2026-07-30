@@ -1319,32 +1319,33 @@ function FeedbackReplyNotice({
           </>
         }
       >
-        <Field k="あなたの質問" v={reply.message} />
-        <div style={{ fontSize: 15 }}>
-          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 4 }}>
-            お返事
-          </div>
-          {/* 長いお返事でコンポーザが画面外に押し出されないよう高さを制限する */}
-          <div
-            style={{
-              color: "var(--foreground)", background: "var(--muted, rgba(120,120,140,0.1))",
-              borderRadius: 10, padding: "10px 14px", borderLeft: "3px solid #d99320",
-              lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word",
-              maxHeight: 160, overflowY: "auto",
-            }}
-          >
-            {reply.reply_body}
-          </div>
+        {/* コンポーザの上に固定するため、縦幅は詰める(狭い画面ではスレッドが潰れる)。
+            どの相談への返事かは1行で足りるので、ラベル付きの Field にはしない。 */}
+        <div style={{ fontSize: 13, color: "var(--muted-foreground)", lineHeight: 1.5, wordBreak: "break-word" }}>
+          ご相談: {reply.message}
           {reply.replied_at && (
-            <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 5 }}>
+            <>
+              {" ・ "}
               {new Date(reply.replied_at).toLocaleString("ja-JP", {
                 month: "short",
                 day: "numeric",
                 hour: "2-digit",
                 minute: "2-digit",
               })}
-            </div>
+            </>
           )}
+        </div>
+        {/* 長いお返事でコンポーザが画面外に押し出されないよう、高さを制限して中でスクロールさせる
+            (上限値は狭い画面でさらに小さくする。index.css の .cp-consult-reply) */}
+        <div
+          className="cp-consult-reply"
+          style={{
+            fontSize: 15, color: "var(--foreground)", background: "var(--muted, rgba(120,120,140,0.1))",
+            borderRadius: 10, padding: "10px 14px", borderLeft: "3px solid #d99320",
+            lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word", overflowY: "auto",
+          }}
+        >
+          {reply.reply_body}
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button

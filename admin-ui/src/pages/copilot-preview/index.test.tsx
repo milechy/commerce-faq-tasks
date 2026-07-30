@@ -1244,7 +1244,8 @@ describe("CopilotPreviewPage — 相談窓口(担当者からのお返事)", () 
     renderPage();
 
     expect(await screen.findByText("担当者からお返事が届きました")).toBeTruthy();
-    expect(screen.getByText("送料の設定はどこから変えますか")).toBeTruthy();
+    // どの相談への返事かは日時と同じ1行に収めているため、部分一致で確かめる
+    expect(screen.getByText(/送料の設定はどこから変えますか/)).toBeTruthy();
     expect(screen.getByText("設定ページから変更できます")).toBeTruthy();
   });
 

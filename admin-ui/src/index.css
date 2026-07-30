@@ -245,6 +245,11 @@ button {
   padding: 0 28px 24px;
 }
 
+/* 相談窓口のお返事(コンポーザ直上に固定)。長文でスレッドを潰さないよう高さを制限する */
+.cp-consult-reply {
+  max-height: 150px;
+}
+
 .cp-rail-backdrop {
   display: none;
 }
@@ -285,5 +290,8 @@ button {
   }
   .cp-composer-wrap {
     padding: 0 12px calc(16px + env(safe-area-inset-bottom));
+  }
+  .cp-consult-reply {
+    max-height: 88px;
   }
 }
