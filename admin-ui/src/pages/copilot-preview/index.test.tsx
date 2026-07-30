@@ -29,6 +29,18 @@ vi.mock("../../components/AppSwitcher", () => ({
   default: () => <div data-testid="app-switcher-stub" />,
 }));
 
+// 会話の永続化(sessionStorage)はストアをモックして検証する。既定は「保存済みの会話なし」
+// なので、これ以前から存在するテストの挙動は永続化の導入前と完全に同じになる。
+vi.mock("../../lib/chatSessionStore", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/chatSessionStore")>("../../lib/chatSessionStore");
+  return {
+    ...actual,
+    restoreChatSession: vi.fn(() => null),
+    saveChatSession: vi.fn(),
+    clearChatSession: vi.fn(),
+  };
+});
+
 const mockNavigate = vi.fn();
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -39,6 +51,17 @@ vi.mock("react-router-dom", async () => {
 });
 
 import { authFetch } from "../../lib/api";
+import {
+  CHAT_SESSION_SURFACE_FULLSCREEN,
+  restoreChatSession,
+  saveChatSession,
+} from "../../lib/chatSessionStore";
+
+// 復元モックはテスト間で持ち越さない(既定は「保存済みの会話なし」)
+beforeEach(() => {
+  vi.mocked(restoreChatSession).mockReturnValue(null);
+  vi.mocked(saveChatSession).mockReset();
+});
 
 const mockOk = (data: unknown): Promise<Response> =>
   Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) } as Response);
@@ -450,5 +473,81 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
     await waitFor(() => expect(screen.getByText("やっぱりやめて、営業時間を教えて")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "保存して" })).toBeNull();
     expect(screen.queryByRole("button", { name: "やめておく" })).toBeNull();
+  });
+});
+
+// GID 1217007298292152: 会話がReactのuseStateだけに載っていたため、リロード・ブラウザバック・
+// モバイルのタブ破棄で会話が丸ごと消えていた。同一タブのsessionStorageから復元し、
+// 復元できた場合は起動時ブートストラップ(週次ブリーフィング/オンボーディング)を行わない。
+describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  it("保存済みの会話があれば復元し、起動時ブリーフィングは取得しない", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 201, role: "me", text: "送料を教えて" },
+        { id: 202, role: "ai", text: "全国一律550円です。" },
+      ],
+      history: [
+        { role: "user", content: "送料を教えて" },
+        { role: "assistant", content: "全国一律550円です。" },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
+    expect(screen.getByText("送料を教えて")).toBeTruthy();
+    // ブリーフィング取得(agent/chat)もオンボーディング判定(my-tenant)も走らない
+    expect(authFetch).not.toHaveBeenCalled();
+  });
+
+  it("保存済みの会話が無ければ、従来通り起動時ブリーフィングを取得する(回帰)", async () => {
+    renderPage();
+
+    await waitFor(() =>
+      expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat"))).toBe(true),
+    );
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/my-tenant"))).toBe(true);
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+  });
+
+  it("会話が更新されると、その面のキーで保存される", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    await waitFor(() => expect(saveChatSession).toHaveBeenCalled());
+    const [surface, session] = vi.mocked(saveChatSession).mock.calls.at(-1)!;
+    expect(surface).toBe(CHAT_SESSION_SURFACE_FULLSCREEN);
+    expect(session.sessionId).toBeTruthy();
+    expect(JSON.stringify(session.messages)).toContain("営業時間を教えて");
+    // 直近履歴ウィンドウも一緒に保存される(先頭2件は起動時ブリーフィングの分)
+    expect(session.history?.slice(-2)).toEqual([
+      { role: "user", content: "営業時間を教えて" },
+      { role: "assistant", content: "今週も順調です。" },
+    ]);
   });
 });
