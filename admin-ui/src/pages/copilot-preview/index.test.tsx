@@ -60,6 +60,18 @@ function baseAuth(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
   } as ReturnType<typeof useAuth>;
 }
 
+// super_admin は my-tenant のオンボーディング判定をスキップして直接ブリーフィングへ進む。
+// プレビュー未選択(previewMode=false)のsuper_adminはテナント選択画面になるため、
+// チャット本体の挙動を検証するテストではクライアントビューに入った状態を使う。
+const SUPER_ADMIN_IN_PREVIEW: Partial<ReturnType<typeof useAuth>> = {
+  isSuperAdmin: true,
+  isClientAdmin: false,
+  previewMode: true,
+  previewTenantId: "tenant-preview",
+  previewTenantName: "Preview Tenant",
+  user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null },
+};
+
 function renderPage(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
   vi.mocked(useAuth).mockReturnValue(baseAuth(overrides));
   return render(
@@ -148,8 +160,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
   });
 
   it("初期状態ではドロワーは閉じており、オーバーレイも存在しない", async () => {
-    // super_admin(client_admin以外)は my-tenant 判定をスキップして直接ブリーフィングへ進む
-    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
     await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
 
     expect(getRail().className).not.toContain("cp-rail-open");
@@ -157,7 +168,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
   });
 
   it("ハンバーガーボタンでドロワーが開き、背景オーバーレイが表示される", async () => {
-    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
     await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
@@ -167,7 +178,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
   });
 
   it("オーバーレイをタップするとドロワーが閉じる", async () => {
-    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
     await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
@@ -180,7 +191,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
   });
 
   it("レール内の閉じるボタン(✕)でもドロワーが閉じる", async () => {
-    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
     await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
@@ -191,7 +202,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
   });
 
   it("会話中でない状態でカテゴリーを選択するとドロワーが閉じる", async () => {
-    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
     // bootstrap完了(送信ボタンのdisabled解除)を待ってから操作する
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
@@ -207,7 +218,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
     vi.mocked(authFetch).mockImplementation(
       () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
     );
-    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
     await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
@@ -450,5 +461,83 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
     await waitFor(() => expect(screen.getByText("やっぱりやめて、営業時間を教えて")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "保存して" })).toBeNull();
     expect(screen.queryByRole("button", { name: "やめておく" })).toBeNull();
+  });
+});
+
+// GID 1217007275510096: プレビュー未選択のsuper_adminは、ほぼ全てのツールが
+// 「テナントが特定できません」を返して会話が行き止まりになっていた。チャットを
+// 始める前にテナントを選ばせ、既存のクライアントビュー(enterPreview)へ入れる。
+describe("CopilotPreviewPage — super_adminのテナント選択", () => {
+  const TENANTS = [
+    { id: "tenant-a", name: "あおぞら商店" },
+    { id: "tenant-b", name: "みどり工房" },
+  ];
+
+  const SUPER_ADMIN_NO_PREVIEW: Partial<ReturnType<typeof useAuth>> = {
+    isSuperAdmin: true,
+    isClientAdmin: false,
+    previewMode: false,
+    user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null },
+  };
+
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/tenants")) return mockOk({ tenants: TENANTS, total: TENANTS.length });
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  });
+
+  it("previewMode未選択のsuper_adminにはテナント選択が出て、チャット(ブリーフィング)は始まらない", async () => {
+    renderPage(SUPER_ADMIN_NO_PREVIEW);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /あおぞら商店/ })).toBeTruthy());
+    expect(screen.getByRole("heading", { name: /どのお客様として見ますか/ })).toBeTruthy();
+    // チャット本体(コンポーザ)はまだ出さない
+    expect(screen.queryByLabelText("送信")).toBeNull();
+    // 一覧取得のみ。エージェントAPI(ブリーフィング)は叩かない
+    expect(vi.mocked(authFetch).mock.calls.every(([url]) => String(url).includes("/v1/admin/tenants"))).toBe(true);
+  });
+
+  it("テナントを選ぶと enterPreview(テナントID, テナント名) が呼ばれる", async () => {
+    const enterPreview = vi.fn();
+    renderPage({ ...SUPER_ADMIN_NO_PREVIEW, enterPreview });
+
+    const button = await waitFor(() => screen.getByRole("button", { name: /みどり工房/ }));
+    fireEvent.click(button);
+
+    expect(enterPreview).toHaveBeenCalledWith("tenant-b", "みどり工房");
+  });
+
+  it("previewMode中のsuper_adminはテナント選択を挟まず通常のチャットになる", async () => {
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByRole("heading", { name: /どのお客様として見ますか/ })).toBeNull();
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/tenants"))).toBe(false);
+  });
+
+  it("client_adminにはテナント選択が出ず、常に通常のチャットになる", async () => {
+    renderPage();
+
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByRole("heading", { name: /どのお客様として見ますか/ })).toBeNull();
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/tenants"))).toBe(false);
+  });
+
+  it("テナント一覧が取得できない場合は再読み込みを促す(白画面にしない)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/tenants")) {
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) } as Response);
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+    renderPage(SUPER_ADMIN_NO_PREVIEW);
+
+    await waitFor(() => expect(screen.getByText(/テナント一覧を取得できませんでした/)).toBeTruthy());
   });
 });

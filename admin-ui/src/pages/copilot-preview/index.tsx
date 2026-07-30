@@ -31,6 +31,12 @@ import AppSwitcher from "../../components/AppSwitcher";
 type Category =
   | { key: string; label: string; icon: string; dim?: boolean };
 
+// GET /v1/admin/tenants(既存・super_admin限定)のうち、テナント選択に使う項目だけ
+interface TenantOption {
+  id: string;
+  name: string;
+}
+
 type Card =
   | { kind: "faq"; question: string; answer: string; category: string }
   | { kind: "rule"; trigger: string; behavior: string }
@@ -246,8 +252,13 @@ export default function CopilotPreviewPage() {
   // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
   // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
   // tenantIdがサーバー側で使われるため、previewMode=falseのままで問題ない。
-  const { user, previewMode, previewTenantId, logout } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, enterPreview, logout } = useAuth();
   const navigate = useNavigate();
+  // super_adminがプレビューに入っていない場合、テナントが特定できないため
+  // ほぼ全てのツールが「テナントが特定できません」になり会話が行き止まりになる。
+  // 先にテナントを選ばせて既存のクライアントビュー(previewMode)へ入れる。
+  // previewModeに入れば以降はclient_adminと同じ経路をそのまま辿る。
+  const needsTenantSelection = isSuperAdmin && !previewMode;
   const [active, setActive] = useState("assistant");
   const [input, setInput] = useState("");
   const [isComposing, setIsComposing] = useState(false);
@@ -433,6 +444,10 @@ export default function CopilotPreviewPage() {
   // super_admin(プレビュー中含む)はオンボーディング判定の対象外(常に週次ブリーフィング側)。
   const bootstrapped = useRef(false);
   useEffect(() => {
+    // テナント選択待ちの間は取りに行かない（テナント未特定のブリーフィングは
+    // 「テナントが特定できません」で埋まるだけのため）。選択してpreviewModeに
+    // 入った時点でこのeffectが再評価され、通常どおりブリーフィングが走る。
+    if (needsTenantSelection) return;
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
@@ -461,7 +476,29 @@ export default function CopilotPreviewPage() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [needsTenantSelection]);
+
+  // テナント選択用の一覧。既存の GET /v1/admin/tenants(super_admin限定)をそのまま使う。
+  const [tenants, setTenants] = useState<TenantOption[] | null>(null);
+  const [tenantsFailed, setTenantsFailed] = useState(false);
+  useEffect(() => {
+    if (!needsTenantSelection) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/v1/admin/tenants`);
+        if (!res.ok) {
+          if (!cancelled) setTenantsFailed(true);
+          return;
+        }
+        const data = (await res.json()) as { tenants?: TenantOption[] };
+        if (!cancelled) setTenants(data.tenants ?? []);
+      } catch {
+        if (!cancelled) setTenantsFailed(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [needsTenantSelection]);
 
   // 新UI(サイドバー型ではないため)にはログアウト手段が無く、Phase4トグルで
   // このブラウザの既定画面にすると詰む(GID: 新UI常用時にログアウトできない)。
@@ -529,6 +566,16 @@ export default function CopilotPreviewPage() {
   };
 
   // ─── レイアウト ───────────────────────────────────────────────────────────
+  if (needsTenantSelection) {
+    return (
+      <TenantSelection
+        tenants={tenants}
+        failed={tenantsFailed}
+        onSelect={(t) => enterPreview(t.id, t.name)}
+      />
+    );
+  }
+
   return (
     <div
       className="cp-shell"
@@ -688,6 +735,71 @@ export default function CopilotPreviewPage() {
 }
 
 // ─── 部品 ────────────────────────────────────────────────────────────────────
+
+// super_adminがプレビュー未選択で入ってきた時だけ出す、チャット開始前のテナント選択。
+// 選ぶと既存の enterPreview(=クライアントビュー)に入り、以降の画面・ツールは
+// client_adminと同じ挙動になる(super_admin専用の機能は一切増やさない)。
+function TenantSelection({
+  tenants,
+  failed,
+  onSelect,
+}: {
+  tenants: TenantOption[] | null;
+  failed: boolean;
+  onSelect: (t: TenantOption) => void;
+}) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "24px 16px", background: "var(--background)", color: "var(--foreground)",
+        fontFamily: "var(--font-sans, system-ui, sans-serif)",
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: 420, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <AgentMark />
+          <div>
+            <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800, letterSpacing: "-0.02em" }}>
+              どのお客様として見ますか？
+            </h1>
+            <div style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 3, lineHeight: 1.5 }}>
+              テナントを選ぶとクライアントビューに入り、そのお客様と同じチャットを再現できます。
+            </div>
+          </div>
+        </div>
+
+        {failed ? (
+          <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+            テナント一覧を取得できませんでした。ページを再読み込みしてお試しください。
+          </div>
+        ) : tenants === null ? (
+          <div style={{ fontSize: 14, color: "var(--muted-foreground)" }}>テナント一覧を読み込んでいます…</div>
+        ) : tenants.length === 0 ? (
+          <div style={{ fontSize: 14, color: "var(--muted-foreground)" }}>表示できるテナントがありません。</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "60vh", overflowY: "auto" }}>
+            {tenants.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => onSelect(t)}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3,
+                  width: "100%", padding: "12px 14px", borderRadius: 12,
+                  border: `1px solid ${AGENT_BORDER}`, background: "var(--card)",
+                  color: "var(--foreground)", cursor: "pointer", textAlign: "left", minHeight: 44,
+                }}
+              >
+                <span style={{ fontSize: 15, fontWeight: 700 }}>{t.name}</span>
+                <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{t.id}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function PreviewBadge() {
   return (
