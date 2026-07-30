@@ -40,7 +40,9 @@
 
 - ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は **45 本** (17行〜906行、`name:` 実測45件)。タスク記載の「45 tools」と一致。
 - 実行系: `src/api/admin/agent/actionExecutor.ts` — 45 本すべてに `case` が存在 (154行〜1764行)。
-- 旧UI案内: `actionExecutor.ts:1659–1710` の `LEGACY_UI_LINKS` — **9 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`)。`toolDefinitions.ts:839–849` の `feature` enum と 1:1 対応。
+- 旧UI案内: `actionExecutor.ts:1659–1710` の `LEGACY_UI_LINKS` — **9 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`)。`get_legacy_ui_link` の `feature` enum と 1:1 対応。
+
+> **`feature` の 9 値の所在について**: `origin/main` (`ef9ac629`) 時点では `toolDefinitions.ts:839–849` の enum リテラルに直接書かれている。**PR #571 着地後は `LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) が唯一の値の所在**になり、enum は `enum: LEGACY_UI_FEATURES` (`:860`) として参照するだけになる。以下、本ドキュメントで「`feature` enum」と書いている箇所は**値の集合**を指しており、着地後は `LEGACY_UI_FEATURES` を読むこと (行番号は §3 Stage B に最新のものを記載)。
 
 ### 1.1 サマリ表
 
@@ -98,7 +100,7 @@
 | PDFアップロード (`pdf`) | `PdfUploadTab` + `BookUploadsSection` (`:11, 205`) | ✕ **GUI固有**。`LEGACY_UI_LINKS.knowledge_pdf` (`actionExecutor.ts:1705–1709`) で受け渡し。`actionExecutor.ts:1700` のコメントが「ファイル選択がGUI固有の操作のためチャット化せず」と明記 |
 | 成約への貢献度 (`attribution`) | `KnowledgeAttributionTab` (`:7, 206–207`) | ✕ **ツールも handoff キーも無い** |
 
-- **「成約への貢献度」タブは第3のカテゴリ**: チャットから実行できず、`get_legacy_ui_link` で案内することすらできない (`feature` enum に対応する値が無い — `toolDefinitions.ts:839–849`)。**チャットからは存在が見えない機能**であり、`agent_legacy_handoff` にも一切現れない。つまり §2 の基準では「使われていない」と区別がつかない。`get_conversion_summary` (`:887`) は成約全体のサマリーで、ナレッジ単位の貢献度 (`/v1/admin/analytics/knowledge-attribution`, `components/knowledge/KnowledgeAttributionTab.tsx:136`) とは別物。
+- **「成約への貢献度」タブは第3のカテゴリ**: チャットから実行できず、`get_legacy_ui_link` で案内することすらできない (`feature` の値集合に対応するものが無い — §1.1 の注記)。**チャットからは存在が見えない機能**であり、`agent_legacy_handoff` にも一切現れない。つまり §2 の基準では「使われていない」と区別がつかない。`get_conversion_summary` (`:887`) は成約全体のサマリーで、ナレッジ単位の貢献度 (`/v1/admin/analytics/knowledge-attribution`, `components/knowledge/KnowledgeAttributionTab.tsx:136`) とは別物。
 - 判定: **クローズ不可** (§4 「クローズ対象外」)。PDF タブが GUI 固有である限りページ全体は閉じられない。加えて attribution タブは、閉じる前に「チャット側にツールを作る」か「最低限 handoff キーを足して計測対象に載せる」かの決着が必要。**計測に現れない機能を抱えたままページを閉じると、失われたことに誰も気づかない。**
 
 #### 5. 未回答質問 `/admin/knowledge-gaps` — Chat-complete
@@ -279,15 +281,17 @@
 1. `admin-ui/src/App.tsx` の該当 `Route` の `element` を `<Navigate to="/copilot-preview" replace />` に差し替える。
    - **`Route` 自体を削除してはいけない。** `App.tsx:251` の catch-all (`path="*"` → `/admin`) に落ちるため、削除すると `/copilot-preview` ではなく旧ダッシュボードに着地する。明示的な `Navigate` が必要。前例は `App.tsx:229–230` (`/admin/evaluations` → `/admin/chat-history`)。
 2. `src/api/admin/agent/actionExecutor.ts:1659–1710` の `LEGACY_UI_LINKS` から該当キーを削除。
-3. `src/api/admin/agent/toolDefinitions.ts:839–849` の `feature` enum から該当値を削除し、**`get_legacy_ui_link` の description (`toolDefinitions.ts:818–832`) の該当文言も削除する**。enum だけ消して description に機能名が残ると、モデルは存在しない `feature` を渡し `actionExecutor.ts:1735–1737` の「不明な案内先です」に落ちる。
-4. **メトリクス側のホワイトリストからも削除する** — PR #571 が入った後は `LEGACY_HANDOFF_FEATURES` (`src/api/admin/agent/agentRoutes.ts:27–37`) が同じ 9 値を**独立にハードコードして持っている**。ここを消し忘れると、閉じたページの handoff が `"unknown"` に落ちず自分の名前で記録され続け、**§2.4 / §6-2-1 の事後トリップワイヤが黙って作動しない**。
-5. 該当キー固有の分岐も掃除する: `analytics`/`conversion` のプランゲート (`actionExecutor.ts:1719–1727`)、`knowledge_pdf` の tenantId 必須ガード (`:1730–1732`)、`session_deletion` のセッション解決 (`:1742–1754`)。
+3. **`src/api/admin/agent/toolDefinitions.ts:26` の `LEGACY_UI_FEATURES` から該当値を削除する。** これがモデル向け enum とメトリクスのラベル語彙の**単一の編集点**。あわせて **`get_legacy_ui_link` の description (`toolDefinitions.ts:818–832`) の該当文言も削除する** — 定数だけ消して description に機能名が残ると、モデルは存在しない `feature` を渡し `actionExecutor.ts:1735–1737` の「不明な案内先です」に落ちる。
+4. 該当キー固有の分岐も掃除する: `analytics`/`conversion` のプランゲート (`actionExecutor.ts:1719–1727`)、`knowledge_pdf` の tenantId 必須ガード (`:1730–1732`)、`session_deletion` のセッション解決 (`:1742–1754`)。
 
-> **9 値は現在 3 箇所に重複している** (①`toolDefinitions.ts` の enum = モデル向け契約 / ②`actionExecutor.ts` の `LEGACY_UI_LINKS` キー = 実際のリンク先 / ③`agentRoutes.ts` の `LEGACY_HANDOFF_FEATURES` = メトリクスのラベル語彙)。Stage B は数か月にわたり別々の担当者が繰り返す手順なので、「3 箇所を消す」を手順書で担保するのは弱い。
+> **削除箇所は 2 つ**: ①`LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) と ②`LEGACY_UI_LINKS` (`actionExecutor.ts:1659–1710`)。
 >
-> **推奨: `toolDefinitions.ts` に `export const LEGACY_UI_FEATURES = [...] as const` を 1 本置き、enum リテラル・`LEGACY_UI_LINKS` の型・`LEGACY_HANDOFF_FEATURES` の 3 箇所すべてがそれを参照する形にしてから Stage B を始める** (`agentRoutes.ts` は既に `toolDefinitions` を import しているので依存は増えない)。`ADMIN_AGENT_TOOLS` の入れ子 (`[43].function.parameters.properties.feature.enum`) を実行時に掘るのは脆いので、**enum の内側から定数を参照する形**にすること。
+> かつて 3 箇所目だったメトリクス側のホワイトリスト `LEGACY_HANDOFF_FEATURES` は、**PR #571 (commit `d1af8eb7`) で ① からの導出に変わったため削除対象ではなくなった** (`agentRoutes.ts:29` が `new Set<string>(LEGACY_UI_FEATURES)` の 1 行)。`get_legacy_ui_link` の enum も `enum: LEGACY_UI_FEATURES` (`toolDefinitions.ts:860`) を参照する。つまり **① から値を消すと、モデルがその feature を渡せなくなるのと同時に、万一渡っても計測側が `"unknown"` へ丸める** — §2.4 / §6-2-1 のトリップワイヤが構造的に作動する。
+> 再インライン化に対しては `agentRoutes.test.ts:2694–2698` が enum と定数の**参照同一性** (`toBe`) を検査しており、`[...LEGACY_UI_FEATURES]` のような無害に見える写しでも失敗する。
 >
-> これを単なる DRY ではなく着手前の前提として挙げるのは、**この重複だけ失敗の向きが危険側**だから。本基準の他の死角 (面の混在 §7-2、プラン拒否 §2.3 C3) はいずれも「クローズが遅れる」方向に倒れる安全な偏りだが、③ の消し忘れは「まだ必要とされているページが健全に見える」方向に倒れ、しかもデータ上は正常な記録と区別が付かない。
+> **② の消し忘れは危険側に倒れない。** ① から消えた値が ② に残っても、モデルはもうその `feature` を渡せないので ② のエントリは単なる dead code になる (誤計測にはならない)。逆に **② を先に消して ① を残すと、モデルが渡せる値の案内先が消えて `actionExecutor.ts:1735–1737` の「不明な案内先です」に落ちる**ので、順序は必ず ② → ① ではなく**同一コミットで両方**にすること。
+
+**なぜ 4 箇所目を探さなくてよいか:** 導出後に値を列挙しているのは ① と ② だけである。手順として「N 箇所を漏れなく消す」に依存していた部分は ① への一本化で解消済みで、残る ② の失敗は上記のとおり安全側に倒れる。
 
 **なぜ 1 と 2–3 を分けられないか:** リダイレクトを先に出すと、`get_legacy_ui_link` が「URL: /admin/analytics」と案内した先が `/copilot-preview` に戻される。案内カード (`pages/copilot-preview/index.tsx:170` の `parseLegacyUiLink` で解析、`:823–840` で描画) は会話を失わないため `target="_blank"` 固定 (`:826–833`) なので、症状は同一タブ内のループではなく **「別タブに真新しいセッションのチャットがもう 1 枚開く」** という形になる。ループより分かりにくいだけで壊れ方は同じ。逆に enum を先に削ると、まだ必要な逃げ道を先に塞ぐことになる。よってこの 2 つは不可分。
 タスク指示の順序 (リダイレクト → サイドバー → リンク削除) に対し、本手順は **サイドバー撤去を先頭に繰り上げている**。理由はこのループ回避で、「案内キーの削除はページが閉じた後」という制約は維持している。
@@ -401,7 +405,7 @@ super_admin 側からの流入があるページ (`/admin/chat-test`) は、テ�
 
 この穴の影響を明記しておく: **handoff キーを持たないページ (未回答質問・指示ルール・声がけ設定・ダッシュボード) について、旧UIで黙って使われ続けている量は本基準では検出できない。** C2b (§2.3) と §5 の新規テナント限定適用は、この穴を前提に置いた埋め合わせである。
 
-さらに悪いケースが 1 件ある。**「チャット側にツールが無く、handoff キーも無い」機能は、`agent_tool_invoked` にも `agent_legacy_handoff` にも現れない。** 実測で該当するのは知識データページの「成約への貢献度」タブ (`pages/admin/knowledge/[tenantId].tsx:206–207`)。この種の機能は本基準上「需要ゼロ」と見分けが付かないため、**クローズ判定にかける前に、ツールを作るか最低限 handoff キーを足して計測対象に載せる必要がある**。新しいテナント向け画面を追加するときは、`get_legacy_ui_link` の `feature` enum (`toolDefinitions.ts:839–849`) にも載せることを既定にしておくと、この穴は再発しない。
+さらに悪いケースが 1 件ある。**「チャット側にツールが無く、handoff キーも無い」機能は、`agent_tool_invoked` にも `agent_legacy_handoff` にも現れない。** 実測で該当するのは知識データページの「成約への貢献度」タブ (`pages/admin/knowledge/[tenantId].tsx:206–207`)。この種の機能は本基準上「需要ゼロ」と見分けが付かないため、**クローズ判定にかける前に、ツールを作るか最低限 handoff キーを足して計測対象に載せる必要がある**。新しいテナント向け画面を追加するときは、`get_legacy_ui_link` の `feature` の値集合 (`LEGACY_UI_FEATURES`) にも載せることを既定にしておくと、この穴は再発しない。
 
 穴を本当に埋めるなら、`legacy_page_view{page=...}` を同じ `metrics_snapshots` (`src/migrations/phase72d_metrics_snapshots.sql`) に入れる別タスクが必要。その計測が入った時点で、C2b を「直接訪問数 ≤ 有効テナント数 × 0.5 回/週」に置き換えるのが望ましい。
 
@@ -411,7 +415,7 @@ super_admin 側からの流入があるページ (`/admin/chat-test`) は、テ�
 
 本基準が依存する契約:
 
-1. **`agent_legacy_handoff.labels.feature` が `get_legacy_ui_link` の enum (`toolDefinitions.ts:839–849`: `billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`) と一致し、enum 外は `"unknown"` に丸められること** (確定済み)。enum を削るとき (§3 Stage B-3) は、削った機能の handoff が以後 `"unknown"` に流れ込むことになる。**クローズ完了後は `unknown` の増分をそのページの残存需要として読める**ので、§2.4 の中止条件を Stage B 後も 4 週延長して監視する価値がある。
+1. **`agent_legacy_handoff.labels.feature` が `get_legacy_ui_link` の値集合 (`LEGACY_UI_FEATURES`: `billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`) と一致し、enum 外は `"unknown"` に丸められること** (確定済み)。enum を削るとき (§3 Stage B-3) は、削った機能の handoff が以後 `"unknown"` に流れ込むことになる。**クローズ完了後は `unknown` の増分をそのページの残存需要として読める**ので、§2.4 の中止条件を Stage B 後も 4 週延長して監視する価値がある。
 2. **`agent_tool_invoked.labels.tool` がツール名、`.outcome ∈ {ok, blocked, error}`** (確定済み)。C2・C2b・C3・C4 のすべてがこれで絞る。キー名は `tool` (`tool_name` ではない)。
 3. **`agent_write_blocked.labels.reason ∈ {unconfirmed, chain}` のみ** (確定済み)。プラン/ポリシー拒否は含まれない。§2.3 C3 はこの前提で組み直してある。**この 2 値に第 3 の値を足す必要は無い** — 理由は C3 の最後の段落 (プラン壁はチャットと旧UIで対称なので、クローズ判定の材料にならない)。
 4. **`tenant_id` は列 (nullable)**。NULL = プレビュー先を持たない super_admin なので §2.2 のとおり除外する。
