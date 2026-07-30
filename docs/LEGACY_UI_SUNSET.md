@@ -4,7 +4,7 @@
 **位置づけ:** チャット・ファースト管理画面 (`/copilot-preview`) を将来の既定とする前提で、**テナント向け旧UIページ (`/admin/*`) を「いつ閉じてよいか」を数値で確定させる**ための判定基準。ドキュメントのみ。実装・リダイレクトは本PRでは一切行わない。
 **実測日:** 2026-07-30 / **基準コミット:** `ef9ac629` (branch `docs/legacy-ui-sunset`, base `origin/main`)
 **依存:**
-- 兄弟タスク「feat: エージェントツール実行の計測基盤」(`docs/AGENT_METRICS.md`) が定義する 5 メトリクス。本ドキュメント作成時点で `docs/AGENT_METRICS.md` はこのツリーに未着地のため、メトリクス名・格納先のみを前提とし、ラベル定義は兄弟タスク側を正とする (§6-2)。
+- 兄弟タスク「feat: エージェントツール実行の計測基盤」(`docs/AGENT_METRICS.md`, PR #571 / branch `feat/agent-metrics`) が定義する 5 メトリクス。ラベル・型は同ドキュメントを正とし、本基準は確定済みの定義に対して書いてある (§2.1 / §6-2)。`origin/main` 着地時に §2.1 の表と突き合わせること。
 - `docs/CHAT_SURFACE_DECISION.md` (#573)。同ドキュメントは Surface A (旧UI上のチャットパネル) の畳み方を本ドキュメントと対で扱うことを前提にしている。その接続は §7。
 
 ---
@@ -156,15 +156,20 @@
 
 ### 2.1 使えるメトリクス
 
-兄弟タスクが `metrics_snapshots` (`src/migrations/phase72d_metrics_snapshots.sql`: `metric_name` / `tenant_id` / `labels JSONB` / `value NUMERIC` / `snapshot_at`) に投入する 5 つだけを使う。
+兄弟タスク (`docs/AGENT_METRICS.md`, PR #571 / branch `feat/agent-metrics`) が `metrics_snapshots` (`src/migrations/phase72d_metrics_snapshots.sql`: `metric_name` / `tenant_id` / `labels JSONB` / `value NUMERIC` / `snapshot_at`) に投入する 5 つだけを使う。ラベルは同ドキュメントで確定済みの値を正とする:
 
-| metric_name | 本基準での用途 |
-|---|---|
-| `agent_legacy_handoff` | 逃げ道の使用量。`labels->>'feature'` が `get_legacy_ui_link` の enum と 1:1 (§6-2) |
-| `agent_turn_completed` | 分母 (完了したチャットターン数) |
-| `agent_tool_invoked` | チャット側で実際に代替操作が行われた量 (ツール名ラベルで絞る) |
-| `agent_write_blocked` | チャット側の書き込みが通らなかった量 = 摩擦 |
-| `agent_turn_hops` | 1ターンあたりのツール往復数 = 手数 |
+| metric_name | `labels` | `value` | 本基準での用途 |
+|---|---|---|---|
+| `agent_legacy_handoff` | `{ feature }` | 常に 1 | 逃げ道の使用量。`feature` は `get_legacy_ui_link` の enum 9 値 + `"unknown"` に丸められる (語彙が閉じている) |
+| `agent_turn_completed` | `{ answered_from }` | 常に 1 | 分母 (**完了した**チャットターン数) |
+| `agent_tool_invoked` | `{ tool, outcome }` | 常に 1 | チャット側で代替操作が実際に走った量。`tool` は `ADMIN_AGENT_TOOLS` の生の名前、`outcome ∈ {ok, blocked, error}` |
+| `agent_write_blocked` | `{ tool, reason }` | 常に 1 | `reason ∈ {unconfirmed, chain}` のみ。**プラン/ポリシー拒否は含まれない** (§2.3 C3) |
+| `agent_turn_hops` | `{ hit_limit }` | **そのターンのホップ数** | 手数。1 完了ターンにつき 1 行 |
+
+**重要な型の前提** (`metricsFlush.ts` の既存 Phase72-D KPI 行とは別物): これらはリクエストパスがイベント単位で直接 append する生の行で、prom-client の counter delta も histogram `_sum` も経由しない。したがって
+
+- 上記 4 つは `COUNT(*)` と `SUM(value)` が等価。
+- **`agent_turn_hops` の平均は `AVG(value)` で出す。`agent_turn_completed` で割ってはいけない** (1 ターン 1 行で、value がそのターン自身のホップ数)。
 
 **存在しないメトリクスは条件に使わない。** 特に「旧UIページへの直接訪問数」は本基準に**入れていない**。理由は §6-1 (admin-ui にページビュー計測が実装されていないため、書いても永久に埋まらない条件になる)。
 
@@ -174,11 +179,13 @@
 - **母集団 (分母)**: そのページが**実際に見えているテナント**の `agent_turn_completed` のみ。
   - `/admin/analytics`・`/admin/conversion` は growth 以上のみ可視 (`planFeatures.ts:34–35`, `AppSidebar.tsx:68–69`)。starter テナントのターンを分母に入れると比率が薄まり、使われているページが「閉じてよい」と誤判定される。`tenant_id` 列で `tenants.plan` を join して絞る。
   - 他のページは全 client_admin テナント。
+  - **`tenant_id` が NULL の行は必ず除外する。** NULL は「プレビュー先テナントを持たない super_admin」= テナントのトラフィックではない。`tenants` への内部結合を使えば自動的に落ちるが、プラン制限が無いページで結合を省略するときは明示的に `tenant_id IS NOT NULL` を書くこと。
 - **有効テナント (active tenant)**: その週に `agent_turn_completed` が 1 件以上あるテナント。
+- **分母は「完了ターン」だけ**: 500 や SSE の `event: error` で終わったターンは `agent_turn_completed` も `agent_legacy_handoff` も発火しない。つまり**壊れて落ちたターンは分子にも分母にも現れない**ため、恒常的に失敗する経路があっても C1 は上がらない。この死角は C3 (`outcome="error"`) が受け持つ。
 
 ### 2.3 判定条件
 
-あるページ P を閉じてよいのは、**V を満たす窓において C1〜C4 のすべてが N 週連続で成立したとき**、かつそのときのみ。
+あるページ P を閉じてよいのは、**V を満たす窓において C1〜C4 のすべてが N 週連続で成立したとき**、かつそのときのみ。C1・C2・C2b・C3 は P 別に測る条件、**C4 は全ページ共通のゲート**である (理由は C4 参照)。
 
 #### V. 有効性ゲート (これを満たさない窓では判定を開始しない)
 
@@ -191,49 +198,62 @@
 - 既定: **4 週連続**。根拠: 月次の業務リズムを 1 周期含む最小の窓。4 週未満だと「月初にしか触らない」使い方 (請求確認、月次レポート) を構造的に取りこぼす。
 - **月次利用が本質のページ (`/admin/analytics`, `/admin/conversion`, `/admin/billing`) は 8 週連続**。根拠: 静かな 1 か月が偶然クローズを引き起こさないよう、月次周期を 2 周期見る。
 
-#### C1. 逃げ道が例外になっていること (handoff 比率)
+#### C1. 逃げ道が例外になっていること (完了ターンあたりの handoff 件数)
 
 各週で
-`SUM(agent_legacy_handoff WHERE labels->>'feature' = <P の feature>) / SUM(agent_turn_completed)` ≤ **2.0%**
+`COUNT(agent_legacy_handoff WHERE labels->>'feature' = <P の feature>) / COUNT(agent_turn_completed)` ≤ **2.0%**
 
 > 根拠: 2% ≒ 50 ターンに 1 回。テナント管理者の 1 セッションは体感 10 ターン規模なので、2% は「平均して 5 セッション連続でそのページを必要としない」水準にあたる。0% を要求しないのは、モデルが端のケースで案内を出すこと自体は正常であり、0% は永久に達成されない基準になるため。
+> **これは「handoff したターンの割合」ではなく「完了ターンあたりの handoff 件数」である。** メトリクス行にターン/セッション識別子が無いため、1 ターン中に `get_legacy_ui_link` が 2 回呼ばれれば 2 行入り、重複を除去できない。原理上この値は 1.0 (=100%) を超え得る。2% という閾値の水準では実害は無いが、判定を「割合」と誤読すると 2 回案内が出たターンを二重に数えていることに気づけない。
 > handoff キーを持たないページ (ダッシュボード / 未回答質問 / 声がけ設定 / 指示ルール / エスカレーションのうち reply・resolve 経路) では C1 は自動的に成立する。**その場合 C1 は証拠にならないので C2b が必須** (下記)。
+
+**あわせて `feature = "unknown"` を監視する。** enum 外の値はすべて `"unknown"` に丸められるので、この件数が恒常的に立つのは「モデルが案内したい機能が `feature` enum に無い」= §6-1 で挙げた**計測に現れない機能が実在する**シグナルになる。`unknown` が週あたり有効テナント数を超えて出ているうちは、どのページについてもクローズ判定を開始しない (何が漏れているか分からないまま閉じることになるため)。
 
 #### C2. チャット側が主経路になっていること (代替比)
 
 窓全体で
-`SUM(agent_tool_invoked WHERE tool ∈ <P の被覆ツール集合>) : SUM(agent_legacy_handoff WHERE feature = <P>)` ≥ **20 : 1**
+`COUNT(agent_tool_invoked WHERE labels->>'tool' ∈ <P の被覆ツール集合> AND labels->>'outcome' = 'ok') : COUNT(agent_legacy_handoff WHERE feature = <P>)` ≥ **20 : 1**
 
 > 根拠: 「逃げ道 1 回に対しチャット成功 20 回」= チャット経路が桁で主。10:1 では、そのページを毎日使うテナントにとって週 1 回の詰まりが残る計算になり弱すぎる。20:1 なら詰まりは月 1 回未満に相当する。
 > C2 は「使われていないから閉じられる」を排除する条件でもある。分子が小さければ比率は満たせない。
+> 分子を `outcome = 'ok'` に絞るのは、`blocked`/`error` を成功として数えないため。ただし **`outcome = 'ok'` は「成功」より広い**: プラン拒否・テナント未特定・越境拒否はいずれも `agent_write_blocked` を出さず `outcome = "ok"` として記録されるため、分子を膨らませ得る。プラン制限のあるページ (`/admin/analytics`, `/admin/conversion`) については §2.2 の母集団制限 (growth+ のみ) がこの膨張をそのまま除去するので、実務上は問題にならない。母集団制限が効かないページで代替比が閾値ぎりぎりの場合は、`outcome` だけを根拠に判断しないこと。
 
 #### C2b. handoff キーを持たないページ向けの絶対量フロア
 
 窓の各週で
-`SUM(agent_tool_invoked WHERE tool ∈ <P の被覆ツール集合>) / <その週の有効テナント数>` ≥ **1.0**
+`COUNT(agent_tool_invoked WHERE labels->>'tool' ∈ <P の被覆ツール集合> AND labels->>'outcome' = 'ok') / <その週の有効テナント数>` ≥ **1.0**
 
 > 根拠: 「テナント 1 社あたり週 1 回以上、その操作をチャットで実際にやっている」。逃げ道メトリクスが無いページは、C1 が形式的に成立してしまうため、これが唯一の実使用証拠になる。1.0 という値は「週次の管理業務として最低限成立している」下限で、これを割るならその操作はチャットでもページでも行われていない = そもそも需要が無いか、旧UIで黙って行われている (後者は計測できない — §6-1) ため、閉じる根拠が無い。
 > **例外**: `/admin/engagement` (声がけ設定) は設定して放置する性質のページで、C2b は原理的に満たせない。このページは C2b の代わりに **(i) 窓を 8 週に延長し、(ii) §5 の新規テナント限定適用のみで開始し、既存テナントには適用しない** ことを条件とする。低頻度ページを絶対量で測ろうとすると必ず不成立になるため、量ではなく影響範囲を絞ることで担保する。
 
 #### C3. チャット側の摩擦が小さいこと
 
-各週で
-`SUM(agent_write_blocked WHERE tool ∈ <P の書き込みツール>) / SUM(agent_tool_invoked WHERE tool ∈ <P の書き込みツール>)` ≤ **5%**
+**`agent_write_blocked` は摩擦の指標として使えない。** `reason` は `unconfirmed` (確認待ち) と `chain` (同一ターン内の `suggest_* → save_*` 連鎖の阻止) の 2 値しかなく、どちらも**設計どおりに動いている証拠**である。R2C のツールは `confirmed=true` を伴う二段確認が既定 (`toolDefinitions.ts` の `save_faq:454`, `save_tuning_rule:263`, `delete_faq:140` 等) なので、`unconfirmed` はほぼすべての書き込みで 1 回出る。両者を除くと `agent_write_blocked` には何も残らない。
 
-ただし `agent_write_blocked` には設計上正常な失敗が混ざる。R2C のツールは `confirmed=true` を伴う二段確認が既定 (`toolDefinitions.ts` の `save_faq:454`, `save_tuning_rule:263`, `delete_faq:140` 等)。したがって:
+したがって摩擦は `agent_tool_invoked` の `outcome` で測る。各週で:
 
-- 兄弟タスクの `agent_write_blocked` が `reason` ラベルで「確認待ち」と「ポリシー/プラン拒否」を区別する場合 → **確認待ちを除いた比率で 5%**。
-- 区別しない場合 → 5% は使えない。代替として **各週で `agent_write_blocked` の絶対値 ≤ 有効テナント数 × 1.0** (テナント 1 社あたり週 1 件まで) を用いる。
+**C3-a (失敗率)** `COUNT(agent_tool_invoked WHERE tool ∈ <P の書き込みツール> AND outcome = 'error') / COUNT(agent_tool_invoked WHERE tool ∈ <P の書き込みツール>)` ≤ **5%**
 
-> 根拠: 5% は「20 回書けば 1 回詰まる」水準で、ここを超えるとチャット経路は体感で不安定になり、ページを閉じれば単に作業ができなくなる。プランゲート由来の拒否 (`actionExecutor.ts:1719–1727`, `planFeatures.ts`) は C3 では失敗として数えない — プラン上使えない機能はページを開いても使えないので、クローズ判定と無関係。
+**C3-b (連鎖阻止)** `COUNT(agent_write_blocked WHERE tool ∈ <P の書き込みツール> AND reason = 'chain') / <その週の有効テナント数>` ≤ **0.5**
 
-#### C4. 手数がページより増えていないこと
+> 根拠 (C3-a): 5% は「20 回書けば 1 回落ちる」水準。ここを超えるとチャット経路は体感で不安定になり、ページを閉じれば単に作業ができなくなる。`error` は `blocked` と区別されているので、確認ゲートによる正常な差し戻しは混ざらない。
+> 根拠 (C3-b): `chain` は「モデルが人間のターンを挟まずに書き込もうとして止められた」ケースで、確認 UX とモデルの振る舞いが噛み合っていないことを意味する。テナント 1 社あたり週 0.5 件 = 2 週に 1 回までを許容とする。これが多いページは、ページを閉じると「同意したはずなのに保存されない」体験が主経路になる。
+>
+> **プランゲート由来の拒否は C3 では測れない (かつ測る必要がない)。** `actionExecutor.ts:1719–1727` や `planFeatures.ts` による拒否は `agent_write_blocked` を出さず `outcome = "ok"` として記録される。ただしプラン上使えない機能は**旧UIページを開いても使えない** (`/admin/analytics`・`/admin/conversion` はそもそもサイドバーに出ない、`activate_avatar` の権能付与は super_admin でもバイパス不可) ため、「チャットが旧UIより劣る」証拠にはならない。クローズ判定と無関係なので、この死角は埋めなくてよい。
 
-各週で
-`SUM(agent_turn_hops) / SUM(agent_turn_completed)` (P の被覆ツールを含むターンに絞る) ≤ **4.0**
+#### C4. チャットが迷路になっていないこと (**ページ別ではなく全体の門番**)
 
-> 根拠: 被覆済み操作のうち最長の正常フローは 「読み取り (`get_tuning_rules`) → 提案 (`suggest_*`) → 同意後の保存 (`save_*`)」= 3 ホップ。4.0 はここに 1 回のやり直し分の余裕を持たせた値。平均が 4 を超えるならチャット経路は迷路になっており、ページを閉じるのは利用者にとって純粋な劣化になる。
-> `agent_turn_hops` が histogram の `_sum` として `metrics_snapshots` に入る場合 (`metricsFlush.ts` の既存 histogram は `_sum` のみ保存する方式)、上式の分子はその `_sum`、分母は同条件の `agent_turn_completed` で平均を出す。
+**C4 は P ごとに絞れない。** `agent_turn_hops` の `labels` は `{ hit_limit }` だけでツールラベルを持たず、行にターン/セッション識別子も無いため、**あるターンがどのツールを呼んだかを結び付ける手段が無い**。したがって C4 は「そのページの操作が何ホップか」ではなく「**チャット全体が収束しているか**」を見る全ページ共通のゲートとして運用する。
+
+各週、テナント母集団全体で:
+
+**C4-a (平均ホップ)** `AVG(value)` on `agent_turn_hops` ≤ **4.0**
+**C4-b (収束しないターン)** `COUNT(agent_turn_hops WHERE labels->>'hit_limit' = 'true') / COUNT(agent_turn_hops)` ≤ **2%**
+
+> 根拠 (C4-a): 被覆済み操作のうち最長の正常フローは 「読み取り (`get_tuning_rules`) → 提案 (`suggest_*`) → 同意後の保存 (`save_*`)」= 3 ホップ。4.0 はここに 1 回のやり直し分の余裕を持たせた値。全体平均が 4 を超えているなら、チャットはどのページの代替としても信頼できない。
+> **`agent_turn_hops` は 1 完了ターンにつき 1 行・`value` がそのターンのホップ数**なので、平均は `AVG(value)`。`agent_turn_completed` で割ると二重に割ることになる。
+> 根拠 (C4-b): `hit_limit = true` は `MAX_TOOL_HOPS` を使い切っても収束しなかったターン = 利用者から見れば「AI が答えを出せずに終わった」ターン。平均が 4 以下でも、こういうターンが 2% を超えて混ざっているなら完遂できていない裾がある。平均だけでは見えないので独立した条件にする。
+> **全体ゲートである以上、C4 は「このページは閉じてよい」の証拠にはならない。** 効くのは逆向き — C4 が落ちている週はどのページのクローズも進めない、という拒否権としてだけ使う。ページ別の手数を測りたいなら `agent_turn_hops` に `tool` 相当のラベル (またはターン識別子) を足す必要があり、それは兄弟タスク側の変更になる。**現状の設計判断としては足さなくてよい** — ページ別の手数は C2 の代替比と C3-a の失敗率で十分に代理できており、ターン識別子の追加は行数とプライバシー面のコストが大きい。
 
 ### 2.4 中止条件 (観察期のトリップワイヤ)
 
@@ -378,38 +398,66 @@ super_admin 側からの流入があるページ (`/admin/chat-test`) は、テ�
 
 穴を本当に埋めるなら、`legacy_page_view{page=...}` を同じ `metrics_snapshots` (`src/migrations/phase72d_metrics_snapshots.sql`) に入れる別タスクが必要。その計測が入った時点で、C2b を「直接訪問数 ≤ 有効テナント数 × 0.5 回/週」に置き換えるのが望ましい。
 
-### 6-2. 兄弟タスクとの接続契約
+### 6-2. 兄弟タスクとの接続契約 (確定済み)
 
-`docs/AGENT_METRICS.md` はこのツリーに未着地 (2026-07-30 確認)。本基準が成立するために兄弟タスク側で満たされている必要があるのは以下:
+`docs/AGENT_METRICS.md` は PR #571 (branch `feat/agent-metrics`) で確定。**ラベル・型は同ドキュメントを正とする**。本基準はそこで確定した内容 (§2.1 の表) に対して書かれている。`origin/main` へ着地したら §2.1 の表と齟齬が無いか一度突き合わせること。
 
-1. **`agent_legacy_handoff` が `feature` ラベルを持ち、値が `get_legacy_ui_link` の enum (`toolDefinitions.ts:839–849`: `billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`) と 1:1 で一致すること。** ずれると C1・C2 が測れない。enum を削るとき (§3 Stage B-3) はメトリクス側の値も同時に退役する。
-2. **`agent_tool_invoked` がツール名ラベルを持つこと** (C2・C2b・C3・C4 のすべてがツール集合での絞り込みを要求する)。
-3. **`agent_write_blocked` が「確認待ち」と「拒否」を `reason` で区別すること** (区別されない場合の代替は §2.3 C3 に記載)。
-4. **`tenant_id` が列として入ること** (`metrics_snapshots.tenant_id`)。プラン別の母集団分離 (§2.2) がこれに依存する。`metricsFlush.ts` の既存実装は `tenantId` ラベルを `labels` から外して `tenant_id` 列に移す方式なので、同じ扱いであれば要件を満たす。
-5. `agent_turn_hops` が histogram の場合、`metrics_snapshots` に入るのは `_sum` (既存 `metricsFlush.ts` の方式)。C4 の平均計算はこれを前提にしている。
+本基準が依存する契約:
+
+1. **`agent_legacy_handoff.labels.feature` が `get_legacy_ui_link` の enum (`toolDefinitions.ts:839–849`: `billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`) と一致し、enum 外は `"unknown"` に丸められること** (確定済み)。enum を削るとき (§3 Stage B-3) は、削った機能の handoff が以後 `"unknown"` に流れ込むことになる。**クローズ完了後は `unknown` の増分をそのページの残存需要として読める**ので、§2.4 の中止条件を Stage B 後も 4 週延長して監視する価値がある。
+2. **`agent_tool_invoked.labels.tool` がツール名、`.outcome ∈ {ok, blocked, error}`** (確定済み)。C2・C2b・C3・C4 のすべてがこれで絞る。キー名は `tool` (`tool_name` ではない)。
+3. **`agent_write_blocked.labels.reason ∈ {unconfirmed, chain}` のみ** (確定済み)。プラン/ポリシー拒否は含まれない。§2.3 C3 はこの前提で組み直してある。**この 2 値に第 3 の値を足す必要は無い** — 理由は C3 の最後の段落 (プラン壁はチャットと旧UIで対称なので、クローズ判定の材料にならない)。
+4. **`tenant_id` は列 (nullable)**。NULL = プレビュー先を持たない super_admin なので §2.2 のとおり除外する。
+5. **`agent_turn_hops` は 1 完了ターン 1 行・`value` = そのターンのホップ数・`labels.hit_limit` は JSON boolean** (確定済み)。C4-a は `AVG(value)`、C4-b は `hit_limit` を使う。既存 Phase72-D KPI 行の counter delta / histogram `_sum` の意味論は**適用されない**。
+6. **行にターン/セッション識別子は無い** (確定済み)。このため C1 は「割合」ではなく「完了ターンあたりの件数」であり、失敗して落ちたターンは分子・分母のどちらにも現れない (§2.2 の最後)。
 
 ### 6-3. 判定に使うクエリの形
 
 ```sql
--- C1: 週別 handoff 比率 (feature = 'analytics' の例。growth+ テナントに限定)
+-- C1 + V: 週別の handoff/完了ターン と有効性ゲート
+-- (feature = 'analytics' の例。可視テナント = growth+ に限定)
 WITH w AS (
   SELECT date_trunc('week', m.snapshot_at) AS wk,
-         SUM(CASE WHEN m.metric_name = 'agent_legacy_handoff'
-                   AND m.labels->>'feature' = 'analytics' THEN m.value ELSE 0 END) AS handoffs,
-         SUM(CASE WHEN m.metric_name = 'agent_turn_completed' THEN m.value ELSE 0 END) AS turns
+         COUNT(*) FILTER (
+           WHERE m.metric_name = 'agent_legacy_handoff'
+             AND m.labels->>'feature' = 'analytics'
+         ) AS handoffs,
+         COUNT(*) FILTER (WHERE m.metric_name = 'agent_turn_completed') AS turns,
+         COUNT(DISTINCT m.tenant_id) FILTER (
+           WHERE m.metric_name = 'agent_turn_completed'
+         ) AS active_tenants,
+         -- enum 外の案内要求。恒常的に立つなら計測外の機能が実在する (§6-1)
+         COUNT(*) FILTER (
+           WHERE m.metric_name = 'agent_legacy_handoff'
+             AND m.labels->>'feature' = 'unknown'
+         ) AS unknown_handoffs
   FROM metrics_snapshots m
-  JOIN tenants t ON t.id = m.tenant_id
+  JOIN tenants t ON t.id = m.tenant_id   -- tenant_id IS NULL (super_admin) はこれで落ちる
   WHERE m.snapshot_at >= NOW() - INTERVAL '8 weeks'
     AND t.plan IN ('growth', 'enterprise')   -- planFeatures.ts:34 のゲートに合わせる
   GROUP BY 1
 )
-SELECT wk, turns, handoffs,
-       ROUND(100.0 * handoffs / NULLIF(turns, 0), 2) AS handoff_pct,
-       (turns >= 200 AND 100.0 * handoffs / NULLIF(turns, 0) <= 2.0) AS week_passes
+SELECT wk, turns, active_tenants, handoffs, unknown_handoffs,
+       ROUND(100.0 * handoffs / NULLIF(turns, 0), 2) AS handoff_per_100_turns,
+       (turns >= 200 AND active_tenants >= 5) AS v_gate_ok,
+       (100.0 * handoffs / NULLIF(turns, 0) <= 2.0) AS c1_ok
 FROM w ORDER BY wk;
 ```
 
-`week_passes` が窓の全週で true であることが C1 の合格条件。C2〜C4 も同じ形 (`metric_name` と `labels` のフィルタを差し替え) で書ける。
+```sql
+-- C4-a / C4-b: 手数。value がそのターンのホップ数なので AVG(value)
+SELECT date_trunc('week', snapshot_at) AS wk,
+       ROUND(AVG(value), 2) AS mean_hops,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE labels->>'hit_limit' = 'true')
+             / NULLIF(COUNT(*), 0), 2) AS hit_limit_pct
+FROM metrics_snapshots
+WHERE metric_name = 'agent_turn_hops'
+  AND tenant_id IS NOT NULL
+  AND snapshot_at >= NOW() - INTERVAL '8 weeks'
+GROUP BY 1 ORDER BY 1;
+```
+
+窓の**全週**で `v_gate_ok` と各条件が true であることが合格条件。C2 / C2b / C3 も同じ形 (`metric_name` と `labels->>'tool'` / `->>'outcome'` のフィルタを差し替え) で書ける。
 
 ---
 
@@ -445,4 +493,4 @@ showAIChat = isClientAdmin && <クローズ対象外ページのみ>
 
 ## 8. まとめ (1 行で)
 
-**テナント向け旧UIページ P は、P が見えているテナント母集団で `agent_turn_completed` が週 200 以上ある窓において、`agent_legacy_handoff{feature=P}` が毎週 2.0% 以下・チャット代替比 20:1 以上・書き込み阻止率 5% 以下・平均ホップ 4.0 以下を 4 週連続 (月次利用ページは 8 週連続) 満たしたときに限り、サイドバー撤去 → 4 週観察 → リダイレクト + 案内キー削除の順で閉じてよい。コンポーネントファイルは削除しない。**
+**テナント向け旧UIページ P は、P が見えているテナント母集団 (`tenant_id` NULL 除外) で完了ターンが週 200 以上・有効テナント 5 社以上ある窓において、完了ターンあたりの `agent_legacy_handoff{feature=P}` が毎週 2.0% 以下・チャット代替比 20:1 以上・書き込みツールの `outcome="error"` 率 5% 以下 (加えて全体ゲートとして平均ホップ 4.0 以下・`hit_limit` 率 2% 以下) を 4 週連続 (月次利用ページは 8 週連続) 満たしたときに限り、サイドバー撤去 → 4 週観察 → リダイレクト + 案内キー削除の順で閉じてよい。コンポーネントファイルは削除しない。**
