@@ -16,8 +16,9 @@ import { authFetch, API_BASE } from "./api";
 import { useAuth } from "../auth/useAuth";
 import type { ChatHistoryEntry } from "./chatSessionStore";
 
-// どちらの面から来たリクエストかの識別子。サーバ側のメトリクスラベル付け(別タスク)で
-// 消費される。現時点ではリクエストボディには載せず、面が自分を名乗る値として保持するだけ。
+// どちらの面から来たリクエストかの識別子。リクエストボディに載せて送り、サーバ側が
+// 挙動メトリクスの surface ラベルとして記録する(docs/AGENT_METRICS.md)。
+// この値だけが「全画面UIが実際に主たる面になりつつあるのか」を面ごとに数える手段になる。
 export type AgentChatSurface = "panel" | "fullscreen";
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
@@ -120,9 +121,10 @@ export function useAgentChatTransport({
       const body: {
         message: string;
         sessionId: string;
+        surface: AgentChatSurface;
         targetTenantId?: string;
         history?: ChatHistoryEntry[];
-      } = { message, sessionId: sessionIdRef.current as string };
+      } = { message, sessionId: sessionIdRef.current as string, surface };
       if (targetTenantId) body.targetTenantId = targetTenantId;
       if (history.length > 0) body.history = history;
 
@@ -150,7 +152,7 @@ export function useAgentChatTransport({
         return { ok: false, kind: "network", message: AGENT_CHAT_ERROR_MESSAGE };
       }
     },
-    [derivedTargetTenantId],
+    [derivedTargetTenantId, surface],
   );
 
   return { surface, sessionId, targetTenantId: derivedTargetTenantId, adoptSessionId, send };

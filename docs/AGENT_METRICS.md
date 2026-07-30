@@ -35,6 +35,50 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
   enum 値と、ツール名のような固定語彙だけ。
 - `snapshot_at`: DB 既定値（`NOW()`）に任せる。
 
+## 全メトリクス共通のラベル: `surface`
+
+チャットターン由来の**5つのメトリクス**
+（`agent_tool_invoked` / `agent_write_blocked` / `agent_turn_hops` /
+`agent_legacy_handoff` / `agent_turn_completed`）は、下表の固有ラベルに加えて
+**必ず `surface` を持つ**。
+
+| `surface` | 意味 |
+| --- | --- |
+| `panel` | 旧UIに埋め込まれたチャットパネル（`admin-ui/src/components/AdminAgent/`） |
+| `fullscreen` | 全画面のチャットUI（`admin-ui/src/pages/copilot-preview/`） |
+| `unknown` | `POST /v1/admin/agent/chat` のリクエストが `surface` を送ってこなかった |
+
+`surface` はリクエストボディの**任意項目**（`chatSchema` の
+`z.enum(['panel','fullscreen']).optional()`）。両面のフロントは共有 transport 層
+（`admin-ui/src/lib/useAgentChatTransport.ts`）が自面の値を必ず載せるため、
+実運用で `unknown` に落ちるのは API を直接叩く経路だけである。
+なお `panel` / `fullscreen` 以外のリテラルを送った場合は `unknown` に丸めず、
+他のフィールドと同様に **400 `invalid_request`** で弾く（ラベルの語彙をサーバ側で閉じる）。
+
+`chat_first_toggle` は例外で `surface` を持たない。これはチャットターンではなく
+`POST /v1/admin/agent/ui-event` 経由のUI操作で、トグルの実体が全画面UIの左レールにしか
+存在しないため、面を記録しても常に同じ値になり情報量がない。
+
+### 過去データ: `surface` が「無い」行と `"unknown"` の行は別物
+
+**この変更より前に記録された行には `surface` キー自体が存在しない**（`"unknown"` ですらない）。
+`metrics_snapshots` を横断して集計するクエリはこれを区別しなければならない。
+
+```sql
+-- labels->>'surface' は3値ではなく4状態を取る
+--   'panel' / 'fullscreen' / 'unknown' / NULL(キーが無い = この変更以前の行)
+SELECT COALESCE(labels->>'surface', 'pre_surface_label') AS surface, COUNT(*)
+FROM metrics_snapshots
+WHERE metric_name = 'agent_turn_completed'
+GROUP BY 1;
+```
+
+- `labels->>'surface' = 'unknown'` は「この変更以後に、面を名乗らないクライアントから来た」行。
+- `labels->>'surface' IS NULL` は「この変更以前の行」。面ごとの比率を出す分母に混ぜると
+  全画面UI側を過小に見せるため、面別の集計では期間を切るか NULL を明示的に除外する。
+- 既存行の遡及埋め（バックフィル）は行わない。当時の面は記録されておらず復元できないため、
+  `"unknown"` を後付けすると「送ってこなかった」という別の意味と衝突する。
+
 ## メトリクス一覧（この6つのみ）
 
 | metric_name | labels | value | 発火タイミング |
@@ -45,6 +89,9 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
 | `agent_legacy_handoff` | `{ feature: string }` | 常に `1` | `get_legacy_ui_link` が呼ばれたとき。「チャットがまだ旧UIへ何回受け渡しているか」の**分子** |
 | `agent_turn_completed` | `{ answered_from: string }` | 常に `1` | 結果に関わらずターンが完了したとき。handoff率の**分母** |
 | `chat_first_toggle` | `{ enabled: boolean }` | 常に `1` | 「これを既定の画面にする」トグルが切り替わったとき（`POST /v1/admin/agent/ui-event`） |
+
+上表の `labels` は各メトリクス**固有**のキーのみを示す。`chat_first_toggle` 以外の5つは
+これに加えて共通ラベル `surface` を持つ（前節）。
 
 ### `agent_tool_invoked`
 
