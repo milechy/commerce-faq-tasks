@@ -88,6 +88,10 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
 - `hit_limit` = `MAX_TOOL_HOPS` に達しても収束せず、tools 無しの強制まとめ呼び出しに
   落ちたかどうか。`true` が増えているならモデルが1ターンで解決しきれていない兆候。
 - ストリーミング（SSE）経路・非ストリーミング（JSON）経路の両方で発火する。
+- ラベルは `hit_limit` のみ。`tool` もターン/セッションIDも**意図的に持たせていない**ため、
+  ホップ数をページや個別ツールに帰属させることはできない。この指標は全体のveto
+  （エージェント全体が1ターンで解決できているか）専用で、機能単位の労力は別指標で見る。
+  行数とプライバシーのコストに見合わないので、消費側の要望があっても安易に追加しない。
 
 ### `agent_legacy_handoff`
 
@@ -98,13 +102,37 @@ CREATE TABLE IF NOT EXISTS metrics_snapshots (
 - `agent_tool_invoked{tool="get_legacy_ui_link"}` とは**重複して**発火する
   （前者はツール実行の記録、こちらは製品指標としての handoff 記録）。
 
+#### `feature="unknown"` は捨てバケツではなく調査シグナル
+
+`unknown` に落ちる行は「異常値をまとめて捨てる先」ではない。**恒常的に集計し、
+ゼロでなければ理由を突き止めるべき signal** として扱う。`unknown` が出る経路は2つあり、
+どちらも情報を持っている。
+
+1. **enum に無い feature をモデルが渡した** — チャットから案内したい機能があるのに
+   案内先のキーが存在しない、という兆候。実例として、テナントに見えているのに
+   対応ツールも handoff キューも無い機能が `unknown` の調査から見つかっている
+   （`agent_tool_invoked` と `agent_legacy_handoff` の両方から不可視だった）。
+   次の取りこぼしを検出する手段がこのカウントである。
+2. **旧UIページの閉鎖に伴い `toolDefinitions.ts` の feature enum から値が削除された** —
+   閉鎖済みページ宛の残存 handoff は消えるのではなく `unknown` に着地する。
+   `docs/LEGACY_UI_SUNSET.md` はこれを閉鎖後のトリップワイヤーとして使う。
+
+つまり `unknown` は時間が経つほど「純粋なエラーバケツ」ではなくなる。
+**この行を「ノイズだから」と落とす形での“修正”をしてはならない**（閉鎖済みページへの
+残存アクセスを観測する唯一の経路が消える）。増加時は上記1と2のどちらなのかを切り分ける。
+
 ### `agent_turn_completed`
 
 - `answered_from`: レスポンスで返している `answered_from` と同じ値
   （`faq_list` / `tool_action` / `general`）。
 - ツールを使ったか・ブロックされたかに関わらず、ターンが完了すれば必ず1行。
   handoff 率は `count(agent_legacy_handoff) / count(agent_turn_completed)` で出す。
-- 500エラーや SSE の `event: error` で終わったターンは「完了」ではないので発火しない。
+- 500エラーや SSE の `event: error` で終わったターンは「完了」ではないので発火しない
+  （分母は「完了したターン」だけ）。
+- 行にターン/セッションIDが無いため、1ターン中に `get_legacy_ui_link` が2回呼ばれれば
+  handoff 行も2行になり重複排除できない。したがって上記の比は
+  **「完了ターンあたりの handoff 回数」であって「handoff を含んだターンの割合」ではない**
+  （原理的に 1.0 を超えうる）。指標名や文書でこの2つを混同しないこと。
 
 ## 実装上の制約
 
