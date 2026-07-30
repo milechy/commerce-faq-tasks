@@ -14,6 +14,7 @@ import { useNavigate } from "react-router-dom";
 import { LogOut } from "lucide-react";
 import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
+import { shouldSubmitOnEnter } from "../../lib/utils";
 import { useAuth } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
 import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
@@ -249,6 +250,7 @@ export default function CopilotPreviewPage() {
   const navigate = useNavigate();
   const [active, setActive] = useState("assistant");
   const [input, setInput] = useState("");
+  const [isComposing, setIsComposing] = useState(false);
   // モバイル用: 左レール(ドロワー)の開閉状態。デスクトップでは未使用(CSSで常時表示)。
   const [railOpen, setRailOpen] = useState(false);
   // 起動直後は空。bootstrap()が実データの週次ブリーフィングを積む
@@ -259,6 +261,22 @@ export default function CopilotPreviewPage() {
   const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [sending, setSending] = useState(false);
   const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
+
+  // textareaは行が増えても自動では伸びないため、入力量に応じて高さを合わせる
+  // (伸ばさないと2行目以降を打った時に前の行が枠外へ隠れてしまう)
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    // 空の時は rows=1 の高さ(=きっちり1行)に戻す。高さを明示すると、Chromeでは
+    // 長いplaceholderの折り返しがscrollHeightに乗って未入力でも枠が伸びてしまう
+    if (!input) {
+      el.style.height = "";
+      return;
+    }
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [input]);
 
   const threadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -495,8 +513,19 @@ export default function CopilotPreviewPage() {
   const handleSend = () => {
     const text = input.trim();
     if (!text || sending) return;
+    // チップ(保存して/やめておく)を無視して別の話題を打った場合、そのままだと未使用の
+    // チップが宙ぶらりんで残り、新しい応答の横に古い選択肢が並んでしまう。入力欄は
+    // 塞がず(=「やっぱりいいです」と打てるようにしたまま)、送信時に使用済みにする。
+    if (lastMsg && awaitingUserDecision) consumeChips(lastMsg.id);
     setInput("");
     void sendReal(text);
+  };
+
+  const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (shouldSubmitOnEnter(e, isComposing)) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
   // ─── レイアウト ───────────────────────────────────────────────────────────
@@ -630,13 +659,19 @@ export default function CopilotPreviewPage() {
         <div className="cp-composer-wrap" style={{ flexShrink: 0 }}>
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 12px 12px 20px", border: `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 16, background: "var(--input, var(--card))" }}>
-              <input
+              {/* textarea(1行から始まり複数行も書ける)。Enterで送信、Shift+Enterで改行。
+                  IME変換中のEnterは shouldSubmitOnEnter が弾く(旧UIパネルと共通実装) */}
+              <textarea
+                ref={composerRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
+                onKeyDown={handleComposerKeyDown}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={() => setIsComposing(false)}
                 placeholder="指示ルールを話しかけてみてください（例：保証について聞かれたら2年と答えて）"
+                rows={1}
                 disabled={sending}
-                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--foreground)", fontSize: 16, minHeight: 32 }}
+                style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--foreground)", fontSize: 16, maxHeight: 140, resize: "none", fontFamily: "inherit", lineHeight: 1.6, padding: 0, overflowY: "auto" }}
               />
               <button onClick={handleSend} disabled={sending} aria-label="送信" style={{ width: 40, height: 40, borderRadius: 12, border: "none", background: AGENT, color: "#fff", cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.6 : 1, fontSize: 18 }}>
                 {sending ? "…" : "↑"}

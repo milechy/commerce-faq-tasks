@@ -5,6 +5,7 @@ import AdminAgentMessage from "./AdminAgentMessage";
 import FeedbackPrompt from "./FeedbackPrompt";
 import ReplyCard from "./ReplyCard";
 import { submitConsultation, type FeedbackReply } from "./useFeedbackReplies";
+import { shouldSubmitOnEnter } from "../../lib/utils";
 
 interface AdminAgentPanelProps {
   isOpen: boolean;
@@ -81,13 +82,7 @@ export default function AdminAgentPanel({
   }, [onMarkReplyRead]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      e.key === "Enter" &&
-      !e.shiftKey &&
-      !e.nativeEvent.isComposing &&
-      !isComposing &&
-      e.nativeEvent.keyCode !== 229
-    ) {
+    if (shouldSubmitOnEnter(e, isComposing)) {
       e.preventDefault();
       void handleSend();
     }
