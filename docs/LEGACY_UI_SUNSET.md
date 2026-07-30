@@ -280,7 +280,14 @@
    - **`Route` 自体を削除してはいけない。** `App.tsx:251` の catch-all (`path="*"` → `/admin`) に落ちるため、削除すると `/copilot-preview` ではなく旧ダッシュボードに着地する。明示的な `Navigate` が必要。前例は `App.tsx:229–230` (`/admin/evaluations` → `/admin/chat-history`)。
 2. `src/api/admin/agent/actionExecutor.ts:1659–1710` の `LEGACY_UI_LINKS` から該当キーを削除。
 3. `src/api/admin/agent/toolDefinitions.ts:839–849` の `feature` enum から該当値を削除し、**`get_legacy_ui_link` の description (`toolDefinitions.ts:818–832`) の該当文言も削除する**。enum だけ消して description に機能名が残ると、モデルは存在しない `feature` を渡し `actionExecutor.ts:1735–1737` の「不明な案内先です」に落ちる。
-4. 該当キー固有の分岐も掃除する: `analytics`/`conversion` のプランゲート (`actionExecutor.ts:1719–1727`)、`knowledge_pdf` の tenantId 必須ガード (`:1730–1732`)、`session_deletion` のセッション解決 (`:1742–1754`)。
+4. **メトリクス側のホワイトリストからも削除する** — PR #571 が入った後は `LEGACY_HANDOFF_FEATURES` (`src/api/admin/agent/agentRoutes.ts:27–37`) が同じ 9 値を**独立にハードコードして持っている**。ここを消し忘れると、閉じたページの handoff が `"unknown"` に落ちず自分の名前で記録され続け、**§2.4 / §6-2-1 の事後トリップワイヤが黙って作動しない**。
+5. 該当キー固有の分岐も掃除する: `analytics`/`conversion` のプランゲート (`actionExecutor.ts:1719–1727`)、`knowledge_pdf` の tenantId 必須ガード (`:1730–1732`)、`session_deletion` のセッション解決 (`:1742–1754`)。
+
+> **9 値は現在 3 箇所に重複している** (①`toolDefinitions.ts` の enum = モデル向け契約 / ②`actionExecutor.ts` の `LEGACY_UI_LINKS` キー = 実際のリンク先 / ③`agentRoutes.ts` の `LEGACY_HANDOFF_FEATURES` = メトリクスのラベル語彙)。Stage B は数か月にわたり別々の担当者が繰り返す手順なので、「3 箇所を消す」を手順書で担保するのは弱い。
+>
+> **推奨: `toolDefinitions.ts` に `export const LEGACY_UI_FEATURES = [...] as const` を 1 本置き、enum リテラル・`LEGACY_UI_LINKS` の型・`LEGACY_HANDOFF_FEATURES` の 3 箇所すべてがそれを参照する形にしてから Stage B を始める** (`agentRoutes.ts` は既に `toolDefinitions` を import しているので依存は増えない)。`ADMIN_AGENT_TOOLS` の入れ子 (`[43].function.parameters.properties.feature.enum`) を実行時に掘るのは脆いので、**enum の内側から定数を参照する形**にすること。
+>
+> これを単なる DRY ではなく着手前の前提として挙げるのは、**この重複だけ失敗の向きが危険側**だから。本基準の他の死角 (面の混在 §7-2、プラン拒否 §2.3 C3) はいずれも「クローズが遅れる」方向に倒れる安全な偏りだが、③ の消し忘れは「まだ必要とされているページが健全に見える」方向に倒れ、しかもデータ上は正常な記録と区別が付かない。
 
 **なぜ 1 と 2–3 を分けられないか:** リダイレクトを先に出すと、`get_legacy_ui_link` が「URL: /admin/analytics」と案内した先が `/copilot-preview` に戻される。案内カード (`pages/copilot-preview/index.tsx:170` の `parseLegacyUiLink` で解析、`:823–840` で描画) は会話を失わないため `target="_blank"` 固定 (`:826–833`) なので、症状は同一タブ内のループではなく **「別タブに真新しいセッションのチャットがもう 1 枚開く」** という形になる。ループより分かりにくいだけで壊れ方は同じ。逆に enum を先に削ると、まだ必要な逃げ道を先に塞ぐことになる。よってこの 2 つは不可分。
 タスク指示の順序 (リダイレクト → サイドバー → リンク削除) に対し、本手順は **サイドバー撤去を先頭に繰り上げている**。理由はこのループ回避で、「案内キーの削除はページが閉じた後」という制約は維持している。
