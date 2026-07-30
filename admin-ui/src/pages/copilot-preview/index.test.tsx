@@ -326,6 +326,79 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
   });
 });
 
+// GID: バックエンドの構造化カード(card)から直接リンクカードを描画する経路の回帰テスト。
+// 自然文の言い回しが変わるとカードが黙って消える正規表現依存を外すための追加経路で、
+// card を返すのは現状 get_legacy_ui_link のみ。card が無いツールは従来の正規表現
+// フォールバックで描画され続ける(この2経路の共存をここで固定する)。
+describe("CopilotPreviewPage — 構造化カード(card)からの描画", () => {
+  function mockAgent(secondResponse: unknown) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    // 起動時ブリーフィングも同じエンドポイントを叩くため、カードは2回目の応答にだけ載せる
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      return mockOk(secondResponse);
+    });
+  }
+
+  async function send(text: string) {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("送信"));
+  }
+
+  it("card があれば、自然文が3行フォーマットに一致しなくてもリンクカードを描画する", async () => {
+    const description = "画像候補の選択・音声クローン・性格設定・ライブテストはこちらの画面で行えます";
+    mockAgent({
+      reply: "アバタースタジオをご案内しました。",
+      actions: [
+        {
+          tool: "get_legacy_ui_link",
+          // 正規表現(画面:/URL:/説明:)に一切一致しない自然文。従来のパース経路だけなら
+          // カードにならず汎用表示に落ちるため、描画されたことが card 経由の証拠になる。
+          result: "アバタースタジオでご対応いただけます。",
+          card: { kind: "legacy_link", label: "アバタースタジオ", url: "/admin/avatar/studio", description },
+        },
+      ],
+    });
+
+    await send("アバターを設定したい");
+
+    const link = await screen.findByRole("link", { name: /アバタースタジオを開く/ });
+    expect(link.getAttribute("href")).toBe("/admin/avatar/studio");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    // 説明文も card の構造化フィールドから来ている
+    expect(screen.getByText(description)).toBeTruthy();
+  });
+
+  it("card が無い既存ツールは、従来どおり自然文の正規表現パースでリンクカードになる", async () => {
+    const description = "会話内容の確認とその会話セッションの削除はこちらの画面で行えます";
+    mockAgent({
+      reply: "会話履歴画面をご案内しました。",
+      actions: [
+        {
+          tool: "get_legacy_ui_link",
+          result: `この操作は会話履歴画面から行えます。\n画面: 会話履歴\nURL: /admin/chat-history\n説明: ${description}`,
+        },
+      ],
+    });
+
+    await send("会話を削除したい");
+
+    const link = await screen.findByRole("link", { name: /会話履歴を開く/ });
+    expect(link.getAttribute("href")).toBe("/admin/chat-history");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(screen.getByText(description)).toBeTruthy();
+  });
+});
+
 function getComposer(): HTMLTextAreaElement {
   return screen.getByPlaceholderText(/指示ルール/) as HTMLTextAreaElement;
 }

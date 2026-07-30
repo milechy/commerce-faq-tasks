@@ -8,6 +8,7 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
+import type { ActionResult, LegacyLinkCardPayload } from './actionExecutor';
 import { requiresConfirmation } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
@@ -70,6 +71,10 @@ function recordTurnCompleted(
 // ---------------------------------------------------------------------------
 
 type AnsweredFrom = 'faq_list' | 'tool_action' | 'general';
+
+// クライアントへ返すツール実行結果。result(自然文)は構造化ツールでも必ず入るので
+// 既存クライアントと既存の正規表現パーサはそのまま動き、card は追加でのみ載る。
+type ChatAction = { tool: string; result: string; card?: LegacyLinkCardPayload };
 
 function determineAnsweredFrom(actions: Array<{ tool: string; result: string }>): AnsweredFrom {
   if (actions.some((a) => a.tool === 'get_faq_list')) return 'faq_list';
@@ -272,7 +277,7 @@ async function executeHopToolCalls(
   effectiveTenantId: string,
   db: Pool,
   suggestedThisTurn: Set<string>,
-  actions: Array<{ tool: string; result: string }>,
+  actions: ChatAction[],
   messages: GroqMessage[],
   isSuperAdmin: boolean,
   sessionId: string,
@@ -294,12 +299,14 @@ async function executeHopToolCalls(
     const blockSameTurnChain = alreadySuggestedThisTurn && requiresConfirmation(name);
 
     let result: string;
+    let card: LegacyLinkCardPayload | undefined;
     if (blockSameTurnChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
     } else {
+      let raw: ActionResult;
       try {
-        result = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
+        raw = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
       } catch (err) {
         fireAgentMetric(db, {
           metricName: 'agent_tool_invoked',
@@ -309,10 +316,20 @@ async function executeHopToolCalls(
         });
         throw err;
       }
+      // 構造化結果を「自然文 + 任意のカード」へ正規化する。これ以降の処理
+      // (LLMへの差し戻し・classifyToolResult による計測・answered_from)は
+      // 従来どおり自然文だけを見るため、構造化しても挙動は変わらない。
+      if (typeof raw === 'string') {
+        result = raw;
+      } else {
+        result = raw.text;
+        card = raw.card;
+      }
       if (name in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(name);
     }
 
-    actions.push({ tool: name, result });
+    // card を持たないツールでは JSON に card キー自体を出さない(既存レスポンス形と同一)。
+    actions.push(card ? { tool: name, result, card } : { tool: name, result });
     messages.push({ role: 'tool', tool_call_id: id, name, content: result });
 
     const metricTenantId = effectiveTenantId || null;
@@ -574,7 +591,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
 
       let totalPromptTokens = 0;
       let totalCompletionTokens = 0;
-      const actions: Array<{ tool: string; result: string }> = [];
+      const actions: ChatAction[] = [];
       // このリクエスト(ターン)内で suggest_* が呼ばれたツール名を記録し、
       // 対応する save_* が同一ターン内で連鎖実行されるのを防ぐ（G1のリスク軽減策）
       const suggestedThisTurn = new Set<string>();

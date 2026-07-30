@@ -2950,6 +2950,159 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 構造化カード(card)チャネル
+  //
+  // ツールが自然文に加えて構造化データを返せる経路。フロントが自然文を正規表現で
+  // 読み直さずにカードを描画できるようにするためのもので、現時点で card を返すのは
+  // get_legacy_ui_link だけ。残りのツールは素の文字列を返し続け、result のみが載る
+  // 従来のレスポンス形と完全に同じであること（=union型化が全ツールへ波及していないこと）
+  // をここで固定する。
+  // -------------------------------------------------------------------------
+  describe('構造化カード(card)チャネル', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const BILLING_DESCRIPTION = '請求書の再送・金額調整・無料期間設定・一時停止/再開はこちらの画面で行えます';
+
+    it('JSON経路: get_legacy_ui_link は自然文(result)に加えて card を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-card-1', 'get_legacy_ui_link', { feature: 'billing' }))
+        .mockResolvedValueOnce(makeGroqResponse('請求管理画面をご案内しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-card-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'legacy_link',
+        label: '請求管理',
+        url: '/admin/billing',
+        description: BILLING_DESCRIPTION,
+      });
+
+      // card は自然文の置き換えではなく追加。3行フォーマット(parseLegacyUiLink の契約)は
+      // 正規表現フォールバックのために残り続ける。
+      const result = res.body.actions[0].result as string;
+      expect(typeof result).toBe('string');
+      expect(result).toContain('画面: 請求管理\n');
+      expect(result).toContain('URL: /admin/billing\n');
+      expect(result).toContain(`説明: ${BILLING_DESCRIPTION}`);
+    });
+
+    it('SSE経路: event: done の actions にも同じ card が載る', async () => {
+      function makeStreamingGroqResponse(fullSseText: string) {
+        const bytes = new TextEncoder().encode(fullSseText);
+        let sent = false;
+        return {
+          ok: true,
+          body: {
+            getReader: () => ({
+              read: async () => {
+                if (!sent) {
+                  sent = true;
+                  return { done: false, value: bytes };
+                }
+                return { done: true, value: undefined };
+              },
+            }),
+          },
+          text: async () => '',
+        };
+      }
+
+      const hop1Sse =
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-card-2","function":{"name":"get_legacy_ui_link","arguments":""}}]}}]}\n\n' +
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"feature\\":\\"billing\\"}"}}]}}]}\n\n' +
+        'data: [DONE]\n\n';
+      const hop2Sse = 'data: {"choices":[{"delta":{"content":"請求管理画面をご案内しました。"}}]}\n\n' + 'data: [DONE]\n\n';
+
+      mockFetch
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop1Sse))
+        .mockResolvedValueOnce(makeStreamingGroqResponse(hop2Sse));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-card-02', stream: true });
+
+      expect(res.status).toBe(200);
+
+      const marker = 'event: done\ndata: ';
+      const start = res.text.indexOf(marker);
+      expect(start).toBeGreaterThan(-1);
+      const done = JSON.parse(res.text.slice(start + marker.length, res.text.indexOf('\n\n', start))) as {
+        actions: Array<{ tool: string; result: string; card?: Record<string, unknown> }>;
+      };
+
+      expect(done.actions[0].tool).toBe('get_legacy_ui_link');
+      expect(done.actions[0].card).toEqual({
+        kind: 'legacy_link',
+        label: '請求管理',
+        url: '/admin/billing',
+        description: BILLING_DESCRIPTION,
+      });
+      expect(done.actions[0].result).toContain('URL: /admin/billing\n');
+    });
+
+    it('素の文字列を返すツール(save_faq)は result のみで card キー自体を持たない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-card-3', 'save_faq', {
+            question: '送料はいくらですか？',
+            answer: '550円です。',
+            category: 'store_info',
+            confirmed: true,
+          }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 99, question: '送料はいくらですか？', answer: '550円です。', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-card-03' });
+
+      expect(res.status).toBe(200);
+      const action = res.body.actions[0];
+      expect(typeof action.result).toBe('string');
+      expect(action.result).toContain('ID: 99');
+      // キーの不在まで見る: 未移行ツールのレスポンス形が1バイトも変わっていないこと
+      expect(action.card).toBeUndefined();
+      expect(Object.keys(action)).toEqual(['tool', 'result']);
+    });
+
+    it('get_legacy_ui_link の失敗パス(プラン制限)では card を返さない(押せないカードを作らない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-card-4', 'get_legacy_ui_link', { feature: 'analytics' }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話の分析を見たい', sessionId: 'sess-card-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].card).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // get_analytics_summary / get_conversion_summary
   // -------------------------------------------------------------------------
   describe('get_analytics_summary / get_conversion_summary', () => {
