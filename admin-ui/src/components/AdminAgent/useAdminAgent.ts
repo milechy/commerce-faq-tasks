@@ -9,10 +9,23 @@ import {
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
+// バックエンド(actionExecutor.ts の LegacyLinkCardPayload)が自然文に添えて返す
+// 構造化カード。現時点で card を返すのは get_legacy_ui_link だけで、他のツールは
+// 従来どおり result の自然文のみ。このパネル(Surface A)はまだ card を描画しないが、
+// /copilot-preview と同じレスポンスを消費するため型は共通にしておく。
+export type AgentActionCard = {
+  kind: "legacy_link";
+  label: string;
+  url: string;
+  description: string;
+};
+
+export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
+
 export interface AgentMessage {
   role: "user" | "assistant";
   content: string;
-  actions?: { tool: string; result: string }[];
+  actions?: AgentAction[];
   needsConfirmation?: boolean;
   answeredFrom?: AnsweredFrom;
 }
@@ -87,7 +100,7 @@ export function useAdminAgent(): UseAdminAgentResult {
 
       const data = (await res.json()) as {
         reply: string;
-        actions: { tool: string; result: string }[];
+        actions: AgentAction[];
         answered_from?: AnsweredFrom;
       };
 

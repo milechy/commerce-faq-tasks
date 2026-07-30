@@ -135,6 +135,24 @@ const CHAT_ROLE_LABELS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// ツール実行結果
+// ---------------------------------------------------------------------------
+
+// フィールド名は copilot-preview の Card union の link バリアントに揃えてあり、
+// フロントは自然文を正規表現で読み直さずそのまま描画できる。
+export type LegacyLinkCardPayload = {
+  kind: 'legacy_link';
+  label: string;
+  url: string;
+  description: string;
+};
+
+// ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
+// { text, card } 形を返す。card は text の置き換えではなく追加である
+// （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
+export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload };
+
+// ---------------------------------------------------------------------------
 // メインエントリ
 // ---------------------------------------------------------------------------
 
@@ -145,7 +163,7 @@ export async function executeToolCall(
   db: Pool,
   sessionId: string,
   isSuperAdmin: boolean = false
-): Promise<string> {
+): Promise<ActionResult> {
   // 結果は500字以内日本語
   const truncate = (s: string) => s.slice(0, 500);
 
@@ -1756,7 +1774,14 @@ export async function executeToolCall(
       // 冒頭は「できません」ではなく「どこでできるか」から始める(行き止まりに見せない)。
       // 続く3行(画面:/URL:/説明:)は copilot-preview の parseLegacyUiLink が
       // リンクカード描画のために正規表現で読む契約なので、順序・ラベルを変えないこと。
-      return truncate(`この操作は${link.label}画面から行えます。\n画面: ${link.label}\nURL: ${path}\n説明: ${link.description}`);
+      // card を併せて返すことで新しいクライアントは正規表現を経ずに描画できるが、
+      // 自然文だけを見る経路(LLMへの差し戻し・旧クライアント)のために text は不可欠。
+      // 失敗パス(プラン制限・不明なfeature等)は素の文字列を返すため、押せないリンク
+      // カードが出ないという性質は card 側でもそのまま保たれる。
+      return {
+        text: truncate(`この操作は${link.label}画面から行えます。\n画面: ${link.label}\nURL: ${path}\n説明: ${link.description}`),
+        card: { kind: 'legacy_link', label: link.label, url: path, description: link.description },
+      };
     }
 
     // -----------------------------------------------------------------------

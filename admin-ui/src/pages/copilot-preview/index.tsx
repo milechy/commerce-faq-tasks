@@ -28,6 +28,8 @@ import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
 // 切り出した(旧UIとの共有コンポーネント。詳細は common/ThemeToggle.tsx 参照)。
 import { NotificationBell } from "../../components/common/NotificationBell";
 import { ThemeToggle } from "../../components/common/ThemeToggle";
+// レスポンス形は本番パネル(Surface A)と共有のため、型も一箇所から取る。
+import type { AgentAction } from "../../components/AdminAgent/useAdminAgent";
 import LangSwitcher from "../../components/LangSwitcher";
 import AppSwitcher from "../../components/AppSwitcher";
 
@@ -334,7 +336,7 @@ export default function CopilotPreviewPage() {
         return;
       }
 
-      const data = (await res.json()) as { reply: string; actions: { tool: string; result: string }[] };
+      const data = (await res.json()) as { reply: string; actions: AgentAction[] };
       setRealHistory((prev) =>
         [
           ...prev,
@@ -346,6 +348,13 @@ export default function CopilotPreviewPage() {
       // ツール結果を、可能なら提案書と同じ見た目のカードにパースする。
       // 想定外の形式(下書き生成失敗時のエラー文など)は汎用の agentAction カードにフォールバック。
       const actionMsgs: Msg[] = (data.actions ?? []).map((a) => {
+        // 構造化カードが来ていればそれを直接描画する。自然文の言い回しが変わっても
+        // カードが黙って消えない経路。card が無いツール(現状 get_legacy_ui_link 以外の
+        // すべて)は、これまでどおり下の正規表現パースにフォールバックする。
+        if (a.card?.kind === "legacy_link") {
+          const { label, url, description } = a.card;
+          return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
+        }
         if (a.tool === "suggest_faq") {
           const parsed = parseSuggestFaq(a.result);
           if (parsed) return { id: nextId(), role: "ai", card: { kind: "faq", ...parsed } };
