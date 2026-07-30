@@ -697,9 +697,11 @@ export default function CopilotPreviewPage() {
             ✕
           </button>
         </div>
-        {/* AppSwitcher (R2C ⇄ R2C2)。旧UI(AppSidebar)と同じくヘッダー直下に配置 */}
+        {/* AppSwitcher (R2C ⇄ R2C2)。旧UI(AppSidebar)と同じくヘッダー直下に配置。
+            この画面には旧UIのチャットパネル(Surface A)が無いため、ロックタブの
+            質問はこの画面自身のチャットへ流す(onSeedQuery)。 */}
         <div style={{ padding: "0 2px" }}>
-          <AppSwitcher />
+          <AppSwitcher onSeedQuery={(query) => void sendReal(query)} />
         </div>
         <PreviewBadge />
         {CATEGORIES.map((c) => {
