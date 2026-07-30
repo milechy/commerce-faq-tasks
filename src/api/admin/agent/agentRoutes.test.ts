@@ -332,7 +332,7 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_tool_invoked',
           tenantId: 'tenant-abc',
-          labels: { tool: 'get_tenant_settings', outcome: 'ok' },
+          labels: { tool: 'get_tenant_settings', outcome: 'ok', surface: 'unknown' },
           value: 1,
         },
       ]);
@@ -341,7 +341,7 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_turn_hops',
           tenantId: 'tenant-abc',
-          labels: { hit_limit: false },
+          labels: { hit_limit: false, surface: 'unknown' },
           value: 1,
         },
       ]);
@@ -349,7 +349,7 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_turn_completed',
           tenantId: 'tenant-abc',
-          labels: { answered_from: 'tool_action' },
+          labels: { answered_from: 'tool_action', surface: 'unknown' },
           value: 1,
         },
       ]);
@@ -365,10 +365,10 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(recordedMetrics('agent_tool_invoked')).toEqual([]);
       expect(recordedMetrics('agent_turn_hops')).toEqual([
-        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false }, value: 0 },
+        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false, surface: 'unknown' }, value: 0 },
       ]);
       expect(recordedMetrics('agent_turn_completed')).toEqual([
-        { metricName: 'agent_turn_completed', tenantId: 'tenant-abc', labels: { answered_from: 'general' }, value: 1 },
+        { metricName: 'agent_turn_completed', tenantId: 'tenant-abc', labels: { answered_from: 'general', surface: 'unknown' }, value: 1 },
       ]);
     });
 
@@ -410,6 +410,129 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.reply).toBe('GA4は未設定です。');
       expect(res.body.actions[0].tool).toBe('get_tenant_settings');
       expect(res.body.answered_from).toBe('tool_action');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GID 1217008695995707: どちらのチャットUI(パネル/全画面)から来たターンかを
+  // 全メトリクスの surface ラベルに載せる。docs/CHAT_SURFACE_DECISION.md の
+  // 「全画面UIが実際に主たる面になりつつあるのか」は面ごとの数字がないと答えられないため、
+  // 1つでもラベルが欠けたメトリクスがあるとその指標だけ面別に切れなくなる。
+  // -------------------------------------------------------------------------
+  describe('surface ラベル', () => {
+    /**
+     * get_legacy_ui_link を1回呼ぶターン。この1リクエストで
+     * agent_tool_invoked / agent_legacy_handoff / agent_turn_hops / agent_turn_completed
+     * の4種が発火するので、「そのターンの全メトリクス」をまとめて検証できる。
+     */
+    function mockLegacyHandoffTurn() {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-surface',
+                  type: 'function',
+                  function: { name: 'get_legacy_ui_link', arguments: JSON.stringify({ feature: 'billing' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('旧管理画面をご確認ください。'));
+    }
+
+    /** 記録された全メトリクスを [metric_name, labels.surface] の組で取り出す */
+    function recordedSurfaces(): Array<[string, unknown]> {
+      return mockRecordAgentMetric.mock.calls.map(([, input]) => [
+        (input as Record<string, any>).metricName,
+        (input as Record<string, any>).labels?.surface,
+      ]);
+    }
+
+    it.each(['panel', 'fullscreen'])(
+      'surface=%s → そのターンに記録された全メトリクスが同じ値のラベルを持つ',
+      async (surface) => {
+        mockLegacyHandoffTurn();
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '請求書を再送したい', sessionId: 'sess-surface-01', surface });
+
+        expect(res.status).toBe(200);
+        // 4種すべてが発火していることを固定する(取りこぼすと、その指標だけ面別に切れなくなる)
+        expect(recordedSurfaces().map(([name]) => name).sort()).toEqual([
+          'agent_legacy_handoff',
+          'agent_tool_invoked',
+          'agent_turn_completed',
+          'agent_turn_hops',
+        ]);
+        expect(recordedSurfaces()).toEqual(recordedSurfaces().map(([name]) => [name, surface]));
+      },
+    );
+
+    it('surface=panel: 確認ゲートでブロックされた書き込み(agent_write_blocked)にも載る', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-surface-blocked',
+                  type: 'function',
+                  function: { name: 'update_tuning_rule', arguments: JSON.stringify({ id: 1, is_active: false }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を無効にして', sessionId: 'sess-surface-02', surface: 'panel' });
+
+      expect(res.status).toBe(200);
+      expect(recordedMetrics('agent_write_blocked')).toEqual([
+        {
+          metricName: 'agent_write_blocked',
+          tenantId: 'tenant-abc',
+          labels: { tool: 'update_tuning_rule', reason: 'unconfirmed', surface: 'panel' },
+          value: 1,
+        },
+      ]);
+    });
+
+    it('surface を送らない既存クライアントは 200 のまま、unknown として記録される(後方互換)', async () => {
+      mockLegacyHandoffTurn();
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-surface-03' });
+
+      // 必須項目にしていないので、送ってこないクライアントを拒否してはならない
+      expect(res.status).toBe(200);
+      expect(recordedSurfaces()).toEqual(recordedSurfaces().map(([name]) => [name, 'unknown']));
+    });
+
+    it('surface が enum 外のリテラルなら 400 で弾く(unknown へ黙って丸めない)', async () => {
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を再送したい', sessionId: 'sess-surface-04', surface: 'mobile' });
+
+      // 語彙はサーバ側で閉じる。黙って unknown に丸めると、面を名乗らないクライアントと
+      // 未知の面を名乗るクライアントが同じバケツに入って区別できなくなる。
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('invalid_request');
+      // バリデーションで落ちたターンは計測もしない
+      expect(mockRecordAgentMetric).not.toHaveBeenCalled();
     });
   });
 
@@ -947,7 +1070,7 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_tool_invoked',
           tenantId: 'tenant-abc',
-          labels: { tool: 'update_tuning_rule', outcome: 'blocked' },
+          labels: { tool: 'update_tuning_rule', outcome: 'blocked', surface: 'unknown' },
           value: 1,
         },
       ]);
@@ -955,7 +1078,7 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_write_blocked',
           tenantId: 'tenant-abc',
-          labels: { tool: 'update_tuning_rule', reason: 'unconfirmed' },
+          labels: { tool: 'update_tuning_rule', reason: 'unconfirmed', surface: 'unknown' },
           value: 1,
         },
       ]);
@@ -2760,7 +2883,7 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_legacy_handoff',
           tenantId: 'tenant-abc',
-          labels: { feature },
+          labels: { feature, surface: 'unknown' },
           value: 1,
         },
       ]);
@@ -2783,7 +2906,7 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_legacy_handoff',
           tenantId: 'tenant-abc',
-          labels: { feature: 'unknown' },
+          labels: { feature: 'unknown', surface: 'unknown' },
           value: 1,
         },
       ]);
@@ -3905,12 +4028,12 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_write_blocked',
           tenantId: 'tenant-abc',
-          labels: { tool: 'save_faq', reason: 'chain' },
+          labels: { tool: 'save_faq', reason: 'chain', surface: 'unknown' },
           value: 1,
         },
       ]);
       expect(recordedMetrics('agent_turn_hops')).toEqual([
-        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false }, value: 2 },
+        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false, surface: 'unknown' }, value: 2 },
       ]);
     });
 
@@ -4258,15 +4381,15 @@ describe('POST /v1/admin/agent/chat', () => {
         {
           metricName: 'agent_tool_invoked',
           tenantId: 'tenant-abc',
-          labels: { tool: 'get_tenant_settings', outcome: 'ok' },
+          labels: { tool: 'get_tenant_settings', outcome: 'ok', surface: 'unknown' },
           value: 1,
         },
       ]);
       expect(recordedMetrics('agent_turn_hops')).toEqual([
-        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false }, value: 1 },
+        { metricName: 'agent_turn_hops', tenantId: 'tenant-abc', labels: { hit_limit: false, surface: 'unknown' }, value: 1 },
       ]);
       expect(recordedMetrics('agent_turn_completed')).toEqual([
-        { metricName: 'agent_turn_completed', tenantId: 'tenant-abc', labels: { answered_from: 'tool_action' }, value: 1 },
+        { metricName: 'agent_turn_completed', tenantId: 'tenant-abc', labels: { answered_from: 'tool_action', surface: 'unknown' }, value: 1 },
       ]);
     });
 

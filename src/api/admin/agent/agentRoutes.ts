@@ -31,6 +31,12 @@ const BLOCKED_CHAIN_MARKER = '確認をスキップできません';
 // docs/LEGACY_UI_SUNSET.md のトリップワイヤーが無言で作動しなくなる）。
 const LEGACY_HANDOFF_FEATURES = new Set<string>(LEGACY_UI_FEATURES);
 
+// 全メトリクスに載せる「どちらのチャットUIから来たターンか」。リクエストが surface を
+// 送ってこない場合(この項目より前のクライアント / 直接APIを叩く経路)は 'unknown' に丸める。
+// docs/AGENT_METRICS.md: この項目以前に記録された行はキー自体を持たないため、
+// 'unknown' と「キーなし」は集計上区別できる別物である。
+type MetricSurface = 'panel' | 'fullscreen' | 'unknown';
+
 /** 計測は fire-and-forget。記録の失敗をチャット応答に一切影響させない。 */
 function fireAgentMetric(db: Pool, input: AgentMetricInput): void {
   try {
@@ -117,18 +123,24 @@ function fireSettingsAudit(
 
 function recordTurnCompleted(
   db: Pool,
-  params: { tenantId: string | null; toolHops: number; hitHopLimit: boolean; answeredFrom: AnsweredFrom },
+  params: {
+    tenantId: string | null;
+    toolHops: number;
+    hitHopLimit: boolean;
+    answeredFrom: AnsweredFrom;
+    surface: MetricSurface;
+  },
 ): void {
   fireAgentMetric(db, {
     metricName: 'agent_turn_hops',
     tenantId: params.tenantId,
-    labels: { hit_limit: params.hitHopLimit },
+    labels: { hit_limit: params.hitHopLimit, surface: params.surface },
     value: params.toolHops,
   });
   fireAgentMetric(db, {
     metricName: 'agent_turn_completed',
     tenantId: params.tenantId,
-    labels: { answered_from: params.answeredFrom },
+    labels: { answered_from: params.answeredFrom, surface: params.surface },
     value: 1,
   });
 }
@@ -211,6 +223,11 @@ const chatSchema = z.object({
   history: z.array(historyItemSchema).max(20).optional(),
   // 明示的にオプトインした場合のみ true。省略時(既存クライアント)は従来通りJSON一括応答のまま。
   stream: z.boolean().optional(),
+  // どちらのチャットUIから来たリクエストか。省略時は 'unknown' として計測する(必須にはしない
+  // ため、この値を送らない既存クライアントは従来どおり動く)。値そのものは enum で閉じており、
+  // 未知のリテラルは他のフィールドと同様 zod のバリデーションで 400 になる
+  // （ラベルの語彙を有界に保つ責任をサーバ側に置く）。
+  surface: z.enum(['panel', 'fullscreen']).optional(),
 });
 
 // UIイベント計測の受け口。event は**閉じた enum** にしておく。自由記述のイベント名を
@@ -359,6 +376,7 @@ async function executeHopToolCalls(
   isSuperAdmin: boolean,
   sessionId: string,
   changedBy: string,
+  surface: MetricSurface,
 ): Promise<void> {
   for (const toolCall of toolCalls) {
     const { id, name, args } = toolCall;
@@ -389,7 +407,7 @@ async function executeHopToolCalls(
         fireAgentMetric(db, {
           metricName: 'agent_tool_invoked',
           tenantId: effectiveTenantId || null,
-          labels: { tool: name, outcome: 'error' },
+          labels: { tool: name, outcome: 'error', surface },
           value: 1,
         });
         throw err;
@@ -415,14 +433,14 @@ async function executeHopToolCalls(
     fireAgentMetric(db, {
       metricName: 'agent_tool_invoked',
       tenantId: metricTenantId,
-      labels: { tool: name, outcome },
+      labels: { tool: name, outcome, surface },
       value: 1,
     });
     if (reason) {
       fireAgentMetric(db, {
         metricName: 'agent_write_blocked',
         tenantId: metricTenantId,
-        labels: { tool: name, reason },
+        labels: { tool: name, reason, surface },
         value: 1,
       });
     }
@@ -447,7 +465,7 @@ async function executeHopToolCalls(
       fireAgentMetric(db, {
         metricName: 'agent_legacy_handoff',
         tenantId: metricTenantId,
-        labels: { feature: LEGACY_HANDOFF_FEATURES.has(feature) ? feature : 'unknown' },
+        labels: { feature: LEGACY_HANDOFF_FEATURES.has(feature) ? feature : 'unknown', surface },
         value: 1,
       });
     }
@@ -626,6 +644,8 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
     }
 
     const { message, sessionId, targetTenantId, history } = parsed.data;
+    // 送ってこないクライアントも受け入れる代わりに、計測側では 'unknown' として1つの語彙に丸める。
+    const surface: MetricSurface = parsed.data.surface ?? 'unknown';
 
     // effectiveTenantId: super_admin は targetTenantId を使用可、client_admin は JWT 由来のみ
     const effectiveTenantId = isSuperAdmin ? (targetTenantId ?? tenantId) : tenantId;
@@ -725,7 +745,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             }));
 
             const beforeCount = actions.length;
-            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email);
+            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface);
             for (const action of actions.slice(beforeCount)) {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
@@ -765,6 +785,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             toolHops,
             hitHopLimit,
             answeredFrom,
+            surface,
           });
 
           res.write(`event: done\ndata: ${JSON.stringify({ reply: finalReply, actions, answered_from: answeredFrom })}\n\n`);
@@ -822,7 +843,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           args: parseToolArgs(toolCall.function.arguments),
         }));
 
-        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email);
+        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface);
       }
 
       const hitHopLimit = finalReply === null;
@@ -850,6 +871,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         toolHops,
         hitHopLimit,
         answeredFrom,
+        surface,
       });
 
       return res.json({ reply: finalReply, actions, answered_from: answeredFrom });

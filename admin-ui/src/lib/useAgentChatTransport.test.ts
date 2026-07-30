@@ -281,17 +281,33 @@ describe("useAgentChatTransport — エラーの正規化", () => {
 });
 
 describe("useAgentChatTransport — surface", () => {
-  it("受け取った面の識別子をそのまま公開する(サーバ側のラベル付けは別タスク)", () => {
+  it("受け取った面の識別子をそのまま公開する", () => {
     const { result } = renderHook(() => useAgentChatTransport({ surface: "fullscreen" }));
     expect(result.current.surface).toBe("fullscreen");
   });
 
-  it("面の識別子はまだリクエストボディに載せない(既存スキーマを変えないため)", async () => {
+  // サーバはこの値を全メトリクスの surface ラベルに載せる(docs/AGENT_METRICS.md)。
+  // 送らないと 'unknown' に丸められ、面ごとの比較(docs/CHAT_SURFACE_DECISION.md の
+  // 「全画面UIが主たる面になりつつあるのか」)ができなくなる。
+  it.each(["panel", "fullscreen"] as const)(
+    "設定された面の識別子(%s)をリクエストボディに載せて送る",
+    async (surface) => {
+      const { result } = renderHook(() => useAgentChatTransport({ surface }));
+
+      await act(async () => { await result.current.send("送料を教えて"); });
+
+      expect(vi.mocked(authFetch).mock.calls.at(-1)![0]).toBe(CHAT_URL);
+      expect(lastBody().surface).toBe(surface);
+    },
+  );
+
+  it("送信を跨いでも面の識別子は変わらない", async () => {
     const { result } = renderHook(() => useAgentChatTransport({ surface: "fullscreen" }));
 
-    await act(async () => { await result.current.send("送料を教えて"); });
+    await act(async () => { await result.current.send("1通目"); });
+    await act(async () => { await result.current.send("2通目"); });
 
-    expect(vi.mocked(authFetch).mock.calls.at(-1)![0]).toBe(CHAT_URL);
-    expect(lastBody()).not.toHaveProperty("surface");
+    const bodies = vi.mocked(authFetch).mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)));
+    expect(bodies.map((b) => b.surface)).toEqual(["fullscreen", "fullscreen"]);
   });
 });

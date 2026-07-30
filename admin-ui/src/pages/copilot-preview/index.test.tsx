@@ -820,6 +820,42 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
   });
 });
 
+// GID 1217008695995707: サーバは全メトリクスの surface ラベルにこの値をそのまま載せる
+// (docs/AGENT_METRICS.md)。この面が名乗り損ねると、全画面UI由来のターンが 'unknown' に
+// 混ざり、docs/CHAT_SURFACE_DECISION.md の「全画面UIが主たる面になりつつあるのか」に
+// 数字で答えられなくなる。
+describe("CopilotPreviewPage — リクエストボディの surface", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+  });
+
+  it("起動時ブリーフィングも手動送信も surface: fullscreen で送る", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    await waitFor(() => expect(screen.getByText("営業時間を教えて")).toBeTruthy());
+
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+
+    // ブリーフィングと手動送信の2本。どちらも同じ transport 経由なので同じ値を名乗る
+    expect(chatBodies.length).toBeGreaterThanOrEqual(2);
+    expect(chatBodies.map((b) => b.surface)).toEqual(chatBodies.map(() => "fullscreen"));
+  });
+});
+
 // GID 1217007275510096: プレビュー未選択のsuper_adminは、ほぼ全てのツールが
 // 「テナントが特定できません」を返して会話が行き止まりになっていた。チャットを
 // 始める前にテナントを選ばせ、既存のクライアントビュー(enterPreview)へ入れる。

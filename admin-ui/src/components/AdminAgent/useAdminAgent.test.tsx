@@ -87,3 +87,27 @@ describe("useAdminAgent — 会話の復元(sessionStorage)", () => {
     expect(window.sessionStorage.getItem(chatSessionKey(CHAT_SESSION_SURFACE_FULLSCREEN))).toBe(fullscreenBefore);
   });
 });
+
+// GID 1217008695995707: サーバは全メトリクスの surface ラベルにこの値をそのまま載せる
+// (docs/AGENT_METRICS.md)。この面が名乗り損ねると、パネル由来のターンが 'unknown' に
+// 混ざって面ごとの比較ができなくなる。
+describe("useAdminAgent — リクエストボディの surface", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(authFetch).mockImplementation(() => mockOk({ reply: "10時から19時です。", actions: [] }));
+    window.sessionStorage.clear();
+  });
+
+  it("送信するリクエストに surface: panel が載る", async () => {
+    render(<Probe />);
+    fireEvent.click(screen.getByText("send"));
+
+    await waitFor(() => expect(authFetch).toHaveBeenCalled());
+
+    const chatCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/v1/admin/agent/chat"))!;
+    const body = JSON.parse(String((chatCall[1] as RequestInit).body)) as Record<string, unknown>;
+    expect(body.surface).toBe("panel");
+  });
+});
