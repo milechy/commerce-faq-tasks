@@ -1,8 +1,12 @@
-// admin-ui/src/components/AdminAgent/useFeedbackReplies.ts
+// admin-ui/src/lib/feedbackReplies.ts
 // テナントの「相談窓口」: 担当者からの未読返信をポーリングし、
 // FABバッジ・お返事カードの両方が同じ状態を参照できるようにする。
+//
+// チャット2面(パネル / 全画面)の両方が使うため lib/ に置く。transport 層
+// (useAgentChatTransport.ts)・会話の永続化(chatSessionStore.ts)と同じ理由で、
+// 面固有の描画だけを面側(components/AdminAgent/ReplyCard.tsx など)に残している。
 import { useCallback, useEffect, useState } from "react";
-import { authFetch, API_BASE } from "../../lib/api";
+import { authFetch, API_BASE } from "./api";
 
 export interface FeedbackReply {
   id: string;

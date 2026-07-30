@@ -1,10 +1,19 @@
 // admin-ui/src/components/AdminAgent/AdminAgentPanel.tsx
+// 【機能凍結】このパネル(Surface A)には新しい機能を足さない。新機能は全画面UI
+// (pages/copilot-preview/index.tsx = Surface B)側だけに実装する。
+// 根拠: docs/CHAT_SURFACE_DECISION.md が採択した選択肢(c)「パネルは橋。旧UIページの
+// 閉鎖に合わせて畳む」。パネルの存在理由は旧UIページが存在することに従属しており、
+// 守備範囲は旧UIページが閉じるにつれ自動的に縮む(着地点は docs/LEGACY_UI_SUNSET.md §7-1)。
+// 凍結の対象は「面固有の新機能」であって、共有層(lib/useAgentChatTransport.ts,
+// lib/chatSessionStore.ts, lib/feedbackReplies.ts)のバグ修正は対象外。
+// このパネルにしか無かった2機能(相談窓口ループ・answered_from ラベル)は Surface B へ
+// 移植済みのため、ここに機能を足す理由はもう無い。
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useAdminAgent } from "./useAdminAgent";
 import AdminAgentMessage from "./AdminAgentMessage";
 import FeedbackPrompt from "./FeedbackPrompt";
 import ReplyCard from "./ReplyCard";
-import { submitConsultation, type FeedbackReply } from "./useFeedbackReplies";
+import { submitConsultation, type FeedbackReply } from "../../lib/feedbackReplies";
 import { shouldSubmitOnEnter } from "../../lib/utils";
 
 interface AdminAgentPanelProps {

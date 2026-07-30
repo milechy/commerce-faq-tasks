@@ -84,6 +84,11 @@ const BADGE_URL_RE = /knowledge\/gaps\/count|chat-history\/escalations/;
 const isBadgeUrl = (url: unknown) => BADGE_URL_RE.test(String(url));
 const mockEmptyBadges = () => mockOk({ count: 0, escalations: [] });
 
+// 相談窓口(担当者からの未読返信)もマウント時に叩かれる。バッジ2本と同じ理由で、
+// /v1/admin/agent/chat の応答シーケンスを数えているテストでは0件で素通りさせる。
+const isUnreadFeedbackUrl = (url: unknown) => String(url).includes("/v1/admin/feedback?");
+const mockNoFeedbackReplies = () => mockOk({ items: [] });
+
 function baseAuth(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
   return {
     user: { id: "1", email: "a@example.com", role: "client_admin", tenantId: "tenant-a", tenantName: "Tenant A" },
@@ -380,6 +385,7 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
       agentCalls += 1;
       if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
       return mockOk({
@@ -426,6 +432,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
       agentCalls += 1;
       if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
       return mockOk(secondResponse);
@@ -572,6 +579,7 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
       if (String(url).includes("/v1/admin/my-tenant")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
       agentCalls += 1;
       if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
       if (agentCalls === 2) {
@@ -1238,5 +1246,258 @@ describe("CopilotPreviewPage — 既定画面トグルの計測(chat_first_toggl
     await getToggle();
 
     expect(uiEventCalls()).toEqual([]);
+  });
+});
+
+// GID 1217008702879233: パネル(Surface A)にしか無かった2機能を全画面UIへ移植する。
+// 1件目 = 相談窓口ループ(担当者からのお返事 → 解決しました/まだ解決しません)。
+// ロジックは lib/feedbackReplies.ts をパネルと共有しているため、ここで確かめるのは
+// 「この画面がそのフックに繋がっており、同じAPIを同じ手順で叩くか」。
+// 対になるパネル側の回帰テストは components/AdminAgent/AdminAgentPanel.test.tsx。
+const REPLY = {
+  id: "fb-1",
+  message: "送料の設定はどこから変えますか",
+  reply_body: "設定ページから変更できます",
+  replied_at: "2026-07-28T01:00:00Z",
+};
+
+describe("CopilotPreviewPage — 相談窓口(担当者からのお返事)", () => {
+  function mockFeedback(items: unknown[]) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockOk({ items });
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  }
+
+  it("未読のお返事があると、全画面チャットにもお返事が出る", async () => {
+    mockFeedback([REPLY]);
+    renderPage();
+
+    expect(await screen.findByText("担当者からお返事が届きました")).toBeTruthy();
+    // どの相談への返事かは日時と同じ1行に収めているため、部分一致で確かめる
+    expect(screen.getByText(/送料の設定はどこから変えますか/)).toBeTruthy();
+    expect(screen.getByText("設定ページから変更できます")).toBeTruthy();
+  });
+
+  it("未読が無ければお返事は出ない", async () => {
+    mockFeedback([]);
+    renderPage();
+
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText("担当者からお返事が届きました")).toBeNull();
+  });
+
+  it("2件以上あると「＋あと{n}件」で残りを案内する(パネルと同じ1件表示)", async () => {
+    mockFeedback([REPLY, { ...REPLY, id: "fb-2" }]);
+    renderPage();
+
+    expect(await screen.findByText("＋あと1件")).toBeTruthy();
+  });
+
+  it("「解決しました」で既読化され、お返事は画面から消える", async () => {
+    mockFeedback([REPLY]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "解決しました" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(authFetch)).toHaveBeenCalledWith(
+        "http://localhost:3100/v1/admin/feedback/fb-1/read",
+        expect.objectContaining({ method: "PATCH" }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByText("担当者からお返事が届きました")).toBeNull());
+  });
+
+  it("「まだ解決しません」で既読化 + parent_feedback_id 付きの再相談が送られる(パネルと同一手順)", async () => {
+    mockFeedback([REPLY]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "まだ解決しません" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(authFetch)).toHaveBeenCalledWith(
+        "http://localhost:3100/v1/admin/feedback/fb-1/read",
+        expect.objectContaining({ method: "PATCH" }),
+      );
+      expect(vi.mocked(authFetch)).toHaveBeenCalledWith(
+        "http://localhost:3100/v1/admin/feedback",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            message: "送料の設定はどこから変えますか",
+            category: "other",
+            parent_feedback_id: "fb-1",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("previewMode中のsuper_adminはプレビュー対象テナントの未読を取得する", async () => {
+    mockFeedback([]);
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+
+    await waitFor(() => {
+      const url = vi.mocked(authFetch).mock.calls.map((c) => String(c[0])).find(isUnreadFeedbackUrl);
+      expect(url).toBeTruthy();
+      expect(url).toContain("tenant_id=tenant-preview");
+    });
+  });
+
+  it("テナントを特定できないsuper_admin(preview外)では未読を取得しない", async () => {
+    mockFeedback([]);
+    renderPage({ isSuperAdmin: true, isClientAdmin: false, user: { id: "2", email: "a@example.com", role: "super_admin", tenantId: null, tenantName: null } });
+
+    await waitFor(() => expect(screen.getByText("どのお客様として見ますか？")).toBeTruthy());
+    expect(vi.mocked(authFetch).mock.calls.map((c) => String(c[0])).filter(isUnreadFeedbackUrl)).toEqual([]);
+  });
+});
+
+// 移植した2件目 = 回答の出どころ(answered_from)ラベル。3値の語彙はサーバ
+// (agentRoutes.ts)・パネル(AdminAgentPanel.tsx)と同一で、増やしたり言い換えたりしない。
+describe("CopilotPreviewPage — 回答の出どころ(answered_from)", () => {
+  function mockAnsweredFrom(answeredFrom?: string) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      // 起動時ブリーフィング(1回目)には載せず、ユーザーの質問への回答(2回目)で検証する
+      if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+      return mockOk({
+        reply: "全国一律550円です。",
+        actions: [],
+        ...(answeredFrom ? { answered_from: answeredFrom } : {}),
+      });
+    });
+    // タイプライター演出を切って応答を同期的に確定させる
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  }
+
+  async function ask() {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "送料はいくら？" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
+  }
+
+  it("faq_list は「登録した知識データから回答しました」と出る", async () => {
+    mockAnsweredFrom("faq_list");
+    await ask();
+    expect(screen.getByText("📚 登録した知識データから回答しました")).toBeTruthy();
+  });
+
+  it("tool_action は「操作を実行しました」と出る", async () => {
+    mockAnsweredFrom("tool_action");
+    await ask();
+    expect(screen.getByText("⚙️ 操作を実行しました")).toBeTruthy();
+  });
+
+  it("general は「R2Cの使い方ガイドから回答しました」と出る", async () => {
+    mockAnsweredFrom("general");
+    await ask();
+    expect(screen.getByText("💡 R2Cの使い方ガイドから回答しました")).toBeTruthy();
+  });
+
+  it("answered_from が無い応答ではラベルを出さない(3値以外は表示しない)", async () => {
+    mockAnsweredFrom(undefined);
+    await ask();
+    expect(screen.queryByText(/回答しました|操作を実行しました/)).toBeNull();
+  });
+});
+
+// 相談窓口ループの入口(パネルの FeedbackPrompt と同じ導線)。
+describe("CopilotPreviewPage — 解決確認プロンプト", () => {
+  function mockChat() {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/feedback")) return mockOk({ id: "fb-9" });
+      return mockOk({ reply: "申し訳ございません、その情報は登録されていません。", actions: [] });
+    });
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  }
+
+  async function ask(text: string) {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByText("このお返事で解決しましたか？");
+  }
+
+  it("起動時ブリーフィングだけの状態では出ない(ユーザーが何も聞いていないため)", async () => {
+    mockChat();
+    renderPage();
+
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText("このお返事で解決しましたか？")).toBeNull();
+  });
+
+  it("「うまく解決しなかった」で質問文が相談として送られ、確認文言に変わる", async () => {
+    mockChat();
+    await ask("割引クーポンはありますか");
+
+    fireEvent.click(screen.getByRole("button", { name: "うまく解決しなかった" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(authFetch)).toHaveBeenCalledWith(
+        "http://localhost:3100/v1/admin/feedback",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ message: "割引クーポンはありますか", category: "other" }),
+        }),
+      ),
+    );
+    expect(await screen.findByText("✅ 担当者に伝えました。お返事はこの画面に届きます。")).toBeTruthy();
+  });
+
+  it("「はい」で消え、相談は送られない", async () => {
+    mockChat();
+    await ask("送料を教えて");
+
+    fireEvent.click(screen.getByRole("button", { name: "はい" }));
+
+    expect(screen.queryByText("このお返事で解決しましたか？")).toBeNull();
+    const posted = vi
+      .mocked(authFetch)
+      .mock.calls.filter((c) => String(c[0]).endsWith("/v1/admin/feedback"));
+    expect(posted).toEqual([]);
   });
 });

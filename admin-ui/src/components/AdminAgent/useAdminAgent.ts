@@ -1,4 +1,10 @@
 // admin-ui/src/components/AdminAgent/useAdminAgent.ts
+//
+// 【機能凍結】パネル(Surface A)側のチャット状態フック。新しい機能は足さず、全画面UI
+// (pages/copilot-preview/index.tsx = Surface B)側だけに実装する。
+// 根拠: docs/CHAT_SURFACE_DECISION.md が採択した選択肢(c)「パネルは橋。旧UIページの
+// 閉鎖に合わせて畳む」。凍結の対象は「面固有の新機能」であって、共有層
+// (lib/useAgentChatTransport.ts, lib/chatSessionStore.ts)のバグ修正は対象外。
 import { useState, useCallback, useEffect } from "react";
 import {
   CHAT_SESSION_SURFACE_PANEL,
