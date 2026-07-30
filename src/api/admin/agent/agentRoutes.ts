@@ -9,8 +9,68 @@ import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
 import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
 import { isUnanswered } from '../ai-assist/systemPrompt';
+
+// ---------------------------------------------------------------------------
+// 挙動メトリクス（metric_name / labels / value の契約は docs/AGENT_METRICS.md）
+// ---------------------------------------------------------------------------
+
+// ブロック判定の部分一致。フロント(copilot-preview)が確認待ちUIの出し分けに使うのと同じ規約だが、
+// get_embed_code の成功文「再確認が必要な場合は〜」を誤ってブロックと数えないよう「です」まで含める。
+const BLOCKED_UNCONFIRMED_MARKER = '確認が必要です';
+const BLOCKED_CHAIN_MARKER = '確認をスキップできません';
+
+// ラベルの語彙を有界に保つためのホワイトリスト（toolDefinitions の feature enum と対応）。
+// モデルが未定義の値を渡した場合は 'unknown' に丸める。
+const LEGACY_HANDOFF_FEATURES = new Set([
+  'billing',
+  'avatar_studio',
+  'escalation_reply',
+  'session_deletion',
+  'analytics',
+  'conversion',
+  'chat_test',
+  'avatar_wizard',
+  'knowledge_pdf',
+]);
+
+/** 計測は fire-and-forget。記録の失敗をチャット応答に一切影響させない。 */
+function fireAgentMetric(db: Pool, input: AgentMetricInput): void {
+  try {
+    void Promise.resolve(recordAgentMetric(db, input)).catch(() => undefined);
+  } catch {
+    // 計測失敗は応答に影響させない
+  }
+}
+
+function classifyToolResult(result: string): {
+  outcome: 'ok' | 'blocked';
+  reason?: 'unconfirmed' | 'chain';
+} {
+  if (result.includes(BLOCKED_CHAIN_MARKER)) return { outcome: 'blocked', reason: 'chain' };
+  if (result.includes(BLOCKED_UNCONFIRMED_MARKER)) return { outcome: 'blocked', reason: 'unconfirmed' };
+  return { outcome: 'ok' };
+}
+
+function recordTurnCompleted(
+  db: Pool,
+  params: { tenantId: string | null; toolHops: number; hitHopLimit: boolean; answeredFrom: AnsweredFrom },
+): void {
+  fireAgentMetric(db, {
+    metricName: 'agent_turn_hops',
+    tenantId: params.tenantId,
+    labels: { hit_limit: params.hitHopLimit },
+    value: params.toolHops,
+  });
+  fireAgentMetric(db, {
+    metricName: 'agent_turn_completed',
+    tenantId: params.tenantId,
+    labels: { answered_from: params.answeredFrom },
+    value: 1,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // answered_from: このターンの回答がどこから来たかをUIに伝える
@@ -238,12 +298,48 @@ async function executeHopToolCalls(
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
     } else {
-      result = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
+      try {
+        result = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
+      } catch (err) {
+        fireAgentMetric(db, {
+          metricName: 'agent_tool_invoked',
+          tenantId: effectiveTenantId || null,
+          labels: { tool: name, outcome: 'error' },
+          value: 1,
+        });
+        throw err;
+      }
       if (name in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(name);
     }
 
     actions.push({ tool: name, result });
     messages.push({ role: 'tool', tool_call_id: id, name, content: result });
+
+    const metricTenantId = effectiveTenantId || null;
+    const { outcome, reason } = classifyToolResult(result);
+    fireAgentMetric(db, {
+      metricName: 'agent_tool_invoked',
+      tenantId: metricTenantId,
+      labels: { tool: name, outcome },
+      value: 1,
+    });
+    if (reason) {
+      fireAgentMetric(db, {
+        metricName: 'agent_write_blocked',
+        tenantId: metricTenantId,
+        labels: { tool: name, reason },
+        value: 1,
+      });
+    }
+    if (name === 'get_legacy_ui_link') {
+      const feature = String(args['feature'] ?? '');
+      fireAgentMetric(db, {
+        metricName: 'agent_legacy_handoff',
+        tenantId: metricTenantId,
+        labels: { feature: LEGACY_HANDOFF_FEATURES.has(feature) ? feature : 'unknown' },
+        value: 1,
+      });
+    }
   }
 }
 
@@ -496,8 +592,10 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
 
         try {
           let finalReply: string | null = null;
+          // ループを抜けた時点で「ツール呼び出しを含むホップを何回消費したか」になる（agent_turn_hops の value）
+          let toolHops = 0;
 
-          for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
+          for (; toolHops < MAX_TOOL_HOPS; toolHops++) {
             const hopResult = await runStreamingHop(messages, ADMIN_AGENT_TOOLS, res);
             totalPromptTokens += hopResult.usage.promptTokens;
             totalCompletionTokens += hopResult.usage.completionTokens;
@@ -521,6 +619,8 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
           }
+
+          const hitHopLimit = finalReply === null;
 
           if (finalReply === null) {
             // MAX_TOOL_HOPS に達しても収束しなかった場合、tools無しで強制的にまとめさせる(これもストリーミング)。
@@ -549,6 +649,13 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             await recordUnansweredFeedback(db, { tenantId: effectiveTenantId, email, message, reply: finalReply });
           }
 
+          recordTurnCompleted(db, {
+            tenantId: effectiveTenantId || null,
+            toolHops,
+            hitHopLimit,
+            answeredFrom,
+          });
+
           res.write(`event: done\ndata: ${JSON.stringify({ reply: finalReply, actions, answered_from: answeredFrom })}\n\n`);
           res.end();
         } catch (err) {
@@ -576,11 +683,13 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       };
 
       let finalReply: string | null = null;
+      // ループを抜けた時点で「ツール呼び出しを含むホップを何回消費したか」になる（agent_turn_hops の value）
+      let toolHops = 0;
 
       // G1: tools付きGroq呼び出しを最大 MAX_TOOL_HOPS 回まで繰り返す。
       // モデルがツール結果を見て追加のツールを呼ぶ「多段推論」を許容しつつ、
       // 上限に達しても収束しない場合は必ず自然文の reply で終了させる。
-      for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
+      for (; toolHops < MAX_TOOL_HOPS; toolHops++) {
         const hopResponse = await callGroqWithTools(messages, ADMIN_AGENT_TOOLS);
         totalPromptTokens += hopResponse.usage.promptTokens;
         totalCompletionTokens += hopResponse.usage.completionTokens;
@@ -605,6 +714,8 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId);
       }
 
+      const hitHopLimit = finalReply === null;
+
       if (finalReply === null) {
         // MAX_TOOL_HOPS に達しても収束しなかった場合、tools無しで強制的にまとめさせる。
         // 実測: toolsを外しただけだと、まだ呼びたいツールがある場合にモデルが
@@ -622,6 +733,13 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       if (effectiveTenantId && actions.length === 0 && isUnanswered(finalReply)) {
         await recordUnansweredFeedback(db, { tenantId: effectiveTenantId, email, message, reply: finalReply });
       }
+
+      recordTurnCompleted(db, {
+        tenantId: effectiveTenantId || null,
+        toolHops,
+        hitHopLimit,
+        answeredFrom,
+      });
 
       return res.json({ reply: finalReply, actions, answered_from: answeredFrom });
     } catch (err) {
