@@ -2,6 +2,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { AuthProvider, useAuth } from "./useAuth";
+import {
+  CHAT_SESSION_SURFACE_FULLSCREEN,
+  CHAT_SESSION_SURFACE_PANEL,
+  chatSessionKey,
+  saveChatSession,
+} from "../lib/chatSessionStore";
 
 const mockGetSession = vi.fn();
 const mockOnAuthStateChange = vi.fn(() => ({ data: { subscription: { unsubscribe: vi.fn() } } }));
@@ -54,6 +60,12 @@ function SUPER_ADMIN_SESSION() {
       },
     },
   };
+}
+
+function LogoutProbe() {
+  const { isLoading, logout } = useAuth();
+  if (isLoading) return <div>loading</div>;
+  return <button onClick={() => void logout()}>logout</button>;
 }
 
 function Probe() {
@@ -220,6 +232,43 @@ describe("useAuth — previewMode の sessionStorage永続化", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("preview-probe").textContent).toContain("preview=false tenantId=null");
+    });
+  });
+});
+
+// GID 1217007298292152: 会話には顧客名・電話番号などの個人情報が載りうるため、共有端末で
+// 次の利用者に残さないよう、ログアウト時にチャット2面ぶんの保存済み会話を消す(多層防御)。
+describe("useAuth — ログアウト時にチャット会話を消す(PII保護)", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    window.sessionStorage.clear();
+    mockGetSession.mockResolvedValue(SUPER_ADMIN_SESSION());
+  });
+
+  it("logout() で全画面UI・パネル両方のキーが消える", async () => {
+    saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, {
+      sessionId: "fullscreen-session",
+      messages: [{ id: 1, role: "me", text: "山田様の電話番号は090-0000-0000です" }],
+    });
+    saveChatSession(CHAT_SESSION_SURFACE_PANEL, {
+      sessionId: "panel-session",
+      messages: [{ role: "user", content: "山田様の注文状況を教えて" }],
+    });
+    expect(window.sessionStorage.getItem(chatSessionKey(CHAT_SESSION_SURFACE_FULLSCREEN))).not.toBeNull();
+    expect(window.sessionStorage.getItem(chatSessionKey(CHAT_SESSION_SURFACE_PANEL))).not.toBeNull();
+
+    render(
+      <AuthProvider>
+        <LogoutProbe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("logout")).toBeTruthy());
+
+    screen.getByText("logout").click();
+
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem(chatSessionKey(CHAT_SESSION_SURFACE_FULLSCREEN))).toBeNull();
+      expect(window.sessionStorage.getItem(chatSessionKey(CHAT_SESSION_SURFACE_PANEL))).toBeNull();
     });
   });
 });
