@@ -30,7 +30,8 @@ interface UseAdminAgentResult {
 export function useAdminAgent(): UseAdminAgentResult {
   // リロード・ブラウザバック・モバイルのタブ破棄で会話が丸ごと消えないよう、同一タブに
   // 保存された会話を復元する。全画面UI(/copilot-preview)とは別キーのため、2面の会話は
-  // 互いに独立している(lib/chatSessionStore.ts 参照)。
+  // 互いに独立している。これは意図的な決定で、理由は lib/chatSessionStore.ts のヘッダと
+  // docs/CHAT_SURFACE_DECISION.md 「§5 補記」にある。
   const [restored] = useState(() => restoreChatSession<AgentMessage>(CHAT_SESSION_SURFACE_PANEL));
   const [messages, setMessages] = useState<AgentMessage[]>(restored?.messages ?? []);
   const [isOpen, setIsOpen] = useState(false);
