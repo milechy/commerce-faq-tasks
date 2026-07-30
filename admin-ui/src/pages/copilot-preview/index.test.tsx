@@ -25,8 +25,14 @@ vi.mock("../../components/common/NotificationBell", () => ({
   NotificationBell: () => <div data-testid="notification-bell-stub" />,
 }));
 
+// スタブだが onSeedQuery は実体と同じ引数で呼ぶ(この画面がロックタブの質問を
+// 自分のチャットへ流せているかを検証するため)。質問文自体の固定は AppSwitcher.test.tsx 側。
 vi.mock("../../components/AppSwitcher", () => ({
-  default: () => <div data-testid="app-switcher-stub" />,
+  default: ({ onSeedQuery }: { onSeedQuery?: (query: string) => void }) => (
+    <button data-testid="app-switcher-stub" onClick={() => onSeedQuery?.("R2C2について教えて")}>
+      R2C2
+    </button>
+  ),
 }));
 
 // 会話の永続化(sessionStorage)はストアをモックして検証する。既定は「保存済みの会話なし」
@@ -333,6 +339,29 @@ describe("CopilotPreviewPage — 共通シェル機能パリティ(テーマ/言
     await waitFor(() => expect(screen.getByRole("button", { name: /ログアウト/ })).toBeTruthy());
 
     expect(screen.getByTestId("app-switcher-stub")).toBeTruthy();
+  });
+
+  // GID: この画面には旧UIのチャットパネル(Surface A)が無く、AppSwitcherのロックタブは
+  // openWithQuery(誰も見ていないContext)を叩くだけで無反応だった。
+  it("AppSwitcherのロックタブ(R2C2)の質問が、この画面自身のチャットに送られる", async () => {
+    renderPage();
+    // 起動時ブリーフィングの完了を待つ(sending中は sendReal が無視されるため)
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByTestId("app-switcher-stub"));
+
+    // 自分が送った質問として会話に積まれ、実APIにも送られている
+    expect(await screen.findByText("R2C2について教えて")).toBeTruthy();
+    await waitFor(() => {
+      const chatCall = vi
+        .mocked(authFetch)
+        .mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/v1/admin/agent/chat") &&
+            String((init as RequestInit | undefined)?.body).includes("R2C2について教えて"),
+        );
+      expect(chatCall).toBeTruthy();
+    });
   });
 });
 
@@ -1069,5 +1098,109 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
 
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
     expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
+  });
+});
+
+// 「これを既定の画面にする」トグルの計測(chat_first_toggle)。トグルの実体は localStorage
+// のままで、この通信は測るだけの副回線 — 成否がトグルの見た目・保存値に影響してはならない。
+describe("CopilotPreviewPage — 既定画面トグルの計測(chat_first_toggle)", () => {
+  const UI_EVENT_URL = "http://localhost:3100/v1/admin/agent/ui-event";
+
+  const uiEventCalls = () =>
+    vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/ui-event"));
+
+  const sentEvents = () => uiEventCalls().map(([, options]) => JSON.parse(String(options?.body)));
+
+  /** トグルのつまみの位置。ON=19px / OFF=3px（見た目の状態そのもの） */
+  const knobLeft = (button: HTMLElement) => (button.querySelector("span > span") as HTMLElement).style.left;
+
+  const getToggle = () =>
+    waitFor(() => screen.getByRole("button", { name: /これを既定の画面にする/ }));
+
+  // この環境(happy-dom)は window.localStorage を提供しないため、chatFirstDefault.test.ts と
+  // 同じくMapベースの最小実装で補う(トグルの保存値まで検証するため素通りモックにはしない)。
+  function installFakeLocalStorage() {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        clear: () => void store.clear(),
+      },
+    });
+  }
+
+  beforeEach(() => {
+    installFakeLocalStorage();
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (String(url).includes("/v1/admin/agent/ui-event")) return mockOk({ ok: true });
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  });
+
+  it("ONにすると enabled:true で ui-event が送られる", async () => {
+    renderPage();
+    const toggle = await getToggle();
+    expect(knobLeft(toggle)).toBe("3px");
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(uiEventCalls().length).toBe(1));
+    expect(uiEventCalls()[0][1]).toMatchObject({ method: "POST" });
+    expect(uiEventCalls()[0][0]).toBe(UI_EVENT_URL);
+    expect(sentEvents()).toEqual([{ event: "chat_first_toggle", enabled: true }]);
+    expect(knobLeft(toggle)).toBe("19px");
+    expect(window.localStorage.getItem("r2c_chat_first_default")).toBe("true");
+  });
+
+  it("OFFに戻すと enabled:false で ui-event が送られる", async () => {
+    window.localStorage.setItem("r2c_chat_first_default", "true");
+    renderPage();
+    const toggle = await getToggle();
+    expect(knobLeft(toggle)).toBe("19px");
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(uiEventCalls().length).toBe(1));
+    expect(sentEvents()).toEqual([{ event: "chat_first_toggle", enabled: false }]);
+    expect(knobLeft(toggle)).toBe("3px");
+    expect(window.localStorage.getItem("r2c_chat_first_default")).toBeNull();
+  });
+
+  it("送信が失敗してもトグルはONになったまま(巻き戻さない・エラーも出さない)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (String(url).includes("/v1/admin/agent/ui-event")) return Promise.reject(new Error("network down"));
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+
+    renderPage();
+    const toggle = await getToggle();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(uiEventCalls().length).toBe(1));
+    expect(knobLeft(toggle)).toBe("19px");
+    expect(window.localStorage.getItem("r2c_chat_first_default")).toBe("true");
+    expect(screen.queryByText(/エラー/)).toBeNull();
+    expect(screen.queryByText(/うまく送信できませんでした/)).toBeNull();
+  });
+
+  it("トグルを触らなければ ui-event は送られない", async () => {
+    renderPage();
+    await getToggle();
+
+    expect(uiEventCalls()).toEqual([]);
   });
 });

@@ -1,27 +1,15 @@
 // admin-ui/src/components/AdminAgent/useAdminAgent.ts
 import { useState, useCallback, useEffect } from "react";
-import { authFetch, API_BASE } from "../../lib/api";
 import {
   CHAT_SESSION_SURFACE_PANEL,
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
+import { useAgentChatTransport } from "../../lib/useAgentChatTransport";
+import type { AgentAction, AnsweredFrom } from "../../lib/useAgentChatTransport";
 
-export type AnsweredFrom = "faq_list" | "tool_action" | "general";
-
-// バックエンド(actionExecutor.ts の LegacyLinkCardPayload)が自然文に添えて返す
-// 構造化カード。現時点で card を返すのは get_legacy_ui_link だけで、他のツールは
-// 従来どおり result の自然文のみ。このパネル(Surface A)はまだ card を描画しないが、
-// /copilot-preview と同じレスポンスを消費するため型は共通にしておく。
-export type AgentActionCard = {
-  kind: "legacy_link";
-  label: string;
-  url: string;
-  description: string;
-};
-
-export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
-
+// transport 層(sessionId / 履歴ウィンドウ / targetTenantId 導出 / エラー文言)と
+// レスポンス型は、全画面UI(/copilot-preview)と共有する lib/useAgentChatTransport.ts が持つ。
 export interface AgentMessage {
   role: "user" | "assistant";
   content: string;
@@ -47,8 +35,11 @@ export function useAdminAgent(): UseAdminAgentResult {
   const [messages, setMessages] = useState<AgentMessage[]>(restored?.messages ?? []);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  // セッションIDはコンポーネントのライフタイム中に一度だけ生成(復元できた場合はその続き)
-  const [sessionId] = useState<string>(() => restored?.sessionId ?? crypto.randomUUID());
+
+  const { sessionId, send } = useAgentChatTransport({
+    surface: "panel",
+    initialSessionId: restored?.sessionId,
+  });
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -58,74 +49,31 @@ export function useAdminAgent(): UseAdminAgentResult {
   const sendMessage = useCallback(async (text: string, targetTenantId?: string) => {
     if (!text.trim() || isLoading) return;
 
-    // G2: サーバはステートレスなので、直近の会話履歴を毎回送ってマルチターンの文脈を持たせる
-    // （このターンで追加するユーザーメッセージより前の履歴。直近20件・各4000字までに制限）
-    const history = messages
-      .filter((m) => m.content.trim())
-      .slice(-20)
-      .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+    // このターンで追加するユーザーメッセージより前の履歴を渡す(件数・文字数の上限は transport 側)
+    const history = messages.map((m) => ({ role: m.role, content: m.content }));
 
     // optimistic にユーザーメッセージを追加
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setIsLoading(true);
 
     try {
-      const body: { message: string; sessionId: string; targetTenantId?: string; history?: typeof history } = {
-        message: text,
-        sessionId,
-      };
-      if (targetTenantId) {
-        body.targetTenantId = targetTenantId;
-      }
-      if (history.length > 0) {
-        body.history = history;
-      }
-
-      const res = await authFetch(`${API_BASE}/v1/admin/agent/chat`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: "うまく送信できませんでした。少し時間をおいてお試しください。",
-            actions: [],
-          },
-        ]);
-        return;
-      }
-
-      const data = (await res.json()) as {
-        reply: string;
-        actions: AgentAction[];
-        answered_from?: AnsweredFrom;
-      };
+      const result = await send(text, { history, targetTenantId });
 
       setMessages((prev) => [
         ...prev,
-        {
-          role: "assistant",
-          content: data.reply,
-          actions: data.actions,
-          answeredFrom: data.answered_from,
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "うまく送信できませんでした。少し時間をおいてお試しください。",
-          actions: [],
-        },
+        result.ok
+          ? {
+              role: "assistant",
+              content: result.data.reply,
+              actions: result.data.actions,
+              answeredFrom: result.data.answered_from,
+            }
+          : { role: "assistant", content: result.message, actions: [] },
       ]);
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, sessionId, messages]);
+  }, [isLoading, messages, send]);
 
   return {
     messages,

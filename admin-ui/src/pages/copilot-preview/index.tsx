@@ -19,6 +19,10 @@ import {
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
+import {
+  AGENT_CHAT_HISTORY_MAX_ENTRIES,
+  useAgentChatTransport,
+} from "../../lib/useAgentChatTransport";
 import { shouldSubmitOnEnter } from "../../lib/utils";
 // PDF取り込みの受付ルール(拡張子/MIME/サイズ上限)と送信は旧UIのPDFタブと同じ実装を共有する。
 // 同じ操作が2面にある状態なので、片方だけ条件が緩む/厳しくなることを避けるため。
@@ -38,8 +42,6 @@ import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
 // 切り出した(旧UIとの共有コンポーネント。詳細は common/ThemeToggle.tsx 参照)。
 import { NotificationBell } from "../../components/common/NotificationBell";
 import { ThemeToggle } from "../../components/common/ThemeToggle";
-// レスポンス形は本番パネル(Surface A)と共有のため、型も一箇所から取る。
-import type { AgentAction } from "../../components/AdminAgent/useAdminAgent";
 import LangSwitcher from "../../components/LangSwitcher";
 import AppSwitcher from "../../components/AppSwitcher";
 
@@ -327,8 +329,14 @@ export default function CopilotPreviewPage() {
   // 起動直後は空。bootstrap()が実データの週次ブリーフィングを積む
   const [msgs, setMsgs] = useState<Msg[]>([]);
 
-  // 自由入力欄・起動時ブリーフィング・サイドバー各カテゴリーが繋がる実チャットの状態
-  const sessionIdRef = useRef<string>(crypto.randomUUID());
+  // 自由入力欄・起動時ブリーフィング・サイドバー各カテゴリーが繋がる実チャットの状態。
+  // sessionId・履歴ウィンドウ・targetTenantId 導出・エラー文言はパネル(Surface A)と
+  // 共有の transport 層が持つ(lib/useAgentChatTransport.ts)。
+  const {
+    sessionId: realSessionId,
+    adoptSessionId,
+    send: sendAgentChat,
+  } = useAgentChatTransport({ surface: "fullscreen" });
   const [realHistory, setRealHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [sending, setSending] = useState(false);
   const [realActionCount, setRealActionCount] = useState(0); // 実際に成功した書き込み操作の件数
@@ -404,135 +412,115 @@ export default function CopilotPreviewPage() {
     if (!text.trim() || sending) return;
     if (!opts?.silent) push(me(text));
     setSending(true);
-    try {
-      const body: { message: string; sessionId: string; history?: typeof realHistory; targetTenantId?: string } = {
-        message: text,
-        sessionId: sessionIdRef.current,
-      };
-      if (realHistory.length > 0) body.history = realHistory.slice(-20);
-      if (previewMode && previewTenantId) body.targetTenantId = previewTenantId;
 
-      const res = await authFetch(`${API_BASE}/v1/admin/agent/chat`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as { error?: string }));
-        push(say(errBody.error ? `エラー: ${errBody.error}` : "うまく送信できませんでした。少し時間をおいてお試しください。"));
-        setSending(false);
-        return;
-      }
-
-      const data = (await res.json()) as { reply: string; actions: AgentAction[] };
-      setRealHistory((prev) =>
-        [
-          ...prev,
-          { role: "user" as const, content: text },
-          { role: "assistant" as const, content: data.reply },
-        ].slice(-20),
-      );
-
-      // ツール結果を、可能なら提案書と同じ見た目のカードにパースする。
-      // 想定外の形式(下書き生成失敗時のエラー文など)は汎用の agentAction カードにフォールバック。
-      const actionMsgs: Msg[] = (data.actions ?? []).map((a) => {
-        // 構造化カードが来ていればそれを直接描画する。自然文の言い回しが変わっても
-        // カードが黙って消えない経路。card が無いツール(現状 get_legacy_ui_link 以外の
-        // すべて)は、これまでどおり下の正規表現パースにフォールバックする。
-        if (a.card?.kind === "legacy_link") {
-          const { label, url, description } = a.card;
-          return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
-        }
-        if (a.tool === "suggest_faq") {
-          const parsed = parseSuggestFaq(a.result);
-          if (parsed) return { id: nextId(), role: "ai", card: { kind: "faq", ...parsed } };
-        } else if (a.tool === "suggest_tuning_rule") {
-          const parsed = parseSuggestTuningRule(a.result);
-          if (parsed) return { id: nextId(), role: "ai", card: { kind: "rule", ...parsed } };
-        } else if (a.tool === "suggest_engagement_rule") {
-          const parsed = parseSuggestEngagementRule(a.result);
-          if (parsed) return { id: nextId(), role: "ai", card: { kind: "engagement", ...parsed } };
-        } else if (a.tool === "get_legacy_ui_link") {
-          const parsed = parseLegacyUiLink(a.result);
-          if (parsed) return { id: nextId(), role: "ai", card: { kind: "link", ...parsed } };
-        } else if (
-          (a.tool === "save_faq" || a.tool === "save_tuning_rule" || a.tool === "save_engagement_rule") &&
-          SAVE_SUCCESS_RE.test(a.result)
-        ) {
-          return { id: nextId(), role: "ai", card: { kind: "success", text: a.result } };
-        }
-        return { id: nextId(), role: "ai", card: { kind: "agentAction", tool: a.tool, result: a.result } };
-      });
-
-      // 実際にDBへ書き込んだ操作(確認ブロックで弾かれたものは除く)だけを実進捗としてカウントする。
-      // ブロック理由は2種類あり、どちらも書き込みが起きていないため除外する:
-      //   1. confirmed=false        → 「確認が必要です」
-      //   2. 同一ターン内の連鎖ブロック → 「確認をスキップできません」(agentRoutes.ts:239)
-      const writesThisTurn = (data.actions ?? []).filter(
-        (a) =>
-          REAL_WRITE_TOOLS.has(a.tool) &&
-          !a.result.includes("確認が必要") &&
-          !a.result.includes("確認をスキップできません"),
-      ).length;
-      if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
-
-      // suggest系の下書きが出たら、そのまま自然文で確定できるチップを添える
-      const SUGGEST_TOOLS = new Set(["suggest_tuning_rule", "suggest_faq", "suggest_engagement_rule"]);
-      const suggested = data.actions?.some((a) => SUGGEST_TOOLS.has(a.tool));
-      // Saiへの依頼がconfirmed待ちでブロックされた場合も、そのまま同意できるチップを添える
-      const saiPendingConfirm = data.actions?.some(
-        (a) => a.tool === "request_sai_task" && a.result.includes("確認が必要"),
-      );
-      // エスカレーションへの返信/対応完了がconfirmed待ちでブロックされた場合も同様
-      const escalationPendingConfirm = data.actions?.some(
-        (a) =>
-          (a.tool === "reply_to_escalation" || a.tool === "resolve_escalation") &&
-          a.result.includes("確認が必要"),
-      );
-      // オンボーディングのFAQテンプレート提案がconfirmed待ちでブロックされた場合も同様
-      const industryTemplatePendingConfirm = data.actions?.some(
-        (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
-      );
-      const chips: Chip[] | undefined = suggested
-        ? [
-            { label: "保存して", action: "__real:保存してください", tone: "primary" },
-            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
-          ]
-        : saiPendingConfirm
-        ? [
-            { label: "お願いする", action: "__real:はい、お願いします", tone: "primary" },
-            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
-          ]
-        : escalationPendingConfirm
-        ? [
-            { label: "実行して", action: "__real:はい、お願いします", tone: "primary" },
-            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
-          ]
-        : industryTemplatePendingConfirm
-        ? [
-            { label: "登録して", action: "__real:登録してください", tone: "primary" },
-            { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
-          ]
-        : undefined;
-
-      push(...actionMsgs);
-
-      // 最終返信だけを少しずつ流し込む(演出)。チップは流し込み完了後に表示する。
-      const replyId = nextId();
-      push({ id: replyId, role: "ai", text: "" });
-      revealText(replyId, data.reply || "（応答なし）", () => {
-        if (chips) setMsgs((prev) => prev.map((m) => (m.id === replyId ? { ...m, chips } : m)));
-        setSending(false);
-      });
-      return; // setSending(false) は revealText の完了コールバックに任せる
-    } catch (err: any) {
-      if (err?.message === "__AUTH_REQUIRED__") {
-        push(say("ログインが必要です。別タブで管理画面にログインしてから、もう一度お試しください。"));
-      } else {
-        push(say("うまく送信できませんでした。少し時間をおいてお試しください。"));
-      }
+    const result = await sendAgentChat(text, { history: realHistory });
+    if (!result.ok) {
+      push(say(result.message));
+      setSending(false);
+      return;
     }
-    setSending(false);
+
+    const data = result.data;
+    setRealHistory((prev) =>
+      [
+        ...prev,
+        { role: "user" as const, content: text },
+        { role: "assistant" as const, content: data.reply },
+      ].slice(-AGENT_CHAT_HISTORY_MAX_ENTRIES),
+    );
+
+    // ツール結果を、可能なら提案書と同じ見た目のカードにパースする。
+    // 想定外の形式(下書き生成失敗時のエラー文など)は汎用の agentAction カードにフォールバック。
+    const actionMsgs: Msg[] = (data.actions ?? []).map((a) => {
+      // 構造化カードが来ていればそれを直接描画する。自然文の言い回しが変わっても
+      // カードが黙って消えない経路。card が無いツール(現状 get_legacy_ui_link 以外の
+      // すべて)は、これまでどおり下の正規表現パースにフォールバックする。
+      if (a.card?.kind === "legacy_link") {
+        const { label, url, description } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
+      }
+      if (a.tool === "suggest_faq") {
+        const parsed = parseSuggestFaq(a.result);
+        if (parsed) return { id: nextId(), role: "ai", card: { kind: "faq", ...parsed } };
+      } else if (a.tool === "suggest_tuning_rule") {
+        const parsed = parseSuggestTuningRule(a.result);
+        if (parsed) return { id: nextId(), role: "ai", card: { kind: "rule", ...parsed } };
+      } else if (a.tool === "suggest_engagement_rule") {
+        const parsed = parseSuggestEngagementRule(a.result);
+        if (parsed) return { id: nextId(), role: "ai", card: { kind: "engagement", ...parsed } };
+      } else if (a.tool === "get_legacy_ui_link") {
+        const parsed = parseLegacyUiLink(a.result);
+        if (parsed) return { id: nextId(), role: "ai", card: { kind: "link", ...parsed } };
+      } else if (
+        (a.tool === "save_faq" || a.tool === "save_tuning_rule" || a.tool === "save_engagement_rule") &&
+        SAVE_SUCCESS_RE.test(a.result)
+      ) {
+        return { id: nextId(), role: "ai", card: { kind: "success", text: a.result } };
+      }
+      return { id: nextId(), role: "ai", card: { kind: "agentAction", tool: a.tool, result: a.result } };
+    });
+
+    // 実際にDBへ書き込んだ操作(確認ブロックで弾かれたものは除く)だけを実進捗としてカウントする。
+    // ブロック理由は2種類あり、どちらも書き込みが起きていないため除外する:
+    //   1. confirmed=false        → 「確認が必要です」
+    //   2. 同一ターン内の連鎖ブロック → 「確認をスキップできません」(agentRoutes.ts:239)
+    const writesThisTurn = (data.actions ?? []).filter(
+      (a) =>
+        REAL_WRITE_TOOLS.has(a.tool) &&
+        !a.result.includes("確認が必要") &&
+        !a.result.includes("確認をスキップできません"),
+    ).length;
+    if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
+
+    // suggest系の下書きが出たら、そのまま自然文で確定できるチップを添える
+    const SUGGEST_TOOLS = new Set(["suggest_tuning_rule", "suggest_faq", "suggest_engagement_rule"]);
+    const suggested = data.actions?.some((a) => SUGGEST_TOOLS.has(a.tool));
+    // Saiへの依頼がconfirmed待ちでブロックされた場合も、そのまま同意できるチップを添える
+    const saiPendingConfirm = data.actions?.some(
+      (a) => a.tool === "request_sai_task" && a.result.includes("確認が必要"),
+    );
+    // エスカレーションへの返信/対応完了がconfirmed待ちでブロックされた場合も同様
+    const escalationPendingConfirm = data.actions?.some(
+      (a) =>
+        (a.tool === "reply_to_escalation" || a.tool === "resolve_escalation") &&
+        a.result.includes("確認が必要"),
+    );
+    // オンボーディングのFAQテンプレート提案がconfirmed待ちでブロックされた場合も同様
+    const industryTemplatePendingConfirm = data.actions?.some(
+      (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
+    );
+    const chips: Chip[] | undefined = suggested
+      ? [
+          { label: "保存して", action: "__real:保存してください", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : saiPendingConfirm
+      ? [
+          { label: "お願いする", action: "__real:はい、お願いします", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : escalationPendingConfirm
+      ? [
+          { label: "実行して", action: "__real:はい、お願いします", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : industryTemplatePendingConfirm
+      ? [
+          { label: "登録して", action: "__real:登録してください", tone: "primary" },
+          { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ]
+      : undefined;
+
+    push(...actionMsgs);
+
+    // 最終返信だけを少しずつ流し込む(演出)。チップは流し込み完了後に表示する。
+    const replyId = nextId();
+    push({ id: replyId, role: "ai", text: "" });
+    revealText(replyId, data.reply || "（応答なし）", () => {
+      if (chips) setMsgs((prev) => prev.map((m) => (m.id === replyId ? { ...m, chips } : m)));
+      setSending(false);
+    });
+    // setSending(false) は revealText の完了コールバックに任せる
   };
 
   // マウント時、まず同一タブに保存済みの会話があれば復元する(リロード・ブラウザバック・
@@ -555,7 +543,7 @@ export default function CopilotPreviewPage() {
     const restored = restoreChatSession<Msg>(CHAT_SESSION_SURFACE_FULLSCREEN);
     if (restored && restored.messages.length > 0) {
       reserveIds(restored.messages);
-      sessionIdRef.current = restored.sessionId;
+      adoptSessionId(restored.sessionId);
       setMsgs(restored.messages);
       setRealHistory(restored.history ?? []);
       return;
@@ -617,13 +605,13 @@ export default function CopilotPreviewPage() {
     if (msgs.length === 0) return;
     const timer = setTimeout(() => {
       saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, {
-        sessionId: sessionIdRef.current,
+        sessionId: realSessionId,
         messages: msgs,
         history: realHistory,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [msgs, realHistory]);
+  }, [msgs, realHistory, realSessionId]);
 
   // 新UI(サイドバー型ではないため)にはログアウト手段が無く、Phase4トグルで
   // このブラウザの既定画面にすると詰む(GID: 新UI常用時にログアウトできない)。
@@ -869,9 +857,11 @@ export default function CopilotPreviewPage() {
             ✕
           </button>
         </div>
-        {/* AppSwitcher (R2C ⇄ R2C2)。旧UI(AppSidebar)と同じくヘッダー直下に配置 */}
+        {/* AppSwitcher (R2C ⇄ R2C2)。旧UI(AppSidebar)と同じくヘッダー直下に配置。
+            この画面には旧UIのチャットパネル(Surface A)が無いため、ロックタブの
+            質問はこの画面自身のチャットへ流す(onSeedQuery)。 */}
         <div style={{ padding: "0 2px" }}>
-          <AppSwitcher />
+          <AppSwitcher onSeedQuery={(query) => void sendReal(query)} />
         </div>
         <PreviewBadge />
         {CATEGORIES.map((c) => {
@@ -1136,6 +1126,14 @@ function Phase4DefaultToggle() {
     const next = !enabled;
     setChatFirstDefaultEnabled(next);
     setEnabled(next);
+    // 「オプトインした人が1ヶ月後も残っているか」を測るための計測だけの副回線
+    // (docs/AGENT_METRICS.md の chat_first_toggle)。トグルの実体はあくまで上の
+    // localStorage 側なので、await せず失敗も握り潰す。この通信の成否がトグルの
+    // 見た目・保存値・ユーザーへのエラー表示に影響してはならない。
+    void authFetch(`${API_BASE}/v1/admin/agent/ui-event`, {
+      method: "POST",
+      body: JSON.stringify({ event: "chat_first_toggle", enabled: next }),
+    }).catch(() => undefined);
   };
 
   return (
@@ -1282,7 +1280,7 @@ function CardView({ card }: { card: Card }) {
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
           <Field k="この操作について" v={card.description} />
-          {/* 同一SPA内のパスなので、target無しだとこのページごとアンマウントされ会話履歴(msgs/sessionIdRef)が消える */}
+          {/* 同一SPA内のパスなので、target無しだとこのページごとアンマウントされ会話履歴(msgs/sessionId)が消える */}
           <a
             href={card.url}
             target="_blank"
