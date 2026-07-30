@@ -193,7 +193,10 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
 
   it("初期状態ではドロワーは閉じており、オーバーレイも存在しない", async () => {
     renderPage(SUPER_ADMIN_IN_PREVIEW);
-    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+    // bootstrap完了(送信ボタンのdisabled解除)を待ってから操作する。左レールの件数
+    // バッジ取得(gaps/count・escalations)がbootstrapと並行して独立に走るため、
+    // 呼び出し回数の厳密一致では待てない。
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     expect(getRail().className).not.toContain("cp-rail-open");
     expect(getBackdrop()).toBeNull();
@@ -201,7 +204,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
 
   it("ハンバーガーボタンでドロワーが開き、背景オーバーレイが表示される", async () => {
     renderPage(SUPER_ADMIN_IN_PREVIEW);
-    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
 
@@ -211,7 +214,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
 
   it("オーバーレイをタップするとドロワーが閉じる", async () => {
     renderPage(SUPER_ADMIN_IN_PREVIEW);
-    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
     expect(getBackdrop()).not.toBeNull();
@@ -224,7 +227,7 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
 
   it("レール内の閉じるボタン(✕)でもドロワーが閉じる", async () => {
     renderPage(SUPER_ADMIN_IN_PREVIEW);
-    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
     expect(getRail().className).toContain("cp-rail-open");
@@ -251,7 +254,9 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
       () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
     );
     renderPage(SUPER_ADMIN_IN_PREVIEW);
-    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(1));
+    // このモックは全fetch呼び出し(bootstrap本体+左レールのバッジ取得2件)を未解決のまま止める。
+    // 呼び出し回数の厳密一致では待てないため、最低1回発火したことだけを確認する。
+    await waitFor(() => expect(authFetch).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
     expect(getRail().className).toContain("cp-rail-open");
@@ -681,6 +686,9 @@ describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
   });
 
   it("テナントを特定できないsuper_admin(preview外)では件数を取得しない(全テナント合計を出さない)", async () => {
+    // previewMode未選択のsuper_adminはテナント選択画面に入るため(別PRで追加)、
+    // 通常のチャット/左レール自体がまだマウントされない。そのためバッジ用エンドポイントは
+    // 一切呼ばれない — 「全テナント合計」を誤って出す経路が無いことがここでの確認点。
     mockBadges({ gaps: { count: 7 }, escalations: { escalations: [{ id: "e1" }] } });
     renderPage({
       isSuperAdmin: true,
@@ -688,7 +696,8 @@ describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
       user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null },
     });
 
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(screen.getByRole("heading", { name: /どのお客様として見ますか/ })).toBeTruthy());
+    expect(screen.queryByLabelText("送信")).toBeNull();
     const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
     expect(urls.some(isBadgeUrl)).toBe(false);
     expect(screen.queryByLabelText(/未回答質問 /)).toBeNull();
