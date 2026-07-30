@@ -8,6 +8,7 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
+import { requiresConfirmation } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
 import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
@@ -285,8 +286,15 @@ async function executeHopToolCalls(
       .map(([suggest]) => suggest);
     const alreadySuggestedThisTurn = suggestCounterparts.some((s) => suggestedThisTurn.has(s));
 
+    // 同一ターン連鎖のブロックは「確認ゲートの対象ツール」にのみ効かせる。
+    // 対象かどうかの判定は confirmPolicy.ts に集約する（リスク階層の単一の情報源）。
+    // requiresConfirmation は分類済みの書き込みツールすべてに対して true を返すため、
+    // ここでの判定結果は従来と完全に同一（挙動不変）。未分類ツールでは例外を投げるが、
+    // 短絡評価により連鎖を検出した save 側ツールしか渡らない。
+    const blockSameTurnChain = alreadySuggestedThisTurn && requiresConfirmation(name);
+
     let result: string;
-    if (alreadySuggestedThisTurn) {
+    if (blockSameTurnChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
     } else {
