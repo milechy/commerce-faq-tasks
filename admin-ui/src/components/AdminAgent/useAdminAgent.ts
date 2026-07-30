@@ -1,6 +1,11 @@
 // admin-ui/src/components/AdminAgent/useAdminAgent.ts
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { authFetch, API_BASE } from "../../lib/api";
+import {
+  CHAT_SESSION_SURFACE_PANEL,
+  restoreChatSession,
+  saveChatSession,
+} from "../../lib/chatSessionStore";
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
@@ -22,11 +27,20 @@ interface UseAdminAgentResult {
 }
 
 export function useAdminAgent(): UseAdminAgentResult {
-  const [messages, setMessages] = useState<AgentMessage[]>([]);
+  // リロード・ブラウザバック・モバイルのタブ破棄で会話が丸ごと消えないよう、同一タブに
+  // 保存された会話を復元する。全画面UI(/copilot-preview)とは別キーのため、2面の会話は
+  // 互いに独立している(lib/chatSessionStore.ts 参照)。
+  const [restored] = useState(() => restoreChatSession<AgentMessage>(CHAT_SESSION_SURFACE_PANEL));
+  const [messages, setMessages] = useState<AgentMessage[]>(restored?.messages ?? []);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  // セッションIDはコンポーネントのライフタイム中に一度だけ生成
-  const [sessionId] = useState<string>(() => crypto.randomUUID());
+  // セッションIDはコンポーネントのライフタイム中に一度だけ生成(復元できた場合はその続き)
+  const [sessionId] = useState<string>(() => restored?.sessionId ?? crypto.randomUUID());
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    saveChatSession(CHAT_SESSION_SURFACE_PANEL, { sessionId, messages });
+  }, [messages, sessionId]);
 
   const sendMessage = useCallback(async (text: string, targetTenantId?: string) => {
     if (!text.trim() || isLoading) return;

@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { authFetch, API_BASE } from "../lib/api";
+import {
+  CHAT_SESSION_SURFACE_FULLSCREEN,
+  CHAT_SESSION_SURFACE_PANEL,
+  clearChatSession,
+} from "../lib/chatSessionStore";
 
 export interface AuthUser {
   id: string;
@@ -179,6 +184,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user, previewMode, previewTenantId]);
 
   const logout = useCallback(async () => {
+    // 会話には顧客名・電話番号などの個人情報が載りうる。共有端末で次の利用者に残さないため、
+    // ネットワーク越しのサインアウト(遅延・失敗しうる)より先にローカルの会話を消す。
+    clearChatSession(CHAT_SESSION_SURFACE_FULLSCREEN);
+    clearChatSession(CHAT_SESSION_SURFACE_PANEL);
     await supabase.auth.signOut();
     setUser(null);
     setPreviewMode(false);
