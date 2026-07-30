@@ -25,7 +25,7 @@ import TuningPage from "./pages/admin/tuning/index";
 import FeedbackPage from "./pages/admin/feedback/index";
 import AdminAgentButton from "./components/AdminAgent/AdminAgentButton";
 import AdminAgentPanel from "./components/AdminAgent/AdminAgentPanel";
-import { useFeedbackReplies } from "./components/AdminAgent/useFeedbackReplies";
+import { useFeedbackReplies } from "./lib/feedbackReplies";
 import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarWizardPage from "./pages/admin/avatar/wizard";
@@ -105,10 +105,6 @@ function AppInner() {
   // 実ログインユーザー(super_admin)の user?.tenantId は常にnullのため
   // previewTenantId を優先しないとAIアシスタントがテナント無しで動作してしまう
   const effectiveTenantId = previewMode ? (previewTenantId ?? null) : (user?.tenantId ?? null);
-  const { replies: feedbackReplies, markRead: markReplyRead } = useFeedbackReplies(
-    showAIChat ? effectiveTenantId : null,
-    isSuperAdmin
-  );
   const isAdmin = location.pathname.startsWith("/admin") || location.pathname === "/";
   const isLogin =
     location.pathname === "/login" || location.pathname === "/reset-password";
@@ -124,6 +120,14 @@ function AppInner() {
   const isCopilotPreview =
     location.pathname === "/copilot-preview" ||
     (isLandingPath && (isChatFirstDefaultEnabled() || previewMode));
+
+  // 担当者からの未読返信(相談窓口)。ここで取るのはパネル(Surface A)のFABバッジと
+  // お返事カードのためだけなので、全画面UI(Surface B)を表示している間は取らない
+  // — その画面は同じフックを自分で呼ぶため、ここで取ると60秒ごとに二重取得になる。
+  const { replies: feedbackReplies, markRead: markReplyRead } = useFeedbackReplies(
+    showAIChat && !isCopilotPreview ? effectiveTenantId : null,
+    isSuperAdmin
+  );
 
   if (isAuthBridge) {
     return (

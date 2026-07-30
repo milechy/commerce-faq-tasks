@@ -1,7 +1,7 @@
 // admin-ui/src/components/AdminAgent/FeedbackPrompt.tsx
 // 直近のAI回答の下に出す「解決しましたか？」の確認導線。
 import { useState } from "react";
-import { submitConsultation } from "./useFeedbackReplies";
+import { submitConsultation } from "../../lib/feedbackReplies";
 
 interface FeedbackPromptProps {
   question: string;

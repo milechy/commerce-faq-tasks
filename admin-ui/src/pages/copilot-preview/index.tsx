@@ -23,6 +23,11 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom } from "../../lib/useAgentChatTransport";
+// 相談窓口(担当者への相談 → 返信 → 解決確認)のループ。ポーリング・既読化・相談投稿は
+// パネル(Surface A)と同じ実装を共有し(lib/feedbackReplies.ts)、見せ方だけこの面の
+// カード/メッセージの作法に合わせる。
+import { submitConsultation, useFeedbackReplies, type FeedbackReply } from "../../lib/feedbackReplies";
 import { shouldSubmitOnEnter } from "../../lib/utils";
 // PDF取り込みの受付ルール(拡張子/MIME/サイズ上限)と送信は旧UIのPDFタブと同じ実装を共有する。
 // 同じ操作が2面にある状態なので、片方だけ条件が緩む/厳しくなることを避けるため。
@@ -285,7 +290,17 @@ interface Msg {
   card?: Card;
   chips?: Chip[];
   chipsUsed?: boolean;
+  /** この回答がどこから来たか(サーバの answered_from をそのまま持つ) */
+  answeredFrom?: AnsweredFrom;
 }
+
+// 回答の出どころ表示。3値の語彙と文言はパネル(Surface A)と同一にする — 同じ回答が
+// 面によって違う出どころに見えてはならないため(値の定義は agentRoutes.ts が正)。
+const ANSWERED_FROM_LABEL: Record<AnsweredFrom, string> = {
+  faq_list: "📚 登録した知識データから回答しました",
+  tool_action: "⚙️ 操作を実行しました",
+  general: "💡 R2Cの使い方ガイドから回答しました",
+};
 
 const AGENT = "#7c3aed";
 const AGENT_SOFT = "rgba(124,58,237,0.10)";
@@ -346,6 +361,28 @@ export default function CopilotPreviewPage() {
   // (全テナント横断の合計が「この店の件数」として出てしまうため)。なお、その状態では
   // needsTenantSelection でチャット自体がまだ描画されないため、コンポーザは存在しない。
   const scopedTenantId = previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "");
+
+  // 相談窓口: 担当者からの未読返信。テナントが特定できない間は取りに行かない
+  // (フック側が tenantId=null で素通りする)。
+  const { replies: feedbackReplies, markRead: markFeedbackReplyRead } = useFeedbackReplies(
+    scopedTenantId || null,
+    isSuperAdmin,
+  );
+
+  // 「解決しました」= 既読にするだけ。「まだ解決しません」= 既読にしたうえで、元の質問を
+  // 親IDに紐づけて再投稿する。どちらもパネル(Surface A)と同じ手順・同じAPI。
+  const handleReplyResolved = useCallback(
+    (reply: FeedbackReply) => markFeedbackReplyRead(reply.id),
+    [markFeedbackReplyRead],
+  );
+  const handleReplyNotResolved = useCallback(
+    async (reply: FeedbackReply) => {
+      await markFeedbackReplyRead(reply.id);
+      await submitConsultation({ message: reply.message, parentFeedbackId: reply.id });
+    },
+    [markFeedbackReplyRead],
+  );
+
   const [railCounts, setRailCounts] = useState<RailCounts>({});
   useEffect(() => {
     if (!scopedTenantId) return;
@@ -515,7 +552,7 @@ export default function CopilotPreviewPage() {
 
     // 最終返信だけを少しずつ流し込む(演出)。チップは流し込み完了後に表示する。
     const replyId = nextId();
-    push({ id: replyId, role: "ai", text: "" });
+    push({ id: replyId, role: "ai", text: "", answeredFrom: data.answered_from });
     revealText(replyId, data.reply || "（応答なし）", () => {
       if (chips) setMsgs((prev) => prev.map((m) => (m.id === replyId ? { ...m, chips } : m)));
       setSending(false);
@@ -639,6 +676,18 @@ export default function CopilotPreviewPage() {
   const awaitingUserDecision =
     !!lastMsg && lastMsg.role === "ai" && !!lastMsg.chips && lastMsg.chips.length > 0 && !lastMsg.chipsUsed;
   const busy = sending || awaitingUserDecision;
+
+  // 相談窓口の入口: 直近のAI回答の下に「解決しましたか？」を出す(パネルと同じ導線)。
+  // 出さない場合:
+  //   - 応答待ち・タイプライター中(sending) / まだチップを選んでいない(awaitingUserDecision)
+  //   - ユーザーが一度も質問していない(起動時ブリーフィングだけの状態)。聞いてもいない
+  //     ことに「解決しましたか？」と尋ねる形になるため。
+  const lastUserText = msgs.reduce<string | undefined>(
+    (acc, m) => (m.role === "me" && m.text ? m.text : acc),
+    undefined,
+  );
+  const showResolutionPrompt =
+    !busy && !!lastUserText && !!lastMsg && lastMsg.role === "ai" && !!lastMsg.text;
 
   // ボタン側のdisabledで大半は弾かれるが、ここでも二重に防御する。
   const handleCategory = (key: string) => {
@@ -955,12 +1004,29 @@ export default function CopilotPreviewPage() {
             {msgs.map((m) => (
               <MessageRow key={m.id} m={m} onChip={runAction} />
             ))}
+            {/* key に直近メッセージのidを与え、回答が変わるたびに新しい確認として出す
+                (前の回答で「はい」を押した状態を持ち越さない) */}
+            {showResolutionPrompt && <ResolutionPrompt key={lastMsg.id} question={lastUserText} />}
           </div>
         </div>
 
         {/* コンポーザ（実API接続）。PDFはここへ落とすと会話の中で取り込みが始まる */}
         <div className="cp-composer-wrap" style={{ flexShrink: 0 }}>
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
+            {/* 担当者からのお返事(最新の未読1件のみ。他は件数で案内)。
+                スレッドの中ではなくコンポーザの上に固定する理由が2つある:
+                  1. スレッドは新しい応答が来るたび末尾へ自動スクロールするため、途中に
+                     差し込むと届いた直後に画面外へ流れてしまう。
+                  2. msgs に入れると会話と一緒に sessionStorage へ保存され、既読化した
+                     お返事がリロード後に復活する。ここは常にフックの現在値だけを映す。 */}
+            {feedbackReplies.length > 0 && (
+              <FeedbackReplyNotice
+                reply={feedbackReplies[0]}
+                extraCount={feedbackReplies.length - 1}
+                onResolved={() => handleReplyResolved(feedbackReplies[0])}
+                onNotResolved={() => handleReplyNotResolved(feedbackReplies[0])}
+              />
+            )}
             <div
               onDragEnter={handlePdfDragEnter}
               onDragOver={(e) => e.preventDefault()}
@@ -1185,6 +1251,13 @@ function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => 
           {m.text}
         </div>
       )}
+      {/* 回答の出どころ。テキストが流し込まれるまでは出さない(空バブルの下に
+          ラベルだけが浮くのを避ける) */}
+      {m.text && m.answeredFrom && (
+        <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", padding: "0 4px" }}>
+          {ANSWERED_FROM_LABEL[m.answeredFrom]}
+        </div>
+      )}
       {m.card && <CardView card={m.card} />}
       {m.chips && !m.chipsUsed && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1205,6 +1278,147 @@ function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => 
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── 相談窓口(担当者への相談 → 返信 → 解決確認) ──────────────────────────────
+// ロジック(ポーリング・既読化・相談投稿)は lib/feedbackReplies.ts でパネルと共有し、
+// ここは見せ方だけを持つ。パネル側の ReplyCard/FeedbackPrompt をそのまま使わないのは、
+// あれがダークのパネル前提の固定色(#86efac 等)で書かれており、light/dark 両対応の
+// この画面ではコントラストが破綻するため(文言と操作は同一に保っている)。
+
+function FeedbackReplyNotice({
+  reply,
+  extraCount,
+  onResolved,
+  onNotResolved,
+}: {
+  reply: FeedbackReply;
+  extraCount: number;
+  onResolved: () => Promise<void>;
+  onNotResolved: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const run = (action: () => Promise<void>) => {
+    setBusy(true);
+    void action();
+  };
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <CardShell
+        tone="brand"
+        hd={
+          <>
+            <span>💬</span>担当者からお返事が届きました
+            {extraCount > 0 && (
+              <span style={{ fontWeight: 500, fontSize: 12.5, opacity: 0.8 }}>{`＋あと${extraCount}件`}</span>
+            )}
+          </>
+        }
+      >
+        <Field k="あなたの質問" v={reply.message} />
+        <div style={{ fontSize: 15 }}>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 4 }}>
+            お返事
+          </div>
+          {/* 長いお返事でコンポーザが画面外に押し出されないよう高さを制限する */}
+          <div
+            style={{
+              color: "var(--foreground)", background: "var(--muted, rgba(120,120,140,0.1))",
+              borderRadius: 10, padding: "10px 14px", borderLeft: "3px solid #d99320",
+              lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word",
+              maxHeight: 160, overflowY: "auto",
+            }}
+          >
+            {reply.reply_body}
+          </div>
+          {reply.replied_at && (
+            <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 5 }}>
+              {new Date(reply.replied_at).toLocaleString("ja-JP", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={() => run(onResolved)}
+            disabled={busy}
+            style={{
+              fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+              border: "none", background: AGENT, color: "#fff",
+              cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+            }}
+          >
+            解決しました
+          </button>
+          <button
+            onClick={() => run(onNotResolved)}
+            disabled={busy}
+            style={{
+              fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+              border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)",
+              cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+            }}
+          >
+            まだ解決しません
+          </button>
+        </div>
+      </CardShell>
+    </div>
+  );
+}
+
+// 直近のAI回答の下に出す「解決しましたか？」。「うまく解決しなかった」を押すと、その
+// 質問がそのまま担当者への相談として投稿される(= 相談窓口ループの入口)。
+function ResolutionPrompt({ question }: { question: string }) {
+  const [state, setState] = useState<"idle" | "sending" | "sent" | "dismissed">("idle");
+
+  if (state === "dismissed") return null;
+
+  if (state === "sent") {
+    return (
+      <div style={{ fontSize: 13.5, color: "#16a34a", padding: "0 4px" }}>
+        {"✅ 担当者に伝えました。お返事はこの画面に届きます。"}
+      </div>
+    );
+  }
+
+  const handleNotResolved = async () => {
+    setState("sending");
+    const ok = await submitConsultation({ message: question });
+    setState(ok ? "sent" : "idle");
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "0 4px" }}>
+      <span style={{ fontSize: 13.5, color: "var(--muted-foreground)" }}>このお返事で解決しましたか？</span>
+      <button
+        onClick={() => setState("dismissed")}
+        style={{
+          fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+          border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
+        }}
+      >
+        はい
+      </button>
+      <button
+        onClick={() => void handleNotResolved()}
+        disabled={state === "sending"}
+        style={{
+          fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+          border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)",
+          cursor: state === "sending" ? "not-allowed" : "pointer",
+        }}
+      >
+        {state === "sending" ? "送信中..." : "うまく解決しなかった"}
+      </button>
     </div>
   );
 }

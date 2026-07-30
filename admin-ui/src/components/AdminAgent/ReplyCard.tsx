@@ -1,6 +1,6 @@
 // admin-ui/src/components/AdminAgent/ReplyCard.tsx
 import { useState } from "react";
-import type { FeedbackReply } from "./useFeedbackReplies";
+import type { FeedbackReply } from "../../lib/feedbackReplies";
 
 interface ReplyCardProps {
   reply: FeedbackReply;

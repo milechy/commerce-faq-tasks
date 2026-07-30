@@ -489,6 +489,20 @@ showAIChat = isClientAdmin && <クローズ対象外ページのみ>
 
 機能凍結 (同 §4(c)-1) と A 固有 2 機能 (相談窓口ループ・`answered_from` ラベル) の B への移植 (同 §4(c)-3) は、この縮小の前提条件としてそのまま有効。凍結の終期に上限が付くという (c) の利点も維持される — 上限は「Wave 1 + Wave 2 の 6 ページが閉じた時点」で確定する。
 
+#### 7-1-a. 前提条件の充足状況: A 固有 2 機能の移植は完了済み (2026-07-30)
+
+上記の前提条件のうち **移植 (同 §4(c)-3) は済んでいる**。Asana GID `1217008702879233` / PR「パネル固有の2機能を全画面UIへ移植する」で以下を実施した。
+
+| 前提条件 | 状態 | 実装 |
+|---|---|---|
+| 相談窓口ループ (担当者からのお返事 → 解決しました / まだ解決しません) を B へ | **済** | `pages/copilot-preview/index.tsx` がフックを共有 (`lib/feedbackReplies.ts` — 移植に合わせて `components/AdminAgent/useFeedbackReplies.ts` から移動)。描画は同ファイルの `FeedbackReplyNotice` / `ResolutionPrompt` |
+| `answered_from` の出典ラベルを B へ | **済** | 同ファイルの `ANSWERED_FROM_LABEL` (3値の語彙・文言はパネルと同一) |
+| パネルの機能凍結の明文化 | **済** | `components/AdminAgent/AdminAgentPanel.tsx` および `useAdminAgent.ts` 冒頭のコメント |
+
+したがって **パネルに固有で B に無い機能はもう無い**。§7-1 の「可視条件の縮小」を実行する際、機能欠落を理由にブロックされる要素は残っていない (縮小そのものの実装は引き続き別タスク)。
+
+なお **本節が満たしたのは「パネル側の前提条件」だけ** であり、§2.3 の数値基準・§3 の実行手順は一切変更していない。それらはテナント向け旧UIページに対する基準であって、パネル自体の基準ではない (§0.1)。
+
 ### 7-2. 面が区別できないことが C1 に与える影響 (重要)
 
 `CHAT_SURFACE_DECISION.md` §3.3 の指摘どおり、`POST /v1/admin/agent/chat` の `chatSchema` (`src/api/admin/agent/agentRoutes.ts:81–89` — 本ドキュメントでの実測値。受け取るのは `message` / `sessionId` / `targetTenantId` / `history` / `stream` のみ) に面の識別子が無い。このため `agent_legacy_handoff` は次の 2 つを区別できない:
