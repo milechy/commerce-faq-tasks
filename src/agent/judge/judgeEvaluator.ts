@@ -304,10 +304,12 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
     if (result.overall_score < threshold && result.suggested_rules.length > 0) {
       for (const rule of result.suggested_rules) {
         try {
+          // source='judge' を明示する。未設定だとスキーマ既定 'manual' になり、
+          // 店主が作ったルールと出所を区別できなくなる(承認導線で必須の情報)。
           await pool.query(
             `INSERT INTO tuning_rules
-               (tenant_id, trigger_pattern, expected_behavior, priority, is_active)
-             VALUES ($1, $2, $3, $4, false)
+               (tenant_id, trigger_pattern, expected_behavior, priority, is_active, source)
+             VALUES ($1, $2, $3, $4, false, 'judge')
              ON CONFLICT DO NOTHING`,
             [
               tenantId,
