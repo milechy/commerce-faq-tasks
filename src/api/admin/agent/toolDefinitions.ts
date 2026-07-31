@@ -33,6 +33,7 @@ export const LEGACY_UI_FEATURES = [
   'chat_test',
   'avatar_wizard',
   'knowledge_pdf',
+  'knowledge_attribution',
 ] as const;
 
 export const ADMIN_AGENT_TOOLS: GroqTool[] = [
@@ -87,7 +88,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_faq_list',
-      description: 'テナントの FAQ 一覧を取得する（最大20件）',
+      description: 'テナントの FAQ 一覧を取得する（最大20件。登録されている総件数も併記されるため、表示件数が上限に達していても総数は正しく分かる）',
       parameters: {
         type: 'object',
         properties: {
@@ -259,6 +260,45 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         type: 'object',
         properties: {},
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_avatar_preset',
+      description:
+        'アバターをまだ持っていないユーザーに、既定の見本（見た目・性格が作り込まれた雛形）から' +
+        '1件を提案する読み取り専用ツール。この時点では何も作成しない。ユーザーが' +
+        '「アバターを作りたい」「初めて設定したい」等と言ったときに使う。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'adopt_avatar_preset',
+      description:
+        'suggest_avatar_preset が提案した見本を、自テナントのアバター設定として採用する。' +
+        '採用してもまだ公開されない（別途 activate_avatar が必要）。' +
+        'ユーザーの明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          preset_id: {
+            type: 'string',
+            description: 'suggest_avatar_preset が返した見本の ID（プリセットID）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['preset_id'],
       },
     },
   },
@@ -443,7 +483,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_weekly_briefing',
       description:
-        '直近7日間のテナントの状況（会話数・前週比・応答品質スコア・成約・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
+        '今週（月曜00:00起点、暦週）のテナントの状況（会話数・先週同時点比・応答品質スコア・成約・FAQ総数と公開数と最終更新日・承認待ちの指示ルール件数・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
       parameters: {
         type: 'object',
         properties: {},

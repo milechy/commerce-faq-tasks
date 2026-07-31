@@ -471,6 +471,24 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText(description)).toBeTruthy();
   });
 
+  it("アバター見本の提案(suggest_avatar_preset)はcardの構造化データがそのまま描画される", async () => {
+    mockAgent({
+      reply: "見本をご提案しました。",
+      actions: [
+        {
+          tool: "suggest_avatar_preset",
+          result: "「Haruka」というアバターの見本があります。\nとても丁寧な性格です。\nプリセットID: preset-1\nこのまま採用しますか？",
+          card: { kind: "avatar_preset", presetId: "preset-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+        },
+      ],
+    });
+
+    await send("アバターを作りたい");
+
+    expect(await screen.findByText("Haruka")).toBeTruthy();
+    expect(screen.getByText("とても丁寧な性格です。")).toBeTruthy();
+  });
+
   it("card が無い既存ツールは、従来どおり自然文の正規表現パースでリンクカードになる", async () => {
     const description = "会話内容の確認とその会話セッションの削除はこちらの画面で行えます";
     mockAgent({
@@ -491,6 +509,126 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText(description)).toBeTruthy();
   });
 
+  it("weekly_summary カードの数値をそのまま描画し、未回答質問・承認待ちルールがあれば行動チップを出す", async () => {
+    mockAgent({
+      reply: "今週も好調です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 142件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2026-08-05T03:00:00.000Z",
+            sessions: { total: 142, changePct: 18, prevTotal: 120 },
+            avgScore: 82,
+            conversions: { count: 8, total: 96000 },
+            faq: { total: 45, published: 40, lastUpdated: "2026-08-01T00:00:00.000Z" },
+            pendingTuningRules: 3,
+            gaps: { total: 11, top: [{ id: 1, question: "送料はいくらですか？" }] },
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    expect(await screen.findByText("142件")).toBeTruthy();
+    expect(screen.getByText(/先週同時点比 \+18%/)).toBeTruthy();
+    expect(screen.getByText("82/100")).toBeTruthy();
+    expect(screen.getByText("8件・¥96,000")).toBeTruthy();
+    expect(screen.getByText("承認待ちの指示ルール")).toBeTruthy();
+    expect(screen.getByText("「送料はいくらですか？」")).toBeTruthy();
+
+    // チップはサーバ集計値(card)から決定的に導く。LLMの文には付けられない
+    await waitFor(() => expect(screen.getByRole("button", { name: "FAQにする" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "確認する" })).toBeTruthy();
+  });
+
+  it("未回答質問・承認待ちルールが0件なら行動チップを出さない", async () => {
+    mockAgent({
+      reply: "順調です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 30件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2026-08-05T03:00:00.000Z",
+            sessions: { total: 30, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: { count: 2, total: 10000 },
+            faq: { total: 10, published: 10, lastUpdated: null },
+            pendingTuningRules: 0,
+            gaps: { total: 0, top: [] },
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    await screen.findByText("30件");
+    expect(screen.queryByRole("button", { name: "FAQにする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "確認する" })).toBeNull();
+  });
+
+  // GID 1217040318322843: 会話復元(sessionStorage)で古いまとめがそのまま画面に残り、
+  // いつ時点のデータか分からないまま今日の数字として読まれてしまう問題の回帰テスト。
+  it("集計時点(asOf)が今日なら鮮度の注記を出さない", async () => {
+    mockAgent({
+      reply: "今週も好調です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 50件",
+          card: {
+            kind: "weekly_summary",
+            asOf: new Date().toISOString(),
+            sessions: { total: 50, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    await screen.findByText("50件");
+    expect(screen.getByText(/集計時点/)).toBeTruthy();
+    expect(screen.queryByText(/別の日に取得した内容です/)).toBeNull();
+  });
+
+  it("集計時点(asOf)が別の日(会話復元など)なら古い内容だと分かる注記を出す", async () => {
+    mockAgent({
+      reply: "先日の状況です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 50件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2020-01-01T00:00:00.000Z",
+            sessions: { total: 50, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    await screen.findByText("50件");
+    expect(await screen.findByText(/別の日に取得した内容です/)).toBeTruthy();
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {
@@ -508,6 +646,98 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText("アバターの停止")).toBeTruthy();
     expect(screen.queryByText("get_avatar_list")).toBeNull();
     expect(screen.queryByText("deactivate_avatar")).toBeNull();
+  });
+
+  // mockAgent は2回目以降すべて同じ応答を返す(単発の描画確認向け)ため、
+  // クリック後の3ターン目に別の応答を返す必要があるこのテストだけは自前でモックする。
+  it("見本提案が出たら「採用して」チップが出て、押すと自然文で採用を伝える", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "見本をご提案しました。",
+          actions: [
+            {
+              tool: "suggest_avatar_preset",
+              result: "「Haruka」というアバターの見本があります。\nプリセットID: preset-1\nこのまま採用しますか？",
+              card: { kind: "avatar_preset", presetId: "preset-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({
+        reply: "採用しました。",
+        actions: [{ tool: "adopt_avatar_preset", result: "アバター「Haruka」を採用しました。まだ公開はされていません。" }],
+      });
+    });
+
+    await send("アバターを作りたい");
+
+    const adoptButton = await screen.findByRole("button", { name: "採用して" });
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+
+    fireEvent.click(adoptButton);
+
+    await waitFor(() => expect(screen.getByText("採用してください")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("採用してください");
+    // 二度押し防止: 前のターンのチップは使用済みになり消える
+    expect(screen.queryByRole("button", { name: "採用して" })).toBeNull();
+  });
+
+  // D3: 500字のtextでは実質3〜4件しか出ていなかった一覧が、cardでは件数によらず全件出る回帰。
+  it("get_tuning_rules: 15件を超えても全件がカードに描画される(500字打ち切りの回帰)", async () => {
+    const rules = Array.from({ length: 20 }, (_, i) => ({
+      id: i + 1,
+      triggerPattern: `トリガー${i + 1}`,
+      expectedBehavior: `振る舞い${i + 1}`,
+      priority: 5,
+      isActive: i % 2 === 0,
+    }));
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（20件、うち有効10件・無効10件）です。詳しい内容は一覧でご確認いただけます。",
+          card: { kind: "tuning_rules_list", rules, totalCount: 20 },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText("トリガー1")).toBeTruthy();
+    expect(screen.getByText("トリガー20")).toBeTruthy();
+    expect(screen.getAllByText("✅ 有効")).toHaveLength(10);
+    expect(screen.getAllByText("⏸️ 無効")).toHaveLength(10);
+  });
+
+  it("get_tuning_rules: card が無い場合は従来どおり自然文の agentAction 表示になる(後方互換)", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        { tool: "get_tuning_rules", result: "有効な指示ルールはありません" },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    // agentAction汎用表示は「ラベル：結果」を1つのspanにまとめるため、
+    // 完全一致ではなく正規表現の部分一致で確認する(他のagentAction回帰テストと同じ形式)。
+    expect(await screen.findByText(/有効な指示ルールはありません/)).toBeTruthy();
   });
 });
 

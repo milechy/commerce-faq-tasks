@@ -147,6 +147,20 @@ describe('analyzeTuningRules', () => {
     expect(insertCalls[0][0]).toContain('ON CONFLICT DO NOTHING');
   });
 
+  it('3c. INSERT文でis_activeがfalseに明示される（列を省略するとスキーマ既定DEFAULT trueで無断有効化されるため）', async () => {
+    const mockRepo = createMockRepo(sampleEvaluations);
+    const mockPool = createMockPool();
+    mockCallGroq.mockResolvedValueOnce(mockRulesResponse);
+
+    await analyzeTuningRules('tenant-test', mockRepo as any, mockPool as any);
+
+    const insertCalls = (mockPool.query as jest.Mock).mock.calls.filter(
+      (call: any[]) => call[0].includes('INSERT INTO tuning_rules'),
+    );
+    expect(insertCalls[0][0]).toContain('is_active');
+    expect(insertCalls[0][0]).toContain('false');
+  });
+
   it('3b. INSERT文にevidence列が含まれ、返り値と同じevidenceがJSON永続化される（GID 1215916762299598: 以前は計算のみでDB未保存だった）', async () => {
     const mockRepo = createMockRepo(sampleEvaluations);
     const mockPool = createMockPool();
