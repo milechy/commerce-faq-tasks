@@ -7,13 +7,14 @@
 // ロジックの乖離を防ぐため、tests/widget/widgetSourceInvariants.test.ts で
 // 実ファイル側の実装がこの契約から外れていないかを別途チェックしている。
 
-type ScriptedResponse = { keywords?: unknown; answer: string };
+type ScriptedResponse = { keywords?: unknown; answer?: string };
 
 function findScriptedAnswer(userText: string, responses: unknown): string | null {
   if (!responses || !Array.isArray(responses)) return null;
   const normalized = userText.toLowerCase().replace(/[？?！!。、\s]/g, '');
   for (let i = 0; i < responses.length; i++) {
     const item = responses[i] as ScriptedResponse;
+    if (!item.answer) continue; // answer未設定のエントリはマッチ対象から除外
     const kws = (item.keywords as string[]) || [];
     if (kws.indexOf('*') !== -1) continue; // wildcard/fallback handled last
     for (let j = 0; j < kws.length; j++) {
@@ -25,7 +26,7 @@ function findScriptedAnswer(userText: string, responses: unknown): string | null
   let fallback: string | null = null;
   for (let k = 0; k < responses.length; k++) {
     const item = responses[k] as ScriptedResponse;
-    if (item.keywords && (item.keywords as string[]).indexOf('*') !== -1) {
+    if (item.answer && item.keywords && (item.keywords as string[]).indexOf('*') !== -1) {
       fallback = item.answer;
       break;
     }
@@ -124,6 +125,24 @@ describe('widget.js findScriptedAnswer', () => {
       // しかし全く無関係なメッセージが空文字キーワードにマッチしてはいけない
       expect(findScriptedAnswer('セキュリティが心配', responses)).toBe('SECURITY');
       expect(findScriptedAnswer('こんにちは', responses)).toBe('FB');
+    });
+
+    it('【回帰】answer が未設定のエントリはマッチしても undefined を返さず、後続のフォールバックに委ねる', () => {
+      // コンテンツ編集ミス（answer フィールドの書き忘れ）で undefined がそのまま
+      // チャットバブルにレンダリングされる（あるいは描画エラーになる）事故の防止。
+      const responses = [
+        { keywords: ['料金'] } as ScriptedResponse, // answer 欠落
+        { keywords: ['*'], answer: 'FB' },
+      ];
+      expect(findScriptedAnswer('料金を教えて', responses)).toBe('FB');
+      expect(findScriptedAnswer('料金を教えて', responses)).not.toBeUndefined();
+    });
+
+    it('【回帰】answer が未設定の * ワイルドカードはフォールバックとして採用されない', () => {
+      const responses = [
+        { keywords: ['*'] } as ScriptedResponse, // answer 欠落のワイルドカード
+      ];
+      expect(findScriptedAnswer('何でもいい質問', responses)).toBeNull();
     });
   });
 

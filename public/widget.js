@@ -2062,6 +2062,7 @@
     avatarConfig = null;
     fabVideoEl = null;
     fabMediaContainer = null;
+    removeAvatarPlaceholder(); // data-avatar-mode="animated" 用の静止画/絵文字要素と avatarPlaceholderImg もリセット
     resetFabIcon();
   }
 
@@ -2195,7 +2196,15 @@
     emitToHost('widget:opened', {});
     capturePostHog('widget_opened', { page_url: window.location.href.slice(0, 2048) });
     if (avatarMode === 'animated') {
-      // LiveKit/Anam へは一切接続しない軽量デモモード
+      // LiveKit/Anam へは一切接続しない軽量デモモード。
+      // 設計判断（意図的）: panel.classList.add('avatar-active') はここでは付与しない。
+      // avatar-active は音声アバター用のダークテーマ+PC横並び2カラム/モバイル全画面分割
+      // レイアウトを一括で切り替える既存の状態機だが、animated モードは「軽量な静止画+
+      // パルスアニメーションだけを見せる」ことが目的のため、そのフル体験は不要と判断し、
+      // 通常のチャットパネル内の小さな avatar-area ボックスにそのまま表示する。
+      // 将来 avatar-active 相当の没入感が必要になった場合は、.panel.avatar-active
+      // .avatar-animated / .avatar-animated-img-wrap 用のCSSを追加した上で
+      // このクラスを付与すること（現状は意図的に未対応）。
       avatarArea.style.display = 'flex';
       showAnimatedAvatarPlaceholder();
     } else if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
@@ -2308,6 +2317,7 @@
     var normalized = userText.toLowerCase().replace(/[？?！!。、\s]/g, '');
     for (var i = 0; i < responses.length; i++) {
       var item = responses[i];
+      if (!item.answer) continue; // answer未設定のエントリはマッチ対象から除外（undefinedをそのままバブル表示しない）
       var kws = item.keywords || [];
       if (kws.indexOf('*') !== -1) continue; // wildcard/fallback handled last
       for (var j = 0; j < kws.length; j++) {
@@ -2318,7 +2328,10 @@
     }
     var fallback = null;
     for (var k = 0; k < responses.length; k++) {
-      if (responses[k].keywords && responses[k].keywords.indexOf('*') !== -1) { fallback = responses[k].answer; break; }
+      if (responses[k].answer && responses[k].keywords && responses[k].keywords.indexOf('*') !== -1) {
+        fallback = responses[k].answer;
+        break;
+      }
     }
     return fallback;
   }
@@ -2958,6 +2971,7 @@
 
   // アバター設定を事前取得（パネルを開く前に完了させ、FABクリック時のフラッシュを防止）
   // data-avatar-mode="animated" の場合は LiveKit/Anam に一切接続せず、CSSアバターのみ表示
+  // （avatar-active レイアウトを使わない設計判断の理由は openPanel() 内のコメントを参照）
   if (avatarMode === 'animated') { showAnimatedAvatarPlaceholder(); }
   else if (apiKey) { fetchAvatarConfig(); }
 
