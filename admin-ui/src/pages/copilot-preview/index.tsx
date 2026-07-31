@@ -16,6 +16,7 @@ import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 import {
   CHAT_SESSION_SURFACE_FULLSCREEN,
+  clearChatSession,
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
@@ -696,6 +697,37 @@ export default function CopilotPreviewPage() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsTenantSelection]);
+
+  // super_adminがプレビュー中に別テナントへenterPreviewする経路(AppSwitcher/テナント詳細の
+  // 「クライアントビューで見る」等)を検知し、会話を初期化して新テナントの週次ブリーフィングを
+  // 取り直す。上の bootstrap effect は needsTenantSelection のみを見ており、previewMode の
+  // まま別テナントへ切り替わるケースでは再評価されないため、前テナントの会話(weeklySummary
+  // カードを含む)が残ったまま新テナントの画面として表示され続けていた(GID: PR #633 で報告)。
+  //
+  // 初回確定("" → 最初のテナント)は上の effect が担当するため何もしない。空への遷移
+  // (プレビュー解除)も何もしない(その間は needsTenantSelection の描画分岐でチャット自体が
+  // 表示されない)。scopedTenantId が「別の非空値」に変わった場合だけリセットする。
+  const lastScopedTenantIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = lastScopedTenantIdRef.current;
+    lastScopedTenantIdRef.current = scopedTenantId || prev;
+
+    if (!prev || !scopedTenantId || scopedTenantId === prev) return;
+
+    // 会話・履歴・sessionId・進捗カウント・保存済みセッション(前テナントのもの)を
+    // すべて破棄してから、新テナントの週次ブリーフィングを取り直す。
+    clearChatSession(CHAT_SESSION_SURFACE_FULLSCREEN);
+    setMsgs([]);
+    setRealHistory([]);
+    setRealActionCount(0);
+    adoptSessionId(crypto.randomUUID());
+
+    void (async () => {
+      push({ id: nextId(), role: "ai", text: "テナントを切り替えました。今週の実データを確認しています…" });
+      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedTenantId]);
 
   // テナント選択用の一覧。既存の GET /v1/admin/tenants(super_admin限定)をそのまま使う。
   const [tenants, setTenants] = useState<TenantOption[] | null>(null);

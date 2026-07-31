@@ -1454,6 +1454,78 @@ describe("CopilotPreviewPage — super_adminのテナント選択", () => {
   });
 });
 
+// GID: super_adminがプレビュー中に別テナントへ切り替えても、bootstrapped(useRef)が
+// needsTenantSelectionのみをキーにしており previewMode のままでは再評価されないため、
+// 会話スレッド(weeklySummaryカードを含む)が前テナントのまま残っていた。修正の回帰テスト。
+describe("CopilotPreviewPage — テナント切替時の会話リセット", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+  });
+
+  it("previewMode中に別テナントへ切り替えると、会話がリセットされ新テナントのブリーフィングが取り直される", async () => {
+    let currentTenant = "tenant-a";
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        return mockOk({ reply: `${currentTenant}の状況です。`, actions: [] });
+      }
+      return mockOk({});
+    });
+
+    const { rerender } = renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-a" });
+    await waitFor(() => expect(screen.getByText("tenant-aの状況です。")).toBeTruthy());
+
+    const callsBeforeSwitch = vi.mocked(authFetch).mock.calls.filter(([url]) =>
+      String(url).includes("/v1/admin/agent/chat"),
+    ).length;
+
+    // 別テナントへ切替(previewTenantIdのみ変化。previewMode/isSuperAdminは維持)
+    currentTenant = "tenant-b";
+    vi.mocked(useAuth).mockReturnValue(
+      baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-b" }),
+    );
+    rerender(
+      <MemoryRouter>
+        <CopilotPreviewPage />
+      </MemoryRouter>,
+    );
+
+    // 新テナントのブリーフィングが自動的に取り直される(手動操作不要)
+    await waitFor(() => expect(screen.getByText("tenant-bの状況です。")).toBeTruthy());
+    // 前テナントの応答は会話から消えている(リセットされた証拠)
+    expect(screen.queryByText("tenant-aの状況です。")).toBeNull();
+
+    const callsAfterSwitch = vi.mocked(authFetch).mock.calls.filter(([url]) =>
+      String(url).includes("/v1/admin/agent/chat"),
+    ).length;
+    expect(callsAfterSwitch).toBeGreaterThan(callsBeforeSwitch);
+  });
+
+  it("同じテナントのままの再レンダーでは会話をリセットしない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    const { rerender } = renderPage(SUPER_ADMIN_IN_PREVIEW);
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+
+    const callsBefore = vi.mocked(authFetch).mock.calls.length;
+
+    // previewTenantIdが変わらない通常の再レンダー(例: 他stateの更新に伴う再描画)
+    vi.mocked(useAuth).mockReturnValue(baseAuth(SUPER_ADMIN_IN_PREVIEW));
+    rerender(
+      <MemoryRouter>
+        <CopilotPreviewPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("今週も順調です。")).toBeTruthy();
+    expect(vi.mocked(authFetch).mock.calls.length).toBe(callsBefore);
+  });
+});
+
 // GID 1217007387443283: GUI固有として旧UIへ丸投げしていたPDF取り込みを、会話の中の
 // カードとして完結させる最初の1件。受付条件(拡張子/MIME/サイズ)は旧UIのPDFタブと
 // lib/bookPdfUpload.ts を共有しているため、ここで見るのは「会話UIとして成立しているか」
