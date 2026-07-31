@@ -114,18 +114,83 @@ export interface SessionSummary {
   outcome_recorded_at: string | null;
 }
 
+const VALID_SORT_BY = ['last_message_at', 'message_count', 'score'] as const;
+const VALID_SORT_ORDER = ['asc', 'desc'] as const;
+const VALID_PERIOD = ['7', '30', '90', 'all'] as const;
+const VALID_SENTIMENT = ['positive', 'negative', 'neutral'] as const;
+
+function pickAllowlisted<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  if (typeof value !== 'string') return undefined;
+  return (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+}
+
+function coerceInt(value: unknown, fallback: number): number {
+  const n = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export interface NormalizedSessionListParams {
+  limit: number;
+  offset: number;
+  sort_by: SessionListParams['sort_by'];
+  sort_order: SessionListParams['sort_order'];
+  period: SessionListParams['period'];
+  sentiment: SessionListParams['sentiment'];
+}
+
+/**
+ * getSessions() が SQL へ文字列補間する period / sort_order 等を、呼び出し元に依存せず
+ * allowlist で検証する。呼び出し元は routes.ts の他に agent の LLM 由来引数
+ * (actionExecutor.ts) が増えるため、検証をここへ集約する。allowlist 外は例外にせず
+ * undefined にフォールバックする(routes.ts の既存挙動を維持するため)。
+ *
+ * 冪等なので複数箇所(routes.ts / getSessions() 内部)から呼んでよい。
+ * search のワイルドカードエスケープだけは非冪等(二重エスケープになる)なため、
+ * ここでは扱わず getSessions() 内で SQL 構築の直前に1回だけ適用する。
+ */
+export function normalizeSessionListParams(raw: {
+  limit?: unknown;
+  offset?: unknown;
+  sort_by?: unknown;
+  sort_order?: unknown;
+  period?: unknown;
+  sentiment?: unknown;
+}): NormalizedSessionListParams {
+  return {
+    limit: Math.max(1, Math.min(coerceInt(raw.limit, 20), 200)),
+    offset: Math.max(0, coerceInt(raw.offset, 0)),
+    sort_by: pickAllowlisted(raw.sort_by, VALID_SORT_BY),
+    sort_order: pickAllowlisted(raw.sort_order, VALID_SORT_ORDER),
+    period: pickAllowlisted(raw.period, VALID_PERIOD),
+    sentiment: pickAllowlisted(raw.sentiment, VALID_SENTIMENT),
+  };
+}
+
+// LIKE のワイルドカードを無効化し、意図しない広域一致を防ぐ（Postgres の既定エスケープ文字は \）。
+// resolveSessionByShortId (actionExecutor.ts) と同じ規約。非冪等なため呼び出しは1箇所に限る。
+function escapeLikeWildcards(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 /**
  * セッション一覧を取得する。
  * Phase52b: sort/filter/search/sentiment に対応。
+ *
+ * 引数は呼び出し元(routes.ts の allowlist 済みの値、または agent 経由の未検証の値)を
+ * 問わず、ここで必ず allowlist を再適用する。period と sort_order は下の SQL に
+ * 文字列補間されるため、検証を経ない値がここに到達することを絶対に防ぐ。
  */
 export async function getSessions(
   params: SessionListParams,
-): Promise<{ sessions: SessionSummary[]; total: number }> {
+): Promise<{ sessions: SessionSummary[]; total: number; limit: number; offset: number }> {
   const pool = getPool();
-  const limit = Math.min(params.limit ?? 20, 200);
-  const offset = params.offset ?? 0;
-  const sortOrder = (params.sort_order ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
-  const sortBy = params.sort_by ?? 'last_message_at';
+  const normalized = normalizeSessionListParams(params);
+  const limit = normalized.limit;
+  const offset = normalized.offset;
+  const sortOrder = (normalized.sort_order ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
+  const sortBy = normalized.sort_by ?? 'last_message_at';
+  const period = normalized.period;
+  const sentiment = normalized.sentiment;
 
   const conditions: string[] = [];
   const args: unknown[] = [];
@@ -135,20 +200,20 @@ export async function getSessions(
     conditions.push(`s.tenant_id = $${args.length}`);
   }
 
-  if (params.period && params.period !== 'all') {
-    conditions.push(`s.started_at >= NOW() - INTERVAL '${params.period} days'`);
+  if (period && period !== 'all') {
+    conditions.push(`s.started_at >= NOW() - INTERVAL '${period} days'`);
   }
 
   if (params.search?.trim()) {
-    args.push(`%${params.search.trim()}%`);
+    args.push(`%${escapeLikeWildcards(params.search.trim())}%`);
     conditions.push(`EXISTS (SELECT 1 FROM chat_messages WHERE session_id = s.id AND role = 'user' AND content ILIKE $${args.length})`);
   }
 
-  if (params.sentiment === 'positive') {
+  if (sentiment === 'positive') {
     conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score >= 70)`);
-  } else if (params.sentiment === 'negative') {
+  } else if (sentiment === 'negative') {
     conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score > 0 AND score < 60)`);
-  } else if (params.sentiment === 'neutral') {
+  } else if (sentiment === 'neutral') {
     conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score >= 60 AND score < 70)`);
   }
 
@@ -197,7 +262,9 @@ export async function getSessions(
     listArgs,
   );
 
-  return { sessions: listResult.rows, total };
+  // limit/offset は正規化後の実効値を返す。呼び出し元(routes.ts)がページング応答に
+  // 使う値を、渡した引数から独自に再計算せずここから読めるようにするため。
+  return { sessions: listResult.rows, total, limit, offset };
 }
 
 export interface MessageListParams {

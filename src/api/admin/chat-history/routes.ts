@@ -5,7 +5,7 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
-import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage } from "./chatHistoryRepository";
+import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
 import { createNotification } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
@@ -56,49 +56,30 @@ export function registerChatHistoryRoutes(app: Express): void {
 
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
 
-      const limit = Math.max(1, Math.min(parseInt((req.query["limit"] as string) ?? "20", 10) || 20, 200));
-      const offset = Math.max(0, parseInt((req.query["offset"] as string) ?? "0", 10) || 0);
-
-      // Phase52b: sort/filter params
-      const validSortBy = ["last_message_at", "message_count", "score"] as const;
-      const sortByParam = req.query["sort_by"] as string | undefined;
-      const sort_by = validSortBy.includes(sortByParam as typeof validSortBy[number])
-        ? (sortByParam as typeof validSortBy[number])
-        : undefined;
-      const sortOrderParam = req.query["sort_order"] as string | undefined;
-      const sort_order = sortOrderParam === "asc" ? "asc" : sortOrderParam === "desc" ? "desc" : undefined;
-
-      const validPeriods = ["7", "30", "90", "all"] as const;
-      const periodParam = req.query["period"] as string | undefined;
-      const period = validPeriods.includes(periodParam as typeof validPeriods[number])
-        ? (periodParam as typeof validPeriods[number])
-        : undefined;
-
-      const validSentiments = ["positive", "negative", "neutral"] as const;
-      const sentimentParam = req.query["sentiment"] as string | undefined;
-      const sentiment = validSentiments.includes(sentimentParam as typeof validSentiments[number])
-        ? (sentimentParam as typeof validSentiments[number])
-        : undefined;
-
-      const search = (req.query["search"] as string | undefined)?.trim() ?? undefined;
+      // allowlist検証・クランプは chatHistoryRepository.normalizeSessionListParams に
+      // 一本化している(agent の actionExecutor.ts と共有するため)。外部挙動は従来と同一。
+      const normalized = normalizeSessionListParams({
+        limit: req.query["limit"],
+        offset: req.query["offset"],
+        sort_by: req.query["sort_by"],
+        sort_order: req.query["sort_order"],
+        period: req.query["period"],
+        sentiment: req.query["sentiment"],
+      });
+      const search = typeof req.query["search"] === "string" ? req.query["search"].trim() || undefined : undefined;
 
       try {
         const result = await getSessions({
           tenantId: tenantFilter,
-          limit,
-          offset,
-          sort_by,
-          sort_order,
-          period,
-          sentiment,
+          ...normalized,
           search,
         });
 
         return res.json({
           sessions: result.sessions,
           total: result.total,
-          limit,
-          offset,
+          limit: result.limit,
+          offset: result.offset,
         });
       } catch (err) {
         logger.warn("[GET /v1/admin/chat-history/sessions]", err);
