@@ -74,6 +74,16 @@ function Probe() {
   return <div data-testid="probe">plan={String(tenantPlan)} preview={String(previewMode)}</div>;
 }
 
+function OnboardingStageProbe() {
+  const { isLoading, onboardingStage, onboardingStageResolved } = useAuth();
+  if (isLoading) return <div>loading</div>;
+  return (
+    <div data-testid="stage-probe">
+      resolved={String(onboardingStageResolved)} stage={JSON.stringify(onboardingStage)}
+    </div>
+  );
+}
+
 function PreviewProbe() {
   const { isLoading, previewMode, previewTenantId, enterPreview, exitPreview } = useAuth();
   if (isLoading) return <div>loading</div>;
@@ -150,6 +160,92 @@ describe("useAuth — tenantPlan", () => {
     await waitFor(() => {
       expect(screen.getByTestId("probe").textContent).toContain("plan=null");
     });
+  });
+});
+
+// Asana 1217040702572796(P6): 着地判定用のオンボーディング段階。my-tenant の
+// 同じ応答に相乗りしているため(既存のtenantPlan取得と同じeffect)、新規fetchは無い。
+describe("useAuth — onboardingStage", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    window.sessionStorage.clear();
+  });
+
+  it("client_admin: my-tenantのonboarding_stageをそのまま公開する", async () => {
+    mockGetSession.mockResolvedValue(CLIENT_ADMIN_SESSION());
+    vi.mocked(authFetch).mockReturnValueOnce(mockOk({
+      plan: "starter",
+      onboarding_stage: {
+        industryAnswered: true,
+        knowledgePublished: false,
+        widgetInstalled: false,
+        firstConversation: false,
+      },
+    }));
+
+    render(
+      <AuthProvider>
+        <OnboardingStageProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("stage-probe").textContent).toContain("resolved=true");
+    });
+    const text = screen.getByTestId("stage-probe").textContent ?? "";
+    expect(text).toContain('"industryAnswered":true');
+    expect(text).toContain('"knowledgePublished":false');
+  });
+
+  it("my-tenant取得失敗時はstage=nullだがresolvedはtrueになる(未確定のまま止まらない)", async () => {
+    mockGetSession.mockResolvedValue(CLIENT_ADMIN_SESSION());
+    vi.mocked(authFetch).mockReturnValueOnce(
+      Promise.resolve({ ok: false, json: () => Promise.resolve({}) } as Response),
+    );
+
+    render(
+      <AuthProvider>
+        <OnboardingStageProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("stage-probe").textContent).toContain("resolved=true");
+    });
+    expect(screen.getByTestId("stage-probe").textContent).toContain("stage=null");
+  });
+
+  it("super_admin(previewMode無し・集約ビュー)はstage=null・resolved=trueになる(my-tenantを叩かない)", async () => {
+    mockGetSession.mockResolvedValue(SUPER_ADMIN_SESSION());
+
+    render(
+      <AuthProvider>
+        <OnboardingStageProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("stage-probe").textContent).toContain("resolved=true");
+    });
+    expect(screen.getByTestId("stage-probe").textContent).toContain("stage=null");
+    expect(vi.mocked(authFetch)).not.toHaveBeenCalled();
+  });
+
+  it("previewMode中(super_adminのクライアントビュー)はstage=nullのまま(決定Aはテナント本人の初回ログインの話であり、代行閲覧を新規テナント扱いにしない)", async () => {
+    window.sessionStorage.setItem("r2c_admin_preview_tenant", JSON.stringify({ tenantId: "tenant-b", tenantName: "テナントB" }));
+    mockGetSession.mockResolvedValue(SUPER_ADMIN_SESSION());
+    vi.mocked(authFetch).mockReturnValueOnce(mockOk({ plan: "growth" }));
+
+    render(
+      <AuthProvider>
+        <OnboardingStageProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("stage-probe").textContent).toContain("resolved=true");
+    });
+    expect(screen.getByTestId("stage-probe").textContent).toContain("stage=null");
   });
 });
 
