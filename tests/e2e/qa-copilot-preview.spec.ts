@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import { ADMIN_BASE_URL } from './config';
+import { isBootstrapMessage } from './helpers/agentChatMock';
 
 // QA: /copilot-preview の実データ接続・super_adminテナントプレビュー回帰テスト — 2026-07-19
 // 本番で以下3件の不具合が実地発見されたため、再発防止として追加:
@@ -58,15 +59,17 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
   // 検証したいのはUIの実配線(クリック→カード遷移→PATCH送出→復元)であって、LLM/外部APIの
   // 中身そのものではないため、モックはこの目的に対して妥当な選択である。
   test('CP-B-3: 未作成テナントが会話だけで公開まで到達し、離脱はライブテストの1回だけ', async ({ page, context }) => {
-    let chatCalls = 0;
     const chatMessages: string[] = [];
 
     await page.route('**/v1/admin/agent/chat', async (route) => {
       const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
-      chatCalls += 1;
       chatMessages.push(body.message ?? '');
 
-      if (chatCalls === 1) {
+      // Asana 1217080508665459: 起動時ブリーフィングは「1回目の呼び出し」ではなく
+      // BOOTSTRAP_PROMPT の内容で判定する。carnationのようにオンボーディング未完了
+      // (firstConversation:false)のテナントでは起動時ブリーフィング自体が発生せず、
+      // 最初の呼び出しがユーザーの送信メッセージになるため。
+      if (isBootstrapMessage(body.message)) {
         // 起動時ブリーフィング
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
       }
