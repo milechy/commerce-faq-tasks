@@ -1,10 +1,12 @@
 /**
- * 「今週」の境界を計算する（暦週・月曜00:00 JST起点）。
+ * 「今週」の境界を計算する（暦週・月曜00:00 JST起点）。get_weekly_briefing が使う。
  *
- * get_weekly_briefing（週次まとめ）と、撤去予定の weeklyReportGenerator の両方が
- * 同じ期間定義を参照する必要があるため、この1本に集約する。SQL側へ AT TIME ZONE を
- * 直書きしない — JST(UTC+9固定・DSTなし)のオフセットを UTC ベースの算術だけで
- * 適用するため、実行環境の process TZ には一切依存しない。
+ * SQL側へ AT TIME ZONE を直書きしない — JST(UTC+9固定・DSTなし)のオフセットを
+ * UTC ベースの算術だけで適用するため、実行環境の process TZ には一切依存しない。
+ * テスト容易性のため純粋関数として切り出してある(weekRange.test.ts参照)。
+ *
+ * (旧: weeklyReportGeneratorとの共有を理由に切り出していたが、同ジェネレータは
+ *  #602で撤去済み。現在の唯一の利用箇所は actionExecutor.ts の get_weekly_briefing)
  */
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
