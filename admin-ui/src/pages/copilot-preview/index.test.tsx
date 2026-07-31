@@ -1168,6 +1168,110 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(body.message).toContain("ID: 42");
     expect(body.message).toContain("承認して有効にしてください");
   });
+
+  // 壊れやすいポイント: card.rules.map() 内で各行に承認/却下ボタンを描画しており、
+  // クロージャがループ変数を正しく捕捉していないと「どのボタンを押しても
+  // 最後の行のIDが送信される」という事故になりうる(JSのvar由来のバグの定番形)。
+  // 複数の未承認提案を同時に表示し、それぞれのボタンが自分自身のIDだけを
+  // 送信することを固定する。
+  it("get_tuning_rules: 複数のAI提案が同時に表示されても各行のボタンは自分自身のIDだけを送信する", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（2件、うち有効0件・無効2件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 2,
+            rules: [
+              { id: 10, triggerPattern: "送料", expectedBehavior: "一律500円", priority: 5, isActive: false, source: "judge", status: "pending", evidence: null },
+              { id: 20, triggerPattern: "営業時間", expectedBehavior: "10時〜18時", priority: 3, isActive: false, source: "judge", status: "pending", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    const approveButtons = await screen.findAllByRole("button", { name: "有効にする" });
+    expect(approveButtons).toHaveLength(2);
+
+    // 2件目(ID:20)の「有効にする」だけをクリックする
+    fireEvent.click(approveButtons[1]!);
+
+    await waitFor(() => {
+      const calls = vi.mocked(authFetch).mock.calls;
+      expect(calls.some(([url]) => String(url).includes("/v1/admin/agent/chat"))).toBe(true);
+    });
+    const lastCall = vi.mocked(authFetch).mock.calls[vi.mocked(authFetch).mock.calls.length - 1];
+    const body = JSON.parse((lastCall![1] as RequestInit).body as string);
+    // 1件目(ID:10)ではなく、クリックした2件目(ID:20)のIDが送信されること
+    expect(body.message).toContain("ID: 20");
+    expect(body.message).not.toContain("ID: 10");
+  });
+
+  // 壊れやすいポイント: evidenceが空オブジェクト{}の場合(avgScore等すべて
+  // undefined)、根拠ブロックが空のdivとして描画され続けると、店主から見て
+  // 「何も書かれていない謎の空白」が出る視覚バグになる。何も表示しないか、
+  // 少なくともクラッシュしないことを固定する。
+  it("get_tuning_rules: evidenceが空オブジェクトでもクラッシュせず、空の根拠行は表示されない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 42, triggerPattern: "送料", expectedBehavior: "一律500円", priority: 5, isActive: false, source: "judge", status: "pending", evidence: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/AIの提案（未承認）/)).toBeTruthy();
+    expect(screen.queryByText(/もとになった会話の対応の質/)).toBeNull();
+    expect(screen.queryByText(/効果があった対応/)).toBeNull();
+    expect(screen.queryByText(/うまくいかなかった対応/)).toBeNull();
+  });
+
+  // 壊れやすいポイント: is_active=true(=承認され本番に反映済み)なのに
+  // statusがpending/nullのまま(LLMがstatusの同時指定を忘れた等で発生しうる
+  // 不整合状態)。承認判定はis_activeを唯一の権威とするため、この場合でも
+  // 「未承認」バッジやボタンが誤って出続けてはならないことを固定する。
+  it("get_tuning_rules: is_active=trueだがstatusがpendingのまま(不整合状態)でも未承認バッジやボタンは出ない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効1件・無効0件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 42, triggerPattern: "送料", expectedBehavior: "一律500円", priority: 5, isActive: true, source: "judge", status: "pending", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    await screen.findByText("✅ 有効");
+    expect(screen.queryByText(/未承認/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "有効にする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
+    // 出所は分かるようにAIの提案タグ自体は出す(承認済みとして扱われるだけで消えない)
+    expect(screen.getByText(/AIの提案/)).toBeTruthy();
+  });
 });
 
 function getComposer(): HTMLTextAreaElement {

@@ -10,6 +10,7 @@ import {
 } from '../knowledge/faqCrudRoutes';
 import { callGroq8bSuggestFromText } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
+import { splitTriggerKeywords } from '../tuning/triggerMatching';
 import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
@@ -1027,7 +1028,9 @@ export async function executeToolCall(
         // 提案値として見せない。それをそのまま save_tuning_rule に渡すと、
         // 文字列としてtrigger_patternに保存され永久に発火しないルールができる(D4)。
         // どんな質問の時に使うかを店主に聞き返し、save_tuning_rule へは進めない。
-        if (!suggestion.trigger_pattern) {
+        // splitTriggerKeywords で区切り文字だけの trigger_pattern(例: "、、、")も
+        // 同じ穴として検出する(D4と同型の別入力・テスト作成時に発見)。
+        if (!suggestion.trigger_pattern || splitTriggerKeywords(suggestion.trigger_pattern).length === 0) {
           return truncate(
             `対応方針の候補: ${suggestion.instruction}\n` +
             (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
@@ -1075,7 +1078,9 @@ export async function executeToolCall(
       // suggest_tuning_rule がトリガー未決定時に案内していた文字列(「（常時適用）」)が
       // そのままtrigger_patternとして渡ってきた場合の防御(D4)。これを通すと
       // 保存は成功するが質問文に一致せず永久に発火しないルールができる。
-      if (ALWAYS_APPLY_PLACEHOLDER.has(triggerPattern)) {
+      // splitTriggerKeywords で区切り文字だけの trigger_pattern(例: "、、、")も
+      // 同じ穴として検出する(D4と同型の別入力・テスト作成時に発見)。
+      if (ALWAYS_APPLY_PLACEHOLDER.has(triggerPattern) || splitTriggerKeywords(triggerPattern).length === 0) {
         return truncate(
           'トリガーが決まっていないようです。お客様のどんな質問の時にこの振る舞いを使うか、キーワードを教えてください（例:「保証」「返品」など）。'
         );
@@ -1159,6 +1164,17 @@ export async function executeToolCall(
 
       if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined && status === undefined) {
         return truncate('変更する内容がありません（trigger_pattern・expected_behavior・is_active のいずれかを指定してください）');
+      }
+      // save_tuning_rule と同じ防御(D4派生): 既存ルールのトリガーを編集する経路でも
+      // 「（常時適用）」やsplitTriggerKeywordsが空になる区切り文字だけの値が
+      // 渡ってくると、更新は成功するが永久に発火しないルールになってしまう。
+      if (
+        triggerPattern !== undefined &&
+        (ALWAYS_APPLY_PLACEHOLDER.has(triggerPattern) || splitTriggerKeywords(triggerPattern).length === 0)
+      ) {
+        return truncate(
+          'トリガーが決まっていないようです。お客様のどんな質問の時にこの振る舞いを使うか、キーワードを教えてください（例:「保証」「返品」など）。'
+        );
       }
 
       try {

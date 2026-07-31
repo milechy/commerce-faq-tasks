@@ -1017,6 +1017,47 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('どんな質問をした時に使いたいですか');
       expect(res.body.actions[0].result).not.toContain('save_tuning_rule を呼び出してください');
     });
+
+    // テスト作成中に発見した新規欠陥: ALWAYS_APPLY_PLACEHOLDER は「（常時適用）」との
+    // 完全一致のみを見ており、区切り文字だけのtrigger_pattern(例:「、、、」)は
+    // 素通りしていた。これは splitTriggerKeywords すると空配列になり、
+    // matchesTriggerPattern が常にfalseを返すため、D4と全く同じ「保存は成功するが
+    // 永久に発火しない」状態を作る別経路だった。
+    it('D4派生: トリガーが区切り文字だけ(例:「、、、」)でも「（常時適用）」と同様に聞き返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-tr-2b',
+                  type: 'function',
+                  function: { name: 'suggest_tuning_rule', arguments: JSON.stringify({ free_text: '丁寧にお願い' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      mockCallGroq8bSuggestFromText.mockResolvedValueOnce({
+        trigger_pattern: '、、、',
+        instruction: '丁寧な言葉遣いで応対する',
+        priority: 5,
+        reason: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '丁寧にお願い', sessionId: 'sess-030c' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('どんな質問をした時に使いたいですか');
+      expect(res.body.actions[0].result).not.toContain('save_tuning_rule を呼び出してください');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1142,6 +1183,45 @@ describe('POST /v1/admin/agent/chat', () => {
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: 'お願い', sessionId: 'sess-032b' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('どんな質問の時にこの振る舞いを使うか');
+    });
+
+    // テスト作成中に発見した新規欠陥(D4派生): 区切り文字だけのtrigger_patternは
+    // 「（常時適用）」の完全一致チェックをすり抜けて保存されてしまっていた。
+    // splitTriggerKeywordsで空配列になるtrigger_patternを弾くよう拡張した。
+    it('D4派生: trigger_patternが区切り文字だけ(例:「、、、」)でも保存せず聞き返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sv-3b',
+                  type: 'function',
+                  function: {
+                    name: 'save_tuning_rule',
+                    arguments: JSON.stringify({
+                      trigger_pattern: '、、、',
+                      expected_behavior: '丁寧な言葉遣いで応対する',
+                      confirmed: true,
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-032c' });
 
       expect(res.status).toBe(200);
       expect(mockCreateRule).not.toHaveBeenCalled();
@@ -1345,6 +1425,109 @@ describe('POST /v1/admin/agent/chat', () => {
         { trigger_pattern: undefined, expected_behavior: undefined, is_active: true, status: undefined },
         'tenant-abc',
       );
+    });
+
+    // 壊れやすいポイント: 一度却下したルールを店主が「やっぱり有効にして」と
+    // 言い直した場合の復元導線。actionExecutor側にrejected→activeの遷移を
+    // 特別に禁止するロジックは無い(意図的な設計)ため、それが壊れていないことを固定する。
+    it('update_tuning_rule: 却下済み(status=rejected)のルールを後から承認し直すと有効になる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-reapprove', 'update_tuning_rule', { id: 3, is_active: true, status: 'active', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('承認しました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 3, tenant_id: 'tenant-abc', trigger_pattern: '送料', expected_behavior: '一律500円', priority: 5, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '', source: 'judge', status: 'active', evidence: null,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'やっぱり有効にして', sessionId: 'sess-tr-reapprove' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        3,
+        { trigger_pattern: undefined, expected_behavior: undefined, is_active: true, status: 'active' },
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('承認し、有効にしました');
+    });
+
+    // 壊れやすいポイント: statusだけ渡されis_activeが指定されない場合の挙動を
+    // 固定する(actionExecutorのcase内でstatus単独指定時にis_activeを暗黙で
+    // 補完しない設計になっていることの回帰)。updateRule に渡る is_active は
+    // undefined(=更新しない)のままであるべきで、勝手にtrueへ補われてはならない。
+    it('update_tuning_rule: statusのみ指定(is_active省略)してもis_activeは補完されず未指定のまま渡る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-status-only', 'update_tuning_rule', { id: 3, status: 'active', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 3, tenant_id: 'tenant-abc', trigger_pattern: '送料', expected_behavior: '一律500円', priority: 5, is_active: false, created_by: null, source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ステータスだけ更新', sessionId: 'sess-tr-status-only' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        3,
+        { trigger_pattern: undefined, expected_behavior: undefined, is_active: undefined, status: 'active' },
+        'tenant-abc',
+      );
+    });
+
+    // 権限境界: 他テナントのルールをクライアント管理者が承認/却下しようとした場合、
+    // updateRule(実装側で所有権チェック済み)がnullを返す経路が正しく
+    // 「見つからないかアクセス権限がありません」に落ちることを確認する。
+    it('update_tuning_rule: 他テナントのAI提案ルールは承認しようとしてもアクセス権限がありませんとなる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-cross-tenant', 'update_tuning_rule', { id: 999, is_active: true, status: 'active', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockUpdateRule.mockResolvedValueOnce(null);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '承認して', sessionId: 'sess-tr-cross-tenant' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つからないかアクセス権限がありません');
+      // 却下されたので進捗(REAL_WRITE_TOOLS的な意味での実書き込み)としてカウントされないことは
+      // フロント側の責務だが、少なくともバックエンド側でエラーが揉み消されていないことを確認する。
+    });
+
+    // テスト作成中に発見した第3の欠陥経路(D4派生): suggest_tuning_rule/save_tuning_rule
+    // では「（常時適用）」や区切り文字だけのtrigger_patternを弾いていたが、
+    // 既存ルールを編集するupdate_tuning_ruleの trigger_pattern 変更経路には
+    // 同じ検証が無かった。既存ルールの編集でも同じ「更新は成功するが
+    // 永久に発火しなくなる」事故が起こりうるため、同じ防御を追加した。
+    it('update_tuning_rule: 既存ルールのtrigger_patternを区切り文字だけの値に編集しようとすると弾かれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-edit-bad', 'update_tuning_rule', { id: 1, trigger_pattern: '、、、', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'トリガーを変更して', sessionId: 'sess-tr-edit-bad' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('どんな質問の時にこの振る舞いを使うか');
+    });
+
+    it('update_tuning_rule: 既存ルールのtrigger_patternを「（常時適用）」に編集しようとすると弾かれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-edit-placeholder', 'update_tuning_rule', { id: 1, trigger_pattern: '（常時適用）', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'トリガーを変更して', sessionId: 'sess-tr-edit-placeholder' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('どんな質問の時にこの振る舞いを使うか');
     });
 
     it('update_tuning_rule: 変更内容が空 → DB呼び出しせずその旨を返す', async () => {
@@ -2116,6 +2299,49 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(card.faq).toEqual({ total: 5, published: 4, lastUpdated: null });
       expect(result).toContain('FAQ 5件（公開4件）');
       expect(result).not.toContain('最終更新');
+    });
+
+    // P4-1: 「承認待ちの指示ルール」件数は以前 approved_at/rejected_at IS NULL で
+    // 数えており、これらの列はどのコードパスからも更新されないため、店主が作った
+    // 通常のルールも含めて全件を「承認待ち」として数えていた(実質バグ)。
+    // 既存テストはDBの戻り値を {n: N} でモックするだけで、実際に発行されるSQLの
+    // 条件式までは検証していなかったため、この修正が将来リグレッション(条件式の
+    // 巻き戻し)を起こしても既存テストでは検出できない。SQL文言そのものを固定する。
+    it('承認待ちの指示ルールのクエリは source=judge かつ is_active=false かつ status<>rejected で絞り込む(D8/P4-1回帰)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-pending-sql',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+      mockQuery.mockResolvedValue({ rows: [{ n: 0 }] });
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-pending-sql' });
+
+      // Promise.allSettled の6番目(0始まりで index 5)が承認待ちルールのクエリ
+      const [tuningSql] = mockQuery.mock.calls[5]!;
+      expect(tuningSql).toContain("source = 'judge'");
+      expect(tuningSql).toContain('is_active = false');
+      expect(tuningSql).toMatch(/status IS DISTINCT FROM 'rejected'/);
+      // 修正前の条件式が紛れ込んでいないことも確認する(巻き戻しの検出)
+      expect(tuningSql).not.toContain('approved_at IS NULL');
+      expect(tuningSql).not.toContain('rejected_at IS NULL');
     });
   });
 
