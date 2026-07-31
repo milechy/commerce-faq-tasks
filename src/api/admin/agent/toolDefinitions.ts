@@ -33,6 +33,7 @@ export const LEGACY_UI_FEATURES = [
   'chat_test',
   'avatar_wizard',
   'knowledge_pdf',
+  'knowledge_attribution',
 ] as const;
 
 export const ADMIN_AGENT_TOOLS: GroqTool[] = [
