@@ -222,6 +222,19 @@ export type TuningRulesListCardPayload = {
   totalCount: number;
 };
 
+// suggest_tuning_rule の下書き提案。D6: フロントは自然文を正規表現で
+// (トリガー:(.+) / 対応方針:(.+))読み直しており、①優先度を拾えない
+// ②対応方針が複数行だと1行目以降が失われる、という2つの欠落があった。
+// この card は truncate されない生の提案値を運ぶため、save_tuning_rule に
+// そのまま渡される内容(trigger_pattern/expected_behavior/priority)と
+// カードの表示内容が一致する。
+export type TuningRuleDraftCardPayload = {
+  kind: 'tuning_rule_draft';
+  triggerPattern: string;
+  expectedBehavior: string;
+  priority: number;
+};
+
 // get_weekly_briefing 用。数値はLLMの生成文を経由せず、この構造化データを
 // そのままカードとして描画する(数値=サーバ、解釈=LLMの文、という権威分離の実体)。
 // 各グループは対応するクエリが失敗した場合に null になる(Promise.allSettledでの
@@ -270,6 +283,7 @@ export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
   | TuningRulesListCardPayload
+  | TuningRuleDraftCardPayload
   | WeeklySummaryCardPayload
   | ChatSessionListCardPayload
   | ChatSessionMessagesCardPayload
@@ -918,14 +932,22 @@ export async function executeToolCall(
           );
         }
 
-        return truncate(
-          `提案:\n` +
-          `トリガー: ${suggestion.trigger_pattern}\n` +
-          `対応方針: ${suggestion.instruction}\n` +
-          `優先度: ${suggestion.priority}\n` +
-          (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
-          `\nこの内容でよいかユーザーに確認し、同意が得られたら save_tuning_rule を呼び出してください（trigger_pattern/expected_behavior/priority は上記の提案値を使うこと）。`
-        );
+        return {
+          text: truncate(
+            `提案:\n` +
+            `トリガー: ${suggestion.trigger_pattern}\n` +
+            `対応方針: ${suggestion.instruction}\n` +
+            `優先度: ${suggestion.priority}\n` +
+            (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
+            `\nこの内容でよいかユーザーに確認し、同意が得られたら save_tuning_rule を呼び出してください（trigger_pattern/expected_behavior/priority は上記の提案値を使うこと）。`
+          ),
+          card: {
+            kind: 'tuning_rule_draft',
+            triggerPattern: suggestion.trigger_pattern,
+            expectedBehavior: suggestion.instruction,
+            priority: suggestion.priority,
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] suggest_tuning_rule failed', err);
         return truncate('ルールの提案に失敗しました');

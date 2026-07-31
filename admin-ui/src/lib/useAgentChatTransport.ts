@@ -76,6 +76,15 @@ export type TuningRulesListAgentActionCard = {
   totalCount: number;
 };
 
+// suggest_tuning_rule の下書き提案(D6)。truncateされない生の提案値を運び、
+// save_tuning_rule に渡される内容とカードの表示内容を一致させる。
+export type TuningRuleDraftAgentActionCard = {
+  kind: "tuning_rule_draft";
+  triggerPattern: string;
+  expectedBehavior: string;
+  priority: number;
+};
+
 // フィールド形状は actionExecutor.ts の WeeklySummaryCardPayload と1対1に保つ。
 export type WeeklySummaryAgentActionCard = {
   kind: "weekly_summary";
@@ -92,6 +101,7 @@ export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
   | TuningRulesListAgentActionCard
+  | TuningRuleDraftAgentActionCard
   | WeeklySummaryAgentActionCard
   | ChatSessionListAgentActionCard
   | ChatSessionMessagesAgentActionCard
