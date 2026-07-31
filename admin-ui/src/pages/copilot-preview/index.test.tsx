@@ -1272,6 +1272,33 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByText("優先度")).toBeNull();
   });
 
+  // P6-1: 新規テナントが最初にこのカードを開いた時、技術的な「0件」表示にせず
+  // 何ができるか+最初の一手を示す。
+  it("P6-1: get_tuning_rules: 0件の場合は空表示ではなく説明と「最初のルールを作ってみる」ボタンが出る", async () => {
+    mockAgent({
+      reply: "まだ指示ルールはありません。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルールはまだありません。",
+          card: { kind: "tuning_rules_list", totalCount: 0, rules: [] },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/AIチャットボットの受け答えを1つずつ細かく調整できます/)).toBeTruthy();
+    const chip = screen.getByRole("button", { name: "🎛️ 最初のルールを作ってみる" });
+    expect(chip).toBeTruthy();
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(screen.getByText("指示ルールを初めて作ります。何をどう伝えればいいか教えてください")).toBeTruthy(),
+    );
+  });
+
   // P4-1: AI提案ルールの承認/却下と根拠提示
   it("get_tuning_rules: AI提案(未承認)には出所バッジと承認/却下ボタン、根拠が表示される", async () => {
     mockAgent({
@@ -2702,6 +2729,97 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
       { role: "user", content: "営業時間を教えて" },
       { role: "assistant", content: "今週も順調です。" },
     ]);
+  });
+});
+
+// P6-1: 4段階のオンボーディングが全て完了した直後、指示ルールの初回体験へ
+// 一度だけ接続する軽量な導線(admin-ui内のlocalStorageフラグのみ。backendの
+// onboardingStage.tsは変更しない)。
+describe("CopilotPreviewPage — 指示ルールの初回紹介(P6-1)", () => {
+  const ALL_STAGES_COMPLETE = {
+    industryAnswered: true,
+    knowledgePublished: true,
+    widgetInstalled: true,
+    firstConversation: true,
+  };
+
+  // happy-dom は window.localStorage を提供しないため、Mapベースの最小実装で補う
+  // (chat_first_toggle のテストと同じパターン)。
+  function installFakeLocalStorage() {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        clear: () => void store.clear(),
+      },
+    });
+  }
+
+  beforeEach(() => {
+    installFakeLocalStorage();
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_stage: ALL_STAGES_COMPLETE });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+  });
+
+  it("4段階完了・未紹介・新規起動(復元なし) → 週次ブリーフィングの代わりに紹介メッセージが一度出る", async () => {
+    renderPage();
+
+    expect(await screen.findByText(/最初のルールを作ってみますか/)).toBeTruthy();
+    expect(screen.getByText("🎛️ 作ってみる")).toBeTruthy();
+    expect(screen.getByText("あとで")).toBeTruthy();
+    // 通常の週次ブリーフィングには進まない(このターンでは agent/chat を呼ばない)
+    const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/v1/admin/agent/chat"))).toBe(false);
+    expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-a")).toBe("true");
+  });
+
+  it("「🎛️ 作ってみる」を押すと、指示ルール作成を依頼する自然文が実送信される", async () => {
+    renderPage();
+    const chip = await screen.findByRole("button", { name: "🎛️ 作ってみる" });
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(screen.getByText("指示ルールを初めて作ります。何をどう伝えればいいか教えてください")).toBeTruthy(),
+    );
+  });
+
+  it("既に紹介済み(localStorageフラグあり) → 紹介メッセージは出ず、通常どおり週次ブリーフィングが走る", async () => {
+    window.localStorage.setItem("r2c_tuning_rule_intro_shown_tenant-a", "true");
+
+    renderPage();
+
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+    expect(screen.queryByText(/最初のルールを作ってみますか/)).toBeNull();
+  });
+
+  it("previewMode中のsuper_adminは対象テナントごとにフラグが分かれる", async () => {
+    // previewMode中はmy-tenantではなく/v1/admin/tenants/:idでオンボーディング判定する
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/tenants/tenant-preview")) {
+        return mockOk({ onboarding_stage: ALL_STAGES_COMPLETE });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+
+    expect(await screen.findByText(/最初のルールを作ってみますか/)).toBeTruthy();
+    expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-preview")).toBe("true");
+    // client_admin(tenant-a)側のフラグには影響しない
+    expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-a")).toBeNull();
   });
 });
 

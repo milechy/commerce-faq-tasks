@@ -21,6 +21,7 @@ import {
   saveChatSession,
 } from "../../lib/chatSessionStore";
 import { priorityToTier } from "../../lib/tuningPriority";
+import { hasShownTuningRuleIntro, markTuningRuleIntroShown } from "../../lib/tuningRuleIntro";
 import {
   AGENT_CHAT_AUTH_REQUIRED_MESSAGE,
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
@@ -929,6 +930,23 @@ export default function CopilotPreviewPage() {
 
     if (nextStep) {
       push(say(nextStep.text, nextStep.chips));
+      return;
+    }
+
+    // P6-1: 新規テナントが指示ルールの存在に気づけるよう、4段階のオンボーディングが
+    // 全て完了した直後に一度だけ紹介する。backendのonboardingStage.ts(単一の情報源)は
+    // 変更せず、admin-ui内のブラウザ単位フラグ(tuningRuleIntro.ts)だけで
+    // 「1回きり」を保証する軽量な接続(既存テナント向けの移行導線は別途作らない — 4段階が
+    // 全て真になるのは実質的にこのオンボーディングフローを新規に通過したテナントのみ)。
+    if (stage && scopedTenantId && !hasShownTuningRuleIntro(scopedTenantId)) {
+      markTuningRuleIntroShown(scopedTenantId);
+      push(say(
+        "指示ルールも使えます。お客様への受け答えを1つずつAIチャットボットに教えられる機能です。最初のルールを作ってみますか？",
+        [
+          { label: "🎛️ 作ってみる", action: "__real:指示ルールを初めて作ります。何をどう伝えればいいか教えてください", tone: "primary" },
+          { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ],
+      ));
       return;
     }
 
@@ -2111,6 +2129,26 @@ function CardView({
         </CardShell>
       );
     case "rulesList":
+      // P6-1: 新規テナントが最初にこのカードを開いた時、0件をそのまま出すと
+      // 「技術的な空表示」になり何をすればいいか分からない。何ができるか(具体例)と
+      // 最初の一手(チップ)を添える。
+      if (card.totalCount === 0) {
+        return (
+          <CardShell hd={<><span>🎛️</span>指示ルールはまだありません</>}>
+            <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+              指示ルールを使うと、「保証について聞かれたら2年とお伝えする」のように、AIチャットボットの受け答えを1つずつ細かく調整できます。
+            </div>
+            {onSendReal && (
+              <button
+                onClick={() => onSendReal("__real:指示ルールを初めて作ります。何をどう伝えればいいか教えてください")}
+                style={{ alignSelf: "flex-start", fontSize: 13.5, fontWeight: 700, padding: "9px 16px", borderRadius: 10, cursor: "pointer", border: "none", background: AGENT, color: "#fff", minHeight: 44 }}
+              >
+                🎛️ 最初のルールを作ってみる
+              </button>
+            )}
+          </CardShell>
+        );
+      }
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
           {card.rules.map((r) => {
