@@ -7,6 +7,7 @@ import {
   getActiveRulesForTenant,
   buildTuningPromptSection,
 } from '../../api/admin/tuning/tuningRulesRepository';
+import { matchesTriggerPattern } from '../../api/admin/tuning/triggerMatching';
 import type { PrincipleChunk } from '../psychology/principleSearch';
 import { selectVariant, type PromptVariant } from '../ab-test/variantSelector';
 import type { BehaviorContext } from '../../api/events/behaviorContext';
@@ -122,19 +123,6 @@ const BASE_SYSTEM_PROMPT = `あなたは中古車販売店のAIコンシェル�
 - 敬語を使う
 - 箇条書きではなく自然な文章で答える
 - FAQ情報が不十分な場合は「詳しくはお問い合わせください」と案内する`;
-
-/**
- * チューニングルールのトリガーパターンがクエリにマッチするか判定する。
- * trigger_pattern はカンマ区切りのキーワードリスト。
- */
-function matchesTriggerPattern(query: string, triggerPattern: string): boolean {
-  const lowerQuery = query.toLowerCase();
-  return triggerPattern
-    .split(',')
-    .map((k) => k.trim())
-    .filter(Boolean)
-    .some((k) => lowerQuery.includes(k.toLowerCase()));
-}
 
 /**
  * Groq LLM（llama-3.3-70b-versatile）で自然な日本語回答を生成する。
