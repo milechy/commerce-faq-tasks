@@ -491,6 +491,69 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText(description)).toBeTruthy();
   });
 
+  it("weekly_summary カードの数値をそのまま描画し、未回答質問・承認待ちルールがあれば行動チップを出す", async () => {
+    mockAgent({
+      reply: "今週も好調です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 142件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2026-08-05T03:00:00.000Z",
+            sessions: { total: 142, changePct: 18, prevTotal: 120 },
+            avgScore: 82,
+            conversions: { count: 8, total: 96000 },
+            faq: { total: 45, published: 40, lastUpdated: "2026-08-01T00:00:00.000Z" },
+            pendingTuningRules: 3,
+            gaps: { total: 11, top: [{ id: 1, question: "送料はいくらですか？" }] },
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    expect(await screen.findByText("142件")).toBeTruthy();
+    expect(screen.getByText(/先週同時点比 \+18%/)).toBeTruthy();
+    expect(screen.getByText("82/100")).toBeTruthy();
+    expect(screen.getByText("8件・¥96,000")).toBeTruthy();
+    expect(screen.getByText("承認待ちの指示ルール")).toBeTruthy();
+    expect(screen.getByText("「送料はいくらですか？」")).toBeTruthy();
+
+    // チップはサーバ集計値(card)から決定的に導く。LLMの文には付けられない
+    await waitFor(() => expect(screen.getByRole("button", { name: "FAQにする" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "確認する" })).toBeTruthy();
+  });
+
+  it("未回答質問・承認待ちルールが0件なら行動チップを出さない", async () => {
+    mockAgent({
+      reply: "順調です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 30件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2026-08-05T03:00:00.000Z",
+            sessions: { total: 30, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: { count: 2, total: 10000 },
+            faq: { total: 10, published: 10, lastUpdated: null },
+            pendingTuningRules: 0,
+            gaps: { total: 0, top: [] },
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    await screen.findByText("30件");
+    expect(screen.queryByRole("button", { name: "FAQにする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "確認する" })).toBeNull();
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {
