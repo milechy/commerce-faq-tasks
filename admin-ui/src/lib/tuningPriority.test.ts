@@ -18,6 +18,17 @@ describe("priorityToTier", () => {
     expect(priorityToTier(7)).toBe("high");
     expect(priorityToTier(10)).toBe("high");
   });
+
+  // 壊れやすいポイント: API側のzodスキーマ(src/api/admin/tuning/routes.ts)は
+  // priorityを-100〜100まで許容しており、この関数が想定する0〜10の範囲と
+  // 一致していない(既知の値域不一致、D5)。是正前の現状でも、範囲外の値が
+  // 来て例外を投げたり想定外の段階に丸め込まれたりしないことを固定しておく。
+  it("値域外(負数・10超)でも例外を投げず、閾値どおりの段階に丸め込む(D5是正前の防御)", () => {
+    expect(priorityToTier(-100)).toBe("low");
+    expect(priorityToTier(-1)).toBe("low");
+    expect(priorityToTier(11)).toBe("high");
+    expect(priorityToTier(100)).toBe("high");
+  });
 });
 
 describe("PRIORITY_TIER_VALUE", () => {
