@@ -80,7 +80,8 @@ interface TenantOption {
 
 type Card =
   | { kind: "faq"; question: string; answer: string; category: string }
-  | { kind: "rule"; trigger: string; behavior: string }
+  // priorityはcard経由(D6)の場合のみ入る。正規表現フォールバック時は未設定のまま。
+  | { kind: "rule"; trigger: string; behavior: string; priority?: number }
   | { kind: "engagement"; when: string; message: string }
   | { kind: "success"; text: string }
   | { kind: "link"; label: string; url: string; description: string }
@@ -161,6 +162,9 @@ type Card =
       pendingTuningRules: number | null;
       gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
     };
+
+// 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
+const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
 const REAL_TOOL_LABEL: Record<string, string> = {
@@ -601,6 +605,15 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "weeklySummary", asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps },
+        };
+      }
+      // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
+      if (a.card?.kind === "tuning_rule_draft") {
+        const { triggerPattern, expectedBehavior, priority } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "rule", trigger: triggerPattern, behavior: expectedBehavior, priority },
         };
       }
       if (a.tool === "suggest_faq") {
@@ -1732,11 +1745,11 @@ function CardShell({ hd, tone = "agent", children, foot }: { hd: React.ReactNode
   );
 }
 
-function Field({ k, v, quote, hi }: { k: string; v: string; quote?: boolean; hi?: boolean }) {
+function Field({ k, v, quote, hi, pre }: { k: string; v: string; quote?: boolean; hi?: boolean; pre?: boolean }) {
   return (
     <div style={{ fontSize: 15 }}>
       <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 4 }}>{k}</div>
-      <div style={{ color: "var(--foreground)", ...(quote ? { background: "var(--muted, rgba(120,120,140,0.1))", borderRadius: 10, padding: "10px 14px", borderLeft: `3px solid ${hi ? "#d99320" : AGENT}`, lineHeight: 1.7 } : {}) }}>{v}</div>
+      <div style={{ color: "var(--foreground)", ...(pre ? { whiteSpace: "pre-wrap" } : {}), ...(quote ? { background: "var(--muted, rgba(120,120,140,0.1))", borderRadius: 10, padding: "10px 14px", borderLeft: `3px solid ${hi ? "#d99320" : AGENT}`, lineHeight: 1.7 } : {}) }}>{v}</div>
     </div>
   );
 }
@@ -1777,11 +1790,13 @@ function CardView({
         <CardShell hd={<><span>🎛️</span>AIへの指示ルールを追加します</>}
           foot={<CardActionsNote note="「いつ・どう振る舞うか」を1つの指示にまとめました。" />}>
           <Field k="どんな時に" v={card.trigger} />
-          <Field k="こう振る舞う" v={card.behavior} quote />
+          <Field k="こう振る舞う" v={card.behavior} quote pre />
+          {card.priority !== undefined && (
+            <Field k="優先度" v={TIER_LABEL[priorityToTier(card.priority)]} />
+          )}
         </CardShell>
       );
-    case "rulesList": {
-      const tierLabel: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
+    case "rulesList":
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
           {card.rules.map((r) => (
@@ -1791,7 +1806,7 @@ function CardView({
             >
               <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)" }}>
                 <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
-                <span>優先度: {tierLabel[priorityToTier(r.priority)]}</span>
+                <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
               </div>
               <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
                 <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
@@ -1800,7 +1815,6 @@ function CardView({
           ))}
         </CardShell>
       );
-    }
     case "engagement":
       return (
         <CardShell hd={<><span>⚡</span>お客様への声がけを設定します</>}

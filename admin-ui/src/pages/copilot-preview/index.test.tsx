@@ -919,6 +919,65 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     // 完全一致ではなく正規表現の部分一致で確認する(他のagentAction回帰テストと同じ形式)。
     expect(await screen.findByText(/有効な指示ルールはありません/)).toBeTruthy();
   });
+
+  // D6: 下書きカードの表示内容が保存内容(トリガー/対応方針/優先度)と一致することの回帰。
+  it("suggest_tuning_rule: cardがあれば優先度も表示される(D6、以前は黙って捨てられていた)", async () => {
+    mockAgent({
+      reply: "こう提案します。保存してよいですか？",
+      actions: [
+        {
+          tool: "suggest_tuning_rule",
+          result: "提案:\nトリガー: 保証\n対応方針: 2年とお伝えする\n優先度: 8\n",
+          card: { kind: "tuning_rule_draft", triggerPattern: "保証", expectedBehavior: "2年とお伝えする", priority: 8 },
+        },
+      ],
+    });
+
+    await send("保証について聞かれたら2年と答えて");
+
+    expect(await screen.findByText("どんな時に")).toBeTruthy();
+    expect(screen.getByText("保証")).toBeTruthy();
+    expect(screen.getByText("2年とお伝えする")).toBeTruthy();
+    expect(screen.getByText("優先度")).toBeTruthy();
+    expect(screen.getByText("高")).toBeTruthy();
+  });
+
+  it("suggest_tuning_rule: 対応方針が複数行でも1行目だけに切られず全行表示される(D6)", async () => {
+    const multiline = "1行目の案内。\n2行目の補足。\n3行目の締めくくり。";
+    mockAgent({
+      reply: "こう提案します。保存してよいですか？",
+      actions: [
+        {
+          tool: "suggest_tuning_rule",
+          result: `提案:\nトリガー: 保証\n対応方針: ${multiline}\n優先度: 5\n`,
+          card: { kind: "tuning_rule_draft", triggerPattern: "保証", expectedBehavior: multiline, priority: 5 },
+        },
+      ],
+    });
+
+    await send("保証について聞かれたら2年と答えて");
+
+    expect(await screen.findByText("1行目の案内。", { exact: false })).toBeTruthy();
+    expect(screen.getByText("2行目の補足。", { exact: false })).toBeTruthy();
+    expect(screen.getByText("3行目の締めくくり。", { exact: false })).toBeTruthy();
+  });
+
+  it("suggest_tuning_rule: cardが無い場合は従来どおり自然文の正規表現パースでカードになる(後方互換)", async () => {
+    mockAgent({
+      reply: "こう提案します。保存してよいですか？",
+      actions: [
+        { tool: "suggest_tuning_rule", result: "提案:\nトリガー: 保証\n対応方針: 2年とお伝えする\n優先度: 5\n" },
+      ],
+    });
+
+    await send("保証について聞かれたら2年と答えて");
+
+    expect(await screen.findByText("どんな時に")).toBeTruthy();
+    expect(screen.getByText("保証")).toBeTruthy();
+    expect(screen.getByText("2年とお伝えする")).toBeTruthy();
+    // card が無い正規表現フォールバック経路には優先度が無いため表示されない
+    expect(screen.queryByText("優先度")).toBeNull();
+  });
 });
 
 function getComposer(): HTMLTextAreaElement {

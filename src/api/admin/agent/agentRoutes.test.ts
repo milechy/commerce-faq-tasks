@@ -939,6 +939,48 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('保証期間は2年とお伝えする');
     });
 
+    // D6: 下書きカードに優先度を表示し、複数行の対応方針も欠落なく運ぶための構造化カード。
+    it('D6: cardにtrigger_pattern/expected_behavior/priorityがtruncateされずそのまま載る', async () => {
+      const multilineInstruction = '1行目の案内。\n2行目の補足。\n3行目の締めくくり。';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-tr-1b',
+                  type: 'function',
+                  function: { name: 'suggest_tuning_rule', arguments: JSON.stringify({ free_text: '保証について聞かれたら2年と答えて' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('こう提案します。保存してよいですか？'));
+
+      mockCallGroq8bSuggestFromText.mockResolvedValueOnce({
+        trigger_pattern: '保証',
+        instruction: multilineInstruction,
+        priority: 8,
+        reason: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保証について聞かれたら2年と答えて', sessionId: 'sess-030c' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'tuning_rule_draft',
+        triggerPattern: '保証',
+        expectedBehavior: multilineInstruction,
+        priority: 8,
+      });
+    });
+
     it('D4: トリガーが決まらない場合は「（常時適用）」を提案せず、聞き返す文言を返す', async () => {
       mockFetch
         .mockResolvedValueOnce({
