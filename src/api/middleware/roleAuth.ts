@@ -113,6 +113,22 @@ export function requireRole(...roles: UserRole[]) {
   };
 }
 
+/**
+ * super_admin のプレビュー中は ?tenant= クエリでの上書きを許可し、それ以外は
+ * JWT の app_metadata.tenant_id をそのまま使う。src/api/admin/avatar/routes.ts:647
+ * の既存パターンを共有ヘルパーとして切り出したもの（生成系ルートが個別に
+ * app_metadata.tenant_id のみを見て ?tenant= を無視していた漏れの是正で導入）。
+ */
+export function resolveEffectiveTenantId(req: Request): string {
+  const supabaseUser = (req as AuthedReq).supabaseUser;
+  const role = safeStringClaim(supabaseUser?.app_metadata?.role);
+  const isSuperAdmin = role === "super_admin";
+  const tenantId =
+    safeStringClaim(supabaseUser?.app_metadata?.tenant_id) ||
+    safeStringClaim((supabaseUser as { tenant_id?: string } | undefined)?.tenant_id);
+  return isSuperAdmin ? ((req.query["tenant"] as string) || tenantId) : tenantId;
+}
+
 // NOTE: 旧 `requireOwnTenant()` ヘルパーは削除済み（Phase70 / Phase44-46 棚卸し結論）。
 // テナント分離は各 per-tenant ルート内で個別に実装されている等価ロジックで担保されており、
 // 一律ミドルウェアの再配線は不要と確認した。代表例:

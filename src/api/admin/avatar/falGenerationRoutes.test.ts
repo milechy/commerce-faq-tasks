@@ -24,11 +24,11 @@ global.fetch = mockFetch;
 
 // ── ヘルパー ──────────────────────────────────────────────────────────────────
 
-function makeApp(tenantId = "tenant-a") {
+function makeApp(tenantId = "tenant-a", role: "client_admin" | "super_admin" = "client_admin") {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res: any, next: any) => {
-    req.supabaseUser = { app_metadata: { tenant_id: tenantId, role: 'client_admin' } };
+    req.supabaseUser = { app_metadata: { tenant_id: tenantId, role } };
     req.requestId = "req-test-001";
     next();
   });
@@ -94,6 +94,42 @@ describe("POST /v1/admin/avatar/fal/generate", () => {
         featureUsed: "avatar_config_image",
         imageCount: 4,
       }),
+    );
+  });
+
+  // previewMode(super_adminのクライアントビュー)中、app_metadata.tenant_id が空の
+  // super_adminがそのまま生成すると trackUsage が空テナントで計上され、Supabase
+  // Storageのパス(uploadImageFromUrlの第2引数=同じtenantId変数)もバケット直下に
+  // 書き込まれていた(#P0-1)。?tenant= を effective tenantId として使うことを固定する。
+  it("super_adminが?tenant=で操作対象テナントを指定すると、そのテナントでusage_logsに計上される", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => FAL_OK_RESPONSE,
+    });
+
+    const res = await request(makeApp("", "super_admin"))
+      .post("/v1/admin/avatar/fal/generate?tenant=tenant-b")
+      .send({ prompt: "Professional portrait of a Japanese woman, bust shot, smiling" });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-b" }),
+    );
+  });
+
+  it("client_adminが?tenant=を付けても無視され、JWTの自テナントで計上される(越権防止)", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => FAL_OK_RESPONSE,
+    });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/fal/generate?tenant=tenant-b")
+      .send({ prompt: "Professional portrait of a Japanese man, bust shot, business suit" });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-a" }),
     );
   });
 
