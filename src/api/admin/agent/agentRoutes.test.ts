@@ -3943,6 +3943,33 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('5件');
     });
 
+    // extractAuth は su.email を actor.email に使うため、email 付きのユーザーで検証する。
+    // CLIENT_ADMIN_USER は email を持たないため、actorEmail: '' というテストが
+    // 「実際にメールが渡っている」ことを一度も検証していなかった(自己言及的な穴)。
+    it('confirmed=true・emailありのユーザー → actorEmailに実メールが渡る(監査ログの実効性)', async () => {
+      const DELETE_USER = {
+        email: 'staff@example.com',
+        app_metadata: { role: 'client_admin', tenant_id: 'tenant-abc' },
+      };
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-del-2b', 'delete_chat_session', { session_id: 'dddd1111', reason: 'ユーザーの依頼により削除', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      seedSessions([OWN_SESSION]);
+      mockDeleteSession.mockResolvedValueOnce({
+        deleted_session_id: 'db-sess-del',
+        affected_counts: { chat_messages: 1, option_orders_nulled: 0 },
+      });
+
+      await request(makeApp(DELETE_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'dddd1111を削除して', sessionId: 'sess-del-2b' });
+
+      expect(mockDeleteSession).toHaveBeenCalledWith(
+        expect.objectContaining({ actorEmail: 'staff@example.com' }),
+      );
+    });
+
     it('previewMode中のsuper_adminが削除しても、scopeは常にtenant(globalにならない)', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-del-3', 'delete_chat_session', { session_id: 'dddd3333', reason: 'テナント確認のため削除', confirmed: true }))
@@ -4289,6 +4316,31 @@ describe('POST /v1/admin/agent/chat', () => {
         sessionDbId: 'db-sess-outcome', tenantId: 'tenant-abc', outcome: '購入完了', recordedBy: null,
       });
       expect(res.body.actions[0].result).toContain('記録しました');
+    });
+
+    // 実行者のメールアドレスが取得できる場合は recordedBy に反映されることを確認する。
+    // 従来はチャット経由の記録が常に recordedBy: null になっていた(PATCH /v1/admin/
+    // chat-history/sessions/:id/outcome 経由の記録とは非対称だった)ため、その回帰。
+    it('record_session_outcome: emailありのユーザー → recordedByに実メールが渡る(監査ログの実効性)', async () => {
+      const OUTCOME_USER = {
+        email: 'staff@example.com',
+        app_metadata: { role: 'client_admin', tenant_id: 'tenant-abc' },
+      };
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-5b', 'record_session_outcome', { session_id: 'oooo1111', outcome: '購入完了', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('記録しました。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetConversionTypes.mockResolvedValueOnce(['購入完了', '予約完了', '離脱']);
+      mockRecordOutcome.mockResolvedValueOnce({ outcome: '購入完了', recordedAt: '2026-07-17T10:00:00Z', recordedBy: 'staff@example.com' });
+
+      await request(makeApp(OUTCOME_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '購入完了で記録して', sessionId: 'sess-so-05b' });
+
+      expect(mockRecordOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ recordedBy: 'staff@example.com' }),
+      );
     });
 
     it('record_session_outcome: outcomeが空/未指定なら必須であることを伝え、セッション解決すら行わない', async () => {

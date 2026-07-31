@@ -662,7 +662,10 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
 
   app.post('/v1/admin/agent/chat', async (req: Request, res: Response) => {
     const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
-    const email: string = su?.email ?? '';
+    // src/api/admin/chat-history/routes.ts と同じ規約(su.email が無い場合は
+    // app_metadata.email にフォールバックする)。同一ユーザーが経路によって
+    // 異なる email に解決されないようにする。
+    const email: string = su?.email ?? su?.app_metadata?.email ?? '';
 
     // ロールチェック
     if (role !== 'super_admin' && role !== 'client_admin') {

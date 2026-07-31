@@ -242,11 +242,21 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   publish_faq_drafts: "下書きFAQの公開",
 };
 
-// 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
+// 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名。
+// src/api/admin/agent/confirmPolicy.ts の WRITE_TOOL_RISK_TIERS(サーバ側の書き込み
+// ツール一覧)の部分集合であるべきで、confirmPolicy.test.ts が双方向の突き合わせを
+// 機械的に検証する(サーバに書き込みツールを追加してここへの追加を忘れると、その
+// テストが落ちる)。
 const REAL_WRITE_TOOLS = new Set([
   "save_tuning_rule",
+  "update_tuning_rule",
+  "delete_tuning_rule",
+  "approve_tuning_rule_response",
+  "remove_approved_response",
   "save_faq",
   "save_engagement_rule",
+  "update_engagement_rule",
+  "delete_engagement_rule",
   "add_faq",
   "update_faq",
   "delete_faq",
@@ -261,6 +271,10 @@ const REAL_WRITE_TOOLS = new Set([
   "reply_to_escalation",
   "resolve_escalation",
   "publish_faq_drafts",
+  "dismiss_knowledge_gap",
+  "request_sai_task",
+  "record_session_outcome",
+  "delete_chat_session",
 ]);
 
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ。
