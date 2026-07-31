@@ -5,9 +5,10 @@
 // 根拠: docs/CHAT_SURFACE_DECISION.md が採択した選択肢(c)「パネルは橋。旧UIページの
 // 閉鎖に合わせて畳む」。凍結の対象は「面固有の新機能」であって、共有層
 // (lib/useAgentChatTransport.ts, lib/chatSessionStore.ts)のバグ修正は対象外。
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   CHAT_SESSION_SURFACE_PANEL,
+  clearChatSession,
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
@@ -50,10 +51,26 @@ export function useAdminAgent(tenantId?: string | null): UseAdminAgentResult {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  const { sessionId, send } = useAgentChatTransport({
+  const { sessionId, send, adoptSessionId } = useAgentChatTransport({
     surface: "panel",
     initialSessionId: restored?.sessionId,
   });
+
+  // ライブテナント切替(super_adminがAppSwitcherで別テナントへ切替える。パネルはunmountされない)
+  // を検知し、保持中の会話を破棄する。マウント時の復元検証(上のrestoreChatSession呼び出し)
+  // だけでは防げない — 検証はマウント時の1回だけで、その後 tenantId が変わっても
+  // 下の保存effectはそのまま新しいtenantIdで保存し続けるため、前テナントの会話が
+  // 新テナントの会話として保存され直ってしまう(GID: 全画面UI側で見つかった同型バグの
+  // パネル側残存箇所)。
+  const lastTenantIdRef = useRef(tenantId);
+  useEffect(() => {
+    const prev = lastTenantIdRef.current;
+    lastTenantIdRef.current = tenantId;
+    if (tenantId === prev) return;
+    clearChatSession(CHAT_SESSION_SURFACE_PANEL);
+    setMessages([]);
+    adoptSessionId(crypto.randomUUID());
+  }, [tenantId, adoptSessionId]);
 
   useEffect(() => {
     if (messages.length === 0) return;

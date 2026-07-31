@@ -867,6 +867,62 @@ export default function CopilotPreviewPage() {
     // setSending(false) は revealText の完了コールバックに任せる
   };
 
+  // オンボーディング段階に応じて「次の一手」を出すか、通常の週次ブリーフィングを取りに
+  // 行くかを決める共通処理。マウント時(初回ログイン/会話復元後)とテナント切替後の
+  // 両方から呼ばれる — 以前はテナント切替側がオンボーディング判定を経由せず常に
+  // ブリーフィングへ直行しており、切替直後は「次の一手」が出ないという2経路の
+  // 不一致があった(P1-3)。
+  //
+  // myEpoch は呼び出し時点の requestEpochRef の値。stage取得(await)の間に、より新しい
+  // 呼び出し(テナント再切替)に追い越されていたら、そのまま何も表示せず抜ける
+  // (追い越した側がこの関数を呼び直すか、sendReal自身の世代ガードに委ねる)。これが
+  // 無いと、切替でスレッドを空にした直後に前テナントの「次の一手」が新テナントの
+  // スレッドへ紛れ込む(P2-1)。
+  const runOnboardingAwareBriefing = async (
+    myEpoch: number,
+    opts: { hasRestoredConversation: boolean; loadingText: string; force?: boolean },
+  ) => {
+    let stage: OnboardingStageFlags | null = null;
+    // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
+    // オンボーディングの「次の一手」提示を使えるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)。
+    // previewMode中はJWTのtenant_idを見るmy-tenantではなくtargetTenantId明示の
+    // /v1/admin/tenants/:id(super_admin専用、useAuthのtenantPlan取得と同じ経路)を使う。
+    try {
+      if (previewMode && previewTenantId) {
+        const res = await authFetch(`${API_BASE}/v1/admin/tenants/${previewTenantId}`);
+        if (res.ok) {
+          const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+          stage = data.onboarding_stage ?? null;
+        }
+      } else if (!previewMode && user?.role === "client_admin") {
+        const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
+        if (res.ok) {
+          const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+          stage = data.onboarding_stage ?? null;
+        }
+      }
+    } catch {
+      // 取得失敗時は通常の週次ブリーフィング側にフォールバック
+    }
+
+    if (requestEpochRef.current !== myEpoch) return; // より新しい呼び出しに追い越された
+
+    const nextStep = stage ? deriveOnboardingNextStep(stage) : null;
+
+    if (opts.hasRestoredConversation) {
+      if (nextStep) push(say(nextStep.text, nextStep.chips));
+      return;
+    }
+
+    if (nextStep) {
+      push(say(nextStep.text, nextStep.chips));
+      return;
+    }
+
+    push({ id: nextId(), role: "ai", text: opts.loadingText });
+    await sendReal(BOOTSTRAP_PROMPT, { silent: true, force: opts.force });
+  };
+
   // マウント時、まず同一タブに保存済みの会話があれば復元する(リロード・ブラウザバック・
   // モバイルのタブ破棄で会話が消えないように)。
   //
@@ -887,6 +943,7 @@ export default function CopilotPreviewPage() {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
+    const myEpoch = requestEpochRef.current;
     const restored = restoreChatSession<Msg>(CHAT_SESSION_SURFACE_FULLSCREEN, scopedTenantId || null);
     const hasRestoredConversation = !!(restored && restored.messages.length > 0);
     if (hasRestoredConversation && restored) {
@@ -896,44 +953,10 @@ export default function CopilotPreviewPage() {
       setRealHistory(restored.history ?? []);
     }
 
-    void (async () => {
-      let stage: OnboardingStageFlags | null = null;
-      // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
-      // オンボーディングの「次の一手」提示を使えるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)。
-      // previewMode中はJWTのtenant_idを見るmy-tenantではなくtargetTenantId明示の
-      // /v1/admin/tenants/:id(super_admin専用、useAuthのtenantPlan取得と同じ経路)を使う。
-      try {
-        if (previewMode && previewTenantId) {
-          const res = await authFetch(`${API_BASE}/v1/admin/tenants/${previewTenantId}`);
-          if (res.ok) {
-            const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
-            stage = data.onboarding_stage ?? null;
-          }
-        } else if (!previewMode && user?.role === "client_admin") {
-          const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
-          if (res.ok) {
-            const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
-            stage = data.onboarding_stage ?? null;
-          }
-        }
-      } catch {
-        // 取得失敗時は通常の週次ブリーフィング側にフォールバック
-      }
-
-      const nextStep = stage ? deriveOnboardingNextStep(stage) : null;
-
-      if (hasRestoredConversation) {
-        if (nextStep) push(say(nextStep.text, nextStep.chips));
-        return;
-      }
-
-      if (nextStep) {
-        push(say(nextStep.text, nextStep.chips));
-      } else {
-        push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
-        await sendReal(BOOTSTRAP_PROMPT, { silent: true });
-      }
-    })();
+    void runOnboardingAwareBriefing(myEpoch, {
+      hasRestoredConversation,
+      loadingText: "ログイン、お疲れさまです。今週の実データを確認しています…",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsTenantSelection]);
 
@@ -953,6 +976,12 @@ export default function CopilotPreviewPage() {
 
     if (!prev || !scopedTenantId || scopedTenantId === prev) return;
 
+    // 世代カウンタを切替の時点で即座に進める(sendReal呼び出しより前)。まだ完了して
+    // いない直前の呼び出し(この後始まる bootstrap 側の onboarding 判定を含む)を
+    // ここで無効化してから会話をリセットする(P2-1)。
+    requestEpochRef.current += 1;
+    const myEpoch = requestEpochRef.current;
+
     // 会話・履歴・sessionId・進捗カウント・保存済みセッション(前テナントのもの)を
     // すべて破棄してから、新テナントの週次ブリーフィングを取り直す。
     clearChatSession(CHAT_SESSION_SURFACE_FULLSCREEN);
@@ -961,13 +990,14 @@ export default function CopilotPreviewPage() {
     setRealActionCount(0);
     adoptSessionId(crypto.randomUUID());
 
-    void (async () => {
-      push({ id: nextId(), role: "ai", text: "テナントを切り替えました。今週の実データを確認しています…" });
-      // force:true — 直前の切替の応答待ち(sending中)でも必ずこの切替を発火させる。
-      // 「新しい切替」は「前のテナントの応答待ち」より常に優先されるべきで、
-      // 追い越された古い呼び出し側は sendReal 内の世代カウンタが無害化する。
-      await sendReal(BOOTSTRAP_PROMPT, { silent: true, force: true });
-    })();
+    // force:true — 直前の切替の応答待ち(sending中)でも必ずこの切替を発火させる。
+    // 「新しい切替」は「前のテナントの応答待ち」より常に優先されるべきで、
+    // 追い越された古い呼び出し側は sendReal 内の世代カウンタが無害化する。
+    void runOnboardingAwareBriefing(myEpoch, {
+      hasRestoredConversation: false,
+      force: true,
+      loadingText: "テナントを切り替えました。今週の実データを確認しています…",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopedTenantId]);
 
