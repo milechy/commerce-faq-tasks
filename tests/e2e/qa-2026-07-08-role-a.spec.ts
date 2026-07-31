@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
+import { API_BASE_URL } from './config';
 
 // QA sweep 2026-07-08: previously-uncovered Role A (end-user/anonymous) flows
 // from R2C_UIフローカタログ_2026-07-08.md (A2-3, A2-6, A2-13, A2-14, A3-2, A3-3, A3-5, A3-6, A3-8).
 // Any real failures found here are filed to Asana (RAJIUCE Development, gid 1213607637045514).
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const DEMO_BASE = 'https://api.r2c.biz/carnation-demo';
+const DEMO_BASE = `${API_BASE_URL}/carnation-demo`;
 
 // Asana #1216386757951251 の修正 (novalidate 付与) が https://api.r2c.biz にまだデプロイされて
 // いない場合、A3-2/A3-5.6/A3-8 の「修正後」アサーションは必ず落ちる。デプロイラグの間 CI を

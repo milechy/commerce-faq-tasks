@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { API_BASE_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 
@@ -15,7 +16,7 @@ test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
 
   // アバター設定済みテナントのデモページ (test 1/2 が使用)
   const AVATAR_DEMO_URL =
-    process.env.E2E_CHAT_TEST_URL || 'https://api.r2c.biz/carnation-demo/index.html';
+    process.env.E2E_CHAT_TEST_URL || `${API_BASE_URL}/carnation-demo/index.html`;
   // 非アバターテナントのページ (test 3 が使用)。CI で実 URL を注入すると非アバター経路を実検証できる。
   // 未指定時はアバター版にフォールバック → test 3 は従来どおり skip される（誤検証を防ぐ）。
   const NON_AVATAR_DEMO_URL = process.env.E2E_NON_AVATAR_TEST_URL || AVATAR_DEMO_URL;

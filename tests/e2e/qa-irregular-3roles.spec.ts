@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL, API_BASE_URL } from './config';
 
 // QA irregular (異常系) sweep — 2026-07-17
 // 3ロールが「イレギュラーな動作」をした場合に、拒むべき操作が正しく拒まれるか / スコープが
@@ -12,8 +13,8 @@ import { test, expect } from '@playwright/test';
 //   Role C — beforeAll で TEST_SUPERADMIN_EMAIL/PASSWORD からログインし superadmin.json を再生成
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const API = 'https://api.r2c.biz';
-const ADMIN = 'https://admin.r2c.biz';
+const API = API_BASE_URL;
+const ADMIN = ADMIN_BASE_URL;
 const DEMO_BASE = `${API}/carnation-demo`;
 const USER_AUTH = 'tests/e2e/.auth/user.json';
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';

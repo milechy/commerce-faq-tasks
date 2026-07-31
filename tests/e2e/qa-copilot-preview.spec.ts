@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
+import { ADMIN_BASE_URL } from './config';
 
 // QA: /copilot-preview の実データ接続・super_adminテナントプレビュー回帰テスト — 2026-07-19
 // 本番で以下3件の不具合が実地発見されたため、再発防止として追加:
@@ -14,7 +15,7 @@ import fs from 'fs';
 //   Role C — tests/e2e/.auth/superadmin.json (superadmin.setup.ts, TEST_SUPERADMIN_EMAIL/PASSWORD)
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const ADMIN = 'https://admin.r2c.biz';
+const ADMIN = ADMIN_BASE_URL;
 const USER_AUTH = 'tests/e2e/.auth/user.json';
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';
 const PREVIEW_TENANT_ID = 'r2c_default';

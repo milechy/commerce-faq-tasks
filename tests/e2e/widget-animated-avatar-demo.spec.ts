@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
+import { API_BASE_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 
@@ -23,7 +24,7 @@ const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 test.describe('LPデモウィジェット — アニメアバター/定型応答のコスト制御', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');
 
-  const LP_URL = 'https://api.r2c.biz/lp/';
+  const LP_URL = `${API_BASE_URL}/lp/`;
 
   async function waitForFab(page: import('@playwright/test').Page) {
     await page.waitForFunction(

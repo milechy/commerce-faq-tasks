@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 
@@ -6,7 +7,7 @@ test.describe('Avatar Card — テストチャットボタン', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');
 
   test('非SuperAdmin: テナント固有アバターにテストチャットボタンが表示される', async ({ page }) => {
-    await page.goto('https://admin.r2c.biz/admin/avatar');
+    await page.goto(`${ADMIN_BASE_URL}/admin/avatar`);
 
     // ログイン済み前提（Cookie/LocalStorageに認証情報がある場合）
     // アバターカードが表示されていることを確認
@@ -41,7 +42,7 @@ test.describe('Avatar Card — テストチャットボタン', () => {
   });
 
   test('アバターページにデフォルトアバターが存在する場合、非SuperAdminにはテストチャットボタンが非表示', async ({ page }) => {
-    await page.goto('https://admin.r2c.biz/admin/avatar');
+    await page.goto(`${ADMIN_BASE_URL}/admin/avatar`);
 
     const url = page.url();
     if (url.includes('/login')) {
@@ -69,7 +70,7 @@ test.describe('Avatar Card — テストチャットボタン', () => {
     const dummyAvatarId = 'test-avatar';
 
     await page.goto(
-      `https://admin.r2c.biz/admin/chat-test?tenantId=${dummyTenantId}&avatarConfigId=${dummyAvatarId}`
+      `${ADMIN_BASE_URL}/admin/chat-test?tenantId=${dummyTenantId}&avatarConfigId=${dummyAvatarId}`
     );
 
     const url = page.url();
