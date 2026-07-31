@@ -121,13 +121,19 @@ const mockGetActiveEscalations = jest.fn();
 const mockGetMessages = jest.fn();
 const mockSaveMessage = jest.fn();
 const mockResolveEscalation = jest.fn();
-jest.mock('../chat-history/chatHistoryRepository', () => ({
-  getSessions: (...args: any[]) => mockGetSessions(...args),
-  getActiveEscalations: (...args: any[]) => mockGetActiveEscalations(...args),
-  getMessages: (...args: any[]) => mockGetMessages(...args),
-  saveMessage: (...args: any[]) => mockSaveMessage(...args),
-  resolveEscalation: (...args: any[]) => mockResolveEscalation(...args),
-}));
+jest.mock('../chat-history/chatHistoryRepository', () => {
+  const actual = jest.requireActual('../chat-history/chatHistoryRepository');
+  return {
+    getSessions: (...args: any[]) => mockGetSessions(...args),
+    getActiveEscalations: (...args: any[]) => mockGetActiveEscalations(...args),
+    getMessages: (...args: any[]) => mockGetMessages(...args),
+    saveMessage: (...args: any[]) => mockSaveMessage(...args),
+    resolveEscalation: (...args: any[]) => mockResolveEscalation(...args),
+    // 純粋関数(DB非依存)なので実体をそのまま使う。allowlist検証まで含めて
+    // get_chat_sessions のツール引数が正しく絞り込まれることを検証したいため。
+    normalizeSessionListParams: actual.normalizeSessionListParams,
+  };
+});
 
 // get_monitoring_summary が使う依存をモック
 const mockComputeKpis = jest.fn();
@@ -2922,10 +2928,103 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: '最近の会話を見せて', sessionId: 'sess-rd-01' });
 
       expect(res.status).toBe(200);
-      expect(mockGetSessions).toHaveBeenCalledWith({ tenantId: 'tenant-abc', limit: 10 });
+      // limit はツール固有の既定値10を維持。offset の既定値0が新たに渡るようになった。
+      expect(mockGetSessions).toHaveBeenCalledWith({ tenantId: 'tenant-abc', limit: 10, offset: 0 });
       const result = res.body.actions[0].result as string;
       expect(result).toContain('全42件中1件');
       expect(result).toContain('送料はいくらですか');
+    });
+
+    it('get_chat_sessions: period/search/sentiment/sort_by/sort_order/offset がgetSessionsへ渡る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-1b', 'get_chat_sessions', {
+          period: '30', search: '送料', sentiment: 'negative', sort_by: 'score', sort_order: 'asc', offset: 20,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('該当する会話です。'));
+
+      mockGetSessions.mockResolvedValueOnce({ sessions: [], total: 0 });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料について評価が低い会話を探して', sessionId: 'sess-rd-01b' });
+
+      expect(mockGetSessions).toHaveBeenCalledWith({
+        tenantId: 'tenant-abc',
+        limit: 10,
+        offset: 20,
+        sort_by: 'score',
+        sort_order: 'asc',
+        period: '30',
+        sentiment: 'negative',
+        search: '送料',
+      });
+    });
+
+    it('get_chat_sessions: allowlist外のperiod/sort_by/sentiment(SQL断片を模した値)はundefinedへ落ちてgetSessionsに渡る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-1c', 'get_chat_sessions', {
+          period: "7 days'; DROP TABLE chat_sessions; --",
+          sort_by: 'message_count; --',
+          sentiment: 'angry',
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('会話は見つかりませんでした。'));
+
+      mockGetSessions.mockResolvedValueOnce({ sessions: [], total: 0 });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '変な期間指定を試す', sessionId: 'sess-rd-01c' });
+
+      const call = mockGetSessions.mock.calls[0]?.[0];
+      expect(call.period).toBeUndefined();
+      expect(call.sort_by).toBeUndefined();
+      expect(call.sentiment).toBeUndefined();
+    });
+
+    it('get_chat_sessions: limitは0/負値/上限超過でも1〜20にクランプされる(ツール固有上限)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-1d', 'get_chat_sessions', { limit: 9999 }))
+        .mockResolvedValueOnce(makeGroqResponse('直近の会話です。'));
+
+      mockGetSessions.mockResolvedValueOnce({ sessions: [], total: 0 });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話を全部見せて', sessionId: 'sess-rd-01d' });
+
+      // normalizeSessionListParams の一般上限(200)ではなく、このツール固有の上限(20)まで
+      expect(mockGetSessions.mock.calls[0]?.[0].limit).toBe(20);
+    });
+
+    it('get_chat_sessions: 出力が4000字を超えると打ち切りを明示する注記が付く(黙って切らない)', async () => {
+      const longPreview = '問'.repeat(200);
+      const manySessions = Array.from({ length: 30 }, (_, i) => ({
+        id: `db-${i}`,
+        tenant_id: 'tenant-abc',
+        session_id: `sess-${String(i).padStart(8, '0')}`,
+        started_at: '2026-07-17T10:00:00Z',
+        last_message_at: '2026-07-17T10:05:00Z',
+        message_count: 4,
+        first_message_preview: longPreview,
+        outcome: null,
+        outcome_recorded_at: null,
+      }));
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-1e', 'get_chat_sessions', { limit: 20 }))
+        .mockResolvedValueOnce(makeGroqResponse('たくさん見つかりました。'));
+
+      mockGetSessions.mockResolvedValueOnce({ sessions: manySessions, total: 30 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話を見せて', sessionId: 'sess-rd-01e' });
+
+      const result = res.body.actions[0].result as string;
+      // 見出し(全N件中M件)は打ち切られても先頭に残る
+      expect(result).toContain('全30件中30件');
+      // 打ち切りが起きたことが分かる注記が末尾に付く(黙って切れない)
+      expect(result).toContain('省略');
+      expect(result.length).toBeLessThan(longPreview.length * manySessions.length);
     });
 
     it('get_chat_sessions: 0件の場合は「ありません」と返す', async () => {
@@ -2961,7 +3060,8 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       // NaN のまま渡らず、既定値10にフォールバックしていることを確認する
-      expect(mockGetSessions).toHaveBeenCalledWith({ tenantId: 'tenant-abc', limit: 10 });
+      // offset の既定値0は絞り込み・ページング対応(PR #616)で新たに渡るようになった
+      expect(mockGetSessions).toHaveBeenCalledWith({ tenantId: 'tenant-abc', limit: 10, offset: 0 });
       expect(res.body.actions[0].result).toContain('送料はいくらですか');
     });
 
