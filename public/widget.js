@@ -2311,7 +2311,9 @@
       var kws = item.keywords || [];
       if (kws.indexOf('*') !== -1) continue; // wildcard/fallback handled last
       for (var j = 0; j < kws.length; j++) {
-        if (normalized.indexOf(kws[j].toLowerCase().replace(/[？?！!。、\s]/g, '')) !== -1) return item.answer;
+        var kw = String(kws[j] || '').toLowerCase().replace(/[？?！!。、\s]/g, '');
+        if (!kw) continue; // 空文字キーワードは正規化後の全メッセージに無条件マッチしてしまうため除外
+        if (normalized.indexOf(kw) !== -1) return item.answer;
       }
     }
     var fallback = null;
