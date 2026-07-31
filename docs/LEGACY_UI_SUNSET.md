@@ -38,8 +38,8 @@
 
 **参照した実装 (2026-07-30 実測):**
 
-- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は **45 本** (17行〜906行、`name:` 実測45件)。タスク記載の「45 tools」と一致。
-- 実行系: `src/api/admin/agent/actionExecutor.ts` — 45 本すべてに `case` が存在 (154行〜1764行)。
+- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は **49 本**（本文書作成時点の45本 + 会話の履歴カテゴリ拡張で追加した4本: `get_conversation_evaluation` / `get_session_outcome` / `record_session_outcome` / `delete_chat_session`。`name:` 実測49件）。
+- 実行系: `src/api/admin/agent/actionExecutor.ts` — 49 本すべてに `case` が存在。
 - 旧UI案内: `actionExecutor.ts:1659–1710` の `LEGACY_UI_LINKS` — **9 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`)。`get_legacy_ui_link` の `feature` enum と 1:1 対応。
 
 > **`feature` の 9 値の所在について**: `origin/main` (`ef9ac629`) 時点では `toolDefinitions.ts:839–849` の enum リテラルに直接書かれている。**PR #571 着地後は `LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) が唯一の値の所在**になり、enum は `enum: LEGACY_UI_FEATURES` (`:860`) として参照するだけになる。以下、本ドキュメントで「`feature` enum」と書いている箇所は**値の集合**を指しており、着地後は `LEGACY_UI_FEATURES` を読むこと (行番号は §3 Stage B に最新のものを記載)。
@@ -49,7 +49,7 @@
 | # | ページ | route | 分類 | handoff `feature` キー |
 |---|---|---|---|---|
 | 1 | ダッシュボード | `/admin` | **Chat-partial** (集計値3つが欠) | なし |
-| 2 | 会話履歴 | `/admin/chat-history` | **Chat-partial** | `session_deletion` |
+| 2 | 会話履歴 | `/admin/chat-history` | **Chat-complete**（2026-07-31追記: `delete_chat_session` 実装により削除も被覆） | `session_deletion`（残存。§1.2-2 参照） |
 | 3 | 対応中の会話 (エスカレーション) | `/admin/escalations` | **Chat-complete** | `escalation_reply` (履歴閲覧用に限定) |
 | 4 | AIの知識データ | `/admin/knowledge/:tenantId` | **Chat-partial** (タブごとに差、§1.2) | `knowledge_pdf` のみ (「成約への貢献度」タブは**キーすら無い**) |
 | 5 | 未回答質問 | `/admin/knowledge-gaps` | **Chat-complete** | なし |
@@ -61,7 +61,7 @@
 | 11 | テストチャット | `/admin/chat-test` | **Legacy-link-only (GUI固有)** | `chat_test` |
 | 12 | ご利用状況・お支払い | `/admin/billing` | **Legacy-link-only** | `billing` |
 
-内訳: Chat-complete 4 / Chat-partial 5 / Legacy-link-only 3。
+内訳（2026-07-31更新）: Chat-complete 5 / Chat-partial 4 / Legacy-link-only 3。
 
 ### 1.2 ページ別 詳細
 
@@ -76,11 +76,11 @@
 - テナント向けに見える追加要素: オンボーディングモーダル (`:423`, `isSuperAdmin`/`previewMode` を除外して自テナントのみ — `:164`)。チャット側の相当物は `import_industry_faq_templates` (`toolDefinitions.ts:161`) で、業種ヒアリングからのFAQたたき台投入まで被覆済み。`CVUnfiredAlert` (`:344`) のうち `/admin/analytics/cv-status` への遷移ボタンは super_admin 分岐の内側 (`components/dashboard/CVUnfiredAlert.tsx:78`) なのでテナントには出ない。
 - 補足: 新UIへの着地切替は既に実装済み。`App.tsx:123–126` が localStorage オプトイン (`admin-ui/src/lib/chatFirstDefault.ts`) で `/` と `/admin` を `/copilot-preview` に差し替える。**このページに限り「クローズ」= 既定値の反転**であり、Route 削除ではない (§5)。
 
-#### 2. 会話履歴 `/admin/chat-history` — Chat-partial
+#### 2. 会話履歴 `/admin/chat-history` — Chat-complete（2026-07-31更新。旧記述はChat-partial）
 - サイドバー: `AppSidebar.tsx:58` / モバイル下部バー: `AppSidebar.tsx:497` / ルート: `App.tsx:197–198`
-- カバー済み: `get_chat_sessions` (`toolDefinitions.ts:659` / `actionExecutor.ts:1399`)、`get_chat_session_messages` (`:674` / `:1421`)。一覧と本文の閲覧はチャットで完結する。
-- **欠けているもの: 会話セッションの削除。** `LEGACY_UI_LINKS.session_deletion` (`actionExecutor.ts:1675–1679`) で旧UIへ受け渡している。`actionExecutor.ts:1742–1754` は短縮IDから実セッションを解決して `/admin/chat-history/:sessionId` に直接飛ばす作り込みまで入っている。
-- **これは GUI 固有ではなく「未実装」**。破壊的操作のためチャット側に出していないだけで、`delete_faq` (`toolDefinitions.ts:140`) と同じ `confirmed` 二段確認パターンで実装可能。クローズ前提として先に 1 ツール作る必要がある (§4 Wave 2)。
+- カバー済み: `get_chat_sessions`、`get_chat_session_messages`（一覧・本文の閲覧）に加え、`get_conversation_evaluation`（Judge評価）、`get_session_outcome` / `record_session_outcome`（成果記録の閲覧・記録）、**`delete_chat_session`**（削除。`deleteSessionRepository.deleteSession()` を経由し、reason必須・audit_logs記録・所有権チェック付き）を実装した。会話の履歴カテゴリの主要操作はチャットで完結する。
+- **`LEGACY_UI_LINKS.session_deletion`（`actionExecutor.ts` の `get_legacy_ui_link` 案内キー）はあえて残してある。** `delete_chat_session` の実装により旧UIへ誘導する必然性は無くなったが、キーを enum (`LEGACY_UI_FEATURES`) から削除すると `agent_legacy_handoff` の該当ラベルが `unknown` へ丸まり、削除機能の移行がユーザーに実際に使われているかを計測できなくなる（`docs/AGENT_METRICS.md`）。**計測窓（4週）が経過し、`session_deletion` への handoff が実際に減っていることを確認してから撤去する。** 撤去手順: `toolDefinitions.ts` の `LEGACY_UI_FEATURES` と `actionExecutor.ts` の `LEGACY_UI_LINKS` から `session_deletion` を削除し、本ドキュメントの handoff `feature` キー列を更新する。
+- クローズの残る条件は無し（Chat-complete）。
 
 #### 3. 対応中の会話 `/admin/escalations` — Chat-complete
 - サイドバー: `AppSidebar.tsx:59` / ルート: `App.tsx:201–202`
@@ -334,18 +334,17 @@ super_admin 側からの流入があるページ (`/admin/chat-test`) は、テ�
 | **2** | **AIへの指示ルール** `/admin/tuning` | Chat-complete で被覆が最も厚い (8 ツール、テスト応答生成・採用まで)。`/copilot-preview` に専用タブが既にある (`index.tsx:235`) | `BOTTOM_NAV:500` も撤去。既存テナントの筋肉記憶が強いページなので §5 の新規テナント限定を適用 |
 | **3** | **対応中の会話** `/admin/escalations` | reply/resolve が入り Chat-complete になった (PR #568)。`escalation_reply` キーは「履歴の見返し」用途に絞られており、`get_chat_session_messages` で代替可能 | **計測開始が最も遅い** (2026-07-29 着地 → 最短でも 2026-08-27 以降に 4 週窓が閉じる) |
 | **4** | **お客様への声がけ設定** `/admin/engagement` | Chat-complete (CRUD 5 ツール、トリガー 4 種すべて) | 低頻度ページのため C2b 適用外。§2.3 の例外扱い = 8 週窓 + 新規テナント限定のみ |
+| **5** | **会話履歴** `/admin/chat-history` | 2026-07-31、`delete_chat_session` の実装により Chat-complete 化。閲覧(一覧・本文・Judge評価・成果記録)に加え削除・成果記録の書き込みまで被覆 | **計測窓は 2026-07-31 起算**（最も遅く開始する Wave 1 ページ）。`session_deletion` handoff の減少を確認してから `LEGACY_UI_FEATURES` / `LEGACY_UI_LINKS` の該当キーを撤去し、本表を更新すること |
 
 ### Wave 2 — チャット側に少し足せば Chat-complete になる (足してから §2 の計測を開始)
 
 | 順 | ページ | 前提として作るもの |
 |---|---|---|
-| **5** | **ダッシュボード** `/admin` | `get_weekly_briefing` に集計値 3 つ (FAQ総数・公開FAQ数・最終更新日) を追加。あわせて `get_faq_list` の「N件」が上限20で頭打ちになる件 (`actionExecutor.ts:243`) を直す |
-| **6** | **会話履歴** `/admin/chat-history` | セッション削除ツール (`delete_faq` と同じ `confirmed` 二段確認)。これで `session_deletion` キー (`actionExecutor.ts:1675`) が不要になる |
+| **6** | **ダッシュボード** `/admin` | `get_weekly_briefing` に集計値 3 つ (FAQ総数・公開FAQ数・最終更新日) を追加。あわせて `get_faq_list` の「N件」が上限20で頭打ちになる件 (`actionExecutor.ts:243`) を直す |
 
-どちらも欠けているのは **GUI 固有ではなく未実装**の機能なので、Wave 2 は「ツールを 1 つ足す → 4 週計測 → 閉じる」で進む。
+欠けているのは **GUI 固有ではなく未実装**の機能なので、Wave 2 は「ツールを 1 つ足す → 4 週計測 → 閉じる」で進む。
 
-- **ダッシュボードを Wave 2 の先頭に置く理由**: 前提が既存ツールへの集計値 3 つの追加だけで最も軽く、かつ効果が最も大きい (着地画面そのものが変わる)。ただし **Route リダイレクトではなく既定値の反転** — 着地切替は既に `App.tsx:123–126` の localStorage オプトイン (`lib/chatFirstDefault.ts:9`) として実装済みで、「閉じる」= `isChatFirstDefaultEnabled()` の既定を真にすることを意味する。実行は Wave 1 の 1〜4 が閉じてクイックアクション/StatCard の遷移先が減ってから (`pages/admin/index.tsx:382,415,418` および `:366,373,381`)。
-- **会話履歴**: 削除は破壊的操作なので、ツールを足す判断自体に「チャットから会話履歴を消せるようにしてよいか」というプロダクト判断が伴う。作らない結論も有りで、その場合このページは `session_deletion` を残したまま**クローズ対象外**に移る。
+- **ダッシュボードを Wave 2 の先頭に置く理由**: 前提が既存ツールへの集計値 3 つの追加だけで最も軽く、かつ効果が最も大きい (着地画面そのものが変わる)。ただし **Route リダイレクトではなく既定値の反転** — 着地切替は既に `App.tsx:123–126` の localStorage オプトイン (`lib/chatFirstDefault.ts:9`) として実装済みで、「閉じる」= `isChatFirstDefaultEnabled()` の既定を真にすることを意味する。実行は Wave 1 の 1〜5 が閉じてクイックアクション/StatCard の遷移先が減ってから (`pages/admin/index.tsx:382,415,418` および `:366,373,381`)。
 
 ### クローズ対象外 — チャット被覆率を上げる対象ではない
 
