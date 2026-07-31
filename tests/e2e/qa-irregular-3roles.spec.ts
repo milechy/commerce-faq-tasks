@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ADMIN_BASE_URL, API_BASE_URL, DEMO_BASE_URL } from './config';
+import { isBootstrapMessage } from './helpers/agentChatMock';
 
 // QA irregular (異常系) sweep — 2026-07-17
 // 3ロールが「イレギュラーな動作」をした場合に、拒むべき操作が正しく拒まれるか / スコープが
@@ -181,13 +182,13 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
   // 実LLM/実課金/carnationの実データ書き換えに依存させない)。検証対象はUIの実配線であり、
   // モックは非破壊性を担保する手段そのものである。
   async function mockAvatarFlowUpToAdopted(page: any) {
-    let chatCalls = 0;
     const sentMessages: string[] = [];
     await page.route('**/v1/admin/agent/chat', async (route: any) => {
       const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
-      chatCalls += 1;
       sentMessages.push(body.message ?? '');
-      if (chatCalls === 1) {
+      // Asana 1217080508665459: 起動時ブリーフィングは回数ではなく内容で判定する
+      // (qa-copilot-preview.spec.ts CP-B-3と同じ理由)。
+      if (isBootstrapMessage(body.message)) {
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
       }
       if (body.message?.includes('アバターを作りたい')) {
@@ -228,7 +229,6 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
       }),
     );
     return {
-      totalCalls: () => chatCalls,
       countMessage: (message: string) => sentMessages.filter((m) => m === message).length,
     };
   }
@@ -311,12 +311,12 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
   async function mockTuningRuleFlowUpToDraft(page: any) {
     let saveCalls = 0;
     const sentMessages: string[] = [];
-    let bootstrapDone = false;
     await page.route('**/v1/admin/agent/chat', async (route: any) => {
       const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
       sentMessages.push(body.message ?? '');
-      if (!bootstrapDone) {
-        bootstrapDone = true;
+      // Asana 1217080508665459: 起動時ブリーフィングは回数ではなく内容で判定する
+      // (qa-copilot-preview.spec.ts CP-B-3と同じ理由)。
+      if (isBootstrapMessage(body.message)) {
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
       }
       if (body.message?.includes('保証について聞かれたら')) {

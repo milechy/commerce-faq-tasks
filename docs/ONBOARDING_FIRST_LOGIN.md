@@ -366,6 +366,8 @@ WHERE t.created_at <= NOW() - INTERVAL '7 days';  -- 判定期間(7日)が満了
 | playwright（`tests/e2e/`） | N-2, N-12, X-6, X-7, X-13, X-14。既存の `qa-irregular-3roles.spec.ts` / `qa-preview-scope-leak.spec.ts` / `responsive.spec.ts` に追記できるものは追記する |
 | 手動 / Gate 4b | 設置検知（N-7）と実会話（N-8）は実サイト依存のため、最低1テナントで実地確認 |
 
+**E2Eモックを書く際の注意（Asana 1217080508665459）**: 起動時に `agent/chat` が必ず1回呼ばれるとは限らない。オンボーディング未完了のテナント（`firstConversation: false` 等）では `deriveOnboardingNextStep`（`index.tsx:335`）が `nextStep` を返し、`index.tsx:947-950` で `return` するため、起動時ブリーフィングの `sendReal(BOOTSTRAP_PROMPT)` 自体が発火しない。`page.route('**/v1/admin/agent/chat', ...)` のモックで「1回目の呼び出し＝起動時ブリーフィング」と回数で決め打たず、`tests/e2e/helpers/agentChatMock.ts` の `isBootstrapMessage()` で `BOOTSTRAP_PROMPT` の内容を見て判定すること。
+
 ---
 
 ## 8. 受け入れ条件

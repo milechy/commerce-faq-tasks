@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ADMIN_BASE_URL } from './config';
+import { isBootstrapMessage } from './helpers/agentChatMock';
 
 // 回帰検知用: super_admin の「クライアントビューで見る」プレビュー中に previewTenantId が
 // 正しく使われず、テナントスコープが壊れる/画面が空白になる不具合の恒久テスト群。
@@ -194,10 +195,12 @@ test.describe('Preview scope leak (known bug) — escalations が preview テナ
   test('C-LEAK-5: carnation プレビュー中、fal/generate・match-voiceのURLに?tenant=が付与される', async ({
     page,
   }) => {
-    let chatCalls = 0;
     await page.route('**/v1/admin/agent/chat', async (route) => {
-      chatCalls += 1;
-      if (chatCalls === 1) {
+      const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
+      // Asana 1217080508665459: 起動時ブリーフィングは回数ではなく内容で判定する
+      // (super_adminもpreviewMode経由でオンボーディング分岐に入りうるため、
+      // 「1回目=ブリーフィング」の決め打ちは同じ理由で壊れる)。
+      if (isBootstrapMessage(body.message)) {
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
       }
       return route.fulfill({
