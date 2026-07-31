@@ -121,6 +121,9 @@ const mockGetActiveEscalations = jest.fn();
 const mockGetMessages = jest.fn();
 const mockSaveMessage = jest.fn();
 const mockResolveEscalation = jest.fn();
+const mockGetConversionTypes = jest.fn();
+const mockRecordOutcome = jest.fn();
+const mockGetSessionOutcome = jest.fn();
 jest.mock('../chat-history/chatHistoryRepository', () => {
   const actual = jest.requireActual('../chat-history/chatHistoryRepository');
   return {
@@ -129,6 +132,9 @@ jest.mock('../chat-history/chatHistoryRepository', () => {
     getMessages: (...args: any[]) => mockGetMessages(...args),
     saveMessage: (...args: any[]) => mockSaveMessage(...args),
     resolveEscalation: (...args: any[]) => mockResolveEscalation(...args),
+    getConversionTypes: (...args: any[]) => mockGetConversionTypes(...args),
+    recordOutcome: (...args: any[]) => mockRecordOutcome(...args),
+    getSessionOutcome: (...args: any[]) => mockGetSessionOutcome(...args),
     // 純粋関数(DB非依存)なので実体をそのまま使う。allowlist検証まで含めて
     // get_chat_sessions のツール引数が正しく絞り込まれることを検証したいため。
     normalizeSessionListParams: actual.normalizeSessionListParams,
@@ -2750,6 +2756,134 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).not.toHaveBeenCalled();
       expect(mockGetMessages).not.toHaveBeenCalled();
       expect(res.body.actions[0].result).toContain('セッションIDを指定してください');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_session_outcome / record_session_outcome（成果記録 / confirmedゲート / allowlist）
+  // -------------------------------------------------------------------------
+  describe('get_session_outcome / record_session_outcome', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    type SessionRow = { id: string; tenant_id: string; session_id: string };
+    const OWN_SESSION: SessionRow = {
+      id: 'db-sess-outcome', tenant_id: 'tenant-abc', session_id: 'oooo1111-1111-4aaa-8000-000000000001',
+    };
+
+    function seedSessions(rows: SessionRow[]) {
+      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
+        if (!Array.isArray(params)) return { rows: [] };
+        const [tenantId, prefix] = params as [string, string];
+        return {
+          rows: rows
+            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
+            .map((r) => ({ id: r.id, session_id: r.session_id })),
+        };
+      });
+    }
+
+    beforeEach(() => {
+      mockGetConversionTypes.mockReset();
+      mockRecordOutcome.mockReset();
+      mockGetSessionOutcome.mockReset();
+    });
+
+    it('get_session_outcome: 記録済みなら成果と記録日を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-1', 'get_session_outcome', { session_id: 'oooo1111' }))
+        .mockResolvedValueOnce(makeGroqResponse('成果はこちらです。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetSessionOutcome.mockResolvedValueOnce({
+        outcome: '購入完了', outcomeRecordedAt: '2026-07-17T10:00:00Z', outcomeRecordedBy: 'a@example.com',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'oooo1111の成果を教えて', sessionId: 'sess-so-01' });
+
+      expect(mockGetSessionOutcome).toHaveBeenCalledWith('db-sess-outcome');
+      expect(res.body.actions[0].result).toContain('購入完了');
+    });
+
+    it('get_session_outcome: 未記録なら「まだ記録されていません」と返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-2', 'get_session_outcome', { session_id: 'oooo1111' }))
+        .mockResolvedValueOnce(makeGroqResponse('未記録です。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetSessionOutcome.mockResolvedValueOnce({ outcome: null, outcomeRecordedAt: null, outcomeRecordedBy: null });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'oooo1111の成果を教えて', sessionId: 'sess-so-02' });
+
+      expect(res.body.actions[0].result).toContain('まだ記録されていません');
+      expect(mockRecordOutcome).not.toHaveBeenCalled();
+    });
+
+    it('record_session_outcome: confirmed=false は確認を求めるだけでDBに書き込まない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-3', 'record_session_outcome', { session_id: 'oooo1111', outcome: '購入完了', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetConversionTypes.mockResolvedValueOnce(['購入完了', '予約完了', '離脱']);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'oooo1111の成果を購入完了で記録して', sessionId: 'sess-so-03' });
+
+      expect(res.body.actions[0].result).toContain('確認が必要');
+      expect(mockRecordOutcome).not.toHaveBeenCalled();
+    });
+
+    it('record_session_outcome: allowlist外のoutcomeは拒否され、有効な選択肢が案内される(DBに書き込まない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-4', 'record_session_outcome', { session_id: 'oooo1111', outcome: '架空の成果', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('その成果は選べません。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetConversionTypes.mockResolvedValueOnce(['購入完了', '予約完了', '離脱']);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '架空の成果で記録して', sessionId: 'sess-so-04' });
+
+      expect(res.body.actions[0].result).toContain('購入完了 / 予約完了 / 離脱');
+      expect(mockRecordOutcome).not.toHaveBeenCalled();
+    });
+
+    it('record_session_outcome: confirmed=true かつ allowlist内なら記録される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-so-5', 'record_session_outcome', { session_id: 'oooo1111', outcome: '購入完了', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('記録しました。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetConversionTypes.mockResolvedValueOnce(['購入完了', '予約完了', '離脱']);
+      mockRecordOutcome.mockResolvedValueOnce({ outcome: '購入完了', recordedAt: '2026-07-17T10:00:00Z', recordedBy: null });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '購入完了で記録して', sessionId: 'sess-so-05' });
+
+      expect(mockRecordOutcome).toHaveBeenCalledWith({
+        sessionDbId: 'db-sess-outcome', tenantId: 'tenant-abc', outcome: '購入完了', recordedBy: null,
+      });
+      expect(res.body.actions[0].result).toContain('記録しました');
     });
   });
 

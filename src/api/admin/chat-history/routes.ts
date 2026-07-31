@@ -5,9 +5,8 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
-import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams } from "./chatHistoryRepository";
+import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
-import { createNotification } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { z } from "zod";
@@ -268,12 +267,7 @@ export function registerChatHistoryRoutes(app: Express): void {
         }
 
         // テナントの conversion_types でバリデーション
-        const tenantResult = await pool.query<{ conversion_types: string[] | null }>(
-          `SELECT conversion_types FROM tenants WHERE id = $1`,
-          [session.tenant_id],
-        );
-        const conversionTypes: string[] = tenantResult.rows[0]?.conversion_types ??
-          ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
+        const conversionTypes = await getConversionTypes(session.tenant_id);
         if (!conversionTypes.includes(outcomeValue)) {
           return res.status(400).json({
             error: "指定されたoutcomeはこのテナントのconversion_typesに含まれていません",
@@ -281,29 +275,20 @@ export function registerChatHistoryRoutes(app: Express): void {
           });
         }
 
-        // 記録
-        await pool.query(
-          `UPDATE chat_sessions
-           SET outcome = $1, outcome_recorded_at = NOW(), outcome_recorded_by = $2
-           WHERE id = $3`,
-          [outcomeValue, email || null, sessionDbId],
-        );
-
-        // Phase52h: Trigger 5 — outcome記録通知
-        void createNotification({
-          recipientRole: 'super_admin',
-          type: 'outcome_recorded',
-          title: 'コンバージョン結果が記録されました',
-          message: `「${outcomeValue}」が記録されました`,
-          link: '/admin/analytics',
-          metadata: { sessionId: sessionDbId, outcome: outcomeValue, tenantId: session!.tenant_id },
+        // 記録 + 通知(検証・更新・通知の3点セットは recordOutcome() に集約。
+        // agent の record_session_outcome ツールと同じ経路を通る)
+        const recorded = await recordOutcome({
+          sessionDbId,
+          tenantId: session.tenant_id,
+          outcome: outcomeValue,
+          recordedBy: email || null,
         });
 
         return res.json({
           sessionId: sessionDbId,
-          outcome: outcomeValue,
-          recorded_at: new Date().toISOString(),
-          recorded_by: email || null,
+          outcome: recorded.outcome,
+          recorded_at: recorded.recordedAt,
+          recorded_by: recorded.recordedBy,
         });
       } catch (err) {
         logger.warn("[PATCH /v1/admin/chat-history/sessions/:id/outcome]", err);

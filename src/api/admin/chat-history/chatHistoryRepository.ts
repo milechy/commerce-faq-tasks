@@ -4,6 +4,7 @@
 import { getPool } from "../../../lib/db";
 import type { RagSource } from "../../../agent/types";
 import type { TrafficSource } from "../../../lib/traffic/trafficSource";
+import { createNotification } from "../../../lib/notifications";
 
 export interface SaveMessageParams {
   tenantId: string;
@@ -439,4 +440,78 @@ export async function getNewOperatorMessages(params: {
     args,
   );
   return result.rows;
+}
+
+// ---------------------------------------------------------------------------
+// Phase52f: コンバージョン結果(outcome)。routes.ts の PATCH ハンドラと
+// agent の record_session_outcome ツールの両方から呼ばれるため、検証・更新・
+// 通知の3点セットをここへ集約する(両呼び出し元で片方だけ通知が飛ばない、
+// といった劣化を防ぐ)。
+// ---------------------------------------------------------------------------
+
+/** テナントの有効な outcome 値一覧。未設定テナントの既定値を単一の情報源にする。 */
+export async function getConversionTypes(tenantId: string): Promise<string[]> {
+  const pool = getPool();
+  const result = await pool.query<{ conversion_types: string[] | null }>(
+    `SELECT conversion_types FROM tenants WHERE id = $1`,
+    [tenantId],
+  );
+  return result.rows[0]?.conversion_types ?? ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
+}
+
+export interface RecordOutcomeParams {
+  sessionDbId: string;  // chat_sessions.id (UUID)
+  tenantId: string;
+  outcome: string;
+  recordedBy: string | null;
+}
+
+export interface RecordedOutcome {
+  outcome: string;
+  recordedAt: string;
+  recordedBy: string | null;
+}
+
+/**
+ * outcome を記録し、outcome_recorded 通知を発火する(fire-and-forget)。
+ * 呼び出し元は conversion_types との照合を事前に済ませておくこと(この関数自身は検証しない)。
+ */
+export async function recordOutcome(params: RecordOutcomeParams): Promise<RecordedOutcome> {
+  const pool = getPool();
+  await pool.query(
+    `UPDATE chat_sessions
+     SET outcome = $1, outcome_recorded_at = NOW(), outcome_recorded_by = $2
+     WHERE id = $3`,
+    [params.outcome, params.recordedBy, params.sessionDbId],
+  );
+
+  // Phase52h: Trigger 5 — outcome記録通知
+  void createNotification({
+    recipientRole: 'super_admin',
+    type: 'outcome_recorded',
+    title: 'コンバージョン結果が記録されました',
+    message: `「${params.outcome}」が記録されました`,
+    link: '/admin/analytics',
+    metadata: { sessionId: params.sessionDbId, outcome: params.outcome, tenantId: params.tenantId },
+  });
+
+  return { outcome: params.outcome, recordedAt: new Date().toISOString(), recordedBy: params.recordedBy };
+}
+
+export interface SessionOutcome {
+  outcome: string | null;
+  outcomeRecordedAt: string | null;
+  outcomeRecordedBy: string | null;
+}
+
+/** 指定セッションの記録済みoutcomeを取得する。存在しなければ null。 */
+export async function getSessionOutcome(sessionDbId: string): Promise<SessionOutcome | null> {
+  const pool = getPool();
+  const result = await pool.query<{ outcome: string | null; outcome_recorded_at: string | null; outcome_recorded_by: string | null }>(
+    `SELECT outcome, outcome_recorded_at, outcome_recorded_by FROM chat_sessions WHERE id = $1`,
+    [sessionDbId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return { outcome: row.outcome, outcomeRecordedAt: row.outcome_recorded_at, outcomeRecordedBy: row.outcome_recorded_by };
 }
