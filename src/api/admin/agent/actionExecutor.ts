@@ -294,7 +294,10 @@ export async function executeToolCall(
         // 「N件」として返しており、LIMIT 20 が総数の頭打ちに見えていた(#実測: 21件以上の
         // テナントで常に「20件」と誤答していた)。
         const [countRes, listRes] = await Promise.all([
-          db.query(`SELECT COUNT(*)::int AS n FROM faq_docs ${whereClause}`, whereParams),
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM faq_docs ${whereClause}`,
+            whereParams,
+          ),
           db.query(
             `SELECT id, question, answer FROM faq_docs ${whereClause} ORDER BY created_at DESC LIMIT $${listParams.length}`,
             listParams,
