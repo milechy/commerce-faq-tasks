@@ -159,13 +159,33 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
     expect(foreignLeak).toBe(false);
   });
 
+  // Asana 1217080725079367: 旧実装は select 要素の全件カウントが0であることだけを
+  // 見ていたが、/admin/knowledge/books はリダイレクトスタブ(books.tsx、13行)のため
+  // role=anonymous(JWT修正前)だと画面自体が退化描画され select が無いだけでも
+  // このテストは通っていた。つまり越境を一度も検証できていなかった。
+  // 画面が実際に描画されたことを先に確認したうえで、描画された select の選択肢に
+  // 自テナント(carnation)以外のテナントIDが含まれないことを検証する。
   test('B-IRR-3: 判明済みギャップ /admin/knowledge/books へ直URL到達しても他テナント選択UIは出ない', async ({ page }) => {
     const { res } = await gotoAdmin(page, '/admin/knowledge/books');
     // RequireAuth のため到達自体は許容され得る。実害＝クロステナント選択/データが出ないことを確認。
     test.info().annotations.push({ type: 'final-url', description: page.url() });
     test.info().annotations.push({ type: 'status', description: String(res?.status()) });
-    const selectCount = await page.locator('select').count();
-    expect(selectCount).toBe(0); // テナント横断セレクタが出ない＝越境ビュー無し
+
+    // books.tsx は /admin/knowledge へリダイレクトするだけのスタブ。画面が実際に
+    // 描画されたことをまず確認する(描画されていなければ select が0件でも無意味)。
+    await expect(page.getByText('AIの知識データ').first()).toBeVisible({ timeout: 10000 });
+
+    const optionValues = await page.locator('select option').evaluateAll((opts) =>
+      opts.map((o) => (o as HTMLOptionElement).value),
+    );
+    test.info().annotations.push({ type: 'select-option-values', description: JSON.stringify(optionValues) });
+
+    // このリポジトリの他specが使う実在の他テナントID(qa-preview-scope-leak.spec.ts の
+    // PREVIEW_TENANT_2 / PREVIEW_TENANT_ID)。仮に他テナント選択UIが実装されて
+    // 選択肢に混入すればこのアサーションで落ちる(単なる0件カウントには戻さない)。
+    const OTHER_TENANT_IDS = ['lp-demo', 'r2c_default'];
+    const foreignOptions = optionValues.filter((v) => OTHER_TENANT_IDS.includes(v));
+    expect(foreignOptions).toEqual([]);
   });
 
   // GID 1217040818410419(2026-07-31): 「書籍/PDFはR2C運用限定」の実装反映。
