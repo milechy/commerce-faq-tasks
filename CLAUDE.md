@@ -28,6 +28,9 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 2. **Mobile First** — Touch targets ≥44px. Font ≥16px. Test 390px viewport first.
 3. **Partner Friendly** — No jargon. Every error = kind message. Every action = success feedback.
 
+## チャットUI / 管理エージェント
+詳細は配下の CLAUDE.md を参照: `src/api/admin/CLAUDE.md`（認可・SQL・ツール追加手順・計測）/ `admin-ui/CLAUDE.md`（面の役割分担・禁止事項・テスト）
+
 ## Definition of Done
 - pnpm typecheck → 0 errors
 - pnpm lint → 0 warnings
