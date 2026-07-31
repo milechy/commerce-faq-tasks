@@ -610,6 +610,25 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     await screen.findByText("50件");
     expect(await screen.findByText(/別の日に取得した内容です/)).toBeTruthy();
   });
+
+  // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
+  // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
+  it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {
+    mockAgent({
+      reply: "アバターの状況をお伝えしました。",
+      actions: [
+        { tool: "get_avatar_list", result: "アバター設定は1件あります:\n- 接客担当（稼働中） ID: av-1" },
+        { tool: "deactivate_avatar", result: "アバター「接客担当」を停止しました。" },
+      ],
+    });
+
+    await send("アバターの一覧を見せて");
+
+    expect(await screen.findByText("アバター一覧の取得")).toBeTruthy();
+    expect(screen.getByText("アバターの停止")).toBeTruthy();
+    expect(screen.queryByText("get_avatar_list")).toBeNull();
+    expect(screen.queryByText("deactivate_avatar")).toBeNull();
+  });
 });
 
 function getComposer(): HTMLTextAreaElement {
