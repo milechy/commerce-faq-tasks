@@ -13,17 +13,37 @@ function stripTrailingSlash(url: string): string {
 }
 
 /**
+ * 解決後のURLが実際に到達可能な形をしているか検証する。
+ * ここを通さないと、'/' や 'not-a-url' のような値が黙って全specに配られ、
+ * 103テストが原因不明の失敗を起こす(向き先の誤りだと気付けない)。
+ * ローカル/自前ステージングは http のことがあるため https 限定にはしない。
+ */
+function assertUsableBaseUrl(value: string, envName: string): string {
+  if (!/^https?:\/\/./i.test(value)) {
+    throw new Error(
+      `${envName} の値が URL として解釈できません(解決結果: ${JSON.stringify(value)})。` +
+        'http:// または https:// で始まるホスト名付きのURLを指定してください。',
+    );
+  }
+  return value;
+}
+
+/**
  * env から E2E の向き先を解決する(純粋関数)。src/lib/traffic/trafficSource.ts の
  * resolveTrafficSource と同じ形(入力を引数で受ける純粋関数)に合わせている。
  *
  * 片方だけ設定された場合は throw する: 管理画面はステージング・APIは本番、という
  * 混在状態が無警告で成立するのを防ぐため。
+ *
+ * 値は trim してから判定する: CI の Secrets や .env 経由の値は末尾に改行や空白が
+ * 混入しやすく、trim しないと `https://example.com\n/health` のような
+ * 一見正しく見えるURLになって原因特定が困難になるため。
  */
 export function resolveE2eBaseUrls(
   env: NodeJS.ProcessEnv = process.env,
 ): { adminBaseUrl: string; apiBaseUrl: string } {
-  const rawAdmin = env.E2E_BASE_URL || '';
-  const rawApi = env.E2E_API_URL || '';
+  const rawAdmin = (env.E2E_BASE_URL || '').trim();
+  const rawApi = (env.E2E_API_URL || '').trim();
 
   if (rawAdmin && !rawApi) {
     throw new Error(
@@ -41,8 +61,14 @@ export function resolveE2eBaseUrls(
   }
 
   return {
-    adminBaseUrl: stripTrailingSlash(rawAdmin || 'https://admin.r2c.biz'),
-    apiBaseUrl: stripTrailingSlash(rawApi || 'https://api.r2c.biz'),
+    adminBaseUrl: assertUsableBaseUrl(
+      stripTrailingSlash(rawAdmin || 'https://admin.r2c.biz'),
+      'E2E_BASE_URL',
+    ),
+    apiBaseUrl: assertUsableBaseUrl(
+      stripTrailingSlash(rawApi || 'https://api.r2c.biz'),
+      'E2E_API_URL',
+    ),
   };
 }
 
