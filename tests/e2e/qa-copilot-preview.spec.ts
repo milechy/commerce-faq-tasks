@@ -178,7 +178,11 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
     // ⑤ 有効化（公開）
     await composer.fill('アバターを有効化してください');
     await send.click();
-    await expect(page.getByText(/有効化しました/)).toBeVisible({ timeout: 10000 });
+    // モック応答の reply(「有効化しました。」)と、agentActionカードの result
+    // (「アバター（ID: cfg-e2e-1）を有効化しました」句点なし)の両方が"有効化しました"を
+    // 含むため、緩い正規表現だと strict mode violation(複数要素にマッチ)になる。
+    // アシスタントの返信バブル(句点まで含めた完全一致)だけを狙う。
+    await expect(page.getByText('有効化しました。', { exact: true })).toBeVisible({ timeout: 10000 });
 
     // ⑥ ライブテストへの受け渡し（唯一の離脱点）。別タブで開き、この会話は残ったままであること。
     await composer.fill('テストチャットで確認したい');
