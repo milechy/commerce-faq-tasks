@@ -28,6 +28,9 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 2. **Mobile First** — Touch targets ≥44px. Font ≥16px. Test 390px viewport first.
 3. **Partner Friendly** — No jargon. Every error = kind message. Every action = success feedback.
 
+## チャットUI / 管理エージェント
+詳細は配下の CLAUDE.md を参照: `src/api/admin/CLAUDE.md`（認可・SQL・ツール追加手順・計測）/ `admin-ui/CLAUDE.md`（面の役割分担・禁止事項・テスト）
+
 ## Definition of Done
 - pnpm typecheck → 0 errors
 - pnpm lint → 0 warnings
@@ -55,6 +58,200 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 - Book RAG: PDF → 6フィールド構造化 → pgvector + ES (Phase47)
 - LLM Defense: L5 Input Sanitizer → L6 Prompt Firewall → L7 Topic Guard → L8 Output Guard (Phase48)
 - Key endpoints / env vars: `docs/API_REFERENCE.md`
+
+## プロダクトの目的とスコープ
+
+R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込む **AI接客ウィジェット**（`public/widget.js`）と、
+その運用を行う **テナント向け管理画面**（`admin-ui/`）からなる。
+
+- **価値が生まれる地点**はエンドユーザーとの会話であって、管理画面の設定作業ではない。
+  機能追加の是非は「テナントの顧客との会話が改善するか」で判断する。
+- **管理画面はチャット・ファースト（`/copilot-preview`）へ移行中**。テナント向け旧UIページ（`/admin/*`）は
+  段階的に閉じる（基準: `docs/LEGACY_UI_SUNSET.md`）。
+- **旧UIは無くならない。** super_admin 向け運用面としては残り続ける。
+  したがって「旧UIを消す」ではなく「**テナント向け**旧UIページを閉じる」が正しい目標。
+- **「GUI固有だから」は面の外に置く理由にならない。** 面の外に残してよいのは
+  「**見て・聴いて最終的に採否を決める瞬間**」だけ。何を出すか・どう振る舞うか・止めるかは会話に写せる。
+  PDF取り込み（#585）とアバター（`docs/AVATAR_CHAT_MIGRATION.md`）は、この基準で分類を後から覆した実例。
+- **ただし「誰の機能か」は別問題。** 書籍/PDFナレッジは **R2C 運用限定**であり、
+  テナント向けチャットの守備範囲外（抜粋200字の著作権制約が「R2Cが投入内容を管理している」前提で成り立つため）。
+  PDF取り込み（#585）は「GUI固有の壁は越えられる」ことの実証であって、テナントへの開放判断ではない。
+- 別製品（R2C2 / aaas、DIA）とはコードを共有しない。Supabase認証と App Switcher のみ共有。
+
+## 管理UIの構造（チャット・ファースト移行中の不変ルール）
+
+チャットUIは現在 3 実装ある。**これ以上増やさない。**
+
+| 面 | 実体 | 位置づけ |
+|---|---|---|
+| Surface B（全画面） | `admin-ui/src/pages/copilot-preview/` | **主面**。新機能はここに入れる |
+| Surface A（パネル） | `admin-ui/src/components/AdminAgent/` | **機能凍結**。旧UIページ閉鎖に合わせて畳む（`docs/CHAT_SURFACE_DECISION.md` 推奨(c)） |
+| テストチャット | `admin-ui/src/pages/admin/chat-test/` | GUI固有。移植対象外 |
+
+- **`/copilot-preview` はテナント専用UI。** super_admin 専用機能をここに足さない
+  （PR #507 で誤追加の 11 ツールを撤去した経緯がある）。
+- パネルに新機能（カード・チップ・レール・ブートストラップ）を移植しない。共有層のバグ修正は対象外＝行ってよい。
+
+## 実装の置き場所（新規ファイルを作る前に必ず読む）
+
+**共有済みの層を再実装しない。** 過去に「正しい実装が同リポジトリにあるのに再利用されず、
+日本語入力が約13日間壊れた」事故がある（`docs/CHAT_SURFACE_DECISION.md` §3.1）。
+
+| やりたいこと | 置き場所（既存） |
+|---|---|
+| チャット送信・sessionId・履歴窓・`targetTenantId`・エラー文言 | `admin-ui/src/lib/useAgentChatTransport.ts` |
+| 会話の保存・復元 | `admin-ui/src/lib/chatSessionStore.ts` |
+| Enter送信・IME合成の扱い | `admin-ui/src/lib/utils.ts` の `shouldSubmitOnEnter` |
+| 構造化カードの追加 | `useAgentChatTransport.ts` の `card.kind` に `kind` を足す |
+| エージェントのツール追加 | `src/api/admin/agent/toolDefinitions.ts` + `actionExecutor.ts` の `switch` に `case` + `copilot-preview/index.tsx` の `REAL_TOOL_LABEL`（**この3点セット**。ラベル漏れは生の英語ツール名が画面に出る。網羅性を強制するテストが無く、人力で守る唯一の箇所） |
+| ファイル添付（コンポーザの📎／ドラッグ＆ドロップ） | `admin-ui/src/lib/bookPdfUpload.ts` の検証 + `pdfUpload` カードの進捗表示を拡張。**第2の添付経路を作らない** |
+| ツール内でのプラン機能判定 | 注入済み `db` に `queryTenantPlan` + `planHasFeature`。`tenantHasFeature` は内部で `getPool()` を呼び、テストのモックPoolと食い違う |
+| 確定前の下書き・生成候補の保持 | 実体テーブル（例 `avatar_configs`）。**プロセス内 Map（`knowledgeImportStaging` 型）を新設しない** — 面をまたぐ／リロードでTTL失効し孤児化する |
+| 書き込みツールのリスク分類 | `src/api/admin/agent/confirmPolicy.ts`（未分類は `confirmPolicy.test.ts` が検出して落ちる。**同テストは `actionExecutor.ts` と `copilot-preview/index.tsx` を readFileSync して検査するため、両ファイルのパス・変数名を変えるとテストが例外で死ぬ**） |
+| 設定変更の監査記録 | `src/api/admin/agent/agentAuditLog.ts` → 既存 `tenant_settings_history`。**新テーブルを作らない** |
+| ツール実行の計測 | `agentRoutes.ts` にのみ実装。`actionExecutor.ts` の各 `case` には手を入れない（`docs/AGENT_METRICS.md`） |
+| テナント設定の取得・更新 | `GET/PATCH /v1/admin/my-tenant`（`src/api/admin/tenants/routes.ts`） |
+| 汎用UI部品（ページネーション・検索窓・期間フィルタ・通知ベル） | `admin-ui/src/components/common/`。**`components/ui/` は存在しない**（shadcn/ui 未導入）。使う前に必ず grep する |
+| テナント/運用者への通知 | `src/lib/notifications.ts` の `createNotification`（`recipientRole` は `super_admin` / `client_admin` 両対応、`recipientTenantId` を必ず添える）。ベル・既読・スコープはAPI側に実装済み。**`notification_preferences` は保存されるだけで誰も読んでいない** |
+| DB列追加 | 機能ディレクトリ内に `migration_<機能>.sql`。`ADD COLUMN IF NOT EXISTS` + `COMMENT ON COLUMN` で意味を明記 |
+| 日付・週境界の計算 | `src/lib/date/weekRange.ts`（JST暦週。UTCベースの算術のみで実装し process TZ に依存しない）。詳細: `docs/WEEKLY_SUMMARY_REQUIREMENTS.md` |
+
+**新規ファイルを作ってよいのは**、テスト可能な純関数として切り出す場合のみ。
+その場合も `confirmPolicy.ts` / `agentAuditLog.ts` と同じ粒度・同じディレクトリに置き、隣に `*.test.ts` を作る。
+
+## 指示ルール（tuning_rules）の不変ルール
+
+エンドユーザーへの応答方針を決める唯一のテナント設定。**壊れても画面に何も出ないため、事故が沈黙する。**
+
+**3層の役割分担を混ぜない**
+
+| 層 | 役割 | 破ってはいけないこと |
+|---|---|---|
+| FAQ / 知識データ（RAG） | **事実の単一情報源** | 他層の記述が事実と矛盾しても、事実はこちらを正とする |
+| `tuning_rules.expected_behavior` | **方針**（どう振る舞うか） | 事実の格納場所として使わない（「保証は2年」はFAQへ） |
+| `tuning_rules.approved_responses` | **文体・言い回しの見本** | 逐語コピーを強制しない。事実を上書きさせない |
+
+**置き場所（単一実装。2箇所目を作ると旧UIとチャットで挙動が割れる）**
+
+| やりたいこと | 置き場所（既存） |
+|---|---|
+| ルールの発火条件の判定 | `src/agent/tools/synthesisTool.ts` の `matchesTriggerPattern` |
+| ルールのプロンプト注入 | `src/api/admin/tuning/tuningRulesRepository.ts` の `buildTuningPromptSection` |
+| 優先度の3段階表現 | `admin-ui/src/lib/tuningPriority.ts`（閾値・代表値を他所に書かない） |
+
+**既知の破れ（是正前に触るなら前提を確認する）**: 自動生成ルールの無断有効化 / 採用済み返答が回答生成に未到達 /
+一致判定が半角カンマ区切りの部分一致のみ / ツール結果500字打ち切りによる一覧欠落。
+詳細と受け入れ条件: `docs/TUNING_RULE_CHAT_REQUIREMENTS.md`
+
+## 絶対にやってはいけないこと
+
+1. **`tenantId` を request body から取る。** JWT または APIキーからのみ取得する。
+   super_admin の `targetTenantId` は super_admin のときのみ有効、という既存条件を変えない。
+2. **共有済みの層を手書きでコピーする**（transport / IME / セッションストア / 確認ポリシー）。
+3. **フローの分岐を LLM の応答文の文字列一致で新規に作る。**
+   既存3箇所（確認ブロック判定・監査の `successMarker`・計測のブロック判定）は現状維持するが、
+   **新規はここに乗せない**。構造化データで判定する。
+4. **確認ゲートを迂回する書き込み経路を作る。** 新しい書き込みツールは必ず `confirmPolicy` に分類する。
+5. **エンドユーザーに出る内容を、テナントの確認なしで公開する。**
+   テンプレート・自動生成の知識は `is_published = false` で投入し、確認後に公開する。
+   **指示ルールも同じ**: AI が自動生成した `tuning_rules`（Judge 由来）は必ず `is_active = false` で INSERT する。
+   列を省略するとスキーマ既定 `DEFAULT true` が効いて即座に本番の応答方針へ入る（`src/agent/judge/evaluationAnalyzer.ts` が現に違反）。
+   逆に `migration.sql` の `DEFAULT` 自体は、既存データへの影響を評価せずに変えない。
+6. **同じ関心事を2ファイルに複製したまま片方だけ直す。**
+   既知の重複: 業種テンプレ（`src/api/admin/agent/industryFaqTemplates.ts` と
+   `admin-ui/src/components/onboarding/industryFaqTemplates.ts`）。増やさない、直すときは必ず両方。
+   **FAQ書き込み経路4系統**（`faqCrudRoutes` / レガシー `faqAdminRoutes` / `knowledge-gaps/add-knowledge` /
+   `actionExecutor`）はそれぞれが embedding+ES 同期を個別実装しており、索引不整合の再発元。**5本目を作らない。**
+7. **ユーザー単位・テナント単位の進行状態を localStorage に持つ。** ブラウザを変えると消える。サーバが正。
+8. **DB migration を自動実行する。** 不可逆操作は人間承認（24h自走中は禁止項目）。
+9. **オンボーディング等の作業フロー中に、同タブで旧UIへ遷移させる。** 会話と進行が飛ぶ。別タブ固定。
+10. **費用が発生する操作を、使用量を計上しないまま／費用が出ると伝えないまま会話に開放する。**
+    外部APIの呼び出しは従量課金でテナントに請求される設計なので、`trackUsage` 漏れは請求漏れ（当社負担）になる
+    （実例: `falGenerationRoutes.ts` が未計上）。回数上限で止めるのではなく、**計上を必ず入れる**ことと、
+    会話は「もう1回」のコストが低いため**費用が発生する旨を実行前に伝える**ことの2点で守る。
+11. **プラン制限の案内を同一会話で繰り返す。** 制限に当たった瞬間だけ、1会話1回（PR #580 で是正済み）。
+12. **ツールの成功文言に確認ゲートの言い回し（「確認が必要です」「確認をスキップできません」等）を混ぜる。**
+    計測もフロントのチップ表示も結果文字列の部分一致で判定しているため、正常応答が `blocked` として数えられる
+    （`docs/AGENT_METRICS.md`。`get_embed_code` で実際に踏んだ）。
+13. **`isSuperAdmin` でテナント向け機能を出し分ける。**
+    `useAuth.tsx` の `isSuperAdmin` は previewMode 中に false へ落ちる。
+    super_admin が `/copilot-preview` を使うには previewMode に入るしかないため、
+    `isSuperAdmin && ...` で隠した機能は**R2C運用者自身からも消える**。
+    運用者に残す機能の判定は生の `user?.role === "super_admin"` を使う（前例: `components/dashboard/CVUnfiredAlert.tsx`）。
+14. **機能ゲートをUI側だけに置く。** 画面から消しただけの制限は、API直叩き・ブックマーク・
+    会話履歴に残った旧UIリンクの再クリックで破られる。**サーバ側の role/plan ガードを必ず同じPRに含める**
+    （前例: `pre_dispatch` の Enterprise 制限がUIのみで `livekitTokenRoutes` に強制が無かった）。
+15. **動線として閉じていないツールを足す。** 一覧を返す手段が無いのに id 必須の `activate_avatar` だけがある状態は、
+    チャットからは実行不能で「あるのに使えない」。ツールは**ユーザーが会話だけで完了できる単位**で追加する。
+16. **`AT TIME ZONE` を片側だけ書く。** `timestamptz` カラムとの比較は往復変換が必須。
+    サーバTZ依存の実装は**本番でのみ実際の時刻とズレ、数値はもっともらしく出るため気づけない**
+    （`src/lib/date/weekRange.ts` は process TZ に一切依存しない実装で、この事故を回避している）。
+17. **チャットに出す集計値をLLMの生成文のまま表示する。** 数値・期間・件数はサーバが構造化データ
+    （card）として返し、LLMは解釈・提案のみを担う。丸め・省略・語り換えが構造的に起こり得るため
+    （例: `get_weekly_briefing`。詳細: `docs/WEEKLY_SUMMARY_REQUIREMENTS.md`）。
+
+## テストの最低ライン
+
+**配置（既存規約に合わせる）**
+
+| 対象 | ランナー | 置き場所 |
+|---|---|---|
+| バックエンド | jest | ソース隣に `*.test.ts`（横断は `tests/api/`） |
+| admin-ui | vitest + happy-dom + testing-library | ソース隣に `*.test.tsx` |
+| E2E | playwright | `tests/e2e/*.spec.ts` |
+
+**CIが守ってくれない範囲（Gate 1 を省略した瞬間に無防備になる）**
+
+- `.github/workflows/ci.yml` が走らせるのは root の `typecheck` / `lint`(oxlint) / `test`(jest) のみ。
+  **admin-ui の vitest と eslint は CI で走らない。**
+- jest の testMatch は `{src,tests}/**/*.test.ts` で、**`.tsx` は対象外**。
+- したがって admin-ui のUI回帰を検出できるのは Gate 1 の `pnpm verify`（内部で `test:ui` を呼ぶ）だけ。
+  Cloudflare Pages は main merge = 即本番なので、ここを飛ばすと検出機会がゼロになる。
+
+**最低限意識すること**
+
+- **回帰テストを消さない。** 既に直したバグ（IME誤送信、previewMode のテナントスコープ漏れ、
+  super_admin バイパス）は、テストが唯一の再発防止装置。
+- **正常系だけで通さない。** 外部API・DB書き込みは「一部失敗」「全件失敗」「タイムアウト」を必ず書く。
+  特に**一部失敗時に表示件数と実件数が一致すること**（黙って成功と表示しない）。
+- **権限の境界を必ずテストする。** client_admin / super_admin / previewMode の3ロールで、
+  他テナントのデータに到達しないこと。既存の `qa-preview-scope-leak.spec.ts` / `qa-irregular-3roles.spec.ts` に追記する。
+- **モバイル 390px を先に確認する。** タップ44px以上・フォント16px以上（Core Principles: Mobile First）。
+- **イレギュラー操作を1件以上書く。** 連打・途中リロード・途中ログアウト・別端末・複数タブ・
+  プライベートブラウズ（localStorage 無効）。実ユーザーはこの順路で壊す。
+- **ツール戻り値は500字で切られる前提でテストする。** 一覧・下書きが件数超過や長文で黙って欠ける経路
+  （`get_*` の一覧、`suggest_*` の末尾指示）を必ず1件書く。
+- **「新規APIを作らない」もテストで固定する。** 既存エンドポイントを叩くことをテスト名に書く既存例に倣う
+  （`copilot-preview/index.test.tsx`）。
+- **外部API失敗でUIが確定状態になること。** タイムアウト・5xx でカードや進捗表示が「失敗」で終わり、
+  **無限スピナーを残さない**。外部依存（生成・音声・LLM）を足すたびに1件書く。
+
+## 命名・エラーハンドリング
+
+**命名**
+
+- エージェントのツール名: snake_case の `動詞_目的語`。既存の語彙に合わせる
+  （`get_*` / `set_*` / `save_*` / `suggest_*` / `import_*` / `commit_*` / `discard_*`。
+  一覧は `get_*_list` / `list_*`、状態切替は `activate_*` / `deactivate_*` / `dismiss_*`）。
+- localStorage / sessionStorage キー: `r2c_` プレフィックス必須。
+- migration ファイル: `migration_<機能>.sql`、機能ディレクトリに colocate。
+- テストファイル: 対象ファイル名 + `.test.ts(x)`、対象の隣。
+
+**エラーハンドリング**
+
+- **ユーザー向け文言をハードコードしない。** 共通文言は定数から使う
+  （例: `AGENT_CHAT_ERROR_MESSAGE` / `AGENT_CHAT_AUTH_REQUIRED_MESSAGE`）。同じ文言を4箇所に散らさない。
+- **すべてのエラーに親切な日本語メッセージを付ける**（Core Principles: Partner Friendly）。
+  「失敗しました」で終えず、**次に何をすればよいか**を書く。
+- **副作用の記録は fire-and-forget。** 監査・計測・embedding 生成は内部で catch し、`logger.warn` に落とすだけ。
+  **記録の失敗がユーザーへの応答（ステータスコード・本文）を変えてはならない。**
+  ただし逆は禁止 — 記録に失敗したのに「処理が進んだ」と表示しない。
+- **検索索引の同期（`faq_embeddings` / Elasticsearch）は「記録」ではない。**
+  失敗すると「登録したのに答えない」というユーザーに見える機能不全になるが、現状は warn ログのみで
+  **誰にも検知されない**（`faqImport.ts` / `faqCrudRoutes.ts`）。同期を新たに fire-and-forget で足さない。
+  既存に足す場合は、**再試行または不整合の検知手段（件数照合）をセットで入れる。**
+- **エージェントのツール戻り値は日本語・500字以内に truncate する。**
+- **ログに PII・書籍内容・RAGコンテンツを出さない**（Anti-Slop と整合）。
 
 ## Security Middleware Order (src/index.ts)
 1. requestIdMiddleware (global)
@@ -102,7 +299,10 @@ git checkout -b feature/<asana-id>-<short-description>
 ```
 
 違反復旧: `git reset --soft HEAD~1` → feature branch作成 → 再コミット
-PR: `gh pr merge <PR番号> --auto --squash --delete-branch` 詳細: `docs/PR_MERGE_RULES.md`
+PR: Tier B（docs / 設定 / テストのみ）は `gh pr merge <PR番号> --auto --squash --delete-branch`。
+**`src/**` / `admin-ui/src/**` に触るPRは Tier S＝`high-risk` ラベルが付き auto-merge 対象外。
+hkobayashi の手動 merge が必要**（`gh pr merge` は `permissions.deny` でブロックされている）。
+「auto-merge待ち」と報告しない。 詳細: `docs/PR_MERGE_RULES.md`
 
 ## Auto Mode 運用ルール（Claude Code v2.1.83+）
 

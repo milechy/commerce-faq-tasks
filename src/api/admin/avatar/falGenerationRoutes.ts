@@ -6,6 +6,7 @@ import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
+import { trackUsage } from "../../../lib/billing/usageTracker";
 import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
@@ -151,6 +152,18 @@ export function registerFalGenerationRoutes(app: Express): void {
             uploadImageFromUrl(url, tenantId, `fal-${requestId}-${i}-${Date.now()}`)
           )
         );
+
+        // 使用量の計上（generate-image / generate-premium と同じ扱い）。
+        // avatar_config_image は billable なので、計上しないと生成の原価を請求できない。
+        trackUsage({
+          tenantId,
+          requestId,
+          featureUsed: "avatar_config_image",
+          model: "fal-flux-pro-v1.1",
+          inputTokens: 0,
+          outputTokens: 0,
+          imageCount: images.length,
+        });
 
         logger.info("[fal/generate] done", { requestId, tenantId, count: images.length });
         return res.json({ images, seed: falData.seed });
