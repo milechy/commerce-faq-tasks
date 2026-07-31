@@ -295,28 +295,42 @@ export async function executeToolCall(
         const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
         const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
-        const params: unknown[] = [tenantId];
+        const whereParams: unknown[] = [tenantId];
         let whereClause = 'WHERE tenant_id = $1';
 
         if (search) {
-          params.push(`%${search}%`);
-          whereClause += ` AND (question ILIKE $${params.length} OR answer ILIKE $${params.length})`;
+          whereParams.push(`%${search}%`);
+          whereClause += ` AND (question ILIKE $${whereParams.length} OR answer ILIKE $${whereParams.length})`;
         }
 
-        params.push(limit);
-        const result = await db.query(
-          `SELECT id, question, answer FROM faq_docs ${whereClause} ORDER BY created_at DESC LIMIT $${params.length}`,
-          params
-        );
+        const listParams = [...whereParams, limit];
+        // 表示件数(上限20)と総数(COUNT)を分けて取得する。以前は result.rows.length を
+        // 「N件」として返しており、LIMIT 20 が総数の頭打ちに見えていた(#実測: 21件以上の
+        // テナントで常に「20件」と誤答していた)。
+        const [countRes, listRes] = await Promise.all([
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM faq_docs ${whereClause}`,
+            whereParams,
+          ),
+          db.query(
+            `SELECT id, question, answer FROM faq_docs ${whereClause} ORDER BY created_at DESC LIMIT $${listParams.length}`,
+            listParams,
+          ),
+        ]);
 
-        if (result.rows.length === 0) {
+        if (listRes.rows.length === 0) {
           return truncate('FAQ が登録されていません');
         }
 
+        const total = Number(countRes.rows[0]?.n ?? listRes.rows.length);
+
         // anti-slop: answer は .slice(0,200) 必須 / console.log で内容出力禁止
-        const lines = (result.rows as { id: number; question: string; answer: string }[])
+        const lines = (listRes.rows as { id: number; question: string; answer: string }[])
           .map((r) => `[${r.id}] ${r.question} — ${r.answer.slice(0, 200)}`);
-        return truncate(`FAQ 一覧（${result.rows.length}件）:\n` + lines.join('\n'));
+        const header = total > listRes.rows.length
+          ? `FAQ 一覧（全${total}件中${listRes.rows.length}件を表示）:`
+          : `FAQ 一覧（${total}件）:`;
+        return truncate(`${header}\n` + lines.join('\n'));
       } catch (err) {
         logger.warn('[actionExecutor] get_faq_list failed', err);
         return truncate('FAQ 一覧の取得に失敗しました');
