@@ -277,7 +277,23 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '了解しました。', actions: [] }) });
       });
 
+      // DIAGNOSTIC (temporary, to be reverted): capture my-tenant/agent-chat responses and
+      // localStorage state to debug why the P6-1 intro nudge doesn't appear in CI.
+      const diagResponses: string[] = [];
+      page.on('response', (res) => {
+        const u = res.url();
+        if (u.includes('my-tenant') || u.includes('agent/chat')) {
+          res.text().then((body) => {
+            diagResponses.push(`${res.status()} ${u} :: ${body.slice(0, 300)}`);
+          }).catch(() => {});
+        }
+      });
+
       await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await page.waitForTimeout(5000);
+      console.log('[DIAG] responses:', JSON.stringify(diagResponses, null, 2));
+      console.log('[DIAG] localStorage keys:', await page.evaluate(() => Object.keys(window.localStorage)));
+      console.log('[DIAG] body text:', (await page.textContent('body'))?.slice(0, 1500));
 
       // 週次ブリーフィングの代わりに、指示ルールの初回紹介が出る
       await expect(page.getByText(/最初のルールを作ってみますか/)).toBeVisible({ timeout: 15000 });
