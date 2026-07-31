@@ -914,6 +914,43 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].tool).toBe('suggest_tuning_rule');
       expect(res.body.actions[0].result).toContain('保証期間は2年とお伝えする');
     });
+
+    it('D4: トリガーが決まらない場合は「（常時適用）」を提案せず、聞き返す文言を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-tr-2',
+                  type: 'function',
+                  function: { name: 'suggest_tuning_rule', arguments: JSON.stringify({ free_text: 'なるべく丁寧にお願いできますか' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      mockCallGroq8bSuggestFromText.mockResolvedValueOnce({
+        trigger_pattern: '',
+        instruction: '丁寧な言葉遣いで応対する',
+        priority: 5,
+        reason: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'なるべく丁寧にお願いできますか', sessionId: 'sess-030b' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).not.toContain('常時適用');
+      expect(res.body.actions[0].result).toContain('どんな質問をした時に使いたいですか');
+      expect(res.body.actions[0].result).not.toContain('save_tuning_rule を呼び出してください');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1007,6 +1044,42 @@ describe('POST /v1/admin/agent/chat', () => {
         }),
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+
+    it('D4: trigger_pattern が「（常時適用）」のまま渡された場合は保存せず聞き返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sv-3',
+                  type: 'function',
+                  function: {
+                    name: 'save_tuning_rule',
+                    arguments: JSON.stringify({
+                      trigger_pattern: '（常時適用）',
+                      expected_behavior: '丁寧な言葉遣いで応対する',
+                      confirmed: true,
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-032b' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('どんな質問の時にこの振る舞いを使うか');
     });
   });
 
@@ -1365,7 +1438,7 @@ describe('POST /v1/admin/agent/chat', () => {
   // Phase2 (P7): get_weekly_briefing — 直近7日間の状況を1回で要約取得
   // -------------------------------------------------------------------------
   describe('get_weekly_briefing', () => {
-    it('会話数・前週比・品質スコア・成約・未回答質問トップ3を1つの結果文字列にまとめる', async () => {
+    it('会話数・前週比・品質スコア・成約・FAQ集計・承認待ちルール・未回答質問トップ3を1つの結果文字列にまとめる', async () => {
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
@@ -1389,7 +1462,9 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce({ rows: [{ n: 142 }] }) // 今週セッション数
         .mockResolvedValueOnce({ rows: [{ n: 120 }] }) // 先週セッション数
         .mockResolvedValueOnce({ rows: [{ avg: '82.4' }] }) // 平均スコア
-        .mockResolvedValueOnce({ rows: [{ n: 8, total: '96000' }] }); // 成約
+        .mockResolvedValueOnce({ rows: [{ n: 8, total: '96000' }] }) // 成約
+        .mockResolvedValueOnce({ rows: [{ total: 45, published: 40, last_updated: '2026-08-01T00:00:00.000Z' }] }) // FAQ集計
+        .mockResolvedValueOnce({ rows: [{ n: 3 }] }); // 承認待ちの指示ルール
 
       mockGetGaps.mockResolvedValueOnce({
         gaps: [
@@ -1409,8 +1484,187 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('+18%'); // (142-120)/120 = 18.3% → 丸めて18%
       expect(result).toContain('82/100');
       expect(result).toContain('8件・¥96,000');
+      expect(result).toContain('FAQ 45件（公開40件）');
+      expect(result).toContain('承認待ちの指示ルール 3件');
       expect(result).toContain('11件');
       expect(result).toContain('送料はいくらですか？');
+    });
+
+    it('FAQ・承認待ちルールのクエリが1本失敗しても、他の指標は表示される(部分失敗の許容)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-4',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 50 }] }) // 今週セッション数
+        .mockResolvedValueOnce({ rows: [{ n: 40 }] }) // 先週セッション数
+        .mockResolvedValueOnce({ rows: [{ avg: '70' }] }) // 平均スコア
+        .mockResolvedValueOnce({ rows: [{ n: 2, total: '5000' }] }) // 成約
+        .mockRejectedValueOnce(new Error('faq_docs connection lost')) // FAQ集計だけ失敗
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] }); // 承認待ちの指示ルール
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-043' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('50件');
+      expect(result).toContain('承認待ちの指示ルール 1件');
+      expect(result).not.toContain('FAQ');
+    });
+
+    it('FAQ最終更新日が無い(FAQ登録0件)場合は最終更新の表記を省く', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-5',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] })
+        .mockResolvedValueOnce({ rows: [{ avg: null }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0, total: '0' }] })
+        .mockResolvedValueOnce({ rows: [{ total: 0, published: 0, last_updated: null }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] });
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-044' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('会話数 0件');
+      expect(result).toContain('FAQ 0件（公開0件）');
+      expect(result).not.toContain('最終更新');
+      expect(result).toContain('承認待ちの指示ルール 0件');
+      expect(result).not.toContain('応答品質スコア'); // avg=null は行ごと省略
+    });
+
+    it('カードの数値はサーバ集計値そのままで、LLMの最終応答の文面をどう変えても変わらない', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-6',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        // LLMの文面は数値と無関係な誤った内容にする。card の数値がこれに引きずられないことを検証する。
+        .mockResolvedValueOnce(makeGroqResponse('残念ながら今週は会話がありませんでした。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 200 }] })
+        .mockResolvedValueOnce({ rows: [{ n: 100 }] })
+        .mockResolvedValueOnce({ rows: [{ avg: '91.7' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 5, total: '1234567' }] })
+        .mockResolvedValueOnce({ rows: [{ total: 60, published: 55, last_updated: '2026-08-03T10:00:00.000Z' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 4 }] });
+
+      mockGetGaps.mockResolvedValueOnce({
+        gaps: [
+          { id: 21, tenant_id: 'tenant-abc', user_question: '返品はできますか？', session_id: null, message_id: null, rag_hit_count: 0, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+        ],
+        total: 7,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-045' });
+
+      expect(res.status).toBe(200);
+      const card = res.body.actions[0].card;
+      expect(card.kind).toBe('weekly_summary');
+      expect(card.sessions).toEqual({ total: 200, changePct: 100, prevTotal: 100 });
+      expect(card.avgScore).toBe(92); // Math.round(91.7)
+      expect(card.conversions).toEqual({ count: 5, total: 1234567 });
+      expect(card.faq).toEqual({ total: 60, published: 55, lastUpdated: '2026-08-03T10:00:00.000Z' });
+      expect(card.pendingTuningRules).toBe(4);
+      expect(card.gaps).toEqual({ total: 7, top: [{ id: 21, question: '返品はできますか？' }] });
+      expect(typeof card.asOf).toBe('string');
+      expect(new Date(card.asOf).toString()).not.toBe('Invalid Date');
+    });
+
+    it('未回答質問・承認待ちルールが共に0件の場合、textにもcardにも書き込み系のチップを誘発する材料が無い', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-7',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('順調です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 30 }] })
+        .mockResolvedValueOnce({ rows: [{ n: 25 }] })
+        .mockResolvedValueOnce({ rows: [{ avg: '88' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 2, total: '10000' }] })
+        .mockResolvedValueOnce({ rows: [{ total: 10, published: 10, last_updated: '2026-07-28T00:00:00.000Z' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] });
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-046' });
+
+      expect(res.status).toBe(200);
+      const card = res.body.actions[0].card;
+      expect(card.gaps.total).toBe(0);
+      expect(card.pendingTuningRules).toBe(0);
     });
 
     it('super_admin がテナント未特定 → テナント特定を促すメッセージを返しDBクエリは発火しない', async () => {
@@ -1441,6 +1695,70 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).not.toHaveBeenCalled();
       expect(mockGetGaps).not.toHaveBeenCalled();
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+
+    it('暦週(月曜00:00 JST起点)のレンジでクエリが組まれる', async () => {
+      // 2026-08-05T03:00:00Z = 2026-08-05T12:00:00 JST(水)。
+      // 今週の開始(月曜00:00 JST) = 2026-08-02T15:00:00Z、
+      // 先週の同一経過時間の終端 = 2026-07-29T03:00:00Z になるはず。
+      //
+      // jest.useFakeTimers() は setTimeout 等も止めてしまい、supertest 経由の
+      // リクエストがハングする(実測)。Date だけを固定し、他のタイマー系は実物のままにする。
+      jest.useFakeTimers({
+        doNotFake: [
+          'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
+          'setImmediate', 'clearImmediate', 'queueMicrotask', 'nextTick',
+          'hrtime', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame',
+          'requestIdleCallback', 'cancelIdleCallback',
+        ],
+      }).setSystemTime(new Date('2026-08-05T03:00:00.000Z'));
+
+      try {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              choices: [{
+                message: {
+                  content: null,
+                  tool_calls: [{
+                    id: 'call-wb-3',
+                    type: 'function',
+                    function: { name: 'get_weekly_briefing', arguments: '{}' },
+                  }],
+                },
+              }],
+            }),
+            text: async () => '',
+          })
+          .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+        mockQuery
+          .mockResolvedValueOnce({ rows: [{ n: 10 }] })
+          .mockResolvedValueOnce({ rows: [{ n: 5 }] })
+          .mockResolvedValueOnce({ rows: [{ avg: '80' }] })
+          .mockResolvedValueOnce({ rows: [{ n: 1, total: '1000' }] });
+
+        mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '今週の状況を教えて', sessionId: 'sess-042' });
+
+        expect(res.status).toBe(200);
+
+        const [sessionsCall, prevSessionsCall, evalCall, cvCall] = mockQuery.mock.calls as Array<[string, unknown[]]>;
+        const weekStart = new Date('2026-08-02T15:00:00.000Z');
+        const prevWeekStart = new Date('2026-07-26T15:00:00.000Z');
+        const prevWeekEnd = new Date('2026-07-29T03:00:00.000Z');
+
+        expect(sessionsCall[1]).toEqual(['tenant-abc', weekStart]);
+        expect(prevSessionsCall[1]).toEqual(['tenant-abc', prevWeekStart, prevWeekEnd]);
+        expect(evalCall[1]).toEqual(['tenant-abc', weekStart]);
+        expect(cvCall[1]).toEqual(['tenant-abc', weekStart]);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 
@@ -1544,6 +1862,88 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_faq_list: 表示件数(上限20)と総数(COUNT)は別物
+  // -------------------------------------------------------------------------
+  describe('get_faq_list', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('総数が表示上限(20件)を超える場合、頭打ちにせず正しい総数を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-1', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('FAQは合計25件です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 25 }] }) // COUNT(*)
+        .mockResolvedValueOnce({
+          rows: Array.from({ length: 10 }, (_, i) => ({ id: i + 1, question: `q${i}`, answer: `a${i}` })),
+        }); // 表示用(デフォルトlimit=10)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQは何件ある?', sessionId: 'sess-fl-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('全25件中10件を表示');
+    });
+
+    it('総数が表示件数と同じ場合は「全N件中」を出さない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-2', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('FAQは3件です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 3 }] })
+        .mockResolvedValueOnce({
+          rows: [
+            { id: 1, question: 'q1', answer: 'a1' },
+            { id: 2, question: 'q2', answer: 'a2' },
+            { id: 3, question: 'q3', answer: 'a3' },
+          ],
+        });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('FAQ 一覧（3件）:');
+      expect(result).not.toContain('全');
+    });
+
+    it('FAQが0件のとき「登録されていません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-3', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('まだ登録がありません。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('FAQ が登録されていません');
     });
   });
 
@@ -3567,6 +3967,142 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_avatar_list / deactivate_avatar
+  // 一覧が無いと activate_avatar は ID を知っている人しか使えない = チャットから実行不能
+  // だったため追加した経路。既定アバターの扱いが最大の罠なのでそこを固定する。
+  // -------------------------------------------------------------------------
+  describe('get_avatar_list / deactivate_avatar', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('既定アバター(r2c_default)は is_active=true でも「稼働中」と表示しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-1', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+
+      // 既定アバターは部分unique制約から除外されており全行 is_active = true。
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 'av-own-1', name: '自社スタッフ', is_active: false, tenant_id: 'tenant-abc' },
+          { id: 'av-def-1', name: '見本アバターA', is_active: true, tenant_id: 'r2c_default' },
+          { id: 'av-def-2', name: '見本アバターB', is_active: true, tenant_id: 'r2c_default' },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('自社スタッフ');
+      expect(result).toContain('見本アバターA（既定の見本）');
+      expect(result).not.toContain('見本アバターA（稼働中）');
+    });
+
+    it('自テナントの稼働中の設定には稼働中の印が付く', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-2', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'av-own-1', name: '接客担当', is_active: true, tenant_id: 'tenant-abc' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('接客担当（稼働中）');
+    });
+
+    it('件数が多くても500字で黙って欠けず、残件数を明示する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-3', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+
+      const rows = Array.from({ length: 30 }, (_, i) => ({
+        id: `550e8400-e29b-41d4-a716-4466554400${String(i).padStart(2, '0')}`,
+        name: `アバター${i}`,
+        is_active: false,
+        tenant_id: 'tenant-abc',
+      }));
+      mockQuery.mockResolvedValueOnce({ rows });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-03' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('アバター設定は30件あります');
+      expect(result).toMatch(/ほか\d+件/);
+      expect(result.length).toBeLessThanOrEqual(500);
+    });
+
+    it('設定が1件も無い場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-4', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('まだありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('まだありません');
+    });
+
+    it('稼働中を停止でき、既定アバターは停止対象から除外される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-deact-1', 'deactivate_avatar', {}))
+        .mockResolvedValueOnce(makeGroqResponse('停止しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: '接客担当' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを止めて', sessionId: 'sess-deact-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('停止しました');
+      const sql = mockQuery.mock.calls[0]![0] as string;
+      expect(sql).toContain('is_default = false OR is_default IS NULL');
+      expect(mockQuery.mock.calls[0]![1]).toEqual(['tenant-abc']);
+    });
+
+    it('稼働中が無いときは停止せずその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-deact-2', 'deactivate_avatar', {}))
+        .mockResolvedValueOnce(makeGroqResponse('稼働中はありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを止めて', sessionId: 'sess-deact-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('稼働中のアバターはありません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // activate_avatar — プラン制限(Growth〜)がチャット経由でも素通りしないことの回帰テスト
   // -------------------------------------------------------------------------
   describe('activate_avatar: プラン制限', () => {
@@ -3638,6 +4174,51 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('Growthプラン以上');
       expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    it('IDがUUIDでない場合も500にならず、一覧で確認するよう案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-act-4', 'activate_avatar', { id: 'それっぽいID' }))
+        .mockResolvedValueOnce(makeGroqResponse('IDをご確認ください。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      // Postgres は uuid 列への不正値で 22P02 を投げる。executor が握って日本語で返すこと。
+      const invalidUuid = Object.assign(new Error('invalid input syntax for type uuid'), { code: '22P02' });
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockRejectedValueOnce(invalidUuid) // deactivate all(idを使う前段で落ちる場合もある)
+        .mockResolvedValue({ rows: [] }); // ROLLBACK
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-act-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('get_avatar_list');
+    });
+
+    it('他テナントのIDは有効化されず、一覧で確認するよう案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-act-5', 'activate_avatar', { id: 'av-other-tenant' }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // deactivate all
+        .mockResolvedValueOnce({ rows: [] }) // activate target → tenant_id 不一致で0件
+        .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-act-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('設定が見つかりません');
+      expect(result).toContain('get_avatar_list');
     });
   });
 

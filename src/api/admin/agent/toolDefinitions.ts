@@ -217,17 +217,48 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_avatar_list',
+      description:
+        'アバター設定の一覧（ID・名前・稼働中かどうか）を取得する読み取り専用ツール。' +
+        'activate_avatar に渡す ID はこのツールで確認したものだけを使うこと。' +
+        'テナント自身の設定に加えて、そのまま使える既定の見本も返す。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'activate_avatar',
-      description: '指定した ID のアバター設定を有効化する（他のアバターは自動的に無効化される）',
+      description:
+        '指定した ID のアバター設定を有効化する（他のアバターは自動的に無効化される）。' +
+        'ID を推測してはならない。必ず get_avatar_list で確認した ID を使うこと。',
       parameters: {
         type: 'object',
         properties: {
           id: {
             type: 'string',
-            description: '有効化するアバター設定の ID',
+            description: '有効化するアバター設定の ID（get_avatar_list が返したもの）',
           },
         },
         required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'deactivate_avatar',
+      description:
+        '稼働中のアバターを停止する（ウィジェットにアバターが表示されなくなる）。' +
+        '再開したい場合は activate_avatar で同じ設定を有効化すればよい。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
       },
     },
   },
@@ -412,7 +443,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_weekly_briefing',
       description:
-        '直近7日間のテナントの状況（会話数・前週比・応答品質スコア・成約・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
+        '今週（月曜00:00起点、暦週）のテナントの状況（会話数・先週同時点比・応答品質スコア・成約・FAQ総数と公開数と最終更新日・承認待ちの指示ルール件数・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
       parameters: {
         type: 'object',
         properties: {},

@@ -3,6 +3,7 @@
 
 import { Pool, PoolClient } from 'pg';
 import { logger } from '../../../lib/logger';
+import { getWeekRange } from '../../../lib/date/weekRange';
 import {
   insertEmbeddingAsync,
   upsertToEsAsync,
@@ -42,6 +43,11 @@ const MAX_IMPORT_FAQS = 20;
 // 有人返信1件の最大文字数。POST /v1/admin/chat-history/sessions/:id/reply の
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
+
+// suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
+// save_tuning_rule にそのまま渡ってきた場合、文字列としてtrigger_patternに
+// 保存させない(D4: 保存は成功するが質問文に一致せず永久に発火しない)。
+const ALWAYS_APPLY_PLACEHOLDER = new Set(['（常時適用）']);
 
 // ---------------------------------------------------------------------------
 // プラン制限の案内文
@@ -182,10 +188,27 @@ export type LegacyLinkCardPayload = {
   description: string;
 };
 
+// get_weekly_briefing 用。数値はLLMの生成文を経由せず、この構造化データを
+// そのままカードとして描画する(数値=サーバ、解釈=LLMの文、という権威分離の実体)。
+// 各グループは対応するクエリが失敗した場合に null になる(Promise.allSettledでの
+// 部分失敗時、text側で行ごと省略するのと同じ意味)。card はUIが「取得できなかった」を
+// 判別するための情報であり、0埋めしてはならない。
+export type WeeklySummaryCardPayload = {
+  kind: 'weekly_summary';
+  /** この応答を生成した瞬間(ISO)。会話復元時に古いまとめだと判別するために使う */
+  asOf: string;
+  sessions: { total: number; changePct: number | null; prevTotal: number } | null;
+  avgScore: number | null;
+  conversions: { count: number; total: number } | null;
+  faq: { total: number; published: number; lastUpdated: string | null } | null;
+  pendingTuningRules: number | null;
+  gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
+};
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
 // （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
-export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload };
+export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload | WeeklySummaryCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -272,28 +295,42 @@ export async function executeToolCall(
         const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
         const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
-        const params: unknown[] = [tenantId];
+        const whereParams: unknown[] = [tenantId];
         let whereClause = 'WHERE tenant_id = $1';
 
         if (search) {
-          params.push(`%${search}%`);
-          whereClause += ` AND (question ILIKE $${params.length} OR answer ILIKE $${params.length})`;
+          whereParams.push(`%${search}%`);
+          whereClause += ` AND (question ILIKE $${whereParams.length} OR answer ILIKE $${whereParams.length})`;
         }
 
-        params.push(limit);
-        const result = await db.query(
-          `SELECT id, question, answer FROM faq_docs ${whereClause} ORDER BY created_at DESC LIMIT $${params.length}`,
-          params
-        );
+        const listParams = [...whereParams, limit];
+        // 表示件数(上限20)と総数(COUNT)を分けて取得する。以前は result.rows.length を
+        // 「N件」として返しており、LIMIT 20 が総数の頭打ちに見えていた(#実測: 21件以上の
+        // テナントで常に「20件」と誤答していた)。
+        const [countRes, listRes] = await Promise.all([
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM faq_docs ${whereClause}`,
+            whereParams,
+          ),
+          db.query(
+            `SELECT id, question, answer FROM faq_docs ${whereClause} ORDER BY created_at DESC LIMIT $${listParams.length}`,
+            listParams,
+          ),
+        ]);
 
-        if (result.rows.length === 0) {
+        if (listRes.rows.length === 0) {
           return truncate('FAQ が登録されていません');
         }
 
+        const total = Number(countRes.rows[0]?.n ?? listRes.rows.length);
+
         // anti-slop: answer は .slice(0,200) 必須 / console.log で内容出力禁止
-        const lines = (result.rows as { id: number; question: string; answer: string }[])
+        const lines = (listRes.rows as { id: number; question: string; answer: string }[])
           .map((r) => `[${r.id}] ${r.question} — ${r.answer.slice(0, 200)}`);
-        return truncate(`FAQ 一覧（${result.rows.length}件）:\n` + lines.join('\n'));
+        const header = total > listRes.rows.length
+          ? `FAQ 一覧（全${total}件中${listRes.rows.length}件を表示）:`
+          : `FAQ 一覧（${total}件）:`;
+        return truncate(`${header}\n` + lines.join('\n'));
       } catch (err) {
         logger.warn('[actionExecutor] get_faq_list failed', err);
         return truncate('FAQ 一覧の取得に失敗しました');
@@ -516,6 +553,48 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // 一覧が無いと activate_avatar は「ID を知っている人しか使えない」ツールになるため、
+    // 切替の前段としてここで ID を提示する。
+    // 既定アバター(tenant_id='r2c_default')は avatar_configs の部分unique制約から
+    // 除外されており全行 is_active = true なので、is_active だけで稼働中を判定すると
+    // 見本18体がすべて「稼働中」に見える。稼働中の判定は自テナント行に限る。
+    case 'get_avatar_list': {
+      try {
+        const res = await db.query(
+          `SELECT id, name, is_active, tenant_id
+             FROM avatar_configs
+            WHERE tenant_id = $1 OR tenant_id = 'r2c_default'
+            ORDER BY (tenant_id = $1) DESC, is_default ASC, created_at DESC`,
+          [tenantId],
+        );
+        const rows = res.rows as { id: string; name: string; is_active: boolean; tenant_id: string }[];
+        if (rows.length === 0) {
+          return truncate('アバター設定はまだありません');
+        }
+
+        // 戻り値は500字で切られる。切られると一覧の末尾が黙って欠けるため、
+        // 収まる分だけ出して残件数を明示する（欠落を沈黙させない）。
+        const LIST_CHAR_BUDGET = 420;
+        const lines: string[] = [];
+        let used = 0;
+        for (const row of rows) {
+          const own = row.tenant_id === tenantId;
+          const mark = own ? (row.is_active ? '（稼働中）' : '') : '（既定の見本）';
+          const line = `- ${row.name}${mark} ID: ${row.id}`;
+          if (used + line.length > LIST_CHAR_BUDGET) break;
+          lines.push(line);
+          used += line.length + 1;
+        }
+        const remaining = rows.length - lines.length;
+        const footer = remaining > 0 ? `\nほか${remaining}件` : '';
+        return truncate(`アバター設定は${rows.length}件あります:\n${lines.join('\n')}${footer}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] get_avatar_list failed', err);
+        return truncate('アバター一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     case 'activate_avatar': {
       const id = String(args['id'] ?? '');
       if (!id) {
@@ -536,14 +615,44 @@ export async function executeToolCall(
       try {
         const res = await activateAvatarConfig(client, id, tenantId);
         if (!res.ok) {
-          return truncate(`アバターの有効化に失敗しました: ${res.error ?? '不明なエラー'}`);
+          // 見つからない原因の大半はIDの取り違え。次の一手（一覧で確認）を示す。
+          return truncate(
+            `アバターの有効化に失敗しました: ${res.error ?? '不明なエラー'}。get_avatar_list で ID を確認してください`,
+          );
         }
         return truncate(`アバター（ID: ${id}）を有効化しました`);
       } catch (err) {
+        // 不正な形式のID（UUIDでない文字列）もここに来る。500にはせず日本語で返す。
         logger.warn('[actionExecutor] activate_avatar failed', err);
-        return truncate('アバターの有効化に失敗しました');
+        return truncate('アバターの有効化に失敗しました。get_avatar_list で ID を確認してください');
       } finally {
         client.release();
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 既定アバター(is_default)は全テナント共通の見本で、常に is_active = true の
+    // 前提で運用されている（部分unique制約から除外されている）。停止対象から外す。
+    case 'deactivate_avatar': {
+      try {
+        const res = await db.query(
+          `UPDATE avatar_configs SET is_active = false
+            WHERE tenant_id = $1 AND is_active = true AND (is_default = false OR is_default IS NULL)
+            RETURNING name`,
+          [tenantId],
+        );
+        const stopped = res.rows as { name: string }[];
+        if (stopped.length === 0) {
+          return truncate('稼働中のアバターはありません');
+        }
+        const names = stopped.map((r) => `「${r.name}」`).join('');
+        return truncate(
+          `アバター${names}を停止しました。ウィジェットにアバターは表示されなくなります。` +
+          '再開したいときは activate_avatar で同じ設定を有効化できます',
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] deactivate_avatar failed', err);
+        return truncate('アバターの停止に失敗しました');
       }
     }
 
@@ -617,9 +726,22 @@ export async function executeToolCall(
           return truncate('提案の生成に失敗しました。もう少し具体的に教えてください');
         }
 
+        // トリガーが決められなかった場合、「（常時適用）」等のプレースホルダを
+        // 提案値として見せない。それをそのまま save_tuning_rule に渡すと、
+        // 文字列としてtrigger_patternに保存され永久に発火しないルールができる(D4)。
+        // どんな質問の時に使うかを店主に聞き返し、save_tuning_rule へは進めない。
+        if (!suggestion.trigger_pattern) {
+          return truncate(
+            `対応方針の候補: ${suggestion.instruction}\n` +
+            (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
+            `\nこの振る舞いは、お客様がどんな質問をした時に使いたいですか？キーワードを教えてください（例:「保証」「返品」など）。` +
+            `決まったら、もう一度 suggest_tuning_rule を呼び出してください。`
+          );
+        }
+
         return truncate(
           `提案:\n` +
-          `トリガー: ${suggestion.trigger_pattern || '（常時適用）'}\n` +
+          `トリガー: ${suggestion.trigger_pattern}\n` +
           `対応方針: ${suggestion.instruction}\n` +
           `優先度: ${suggestion.priority}\n` +
           (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
@@ -644,6 +766,14 @@ export async function executeToolCall(
       }
       if (!triggerPattern || !expectedBehavior) {
         return truncate('trigger_pattern と expected_behavior は必須です');
+      }
+      // suggest_tuning_rule がトリガー未決定時に案内していた文字列(「（常時適用）」)が
+      // そのままtrigger_patternとして渡ってきた場合の防御(D4)。これを通すと
+      // 保存は成功するが質問文に一致せず永久に発火しないルールができる。
+      if (ALWAYS_APPLY_PLACEHOLDER.has(triggerPattern)) {
+        return truncate(
+          'トリガーが決まっていないようです。お客様のどんな質問の時にこの振る舞いを使うか、キーワードを教えてください（例:「保証」「返品」など）。'
+        );
       }
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
@@ -863,66 +993,148 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
-    // Phase2 (P7 プロアクティブ・ブリーフィング): 直近7日間の状況を1回で要約取得する
-    // 読み取り専用ツール。ログイン直後など能動的な状況説明に使う。
+    // Phase2 (P7 プロアクティブ・ブリーフィング): 今週(暦週・月曜00:00 JST起点)の状況を
+    // 1回で要約取得する読み取り専用ツール。ログイン直後など能動的な状況説明に使う。
+    // 期間の計算は weekRange.ts に集約する(SQLへ AT TIME ZONE を直書きしない)。
     case 'get_weekly_briefing': {
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
       try {
-        const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes] = await Promise.all([
+        const { weekStart, prevWeekStart, prevWeekEnd } = getWeekRange(new Date());
+        // 指標ごとに Promise.allSettled で独立させる。以前は1本の失敗で全指標が
+        // 「取得に失敗しました」に落ちていたが、指標が増えるほど1本の不調が全体を
+        // 巻き込む確率が上がるため、取れた指標だけを出す方式に変更する。
+        const [sessionsRes, prevSessionsRes, evalRes, cvRes, faqRes, tuningRes, gapsRes] = await Promise.allSettled([
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
-             WHERE tenant_id = $1 AND started_at >= NOW() - INTERVAL '7 days'`,
-            [tenantId],
+             WHERE tenant_id = $1 AND started_at >= $2`,
+            [tenantId, weekStart],
           ),
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
              WHERE tenant_id = $1
-               AND started_at >= NOW() - INTERVAL '14 days'
-               AND started_at < NOW() - INTERVAL '7 days'`,
-            [tenantId],
+               AND started_at >= $2
+               AND started_at < $3`,
+            [tenantId, prevWeekStart, prevWeekEnd],
           ),
           db.query(
             `SELECT AVG(score) AS avg FROM conversation_evaluations
-             WHERE tenant_id = $1 AND evaluated_at >= NOW() - INTERVAL '7 days' AND score > 0`,
-            [tenantId],
+             WHERE tenant_id = $1 AND evaluated_at >= $2 AND score > 0`,
+            [tenantId, weekStart],
           ),
           db.query(
             `SELECT COUNT(*)::int AS n, COALESCE(SUM(conversion_value), 0)::numeric AS total
              FROM conversion_attributions
-             WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`,
+             WHERE tenant_id = $1 AND created_at >= $2`,
+            [tenantId, weekStart],
+          ),
+          // 旧ダッシュボードStatCard代替: FAQ総数・公開数・最終更新日(週に限定しないテナント全体の値)
+          db.query(
+            `SELECT COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE is_published)::int AS published,
+                    MAX(updated_at) AS last_updated
+             FROM faq_docs WHERE tenant_id = $1`,
+            [tenantId],
+          ),
+          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM tuning_rules
+             WHERE tenant_id = $1 AND approved_at IS NULL AND rejected_at IS NULL`,
             [tenantId],
           ),
           getGaps({ tenantId, status: 'open', limit: 3 }),
         ]);
 
-        const totalSessions = Number(sessionsRes.rows[0]?.n ?? 0);
-        const prevSessions = Number(prevSessionsRes.rows[0]?.n ?? 0);
-        const changePct = prevSessions > 0 ? Math.round(((totalSessions - prevSessions) / prevSessions) * 100) : null;
-        const avgScoreRaw = evalRes.rows[0]?.avg;
-        const avgScore = avgScoreRaw != null ? Math.round(Number(avgScoreRaw)) : null;
-        const cvCount = Number(cvRes.rows[0]?.n ?? 0);
-        const cvTotal = Math.round(Number(cvRes.rows[0]?.total ?? 0));
-        const { gaps, total: gapsTotal } = gapsRes;
+        const lines: string[] = ['今週(月曜起点)の状況:'];
+        // 数値の権威はこのcard(サーバ集計値)。text はLLMに渡す自然文とフォールバック
+        // 表示用で、card と同じ値から組み立てる(2箇所に別の計算を書かない)。
+        const card: WeeklySummaryCardPayload = {
+          kind: 'weekly_summary',
+          asOf: new Date().toISOString(),
+          sessions: null,
+          avgScore: null,
+          conversions: null,
+          faq: null,
+          pendingTuningRules: null,
+          gaps: null,
+        };
 
-        const lines: string[] = ['直近7日間の状況:'];
-        lines.push(
-          `会話数 ${totalSessions}件` +
-          (changePct !== null ? `（前週比 ${changePct >= 0 ? '+' : ''}${changePct}%）` : ''),
-        );
-        if (avgScore !== null) lines.push(`応答品質スコア ${avgScore}/100`);
-        lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
-        lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
-        if (gaps.length > 0) {
-          lines.push('うち上位:');
-          gaps.forEach((g, i) => {
-            lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
-          });
+        if (sessionsRes.status === 'fulfilled') {
+          const totalSessions = Number(sessionsRes.value?.rows?.[0]?.n ?? 0);
+          // 先週の同一経過時間との比較値。先週は既に終わっているため確定値として併記する
+          // （週初の部分週をまる1週間の前週と比べると常に大幅マイナスになり指標として使えない）。
+          let changePct: number | null = null;
+          let prevSessions = 0;
+          if (prevSessionsRes.status === 'fulfilled') {
+            prevSessions = Number(prevSessionsRes.value?.rows?.[0]?.n ?? 0);
+            if (prevSessions > 0) {
+              changePct = Math.round(((totalSessions - prevSessions) / prevSessions) * 100);
+            }
+          }
+          card.sessions = { total: totalSessions, changePct, prevTotal: prevSessions };
+          const changeSuffix = changePct !== null
+            ? `（先週同時点比 ${changePct >= 0 ? '+' : ''}${changePct}%、先週同時点は${prevSessions}件）`
+            : '';
+          lines.push(`会話数 ${totalSessions}件${changeSuffix}`);
         }
 
-        return truncate(lines.join('\n'));
+        if (evalRes.status === 'fulfilled') {
+          const avgScoreRaw = evalRes.value?.rows?.[0]?.avg;
+          if (avgScoreRaw != null) {
+            card.avgScore = Math.round(Number(avgScoreRaw));
+            lines.push(`応答品質スコア ${card.avgScore}/100`);
+          }
+        }
+
+        if (cvRes.status === 'fulfilled') {
+          const cvCount = Number(cvRes.value?.rows?.[0]?.n ?? 0);
+          const cvTotal = Math.round(Number(cvRes.value?.rows?.[0]?.total ?? 0));
+          card.conversions = { count: cvCount, total: cvTotal };
+          lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
+        }
+
+        if (faqRes.status === 'fulfilled') {
+          const row = faqRes.value?.rows?.[0];
+          const faqTotal = Number(row?.total ?? 0);
+          const faqPublished = Number(row?.published ?? 0);
+          const lastUpdatedIso: string | null = row?.last_updated
+            ? new Date(row.last_updated).toISOString()
+            : null;
+          card.faq = { total: faqTotal, published: faqPublished, lastUpdated: lastUpdatedIso };
+          const lastUpdatedDisplay = lastUpdatedIso
+            ? new Date(lastUpdatedIso).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
+            : null;
+          lines.push(
+            `FAQ ${faqTotal}件（公開${faqPublished}件）` + (lastUpdatedDisplay ? `・最終更新 ${lastUpdatedDisplay}` : ''),
+          );
+        }
+
+        if (tuningRes.status === 'fulfilled') {
+          const pending = Number(tuningRes.value?.rows?.[0]?.n ?? 0);
+          card.pendingTuningRules = pending;
+          lines.push(`承認待ちの指示ルール ${pending}件`);
+        }
+
+        if (gapsRes.status === 'fulfilled') {
+          const { gaps, total: gapsTotal } = gapsRes.value;
+          card.gaps = { total: gapsTotal, top: gaps.map((g) => ({ id: g.id, question: g.user_question.slice(0, 60) })) };
+          lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
+          if (gaps.length > 0) {
+            lines.push('うち上位:');
+            gaps.forEach((g, i) => {
+              lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
+            });
+          }
+        }
+
+        if (lines.length === 1) {
+          // 全指標が取得失敗
+          return truncate('週次サマリーの取得に失敗しました');
+        }
+
+        return { text: truncate(lines.join('\n')), card };
       } catch (err) {
         logger.warn('[actionExecutor] get_weekly_briefing failed', err);
         return truncate('週次サマリーの取得に失敗しました');

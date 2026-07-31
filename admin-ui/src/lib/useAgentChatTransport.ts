@@ -23,15 +23,29 @@ export type AgentChatSurface = "panel" | "fullscreen";
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
-// バックエンド(actionExecutor.ts の LegacyLinkCardPayload)が自然文に添えて返す
-// 構造化カード。現時点で card を返すのは get_legacy_ui_link だけで、他のツールは
-// 従来どおり result の自然文のみ。
-export type AgentActionCard = {
+// バックエンド(actionExecutor.ts の LegacyLinkCardPayload / WeeklySummaryCardPayload)が
+// 自然文に添えて返す構造化カード。card を返すのは get_legacy_ui_link と get_weekly_briefing
+// のみで、他のツールは従来どおり result の自然文のみ。
+export type LegacyLinkAgentActionCard = {
   kind: "legacy_link";
   label: string;
   url: string;
   description: string;
 };
+
+// フィールド形状は actionExecutor.ts の WeeklySummaryCardPayload と1対1に保つ。
+export type WeeklySummaryAgentActionCard = {
+  kind: "weekly_summary";
+  asOf: string;
+  sessions: { total: number; changePct: number | null; prevTotal: number } | null;
+  avgScore: number | null;
+  conversions: { count: number; total: number } | null;
+  faq: { total: number; published: number; lastUpdated: string | null } | null;
+  pendingTuningRules: number | null;
+  gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
+};
+
+export type AgentActionCard = LegacyLinkAgentActionCard | WeeklySummaryAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 
