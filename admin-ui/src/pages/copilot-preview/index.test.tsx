@@ -471,6 +471,24 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText(description)).toBeTruthy();
   });
 
+  it("アバター見本の提案(suggest_avatar_preset)はcardの構造化データがそのまま描画される", async () => {
+    mockAgent({
+      reply: "見本をご提案しました。",
+      actions: [
+        {
+          tool: "suggest_avatar_preset",
+          result: "「Haruka」というアバターの見本があります。\nとても丁寧な性格です。\nプリセットID: preset-1\nこのまま採用しますか？",
+          card: { kind: "avatar_preset", presetId: "preset-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+        },
+      ],
+    });
+
+    await send("アバターを作りたい");
+
+    expect(await screen.findByText("Haruka")).toBeTruthy();
+    expect(screen.getByText("とても丁寧な性格です。")).toBeTruthy();
+  });
+
   it("card が無い既存ツールは、従来どおり自然文の正規表現パースでリンクカードになる", async () => {
     const description = "会話内容の確認とその会話セッションの削除はこちらの画面で行えます";
     mockAgent({
@@ -508,6 +526,55 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText("アバターの停止")).toBeTruthy();
     expect(screen.queryByText("get_avatar_list")).toBeNull();
     expect(screen.queryByText("deactivate_avatar")).toBeNull();
+  });
+
+  // mockAgent は2回目以降すべて同じ応答を返す(単発の描画確認向け)ため、
+  // クリック後の3ターン目に別の応答を返す必要があるこのテストだけは自前でモックする。
+  it("見本提案が出たら「採用して」チップが出て、押すと自然文で採用を伝える", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "見本をご提案しました。",
+          actions: [
+            {
+              tool: "suggest_avatar_preset",
+              result: "「Haruka」というアバターの見本があります。\nプリセットID: preset-1\nこのまま採用しますか？",
+              card: { kind: "avatar_preset", presetId: "preset-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({
+        reply: "採用しました。",
+        actions: [{ tool: "adopt_avatar_preset", result: "アバター「Haruka」を採用しました。まだ公開はされていません。" }],
+      });
+    });
+
+    await send("アバターを作りたい");
+
+    const adoptButton = await screen.findByRole("button", { name: "採用して" });
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+
+    fireEvent.click(adoptButton);
+
+    await waitFor(() => expect(screen.getByText("採用してください")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("採用してください");
+    // 二度押し防止: 前のターンのチップは使用済みになり消える
+    expect(screen.queryByRole("button", { name: "採用して" })).toBeNull();
   });
 });
 

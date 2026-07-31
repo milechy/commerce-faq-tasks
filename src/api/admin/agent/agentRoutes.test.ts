@@ -3703,6 +3703,171 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // suggest_avatar_preset / adopt_avatar_preset
+  // avatar_configs には業種を示す列が無いため、業種を尋ねず未採用の見本を1件そのまま
+  // 提示する経路（docs/AVATAR_CHAT_MIGRATION.md からの意図的なスコープ調整）。
+  // -------------------------------------------------------------------------
+  describe('suggest_avatar_preset / adopt_avatar_preset', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('未採用の見本を1件、IDつきで提案する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sp-1', 'suggest_avatar_preset', {}))
+        .mockResolvedValueOnce(makeGroqResponse('見本をご提案しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [
+            { id: 'preset-1', name: 'Haruka', image_url: 'https://img/haruka.png', personality_prompt: 'とても丁寧な性格です。', default_template_id: 'default_01' },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }); // 自テナントはまだ何も持っていない
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを作りたい', sessionId: 'sess-sp-01' });
+
+      expect(res.status).toBe(200);
+      const action = res.body.actions[0];
+      expect(action.result).toContain('Haruka');
+      expect(action.result).toContain('プリセットID: preset-1');
+      expect(action.card).toEqual({
+        kind: 'avatar_preset',
+        presetId: 'preset-1',
+        name: 'Haruka',
+        imageUrl: 'https://img/haruka.png',
+        description: 'とても丁寧な性格です。',
+      });
+    });
+
+    it('既に自テナントが同名で持っている見本は避け、次の未採用の見本を選ぶ', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sp-2', 'suggest_avatar_preset', {}))
+        .mockResolvedValueOnce(makeGroqResponse('見本をご提案しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [
+            { id: 'preset-1', name: 'Haruka', image_url: null, personality_prompt: '丁寧な性格です。', default_template_id: 'default_01' },
+            { id: 'preset-2', name: 'Rei', image_url: null, personality_prompt: '軽快な性格です。', default_template_id: 'default_02' },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] }); // Haruka は採用済み
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを作りたい', sessionId: 'sess-sp-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].card.presetId).toBe('preset-2');
+      expect(res.body.actions[0].card.name).toBe('Rei');
+    });
+
+    it('見本を全て採用済みでも、最初の1件にフォールバックして提案し続ける', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sp-3', 'suggest_avatar_preset', {}))
+        .mockResolvedValueOnce(makeGroqResponse('見本をご提案しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [
+            { id: 'preset-1', name: 'Haruka', image_url: null, personality_prompt: '丁寧な性格です。', default_template_id: 'default_01' },
+            { id: 'preset-2', name: 'Rei', image_url: null, personality_prompt: '軽快な性格です。', default_template_id: 'default_02' },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [{ name: 'Haruka' }, { name: 'Rei' }] }); // 両方採用済み
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを作りたい', sessionId: 'sess-sp-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].card.presetId).toBe('preset-1');
+    });
+
+    it('見本が1件も無い場合はカード無しでその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sp-4', 'suggest_avatar_preset', {}))
+        .mockResolvedValueOnce(makeGroqResponse('見本が見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを作りたい', sessionId: 'sess-sp-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりませんでした');
+      expect(res.body.actions[0].card).toBeUndefined();
+    });
+
+    it('confirmed無しでは採用されず、DBに触れずに確認を促す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ap-1', 'adopt_avatar_preset', { preset_id: 'preset-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '採用してください', sessionId: 'sess-ap-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要です');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('confirmed=trueで自テナントへ複製され、is_default/is_activeともにfalseで作られる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ap-2', 'adopt_avatar_preset', { preset_id: 'preset-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('採用しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '採用してください', sessionId: 'sess-ap-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Haruka」を採用しました');
+      expect(res.body.actions[0].result).toContain('まだ公開はされていません');
+      const [sql, params] = mockQuery.mock.calls[0]!;
+      expect(sql as string).toContain("tenant_id = 'r2c_default'");
+      expect(sql as string).toContain('is_default = true');
+      expect(sql as string).toContain('false, false');
+      expect(params).toEqual(['tenant-abc', 'preset-1']);
+    });
+
+    it('存在しない/他テナントの preset_id では複製されず、次の一手を案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ap-3', 'adopt_avatar_preset', { preset_id: 'no-such-preset', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '採用してください', sessionId: 'sess-ap-03' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('見つかりませんでした');
+      expect(result).toContain('suggest_avatar_preset');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // activate_avatar — プラン制限(Growth〜)がチャット経由でも素通りしないことの回帰テスト
   // -------------------------------------------------------------------------
   describe('activate_avatar: プラン制限', () => {

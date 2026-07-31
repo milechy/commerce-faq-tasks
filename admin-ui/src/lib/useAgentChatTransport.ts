@@ -26,12 +26,20 @@ export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 // バックエンド(actionExecutor.ts の LegacyLinkCardPayload)が自然文に添えて返す
 // 構造化カード。現時点で card を返すのは get_legacy_ui_link だけで、他のツールは
 // 従来どおり result の自然文のみ。
-export type AgentActionCard = {
-  kind: "legacy_link";
-  label: string;
-  url: string;
-  description: string;
-};
+export type AgentActionCard =
+  | {
+      kind: "legacy_link";
+      label: string;
+      url: string;
+      description: string;
+    }
+  | {
+      kind: "avatar_preset";
+      presetId: string;
+      name: string;
+      imageUrl: string | null;
+      description: string;
+    };
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

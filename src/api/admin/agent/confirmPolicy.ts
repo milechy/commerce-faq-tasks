@@ -38,6 +38,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // --- medium: 永続コンテンツの作成・変更 ---
   add_faq: 'medium',
   update_faq: 'medium',
+  // 既定見本の自テナントへの複製。is_active=false で作るため公開はされないが、
+  // 永続レコードを作成する点は add_faq と同じ階層。
+  adopt_avatar_preset: 'medium',
   save_faq: 'medium',
   commit_faq_import: 'medium',
   import_industry_faq_templates: 'medium',
@@ -72,6 +75,7 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_faq_list',
   'get_avatar_status',
   'get_avatar_list',
+  'suggest_avatar_preset',
   'get_embed_code',
   'get_tuning_rules',
   'get_weekly_briefing',

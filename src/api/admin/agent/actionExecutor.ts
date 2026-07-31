@@ -182,10 +182,22 @@ export type LegacyLinkCardPayload = {
   description: string;
 };
 
+// suggest_avatar_preset が返す、既定アバター見本1件の提示カード。
+// presetId は adopt_avatar_preset にそのまま渡す r2c_default 側の avatar_configs.id。
+export type AvatarPresetCardPayload = {
+  kind: 'avatar_preset';
+  presetId: string;
+  name: string;
+  imageUrl: string | null;
+  description: string;
+};
+
+export type ActionCardPayload = LegacyLinkCardPayload | AvatarPresetCardPayload;
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
 // （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
-export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload };
+export type ActionResult = string | { text: string; card?: ActionCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -616,6 +628,99 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] deactivate_avatar failed', err);
         return truncate('アバターの停止に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // avatar_configs には業種を示す列が無く、既定の18体（見た目・性格の作り込まれた
+    // 見本）は業種ごとに分類されていない。したがって「業種に合わせて選ぶ」ことはできず、
+    // 業種を尋ねずに未採用の見本を1件そのまま提示する（質問0件は「選ばせない」方針にも
+    // 沿う）。採用済みかどうかは avatar_configs.name の一致で判定する
+    // （adopt側でdefault_template_idを引き継がないため、他に手掛かりが無い）。
+    case 'suggest_avatar_preset': {
+      try {
+        const res = await db.query(
+          `SELECT id, name, image_url, personality_prompt, default_template_id
+             FROM avatar_configs
+            WHERE tenant_id = 'r2c_default' AND is_default = true
+            ORDER BY default_template_id ASC NULLS LAST`,
+        );
+        const presets = res.rows as {
+          id: string; name: string; image_url: string | null;
+          personality_prompt: string | null; default_template_id: string | null;
+        }[];
+        if (presets.length === 0) {
+          return truncate('アバターの見本が見つかりませんでした');
+        }
+
+        const ownedRes = await db.query(`SELECT name FROM avatar_configs WHERE tenant_id = $1`, [tenantId]);
+        const ownedNames = new Set((ownedRes.rows as { name: string }[]).map((r) => r.name));
+        const preset = presets.find((p) => !ownedNames.has(p.name)) ?? presets[0]!;
+
+        const description = (preset.personality_prompt ?? '').slice(0, 120);
+        return {
+          text: truncate(
+            `「${preset.name}」というアバターの見本があります。\n${description}\n` +
+            `プリセットID: ${preset.id}\n` +
+            'このまま採用しますか？（採用後も名前・話し方はいつでも変更できます）',
+          ),
+          card: {
+            kind: 'avatar_preset',
+            presetId: preset.id,
+            name: preset.name,
+            imageUrl: preset.image_url,
+            description,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_avatar_preset failed', err);
+        return truncate('アバター見本の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 採用は自テナントへの複製のみで、is_active はここでは変えない（公開はしない）。
+    // 新規のアバターを作る/直す/出す/止めるまでの一連の流れの中で、公開は
+    // activate_avatar の役割として分離する（docs/AVATAR_CHAT_MIGRATION.md §4.4）。
+    case 'adopt_avatar_preset': {
+      const presetId = String(args['preset_id'] ?? '');
+      if (!presetId) {
+        return truncate('preset_id は必須です');
+      }
+      const confirmed = Boolean(args['confirmed']);
+      if (!confirmed) {
+        return truncate(
+          '採用には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください',
+        );
+      }
+
+      try {
+        const result = await db.query(
+          `INSERT INTO avatar_configs
+             (tenant_id, name, image_url, image_prompt, voice_id, voice_description,
+              personality_prompt, behavior_description, emotion_tags, lemonslice_agent_id,
+              anam_avatar_id, anam_voice_id, anam_persona_id, anam_llm_id, avatar_provider,
+              is_default, is_active)
+           SELECT $1, name, image_url, image_prompt, voice_id, voice_description,
+                  personality_prompt, behavior_description, emotion_tags, lemonslice_agent_id,
+                  anam_avatar_id, anam_voice_id, anam_persona_id, anam_llm_id, avatar_provider,
+                  false, false
+             FROM avatar_configs
+            WHERE id = $2 AND tenant_id = 'r2c_default' AND is_default = true
+           RETURNING name`,
+          [tenantId, presetId],
+        );
+        const created = result.rows[0] as { name: string } | undefined;
+        if (!created) {
+          return truncate('指定のアバター見本が見つかりませんでした。suggest_avatar_preset で提案をやり直してください');
+        }
+        return truncate(
+          `アバター「${created.name}」を採用しました。まだ公開はされていません。` +
+          '声・名前・話し方を調整してから activate_avatar で公開できます',
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] adopt_avatar_preset failed', err);
+        return truncate('アバターの採用に失敗しました');
       }
     }
 

@@ -80,6 +80,7 @@ type Card =
   | { kind: "success"; text: string }
   | { kind: "link"; label: string; url: string; description: string }
   | { kind: "agentAction"; tool: string; result: string }
+  | { kind: "avatarPreset"; presetId: string; name: string; imageUrl: string | null; description: string }
   // GUI固有だった操作(PDF取り込み)を旧UIへ渡さず会話の中で完結させる最初の1件。
   // 送信の進捗までしか追わない(取り込み完了までの追跡は旧UIのPDFタブが担当)ため、
   // 状態は「送っている / 受け取った / 受け取れなかった」の3つで足りる。
@@ -110,6 +111,8 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_avatar_list: "アバター一覧の取得",
   activate_avatar: "アバターの有効化",
   deactivate_avatar: "アバターの停止",
+  suggest_avatar_preset: "アバター見本の提案",
+  adopt_avatar_preset: "アバター見本の採用",
   get_embed_code: "埋め込みコードの取得",
   set_widget_theme: "ウィジェットテーマの変更",
   get_tuning_rules: "指示ルール一覧の取得",
@@ -155,6 +158,7 @@ const REAL_WRITE_TOOLS = new Set([
   "set_widget_theme",
   "activate_avatar",
   "deactivate_avatar",
+  "adopt_avatar_preset",
   "import_industry_faq_templates",
   "commit_faq_import",
   "reply_to_escalation",
@@ -231,7 +235,7 @@ function parseLegacyUiLink(result: string): { label: string; url: string; descri
   return { label, url, description };
 }
 
-const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定)しました/;
+const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定|採用)しました/;
 
 // ─── PDF取り込みの案内文 ─────────────────────────────────────────────────────
 // 判定条件は lib/bookPdfUpload.ts で旧UIと共有し、文言だけをこの面の話し言葉に合わせる。
@@ -479,6 +483,10 @@ export default function CopilotPreviewPage() {
         const { label, url, description } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
       }
+      if (a.card?.kind === "avatar_preset") {
+        const { presetId, name, imageUrl, description } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "avatarPreset", presetId, name, imageUrl, description } };
+      }
       if (a.tool === "suggest_faq") {
         const parsed = parseSuggestFaq(a.result);
         if (parsed) return { id: nextId(), role: "ai", card: { kind: "faq", ...parsed } };
@@ -529,9 +537,16 @@ export default function CopilotPreviewPage() {
     const industryTemplatePendingConfirm = data.actions?.some(
       (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
     );
+    // アバター見本の提案(suggest_avatar_preset)が出たら、そのまま採用できるチップを添える
+    const avatarPresetSuggested = data.actions?.some((a) => a.tool === "suggest_avatar_preset");
     const chips: Chip[] | undefined = suggested
       ? [
           { label: "保存して", action: "__real:保存してください", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : avatarPresetSuggested
+      ? [
+          { label: "採用して", action: "__real:採用してください", tone: "primary" },
           { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
         ]
       : saiPendingConfirm
@@ -1494,6 +1509,21 @@ function CardView({ card }: { card: Card }) {
       );
     case "pdfUpload":
       return <PdfUploadCard card={card} />;
+    case "avatarPreset":
+      return (
+        <CardShell hd={<><span>🎭</span>アバターの見本を提案します</>}
+          foot={<CardActionsNote note="採用しても公開はされません。声や話し方はあとから自由に変更できます。" />}>
+          {card.imageUrl && (
+            <img
+              src={card.imageUrl}
+              alt={card.name}
+              style={{ width: 96, height: 96, borderRadius: 12, objectFit: "cover", alignSelf: "flex-start" }}
+            />
+          )}
+          <Field k="名前" v={card.name} />
+          <Field k="性格・話し方" v={card.description} quote />
+        </CardShell>
+      );
     case "link":
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>

@@ -265,6 +265,45 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'suggest_avatar_preset',
+      description:
+        'アバターをまだ持っていないユーザーに、既定の見本（見た目・性格が作り込まれた雛形）から' +
+        '1件を提案する読み取り専用ツール。この時点では何も作成しない。ユーザーが' +
+        '「アバターを作りたい」「初めて設定したい」等と言ったときに使う。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'adopt_avatar_preset',
+      description:
+        'suggest_avatar_preset が提案した見本を、自テナントのアバター設定として採用する。' +
+        '採用してもまだ公開されない（別途 activate_avatar が必要）。' +
+        'ユーザーの明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          preset_id: {
+            type: 'string',
+            description: 'suggest_avatar_preset が返した見本の ID（プリセットID）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['preset_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_embed_code',
       description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示）',
       parameters: {
