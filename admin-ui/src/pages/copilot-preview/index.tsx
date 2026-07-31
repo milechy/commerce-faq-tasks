@@ -154,7 +154,13 @@ type Card =
   | {
       kind: "chatSessionList";
       total: number;
-      sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+      sessions: Array<{
+        shortId: string;
+        startedAt: string;
+        messageCount: number;
+        preview: string;
+        outcome: string | null;
+      }>;
     }
   // 会話本文(get_chat_session_messages)。role のラベルはサーバ側(CHAT_ROLE_LABELS)を
   // 単一の情報源とし、ここでは辞書を持たずそのまま描画する。
@@ -276,6 +282,15 @@ const REAL_WRITE_TOOLS = new Set([
   "record_session_outcome",
   "delete_chat_session",
 ]);
+
+// 確認待ち/連鎖ブロックの判定に使う部分一致マーカー。サーバ側の実体は
+// src/api/admin/agent/agentRoutes.ts の BLOCKED_UNCONFIRMED_MARKER('確認が必要です')・
+// BLOCKED_CHAIN_MARKER('確認をスキップできません')。この2ファイルは別プロジェクト
+// (Node/Vite)のため定数を直接共有できず、文言はここに複製している。サーバ側の文言を
+// 変える場合はここも同時に更新すること(ここでは完全一致ではなく includes による
+// 部分一致にしてあるため、サーバ側の文言が「〜まで」を含む限り前方一致で検出できる)。
+const CONFIRM_REQUIRED_MARKER = "確認が必要";
+const CHAIN_BLOCKED_MARKER = "確認をスキップできません";
 
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ。
 // 左レール「今週のまとめ」(handleCategory の "weekly" 分岐)と実質同じ依頼文で
@@ -738,8 +753,8 @@ export default function CopilotPreviewPage() {
     const writesThisTurn = (data.actions ?? []).filter(
       (a) =>
         REAL_WRITE_TOOLS.has(a.tool) &&
-        !a.result.includes("確認が必要") &&
-        !a.result.includes("確認をスキップできません"),
+        !a.result.includes(CONFIRM_REQUIRED_MARKER) &&
+        !a.result.includes(CHAIN_BLOCKED_MARKER),
     ).length;
     if (writesThisTurn > 0) setRealActionCount((n) => n + writesThisTurn);
 
@@ -748,13 +763,13 @@ export default function CopilotPreviewPage() {
     const suggested = data.actions?.some((a) => SUGGEST_TOOLS.has(a.tool));
     // Saiへの依頼がconfirmed待ちでブロックされた場合も、そのまま同意できるチップを添える
     const saiPendingConfirm = data.actions?.some(
-      (a) => a.tool === "request_sai_task" && a.result.includes("確認が必要"),
+      (a) => a.tool === "request_sai_task" && a.result.includes(CONFIRM_REQUIRED_MARKER),
     );
     // エスカレーションへの返信/対応完了がconfirmed待ちでブロックされた場合も同様
     const escalationPendingConfirm = data.actions?.some(
       (a) =>
         (a.tool === "reply_to_escalation" || a.tool === "resolve_escalation") &&
-        a.result.includes("確認が必要"),
+        a.result.includes(CONFIRM_REQUIRED_MARKER),
     );
     // オンボーディングのFAQテンプレート提案がconfirmed待ちでブロックされた場合も同様
     const industryTemplatePendingConfirm = data.actions?.some(
@@ -762,11 +777,11 @@ export default function CopilotPreviewPage() {
     );
     // 成果(コンバージョン)記録がconfirmed待ちでブロックされた場合も同様
     const outcomePendingConfirm = data.actions?.some(
-      (a) => a.tool === "record_session_outcome" && a.result.includes("確認が必要"),
+      (a) => a.tool === "record_session_outcome" && a.result.includes(CONFIRM_REQUIRED_MARKER),
     );
     // 会話セッション削除(不可逆)がconfirmed待ちでブロックされた場合も同様
     const deletePendingConfirm = data.actions?.some(
-      (a) => a.tool === "delete_chat_session" && a.result.includes("確認が必要"),
+      (a) => a.tool === "delete_chat_session" && a.result.includes(CONFIRM_REQUIRED_MARKER),
     );
     // 会話一覧(get_chat_sessions)が返ってきたら、短縮IDを手打ちさせず次の1件を
     // 選べるチップを添える。同じターンに複数の会話一覧が返ることは無い前提(最初の1件)。
@@ -2184,6 +2199,11 @@ function CardView({
             <div key={s.shortId} style={{ display: "flex", flexDirection: "column", gap: 3, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
               <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
                 {s.startedAt.slice(0, 10)} ・ {s.messageCount}件
+                {s.outcome && (
+                  <span style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 600, background: "rgba(34,197,94,0.15)", color: "#16a34a" }}>
+                    {s.outcome}
+                  </span>
+                )}
               </div>
               <div style={{ fontSize: 15, color: "var(--foreground)" }}>{s.preview}</div>
             </div>

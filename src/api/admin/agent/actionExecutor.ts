@@ -279,10 +279,19 @@ export type WeeklySummaryCardPayload = {
 
 // 会話一覧カード。短縮ID(shortId)をそのまま次のツール呼び出しに使える形で持たせ、
 // フロント側が短縮IDの手打ちなしで次の1件を選べるようにする(チップの action に使う)。
+// outcome は getSessions() が既にSELECTしているため、ここで持たせることで
+// 「どの会話が成約したか」を知るために get_session_outcome をセッション数だけ
+// 往復する必要が無くなる。
 export type ChatSessionListCardPayload = {
   kind: 'chat_session_list';
   total: number;
-  sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+  sessions: Array<{
+    shortId: string;
+    startedAt: string;
+    messageCount: number;
+    preview: string;
+    outcome: string | null;
+  }>;
 };
 
 // 会話本文カード。role のラベル化はサーバ側の CHAT_ROLE_LABELS を単一の情報源とし、
@@ -2066,6 +2075,7 @@ export async function executeToolCall(
               startedAt: s.started_at,
               messageCount: s.message_count,
               preview: s.first_message_preview,
+              outcome: s.outcome,
             })),
           },
         };
@@ -2209,7 +2219,10 @@ export async function executeToolCall(
         const axesText = axes.map((a) => `${a.label}: ${a.score ?? '未測定'}`).join(' / ');
         const shortId8 = resolved.session.session_id.slice(0, 8);
         return {
-          text: truncate(
+          // notes はJudgeの自由記述で、書き込み系の500字予算(truncate)だと所見の
+          // 大半が無言で切れうる(card側は全文を持つため、LLMだけが根拠を読めない
+          // 非対称が起きる)。閲覧系の予算(truncateRead, 4000字+打ち切り注記)を使う。
+          text: truncateRead(
             `セッション[${shortId8}]の対応品質評価: 総合${ev.overall_score}点\n${axesText}` +
             (ev.notes ? `\n所見: ${ev.notes}` : ''),
           ),
@@ -2241,7 +2254,9 @@ export async function executeToolCall(
         const lines = escalations.map(
           (e) => `[${e.session_id.slice(0, 8)}] ${e.escalated_at.slice(0, 16).replace('T', ' ')} 「${e.first_message_preview}」`,
         );
-        return truncate(`対応中のエスカレーション（${escalations.length}件）:\n` + lines.join('\n'));
+        // 件数の上限を設けていない一覧のため、書き込み系の500字予算(truncate)だと
+        // 対応待ちの顧客が黙って表示から消えうる。閲覧系の予算(truncateRead)を使う。
+        return truncateRead(`対応中のエスカレーション（${escalations.length}件）:\n` + lines.join('\n'));
       } catch (err) {
         logger.warn('[actionExecutor] get_escalations failed', err);
         return truncate('エスカレーション一覧の取得に失敗しました');

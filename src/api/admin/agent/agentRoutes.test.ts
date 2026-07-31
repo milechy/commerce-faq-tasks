@@ -265,6 +265,26 @@ function makeGroqResponse(
   };
 }
 
+// resolveSessionByShortId(短縮IDのテナント境界解決)を経由するツール(get_chat_session_messages /
+// delete_chat_session / get_session_outcome・record_session_outcome / get_conversation_evaluation /
+// reply_to_escalation・resolve_escalation / get_legacy_ui_link)のテストが共有するモックヘルパー。
+// テナント越境防止という同一のセキュリティロジックを検証するため、個々のdescribeで
+// コピーを持たせず1箇所にする(片方だけ実装を直して他方が古いまま気付かない事故を防ぐ)。
+// 固定の rows を返すのではなく、resolveSessionByShortId が実行する SQL
+// (tenant_id = $1 AND session_id LIKE $2 || '%')を tenant_id + 前方一致で忠実に再現する。
+type SessionRow = { id: string; tenant_id: string; session_id: string };
+function seedSessions(rows: SessionRow[]) {
+  mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
+    if (!Array.isArray(params)) return { rows: [] };
+    const [tenantId, prefix] = params as [string, string];
+    return {
+      rows: rows
+        .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
+        .map((r) => ({ id: r.id, session_id: r.session_id })),
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // テストスイート
 // ---------------------------------------------------------------------------
@@ -3618,9 +3638,29 @@ describe('POST /v1/admin/agent/chat', () => {
         kind: 'chat_session_list',
         total: 42,
         sessions: [
-          { shortId: 'sess-aaa', startedAt: '2026-07-17T10:00:00Z', messageCount: 4, preview: '送料はいくらですか' },
+          { shortId: 'sess-aaa', startedAt: '2026-07-17T10:00:00Z', messageCount: 4, preview: '送料はいくらですか', outcome: null },
         ],
       });
+    });
+
+    it('get_chat_sessions: 記録済みのoutcomeはカードにそのまま渡る(一覧から成約状況が分かる)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-outcome', 'get_chat_sessions', {}))
+        .mockResolvedValueOnce(makeGroqResponse('直近の会話は1件です。'));
+
+      mockGetSessions.mockResolvedValueOnce({
+        sessions: [
+          { id: 'db-1', tenant_id: 'tenant-abc', session_id: 'sess-bbbbbbbb-2222', started_at: '2026-07-17T10:00:00Z', last_message_at: '2026-07-17T10:05:00Z', message_count: 2, first_message_preview: 'ありがとうございました', outcome: '購入完了', outcome_recorded_at: '2026-07-17T11:00:00Z' },
+        ],
+        total: 1,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '最近の会話を見せて', sessionId: 'sess-rd-outcome' });
+
+      const action = res.body.actions[0] as { card?: { sessions?: Array<{ outcome: string | null }> } };
+      expect(action.card?.sessions?.[0]?.outcome).toBe('購入完了');
     });
 
     it('get_chat_sessions: period/search/sentiment/sort_by/sort_order/offset がgetSessionsへ渡る', async () => {
@@ -3861,8 +3901,7 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    type SessionRow = { id: string; tenant_id: string; session_id: string };
-
+    // SessionRow / seedSessions はファイル先頭の共有ヘルパーを使う。
     const OWN_SESSION: SessionRow = {
       id: 'db-sess-own', tenant_id: 'tenant-abc', session_id: 'a1b2c3d4-1111-4aaa-8000-000000000001',
     };
@@ -3875,21 +3914,6 @@ describe('POST /v1/admin/agent/chat', () => {
     const DUP_B: SessionRow = {
       id: 'db-sess-dup-b', tenant_id: 'tenant-abc', session_id: 'dupdup00-2222-4ddd-8000-000000000004',
     };
-
-    // resolveSessionByShortId の SQL（tenant_id = $1 AND session_id LIKE $2 || '%'）を
-    // 忠実に再現する。テナント越境が「SQLの条件で」防がれていることを検証するため、
-    // 固定の rows を返すのではなく tenant_id + 前方一致でフィルタする。
-    function seedSessions(rows: SessionRow[]) {
-      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
-        if (!Array.isArray(params)) return { rows: [] };
-        const [tenantId, prefix] = params as [string, string];
-        return {
-          rows: rows
-            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
-            .map((r) => ({ id: r.id, session_id: r.session_id })),
-        };
-      });
-    }
 
     it('自テナントのセッションは短縮IDで本文を取得できる', async () => {
       mockFetch
@@ -4195,7 +4219,7 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    type SessionRow = { id: string; tenant_id: string; session_id: string };
+    // SessionRow / seedSessions はファイル先頭の共有ヘルパーを使う。
     const OWN_SESSION: SessionRow = {
       id: 'db-sess-del', tenant_id: 'tenant-abc', session_id: 'dddd1111-1111-4aaa-8000-000000000001',
     };
@@ -4205,18 +4229,6 @@ describe('POST /v1/admin/agent/chat', () => {
     const PREVIEW_SESSION: SessionRow = {
       id: 'db-sess-del-preview', tenant_id: 'tenant-preview', session_id: 'dddd3333-3333-4ccc-8000-000000000003',
     };
-
-    function seedSessions(rows: SessionRow[]) {
-      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
-        if (!Array.isArray(params)) return { rows: [] };
-        const [tenantId, prefix] = params as [string, string];
-        return {
-          rows: rows
-            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
-            .map((r) => ({ id: r.id, session_id: r.session_id })),
-        };
-      });
-    }
 
     beforeEach(() => {
       mockDeleteSession.mockReset();
@@ -4577,22 +4589,10 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    type SessionRow = { id: string; tenant_id: string; session_id: string };
+    // SessionRow / seedSessions はファイル先頭の共有ヘルパーを使う。
     const OWN_SESSION: SessionRow = {
       id: 'db-sess-outcome', tenant_id: 'tenant-abc', session_id: 'oooo1111-1111-4aaa-8000-000000000001',
     };
-
-    function seedSessions(rows: SessionRow[]) {
-      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
-        if (!Array.isArray(params)) return { rows: [] };
-        const [tenantId, prefix] = params as [string, string];
-        return {
-          rows: rows
-            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
-            .map((r) => ({ id: r.id, session_id: r.session_id })),
-        };
-      });
-    }
 
     beforeEach(() => {
       mockGetConversionTypes.mockReset();
@@ -4907,25 +4907,13 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    type SessionRow = { id: string; tenant_id: string; session_id: string };
+    // SessionRow / seedSessions はファイル先頭の共有ヘルパーを使う。
     const OWN_SESSION: SessionRow = {
       id: 'db-sess-eval', tenant_id: 'tenant-abc', session_id: 'eeee1111-1111-4aaa-8000-000000000001',
     };
     const OTHER_TENANT_SESSION: SessionRow = {
       id: 'db-sess-eval-other', tenant_id: 'tenant-zzz', session_id: 'ffff2222-2222-4bbb-8000-000000000002',
     };
-
-    function seedSessions(rows: SessionRow[]) {
-      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
-        if (!Array.isArray(params)) return { rows: [] };
-        const [tenantId, prefix] = params as [string, string];
-        return {
-          rows: rows
-            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
-            .map((r) => ({ id: r.id, session_id: r.session_id })),
-        };
-      });
-    }
 
     beforeEach(() => {
       mockGetEvaluationsBySession.mockReset();
@@ -5127,28 +5115,13 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    type SessionRow = { id: string; tenant_id: string; session_id: string };
-
+    // SessionRow / seedSessions はファイル先頭の共有ヘルパーを使う。
     const OWN_SESSION: SessionRow = {
       id: 'db-esc-own', tenant_id: 'tenant-abc', session_id: 'e5c0abcd-1111-4aaa-8000-000000000011',
     };
     const OTHER_TENANT_SESSION: SessionRow = {
       id: 'db-esc-other', tenant_id: 'tenant-zzz', session_id: 'ffee0000-9999-4bbb-8000-000000000012',
     };
-
-    // resolveSessionByShortId の SQL（tenant_id = $1 AND session_id LIKE $2 || '%'）を
-    // 忠実に再現し、テナント越境が「SQLの条件で」防がれていることを検証する。
-    function seedSessions(rows: SessionRow[]) {
-      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
-        if (!Array.isArray(params)) return { rows: [] };
-        const [tenantId, prefix] = params as [string, string];
-        return {
-          rows: rows
-            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
-            .map((r) => ({ id: r.id, session_id: r.session_id })),
-        };
-      });
-    }
 
     it('reply: confirmed 未指定なら「確認が必要」を返し、返信を保存しない', async () => {
       mockFetch
@@ -5628,20 +5601,7 @@ describe('POST /v1/admin/agent/chat', () => {
     });
 
     // session_deletion の deep-link（resolveSessionByShortId で短縮IDを解決する）
-    type SessionRow = { id: string; tenant_id: string; session_id: string };
-
-    function seedSessions(rows: SessionRow[]) {
-      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
-        if (!Array.isArray(params)) return { rows: [] };
-        const [tenantId, prefix] = params as [string, string];
-        return {
-          rows: rows
-            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
-            .map((r) => ({ id: r.id, session_id: r.session_id })),
-        };
-      });
-    }
-
+    // SessionRow / seedSessions はファイル先頭の共有ヘルパーを使う。
     const OWN_SESSION: SessionRow = {
       id: '8f14e45f-ceea-467a-9d0f-2b3c4d5e6f70', tenant_id: 'tenant-abc', session_id: 'a1b2c3d4-1111-4aaa-8000-000000000001',
     };

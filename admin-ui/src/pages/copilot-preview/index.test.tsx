@@ -544,6 +544,32 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(chip).toBeTruthy();
   });
 
+  it("chat_session_list カードは記録済みのoutcomeがあればバッジを表示する(未記録ならバッジを出さない)", async () => {
+    mockAgent({
+      reply: "直近の会話は2件です。",
+      actions: [
+        {
+          tool: "get_chat_sessions",
+          result: "会話セッション一覧（全2件中2件）:\n[sess-aaa] 2026-07-17 (4件) 「送料はいくらですか」\n[sess-bbb] 2026-07-16 (2件) 「ありがとうございました」",
+          card: {
+            kind: "chat_session_list",
+            total: 2,
+            sessions: [
+              { shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか", outcome: null },
+              { shortId: "sess-bbb", startedAt: "2026-07-16T10:00:00Z", messageCount: 2, preview: "ありがとうございました", outcome: "購入完了" },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("最近の会話を見せて");
+
+    expect(await screen.findByText("購入完了")).toBeTruthy();
+    // 未記録(null)のセッション行にはバッジのテキスト自体が存在しない(件数1つだけ)
+    expect(screen.getAllByText("購入完了")).toHaveLength(1);
+  });
+
   it("chat_session_list のチップを押すと、短縮IDを含む自然文が実送信される", async () => {
     vi.mocked(authFetch).mockReset();
     let agentCalls = 0;

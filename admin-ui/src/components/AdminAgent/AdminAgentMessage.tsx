@@ -1,16 +1,14 @@
 // admin-ui/src/components/AdminAgent/AdminAgentMessage.tsx
 import type { AgentMessage } from "./useAdminAgent";
 
+// このパネル面(components/AdminAgent/)は凍結方針(admin-ui/CLAUDE.md)のため、
+// 全画面UI(pages/copilot-preview/)が追加した新ツールのラベルはここに追加しない。
+// 未登録のツール名は toolLabel() の `?? tool` フォールバックで生の英語名のまま
+// 表示される(意図的な劣化。パネル面は今後増えないため許容している)。
 const TOOL_LABEL: Record<string, string> = {
-  list_faqs: "FAQ一覧取得",
   add_faq: "FAQ追加",
   update_faq: "FAQ更新",
   delete_faq: "FAQ削除",
-  list_tenants: "テナント一覧取得",
-  get_tenant: "テナント情報取得",
-  update_tenant: "テナント更新",
-  list_knowledge: "ナレッジ一覧取得",
-  add_knowledge: "ナレッジ追加",
 };
 
 function toolLabel(tool: string): string {
