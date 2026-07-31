@@ -133,6 +133,19 @@ describe("POST /v1/admin/avatar/fal/generate", () => {
     );
   });
 
+  // super_adminが previewMode に入らず ?tenant= も付けずに叩くと、テナントが
+  // 解決できないまま fal.ai を呼び、バケット直下に書き込み・空テナントに課金
+  // していた(#P0-1で発覚)。#P0-3: 外部APIを呼ぶ前に400で早期リターンする。
+  it("super_adminが?tenant=を付けないとテナント不明で400になり、fal.aiを呼ばない", async () => {
+    const res = await request(makeApp("", "super_admin"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: "Professional portrait of a Japanese woman, bust shot, smiling" });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
   it("生成に失敗した場合は計上しない", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,

@@ -113,6 +113,9 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
       }
 
       const tenantId: string = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 
@@ -254,6 +257,9 @@ Output ONLY the English prompt, nothing else.`,
 
       const { description } = parsed.data;
       const tenantId: string = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 
@@ -381,6 +387,9 @@ JSONのみ返してください。`,
 
       const { rules } = parsed.data;
       const tenantId: string = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 

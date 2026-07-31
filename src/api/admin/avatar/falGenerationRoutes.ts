@@ -93,6 +93,9 @@ export function registerFalGenerationRoutes(app: Express): void {
       const { prompt, numImages } = parsed.data;
 
       const tenantId = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId = (req as AuthReq).requestId ?? crypto.randomUUID();
 
       const falKey = process.env.FAL_KEY?.trim();
