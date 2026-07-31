@@ -67,6 +67,9 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   段階的に閉じる（基準: `docs/LEGACY_UI_SUNSET.md`）。
 - **旧UIは無くならない。** super_admin 向け運用面としては残り続ける。
   したがって「旧UIを消す」ではなく「**テナント向け**旧UIページを閉じる」が正しい目標。
+- **「GUI固有だから」は面の外に置く理由にならない。** 面の外に残してよいのは
+  「**見て・聴いて最終的に採否を決める瞬間**」だけ。何を出すか・どう振る舞うか・止めるかは会話に写せる。
+  PDF取り込み（#585）とアバター（`docs/AVATAR_CHAT_MIGRATION.md`）は、この基準で分類を後から覆した実例。
 - 別製品（R2C2 / aaas、DIA）とはコードを共有しない。Supabase認証と App Switcher のみ共有。
 
 ## 管理UIの構造（チャット・ファースト移行中の不変ルール）
@@ -94,7 +97,10 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | 会話の保存・復元 | `admin-ui/src/lib/chatSessionStore.ts` |
 | Enter送信・IME合成の扱い | `admin-ui/src/lib/utils.ts` の `shouldSubmitOnEnter` |
 | 構造化カードの追加 | `useAgentChatTransport.ts` の `card.kind` に `kind` を足す |
-| エージェントのツール追加 | `src/api/admin/agent/toolDefinitions.ts` + `actionExecutor.ts` の `switch` に `case` |
+| エージェントのツール追加 | `src/api/admin/agent/toolDefinitions.ts` + `actionExecutor.ts` の `switch` に `case` + `copilot-preview/index.tsx` の `TOOL_LABELS`（**この3点セット**。ラベル漏れは生の英語ツール名が画面に出る） |
+| ファイル添付（コンポーザの📎／ドラッグ＆ドロップ） | `admin-ui/src/lib/bookPdfUpload.ts` の検証 + `pdfUpload` カードの進捗表示を拡張。**第2の添付経路を作らない** |
+| ツール内でのプラン機能判定 | 注入済み `db` に `queryTenantPlan` + `planHasFeature`。`tenantHasFeature` は内部で `getPool()` を呼び、テストのモックPoolと食い違う |
+| 確定前の下書き・生成候補の保持 | 実体テーブル（例 `avatar_configs`）。**プロセス内 Map（`knowledgeImportStaging` 型）を新設しない** — 面をまたぐ／リロードでTTL失効し孤児化する |
 | 書き込みツールのリスク分類 | `src/api/admin/agent/confirmPolicy.ts`（未分類は `confirmPolicy.test.ts` が検出して落ちる） |
 | 設定変更の監査記録 | `src/api/admin/agent/agentAuditLog.ts` → 既存 `tenant_settings_history`。**新テーブルを作らない** |
 | ツール実行の計測 | `agentRoutes.ts` にのみ実装。`actionExecutor.ts` の各 `case` には手を入れない（`docs/AGENT_METRICS.md`） |
@@ -148,6 +154,13 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 7. **ユーザー単位・テナント単位の進行状態を localStorage に持つ。** ブラウザを変えると消える。サーバが正。
 8. **DB migration を自動実行する。** 不可逆操作は人間承認（24h自走中は禁止項目）。
 9. **オンボーディング等の作業フロー中に、同タブで旧UIへ遷移させる。** 会話と進行が飛ぶ。別タブ固定。
+10. **課金が発生する操作を、確認ゲートか回数上限の片方だけで会話に開放する。**
+    会話は「もう1回」のコストが低く、生成・外部API呼び出しは線形に積む。**両方を最初から入れる**（後付けは会話体験を壊す）。
+11. **プラン制限の案内を同一会話で繰り返す。** 制限に当たった瞬間だけ、1会話1回（PR #580 で是正済み）。
+12. **ツールの成功文言に確認ゲートの言い回し（「確認が必要です」等）を混ぜる。**
+    計測もフロントのチップ表示も結果文字列の部分一致で判定しているため、正常応答が `blocked` として数えられる（`docs/AGENT_METRICS.md`）。
+13. **動線として閉じていないツールを足す。** 一覧を返す手段が無いのに id 必須の `activate_avatar` だけがある状態は、
+    チャットからは実行不能で「あるのに使えない」。ツールは**ユーザーが会話だけで完了できる単位**で追加する。
 
 ## テストの最低ライン
 
@@ -174,13 +187,16 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   （`get_*` の一覧、`suggest_*` の末尾指示）を必ず1件書く。
 - **「新規APIを作らない」もテストで固定する。** 既存エンドポイントを叩くことをテスト名に書く既存例に倣う
   （`copilot-preview/index.test.tsx`）。
+- **外部API失敗でUIが確定状態になること。** タイムアウト・5xx でカードや進捗表示が「失敗」で終わり、
+  **無限スピナーを残さない**。外部依存（生成・音声・LLM）を足すたびに1件書く。
 
 ## 命名・エラーハンドリング
 
 **命名**
 
 - エージェントのツール名: snake_case の `動詞_目的語`。既存の語彙に合わせる
-  （`get_*` / `set_*` / `save_*` / `suggest_*` / `import_*` / `commit_*` / `discard_*`）。
+  （`get_*` / `set_*` / `save_*` / `suggest_*` / `import_*` / `commit_*` / `discard_*`。
+  一覧は `get_*_list` / `list_*`、状態切替は `activate_*` / `deactivate_*` / `dismiss_*`）。
 - localStorage / sessionStorage キー: `r2c_` プレフィックス必須。
 - migration ファイル: `migration_<機能>.sql`、機能ディレクトリに colocate。
 - テストファイル: 対象ファイル名 + `.test.ts(x)`、対象の隣。
