@@ -348,7 +348,11 @@ const AGENT_BORDER = "rgba(124,58,237,0.30)";
 const CATEGORIES: Category[] = [
   { key: "assistant", label: "アシスタント", icon: "✨" },
   { key: "weekly", label: "今週のまとめ", icon: "📊" },
-  { key: "history", label: "会話の履歴", icon: "💬", badge: "escalations" },
+  // 「対応中の会話」(J1: 今すぐ人が出るべき会話)と「会話の履歴」(J2点検/J3照会)は
+  // 緊急性の軸が違うため別カテゴリーに分ける。バッジ(escalations件数)もこちらへ移す。
+  // ラベルは RAIL_BADGE_LABEL.escalations を直接参照し、新しい呼び名を作らない。
+  { key: "escalations", label: RAIL_BADGE_LABEL.escalations, icon: "💬", badge: "escalations" },
+  { key: "history", label: "会話の履歴", icon: "🗂️" },
   { key: "knowledge", label: "知識データ", icon: "📚", badge: "gaps" },
   { key: "rules", label: "指示ルール", icon: "🎛️" },
   { key: "avatar", label: "アバター", icon: "🎭" },
@@ -779,8 +783,24 @@ export default function CopilotPreviewPage() {
       // 統一済み(BOOTSTRAP_PROMPT のコメント参照)。ここでキャッシュや直近取得のスキップは
       // 行わない — クリックした瞬間の最新状況を見せるのがこのカテゴリの役割。
       void sendReal("今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。");
+    } else if (key === "escalations") {
+      void sendReal("対応中のエスカレーションの状況を教えて");
     } else if (key === "history") {
-      void sendReal("最近の会話とエスカレーションの状況を教えて");
+      // 会話の履歴は「点検(品質を確かめる)」と「照会(特定の1件を探す)」で送る内容が
+      // 別物なので、定型プロンプト1本を即送信していた旧挙動をやめ、既存のチップ機構
+      // (__real: プレフィックスで自然文を代理送信)でユーザーに選ばせる。
+      // sendReal経由ではなくpushで直接積むため sendReal 自身の sending ガードが効かず、
+      // 既にチップ提示中(active === "history" かつ busy)に連打すると同じ質問が
+      // 積み上がってしまう。ここだけ明示的に多重投入を防ぐ。
+      if (busy) return;
+      push(say("会話の履歴について、何をしますか？", [
+        {
+          label: "最近の会話を点検する",
+          action: "__real:直近の会話を点検して、対応品質に問題がありそうな会話があれば教えて",
+          tone: "primary",
+        },
+        { label: "特定の会話を探す", action: "__real:特定の会話を探したい", tone: "ghost" },
+      ]));
     } else if (key === "avatar") {
       void sendReal("アバターの稼働状況と、設定の一覧を教えて");
     } else if (key === "knowledge") {

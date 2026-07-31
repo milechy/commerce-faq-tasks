@@ -871,6 +871,125 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
   });
 });
 
+// 「対応中の会話」(J1: 今すぐ対応が要る)と「会話の履歴」(J2点検/J3照会)は緊急性の軸が
+// 違うため別カテゴリーに分けた。会話の履歴は1回の定型質問ではなく、点検/照会どちらを
+// したいかをチップで選ばせる(反復探索に耐えないという課題への対応)。
+describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の履歴カテゴリー(点検/照会分岐)", () => {
+  function mockAgentSequential(replies: unknown[]) {
+    vi.mocked(authFetch).mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      const reply = replies[agentCalls] ?? replies[replies.length - 1];
+      agentCalls += 1;
+      return mockOk(reply);
+    });
+  }
+
+  function chatBodies() {
+    return vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+  }
+
+  it("「対応中の会話」は会話の履歴とは別の定型文を即送信する", async () => {
+    mockAgentSequential([
+      { reply: "今週も順調です。", actions: [] },
+      { reply: "対応中の会話が2件あります。", actions: [] },
+    ]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /対応中の会話/ }));
+
+    await waitFor(() => expect(chatBodies().length).toBe(2));
+    expect(chatBodies()[1]?.["message"]).toBe("対応中のエスカレーションの状況を教えて");
+  });
+
+  it("「会話の履歴」を押すと即送信せず、点検/照会のチップを提示する", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+
+    expect(await screen.findByRole("button", { name: "最近の会話を点検する" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "特定の会話を探す" })).toBeTruthy();
+    // チップを出しただけでは実APIを追加で叩かない(ブリーフィングの1本のみ)
+    expect(chatBodies().length).toBe(1);
+  });
+
+  it("「最近の会話を点検する」チップは点検用の定型文を送る", async () => {
+    mockAgentSequential([
+      { reply: "今週も順調です。", actions: [] },
+      { reply: "問題は見当たりませんでした。", actions: [] },
+    ]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "最近の会話を点検する" }));
+
+    await waitFor(() => expect(chatBodies().length).toBe(2));
+    expect(chatBodies()[1]?.["message"]).toBe(
+      "直近の会話を点検して、対応品質に問題がありそうな会話があれば教えて",
+    );
+    // 選んだ後はもう一方のチップも使用済みになり再表示されない
+    expect(screen.queryByRole("button", { name: "特定の会話を探す" })).toBeNull();
+  });
+
+  it("「特定の会話を探す」チップは照会用の定型文を送る", async () => {
+    mockAgentSequential([
+      { reply: "今週も順調です。", actions: [] },
+      { reply: "いつ頃の会話か、キーワードなどを教えてください。", actions: [] },
+    ]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "特定の会話を探す" }));
+
+    await waitFor(() => expect(chatBodies().length).toBe(2));
+    expect(chatBodies()[1]?.["message"]).toBe("特定の会話を探したい");
+  });
+
+  it("会話の履歴のチップ提示中は他のカテゴリーへ切り替えられない", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    await screen.findByRole("button", { name: "最近の会話を点検する" });
+
+    expect((screen.getByRole("button", { name: /知識データ/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /対応中の会話/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("会話の履歴を連打してもチップメッセージが積み上がらない", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    await screen.findByRole("button", { name: "最近の会話を点検する" });
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+
+    expect(screen.getAllByRole("button", { name: "最近の会話を点検する" }).length).toBe(1);
+  });
+
+  it("7カテゴリー全てがレールに表示される", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    for (const label of ["アシスタント", "今週のまとめ", "対応中の会話", "会話の履歴", "知識データ", "指示ルール", "アバター"]) {
+      expect(screen.getByRole("button", { name: new RegExp(label) })).toBeTruthy();
+    }
+  });
+});
+
 // GID 1217007275511487: 左レールが「今どれだけ溜まっているか」を一切示しておらず、
 // 旧ダッシュボードのstatカード無しでは対応漏れに気づけなかった。既存エンドポイント
 // (knowledge/gaps/count・chat-history/escalations)の件数をバッジで出す。
@@ -916,9 +1035,21 @@ describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
 
     expect(await screen.findByLabelText("未回答質問 3件")).toBeTruthy();
     expect(screen.getByLabelText("対応中の会話 2件")).toBeTruthy();
-    // バッジはカテゴリーボタンの中に出る(独立した要素ではない)
+    // バッジはカテゴリーボタンの中に出る(独立した要素ではない)。
+    // escalationsバッジは「対応中の会話」カテゴリーに付く(「会話の履歴」からは移した)。
     expect(screen.getByRole("button", { name: /知識データ/ }).textContent).toContain("3");
-    expect(screen.getByRole("button", { name: /会話の履歴/ }).textContent).toContain("2");
+    expect(screen.getByRole("button", { name: /対応中の会話/ }).textContent).toContain("2");
+  });
+
+  it("「会話の履歴」カテゴリーにはescalationsバッジが付かない", async () => {
+    mockBadges({
+      gaps: { count: 0 },
+      escalations: { escalations: [{ id: "e1" }, { id: "e2" }] },
+    });
+    renderPage();
+
+    await screen.findByLabelText("対応中の会話 2件");
+    expect(screen.getByRole("button", { name: /会話の履歴/ }).textContent).not.toContain("2");
   });
 
   it("テナントのIDでスコープした既存エンドポイントを叩く(新規APIを作らない)", async () => {
