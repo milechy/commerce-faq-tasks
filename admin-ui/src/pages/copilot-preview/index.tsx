@@ -107,7 +107,9 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   add_faq: "FAQの追加",
   update_faq: "FAQの更新",
   delete_faq: "FAQの削除",
+  get_avatar_list: "アバター一覧の取得",
   activate_avatar: "アバターの有効化",
+  deactivate_avatar: "アバターの停止",
   get_embed_code: "埋め込みコードの取得",
   set_widget_theme: "ウィジェットテーマの変更",
   get_tuning_rules: "指示ルール一覧の取得",
@@ -152,6 +154,7 @@ const REAL_WRITE_TOOLS = new Set([
   "set_posthog",
   "set_widget_theme",
   "activate_avatar",
+  "deactivate_avatar",
   "import_industry_faq_templates",
   "commit_faq_import",
   "reply_to_escalation",
@@ -699,7 +702,7 @@ export default function CopilotPreviewPage() {
     } else if (key === "history") {
       void sendReal("最近の会話とエスカレーションの状況を教えて");
     } else if (key === "avatar") {
-      void sendReal("アバターの稼働状況を教えて");
+      void sendReal("アバターの稼働状況と、設定の一覧を教えて");
     } else if (key === "knowledge") {
       // Phase E: get_faq_list/get_knowledge_gaps(実API)に接続。以前はモック固定文言だった
       void sendReal("知識データの状況を教えて（FAQの件数と、AIが答えられなかった質問があれば教えて）");
