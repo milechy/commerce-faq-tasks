@@ -172,6 +172,61 @@ describe('avatar generation routes — テナント不明時は400、外部API�
       expect(res.status).toBe(400);
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    // 空白のみ／複数指定は、テナントとして採用してはいけないが 400 で
+    // 落ちることまで確認しないと「truthy だから通った」に気づけない。
+    it(`${method.toUpperCase()} ${path} — ?tenant=が空白のみ → 400、fetch未呼び出し`, async () => {
+      const app = makeApp({ app_metadata: { role: 'super_admin' }, email: 'sa@t.com' });
+      const res = await (request(app) as any)[method](`${path}?tenant=%20%20`).send(body);
+      expect(res.status).toBe(400);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it(`${method.toUpperCase()} ${path} — ?tenant=を2回指定 → 400、fetch未呼び出し`, async () => {
+      const app = makeApp({ app_metadata: { role: 'super_admin' }, email: 'sa@t.com' });
+      const res = await (request(app) as any)[method](`${path}?tenant=t1&tenant=t2`).send(body);
+      expect(res.status).toBe(400);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ── 過剰ブロックしていないことの対検証 ────────────────────────────────────
+// 上の 400 ガードだけを見ていると「常に400を返す」実装でもテストが通ってしまう。
+// テナントが解決できるときは通ること（＝外部APIまで到達すること）を必ず対で押さえる。
+
+describe('avatar generation routes — テナントが解決できれば400にならず外部APIへ到達する', () => {
+  // 外部APIキーが無いと、テナントガードを通過しても手前で 500 になり fetch まで
+  // 到達しない。「ガードを抜けて実処理に入った」ことを見たいので一式用意する
+  // （応答自体は共通 beforeEach の失敗レスポンスのままでよい）。
+  beforeEach(() => {
+    process.env.GROQ_API_KEY = 'test-groq-key';
+    process.env.LEONARDO_API_KEY = 'test-leonardo-key';
+    process.env.FISH_AUDIO_API_KEY = 'test-fish-key';
+    process.env.FAL_KEY = 'test-fal-key';
+  });
+
+  afterEach(() => {
+    delete process.env.GROQ_API_KEY;
+    delete process.env.LEONARDO_API_KEY;
+    delete process.env.FISH_AUDIO_API_KEY;
+    delete process.env.FAL_KEY;
+  });
+
+  TENANT_GUARDED_ENDPOINTS.forEach(({ method, path, body }) => {
+    it(`${method.toUpperCase()} ${path} — super_admin + ?tenant=t1 → 400にならない`, async () => {
+      const app = makeApp({ app_metadata: { role: 'super_admin' }, email: 'sa@t.com' });
+      const res = await (request(app) as any)[method](`${path}?tenant=t1`).send(body);
+      expect(res.status).not.toBe(400);
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    it(`${method.toUpperCase()} ${path} — client_admin(自テナントあり) → 400にならない`, async () => {
+      const app = makeApp({ app_metadata: { role: 'client_admin', tenant_id: 't1' }, email: 'ca@t.com' });
+      const res = await (request(app) as any)[method](path).send(body);
+      expect(res.status).not.toBe(400);
+      expect(mockFetch).toHaveBeenCalled();
+    });
   });
 });
 

@@ -123,10 +123,18 @@ export function resolveEffectiveTenantId(req: Request): string {
   const supabaseUser = (req as AuthedReq).supabaseUser;
   const role = safeStringClaim(supabaseUser?.app_metadata?.role);
   const isSuperAdmin = role === "super_admin";
-  const tenantId =
+  const tenantId = (
     safeStringClaim(supabaseUser?.app_metadata?.tenant_id) ||
-    safeStringClaim((supabaseUser as { tenant_id?: string } | undefined)?.tenant_id);
-  return isSuperAdmin ? ((req.query["tenant"] as string) || tenantId) : tenantId;
+    safeStringClaim((supabaseUser as { tenant_id?: string } | undefined)?.tenant_id)
+  ).trim();
+  if (!isSuperAdmin) return tenantId;
+  // `?tenant=a&tenant=b` を Express は配列に、`?tenant[x]=y` はオブジェクトにする。
+  // 返り値は trackUsage の請求先と Storage のパス(`${tenantId}/...`)へそのまま入るため、
+  // string 以外は採用しない（曖昧な指定はテナント未指定として呼び出し側の400へ落とす）。
+  // 空白のみの値も同様に落とす: "   " は truthy で `if (!tenantId)` を通過してしまい、
+  // バケット直下に空白ディレクトリを作って書き込まれる。
+  const fromQuery = safeStringClaim(req.query["tenant"]).trim();
+  return fromQuery || tenantId;
 }
 
 // NOTE: 旧 `requireOwnTenant()` ヘルパーは削除済み（Phase70 / Phase44-46 棚卸し結論）。
