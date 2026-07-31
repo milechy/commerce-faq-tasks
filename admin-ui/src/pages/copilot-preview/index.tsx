@@ -46,8 +46,9 @@ import {
   type BookPdfRejection,
 } from "../../lib/bookPdfUpload";
 import { getAccessToken } from "../../components/knowledge/shared";
-import { useAuth } from "../../auth/useAuth";
+import { useAuth, type OnboardingStageFlags } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
+import { nextIncompleteStage } from "../../lib/landingDecision";
 import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
 // 旧UI(AppSidebar)の共通シェル機能パリティ(残り4件)。既に独立コンポーネント化
 // 済みのものはそのままimportし、テーマ切替だけ common/ThemeToggle として新規に
@@ -323,54 +324,48 @@ const INDUSTRY_CHIPS: Chip[] = ONBOARDING_INDUSTRIES.map((ind) => ({
 
 // Asana 1217040702485762(P5): オンボーディング4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)。
 // 導出ロジックの単一の情報源は src/api/admin/agent/onboardingStage.ts(バックエンド)。
-// admin-ui と backend は別パッケージ(別ビルドルート)のため import できず、
-// GET /v1/admin/my-tenant が返す形をそのままここで受ける(4個の boolean のみの薄い型)。
-interface OnboardingStageFlags {
-  industryAnswered: boolean;
-  knowledgePublished: boolean;
-  widgetInstalled: boolean;
-  firstConversation: boolean;
-  /** オンボ 是正A-2: 段階ではなくヒント。stage2の案内文の出し分けにのみ使う。 */
-  hasDraftFaq: boolean;
-}
+// admin-ui と backend は別パッケージ(別ビルドルート)のため import できないが、admin-ui内の
+// 段階順序(何が「次に足りない段階」か)は lib/landingDecision.ts の nextIncompleteStage に
+// 集約する(オンボ 是正C-2。以前はここに同じ判定順序をif連鎖で再実装しており、
+// landingDecision.ts のisOnboardingComplete・useAuthの型と3重に重複していた)。
+// stage の型自体は useAuth.tsx の OnboardingStageFlags を単一の情報源として使う。
 
 // 4段階のうち、まだ到達していない最初の段階に対応する案内文＋チップを返す。
 // 全段階到達済みなら null(=通常の週次ブリーフィング側の起動に進む)。
-// 各段階の判定順序は onboardingStage.ts の STAGE_ORDER と揃える。
 function deriveOnboardingNextStep(stage: OnboardingStageFlags): { text: string; chips?: Chip[] } | null {
-  if (!stage.industryAnswered) {
-    return {
-      text: "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
-      chips: INDUSTRY_CHIPS,
-    };
-  }
-  if (!stage.knowledgePublished) {
-    // オンボ 是正A-2: 業種は答えたが下書きが1件も無い(全INSERT失敗、または
-    // 「あとで」を選んで抜けた等)場合は「下書きを見る」を出しても空振りになる。
-    // 下書きの有無で「公開を促す」か「たたき台作成に戻す」かを分ける。
-    if (!stage.hasDraftFaq) {
+  const incompleteStage = nextIncompleteStage(stage);
+  switch (incompleteStage) {
+    case "industry_answered":
       return {
-        text: "FAQのたたき台をまだお作りしていません。業種を教えていただければ、すぐ使えるたたき台をご提案します。",
+        text: "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
         chips: INDUSTRY_CHIPS,
       };
-    }
-    return {
-      text: "業種のFAQたたき台は下書きとして登録済みです。内容をご確認のうえ、よろしければ公開しましょう。",
-      chips: [{ label: "下書きを見る", action: "__real:下書きのFAQを見せてください", tone: "ghost" }],
-    };
+    case "knowledge_published":
+      // オンボ 是正A-2: 業種は答えたが下書きが1件も無い(全INSERT失敗、または
+      // 「あとで」を選んで抜けた等)場合は「下書きを見る」を出しても空振りになる。
+      // 下書きの有無で「公開を促す」か「たたき台作成に戻す」かを分ける。
+      if (!stage.hasDraftFaq) {
+        return {
+          text: "FAQのたたき台をまだお作りしていません。業種を教えていただければ、すぐ使えるたたき台をご提案します。",
+          chips: INDUSTRY_CHIPS,
+        };
+      }
+      return {
+        text: "業種のFAQたたき台は下書きとして登録済みです。内容をご確認のうえ、よろしければ公開しましょう。",
+        chips: [{ label: "下書きを見る", action: "__real:下書きのFAQを見せてください", tone: "ghost" }],
+      };
+    case "widget_installed":
+      return {
+        text: "FAQの準備ができました。次はウィジェットをサイトに設置しましょう。埋め込みコードをお渡しします。",
+        chips: [{ label: "埋め込みコードを見る", action: "__real:埋め込みコードを教えてください", tone: "ghost" }],
+      };
+    case "first_conversation":
+      return {
+        text: "設置は完了しています。お客様からの最初のご質問をお待ちしています。準備は万端です！",
+      };
+    case null:
+      return null;
   }
-  if (!stage.widgetInstalled) {
-    return {
-      text: "FAQの準備ができました。次はウィジェットをサイトに設置しましょう。埋め込みコードをお渡しします。",
-      chips: [{ label: "埋め込みコードを見る", action: "__real:埋め込みコードを教えてください", tone: "ghost" }],
-    };
-  }
-  if (!stage.firstConversation) {
-    return {
-      text: "設置は完了しています。お客様からの最初のご質問をお待ちしています。準備は万端です！",
-    };
-  }
-  return null;
 }
 
 // ─── 実APIのツール結果 → 見た目の良いカードへの変換 ────────────────────────────
