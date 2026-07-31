@@ -4416,6 +4416,155 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 確認フラグ(confirmed)の型混同 — isConfirmed() の振る舞い
+  //
+  // かつては Boolean(args['confirmed']) と === true の2方式が混在しており、
+  // 前者は Boolean('false') === true という JS の仕様で文字列 'false' を
+  // 「確認済み」と誤判定していた。Groq が引数を文字列化して送ってくる事象は
+  // 本リポジトリで実測されている(parseToolArgs のコメント)ため机上の話ではない。
+  // 判定を isConfirmed() へ集約したうえで、両方向の挙動をここで固定する。
+  // -------------------------------------------------------------------------
+  describe('確認フラグの型混同 (isConfirmed)', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    // 実行された/されなかったを、各ツールの実書き込み経路で判定する。
+    // confirmed 以外の条件で弾かれないよう、前提条件はすべて満たしておく。
+    const CONFIRMED_ACCEPTED: Array<[string, unknown]> = [
+      ['boolean の true', true],
+      ['文字列の "true"（Groqの文字列化を想定）', 'true'],
+      ['大文字混じりの "True"', 'True'],
+    ];
+    const CONFIRMED_REJECTED: Array<[string, unknown]> = [
+      ['文字列の "false"（Boolean()なら誤って通っていた）', 'false'],
+      ['文字列の "0"', '0'],
+      ['数値の 0', 0],
+      ['数値の 1（真偽値ではない）', 1],
+      ['null', null],
+      ['未指定', undefined],
+    ];
+
+    describe('delete_faq（high・不可逆削除）', () => {
+      function seedFaq() {
+        // 1回目: 存在確認の SELECT（自テナントのFAQ）
+        mockQuery.mockResolvedValueOnce({ rows: [{ id: 7, tenant_id: 'tenant-abc', question: '送料は?' }] });
+        // 2回目: DELETE
+        mockQuery.mockResolvedValueOnce({ rows: [] });
+      }
+
+      it.each(CONFIRMED_ACCEPTED)('confirmed=%s は削除される', async (_label, confirmed) => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-cf-a', 'delete_faq', { id: 7, confirmed }))
+          .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+        seedFaq();
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'FAQ7番を削除して', sessionId: `sess-cf-a-${String(confirmed)}` });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).not.toContain('確認が必要');
+      });
+
+      it.each(CONFIRMED_REJECTED)('confirmed=%s は確認待ちになりDELETEに到達しない', async (_label, confirmed) => {
+        const args: Record<string, unknown> = { id: 7 };
+        if (confirmed !== undefined) args['confirmed'] = confirmed;
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-cf-r', 'delete_faq', args))
+          .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'FAQ7番を削除して', sessionId: `sess-cf-r-${String(confirmed)}` });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain('確認が必要');
+        // 確認前に存在確認SELECTすら投げない(ゲートが最初にある)
+        expect(mockQuery).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('request_sai_task（high・従量課金が発生する）', () => {
+      it('confirmed="false" は依頼されない（Boolean()時代は誤って依頼されていた）', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-cf-sai-1', 'request_sai_task', { description: '送料表記を直して', confirmed: 'false' }))
+          .mockResolvedValueOnce(makeGroqResponse('確認してから依頼します。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-cf-sai-1' });
+
+        expect(mockSubmitSaiTask).not.toHaveBeenCalled();
+        expect(res.body.actions[0].result).toContain('確認が必要');
+      });
+
+      it('confirmed="true" は依頼される（=== true 統一では詰まっていた経路）', async () => {
+        mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'enterprise' }] });
+        mockCheckSaiMonthlyCostCeiling.mockResolvedValueOnce({ ok: true });
+        mockSubmitSaiTask.mockResolvedValueOnce({ taskId: 'sai-1', status: 'queued' });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-cf-sai-2', 'request_sai_task', { description: '送料表記を直して', confirmed: 'true' }))
+          .mockResolvedValueOnce(makeGroqResponse('依頼しました。'));
+
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-cf-sai-2' });
+
+        expect(mockSubmitSaiTask).toHaveBeenCalled();
+      });
+    });
+
+    describe('delete_chat_session（high・従来から === true で安全側だった）', () => {
+      const OWN: SessionRow = {
+        id: 'db-sess-cf', tenant_id: 'tenant-abc', session_id: 'cfcf1111-1111-4aaa-8000-000000000001',
+      };
+
+      it('confirmed="false" は削除されない（従来どおり）', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-cf-del-1', 'delete_chat_session', { session_id: 'cfcf1111', reason: '型混同の検証', confirmed: 'false' }))
+          .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+        seedSessions([OWN]);
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'cfcf1111を削除して', sessionId: 'sess-cf-del-1' });
+
+        expect(mockDeleteSession).not.toHaveBeenCalled();
+        expect(res.body.actions[0].result).toContain('確認が必要');
+      });
+
+      it('confirmed="true" は削除される（=== true 時代は永久に詰まっていた回帰）', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-cf-del-2', 'delete_chat_session', { session_id: 'cfcf1111', reason: '型混同の検証', confirmed: 'true' }))
+          .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+        seedSessions([OWN]);
+        mockDeleteSession.mockResolvedValueOnce({
+          deleted_session_id: 'db-sess-cf',
+          affected_counts: { chat_messages: 1, option_orders_nulled: 0 },
+        });
+
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'cfcf1111を削除して', sessionId: 'sess-cf-del-2' });
+
+        expect(mockDeleteSession).toHaveBeenCalled();
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // delete_chat_session（不可逆削除 / confirmedゲート / previewMode scope / 注入経路の遮断）
   // -------------------------------------------------------------------------
   describe('delete_chat_session', () => {

@@ -58,6 +58,23 @@ function clampToolLimit(raw: unknown, defaultValue: number, max: number): number
   return Math.floor(Math.min(Math.max(Number.isFinite(n) ? n : defaultValue, 1), max));
 }
 
+// 書き込み系ツールの確認フラグ(confirmed)を読む唯一の入口。
+//
+// かつては Boolean() による判定と厳密等価(=== true)による判定が混在していた。
+// 前者は Boolean('false') === true という JS の仕様により、文字列 'false' を
+// 「確認済み」と誤判定する。本リポジトリでは Groq が引数を文字列化して送ってくる
+// 事象が実測されている(agentRoutes.ts の parseToolArgs のコメント: 無引数ツールに
+// 対し文字列 "null" が送られてくるケース)ため、この誤判定は机上のものではない。
+//
+// 逆に === true だけに統一すると、Groq が文字列 "true" を送ってきた場合に
+// ユーザーが同意し続けても永久に実行されないループに陥る。両方向に対応するため、
+// boolean の true と文字列 "true" のみを受理し、それ以外は未確認として扱う
+// (未知の型は安全側=未確認に倒す)。
+function isConfirmed(raw: unknown): boolean {
+  if (raw === true) return true;
+  return typeof raw === 'string' && raw.trim().toLowerCase() === 'true';
+}
+
 // suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
 // save_tuning_rule にそのまま渡ってきた場合、文字列としてtrigger_patternに
 // 保存させない(D4: 保存は成功するが質問文に一致せず永久に発火しない)。
@@ -602,7 +619,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'delete_faq': {
       const id = Number(args['id']);
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate(`FAQ（ID: ${id}）の削除には確認が必要です。confirmed=true を指定して再度実行してください`);
@@ -652,7 +669,7 @@ export async function executeToolCall(
       if (!isOnboardingIndustry(industryRaw)) {
         return truncate(`不明な業種です: ${String(industryRaw)}`);
       }
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
       const templates = INDUSTRY_FAQ_TEMPLATES[industryRaw];
       const label = ONBOARDING_INDUSTRY_LABELS[industryRaw];
 
@@ -716,7 +733,7 @@ export async function executeToolCall(
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         try {
@@ -953,7 +970,7 @@ export async function executeToolCall(
       if (!presetId) {
         return truncate('preset_id は必須です');
       }
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
       if (!confirmed) {
         return truncate(
           '採用には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください',
@@ -1121,7 +1138,7 @@ export async function executeToolCall(
 
     // -----------------------------------------------------------------------
     case 'save_tuning_rule': {
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
       const triggerPattern = String(args['trigger_pattern'] ?? '').slice(0, 1000);
       const expectedBehavior = String(args['expected_behavior'] ?? '').slice(0, 4000);
       // D5: ユーザーが「高い優先度で」等、3段階の言葉で話した場合は priority_tier を優先する。
@@ -1208,7 +1225,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'update_tuning_rule': {
       const id = Number(args['id']);
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate(`指示ルール（ID: ${id}）の更新には確認が必要です。confirmed=true を指定して再度実行してください`);
@@ -1276,7 +1293,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'delete_tuning_rule': {
       const id = Number(args['id']);
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate(`指示ルール（ID: ${id}）の削除には確認が必要です。confirmed=true を指定して再度実行してください`);
@@ -1338,7 +1355,7 @@ export async function executeToolCall(
       const text = String(args['text'] ?? '').trim().slice(0, 4000);
       const style = String(args['style'] ?? '').trim().slice(0, 50);
       const reason = typeof args['reason'] === 'string' ? args['reason'].trim().slice(0, 1000) || undefined : undefined;
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate('返答の採用には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください');
@@ -1376,7 +1393,7 @@ export async function executeToolCall(
     case 'remove_approved_response': {
       const id = Number(args['id']);
       const index = Number(args['index']);
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate('採用済み返答の取消には確認が必要です。confirmed=true を指定して再度実行してください');
@@ -1603,7 +1620,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'dismiss_knowledge_gap': {
       const id = Number(args['id']);
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate(`知識ギャップ（ID: ${id}）を片付けるには確認が必要です。confirmed=true を指定して再度実行してください`);
@@ -1668,7 +1685,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     // Phase3: save_faq — confirmedゲート必須のFAQ保存(add_faqと同じINSERT経路)
     case 'save_faq': {
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
       const question = String(args['question'] ?? '').slice(0, 500);
       const answer = String(args['answer'] ?? '').slice(0, 2000);
       const category = typeof args['category'] === 'string' ? args['category'] : null;
@@ -1829,7 +1846,7 @@ export async function executeToolCall(
     // チャット版 FAQ一括取り込みのコミット: suggest_faq_import_from_text/urls で
     // ステージング済みのFAQをDBに登録する。confirmedゲート必須。
     case 'commit_faq_import': {
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
       const targetRaw = typeof args['target'] === 'string' ? args['target'] : undefined;
 
       if (!confirmed) {
@@ -1927,7 +1944,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     // Phase3: save_engagement_rule — confirmedゲート必須の声がけルール保存(trigger_rules)
     case 'save_engagement_rule': {
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
       const triggerType = String(args['trigger_type'] ?? '');
       const messageTemplate = String(args['message_template'] ?? '').slice(0, 500);
       const priorityRaw = Number(args['priority']);
@@ -1997,7 +2014,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'update_engagement_rule': {
       const id = Number(args['id']);
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate(`声がけルール（ID: ${id}）の更新には確認が必要です。confirmed=true を指定して再度実行してください`);
@@ -2070,7 +2087,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'delete_engagement_rule': {
       const id = Number(args['id']);
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
         return truncate(`声がけルール（ID: ${id}）の削除には確認が必要です。confirmed=true を指定して再度実行してください`);
@@ -2204,7 +2221,7 @@ export async function executeToolCall(
       }
       const shortId = String(args['session_id'] ?? '').trim();
       const reason = String(args['reason'] ?? '').trim();
-      const confirmed = args['confirmed'] === true;
+      const confirmed = isConfirmed(args['confirmed']);
 
       try {
         const resolved = await resolveSessionByShortId(db, tenantId, shortId);
@@ -2341,7 +2358,7 @@ export async function executeToolCall(
       }
       const shortId = String(args['session_id'] ?? '').trim();
       const content = String(args['content'] ?? '').trim();
-      const confirmed = args['confirmed'] === true;
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!content) {
         return truncate('返信内容（content）は必須です');
@@ -2384,7 +2401,7 @@ export async function executeToolCall(
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
       const shortId = String(args['session_id'] ?? '').trim();
-      const confirmed = args['confirmed'] === true;
+      const confirmed = isConfirmed(args['confirmed']);
 
       try {
         const resolved = await resolveSessionByShortId(db, tenantId, shortId);
@@ -2446,7 +2463,7 @@ export async function executeToolCall(
       }
       const shortId = String(args['session_id'] ?? '').trim();
       const outcomeValue = String(args['outcome'] ?? '').trim();
-      const confirmed = args['confirmed'] === true;
+      const confirmed = isConfirmed(args['confirmed']);
 
       if (!outcomeValue) {
         return truncate('outcome（記録する成果）は必須です');
@@ -2510,7 +2527,7 @@ export async function executeToolCall(
     // 費用は一回限りの即時課金ではなく、他のLLM機能(admin_agent等)と同じ従量課金
     // (trackUsage → usage_logs → 月次Stripe請求)に計上される。
     case 'request_sai_task': {
-      const confirmed = Boolean(args['confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
       const description = String(args['description'] ?? '').trim().slice(0, 2000);
 
       if (!confirmed) {
