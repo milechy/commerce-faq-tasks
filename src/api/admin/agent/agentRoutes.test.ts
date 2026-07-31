@@ -1102,7 +1102,9 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    it('get_tuning_rules: 一覧を1つの結果文字列にまとめる（無効ルールは(無効)を付ける）', async () => {
+    // D3: 以前はresult(自然文・500字)に1件ずつ列挙しており、15件超・長文で黙って切れていた。
+    // 現在はresultを件数の要約のみにし、全件の中身はcard(構造化データ)に載せる。
+    it('get_tuning_rules: resultは件数の要約のみ、全件の中身はcardに構造化データとして載る', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-tr-1', 'get_tuning_rules', {}))
         .mockResolvedValueOnce(makeGroqResponse('現在2件のルールがあります。'));
@@ -1120,9 +1122,20 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockListRules).toHaveBeenCalledWith('tenant-abc');
       const result = res.body.actions[0].result as string;
       expect(result).toContain('2件');
-      expect(result).toContain('保証');
-      expect(result).toContain('価格交渉');
-      expect(result).toContain('(無効)');
+      expect(result).toContain('有効1件');
+      expect(result).toContain('無効1件');
+      // 個別のトリガー名・振る舞いは500字制約のあるresultには含めない(D3)
+      expect(result).not.toContain('保証');
+      expect(result).not.toContain('価格交渉');
+
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'tuning_rules_list',
+        totalCount: 2,
+        rules: [
+          { id: 1, triggerPattern: '保証', expectedBehavior: '2年と案内する', priority: 5, isActive: true },
+          { id: 2, triggerPattern: '価格交渉', expectedBehavior: '応じない', priority: 3, isActive: false },
+        ],
+      });
     });
 
     it('update_tuning_rule: confirmed=false → 更新されずブロックされる', async () => {
