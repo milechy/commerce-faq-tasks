@@ -46,7 +46,13 @@ export type LegacyLinkAgentActionCard = {
 export type ChatSessionListAgentActionCard = {
   kind: "chat_session_list";
   total: number;
-  sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+  sessions: Array<{
+    shortId: string;
+    startedAt: string;
+    messageCount: number;
+    preview: string;
+    outcome: string | null;
+  }>;
 };
 
 export type ChatSessionMessagesAgentActionCard = {

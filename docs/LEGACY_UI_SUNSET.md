@@ -38,9 +38,9 @@
 
 **参照した実装 (2026-07-30 実測):**
 
-- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は **49 本**（本文書作成時点の45本 + 会話の履歴カテゴリ拡張で追加した4本: `get_conversation_evaluation` / `get_session_outcome` / `record_session_outcome` / `delete_chat_session`。`name:` 実測49件）。
-- 実行系: `src/api/admin/agent/actionExecutor.ts` — 49 本すべてに `case` が存在。
-- 旧UI案内: `actionExecutor.ts:1659–1710` の `LEGACY_UI_LINKS` — **9 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`)。`get_legacy_ui_link` の `feature` enum と 1:1 対応。
+- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は本文書作成時点の45本から増え続けている（会話の履歴カテゴリ拡張で4本、その後のPRでも追加あり。**`name:` の実測件数を都度 `grep -c "^\s*name: '" toolDefinitions.ts` で確認すること**。以下の行番号・件数は本文書の実測時点のスナップショットであり、この文書自体が更新頻度に追いつけていない前提で読むこと）。
+- 実行系: `src/api/admin/agent/actionExecutor.ts` — ツール定義と同数の `case` が存在するはず(乖離があれば `confirmPolicy.test.ts` が検出する)。
+- 旧UI案内: `actionExecutor.ts` の `LEGACY_UI_LINKS`（行番号は移動しやすいため `grep -n "LEGACY_UI_LINKS" actionExecutor.ts` で確認）— **10 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf` / `knowledge_attribution`)。`get_legacy_ui_link` の `feature` enum と 1:1 対応（§1.2-4 で `knowledge_attribution` を追加、以前の版は9キーだった）。
 
 > **`feature` の 9 値の所在について**: `origin/main` (`ef9ac629`) 時点では `toolDefinitions.ts:839–849` の enum リテラルに直接書かれている。**PR #571 着地後は `LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) が唯一の値の所在**になり、enum は `enum: LEGACY_UI_FEATURES` (`:860`) として参照するだけになる。以下、本ドキュメントで「`feature` enum」と書いている箇所は**値の集合**を指しており、着地後は `LEGACY_UI_FEATURES` を読むこと (行番号は §3 Stage B に最新のものを記載)。
 
