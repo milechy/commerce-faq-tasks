@@ -642,6 +642,10 @@ const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
   // 会話本文の取得直後に、その内容(顧客が書いた文字列=注入されうる)に反応して
   // 同一ターンで削除が確定するのを防ぐ。削除は必ず別ターンでのユーザーの同意を要求する。
   get_chat_session_messages: 'delete_chat_session',
+  // 見本の提示と採用(永続レコード作成)が同一ターンで連鎖しないようにする。他の
+  // suggest_*→save_* と同じ理由: confirmed=true はモデルが自己申告する値でしかなく、
+  // 同一ターン内では人間の実際の同意を経ていない。
+  suggest_avatar_preset: 'adopt_avatar_preset',
 };
 
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ

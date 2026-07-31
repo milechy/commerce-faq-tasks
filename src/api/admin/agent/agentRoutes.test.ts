@@ -6991,6 +6991,45 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('見つかりませんでした');
       expect(result).toContain('suggest_avatar_preset');
     });
+
+    // suggest_faq → save_faq 等と同じ理由: confirmed=true はモデルの自己申告でしかなく、
+    // 同一ターン(同一ユーザーメッセージ)内では人間の実際の同意を経ていない。
+    // このガードが SUGGEST_TO_SAVE_TOOL に登録されていないと、ユーザーが
+    // 「アバターを作りたい」と言っただけの1ターンで、モデルが suggest → adopt を
+    // 自己判断で連鎖させ、カードを提示して同意を得る前に永続レコードが作られてしまう。
+    it('同一ターン内で suggest_avatar_preset → adopt_avatar_preset(confirmed=true) を連鎖しようとするとブロックされ、DBには書き込まれない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ap-chain-1', 'suggest_avatar_preset', {}))
+        .mockResolvedValueOnce(toolCallResponse('call-ap-chain-2', 'adopt_avatar_preset', { preset_id: 'preset-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ id: 'preset-1', name: 'Haruka', image_url: null, personality_prompt: '丁寧な性格です。', default_template_id: 'default_01' }],
+        }) // suggest_avatar_preset 内の見本取得
+        .mockResolvedValueOnce({ rows: [] }); // suggest_avatar_preset 内の自テナント既存名取得(未採用)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを作りたい', sessionId: 'sess-ap-chain-01' });
+
+      expect(res.status).toBe(200);
+      // adopt_avatar_preset の INSERT が発火していないこと(suggest側の2回のSELECTのみ)
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO avatar_configs'), expect.anything());
+
+      const adoptAction = res.body.actions.find((a: any) => a.tool === 'adopt_avatar_preset');
+      expect(adoptAction.result).toContain('同一ターン内での連続実行');
+
+      expect(recordedMetrics('agent_write_blocked')).toEqual([
+        {
+          metricName: 'agent_write_blocked',
+          tenantId: 'tenant-abc',
+          labels: { tool: 'adopt_avatar_preset', reason: 'chain', surface: 'unknown' },
+          value: 1,
+        },
+      ]);
+    });
   });
 
   // -------------------------------------------------------------------------
