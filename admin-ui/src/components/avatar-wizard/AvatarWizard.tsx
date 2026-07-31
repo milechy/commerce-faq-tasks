@@ -211,6 +211,7 @@ function NavButtons({
 
 interface Props {
   tenantId: string;
+  isSuperAdmin: boolean;
   onComplete: (imageUrl: string) => void;
   onCancel: () => void;
 }
@@ -224,7 +225,7 @@ const PREMIUM_STEPS = [
   "完了！",
 ];
 
-export function AvatarWizard({ tenantId: _tenantId, onComplete, onCancel }: Props) {
+export function AvatarWizard({ tenantId, isSuperAdmin, onComplete, onCancel }: Props) {
   const [step, setStep] = useState(1);
   const [state, setState] = useState<WizardState>(INITIAL);
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
@@ -272,7 +273,13 @@ export function AvatarWizard({ tenantId: _tenantId, onComplete, onCancel }: Prop
 
     try {
       const { prompt, negativePrompt } = built;
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/fal/generate`, {
+      // previewMode(super_adminのクライアントビュー)中は ?tenant= を付与する
+      // (copilot-preview/index.tsx の uploadUrl と同じ既存パターン)。付けないと
+      // super_admin自身の(空の)テナントで課金・保存されてしまう。
+      const generateUrl = isSuperAdmin && tenantId
+        ? `${API_BASE}/v1/admin/avatar/fal/generate?tenant=${encodeURIComponent(tenantId)}`
+        : `${API_BASE}/v1/admin/avatar/fal/generate`;
+      const res = await authFetch(generateUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, negativePrompt, numImages: 4 }),
@@ -306,8 +313,13 @@ export function AvatarWizard({ tenantId: _tenantId, onComplete, onCancel }: Prop
     try {
       const { prompt, negativePrompt } = built;
 
+      // previewMode中は ?tenant= を付与する(handleGenerateと同じ理由、#P1-B)。
+      const premiumUrl = isSuperAdmin && tenantId
+        ? `${API_BASE}/v1/admin/avatar/generate-premium?tenant=${encodeURIComponent(tenantId)}`
+        : `${API_BASE}/v1/admin/avatar/generate-premium`;
+
       // simulate step transition: Magnific処理は非同期で中継ぎUIを出す
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/generate-premium`, {
+      const res = await authFetch(premiumUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, negativePrompt }),

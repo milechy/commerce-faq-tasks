@@ -23,6 +23,13 @@ jest.mock('../../../lib/contentGuard', () => ({
 jest.mock('../../../lib/magnific', () => ({
   upscaleWithMagnific: jest.fn().mockResolvedValue(null),
 }));
+// generate-premium(client_admin時)が queryTenantPlan 経由で参照する。
+// DATABASE_URL 未設定の場合 getPool() が同期例外を投げるため、この describe
+// ブロックで generate-premium を対象に含める(#P1-B)前提としてモックが必要。
+// growthプラン固定で「テナントが解決できれば400にならない」検証に支障が出ないようにする。
+jest.mock('../../../lib/db', () => ({
+  getPool: () => ({ query: jest.fn().mockResolvedValue({ rows: [{ plan: 'growth' }] }) }),
+}));
 
 import express from 'express';
 import request from 'supertest';
@@ -158,11 +165,10 @@ describe('avatar generation routes — fail-closed: client_admin without tenant_
 });
 
 // ── テナント解決: super_adminが?tenant=を付けないと400(外部API未呼び出し) ──
-// generate-premium(premiumGenerationRoutes.ts)は #P0-1〜#P0-3 のスコープ外
-// (同じ脆弱パターンが存在するが、別タスクとして扱う。ここでは対象外にする)。
-const TENANT_GUARDED_ENDPOINTS = GENERATION_ENDPOINTS.filter(
-  (e) => e.path !== '/v1/admin/avatar/generate-premium'
-);
+// generate-premiumは#P0-1〜#P0-3では意図的にスコープ外だったが、#P1-Bで
+// resolveEffectiveTenantId + 400ガードを導入したため、他4ルートと同じ
+// テーブル駆動テストがそのまま適用できる。除外リストは無くなった。
+const TENANT_GUARDED_ENDPOINTS = GENERATION_ENDPOINTS;
 
 describe('avatar generation routes — テナント不明時は400、外部APIを呼ばない', () => {
   TENANT_GUARDED_ENDPOINTS.forEach(({ method, path, body }) => {
