@@ -2,6 +2,7 @@ import { test as setup } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { ADMIN_BASE_URL } from './config';
+import { waitForAppReady } from './helpers/gotoRetry';
 
 const AUTH_FILE = 'tests/e2e/.auth/user.json';
 
@@ -17,8 +18,9 @@ setup('authenticate admin', async ({ page }) => {
     return;
   }
 
-  await page.goto(ADMIN_BASE_URL);
-  await page.locator('input[type="email"]').waitFor({ timeout: 15000 });
+  // Asana 1217048228772841: mainマージ直後のCloudflare Pagesデプロイ直撃で
+  // input[type="email"]が現れない時間帯があるため、再読み込みしながら待つ。
+  await waitForAppReady(page, ADMIN_BASE_URL, 'input[type="email"]');
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', password);
   await page.locator('button[type="submit"]').click();
