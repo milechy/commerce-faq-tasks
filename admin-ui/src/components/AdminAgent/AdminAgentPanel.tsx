@@ -43,7 +43,7 @@ export default function AdminAgentPanel({
   replies,
   onMarkReplyRead,
 }: AdminAgentPanelProps) {
-  const { messages, isLoading, sendMessage } = useAdminAgent();
+  const { messages, isLoading, sendMessage } = useAdminAgent(tenantId);
   const [input, setInput] = useState("");
   const [isComposing, setIsComposing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);

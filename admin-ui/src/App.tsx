@@ -97,7 +97,10 @@ if (typeof window !== "undefined") {
 }
 
 function AppInner() {
-  const { isClientAdmin, isSuperAdmin, user, previewMode, previewTenantId } = useAuth();
+  const {
+    isClientAdmin, isSuperAdmin, user, previewMode, previewTenantId,
+    onboardingStage, onboardingStageResolved,
+  } = useAuth();
   const { isOpen: agentOpen, seedQuery, toggle: toggleAgent, close: closeAgent } = useAdminAgentUI();
   const location = useLocation();
   const showAIChat = isClientAdmin && location.pathname !== "/admin/chat-test";
@@ -117,9 +120,39 @@ function AppInner() {
   // 追加: super_adminの「クライアントビューで見る」(previewMode)中は、このブラウザの
   // オプトインフラグに関わらず常に新UI(copilot-preview)を表示する — 動作確認・デモ用途のため。
   const isLandingPath = location.pathname === "/" || location.pathname === "/admin";
+
+  // Asana 1217040702572796(P6): 新規テナント(オンボーディング4段階が全て完了していない
+  // client_admin)は、このブラウザのオプトイン設定に関わらず新UIを既定にする。
+  // 「新規」の範囲は onboarding_completed_at 単体ではなく4段階すべて(業種回答・知識公開・
+  // 設置検知・初回実会話)が揃うまでとする — 途中で旧UI側に戻ると、P5で実装した
+  // 「次の一手」の提示が届かなくなり、オンボーディングが進まなくなるため。
+  // 既存テナント(4段階完了済み)の着地先・動線はこれによって一切変わらない。
+  const isNewTenantOnboarding =
+    !previewMode &&
+    isClientAdmin &&
+    onboardingStageResolved &&
+    onboardingStage !== null &&
+    !(
+      onboardingStage.industryAnswered &&
+      onboardingStage.knowledgePublished &&
+      onboardingStage.widgetInstalled &&
+      onboardingStage.firstConversation
+    );
+
   const isCopilotPreview =
     location.pathname === "/copilot-preview" ||
-    (isLandingPath && (isChatFirstDefaultEnabled() || previewMode));
+    (isLandingPath && (isChatFirstDefaultEnabled() || previewMode || isNewTenantOnboarding));
+
+  // ちらつき・二重着地の防止: ランディングパスで、ブラウザのオプトイン(同期的に判定可能)が
+  // 無効・previewModeでもない場合、新規テナント判定(onboardingStageResolved、非同期のAPI
+  // 呼び出しに依存)が確定するまでは旧UI・新UIどちらも描画しない。確定前に旧UIを描画すると、
+  // 新規テナントの場合に「旧UIが一瞬出てから新UIへ飛ぶ」現象が起きる。
+  const isLandingDecisionPending =
+    isLandingPath &&
+    !previewMode &&
+    isClientAdmin &&
+    !isChatFirstDefaultEnabled() &&
+    !onboardingStageResolved;
 
   // 担当者からの未読返信(相談窓口)。ここで取るのはパネル(Surface A)のFABバッジと
   // お返事カードのためだけなので、全画面UI(Surface B)を表示している間は取らない
@@ -135,6 +168,13 @@ function AppInner() {
         <Route path="/auth/bridge" element={<AuthBridgePage />} />
       </Routes>
     );
+  }
+
+  // 新規テナント判定が未確定の間は何も描画しない(旧UIの一瞬描画→新UIへの二重着地を防ぐ)。
+  // このガードはブラウザのオプトインが無効・previewModeでもない場合にのみ働くため、
+  // 既存テナント・previewMode・オプトイン済みユーザーの着地は従来どおり同期的に決まる。
+  if (isLandingDecisionPending) {
+    return null;
   }
 
   if (isCopilotPreview) {

@@ -133,4 +133,51 @@ test.describe('Preview scope leak (known bug) — escalations が preview テナ
       `プレビュー中(lp-demo)に他テナントのアバター設定が漏洩: ${JSON.stringify(foreign)}`,
     ).toHaveLength(0);
   });
+
+  // C-LEAK-4: /copilot-preview のアバター関連ツール(get_avatar_list等)は previewMode 中、
+  // targetTenantId をリクエストボディに明示的に付与して送る(docs/CHAT_SURFACE_DECISION.md §1.9
+  // が指摘する「super_adminのtargetTenantId導出が2箇所別実装」の懸念に対する回帰ガード)。
+  // C-LEAK-1〜3と異なりこのツールはテキスト応答のみでJSON構造化データを持たないため、
+  // レスポンス本文からのテナント混入検査ではなく、リクエスト側のスコープ付与を検証する。
+  test('C-LEAK-4: carnation プレビュー中の /copilot-preview で targetTenantId が正しく付与される(アバター一覧)', async ({
+    page,
+  }) => {
+    // 1. テナント詳細を開き、プレビュー投入
+    await page.goto(`${ADMIN}/admin/tenants/${PREVIEW_TENANT}`, { waitUntil: 'domcontentloaded' });
+    const previewBtn = page.getByRole('button', { name: /クライアントビューで見る/ });
+    await previewBtn.waitFor({ timeout: 15000 });
+    await previewBtn.click();
+    await expect(page.getByText(/プレビューモード|元に戻す/).first()).toBeVisible({ timeout: 10000 });
+
+    // 2. SPA内リンククリックでチャットへ(page.gotoはpreview状態をリセットしてしまうため使わない)。
+    // previewMode中は isClientAdmin が true になるため「AIチャットに戻る」導線が出る
+    // (App.tsx の showAIChat 判定コメント参照)。
+    await page.getByText('AIチャットに戻る').first().click();
+    await page.waitForURL((url) => url.pathname === '/copilot-preview', { timeout: 15000 });
+    await page
+      .waitForResponse((r) => r.url().includes('/v1/admin/agent/chat') && r.request().method() === 'POST', { timeout: 20000 })
+      .catch(() => {});
+    await page.waitForTimeout(1500);
+
+    // 3. アバター一覧を尋ね、リクエストボディの targetTenantId を検証
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('アバターの一覧を見せて');
+    const chatResP = page.waitForResponse(
+      (r) => r.url().includes('/v1/admin/agent/chat') && r.request().method() === 'POST',
+      { timeout: 20000 },
+    );
+    await send.click();
+    const chatRes = await chatResP;
+    const reqBody = JSON.parse(chatRes.request().postData() || '{}') as { targetTenantId?: string };
+
+    test.info().annotations.push({ type: 'targetTenantId', description: String(reqBody.targetTenantId) });
+    expect(reqBody.targetTenantId).toBe(PREVIEW_TENANT);
+    expect(reqBody.targetTenantId).not.toBe(PREVIEW_TENANT_2);
+
+    // 4. テナント未特定エラーに落ちていない(=正しくスコープ解決できている)こと
+    await page.waitForTimeout(1500);
+    const body = (await page.textContent('body')) ?? '';
+    expect(body).not.toContain('テナントが特定できません');
+  });
 });

@@ -174,6 +174,130 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
     const pdfTabCount = await page.getByText('PDFアップロード', { exact: true }).count();
     expect(pdfTabCount).toBe(0);
   });
+
+  // このファイルの方針(非破壊のみ)に従い、以下2件も /v1/admin/agent/chat・fal/generate・
+  // configs PATCH をモックする(理由は qa-copilot-preview.spec.ts CP-B-3 のコメントと同じ:
+  // 実LLM/実課金/carnationの実データ書き換えに依存させない)。検証対象はUIの実配線であり、
+  // モックは非破壊性を担保する手段そのものである。
+  async function mockAvatarFlowUpToAdopted(page: any) {
+    let chatCalls = 0;
+    const sentMessages: string[] = [];
+    await page.route('**/v1/admin/agent/chat', async (route: any) => {
+      const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
+      chatCalls += 1;
+      sentMessages.push(body.message ?? '');
+      if (chatCalls === 1) {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
+      }
+      if (body.message?.includes('アバターを作りたい')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            reply: '見本をご提案しました。',
+            actions: [{
+              tool: 'suggest_avatar_preset',
+              result: '「Haruka」というアバターの見本があります。\nプリセットID: preset-e2e-1\nこのまま採用しますか？',
+              card: { kind: 'avatar_preset', presetId: 'preset-e2e-1', name: 'Haruka', imageUrl: null, description: 'とても丁寧な性格です。' },
+            }],
+          }),
+        });
+      }
+      if (body.message === '採用してください') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            reply: '採用しました。',
+            actions: [{
+              tool: 'adopt_avatar_preset',
+              result: 'アバター「Haruka」を採用しました。まだ公開はされていません。',
+              card: { kind: 'avatar_adopted', configId: 'cfg-e2e-1', name: 'Haruka', imageUrl: null, description: 'とても丁寧な性格です。' },
+            }],
+          }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '了解しました。', actions: [] }) });
+    });
+    await page.route('**/v1/admin/avatar/fal/generate', (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ images: ['https://img.example/1.png', 'https://img.example/2.png', 'https://img.example/3.png', 'https://img.example/4.png'] }),
+      }),
+    );
+    return {
+      totalCalls: () => chatCalls,
+      countMessage: (message: string) => sentMessages.filter((m) => m === message).length,
+    };
+  }
+
+  // 下書き(画像候補)そのものはサーバに永続化されない一方、採用済みアバター自体
+  // (avatar_configs行 = adopt_avatar_presetの結果)はサーバ側に実在する。
+  // sessionStorage(chatSessionStore)からの会話復元が、生成完了後の状態を正しく
+  // 保つことを検証する。「生成の途中(status=generating)」でのリロードは、対応する
+  // fetchそのものが中断されるため復帰しない(既知の制約。カードは永久にgenerating表示の
+  // ままになる)。本テストは生成が完了した状態からのリロードのみを対象とする。
+  test('B-IRR-5: 画像候補の生成が完了した状態でリロードしても会話が復元し、採用を続けられる', async ({ page }) => {
+    await mockAvatarFlowUpToAdopted(page);
+    let patchCount = 0;
+    await page.route('**/v1/admin/avatar/configs/cfg-e2e-1', (route: any) => {
+      if (route.request().method() === 'PATCH') {
+        patchCount += 1;
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'cfg-e2e-1' }) });
+      }
+      return route.continue();
+    });
+
+    await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(2000);
+
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('アバターを作りたい');
+    await send.click();
+    await page.getByRole('button', { name: '採用して' }).waitFor({ timeout: 10000 });
+    await page.getByRole('button', { name: '採用して' }).click();
+    await page.getByRole('button', { name: '画像を新しく生成する' }).waitFor({ timeout: 10000 });
+    await page.getByRole('button', { name: '画像を新しく生成する' }).click();
+    await page.getByRole('button', { name: 'これにする' }).first().waitFor({ timeout: 10000 });
+
+    // このタイミングで4枚の候補が既に描画されている(=生成は完了済み)。ここでリロードする。
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(1500);
+
+    // 会話(sessionStorage)が復元し、候補カードとボタンがそのまま操作できる
+    await expect(page.getByRole('button', { name: 'これにする' }).first()).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'これにする' }).first().click();
+    await expect(page.getByRole('button', { name: 'これに決定' })).toBeVisible({ timeout: 10000 });
+    expect(patchCount).toBe(1);
+  });
+
+  // GID: 下書き提案のチップを連打しても、2通目の「採用してください」が二重送信されない
+  // (Msg.chipsUsed による使用済み化。連打はユーザーが実際にやりがちな操作)。
+  test('B-IRR-6: 「採用して」チップを連打しても採用は1回しか実行されない', async ({ page }) => {
+    const mock = await mockAvatarFlowUpToAdopted(page);
+
+    await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(2000);
+
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('アバターを作りたい');
+    await send.click();
+    const adoptChip = page.getByRole('button', { name: '採用して' });
+    await adoptChip.waitFor({ timeout: 10000 });
+
+    // 連打(2回)。1回目のクリックでチップは使用済みになり消えるため、2回目は
+    // 同じ要素に当たらず何も起きない想定。
+    await adoptChip.click();
+    await adoptChip.click({ timeout: 1000 }).catch(() => {}); // 消えていれば即タイムアウトでよい
+
+    await expect(page.getByRole('button', { name: '画像を新しく生成する' })).toBeVisible({ timeout: 10000 });
+    // 二重の実UI状態(チップが残っていない)と、実際の送信回数(サーバ視点)の両方を確認する
+    expect(await page.getByRole('button', { name: '採用して' }).count()).toBe(0);
+    expect(mock.countMessage('採用してください')).toBe(1);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -245,5 +369,31 @@ test.describe('Irregular — Role C (super_admin cross-tenant & preview)', () =>
     await page.waitForTimeout(2000);
     const pdfTabCount = await page.getByText('PDFアップロード', { exact: true }).count();
     expect(pdfTabCount).toBeGreaterThan(0);
+  });
+
+  // previewMode を一切設定せず /copilot-preview を直接開く(page.gotoで良い。previewMode
+  // 未設定=状態を消す心配が無いため他のC-LEAK系テストのような制約が無い)。
+  // activate_avatar はテナントが解決できないため未確定のIDに対しても実行前に拒否され、
+  // DBへは触れない(既存jestテスト同様のガード。実backendに対して安全に実行できる)。
+  test('C-IRR-5: super_adminがpreview未選択のままアバターの有効化を指示すると拒否される', async ({ page }) => {
+    await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page
+      .waitForResponse((res) => res.url().includes('/v1/admin/agent/chat') && res.request().method() === 'POST', { timeout: 20000 })
+      .catch(() => {});
+    await page.waitForTimeout(2000);
+
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('アバターを有効化してください');
+    const chatResP = page.waitForResponse(
+      (res) => res.url().includes('/v1/admin/agent/chat') && res.request().method() === 'POST',
+      { timeout: 20000 },
+    );
+    await send.click();
+    await chatResP;
+    await page.waitForTimeout(1500);
+
+    const body = (await page.textContent('body')) ?? '';
+    expect(body).toContain('テナントが特定できません');
   });
 });
