@@ -1907,6 +1907,49 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
       .mock.calls.find(([url]) => String(url).includes("/fal/generate"));
     expect(String(generateCall![0])).toBe("http://localhost:3100/v1/admin/avatar/fal/generate");
   });
+
+  // テナントIDはURLに素で連結している。encodeURIComponent を外すと `&` や `=` が
+  // そのままクエリ構文として解釈され、別のパラメータを注入できてしまう
+  // （例: `a&numImages=99`）。エスケープが実際に効いていることを固定する。
+  it("テナントIDにクエリ構文の文字が含まれていてもエスケープされる", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt({
+      ...SUPER_ADMIN_IN_PREVIEW,
+      previewTenantId: "a&b=c d",
+    });
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const url = String(
+      vi.mocked(authFetch).mock.calls.find(([u]) => String(u).includes("/fal/generate"))![0],
+    );
+    expect(url).toBe("http://localhost:3100/v1/admin/avatar/fal/generate?tenant=a%26b%3Dc%20d");
+    // 生のまま連結されていない（=クエリが増えていない）こと
+    expect(new URL(url).searchParams.get("tenant")).toBe("a&b=c d");
+    expect([...new URL(url).searchParams.keys()]).toEqual(["tenant"]);
+  });
+
+  // previewMode に入っているのにテナントが未解決（previewTenantId=null）という
+  // 中間状態がありうる。ここで `?tenant=` を空で送ると、バックエンドは
+  // 「空白のみ/未指定」として400にするので、送らない方が挙動が素直になる。
+  // 空文字を付けて送っていないことを固定する。
+  it("previewMode中でもテナント未解決なら ?tenant= を空で送らない", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt({
+      ...SUPER_ADMIN_IN_PREVIEW,
+      previewTenantId: null,
+    });
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const url = String(
+      vi.mocked(authFetch).mock.calls.find(([u]) => String(u).includes("/fal/generate"))![0],
+    );
+    expect(url).toBe("http://localhost:3100/v1/admin/avatar/fal/generate");
+    expect(url).not.toContain("tenant=");
+  });
 });
 
 // POST /match-voice はテキストの候補(id/title/description/score)のみを返し音声
