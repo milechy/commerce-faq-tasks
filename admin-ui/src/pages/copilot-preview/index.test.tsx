@@ -2710,6 +2710,56 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
     expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
   });
+
+  // previewMode中にsuper_adminが別テナントへ切り替えた直後にPDFを投げた場合、
+  // uploadUrlが古いpreviewTenantIdを使い回して誤テナントへ送信しないことを固定する。
+  it("previewMode中に別テナントへ切り替えた直後にPDFを落とすと、新テナント宛に送信される(古いテナントIDが混入しない)", async () => {
+    const { rerender } = renderPage(SUPER_ADMIN_IN_PREVIEW);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    // 別テナントへ切替(previewTenantIdのみ変化)
+    vi.mocked(useAuth).mockReturnValue(
+      baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-preview-2" }),
+    );
+    rerender(
+      <MemoryRouter>
+        <CopilotPreviewPage />
+      </MemoryRouter>,
+    );
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    const xhr = MockXHR.instances[0]!;
+    expect(xhr.open).toHaveBeenCalledWith(
+      "POST",
+      "http://localhost:3100/v1/admin/knowledge/book-pdf?tenant=tenant-preview-2",
+    );
+  });
+
+  // acceptFilesは1件ずつ順次送信するfor...ofループのみで、多重呼び出しをブロックする
+  // ロック/フラグが無い。1件目がアップロード中(fireLoad未発火)のまま2件目を落とすと
+  // どうなるかを固定する(現状の挙動を可視化するテストで、特定の対処を強制するものではない)。
+  it("【現状の挙動】1件目のアップロード中に2件目をドロップすると、2件目も独立して送信が始まる(排他制御なし)", async () => {
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
+
+    dropFiles([makeFile("1件目.pdf", "application/pdf")]);
+    await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+    // 1件目はまだ fireLoad していない(アップロード中)状態のまま2件目を落とす
+    expect(screen.getByText("1件目.pdf")).toBeTruthy();
+
+    dropFiles([makeFile("2件目.pdf", "application/pdf")]);
+    await waitFor(() => expect(MockXHR.instances.length).toBe(2));
+
+    // 両方の進捗カードが会話に共存する(片方が壊れて消えたりしない)
+    expect(screen.getByText("1件目.pdf")).toBeTruthy();
+    expect(screen.getByText("2件目.pdf")).toBeTruthy();
+
+    // 1件目を完了させても2件目のXHRは影響を受けず独立して継続する
+    MockXHR.instances[0]!.fireLoad(201, { id: 1, title: "1件目", status: "uploaded" });
+    await waitFor(() => expect(screen.getAllByText("PDFを受け取りました").length).toBe(1));
+    expect(screen.getByText("2件目.pdf")).toBeTruthy();
+  });
 });
 
 // GID 1217040818410419: 「書籍/PDFはR2C運用限定」の実装反映。テナント(client_admin)からの

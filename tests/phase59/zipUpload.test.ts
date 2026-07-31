@@ -298,6 +298,72 @@ describe("ZIP PDFアップロード (Phase59)", () => {
     expect(res.body.error).toContain("不正なファイルパス");
   });
 
+  // ── 9. 壊れたZIPバイト列 ─────────────────────────────────────────────────
+
+  it("9. ZIPとしてパースできないバイト列 → 400エラー「読み込みに失敗しました」", async () => {
+    // ZIPのローカルファイルヘッダ署名(PK\x03\x04)を含まない、ただのランダムバイト列。
+    // AdmZipのコンストラクタが例外を投げる経路(try/catch)を通す。
+    const garbage = Buffer.from("これはZIPファイルではありません。ただのテキストです。".repeat(50), "utf8");
+
+    const { app } = makeApp({});
+    const res = await request(app)
+      .post("/v1/admin/knowledge/book-pdf")
+      .attach("file", garbage, { filename: "not-a-zip.zip", contentType: "application/zip" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("読み込みに失敗しました");
+  });
+
+  // ── 10. PDFと非PDFが混在するZIP(全滅でも全成功でもない) ───────────────────
+
+  it("10. PDF2件+非PDF1件が混在するZIP → 非PDFは静かに除外され、PDF2件のみ処理される", async () => {
+    const zipBuf = makeZip([
+      { name: "book-a.pdf", content: MINIMAL_PDF },
+      { name: "readme.txt", content: Buffer.from("これはPDFではありません") },
+      { name: "book-b.pdf", content: MINIMAL_PDF },
+    ]);
+
+    const { app, db } = makeApp({});
+    const res = await request(app)
+      .post("/v1/admin/knowledge/book-pdf")
+      .attach("file", zipBuf, { filename: "mixed.zip", contentType: "application/zip" });
+
+    expect(res.status).toBe(201);
+    // 非PDFはpdfEntriesの時点でフィルタされ、results配列にすら現れない
+    // (エラー扱いで報告されるのではなく、そもそも対象外として静かに除外される)
+    expect(res.body.total).toBe(2);
+    expect(res.body.results).toHaveLength(2);
+    expect(res.body.results.map((r: any) => r.fileName).sort()).toEqual(["book-a.pdf", "book-b.pdf"]);
+    expect(res.body.results.every((r: any) => r.status === "ok")).toBe(true);
+    const insertCalls = (db.query as jest.Mock).mock.calls.filter((c: any[]) =>
+      typeof c[0] === "string" && c[0].includes("INSERT INTO book_uploads")
+    );
+    expect(insertCalls).toHaveLength(2);
+  });
+
+  // ── 11. 展開後合計サイズが200MB上限を超える ───────────────────────────────
+
+  it("11. 展開後合計サイズが200MBを超えるZIP → 400エラー「200MB」", async () => {
+    // 実際の200MB超のバッファを3エントリに分けて用意する(ゼロ埋めなので圧縮・確保は高速)。
+    // multerのfileSize上限(50MB)は「圧縮後(=送信バイト数)」に効くのに対し、この上限は
+    // 「展開後の合計」に効くため、圧縮率の高いゼロ埋めバッファでmulter制限を回避しつつ
+    // 展開後合計だけを200MB超にできる。
+    const zip = new AdmZip();
+    const CHUNK = 75 * 1024 * 1024; // 75MB × 3 = 225MB(> 200MB上限)
+    for (let i = 0; i < 3; i++) {
+      zip.addFile(`huge-${i + 1}.pdf`, Buffer.alloc(CHUNK, 0x00));
+    }
+    const zipBuf = zip.toBuffer();
+
+    const { app } = makeApp({});
+    const res = await request(app)
+      .post("/v1/admin/knowledge/book-pdf")
+      .attach("file", zipBuf, { filename: "zipbomb.zip", contentType: "application/zip" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("200MB");
+  }, 20000);
+
   // ── 8. 通常PDFアップロードの回帰テスト ───────────────────────────────────
 
   it("8. 通常のPDFアップロード → 既存動作が壊れていない（回帰テスト）", async () => {
