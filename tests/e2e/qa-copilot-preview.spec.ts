@@ -294,6 +294,20 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
       console.log('[DIAG] responses:', JSON.stringify(diagResponses, null, 2));
       console.log('[DIAG] localStorage keys:', await page.evaluate(() => Object.keys(window.localStorage)));
       console.log('[DIAG] body text:', (await page.textContent('body'))?.slice(0, 1500));
+      console.log('[DIAG] jwt payload:', await page.evaluate(() => {
+        try {
+          const key = Object.keys(window.localStorage).find((k) => k.includes('auth-token'));
+          if (!key) return 'NO_AUTH_TOKEN_KEY';
+          const raw = window.localStorage.getItem(key);
+          const parsed = JSON.parse(raw || '{}');
+          const accessToken = parsed?.access_token as string | undefined;
+          if (!accessToken) return 'NO_ACCESS_TOKEN';
+          const payloadB64 = accessToken.split('.')[1];
+          return JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')));
+        } catch (e) {
+          return 'ERROR: ' + String(e);
+        }
+      }));
 
       // 週次ブリーフィングの代わりに、指示ルールの初回紹介が出る
       await expect(page.getByText(/最初のルールを作ってみますか/)).toBeVisible({ timeout: 15000 });
