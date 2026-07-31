@@ -148,6 +148,45 @@ describe('confirmPolicy: フロントの REAL_WRITE_TOOLS との突き合わせ'
 });
 
 // ---------------------------------------------------------------------------
+// 確認フラグ(confirmed)の読み取り方が1箇所に集約されていることの検証。
+//
+// かつては Boolean(args['confirmed']) と args['confirmed'] === true の2方式が
+// 混在していた。前者は Boolean('false') === true という JS の仕様により、
+// 文字列 'false' を「確認済み」と誤判定する。本リポジトリでは Groq が引数を
+// 文字列化して送ってくる事象が実測されている（agentRoutes.ts の parseToolArgs
+// のコメント参照）ため、この誤判定は机上のものではない。
+//
+// 判定を isConfirmed() へ集約したうえで、素の読み取りが再び現れないことを
+// ここで機械的に防ぐ。
+// ---------------------------------------------------------------------------
+
+describe('confirmPolicy: 確認フラグの読み取りが isConfirmed() に集約されている', () => {
+  // args['confirmed'] を isConfirmed() に渡す形以外で参照している箇所を検出する。
+  // 許可されるのは isConfirmed(args['confirmed']) の形のみ。
+  const RAW_CONFIRMED_READS: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /Boolean\(\s*args\[['"]confirmed['"]\]\s*\)/g, label: "Boolean(args['confirmed'])" },
+    { pattern: /args\[['"]confirmed['"]\]\s*===/g, label: "args['confirmed'] ===" },
+    { pattern: /args\[['"]confirmed['"]\]\s*==[^=]/g, label: "args['confirmed'] ==" },
+    { pattern: /!\s*args\[['"]confirmed['"]\]/g, label: "!args['confirmed']" },
+  ];
+
+  it('Boolean() や === による素の確認フラグ読み取りが残っていない', () => {
+    const found = RAW_CONFIRMED_READS.flatMap(({ pattern, label }) =>
+      (EXECUTOR_CODE.match(pattern) ?? []).map(() => label),
+    );
+    expect(found).toEqual([]);
+  });
+
+  it('確認フラグを読む箇所はすべて isConfirmed() を経由している', () => {
+    // args['confirmed'] の総出現回数と、isConfirmed(args['confirmed']) の出現回数が一致すること。
+    // 片方だけ増えた場合（新しいツールが素の読み取りを書いた場合）に落ちる。
+    const allReads = (EXECUTOR_CODE.match(/args\[['"]confirmed['"]\]/g) ?? []).length;
+    const viaHelper = (EXECUTOR_CODE.match(/isConfirmed\(\s*args\[['"]confirmed['"]\]\s*\)/g) ?? []).length;
+    expect(viaHelper).toBe(allReads);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // requiresConfirmation の挙動（本タスクの時点では階層によらず一律 true）
 // ---------------------------------------------------------------------------
 
