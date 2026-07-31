@@ -221,6 +221,14 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
     // my-tenant(オンボーディング判定)とagent/chatをモックし、実LLM/実carnationデータの
     // 書き換えに依存させない(CP-B-3のコメントと同じ理由)。
     test('CP-B-4 (P6-1): 4段階完了直後の紹介から、旧UIに行かずに指示ルールを作成・確認できる', async ({ page }) => {
+      // TEMP DIAGNOSTIC (Asana 1217048227626635, do not merge): copilot-preview/index.tsx に
+      // 追加した [DIAG2] console.log をブラウザ→NodeのCIログへ転送する。
+      page.on('console', (msg) => {
+        if (msg.text().includes('[DIAG2]')) {
+          // eslint-disable-next-line no-console
+          console.log('[BROWSER]', msg.text());
+        }
+      });
       await page.route('**/v1/admin/my-tenant', (route) =>
         route.fulfill({
           status: 200,
