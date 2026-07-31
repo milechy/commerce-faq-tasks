@@ -387,13 +387,26 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
       }
-      return res.json(result.rows[0]);
+      const row = result.rows[0] as {
+        onboarding_industry: string | null;
+        onboarding_widget_seen_at: string | null;
+      };
+      // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
+      // オンボーディングの「次の一手」提示を使えるようにするため、my-tenant同様に
+      // onboarding_stage を相乗りさせる(新規fetchは作らない)。
+      const onboarding_stage = await fetchOnboardingStageStatus(
+        db,
+        id,
+        row.onboarding_industry,
+        row.onboarding_widget_seen_at
+      );
+      return res.json({ ...result.rows[0], onboarding_stage });
     } catch (err) {
       logger.warn("[GET /v1/admin/tenants/:id]", err);
       return res.status(500).json({ error: "取得に失敗しました" });

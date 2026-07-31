@@ -106,7 +106,9 @@ function baseAuth(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
   } as ReturnType<typeof useAuth>;
 }
 
-// super_admin は my-tenant のオンボーディング判定をスキップして直接ブリーフィングへ進む。
+// Asana 1217040568430944(P7)以降、previewMode中のsuper_adminも
+// /v1/admin/tenants/:id 経由でオンボーディング判定を行う(my-tenantは使わない。
+// my-tenantはJWTのtenant_idを見るため、super_adminのJWTには使えない)。
 // プレビュー未選択(previewMode=false)のsuper_adminはテナント選択画面になるため、
 // チャット本体の挙動を検証するテストではクライアントビューに入った状態を使う。
 const SUPER_ADMIN_IN_PREVIEW: Partial<ReturnType<typeof useAuth>> = {
@@ -267,12 +269,20 @@ describe("CopilotPreviewPage — モバイル左レールのドロワー化", ()
 
   it("会話中(busy)は他カテゴリーへの切り替えロックがドロワー化後も維持される", async () => {
     let resolveFetch: (v: Response) => void = () => {};
-    vi.mocked(authFetch).mockImplementation(
-      () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
-    );
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      // Asana 1217040568430944(P7)以降、bootstrapは実際のチャットfetchの前に
+      // オンボーディング判定(/v1/admin/tenants/:id)を1回awaitする。これは即座に
+      // 解決させ、このテストが検証したい「実際のチャット送信中(busy)」の再現を
+      // 妨げないようにする(このURLだけ他と挙動を分ける)。
+      if (String(url).includes("/v1/admin/tenants/")) {
+        return mockOk({ onboarding_stage: null });
+      }
+      return new Promise<Response>((resolve) => { resolveFetch = resolve; });
+    });
     renderPage(SUPER_ADMIN_IN_PREVIEW);
-    // このモックは全fetch呼び出し(bootstrap本体+左レールのバッジ取得2件)を未解決のまま止める。
-    // 呼び出し回数の厳密一致では待てないため、最低1回発火したことだけを確認する。
+    // このモックは実チャットのfetch呼び出し(bootstrap本体+左レールのバッジ取得2件)を
+    // 未解決のまま止める。呼び出し回数の厳密一致では待てないため、最低1回発火した
+    // ことだけを確認する。
     await waitFor(() => expect(authFetch).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("button", { name: "メニューを開く" }));
@@ -2114,7 +2124,38 @@ describe("CopilotPreviewPage — super_adminのテナント選択", () => {
 
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByRole("heading", { name: /どのお客様として見ますか/ })).toBeNull();
-    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/tenants"))).toBe(false);
+    // テナント一覧(選択画面用)は叩かない。個別テナント取得(オンボーディング判定、下のテストで検証)は叩く。
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).endsWith("/v1/admin/tenants"))).toBe(false);
+  });
+
+  // Asana 1217040568430944(P7)
+  it("previewMode中のsuper_adminはmy-tenantではなく/v1/admin/tenants/:idでオンボーディング判定する", async () => {
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/v1/admin/tenants/tenant-preview"))).toBe(true);
+    expect(urls.some((u) => u.includes("/v1/admin/my-tenant"))).toBe(false);
+  });
+
+  it("previewMode中、テナントがオンボーディング未完了なら次の一手が提示される(代行導線)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).includes("/v1/admin/tenants/tenant-preview")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: false,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+          },
+        });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+
+    expect(await screen.findByText(/どんな業種ですか/)).toBeTruthy();
   });
 
   it("client_adminにはテナント選択が出ず、常に通常のチャットになる", async () => {

@@ -347,6 +347,42 @@ describe("Tenant Admin Routes", () => {
     });
   });
 
+  // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
+  // オンボーディング状態を取得できるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)
+  describe("GET /v1/admin/tenants/:id — onboarding_stage", () => {
+    it("onboarding_stageを応答に含める", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: "t1", name: "Test", plan: "starter", is_active: true, features: {},
+            onboarding_industry: "beauty", onboarding_widget_seen_at: null,
+          }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // faq_docs (knowledge_published)
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions (first_conversation)
+
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.onboarding_stage).toEqual({
+        industryAnswered: true,
+        knowledgePublished: false,
+        widgetInstalled: false,
+        firstConversation: false,
+      });
+    });
+
+    it("client_adminからのアクセスは従来どおり403(super_admin専用)", async () => {
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(403);
+    });
+  });
+
   describe("PATCH /v1/admin/tenants/:id", () => {
     it("updates faq_question_hint/faq_answer_hint for super_admin (GID 1216274385106667)", async () => {
       mockDb.query
