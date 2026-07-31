@@ -105,7 +105,10 @@ export type TuningRuleDraftAgentActionCard = {
   priority: number;
 };
 
-// フィールド形状は actionExecutor.ts の WeeklySummaryCardPayload と1対1に保つ。
+// フィールド形状は src/api/admin/agent/actionExecutor.ts の WeeklySummaryCardPayload と
+// 1対1に保つ(サーバ/フロントの境界を跨ぐため型は共有できず、手動同期が必要)。
+// pages/copilot-preview/index.tsx の Card union はこの型を Omit<..., "kind"> で再利用して
+// いるため、ここを直せば同ファイル内の二重定義は発生しない。
 export type WeeklySummaryAgentActionCard = {
   kind: "weekly_summary";
   asOf: string;

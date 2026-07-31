@@ -259,6 +259,11 @@ export type TuningRuleDraftCardPayload = {
 // 各グループは対応するクエリが失敗した場合に null になる(Promise.allSettledでの
 // 部分失敗時、text側で行ごと省略するのと同じ意味)。card はUIが「取得できなかった」を
 // 判別するための情報であり、0埋めしてはならない。
+//
+// フィールドを変更したら、サーバ/フロントの境界を跨いで手動同期が必要な箇所が2つある:
+//   - admin-ui/src/lib/useAgentChatTransport.ts の WeeklySummaryAgentActionCard
+//   - admin-ui/src/pages/copilot-preview/index.tsx の Card union(weeklySummary variant)
+//     は上記から Omit<..., "kind"> で再利用しているため、そちらを直せば自動的に追随する。
 export type WeeklySummaryCardPayload = {
   kind: 'weekly_summary';
   /** この応答を生成した瞬間(ISO)。会話復元時に古いまとめだと判別するために使う */

@@ -26,7 +26,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
@@ -175,16 +175,11 @@ type Card =
     }
   // 週次まとめ。数値はサーバ集計値をそのまま描画する(LLMの生成文を経由しない)。
   // 各グループが null なのは、対応するクエリが失敗し取得できなかった場合(0とは区別する)。
-  | {
-      kind: "weeklySummary";
-      asOf: string;
-      sessions: { total: number; changePct: number | null; prevTotal: number } | null;
-      avgScore: number | null;
-      conversions: { count: number; total: number } | null;
-      faq: { total: number; published: number; lastUpdated: string | null } | null;
-      pendingTuningRules: number | null;
-      gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
-    };
+  // フィールド形状は WeeklySummaryAgentActionCard(useAgentChatTransport.ts)と同一に保つ
+  // 必要があるため、kind(UI向けにcamelCaseへ変える)以外はそこから再利用し、手書きの
+  // 二重定義を避ける。actionExecutor.ts の WeeklySummaryCardPayload とはサーバ/フロント
+  // という境界を跨ぐため型を共有できないが、フィールド名・形は3箇所とも一致させること。
+  | ({ kind: "weeklySummary" } & Omit<WeeklySummaryAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
