@@ -752,6 +752,40 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByRole("button", { name: "確認する" })).toBeNull();
   });
 
+  // GID: 1ターンに suggest_faq(下書き提案の確認待ち)と get_weekly_briefing(未回答質問あり)が
+  // 同時に来た場合、優先されるべきは「保存して/やめておく」(確認が必要な保留中の書き込み)で、
+  // 週次まとめのチップではない。同時発生は稀だが、chips は現状 if/elseif の単一選択(排他)で
+  // 実装されているため、優先順位が実装の分岐順そのものに委ねられている。この境界を固定する。
+  it("suggest_faqの確認待ちと週次まとめの行動チップが同一ターンに同居した場合、確認待ちの保存/やめるが優先される", async () => {
+    mockAgent({
+      reply: "下書きと今週の状況をまとめました。",
+      actions: [
+        { tool: "suggest_faq", result: "質問: 送料はいくら？\n回答: 全国一律550円です。\n分類: 配送" },
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 10件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2026-08-05T03:00:00.000Z",
+            sessions: { total: 10, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: 2,
+            gaps: { total: 5, top: [{ id: 1, question: "返品はできますか？" }] },
+          },
+        },
+      ],
+    });
+
+    await send("FAQ案を作りつつ今週の状況も教えて");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存して" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "FAQにする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "確認する" })).toBeNull();
+  });
+
   // GID 1217040318322843: 会話復元(sessionStorage)で古いまとめがそのまま画面に残り、
   // いつ時点のデータか分からないまま今日の数字として読まれてしまう問題の回帰テスト。
   it("集計時点(asOf)が今日なら鮮度の注記を出さない", async () => {
@@ -807,6 +841,38 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
     await screen.findByText("50件");
     expect(await screen.findByText(/別の日に取得した内容です/)).toBeTruthy();
+  });
+
+  // GID: asOf は改ざん/破損した sessionStorage から復元される可能性がある(手動編集・
+  // 古いスキーマのデータ等)。修正前は new Date(不正値) を toISOString() に渡した瞬間に
+  // 例外が飛び、WeeklySummaryCard の描画自体が失敗して画面がスレッドごと真っ白になっていた
+  // (このページに React Error Boundary は無い)。回帰テスト。
+  it("集計時点(asOf)が不正な値でもクラッシュせず「不明」として表示する", async () => {
+    mockAgent({
+      reply: "今週の状況です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 50件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "this-is-not-a-valid-date",
+            sessions: { total: 50, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    // クラッシュしていれば "50件" を含むこの後続描画自体に到達しない
+    await screen.findByText("50件");
+    expect(screen.getByText(/集計時点: 不明/)).toBeTruthy();
   });
 
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
@@ -1541,6 +1607,46 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(urls.some((u) => u.includes("/v1/admin/my-tenant"))).toBe(false);
   });
 
+  // GID: weeklySummary カードは複数フィールドが null になり得る構造(部分失敗を反映するため)。
+  // sessionStorage への JSON.stringify → 復元後の描画という往復で、null を含むネストが
+  // 壊れずに残ること、かつ復元されたカードは(取得した日と同じでない限り)鮮度が古いと
+  // 表示されることを確認する。
+  it("weeklySummaryカードを含む会話を復元しても、null混じりのフィールドが壊れず描画される", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 201, role: "me", text: "今週の状況を教えて" },
+        {
+          id: 202,
+          role: "ai",
+          card: {
+            kind: "weeklySummary",
+            asOf: "2020-01-01T00:00:00.000Z",
+            sessions: { total: 12, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: { total: 3, published: 3, lastUpdated: null },
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+      history: [],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("12件")).toBeTruthy();
+    // ラベルと値は別divなので、それぞれ別のテキストノードとして検証する
+    expect(screen.getByText("FAQ")).toBeTruthy();
+    expect(screen.getByText("3件（公開3件）")).toBeTruthy();
+    // avgScore/conversions/pendingTuningRules/gaps が null のため、それらの欄は描画されない
+    expect(screen.queryByText(/\/100/)).toBeNull();
+    expect(screen.queryByText("承認待ちの指示ルール")).toBeNull();
+    // 復元された古いasOfにより、鮮度の注記が出る
+    expect(screen.getByText(/別の日に取得した内容です/)).toBeTruthy();
+  });
+
   it("保存済みの会話が無ければ、従来通り起動時ブリーフィングを取得する(回帰)", async () => {
     renderPage();
 
@@ -1604,6 +1710,32 @@ describe("CopilotPreviewPage — リクエストボディの surface", () => {
     // ブリーフィングと手動送信の2本。どちらも同じ transport 経由なので同じ値を名乗る
     expect(chatBodies.length).toBeGreaterThanOrEqual(2);
     expect(chatBodies.map((b) => b.surface)).toEqual(chatBodies.map(() => "fullscreen"));
+  });
+
+  // GID: 起動時ブリーフィング(BOOTSTRAP_PROMPT)と左レール「今週のまとめ」クリックは
+  // 同一ツール(get_weekly_briefing)に着地する前提(「必ず再取得する」で統一、重複は
+  // 許容する設計)。起動時は「ログインしたところです。」という挨拶が前置されるが、
+  // 実際に状況を尋ねる依頼文の核("今週の状況を教えてください。要点と次にやるべき
+  // ことを最大3つまで、簡潔に教えてください。")は完全一致でなければならない。
+  // この2箇所は別々の文字列リテラルとして存在するため、片方だけ表現を直すと
+  // 定義が黙って割れる。核の一致を固定してその再発を防ぐ。
+  it("起動時ブリーフィングと「今週のまとめ」クリックは同一の依頼文の核を送る", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /今週のまとめ/ }));
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+
+    expect(chatBodies.length).toBeGreaterThanOrEqual(2);
+    const [bootstrapMessage, categoryClickMessage] = chatBodies.map((b) => String(b.message));
+    const core = "今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
+    expect(categoryClickMessage).toBe(core);
+    expect(bootstrapMessage.endsWith(core)).toBe(true);
   });
 });
 
@@ -1682,6 +1814,78 @@ describe("CopilotPreviewPage — super_adminのテナント選択", () => {
     renderPage(SUPER_ADMIN_NO_PREVIEW);
 
     await waitFor(() => expect(screen.getByText(/テナント一覧を取得できませんでした/)).toBeTruthy());
+  });
+});
+
+// GID: super_adminがプレビュー中に別テナントへ切り替えても、bootstrapped(useRef)が
+// needsTenantSelectionのみをキーにしており previewMode のままでは再評価されないため、
+// 会話スレッド(weeklySummaryカードを含む)が前テナントのまま残っていた。修正の回帰テスト。
+describe("CopilotPreviewPage — テナント切替時の会話リセット", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+  });
+
+  it("previewMode中に別テナントへ切り替えると、会話がリセットされ新テナントのブリーフィングが取り直される", async () => {
+    let currentTenant = "tenant-a";
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        return mockOk({ reply: `${currentTenant}の状況です。`, actions: [] });
+      }
+      return mockOk({});
+    });
+
+    const { rerender } = renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-a" });
+    await waitFor(() => expect(screen.getByText("tenant-aの状況です。")).toBeTruthy());
+
+    const callsBeforeSwitch = vi.mocked(authFetch).mock.calls.filter(([url]) =>
+      String(url).includes("/v1/admin/agent/chat"),
+    ).length;
+
+    // 別テナントへ切替(previewTenantIdのみ変化。previewMode/isSuperAdminは維持)
+    currentTenant = "tenant-b";
+    vi.mocked(useAuth).mockReturnValue(
+      baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-b" }),
+    );
+    rerender(
+      <MemoryRouter>
+        <CopilotPreviewPage />
+      </MemoryRouter>,
+    );
+
+    // 新テナントのブリーフィングが自動的に取り直される(手動操作不要)
+    await waitFor(() => expect(screen.getByText("tenant-bの状況です。")).toBeTruthy());
+    // 前テナントの応答は会話から消えている(リセットされた証拠)
+    expect(screen.queryByText("tenant-aの状況です。")).toBeNull();
+
+    const callsAfterSwitch = vi.mocked(authFetch).mock.calls.filter(([url]) =>
+      String(url).includes("/v1/admin/agent/chat"),
+    ).length;
+    expect(callsAfterSwitch).toBeGreaterThan(callsBeforeSwitch);
+  });
+
+  it("同じテナントのままの再レンダーでは会話をリセットしない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    const { rerender } = renderPage(SUPER_ADMIN_IN_PREVIEW);
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+
+    const callsBefore = vi.mocked(authFetch).mock.calls.length;
+
+    // previewTenantIdが変わらない通常の再レンダー(例: 他stateの更新に伴う再描画)
+    vi.mocked(useAuth).mockReturnValue(baseAuth(SUPER_ADMIN_IN_PREVIEW));
+    rerender(
+      <MemoryRouter>
+        <CopilotPreviewPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("今週も順調です。")).toBeTruthy();
+    expect(vi.mocked(authFetch).mock.calls.length).toBe(callsBefore);
   });
 });
 
