@@ -196,6 +196,10 @@ describe('evaluateSession', () => {
     expect(mockPool.query.mock.calls.length).toBeGreaterThanOrEqual(5);
     const tuningInsertCall = mockPool.query.mock.calls[4]!;
     expect(tuningInsertCall[0]).toContain('tuning_rules');
+    // is_active=false と source='judge' が明示されること(店主の承認なしに有効化しない)
+    expect(tuningInsertCall[0]).toContain('is_active');
+    expect(tuningInsertCall[0]).toContain('false');
+    expect(tuningInsertCall[0]).toContain("'judge'");
   });
 
   it('3. high score does NOT insert tuning_rules (score >= 60)', async () => {

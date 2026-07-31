@@ -676,6 +676,8 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         `（URL 1〜5件から）でプレビューを作成し、内容を要約提示のうえ同意を得たら commit_faq_import で` +
         `登録してください（同じく同一ターン内での連鎖実行は避け、ユーザーの次のメッセージを待つこと）。` +
         `PDFからの知識登録は get_legacy_ui_link(feature=knowledge_pdf) で旧管理画面へ案内してください。` +
+        `ナレッジ(FAQ・書籍)ごとの成約への貢献度を尋ねられた場合は get_legacy_ui_link(feature=knowledge_attribution) で` +
+        `旧管理画面へ案内してください。` +
         `請求（支払い操作）、アバタースタジオ（画像/音声/性格/ライブテスト）、エスカレーションへの有人返信、` +
         `会話セッションの削除、テストチャット、アバター新規作成について尋ねられた場合は、` +
         `チャットで実行しようとせず get_legacy_ui_link を呼び出して旧管理画面へ案内してください。` +
