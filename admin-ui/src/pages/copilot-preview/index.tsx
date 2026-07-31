@@ -21,10 +21,14 @@ import {
 } from "../../lib/chatSessionStore";
 import { priorityToTier } from "../../lib/tuningPriority";
 import {
+  AGENT_CHAT_AUTH_REQUIRED_MESSAGE,
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
 import type { AnsweredFrom } from "../../lib/useAgentChatTransport";
+// アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
+// チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
+import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
 // 相談窓口(担当者への相談 → 返信 → 解決確認)のループ。ポーリング・既読化・相談投稿は
 // パネル(Surface A)と同じ実装を共有し(lib/feedbackReplies.ts)、見せ方だけこの面の
 // カード/メッセージの作法に合わせる。
@@ -82,6 +86,23 @@ type Card =
   | { kind: "link"; label: string; url: string; description: string }
   | { kind: "agentAction"; tool: string; result: string }
   | { kind: "avatarPreset"; presetId: string; name: string; imageUrl: string | null; description: string }
+  // adopt_avatar_preset の採用直後カード。configId は自テナント側の avatar_configs.id
+  // (presetIdとは別物)で、以降の画像候補生成・採用はすべてこのidを使う。
+  | { kind: "avatarAdopted"; configId: string; name: string; imageUrl: string | null; description: string }
+  // 画像候補の生成(POST /v1/admin/avatar/fal/generate)と採用(PATCH /configs/:id)を
+  // チャット画面内で完結させるためのカード。生成はエージェントツール経由にしない
+  // (画像URL群はツール結果の500字に収まらないため)。フロントから直接叩き、
+  // タイムアウト・5xx・429いずれの失敗でも status="failed" で確定させる
+  // (無限スピナーを残さない)。adoptedUrl は採用済みの1枚(二重採用の防止・ハイライト用)。
+  | {
+      kind: "avatarCandidates";
+      configId: string;
+      name: string;
+      status: "generating" | "done" | "failed";
+      images?: string[];
+      message?: string;
+      adoptedUrl?: string;
+    }
   // D3: 一覧が15件・1行60/100字で黙って切れていたのを解消するための全件カード。
   | {
       kind: "rulesList";
@@ -311,6 +332,9 @@ const PDF_UPLOAD_TOO_LARGE_ERROR = "ファイルが大きすぎて受け取れ�
 const PDF_UPLOAD_NETWORK_ERROR = "うまく送れませんでした。通信の状態を確かめて、もう一度お試しください。";
 const PDF_UPLOAD_GENERIC_ERROR = "うまく受け取れませんでした。少し時間をおいてお試しください。";
 const PDF_UPLOAD_ZIP_EMPTY_ERROR = "ZIPの中に取り込めるPDFが見つかりませんでした。";
+
+const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでした。少し時間をおいてもう一度お試しください。";
 
 // ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
 //     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
@@ -561,6 +585,10 @@ export default function CopilotPreviewPage() {
       if (a.card?.kind === "avatar_preset") {
         const { presetId, name, imageUrl, description } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "avatarPreset", presetId, name, imageUrl, description } };
+      }
+      if (a.card?.kind === "avatar_adopted") {
+        const { configId, name, imageUrl, description } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "avatarAdopted", configId, name, imageUrl, description } };
       }
       if (a.card?.kind === "tuning_rules_list") {
         const { rules, totalCount } = a.card;
@@ -994,6 +1022,78 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // ─── アバター画像候補の生成・採用(採用が気に入らなかった場合の分岐) ────────────
+  // PDF取り込みと同じ理由でエージェントツール経由にしない: 画像URL群はツール結果の
+  // 500字に収まらない。プロンプトは wizard と同じ buildAvatarPrompt を固定の標準的な
+  // 選択(人物・バストショット・自然な笑顔・シンプル背景)で使う。チャットは選択肢を
+  // 集めない(「選ばせない」方針)ため、雰囲気を変えたい場合は生成をやり直すだけで良い。
+  const updateAvatarCandidatesCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "avatarCandidates" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "avatarCandidates" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  const generateAvatarCandidates = async (configId: string, name: string) => {
+    const cardId = nextId();
+    push({ id: cardId, role: "ai", card: { kind: "avatarCandidates", configId, name, status: "generating" } });
+
+    const { prompt } = buildAvatarPrompt({
+      type: "human",
+      composition: "bust",
+      expression: "smile",
+      background: "simple",
+    });
+
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/fal/generate`, {
+        method: "POST",
+        body: JSON.stringify({ prompt, numImages: 4 }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarCandidatesCard(cardId, { status: "failed", message: body?.error || AVATAR_GENERATE_GENERIC_ERROR });
+        return;
+      }
+      const data = (await res.json()) as { images?: string[] };
+      const images = data.images ?? [];
+      if (images.length === 0) {
+        updateAvatarCandidatesCard(cardId, { status: "failed", message: AVATAR_GENERATE_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarCandidatesCard(cardId, { status: "done", images });
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_GENERATE_GENERIC_ERROR;
+      updateAvatarCandidatesCard(cardId, { status: "failed", message });
+    }
+  };
+
+  const adoptAvatarCandidate = async (cardMsgId: number, configId: string, imageUrl: string) => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${configId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ image_url: imageUrl }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarCandidatesCard(cardMsgId, { message: body?.error || AVATAR_ADOPT_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarCandidatesCard(cardMsgId, { adoptedUrl: imageUrl });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_ADOPT_GENERIC_ERROR;
+      updateAvatarCandidatesCard(cardMsgId, { message });
+    }
+  };
+
   const handlePdfDrop = (e: React.DragEvent) => {
     e.preventDefault();
     pdfDragCounterRef.current = 0;
@@ -1164,7 +1264,13 @@ export default function CopilotPreviewPage() {
         <div ref={threadRef} className="cp-thread" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}>
           <div style={{ width: "100%", maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 18 }}>
             {msgs.map((m) => (
-              <MessageRow key={m.id} m={m} onChip={runAction} />
+              <MessageRow
+                key={m.id}
+                m={m}
+                onChip={runAction}
+                onGenerateAvatarCandidates={generateAvatarCandidates}
+                onAdoptAvatarCandidate={adoptAvatarCandidate}
+              />
             ))}
             {/* key に直近メッセージのidを与え、回答が変わるたびに新しい確認として出す
                 (前の回答で「はい」を押した状態を持ち越さない) */}
@@ -1404,7 +1510,17 @@ function RealActionBadge({ count }: { count: number }) {
   );
 }
 
-function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => void }) {
+function MessageRow({
+  m,
+  onChip,
+  onGenerateAvatarCandidates,
+  onAdoptAvatarCandidate,
+}: {
+  m: Msg;
+  onChip: (a: string, id: number) => void;
+  onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
+  onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+}) {
   const isMe = m.role === "me";
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 10 }}>
@@ -1420,7 +1536,14 @@ function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => 
           {ANSWERED_FROM_LABEL[m.answeredFrom]}
         </div>
       )}
-      {m.card && <CardView card={m.card} />}
+      {m.card && (
+        <CardView
+          card={m.card}
+          msgId={m.id}
+          onGenerateAvatarCandidates={onGenerateAvatarCandidates}
+          onAdoptAvatarCandidate={onAdoptAvatarCandidate}
+        />
+      )}
       {m.chips && !m.chipsUsed && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {m.chips.map((c, i) => (
@@ -1608,7 +1731,17 @@ function Field({ k, v, quote, hi }: { k: string; v: string; quote?: boolean; hi?
   );
 }
 
-function CardView({ card }: { card: Card }) {
+function CardView({
+  card,
+  msgId,
+  onGenerateAvatarCandidates,
+  onAdoptAvatarCandidate,
+}: {
+  card: Card;
+  msgId: number;
+  onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
+  onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+}) {
   switch (card.kind) {
     case "agentAction":
       return (
@@ -1689,6 +1822,10 @@ function CardView({ card }: { card: Card }) {
           <Field k="性格・話し方" v={card.description} quote />
         </CardShell>
       );
+    case "avatarAdopted":
+      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} />;
+    case "avatarCandidates":
+      return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onAdopt={onAdoptAvatarCandidate} />;
     case "link":
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
@@ -1863,6 +2000,163 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
           </div>
         </div>
       )}
+    </CardShell>
+  );
+}
+
+// 採用直後のカード。この画面のまま画像候補の生成に進める入口を持つ。
+// ボタンは相談窓口の ResolutionPrompt/ConsultReplyCard と同じく、チャットの
+// ツール呼び出しループを経由せずここから直接バックエンドを叩く(チップとは別系統)。
+function AvatarAdoptedCard({
+  card,
+  onGenerate,
+}: {
+  card: Extract<Card, { kind: "avatarAdopted" }>;
+  onGenerate: (configId: string, name: string) => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const handleGenerate = () => {
+    setBusy(true);
+    void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusy(false));
+  };
+
+  return (
+    <CardShell
+      tone="good"
+      hd={<><span>✅</span>アバター「{card.name}」を採用しました</>}
+      foot={<CardActionsNote note="生成のたびに少額の費用が発生します。気に入った1枚を選ぶまで何度でもやり直せます。" />}
+    >
+      {card.imageUrl && (
+        <img
+          src={card.imageUrl}
+          alt={card.name}
+          style={{ width: 96, height: 96, borderRadius: 12, objectFit: "cover", alignSelf: "flex-start" }}
+        />
+      )}
+      <Field k="性格・話し方" v={card.description} quote />
+      <button
+        onClick={handleGenerate}
+        disabled={busy}
+        style={{
+          alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+          border: "none", background: AGENT, color: "#fff",
+          cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+        }}
+      >
+        {busy ? "生成しています…" : "画像を新しく生成する"}
+      </button>
+    </CardShell>
+  );
+}
+
+// 画像候補の生成〜採用。生成はエージェントツール経由にしない(画像URL群はツール結果の
+// 500字に収まらない)ため、直接バックエンドを叩く。3つの状態(生成中/完了/失敗)は
+// 必ずどれかで確定させ、無限スピナーを残さない。
+function AvatarCandidatesCard({
+  card,
+  msgId,
+  onGenerate,
+  onAdopt,
+}: {
+  card: Extract<Card, { kind: "avatarCandidates" }>;
+  msgId: number;
+  onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onAdopt: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+}) {
+  const [adopting, setAdopting] = useState<string | null>(null);
+
+  if (card.status === "generating") {
+    return (
+      <CardShell hd={<><span>🎨</span>新しい画像を生成しています</>}>
+        <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+          数十秒かかることがあります。このまま他の操作もできます。
+        </div>
+      </CardShell>
+    );
+  }
+
+  if (card.status === "failed") {
+    return (
+      <CardShell
+        tone="bad"
+        hd={<><span>🎨</span>画像を生成できませんでした</>}
+        foot={
+          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={() => void onGenerate(card.configId, card.name)}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
+              }}
+            >
+              もう一度試す
+            </button>
+          </div>
+        }
+      >
+        {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+      </CardShell>
+    );
+  }
+
+  const handleAdopt = (imageUrl: string) => {
+    setAdopting(imageUrl);
+    void Promise.resolve(onAdopt(msgId, card.configId, imageUrl)).finally(() => setAdopting(null));
+  };
+
+  return (
+    <CardShell
+      tone="good"
+      hd={<><span>🎨</span>新しい候補です</>}
+      foot={
+        !card.adoptedUrl ? (
+          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={() => void onGenerate(card.configId, card.name)}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer",
+              }}
+            >
+              別の候補を見る
+            </button>
+          </div>
+        ) : undefined
+      }
+    >
+      {card.message && <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{card.message}</div>}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {(card.images ?? []).map((url) => {
+          const isAdopted = card.adoptedUrl === url;
+          const disabled = !!card.adoptedUrl || adopting !== null;
+          return (
+            <div key={url} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <img
+                src={url}
+                alt="アバター候補"
+                style={{
+                  width: 96, height: 96, borderRadius: 12, objectFit: "cover",
+                  border: isAdopted ? `2px solid ${AGENT}` : "1px solid var(--border)",
+                }}
+              />
+              <button
+                onClick={() => handleAdopt(url)}
+                disabled={disabled}
+                style={{
+                  fontSize: 12.5, fontWeight: 700, padding: "5px 12px", borderRadius: 999, minHeight: 32,
+                  border: isAdopted ? "none" : "1px solid var(--border)",
+                  background: isAdopted ? AGENT : "transparent",
+                  color: isAdopted ? "#fff" : "var(--muted-foreground)",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled && !isAdopted ? 0.5 : 1,
+                }}
+              >
+                {isAdopted ? "これに決定" : adopting === url ? "反映中…" : "これにする"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </CardShell>
   );
 }
