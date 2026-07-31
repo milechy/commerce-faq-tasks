@@ -131,13 +131,14 @@
 
 #### 9. アバター設定 `/admin/avatar` — Chat-partial (Wave 3・2026-07-31 に分類変更)
 - サイドバー: `AppSidebar.tsx:77` / ルート: `App.tsx:214–217` (`/admin/avatar`, `/wizard`, `/studio`, `/studio/:id`)
-- チャット側にあるのは状態確認と切替の2本だけ: `get_avatar_status` (`toolDefinitions.ts:187` / `actionExecutor.ts:436`)、`activate_avatar` (`:199` / `:466`)。
+- チャット側のツール（2026-07-31時点）: `get_avatar_status` / `get_avatar_list` / `activate_avatar` / `deactivate_avatar` / `suggest_avatar_preset` / `adopt_avatar_preset`（`confirmPolicy.ts` に登録済みの全アバターツール）。画像候補の生成・採用（#632）と声の候補の検索・採用（#635）はエージェントツール経由にしていない（画像URL群がツール結果の500字に収まらないため）ので、この一覧には現れない。
 - 旧UI受け渡し 2 キー: `avatar_studio` (`actionExecutor.ts:1665–1669` — 「画像候補の選択・音声クローン・性格設定・ライブテスト」)、`avatar_wizard` (`:1695–1699` — 新規作成ウィザード)。
 - **2026-07-31 に「GUI 固有として恒久的に残る」判断を撤回した**（決定者: hkobayashi。要件定義: `docs/AVATAR_CHAT_MIGRATION.md`）。面の外に残すのは**ライブテストのみ**とし、画像候補の採否・音声の試聴採否は会話内カードとして持ち込む。旧判断は「見て・聴いて選ぶ操作はテキストに写像できない」だったが、写像すべきは操作の様式ではなく意思決定であり、同じ理由で対象外としていた知識データPDFが #585 で会話内完結へ移った先例がある。
 - **判定時の固有条件（`AVATAR_CHAT_MIGRATION.md` §5 で導出）**:
   - 母集団は `avatar` プラン保有テナント（Growth+）に限定する。このページはプランゲート無しで全 client_admin に可視（`AppSidebar.tsx:77`）で、かつ未契約テナントも意図的にフローへ入れる方針のため、絞らないと比率が薄まる。
   - **C1 の分子は `feature ∈ {avatar_wizard, avatar_studio}` のみ**。ライブテストへの `chat_test` handoff はフローの正常な一部（離脱1回を許容する決定）であり、分子に含めると恒久的に閉じられない。
   - 低頻度ページのため、handoff が 0 に近づくと C2 が自明に成立する。`/admin/engagement` と同じ例外（8週窓・新規テナント限定）に加え、**ファネル完了率**（未作成テナントがチャット経由で有効化まで到達した割合）を実使用証拠として要求する。
+- **判定用SQL・観測開始日は `AVATAR_CHAT_MIGRATION.md` §14/§15 に記録済み**。有効性ゲート V は2026-07-31時点で**未確認**（機能が同日に揃ったばかりで、本番DBへの接続も未実施のため）。V が8週連続で成立するまでクローズ判定は開始しない。
 
 #### 10. AIへの指示ルール `/admin/tuning` — Chat-complete
 - サイドバー: `AppSidebar.tsx:78` / モバイル下部バー: `AppSidebar.tsx:500` / ルート: `App.tsx:205`

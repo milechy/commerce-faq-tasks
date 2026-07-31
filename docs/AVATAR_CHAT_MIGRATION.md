@@ -394,5 +394,222 @@ Stage B で削除するのは `avatar_wizard` / `avatar_studio` の2キーのみ
 
 - **AC-19** `LEGACY_UI_SUNSET.md` §1.2-9 / §4 の分類改訂（§5）が、同一PRまたは先行PRで着地している
 - **AC-20** ベースライン計測（チャット経由の有効化件数・`avatar_*` handoff 件数）が取得済みで、着手前の値が記録されている
+  — **未達（§13 参照）**。着手順(§8)の1件目として計画したが、実装を担当した環境からは本番DB（`metrics_snapshots` / `tenants`）へ接続できず、実装完了（#635〜#648マージ）まで一度も実行できなかった。§14 のSQLは書けているため、本番DBにアクセスできる環境で実行すればAC-20は即座に満たせる状態にはある。
 - **AC-21** `admin-ui/src` 配下を触るPRは Mergify の auto-merge 対象外であり、人手でのマージを前提に進行している
 - **AC-22** 旧UIのアバター画面が**削除もリダイレクトもされていない**（クローズは §6 の判定成立後）
+
+---
+
+# ファネル計測とクローズ判定の準備
+
+## 13. ベースライン（未取得・既知の欠落）
+
+着手順(§8)の1件目としてベースライン計測を計画していたが、**このタスク群を実装した環境からは本番DB（`metrics_snapshots` / `tenants`）へ一度も接続できず、実行できなかった**。他のタスク（fal課金の実装訂正・generate-prompt誤認の発見など）と異なり、これは実装中に判明した前提の誤りではなく、**単純に環境制約で未実施のまま実装を完了させた**という状態である。黙って「取得済み」として扱わず、欠落として明記する。
+
+§14 のSQL（特に「E. ファネル」）をそのまま `WHERE tenant.created_at < '2026-07-31'`（#611マージ日より前）に条件を反転させれば、実装前の実績値（=ベースライン）を今からでも取得できる。ただし `suggest_avatar_preset` / `adopt_avatar_preset` ツール自体が #611 以前は存在しないため、この期間の値は自明に0になる。真に意味のあるベースラインは「**チャット経由で `activate_avatar` が実行された件数**」（このツールは移行前から存在する）であり、これは §14-C のクエリで `tool = 'activate_avatar'` に絞り、期間を #611 より前に変えれば取得できる。
+
+**次にこのドキュメントを触る人（人間・別セッション問わず）へ**: 本番DBに接続できる環境であれば、§14 の全クエリを実行し、この節に実測値を追記すること。
+
+## 14. ファネル集計SQL（再実行可能）
+
+`docs/AGENT_METRICS.md` は「メトリクスはこの7つのみ」を契約として宣言している。**新しいメトリクスは追加しない。** 以下はすべて既存の `agent_tool_invoked` / `agent_legacy_handoff` / `agent_turn_completed`（`metrics_snapshots` テーブル）の組み合わせから導出する。
+
+`docs/LEGACY_UI_SUNSET.md` §1.2-9 で確定した3条件を全クエリで守る:
+1. 母集団は `avatar` プラン保有テナント（Growth+）に限定（`tenants.plan IN ('growth', 'enterprise')`）
+2. C1 の分子は `feature IN ('avatar_wizard', 'avatar_studio')` のみ。`chat_test` は含めない（離脱1回を許容する決定5により、含めると恒久的に閉じられなくなる）
+3. 低頻度ページのため8週窓＋ファネル完了率を実使用証拠として要求する
+
+被覆ツール集合（C2・C3の対象）: `get_avatar_status` / `get_avatar_list` / `suggest_avatar_preset` / `adopt_avatar_preset` / `activate_avatar` / `deactivate_avatar`（`confirmPolicy.ts` に登録済みの全アバターツール）。
+
+**既知の死角（このSQLでは見えない）**: 画像候補の生成・採用（#632）と声の候補の検索・採用（#635）は、意図的にエージェントツール経由にしていない（画像URL群がツール結果の500字に収まらないため。`docs/AVATAR_CHAT_MIGRATION.md` §4.1・§10.1）。したがって `fal/generate` / `match-voice` / `configs` PATCH の呼び出しは `agent_tool_invoked` に一切現れない。以下のファネルは `suggest_avatar_preset → adopt_avatar_preset →（画像・声はここでは不可視）→ activate_avatar` であり、「採用したのに一度も画像を変えなかった」のか「画像候補で離脱した」のかはこのSQLだけでは区別できない。これを埋めるには `avatar_configs.image_url` / `voice_id` が既定値から変わったかどうかをDB側で見る必要があり、本タスクのスコープ外として記録する。
+
+### A. 有効性ゲート V（週次・Growth+ 母集団）
+
+```sql
+-- V: agent_turn_completed >= 200 かつ 有効テナント数 >= 5 の週が
+--    8週連続していることを判定開始の前提とする（アバターは低頻度ページのため
+--    通常の4週ではなく8週。docs/LEGACY_UI_SUNSET.md §2.3 の例外扱い）。
+SELECT
+  date_trunc('week', ms.snapshot_at) AS iso_week,
+  COUNT(*) AS turn_completed,
+  COUNT(DISTINCT ms.tenant_id) AS active_tenants
+FROM metrics_snapshots ms
+JOIN tenants t ON t.id = ms.tenant_id
+WHERE ms.metric_name = 'agent_turn_completed'
+  AND t.plan IN ('growth', 'enterprise')
+  AND ms.tenant_id IS NOT NULL
+GROUP BY 1
+ORDER BY 1;
+-- 判定: turn_completed >= 200 AND active_tenants >= 5 の行が8週連続で並ぶまで、
+-- 以降のC1〜C3・ファネルの数値をクローズ判定の根拠として使わない。
+```
+
+### B. C1（逃げ道が例外になっていること。閾値 ≤2.0%）
+
+```sql
+WITH weekly_handoff AS (
+  SELECT date_trunc('week', ms.snapshot_at) AS iso_week, COUNT(*) AS handoff_count
+  FROM metrics_snapshots ms
+  JOIN tenants t ON t.id = ms.tenant_id
+  WHERE ms.metric_name = 'agent_legacy_handoff'
+    AND ms.labels->>'feature' IN ('avatar_wizard', 'avatar_studio')  -- chat_testは含めない(決定5)
+    AND t.plan IN ('growth', 'enterprise')
+  GROUP BY 1
+),
+weekly_turns AS (
+  SELECT date_trunc('week', ms.snapshot_at) AS iso_week, COUNT(*) AS turn_count
+  FROM metrics_snapshots ms
+  JOIN tenants t ON t.id = ms.tenant_id
+  WHERE ms.metric_name = 'agent_turn_completed'
+    AND t.plan IN ('growth', 'enterprise')
+  GROUP BY 1
+)
+SELECT
+  wt.iso_week,
+  COALESCE(wh.handoff_count, 0) AS handoff_count,
+  wt.turn_count,
+  ROUND(COALESCE(wh.handoff_count, 0)::numeric / NULLIF(wt.turn_count, 0) * 100, 2) AS c1_pct
+FROM weekly_turns wt
+LEFT JOIN weekly_handoff wh USING (iso_week)
+ORDER BY wt.iso_week;
+-- 判定: c1_pct <= 2.0 が8週連続。
+```
+
+### C. C2（チャット側が主経路であること。閾値 ≥20:1）
+
+```sql
+-- 窓は判定対象の期間に置き換える（例: 直近8週 → snapshot_at >= now() - interval '8 weeks'）
+WITH ok_calls AS (
+  SELECT COUNT(*) AS ok_count
+  FROM metrics_snapshots ms
+  JOIN tenants t ON t.id = ms.tenant_id
+  WHERE ms.metric_name = 'agent_tool_invoked'
+    AND ms.labels->>'tool' IN ('get_avatar_status', 'get_avatar_list', 'suggest_avatar_preset', 'adopt_avatar_preset', 'activate_avatar', 'deactivate_avatar')
+    AND ms.labels->>'outcome' = 'ok'
+    AND t.plan IN ('growth', 'enterprise')
+    AND ms.snapshot_at >= now() - interval '8 weeks'
+),
+handoff_calls AS (
+  SELECT COUNT(*) AS handoff_count
+  FROM metrics_snapshots ms
+  JOIN tenants t ON t.id = ms.tenant_id
+  WHERE ms.metric_name = 'agent_legacy_handoff'
+    AND ms.labels->>'feature' IN ('avatar_wizard', 'avatar_studio')
+    AND t.plan IN ('growth', 'enterprise')
+    AND ms.snapshot_at >= now() - interval '8 weeks'
+)
+SELECT
+  ok_calls.ok_count,
+  handoff_calls.handoff_count,
+  CASE WHEN handoff_calls.handoff_count = 0 THEN NULL
+       ELSE ROUND(ok_calls.ok_count::numeric / handoff_calls.handoff_count, 1)
+  END AS ratio_ok_to_handoff
+FROM ok_calls, handoff_calls;
+-- 判定: ratio_ok_to_handoff >= 20。
+-- 注意(LEGACY_UI_SUNSET.md §1.2-9): 低頻度ページのため handoff が0に近づくとC2は
+-- 分母0で自明に「判定不能」または極端に高い比率になりうる。C2単独ではなく、
+-- 下記Eのファネル完了率を実使用証拠として必須で併記すること。
+```
+
+### D. C3（チャット側の摩擦が小さいこと）
+
+```sql
+-- C3-a: 失敗率 <= 5%（対象: 書き込みツールのみ）
+SELECT
+  date_trunc('week', ms.snapshot_at) AS iso_week,
+  COUNT(*) FILTER (WHERE ms.labels->>'outcome' = 'error') AS error_count,
+  COUNT(*) AS total_count,
+  ROUND(COUNT(*) FILTER (WHERE ms.labels->>'outcome' = 'error')::numeric / NULLIF(COUNT(*), 0) * 100, 2) AS error_pct
+FROM metrics_snapshots ms
+JOIN tenants t ON t.id = ms.tenant_id
+WHERE ms.metric_name = 'agent_tool_invoked'
+  AND ms.labels->>'tool' IN ('adopt_avatar_preset', 'activate_avatar', 'deactivate_avatar')
+  AND t.plan IN ('growth', 'enterprise')
+GROUP BY 1
+ORDER BY 1;
+
+-- C3-b: 連鎖阻止(chain) <= テナント1社あたり週0.5件
+WITH weekly_chain_blocked AS (
+  SELECT date_trunc('week', ms.snapshot_at) AS iso_week, COUNT(*) AS chain_blocked
+  FROM metrics_snapshots ms
+  JOIN tenants t ON t.id = ms.tenant_id
+  WHERE ms.metric_name = 'agent_write_blocked'
+    AND ms.labels->>'tool' IN ('adopt_avatar_preset', 'activate_avatar', 'deactivate_avatar')
+    AND ms.labels->>'reason' = 'chain'
+    AND t.plan IN ('growth', 'enterprise')
+  GROUP BY 1
+),
+weekly_active AS (
+  -- Aの有効性ゲートクエリと同じ定義(active_tenants)を再利用する
+  SELECT date_trunc('week', ms.snapshot_at) AS iso_week, COUNT(DISTINCT ms.tenant_id) AS active_tenants
+  FROM metrics_snapshots ms
+  JOIN tenants t ON t.id = ms.tenant_id
+  WHERE ms.metric_name = 'agent_turn_completed'
+    AND t.plan IN ('growth', 'enterprise')
+  GROUP BY 1
+)
+SELECT
+  wa.iso_week,
+  COALESCE(wcb.chain_blocked, 0) AS chain_blocked,
+  wa.active_tenants,
+  ROUND(COALESCE(wcb.chain_blocked, 0)::numeric / NULLIF(wa.active_tenants, 0), 2) AS per_tenant
+FROM weekly_active wa
+LEFT JOIN weekly_chain_blocked wcb USING (iso_week)
+ORDER BY wa.iso_week;
+-- 判定: error_pct <= 5.0 かつ per_tenant <= 0.5 が8週連続。
+```
+
+### E. ファネル（新規テナント単位。本タスクの主目的）
+
+「新規テナント」は `tenants.created_at >= '2026-07-31'`（`suggest_avatar_preset` / `adopt_avatar_preset` が使えるようになった #611 マージ日）で定義する。既存テナントは旧UIウィザードで既にアバターを作っている可能性があり、チャット経由かどうかを切り分けられないため、`docs/LEGACY_UI_SUNSET.md` §5「新規テナント限定」の既存パターンに倣う。
+
+```sql
+WITH new_tenants AS (
+  SELECT id FROM tenants
+  WHERE created_at >= '2026-07-31'  -- #611マージ日。要判定時点で確定日に置き換える
+    AND plan IN ('growth', 'enterprise')
+),
+suggested AS (
+  SELECT DISTINCT tenant_id FROM metrics_snapshots
+  WHERE metric_name = 'agent_tool_invoked'
+    AND labels->>'tool' = 'suggest_avatar_preset'
+    AND labels->>'outcome' = 'ok'
+    AND tenant_id IN (SELECT id FROM new_tenants)
+),
+adopted AS (
+  SELECT DISTINCT tenant_id FROM metrics_snapshots
+  WHERE metric_name = 'agent_tool_invoked'
+    AND labels->>'tool' = 'adopt_avatar_preset'
+    AND labels->>'outcome' = 'ok'
+    AND tenant_id IN (SELECT id FROM new_tenants)
+),
+activated AS (
+  SELECT DISTINCT tenant_id FROM metrics_snapshots
+  WHERE metric_name = 'agent_tool_invoked'
+    AND labels->>'tool' = 'activate_avatar'
+    AND labels->>'outcome' = 'ok'
+    AND tenant_id IN (SELECT id FROM new_tenants)
+)
+SELECT
+  (SELECT COUNT(*) FROM new_tenants) AS new_tenants_total,
+  (SELECT COUNT(*) FROM suggested) AS reached_suggested,
+  (SELECT COUNT(*) FROM adopted) AS reached_adopted,
+  (SELECT COUNT(*) FROM activated) AS reached_activated,
+  ROUND((SELECT COUNT(*) FROM suggested)::numeric / NULLIF((SELECT COUNT(*) FROM new_tenants), 0) * 100, 1) AS suggested_rate_pct,
+  ROUND((SELECT COUNT(*) FROM adopted)::numeric / NULLIF((SELECT COUNT(*) FROM suggested), 0) * 100, 1) AS adopted_of_suggested_pct,
+  ROUND((SELECT COUNT(*) FROM activated)::numeric / NULLIF((SELECT COUNT(*) FROM new_tenants), 0) * 100, 1) AS activation_rate_pct;
+-- activation_rate_pct が §6 の一次指標(実使用証拠)。C2が低頻度ゆえ自明成立してしまう
+-- 弱点を、この値で補う(LEGACY_UI_SUNSET.md §1.2-9)。
+```
+
+## 15. 観測開始日と判定開始条件の充足状況
+
+| 項目 | 値 |
+|---|---|
+| ファネル計測対象の機能が全て揃った日 | 2026-07-31（声の選択・採用 #635 マージ、12:32 JST。これ以前は画像候補までしか完結していなかった） |
+| 8週観測窓の開始日（提案） | 2026-07-31（上記と同日。#640/#648 はテスト追加のみでユーザー向け機能変化なし） |
+| 8週窓の終了予定日 | 2026-09-25（8週後） |
+| 有効性ゲート V の充足状況 | **未確認**。§13 の理由により本番DBへ未接続のため、A のクエリを一度も実行できていない。機能ローンチ当日のため、たとえ接続できても直近8週のデータは物理的に存在しない |
+| クローズ判定を開始してよいか | **開始不可**。V が8週連続で成立するまでは、C1〜C3・ファネルの数値が仮に良好でも判定材料として使わない（`docs/LEGACY_UI_SUNSET.md` §2.3 の規約どおり） |
+
+**次のアクション**: 2026-09-25 以降（または本番DBに接続できるようになった時点でまず§14-Aを実行し8週連続成立を確認してから）、§14 の B〜E を実行し、本ドキュメントに実測値を追記した上でクローズ判定に進む。
