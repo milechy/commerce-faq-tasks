@@ -37,8 +37,11 @@ jest.mock('../knowledge/faqCrudRoutes', () => ({
 
 // suggest_tuning_rule / save_tuning_rule が使う依存をモック（実DB/実Groq呼び出し回避）
 const mockCallGroq8bSuggestFromText = jest.fn();
+// P5-1: 会話1往復(user_message/ai_message)からの提案モード用
+const mockCallGroq8bSuggest = jest.fn();
 jest.mock('../tuning/routes', () => ({
   callGroq8bSuggestFromText: (...args: any[]) => mockCallGroq8bSuggestFromText(...args),
+  callGroq8bSuggest: (...args: any[]) => mockCallGroq8bSuggest(...args),
 }));
 
 const mockListRules = jest.fn();
@@ -1077,6 +1080,88 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('どんな質問をした時に使いたいですか');
       expect(res.body.actions[0].result).not.toContain('save_tuning_rule を呼び出してください');
+    });
+
+    // P5-1: 会話1往復(user_message/ai_message)から提案する経路。free_text 経路の
+    // callGroq8bSuggestFromText とは別の callGroq8bSuggest に分岐する。
+    it('P5-1: user_message/ai_message が両方指定されると callGroq8bSuggest(会話モード)に分岐する（callGroq8bSuggestFromTextは呼ばれない）', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-tr-conv-1',
+                  type: 'function',
+                  function: {
+                    name: 'suggest_tuning_rule',
+                    arguments: JSON.stringify({
+                      user_message: '送料はいくらですか',
+                      ai_message: 'ご質問の内容に完全に一致するFAQは見つかりませんでした。',
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('こう提案します。保存してよいですか？'));
+
+      mockCallGroq8bSuggest.mockResolvedValueOnce({
+        trigger_pattern: '送料',
+        instruction: '送料は全国一律500円とお伝えする',
+        priority: 5,
+        reason: '送料に関する知識ギャップが多いため',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この会話からルールを作って', sessionId: 'sess-030d' });
+
+      expect(res.status).toBe(200);
+      expect(mockCallGroq8bSuggest).toHaveBeenCalledWith(
+        '送料はいくらですか',
+        'ご質問の内容に完全に一致するFAQは見つかりませんでした。',
+        expect.any(String),
+        expect.any(String),
+      );
+      expect(mockCallGroq8bSuggestFromText).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('送料は全国一律500円とお伝えする');
+    });
+
+    // P5-1: free_text も user_message/ai_message の組も無い呼び出し(パラメータ欠落や
+    // モデルの引数生成ミス)は、DBもGroqも呼ばずに聞き返す文言で終える。
+    it('P5-1: free_text も user_message/ai_message の組も無い場合は提案を試みずエラー文言を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-tr-conv-2',
+                  type: 'function',
+                  function: { name: 'suggest_tuning_rule', arguments: JSON.stringify({ user_message: '送料はいくらですか' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('もう少し詳しく教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルールを作って', sessionId: 'sess-030e' });
+
+      expect(res.status).toBe(200);
+      expect(mockCallGroq8bSuggest).not.toHaveBeenCalled();
+      expect(mockCallGroq8bSuggestFromText).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('free_text か、user_message と ai_message の組み合わせのいずれかが必要です');
     });
   });
 
@@ -2407,6 +2492,35 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('未対応11件中2件');
       expect(result).toContain('送料はいくらですか？');
       expect(result).toContain('返品はできますか？');
+    });
+
+    // P5-1: 一覧の各行から「このギャップからルールを作る」チップに繋げるためのカード。
+    it('P5-1: get_knowledge_gaps は knowledge_gaps_list カードを返す（id/userQuestion/ragHitCount/totalCount）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-kg-card-1', 'get_knowledge_gaps', {}))
+        .mockResolvedValueOnce(makeGroqResponse('未対応の質問は2件あります。'));
+
+      mockGetGaps.mockResolvedValueOnce({
+        gaps: [
+          { id: 1, tenant_id: 'tenant-abc', user_question: '送料はいくらですか？', session_id: null, message_id: null, rag_hit_count: 9, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+          { id: 2, tenant_id: 'tenant-abc', user_question: '返品はできますか？', session_id: null, message_id: null, rag_hit_count: 2, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+        ],
+        total: 11,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '知識ギャップを見せて', sessionId: 'sess-kg-card-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'knowledge_gaps_list',
+        gaps: [
+          { id: 1, userQuestion: '送料はいくらですか？', ragHitCount: 9 },
+          { id: 2, userQuestion: '返品はできますか？', ragHitCount: 2 },
+        ],
+        totalCount: 11,
+      });
     });
 
     it('get_knowledge_gaps: 0件の場合は「ありません」と返す', async () => {
@@ -3972,7 +4086,9 @@ describe('POST /v1/admin/agent/chat', () => {
         kind: 'chat_session_messages',
         shortId: 'a1b2c3d4',
         totalMessages: 1,
-        messages: [{ roleLabel: 'お客様', content: '送料はいくらですか' }],
+        // P5-1: role(生の値)を追加。「この会話からルールを作る」チップの
+        // 判定(AI応答の直後にのみ出す)に使う。
+        messages: [{ role: 'user', roleLabel: 'お客様', content: '送料はいくらですか' }],
       });
     });
 

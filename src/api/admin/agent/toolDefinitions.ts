@@ -356,16 +356,27 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'suggest_tuning_rule',
       description:
-        '店舗管理者の自然な言葉による指示を、AIチャットボットの「指示ルール」（トリガー条件・期待する応答方針・優先度）の下書きに変換する。書き込みは行わない読み取り専用ツール。提案内容は必ずユーザーに提示して明確な同意を得てから save_tuning_rule で保存すること。',
+        '店舗管理者の自然な言葉による指示、または既存の会話のやりとり・知識ギャップから、AIチャットボットの「指示ルール」（トリガー条件・期待する応答方針・優先度）の下書きに変換する。書き込みは行わない読み取り専用ツール。' +
+        'free_text（自然文の指示）か、user_message + ai_message（会話1往復からの提案）のどちらか一方を指定する。' +
+        '会話の全文表示や知識ギャップの一覧から「この会話/ギャップからルールを作って」と言われた場合は、free_text ではなく user_message（お客様の発言・質問）と ai_message（それに対するAIの回答。知識ギャップの場合は「ご質問の内容に完全に一致するFAQは見つかりませんでした。」）を使うこと。' +
+        '提案内容は必ずユーザーに提示して明確な同意を得てから save_tuning_rule で保存すること。',
       parameters: {
         type: 'object',
         properties: {
           free_text: {
             type: 'string',
-            description: '管理者が話した自然文の指示（例:「保証について聞かれたら2年とお伝えして」）',
+            description: '管理者が話した自然文の指示（例:「保証について聞かれたら2年とお伝えして」）。user_message/ai_message とは併用しない。',
+          },
+          user_message: {
+            type: 'string',
+            description: '会話やギャップにおけるお客様側の発言・質問。ai_message と組で指定する。',
+          },
+          ai_message: {
+            type: 'string',
+            description: 'user_message に対するAIの回答。user_message と組で指定する。',
           },
         },
-        required: ['free_text'],
+        required: [],
       },
     },
   },

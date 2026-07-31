@@ -8,7 +8,7 @@ import {
   insertEmbeddingAsync,
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
-import { callGroq8bSuggestFromText } from '../tuning/routes';
+import { callGroq8bSuggestFromText, callGroq8bSuggest } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
 import { splitTriggerKeywords } from '../tuning/triggerMatching';
 import { generateTestResponses } from '../tuning/testResponseRoutes';
@@ -303,7 +303,10 @@ export type ChatSessionMessagesCardPayload = {
   kind: 'chat_session_messages';
   shortId: string;
   totalMessages: number;
-  messages: Array<{ roleLabel: string; content: string }>;
+  // role は 'user' | 'assistant' | 'operator' 等の生の値。P5-1で
+  // 「この会話からルールを作る」チップをAI応答直後にのみ出すために必要
+  // (roleLabelは表示用の日本語ラベルで判定に使うと言語非依存性が崩れる)。
+  messages: Array<{ role: string; roleLabel: string; content: string }>;
 };
 
 // AI品質評価(Judge)カード。4軸ラベルは旧UI(admin-ui の JudgeEvaluationSection.tsx)と
@@ -316,6 +319,14 @@ export type ConversationEvaluationCardPayload = {
   notes: string | null;
 };
 
+// P5-1: 知識ギャップ一覧カード。各行から「このギャップからルールを作る」チップに
+// 繋げるため、質問文とヒット件数を店主が読める形で持たせる。
+export type KnowledgeGapsListCardPayload = {
+  kind: 'knowledge_gaps_list';
+  gaps: Array<{ id: number; userQuestion: string; ragHitCount: number }>;
+  totalCount: number;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -325,7 +336,8 @@ export type ActionCardPayload =
   | WeeklySummaryCardPayload
   | ChatSessionListCardPayload
   | ChatSessionMessagesCardPayload
-  | ConversationEvaluationCardPayload;
+  | ConversationEvaluationCardPayload
+  | KnowledgeGapsListCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -1017,16 +1029,24 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'suggest_tuning_rule': {
       const freeText = String(args['free_text'] ?? '').trim();
-      if (!freeText) {
-        return truncate('free_text は必須です');
+      const userMessage = String(args['user_message'] ?? '').trim();
+      const aiMessage = String(args['ai_message'] ?? '').trim();
+      // P5-1: 会話の全文表示・知識ギャップの一覧から画面遷移なしでルールの下書きに
+      // 繋げる導線。既存のfree_text経路とは別に、会話1往復(user_message/ai_message)
+      // からの提案経路を追加する。新しい提案ロジックは書かず、旧UI(TuningRuleModal.tsx)
+      // が使っているのと同じ callGroq8bSuggest に分岐するだけ。
+      const isConversationMode = Boolean(userMessage && aiMessage);
+      if (!freeText && !isConversationMode) {
+        return truncate('free_text か、user_message と ai_message の組み合わせのいずれかが必要です');
       }
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
       try {
+        const anchorText = isConversationMode ? userMessage : freeText;
         const [knowledgeCtx, existingRules] = await Promise.all([
-          searchKnowledgeForSuggestion(tenantId, freeText).catch(() => ({ results: [] })),
+          searchKnowledgeForSuggestion(tenantId, anchorText).catch(() => ({ results: [] })),
           listRules(tenantId).catch(() => []),
         ]);
         const knowledgeSection = formatKnowledgeContext(knowledgeCtx);
@@ -1035,7 +1055,9 @@ export async function executeToolCall(
           .map((r) => `- [${r.trigger_pattern}] ${r.expected_behavior}`)
           .join('\n');
 
-        const suggestion = await callGroq8bSuggestFromText(freeText, knowledgeSection, existingRulesSection);
+        const suggestion = isConversationMode
+          ? await callGroq8bSuggest(userMessage, aiMessage, knowledgeSection, existingRulesSection)
+          : await callGroq8bSuggestFromText(freeText, knowledgeSection, existingRulesSection);
 
         if (!suggestion.trigger_pattern && !suggestion.instruction) {
           return truncate('提案の生成に失敗しました。もう少し具体的に教えてください');
@@ -1528,7 +1550,16 @@ export async function executeToolCall(
           return truncate('未対応の知識ギャップはありません');
         }
         const lines = gaps.map((g) => `[${g.id}] ${g.user_question.slice(0, 100)}（${g.rag_hit_count}件ヒット）`);
-        return truncate(`知識ギャップ一覧（未対応${total}件中${gaps.length}件）:\n` + lines.join('\n'));
+        // P5-1: cardに全件の質問文をそのまま持たせ、フロントの「このギャップから
+        // ルールを作る」チップが id と質問文をそのまま自然文に埋め込めるようにする。
+        return {
+          text: truncate(`知識ギャップ一覧（未対応${total}件中${gaps.length}件）:\n` + lines.join('\n')),
+          card: {
+            kind: 'knowledge_gaps_list',
+            gaps: gaps.map((g) => ({ id: g.id, userQuestion: g.user_question, ragHitCount: g.rag_hit_count })),
+            totalCount: total,
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_knowledge_gaps failed', err);
         return truncate('知識ギャップ一覧の取得に失敗しました');
@@ -2120,7 +2151,7 @@ export async function executeToolCall(
             totalMessages: messages.length,
             // role のラベル化はここ(CHAT_ROLE_LABELS)を単一の情報源とする。
             // フロント側に同じ辞書を二重に持たせない。
-            messages: recent.map((m) => ({ roleLabel: CHAT_ROLE_LABELS[m.role] ?? m.role, content: m.content })),
+            messages: recent.map((m) => ({ role: m.role, roleLabel: CHAT_ROLE_LABELS[m.role] ?? m.role, content: m.content })),
           },
         };
       } catch (err) {

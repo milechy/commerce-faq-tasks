@@ -630,6 +630,102 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText("送料はいくらですか")).toBeTruthy();
   });
 
+  // P5-1: 会話の全文表示から画面遷移なしでルール下書きに繋げる導線。
+  it("「この会話からルールを作る」は直前にお客様発言があるAI応答にのみ表示され、押すと会話内容を埋め込んだ自然文を実送信する", async () => {
+    mockAgent({
+      reply: "会話内容はこちらです。",
+      actions: [
+        {
+          tool: "get_chat_session_messages",
+          result: "セッション[a1b2c3d4]の会話（全2件中2件）:\nお客様: 送料はいくらですか\nAI: 全国一律500円です",
+          card: {
+            kind: "chat_session_messages",
+            shortId: "a1b2c3d4",
+            totalMessages: 2,
+            messages: [
+              { role: "user", roleLabel: "お客様", content: "送料はいくらですか" },
+              { role: "assistant", roleLabel: "AI", content: "全国一律500円です" },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("a1b2c3d4の会話を見せて");
+
+    const chip = await screen.findByRole("button", { name: "🎛️ この会話からルールを作る" });
+    // お客様発言そのものにはボタンが出ない(AI応答1個・チップ1個であることの確認)
+    expect(screen.getAllByRole("button", { name: "🎛️ この会話からルールを作る" })).toHaveLength(1);
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("この会話(お客様:「送料はいくらですか」→AI:「全国一律500円です」)から指示ルールを提案してください"),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("「この会話からルールを作る」は直前のお客様発言が無いAI応答には表示されない", async () => {
+    mockAgent({
+      reply: "会話内容はこちらです。",
+      actions: [
+        {
+          tool: "get_chat_session_messages",
+          result: "セッション[a1b2c3d4]の会話（全1件中1件）:\nAI: いらっしゃいませ",
+          card: {
+            kind: "chat_session_messages",
+            shortId: "a1b2c3d4",
+            totalMessages: 1,
+            messages: [{ role: "assistant", roleLabel: "AI", content: "いらっしゃいませ" }],
+          },
+        },
+      ],
+    });
+
+    await send("a1b2c3d4の会話を見せて");
+
+    expect(await screen.findByText("いらっしゃいませ")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "🎛️ この会話からルールを作る" })).toBeNull();
+  });
+
+  // P5-1: 知識ギャップ一覧から画面遷移なしでルール下書きに繋げる導線。
+  it("知識ギャップカードは行ごとに「このギャップからルールを作る」チップを出し、押すとID/質問を埋め込んだ自然文を実送信する", async () => {
+    mockAgent({
+      reply: "未対応の質問は2件あります。",
+      actions: [
+        {
+          tool: "get_knowledge_gaps",
+          result: "知識ギャップ一覧（未対応2件中2件）:\n[1] 送料はいくらですか？（9件ヒット）\n[2] 返品はできますか？（2件ヒット）",
+          card: {
+            kind: "knowledge_gaps_list",
+            gaps: [
+              { id: 1, userQuestion: "送料はいくらですか？", ragHitCount: 9 },
+              { id: 2, userQuestion: "返品はできますか？", ragHitCount: 2 },
+            ],
+            totalCount: 2,
+          },
+        },
+      ],
+    });
+
+    await send("知識ギャップを見せて");
+
+    expect(await screen.findByText("送料はいくらですか？")).toBeTruthy();
+    expect(screen.getByText("返品はできますか？")).toBeTruthy();
+
+    const chips = screen.getAllByRole("button", { name: "🎛️ このギャップからルールを作る" });
+    expect(chips).toHaveLength(2);
+
+    fireEvent.click(chips[0]);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("知識ギャップ（ID: 1、質問:「送料はいくらですか？」）から指示ルールを提案してください"),
+      ).toBeTruthy(),
+    );
+  });
+
   it("record_session_outcome が確認待ちのときは「記録して」チップを出し、押すと実送信する", async () => {
     vi.mocked(authFetch).mockReset();
     mockNavigate.mockReset();
