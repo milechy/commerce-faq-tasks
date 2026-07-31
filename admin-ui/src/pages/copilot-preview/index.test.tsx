@@ -490,6 +490,91 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(link.getAttribute("target")).toBe("_blank");
     expect(screen.getByText(description)).toBeTruthy();
   });
+
+  it("chat_session_list カードは一覧を表示し、次の1件を選ぶチップを添える(短縮IDの手打ち不要)", async () => {
+    mockAgent({
+      reply: "直近の会話は1件です。",
+      actions: [
+        {
+          tool: "get_chat_sessions",
+          result: "会話セッション一覧（全1件中1件）:\n[sess-aaa] 2026-07-17 (4件) 「送料はいくらですか」",
+          card: {
+            kind: "chat_session_list",
+            total: 1,
+            sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+          },
+        },
+      ],
+    });
+
+    await send("最近の会話を見せて");
+
+    expect(await screen.findByText("送料はいくらですか")).toBeTruthy();
+    expect(screen.getByText(/全1件中1件/)).toBeTruthy();
+    // 短縮IDを手打ちせず、チップから次の1件を選べる
+    const chip = await screen.findByRole("button", { name: /07-17 送料はいくらですか/ });
+    expect(chip).toBeTruthy();
+  });
+
+  it("chat_session_list のチップを押すと、短縮IDを含む自然文が実送信される", async () => {
+    vi.mocked(authFetch).mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "1件見つかりました。",
+          actions: [
+            {
+              tool: "get_chat_sessions",
+              result: "会話セッション一覧（全1件中1件）:\n[sess-aaa] 2026-07-17 (4件) 「送料はいくらですか」",
+              card: {
+                kind: "chat_session_list",
+                total: 1,
+                sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+              },
+            },
+          ],
+        });
+      }
+      return mockOk({ reply: "会話の内容はこちらです。", actions: [] });
+    });
+
+    await send("最近の会話を見せて");
+    const chip = await screen.findByRole("button", { name: /07-17 送料はいくらですか/ });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("[sess-aaa]の会話を見せて")).toBeTruthy());
+  });
+
+  it("chat_session_messages カードは会話本文をロールラベル付きで表示する", async () => {
+    mockAgent({
+      reply: "会話内容はこちらです。",
+      actions: [
+        {
+          tool: "get_chat_session_messages",
+          result: "セッション[a1b2c3d4]の会話（全1件中1件）:\nお客様: 送料はいくらですか",
+          card: {
+            kind: "chat_session_messages",
+            shortId: "a1b2c3d4",
+            totalMessages: 1,
+            messages: [{ roleLabel: "お客様", content: "送料はいくらですか" }],
+          },
+        },
+      ],
+    });
+
+    await send("a1b2c3d4の会話を見せて");
+
+    expect(await screen.findByText("お客様")).toBeTruthy();
+    expect(screen.getByText("送料はいくらですか")).toBeTruthy();
+  });
 });
 
 function getComposer(): HTMLTextAreaElement {

@@ -182,10 +182,29 @@ export type LegacyLinkCardPayload = {
   description: string;
 };
 
+// 会話一覧カード。短縮ID(shortId)をそのまま次のツール呼び出しに使える形で持たせ、
+// フロント側が短縮IDの手打ちなしで次の1件を選べるようにする(チップの action に使う)。
+export type ChatSessionListCardPayload = {
+  kind: 'chat_session_list';
+  total: number;
+  sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+};
+
+// 会話本文カード。role のラベル化はサーバ側の CHAT_ROLE_LABELS を単一の情報源とし、
+// フロント側に同じ辞書を二重に持たせない(値が面によって違って見える事故を避ける)。
+export type ChatSessionMessagesCardPayload = {
+  kind: 'chat_session_messages';
+  shortId: string;
+  totalMessages: number;
+  messages: Array<{ roleLabel: string; content: string }>;
+};
+
+export type ActionCardPayload = LegacyLinkCardPayload | ChatSessionListCardPayload | ChatSessionMessagesCardPayload;
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
 // （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
-export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload };
+export type ActionResult = string | { text: string; card?: ActionCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -1488,7 +1507,21 @@ export async function executeToolCall(
         const lines = sessions.map(
           (s) => `[${s.session_id.slice(0, 8)}] ${s.started_at.slice(0, 10)} (${s.message_count}件) 「${s.first_message_preview}」`,
         );
-        return truncateRead(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n'));
+        return {
+          text: truncateRead(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n')),
+          // card は次の1件を選ぶ操作のため。フロントは card.sessions[].shortId をそのまま
+          // 次の get_chat_session_messages 呼び出しに使い、短縮IDの手打ちを不要にする。
+          card: {
+            kind: 'chat_session_list',
+            total,
+            sessions: sessions.map((s) => ({
+              shortId: s.session_id.slice(0, 8),
+              startedAt: s.started_at,
+              messageCount: s.message_count,
+              preview: s.first_message_preview,
+            })),
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_sessions failed', err);
         return truncate('会話セッション一覧の取得に失敗しました');
@@ -1517,10 +1550,20 @@ export async function executeToolCall(
 
         const recent = messages.slice(-limit);
         const lines = recent.map((m) => `${CHAT_ROLE_LABELS[m.role] ?? m.role}: ${m.content}`);
-        return truncateRead(
-          `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
-          lines.join('\n'),
-        );
+        return {
+          text: truncateRead(
+            `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
+            lines.join('\n'),
+          ),
+          card: {
+            kind: 'chat_session_messages',
+            shortId: resolved.session.session_id.slice(0, 8),
+            totalMessages: messages.length,
+            // role のラベル化はここ(CHAT_ROLE_LABELS)を単一の情報源とする。
+            // フロント側に同じ辞書を二重に持たせない。
+            messages: recent.map((m) => ({ roleLabel: CHAT_ROLE_LABELS[m.role] ?? m.role, content: m.content })),
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_session_messages failed', err);
         return truncate('会話内容の取得に失敗しました');

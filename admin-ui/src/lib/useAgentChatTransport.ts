@@ -23,15 +23,23 @@ export type AgentChatSurface = "panel" | "fullscreen";
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
-// バックエンド(actionExecutor.ts の LegacyLinkCardPayload)が自然文に添えて返す
-// 構造化カード。現時点で card を返すのは get_legacy_ui_link だけで、他のツールは
-// 従来どおり result の自然文のみ。
-export type AgentActionCard = {
-  kind: "legacy_link";
-  label: string;
-  url: string;
-  description: string;
-};
+// バックエンド(actionExecutor.ts の ActionCardPayload)が自然文に添えて返す構造化
+// カード。card を返すのは get_legacy_ui_link / get_chat_sessions / get_chat_session_messages
+// の3ツールで、他のツールは従来どおり result の自然文のみ。
+// フィールド形はサーバ側の型と1:1で対応させる(型定義箇所はサーバ/ここの2箇所に限る)。
+export type AgentActionCard =
+  | { kind: "legacy_link"; label: string; url: string; description: string }
+  | {
+      kind: "chat_session_list";
+      total: number;
+      sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+    }
+  | {
+      kind: "chat_session_messages";
+      shortId: string;
+      totalMessages: number;
+      messages: Array<{ roleLabel: string; content: string }>;
+    };
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 
