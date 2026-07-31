@@ -1501,6 +1501,99 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('応答品質スコア'); // avg=null は行ごと省略
     });
 
+    it('カードの数値はサーバ集計値そのままで、LLMの最終応答の文面をどう変えても変わらない', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-6',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        // LLMの文面は数値と無関係な誤った内容にする。card の数値がこれに引きずられないことを検証する。
+        .mockResolvedValueOnce(makeGroqResponse('残念ながら今週は会話がありませんでした。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 200 }] })
+        .mockResolvedValueOnce({ rows: [{ n: 100 }] })
+        .mockResolvedValueOnce({ rows: [{ avg: '91.7' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 5, total: '1234567' }] })
+        .mockResolvedValueOnce({ rows: [{ total: 60, published: 55, last_updated: '2026-08-03T10:00:00.000Z' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 4 }] });
+
+      mockGetGaps.mockResolvedValueOnce({
+        gaps: [
+          { id: 21, tenant_id: 'tenant-abc', user_question: '返品はできますか？', session_id: null, message_id: null, rag_hit_count: 0, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+        ],
+        total: 7,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-045' });
+
+      expect(res.status).toBe(200);
+      const card = res.body.actions[0].card;
+      expect(card.kind).toBe('weekly_summary');
+      expect(card.sessions).toEqual({ total: 200, changePct: 100, prevTotal: 100 });
+      expect(card.avgScore).toBe(92); // Math.round(91.7)
+      expect(card.conversions).toEqual({ count: 5, total: 1234567 });
+      expect(card.faq).toEqual({ total: 60, published: 55, lastUpdated: '2026-08-03T10:00:00.000Z' });
+      expect(card.pendingTuningRules).toBe(4);
+      expect(card.gaps).toEqual({ total: 7, top: [{ id: 21, question: '返品はできますか？' }] });
+      expect(typeof card.asOf).toBe('string');
+      expect(new Date(card.asOf).toString()).not.toBe('Invalid Date');
+    });
+
+    it('未回答質問・承認待ちルールが共に0件の場合、textにもcardにも書き込み系のチップを誘発する材料が無い', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-7',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('順調です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 30 }] })
+        .mockResolvedValueOnce({ rows: [{ n: 25 }] })
+        .mockResolvedValueOnce({ rows: [{ avg: '88' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 2, total: '10000' }] })
+        .mockResolvedValueOnce({ rows: [{ total: 10, published: 10, last_updated: '2026-07-28T00:00:00.000Z' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] });
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-046' });
+
+      expect(res.status).toBe(200);
+      const card = res.body.actions[0].card;
+      expect(card.gaps.total).toBe(0);
+      expect(card.pendingTuningRules).toBe(0);
+    });
+
     it('super_admin がテナント未特定 → テナント特定を促すメッセージを返しDBクエリは発火しない', async () => {
       mockFetch
         .mockResolvedValueOnce({
