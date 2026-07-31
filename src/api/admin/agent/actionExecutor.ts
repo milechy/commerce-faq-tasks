@@ -874,7 +874,10 @@ export async function executeToolCall(
 
       try {
         const { weekStart, prevWeekStart, prevWeekEnd } = getWeekRange(new Date());
-        const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes] = await Promise.all([
+        // 指標ごとに Promise.allSettled で独立させる。以前は1本の失敗で全指標が
+        // 「取得に失敗しました」に落ちていたが、指標が増えるほど1本の不調が全体を
+        // 巻き込む確率が上がるため、取れた指標だけを出す方式に変更する。
+        const [sessionsRes, prevSessionsRes, evalRes, cvRes, faqRes, tuningRes, gapsRes] = await Promise.allSettled([
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
              WHERE tenant_id = $1 AND started_at >= $2`,
@@ -898,35 +901,82 @@ export async function executeToolCall(
              WHERE tenant_id = $1 AND created_at >= $2`,
             [tenantId, weekStart],
           ),
+          // 旧ダッシュボードStatCard代替: FAQ総数・公開数・最終更新日(週に限定しないテナント全体の値)
+          db.query(
+            `SELECT COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE is_published)::int AS published,
+                    MAX(updated_at) AS last_updated
+             FROM faq_docs WHERE tenant_id = $1`,
+            [tenantId],
+          ),
+          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM tuning_rules
+             WHERE tenant_id = $1 AND approved_at IS NULL AND rejected_at IS NULL`,
+            [tenantId],
+          ),
           getGaps({ tenantId, status: 'open', limit: 3 }),
         ]);
 
-        const totalSessions = Number(sessionsRes.rows[0]?.n ?? 0);
-        // 先週の同一経過時間との比較値。先週は既に終わっているため確定値として併記する
-        // （週初の部分週をまる1週間の前週と比べると常に大幅マイナスになり指標として使えない）。
-        const prevSessions = Number(prevSessionsRes.rows[0]?.n ?? 0);
-        const changePct = prevSessions > 0 ? Math.round(((totalSessions - prevSessions) / prevSessions) * 100) : null;
-        const avgScoreRaw = evalRes.rows[0]?.avg;
-        const avgScore = avgScoreRaw != null ? Math.round(Number(avgScoreRaw)) : null;
-        const cvCount = Number(cvRes.rows[0]?.n ?? 0);
-        const cvTotal = Math.round(Number(cvRes.rows[0]?.total ?? 0));
-        const { gaps, total: gapsTotal } = gapsRes;
-
         const lines: string[] = ['今週(月曜起点)の状況:'];
-        lines.push(
-          `会話数 ${totalSessions}件` +
-          (changePct !== null
-            ? `（先週同時点比 ${changePct >= 0 ? '+' : ''}${changePct}%、先週同時点は${prevSessions}件）`
-            : ''),
-        );
-        if (avgScore !== null) lines.push(`応答品質スコア ${avgScore}/100`);
-        lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
-        lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
-        if (gaps.length > 0) {
-          lines.push('うち上位:');
-          gaps.forEach((g, i) => {
-            lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
-          });
+
+        if (sessionsRes.status === 'fulfilled') {
+          const totalSessions = Number(sessionsRes.value?.rows?.[0]?.n ?? 0);
+          // 先週の同一経過時間との比較値。先週は既に終わっているため確定値として併記する
+          // （週初の部分週をまる1週間の前週と比べると常に大幅マイナスになり指標として使えない）。
+          let changeSuffix = '';
+          if (prevSessionsRes.status === 'fulfilled') {
+            const prevSessions = Number(prevSessionsRes.value?.rows?.[0]?.n ?? 0);
+            if (prevSessions > 0) {
+              const changePct = Math.round(((totalSessions - prevSessions) / prevSessions) * 100);
+              changeSuffix = `（先週同時点比 ${changePct >= 0 ? '+' : ''}${changePct}%、先週同時点は${prevSessions}件）`;
+            }
+          }
+          lines.push(`会話数 ${totalSessions}件${changeSuffix}`);
+        }
+
+        if (evalRes.status === 'fulfilled') {
+          const avgScoreRaw = evalRes.value?.rows?.[0]?.avg;
+          if (avgScoreRaw != null) lines.push(`応答品質スコア ${Math.round(Number(avgScoreRaw))}/100`);
+        }
+
+        if (cvRes.status === 'fulfilled') {
+          const cvCount = Number(cvRes.value?.rows?.[0]?.n ?? 0);
+          const cvTotal = Math.round(Number(cvRes.value?.rows?.[0]?.total ?? 0));
+          lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
+        }
+
+        if (faqRes.status === 'fulfilled') {
+          const row = faqRes.value?.rows?.[0];
+          const faqTotal = Number(row?.total ?? 0);
+          const faqPublished = Number(row?.published ?? 0);
+          const lastUpdated = row?.last_updated
+            ? new Date(row.last_updated).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
+            : null;
+          lines.push(
+            `FAQ ${faqTotal}件（公開${faqPublished}件）` + (lastUpdated ? `・最終更新 ${lastUpdated}` : ''),
+          );
+        }
+
+        if (tuningRes.status === 'fulfilled') {
+          const pending = Number(tuningRes.value?.rows?.[0]?.n ?? 0);
+          lines.push(`承認待ちの指示ルール ${pending}件`);
+        }
+
+        if (gapsRes.status === 'fulfilled') {
+          const { gaps, total: gapsTotal } = gapsRes.value;
+          lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
+          if (gaps.length > 0) {
+            lines.push('うち上位:');
+            gaps.forEach((g, i) => {
+              lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
+            });
+          }
+        }
+
+        if (lines.length === 1) {
+          // 全指標が取得失敗
+          return truncate('週次サマリーの取得に失敗しました');
         }
 
         return truncate(lines.join('\n'));
