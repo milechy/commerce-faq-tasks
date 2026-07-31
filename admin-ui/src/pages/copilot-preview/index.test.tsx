@@ -1298,6 +1298,134 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
   });
 });
 
+// POST /match-voice はテキストの候補(id/title/description/score)のみを返し音声
+// プレビューURLを持たない(旧UIウィザードのStudioVoiceSectionも試聴機能を持たない)。
+// 計画は「試聴要素の存在」を前提にしていたが、実装を確認するとその基盤が無いため、
+// 一覧から選ぶ形に修正し、代わりに「プレビューは提供されていない」旨を明示するテストを書く。
+describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
+  function mockAdoptedThenVoiceEndpoints(opts: {
+    match?: () => Promise<Response>;
+    patch?: () => Promise<Response>;
+  }) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/match-voice")) {
+        return opts.match
+          ? opts.match()
+          : mockOk({ recommendations: [{ id: "voice-1", title: "Haruka Voice", description: "明るく親しみやすい声", score: 0.92 }] });
+      }
+      if (String(url).includes("/v1/admin/avatar/configs/")) {
+        return opts.patch ? opts.patch() : mockOk({ id: "cfg-1" });
+      }
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+  }
+
+  async function sendAndFindVoiceButton() {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByRole("button", { name: "声を探す" });
+  }
+
+  it("候補が描画され、音声プレビューが無い旨が明示される(試聴URLを持たないため)", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    expect(await screen.findByText("Haruka Voice")).toBeTruthy();
+    expect(screen.getByText("明るく親しみやすい声")).toBeTruthy();
+    expect(screen.getByText("92%")).toBeTruthy();
+    expect(screen.getByText("音声のプレビューは提供されていません。名前と説明を参考にお選びください。")).toBeTruthy();
+    expect(document.querySelector("audio")).toBeNull();
+
+    const matchCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/match-voice"));
+    expect(matchCall).toBeTruthy();
+    // 声の説明を新たに尋ねず、採用済みの性格・話し方の説明をそのまま検索クエリにする
+    expect(JSON.parse(String((matchCall![1] as RequestInit).body))).toEqual({ description: "とても丁寧な性格です。" });
+  });
+
+  it("採用でPATCHが呼ばれ、二重押しできない", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    const adoptButton = await screen.findByRole("button", { name: "この声にする" });
+    fireEvent.click(adoptButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+    const patchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(patchCall).toBeTruthy();
+    expect((patchCall![1] as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toEqual({ voice_id: "voice-1" });
+    expect((screen.getByRole("button", { name: "これに決定" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("候補が0件でも失敗として確定する(無限スピナーを残さない)", async () => {
+    mockAdoptedThenVoiceEndpoints({ match: () => mockOk({ recommendations: [] }) });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    expect(await screen.findByText("合う声が見つかりませんでした。もう一度お試しください。")).toBeTruthy();
+    expect(screen.queryByText("少し時間がかかることがあります。このまま他の操作もできます。")).toBeNull();
+    expect(await screen.findByRole("button", { name: "もう一度試す" })).toBeTruthy();
+  });
+
+  it("検索が5xxで失敗しても確定する", async () => {
+    mockAdoptedThenVoiceEndpoints({
+      match: () => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "声マッチングに失敗しました" }) } as Response),
+    });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    expect(await screen.findByText("声マッチングに失敗しました")).toBeTruthy();
+  });
+
+  it("採用のPATCHが失敗しても、まだ採用されていない扱いのままエラーを示す", async () => {
+    mockAdoptedThenVoiceEndpoints({
+      patch: () => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "更新に失敗しました" }) } as Response),
+    });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+    const adoptButton = await screen.findByRole("button", { name: "この声にする" });
+    fireEvent.click(adoptButton);
+
+    expect(await screen.findByText("更新に失敗しました")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
+    expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy();
+  });
+});
+
 // 想定ユーザーは100%日本語入力の店主。かな漢字変換の確定Enterで未変換のまま
 // 送信されてしまう不具合の回帰テスト(判定条件自体は lib/utils.test.ts で検証済み)。
 describe("CopilotPreviewPage — コンポーザのIME/改行", () => {

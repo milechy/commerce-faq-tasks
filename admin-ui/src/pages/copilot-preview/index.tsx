@@ -105,6 +105,19 @@ type Card =
       message?: string;
       adoptedUrl?: string;
     }
+  // 声の候補提示〜採用。POST /match-voice はテキストの候補(id/title/description/score)
+  // のみを返し音声プレビューを持たないため(旧UIウィザードのStudioVoiceSectionも同様に
+  // 試聴機能を持たない)、本カードも一覧から選ぶ形にする。description は再検索(もう一度
+  // 探す)用に保持する。他の失敗系カードと同じく、必ず status="failed" で確定させる。
+  | {
+      kind: "avatarVoiceCandidates";
+      configId: string;
+      description: string;
+      status: "matching" | "done" | "failed";
+      recommendations?: Array<{ id: string; title: string; description: string; score: number }>;
+      message?: string;
+      adoptedVoiceId?: string;
+    }
   // D3: 一覧が15件・1行60/100字で黙って切れていたのを解消するための全件カード。
   | {
       kind: "rulesList";
@@ -354,6 +367,9 @@ const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
 
 const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_VOICE_MATCH_GENERIC_ERROR = "声を検索できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_VOICE_MATCH_EMPTY_ERROR = "合う声が見つかりませんでした。もう一度お試しください。";
+const AVATAR_VOICE_ADOPT_GENERIC_ERROR = "この声を反映できませんでした。少し時間をおいてもう一度お試しください。";
 
 // ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
 //     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
@@ -1186,6 +1202,73 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // ─── アバターの声の選択・採用 ─────────────────────────────────────────────────
+  // POST /match-voice はテキストの候補(id/title/description/score)のみを返す
+  // (旧UIウィザードのStudioVoiceSectionも同様に試聴機能を持たない。Fish Audio
+  // 検索APIの応答に音声プレビューURLが含まれないため)。「声の説明」は新たに
+  // 尋ねず、採用済みアバターの性格・話し方の説明をそのまま検索クエリに使う
+  // (「選ばせない」方針。ユーザーは声だけの追加質問に答えなくてよい)。
+  const updateAvatarVoiceCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "avatarVoiceCandidates" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "avatarVoiceCandidates" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  const matchAvatarVoice = async (configId: string, description: string) => {
+    const cardId = nextId();
+    const boundedDescription = description.slice(0, 300);
+    push({ id: cardId, role: "ai", card: { kind: "avatarVoiceCandidates", configId, description: boundedDescription, status: "matching" } });
+
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/match-voice`, {
+        method: "POST",
+        body: JSON.stringify({ description: boundedDescription }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarVoiceCard(cardId, { status: "failed", message: body?.error || AVATAR_VOICE_MATCH_GENERIC_ERROR });
+        return;
+      }
+      const data = (await res.json()) as { recommendations?: Array<{ id: string; title: string; description: string; score: number }> };
+      const recommendations = data.recommendations ?? [];
+      if (recommendations.length === 0) {
+        updateAvatarVoiceCard(cardId, { status: "failed", message: AVATAR_VOICE_MATCH_EMPTY_ERROR });
+        return;
+      }
+      updateAvatarVoiceCard(cardId, { status: "done", recommendations });
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_VOICE_MATCH_GENERIC_ERROR;
+      updateAvatarVoiceCard(cardId, { status: "failed", message });
+    }
+  };
+
+  const adoptAvatarVoice = async (cardMsgId: number, configId: string, voiceId: string) => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${configId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ voice_id: voiceId }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarVoiceCard(cardMsgId, { message: body?.error || AVATAR_VOICE_ADOPT_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarVoiceCard(cardMsgId, { adoptedVoiceId: voiceId });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_VOICE_ADOPT_GENERIC_ERROR;
+      updateAvatarVoiceCard(cardMsgId, { message });
+    }
+  };
+
   const handlePdfDrop = (e: React.DragEvent) => {
     e.preventDefault();
     pdfDragCounterRef.current = 0;
@@ -1362,6 +1445,8 @@ export default function CopilotPreviewPage() {
                 onChip={runAction}
                 onGenerateAvatarCandidates={generateAvatarCandidates}
                 onAdoptAvatarCandidate={adoptAvatarCandidate}
+                onMatchAvatarVoice={matchAvatarVoice}
+                onAdoptAvatarVoice={adoptAvatarVoice}
               />
             ))}
             {/* key に直近メッセージのidを与え、回答が変わるたびに新しい確認として出す
@@ -1607,11 +1692,15 @@ function MessageRow({
   onChip,
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
+  onMatchAvatarVoice,
+  onAdoptAvatarVoice,
 }: {
   m: Msg;
   onChip: (a: string, id: number) => void;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
+  onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
 }) {
   const isMe = m.role === "me";
   return (
@@ -1634,6 +1723,8 @@ function MessageRow({
           msgId={m.id}
           onGenerateAvatarCandidates={onGenerateAvatarCandidates}
           onAdoptAvatarCandidate={onAdoptAvatarCandidate}
+          onMatchAvatarVoice={onMatchAvatarVoice}
+          onAdoptAvatarVoice={onAdoptAvatarVoice}
           onSendReal={(action) => onChip(action, m.id)}
         />
       )}
@@ -1829,12 +1920,16 @@ function CardView({
   msgId,
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
+  onMatchAvatarVoice,
+  onAdoptAvatarVoice,
   onSendReal,
 }: {
   card: Card;
   msgId: number;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
+  onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
   onSendReal?: (action: string) => void;
 }) {
   switch (card.kind) {
@@ -1970,9 +2065,11 @@ function CardView({
         </CardShell>
       );
     case "avatarAdopted":
-      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} />;
+      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onMatchVoice={onMatchAvatarVoice} />;
     case "avatarCandidates":
       return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onAdopt={onAdoptAvatarCandidate} />;
+    case "avatarVoiceCandidates":
+      return <AvatarVoiceCard card={card} msgId={msgId} onMatch={onMatchAvatarVoice} onAdopt={onAdoptAvatarVoice} />;
     case "link":
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
@@ -2164,21 +2261,29 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
 function AvatarAdoptedCard({
   card,
   onGenerate,
+  onMatchVoice,
 }: {
   card: Extract<Card, { kind: "avatarAdopted" }>;
   onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onMatchVoice: (configId: string, description: string) => void | Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busyImage, setBusyImage] = useState(false);
+  const [busyVoice, setBusyVoice] = useState(false);
   const handleGenerate = () => {
-    setBusy(true);
-    void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusy(false));
+    setBusyImage(true);
+    void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusyImage(false));
+  };
+  const handleMatchVoice = () => {
+    setBusyVoice(true);
+    // 声の説明を新たに尋ねず、採用済みの性格・話し方の説明をそのまま検索クエリにする。
+    void Promise.resolve(onMatchVoice(card.configId, card.description)).finally(() => setBusyVoice(false));
   };
 
   return (
     <CardShell
       tone="good"
       hd={<><span>✅</span>アバター「{card.name}」を採用しました</>}
-      foot={<CardActionsNote note="生成のたびに少額の費用が発生します。気に入った1枚を選ぶまで何度でもやり直せます。" />}
+      foot={<CardActionsNote note="生成・検索のたびに少額の費用が発生します。気に入るまで何度でもやり直せます。" />}
     >
       {card.imageUrl && (
         <img
@@ -2188,17 +2293,30 @@ function AvatarAdoptedCard({
         />
       )}
       <Field k="性格・話し方" v={card.description} quote />
-      <button
-        onClick={handleGenerate}
-        disabled={busy}
-        style={{
-          alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
-          border: "none", background: AGENT, color: "#fff",
-          cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
-        }}
-      >
-        {busy ? "生成しています…" : "画像を新しく生成する"}
-      </button>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={handleGenerate}
+          disabled={busyImage}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "none", background: AGENT, color: "#fff",
+            cursor: busyImage ? "not-allowed" : "pointer", opacity: busyImage ? 0.6 : 1,
+          }}
+        >
+          {busyImage ? "生成しています…" : "画像を新しく生成する"}
+        </button>
+        <button
+          onClick={handleMatchVoice}
+          disabled={busyVoice}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)",
+            cursor: busyVoice ? "not-allowed" : "pointer", opacity: busyVoice ? 0.6 : 1,
+          }}
+        >
+          {busyVoice ? "声を探しています…" : "声を探す"}
+        </button>
+      </div>
     </CardShell>
   );
 }
@@ -2306,6 +2424,113 @@ function AvatarCandidatesCard({
                 }}
               >
                 {isAdopted ? "これに決定" : adopting === url ? "反映中…" : "これにする"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </CardShell>
+  );
+}
+
+// 声の候補〜採用。match-voice はテキストの候補(id/title/description/score)のみを
+// 返し、音声プレビューURLを持たない(旧UIウィザードのStudioVoiceSectionも試聴機能を
+// 持たない。Fish Audio検索APIの応答に含まれないため)。名前とスコアを頼りに選ぶ形になる。
+function AvatarVoiceCard({
+  card,
+  msgId,
+  onMatch,
+  onAdopt,
+}: {
+  card: Extract<Card, { kind: "avatarVoiceCandidates" }>;
+  msgId: number;
+  onMatch: (configId: string, description: string) => void | Promise<void>;
+  onAdopt: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
+}) {
+  const [adopting, setAdopting] = useState<string | null>(null);
+
+  if (card.status === "matching") {
+    return (
+      <CardShell hd={<><span>🔊</span>合う声を探しています</>}>
+        <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+          少し時間がかかることがあります。このまま他の操作もできます。
+        </div>
+      </CardShell>
+    );
+  }
+
+  if (card.status === "failed") {
+    return (
+      <CardShell
+        tone="bad"
+        hd={<><span>🔊</span>声を検索できませんでした</>}
+        foot={
+          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={() => void onMatch(card.configId, card.description)}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
+              }}
+            >
+              もう一度試す
+            </button>
+          </div>
+        }
+      >
+        {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+      </CardShell>
+    );
+  }
+
+  const handleAdopt = (voiceId: string) => {
+    setAdopting(voiceId);
+    void Promise.resolve(onAdopt(msgId, card.configId, voiceId)).finally(() => setAdopting(null));
+  };
+
+  return (
+    <CardShell
+      tone="good"
+      hd={<><span>🔊</span>声の候補です</>}
+      foot={
+        <CardActionsNote note="音声のプレビューは提供されていません。名前と説明を参考にお選びください。" />
+      }
+    >
+      {card.message && <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{card.message}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {(card.recommendations ?? []).map((rec) => {
+          const isAdopted = card.adoptedVoiceId === rec.id;
+          const disabled = !!card.adoptedVoiceId || adopting !== null;
+          return (
+            <div
+              key={rec.id}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                padding: "10px 14px", borderRadius: 10,
+                border: isAdopted ? `1px solid ${AGENT}` : "1px solid var(--border)",
+                background: isAdopted ? AGENT_SOFT : "transparent",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>{rec.title}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{Math.round(rec.score * 100)}%</span>
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", marginTop: 2 }}>{rec.description}</div>
+              </div>
+              <button
+                onClick={() => handleAdopt(rec.id)}
+                disabled={disabled}
+                style={{
+                  flexShrink: 0, fontSize: 12.5, fontWeight: 700, padding: "7px 14px", borderRadius: 999, minHeight: 36,
+                  border: isAdopted ? "none" : "1px solid var(--border)",
+                  background: isAdopted ? AGENT : "transparent",
+                  color: isAdopted ? "#fff" : "var(--muted-foreground)",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled && !isAdopted ? 0.5 : 1,
+                }}
+              >
+                {isAdopted ? "これに決定" : adopting === rec.id ? "反映中…" : "この声にする"}
               </button>
             </div>
           );
