@@ -124,6 +124,14 @@ GROUP BY 1;
   （`src/api/chat/route.ts` 等、管理エージェントとは別系統かつ高頻度経路）に触れる必要があり、
   本タスク群のスコープ外として意図的に残している。
 
+**参照(オンボ 是正B-2で追加):**
+- `GET /v1/admin/analytics/metrics-history?metric=onboarding_stage_reached` から集計参照できる
+  （`src/api/admin/analytics/routes.ts` の `VALID_METRICS`）。追加前は allowlist に無く 400 で
+  弾かれ、書き込まれるだけで一切参照できない状態だった。
+- `import_industry_faq_templates` / `publish_faq_drafts` は `agentRoutes.ts` の
+  `AUDITED_SETTINGS_TOOLS` にも登録済みで、`tenant_settings_history` にも記録される
+  （`actor` はこちらの監査ログには含まれないため、actor別の集計にはこのメトリクスを使うこと）。
+
 ### `agent_tool_invoked`
 
 - `tool`: ツール名（`ADMIN_AGENT_TOOLS` の `name`。例 `get_faq_list`, `save_faq`）。

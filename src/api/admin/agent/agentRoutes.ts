@@ -97,6 +97,21 @@ const AUDITED_SETTINGS_TOOLS: Record<
     successMarker: 'を有効化しました',
     readNewValue: (args) => args['id'],
   },
+  // オンボ 是正B-2: オンボ2ツールが未登録で tenant_settings_history に一切記録されず、
+  // 「各段階の到達に actor が記録される」(AC-4)が未達だった。successMarker は
+  // 下のonboarding_stage_reachedメトリクス発火(478行目付近)と同じ文字列に揃える。
+  import_industry_faq_templates: {
+    fieldName: 'onboarding_industry',
+    successMarker: '下書きとして登録しました',
+    readNewValue: (args) => args['industry'],
+  },
+  publish_faq_drafts: {
+    fieldName: 'faq_docs_published',
+    successMarker: '件のFAQを公開しました',
+    // 公開対象のFAQ ID等はactionExecutor内部の戻り値にしかなくargsからは取れないため、
+    // 「公開操作が行われた」ことのみを記録する。
+    readNewValue: () => true,
+  },
 };
 
 /** 監査記録も fire-and-forget。記録の失敗をチャット応答に一切影響させない。 */

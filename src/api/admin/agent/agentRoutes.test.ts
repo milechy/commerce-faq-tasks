@@ -7980,6 +7980,76 @@ describe('POST /v1/admin/agent/chat', () => {
       ]);
     });
 
+    // オンボ 是正B-2: import_industry_faq_templates/publish_faq_drafts が未登録で
+    // AC-4「各段階の到達に actor が記録される」が未達だった(メトリクスのactorラベルは
+    // 集計用で監査証跡ではない)。
+    it('import_industry_faq_templates 成功時に onboarding_industry の変更を記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-ob1', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+
+      for (let i = 0; i < 5; i++) {
+        mockQuery.mockResolvedValueOnce({ rows: [{ id: 100 + i, question: `q${i}`, answer: `a${i}`, is_published: false }] });
+      }
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-audit-ob1' });
+
+      expect(res.status).toBe(200);
+      expect(recordedSettingsChanges()).toEqual([
+        {
+          tenantId: 'tenant-abc',
+          changedBy: 'admin@example.com',
+          fieldName: 'onboarding_industry',
+          oldValue: null,
+          newValue: 'beauty',
+        },
+      ]);
+    });
+
+    it('import_industry_faq_templates が0件成功(オンボ 是正A-2)の場合は記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-ob2', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('失敗しました。'));
+
+      for (let i = 0; i < 5; i++) {
+        mockQuery.mockRejectedValueOnce(new Error('insert failed'));
+      }
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-audit-ob2' });
+
+      expect(res.status).toBe(200);
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('publish_faq_drafts 成功時に faq_docs_published の変更を記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-ob3', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, question: 'Q1', answer: 'A1' }],
+      });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-audit-ob3' });
+
+      expect(res.status).toBe(200);
+      expect(recordedSettingsChanges()).toEqual([
+        {
+          tenantId: 'tenant-abc',
+          changedBy: 'admin@example.com',
+          fieldName: 'faq_docs_published',
+          oldValue: null,
+          newValue: true,
+        },
+      ]);
+    });
+
     it('activate_avatar がプラン制限でブロックされた場合は記録しない', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-au-5', 'activate_avatar', { id: 'av-1' }))
@@ -8039,7 +8109,8 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
     });
 
-    it('対象4ツール以外の書き込み(save_faq成功)は tenant_settings_history に記録しない', async () => {
+    // オンボ 是正B-2でimport_industry_faq_templates/publish_faq_draftsを追加登録し、対象は6ツールになった。
+    it('対象6ツール以外の書き込み(save_faq成功)は tenant_settings_history に記録しない', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-au-7', 'save_faq', { question: 'q', answer: 'a', confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('FAQを保存しました。'));
