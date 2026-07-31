@@ -546,7 +546,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
           card: {
             kind: "chat_session_list",
             total: 1,
-            sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+            sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか", outcome: null }],
           },
         },
       ],
@@ -608,7 +608,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
               card: {
                 kind: "chat_session_list",
                 total: 1,
-                sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+                sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか", outcome: null }],
               },
             },
           ],

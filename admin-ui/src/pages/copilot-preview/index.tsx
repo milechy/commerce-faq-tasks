@@ -2264,7 +2264,7 @@ function CardView({
               <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
                 {s.startedAt.slice(0, 10)} ・ {s.messageCount}件
                 {s.outcome && (
-                  <span style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 600, background: "rgba(34,197,94,0.15)", color: "#16a34a" }}>
+                  <span style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#16a34a" }}>
                     {s.outcome}
                   </span>
                 )}
