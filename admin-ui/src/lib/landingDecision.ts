@@ -31,13 +31,35 @@ export interface LandingDecision {
   isLandingDecisionPending: boolean;
 }
 
+export type OnboardingStage = "industry_answered" | "knowledge_published" | "widget_installed" | "first_conversation";
+
+// オンボ 是正C-2: 段階の順序(判定順)がバックエンド(onboardingStage.ts の STAGE_ORDER)と
+// admin-ui内(copilot-preview/index.tsx の deriveOnboardingNextStep)の2箇所に暗黙if連鎖・
+// 4つのand直書きとして3重化していた。ここを単一の情報源にする(パッケージ境界の都合上
+// バックエンドとの重複は解消できないが、admin-ui内は1本になる)。
+const ONBOARDING_STAGE_ORDER: OnboardingStage[] = [
+  "industry_answered",
+  "knowledge_published",
+  "widget_installed",
+  "first_conversation",
+];
+
+/** 4段階のうち、まだ到達していない最初の段階を返す。全段階到達済みなら null。 */
+export function nextIncompleteStage(stage: OnboardingStageFlags): OnboardingStage | null {
+  const flags: Record<OnboardingStage, boolean> = {
+    industry_answered: stage.industryAnswered,
+    knowledge_published: stage.knowledgePublished,
+    widget_installed: stage.widgetInstalled,
+    first_conversation: stage.firstConversation,
+  };
+  for (const s of ONBOARDING_STAGE_ORDER) {
+    if (!flags[s]) return s;
+  }
+  return null;
+}
+
 function isOnboardingComplete(stage: OnboardingStageFlags): boolean {
-  return (
-    stage.industryAnswered &&
-    stage.knowledgePublished &&
-    stage.widgetInstalled &&
-    stage.firstConversation
-  );
+  return nextIncompleteStage(stage) === null;
 }
 
 export function computeLandingDecision(input: LandingDecisionInput): LandingDecision {

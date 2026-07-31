@@ -3,7 +3,7 @@
 // docs/ONBOARDING_FIRST_LOGIN.md §7 の N-1/N-2/N-12(間接)・X-7/X-13 に対応。
 
 import { describe, it, expect } from "vitest";
-import { computeLandingDecision, type LandingDecisionInput } from "./landingDecision";
+import { computeLandingDecision, nextIncompleteStage, type LandingDecisionInput } from "./landingDecision";
 import type { OnboardingStageFlags } from "../auth/useAuth";
 
 const INCOMPLETE_STAGE: OnboardingStageFlags = {
@@ -33,6 +33,43 @@ function baseInput(overrides: Partial<LandingDecisionInput> = {}): LandingDecisi
     ...overrides,
   };
 }
+
+// オンボ 是正C-2: 段階の判定順序をここに一本化した(以前は copilot-preview/index.tsx の
+// deriveOnboardingNextStep に同じ順序がif連鎖として重複していた)。
+describe("nextIncompleteStage", () => {
+  it("全段階未到達なら industry_answered を返す(先頭)", () => {
+    expect(nextIncompleteStage(INCOMPLETE_STAGE)).toBe("industry_answered");
+  });
+
+  it("業種回答済みなら knowledge_published を返す", () => {
+    expect(nextIncompleteStage({ ...INCOMPLETE_STAGE, industryAnswered: true })).toBe("knowledge_published");
+  });
+
+  it("業種回答+知識公開済みなら widget_installed を返す", () => {
+    expect(
+      nextIncompleteStage({ ...INCOMPLETE_STAGE, industryAnswered: true, knowledgePublished: true }),
+    ).toBe("widget_installed");
+  });
+
+  it("業種回答+知識公開+設置検知済みなら first_conversation を返す", () => {
+    expect(
+      nextIncompleteStage({
+        ...INCOMPLETE_STAGE,
+        industryAnswered: true,
+        knowledgePublished: true,
+        widgetInstalled: true,
+      }),
+    ).toBe("first_conversation");
+  });
+
+  it("全段階到達済みなら null を返す", () => {
+    expect(nextIncompleteStage(COMPLETE_STAGE)).toBeNull();
+  });
+
+  it("hasDraftFaqは段階の判定に混ざらない(ヒントのみ)", () => {
+    expect(nextIncompleteStage({ ...COMPLETE_STAGE, hasDraftFaq: true })).toBeNull();
+  });
+});
 
 describe("computeLandingDecision — N-1: 新規テナントは新UIに着地する", () => {
   it.each<[string, string]>([["/", "ルート"], ["/admin", "旧ダッシュボード"]])(

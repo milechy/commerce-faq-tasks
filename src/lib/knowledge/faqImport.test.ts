@@ -256,11 +256,12 @@ describe('commitTextFaqs', () => {
 
     await commitTextFaqs(db, 't1', [{ question: 'Q1', answer: 'A1', category: 'general' }], 'pricing', 'text');
     const insertCall = queryMock.mock.calls[1];
-    expect(insertCall[1]).toEqual(['t1', 'Q1', 'A1', 'pricing', true]);
+    expect(insertCall[1]).toEqual(['t1', 'Q1', 'A1', 'pricing']);
   });
 
-  // Asana 1217040715802747(P3): isPublished の既定値は true(既存挙動を完全に保持する)。
-  it('isPublishedを省略した場合は既定でtrue(即公開)のまま登録される', async () => {
+  // オンボ 是正C-1: isPublishedパラメータは撤去した(唯一の呼び出し元だったOnboardingModalを
+  // 削除したため)。登録は常に即公開(is_published=true固定)であることをSQL文字列で固定する。
+  it('登録は常に即公開(is_published=true固定)で行われる', async () => {
     const queryMock = jest
       .fn()
       .mockResolvedValueOnce({ rows: [] })
@@ -269,19 +270,8 @@ describe('commitTextFaqs', () => {
 
     await commitTextFaqs(db, 't1', [{ question: 'Q1', answer: 'A1' }], undefined, 'text');
     const insertCall = queryMock.mock.calls[1];
-    expect(insertCall[1]).toEqual(['t1', 'Q1', 'A1', 'general', true]);
-  });
-
-  it('isPublished=falseを渡すと下書き(非公開)で登録される(オンボーディング経路)', async () => {
-    const queryMock = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: 1 }] });
-    const db = makeMockPool(queryMock);
-
-    await commitTextFaqs(db, 't1', [{ question: 'Q1', answer: 'A1' }], undefined, 'text', false);
-    const insertCall = queryMock.mock.calls[1];
-    expect(insertCall[1]).toEqual(['t1', 'Q1', 'A1', 'general', false]);
+    expect(insertCall[1]).toEqual(['t1', 'Q1', 'A1', 'general']);
+    expect(String(insertCall[0])).toContain('VALUES ($1, $2, $3, $4, true)');
   });
 });
 
