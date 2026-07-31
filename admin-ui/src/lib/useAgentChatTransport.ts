@@ -59,7 +59,15 @@ export type ChatSessionMessagesAgentActionCard = {
   kind: "chat_session_messages";
   shortId: string;
   totalMessages: number;
-  messages: Array<{ roleLabel: string; content: string }>;
+  messages: Array<{ role: string; roleLabel: string; content: string }>;
+};
+
+// P5-1: 知識ギャップ一覧(get_knowledge_gaps)。各行から「このギャップから
+// ルールを作る」チップに繋げる。
+export type KnowledgeGapsListAgentActionCard = {
+  kind: "knowledge_gaps_list";
+  gaps: Array<{ id: number; userQuestion: string; ragHitCount: number }>;
+  totalCount: number;
 };
 
 export type AvatarPresetAgentActionCard = {
@@ -135,7 +143,8 @@ export type AgentActionCard =
   | WeeklySummaryAgentActionCard
   | ChatSessionListAgentActionCard
   | ChatSessionMessagesAgentActionCard
-  | ConversationEvaluationAgentActionCard;
+  | ConversationEvaluationAgentActionCard
+  | KnowledgeGapsListAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

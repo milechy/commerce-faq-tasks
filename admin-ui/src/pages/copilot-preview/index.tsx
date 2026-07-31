@@ -164,11 +164,20 @@ type Card =
     }
   // 会話本文(get_chat_session_messages)。role のラベルはサーバ側(CHAT_ROLE_LABELS)を
   // 単一の情報源とし、ここでは辞書を持たずそのまま描画する。
+  // role(生の値)はP5-1で追加: AI応答の直後にのみ「この会話からルールを作る」
+  // チップを出すための判定に使う(roleLabelは表示用の日本語で判定に使わない)。
   | {
       kind: "chatSessionMessages";
       shortId: string;
       totalMessages: number;
-      messages: Array<{ roleLabel: string; content: string }>;
+      messages: Array<{ role: string; roleLabel: string; content: string }>;
+    }
+  // P5-1: 知識ギャップ一覧(get_knowledge_gaps)。各行から「このギャップから
+  // ルールを作る」チップに繋げる。
+  | {
+      kind: "knowledgeGapsList";
+      gaps: Array<{ id: number; userQuestion: string; ragHitCount: number }>;
+      totalCount: number;
     }
   // AI品質評価(get_conversation_evaluation)。4軸ラベルはサーバ側で確定済みのものを
   // そのまま描画する(旧UIの JudgeEvaluationSection.tsx と同一語彙)。
@@ -707,6 +716,10 @@ export default function CopilotPreviewPage() {
       if (a.card?.kind === "tuning_rules_list") {
         const { rules, totalCount } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "rulesList", rules, totalCount } };
+      }
+      if (a.card?.kind === "knowledge_gaps_list") {
+        const { gaps, totalCount } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "knowledgeGapsList", gaps, totalCount } };
       }
       if (a.card?.kind === "weekly_summary") {
         const { asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps } = a.card;
@@ -2246,7 +2259,32 @@ function CardView({
     case "chatSessionMessages":
       return (
         <CardShell hd={<><span>📜</span>会話[{card.shortId}]（全{card.totalMessages}件中{card.messages.length}件）</>}>
-          {card.messages.map((m, i) => <Field key={i} k={m.roleLabel} v={m.content} quote />)}
+          {card.messages.map((m, i) => {
+            // P5-1: AI応答の直後にのみ「この会話からルールを作る」を出す。
+            // 直前が必ずしもお客様発言とは限らない(担当者返信を挟む等)ため、
+            // 遡って直近のuser発言を探す。見つからなければチップを出さない。
+            const prevUser =
+              m.role === "assistant"
+                ? card.messages.slice(0, i).reverse().find((p) => p.role === "user")
+                : undefined;
+            return (
+              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <Field k={m.roleLabel} v={m.content} quote />
+                {prevUser && onSendReal && (
+                  <button
+                    onClick={() =>
+                      onSendReal(
+                        `__real:この会話(お客様:「${prevUser.content.slice(0, 300)}」→AI:「${m.content.slice(0, 300)}」)から指示ルールを提案してください`,
+                      )
+                    }
+                    style={{ alignSelf: "flex-start", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                  >
+                    🎛️ この会話からルールを作る
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </CardShell>
       );
     case "evaluation": {
@@ -2275,6 +2313,29 @@ function CardView({
     }
     case "weeklySummary":
       return <WeeklySummaryCard card={card} />;
+    case "knowledgeGapsList":
+      return (
+        <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
+          {card.gaps.map((g) => (
+            <div key={g.id} style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>{g.userQuestion}</div>
+              <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>{g.ragHitCount}件ヒット</div>
+              {onSendReal && (
+                <button
+                  onClick={() =>
+                    onSendReal(
+                      `__real:知識ギャップ（ID: ${g.id}、質問:「${g.userQuestion}」）から指示ルールを提案してください`,
+                    )
+                  }
+                  style={{ alignSelf: "flex-start", fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                >
+                  🎛️ このギャップからルールを作る
+                </button>
+              )}
+            </div>
+          ))}
+        </CardShell>
+      );
     default:
       return null;
   }
