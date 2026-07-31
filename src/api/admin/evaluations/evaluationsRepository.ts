@@ -276,6 +276,11 @@ export async function getEvaluationsBySession(
     args.push(tenantId);
   }
 
+  // psychology_fit_score等の4軸は listEvaluations() では選択されているのに、この関数
+  // (GET /v1/admin/evaluations/:sessionId が使う)だけ欠落していた。ConversationEvaluation
+  // 型には宣言されているため、これまで旧UI(JudgeEvaluationSection)の4軸表示が常に
+  // undefined になっていた既存の不具合。会話の履歴カテゴリの評価カードで再利用するのに
+  // 合わせて修正する(listEvaluationsと同じ列を選択するだけで、新しいSQLは書かない)。
   const result = await pool.query<ConversationEvaluation>(
     `SELECT id, tenant_id, session_id, score AS overall_score,
             COALESCE(used_principles, '{}') AS used_principles,
@@ -283,7 +288,9 @@ export async function getEvaluationsBySession(
             COALESCE(failed_principles, '{}') AS failed_principles,
             evaluation_axes, notes, model_used, evaluated_at,
             COALESCE(outcome, 'unknown') AS outcome,
-            outcome_updated_by, outcome_updated_at
+            outcome_updated_by, outcome_updated_at,
+            psychology_fit_score, customer_reaction_score,
+            stage_progress_score, taboo_violation_score
      FROM conversation_evaluations
      ${where}
      ORDER BY evaluated_at DESC`,
