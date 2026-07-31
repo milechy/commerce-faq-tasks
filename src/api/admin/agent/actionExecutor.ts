@@ -52,6 +52,11 @@ function clampToolLimit(raw: unknown, defaultValue: number, max: number): number
   return Math.min(Math.max(Number.isFinite(n) ? n : defaultValue, 1), max);
 }
 
+// suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
+// save_tuning_rule にそのまま渡ってきた場合、文字列としてtrigger_patternに
+// 保存させない(D4: 保存は成功するが質問文に一致せず永久に発火しない)。
+const ALWAYS_APPLY_PLACEHOLDER = new Set(['（常時適用）']);
+
 // ---------------------------------------------------------------------------
 // プラン制限の案内文
 // ---------------------------------------------------------------------------
@@ -191,10 +196,27 @@ export type LegacyLinkCardPayload = {
   description: string;
 };
 
+// get_weekly_briefing 用。数値はLLMの生成文を経由せず、この構造化データを
+// そのままカードとして描画する(数値=サーバ、解釈=LLMの文、という権威分離の実体)。
+// 各グループは対応するクエリが失敗した場合に null になる(Promise.allSettledでの
+// 部分失敗時、text側で行ごと省略するのと同じ意味)。card はUIが「取得できなかった」を
+// 判別するための情報であり、0埋めしてはならない。
+export type WeeklySummaryCardPayload = {
+  kind: 'weekly_summary';
+  /** この応答を生成した瞬間(ISO)。会話復元時に古いまとめだと判別するために使う */
+  asOf: string;
+  sessions: { total: number; changePct: number | null; prevTotal: number } | null;
+  avgScore: number | null;
+  conversions: { count: number; total: number } | null;
+  faq: { total: number; published: number; lastUpdated: string | null } | null;
+  pendingTuningRules: number | null;
+  gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
+};
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
 // （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
-export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload };
+export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload | WeeklySummaryCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -717,9 +739,22 @@ export async function executeToolCall(
           return truncate('提案の生成に失敗しました。もう少し具体的に教えてください');
         }
 
+        // トリガーが決められなかった場合、「（常時適用）」等のプレースホルダを
+        // 提案値として見せない。それをそのまま save_tuning_rule に渡すと、
+        // 文字列としてtrigger_patternに保存され永久に発火しないルールができる(D4)。
+        // どんな質問の時に使うかを店主に聞き返し、save_tuning_rule へは進めない。
+        if (!suggestion.trigger_pattern) {
+          return truncate(
+            `対応方針の候補: ${suggestion.instruction}\n` +
+            (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
+            `\nこの振る舞いは、お客様がどんな質問をした時に使いたいですか？キーワードを教えてください（例:「保証」「返品」など）。` +
+            `決まったら、もう一度 suggest_tuning_rule を呼び出してください。`
+          );
+        }
+
         return truncate(
           `提案:\n` +
-          `トリガー: ${suggestion.trigger_pattern || '（常時適用）'}\n` +
+          `トリガー: ${suggestion.trigger_pattern}\n` +
           `対応方針: ${suggestion.instruction}\n` +
           `優先度: ${suggestion.priority}\n` +
           (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
@@ -744,6 +779,14 @@ export async function executeToolCall(
       }
       if (!triggerPattern || !expectedBehavior) {
         return truncate('trigger_pattern と expected_behavior は必須です');
+      }
+      // suggest_tuning_rule がトリガー未決定時に案内していた文字列(「（常時適用）」)が
+      // そのままtrigger_patternとして渡ってきた場合の防御(D4)。これを通すと
+      // 保存は成功するが質問文に一致せず永久に発火しないルールができる。
+      if (ALWAYS_APPLY_PLACEHOLDER.has(triggerPattern)) {
+        return truncate(
+          'トリガーが決まっていないようです。お客様のどんな質問の時にこの振る舞いを使うか、キーワードを教えてください（例:「保証」「返品」など）。'
+        );
       }
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
@@ -973,7 +1016,10 @@ export async function executeToolCall(
 
       try {
         const { weekStart, prevWeekStart, prevWeekEnd } = getWeekRange(new Date());
-        const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes, faqTotalRes, faqPublishedRes, faqLastUpdatedRes] = await Promise.all([
+        // 指標ごとに Promise.allSettled で独立させる。以前は1本の失敗で全指標が
+        // 「取得に失敗しました」に落ちていたが、指標が増えるほど1本の不調が全体を
+        // 巻き込む確率が上がるため、取れた指標だけを出す方式に変更する。
+        const [sessionsRes, prevSessionsRes, evalRes, cvRes, faqRes, tuningRes, gapsRes] = await Promise.allSettled([
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
              WHERE tenant_id = $1 AND started_at >= $2`,
@@ -997,48 +1043,111 @@ export async function executeToolCall(
              WHERE tenant_id = $1 AND created_at >= $2`,
             [tenantId, weekStart],
           ),
+          // 旧ダッシュボードStatCard代替: FAQ総数・公開数・最終更新日(週に限定しないテナント全体の値)
+          db.query(
+            `SELECT COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE is_published)::int AS published,
+                    MAX(updated_at) AS last_updated
+             FROM faq_docs WHERE tenant_id = $1`,
+            [tenantId],
+          ),
+          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標
+          db.query(
+            `SELECT COUNT(*)::int AS n FROM tuning_rules
+             WHERE tenant_id = $1 AND approved_at IS NULL AND rejected_at IS NULL`,
+            [tenantId],
+          ),
           getGaps({ tenantId, status: 'open', limit: 3 }),
-          // 旧ダッシュボード StatCard の「FAQ総数」「公開FAQ数」「最終更新日」を briefing に統合する
-          // (docs/LEGACY_UI_SUNSET.md Wave 2)。COUNT(*)::int のキャストは faqCrudRoutes.ts:194 の前例に揃える。
-          db.query(`SELECT COUNT(*)::int AS n FROM faq_docs WHERE tenant_id = $1`, [tenantId]),
-          db.query(`SELECT COUNT(*)::int AS n FROM faq_docs WHERE tenant_id = $1 AND is_published = true`, [tenantId]),
-          db.query(`SELECT MAX(updated_at)::text AS max FROM faq_docs WHERE tenant_id = $1`, [tenantId]),
         ]);
 
-        const totalSessions = Number(sessionsRes.rows[0]?.n ?? 0);
-        // 先週の同一経過時間との比較値。先週は既に終わっているため確定値として併記する
-        // （週初の部分週をまる1週間の前週と比べると常に大幅マイナスになり指標として使えない）。
-        const prevSessions = Number(prevSessionsRes.rows[0]?.n ?? 0);
-        const changePct = prevSessions > 0 ? Math.round(((totalSessions - prevSessions) / prevSessions) * 100) : null;
-        const avgScoreRaw = evalRes.rows[0]?.avg;
-        const avgScore = avgScoreRaw != null ? Math.round(Number(avgScoreRaw)) : null;
-        const cvCount = Number(cvRes.rows[0]?.n ?? 0);
-        const cvTotal = Math.round(Number(cvRes.rows[0]?.total ?? 0));
-        const { gaps, total: gapsTotal } = gapsRes;
-        const faqTotal = Number(faqTotalRes.rows[0]?.n ?? 0);
-        const faqPublished = Number(faqPublishedRes.rows[0]?.n ?? 0);
-        const faqLastUpdatedRaw = faqLastUpdatedRes.rows[0]?.max as string | null | undefined;
-        const faqLastUpdated = faqLastUpdatedRaw ? faqLastUpdatedRaw.slice(0, 10) : 'なし';
-
         const lines: string[] = ['今週(月曜起点)の状況:'];
-        lines.push(
-          `会話数 ${totalSessions}件` +
-          (changePct !== null
+        // 数値の権威はこのcard(サーバ集計値)。text はLLMに渡す自然文とフォールバック
+        // 表示用で、card と同じ値から組み立てる(2箇所に別の計算を書かない)。
+        const card: WeeklySummaryCardPayload = {
+          kind: 'weekly_summary',
+          asOf: new Date().toISOString(),
+          sessions: null,
+          avgScore: null,
+          conversions: null,
+          faq: null,
+          pendingTuningRules: null,
+          gaps: null,
+        };
+
+        if (sessionsRes.status === 'fulfilled') {
+          const totalSessions = Number(sessionsRes.value?.rows?.[0]?.n ?? 0);
+          // 先週の同一経過時間との比較値。先週は既に終わっているため確定値として併記する
+          // （週初の部分週をまる1週間の前週と比べると常に大幅マイナスになり指標として使えない）。
+          let changePct: number | null = null;
+          let prevSessions = 0;
+          if (prevSessionsRes.status === 'fulfilled') {
+            prevSessions = Number(prevSessionsRes.value?.rows?.[0]?.n ?? 0);
+            if (prevSessions > 0) {
+              changePct = Math.round(((totalSessions - prevSessions) / prevSessions) * 100);
+            }
+          }
+          card.sessions = { total: totalSessions, changePct, prevTotal: prevSessions };
+          const changeSuffix = changePct !== null
             ? `（先週同時点比 ${changePct >= 0 ? '+' : ''}${changePct}%、先週同時点は${prevSessions}件）`
-            : ''),
-        );
-        if (avgScore !== null) lines.push(`応答品質スコア ${avgScore}/100`);
-        lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
-        lines.push(`FAQ ${faqTotal}件（公開 ${faqPublished}件・最終更新 ${faqLastUpdated}）`);
-        lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
-        if (gaps.length > 0) {
-          lines.push('うち上位:');
-          gaps.forEach((g, i) => {
-            lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
-          });
+            : '';
+          lines.push(`会話数 ${totalSessions}件${changeSuffix}`);
         }
 
-        return truncate(lines.join('\n'));
+        if (evalRes.status === 'fulfilled') {
+          const avgScoreRaw = evalRes.value?.rows?.[0]?.avg;
+          if (avgScoreRaw != null) {
+            card.avgScore = Math.round(Number(avgScoreRaw));
+            lines.push(`応答品質スコア ${card.avgScore}/100`);
+          }
+        }
+
+        if (cvRes.status === 'fulfilled') {
+          const cvCount = Number(cvRes.value?.rows?.[0]?.n ?? 0);
+          const cvTotal = Math.round(Number(cvRes.value?.rows?.[0]?.total ?? 0));
+          card.conversions = { count: cvCount, total: cvTotal };
+          lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
+        }
+
+        if (faqRes.status === 'fulfilled') {
+          const row = faqRes.value?.rows?.[0];
+          const faqTotal = Number(row?.total ?? 0);
+          const faqPublished = Number(row?.published ?? 0);
+          const lastUpdatedIso: string | null = row?.last_updated
+            ? new Date(row.last_updated).toISOString()
+            : null;
+          card.faq = { total: faqTotal, published: faqPublished, lastUpdated: lastUpdatedIso };
+          const lastUpdatedDisplay = lastUpdatedIso
+            ? new Date(lastUpdatedIso).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
+            : null;
+          lines.push(
+            `FAQ ${faqTotal}件（公開${faqPublished}件）` + (lastUpdatedDisplay ? `・最終更新 ${lastUpdatedDisplay}` : ''),
+          );
+        }
+
+        if (tuningRes.status === 'fulfilled') {
+          const pending = Number(tuningRes.value?.rows?.[0]?.n ?? 0);
+          card.pendingTuningRules = pending;
+          lines.push(`承認待ちの指示ルール ${pending}件`);
+        }
+
+        if (gapsRes.status === 'fulfilled') {
+          const { gaps, total: gapsTotal } = gapsRes.value;
+          card.gaps = { total: gapsTotal, top: gaps.map((g) => ({ id: g.id, question: g.user_question.slice(0, 60) })) };
+          lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
+          if (gaps.length > 0) {
+            lines.push('うち上位:');
+            gaps.forEach((g, i) => {
+              lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
+            });
+          }
+        }
+
+        if (lines.length === 1) {
+          // 全指標が取得失敗
+          return truncate('週次サマリーの取得に失敗しました');
+        }
+
+        return { text: truncate(lines.join('\n')), card };
       } catch (err) {
         logger.warn('[actionExecutor] get_weekly_briefing failed', err);
         return truncate('週次サマリーの取得に失敗しました');
