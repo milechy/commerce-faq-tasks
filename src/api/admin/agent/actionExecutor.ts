@@ -44,6 +44,11 @@ const MAX_IMPORT_FAQS = 20;
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
 
+// suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
+// save_tuning_rule にそのまま渡ってきた場合、文字列としてtrigger_patternに
+// 保存させない(D4: 保存は成功するが質問文に一致せず永久に発火しない)。
+const ALWAYS_APPLY_PLACEHOLDER = new Set(['（常時適用）']);
+
 // ---------------------------------------------------------------------------
 // プラン制限の案内文
 // ---------------------------------------------------------------------------
@@ -690,9 +695,22 @@ export async function executeToolCall(
           return truncate('提案の生成に失敗しました。もう少し具体的に教えてください');
         }
 
+        // トリガーが決められなかった場合、「（常時適用）」等のプレースホルダを
+        // 提案値として見せない。それをそのまま save_tuning_rule に渡すと、
+        // 文字列としてtrigger_patternに保存され永久に発火しないルールができる(D4)。
+        // どんな質問の時に使うかを店主に聞き返し、save_tuning_rule へは進めない。
+        if (!suggestion.trigger_pattern) {
+          return truncate(
+            `対応方針の候補: ${suggestion.instruction}\n` +
+            (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
+            `\nこの振る舞いは、お客様がどんな質問をした時に使いたいですか？キーワードを教えてください（例:「保証」「返品」など）。` +
+            `決まったら、もう一度 suggest_tuning_rule を呼び出してください。`
+          );
+        }
+
         return truncate(
           `提案:\n` +
-          `トリガー: ${suggestion.trigger_pattern || '（常時適用）'}\n` +
+          `トリガー: ${suggestion.trigger_pattern}\n` +
           `対応方針: ${suggestion.instruction}\n` +
           `優先度: ${suggestion.priority}\n` +
           (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
@@ -717,6 +735,14 @@ export async function executeToolCall(
       }
       if (!triggerPattern || !expectedBehavior) {
         return truncate('trigger_pattern と expected_behavior は必須です');
+      }
+      // suggest_tuning_rule がトリガー未決定時に案内していた文字列(「（常時適用）」)が
+      // そのままtrigger_patternとして渡ってきた場合の防御(D4)。これを通すと
+      // 保存は成功するが質問文に一致せず永久に発火しないルールができる。
+      if (ALWAYS_APPLY_PLACEHOLDER.has(triggerPattern)) {
+        return truncate(
+          'トリガーが決まっていないようです。お客様のどんな質問の時にこの振る舞いを使うか、キーワードを教えてください（例:「保証」「返品」など）。'
+        );
       }
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
