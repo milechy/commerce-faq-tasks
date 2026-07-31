@@ -2,6 +2,7 @@ import "dotenv/config";
 import "./config/env";
 
 import { pool as db } from "./lib/db";
+import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import { startOpenClawHeartbeat } from "./agent/openclaw/heartbeatHandler";
 import express from "express";
@@ -647,11 +648,18 @@ registerHermesMcpRoutes(app);
 registerHermesProposalAdminRoutes(app, db);
 
 // Phase55: Widget features check (event_tracking フラグ取得)
+//
+// P4: オンボーディング段階「設置検知」の記録を兼ねる。widget.js はページ読み込み
+// ごと・apiKey保有時に必ずこのエンドポイントを叩く(public/widget.js:3185)。
+// CDNキャッシュは widget.js 本体(静的ファイル)にのみかかり、この fetch() 自体は
+// ブラウザから都度APIへ届くため設置検知の判定に使える
+// (docs/ONBOARDING_FIRST_LOGIN.md §3.1③ 決定2)。
 app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: express.Response) => {
   const tenantId: string = (req as any).tenantId ?? '';
   if (!db || !tenantId) {
     return res.json({ event_tracking: false });
   }
+  void recordWidgetSeenOnce(db, tenantId);
   try {
     const result = await db.query(
       'SELECT features FROM tenants WHERE id = $1 AND is_active = true',
