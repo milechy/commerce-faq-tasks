@@ -169,7 +169,9 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
     await page.getByRole('button', { name: '声を探す' }).click();
     await expect(page.getByRole('button', { name: 'この声にする' })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'この声にする' }).click();
-    await expect(page.getByText('Haruka Voice')).toBeVisible();
+    // 「Haruka Voice」は候補提示の時点で既に表示されているため、それだけでは採用完了の
+    // 証拠にならない。「これに決定」が画像・声で2つに増えたことをもって採用完了を待つ。
+    await expect(page.getByRole('button', { name: 'これに決定' })).toHaveCount(2, { timeout: 10000 });
 
     expect(patchCount).toBe(2); // 画像1回 + 声1回。二重PATCHが起きていないこと
 
