@@ -1370,6 +1370,68 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
   });
 
+  // D5: 旧UIと同じ3段階(低/普通/高)語彙でチャットからも優先度を変えられる。
+  it("D5: 優先度チップは現在の段階を除く2つだけ表示され、押すと段階名を埋め込んだ自然文が実送信される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効1件・無効0件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 1, triggerPattern: "保証", expectedBehavior: "2年", priority: 5, isActive: true, source: "manual", status: null, evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    await screen.findByText("保証");
+
+    // priority=5 は「普通」なので、残る2チップ(低・高)だけが出る
+    expect(screen.queryByRole("button", { name: "優先度を普通にする" })).toBeNull();
+    const lowButton = screen.getByRole("button", { name: "優先度を低にする" });
+    const highButton = screen.getByRole("button", { name: "優先度を高にする" });
+    expect(lowButton).toBeTruthy();
+    expect(highButton).toBeTruthy();
+
+    fireEvent.click(highButton);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("指示ルール（ID: 1、「保証」）の優先度を「高」にしてください"),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("D5: 却下済み(status=rejected)のAI提案には優先度チップが出ない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 43, triggerPattern: "値引き", expectedBehavior: "応じない", priority: 3, isActive: false, source: "judge", status: "rejected", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    await screen.findByText("値引き");
+
+    expect(screen.queryByRole("button", { name: /優先度を.+にする/ })).toBeNull();
+  });
+
   it("get_tuning_rules: 「有効にする」を押すと承認の自然文が実送信される", async () => {
     mockAgent({
       reply: "指示ルールの状況をお伝えしました。",

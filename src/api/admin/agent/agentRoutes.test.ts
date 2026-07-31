@@ -1258,6 +1258,49 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('ID: 42');
     });
 
+    // D5: 「優先度を高くして」等、3段階の言葉で話した場合はpriority_tierが優先され、
+    // admin-ui/src/lib/tuningPriority.ts の PRIORITY_TIER_VALUE と同じ数値(high=8)に変換される。
+    it('D5: priority_tier="high" は priority(数値) より優先され、createRule には8として渡る', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sv-tier-1',
+                  type: 'function',
+                  function: {
+                    name: 'save_tuning_rule',
+                    arguments: JSON.stringify({
+                      trigger_pattern: '保証',
+                      expected_behavior: '2年と案内する',
+                      priority: 2,
+                      priority_tier: 'high',
+                      confirmed: true,
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockCreateRule.mockResolvedValueOnce({
+        id: 43, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 8, is_active: true, created_by: 'admin_agent', source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '優先度を高くして保存して', sessionId: 'sess-032-tier' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).toHaveBeenCalledWith(expect.objectContaining({ priority: 8 }));
+    });
+
     it('D4: trigger_pattern が「（常時適用）」のまま渡された場合は保存せず聞き返す', async () => {
       mockFetch
         .mockResolvedValueOnce({
@@ -1633,6 +1676,49 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(mockUpdateRule).not.toHaveBeenCalled();
       expect(res.body.actions[0].result).toContain('どんな質問の時にこの振る舞いを使うか');
+    });
+
+    // D5: 「優先度を下げて」等、3段階の言葉での既存ルール編集をチャットから可能にする。
+    it('D5: update_tuning_rule: priority_tier="low" は updateRule に priority=2 として渡り、応答に段階名が入る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-tier-1', 'update_tuning_rule', { id: 1, priority_tier: 'low', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('優先度を下げました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 1, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 2, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1の優先度を低くして', sessionId: 'sess-tr-tier-1' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ priority: 2 }),
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('優先度: 低');
+    });
+
+    // priority_tier だけの指定でも「変更する内容がありません」で弾かれてはいけない
+    // (D5導入前は is_active/trigger_pattern/expected_behavior/status の4項目しか見ていなかった)。
+    it('D5: priority_tier のみの指定でも「変更する内容がありません」にはならない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-tier-2', 'update_tuning_rule', { id: 1, priority_tier: 'high', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('優先度を上げました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 1, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 8, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1の優先度を高くして', sessionId: 'sess-tr-tier-2' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).not.toContain('変更する内容がありません');
+      expect(mockUpdateRule).toHaveBeenCalled();
     });
 
     it('update_tuning_rule: 変更内容が空 → DB呼び出しせずその旨を返す', async () => {

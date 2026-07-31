@@ -399,7 +399,12 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           },
           priority: {
             type: 'number',
-            description: '優先度（0〜10の整数、任意。省略時は5）',
+            description: '優先度（0〜10の整数、任意。省略時は5）。suggest_tuning_ruleの提案値をそのまま渡す場合に使う。ユーザーが「低い/普通/高い優先度で」のように3段階で話した場合は、こちらではなく priority_tier を使うこと（両方指定した場合は priority_tier が優先される）。',
+          },
+          priority_tier: {
+            type: 'string',
+            enum: ['low', 'normal', 'high'],
+            description: 'ユーザーが優先度を「低い/普通/高い」の3段階で話した場合に指定する。',
           },
           confirmed: {
             type: 'boolean',
@@ -428,9 +433,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'update_tuning_rule',
       description:
-        '既存の指示ルールを編集する、有効/無効を切り替える、またはAI提案ルールを承認/却下する。編集する場合は trigger_pattern/expected_behavior を、有効/無効の切り替えのみの場合は is_active だけを指定する。' +
+        '既存の指示ルールを編集する、有効/無効を切り替える、優先度を変更する、またはAI提案ルールを承認/却下する。編集する場合は trigger_pattern/expected_behavior を、有効/無効の切り替えのみの場合は is_active だけを指定する。' +
         'AI提案ルール（get_tuning_rulesの結果でsourceが"judge"のもの）を承認する場合は is_active=true と status="active" を両方指定し、却下する場合は is_active=false と status="rejected" を両方指定すること（is_active だけでは未承認と却下済みを区別できない）。通常のルールのON/OFF切替では status を指定しない。' +
-        '必ず先に変更内容（承認/却下の場合は根拠を含む）をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+        'ユーザーが「優先度を上げて/下げて/高くして」等と言った場合は priority_tier を指定する。一覧画面の「優先度を◯にする」チップから来た指示は既にユーザーの明確な意思表示なので、そのターンで直接 confirmed=true を指定してよい。それ以外は必ず先に変更内容（承認/却下の場合は根拠を含む）をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
       parameters: {
         type: 'object',
         properties: {
@@ -438,6 +443,11 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           trigger_pattern: { type: 'string', description: '新しいトリガー内容（変更する場合のみ指定）' },
           expected_behavior: { type: 'string', description: '新しい対応方針（変更する場合のみ指定）' },
           is_active: { type: 'boolean', description: '有効/無効の切り替え（変更する場合のみ指定）' },
+          priority_tier: {
+            type: 'string',
+            enum: ['low', 'normal', 'high'],
+            description: '優先度を3段階(低/普通/高)で変更する場合のみ指定する。',
+          },
           status: {
             type: 'string',
             enum: ['active', 'rejected'],

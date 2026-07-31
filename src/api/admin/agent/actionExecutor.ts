@@ -63,6 +63,25 @@ function clampToolLimit(raw: unknown, defaultValue: number, max: number): number
 // 保存させない(D4: 保存は成功するが質問文に一致せず永久に発火しない)。
 const ALWAYS_APPLY_PLACEHOLDER = new Set(['（常時適用）']);
 
+// D5: 優先度の3段階語彙(低/普通/高)→数値変換。単一の情報源は
+// admin-ui/src/lib/tuningPriority.ts の PRIORITY_TIER_VALUE。サーバ/フロントの
+// 境界を跨ぐため型は共有できず、値を変える場合は両方を手動で同期させること。
+const PRIORITY_TIER_VALUE: Record<'low' | 'normal' | 'high', number> = {
+  low: 2,
+  normal: 5,
+  high: 8,
+};
+
+const PRIORITY_TIER_LABEL_JA: Record<'low' | 'normal' | 'high', string> = {
+  low: '低',
+  normal: '普通',
+  high: '高',
+};
+
+function parsePriorityTier(raw: unknown): 'low' | 'normal' | 'high' | undefined {
+  return raw === 'low' || raw === 'normal' || raw === 'high' ? raw : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // プラン制限の案内文
 // ---------------------------------------------------------------------------
@@ -1105,8 +1124,13 @@ export async function executeToolCall(
       const confirmed = Boolean(args['confirmed']);
       const triggerPattern = String(args['trigger_pattern'] ?? '').slice(0, 1000);
       const expectedBehavior = String(args['expected_behavior'] ?? '').slice(0, 4000);
+      // D5: ユーザーが「高い優先度で」等、3段階の言葉で話した場合は priority_tier を優先する。
+      // 数値(priority)は suggest_tuning_rule の提案値をそのまま渡す既存経路のために残す。
+      const priorityTier = parsePriorityTier(args['priority_tier']);
       const priorityRaw = Number(args['priority']);
-      const priority = Number.isFinite(priorityRaw) ? Math.max(0, Math.min(10, Math.round(priorityRaw))) : 5;
+      const priority = priorityTier
+        ? PRIORITY_TIER_VALUE[priorityTier]
+        : Number.isFinite(priorityRaw) ? Math.max(0, Math.min(10, Math.round(priorityRaw))) : 5;
 
       if (!confirmed) {
         return truncate('ルールの保存には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください');
@@ -1200,9 +1224,18 @@ export async function executeToolCall(
       // rejected(却下済み)を区別できない(どちらもis_active=falseのため)。
       const statusRaw = args['status'];
       const status = statusRaw === 'active' || statusRaw === 'rejected' ? statusRaw : undefined;
+      // D5: 「優先度を高くして」のような3段階の言葉での編集をチャットから可能にする。
+      const priorityTier = parsePriorityTier(args['priority_tier']);
+      const priority = priorityTier ? PRIORITY_TIER_VALUE[priorityTier] : undefined;
 
-      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined && status === undefined) {
-        return truncate('変更する内容がありません（trigger_pattern・expected_behavior・is_active のいずれかを指定してください）');
+      if (
+        triggerPattern === undefined &&
+        expectedBehavior === undefined &&
+        isActive === undefined &&
+        status === undefined &&
+        priority === undefined
+      ) {
+        return truncate('変更する内容がありません（trigger_pattern・expected_behavior・is_active・priority_tier のいずれかを指定してください）');
       }
       // save_tuning_rule と同じ防御(D4派生): 既存ルールのトリガーを編集する経路でも
       // 「（常時適用）」やsplitTriggerKeywordsが空になる区切り文字だけの値が
@@ -1220,7 +1253,7 @@ export async function executeToolCall(
         const ownerFilter = isSuperAdmin ? undefined : tenantId;
         const updated = await updateRule(
           id,
-          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive, status },
+          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive, status, priority },
           ownerFilter,
         );
         if (!updated) {
@@ -1232,7 +1265,8 @@ export async function executeToolCall(
         if (status === 'rejected') {
           return truncate(`指示ルール（ID: ${id}）を却下しました: 「${updated.trigger_pattern}」`);
         }
-        return truncate(`指示ルール（ID: ${id}）を更新しました: 「${updated.trigger_pattern}」${updated.is_active ? '' : '（現在無効）'}`);
+        const priorityNote = priorityTier ? `／優先度: ${PRIORITY_TIER_LABEL_JA[priorityTier]}` : '';
+        return truncate(`指示ルール（ID: ${id}）を更新しました: 「${updated.trigger_pattern}」${updated.is_active ? '' : '（現在無効）'}${priorityNote}`);
       } catch (err) {
         logger.warn('[actionExecutor] update_tuning_rule failed', err);
         return truncate('指示ルールの更新に失敗しました');
