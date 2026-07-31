@@ -86,6 +86,22 @@ describe('deriveOnboardingStage', () => {
       };
       expect(deriveOnboardingStage(facts)).toBeNull();
     });
+
+    // 上のテストは hasDraftFaq: false 固定だった。hasDraftFaq は他の4フラグとは別経路
+    // (fetchOnboardingStageStatusの別クエリ)から来るため、これがtrueの組み合わせでも
+    // カットオフが優先されることを別途固定する(値の見落としで片方だけ対象外判定が
+    // 抜ける、というリグレッションを防ぐ)。
+    it('カットオフより前は hasDraftFaq=true(下書きあり)でも null を返す', () => {
+      const facts: OnboardingStageFacts = {
+        tenantCreatedAt: '2020-01-01T00:00:00Z',
+        onboardingIndustry: null,
+        onboardingWidgetSeenAt: null,
+        hasPublishedFaq: false,
+        hasRealConversation: false,
+        hasDraftFaq: true,
+      };
+      expect(deriveOnboardingStage(facts)).toBeNull();
+    });
   });
 
   it('onboardingWidgetSeenAt が文字列(DBからのタイムスタンプ)でも true になる', () => {

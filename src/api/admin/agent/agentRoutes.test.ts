@@ -6618,6 +6618,85 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('4件、下書きとして登録しました');
     });
 
+    // X-2強化(テスト強化パス): 上のテストは完全一致(文字列同一)でのスキップしか検証して
+    // いない。実運用では表記ゆれ(「営業時間は？」等のパラフレーズ)が既存FAQ側に
+    // あることの方が多く、bigramSimilarity(閾値0.6)による近似一致判定が実際に
+    // 効いているかどうかは別軸の懸念。faqImport.ts のdocstring例(「営業時間は」vs
+    // 「営業時間を教えてください」→0.75)をそのまま使い、完全一致ではないが
+    // 閾値を超えるケースでもスキップされることを固定する。
+    it('X-2強化: 完全一致ではないパラフレーズ(表記ゆれ)でも類似度閾値を超えれば重複スキップされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-dup1b', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+
+      // 「営業時間を教えてください」テンプレとは文字列として不一致だが、bigram類似度は
+      // 閾値(0.6)を超える(faqImport.tsのdocstring例と同じペア)
+      mockFetchExistingQuestions.mockResolvedValueOnce(['営業時間は']);
+      for (let i = 0; i < 4; i++) {
+        mockQuery.mockResolvedValueOnce({
+          rows: [{ id: 210 + i, question: `dup-q${i}`, answer: `dup-a${i}`, is_published: false }],
+        });
+      }
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-dup1b' });
+
+      expect(res.status).toBe(200);
+      const insertCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO faq_docs'));
+      expect(insertCalls).toHaveLength(4);
+      // 完全一致でスキップされたのなら偶然一致しただけの可能性が残るため、
+      // 実際にINSERTされた4件の中に「営業時間を教えてください」が含まれないことも確認する
+      expect(insertCalls.some(([, params]) => (params as unknown[])[1] === '営業時間を教えてください')).toBe(false);
+      expect(res.body.actions[0].result).toContain('4件、下書きとして登録しました');
+    });
+
+    // X-1関連(テスト強化パス): オンボ 是正A-2で「あとで」時点で業種を先に保存する
+    // ようにしたため、ユーザーが一度業種を選んでから気が変わり、確認前に別の業種で
+    // 確定するケースが新たに起こりうる(以前は業種未保存だったため起こり得なかった
+    // 状態遷移)。最終的な業種は「確定時に指定した値」で上書きされ、投入される
+    // FAQも確定時の業種のテンプレになることを固定する。
+    it('X-1関連: 「あとで」で業種Aを保存した後、別の業種Bで確定すると業種Bのテンプレが登録され業種もBで上書きされる', async () => {
+      // 1ターン目: 美容室を選んで「あとで」(confirmed=false) → onboarding_industry='beauty'を保存
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-switch1', 'import_industry_faq_templates', { industry: 'beauty', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらでよろしいですか？'));
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants(業種のみ、fire-and-forget)
+
+      const res1 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '美容室です', sessionId: 'sess-ind-switch1' });
+      expect(res1.status).toBe(200);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE tenants SET onboarding_industry'),
+        ['beauty', 'tenant-abc'],
+      );
+
+      // 2ターン目: 気が変わって飲食を選び直し、そのまま確定(confirmed=true)
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-switch2', 'import_industry_faq_templates', { industry: 'food', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+      for (let i = 0; i < 5; i++) {
+        mockQuery.mockResolvedValueOnce({
+          rows: [{ id: 220 + i, question: `food-q${i}`, answer: `food-a${i}`, is_published: false }],
+        });
+      }
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants(最終確定)
+
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-switch2' });
+
+      expect(res2.status).toBe(200);
+      expect(res2.body.actions[0].result).toContain('5件、下書きとして登録しました');
+      expect(mockQuery).toHaveBeenLastCalledWith(
+        expect.stringContaining('UPDATE tenants SET onboarding_industry'),
+        ['food', 'tenant-abc'],
+      );
+    });
+
     it('X-2: 業種テンプレ5件すべてが既に登録済みなら1件もINSERTせず、段階も進めない(重複のみメッセージ)', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ind-dup2', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
@@ -6901,6 +6980,65 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(updateCall).toBeDefined();
       expect(String(updateCall![0])).toContain('tenant_id = $1');
       expect(updateCall![1]).toEqual(['tenant-abc']);
+    });
+
+    // silent cap境界値(テスト強化パス、オンボ 是正D-1の境界)。総件数がLIMIT(20)ちょうどの
+    // 場合と、1件超過(21件)の場合とで「残りN件」文言の有無が正しく切り替わることを固定する。
+    // これまでのテストは0件・少数件でしか総件数分岐を検証しておらず、実際にLIMITへ
+    // 到達するケース(このsilent capが本来意味を持つ場面)が未検証だった。
+    it('境界値: 下書き総数がちょうど20件(LIMIT一致)なら「残り」文言は出ない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-b20', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+      const rows = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, question: `Q${i}`, answer: `A${i}` }));
+      mockQuery
+        .mockResolvedValueOnce({ rows })
+        .mockResolvedValueOnce({ rows: [{ cnt: 0 }] }); // 公開後の残件数= 0
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-pub-b20' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('20件のFAQを公開しました');
+      expect(res.body.actions[0].result).not.toContain('残り');
+    });
+
+    it('境界値: 下書き総数が21件(LIMIT超過)なら公開は20件のみ・「残り1件は次回以降」を明示する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-b21', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+      const rows = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, question: `Q${i}`, answer: `A${i}` }));
+      mockQuery
+        .mockResolvedValueOnce({ rows })
+        .mockResolvedValueOnce({ rows: [{ cnt: 1 }] }); // 公開後もまだ1件残っている(21件目)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-pub-b21' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('20件のFAQを公開しました');
+      expect(res.body.actions[0].result).toContain('残り1件は次回以降に公開できます');
+    });
+
+    // confirmed=false側の総件数境界(一覧提示時)も同様に固定する。
+    it('境界値: 一覧提示時、下書き総数が21件なら「総21件あります。うち新しい20件」と表示する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-list21', 'publish_faq_drafts', { confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらを公開しますか？'));
+      const rows = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, question: `Q${i}`, answer: `A${i}` }));
+      mockQuery
+        .mockResolvedValueOnce({ rows })
+        .mockResolvedValueOnce({ rows: [{ cnt: 21 }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '下書きを見せて', sessionId: 'sess-pub-list21' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('総21件あります');
+      expect(res.body.actions[0].result).toContain('うち新しい20件');
     });
 
     it('super_adminがtargetTenantId指定で代行実行した場合はactor:delegatedで記録される', async () => {
