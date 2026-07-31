@@ -4,6 +4,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   roleAuthMiddleware,
   requireRole,
+  resolveEffectiveTenantId,
   type AuthenticatedUser,
 } from "./roleAuth";
 
@@ -264,6 +265,53 @@ describe("requireRole", () => {
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(next).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveEffectiveTenantId
+// ---------------------------------------------------------------------------
+// アバター生成系4ルート(fal/generate, generate-image, match-voice,
+// generate-prompt)が個別に app_metadata.tenant_id のみを見ており、
+// super_adminのpreviewMode中に ?tenant= を無視して空テナントで課金・
+// ストレージ書き込みしていた欠陥の是正で導入。routes.ts:647 の既存パターンを
+// 共有ヘルパーとして切り出したもの。
+describe("resolveEffectiveTenantId", () => {
+  it("super_adminは?tenant=クエリで操作対象テナントを上書きできる", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: { tenant: "tenant-b" },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-b");
+  });
+
+  it("super_adminが?tenant=を付けなければ従来通り空文字のまま(400ガードは別レイヤーの責務)", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: {},
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("");
+  });
+
+  it("[越権防止] client_adminが?tenant=を付けても無視され、JWTの自テナントが使われる", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "client_admin", tenant_id: "tenant-a" } },
+      query: { tenant: "tenant-b" },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-a");
+  });
+
+  it("client_adminは?tenant=なしなら自テナントをそのまま使う", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "client_admin", tenant_id: "tenant-a" } },
+      query: {},
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-a");
+  });
+
+  it("supabaseUserが無ければ空文字を返す(anonymous)", () => {
+    const req = mockReq({ query: {} });
+    expect(resolveEffectiveTenantId(req)).toBe("");
   });
 });
 
