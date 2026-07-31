@@ -58,6 +58,11 @@ export interface UpdateRuleParams {
   priority?: number;
   is_active?: boolean;
   approved_responses?: ApprovedResponse[];
+  // AI提案(source='judge')の承認/却下時のみ指定する。'active' で承認・'rejected' で却下を記録する。
+  // is_active だけでは pending(未承認) と rejected(却下済み) を区別できない
+  // (どちらも is_active=false のため)。status が無いと却下済みルールが
+  // 承認待ち一覧に出続け、店主には「却下したのに戻ってきた」ように見える。
+  status?: 'active' | 'rejected';
 }
 
 // ---------------------------------------------------------------------------
@@ -190,17 +195,19 @@ export async function updateRule(
        priority          = COALESCE($3, priority),
        is_active         = COALESCE($4, is_active),
        approved_responses = CASE WHEN $5::text IS NOT NULL THEN $5::jsonb ELSE approved_responses END,
+       status            = COALESCE($6, status),
        updated_at        = NOW()
-     WHERE id = $6
+     WHERE id = $7
      RETURNING id, tenant_id, trigger_pattern, expected_behavior,
                priority, is_active, created_by, source_message_id,
-               created_at, updated_at, approved_responses`,
+               created_at, updated_at, approved_responses, source, status, evidence`,
     [
       params.trigger_pattern ?? null,
       params.expected_behavior ?? null,
       params.priority ?? null,
       params.is_active ?? null,
       approvedJson,
+      params.status ?? null,
       id,
     ],
   );

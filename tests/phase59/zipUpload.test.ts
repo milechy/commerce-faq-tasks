@@ -115,7 +115,10 @@ function makeApp(opts: {
   role?: string;
   tenantId?: string | null;
 }) {
-  const { role = "client_admin", tenantId = "tenant-test" } = opts;
+  // GID 1217040818410419(2026-07-31): 書籍/PDF投入はR2C運用限定になったため、
+  // このファイルが検証するアップロード機構(ZIP展開/バリデーション)自体はsuper_adminで行う。
+  // ロールガードそのものは bookPdfRoutes.test.ts の専用describeで検証する。
+  const { role = "super_admin", tenantId = "tenant-test" } = opts;
 
   const app = express();
   app.use(express.json());

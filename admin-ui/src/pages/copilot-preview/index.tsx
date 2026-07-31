@@ -16,6 +16,7 @@ import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 import {
   CHAT_SESSION_SURFACE_FULLSCREEN,
+  clearChatSession,
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
@@ -126,6 +127,15 @@ type Card =
         expectedBehavior: string;
         priority: number;
         isActive: boolean;
+        // P4-1: 古い(このフィールドが無い)キャッシュ済み会話との後方互換のため任意。
+        source?: string | null;
+        status?: string | null;
+        evidence?: {
+          evaluationIds?: number[];
+          effectivePrinciples?: string[];
+          failedPrinciples?: string[];
+          avgScore?: number;
+        } | null;
       }>;
       totalCount: number;
     }
@@ -350,6 +360,10 @@ const PDF_UPLOAD_TOO_LARGE_ERROR = "ファイルが大きすぎて受け取れ�
 const PDF_UPLOAD_NETWORK_ERROR = "うまく送れませんでした。通信の状態を確かめて、もう一度お試しください。";
 const PDF_UPLOAD_GENERIC_ERROR = "うまく受け取れませんでした。少し時間をおいてお試しください。";
 const PDF_UPLOAD_ZIP_EMPTY_ERROR = "ZIPの中に取り込めるPDFが見つかりませんでした。";
+// GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定(2026-07-31決定)。専門用語(403/権限等)は
+// 出さず、優しい日本語で断る。バックエンド(bookPdfRoutes.ts)の拒否文言とも揃える。
+const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
+  "この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。";
 
 const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでした。少し時間をおいてもう一度お試しください。";
@@ -823,6 +837,37 @@ export default function CopilotPreviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsTenantSelection]);
 
+  // super_adminがプレビュー中に別テナントへenterPreviewする経路(AppSwitcher/テナント詳細の
+  // 「クライアントビューで見る」等)を検知し、会話を初期化して新テナントの週次ブリーフィングを
+  // 取り直す。上の bootstrap effect は needsTenantSelection のみを見ており、previewMode の
+  // まま別テナントへ切り替わるケースでは再評価されないため、前テナントの会話(weeklySummary
+  // カードを含む)が残ったまま新テナントの画面として表示され続けていた(GID: PR #633 で報告)。
+  //
+  // 初回確定("" → 最初のテナント)は上の effect が担当するため何もしない。空への遷移
+  // (プレビュー解除)も何もしない(その間は needsTenantSelection の描画分岐でチャット自体が
+  // 表示されない)。scopedTenantId が「別の非空値」に変わった場合だけリセットする。
+  const lastScopedTenantIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = lastScopedTenantIdRef.current;
+    lastScopedTenantIdRef.current = scopedTenantId || prev;
+
+    if (!prev || !scopedTenantId || scopedTenantId === prev) return;
+
+    // 会話・履歴・sessionId・進捗カウント・保存済みセッション(前テナントのもの)を
+    // すべて破棄してから、新テナントの週次ブリーフィングを取り直す。
+    clearChatSession(CHAT_SESSION_SURFACE_FULLSCREEN);
+    setMsgs([]);
+    setRealHistory([]);
+    setRealActionCount(0);
+    adoptSessionId(crypto.randomUUID());
+
+    void (async () => {
+      push({ id: nextId(), role: "ai", text: "テナントを切り替えました。今週の実データを確認しています…" });
+      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedTenantId]);
+
   // テナント選択用の一覧。既存の GET /v1/admin/tenants(super_admin限定)をそのまま使う。
   const [tenants, setTenants] = useState<TenantOption[] | null>(null);
   const [tenantsFailed, setTenantsFailed] = useState(false);
@@ -964,6 +1009,11 @@ export default function CopilotPreviewPage() {
     ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(scopedTenantId)}`
     : `${API_BASE}/v1/admin/knowledge/book-pdf`;
 
+  // GID 1217040818410419: previewMode中はisSuperAdminがclient_admin相当に落ちる(useAuth.tsx:213-214)
+  // ため、ここで isSuperAdmin(上の派生値)を使うと previewMode中のsuper_admin自身からもPDF投入が
+  // 消えてしまう。生のロールで判定する(この画面はテナントとsuper_adminのpreviewの両方が通る)。
+  const canUploadBookPdf = user?.role === "super_admin";
+
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const [pdfDragOver, setPdfDragOver] = useState(false);
   const pdfDragCounterRef = useRef(0);
@@ -977,8 +1027,27 @@ export default function CopilotPreviewPage() {
   }, []);
 
   const acceptFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0) return;
+
+    // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定。通信前にこの場で優しく断る
+    // (拡張子/サイズの受付判定と同じく、対象外の相手には通信させない)。
+    if (!canUploadBookPdf) {
+      push({
+        id: nextId(),
+        role: "ai",
+        card: {
+          kind: "pdfUpload",
+          status: "error",
+          fileName: fileArray.length === 1 ? fileArray[0].name : `${fileArray.length}件のファイル`,
+          message: PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE,
+        },
+      });
+      return;
+    }
+
     const accepted: { file: File; isZip: boolean }[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of fileArray) {
       const verdict = validateBookPdfFile(file);
       if (verdict.kind === "rejected") {
         // 受け付けない形式・大きさは通信する前にこの場で断る
@@ -1656,6 +1725,7 @@ function MessageRow({
           onAdoptAvatarCandidate={onAdoptAvatarCandidate}
           onMatchAvatarVoice={onMatchAvatarVoice}
           onAdoptAvatarVoice={onAdoptAvatarVoice}
+          onSendReal={(action) => onChip(action, m.id)}
         />
       )}
       {m.chips && !m.chipsUsed && (
@@ -1852,6 +1922,7 @@ function CardView({
   onAdoptAvatarCandidate,
   onMatchAvatarVoice,
   onAdoptAvatarVoice,
+  onSendReal,
 }: {
   card: Card;
   msgId: number;
@@ -1859,6 +1930,7 @@ function CardView({
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
   onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
   onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
+  onSendReal?: (action: string) => void;
 }) {
   switch (card.kind) {
     case "agentAction":
@@ -1894,20 +1966,71 @@ function CardView({
     case "rulesList":
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
-          {card.rules.map((r) => (
-            <div
-              key={r.id}
-              style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)" }}>
-                <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
-                <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
+          {card.rules.map((r) => {
+            // P4-1: AI(judge)が提案したルールは、店主が作ったものと同じ見た目で
+            // 並べない(出所が分からないと承認判断ができない)。is_activeだけでは
+            // 未承認(pending)と却下済み(rejected)を区別できないためstatusも見る。
+            const isJudgeProposal = r.source === "judge";
+            const isPendingApproval = isJudgeProposal && !r.isActive && r.status !== "rejected";
+            const isRejected = isJudgeProposal && r.status === "rejected";
+            return (
+              <div
+                key={r.id}
+                style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)", flexWrap: "wrap" }}>
+                  <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
+                  <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
+                  {isJudgeProposal && (
+                    <span style={{ fontWeight: 700, color: "#b45309", background: "rgba(245,158,11,0.14)", borderRadius: 6, padding: "2px 8px" }}>
+                      🤖 AIの提案{isPendingApproval ? "（未承認）" : isRejected ? "（却下済み）" : ""}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+                  <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
+                </div>
+                {/* 根拠は評価IDなどの内部識別子をそのまま出さず、店主の言葉に言い換える */}
+                {r.evidence && (
+                  <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", display: "flex", flexDirection: "column", gap: 2 }}>
+                    {r.evidence.avgScore !== undefined && (
+                      <div>もとになった会話の対応の質: 目安{r.evidence.avgScore}点</div>
+                    )}
+                    {r.evidence.effectivePrinciples && r.evidence.effectivePrinciples.length > 0 && (
+                      <div>効果があった対応: {r.evidence.effectivePrinciples.join("、")}</div>
+                    )}
+                    {r.evidence.failedPrinciples && r.evidence.failedPrinciples.length > 0 && (
+                      <div>うまくいかなかった対応: {r.evidence.failedPrinciples.join("、")}</div>
+                    )}
+                  </div>
+                )}
+                {isPendingApproval && onSendReal && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を承認して有効にしてください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "none", background: AGENT, color: "#fff", minHeight: 44 }}
+                    >
+                      有効にする
+                    </button>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を却下してください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                    >
+                      却下する
+                    </button>
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
-                <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </CardShell>
       );
     case "engagement":
@@ -2055,10 +2178,17 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
   // 集計時点(asOf)を常に表示する。取得日時をJSTの暦日で比較し、今日でなければ
   // 「別の日に取得した内容」だと分かるようにする(取得直後かどうかは問わない — 復元も
   // 再取得も同じ card 構造なので、この表示ロジック1本だけで両方をカバーできる)。
+  //
+  // asOf は改ざん/破損したsessionStorageから復元される可能性がある(手動編集・古い
+  // スキーマのデータ等)。toISOString() は Invalid Date で例外を投げるため、ここで
+  // throw するとカード1枚のためにスレッド全体の描画が落ちる。素通しせず必ず検証する。
   const asOfDate = new Date(card.asOf);
+  const asOfValid = !Number.isNaN(asOfDate.getTime());
   const jstDayKey = (d: Date) => new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const isStale = jstDayKey(asOfDate) !== jstDayKey(new Date());
-  const asOfLabel = asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const isStale = !asOfValid || jstDayKey(asOfDate) !== jstDayKey(new Date());
+  const asOfLabel = asOfValid
+    ? asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "不明";
 
   return (
     <CardShell
