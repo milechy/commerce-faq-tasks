@@ -2626,13 +2626,17 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10]);
     });
 
-    it('【既知の未対応】limit=1.5（小数）は整数化されずそのままSQLパラメータに渡る', async () => {
-      // clampToolLimit は Number.isFinite チェックのみで Math.floor/round を行わないため、
-      // JSON Schema上 type:'number' の limit にLLMが小数を返すと非整数のままLIMITへ渡る。
-      // 実DBでは型により無視/丸め/エラーいずれもありうる未検証の経路。このテストはバグを
-      // 推奨するものではなく、現状の挙動を固定して可視化するもの。
+    // LLMが小数を返しても、非整数のまま SQL の LIMIT に渡らないことを固定する
+    // (実DBでは非整数の LIMIT はエラーになる)。clampToolLimit はクランプ後に
+    // Math.floor で整数化する。
+    it.each([
+      { input: 1.5, expected: 1 },
+      { input: 19.9, expected: 19 },
+      { input: 0.4, expected: 1 },   // クランプで1に持ち上がってから整数化される
+      { input: 20.7, expected: 20 }, // 上限20でクランプされてから整数化される
+    ])('limit=$input（小数）は整数$expectedに切り捨てられてSQLに渡る', async ({ input, expected }) => {
       mockFetch
-        .mockResolvedValueOnce(toolCallResponse('call-fl-clamp-decimal', 'get_faq_list', { limit: 1.5 }))
+        .mockResolvedValueOnce(toolCallResponse(`call-fl-clamp-decimal-${input}`, 'get_faq_list', { limit: input }))
         .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
 
       mockQuery
@@ -2641,10 +2645,19 @@ describe('POST /v1/admin/agent/chat', () => {
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
-        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-clamp-decimal' });
+        .send({ message: 'FAQ一覧を見せて', sessionId: `sess-fl-clamp-decimal-${input}` });
 
       expect(res.status).toBe(200);
-      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 1.5]);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', expected]);
+      expect(Number.isInteger(mockQuery.mock.calls[1]?.[1]?.[1])).toBe(true);
+    });
+
+    // limit の JSON Schema は integer だが、LLMがスキーマを無視して小数を返す可能性は
+    // 残るため、サーバ側(clampToolLimit)でも整数化する多層防御になっていることを固定する。
+    it('limit の JSON Schema は integer で、LLM側にも小数を返させない', () => {
+      const tool = ADMIN_AGENT_TOOLS.find((t) => t.function.name === 'get_faq_list');
+      const limitProp = tool!.function.parameters.properties['limit'] as { type: string };
+      expect(limitProp.type).toBe('integer');
     });
 
     it.each([

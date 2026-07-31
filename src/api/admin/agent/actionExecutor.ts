@@ -47,12 +47,15 @@ const MAX_IMPORT_FAQS = 20;
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
 
-// ツールの limit 引数を [1, max] にクランプする。"abc" のような非数値は Number() で
+// ツールの limit 引数を [1, max] の整数にクランプする。"abc" のような非数値は Number() で
 // NaN になり、Math.min/max を素通りして NaN のまま残ってしまう(NaN との比較は常に false)。
 // NaN が SQL の LIMIT パラメータに渡ると実DBではエラーになるため、既定値にフォールバックする。
+// また limit は toolDefinitions.ts 上 integer だが、LLMが 1.5 のような小数を返す可能性があり、
+// 小数のまま SQL の LIMIT に渡ると実DBでエラーになる。クランプ後に整数化して防ぐ
+// (クランプ→整数化の順にするのは「範囲に収めてから丸める」意図を読み取れるようにするため)。
 function clampToolLimit(raw: unknown, defaultValue: number, max: number): number {
   const n = Number(raw ?? defaultValue);
-  return Math.min(Math.max(Number.isFinite(n) ? n : defaultValue, 1), max);
+  return Math.floor(Math.min(Math.max(Number.isFinite(n) ? n : defaultValue, 1), max));
 }
 
 // suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
