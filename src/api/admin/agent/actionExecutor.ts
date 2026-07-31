@@ -44,6 +44,14 @@ const MAX_IMPORT_FAQS = 20;
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
 
+// ツールの limit 引数を [1, max] にクランプする。"abc" のような非数値は Number() で
+// NaN になり、Math.min/max を素通りして NaN のまま残ってしまう(NaN との比較は常に false)。
+// NaN が SQL の LIMIT パラメータに渡ると実DBではエラーになるため、既定値にフォールバックする。
+function clampToolLimit(raw: unknown, defaultValue: number, max: number): number {
+  const n = Number(raw ?? defaultValue);
+  return Math.min(Math.max(Number.isFinite(n) ? n : defaultValue, 1), max);
+}
+
 // suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
 // save_tuning_rule にそのまま渡ってきた場合、文字列としてtrigger_patternに
 // 保存させない(D4: 保存は成功するが質問文に一致せず永久に発火しない)。
@@ -311,7 +319,7 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'get_faq_list': {
       try {
-        const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+        const limit = clampToolLimit(args['limit'], 10, 20);
         const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
         const whereParams: unknown[] = [tenantId];
@@ -338,6 +346,11 @@ export async function executeToolCall(
         ]);
 
         if (listRes.rows.length === 0) {
+          // search 指定時のヒット0件は「FAQが登録されていない」わけではない(FAQ自体は
+          // 大量にある可能性がある)。検索条件に一致するものが無いだけなので文言を分ける。
+          if (search) {
+            return truncate(`「${search.slice(0, 100)}」に一致する FAQ は見つかりませんでした`);
+          }
           return truncate('FAQ が登録されていません');
         }
 
@@ -1179,7 +1192,7 @@ export async function executeToolCall(
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
-      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+      const limit = clampToolLimit(args['limit'], 10, 20);
 
       try {
         const { gaps, total } = await getGaps({ tenantId, status: 'open', limit });
@@ -1698,7 +1711,7 @@ export async function executeToolCall(
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
-      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+      const limit = clampToolLimit(args['limit'], 10, 20);
 
       try {
         const { sessions, total } = await getSessions({ tenantId, limit });
@@ -1721,8 +1734,7 @@ export async function executeToolCall(
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
       const shortId = String(args['session_id'] ?? '').trim();
-      const limitRaw = Number(args['limit'] ?? 20);
-      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 20;
+      const limit = clampToolLimit(args['limit'], 20, 50);
 
       try {
         const resolved = await resolveSessionByShortId(db, tenantId, shortId);

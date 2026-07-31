@@ -1750,7 +1750,11 @@ describe('POST /v1/admin/agent/chat', () => {
           .mockResolvedValueOnce({ rows: [{ n: 10 }] })
           .mockResolvedValueOnce({ rows: [{ n: 5 }] })
           .mockResolvedValueOnce({ rows: [{ avg: '80' }] })
-          .mockResolvedValueOnce({ rows: [{ n: 1, total: '1000' }] });
+          .mockResolvedValueOnce({ rows: [{ n: 1, total: '1000' }] })
+          // FAQ集計・承認待ちルールはこのテストの主眼ではないが、Promise.allSettledの
+          // 一員として発火するため、db.queryの呼び出し回数を合わせるために用意する
+          .mockResolvedValueOnce({ rows: [{ total: 3, published: 2, last_updated: '2026-07-01T00:00:00.000Z' }] })
+          .mockResolvedValueOnce({ rows: [{ n: 0 }] });
 
         mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
 
@@ -1957,6 +1961,155 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('FAQ が登録されていません');
+    });
+
+    it('21件登録・limit=20指定 → 「全21件中20件を表示」となり20で頭打ちにならない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-4', 'get_faq_list', { limit: 20 }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQは合計21件です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 21 }] }) // COUNT(*)
+        .mockResolvedValueOnce({
+          rows: Array.from({ length: 20 }, (_, i) => ({ id: i + 1, question: `q${i}`, answer: `a${i}` })),
+        });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQは何件ある?', sessionId: 'sess-fl-04' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('全21件中20件を表示');
+    });
+
+    it.each([
+      { input: 0, expected: 1 },
+      { input: -1, expected: 1 },
+      { input: 999, expected: 20 },
+    ])('limit=$input は例外にならず$expectedにクランプされてSQLに渡る', async ({ input, expected }) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse(`call-fl-clamp-${input}`, 'get_faq_list', { limit: input }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: `sess-fl-clamp-${input}` });
+
+      expect(res.status).toBe(200);
+      // 1件目=COUNT(*)（tenant_idのみ）、2件目=一覧取得（tenant_id + limit）
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', expected]);
+    });
+
+    it('limit="abc"（数値でない）は例外にならず既定件数(10)にフォールバックしてFAQ一覧が正しく返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-clamp-abc', 'get_faq_list', { limit: 'abc' }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-clamp-abc' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).not.toContain('取得に失敗しました');
+      expect(result).toContain('FAQ 一覧（1件）:');
+      // NaN のまま LIMIT の SQL パラメータに渡らず、既定値10にフォールバックしていることを確認する
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10]);
+    });
+
+    it('他テナントで呼び出すと0件になり、かつSQLに自テナントのtenant_idが渡る（テナント越境なし）', async () => {
+      const OTHER_TENANT_USER = { app_metadata: { role: 'client_admin', tenant_id: 'tenant-other' } };
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-5', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('FAQは登録されていません。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(OTHER_TENANT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('FAQ が登録されていません');
+      // COUNT(*)クエリにも一覧クエリにも自テナント("tenant-other")のIDが渡っており、
+      // 他テナント("tenant-abc")のデータが混ざっていないことを確認する
+      expect(mockQuery.mock.calls[0]?.[1]).toEqual(['tenant-other']);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-other', 10]);
+    });
+
+    it('search指定時、総数(COUNT)も検索条件で絞り込まれた件数になる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-7', 'get_faq_list', { search: '送料' }))
+        .mockResolvedValueOnce(makeGroqResponse('「送料」に関するFAQは4件です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 4 }] }) // 「送料」でILIKE絞り込んだ後のCOUNT
+        .mockResolvedValueOnce({
+          rows: Array.from({ length: 4 }, (_, i) => ({ id: i + 1, question: `送料q${i}`, answer: `a${i}` })),
+        });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料についてのFAQは何件ある?', sessionId: 'sess-fl-08' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('FAQ 一覧（4件）:');
+
+      // COUNT(*)クエリ自体にもILIKE(検索条件)が含まれ、かつ検索語が渡っていることを確認する
+      // (総数がsearch適用前の全件になっていないことの担保)
+      const countCallSql = mockQuery.mock.calls[0]?.[0] as string;
+      const countCallParams = mockQuery.mock.calls[0]?.[1] as unknown[];
+      expect(countCallSql).toContain('ILIKE');
+      expect(countCallParams).toEqual(['tenant-abc', '%送料%']);
+    });
+
+    it('FAQは存在するが search がヒットしない場合は「登録されていません」ではなく検索条件に言及した文言を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-11', 'get_faq_list', { search: '存在しないキーワード' }))
+        .mockResolvedValueOnce(makeGroqResponse('一致するFAQは見つかりませんでした。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] }) // 「存在しないキーワード」に一致するFAQは0件
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '存在しないキーワードのFAQはある?', sessionId: 'sess-fl-12' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      // FAQ自体は登録されている可能性があるテナントに「登録されていません」と誤答してはいけない
+      expect(result).not.toContain('FAQ が登録されていません');
+      expect(result).toContain('存在しないキーワード');
+      expect(result).toContain('見つかりませんでした');
+    });
+
+    it('DB失敗時は例外を投げず日本語1行のエラーメッセージを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-9', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('取得に失敗しました。'));
+
+      mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-10' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toBe('FAQ 一覧の取得に失敗しました');
     });
   });
 
@@ -2788,6 +2941,28 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('ありません');
+    });
+
+    it('get_chat_sessions: limit="abc"（数値でない）は例外にならず既定件数(10)にフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-abc', 'get_chat_sessions', { limit: 'abc' }))
+        .mockResolvedValueOnce(makeGroqResponse('直近の会話です。'));
+
+      mockGetSessions.mockResolvedValueOnce({
+        sessions: [
+          { id: 'db-1', tenant_id: 'tenant-abc', session_id: 'sess-aaaaaaaa-1111', started_at: '2026-07-17T10:00:00Z', last_message_at: '2026-07-17T10:05:00Z', message_count: 4, first_message_preview: '送料はいくらですか', outcome: null, outcome_recorded_at: null },
+        ],
+        total: 1,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '最近の会話を見せて', sessionId: 'sess-rd-abc' });
+
+      expect(res.status).toBe(200);
+      // NaN のまま渡らず、既定値10にフォールバックしていることを確認する
+      expect(mockGetSessions).toHaveBeenCalledWith({ tenantId: 'tenant-abc', limit: 10 });
+      expect(res.body.actions[0].result).toContain('送料はいくらですか');
     });
 
     it('get_escalations: 対応中の一覧を1つの結果文字列にまとめる', async () => {
