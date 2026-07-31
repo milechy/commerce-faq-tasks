@@ -11,6 +11,7 @@ const INCOMPLETE_STAGE: OnboardingStageFlags = {
   knowledgePublished: false,
   widgetInstalled: false,
   firstConversation: false,
+  hasDraftFaq: false,
 };
 
 const COMPLETE_STAGE: OnboardingStageFlags = {
@@ -18,6 +19,7 @@ const COMPLETE_STAGE: OnboardingStageFlags = {
   knowledgePublished: true,
   widgetInstalled: true,
   firstConversation: true,
+  hasDraftFaq: false,
 };
 
 function baseInput(overrides: Partial<LandingDecisionInput> = {}): LandingDecisionInput {

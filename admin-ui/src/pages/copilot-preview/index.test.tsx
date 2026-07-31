@@ -2315,6 +2315,7 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
             knowledgePublished: false,
             widgetInstalled: false,
             firstConversation: false,
+            hasDraftFaq: true,
           },
         });
       }
@@ -2337,6 +2338,32 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
     expect(await screen.findByText(/下書きとして登録済み/)).toBeTruthy();
     expect(screen.getByText("下書きを見る")).toBeTruthy();
+  });
+
+  // オンボ 是正A-2: 業種は答えたが下書きが1件も無い(全INSERT失敗や「あとで」離脱)場合、
+  // 「下書きを見る」チップを出すと空振りになる。業種チップに戻して詰まりを解消する。
+  it("業種回答済みだが下書きが1件も無いなら、下書き確認ではなく業種チップに戻る", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+
+    renderPage();
+
+    expect(await screen.findByText(/たたき台をまだお作りしていません/)).toBeTruthy();
+    expect(screen.queryByText("下書きを見る")).toBeNull();
   });
 
   // N-6/X-11(docs/ONBOARDING_FIRST_LOGIN.md §7.1/§7.3): deriveOnboardingNextStep の

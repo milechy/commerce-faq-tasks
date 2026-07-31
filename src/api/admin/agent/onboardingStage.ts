@@ -22,11 +22,23 @@ export type OnboardingStage =
   | 'widget_installed'
   | 'first_conversation';
 
+// P6(#627, 2026-07-31T13:55:06+09:00)がmainにマージされる前に作られたテナントは、
+// 4段階モデル自体が存在しない時期に作られている。onboarding_industry は導入前の
+// 全テナントで一律 NULL のため、カットオフ無しだと「新規テナント」と誤判定され
+// 全既存テナントが新UIへ強制着地する(オンボ 是正A-1)。この列だけで新規/既存を
+// 見分けられないので、テナントの作成日時で線を引く。
+const ONBOARDING_MODEL_CUTOFF = '2026-07-31T04:55:06Z';
+
 export interface OnboardingStageFacts {
+  tenantCreatedAt: Date | string;
   onboardingIndustry: string | null;
   onboardingWidgetSeenAt: Date | string | null;
   hasPublishedFaq: boolean;
   hasRealConversation: boolean;
+  // オンボ 是正A-2: 段階(4つ)ではなくヒント。stage2「下書きを見る」と「たたき台を
+  // 作る」を切り分けるためだけに使い、isOnboardingComplete/nextIncompleteStage の
+  // 判定には混ぜない。
+  hasDraftFaq: boolean;
 }
 
 export interface OnboardingStageStatus {
@@ -34,14 +46,20 @@ export interface OnboardingStageStatus {
   knowledgePublished: boolean;
   widgetInstalled: boolean;
   firstConversation: boolean;
+  hasDraftFaq: boolean;
 }
 
-export function deriveOnboardingStage(facts: OnboardingStageFacts): OnboardingStageStatus {
+/** カットオフより前に作られたテナントは4段階モデルの対象外として null を返す。 */
+export function deriveOnboardingStage(facts: OnboardingStageFacts): OnboardingStageStatus | null {
+  if (new Date(facts.tenantCreatedAt) < new Date(ONBOARDING_MODEL_CUTOFF)) {
+    return null;
+  }
   return {
     industryAnswered: facts.onboardingIndustry !== null,
     knowledgePublished: facts.hasPublishedFaq,
     widgetInstalled: facts.onboardingWidgetSeenAt !== null,
     firstConversation: facts.hasRealConversation,
+    hasDraftFaq: facts.hasDraftFaq,
   };
 }
 

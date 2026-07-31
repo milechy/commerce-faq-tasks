@@ -90,16 +90,25 @@ async function checkHasR2c2(db: Pool, tenantId: string): Promise<boolean> {
 async function fetchOnboardingStageStatus(
   db: Pool,
   tenantId: string,
+  tenantCreatedAt: string,
   onboardingIndustry: string | null,
   onboardingWidgetSeenAt: string | null
-): Promise<OnboardingStageStatus> {
+): Promise<OnboardingStageStatus | null> {
+  // オンボ 是正A-2: 公開済み/下書きの両方の有無を1クエリで取る(hasDraftFaqは
+  // stage2の「下書きを見る」と「たたき台を作る」を切り分けるためのヒント)。
   let hasPublishedFaq = false;
+  let hasDraftFaq = false;
   try {
     const result = await db.query(
-      `SELECT 1 FROM faq_docs WHERE tenant_id = $1 AND is_published = true LIMIT 1`,
+      `SELECT
+         COUNT(*) FILTER (WHERE is_published) AS published_count,
+         COUNT(*) FILTER (WHERE NOT is_published) AS draft_count
+       FROM faq_docs WHERE tenant_id = $1`,
       [tenantId]
     );
-    hasPublishedFaq = (result.rowCount ?? 0) > 0;
+    const row = result.rows[0] as { published_count: string; draft_count: string } | undefined;
+    hasPublishedFaq = Number(row?.published_count ?? 0) > 0;
+    hasDraftFaq = Number(row?.draft_count ?? 0) > 0;
   } catch (err) {
     logger.warn("[fetchOnboardingStageStatus] faq_docs query failed", err);
   }
@@ -116,10 +125,12 @@ async function fetchOnboardingStageStatus(
   }
 
   return deriveOnboardingStage({
+    tenantCreatedAt,
     onboardingIndustry,
     onboardingWidgetSeenAt,
     hasPublishedFaq,
     hasRealConversation,
+    hasDraftFaq,
   });
 }
 
@@ -196,7 +207,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, onboarding_widget_seen_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, onboarding_widget_seen_at, created_at FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (result.rowCount === 0) {
@@ -205,11 +216,13 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       const row = result.rows[0] as {
         onboarding_industry: string | null;
         onboarding_widget_seen_at: string | null;
+        created_at: string;
       };
       const has_r2c2 = await checkHasR2c2(db, tenantId);
       const onboarding_stage = await fetchOnboardingStageStatus(
         db,
         tenantId,
+        row.created_at,
         row.onboarding_industry,
         row.onboarding_widget_seen_at
       );
@@ -396,6 +409,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       const row = result.rows[0] as {
         onboarding_industry: string | null;
         onboarding_widget_seen_at: string | null;
+        created_at: string;
       };
       // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
       // オンボーディングの「次の一手」提示を使えるようにするため、my-tenant同様に
@@ -403,6 +417,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       const onboarding_stage = await fetchOnboardingStageStatus(
         db,
         id,
+        row.created_at,
         row.onboarding_industry,
         row.onboarding_widget_seen_at
       );
