@@ -4362,6 +4362,50 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(params[1]).toBe(expectedPrefix);
     });
 
+    // session_id は生成時から常に小文字だが Postgres の LIKE は大文字小文字を区別する。
+    // コピペ時の自動大文字化やLLMによる整形で大文字が混ざると、実在するセッションが
+    // 「見つかりません」になり、存在しないIDと区別が付かなかった。
+    it.each([
+      ['A1B2C3D4', '全て大文字'],
+      ['A1b2C3d4', '大文字小文字の混在'],
+      ['  A1B2C3D4  ', '大文字 + 前後の空白'],
+    ])('session_id=%p (%s) でも実在セッションを解決できる', async (rawInput) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-case', 'get_chat_session_messages', { session_id: rawInput }))
+        .mockResolvedValueOnce(makeGroqResponse('会話内容はこちらです。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([
+        { id: 1, role: 'user', content: '送料はいくらですか', metadata: {}, created_at: '2026-07-17T10:00:00Z' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話を見せて', sessionId: `sess-cm-case-${encodeURIComponent(rawInput)}` });
+
+      // 小文字へ正規化された前方一致でDBに問い合わせている
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(params[1]).toBe('a1b2c3d4');
+      // 「見つかりません」で終わらず、実際に本文を取得できている
+      expect(mockGetMessages).toHaveBeenCalledWith({ sessionDbId: 'db-sess-own', tenantId: 'tenant-abc' });
+      expect(res.body.actions[0].result).toContain('送料はいくらですか');
+    });
+
+    it('大文字のIDが見つからない場合、エラー文にはユーザーが入力した表記をそのまま返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-case-nf', 'get_chat_session_messages', { session_id: 'ZZZZZZZZ' }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      seedSessions([OWN_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話を見せて', sessionId: 'sess-cm-case-nf' });
+
+      // 正規化後の小文字ではなく、打った文字列を見せる(どのIDを試したか分かるように)
+      expect(res.body.actions[0].result).toContain('ZZZZZZZZ');
+    });
+
     it('getMessages が例外を投げても500にならず、失敗を伝える(本文は漏らさない)', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-cm-err', 'get_chat_session_messages', { session_id: 'a1b2c3d4' }))
