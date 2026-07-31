@@ -554,6 +554,63 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByRole("button", { name: "確認する" })).toBeNull();
   });
 
+  // GID 1217040318322843: 会話復元(sessionStorage)で古いまとめがそのまま画面に残り、
+  // いつ時点のデータか分からないまま今日の数字として読まれてしまう問題の回帰テスト。
+  it("集計時点(asOf)が今日なら鮮度の注記を出さない", async () => {
+    mockAgent({
+      reply: "今週も好調です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 50件",
+          card: {
+            kind: "weekly_summary",
+            asOf: new Date().toISOString(),
+            sessions: { total: 50, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    await screen.findByText("50件");
+    expect(screen.getByText(/集計時点/)).toBeTruthy();
+    expect(screen.queryByText(/別の日に取得した内容です/)).toBeNull();
+  });
+
+  it("集計時点(asOf)が別の日(会話復元など)なら古い内容だと分かる注記を出す", async () => {
+    mockAgent({
+      reply: "先日の状況です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 50件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2020-01-01T00:00:00.000Z",
+            sessions: { total: 50, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    await screen.findByText("50件");
+    expect(await screen.findByText(/別の日に取得した内容です/)).toBeTruthy();
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {

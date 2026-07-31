@@ -46,6 +46,23 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
     const body = (await page.textContent('body')) ?? '';
     expect(body).not.toContain(NO_TENANT_MSG);
   });
+
+  // GID 1217040318322843: 週次まとめカード(指標が5〜6個並ぶ)が最も崩れやすいカードのため、
+  // 390pxモバイルビューポート(CLAUDE.md Mobile First)で個別に確認する。
+  test.describe('390pxモバイルビューポート', () => {
+    test.use({ viewport: { width: 390, height: 844 } }); // iPhone 14 Pro
+
+    test('CP-B-2: 起動時ブリーフィングの週次まとめカードが横スクロールを出さずに描画される', async ({ page }) => {
+      await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await waitForBootstrapReply(page);
+
+      const bodyScrollWidth = await page.evaluate(() => document.body.scrollWidth);
+      expect(bodyScrollWidth).toBeLessThanOrEqual(400); // 10px tolerance
+
+      const body = (await page.textContent('body')) ?? '';
+      expect(body).not.toContain(NO_TENANT_MSG);
+    });
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────

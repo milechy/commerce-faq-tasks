@@ -173,7 +173,14 @@ const REAL_WRITE_TOOLS = new Set([
   "resolve_escalation",
 ]);
 
-// Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ
+// Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ。
+// 左レール「今週のまとめ」(handleCategory の "weekly" 分岐)と実質同じ依頼文で
+// 同じツール(get_weekly_briefing)に着地する。この2つの関係は「必ず再取得する」で
+// 統一する — カテゴリクリックのたびに毎回サーバへ問い合わせ、キャッシュや
+// 直近取得のスキップは行わない。同一セッション内で内容がほぼ重複することは
+// 許容する(週次まとめは「いつ見ても最新の状況を確認できる」がこの機能の目的で、
+// 一度見たら消えるべき情報ではない)。カードの集計時点(asOf)表示が、
+// 重複よりも「古いまま」を防ぐ方の実害を先に塞ぐ(WeeklySummaryCard 参照)。
 const BOOTSTRAP_PROMPT =
   "ログインしたところです。今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
 
@@ -736,6 +743,9 @@ export default function CopilotPreviewPage() {
     setActive(key);
     setRailOpen(false); // モバイル: カテゴリー選択でドロワーを閉じる(デスクトップでは無害)
     if (key === "weekly") {
+      // BOOTSTRAP_PROMPT と同じ依頼文・同じツールに着地する。関係は「必ず再取得する」で
+      // 統一済み(BOOTSTRAP_PROMPT のコメント参照)。ここでキャッシュや直近取得のスキップは
+      // 行わない — クリックした瞬間の最新状況を見せるのがこのカテゴリの役割。
       void sendReal("今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。");
     } else if (key === "history") {
       void sendReal("最近の会話とエスカレーションの状況を教えて");
@@ -1590,8 +1600,33 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
   if (pendingTuningRules !== null) stats.push({ label: "承認待ちの指示ルール", value: `${pendingTuningRules}件` });
   if (gaps) stats.push({ label: "AIが答えられなかった質問", value: `${gaps.total}件（未対応の累計）` });
 
+  // 会話復元(sessionStorage)で古いまとめがそのまま画面に残るケースがあるため、
+  // 集計時点(asOf)を常に表示する。取得日時をJSTの暦日で比較し、今日でなければ
+  // 「別の日に取得した内容」だと分かるようにする(取得直後かどうかは問わない — 復元も
+  // 再取得も同じ card 構造なので、この表示ロジック1本だけで両方をカバーできる)。
+  const asOfDate = new Date(card.asOf);
+  const jstDayKey = (d: Date) => new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const isStale = jstDayKey(asOfDate) !== jstDayKey(new Date());
+  const asOfLabel = asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
   return (
-    <CardShell hd={<><span>📊</span>今週(月曜起点)のまとめ</>}>
+    <CardShell
+      hd={<><span>📊</span>今週(月曜起点)のまとめ</>}
+      foot={
+        <div
+          style={{
+            padding: "10px 18px",
+            borderTop: "1px solid var(--border)",
+            background: "var(--muted, rgba(120,120,140,0.06))",
+            fontSize: 12.5,
+            color: isStale ? "#b45309" : "var(--muted-foreground)",
+          }}
+        >
+          集計時点: {asOfLabel}
+          {isStale && "（別の日に取得した内容です。最新の状況は左の「今週のまとめ」をもう一度お試しください）"}
+        </div>
+      }
+    >
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
         {stats.map((s) => (
           <div
