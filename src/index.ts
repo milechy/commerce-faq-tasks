@@ -58,6 +58,7 @@ import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
 import { langDetectMiddleware } from "./api/middleware/langDetect";
 import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { internalNetworkOnly } from "./api/middleware/internalNetworkOnly";
+import { e2eWriteGuard } from "./api/middleware/e2eWriteGuard";
 import { assertInternalSecretConfigured } from "./lib/startup/internalSecretGuard";
 import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerAuthRoutes } from "./api/auth/routes";
@@ -509,6 +510,12 @@ app.get(
 );
 
 const port = Number(process.env.PORT || 3000);
+
+// E2E(Playwright)由来のリクエストから管理APIへの書き込みを拒否する。
+// E2Eは専用環境を持たず本番を直接叩くため、CIからの事故で本番データが壊れるのを防ぐ。
+// 管理系ルートの登録より前に置くこと(以降の register* は全てこのガードの内側になる)。
+// 読み取り(GET/HEAD/OPTIONS)は通すので、画面到達性を見るE2Eの検証内容には影響しない。
+app.use(["/v1/admin", "/admin"], e2eWriteGuard);
 
 // Legacy FAQ admin routes (/admin/faqs)
 registerFaqAdminRoutes(app);
