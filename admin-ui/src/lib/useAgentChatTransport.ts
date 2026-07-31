@@ -23,15 +23,27 @@ export type AgentChatSurface = "panel" | "fullscreen";
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
-// バックエンド(actionExecutor.ts の LegacyLinkCardPayload)が自然文に添えて返す
-// 構造化カード。現時点で card を返すのは get_legacy_ui_link だけで、他のツールは
-// 従来どおり result の自然文のみ。
-export type AgentActionCard = {
-  kind: "legacy_link";
-  label: string;
-  url: string;
-  description: string;
-};
+// バックエンド(actionExecutor.ts の LegacyLinkCardPayload / TuningRulesListCardPayload)
+// が自然文に添えて返す構造化カード。card を返すのは get_legacy_ui_link と
+// get_tuning_rules のみで、他のツールは従来どおり result の自然文のみ。
+export type AgentActionCard =
+  | {
+      kind: "legacy_link";
+      label: string;
+      url: string;
+      description: string;
+    }
+  | {
+      kind: "tuning_rules_list";
+      rules: Array<{
+        id: number;
+        triggerPattern: string;
+        expectedBehavior: string;
+        priority: number;
+        isActive: boolean;
+      }>;
+      totalCount: number;
+    };
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

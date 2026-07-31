@@ -509,6 +509,49 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByText("get_avatar_list")).toBeNull();
     expect(screen.queryByText("deactivate_avatar")).toBeNull();
   });
+
+  // D3: 500字のtextでは実質3〜4件しか出ていなかった一覧が、cardでは件数によらず全件出る回帰。
+  it("get_tuning_rules: 15件を超えても全件がカードに描画される(500字打ち切りの回帰)", async () => {
+    const rules = Array.from({ length: 20 }, (_, i) => ({
+      id: i + 1,
+      triggerPattern: `トリガー${i + 1}`,
+      expectedBehavior: `振る舞い${i + 1}`,
+      priority: 5,
+      isActive: i % 2 === 0,
+    }));
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（20件、うち有効10件・無効10件）です。詳しい内容は一覧でご確認いただけます。",
+          card: { kind: "tuning_rules_list", rules, totalCount: 20 },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText("トリガー1")).toBeTruthy();
+    expect(screen.getByText("トリガー20")).toBeTruthy();
+    expect(screen.getAllByText("✅ 有効")).toHaveLength(10);
+    expect(screen.getAllByText("⏸️ 無効")).toHaveLength(10);
+  });
+
+  it("get_tuning_rules: card が無い場合は従来どおり自然文の agentAction 表示になる(後方互換)", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        { tool: "get_tuning_rules", result: "有効な指示ルールはありません" },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    // agentAction汎用表示は「ラベル：結果」を1つのspanにまとめるため、
+    // 完全一致ではなく正規表現の部分一致で確認する(他のagentAction回帰テストと同じ形式)。
+    expect(await screen.findByText(/有効な指示ルールはありません/)).toBeTruthy();
+  });
 });
 
 function getComposer(): HTMLTextAreaElement {

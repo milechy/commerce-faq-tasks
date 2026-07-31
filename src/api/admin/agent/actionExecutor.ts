@@ -182,10 +182,29 @@ export type LegacyLinkCardPayload = {
   description: string;
 };
 
+// get_tuning_rules の全件データ。text(自然文・500字)は件数の要約のみとし、
+// 一覧の欠落(D3: 15件に切ってさらに1行60/100字に切っていたため実質3〜4件しか
+// 出ていなかった)を、件数によらず全件をここに載せることで解消する。
+export type TuningRulesListCardPayload = {
+  kind: 'tuning_rules_list';
+  rules: Array<{
+    id: number;
+    triggerPattern: string;
+    expectedBehavior: string;
+    priority: number;
+    isActive: boolean;
+  }>;
+  totalCount: number;
+};
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
-// （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
-export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload };
+// （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す。
+// また text は LLM へ tool 結果として差し戻され、応答文の材料になるため、
+// 件数に依存しない要約であることが必須）。
+export type ActionResult =
+  | string
+  | { text: string; card?: LegacyLinkCardPayload | TuningRulesListCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -747,10 +766,24 @@ export async function executeToolCall(
         if (rules.length === 0) {
           return truncate('有効な指示ルールはありません');
         }
-        const lines = rules.slice(0, 15).map((r) =>
-          `[${r.id}]${r.is_active ? '' : '(無効)'} 「${r.trigger_pattern.slice(0, 60)}」→ ${r.expected_behavior.slice(0, 100)}`
-        );
-        return truncate(`指示ルール一覧（${rules.length}件）:\n` + lines.join('\n'));
+        const activeCount = rules.filter((r) => r.is_active).length;
+        // text は件数の要約のみ(件数によらず500字に収まる)。全件の中身はcardに載せる。
+        return {
+          text: truncate(
+            `指示ルール一覧（${rules.length}件、うち有効${activeCount}件・無効${rules.length - activeCount}件）です。詳しい内容は一覧でご確認いただけます。`
+          ),
+          card: {
+            kind: 'tuning_rules_list',
+            rules: rules.map((r) => ({
+              id: r.id,
+              triggerPattern: r.trigger_pattern,
+              expectedBehavior: r.expected_behavior,
+              priority: r.priority,
+              isActive: r.is_active,
+            })),
+            totalCount: rules.length,
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_tuning_rules failed', err);
         return truncate('指示ルール一覧の取得に失敗しました');

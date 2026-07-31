@@ -19,6 +19,7 @@ import {
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
+import { priorityToTier } from "../../lib/tuningPriority";
 import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
@@ -80,6 +81,18 @@ type Card =
   | { kind: "success"; text: string }
   | { kind: "link"; label: string; url: string; description: string }
   | { kind: "agentAction"; tool: string; result: string }
+  // D3: 一覧が15件・1行60/100字で黙って切れていたのを解消するための全件カード。
+  | {
+      kind: "rulesList";
+      rules: Array<{
+        id: number;
+        triggerPattern: string;
+        expectedBehavior: string;
+        priority: number;
+        isActive: boolean;
+      }>;
+      totalCount: number;
+    }
   // GUI固有だった操作(PDF取り込み)を旧UIへ渡さず会話の中で完結させる最初の1件。
   // 送信の進捗までしか追わない(取り込み完了までの追跡は旧UIのPDFタブが担当)ため、
   // 状態は「送っている / 受け取った / 受け取れなかった」の3つで足りる。
@@ -478,6 +491,10 @@ export default function CopilotPreviewPage() {
       if (a.card?.kind === "legacy_link") {
         const { label, url, description } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
+      }
+      if (a.card?.kind === "tuning_rules_list") {
+        const { rules, totalCount } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "rulesList", rules, totalCount } };
       }
       if (a.tool === "suggest_faq") {
         const parsed = parseSuggestFaq(a.result);
@@ -1478,6 +1495,27 @@ function CardView({ card }: { card: Card }) {
           <Field k="こう振る舞う" v={card.behavior} quote />
         </CardShell>
       );
+    case "rulesList": {
+      const tierLabel: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
+      return (
+        <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
+          {card.rules.map((r) => (
+            <div
+              key={r.id}
+              style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)" }}>
+                <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
+                <span>優先度: {tierLabel[priorityToTier(r.priority)]}</span>
+              </div>
+              <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+                <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
+              </div>
+            </div>
+          ))}
+        </CardShell>
+      );
+    }
     case "engagement":
       return (
         <CardShell hd={<><span>⚡</span>お客様への声がけを設定します</>}
