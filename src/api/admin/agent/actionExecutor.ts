@@ -527,6 +527,48 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // 一覧が無いと activate_avatar は「ID を知っている人しか使えない」ツールになるため、
+    // 切替の前段としてここで ID を提示する。
+    // 既定アバター(tenant_id='r2c_default')は avatar_configs の部分unique制約から
+    // 除外されており全行 is_active = true なので、is_active だけで稼働中を判定すると
+    // 見本18体がすべて「稼働中」に見える。稼働中の判定は自テナント行に限る。
+    case 'get_avatar_list': {
+      try {
+        const res = await db.query(
+          `SELECT id, name, is_active, tenant_id
+             FROM avatar_configs
+            WHERE tenant_id = $1 OR tenant_id = 'r2c_default'
+            ORDER BY (tenant_id = $1) DESC, is_default ASC, created_at DESC`,
+          [tenantId],
+        );
+        const rows = res.rows as { id: string; name: string; is_active: boolean; tenant_id: string }[];
+        if (rows.length === 0) {
+          return truncate('アバター設定はまだありません');
+        }
+
+        // 戻り値は500字で切られる。切られると一覧の末尾が黙って欠けるため、
+        // 収まる分だけ出して残件数を明示する（欠落を沈黙させない）。
+        const LIST_CHAR_BUDGET = 420;
+        const lines: string[] = [];
+        let used = 0;
+        for (const row of rows) {
+          const own = row.tenant_id === tenantId;
+          const mark = own ? (row.is_active ? '（稼働中）' : '') : '（既定の見本）';
+          const line = `- ${row.name}${mark} ID: ${row.id}`;
+          if (used + line.length > LIST_CHAR_BUDGET) break;
+          lines.push(line);
+          used += line.length + 1;
+        }
+        const remaining = rows.length - lines.length;
+        const footer = remaining > 0 ? `\nほか${remaining}件` : '';
+        return truncate(`アバター設定は${rows.length}件あります:\n${lines.join('\n')}${footer}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] get_avatar_list failed', err);
+        return truncate('アバター一覧の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     case 'activate_avatar': {
       const id = String(args['id'] ?? '');
       if (!id) {
@@ -547,14 +589,44 @@ export async function executeToolCall(
       try {
         const res = await activateAvatarConfig(client, id, tenantId);
         if (!res.ok) {
-          return truncate(`アバターの有効化に失敗しました: ${res.error ?? '不明なエラー'}`);
+          // 見つからない原因の大半はIDの取り違え。次の一手（一覧で確認）を示す。
+          return truncate(
+            `アバターの有効化に失敗しました: ${res.error ?? '不明なエラー'}。get_avatar_list で ID を確認してください`,
+          );
         }
         return truncate(`アバター（ID: ${id}）を有効化しました`);
       } catch (err) {
+        // 不正な形式のID（UUIDでない文字列）もここに来る。500にはせず日本語で返す。
         logger.warn('[actionExecutor] activate_avatar failed', err);
-        return truncate('アバターの有効化に失敗しました');
+        return truncate('アバターの有効化に失敗しました。get_avatar_list で ID を確認してください');
       } finally {
         client.release();
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 既定アバター(is_default)は全テナント共通の見本で、常に is_active = true の
+    // 前提で運用されている（部分unique制約から除外されている）。停止対象から外す。
+    case 'deactivate_avatar': {
+      try {
+        const res = await db.query(
+          `UPDATE avatar_configs SET is_active = false
+            WHERE tenant_id = $1 AND is_active = true AND (is_default = false OR is_default IS NULL)
+            RETURNING name`,
+          [tenantId],
+        );
+        const stopped = res.rows as { name: string }[];
+        if (stopped.length === 0) {
+          return truncate('稼働中のアバターはありません');
+        }
+        const names = stopped.map((r) => `「${r.name}」`).join('');
+        return truncate(
+          `アバター${names}を停止しました。ウィジェットにアバターは表示されなくなります。` +
+          '再開したいときは activate_avatar で同じ設定を有効化できます',
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] deactivate_avatar failed', err);
+        return truncate('アバターの停止に失敗しました');
       }
     }
 
