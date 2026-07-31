@@ -1642,6 +1642,117 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
     expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
     expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy();
   });
+
+  // 生成のたびに実費用(fal.ai)が発生する(#594)。busyImage state が正しく
+  // ボタンをdisabledにしていないと、連打でコストが二重に発生する。応答を
+  // 意図的に遅延させ、1回目の応答が返る前に2回目をクリックしても
+  // ネットワーク呼び出しが1回しか発生しないことを検証する。
+  it("「画像を新しく生成する」を連打しても、生成中はfal/generateが1回しか呼ばれない", async () => {
+    let resolveGenerate: (() => void) | null = null;
+    const pending = new Promise<Response>((resolve) => {
+      resolveGenerate = () =>
+        resolve({ ok: true, status: 200, json: () => Promise.resolve({ images: ["https://img/1.png"] }) } as Response);
+    });
+    mockAdoptedThenEndpoints({ generate: () => pending });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    // 1回目の応答がまだ解決していない間に2回目をクリックする(同じDOMノードを
+    // React が再利用するため、disabled化された後も同じ参照でクリックできる)。
+    await waitFor(() => expect((generateButton as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(generateButton);
+
+    const generateCallsWhileInFlight = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/fal/generate")).length;
+    expect(generateCallsWhileInFlight).toBe(1);
+
+    resolveGenerate!();
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    // 解決後も合計1回のまま(遅延クリックが後から発火していない)
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/fal/generate")).length).toBe(1);
+  });
+
+  // 旧UIウィザードの is_default=true 保護(routes.ts の image_url 変更禁止ガード)は
+  // 既存の仕様だが、チャットからのPATCH経路(#632)がこれに触れた場合の応答を
+  // 明示的に確認していなかった。500汎用エラーとは別の実際のレスポンス形状。
+  it("採用のPATCHがデフォルトアバター保護の400を返した場合も、その文言で確定する", async () => {
+    mockAdoptedThenEndpoints({
+      generate: () => mockOk({ images: ["https://img/1.png"] }),
+      patch: () =>
+        Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({ error: "デフォルトアバターの画像は変更できません" }) } as Response),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    const adoptButton = await screen.findByRole("button", { name: "これにする" });
+    fireEvent.click(adoptButton);
+
+    expect(await screen.findByText("デフォルトアバターの画像は変更できません")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
+  });
+
+  // 「気に入らなかったら何度でもやり直せる」(§7-1)という設計上の約束の直接検証。
+  // 【発見】AvatarCandidatesCard の「別の候補を見る」は !card.adoptedUrl の間だけ表示され、
+  // 一度採用するとそのカードからは消える。再生成の実際の導線は常に表示されている
+  // AvatarAdoptedCard 側の「画像を新しく生成する」であることを、このテストで確定する
+  // (「別の候補を見る」を押せばよいという誤った前提でテストを書くと、この非対称に
+  // 気づけないままになる)。
+  it("1回目を採用した後も、元のカードから再度「画像を新しく生成する」で2回目が独立して生成・採用できる", async () => {
+    let generateCalls = 0;
+    mockAdoptedThenEndpoints({
+      generate: () => {
+        generateCalls += 1;
+        const batch = generateCalls === 1
+          ? ["https://img/1-a.png", "https://img/1-b.png"]
+          : ["https://img/2-a.png", "https://img/2-b.png"];
+        return mockOk({ images: batch });
+      },
+      patch: () => mockOk({ id: "cfg-1" }),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "これにする" }).length).toBe(2));
+    fireEvent.click(screen.getAllByRole("button", { name: "これにする" })[0]!);
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+
+    // 採用後、1回目のカードには「別の候補を見る」が出ない(発見した非対称の固定)
+    expect(screen.queryByRole("button", { name: "別の候補を見る" })).toBeNull();
+    // 1回目のカードの未選択の1枚は「これにする」の文言のまま無効化されて残る
+    // (isAdopted=falseだがdisabled=trueのため、後段のフィルタで見分ける必要がある)
+    expect(
+      (screen.getAllByRole("button", { name: "これにする" })[0] as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    // 再生成は元の AvatarAdoptedCard の「画像を新しく生成する」から行う
+    fireEvent.click(generateButton);
+    await waitFor(() => {
+      const enabled = screen
+        .getAllByRole("button", { name: "これにする" })
+        .filter((btn) => !(btn as HTMLButtonElement).disabled);
+      expect(enabled.length).toBe(2);
+    });
+
+    // 1回目のカードの採用状態(これに決定)はそのまま残っている
+    expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy();
+    // 2回目バッチの「有効な(未採用の)これにする」だけを対象にする(1回目カードの
+    // 無効化された残骸1件と混同しない)
+    const secondBatchButtons = screen
+      .getAllByRole("button", { name: "これにする" })
+      .filter((btn) => !(btn as HTMLButtonElement).disabled);
+    expect(secondBatchButtons.length).toBe(2);
+
+    fireEvent.click(secondBatchButtons[1]!);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "これに決定" }).length).toBe(2));
+
+    const patchCalls = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(patchCalls.length).toBe(2);
+    expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toEqual({ image_url: "https://img/1-a.png" });
+    expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toEqual({ image_url: "https://img/2-b.png" });
+  });
 });
 
 // POST /match-voice はテキストの候補(id/title/description/score)のみを返し音声
@@ -1769,6 +1880,70 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
     expect(await screen.findByText("更新に失敗しました")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
     expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy();
+  });
+
+  // match-voice もGroq LLM呼び出しを含み実費用が発生する。画像側と同じ理由で、
+  // busyVoice state による連打防止を明示的に検証する。
+  it("「声を探す」を連打しても、検索中はmatch-voiceが1回しか呼ばれない", async () => {
+    let resolveMatch: (() => void) | null = null;
+    const pending = new Promise<Response>((resolve) => {
+      resolveMatch = () =>
+        resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ recommendations: [{ id: "voice-1", title: "Haruka Voice", description: "明るい声", score: 0.9 }] }),
+        } as Response);
+    });
+    mockAdoptedThenVoiceEndpoints({ match: () => pending });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+    await waitFor(() => expect((voiceButton as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(voiceButton);
+
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/match-voice")).length).toBe(1);
+
+    resolveMatch!();
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/match-voice")).length).toBe(1);
+  });
+
+  // 画像候補は既に複数件(4枚)での排他制御をテスト済みだが、声の候補は単一の
+  // recommendationでしかテストしていなかった(#635実装時の全テストが1件のみ)。
+  // 複数候補のうち1件を採用したとき、他の候補が誤って選べてしまわないかを検証する。
+  it("複数の声の候補から1件を採用すると、残りの候補は選べなくなる", async () => {
+    mockAdoptedThenVoiceEndpoints({
+      match: () =>
+        mockOk({
+          recommendations: [
+            { id: "voice-1", title: "Haruka Voice", description: "明るく親しみやすい声", score: 0.92 },
+            { id: "voice-2", title: "Rei Voice", description: "落ち着いた声", score: 0.81 },
+            { id: "voice-3", title: "Sora Voice", description: "元気な声", score: 0.75 },
+          ],
+        }),
+    });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "この声にする" }).length).toBe(3));
+
+    // 真ん中(2番目)の候補を採用する
+    fireEvent.click(screen.getAllByRole("button", { name: "この声にする" })[1]!);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+    // 採用されたのは voice-2 であること
+    const patchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toEqual({ voice_id: "voice-2" });
+
+    // 残り2件(voice-1, voice-3)の「この声にする」は無効化されており、誤って
+    // 別の声を選び直せない(二重採用の防止)
+    const remaining = screen.getAllByRole("button", { name: "この声にする" });
+    expect(remaining.length).toBe(2);
+    for (const btn of remaining) expect((btn as HTMLButtonElement).disabled).toBe(true);
+    // 「これに決定」は1件だけ(誤って複数がハイライトされていない)
+    expect(screen.getAllByRole("button", { name: "これに決定" }).length).toBe(1);
   });
 });
 

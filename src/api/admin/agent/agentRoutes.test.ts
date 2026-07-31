@@ -6591,6 +6591,36 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('接客担当（稼働中）');
     });
 
+    // これまでのテストは自テナントの行が0件か1件のケースのみで、複数の自作アバターを
+    // 持つテナント(旧UIウィザードで何度か作り直した等)で「稼働中でない自テナント行」に
+    // 誤って（稼働中）マークが付かないかを検証していなかった。
+    it('自テナントが複数のアバターを持つ場合、稼働中でない行には印を付けない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-2b', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 'av-own-1', name: '旧デザイン', is_active: false, tenant_id: 'tenant-abc' },
+          { id: 'av-own-2', name: '接客担当', is_active: true, tenant_id: 'tenant-abc' },
+          { id: 'av-own-3', name: '試作中', is_active: false, tenant_id: 'tenant-abc' },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-02b' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('接客担当（稼働中）');
+      // 非稼働の自テナント行には「（稼働中）」を含まない行として出ること
+      expect(result).toContain('旧デザイン ID:');
+      expect(result).toContain('試作中 ID:');
+      expect(result).not.toContain('旧デザイン（稼働中）');
+      expect(result).not.toContain('試作中（稼働中）');
+    });
+
     it('件数が多くても500字で黙って欠けず、残件数を明示する', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-list-3', 'get_avatar_list', {}))
@@ -6736,6 +6766,42 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].card.presetId).toBe('preset-2');
       expect(res.body.actions[0].card.name).toBe('Rei');
+    });
+
+    // 既知の限界（バグではあるが本テストは「現状の挙動」を固定し、意図せず悪化させないためのもの）:
+    // 採用済み判定が avatar_configs.name の一致だけで行われている(adopt時に default_template_id を
+    // 引き継がない設計。#611)。そのため、旧UIウィザードで自作したアバターの名前がたまたま
+    // r2c_default の見本と同じ場合、そのテナントは一度も suggest_avatar_preset を使っていなくても
+    // 「採用済み」と誤判定され、本来の見本が二度と提案されなくなる。名前は自由記入欄なので
+    // 現実的に起こりうる（"Haruka" のような既定名をそのまま使う等）。
+    // 直す場合の方向性: adopt時に default_template_id を引き継ぎ、名前ではなくそれで判定する
+    // （デメリット: migration_seed_defaults_v2.sql の再シード時ユニーク制約(tenant_id,
+    // default_template_id)と衝突しうるため、判定方式の変更は別タスクとして検討する）。
+    it('【既知の限界】旧UIで作った自作アバターと見本の名前がたまたま一致すると、未使用でも「採用済み」扱いになる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sp-2b', 'suggest_avatar_preset', {}))
+        .mockResolvedValueOnce(makeGroqResponse('見本をご提案しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [
+            { id: 'preset-1', name: 'Haruka', image_url: null, personality_prompt: '丁寧な性格です。', default_template_id: 'default_01' },
+            { id: 'preset-2', name: 'Rei', image_url: null, personality_prompt: '軽快な性格です。', default_template_id: 'default_02' },
+          ],
+        })
+        // このテナントは suggest_avatar_preset を一度も使っておらず、旧UIウィザードで
+        // 独自に "Haruka" という名前のアバターを作っただけ(r2c_defaultの見本とは無関係)。
+        .mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを作りたい', sessionId: 'sess-sp-02b' });
+
+      expect(res.status).toBe(200);
+      // 現状の挙動: 本当は使っていない「Haruka」見本が誤って除外され、Reiが提案される。
+      // 望ましい挙動ではないが、直すには判定方式そのものの変更が要るため、ここでは
+      // この挙動が「意図せず」変わらないことだけを固定する。
+      expect(res.body.actions[0].card.presetId).toBe('preset-2');
     });
 
     it('見本を全て採用済みでも、最初の1件にフォールバックして提案し続ける', async () => {
