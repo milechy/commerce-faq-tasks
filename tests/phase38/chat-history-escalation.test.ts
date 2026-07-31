@@ -44,9 +44,12 @@ describe("Chat History Escalation API", () => {
 
   describe("GET /v1/admin/chat-history/escalations", () => {
     it("super_admin → 全テナントの一覧 200", async () => {
-      mockGetActiveEscalations.mockResolvedValueOnce([
-        { id: "s1", tenant_id: "tenant-a", session_id: "sess-1", escalated_at: "2026-01-01T00:00:00Z", last_message_at: "2026-01-01T00:00:00Z", message_count: 3, first_message_preview: "help" },
-      ]);
+      mockGetActiveEscalations.mockResolvedValueOnce({
+        escalations: [
+          { id: "s1", tenant_id: "tenant-a", session_id: "sess-1", escalated_at: "2026-01-01T00:00:00Z", last_message_at: "2026-01-01T00:00:00Z", message_count: 3, first_message_preview: "help" },
+        ],
+        total: 1,
+      });
       const res = await request(app)
         .get("/v1/admin/chat-history/escalations")
         .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
@@ -56,7 +59,7 @@ describe("Chat History Escalation API", () => {
     });
 
     it("client_admin → 自テナントのみ 200", async () => {
-      mockGetActiveEscalations.mockResolvedValueOnce([]);
+      mockGetActiveEscalations.mockResolvedValueOnce({ escalations: [], total: 0 });
       const res = await request(app)
         .get("/v1/admin/chat-history/escalations")
         .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
