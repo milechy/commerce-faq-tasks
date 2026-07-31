@@ -135,6 +135,16 @@ describe('confirmPolicy: フロントの REAL_WRITE_TOOLS との突き合わせ'
     const missing = readFrontendRealWriteTools().filter((name) => !(name in WRITE_TOOL_RISK_TIERS));
     expect(missing).toEqual([]);
   });
+
+  // 上のテストは「フロント ⊆ サーバ」しか見ておらず、逆方向(サーバに書き込みツールを
+  // 追加したのにフロントの実書き込みカウント対象への追加を忘れる)を検出できなかった。
+  // 実際に record_session_outcome / delete_chat_session を含む10ツールがこの穴を
+  // 通り抜けて RealActionBadge の集計から漏れていた(発見時点のレビューで判明)。
+  it('リスク階層表の書き込みツールはすべてフロントの REAL_WRITE_TOOLS にも登録されている', () => {
+    const front = new Set(readFrontendRealWriteTools());
+    const missing = Object.keys(WRITE_TOOL_RISK_TIERS).filter((name) => !front.has(name));
+    expect(missing).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

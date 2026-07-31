@@ -2369,15 +2369,13 @@ export async function executeToolCall(
           );
         }
 
-        // executeToolCall は現状、実行者(メールアドレス等)を受け取っていない
-        // (reply_to_escalation 等の既存の書き込みツールと同じ制約)。HTTP経由の
-        // PATCH /v1/admin/chat-history/sessions/:id/outcome は email を記録できるが、
-        // チャット経由はここでは null になる。
         await recordOutcome({
           sessionDbId: resolved.session.id,
           tenantId,
           outcome: outcomeValue,
-          recordedBy: null,
+          // actor.email は '' になりうる('' は audit_logs 上 null と区別する意味を
+          // 持たないため null に正規化する。HTTP経路(routes.ts)と同じ規約)。
+          recordedBy: actor.email || null,
         });
         return truncate(`セッション[${display}]の成果を「${outcomeValue}」として記録しました`);
       } catch (err) {
