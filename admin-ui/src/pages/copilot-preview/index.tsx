@@ -682,16 +682,26 @@ export default function CopilotPreviewPage() {
 
     void (async () => {
       let stage: OnboardingStageFlags | null = null;
-      if (!previewMode && user?.role === "client_admin") {
-        try {
+      // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
+      // オンボーディングの「次の一手」提示を使えるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)。
+      // previewMode中はJWTのtenant_idを見るmy-tenantではなくtargetTenantId明示の
+      // /v1/admin/tenants/:id(super_admin専用、useAuthのtenantPlan取得と同じ経路)を使う。
+      try {
+        if (previewMode && previewTenantId) {
+          const res = await authFetch(`${API_BASE}/v1/admin/tenants/${previewTenantId}`);
+          if (res.ok) {
+            const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+            stage = data.onboarding_stage ?? null;
+          }
+        } else if (!previewMode && user?.role === "client_admin") {
           const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
           if (res.ok) {
             const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
             stage = data.onboarding_stage ?? null;
           }
-        } catch {
-          // 取得失敗時は通常の週次ブリーフィング側にフォールバック
         }
+      } catch {
+        // 取得失敗時は通常の週次ブリーフィング側にフォールバック
       }
 
       const nextStep = stage ? deriveOnboardingNextStep(stage) : null;
