@@ -5,6 +5,10 @@ const AUTH_FILE = 'tests/e2e/.auth/user.json';
 
 export default defineConfig({
   testDir: './tests/e2e',
+  // tests/ 配下は Jest と Playwright の二重所有。*.test.ts は Jest の領域であり、
+  // Playwrightが拾うと収集エラー(ReferenceError: describe is not defined)で
+  // E2E全件が0件になるため、ここで .spec.ts / .setup.ts のみに限定する。
+  testMatch: /\.(spec|setup)\.ts$/,
   timeout: 30000,
   retries: 1,
   use: {
