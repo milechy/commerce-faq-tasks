@@ -34,6 +34,14 @@ export type LegacyLinkAgentActionCard = {
   description: string;
 };
 
+export type AvatarPresetAgentActionCard = {
+  kind: "avatar_preset";
+  presetId: string;
+  name: string;
+  imageUrl: string | null;
+  description: string;
+};
+
 export type TuningRulesListAgentActionCard = {
   kind: "tuning_rules_list";
   rules: Array<{
@@ -60,6 +68,7 @@ export type WeeklySummaryAgentActionCard = {
 
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
+  | AvatarPresetAgentActionCard
   | TuningRulesListAgentActionCard
   | WeeklySummaryAgentActionCard;
 
