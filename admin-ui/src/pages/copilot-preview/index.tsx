@@ -194,6 +194,47 @@ const INDUSTRY_CHIPS: Chip[] = ONBOARDING_INDUSTRIES.map((ind) => ({
   tone: "ghost",
 }));
 
+// Asana 1217040702485762(P5): オンボーディング4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)。
+// 導出ロジックの単一の情報源は src/api/admin/agent/onboardingStage.ts(バックエンド)。
+// admin-ui と backend は別パッケージ(別ビルドルート)のため import できず、
+// GET /v1/admin/my-tenant が返す形をそのままここで受ける(4個の boolean のみの薄い型)。
+interface OnboardingStageFlags {
+  industryAnswered: boolean;
+  knowledgePublished: boolean;
+  widgetInstalled: boolean;
+  firstConversation: boolean;
+}
+
+// 4段階のうち、まだ到達していない最初の段階に対応する案内文＋チップを返す。
+// 全段階到達済みなら null(=通常の週次ブリーフィング側の起動に進む)。
+// 各段階の判定順序は onboardingStage.ts の STAGE_ORDER と揃える。
+function deriveOnboardingNextStep(stage: OnboardingStageFlags): { text: string; chips?: Chip[] } | null {
+  if (!stage.industryAnswered) {
+    return {
+      text: "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
+      chips: INDUSTRY_CHIPS,
+    };
+  }
+  if (!stage.knowledgePublished) {
+    return {
+      text: "業種のFAQたたき台は下書きとして登録済みです。内容をご確認のうえ、よろしければ公開しましょう。",
+      chips: [{ label: "下書きを見る", action: "__real:下書きのFAQを見せてください", tone: "ghost" }],
+    };
+  }
+  if (!stage.widgetInstalled) {
+    return {
+      text: "FAQの準備ができました。次はウィジェットをサイトに設置しましょう。埋め込みコードをお渡しします。",
+      chips: [{ label: "埋め込みコードを見る", action: "__real:埋め込みコードを教えてください", tone: "ghost" }],
+    };
+  }
+  if (!stage.firstConversation) {
+    return {
+      text: "設置は完了しています。お客様からの最初のご質問をお待ちしています。準備は万端です！",
+    };
+  }
+  return null;
+}
+
 // ─── 実APIのツール結果 → 見た目の良いカードへの変換 ────────────────────────────
 // actionExecutor.ts が返す日本語の定型文字列を軽くパースする。想定外の形式なら
 // null を返し、呼び出し側は汎用の agentAction カード（生テキスト）にフォールバックする。
@@ -611,13 +652,16 @@ export default function CopilotPreviewPage() {
   };
 
   // マウント時、まず同一タブに保存済みの会話があれば復元する(リロード・ブラウザバック・
-  // モバイルのタブ破棄で会話が消えないように)。復元できた場合は既に進行中の会話がある
-  // ということなので、ブートストラップ(業種選択オンボーディング/週次ブリーフィングの
-  // 自動取得)は行わない。
+  // モバイルのタブ破棄で会話が消えないように)。
   //
-  // 復元できなかった場合は従来通り、新規テナント(onboarding_completed_at未設定)なら業種選択
-  // オンボーディングを、既存テナントなら実データの週次ブリーフィングを自動取得する。
-  // super_admin(プレビュー中含む)はオンボーディング判定の対象外(常に週次ブリーフィング側)。
+  // Asana 1217040702485762(P5): 復元できた場合でも、オンボーディングが未完了なら
+  // 必ず「次の一手」を提示する(以前は復元時にブートストラップ自体を丸ごとスキップして
+  // おり、2回目以降のログインで次に何をすべきかが消える欠陥があった)。
+  //
+  // 復元できなかった場合は、4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)のうち
+  // 最初に未到達の段階の案内を出す。全段階到達済み・または段階を取得できない
+  // (super_admin/previewMode含む)場合は、従来どおり実データの週次ブリーフィングを
+  // 自動取得する。
   const bootstrapped = useRef(false);
   useEffect(() => {
     // テナント選択待ちの間は取りに行かない（テナント未特定のブリーフィングは
@@ -628,33 +672,37 @@ export default function CopilotPreviewPage() {
     bootstrapped.current = true;
 
     const restored = restoreChatSession<Msg>(CHAT_SESSION_SURFACE_FULLSCREEN);
-    if (restored && restored.messages.length > 0) {
+    const hasRestoredConversation = !!(restored && restored.messages.length > 0);
+    if (hasRestoredConversation && restored) {
       reserveIds(restored.messages);
       adoptSessionId(restored.sessionId);
       setMsgs(restored.messages);
       setRealHistory(restored.history ?? []);
-      return;
     }
 
     void (async () => {
-      let isNewTenant = false;
+      let stage: OnboardingStageFlags | null = null;
       if (!previewMode && user?.role === "client_admin") {
         try {
           const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
           if (res.ok) {
-            const data = (await res.json()) as { onboarding_completed_at?: string | null };
-            isNewTenant = !data.onboarding_completed_at;
+            const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+            stage = data.onboarding_stage ?? null;
           }
         } catch {
           // 取得失敗時は通常の週次ブリーフィング側にフォールバック
         }
       }
 
-      if (isNewTenant) {
-        push(say(
-          "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
-          INDUSTRY_CHIPS,
-        ));
+      const nextStep = stage ? deriveOnboardingNextStep(stage) : null;
+
+      if (hasRestoredConversation) {
+        if (nextStep) push(say(nextStep.text, nextStep.chips));
+        return;
+      }
+
+      if (nextStep) {
+        push(say(nextStep.text, nextStep.chips));
       } else {
         push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
         await sendReal(BOOTSTRAP_PROMPT, { silent: true });

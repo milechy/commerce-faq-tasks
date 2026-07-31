@@ -912,7 +912,7 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     }));
   });
 
-  it("保存済みの会話があれば復元し、起動時ブリーフィングは取得しない", async () => {
+  it("保存済みの会話があれば復元し、起動時ブリーフィング(agent/chat)は取得しない", async () => {
     vi.mocked(restoreChatSession).mockReturnValue({
       sessionId: "restored-session-id",
       messages: [
@@ -929,12 +929,81 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
 
     expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
     expect(screen.getByText("送料を教えて")).toBeTruthy();
-    // ブリーフィング取得(agent/chat)もオンボーディング判定(my-tenant)も走らない。
-    // 左レールの件数バッジ取得(gaps/count・escalations)は復元の有無と無関係に独立して
-    // 走るため許容する — ここで見るのはブリーフィング固有のエンドポイントのみ。
+    // ブリーフィング取得(agent/chat)は走らない(復元済みの会話に割り込ませないため)。
+    // 一方 my-tenant は Asana 1217040702485762(P5)以降、復元時にも「次の一手」判定のために
+    // 呼ばれる(下の別テストで検証)。左レールの件数バッジ取得は復元の有無と無関係に独立して走る。
     const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("/v1/admin/agent/chat"))).toBe(false);
-    expect(urls.some((u) => u.includes("/v1/admin/my-tenant"))).toBe(false);
+  });
+
+  // Asana 1217040702485762(P5): 復元時でもオンボーディング未完了なら「次の一手」を提示する
+  // (旧実装は復元時にブートストラップを丸ごとスキップし、次にすべきことが消えていた)。
+  it("復元時、オンボーディングが未完了なら次の一手が追加で提示される", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 201, role: "me", text: "送料を教えて" },
+        { id: 202, role: "ai", text: "全国一律550円です。" },
+      ],
+      history: [
+        { role: "user", content: "送料を教えて" },
+        { role: "assistant", content: "全国一律550円です。" },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
+    expect(await screen.findByText(/下書きとして登録済み/)).toBeTruthy();
+    expect(screen.getByText("下書きを見る")).toBeTruthy();
+  });
+
+  it("復元時、オンボーディングが全段階完了済みなら次の一手は表示されない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: true,
+            widgetInstalled: true,
+            firstConversation: true,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 201, role: "me", text: "送料を教えて" },
+        { id: 202, role: "ai", text: "全国一律550円です。" },
+      ],
+      history: [
+        { role: "user", content: "送料を教えて" },
+        { role: "assistant", content: "全国一律550円です。" },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
+    expect(screen.queryByText("下書きを見る")).toBeNull();
+    expect(screen.queryByText("埋め込みコードを見る")).toBeNull();
   });
 
   it("保存済みの会話が無ければ、従来通り起動時ブリーフィングを取得する(回帰)", async () => {
