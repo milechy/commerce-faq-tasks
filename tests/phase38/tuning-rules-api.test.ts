@@ -34,7 +34,7 @@ const RULE_FIXTURE = {
   tenant_id: "demo-tenant",
   trigger_pattern: "テスト,test-trigger",
   expected_behavior: "テスト用の期待動作",
-  priority: 50,
+  priority: 5,
   is_active: true,
   created_by: "admin@example.com",
   source_message_id: null,

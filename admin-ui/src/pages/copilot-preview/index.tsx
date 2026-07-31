@@ -2151,6 +2151,27 @@ function CardView({
                     )}
                   </div>
                 )}
+                {/* D5: 旧UIの3段階(低/普通/高)と同じ語彙でチャットからも優先度を変えられるようにする。
+                    却下済みのAI提案は編集の意味が無いため出さない。 */}
+                {onSendReal && !isRejected && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {(["low", "normal", "high"] as const)
+                      .filter((t) => t !== priorityToTier(r.priority))
+                      .map((t) => (
+                        <button
+                          key={t}
+                          onClick={() =>
+                            onSendReal(
+                              `__real:指示ルール（ID: ${r.id}、「${r.triggerPattern}」）の優先度を「${TIER_LABEL[t]}」にしてください`,
+                            )
+                          }
+                          style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 12px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                        >
+                          優先度を{TIER_LABEL[t]}にする
+                        </button>
+                      ))}
+                  </div>
+                )}
                 {isPendingApproval && onSendReal && (
                   <div style={{ display: "flex", gap: 8 }}>
                     <button

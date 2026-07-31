@@ -212,11 +212,15 @@ ${knowledgePart}${rulesPart}${crossTenantPart}
 // Zod スキーマ
 // ---------------------------------------------------------------------------
 
+// D5: 実際に意味を持つ値域(admin-ui/src/lib/tuningPriority.ts の3段階表示・
+// judgeEvaluator/evaluationAnalyzerの生成値)はいずれも0〜10のみ。-100〜100を
+// 許していたのは実態と無関係な過去の値域で、同じルールが旧UIとチャットで
+// 違う段階に見えるD5の一因だった(本番データに範囲外値が無いことは移行前に確認済み)。
 const createSchema = z.object({
   tenant_id: z.string().min(1).max(100),
   trigger_pattern: z.string().min(1).max(1000),
   expected_behavior: z.string().min(1).max(4000),
-  priority: z.number().int().min(-100).max(100).optional(),
+  priority: z.number().int().min(0).max(10).optional(),
   source_message_id: z.number().int().positive().nullable().optional(),
 });
 
@@ -230,7 +234,7 @@ const approvedResponseSchema = z.object({
 const updateSchema = z.object({
   trigger_pattern: z.string().min(1).max(1000).optional(),
   expected_behavior: z.string().min(1).max(4000).optional(),
-  priority: z.number().int().min(-100).max(100).optional(),
+  priority: z.number().int().min(0).max(10).optional(),
   is_active: z.boolean().optional(),
   approved_responses: z.array(approvedResponseSchema).optional(),
 });
