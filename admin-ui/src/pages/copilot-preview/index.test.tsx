@@ -1782,14 +1782,19 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
   }
 
+  // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定になったため、投入が実際に始まる系の
+  // テストは(previewMode中の)super_adminで行う。client_adminの拒否は専用describeで検証する。
   it("PDFを落とすと旧UIと同じ既存エンドポイントへ送信が始まる(新APIを作らない)", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
 
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
     const xhr = MockXHR.instances[0]!;
-    expect(xhr.open).toHaveBeenCalledWith("POST", "http://localhost:3100/v1/admin/knowledge/book-pdf");
+    expect(xhr.open).toHaveBeenCalledWith(
+      "POST",
+      "http://localhost:3100/v1/admin/knowledge/book-pdf?tenant=tenant-preview",
+    );
     expect(xhr.setRequestHeader).toHaveBeenCalledWith("Authorization", "Bearer test-token");
     // 会話の中に進捗カードが出る
     expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
@@ -1812,7 +1817,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("PDF以外を落とすと、通信せずやわらかい日本語で断る", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("メモ.txt", "text/plain")]);
 
@@ -1822,7 +1827,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("上限を超えるPDFは通信する前に断る", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("大きい資料.pdf", "application/pdf", 11 * 1024 * 1024)]);
 
@@ -1831,7 +1836,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("通信に失敗してもチャットは壊れず、そのまま次のメッセージを送れる", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
@@ -1849,7 +1854,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("サーバー側で失敗した場合もやわらかい案内カードになる", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
@@ -1862,7 +1867,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("成功すると成功カードが出て、他の書き込み操作と同じく実操作の件数に加算される", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
     expect(screen.getByLabelText("実際の操作 0件")).toBeTruthy();
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
@@ -1877,7 +1882,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("📎ボタンからでも同じ取り込みができる(ドラッグできない環境向け)", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     expect(screen.getByLabelText("PDFを添付")).toBeTruthy();
@@ -1885,6 +1890,80 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
 
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
     expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
+  });
+});
+
+// GID 1217040818410419: 「書籍/PDFはR2C運用限定」の実装反映。テナント(client_admin)からの
+// D&D/添付ボタンからの受付を役割で条件化する。previewMode中のsuper_adminは従来通り成功すること
+// は上のdescribe(SUPER_ADMIN_IN_PREVIEW を使う各テスト)で既に固定済み。
+describe("CopilotPreviewPage — PDF取り込みのR2C運用限定ガード(client_admin)", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    MockXHR.instances = [];
+    vi.stubGlobal("XMLHttpRequest", MockXHR as unknown as typeof XMLHttpRequest);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function readyPage(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(overrides);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  }
+
+  it("client_adminがPDFを落としても通信せず、優しい日本語で断る", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+
+    expect(await screen.findByText("PDFを受け取れませんでした")).toBeTruthy();
+    expect(
+      screen.getByText("この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。"),
+    ).toBeTruthy();
+    expect(MockXHR.instances.length).toBe(0);
+    // 専門用語(ステータスコード/権限/MIME等)や、他の場所で誤ってblocked計測に載る文言を出さない
+    expect(screen.queryByText(/403|権限|MIME/)).toBeNull();
+    expect(screen.queryByText(/確認が必要です|確認をスキップできません/)).toBeNull();
+  });
+
+  it("client_adminが📎ボタンから選んでも同様に断る", async () => {
+    await readyPage();
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [makeFile("料金表.pdf", "application/pdf")] } });
+
+    expect(await screen.findByText("PDFを受け取れませんでした")).toBeTruthy();
+    expect(MockXHR.instances.length).toBe(0);
+  });
+
+  it("断られても会話は壊れず、そのまま次のメッセージを送れる", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+    await screen.findByText("PDFを受け取れませんでした");
+
+    fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    expect(await screen.findByText("営業時間を教えて")).toBeTruthy();
   });
 });
 

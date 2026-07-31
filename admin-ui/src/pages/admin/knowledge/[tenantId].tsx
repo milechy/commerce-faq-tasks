@@ -29,7 +29,11 @@ export default function TenantKnowledgePage() {
   const location = useLocation();
   const { t } = useLang();
   const { tenantId } = useParams<{ tenantId: string }>();
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, isLoading } = useAuth();
+  // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定(2026-07-31決定)。previewMode中は
+  // isSuperAdmin が client_admin相当に落ちる(useAuth.tsx:213-214)ため、ここで isSuperAdmin を
+  // 使うと previewMode中のsuper_admin自身からもPDFタブが消えてしまう。生のロールで判定する。
+  const canManageBookPdf = user?.role === "super_admin";
 
   const searchParams = new URLSearchParams(location.search);
   const tabParam = searchParams.get("tab") as Tab | null;
@@ -75,11 +79,21 @@ export default function TenantKnowledgePage() {
     })();
   }, [navigate]);
 
+  // ?tab=pdf で直リンクされた場合のフォールバック。client_admin(previewMode中のsuper_admin含む)
+  // には PDF タブのボタン自体が出ないため、直リンクだけタブが残ると白画面/存在しないタブの
+  // ままになる。ロード完了を待ってから戻す(user未確定の一瞬でlistへ戻し切ってしまわないため)。
+  useEffect(() => {
+    if (!isLoading && activeTab === "pdf" && !canManageBookPdf) {
+      setActiveTab("list");
+    }
+  }, [isLoading, activeTab, canManageBookPdf]);
+
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "list", label: t("knowledge.tab_list"), icon: "📋" },
     { id: "text", label: t("knowledge.tab_text"), icon: "✏️" },
     { id: "scrape", label: t("knowledge.tab_scrape"), icon: "🌐" },
-    { id: "pdf", label: "PDFアップロード", icon: "📚" },
+    // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定。テナント可視面から外す。
+    ...(canManageBookPdf ? [{ id: "pdf" as const, label: "PDFアップロード", icon: "📚" }] : []),
     { id: "attribution", label: "成約への貢献度", icon: "📈" },
   ];
 
@@ -202,7 +216,7 @@ export default function TenantKnowledgePage() {
       )}
       {activeTab === "text" && <TextInputTab tenantId={resolvedTenantId} gapQuestion={gapQuestion} gapId={gapId} />}
       {activeTab === "scrape" && <ScrapeTab tenantId={resolvedTenantId} onCommitSuccess={() => setActiveTab("list")} gapQuestion={gapQuestion} gapId={gapId} />}
-      {activeTab === "pdf" && <PdfUploadTab tenantId={resolvedTenantId} />}
+      {activeTab === "pdf" && canManageBookPdf && <PdfUploadTab tenantId={resolvedTenantId} />}
       {activeTab === "attribution" && (
         <KnowledgeAttributionTab tenantId={resolvedTenantId} />
       )}
