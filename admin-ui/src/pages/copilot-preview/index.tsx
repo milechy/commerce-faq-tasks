@@ -113,6 +113,15 @@ type Card =
         expectedBehavior: string;
         priority: number;
         isActive: boolean;
+        // P4-1: 古い(このフィールドが無い)キャッシュ済み会話との後方互換のため任意。
+        source?: string | null;
+        status?: string | null;
+        evidence?: {
+          evaluationIds?: number[];
+          effectivePrinciples?: string[];
+          failedPrinciples?: string[];
+          avgScore?: number;
+        } | null;
       }>;
       totalCount: number;
     }
@@ -1565,6 +1574,7 @@ function MessageRow({
           msgId={m.id}
           onGenerateAvatarCandidates={onGenerateAvatarCandidates}
           onAdoptAvatarCandidate={onAdoptAvatarCandidate}
+          onSendReal={(action) => onChip(action, m.id)}
         />
       )}
       {m.chips && !m.chipsUsed && (
@@ -1759,11 +1769,13 @@ function CardView({
   msgId,
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
+  onSendReal,
 }: {
   card: Card;
   msgId: number;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onSendReal?: (action: string) => void;
 }) {
   switch (card.kind) {
     case "agentAction":
@@ -1799,20 +1811,71 @@ function CardView({
     case "rulesList":
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
-          {card.rules.map((r) => (
-            <div
-              key={r.id}
-              style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)" }}>
-                <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
-                <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
+          {card.rules.map((r) => {
+            // P4-1: AI(judge)が提案したルールは、店主が作ったものと同じ見た目で
+            // 並べない(出所が分からないと承認判断ができない)。is_activeだけでは
+            // 未承認(pending)と却下済み(rejected)を区別できないためstatusも見る。
+            const isJudgeProposal = r.source === "judge";
+            const isPendingApproval = isJudgeProposal && !r.isActive && r.status !== "rejected";
+            const isRejected = isJudgeProposal && r.status === "rejected";
+            return (
+              <div
+                key={r.id}
+                style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)", flexWrap: "wrap" }}>
+                  <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
+                  <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
+                  {isJudgeProposal && (
+                    <span style={{ fontWeight: 700, color: "#b45309", background: "rgba(245,158,11,0.14)", borderRadius: 6, padding: "2px 8px" }}>
+                      🤖 AIの提案{isPendingApproval ? "（未承認）" : isRejected ? "（却下済み）" : ""}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+                  <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
+                </div>
+                {/* 根拠は評価IDなどの内部識別子をそのまま出さず、店主の言葉に言い換える */}
+                {r.evidence && (
+                  <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", display: "flex", flexDirection: "column", gap: 2 }}>
+                    {r.evidence.avgScore !== undefined && (
+                      <div>もとになった会話の対応の質: 目安{r.evidence.avgScore}点</div>
+                    )}
+                    {r.evidence.effectivePrinciples && r.evidence.effectivePrinciples.length > 0 && (
+                      <div>効果があった対応: {r.evidence.effectivePrinciples.join("、")}</div>
+                    )}
+                    {r.evidence.failedPrinciples && r.evidence.failedPrinciples.length > 0 && (
+                      <div>うまくいかなかった対応: {r.evidence.failedPrinciples.join("、")}</div>
+                    )}
+                  </div>
+                )}
+                {isPendingApproval && onSendReal && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を承認して有効にしてください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "none", background: AGENT, color: "#fff", minHeight: 44 }}
+                    >
+                      有効にする
+                    </button>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を却下してください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                    >
+                      却下する
+                    </button>
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
-                <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </CardShell>
       );
     case "engagement":

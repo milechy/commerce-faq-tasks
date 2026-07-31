@@ -978,6 +978,130 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     // card が無い正規表現フォールバック経路には優先度が無いため表示されない
     expect(screen.queryByText("優先度")).toBeNull();
   });
+
+  // P4-1: AI提案ルールの承認/却下と根拠提示
+  it("get_tuning_rules: AI提案(未承認)には出所バッジと承認/却下ボタン、根拠が表示される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              {
+                id: 42,
+                triggerPattern: "送料",
+                expectedBehavior: "一律500円とお伝えする",
+                priority: 5,
+                isActive: false,
+                source: "judge",
+                status: "pending",
+                evidence: { avgScore: 38, effectivePrinciples: ["共感"], failedPrinciples: ["クロージング"] },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/AIの提案（未承認）/)).toBeTruthy();
+    // 根拠は評価IDなど内部識別子をそのまま出さず、店主の言葉に言い換える
+    expect(screen.getByText(/もとになった会話の対応の質/)).toBeTruthy();
+    expect(screen.getByText(/共感/)).toBeTruthy();
+    expect(screen.getByText(/クロージング/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "有効にする" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "却下する" })).toBeTruthy();
+  });
+
+  it("get_tuning_rules: 自分で作ったルール(source=manual)にはAI提案バッジも承認ボタンも出ない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効1件・無効0件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 1, triggerPattern: "保証", expectedBehavior: "2年", priority: 5, isActive: true, source: "manual", status: null, evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    await screen.findByText("保証");
+    expect(screen.queryByText(/AIの提案/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "有効にする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
+  });
+
+  it("get_tuning_rules: 却下済み(status=rejected)には承認ボタンが出ず、却下済みバッジのみ表示される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 43, triggerPattern: "値引き", expectedBehavior: "応じない", priority: 3, isActive: false, source: "judge", status: "rejected", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/AIの提案（却下済み）/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "有効にする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
+  });
+
+  it("get_tuning_rules: 「有効にする」を押すと承認の自然文が実送信される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 42, triggerPattern: "送料", expectedBehavior: "一律500円とお伝えする", priority: 5, isActive: false, source: "judge", status: "pending", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    const approveButton = await screen.findByRole("button", { name: "有効にする" });
+
+    fireEvent.click(approveButton);
+
+    await waitFor(() => {
+      const calls = vi.mocked(authFetch).mock.calls;
+      const chatCall = calls.find(([url]) => String(url).includes("/v1/admin/agent/chat"));
+      expect(chatCall).toBeTruthy();
+    });
+    const lastCall = vi.mocked(authFetch).mock.calls[vi.mocked(authFetch).mock.calls.length - 1];
+    const body = JSON.parse((lastCall![1] as RequestInit).body as string);
+    expect(body.message).toContain("ID: 42");
+    expect(body.message).toContain("承認して有効にしてください");
+  });
 });
 
 function getComposer(): HTMLTextAreaElement {

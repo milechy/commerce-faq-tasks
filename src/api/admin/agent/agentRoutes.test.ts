@@ -1176,8 +1176,8 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(makeGroqResponse('現在2件のルールがあります。'));
 
       mockListRules.mockResolvedValueOnce([
-        { id: 1, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 5, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '' },
-        { id: 2, tenant_id: 'global', trigger_pattern: '価格交渉', expected_behavior: '応じない', priority: 3, is_active: false, created_by: null, source_message_id: null, created_at: '', updated_at: '' },
+        { id: 1, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 5, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '', source: 'manual', status: null, evidence: null },
+        { id: 2, tenant_id: 'global', trigger_pattern: '価格交渉', expected_behavior: '応じない', priority: 3, is_active: false, created_by: null, source_message_id: null, created_at: '', updated_at: '', source: 'judge', status: 'pending', evidence: { avgScore: 42 } },
       ]);
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
@@ -1194,12 +1194,13 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('保証');
       expect(result).not.toContain('価格交渉');
 
+      // P4-1: source/status/evidence もcardに含める(承認判断に必要な出所・根拠)
       expect(res.body.actions[0].card).toEqual({
         kind: 'tuning_rules_list',
         totalCount: 2,
         rules: [
-          { id: 1, triggerPattern: '保証', expectedBehavior: '2年と案内する', priority: 5, isActive: true },
-          { id: 2, triggerPattern: '価格交渉', expectedBehavior: '応じない', priority: 3, isActive: false },
+          { id: 1, triggerPattern: '保証', expectedBehavior: '2年と案内する', priority: 5, isActive: true, source: 'manual', status: null, evidence: null },
+          { id: 2, triggerPattern: '価格交渉', expectedBehavior: '応じない', priority: 3, isActive: false, source: 'judge', status: 'pending', evidence: { avgScore: 42 } },
         ],
       });
     });
@@ -1276,6 +1277,73 @@ describe('POST /v1/admin/agent/chat', () => {
         2,
         { trigger_pattern: undefined, expected_behavior: undefined, is_active: true },
         undefined,
+      );
+    });
+
+    // P4-1: AI提案ルールの承認/却下。is_active だけでは pending と rejected を
+    // 区別できないため、status も併せて渡す。
+    it('update_tuning_rule: is_active=true + status="active" → 承認され有効になる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-6', 'update_tuning_rule', { id: 3, is_active: true, status: 'active', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('承認しました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 3, tenant_id: 'tenant-abc', trigger_pattern: '送料', expected_behavior: '一律500円', priority: 5, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '', source: 'judge', status: 'active', evidence: { avgScore: 40 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'AI提案のルールを承認して', sessionId: 'sess-tr-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        3,
+        { trigger_pattern: undefined, expected_behavior: undefined, is_active: true, status: 'active' },
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('承認し、有効にしました');
+    });
+
+    it('update_tuning_rule: is_active=false + status="rejected" → 却下される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-7', 'update_tuning_rule', { id: 3, is_active: false, status: 'rejected', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('却下しました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 3, tenant_id: 'tenant-abc', trigger_pattern: '送料', expected_behavior: '一律500円', priority: 5, is_active: false, created_by: null, source_message_id: null, created_at: '', updated_at: '', source: 'judge', status: 'rejected', evidence: { avgScore: 40 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'AI提案のルールを却下して', sessionId: 'sess-tr-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        3,
+        { trigger_pattern: undefined, expected_behavior: undefined, is_active: false, status: 'rejected' },
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('却下しました');
+    });
+
+    it('update_tuning_rule: statusに不正な値が来ても弾かれ、通常のis_active切替として扱われる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-7b', 'update_tuning_rule', { id: 3, is_active: true, status: 'bogus', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 3, tenant_id: 'tenant-abc', trigger_pattern: '送料', expected_behavior: '一律500円', priority: 5, is_active: true, created_by: null, source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール更新', sessionId: 'sess-tr-07b' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        3,
+        { trigger_pattern: undefined, expected_behavior: undefined, is_active: true, status: undefined },
+        'tenant-abc',
       );
     });
 

@@ -9,7 +9,7 @@ import {
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
 import { callGroq8bSuggestFromText } from '../tuning/routes';
-import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse } from '../tuning/tuningRulesRepository';
+import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
 import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
@@ -231,6 +231,12 @@ export type TuningRulesListCardPayload = {
     expectedBehavior: string;
     priority: number;
     isActive: boolean;
+    // AI提案(judge)か店主が作ったもの(manual)かの出所。無いと承認判断ができない。
+    source: string | null;
+    // pending(既定) / active(承認済み) / rejected(却下済み)。is_active だけでは
+    // pending と rejected が区別できない(どちらも is_active=false)ため必要。
+    status: string | null;
+    evidence: RuleEvidence | null;
   }>;
   totalCount: number;
 };
@@ -1050,6 +1056,9 @@ export async function executeToolCall(
               expectedBehavior: r.expected_behavior,
               priority: r.priority,
               isActive: r.is_active,
+              source: r.source ?? null,
+              status: r.status ?? null,
+              evidence: r.evidence ?? null,
             })),
             totalCount: rules.length,
           },
@@ -1075,8 +1084,12 @@ export async function executeToolCall(
       const triggerPattern = typeof args['trigger_pattern'] === 'string' ? args['trigger_pattern'].slice(0, 1000) : undefined;
       const expectedBehavior = typeof args['expected_behavior'] === 'string' ? args['expected_behavior'].slice(0, 4000) : undefined;
       const isActive = typeof args['is_active'] === 'boolean' ? args['is_active'] : undefined;
+      // AI提案(source='judge')の承認/却下でのみ指定される。is_activeだけではpending(未承認)と
+      // rejected(却下済み)を区別できない(どちらもis_active=falseのため)。
+      const statusRaw = args['status'];
+      const status = statusRaw === 'active' || statusRaw === 'rejected' ? statusRaw : undefined;
 
-      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined) {
+      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined && status === undefined) {
         return truncate('変更する内容がありません（trigger_pattern・expected_behavior・is_active のいずれかを指定してください）');
       }
 
@@ -1084,11 +1097,17 @@ export async function executeToolCall(
         const ownerFilter = isSuperAdmin ? undefined : tenantId;
         const updated = await updateRule(
           id,
-          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive },
+          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive, status },
           ownerFilter,
         );
         if (!updated) {
           return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        if (status === 'active') {
+          return truncate(`指示ルール（ID: ${id}）を承認し、有効にしました: 「${updated.trigger_pattern}」`);
+        }
+        if (status === 'rejected') {
+          return truncate(`指示ルール（ID: ${id}）を却下しました: 「${updated.trigger_pattern}」`);
         }
         return truncate(`指示ルール（ID: ${id}）を更新しました: 「${updated.trigger_pattern}」${updated.is_active ? '' : '（現在無効）'}`);
       } catch (err) {
@@ -1283,10 +1302,15 @@ export async function executeToolCall(
              FROM faq_docs WHERE tenant_id = $1`,
             [tenantId],
           ),
-          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標
+          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標。
+          // P4-1で修正: 以前は approved_at/rejected_at (どのコードパスからも
+          // 更新されない列)を見ており、店主が作った通常のルールも含めて
+          // 全件を「承認待ち」として数えていた。AI提案(source='judge')かつ
+          // 未承認(is_active=false)かつ却下されていない件数に修正する。
           db.query(
             `SELECT COUNT(*)::int AS n FROM tuning_rules
-             WHERE tenant_id = $1 AND approved_at IS NULL AND rejected_at IS NULL`,
+             WHERE tenant_id = $1 AND source = 'judge' AND is_active = false
+               AND status IS DISTINCT FROM 'rejected'`,
             [tenantId],
           ),
           getGaps({ tenantId, status: 'open', limit: 3 }),

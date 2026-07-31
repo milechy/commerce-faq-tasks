@@ -73,6 +73,13 @@ export type AvatarAdoptedAgentActionCard = {
   description: string;
 };
 
+export type TuningRuleEvidence = {
+  evaluationIds?: number[];
+  effectivePrinciples?: string[];
+  failedPrinciples?: string[];
+  avgScore?: number;
+};
+
 export type TuningRulesListAgentActionCard = {
   kind: "tuning_rules_list";
   rules: Array<{
@@ -81,6 +88,10 @@ export type TuningRulesListAgentActionCard = {
     expectedBehavior: string;
     priority: number;
     isActive: boolean;
+    // P4-1: 古い(このフィールドが無い)キャッシュ済み会話との後方互換のため任意。
+    source?: string | null;
+    status?: string | null;
+    evidence?: TuningRuleEvidence | null;
   }>;
   totalCount: number;
 };
