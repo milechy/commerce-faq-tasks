@@ -24,6 +24,11 @@
   var apiKey = currentScript ? currentScript.getAttribute('data-api-key') : '';
   var avatarConfigId = currentScript ? (currentScript.getAttribute('data-avatar-config-id') || '') : '';
   var posthogKey = currentScript ? (currentScript.getAttribute('data-posthog-key') || '') : '';
+  // data-avatar-mode="animated": LiveKit/Anam への接続を一切行わず、CSSアニメーションのみの
+  // 軽量アバターを表示する（コスト0のデモ用モード）。未指定時は既存の音声アバター動作を維持。
+  var avatarMode = currentScript ? (currentScript.getAttribute('data-avatar-mode') || '') : '';
+  // avatarMode="animated" 時、絵文字の代わりに表示する静止画（任意）。未指定なら絵文字にフォールバック
+  var avatarModeImageUrl = currentScript ? (currentScript.getAttribute('data-avatar-image-url') || '') : '';
 
   // GID 1216978855735482 follow-up: アバターA/Bテストの割当は widgetGenerator.ts が
   // GET /widget/:tenantSlug.js 生成時に window.__RAJIUCE_TENANT_CFG__ へ注入する
@@ -194,6 +199,44 @@
     '}',
     '@keyframes fab-spin {',
     '  to { transform: rotate(360deg); }',
+    '}',
+    /* アニメアバター（data-avatar-mode="animated" — LiveKit接続なしの軽量表示） */
+    '.avatar-animated {',
+    '  width: 100%; height: 100%;',
+    '  border-radius: 50%;',
+    '  display: flex; align-items: center; justify-content: center;',
+    '  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #fff));',
+    '  font-size: 28px;',
+    '  animation: ' + (prefersReducedMotion ? 'none' : 'avatar-breathe 2.6s ease-in-out infinite') + ';',
+    '}',
+    '@keyframes avatar-breathe {',
+    '  0%, 100% { transform: scale(1); }',
+    '  50% { transform: scale(1.06); }',
+    '}',
+    /* アニメアバター（静止画バリエーション） — data-avatar-image-url 指定時 */
+    '.avatar-animated-img-wrap {',
+    '  position: relative;',
+    '  width: 100%; height: 100%;',
+    '  border-radius: 50%;',
+    '  overflow: visible;',
+    '}',
+    '.avatar-animated-img-wrap img {',
+    '  position: absolute; inset: 0;',
+    '  width: 100%; height: 100%;',
+    '  border-radius: 50%;',
+    '  object-fit: cover;',
+    '  z-index: 1;',
+    '}',
+    '.avatar-animated-ring {',
+    '  position: absolute;',
+    '  inset: -6px;',
+    '  border-radius: 50%;',
+    '  border: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);',
+    '  animation: ' + (prefersReducedMotion ? 'none' : 'avatar-ring-pulse 2.6s ease-in-out infinite') + ';',
+    '}',
+    '@keyframes avatar-ring-pulse {',
+    '  0%, 100% { transform: scale(1); opacity: 0.8; }',
+    '  50% { transform: scale(1.08); opacity: 0.35; }',
     '}',
     /* FABアバターメディアコンテナ */
     '.fab-media-container {',
@@ -1104,6 +1147,38 @@
       fabPreviewImg.alt = 'アバター';
       fabPreviewImg.onerror = function () { if (!_fabRestored) resetFabIcon(); };
       showFabMedia(fabPreviewImg);
+    }
+  }
+
+  function buildAnimatedAvatarEl() {
+    if (avatarModeImageUrl) {
+      var wrap = document.createElement('div');
+      wrap.className = 'avatar-animated-img-wrap';
+      var ring = document.createElement('div');
+      ring.className = 'avatar-animated-ring';
+      var img = document.createElement('img');
+      img.src = avatarModeImageUrl;
+      img.alt = 'アバター';
+      wrap.appendChild(img);
+      wrap.appendChild(ring);
+      wrap.setAttribute('aria-hidden', 'true');
+      return wrap;
+    }
+    var el = document.createElement('div');
+    el.className = 'avatar-animated';
+    el.textContent = '🤖';
+    el.setAttribute('aria-hidden', 'true');
+    return el;
+  }
+
+  function showAnimatedAvatarPlaceholder() {
+    if (avatarPlaceholderImg) return; // 既に表示中
+    var el = buildAnimatedAvatarEl();
+    avatarPlaceholderImg = el; // removeAvatarPlaceholder() の対象として流用
+    avatarArea.appendChild(el);
+    if (avatarStatusText) avatarStatusText.style.display = 'none';
+    if (!fabVideoEl) {
+      showFabMedia(buildAnimatedAvatarEl());
     }
   }
 
@@ -2119,8 +2194,12 @@
     textarea.focus();
     emitToHost('widget:opened', {});
     capturePostHog('widget_opened', { page_url: window.location.href.slice(0, 2048) });
-    // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
-    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+    if (avatarMode === 'animated') {
+      // LiveKit/Anam へは一切接続しない軽量デモモード
+      avatarArea.style.display = 'flex';
+      showAnimatedAvatarPlaceholder();
+    } else if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+      // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
       avatarArea.style.display = 'flex';
       setAvatarActive();
       document.body.style.overflow = 'hidden';
@@ -2876,7 +2955,9 @@
   };
 
   // アバター設定を事前取得（パネルを開く前に完了させ、FABクリック時のフラッシュを防止）
-  if (apiKey) { fetchAvatarConfig(); }
+  // data-avatar-mode="animated" の場合は LiveKit/Anam に一切接続せず、CSSアバターのみ表示
+  if (avatarMode === 'animated') { showAnimatedAvatarPlaceholder(); }
+  else if (apiKey) { fetchAvatarConfig(); }
 
   /* ------------------------------------------------------------------ */
   /* 15. Phase55: 行動イベントトラッカー                                   */
