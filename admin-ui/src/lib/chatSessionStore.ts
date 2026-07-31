@@ -44,6 +44,11 @@ export interface StoredChatSession<TMessage> {
   messages: TMessage[];
   // サーバへ送る直近履歴のウィンドウ。パネル側は送信時に messages から組み立てるため持たない。
   history?: ChatHistoryEntry[];
+  // この会話が属するテナント(super_adminのプレビュー切替でテナントが変わりうる面のみ設定)。
+  // 復元時にこの値が現在のテナントと一致しない場合は、別テナントの会話として拒否する
+  // (キーが surface のみでテナントを区別しないため、検証しないと別テナントの会話が
+  // 「復元成功」として通ってしまう — GID: super_adminのテナント切替バグ参照)。
+  tenantId?: string | null;
 }
 
 // sessionStorageのクォータを圧迫しないよう、保存するメッセージ数に上限を設ける
@@ -64,6 +69,7 @@ export function saveChatSession<TMessage>(surface: string, session: StoredChatSe
       sessionId: session.sessionId,
       messages: session.messages.slice(-MAX_PERSISTED_MESSAGES),
       history: session.history,
+      tenantId: session.tenantId,
     };
     window.sessionStorage.setItem(chatSessionKey(surface), JSON.stringify(payload));
   } catch {
@@ -71,17 +77,29 @@ export function saveChatSession<TMessage>(surface: string, session: StoredChatSe
   }
 }
 
-export function restoreChatSession<TMessage>(surface: string): StoredChatSession<TMessage> | null {
+/**
+ * @param currentTenantId 呼び出し元が把握している「現在のテナント」。省略した場合はテナント
+ *   検証をスキップする(テナント概念を持たない呼び出しとの後方互換)。渡した場合、保存時の
+ *   tenantId と一致しなければ別テナントの会話とみなし null を返す(復元しない)。
+ *   tenantId を持たない旧形式の保存データ(この検証を追加する前に保存されたもの)も、
+ *   currentTenantId を渡された場合は不一致として扱い破棄する(安全側に倒す)。
+ */
+export function restoreChatSession<TMessage>(
+  surface: string,
+  currentTenantId?: string | null,
+): StoredChatSession<TMessage> | null {
   try {
     if (typeof window === "undefined") return null;
     const raw = window.sessionStorage.getItem(chatSessionKey(surface));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredChatSession<TMessage>>;
     if (typeof parsed.sessionId !== "string" || !Array.isArray(parsed.messages)) return null;
+    if (currentTenantId !== undefined && parsed.tenantId !== currentTenantId) return null;
     return {
       sessionId: parsed.sessionId,
       messages: parsed.messages,
       history: Array.isArray(parsed.history) ? parsed.history : [],
+      tenantId: parsed.tenantId,
     };
   } catch {
     // 壊れたJSON・sessionStorage無効環境。会話が無かったものとして扱う(例外は投げない)

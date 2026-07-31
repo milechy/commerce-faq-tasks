@@ -2054,6 +2054,28 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(screen.getByText(/別の日に取得した内容です/)).toBeTruthy();
   });
 
+  // GID: restoreChatSession/saveChatSession はこのファイルでモック化されているため、
+  // 実際のテナント一致検証ロジックは chatSessionStore.test.ts で検証済み。ここでは
+  // ページ側が正しい tenantId を引数として渡していること(配線)だけを確認する。
+  it("復元・保存の呼び出しに現在のscopedTenantIdを渡す(別テナントの会話を誤って復元しないための前提)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-scope-check" });
+
+    await waitFor(() => expect(vi.mocked(restoreChatSession)).toHaveBeenCalledWith(
+      CHAT_SESSION_SURFACE_FULLSCREEN,
+      "tenant-scope-check",
+    ));
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(vi.mocked(saveChatSession)).toHaveBeenCalledWith(
+      CHAT_SESSION_SURFACE_FULLSCREEN,
+      expect.objectContaining({ tenantId: "tenant-scope-check" }),
+    ));
+  });
+
   it("保存済みの会話が無ければ、従来通り起動時ブリーフィングを取得する(回帰)", async () => {
     renderPage();
 
@@ -2324,6 +2346,57 @@ describe("CopilotPreviewPage — テナント切替時の会話リセット", ()
 
     expect(screen.getByText("今週も順調です。")).toBeTruthy();
     expect(vi.mocked(authFetch).mock.calls.length).toBe(callsBefore);
+  });
+
+  // GID: 連続テナント切替のレース。1回目の切替(tenant-b)の応答待ち中に2回目の切替
+  // (tenant-c)が発生すると、修正前は(a) sendReal の sending ガードにより2回目の
+  // 再取得が無言でドロップされ、(b) 後から届いた1回目の応答が2回目の会話に紛れ込んで
+  // 表示されていた。世代カウンタ(requestEpochRef)による回帰テスト。
+  it("切替の応答待ち中にさらに切替が発生しても、古い応答は表示されず新しい切替が必ず反映される", async () => {
+    let resolveTenantB: (v: Response) => void = () => {};
+    let chatCallCount = 0;
+
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (!String(url).includes("/v1/admin/agent/chat")) return mockOk({});
+      chatCallCount += 1;
+      if (chatCallCount === 1) {
+        // 起動時ブリーフィング(tenant-a)
+        return mockOk({ reply: "tenant-aの状況です。", actions: [] });
+      }
+      if (chatCallCount === 2) {
+        // tenant-b への切替: 応答が遅延する(手動で解決するまで保留)
+        return new Promise<Response>((resolve) => { resolveTenantB = resolve; });
+      }
+      // tenant-c への切替: 即座に解決する
+      return mockOk({ reply: "tenant-cの状況です。", actions: [] });
+    });
+
+    const { rerender } = renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-a" });
+    await waitFor(() => expect(screen.getByText("tenant-aの状況です。")).toBeTruthy());
+
+    // tenant-b へ切替(応答は遅延したまま)
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-b" }));
+    rerender(<MemoryRouter><CopilotPreviewPage /></MemoryRouter>);
+    await waitFor(() => expect(chatCallCount).toBe(2));
+
+    // tenant-b の応答が届く前に、さらに tenant-c へ切替
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-c" }));
+    rerender(<MemoryRouter><CopilotPreviewPage /></MemoryRouter>);
+    await waitFor(() => expect(chatCallCount).toBe(3));
+
+    // tenant-c の応答が表示される(sending guardに阻まれず必ず発火する)
+    await waitFor(() => expect(screen.getByText("tenant-cの状況です。")).toBeTruthy());
+    // 送信可能状態(sending=false)に戻っている
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    // 遅延していた tenant-b の応答が今さら届いても、画面には一切反映されない
+    resolveTenantB({ ok: true, status: 200, json: () => Promise.resolve({ reply: "tenant-bの状況です。", actions: [] }) } as unknown as Response);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText("tenant-bの状況です。")).toBeNull();
+    expect(screen.getByText("tenant-cの状況です。")).toBeTruthy();
+    // 送信可能状態も壊れていない(遅れてきたtenant-bの完了処理がsendingを誤って書き換えていない)
+    expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
