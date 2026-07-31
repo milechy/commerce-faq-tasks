@@ -147,6 +147,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   dismiss_knowledge_gap: "知識ギャップの片付け",
   get_chat_sessions: "会話セッション一覧の取得",
   get_chat_session_messages: "会話の全文取得",
+  delete_chat_session: "会話セッションの削除",
   get_session_outcome: "会話の成果の取得",
   record_session_outcome: "会話の成果の記録",
   get_conversation_evaluation: "対応品質評価の取得",
@@ -569,6 +570,10 @@ export default function CopilotPreviewPage() {
     const outcomePendingConfirm = data.actions?.some(
       (a) => a.tool === "record_session_outcome" && a.result.includes("確認が必要"),
     );
+    // 会話セッション削除(不可逆)がconfirmed待ちでブロックされた場合も同様
+    const deletePendingConfirm = data.actions?.some(
+      (a) => a.tool === "delete_chat_session" && a.result.includes("確認が必要"),
+    );
     // 会話一覧(get_chat_sessions)が返ってきたら、短縮IDを手打ちさせず次の1件を
     // 選べるチップを添える。同じターンに複数の会話一覧が返ることは無い前提(最初の1件)。
     const sessionListAction = data.actions?.find((a) => a.card?.kind === "chat_session_list");
@@ -597,6 +602,11 @@ export default function CopilotPreviewPage() {
       : outcomePendingConfirm
       ? [
           { label: "記録して", action: "__real:はい、お願いします", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : deletePendingConfirm
+      ? [
+          { label: "削除して", action: "__real:はい、削除してください", tone: "primary" },
           { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
         ]
       : sessionListCard && sessionListCard.sessions.length > 0
