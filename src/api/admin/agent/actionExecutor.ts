@@ -269,7 +269,11 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'get_faq_list': {
       try {
-        const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+        // "abc" のような非数値は Number() で NaN になり、Math.min/max を通しても NaN のまま
+        // 残ってしまう(NaN との比較は常に false)。NaN が LIMIT の SQL パラメータに渡ると実DBでは
+        // エラーになり catch 経由の「取得に失敗しました」に落ちてしまうため、既定値(10)にフォールバックする。
+        const rawLimit = Number(args['limit']);
+        const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 10, 1), 20);
         const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
         const whereParams: unknown[] = [tenantId];
@@ -293,6 +297,11 @@ export async function executeToolCall(
         ]);
 
         if (listRes.rows.length === 0) {
+          // search 指定時のヒット0件は「FAQが登録されていない」わけではない(FAQ自体は
+          // 大量にある可能性がある)。検索条件に一致するものが無いだけなので文言を分ける。
+          if (search) {
+            return truncate(`「${search.slice(0, 100)}」に一致する FAQ は見つかりませんでした`);
+          }
           return truncate('FAQ が登録されていません');
         }
 

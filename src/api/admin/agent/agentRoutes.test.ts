@@ -1674,7 +1674,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', expected]);
     });
 
-    it('limit="abc"（数値でない）を渡しても例外にならない（catchに落ちず200で応答する）', async () => {
+    it('limit="abc"（数値でない）は例外にならず既定件数(10)にフォールバックしてFAQ一覧が正しく返る', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-fl-clamp-abc', 'get_faq_list', { limit: 'abc' }))
         .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
@@ -1688,7 +1688,11 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-clamp-abc' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).not.toContain('取得に失敗しました');
+      const result = res.body.actions[0].result as string;
+      expect(result).not.toContain('取得に失敗しました');
+      expect(result).toContain('FAQ 一覧（1件）:');
+      // NaN のまま LIMIT の SQL パラメータに渡らず、既定値10にフォールバックしていることを確認する
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10]);
     });
 
     it('他テナントで呼び出すと0件になり、かつSQLに自テナントのtenant_idが渡る（テナント越境なし）', async () => {
@@ -1739,6 +1743,27 @@ describe('POST /v1/admin/agent/chat', () => {
       const countCallParams = mockQuery.mock.calls[0]?.[1] as unknown[];
       expect(countCallSql).toContain('ILIKE');
       expect(countCallParams).toEqual(['tenant-abc', '%送料%']);
+    });
+
+    it('FAQは存在するが search がヒットしない場合は「登録されていません」ではなく検索条件に言及した文言を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-11', 'get_faq_list', { search: '存在しないキーワード' }))
+        .mockResolvedValueOnce(makeGroqResponse('一致するFAQは見つかりませんでした。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] }) // 「存在しないキーワード」に一致するFAQは0件
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '存在しないキーワードのFAQはある?', sessionId: 'sess-fl-12' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      // FAQ自体は登録されている可能性があるテナントに「登録されていません」と誤答してはいけない
+      expect(result).not.toContain('FAQ が登録されていません');
+      expect(result).toContain('存在しないキーワード');
+      expect(result).toContain('見つかりませんでした');
     });
 
     it('DB失敗時は例外を投げず日本語1行のエラーメッセージを返す', async () => {
