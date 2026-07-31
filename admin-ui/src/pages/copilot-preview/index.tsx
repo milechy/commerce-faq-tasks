@@ -21,6 +21,7 @@ import {
   saveChatSession,
 } from "../../lib/chatSessionStore";
 import { priorityToTier } from "../../lib/tuningPriority";
+import { hasShownTuningRuleIntro, markTuningRuleIntroShown } from "../../lib/tuningRuleIntro";
 import {
   AGENT_CHAT_AUTH_REQUIRED_MESSAGE,
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
@@ -545,7 +546,7 @@ export default function CopilotPreviewPage() {
   // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
   // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
   // tenantIdがサーバー側で使われるため、previewMode=falseのままで問題ない。
-  const { user, isSuperAdmin, previewMode, previewTenantId, enterPreview, logout } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, enterPreview, logout, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   // super_adminがプレビューに入っていない場合、テナントが特定できないため
   // ほぼ全てのツールが「テナントが特定できません」になり会話が行き止まりになる。
@@ -953,6 +954,23 @@ export default function CopilotPreviewPage() {
       return;
     }
 
+    // P6-1: 新規テナントが指示ルールの存在に気づけるよう、4段階のオンボーディングが
+    // 全て完了した直後に一度だけ紹介する。backendのonboardingStage.ts(単一の情報源)は
+    // 変更せず、admin-ui内のブラウザ単位フラグ(tuningRuleIntro.ts)だけで
+    // 「1回きり」を保証する軽量な接続(既存テナント向けの移行導線は別途作らない — 4段階が
+    // 全て真になるのは実質的にこのオンボーディングフローを新規に通過したテナントのみ)。
+    if (stage && scopedTenantId && !hasShownTuningRuleIntro(scopedTenantId)) {
+      markTuningRuleIntroShown(scopedTenantId);
+      push(say(
+        "指示ルールも使えます。お客様への受け答えを1つずつAIチャットボットに教えられる機能です。最初のルールを作ってみますか？",
+        [
+          { label: "🎛️ 作ってみる", action: "__real:指示ルールを初めて作ります。何をどう伝えればいいか教えてください", tone: "primary" },
+          { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ],
+      ));
+      return;
+    }
+
     push({ id: nextId(), role: "ai", text: opts.loadingText });
     await sendReal(BOOTSTRAP_PROMPT, { silent: true, force: opts.force });
   };
@@ -974,6 +992,13 @@ export default function CopilotPreviewPage() {
     // 「テナントが特定できません」で埋まるだけのため）。選択してpreviewModeに
     // 入った時点でこのeffectが再評価され、通常どおりブリーフィングが走る。
     if (needsTenantSelection) return;
+    // P6-1で発見(既存の潜在バグ): /copilot-previewはRequireAuth外の隔離ルートのため、
+    // useAuth()のセッション確認(非同期)が終わる前に user=null のままこのeffectが
+    // 走ってしまうことがある。user未確定のままだとscopedTenantIdが空になり、
+    // オンボーディング段階(stage)判定そのものが飛ばされて通常の週次ブリーフィングに
+    // フォールバックしていた(既存の4段階次の一手が出ないことがある、同一の原因)。
+    // needsTenantSelectionと同じ理由でauth確認が終わるまで待つ。
+    if (authLoading) return;
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
@@ -992,7 +1017,7 @@ export default function CopilotPreviewPage() {
       loadingText: "ログイン、お疲れさまです。今週の実データを確認しています…",
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsTenantSelection]);
+  }, [needsTenantSelection, authLoading]);
 
   // super_adminがプレビュー中に別テナントへenterPreviewする経路(AppSwitcher/テナント詳細の
   // 「クライアントビューで見る」等)を検知し、会話を初期化して新テナントの週次ブリーフィングを
@@ -2132,6 +2157,26 @@ function CardView({
         </CardShell>
       );
     case "rulesList":
+      // P6-1: 新規テナントが最初にこのカードを開いた時、0件をそのまま出すと
+      // 「技術的な空表示」になり何をすればいいか分からない。何ができるか(具体例)と
+      // 最初の一手(チップ)を添える。
+      if (card.totalCount === 0) {
+        return (
+          <CardShell hd={<><span>🎛️</span>指示ルールはまだありません</>}>
+            <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+              指示ルールを使うと、「保証について聞かれたら2年とお伝えする」のように、AIチャットボットの受け答えを1つずつ細かく調整できます。
+            </div>
+            {onSendReal && (
+              <button
+                onClick={() => onSendReal("__real:指示ルールを初めて作ります。何をどう伝えればいいか教えてください")}
+                style={{ alignSelf: "flex-start", fontSize: 13.5, fontWeight: 700, padding: "9px 16px", borderRadius: 10, cursor: "pointer", border: "none", background: AGENT, color: "#fff", minHeight: 44 }}
+              >
+                🎛️ 最初のルールを作ってみる
+              </button>
+            )}
+          </CardShell>
+        );
+      }
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
           {card.rules.map((r) => {
