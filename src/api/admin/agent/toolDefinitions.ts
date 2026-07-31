@@ -87,7 +87,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_faq_list',
-      description: 'テナントの FAQ 一覧を取得する（最大20件）',
+      description: 'テナントの FAQ 一覧を取得する（最大20件。登録されている総件数も併記されるため、表示件数が上限に達していても総数は正しく分かる）',
       parameters: {
         type: 'object',
         properties: {
@@ -443,7 +443,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_weekly_briefing',
       description:
-        '直近7日間のテナントの状況（会話数・前週比・応答品質スコア・成約・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
+        '直近7日間のテナントの状況（会話数・前週比・応答品質スコア・成約・FAQ総数/公開数/最終更新日・AIが答えられなかった質問トップ3）をまとめて取得する読み取り専用ツール。ログイン直後など、ユーザーから明示的な依頼がなくても状況を能動的に説明する際に使う。',
       parameters: {
         type: 'object',
         properties: {},

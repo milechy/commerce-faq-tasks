@@ -68,10 +68,9 @@
 #### 1. ダッシュボード `/admin` — Chat-partial
 - サイドバー定義: `AppSidebar.tsx:52` / ルート: `App.tsx:172`
 - カバーするツール: `get_weekly_briefing` (`toolDefinitions.ts:392`, 実行 `actionExecutor.ts:815`)、`get_monitoring_summary` (`:762` / `:1554`)、`get_analytics_summary` (`:865` / `:1763`)
-- `get_weekly_briefing` は「直近7日の会話数・前週比・応答品質スコア・成約・答えられなかった質問(累計件数+上位3件)」を1回で返す (実装 `actionExecutor.ts:857–870`)。旧ダッシュボードの読み取り価値の大半はこれで置き換わる。
-- **欠けているもの: 旧ダッシュボードの StatCard 4 枚のうち 3 枚。** `pages/admin/index.tsx:361–395` の実測で「FAQ総数」(`:361`)・「公開FAQ数」(`:368`)・「最終更新日」(`:384`) が weekly briefing に含まれていない。残る「未回答質問数」(`:376`) は briefing 側でカバー済み。
-  - 特に **FAQ 総数はチャットからは取得できない**: `get_faq_list` は上限 20 件で、返す「N件」は `result.rows.length` = ページサイズであって総数ではない (`actionExecutor.ts:243`)。総数を尋ねられたときに 20 で頭打ちになるのはそれ自体が単体の不具合。
-  - いずれも `get_weekly_briefing` に 3 つの集計値を足すだけで埋まる。**GUI 固有ではなく未実装** (§4 Wave 2)。
+- `get_weekly_briefing` は「直近7日の会話数・前週比・応答品質スコア・成約・FAQ総数/公開数/最終更新日・答えられなかった質問(累計件数+上位3件)」を1回で返す (実装 `actionExecutor.ts` の `case 'get_weekly_briefing'`)。旧ダッシュボードの読み取り価値の大半はこれで置き換わる。
+- **解消済み: 旧ダッシュボードの StatCard 4 枚のうち残り 3 枚。** `pages/admin/index.tsx:361–395` の実測で挙がっていた「FAQ総数」(`:361`)・「公開FAQ数」(`:368`)・「最終更新日」(`:384`) は `get_weekly_briefing` に集計値を追加して埋めた。残る「未回答質問数」(`:376`) は元から briefing 側でカバー済み。
+  - あわせて **FAQ 総数がチャットから取得できない不具合も解消**: `get_faq_list` は表示上限20件のままだが、`COUNT(*)::int` による総数を別途取得して「FAQ 一覧（全N件中M件を表示）」の形で返すようになった（表示件数が上限に達していても総数は正しく分かる）。
 - 旧ダッシュボードの残り価値はクイックアクション (`pages/admin/index.tsx:382,415,418`) と StatCard のクリック遷移 (`:366,373,381`) で、これは「他ページへの遷移」でありページ固有機能ではない。遷移先が閉じれば同時に消える。
 - テナント向けに見える追加要素: オンボーディングモーダル (`:423`, `isSuperAdmin`/`previewMode` を除外して自テナントのみ — `:164`)。チャット側の相当物は `import_industry_faq_templates` (`toolDefinitions.ts:161`) で、業種ヒアリングからのFAQたたき台投入まで被覆済み。`CVUnfiredAlert` (`:344`) のうち `/admin/analytics/cv-status` への遷移ボタンは super_admin 分岐の内側 (`components/dashboard/CVUnfiredAlert.tsx:78`) なのでテナントには出ない。
 - 補足: 新UIへの着地切替は既に実装済み。`App.tsx:123–126` が localStorage オプトイン (`admin-ui/src/lib/chatFirstDefault.ts`) で `/` と `/admin` を `/copilot-preview` に差し替える。**このページに限り「クローズ」= 既定値の反転**であり、Route 削除ではない (§5)。
@@ -343,7 +342,7 @@ super_admin 側からの流入があるページ (`/admin/chat-test`) は、テ�
 
 | 順 | ページ | 前提として作るもの |
 |---|---|---|
-| **5** | **ダッシュボード** `/admin` | `get_weekly_briefing` に集計値 3 つ (FAQ総数・公開FAQ数・最終更新日) を追加。あわせて `get_faq_list` の「N件」が上限20で頭打ちになる件 (`actionExecutor.ts:243`) を直す |
+| **5** | **ダッシュボード** `/admin` | ~~`get_weekly_briefing` に集計値 3 つ (FAQ総数・公開FAQ数・最終更新日) を追加。あわせて `get_faq_list` の「N件」が上限20で頭打ちになる件を直す~~ → **対応済み**（`get_weekly_briefing` に3値追加、`get_faq_list` はCOUNT(*)で総数を分離） |
 | **6** | **会話履歴** `/admin/chat-history` | セッション削除ツール (`delete_faq` と同じ `confirmed` 二段確認)。これで `session_deletion` キー (`actionExecutor.ts:1675`) が不要になる |
 
 どちらも欠けているのは **GUI 固有ではなく未実装**の機能なので、Wave 2 は「ツールを 1 つ足す → 4 週計測 → 閉じる」で進む。

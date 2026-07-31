@@ -954,7 +954,7 @@ export async function executeToolCall(
       }
 
       try {
-        const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes] = await Promise.all([
+        const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes, faqTotalRes, faqPublishedRes, faqLastUpdatedRes] = await Promise.all([
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
              WHERE tenant_id = $1 AND started_at >= NOW() - INTERVAL '7 days'`,
@@ -979,6 +979,11 @@ export async function executeToolCall(
             [tenantId],
           ),
           getGaps({ tenantId, status: 'open', limit: 3 }),
+          // 旧ダッシュボード StatCard の「FAQ総数」「公開FAQ数」「最終更新日」を briefing に統合する
+          // (docs/LEGACY_UI_SUNSET.md Wave 2)。COUNT(*)::int のキャストは faqCrudRoutes.ts:194 の前例に揃える。
+          db.query(`SELECT COUNT(*)::int AS n FROM faq_docs WHERE tenant_id = $1`, [tenantId]),
+          db.query(`SELECT COUNT(*)::int AS n FROM faq_docs WHERE tenant_id = $1 AND is_published = true`, [tenantId]),
+          db.query(`SELECT MAX(updated_at)::text AS max FROM faq_docs WHERE tenant_id = $1`, [tenantId]),
         ]);
 
         const totalSessions = Number(sessionsRes.rows[0]?.n ?? 0);
@@ -989,6 +994,10 @@ export async function executeToolCall(
         const cvCount = Number(cvRes.rows[0]?.n ?? 0);
         const cvTotal = Math.round(Number(cvRes.rows[0]?.total ?? 0));
         const { gaps, total: gapsTotal } = gapsRes;
+        const faqTotal = Number(faqTotalRes.rows[0]?.n ?? 0);
+        const faqPublished = Number(faqPublishedRes.rows[0]?.n ?? 0);
+        const faqLastUpdatedRaw = faqLastUpdatedRes.rows[0]?.max as string | null | undefined;
+        const faqLastUpdated = faqLastUpdatedRaw ? faqLastUpdatedRaw.slice(0, 10) : 'なし';
 
         const lines: string[] = ['直近7日間の状況:'];
         lines.push(
@@ -997,6 +1006,7 @@ export async function executeToolCall(
         );
         if (avgScore !== null) lines.push(`応答品質スコア ${avgScore}/100`);
         lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
+        lines.push(`FAQ ${faqTotal}件（公開 ${faqPublished}件・最終更新 ${faqLastUpdated}）`);
         lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
         if (gaps.length > 0) {
           lines.push('うち上位:');
