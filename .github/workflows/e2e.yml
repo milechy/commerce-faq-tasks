@@ -51,12 +51,25 @@ jobs:
           E2E_ENABLED: '1'
         run: npx playwright test --project=setup
 
+      # Phase A-2: super_admin 用 storageState 生成
+      # qa-irregular-3roles.spec.ts の Role C(super_admin 越境/プレビュー)群が依存する。
+      # TEST_SUPERADMIN_* 未設定の場合は superadmin.setup.ts が空スケルトンを書き、
+      # Role C は spec 側の saReady チェックで graceful skip される(CIは赤化しない)。
+      - name: Super admin auth setup
+        env:
+          TEST_SUPERADMIN_EMAIL: ${{ secrets.TEST_SUPERADMIN_EMAIL }}
+          TEST_SUPERADMIN_PASSWORD: ${{ secrets.TEST_SUPERADMIN_PASSWORD }}
+          E2E_ENABLED: '1'
+        run: npx playwright test --project=superadmin-setup
+
       # E2E テスト (admin-ui project + public project)
       - name: Run E2E tests
         env:
           E2E_ENABLED: '1'
           TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
           TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}
+          TEST_SUPERADMIN_EMAIL: ${{ secrets.TEST_SUPERADMIN_EMAIL }}
+          TEST_SUPERADMIN_PASSWORD: ${{ secrets.TEST_SUPERADMIN_PASSWORD }}
         run: npx playwright test --project=admin-ui --project=chromium
 
       # Phase C: ビジュアルリグレッション（linux baseline が存在する場合のみ）
