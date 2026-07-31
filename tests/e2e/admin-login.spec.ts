@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 
@@ -6,7 +7,7 @@ test.describe('Admin UI — Login Page', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');
 
   test('admin.r2c.biz shows login form', async ({ page }) => {
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
 
     // メールまたはパスワード入力欄が表示されることを確認
     // Supabase Auth の実際のログインはスキップ（認証情報不要）
@@ -30,7 +31,7 @@ test.describe('Admin UI — Login Page', () => {
   });
 
   test('admin.r2c.biz page title is not blank', async ({ page }) => {
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
     const title = await page.title();
     expect(title.length).toBeGreaterThan(0);
   });

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL, API_BASE_URL } from './config';
 
 // Phase C: ビジュアルリグレッションテスト
 // storageState (auth.setup.ts) で認証済み状態で実行される
@@ -12,7 +13,7 @@ test.describe('Visual Regression — Admin UI', () => {
 
   test.beforeEach(async ({ page }) => {
     // storageStateが空（認証情報なし）の場合はスキップ
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
     if (page.url().includes('/login')) {
       test.skip();
     }
@@ -20,7 +21,7 @@ test.describe('Visual Regression — Admin UI', () => {
 
   test('dashboard — desktop 1280x800', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
     // 動的な要素（時刻・通知バッジ）をマスクして差分を安定化
@@ -37,7 +38,7 @@ test.describe('Visual Regression — Admin UI', () => {
 
   test('dashboard — mobile 390x844', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('dashboard-mobile-390.png', {
@@ -53,7 +54,7 @@ test.describe('Visual Regression — Admin UI', () => {
   test('sessions list — desktop 1280x800', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     // セッション一覧ページ（AI提案ルール含む）
-    await page.goto('https://admin.r2c.biz/admin/sessions');
+    await page.goto(`${ADMIN_BASE_URL}/admin/sessions`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('sessions-desktop.png', {
@@ -73,7 +74,7 @@ test.describe('Visual Regression — Public Pages', () => {
 
   test('carnation-demo index — desktop', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('https://api.r2c.biz/carnation-demo/index.html');
+    await page.goto(`${API_BASE_URL}/carnation-demo/index.html`);
     await page.waitForLoadState('networkidle');
     // widget初期化を待つ
     await page.waitForTimeout(2000);
@@ -84,7 +85,7 @@ test.describe('Visual Regression — Public Pages', () => {
 
   test('carnation-demo index — mobile 390px', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('https://api.r2c.biz/carnation-demo/index.html');
+    await page.goto(`${API_BASE_URL}/carnation-demo/index.html`);
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('carnation-demo-mobile-390.png', {

@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { ADMIN_BASE_URL } from './tests/e2e/config';
 
 const AUTH_FILE = 'tests/e2e/.auth/user.json';
 
@@ -7,7 +8,7 @@ export default defineConfig({
   timeout: 30000,
   retries: 1,
   use: {
-    baseURL: process.env.E2E_BASE_URL || 'https://admin.r2c.biz',
+    baseURL: ADMIN_BASE_URL,
     screenshot: 'only-on-failure',
     trace: 'on-first-retry',
     // GID 1216970103691946: E2Eトラフィックであることをサーバ側(resolveTrafficSource)

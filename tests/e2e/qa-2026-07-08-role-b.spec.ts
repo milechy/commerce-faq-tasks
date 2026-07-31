@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL } from './config';
 
 // QA sweep 2026-07-08: Role B (client_admin, tenant "carnation") flows from
 // R2C_UIフローカタログ_2026-07-08.md. Read-only / navigation checks only —
@@ -7,7 +8,7 @@ import { test, expect } from '@playwright/test';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 const AUTH_FILE = 'tests/e2e/.auth/user.json';
-const BASE = 'https://admin.r2c.biz';
+const BASE = ADMIN_BASE_URL;
 
 test.describe('QA 2026-07-08 — Role B (client_admin) read-only sweep', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');

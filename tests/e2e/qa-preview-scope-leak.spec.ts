@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL } from './config';
 
 // 回帰検知用: super_admin の「クライアントビューで見る」プレビュー中に previewTenantId が
 // 正しく使われず、テナントスコープが壊れる/画面が空白になる不具合の恒久テスト群。
@@ -17,7 +18,7 @@ import { test, expect } from '@playwright/test';
 // 消えるため、各ページへは SPA 内リンククリックで遷移する（page.goto は使わない）。
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const ADMIN = 'https://admin.r2c.biz';
+const ADMIN = ADMIN_BASE_URL;
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';
 const PREVIEW_TENANT = 'carnation';
 const PREVIEW_TENANT_2 = 'lp-demo';

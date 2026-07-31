@@ -1,6 +1,7 @@
 import { test as setup } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import { ADMIN_BASE_URL } from './config';
 
 const AUTH_FILE = 'tests/e2e/.auth/user.json';
 
@@ -16,7 +17,7 @@ setup('authenticate admin', async ({ page }) => {
     return;
   }
 
-  await page.goto('https://admin.r2c.biz');
+  await page.goto(ADMIN_BASE_URL);
   await page.locator('input[type="email"]').waitFor({ timeout: 15000 });
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', password);

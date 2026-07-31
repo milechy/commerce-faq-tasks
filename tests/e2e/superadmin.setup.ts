@@ -1,6 +1,7 @@
 import { test as setup } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import { ADMIN_BASE_URL } from './config';
 
 // super_admin 用 storageState 生成（auth.setup.ts の client_admin 版と同方式）。
 // TEST_SUPERADMIN_EMAIL / TEST_SUPERADMIN_PASSWORD が無い場合は空スケルトンを書き、
@@ -19,7 +20,7 @@ setup('authenticate super_admin', async ({ page }) => {
     return;
   }
 
-  await page.goto('https://admin.r2c.biz', { waitUntil: 'domcontentloaded' });
+  await page.goto(ADMIN_BASE_URL, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
   await page.locator('input[type="email"]').waitFor({ timeout: 15000 });
   await page.fill('input[type="email"]', email);
