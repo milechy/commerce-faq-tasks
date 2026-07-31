@@ -58,6 +58,8 @@ const MUTATION_PATTERNS: RegExp[] = [
   /\bupdateGapStatus\(/,
   /\bsaveMessage\(/,
   /\bresolveEscalation\(/,
+  /\brecordOutcome\(/,
+  /\bdeleteSession\(/,
   /\bsubmitSaiTask\(/,
   /\bactivateAvatarConfig\(/,
   /\bcommitTextFaqs\(/,

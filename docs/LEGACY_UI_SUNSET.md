@@ -38,8 +38,8 @@
 
 **参照した実装 (2026-07-30 実測):**
 
-- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は **45 本** (17行〜906行、`name:` 実測45件)。タスク記載の「45 tools」と一致。
-- 実行系: `src/api/admin/agent/actionExecutor.ts` — 45 本すべてに `case` が存在 (154行〜1764行)。
+- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は **49 本**（本文書作成時点の45本 + 会話の履歴カテゴリ拡張で追加した4本: `get_conversation_evaluation` / `get_session_outcome` / `record_session_outcome` / `delete_chat_session`。`name:` 実測49件）。
+- 実行系: `src/api/admin/agent/actionExecutor.ts` — 49 本すべてに `case` が存在。
 - 旧UI案内: `actionExecutor.ts:1659–1710` の `LEGACY_UI_LINKS` — **9 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`)。`get_legacy_ui_link` の `feature` enum と 1:1 対応。
 
 > **`feature` の 9 値の所在について**: `origin/main` (`ef9ac629`) 時点では `toolDefinitions.ts:839–849` の enum リテラルに直接書かれている。**PR #571 着地後は `LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) が唯一の値の所在**になり、enum は `enum: LEGACY_UI_FEATURES` (`:860`) として参照するだけになる。以下、本ドキュメントで「`feature` enum」と書いている箇所は**値の集合**を指しており、着地後は `LEGACY_UI_FEATURES` を読むこと (行番号は §3 Stage B に最新のものを記載)。
@@ -49,9 +49,9 @@
 | # | ページ | route | 分類 | handoff `feature` キー |
 |---|---|---|---|---|
 | 1 | ダッシュボード | `/admin` | **Chat-partial** (集計値3つが欠) | なし |
-| 2 | 会話履歴 | `/admin/chat-history` | **Chat-partial** | `session_deletion` |
+| 2 | 会話履歴 | `/admin/chat-history` | **Chat-complete**（2026-07-31追記: `delete_chat_session` 実装により削除も被覆） | `session_deletion`（残存。§1.2-2 参照） |
 | 3 | 対応中の会話 (エスカレーション) | `/admin/escalations` | **Chat-complete** | `escalation_reply` (履歴閲覧用に限定) |
-| 4 | AIの知識データ | `/admin/knowledge/:tenantId` | **Chat-partial** (タブごとに差、§1.2) | `knowledge_pdf` のみ (「成約への貢献度」タブは**キーすら無い**) |
+| 4 | AIの知識データ | `/admin/knowledge/:tenantId` | **Chat-partial** (タブごとに差、§1.2。2026-07-31: PDFタブをテナント可視面から除外、「成約への貢献度」もhandoffキー追加で解消。両方とも§1.2-4) | `knowledge_pdf` / `knowledge_attribution` (2026-07-31 両方解消済み、§1.2-4) |
 | 5 | 未回答質問 | `/admin/knowledge-gaps` | **Chat-complete** | なし |
 | 6 | 会話分析 | `/admin/analytics` | **Chat-partial** | `analytics` |
 | 7 | 成約・効果分析 | `/admin/conversion` | **Chat-partial** | `conversion` |
@@ -61,26 +61,25 @@
 | 11 | テストチャット | `/admin/chat-test` | **Legacy-link-only (GUI固有)** | `chat_test` |
 | 12 | ご利用状況・お支払い | `/admin/billing` | **Legacy-link-only** | `billing` |
 
-内訳: Chat-complete 4 / Chat-partial 6 / Legacy-link-only 2。
+内訳（2026-07-31更新）: Chat-complete 5 / Chat-partial 4 / Legacy-link-only 3。
 
 ### 1.2 ページ別 詳細
 
 #### 1. ダッシュボード `/admin` — Chat-partial
 - サイドバー定義: `AppSidebar.tsx:52` / ルート: `App.tsx:172`
 - カバーするツール: `get_weekly_briefing` (`toolDefinitions.ts:392`, 実行 `actionExecutor.ts:815`)、`get_monitoring_summary` (`:762` / `:1554`)、`get_analytics_summary` (`:865` / `:1763`)
-- `get_weekly_briefing` は「直近7日の会話数・前週比・応答品質スコア・成約・答えられなかった質問(累計件数+上位3件)」を1回で返す (実装 `actionExecutor.ts:857–870`)。旧ダッシュボードの読み取り価値の大半はこれで置き換わる。
-- **欠けているもの: 旧ダッシュボードの StatCard 4 枚のうち 3 枚。** `pages/admin/index.tsx:361–395` の実測で「FAQ総数」(`:361`)・「公開FAQ数」(`:368`)・「最終更新日」(`:384`) が weekly briefing に含まれていない。残る「未回答質問数」(`:376`) は briefing 側でカバー済み。
-  - 特に **FAQ 総数はチャットからは取得できない**: `get_faq_list` は上限 20 件で、返す「N件」は `result.rows.length` = ページサイズであって総数ではない (`actionExecutor.ts:243`)。総数を尋ねられたときに 20 で頭打ちになるのはそれ自体が単体の不具合。
-  - いずれも `get_weekly_briefing` に 3 つの集計値を足すだけで埋まる。**GUI 固有ではなく未実装** (§4 Wave 2)。
+- `get_weekly_briefing` は「直近7日の会話数・前週比・応答品質スコア・成約・FAQ総数/公開数/最終更新日・答えられなかった質問(累計件数+上位3件)」を1回で返す (実装 `actionExecutor.ts` の `case 'get_weekly_briefing'`)。旧ダッシュボードの読み取り価値の大半はこれで置き換わる。
+- **解消済み: 旧ダッシュボードの StatCard 4 枚のうち残り 3 枚。** `pages/admin/index.tsx:361–395` の実測で挙がっていた「FAQ総数」(`:361`)・「公開FAQ数」(`:368`)・「最終更新日」(`:384`) は `get_weekly_briefing` に集計値を追加して埋めた。残る「未回答質問数」(`:376`) は元から briefing 側でカバー済み。
+  - あわせて **FAQ 総数がチャットから取得できない不具合も解消**: `get_faq_list` は表示上限20件のままだが、`COUNT(*)::int` による総数を別途取得して「FAQ 一覧（全N件中M件を表示）」の形で返すようになった（表示件数が上限に達していても総数は正しく分かる）。
 - 旧ダッシュボードの残り価値はクイックアクション (`pages/admin/index.tsx:382,415,418`) と StatCard のクリック遷移 (`:366,373,381`) で、これは「他ページへの遷移」でありページ固有機能ではない。遷移先が閉じれば同時に消える。
 - テナント向けに見える追加要素: オンボーディングモーダル (`:423`, `isSuperAdmin`/`previewMode` を除外して自テナントのみ — `:164`)。チャット側の相当物は `import_industry_faq_templates` (`toolDefinitions.ts:161`) で、業種ヒアリングからのFAQたたき台投入まで被覆済み。`CVUnfiredAlert` (`:344`) のうち `/admin/analytics/cv-status` への遷移ボタンは super_admin 分岐の内側 (`components/dashboard/CVUnfiredAlert.tsx:78`) なのでテナントには出ない。
 - 補足: 新UIへの着地切替は既に実装済み。`App.tsx:123–126` が localStorage オプトイン (`admin-ui/src/lib/chatFirstDefault.ts`) で `/` と `/admin` を `/copilot-preview` に差し替える。**このページに限り「クローズ」= 既定値の反転**であり、Route 削除ではない (§5)。
 
-#### 2. 会話履歴 `/admin/chat-history` — Chat-partial
+#### 2. 会話履歴 `/admin/chat-history` — Chat-complete（2026-07-31更新。旧記述はChat-partial）
 - サイドバー: `AppSidebar.tsx:58` / モバイル下部バー: `AppSidebar.tsx:497` / ルート: `App.tsx:197–198`
-- カバー済み: `get_chat_sessions` (`toolDefinitions.ts:659` / `actionExecutor.ts:1399`)、`get_chat_session_messages` (`:674` / `:1421`)。一覧と本文の閲覧はチャットで完結する。
-- **欠けているもの: 会話セッションの削除。** `LEGACY_UI_LINKS.session_deletion` (`actionExecutor.ts:1675–1679`) で旧UIへ受け渡している。`actionExecutor.ts:1742–1754` は短縮IDから実セッションを解決して `/admin/chat-history/:sessionId` に直接飛ばす作り込みまで入っている。
-- **これは GUI 固有ではなく「未実装」**。破壊的操作のためチャット側に出していないだけで、`delete_faq` (`toolDefinitions.ts:140`) と同じ `confirmed` 二段確認パターンで実装可能。クローズ前提として先に 1 ツール作る必要がある (§4 Wave 2)。
+- カバー済み: `get_chat_sessions`、`get_chat_session_messages`（一覧・本文の閲覧）に加え、`get_conversation_evaluation`（Judge評価）、`get_session_outcome` / `record_session_outcome`（成果記録の閲覧・記録）、**`delete_chat_session`**（削除。`deleteSessionRepository.deleteSession()` を経由し、reason必須・audit_logs記録・所有権チェック付き）を実装した。会話の履歴カテゴリの主要操作はチャットで完結する。
+- **`LEGACY_UI_LINKS.session_deletion`（`actionExecutor.ts` の `get_legacy_ui_link` 案内キー）はあえて残してある。** `delete_chat_session` の実装により旧UIへ誘導する必然性は無くなったが、キーを enum (`LEGACY_UI_FEATURES`) から削除すると `agent_legacy_handoff` の該当ラベルが `unknown` へ丸まり、削除機能の移行がユーザーに実際に使われているかを計測できなくなる（`docs/AGENT_METRICS.md`）。**計測窓（4週）が経過し、`session_deletion` への handoff が実際に減っていることを確認してから撤去する。** 撤去手順: `toolDefinitions.ts` の `LEGACY_UI_FEATURES` と `actionExecutor.ts` の `LEGACY_UI_LINKS` から `session_deletion` を削除し、本ドキュメントの handoff `feature` キー列を更新する。
+- クローズの残る条件は無し（Chat-complete）。
 
 #### 3. 対応中の会話 `/admin/escalations` — Chat-complete
 - サイドバー: `AppSidebar.tsx:59` / ルート: `App.tsx:201–202`
@@ -90,18 +89,20 @@
 
 #### 4. AIの知識データ `/admin/knowledge/:tenantId` — Chat-partial
 - サイドバー: `AppSidebar.tsx:60` (パスは `SidebarContent` 内 166–178行 でテナントID付きに書き換え) / モバイル下部バー: `AppSidebar.tsx:498` / ルート: `App.tsx:175–181`
-- このページは **5 タブ構成** (`pages/admin/knowledge/[tenantId].tsx:78–84`)。タブ配列に `isSuperAdmin` ガードは無く、**5 タブすべてがテナントに見えている**。タブ単位で被覆状況が違うため、ページ単位の分類だけでは判断を誤る:
+- このページは **5 タブ構成** (`pages/admin/knowledge/[tenantId].tsx` のタブ配列)。タブ単位で被覆状況が違うため、ページ単位の分類だけでは判断を誤る:
+- **2026-07-31 (GID 1217040818410419)**: 「書籍/PDFはR2C運用限定」の方針決定を受け、PDFタブを `user?.role === "super_admin"` の生ロール判定でタブ配列から除外した(previewMode中は `isSuperAdmin` がclient_admin相当に落ちるため、そちらは使っていない — `useAuth.tsx:213–214`)。`?tab=pdf` への直リンクも list へフォールバックする。バックエンド(`bookPdfRoutes.ts` の投入系2エンドポイント)にも同判定で403ガードを追加済み。UIから消しただけで終わらせていない。
 
 | タブ | 実装 | チャット被覆 |
 |---|---|---|
 | 一覧 (`list`) | `KnowledgeListTab` (`[tenantId].tsx:8, 199`) | ○ `get_faq_list` (`toolDefinitions.ts:68`)、`add_faq` (`:89`)、`update_faq` (`:115`)、`delete_faq` (`:140`)、`suggest_faq` (`:436`)、`save_faq` (`:454`)、`import_industry_faq_templates` (`:161`) |
 | テキスト入力 (`text`) | `TextInputTab` (`:9, 203`) | ○ `suggest_faq_import_from_text` (`:472`) + `commit_faq_import` (`:521`) / `discard_faq_import` (`:542`) |
 | URL取得 (`scrape`) | `UrlScrapeTab` (`:10, 204`) | ○ `suggest_faq_import_from_urls` (`:496`) + `commit_faq_import` |
-| PDFアップロード (`pdf`) | `PdfUploadTab` + `BookUploadsSection` (`:11, 205`) | ✕ **GUI固有**。`LEGACY_UI_LINKS.knowledge_pdf` (`actionExecutor.ts:1705–1709`) で受け渡し。`actionExecutor.ts:1700` のコメントが「ファイル選択がGUI固有の操作のためチャット化せず」と明記 |
-| 成約への貢献度 (`attribution`) | `KnowledgeAttributionTab` (`:7, 206–207`) | ✕ **ツールも handoff キーも無い** |
+| PDFアップロード (`pdf`) | `PdfUploadTab` + `BookUploadsSection` (`:11, 205`) | **済 (2026-07-31)** テナント可視面から除外済み。R2C運用限定になったため、そもそも「テナントのチャット被覆」の対象から外れた(super_adminの運用面としては旧UI/新UI(`/copilot-preview`)双方に残る)。`LEGACY_UI_LINKS.knowledge_pdf` のキー・enumは計測トリップワイヤーのため削除せず維持(説明文のみ更新) |
+| 成約への貢献度 (`attribution`) | `KnowledgeAttributionTab` (`:7, 206–207`) | ○ **解消済み**。`LEGACY_UI_LINKS.knowledge_attribution` (`actionExecutor.ts`) で受け渡し (GID `1217040615948155`, 2026-07-31) |
 
-- **「成約への貢献度」タブは第3のカテゴリ**: チャットから実行できず、`get_legacy_ui_link` で案内することすらできない (`feature` の値集合に対応するものが無い — §1.1 の注記)。**チャットからは存在が見えない機能**であり、`agent_legacy_handoff` にも一切現れない。つまり §2 の基準では「使われていない」と区別がつかない。`get_conversion_summary` (`:887`) は成約全体のサマリーで、ナレッジ単位の貢献度 (`/v1/admin/analytics/knowledge-attribution`, `components/knowledge/KnowledgeAttributionTab.tsx:136`) とは別物。
-- 判定: **クローズ不可** (§4 「クローズ対象外」)。PDF タブが GUI 固有である限りページ全体は閉じられない。加えて attribution タブは、閉じる前に「チャット側にツールを作る」か「最低限 handoff キーを足して計測対象に載せる」かの決着が必要。**計測に現れない機能を抱えたままページを閉じると、失われたことに誰も気づかない。**
+- **「成約への貢献度」タブは解消済み**: 2026-07-31 まではチャットから実行できず、`get_legacy_ui_link` で案内することすらできなかった (`feature` の値集合に対応するものが無い状態)。**チャットからは存在が見えない機能**で `agent_legacy_handoff` にも一切現れず、§2 の基準では「使われていない」と区別がつかなかった。`get_conversion_summary` (`:887`) は成約全体のサマリーで、ナレッジ単位の貢献度 (`/v1/admin/analytics/knowledge-attribution`, `components/knowledge/KnowledgeAttributionTab.tsx:136`) とは別物であることも変わらない。
+- **採用した方式と決定理由(handoffキー追加、ツール追加はしない)**: `LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) に `knowledge_attribution` を1語追加するだけで、`LEGACY_HANDOFF_FEATURES` (`agentRoutes.ts:32`、`LEGACY_UI_FEATURES` から import して導出) と `get_legacy_ui_link` の JSON Schema enum (`toolDefinitions.ts:860`、同じく `LEGACY_UI_FEATURES` を参照) の両方が自動的に追従する。閉鎖判定に必要なのは「計測に載ること」であって「機能をチャットから実行可能にすること」ではないため、新規ツール追加(専用の実行ロジック・テスト・システムプロンプト記述などタッチポイントが5倍になる)は過剰だった。プラン制限ゲート(`planLimitNotice()` 等)も付けていない — R2Cは従量課金であり、貢献度タブ自体もテナントに可視でプランゲートされていないため、`analytics` / `conversion` の既存ゲートを模倣する理由がない。
+- 判定: **両方の障害が解消済み**(2026-07-31、GID `1217040818410419` + `1217040615948155`)。PDF タブはテナント可視面から除外、attribution タブはhandoffキー追加で計測対象化。§4 「クローズ対象外」表のこのページの記述は要見直し(本コンフリクト解決の場では未着手。別途 §4 を更新すること)。
 
 #### 5. 未回答質問 `/admin/knowledge-gaps` — Chat-complete
 - サイドバー: `AppSidebar.tsx:61` / ルート: `App.tsx:208`
@@ -338,18 +339,17 @@ super_admin 側からの流入があるページ (`/admin/chat-test`) は、テ�
 | **2** | **AIへの指示ルール** `/admin/tuning` | Chat-complete で被覆が最も厚い (8 ツール、テスト応答生成・採用まで)。`/copilot-preview` に専用タブが既にある (`index.tsx:235`) | `BOTTOM_NAV:500` も撤去。既存テナントの筋肉記憶が強いページなので §5 の新規テナント限定を適用 |
 | **3** | **対応中の会話** `/admin/escalations` | reply/resolve が入り Chat-complete になった (PR #568)。`escalation_reply` キーは「履歴の見返し」用途に絞られており、`get_chat_session_messages` で代替可能 | **計測開始が最も遅い** (2026-07-29 着地 → 最短でも 2026-08-27 以降に 4 週窓が閉じる) |
 | **4** | **お客様への声がけ設定** `/admin/engagement` | Chat-complete (CRUD 5 ツール、トリガー 4 種すべて) | 低頻度ページのため C2b 適用外。§2.3 の例外扱い = 8 週窓 + 新規テナント限定のみ |
+| **5** | **会話履歴** `/admin/chat-history` | 2026-07-31、`delete_chat_session` の実装により Chat-complete 化。閲覧(一覧・本文・Judge評価・成果記録)に加え削除・成果記録の書き込みまで被覆 | **計測窓は 2026-07-31 起算**（最も遅く開始する Wave 1 ページ）。`session_deletion` handoff の減少を確認してから `LEGACY_UI_FEATURES` / `LEGACY_UI_LINKS` の該当キーを撤去し、本表を更新すること |
 
 ### Wave 2 — チャット側に少し足せば Chat-complete になる (足してから §2 の計測を開始)
 
 | 順 | ページ | 前提として作るもの |
 |---|---|---|
-| **5** | **ダッシュボード** `/admin` | `get_weekly_briefing` に集計値 3 つ (FAQ総数・公開FAQ数・最終更新日) を追加。あわせて `get_faq_list` の「N件」が上限20で頭打ちになる件 (`actionExecutor.ts:243`) を直す |
-| **6** | **会話履歴** `/admin/chat-history` | セッション削除ツール (`delete_faq` と同じ `confirmed` 二段確認)。これで `session_deletion` キー (`actionExecutor.ts:1675`) が不要になる |
+| **6** | **ダッシュボード** `/admin` | `get_weekly_briefing` に集計値 3 つ (FAQ総数・公開FAQ数・最終更新日) を追加。あわせて `get_faq_list` の「N件」が上限20で頭打ちになる件 (`actionExecutor.ts:243`) を直す |
 
-どちらも欠けているのは **GUI 固有ではなく未実装**の機能なので、Wave 2 は「ツールを 1 つ足す → 4 週計測 → 閉じる」で進む。
+欠けているのは **GUI 固有ではなく未実装**の機能なので、Wave 2 は「ツールを 1 つ足す → 4 週計測 → 閉じる」で進む。
 
-- **ダッシュボードを Wave 2 の先頭に置く理由**: 前提が既存ツールへの集計値 3 つの追加だけで最も軽く、かつ効果が最も大きい (着地画面そのものが変わる)。ただし **Route リダイレクトではなく既定値の反転** — 着地切替は既に `App.tsx:123–126` の localStorage オプトイン (`lib/chatFirstDefault.ts:9`) として実装済みで、「閉じる」= `isChatFirstDefaultEnabled()` の既定を真にすることを意味する。実行は Wave 1 の 1〜4 が閉じてクイックアクション/StatCard の遷移先が減ってから (`pages/admin/index.tsx:382,415,418` および `:366,373,381`)。
-- **会話履歴**: 削除は破壊的操作なので、ツールを足す判断自体に「チャットから会話履歴を消せるようにしてよいか」というプロダクト判断が伴う。作らない結論も有りで、その場合このページは `session_deletion` を残したまま**クローズ対象外**に移る。
+- **ダッシュボードを Wave 2 の先頭に置く理由**: 前提が既存ツールへの集計値 3 つの追加だけで最も軽く、かつ効果が最も大きい (着地画面そのものが変わる)。ただし **Route リダイレクトではなく既定値の反転** — 着地切替は既に `App.tsx:123–126` の localStorage オプトイン (`lib/chatFirstDefault.ts:9`) として実装済みで、「閉じる」= `isChatFirstDefaultEnabled()` の既定を真にすることを意味する。実行は Wave 1 の 1〜5 が閉じてクイックアクション/StatCard の遷移先が減ってから (`pages/admin/index.tsx:382,415,418` および `:366,373,381`)。
 
 ### Wave 3 — チャット側の実装を伴う (要件定義済み・実装後に計測開始)
 
@@ -366,7 +366,7 @@ Wave 2 が「ツールを1つ足す→4週計測→閉じる」で進むのに�
 | ページ | 対象外の理由 |
 |---|---|
 | **テストチャット** `/admin/chat-test` | ウィジェットの実挙動確認が目的で、管理者チャット内で再現しても検証にならない。加えて super_admin のテナント詳細から流入 (`TenantTestTab.tsx:24`) |
-| **AIの知識データ** `/admin/knowledge/:tenantId` | 5 タブ中 3 タブ (一覧・テキスト・URL) は Chat-complete だが、**PDFアップロード**がファイル選択という GUI 固有操作 (`actionExecutor.ts:1700`)。さらに**「成約への貢献度」タブはツールも handoff キーも無く、計測に一切現れない** (§1.2)。この 2 タブの決着が付くまでページ全体は閉じられない |
+| **AIの知識データ** `/admin/knowledge/:tenantId` | **要再評価 (2026-07-31)**。従来の対象外理由(PDFアップロードのGUI固有操作、貢献度タブの計測不能)は両方解消済み — PDFはR2C運用限定としてテナント可視面から除外(GID `1217040818410419`)、貢献度は handoff キー追加(`knowledge_attribution`)で計測対象化(GID `1217040615948155`)。5 タブ中4タブがChat-complete相当(残るPDFはR2C運用限定によりテナントのチャット被覆対象外)。**このページを本表から外し、§2.3 の V ゲート判定(次回 2026-08-27、Asana `1217008521775249`)にかけるべきか要判断** |
 | **会話分析** `/admin/analytics` / **成約・効果分析** `/admin/conversion` | 数値サマリーは既にチャット側 (`get_analytics_summary` / `get_conversion_summary`)。残るのはグラフ推移・低評価セッションのドリルダウン・ABテスト結果で、グラフと比較表は視覚表現そのものが価値 |
 | **ご利用状況・お支払い** `/admin/billing` | 案内文が指す操作 (請求書再送・金額調整・無料期間・一時停止/再開) は実質 super_admin の運用操作。テナント側の「金額を画面で確認したい」要求をテキストで置き換える便益が薄い |
 
@@ -416,7 +416,7 @@ Wave 2 が「ツールを1つ足す→4週計測→閉じる」で進むのに�
 
 この穴の影響を明記しておく: **handoff キーを持たないページ (未回答質問・指示ルール・声がけ設定・ダッシュボード) について、旧UIで黙って使われ続けている量は本基準では検出できない。** C2b (§2.3) と §5 の新規テナント限定適用は、この穴を前提に置いた埋め合わせである。
 
-さらに悪いケースが 1 件ある。**「チャット側にツールが無く、handoff キーも無い」機能は、`agent_tool_invoked` にも `agent_legacy_handoff` にも現れない。** 実測で該当するのは知識データページの「成約への貢献度」タブ (`pages/admin/knowledge/[tenantId].tsx:206–207`)。この種の機能は本基準上「需要ゼロ」と見分けが付かないため、**クローズ判定にかける前に、ツールを作るか最低限 handoff キーを足して計測対象に載せる必要がある**。新しいテナント向け画面を追加するときは、`get_legacy_ui_link` の `feature` の値集合 (`LEGACY_UI_FEATURES`) にも載せることを既定にしておくと、この穴は再発しない。
+さらに悪いケースが 1 件あった。**「チャット側にツールが無く、handoff キーも無い」機能は、`agent_tool_invoked` にも `agent_legacy_handoff` にも現れない。** 該当していたのは知識データページの「成約への貢献度」タブ (`pages/admin/knowledge/[tenantId].tsx:206–207`) で、この種の機能は本基準上「需要ゼロ」と「計測不能」の区別が付かなかった。**2026-07-31、`LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) に `knowledge_attribution` を追加して解消済み** (GID `1217040615948155`, §1.2-4)。新しいテナント向け画面を追加するときは、`get_legacy_ui_link` の `feature` の値集合 (`LEGACY_UI_FEATURES`) にも載せることを既定にしておくと、この穴は再発しない。
 
 穴を本当に埋めるなら、`legacy_page_view{page=...}` を同じ `metrics_snapshots` (`src/migrations/phase72d_metrics_snapshots.sql`) に入れる別タスクが必要。その計測が入った時点で、C2b を「直接訪問数 ≤ 有効テナント数 × 0.5 回/週」に置き換えるのが望ましい。
 
@@ -426,7 +426,7 @@ Wave 2 が「ツールを1つ足す→4週計測→閉じる」で進むのに�
 
 本基準が依存する契約:
 
-1. **`agent_legacy_handoff.labels.feature` が `get_legacy_ui_link` の値集合 (`LEGACY_UI_FEATURES`: `billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf`) と一致し、enum 外は `"unknown"` に丸められること** (確定済み)。enum を削るとき (§3 Stage B-3) は、削った機能の handoff が以後 `"unknown"` に流れ込むことになる。**クローズ完了後は `unknown` の増分をそのページの残存需要として読める**ので、§2.4 の中止条件を Stage B 後も 4 週延長して監視する価値がある。
+1. **`agent_legacy_handoff.labels.feature` が `get_legacy_ui_link` の値集合 (`LEGACY_UI_FEATURES`: `billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf` / `knowledge_attribution`) と一致し、enum 外は `"unknown"` に丸められること** (確定済み)。enum を削るとき (§3 Stage B-3) は、削った機能の handoff が以後 `"unknown"` に流れ込むことになる。**クローズ完了後は `unknown` の増分をそのページの残存需要として読める**ので、§2.4 の中止条件を Stage B 後も 4 週延長して監視する価値がある。
 2. **`agent_tool_invoked.labels.tool` がツール名、`.outcome ∈ {ok, blocked, error}`** (確定済み)。C2・C2b・C3・C4 のすべてがこれで絞る。キー名は `tool` (`tool_name` ではない)。
 3. **`agent_write_blocked.labels.reason ∈ {unconfirmed, chain}` のみ** (確定済み)。プラン/ポリシー拒否は含まれない。§2.3 C3 はこの前提で組み直してある。**この 2 値に第 3 の値を足す必要は無い** — 理由は C3 の最後の段落 (プラン壁はチャットと旧UIで対称なので、クローズ判定の材料にならない)。
 4. **`tenant_id` は列 (nullable)**。NULL = プレビュー先を持たない super_admin なので §2.2 のとおり除外する。

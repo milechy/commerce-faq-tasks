@@ -38,6 +38,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // --- medium: 永続コンテンツの作成・変更 ---
   add_faq: 'medium',
   update_faq: 'medium',
+  // 既定見本の自テナントへの複製。is_active=false で作るため公開はされないが、
+  // 永続レコードを作成する点は add_faq と同じ階層。
+  adopt_avatar_preset: 'medium',
   save_faq: 'medium',
   commit_faq_import: 'medium',
   import_industry_faq_templates: 'medium',
@@ -54,11 +57,16 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 採用済み文面の削除。対象は配列の1要素で approve_ し直せるが、
   // 元の文面自体は失われるため low ではなく medium に置く。
   remove_approved_response: 'medium',
+  // 会話セッションの成果(コンバージョン結果)記録。永続コンテンツの変更だが、
+  // 再記録すれば戻せるため medium。
+  record_session_outcome: 'medium',
 
   // --- high: 不可逆な破棄 / 課金 / 外部送出 ---
   delete_faq: 'high',
   delete_tuning_rule: 'high',
   delete_engagement_rule: 'high',
+  // 会話セッションの完全削除。不可逆な破棄(audit_logsに理由付きで残るのみ)。
+  delete_chat_session: 'high',
   // 顧客の画面に有人返信として表示される（取り消し手段がない）。
   reply_to_escalation: 'high',
   // 返信待ちの顧客対応を打ち切りエスカレーション一覧から外す。状態変更ではあるが
@@ -75,6 +83,7 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_faq_list',
   'get_avatar_status',
   'get_avatar_list',
+  'suggest_avatar_preset',
   'get_embed_code',
   'get_tuning_rules',
   'get_weekly_briefing',
@@ -82,6 +91,8 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_engagement_rules',
   'get_chat_sessions',
   'get_chat_session_messages',
+  'get_session_outcome',
+  'get_conversation_evaluation',
   'get_escalations',
   'get_monitoring_summary',
   'get_sai_task_status',

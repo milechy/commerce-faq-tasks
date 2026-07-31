@@ -10,6 +10,7 @@ import express from 'express';
 import request from 'supertest';
 import { getPool } from '../../src/lib/db';
 import { registerChatHistoryRoutes } from '../../src/api/admin/chat-history/routes';
+import { normalizeSessionListParams } from '../../src/api/admin/chat-history/chatHistoryRepository';
 
 function makeApp(role = 'super_admin', tenantId = 'tenant-super') {
   const app = express();
@@ -111,5 +112,105 @@ describe('GET /v1/admin/chat-history/sessions — Phase52b filters', () => {
     const countCall = pool.query.mock.calls[0];
     expect(countCall[1]).toContain('tenant-abc');
     expect(countCall[1]).not.toContain('other-tenant');
+  });
+
+  // ---------------------------------------------------------------------------
+  // allowlist 回帰: period / sort_order は SQL に文字列補間されるため、allowlist 外の
+  // 値が絶対に SQL テキストへ到達しないことを固定する。routes.ts 経由(HTTPクエリ文字列)
+  // と normalizeSessionListParams() 直呼び出し(agent の LLM 由来引数を模す)の両方で確認する。
+  // ---------------------------------------------------------------------------
+  it('9. allowlist外の period(SQL断片を模した値)はINTERVAL句に補間されない', async () => {
+    const pool = makeMockPool([], 0);
+    mockGetPool.mockReturnValue(pool);
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/chat-history/sessions')
+      .query({ period: "7 days'; DROP TABLE chat_sessions; --" });
+    const countCall = pool.query.mock.calls[0];
+    expect(countCall[0]).not.toContain('DROP TABLE');
+    expect(countCall[0]).not.toContain('INTERVAL');
+  });
+
+  it('10. allowlist外のsort_order(SQL断片を模した値)はORDER BY句に補間されない', async () => {
+    const pool = makeMockPool([], 0);
+    mockGetPool.mockReturnValue(pool);
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/chat-history/sessions')
+      .query({ sort_order: 'desc; DROP TABLE chat_sessions; --' });
+    const listCall = pool.query.mock.calls[1];
+    expect(listCall[0]).not.toContain('DROP TABLE');
+    // allowlist外はデフォルト('desc'相当のDESC)にフォールバックする
+    expect(listCall[0]).toContain('s.last_message_at DESC');
+  });
+
+  it('11. normalizeSessionListParams: allowlist外のperiod/sort_by/sort_order/sentimentはundefinedに落ちる', () => {
+    const n = normalizeSessionListParams({
+      period: "7 days'; --",
+      sort_by: 'message_count; DROP TABLE',
+      sort_order: 'desc; --',
+      sentiment: 'angry',
+    });
+    expect(n.period).toBeUndefined();
+    expect(n.sort_by).toBeUndefined();
+    expect(n.sort_order).toBeUndefined();
+    expect(n.sentiment).toBeUndefined();
+  });
+
+  it('12. normalizeSessionListParams: allowlist内の値はそのまま通す(冪等)', () => {
+    const once = normalizeSessionListParams({ period: '30', sort_by: 'score', sort_order: 'asc', sentiment: 'positive' });
+    const twice = normalizeSessionListParams(once);
+    expect(twice).toEqual(once);
+    expect(once.period).toBe('30');
+    expect(once.sort_by).toBe('score');
+    expect(once.sort_order).toBe('asc');
+    expect(once.sentiment).toBe('positive');
+  });
+
+  it.each([
+    [0, 1], [1, 1], [200, 200], [201, 200], [-1, 1], [NaN, 20], ['abc', 20], [undefined, 20],
+  ])('13. limit=%p は %p にクランプされる', (input, expected) => {
+    expect(normalizeSessionListParams({ limit: input }).limit).toBe(expected);
+  });
+
+  it.each([
+    [0, 0], [-1, 0], [NaN, 0], ['abc', 0], [undefined, 0], [500, 500],
+  ])('14. offset=%p は %p にクランプされる', (input, expected) => {
+    expect(normalizeSessionListParams({ offset: input }).offset).toBe(expected);
+  });
+
+  it('15. search の % _ \\ はワイルドカードとして解釈されない(エスケープされる)', async () => {
+    const pool = makeMockPool([], 0);
+    mockGetPool.mockReturnValue(pool);
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/chat-history/sessions')
+      .query({ search: '50%_off\\deal' });
+    const countCall = pool.query.mock.calls[0];
+    // \\ % _ の直前にエスケープの \\ が入り、意図しない広域一致にならない
+    expect(countCall[1]).toContain('%50\\%\\_off\\\\deal%');
+  });
+
+  it('16. HTTP経由のlimit/offset境界値(0/負値/NaN/上限超過)がクランプされてSQLに渡る', async () => {
+    const pool = makeMockPool([], 0);
+    mockGetPool.mockReturnValue(pool);
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/chat-history/sessions')
+      .query({ limit: '-1', offset: '-5' });
+    const listCall = pool.query.mock.calls[1];
+    // super_adminがtenant/search未指定なのでargsは[limit, offset]のみ
+    expect(listCall[1]).toEqual([1, 0]);
+  });
+
+  it('17. 応答bodyのlimit/offsetはgetSessionsの実効値(クランプ後)を反映する', async () => {
+    const pool = makeMockPool([], 0);
+    mockGetPool.mockReturnValue(pool);
+    const app = makeApp();
+    const res = await request(app)
+      .get('/v1/admin/chat-history/sessions')
+      .query({ limit: '9999', offset: '-3' });
+    expect(res.body.limit).toBe(200);
+    expect(res.body.offset).toBe(0);
   });
 });
