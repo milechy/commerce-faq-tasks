@@ -7,8 +7,13 @@ import { AvatarWizard } from "../../../components/avatar-wizard/AvatarWizard";
 
 export default function AvatarWizardPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const tenantId: string = (user as any)?.app_metadata?.tenant_id ?? "";
+  // 修正前は user?.app_metadata?.tenant_id を見ていたが、useAuth() の user は
+  // 正規化済みの { tenantId, ... } 形であり app_metadata を持たないため、
+  // client_adminも含め常に空文字になっていた(#P1-B)。previewMode中の
+  // super_adminはpreviewTenantIdを使う(copilot-preview/index.tsxのscopedTenantId
+  // と同じパターン)。
+  const { user, isSuperAdmin, previewMode, previewTenantId } = useAuth();
+  const tenantId: string = previewMode ? (previewTenantId ?? "") : (user?.tenantId ?? "");
 
   function handleComplete(imageUrl: string) {
     // 生成完了後はスタジオ新規作成ページへ遷移（URLにimage_urlを渡す）
@@ -22,6 +27,7 @@ export default function AvatarWizardPage() {
   return (
     <AvatarWizard
       tenantId={tenantId}
+      isSuperAdmin={isSuperAdmin}
       onComplete={handleComplete}
       onCancel={handleCancel}
     />

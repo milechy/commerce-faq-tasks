@@ -239,6 +239,78 @@ describe("POST /v1/admin/avatar/generate-premium", () => {
   });
 });
 
+// #P1-B: previewMode(super_adminのクライアントビュー)中に ?tenant= を無視して
+// super_admin自身の(空の)テナントで課金・保存していた欠陥の回帰ガード。
+// generate-image/match-voice/generate-prompt/fal/generateの4ルートは#674〜#676で
+// 直したが、generate-premiumは当時スコープ外だった。
+describe("POST /v1/admin/avatar/generate-premium — previewMode中のテナント解決", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.FAL_KEY = "test-fal-key";
+    delete process.env.FREEPIK_API_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.FAL_KEY;
+  });
+
+  it("super_admin + ?tenant=tenant-b → trackUsageがtenant-bで呼ばれる(プラン制限もバイパスされfal.aiに到達する)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => FAL_OK });
+
+    const res = await request(makeApp("", "super_admin"))
+      .post("/v1/admin/avatar/generate-premium?tenant=tenant-b")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(200);
+    // super_adminはプラン制限をバイパスするため、この呼び出しでmockQueryは
+    // 一切呼ばれない(plan問い合わせ自体が発生しない)
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-b" }),
+    );
+  });
+
+  it("[越権防止] client_adminが?tenant=tenant-bを付けても無視され、JWTの自テナントで計上される", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => FAL_OK });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/generate-premium?tenant=tenant-b")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-a" }),
+    );
+  });
+
+  it("super_adminが?tenant=を付けないとテナント不明で400になり、fal.ai/Magnificを一切呼ばない(課金発生前に落ちる証明)", async () => {
+    const res = await request(makeApp("", "super_admin"))
+      .post("/v1/admin/avatar/generate-premium")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockUpscale).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+    // プラン制限チェックにも到達しない(400が先)
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("テナントが解決できれば400にならずプラン制限チェックまで到達する(過剰ブロックの対検証)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/generate-premium")
+      .send({ prompt: VALID_PROMPT });
+
+    // starterプランなので403(plan_upgrade_required)になるが、400(テナント不明)
+    // ではないこと、かつプラン問い合わせ自体には到達していることを確認する
+    expect(res.status).toBe(403);
+    expect(mockQuery).toHaveBeenCalled();
+  });
+});
+
 // GID 1216944249525907: LP料金表(Growth〜: プレミアムアバター生成)に基づくプラン制限の回帰テスト
 describe("POST /v1/admin/avatar/generate-premium — プラン制限", () => {
   beforeEach(() => {

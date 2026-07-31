@@ -15,7 +15,7 @@ import {
   MAGNIFIC_UPSCALE_COST_USD,
   SERVER_COST_PER_REQUEST_USD,
 } from "../../../lib/billing/costCalculator";
-import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
+import { roleAuthMiddleware, requireRole, resolveEffectiveTenantId, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
 
@@ -120,10 +120,17 @@ export function registerPremiumGenerationRoutes(app: Express): void {
 
     const { prompt } = parsed.data;
 
-    const su = (req as AuthReq).supabaseUser;
-    const suMeta = su?.app_metadata as Record<string, unknown> | undefined;
-    const tenantId = (suMeta?.tenant_id as string) ?? "";
+    // previewMode(super_adminのクライアントビュー)中は ?tenant= を反映する
+    // (他の生成系ルートと同じresolveEffectiveTenantId、#674/#682)。生の
+    // app_metadata.tenant_id のままだと super_admin の空テナントで課金・保存
+    // されていた(#P1-B)。プレミアム生成は高単価(Flux 2 Pro + Magnific)のため
+    // 通常生成の4ルートより実害が大きい。
+    const tenantId = resolveEffectiveTenantId(req);
     const requestId = (req as AuthReq).requestId ?? crypto.randomUUID();
+
+    if (!tenantId) {
+      return res.status(400).json({ error: "テナント情報が取得できません" });
+    }
 
     // GID 1216944249525907: LP料金表(Growth〜: プレミアムアバター生成)に基づくプラン制限。
     // super_adminは従来どおりバイパス。
