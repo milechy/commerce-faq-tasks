@@ -14,6 +14,11 @@ jest.mock("../../../auth/supabaseClient", () => ({
   supabaseAdmin: null, // ストレージ無効（imageUrlをそのまま返す）
 }));
 
+const mockTrackUsage = jest.fn();
+jest.mock("../../../lib/billing/usageTracker", () => ({
+  trackUsage: (...args: any[]) => mockTrackUsage(...args),
+}));
+
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
 
@@ -66,6 +71,45 @@ describe("POST /v1/admin/avatar/fal/generate", () => {
     expect(res.status).toBe(200);
     expect(res.body.images).toHaveLength(4);
     expect(res.body.seed).toBe(42);
+  });
+
+  // avatar_config_image は billable（NON_BILLABLE_FEATURES に含まれない）。
+  // 計上しないと生成の原価をテナントに請求できない = 当社負担になるため、
+  // 成功時に必ず1件計上されることを固定する。
+  it("生成に成功したら usage_logs へ計上する（生成枚数つき）", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => FAL_OK_RESPONSE,
+    });
+
+    const res = await request(makeApp("tenant-billing"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: "Professional portrait of a Japanese woman, bust shot, smiling", numImages: 4 });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-billing",
+        featureUsed: "avatar_config_image",
+        imageCount: 4,
+      }),
+    );
+  });
+
+  it("生成に失敗した場合は計上しない", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      text: async () => "Service Unavailable",
+    });
+
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: "Professional portrait of a Japanese man, bust shot, business suit" });
+
+    expect(res.status).toBe(502);
+    expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 
   it("バリデーションエラー: promptが短すぎる", async () => {

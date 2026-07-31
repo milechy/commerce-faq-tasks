@@ -23,30 +23,79 @@ export type AgentChatSurface = "panel" | "fullscreen";
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
-// バックエンド(actionExecutor.ts の ActionCardPayload)が自然文に添えて返す構造化
-// カード。card を返すのは get_legacy_ui_link / get_chat_sessions / get_chat_session_messages /
-// get_conversation_evaluation の4ツールで、他のツールは従来どおり result の自然文のみ。
-// フィールド形はサーバ側の型と1:1で対応させる(型定義箇所はサーバ/ここの2箇所に限る)。
+// バックエンド(actionExecutor.ts の各 *CardPayload)が自然文に添えて返す構造化カード。
+// card を返すのは get_legacy_ui_link / get_tuning_rules / get_weekly_briefing /
+// get_chat_sessions / get_chat_session_messages / get_conversation_evaluation のみで、
+// 他のツールは従来どおり result の自然文のみ。フィールド形はサーバ側の型と1:1で対応させる
+// (型定義箇所はサーバ/ここの2箇所に限る)。
+export type ConversationEvaluationAgentActionCard = {
+  kind: "conversation_evaluation";
+  shortId: string;
+  overallScore: number;
+  axes: Array<{ label: string; score: number | null }>;
+  notes: string | null;
+};
+
+export type LegacyLinkAgentActionCard = {
+  kind: "legacy_link";
+  label: string;
+  url: string;
+  description: string;
+};
+
+export type ChatSessionListAgentActionCard = {
+  kind: "chat_session_list";
+  total: number;
+  sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+};
+
+export type ChatSessionMessagesAgentActionCard = {
+  kind: "chat_session_messages";
+  shortId: string;
+  totalMessages: number;
+  messages: Array<{ roleLabel: string; content: string }>;
+};
+
+export type AvatarPresetAgentActionCard = {
+  kind: "avatar_preset";
+  presetId: string;
+  name: string;
+  imageUrl: string | null;
+  description: string;
+};
+
+export type TuningRulesListAgentActionCard = {
+  kind: "tuning_rules_list";
+  rules: Array<{
+    id: number;
+    triggerPattern: string;
+    expectedBehavior: string;
+    priority: number;
+    isActive: boolean;
+  }>;
+  totalCount: number;
+};
+
+// フィールド形状は actionExecutor.ts の WeeklySummaryCardPayload と1対1に保つ。
+export type WeeklySummaryAgentActionCard = {
+  kind: "weekly_summary";
+  asOf: string;
+  sessions: { total: number; changePct: number | null; prevTotal: number } | null;
+  avgScore: number | null;
+  conversions: { count: number; total: number } | null;
+  faq: { total: number; published: number; lastUpdated: string | null } | null;
+  pendingTuningRules: number | null;
+  gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
+};
+
 export type AgentActionCard =
-  | { kind: "legacy_link"; label: string; url: string; description: string }
-  | {
-      kind: "chat_session_list";
-      total: number;
-      sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
-    }
-  | {
-      kind: "chat_session_messages";
-      shortId: string;
-      totalMessages: number;
-      messages: Array<{ roleLabel: string; content: string }>;
-    }
-  | {
-      kind: "conversation_evaluation";
-      shortId: string;
-      overallScore: number;
-      axes: Array<{ label: string; score: number | null }>;
-      notes: string | null;
-    };
+  | LegacyLinkAgentActionCard
+  | AvatarPresetAgentActionCard
+  | TuningRulesListAgentActionCard
+  | WeeklySummaryAgentActionCard
+  | ChatSessionListAgentActionCard
+  | ChatSessionMessagesAgentActionCard
+  | ConversationEvaluationAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 
