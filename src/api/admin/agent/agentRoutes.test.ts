@@ -5186,14 +5186,14 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('不明な業種');
     });
 
-    it('confirmed=true → 全テンプレートがINSERTされ、テナントのonboarding項目が更新される', async () => {
+    it('confirmed=true → 全テンプレートが下書き(is_published=false)でINSERTされ、テナントのonboarding項目が更新される', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ind-3', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
 
       for (let i = 0; i < 5; i++) {
         mockQuery.mockResolvedValueOnce({
-          rows: [{ id: 100 + i, question: `q${i}`, answer: `a${i}`, is_published: true }],
+          rows: [{ id: 100 + i, question: `q${i}`, answer: `a${i}`, is_published: false }],
         });
       }
       mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants
@@ -5205,11 +5205,93 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       const insertCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO faq_docs'));
       expect(insertCalls).toHaveLength(5);
+      // Asana 1217040715802747(P3): テンプレは下書き(is_published=false)で登録される
+      // (is_published はプレースホルダではなくSQL文中に直接 false と書かれている)
+      for (const [sql] of insertCalls) {
+        expect(String(sql)).toContain('VALUES ($1, $2, $3, $4, false)');
+      }
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('UPDATE tenants SET onboarding_industry'),
         ['beauty', 'tenant-abc'],
       );
-      expect(res.body.actions[0].result).toContain('5件登録しました');
+      expect(res.body.actions[0].result).toContain('5件、下書きとして登録しました');
+      expect(res.body.actions[0].result).toContain('公開しますか');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // publish_faq_drafts (Asana 1217040715802747, P3)
+  // -------------------------------------------------------------------------
+  describe('publish_faq_drafts', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('confirmed=false → 下書き一覧を提示するのみで公開しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-1', 'publish_faq_drafts', { confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらを公開しますか？'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, question: 'Q1', answer: 'A1' }, { id: 2, question: 'Q2', answer: 'A2' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '下書きを見せて', sessionId: 'sess-pub-01' });
+
+      expect(res.status).toBe(200);
+      const selectCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('SELECT id, question, answer FROM faq_docs'));
+      expect(selectCalls).toHaveLength(1);
+      const updateCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('UPDATE faq_docs SET is_published'));
+      expect(updateCalls).toHaveLength(0);
+      expect(res.body.actions[0].result).toContain('2件');
+      expect(res.body.actions[0].result).toContain('公開しますか');
+    });
+
+    it('下書きが0件なら「公開できる下書きはありません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-2', 'publish_faq_drafts', { confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('下書きはありませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '下書きを見せて', sessionId: 'sess-pub-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('公開できる下書きのFAQはありません');
+    });
+
+    it('confirmed=true → 下書きが is_published=true に更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-3', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, question: 'Q1', answer: 'A1' }, { id: 2, question: 'Q2', answer: 'A2' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-pub-03' });
+
+      expect(res.status).toBe(200);
+      const updateCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('UPDATE faq_docs SET is_published = true'));
+      expect(updateCalls).toHaveLength(1);
+      expect(res.body.actions[0].result).toContain('2件のFAQを公開しました');
     });
   });
 

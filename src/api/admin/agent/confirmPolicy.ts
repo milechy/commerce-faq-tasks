@@ -44,6 +44,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   save_faq: 'medium',
   commit_faq_import: 'medium',
   import_industry_faq_templates: 'medium',
+  // 公開は is_published=false に戻せるため high ではなく medium。
+  // ただし顧客の目に触れる内容を公開する操作のため low ではない。
+  publish_faq_drafts: 'medium',
   save_tuning_rule: 'medium',
   update_tuning_rule: 'medium',
   save_engagement_rule: 'medium',

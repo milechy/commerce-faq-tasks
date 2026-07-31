@@ -244,6 +244,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   suggest_faq_import_from_urls: "URLからのFAQ一括提案",
   commit_faq_import: "FAQの一括登録",
   discard_faq_import: "FAQ一括提案の破棄",
+  publish_faq_drafts: "下書きFAQの公開",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -264,6 +265,7 @@ const REAL_WRITE_TOOLS = new Set([
   "commit_faq_import",
   "reply_to_escalation",
   "resolve_escalation",
+  "publish_faq_drafts",
 ]);
 
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ。

@@ -63,7 +63,9 @@ export default function OnboardingModal({ tenantId, onClose }: OnboardingModalPr
         `${API_BASE}/v1/admin/knowledge/text/commit?tenant=${encodeURIComponent(tenantId)}`,
         {
           method: "POST",
-          body: JSON.stringify({ faqs: templates }),
+          // Asana 1217040715802747: テンプレは内容未確認のため下書き(非公開)で投入する。
+          // 公開は「AIの知識データ」画面でテナントが内容を確認してから行う。
+          body: JSON.stringify({ faqs: templates, isPublished: false }),
         }
       );
       if (!res.ok) {
@@ -252,7 +254,7 @@ export default function OnboardingModal({ tenantId, onClose }: OnboardingModalPr
             </h2>
             <p style={{ fontSize: 14, color: "#9ca3af", margin: "0 0 24px", lineHeight: 1.6 }}>
               {importedCount > 0
-                ? `${importedCount}件のFAQを登録しました。ナレッジ画面でいつでも編集できます。`
+                ? `${importedCount}件のFAQを下書きとして登録しました。内容をご確認のうえ、ナレッジ画面から公開してください。`
                 : "ナレッジ画面からいつでもFAQを追加できます。"}
             </p>
             <button
