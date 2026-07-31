@@ -102,6 +102,18 @@ type Card =
       fileName: string;
       progress?: number;
       message?: string;
+    }
+  // 週次まとめ。数値はサーバ集計値をそのまま描画する(LLMの生成文を経由しない)。
+  // 各グループが null なのは、対応するクエリが失敗し取得できなかった場合(0とは区別する)。
+  | {
+      kind: "weeklySummary";
+      asOf: string;
+      sessions: { total: number; changePct: number | null; prevTotal: number } | null;
+      avgScore: number | null;
+      conversions: { count: number; total: number } | null;
+      faq: { total: number; published: number; lastUpdated: string | null } | null;
+      pendingTuningRules: number | null;
+      gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
     };
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
@@ -174,7 +186,14 @@ const REAL_WRITE_TOOLS = new Set([
   "resolve_escalation",
 ]);
 
-// Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ
+// Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ。
+// 左レール「今週のまとめ」(handleCategory の "weekly" 分岐)と実質同じ依頼文で
+// 同じツール(get_weekly_briefing)に着地する。この2つの関係は「必ず再取得する」で
+// 統一する — カテゴリクリックのたびに毎回サーバへ問い合わせ、キャッシュや
+// 直近取得のスキップは行わない。同一セッション内で内容がほぼ重複することは
+// 許容する(週次まとめは「いつ見ても最新の状況を確認できる」がこの機能の目的で、
+// 一度見たら消えるべき情報ではない)。カードの集計時点(asOf)表示が、
+// 重複よりも「古いまま」を防ぐ方の実害を先に塞ぐ(WeeklySummaryCard 参照)。
 const BOOTSTRAP_PROMPT =
   "ログインしたところです。今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
 
@@ -486,8 +505,8 @@ export default function CopilotPreviewPage() {
     // 想定外の形式(下書き生成失敗時のエラー文など)は汎用の agentAction カードにフォールバック。
     const actionMsgs: Msg[] = (data.actions ?? []).map((a) => {
       // 構造化カードが来ていればそれを直接描画する。自然文の言い回しが変わっても
-      // カードが黙って消えない経路。card が無いツール(現状 get_legacy_ui_link 以外の
-      // すべて)は、これまでどおり下の正規表現パースにフォールバックする。
+      // カードが黙って消えない経路。card が無いツール(get_legacy_ui_link / get_weekly_briefing
+      // 以外のすべて)は、これまでどおり下の正規表現パースにフォールバックする。
       if (a.card?.kind === "legacy_link") {
         const { label, url, description } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
@@ -495,6 +514,14 @@ export default function CopilotPreviewPage() {
       if (a.card?.kind === "tuning_rules_list") {
         const { rules, totalCount } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "rulesList", rules, totalCount } };
+      }
+      if (a.card?.kind === "weekly_summary") {
+        const { asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "weeklySummary", asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps },
+        };
       }
       if (a.tool === "suggest_faq") {
         const parsed = parseSuggestFaq(a.result);
@@ -546,6 +573,15 @@ export default function CopilotPreviewPage() {
     const industryTemplatePendingConfirm = data.actions?.some(
       (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
     );
+    // 週次まとめのアクションチップ: LLMの文には付けられない(chipsはsuggest_*系の
+    // ツール結果パースからしか生成できない構造のため)。サーバ集計値(card)から
+    // 決定的に導く — 未回答質問/承認待ちルールが実在する時だけ、その場で着手できる
+    // チップを添える。「次にやるべきこと」の文はLLMの解釈のまま、実行導線だけを分離する。
+    const weeklySummaryCard = data.actions?.find((a) => a.card?.kind === "weekly_summary")?.card;
+    const weeklySummaryGapsActionable =
+      weeklySummaryCard?.kind === "weekly_summary" && (weeklySummaryCard.gaps?.total ?? 0) > 0;
+    const weeklySummaryTuningActionable =
+      weeklySummaryCard?.kind === "weekly_summary" && (weeklySummaryCard.pendingTuningRules ?? 0) > 0;
     const chips: Chip[] | undefined = suggested
       ? [
           { label: "保存して", action: "__real:保存してください", tone: "primary" },
@@ -565,6 +601,15 @@ export default function CopilotPreviewPage() {
       ? [
           { label: "登録して", action: "__real:登録してください", tone: "primary" },
           { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ]
+      : weeklySummaryGapsActionable || weeklySummaryTuningActionable
+      ? [
+          ...(weeklySummaryGapsActionable
+            ? [{ label: "FAQにする", action: "__real:AIが答えられなかった質問をFAQにしてください", tone: "primary" as const }]
+            : []),
+          ...(weeklySummaryTuningActionable
+            ? [{ label: "確認する", action: "__real:承認待ちの指示ルールを見せてください", tone: "primary" as const }]
+            : []),
         ]
       : undefined;
 
@@ -715,6 +760,9 @@ export default function CopilotPreviewPage() {
     setActive(key);
     setRailOpen(false); // モバイル: カテゴリー選択でドロワーを閉じる(デスクトップでは無害)
     if (key === "weekly") {
+      // BOOTSTRAP_PROMPT と同じ依頼文・同じツールに着地する。関係は「必ず再取得する」で
+      // 統一済み(BOOTSTRAP_PROMPT のコメント参照)。ここでキャッシュや直近取得のスキップは
+      // 行わない — クリックした瞬間の最新状況を見せるのがこのカテゴリの役割。
       void sendReal("今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。");
     } else if (key === "history") {
       void sendReal("最近の会話とエスカレーションの状況を教えて");
@@ -1550,9 +1598,118 @@ function CardView({ card }: { card: Card }) {
           </div>
         </CardShell>
       );
+    case "weeklySummary":
+      return <WeeklySummaryCard card={card} />;
     default:
       return null;
   }
+}
+
+// 週次まとめ。数値はすべてサーバ集計値(card)をそのまま描画し、LLMの生成文を経由しない
+// (権威の分離: 数値=サーバ、解釈と「次にやるべきこと」=LLMの文)。各グループが null なのは
+// 取得できなかった場合で、0とは区別して表示自体を省く。
+function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummary" }> }) {
+  const { sessions, avgScore, conversions, faq, pendingTuningRules, gaps } = card;
+  const stats: Array<{ label: string; value: string; sub?: string }> = [];
+
+  if (sessions) {
+    stats.push({
+      label: "会話数",
+      value: `${sessions.total}件`,
+      sub:
+        sessions.changePct !== null
+          ? `先週同時点比 ${sessions.changePct >= 0 ? "+" : ""}${sessions.changePct}%（${sessions.prevTotal}件）`
+          : undefined,
+    });
+  }
+  if (avgScore !== null) stats.push({ label: "応答品質スコア", value: `${avgScore}/100` });
+  if (conversions) {
+    stats.push({ label: "成約", value: `${conversions.count}件・¥${conversions.total.toLocaleString("ja-JP")}` });
+  }
+  if (faq) {
+    stats.push({
+      label: "FAQ",
+      value: `${faq.total}件（公開${faq.published}件）`,
+      sub: faq.lastUpdated
+        ? `最終更新 ${new Date(faq.lastUpdated).toLocaleDateString("ja-JP", { month: "short", day: "numeric" })}`
+        : undefined,
+    });
+  }
+  if (pendingTuningRules !== null) stats.push({ label: "承認待ちの指示ルール", value: `${pendingTuningRules}件` });
+  if (gaps) stats.push({ label: "AIが答えられなかった質問", value: `${gaps.total}件（未対応の累計）` });
+
+  // 会話復元(sessionStorage)で古いまとめがそのまま画面に残るケースがあるため、
+  // 集計時点(asOf)を常に表示する。取得日時をJSTの暦日で比較し、今日でなければ
+  // 「別の日に取得した内容」だと分かるようにする(取得直後かどうかは問わない — 復元も
+  // 再取得も同じ card 構造なので、この表示ロジック1本だけで両方をカバーできる)。
+  const asOfDate = new Date(card.asOf);
+  const jstDayKey = (d: Date) => new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const isStale = jstDayKey(asOfDate) !== jstDayKey(new Date());
+  const asOfLabel = asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <CardShell
+      hd={<><span>📊</span>今週(月曜起点)のまとめ</>}
+      foot={
+        <div
+          style={{
+            padding: "10px 18px",
+            borderTop: "1px solid var(--border)",
+            background: "var(--muted, rgba(120,120,140,0.06))",
+            fontSize: 12.5,
+            color: isStale ? "#b45309" : "var(--muted-foreground)",
+          }}
+        >
+          集計時点: {asOfLabel}
+          {isStale && "（別の日に取得した内容です。最新の状況は左の「今週のまとめ」をもう一度お試しください）"}
+        </div>
+      }
+    >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        {stats.map((s) => (
+          <div
+            key={s.label}
+            style={{
+              flex: "1 1 140px",
+              minWidth: 120,
+              background: "var(--muted, rgba(120,120,140,0.08))",
+              borderRadius: 10,
+              padding: "10px 12px",
+            }}
+          >
+            <div style={{ fontSize: 12, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 4 }}>
+              {s.label}
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--foreground)" }}>{s.value}</div>
+            {s.sub && <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 2 }}>{s.sub}</div>}
+          </div>
+        ))}
+      </div>
+      {gaps && gaps.top.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
+            答えられなかった質問（上位）
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {gaps.top.map((g) => (
+              <div
+                key={g.id}
+                style={{
+                  fontSize: 14,
+                  color: "var(--foreground)",
+                  background: "var(--muted, rgba(120,120,140,0.08))",
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                }}
+              >
+                「{g.question}」
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </CardShell>
+  );
 }
 
 // PDF取り込みカード。旧UIのPDFタブと同じ3点(ファイル名・送信の進捗%・結果)を、

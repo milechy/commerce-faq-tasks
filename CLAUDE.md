@@ -106,6 +106,7 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | ツール実行の計測 | `agentRoutes.ts` にのみ実装。`actionExecutor.ts` の各 `case` には手を入れない（`docs/AGENT_METRICS.md`） |
 | テナント設定の取得・更新 | `GET/PATCH /v1/admin/my-tenant`（`src/api/admin/tenants/routes.ts`） |
 | DB列追加 | 機能ディレクトリ内に `migration_<機能>.sql`。`ADD COLUMN IF NOT EXISTS` + `COMMENT ON COLUMN` で意味を明記 |
+| 日付・週境界の計算 | `src/lib/date/weekRange.ts`（JST暦週。UTCベースの算術のみで実装し process TZ に依存しない）。詳細: `docs/WEEKLY_SUMMARY_REQUIREMENTS.md` |
 
 **新規ファイルを作ってよいのは**、テスト可能な純関数として切り出す場合のみ。
 その場合も `confirmPolicy.ts` / `agentAuditLog.ts` と同じ粒度・同じディレクトリに置き、隣に `*.test.ts` を作る。
@@ -163,6 +164,12 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     計測もフロントのチップ表示も結果文字列の部分一致で判定しているため、正常応答が `blocked` として数えられる（`docs/AGENT_METRICS.md`）。
 13. **動線として閉じていないツールを足す。** 一覧を返す手段が無いのに id 必須の `activate_avatar` だけがある状態は、
     チャットからは実行不能で「あるのに使えない」。ツールは**ユーザーが会話だけで完了できる単位**で追加する。
+14. **`AT TIME ZONE` を片側だけ書く。** `timestamptz` カラムとの比較は往復変換が必須。
+    サーバTZ依存の実装は**本番でのみ実際の時刻とズレ、数値はもっともらしく出るため気づけない**
+    （`src/lib/date/weekRange.ts` は process TZ に一切依存しない実装で、この事故を回避している）。
+15. **チャットに出す集計値をLLMの生成文のまま表示する。** 数値・期間・件数はサーバが構造化データ
+    （card）として返し、LLMは解釈・提案のみを担う。丸め・省略・語り換えが構造的に起こり得るため
+    （例: `get_weekly_briefing`。詳細: `docs/WEEKLY_SUMMARY_REQUIREMENTS.md`）。
 
 ## テストの最低ライン
 

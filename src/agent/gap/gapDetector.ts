@@ -3,7 +3,7 @@
 
 import pino from 'pino';
 import { getPool } from '../../lib/db';
-import { createNotification } from '../../lib/notifications';
+import { createNotification, notificationExists } from '../../lib/notifications';
 
 const logger = pino();
 
@@ -94,14 +94,21 @@ async function upsertGap(
       const updatedQuestion: string = updateResult.rows[0]?.user_question ?? question;
 
       // Phase52h: Trigger 2 — 頻出未回答質問通知（5回以上）
+      // GID:1217040958080651 — FAQを足して穴を埋められる client_admin 宛と、
+      // テナント横断で状況を把握する super_admin 宛の2件を発行する（片方に寄せない）
       if (updatedFreq >= 5) {
-        void createNotification({
+        void notifyFrequentGap({
+          recipientRole: 'client_admin',
+          recipientTenantId: input.tenantId,
+          gapId,
+          question: updatedQuestion,
+          frequency: updatedFreq,
+        });
+        void notifyFrequentGap({
           recipientRole: 'super_admin',
-          type: 'knowledge_gap_frequent',
-          title: 'よく聞かれる未回答質問があります',
-          message: `「${updatedQuestion.slice(0, 50)}」が${updatedFreq}回聞かれています`,
-          link: '/admin/knowledge-gaps',
-          metadata: { gapId },
+          gapId,
+          question: updatedQuestion,
+          frequency: updatedFreq,
         });
       }
 
@@ -128,5 +135,45 @@ async function upsertGap(
   } catch (err) {
     logger.warn({ err, tenantId: input.tenantId, source }, 'gapDetector.upsert.failed');
     return { detected: false, source: null };
+  }
+}
+
+/**
+ * GID:1217040958080651 — 頻出gap通知を宛先ごとに重複抑止しつつ発行する。
+ * client_admin / super_admin はそれぞれ独立した重複抑止キー(gapId + role)を持つため、
+ * 一方が既に通知済みでも他方の発行はブロックされない。
+ * fire-and-forget 前提: 呼び出し側は void で呼ぶこと。内部で例外を握りつぶし、
+ * gap 検出・チャット応答をブロックしない。
+ */
+async function notifyFrequentGap(params: {
+  recipientRole: 'client_admin' | 'super_admin';
+  recipientTenantId?: string;
+  gapId: number;
+  question: string;
+  frequency: number;
+}): Promise<void> {
+  const dedupeKey = `${params.gapId}_${params.recipientRole}`;
+  try {
+    const alreadyExists = await notificationExists(
+      'knowledge_gap_frequent',
+      'gap_role',
+      dedupeKey,
+    );
+    if (alreadyExists) return;
+
+    await createNotification({
+      recipientRole: params.recipientRole,
+      recipientTenantId: params.recipientTenantId,
+      type: 'knowledge_gap_frequent',
+      title: 'よく聞かれる未回答質問があります',
+      message: `「${params.question.slice(0, 50)}」が${params.frequency}回聞かれています`,
+      link: '/admin/knowledge-gaps',
+      metadata: { gapId: params.gapId, gap_role: dedupeKey },
+    });
+  } catch (err) {
+    logger.warn(
+      { err, gapId: params.gapId, recipientRole: params.recipientRole },
+      'gapDetector.notifyFrequentGap.failed',
+    );
   }
 }
