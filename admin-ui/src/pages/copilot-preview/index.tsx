@@ -248,6 +248,10 @@ const PDF_UPLOAD_TOO_LARGE_ERROR = "ファイルが大きすぎて受け取れ�
 const PDF_UPLOAD_NETWORK_ERROR = "うまく送れませんでした。通信の状態を確かめて、もう一度お試しください。";
 const PDF_UPLOAD_GENERIC_ERROR = "うまく受け取れませんでした。少し時間をおいてお試しください。";
 const PDF_UPLOAD_ZIP_EMPTY_ERROR = "ZIPの中に取り込めるPDFが見つかりませんでした。";
+// GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定(2026-07-31決定)。専門用語(403/権限等)は
+// 出さず、優しい日本語で断る。バックエンド(bookPdfRoutes.ts)の拒否文言とも揃える。
+const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
+  "この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。";
 
 // ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
 //     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
@@ -738,6 +742,11 @@ export default function CopilotPreviewPage() {
     ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(scopedTenantId)}`
     : `${API_BASE}/v1/admin/knowledge/book-pdf`;
 
+  // GID 1217040818410419: previewMode中はisSuperAdminがclient_admin相当に落ちる(useAuth.tsx:213-214)
+  // ため、ここで isSuperAdmin(上の派生値)を使うと previewMode中のsuper_admin自身からもPDF投入が
+  // 消えてしまう。生のロールで判定する(この画面はテナントとsuper_adminのpreviewの両方が通る)。
+  const canUploadBookPdf = user?.role === "super_admin";
+
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const [pdfDragOver, setPdfDragOver] = useState(false);
   const pdfDragCounterRef = useRef(0);
@@ -751,8 +760,27 @@ export default function CopilotPreviewPage() {
   }, []);
 
   const acceptFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0) return;
+
+    // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定。通信前にこの場で優しく断る
+    // (拡張子/サイズの受付判定と同じく、対象外の相手には通信させない)。
+    if (!canUploadBookPdf) {
+      push({
+        id: nextId(),
+        role: "ai",
+        card: {
+          kind: "pdfUpload",
+          status: "error",
+          fileName: fileArray.length === 1 ? fileArray[0].name : `${fileArray.length}件のファイル`,
+          message: PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE,
+        },
+      });
+      return;
+    }
+
     const accepted: { file: File; isZip: boolean }[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of fileArray) {
       const verdict = validateBookPdfFile(file);
       if (verdict.kind === "rejected") {
         // 受け付けない形式・大きさは通信する前にこの場で断る

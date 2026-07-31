@@ -51,7 +51,7 @@
 | 1 | ダッシュボード | `/admin` | **Chat-partial** (集計値3つが欠) | なし |
 | 2 | 会話履歴 | `/admin/chat-history` | **Chat-partial** | `session_deletion` |
 | 3 | 対応中の会話 (エスカレーション) | `/admin/escalations` | **Chat-complete** | `escalation_reply` (履歴閲覧用に限定) |
-| 4 | AIの知識データ | `/admin/knowledge/:tenantId` | **Chat-partial** (タブごとに差、§1.2) | `knowledge_pdf` のみ (「成約への貢献度」タブは**キーすら無い**) |
+| 4 | AIの知識データ | `/admin/knowledge/:tenantId` | **Chat-partial** (タブごとに差、§1.2。2026-07-31: PDFタブをテナント可視面から除外、残る障害は「成約への貢献度」タブのみ) | `knowledge_pdf` のみ (キーは残存。「成約への貢献度」タブは**キーすら無い**) |
 | 5 | 未回答質問 | `/admin/knowledge-gaps` | **Chat-complete** | なし |
 | 6 | 会話分析 | `/admin/analytics` | **Chat-partial** | `analytics` |
 | 7 | 成約・効果分析 | `/admin/conversion` | **Chat-partial** | `conversion` |
@@ -90,18 +90,19 @@
 
 #### 4. AIの知識データ `/admin/knowledge/:tenantId` — Chat-partial
 - サイドバー: `AppSidebar.tsx:60` (パスは `SidebarContent` 内 166–178行 でテナントID付きに書き換え) / モバイル下部バー: `AppSidebar.tsx:498` / ルート: `App.tsx:175–181`
-- このページは **5 タブ構成** (`pages/admin/knowledge/[tenantId].tsx:78–84`)。タブ配列に `isSuperAdmin` ガードは無く、**5 タブすべてがテナントに見えている**。タブ単位で被覆状況が違うため、ページ単位の分類だけでは判断を誤る:
+- このページは **5 タブ構成** (`pages/admin/knowledge/[tenantId].tsx` のタブ配列)。タブ単位で被覆状況が違うため、ページ単位の分類だけでは判断を誤る:
+- **2026-07-31 (GID 1217040818410419)**: 「書籍/PDFはR2C運用限定」の方針決定を受け、PDFタブを `user?.role === "super_admin"` の生ロール判定でタブ配列から除外した(previewMode中は `isSuperAdmin` がclient_admin相当に落ちるため、そちらは使っていない — `useAuth.tsx:213–214`)。`?tab=pdf` への直リンクも list へフォールバックする。バックエンド(`bookPdfRoutes.ts` の投入系2エンドポイント)にも同判定で403ガードを追加済み。UIから消しただけで終わらせていない。
 
 | タブ | 実装 | チャット被覆 |
 |---|---|---|
 | 一覧 (`list`) | `KnowledgeListTab` (`[tenantId].tsx:8, 199`) | ○ `get_faq_list` (`toolDefinitions.ts:68`)、`add_faq` (`:89`)、`update_faq` (`:115`)、`delete_faq` (`:140`)、`suggest_faq` (`:436`)、`save_faq` (`:454`)、`import_industry_faq_templates` (`:161`) |
 | テキスト入力 (`text`) | `TextInputTab` (`:9, 203`) | ○ `suggest_faq_import_from_text` (`:472`) + `commit_faq_import` (`:521`) / `discard_faq_import` (`:542`) |
 | URL取得 (`scrape`) | `UrlScrapeTab` (`:10, 204`) | ○ `suggest_faq_import_from_urls` (`:496`) + `commit_faq_import` |
-| PDFアップロード (`pdf`) | `PdfUploadTab` + `BookUploadsSection` (`:11, 205`) | ✕ **GUI固有**。`LEGACY_UI_LINKS.knowledge_pdf` (`actionExecutor.ts:1705–1709`) で受け渡し。`actionExecutor.ts:1700` のコメントが「ファイル選択がGUI固有の操作のためチャット化せず」と明記 |
-| 成約への貢献度 (`attribution`) | `KnowledgeAttributionTab` (`:7, 206–207`) | ✕ **ツールも handoff キーも無い** |
+| PDFアップロード (`pdf`) | `PdfUploadTab` + `BookUploadsSection` (`:11, 205`) | **済 (2026-07-31)** テナント可視面から除外済み。R2C運用限定になったため、そもそも「テナントのチャット被覆」の対象から外れた(super_adminの運用面としては旧UI/新UI(`/copilot-preview`)双方に残る)。`LEGACY_UI_LINKS.knowledge_pdf` のキー・enumは計測トリップワイヤーのため削除せず維持(説明文のみ更新) |
+| 成約への貢献度 (`attribution`) | `KnowledgeAttributionTab` (`:7, 206–207`) | ✕ **ツールも handoff キーも無い**(未着手) |
 
 - **「成約への貢献度」タブは第3のカテゴリ**: チャットから実行できず、`get_legacy_ui_link` で案内することすらできない (`feature` の値集合に対応するものが無い — §1.1 の注記)。**チャットからは存在が見えない機能**であり、`agent_legacy_handoff` にも一切現れない。つまり §2 の基準では「使われていない」と区別がつかない。`get_conversion_summary` (`:887`) は成約全体のサマリーで、ナレッジ単位の貢献度 (`/v1/admin/analytics/knowledge-attribution`, `components/knowledge/KnowledgeAttributionTab.tsx:136`) とは別物。
-- 判定: **クローズ不可** (§4 「クローズ対象外」)。PDF タブが GUI 固有である限りページ全体は閉じられない。加えて attribution タブは、閉じる前に「チャット側にツールを作る」か「最低限 handoff キーを足して計測対象に載せる」かの決着が必要。**計測に現れない機能を抱えたままページを閉じると、失われたことに誰も気づかない。**
+- 判定: **クローズ不可** (§4 「クローズ対象外」)。PDF タブは「テナント可視面から除外」でこのページの障害としては解消したが、attribution タブが残る限りページ全体はまだ閉じられない。attribution タブは、閉じる前に「チャット側にツールを作る」か「最低限 handoff キーを足して計測対象に載せる」かの決着が必要。**計測に現れない機能を抱えたままページを閉じると、失われたことに誰も気づかない。** attribution タブの決着が付けば、このページはクローズ候補に上がる。
 
 #### 5. 未回答質問 `/admin/knowledge-gaps` — Chat-complete
 - サイドバー: `AppSidebar.tsx:61` / ルート: `App.tsx:208`
