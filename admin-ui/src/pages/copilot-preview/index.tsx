@@ -1692,10 +1692,17 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
   // 集計時点(asOf)を常に表示する。取得日時をJSTの暦日で比較し、今日でなければ
   // 「別の日に取得した内容」だと分かるようにする(取得直後かどうかは問わない — 復元も
   // 再取得も同じ card 構造なので、この表示ロジック1本だけで両方をカバーできる)。
+  //
+  // asOf は改ざん/破損したsessionStorageから復元される可能性がある(手動編集・古い
+  // スキーマのデータ等)。toISOString() は Invalid Date で例外を投げるため、ここで
+  // throw するとカード1枚のためにスレッド全体の描画が落ちる。素通しせず必ず検証する。
   const asOfDate = new Date(card.asOf);
+  const asOfValid = !Number.isNaN(asOfDate.getTime());
   const jstDayKey = (d: Date) => new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const isStale = jstDayKey(asOfDate) !== jstDayKey(new Date());
-  const asOfLabel = asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const isStale = !asOfValid || jstDayKey(asOfDate) !== jstDayKey(new Date());
+  const asOfLabel = asOfValid
+    ? asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "不明";
 
   return (
     <CardShell

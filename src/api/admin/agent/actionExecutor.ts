@@ -343,7 +343,11 @@ export async function executeToolCall(
         let whereClause = 'WHERE tenant_id = $1';
 
         if (search) {
-          whereParams.push(`%${search}%`);
+          // LIKE のワイルドカードを無効化し、意図しない広域一致を防ぐ（Postgres の既定エスケープ文字は \）。
+          // resolveSessionByShortId と同じ規約(この関数固有。呼び出しは1箇所に限る)。
+          // 例: 「50%オフ」で検索すると、エスケープ無しでは「50」+任意文字列+「オフ」に広域一致していた。
+          const escapedSearch = search.replace(/[\\%_]/g, (c) => `\\${c}`);
+          whereParams.push(`%${escapedSearch}%`);
           whereClause += ` AND (question ILIKE $${whereParams.length} OR answer ILIKE $${whereParams.length})`;
         }
 
@@ -1255,9 +1259,13 @@ export async function executeToolCall(
           const row = faqRes.value?.rows?.[0];
           const faqTotal = Number(row?.total ?? 0);
           const faqPublished = Number(row?.published ?? 0);
-          const lastUpdatedIso: string | null = row?.last_updated
-            ? new Date(row.last_updated).toISOString()
-            : null;
+          // last_updated が想定外の値(パース不能)でも toISOString() で例外を投げない。
+          // ここで投げると case 全体の try/catch に捕まり、他6指標が正常に取得できていても
+          // 「取得に失敗しました」に落ちる — Promise.allSettled で守っている部分失敗耐性が
+          // この1行のせいで無効化されてしまうため、必ず検証してから変換する。
+          const lastUpdatedDate = row?.last_updated ? new Date(row.last_updated) : null;
+          const lastUpdatedIso: string | null =
+            lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime()) ? lastUpdatedDate.toISOString() : null;
           card.faq = { total: faqTotal, published: faqPublished, lastUpdated: lastUpdatedIso };
           const lastUpdatedDisplay = lastUpdatedIso
             ? new Date(lastUpdatedIso).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
