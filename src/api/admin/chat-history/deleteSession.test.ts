@@ -757,4 +757,85 @@ describe("deleteSessionRepository: lock_timeout / ROLLBACK 整合性", () => {
     expect(rollbackCalls).toHaveLength(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
+
+  // ── 削除時に失われる成果(outcome)の監査記録 ─────────────────────────────
+  // outcome は独立テーブルではなく chat_sessions の列のため、行の削除と同時に
+  // 失われる。agent の record_session_outcome と delete_chat_session を同一ターンで
+  // 実行すると、記録した直後に無音で消える経路が実在する。削除の監査ログに
+  // 残しておかないと、後から「何が記録されていたか」を追う手段が無くなる。
+  function seedSuccessfulDelete(sessionRow: Record<string, unknown>) {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // BEGIN
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // SET LOCAL lock_timeout
+      .mockResolvedValueOnce({ rows: [sessionRow], rowCount: 1 }) // SELECT FOR UPDATE
+      .mockResolvedValueOnce({ rows: [{ cnt: "3" }], rowCount: 1 }) // COUNT messages
+      .mockResolvedValueOnce({ rows: [{ cnt: "0" }], rowCount: 1 }) // COUNT orders
+      .mockResolvedValueOnce({ rows: [{ id: "sess-uuid-1" }], rowCount: 1 }) // DELETE RETURNING
+      .mockResolvedValue({ rows: [], rowCount: 0 }); // INSERT audit_logs / COMMIT
+  }
+
+  function auditMetadata(): Record<string, unknown> {
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === "string" && (c[0] as string).includes("INSERT INTO audit_logs"),
+    );
+    expect(insertCall).toBeTruthy();
+    // metadata は INSERT の7番目のパラメータ（JSON文字列）
+    return JSON.parse((insertCall![1] as unknown[])[6] as string) as Record<string, unknown>;
+  }
+
+  it("成果が記録済みのセッションを削除すると、その値が監査ログに残る", async () => {
+    seedSuccessfulDelete({
+      id: "sess-uuid-1",
+      tenant_id: "tenant-a",
+      outcome: "購入完了",
+      outcome_recorded_at: "2026-07-31T10:00:00Z",
+    });
+
+    await realDeleteSession(BASE_PARAMS);
+
+    expect(auditMetadata()).toEqual(
+      expect.objectContaining({
+        deleted_outcome: { outcome: "購入完了", recorded_at: "2026-07-31T10:00:00Z" },
+      }),
+    );
+  });
+
+  it("成果が未記録(null)なら監査ログに余計なフィールドを足さない", async () => {
+    seedSuccessfulDelete({
+      id: "sess-uuid-1",
+      tenant_id: "tenant-a",
+      outcome: null,
+      outcome_recorded_at: null,
+    });
+
+    await realDeleteSession(BASE_PARAMS);
+
+    const metadata = auditMetadata();
+    expect(metadata).not.toHaveProperty("deleted_outcome");
+    // 既存の形(reason + affected_counts)が変わっていないこと
+    expect(metadata).toEqual({
+      reason: "test reason here",
+      affected_counts: { chat_messages: 3, option_orders_nulled: 0 },
+    });
+  });
+
+  it.each([
+    ["tenant スコープ", { kind: "tenant" as const, tenantId: "tenant-a" }],
+    ["global スコープ", { kind: "global" as const }],
+  ])("%s の SELECT でも outcome を読む(super_admin経路の取りこぼし防止)", async (_label, scope) => {
+    seedSuccessfulDelete({
+      id: "sess-uuid-1",
+      tenant_id: "tenant-a",
+      outcome: "離脱",
+      outcome_recorded_at: "2026-07-31T10:00:00Z",
+    });
+
+    await realDeleteSession({ ...BASE_PARAMS, scope });
+
+    const selectCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === "string" && (c[0] as string).includes("FOR UPDATE"),
+    );
+    expect(selectCall![0] as string).toContain("outcome");
+    expect(auditMetadata()).toHaveProperty("deleted_outcome");
+  });
 });
