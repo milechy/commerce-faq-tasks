@@ -189,6 +189,15 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 17. **チャットに出す集計値をLLMの生成文のまま表示する。** 数値・期間・件数はサーバが構造化データ
     （card）として返し、LLMは解釈・提案のみを担う。丸め・省略・語り換えが構造的に起こり得るため
     （例: `get_weekly_briefing`。詳細: `docs/WEEKLY_SUMMARY_REQUIREMENTS.md`）。
+18. **チャットUIからバックエンドを直接fetchする経路を足すとき、previewMode中のテナントスコープ
+    (`?tenant=`)を載せ忘れる。** エージェントツール経由の呼び出しは `targetTenantId` が自動で載るが、
+    直接fetch（`generateAvatarCandidates`・`matchAvatarVoice`・`uploadUrl`のような、500字制約や
+    外部API呼び出しでツール経由にできない処理）は自分で載せる必要があり、この非対称を知らないまま
+    新しい直接fetch経路を足すと静かに漏れる。載せ忘れると、費用と保存先が操作対象テナントではなく
+    super_admin自身の（空の）テナントに紐づき、画面上は正常に見えるためQAで気づけない
+    （実例: `falGenerationRoutes.ts`/`generationRoutes.ts` の生成系4ルート。
+    `escalations`/`tuning`/`knowledge`/テストチャットでも過去に同根の修正が4回ある再発パターン。
+    PR #481/#483、および #P0-1〜#P0-3）。
 
 ## テストの最低ライン
 
