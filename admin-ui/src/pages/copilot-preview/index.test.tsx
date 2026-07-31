@@ -594,6 +594,41 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText("送料はいくらですか")).toBeTruthy();
   });
 
+  it("record_session_outcome が確認待ちのときは「記録して」チップを出し、押すと実送信する", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let outcomeCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      outcomeCalls += 1;
+      if (outcomeCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      if (outcomeCalls === 2) {
+        return mockOk({
+          reply: "確認をお願いします。",
+          actions: [
+            {
+              tool: "record_session_outcome",
+              result:
+                "セッション[oooo1111]の成果を「購入完了」として記録するには確認が必要です。ユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+            },
+          ],
+        });
+      }
+      return mockOk({ reply: "記録しました。", actions: [] });
+    });
+
+    await send("oooo1111の成果を購入完了で記録して");
+
+    const chip = await screen.findByRole("button", { name: "記録して" });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("はい、お願いします")).toBeTruthy());
+  });
+
   it("conversation_evaluation カードは総合スコア・4軸・所見を表示する(旧UIと同一の閾値)", async () => {
     mockAgent({
       reply: "評価はこちらです。",

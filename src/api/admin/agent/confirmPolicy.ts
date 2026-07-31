@@ -54,6 +54,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 採用済み文面の削除。対象は配列の1要素で approve_ し直せるが、
   // 元の文面自体は失われるため low ではなく medium に置く。
   remove_approved_response: 'medium',
+  // 会話セッションの成果(コンバージョン結果)記録。永続コンテンツの変更だが、
+  // 再記録すれば戻せるため medium。
+  record_session_outcome: 'medium',
 
   // --- high: 不可逆な破棄 / 課金 / 外部送出 ---
   delete_faq: 'high',
@@ -83,6 +86,7 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_engagement_rules',
   'get_chat_sessions',
   'get_chat_session_messages',
+  'get_session_outcome',
   'get_conversation_evaluation',
   'get_escalations',
   'get_monitoring_summary',

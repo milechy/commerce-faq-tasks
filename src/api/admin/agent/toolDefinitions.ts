@@ -893,6 +893,57 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_session_outcome',
+      description:
+        '指定した会話セッションの成果（コンバージョン結果。例: 購入完了・予約完了・離脱）が' +
+        '記録済みかどうかを取得する読み取り専用ツール。get_chat_sessions が返した [xxxxxxxx] の' +
+        '短縮IDをそのまま session_id に渡せる。「この会話の成果は記録されている？」と聞かれた時に使う。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'record_session_outcome',
+      description:
+        '指定した会話セッションの成果（コンバージョン結果）を記録する書き込みツール。' +
+        'outcome はテナントごとに決められた選択肢（例: 購入完了・予約完了・問い合わせ送信・離脱・不明）の' +
+        'いずれかでなければならず、範囲外の値を渡すと有効な選択肢が案内される。get_chat_sessions が' +
+        '返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。永続コンテンツの変更のため、' +
+        '必ず先にどの会話にどの成果を記録するかをユーザーに提示し、同意を得たターンでのみ' +
+        'confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+          outcome: {
+            type: 'string',
+            description: '記録する成果。このテナントの成果選択肢のいずれか(不明な場合はまず get_session_outcome か会話一覧で確認すること)',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['session_id', 'outcome'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_monitoring_summary',
       description:
         '直近30日間の会話完了率・フォールバック率（AIが答えられなかった割合）のサマリーを取得する読み取り専用ツール。',

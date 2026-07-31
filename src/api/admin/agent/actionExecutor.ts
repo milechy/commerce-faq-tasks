@@ -27,7 +27,7 @@ import {
   recordPlanLimitMention,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
-import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation, normalizeSessionListParams } from '../chat-history/chatHistoryRepository';
+import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation, normalizeSessionListParams, getConversionTypes, recordOutcome, getSessionOutcome } from '../chat-history/chatHistoryRepository';
 import { getEvaluationsBySession } from '../evaluations/evaluationsRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
@@ -2096,6 +2096,85 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] resolve_escalation failed', err);
         return truncate('対応完了の記録に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_session_outcome': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        const outcome = await getSessionOutcome(resolved.session.id);
+        if (!outcome?.outcome) {
+          return truncate(`セッション[${display}]の成果はまだ記録されていません`);
+        }
+        return truncate(
+          `セッション[${display}]の成果: ${outcome.outcome}` +
+          (outcome.outcomeRecordedAt ? `（${outcome.outcomeRecordedAt.slice(0, 10)}に記録）` : ''),
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] get_session_outcome failed', err);
+        return truncate('成果の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'record_session_outcome': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const outcomeValue = String(args['outcome'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      if (!outcomeValue) {
+        return truncate('outcome（記録する成果）は必須です');
+      }
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        const conversionTypes = await getConversionTypes(tenantId);
+        if (!conversionTypes.includes(outcomeValue)) {
+          return truncate(
+            `「${outcomeValue}」はこのテナントの成果選択肢に含まれていません。有効な選択肢: ${conversionTypes.join(' / ')}`,
+          );
+        }
+
+        if (!confirmed) {
+          return truncate(
+            `セッション[${display}]の成果を「${outcomeValue}」として記録するには確認が必要です。` +
+            'ユーザーに提示し、同意を得てから confirmed=true で再度実行してください',
+          );
+        }
+
+        // executeToolCall は現状、実行者(メールアドレス等)を受け取っていない
+        // (reply_to_escalation 等の既存の書き込みツールと同じ制約)。HTTP経由の
+        // PATCH /v1/admin/chat-history/sessions/:id/outcome は email を記録できるが、
+        // チャット経由はここでは null になる。
+        await recordOutcome({
+          sessionDbId: resolved.session.id,
+          tenantId,
+          outcome: outcomeValue,
+          recordedBy: null,
+        });
+        return truncate(`セッション[${display}]の成果を「${outcomeValue}」として記録しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] record_session_outcome failed', err);
+        return truncate('成果の記録に失敗しました');
       }
     }
 
