@@ -613,3 +613,28 @@ SELECT
 | クローズ判定を開始してよいか | **開始不可**。V が8週連続で成立するまでは、C1〜C3・ファネルの数値が仮に良好でも判定材料として使わない（`docs/LEGACY_UI_SUNSET.md` §2.3 の規約どおり） |
 
 **次のアクション**: 2026-09-25 以降（または本番DBに接続できるようになった時点でまず§14-Aを実行し8週連続成立を確認してから）、§14 の B〜E を実行し、本ドキュメントに実測値を追記した上でクローズ判定に進む。
+
+## 16. previewMode中のテナントスコープ漏れ（発見・是正、#P0-1〜#P0-3）
+
+実装完了後の厳格レビューで、super_adminのクライアントビュー(previewMode)中に画像生成・声検索を行うと、操作対象テナントではなく super_admin 自身の（空の）テナントに課金・保存されるバグが発覚した。
+
+**発見時の想定と実態の差分**: 当初のレビュー指摘は「`fal/generate`・`match-voice` の2エンドポイントで課金先を誤る」だったが、調査の結果:
+
+- 対象は2本ではなく **`fal/generate`・`generate-image`・`match-voice`・`generate-prompt` の4本**。`src/api/admin/avatar/` 配下の生成系ルートが同じ2行（`app_metadata.tenant_id` を直接読むだけで `?tenant=` クエリを無視）を共有していた
+- 被害は課金の誤計上だけでなく **Supabase Storageのパス破壊**。`falGenerationRoutes.ts` の `uploadImageFromUrl` は `filePath = ${tenantId}/${filename}.${ext}` を組むため、`tenantId` が空だと生成画像がバケット直下に全テナント混在で書き込まれていた
+- これはチャットUI移行で作り込んだバグではなく **旧UI時代から存在する既存バグ**。旧UI(`studio.tsx`)のCRUD系(`/configs`)には `?tenant=` 対応があるのに、生成系4本には無かった
+- 同種の「previewMode中のテナントスコープ漏れ」は `escalations`/`tuning`/`knowledge`/テストチャット（PR #481/#483 等）で過去に**4回**修正されている再発パターンであり、根本原因は本ドキュメントの以下の非対称にある
+
+**根本原因**: エージェントツール経由の呼び出しは `targetTenantId` が自動で載るが、画像生成・声検索のような「500字応答制約や外部API呼び出しでツール経由にできない処理」（§10参照）はチャットUIから直接fetchしており、この直接fetch経路には自動付与の仕組みがない。この非対称を知らないまま新しい直接fetch経路を追加すると、`?tenant=` の付与を個別に実装し忘れやすい。
+
+**対応（3段階、この順序でしか安全に適用できない）**:
+
+1. **P0-1**（バックエンド）: `src/api/middleware/roleAuth.ts` に `resolveEffectiveTenantId()` を追加し、4ルートで共通利用。super_adminの `?tenant=` を受け付けるが、まだ400ガードは入れない
+2. **P0-2**（フロント・新旧UI）: `copilot-preview/index.tsx`・`studio.tsx` の生成系呼び出しに `?tenant=` を実際に送らせる
+3. **P0-3**（バックエンド）: テナントが解決できない場合、外部API呼び出し前に400で早期リターン。P0-1/P0-2完了後でないと、まだ `?tenant=` を送っていない経路（当時の旧UI）を新たに壊す
+
+**やっていないこと（既知の残存ギャップ）**:
+
+- `studio.tsx` の編集(`isEdit`)導線は `AvatarCard.tsx` からの遷移時に `?tenant=` をそもそもURLに乗せていない（新規作成導線の `AvatarTab.tsx` は乗せている）。P0-2で追加した `?tenant=` 付与ロジック自体は正しいが、編集画面ではこのURLパラメータが最初から無いため無効化される
+- `generate-premium`（`premiumGenerationRoutes.ts`）にも同じ脆弱パターン（`su?.app_metadata?.tenant_id` を直接見て `?tenant=` 未対応）が存在することを確認したが、P0-1〜P0-3のスコープが明示的に4ルートに限定されていたため対象外。別タスクとして起票が必要
+- レート制限・利用回数上限は追加していない。従量課金のプロダクトのため、守るべきは `trackUsage` の正しい計上と費用の事前明示であり、上限を設ける必要はない（CLAUDE.md 項目10参照）
