@@ -199,7 +199,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             description: 'ユーザーの明確な同意を得た場合のみ true',
           },
         },
-        required: ['industry'],
+        // オンボ 是正D-1: publish_faq_drafts側は confirmed が required なのに、
+        // ここは industry だけが required で非対称だった。同じ確認ゲート付きツールとして揃える。
+        required: ['industry', 'confirmed'],
       },
     },
   },

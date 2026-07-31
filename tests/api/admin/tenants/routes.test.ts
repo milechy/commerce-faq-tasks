@@ -295,6 +295,35 @@ describe("Tenant Admin Routes", () => {
         expect(String(chatSessionsCall[0])).toContain(`metadata->>'source' = 'user'`);
       });
 
+      // オンボ 是正D-2: X-16はchat_sessionsのテナント境界をSQL文字列レベルで固定して
+      // いるのに、knowledgePublished判定のis_published条件は未検証で非対称だった
+      // (この条件が外れて「下書きでも公開済み扱い」になっても既存テストは全て緑のまま)。
+      it("オンボ 是正D-2: knowledgePublished判定クエリは is_published を条件に含む(SQL文字列検証)", async () => {
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: "beauty", onboarding_widget_seen_at: null,
+              created_at: "2026-08-01T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [{ published_count: "0", draft_count: "0" }], rowCount: 1 }) // faq_docs
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions
+
+        await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        const faqDocsCall = mockDb.query.mock.calls.find(([sql]: [string]) =>
+          String(sql).includes("FROM faq_docs"),
+        );
+        expect(faqDocsCall).toBeDefined();
+        expect(String(faqDocsCall[0])).toContain("is_published");
+        expect(String(faqDocsCall[0])).toContain("tenant_id = $1");
+      });
+
       // X-14(docs/ONBOARDING_FIRST_LOGIN.md §7.3): super_adminの代行(previewMode)でも
       // client_admin本人でも、段階の導出は同じクエリ・同じ判定になる(actorによる分岐が無い)。
       // tenants テーブル自体に actor 列が無いため、代行で設定した状態はテナント本人からも
@@ -348,6 +377,31 @@ describe("Tenant Admin Routes", () => {
         expect(res.status).toBe(200);
         expect(res.body.onboarding_stage.knowledgePublished).toBe(false);
         expect(res.body.onboarding_stage.industryAnswered).toBe(true);
+      });
+
+      // オンボ 是正D-2: フェイルセーフはfaq_docs失敗のみ検証済みで、chat_sessions失敗が
+      // 非対称に未検証だった。
+      it("chat_sessions クエリが失敗しても my-tenant 応答全体は壊れない(フェイルセーフ)", async () => {
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: "beauty", onboarding_completed_at: null, onboarding_widget_seen_at: null,
+              created_at: "2026-08-01T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [{ published_count: "1", draft_count: "0" }], rowCount: 1 }) // faq_docs: 成功
+          .mockRejectedValueOnce(new Error("connection lost")); // chat_sessions 失敗
+
+        const res = await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.onboarding_stage.firstConversation).toBe(false);
+        expect(res.body.onboarding_stage.knowledgePublished).toBe(true);
       });
 
       // オンボ 是正A-1: P6マージ前(4段階モデル導入前)に作られたテナントは
