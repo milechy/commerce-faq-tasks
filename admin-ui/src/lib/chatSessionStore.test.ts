@@ -108,6 +108,50 @@ describe("chatSessionStore (タブ単位の会話永続化)", () => {
     expect(restoreChatSession(CHAT_SESSION_SURFACE_FULLSCREEN)).toBeNull();
   });
 
+  // GID: キーが surface のみでテナントを区別しないため、super_adminがプレビュー中に
+  // 別テナントへ切り替えると、前テナントの会話が「復元成功」として通ってしまっていた。
+  describe("テナントスコープの検証", () => {
+    it("保存時と同じcurrentTenantIdを渡せば復元できる", () => {
+      saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, { ...SESSION, tenantId: "tenant-a" });
+
+      expect(restoreChatSession<TestMsg>(CHAT_SESSION_SURFACE_FULLSCREEN, "tenant-a")).toEqual({
+        ...SESSION,
+        tenantId: "tenant-a",
+      });
+    });
+
+    it("保存時と異なるcurrentTenantIdを渡すと、別テナントの会話として復元しない(null)", () => {
+      saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, { ...SESSION, tenantId: "tenant-a" });
+
+      expect(restoreChatSession<TestMsg>(CHAT_SESSION_SURFACE_FULLSCREEN, "tenant-b")).toBeNull();
+    });
+
+    it("currentTenantIdを渡さなければ、保存されたtenantIdに関わらず検証をスキップする(後方互換)", () => {
+      saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, { ...SESSION, tenantId: "tenant-a" });
+
+      expect(restoreChatSession<TestMsg>(CHAT_SESSION_SURFACE_FULLSCREEN)).toEqual({
+        ...SESSION,
+        tenantId: "tenant-a",
+      });
+    });
+
+    it("tenantIdを持たない旧形式の保存データは、currentTenantIdを渡すと安全側に倒して破棄する", () => {
+      // この検証を追加する前に保存された会話を模擬(tenantIdフィールド自体が無い)
+      saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, SESSION);
+
+      expect(restoreChatSession<TestMsg>(CHAT_SESSION_SURFACE_FULLSCREEN, "tenant-a")).toBeNull();
+    });
+
+    it("tenantId: null 同士は一致として扱う(テナント未特定同士)", () => {
+      saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, { ...SESSION, tenantId: null });
+
+      expect(restoreChatSession<TestMsg>(CHAT_SESSION_SURFACE_FULLSCREEN, null)).toEqual({
+        ...SESSION,
+        tenantId: null,
+      });
+    });
+  });
+
   it("clearChatSession で消える(その面だけ)", () => {
     saveChatSession(CHAT_SESSION_SURFACE_FULLSCREEN, SESSION);
     saveChatSession(CHAT_SESSION_SURFACE_PANEL, { sessionId: "s2", messages: [{ id: 9, text: "パネル" }] });
