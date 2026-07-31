@@ -1347,8 +1347,15 @@ export default function CopilotPreviewPage() {
       background: "simple",
     });
 
+    // previewMode(super_adminのクライアントビュー)中は操作対象テナントを
+    // ?tenant= で明示する。付けないとバックエンドが自身の(空の)テナントで
+    // 課金・保存してしまう(uploadUrl と同じ既存パターン、#P0-2)。
+    const generateUrl = isSuperAdmin && scopedTenantId
+      ? `${API_BASE}/v1/admin/avatar/fal/generate?tenant=${encodeURIComponent(scopedTenantId)}`
+      : `${API_BASE}/v1/admin/avatar/fal/generate`;
+
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/fal/generate`, {
+      const res = await authFetch(generateUrl, {
         method: "POST",
         body: JSON.stringify({ prompt, numImages: 4 }),
       });
@@ -1414,8 +1421,14 @@ export default function CopilotPreviewPage() {
     const boundedDescription = description.slice(0, 300);
     push({ id: cardId, role: "ai", card: { kind: "avatarVoiceCandidates", configId, description: boundedDescription, status: "matching" } });
 
+    // previewMode中は操作対象テナントを ?tenant= で明示する(generateAvatarCandidates
+    // と同じ理由、#P0-2)。
+    const matchVoiceUrl = isSuperAdmin && scopedTenantId
+      ? `${API_BASE}/v1/admin/avatar/match-voice?tenant=${encodeURIComponent(scopedTenantId)}`
+      : `${API_BASE}/v1/admin/avatar/match-voice`;
+
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/match-voice`, {
+      const res = await authFetch(matchVoiceUrl, {
         method: "POST",
         body: JSON.stringify({ description: boundedDescription }),
       });

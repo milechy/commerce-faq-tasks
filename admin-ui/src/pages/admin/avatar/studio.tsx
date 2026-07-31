@@ -149,8 +149,13 @@ export default function AvatarStudioPage() {
     setImageDescError(null);
     setGeneratingImage(true);
     setError(null);
+    // super_admin 用: URL ?tenant= でテナントを指定(line 350 と同じ既存パターン)。
+    // 付けないとバックエンドが自身の(空の)テナントで課金してしまう。
+    const generateImageUrl = isSuperAdmin && tenantQueryParam
+      ? `${API_BASE}/v1/admin/avatar/generate-image?tenant=${encodeURIComponent(tenantQueryParam)}`
+      : `${API_BASE}/v1/admin/avatar/generate-image`;
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/generate-image`, {
+      const res = await authFetch(generateImageUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: imageDesc }),
@@ -216,8 +221,12 @@ export default function AvatarStudioPage() {
     if (isDefault || !voiceDesc.trim() || matchingVoice) return;
     setMatchingVoice(true);
     setError(null);
+    // super_admin 用: URL ?tenant= でテナントを指定(generateImageUrl と同じ理由)。
+    const matchVoiceUrl = isSuperAdmin && tenantQueryParam
+      ? `${API_BASE}/v1/admin/avatar/match-voice?tenant=${encodeURIComponent(tenantQueryParam)}`
+      : `${API_BASE}/v1/admin/avatar/match-voice`;
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/match-voice`, {
+      const res = await authFetch(matchVoiceUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: voiceDesc }),
@@ -252,8 +261,12 @@ export default function AvatarStudioPage() {
     if (isDefault || !promptRules.trim() || generatingPrompt) return;
     setGeneratingPrompt(true);
     setError(null);
+    // super_admin 用: URL ?tenant= でテナントを指定(generateImageUrl と同じ理由)。
+    const generatePromptUrl = isSuperAdmin && tenantQueryParam
+      ? `${API_BASE}/v1/admin/avatar/generate-prompt?tenant=${encodeURIComponent(tenantQueryParam)}`
+      : `${API_BASE}/v1/admin/avatar/generate-prompt`;
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/generate-prompt`, {
+      const res = await authFetch(generatePromptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rules: promptRules }),
