@@ -3,6 +3,7 @@
 
 import { Pool, PoolClient } from 'pg';
 import { logger } from '../../../lib/logger';
+import { getWeekRange } from '../../../lib/date/weekRange';
 import {
   insertEmbeddingAsync,
   upsertToEsAsync,
@@ -863,42 +864,46 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
-    // Phase2 (P7 プロアクティブ・ブリーフィング): 直近7日間の状況を1回で要約取得する
-    // 読み取り専用ツール。ログイン直後など能動的な状況説明に使う。
+    // Phase2 (P7 プロアクティブ・ブリーフィング): 今週(暦週・月曜00:00 JST起点)の状況を
+    // 1回で要約取得する読み取り専用ツール。ログイン直後など能動的な状況説明に使う。
+    // 期間の計算は weekRange.ts に集約する(SQLへ AT TIME ZONE を直書きしない)。
     case 'get_weekly_briefing': {
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
       try {
+        const { weekStart, prevWeekStart, prevWeekEnd } = getWeekRange(new Date());
         const [sessionsRes, prevSessionsRes, evalRes, cvRes, gapsRes] = await Promise.all([
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
-             WHERE tenant_id = $1 AND started_at >= NOW() - INTERVAL '7 days'`,
-            [tenantId],
+             WHERE tenant_id = $1 AND started_at >= $2`,
+            [tenantId, weekStart],
           ),
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
              WHERE tenant_id = $1
-               AND started_at >= NOW() - INTERVAL '14 days'
-               AND started_at < NOW() - INTERVAL '7 days'`,
-            [tenantId],
+               AND started_at >= $2
+               AND started_at < $3`,
+            [tenantId, prevWeekStart, prevWeekEnd],
           ),
           db.query(
             `SELECT AVG(score) AS avg FROM conversation_evaluations
-             WHERE tenant_id = $1 AND evaluated_at >= NOW() - INTERVAL '7 days' AND score > 0`,
-            [tenantId],
+             WHERE tenant_id = $1 AND evaluated_at >= $2 AND score > 0`,
+            [tenantId, weekStart],
           ),
           db.query(
             `SELECT COUNT(*)::int AS n, COALESCE(SUM(conversion_value), 0)::numeric AS total
              FROM conversion_attributions
-             WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`,
-            [tenantId],
+             WHERE tenant_id = $1 AND created_at >= $2`,
+            [tenantId, weekStart],
           ),
           getGaps({ tenantId, status: 'open', limit: 3 }),
         ]);
 
         const totalSessions = Number(sessionsRes.rows[0]?.n ?? 0);
+        // 先週の同一経過時間との比較値。先週は既に終わっているため確定値として併記する
+        // （週初の部分週をまる1週間の前週と比べると常に大幅マイナスになり指標として使えない）。
         const prevSessions = Number(prevSessionsRes.rows[0]?.n ?? 0);
         const changePct = prevSessions > 0 ? Math.round(((totalSessions - prevSessions) / prevSessions) * 100) : null;
         const avgScoreRaw = evalRes.rows[0]?.avg;
@@ -907,10 +912,12 @@ export async function executeToolCall(
         const cvTotal = Math.round(Number(cvRes.rows[0]?.total ?? 0));
         const { gaps, total: gapsTotal } = gapsRes;
 
-        const lines: string[] = ['直近7日間の状況:'];
+        const lines: string[] = ['今週(月曜起点)の状況:'];
         lines.push(
           `会話数 ${totalSessions}件` +
-          (changePct !== null ? `（前週比 ${changePct >= 0 ? '+' : ''}${changePct}%）` : ''),
+          (changePct !== null
+            ? `（先週同時点比 ${changePct >= 0 ? '+' : ''}${changePct}%、先週同時点は${prevSessions}件）`
+            : ''),
         );
         if (avgScore !== null) lines.push(`応答品質スコア ${avgScore}/100`);
         lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);

@@ -1442,6 +1442,70 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockGetGaps).not.toHaveBeenCalled();
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
     });
+
+    it('暦週(月曜00:00 JST起点)のレンジでクエリが組まれる', async () => {
+      // 2026-08-05T03:00:00Z = 2026-08-05T12:00:00 JST(水)。
+      // 今週の開始(月曜00:00 JST) = 2026-08-02T15:00:00Z、
+      // 先週の同一経過時間の終端 = 2026-07-29T03:00:00Z になるはず。
+      //
+      // jest.useFakeTimers() は setTimeout 等も止めてしまい、supertest 経由の
+      // リクエストがハングする(実測)。Date だけを固定し、他のタイマー系は実物のままにする。
+      jest.useFakeTimers({
+        doNotFake: [
+          'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
+          'setImmediate', 'clearImmediate', 'queueMicrotask', 'nextTick',
+          'hrtime', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame',
+          'requestIdleCallback', 'cancelIdleCallback',
+        ],
+      }).setSystemTime(new Date('2026-08-05T03:00:00.000Z'));
+
+      try {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              choices: [{
+                message: {
+                  content: null,
+                  tool_calls: [{
+                    id: 'call-wb-3',
+                    type: 'function',
+                    function: { name: 'get_weekly_briefing', arguments: '{}' },
+                  }],
+                },
+              }],
+            }),
+            text: async () => '',
+          })
+          .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+        mockQuery
+          .mockResolvedValueOnce({ rows: [{ n: 10 }] })
+          .mockResolvedValueOnce({ rows: [{ n: 5 }] })
+          .mockResolvedValueOnce({ rows: [{ avg: '80' }] })
+          .mockResolvedValueOnce({ rows: [{ n: 1, total: '1000' }] });
+
+        mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '今週の状況を教えて', sessionId: 'sess-042' });
+
+        expect(res.status).toBe(200);
+
+        const [sessionsCall, prevSessionsCall, evalCall, cvCall] = mockQuery.mock.calls as Array<[string, unknown[]]>;
+        const weekStart = new Date('2026-08-02T15:00:00.000Z');
+        const prevWeekStart = new Date('2026-07-26T15:00:00.000Z');
+        const prevWeekEnd = new Date('2026-07-29T03:00:00.000Z');
+
+        expect(sessionsCall[1]).toEqual(['tenant-abc', weekStart]);
+        expect(prevSessionsCall[1]).toEqual(['tenant-abc', prevWeekStart, prevWeekEnd]);
+        expect(evalCall[1]).toEqual(['tenant-abc', weekStart]);
+        expect(cvCall[1]).toEqual(['tenant-abc', weekStart]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
