@@ -46,6 +46,7 @@ import CopilotPreviewPage from "./pages/copilot-preview/index";
 import { AdminAgentUIProvider, useAdminAgentUI } from "./contexts/AdminAgentUIContext";
 import { supabaseConfigured } from "./lib/supabaseClient";
 import { isChatFirstDefaultEnabled } from "./lib/chatFirstDefault";
+import { computeLandingDecision } from "./lib/landingDecision";
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
 // supabaseConfigured=false の場合、Reactはマウントできるが
@@ -119,40 +120,18 @@ function AppInner() {
   // テナント全体・他ユーザーの挙動には一切影響しない。
   // 追加: super_adminの「クライアントビューで見る」(previewMode)中は、このブラウザの
   // オプトインフラグに関わらず常に新UI(copilot-preview)を表示する — 動作確認・デモ用途のため。
-  const isLandingPath = location.pathname === "/" || location.pathname === "/admin";
-
   // Asana 1217040702572796(P6): 新規テナント(オンボーディング4段階が全て完了していない
-  // client_admin)は、このブラウザのオプトイン設定に関わらず新UIを既定にする。
-  // 「新規」の範囲は onboarding_completed_at 単体ではなく4段階すべて(業種回答・知識公開・
-  // 設置検知・初回実会話)が揃うまでとする — 途中で旧UI側に戻ると、P5で実装した
-  // 「次の一手」の提示が届かなくなり、オンボーディングが進まなくなるため。
-  // 既存テナント(4段階完了済み)の着地先・動線はこれによって一切変わらない。
-  const isNewTenantOnboarding =
-    !previewMode &&
-    isClientAdmin &&
-    onboardingStageResolved &&
-    onboardingStage !== null &&
-    !(
-      onboardingStage.industryAnswered &&
-      onboardingStage.knowledgePublished &&
-      onboardingStage.widgetInstalled &&
-      onboardingStage.firstConversation
-    );
-
-  const isCopilotPreview =
-    location.pathname === "/copilot-preview" ||
-    (isLandingPath && (isChatFirstDefaultEnabled() || previewMode || isNewTenantOnboarding));
-
-  // ちらつき・二重着地の防止: ランディングパスで、ブラウザのオプトイン(同期的に判定可能)が
-  // 無効・previewModeでもない場合、新規テナント判定(onboardingStageResolved、非同期のAPI
-  // 呼び出しに依存)が確定するまでは旧UI・新UIどちらも描画しない。確定前に旧UIを描画すると、
-  // 新規テナントの場合に「旧UIが一瞬出てから新UIへ飛ぶ」現象が起きる。
-  const isLandingDecisionPending =
-    isLandingPath &&
-    !previewMode &&
-    isClientAdmin &&
-    !isChatFirstDefaultEnabled() &&
-    !onboardingStageResolved;
+  // client_admin)は、このブラウザのオプトイン設定に関わらず新UIを既定にする。判定ロジック
+  // 本体は lib/landingDecision.ts に切り出している(App.tsx は~30個のページを import する
+  // ため直接テストするのが重く、判定だけを単体テスト可能な純関数にした)。
+  const { isCopilotPreview, isLandingDecisionPending } = computeLandingDecision({
+    pathname: location.pathname,
+    isChatFirstDefaultEnabled: isChatFirstDefaultEnabled(),
+    previewMode,
+    isClientAdmin,
+    onboardingStageResolved,
+    onboardingStage,
+  });
 
   // 担当者からの未読返信(相談窓口)。ここで取るのはパネル(Surface A)のFABバッジと
   // お返事カードのためだけなので、全画面UI(Surface B)を表示している間は取らない

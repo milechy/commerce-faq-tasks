@@ -1904,6 +1904,116 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(screen.getByText("下書きを見る")).toBeTruthy();
   });
 
+  // N-6/X-11(docs/ONBOARDING_FIRST_LOGIN.md §7.1/§7.3): deriveOnboardingNextStep の
+  // widgetInstalled=false 分岐(埋め込みコード提示)は、これまでテストされていなかった。
+  it("復元時、知識公開済み・未設置なら埋め込みコード提示のチップが出る(N-6/X-11)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: true,
+            widgetInstalled: false,
+            firstConversation: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 201, role: "me", text: "送料を教えて" },
+        { id: 202, role: "ai", text: "全国一律550円です。" },
+      ],
+      history: [
+        { role: "user", content: "送料を教えて" },
+        { role: "assistant", content: "全国一律550円です。" },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
+    expect(await screen.findByText(/ウィジェットをサイトに設置しましょう/)).toBeTruthy();
+    expect(screen.getByText("埋め込みコードを見る")).toBeTruthy();
+    // 前の段階(下書き確認)のチップは出ない
+    expect(screen.queryByText("下書きを見る")).toBeNull();
+  });
+
+  // deriveOnboardingNextStep の firstConversation=false 分岐(待機メッセージ、チップ無し)。
+  it("復元時、設置済み・実会話未発生なら待機メッセージが出てチップは無い", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: true,
+            widgetInstalled: true,
+            firstConversation: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 201, role: "me", text: "送料を教えて" },
+        { id: 202, role: "ai", text: "全国一律550円です。" },
+      ],
+      history: [
+        { role: "user", content: "送料を教えて" },
+        { role: "assistant", content: "全国一律550円です。" },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
+    expect(await screen.findByText(/最初のご質問をお待ちしています/)).toBeTruthy();
+    // チップは出ない(ユーザー側に取れるアクションが無い段階のため)
+    expect(screen.queryByText("下書きを見る")).toBeNull();
+    expect(screen.queryByText("埋め込みコードを見る")).toBeNull();
+  });
+
+  // E-1(docs/ONBOARDING_FIRST_LOGIN.md §7.2): my-tenant取得失敗時、詰まらず週次ブリーフィングへ
+  // フォールバックする。会話が復元されない(=新規起動)パスで検証する。
+  it("E-1: my-tenant取得が例外を投げても、詰まらず週次ブリーフィングにフォールバックする", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return Promise.reject(new Error("network error"));
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    // オンボーディングの挨拶(業種チップ)は出ない。通常の週次ブリーフィングが走る。
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+    expect(screen.queryByText(/どんな業種ですか/)).toBeNull();
+  });
+
+  it("E-1: my-tenantが200以外を返しても、詰まらず週次ブリーフィングにフォールバックする", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) } as Response);
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+    expect(screen.queryByText(/どんな業種ですか/)).toBeNull();
+  });
+
   it("復元時、オンボーディングが全段階完了済みなら次の一手は表示されない", async () => {
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (isBadgeUrl(url)) return mockEmptyBadges();
