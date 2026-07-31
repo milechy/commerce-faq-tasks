@@ -81,7 +81,6 @@ import { registerInternalGa4SyncRoutes } from "./api/internal/ga4SyncRoutes";
 import { registerEvaluationRoutes } from "./api/admin/evaluations/routes";
 import { registerVariantRoutes } from "./api/admin/variants/routes";
 import { registerObjectionPatternRoutes } from "./api/admin/objection-patterns/routes";
-import { registerReportRoutes } from "./api/admin/reports/routes";
 import { registerAnalyticsRoutes } from "./api/admin/analytics/routes";
 import { registerEventAnalyticsRoutes } from "./api/admin/analytics/eventAnalyticsRoutes";
 import { registerEventRoutes } from "./api/events/eventRoutes";
@@ -569,10 +568,9 @@ registerAdminAiAssistRoutes(app);
 
 // Phase45: 評価API + KPI API
 registerEvaluationRoutes(app);
-// Phase46: Variant CRUD + Objection Patterns + Weekly Reports API
+// Phase46: Variant CRUD + Objection Patterns
 registerVariantRoutes(app);
 registerObjectionPatternRoutes(app);
-registerReportRoutes(app);
 registerAnalyticsRoutes(app);
 // Phase55: 行動イベント分析 API
 registerEventAnalyticsRoutes(app);

@@ -176,7 +176,6 @@ export default function TenantDetailPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabId>("settings");
   const [toast, setToast] = useState<string | null>(null);
-  const [unreadReportCount, setUnreadReportCount] = useState(0);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -224,53 +223,6 @@ export default function TenantDetailPage() {
     navigate("/admin");
   };
 
-  // 未読レポート数の取得
-  useEffect(() => {
-    const fetchUnread = async () => {
-      try {
-        const token = await getToken();
-        if (!token) return;
-        const res = await fetch(`${API_BASE}/v1/admin/reports/unread-count?tenantId=${tenantId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const data = (await res.json()) as any;
-          setUnreadReportCount(data.count ?? 0);
-        }
-      } catch {
-        // API未実装の場合はモック値
-        setUnreadReportCount(1);
-      }
-    };
-    void fetchUnread();
-  }, [tenantId]);
-
-  const aiReportLabel = (
-    <span style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 4 }}>
-      📊 AI改善レポート
-      {unreadReportCount > 0 && (
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minWidth: 18,
-            height: 18,
-            borderRadius: 999,
-            background: "#ef4444",
-            color: "#fff",
-            fontSize: 11,
-            fontWeight: 700,
-            padding: "0 4px",
-          }}
-        >
-          {unreadReportCount}
-        </span>
-      )}
-    </span>
-  );
-
   const baseTabs: { id: TabId; label: React.ReactNode }[] = [
     { id: "settings", label: t("tenant_detail.tab_settings") },
     { id: "apikeys", label: t("tenant_detail.tab_apikeys") },
@@ -281,7 +233,7 @@ export default function TenantDetailPage() {
     { id: "analytics", label: "📉 アナリティクス" },
     { id: "billing-info", label: "💳 請求情報" },
     { id: "notification-prefs", label: "🔔 通知設定" },
-    { id: "ai-report", label: aiReportLabel },
+    { id: "ai-report", label: "📊 AI改善レポート" },
     { id: "conversion", label: "🎯 成果設定" },
     { id: "deep-research", label: "🔬 ディープリサーチ" },
     { id: "tuning", label: "🎛 チューニング" },
