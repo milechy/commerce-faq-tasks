@@ -23,15 +23,29 @@ export type AgentChatSurface = "panel" | "fullscreen";
 
 export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
-// バックエンド(actionExecutor.ts の LegacyLinkCardPayload / TuningRulesListCardPayload /
-// WeeklySummaryCardPayload)が自然文に添えて返す構造化カード。card を返すのは
-// get_legacy_ui_link / get_tuning_rules / get_weekly_briefing のみで、他のツールは
-// 従来どおり result の自然文のみ。
+// バックエンド(actionExecutor.ts の各 *CardPayload)が自然文に添えて返す構造化カード。
+// card を返すのは get_legacy_ui_link / get_tuning_rules / get_weekly_briefing /
+// get_chat_sessions / get_chat_session_messages のみで、他のツールは従来どおり
+// result の自然文のみ。フィールド形はサーバ側の型と1:1で対応させる
+// (型定義箇所はサーバ/ここの2箇所に限る)。
 export type LegacyLinkAgentActionCard = {
   kind: "legacy_link";
   label: string;
   url: string;
   description: string;
+};
+
+export type ChatSessionListAgentActionCard = {
+  kind: "chat_session_list";
+  total: number;
+  sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+};
+
+export type ChatSessionMessagesAgentActionCard = {
+  kind: "chat_session_messages";
+  shortId: string;
+  totalMessages: number;
+  messages: Array<{ roleLabel: string; content: string }>;
 };
 
 export type AvatarPresetAgentActionCard = {
@@ -70,7 +84,9 @@ export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
   | TuningRulesListAgentActionCard
-  | WeeklySummaryAgentActionCard;
+  | WeeklySummaryAgentActionCard
+  | ChatSessionListAgentActionCard
+  | ChatSessionMessagesAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

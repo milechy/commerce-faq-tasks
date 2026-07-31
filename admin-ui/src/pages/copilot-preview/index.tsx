@@ -104,6 +104,21 @@ type Card =
       progress?: number;
       message?: string;
     }
+  // 会話一覧(get_chat_sessions)。短縮IDの手打ちを不要にするため、次の1件を選ぶ
+  // チップ(sessionListSelectionChips)とセットで使う。
+  | {
+      kind: "chatSessionList";
+      total: number;
+      sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+    }
+  // 会話本文(get_chat_session_messages)。role のラベルはサーバ側(CHAT_ROLE_LABELS)を
+  // 単一の情報源とし、ここでは辞書を持たずそのまま描画する。
+  | {
+      kind: "chatSessionMessages";
+      shortId: string;
+      totalMessages: number;
+      messages: Array<{ roleLabel: string; content: string }>;
+    }
   // 週次まとめ。数値はサーバ集計値をそのまま描画する(LLMの生成文を経由しない)。
   // 各グループが null なのは、対応するクエリが失敗し取得できなかった場合(0とは区別する)。
   | {
@@ -519,6 +534,14 @@ export default function CopilotPreviewPage() {
         const { label, url, description } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
       }
+      if (a.card?.kind === "chat_session_list") {
+        const { total, sessions } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "chatSessionList", total, sessions } };
+      }
+      if (a.card?.kind === "chat_session_messages") {
+        const { shortId, totalMessages, messages } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "chatSessionMessages", shortId, totalMessages, messages } };
+      }
       if (a.card?.kind === "avatar_preset") {
         const { presetId, name, imageUrl, description } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "avatarPreset", presetId, name, imageUrl, description } };
@@ -585,6 +608,11 @@ export default function CopilotPreviewPage() {
     const industryTemplatePendingConfirm = data.actions?.some(
       (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
     );
+    // 会話一覧(get_chat_sessions)が返ってきたら、短縮IDを手打ちさせず次の1件を
+    // 選べるチップを添える。同じターンに複数の会話一覧が返ることは無い前提(最初の1件)。
+    const sessionListAction = data.actions?.find((a) => a.card?.kind === "chat_session_list");
+    const sessionListCard =
+      sessionListAction?.card?.kind === "chat_session_list" ? sessionListAction.card : undefined;
     // アバター見本の提案(suggest_avatar_preset)が出たら、そのまま採用できるチップを添える
     const avatarPresetSuggested = data.actions?.some((a) => a.tool === "suggest_avatar_preset");
     // 週次まとめのアクションチップ: LLMの文には付けられない(chipsはsuggest_*系の
@@ -621,6 +649,12 @@ export default function CopilotPreviewPage() {
           { label: "登録して", action: "__real:登録してください", tone: "primary" },
           { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
         ]
+      : sessionListCard && sessionListCard.sessions.length > 0
+      ? sessionListCard.sessions.map((s) => ({
+          label: `${s.startedAt.slice(5, 10)} ${s.preview.slice(0, 12)}`,
+          action: `__real:[${s.shortId}]の会話を見せて`,
+          tone: "ghost" as const,
+        }))
       : weeklySummaryGapsActionable || weeklySummaryTuningActionable
       ? [
           ...(weeklySummaryGapsActionable
@@ -1646,6 +1680,28 @@ function CardView({ card }: { card: Card }) {
           <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
             別タブで開きます。この会話はそのまま残ります。
           </div>
+        </CardShell>
+      );
+    case "chatSessionList":
+      return (
+        <CardShell hd={<><span>💬</span>会話セッション一覧（全{card.total}件中{card.sessions.length}件）</>}>
+          {card.sessions.map((s) => (
+            <div key={s.shortId} style={{ display: "flex", flexDirection: "column", gap: 3, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+                {s.startedAt.slice(0, 10)} ・ {s.messageCount}件
+              </div>
+              <div style={{ fontSize: 15, color: "var(--foreground)" }}>{s.preview}</div>
+            </div>
+          ))}
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+            下のボタンから会話を選ぶと、内容を表示します。
+          </div>
+        </CardShell>
+      );
+    case "chatSessionMessages":
+      return (
+        <CardShell hd={<><span>📜</span>会話[{card.shortId}]（全{card.totalMessages}件中{card.messages.length}件）</>}>
+          {card.messages.map((m, i) => <Field key={i} k={m.roleLabel} v={m.content} quote />)}
         </CardShell>
       );
     case "weeklySummary":

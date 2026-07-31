@@ -2935,6 +2935,34 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('送料はいくらですか');
     });
 
+    it('get_chat_sessions: 短縮IDの手打ちを不要にするため、text に加えて chat_session_list カードを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-1f', 'get_chat_sessions', {}))
+        .mockResolvedValueOnce(makeGroqResponse('直近の会話は1件です。'));
+
+      mockGetSessions.mockResolvedValueOnce({
+        sessions: [
+          { id: 'db-1', tenant_id: 'tenant-abc', session_id: 'sess-aaaaaaaa-1111', started_at: '2026-07-17T10:00:00Z', last_message_at: '2026-07-17T10:05:00Z', message_count: 4, first_message_preview: '送料はいくらですか', outcome: null, outcome_recorded_at: null },
+        ],
+        total: 42,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '最近の会話を見せて', sessionId: 'sess-rd-01f' });
+
+      const action = res.body.actions[0] as { result: string; card?: Record<string, unknown> };
+      // card は text の置き換えではなく追加(自然文は従来どおり残る)
+      expect(action.result).toContain('全42件中1件');
+      expect(action.card).toEqual({
+        kind: 'chat_session_list',
+        total: 42,
+        sessions: [
+          { shortId: 'sess-aaa', startedAt: '2026-07-17T10:00:00Z', messageCount: 4, preview: '送料はいくらですか' },
+        ],
+      });
+    });
+
     it('get_chat_sessions: period/search/sentiment/sort_by/sort_order/offset がgetSessionsへ渡る', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-rd-1b', 'get_chat_sessions', {
@@ -3192,6 +3220,29 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('AI: 全国一律500円です');
       expect(result).toContain('担当者: 担当より補足します');
       expect(result).toContain('全3件中3件');
+    });
+
+    it('role のラベル化(CHAT_ROLE_LABELS)を単一の情報源として chat_session_messages カードを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-1g', 'get_chat_session_messages', { session_id: 'a1b2c3d4' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話内容はこちらです。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([
+        { id: 1, role: 'user', content: '送料はいくらですか', metadata: {}, created_at: '2026-07-17T10:00:00Z' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'a1b2c3d4の会話を見せて', sessionId: 'sess-cm-01g' });
+
+      const action = res.body.actions[0] as { result: string; card?: Record<string, unknown> };
+      expect(action.card).toEqual({
+        kind: 'chat_session_messages',
+        shortId: 'a1b2c3d4',
+        totalMessages: 1,
+        messages: [{ roleLabel: 'お客様', content: '送料はいくらですか' }],
+      });
     });
 
     it('limit で新しい方から件数を絞る', async () => {
