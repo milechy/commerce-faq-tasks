@@ -188,10 +188,27 @@ export type LegacyLinkCardPayload = {
   description: string;
 };
 
+// get_weekly_briefing 用。数値はLLMの生成文を経由せず、この構造化データを
+// そのままカードとして描画する(数値=サーバ、解釈=LLMの文、という権威分離の実体)。
+// 各グループは対応するクエリが失敗した場合に null になる(Promise.allSettledでの
+// 部分失敗時、text側で行ごと省略するのと同じ意味)。card はUIが「取得できなかった」を
+// 判別するための情報であり、0埋めしてはならない。
+export type WeeklySummaryCardPayload = {
+  kind: 'weekly_summary';
+  /** この応答を生成した瞬間(ISO)。会話復元時に古いまとめだと判別するために使う */
+  asOf: string;
+  sessions: { total: number; changePct: number | null; prevTotal: number } | null;
+  avgScore: number | null;
+  conversions: { count: number; total: number } | null;
+  faq: { total: number; published: number; lastUpdated: string | null } | null;
+  pendingTuningRules: number | null;
+  gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
+};
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
 // （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
-export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload };
+export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload | WeeklySummaryCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -1017,30 +1034,50 @@ export async function executeToolCall(
         ]);
 
         const lines: string[] = ['今週(月曜起点)の状況:'];
+        // 数値の権威はこのcard(サーバ集計値)。text はLLMに渡す自然文とフォールバック
+        // 表示用で、card と同じ値から組み立てる(2箇所に別の計算を書かない)。
+        const card: WeeklySummaryCardPayload = {
+          kind: 'weekly_summary',
+          asOf: new Date().toISOString(),
+          sessions: null,
+          avgScore: null,
+          conversions: null,
+          faq: null,
+          pendingTuningRules: null,
+          gaps: null,
+        };
 
         if (sessionsRes.status === 'fulfilled') {
           const totalSessions = Number(sessionsRes.value?.rows?.[0]?.n ?? 0);
           // 先週の同一経過時間との比較値。先週は既に終わっているため確定値として併記する
           // （週初の部分週をまる1週間の前週と比べると常に大幅マイナスになり指標として使えない）。
-          let changeSuffix = '';
+          let changePct: number | null = null;
+          let prevSessions = 0;
           if (prevSessionsRes.status === 'fulfilled') {
-            const prevSessions = Number(prevSessionsRes.value?.rows?.[0]?.n ?? 0);
+            prevSessions = Number(prevSessionsRes.value?.rows?.[0]?.n ?? 0);
             if (prevSessions > 0) {
-              const changePct = Math.round(((totalSessions - prevSessions) / prevSessions) * 100);
-              changeSuffix = `（先週同時点比 ${changePct >= 0 ? '+' : ''}${changePct}%、先週同時点は${prevSessions}件）`;
+              changePct = Math.round(((totalSessions - prevSessions) / prevSessions) * 100);
             }
           }
+          card.sessions = { total: totalSessions, changePct, prevTotal: prevSessions };
+          const changeSuffix = changePct !== null
+            ? `（先週同時点比 ${changePct >= 0 ? '+' : ''}${changePct}%、先週同時点は${prevSessions}件）`
+            : '';
           lines.push(`会話数 ${totalSessions}件${changeSuffix}`);
         }
 
         if (evalRes.status === 'fulfilled') {
           const avgScoreRaw = evalRes.value?.rows?.[0]?.avg;
-          if (avgScoreRaw != null) lines.push(`応答品質スコア ${Math.round(Number(avgScoreRaw))}/100`);
+          if (avgScoreRaw != null) {
+            card.avgScore = Math.round(Number(avgScoreRaw));
+            lines.push(`応答品質スコア ${card.avgScore}/100`);
+          }
         }
 
         if (cvRes.status === 'fulfilled') {
           const cvCount = Number(cvRes.value?.rows?.[0]?.n ?? 0);
           const cvTotal = Math.round(Number(cvRes.value?.rows?.[0]?.total ?? 0));
+          card.conversions = { count: cvCount, total: cvTotal };
           lines.push(`成約 ${cvCount}件・¥${cvTotal.toLocaleString('ja-JP')}`);
         }
 
@@ -1048,21 +1085,27 @@ export async function executeToolCall(
           const row = faqRes.value?.rows?.[0];
           const faqTotal = Number(row?.total ?? 0);
           const faqPublished = Number(row?.published ?? 0);
-          const lastUpdated = row?.last_updated
-            ? new Date(row.last_updated).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
+          const lastUpdatedIso: string | null = row?.last_updated
+            ? new Date(row.last_updated).toISOString()
+            : null;
+          card.faq = { total: faqTotal, published: faqPublished, lastUpdated: lastUpdatedIso };
+          const lastUpdatedDisplay = lastUpdatedIso
+            ? new Date(lastUpdatedIso).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
             : null;
           lines.push(
-            `FAQ ${faqTotal}件（公開${faqPublished}件）` + (lastUpdated ? `・最終更新 ${lastUpdated}` : ''),
+            `FAQ ${faqTotal}件（公開${faqPublished}件）` + (lastUpdatedDisplay ? `・最終更新 ${lastUpdatedDisplay}` : ''),
           );
         }
 
         if (tuningRes.status === 'fulfilled') {
           const pending = Number(tuningRes.value?.rows?.[0]?.n ?? 0);
+          card.pendingTuningRules = pending;
           lines.push(`承認待ちの指示ルール ${pending}件`);
         }
 
         if (gapsRes.status === 'fulfilled') {
           const { gaps, total: gapsTotal } = gapsRes.value;
+          card.gaps = { total: gapsTotal, top: gaps.map((g) => ({ id: g.id, question: g.user_question.slice(0, 60) })) };
           lines.push(`AIが答えられなかった質問 ${gapsTotal}件（未対応の累計）`);
           if (gaps.length > 0) {
             lines.push('うち上位:');
@@ -1077,7 +1120,7 @@ export async function executeToolCall(
           return truncate('週次サマリーの取得に失敗しました');
         }
 
-        return truncate(lines.join('\n'));
+        return { text: truncate(lines.join('\n')), card };
       } catch (err) {
         logger.warn('[actionExecutor] get_weekly_briefing failed', err);
         return truncate('週次サマリーの取得に失敗しました');
