@@ -9,7 +9,7 @@ import {
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
 import { callGroq8bSuggestFromText } from '../tuning/routes';
-import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse } from '../tuning/tuningRulesRepository';
+import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
 import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
@@ -231,6 +231,12 @@ export type TuningRulesListCardPayload = {
     expectedBehavior: string;
     priority: number;
     isActive: boolean;
+    // AI提案(judge)か店主が作ったもの(manual)かの出所。無いと承認判断ができない。
+    source: string | null;
+    // pending(既定) / active(承認済み) / rejected(却下済み)。is_active だけでは
+    // pending と rejected が区別できない(どちらも is_active=false)ため必要。
+    status: string | null;
+    evidence: RuleEvidence | null;
   }>;
   totalCount: number;
 };
@@ -587,6 +593,11 @@ export async function executeToolCall(
     // 新規テナントのオンボーディング(GID 1216274591838389のチャット版):
     // 業種別FAQたたき台を一括登録し、旧UI(OnboardingModal)と同じ条件で
     // onboarding_completed_at を更新する(業種選択のみで完了扱いになる仕様を踏襲)。
+    //
+    // Asana 1217040715802747(P3): テンプレは内容未確認のまま即座にエンドユーザーへ
+    // 回答され得たため、is_published=false(下書き)で投入する。公開は別ツール
+    // publish_faq_drafts でユーザーが内容を確認してから行う。onboarding_completed_at の
+    // 更新条件は変えない(業種選択のみで完了扱いにする既存仕様をそのまま踏襲)。
     case 'import_industry_faq_templates': {
       const industryRaw = args['industry'];
       if (!isOnboardingIndustry(industryRaw)) {
@@ -601,7 +612,7 @@ export async function executeToolCall(
         return truncate(
           `「${label}」向けのFAQたたき台を${templates.length}件ご用意しました:\n` +
           lines.join('\n') +
-          `\nよろしければ登録しますか？（登録後も自由に編集・削除できます）`,
+          `\nよろしければ登録しますか？（下書きとして登録し、内容を確認してから公開できます）`,
         );
       }
       if (!tenantId) {
@@ -614,7 +625,7 @@ export async function executeToolCall(
           try {
             const result = await db.query(
               `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
-               VALUES ($1, $2, $3, $4, true)
+               VALUES ($1, $2, $3, $4, false)
                RETURNING id, question, answer, is_published`,
               [tenantId, t.question, t.answer, t.category ?? 'general'],
             );
@@ -637,10 +648,69 @@ export async function executeToolCall(
           logger.warn('[actionExecutor] import_industry_faq_templates onboarding update failed', err);
         });
 
-        return truncate(`「${label}」向けのFAQを${inserted}件登録しました`);
+        return truncate(
+          `「${label}」向けのFAQを${inserted}件、下書きとして登録しました。` +
+          `内容をご確認のうえ、よろしければ公開しますか？（公開後も自由に編集・非公開に戻せます）`,
+        );
       } catch (err) {
         logger.warn('[actionExecutor] import_industry_faq_templates failed', err);
         return truncate('FAQテンプレートの登録に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Asana 1217040715802747(P3): 下書き(is_published=false)のFAQを内容確認のうえ公開する。
+    // オンボーディング由来に限定しない(docs/ONBOARDING_FIRST_LOGIN.md §3.1③ 決定1: 知識公開済み
+    // 段階はテナント全体の is_published=true 件数で判定するため、出自を問う必要がない)。
+    // 一度に最大20件(一覧提示と実際の公開対象を同じ集合に揃え、表示件数と実件数の不一致を防ぐ)。
+    case 'publish_faq_drafts': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const confirmed = Boolean(args['confirmed']);
+
+      if (!confirmed) {
+        try {
+          const draftResult = await db.query(
+            `SELECT id, question, answer FROM faq_docs WHERE tenant_id = $1 AND is_published = false ORDER BY id LIMIT 20`,
+            [tenantId],
+          );
+          const drafts = draftResult.rows as { id: number; question: string; answer: string }[];
+          if (drafts.length === 0) {
+            return truncate('公開できる下書きのFAQはありません');
+          }
+          const lines = drafts.map((d, i) => `${i + 1}. Q: ${d.question} / A: ${d.answer}`);
+          return truncate(
+            `下書き（未公開）のFAQが${drafts.length}件あります:\n` +
+            lines.join('\n') +
+            `\nよろしければ公開しますか？（公開後も自由に編集・非公開に戻せます）`,
+          );
+        } catch (err) {
+          logger.warn('[actionExecutor] publish_faq_drafts list failed', err);
+          return truncate('下書きの取得に失敗しました');
+        }
+      }
+
+      try {
+        const result = await db.query(
+          `UPDATE faq_docs SET is_published = true, updated_at = NOW()
+           WHERE id IN (
+             SELECT id FROM faq_docs WHERE tenant_id = $1 AND is_published = false ORDER BY id LIMIT 20
+           )
+           RETURNING id, question, answer`,
+          [tenantId],
+        );
+        const rows = result.rows as { id: number; question: string; answer: string }[];
+        for (const row of rows) {
+          upsertToEsAsync(tenantId, row.id, row.question, row.answer, true);
+        }
+        if (rows.length === 0) {
+          return truncate('公開できる下書きのFAQはありません');
+        }
+        return truncate(`${rows.length}件のFAQを公開しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] publish_faq_drafts failed', err);
+        return truncate('FAQの公開に失敗しました');
       }
     }
 
@@ -1054,6 +1124,9 @@ export async function executeToolCall(
               expectedBehavior: r.expected_behavior,
               priority: r.priority,
               isActive: r.is_active,
+              source: r.source ?? null,
+              status: r.status ?? null,
+              evidence: r.evidence ?? null,
             })),
             totalCount: rules.length,
           },
@@ -1079,8 +1152,12 @@ export async function executeToolCall(
       const triggerPattern = typeof args['trigger_pattern'] === 'string' ? args['trigger_pattern'].slice(0, 1000) : undefined;
       const expectedBehavior = typeof args['expected_behavior'] === 'string' ? args['expected_behavior'].slice(0, 4000) : undefined;
       const isActive = typeof args['is_active'] === 'boolean' ? args['is_active'] : undefined;
+      // AI提案(source='judge')の承認/却下でのみ指定される。is_activeだけではpending(未承認)と
+      // rejected(却下済み)を区別できない(どちらもis_active=falseのため)。
+      const statusRaw = args['status'];
+      const status = statusRaw === 'active' || statusRaw === 'rejected' ? statusRaw : undefined;
 
-      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined) {
+      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined && status === undefined) {
         return truncate('変更する内容がありません（trigger_pattern・expected_behavior・is_active のいずれかを指定してください）');
       }
 
@@ -1088,11 +1165,17 @@ export async function executeToolCall(
         const ownerFilter = isSuperAdmin ? undefined : tenantId;
         const updated = await updateRule(
           id,
-          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive },
+          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive, status },
           ownerFilter,
         );
         if (!updated) {
           return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        if (status === 'active') {
+          return truncate(`指示ルール（ID: ${id}）を承認し、有効にしました: 「${updated.trigger_pattern}」`);
+        }
+        if (status === 'rejected') {
+          return truncate(`指示ルール（ID: ${id}）を却下しました: 「${updated.trigger_pattern}」`);
         }
         return truncate(`指示ルール（ID: ${id}）を更新しました: 「${updated.trigger_pattern}」${updated.is_active ? '' : '（現在無効）'}`);
       } catch (err) {
@@ -1287,10 +1370,15 @@ export async function executeToolCall(
              FROM faq_docs WHERE tenant_id = $1`,
             [tenantId],
           ),
-          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標
+          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標。
+          // P4-1で修正: 以前は approved_at/rejected_at (どのコードパスからも
+          // 更新されない列)を見ており、店主が作った通常のルールも含めて
+          // 全件を「承認待ち」として数えていた。AI提案(source='judge')かつ
+          // 未承認(is_active=false)かつ却下されていない件数に修正する。
           db.query(
             `SELECT COUNT(*)::int AS n FROM tuning_rules
-             WHERE tenant_id = $1 AND approved_at IS NULL AND rejected_at IS NULL`,
+             WHERE tenant_id = $1 AND source = 'judge' AND is_active = false
+               AND status IS DISTINCT FROM 'rejected'`,
             [tenantId],
           ),
           getGaps({ tenantId, status: 'open', limit: 3 }),

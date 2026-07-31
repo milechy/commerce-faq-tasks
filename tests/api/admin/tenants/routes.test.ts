@@ -181,6 +181,84 @@ describe("Tenant Admin Routes", () => {
       expect(res.body.onboarding_industry).toBeNull();
       expect(res.body.onboarding_completed_at).toBeNull();
     });
+
+    // Asana 1217040568432160: オンボーディング4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)
+    describe("onboarding_stage", () => {
+      it("全段階未到達の新規テナントでは全て false を返す", async () => {
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: null, onboarding_completed_at: null, onboarding_widget_seen_at: null,
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // faq_docs (knowledge_published)
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions (first_conversation)
+
+        const res = await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.onboarding_stage).toEqual({
+          industryAnswered: false,
+          knowledgePublished: false,
+          widgetInstalled: false,
+          firstConversation: false,
+        });
+      });
+
+      it("業種回答済み・公開FAQあり・設置検知済み・実会話ありなら全て true を返す", async () => {
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: "beauty", onboarding_completed_at: "2026-07-01T00:00:00.000Z",
+              onboarding_widget_seen_at: "2026-07-02T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [{ "?column?": 1 }], rowCount: 1 }) // faq_docs: 公開FAQあり
+          .mockResolvedValueOnce({ rows: [{ "?column?": 1 }], rowCount: 1 }); // chat_sessions: 実会話あり
+
+        const res = await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.onboarding_stage).toEqual({
+          industryAnswered: true,
+          knowledgePublished: true,
+          widgetInstalled: true,
+          firstConversation: true,
+        });
+      });
+
+      it("faq_docs クエリが失敗しても my-tenant 応答全体は壊れない(フェイルセーフ)", async () => {
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: "beauty", onboarding_completed_at: null, onboarding_widget_seen_at: null,
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockRejectedValueOnce(new Error("connection lost")) // faq_docs 失敗
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions
+
+        const res = await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.onboarding_stage.knowledgePublished).toBe(false);
+        expect(res.body.onboarding_stage.industryAnswered).toBe(true);
+      });
+    });
   });
 
   describe("PATCH /v1/admin/my-tenant", () => {
@@ -266,6 +344,42 @@ describe("Tenant Admin Routes", () => {
         .send({});
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("no_fields");
+    });
+  });
+
+  // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
+  // オンボーディング状態を取得できるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)
+  describe("GET /v1/admin/tenants/:id — onboarding_stage", () => {
+    it("onboarding_stageを応答に含める", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: "t1", name: "Test", plan: "starter", is_active: true, features: {},
+            onboarding_industry: "beauty", onboarding_widget_seen_at: null,
+          }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // faq_docs (knowledge_published)
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions (first_conversation)
+
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.onboarding_stage).toEqual({
+        industryAnswered: true,
+        knowledgePublished: false,
+        widgetInstalled: false,
+        firstConversation: false,
+      });
+    });
+
+    it("client_adminからのアクセスは従来どおり403(super_admin専用)", async () => {
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(403);
     });
   });
 

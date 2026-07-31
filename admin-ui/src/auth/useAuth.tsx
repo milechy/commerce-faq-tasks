@@ -18,6 +18,17 @@ export interface AuthUser {
 // LP(r2c.biz)料金表のプラン。backendのplanValues(src/api/admin/tenants/routes.ts)と一致させること。
 export type TenantPlan = "starter" | "growth" | "enterprise";
 
+// Asana 1217040702572796(P6): オンボーディング4段階。単一の情報源は
+// src/api/admin/agent/onboardingStage.ts(バックエンド)。admin-ui とは別パッケージ
+// (別ビルドルート)のため import できず、GET /v1/admin/my-tenant の応答形をそのまま
+// ここで受ける(4個の boolean のみの薄い型。copilot-preview/index.tsx にも同じ型がある)。
+export interface OnboardingStageFlags {
+  industryAnswered: boolean;
+  knowledgePublished: boolean;
+  widgetInstalled: boolean;
+  firstConversation: boolean;
+}
+
 interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
@@ -36,6 +47,15 @@ interface AuthContextValue {
    * - 未取得時は null（機能表示側はnullを「制限あり(未確認)」として扱うこと）
    */
   tenantPlan: TenantPlan | null;
+  /**
+   * 自テナント(previewMode時は対象外)のオンボーディング4段階。
+   * - client_admin(previewMode時を除く)のみ取得する。それ以外は常に null。
+   * - 未取得時は null（着地判定側は onboardingStageResolved で「まだ取得できていない」
+   *   ことと区別すること。null を「新規テナントではない」と早合点しない）。
+   */
+  onboardingStage: OnboardingStageFlags | null;
+  /** onboardingStage の取得が完了した(成功/失敗/対象外いずれも含む)かどうか。 */
+  onboardingStageResolved: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -50,6 +70,8 @@ const AuthContext = createContext<AuthContextValue>({
   enterPreview: () => {},
   exitPreview: () => {},
   tenantPlan: null,
+  onboardingStage: null,
+  onboardingStageResolved: false,
 });
 
 function parseRole(meta: Record<string, unknown>): AuthUser["role"] {
@@ -103,6 +125,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [previewTenantId, setPreviewTenantId] = useState<string | null>(storedPreview?.tenantId ?? null);
   const [previewTenantName, setPreviewTenantName] = useState<string | null>(storedPreview?.tenantName ?? null);
   const [tenantPlan, setTenantPlan] = useState<TenantPlan | null>(null);
+  const [onboardingStage, setOnboardingStage] = useState<OnboardingStageFlags | null>(null);
+  const [onboardingStageResolved, setOnboardingStageResolved] = useState(false);
 
   const loadUser = useCallback(async () => {
     setIsLoading(true);
@@ -154,6 +178,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // 表示対象テナントのプランを取得する。プレビュー中はプレビュー先テナント、
   // 通常のclient_adminは自テナント、それ以外(super_adminの集約ビュー)はnullのまま。
+  //
+  // Asana 1217040702572796(P6): 同じ my-tenant 呼び出しに、着地判定用の
+  // オンボーディング段階(onboardingStage)を相乗りさせる。新規 fetch は作らない。
+  // previewMode(super_adminのクライアントビュー)は対象外 — 決定Aは「テナント本人の
+  // 初回ログイン」の話であり、super_adminの一時的なプレビュー閲覧を新規テナント扱いに
+  // してはならない。
   useEffect(() => {
     let cancelled = false;
 
@@ -161,21 +191,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         if (previewMode && previewTenantId) {
           const res = await authFetch(`${API_BASE}/v1/admin/tenants/${previewTenantId}`);
-          if (!res.ok) { if (!cancelled) setTenantPlan(null); return; }
+          if (!res.ok) {
+            if (!cancelled) { setTenantPlan(null); setOnboardingStage(null); setOnboardingStageResolved(true); }
+            return;
+          }
           const data = (await res.json()) as { plan?: TenantPlan };
-          if (!cancelled) setTenantPlan(data.plan ?? "starter");
+          if (!cancelled) { setTenantPlan(data.plan ?? "starter"); setOnboardingStage(null); setOnboardingStageResolved(true); }
           return;
         }
         if (!previewMode && user?.role === "client_admin") {
           const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
-          if (!res.ok) { if (!cancelled) setTenantPlan(null); return; }
-          const data = (await res.json()) as { plan?: TenantPlan };
-          if (!cancelled) setTenantPlan(data.plan ?? "starter");
+          if (!res.ok) {
+            if (!cancelled) { setTenantPlan(null); setOnboardingStage(null); setOnboardingStageResolved(true); }
+            return;
+          }
+          const data = (await res.json()) as { plan?: TenantPlan; onboarding_stage?: OnboardingStageFlags };
+          if (!cancelled) {
+            setTenantPlan(data.plan ?? "starter");
+            setOnboardingStage(data.onboarding_stage ?? null);
+            setOnboardingStageResolved(true);
+          }
           return;
         }
-        if (!cancelled) setTenantPlan(null);
+        if (!cancelled) { setTenantPlan(null); setOnboardingStage(null); setOnboardingStageResolved(true); }
       } catch {
-        if (!cancelled) setTenantPlan(null);
+        if (!cancelled) { setTenantPlan(null); setOnboardingStage(null); setOnboardingStageResolved(true); }
       }
     }
 
@@ -227,6 +267,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       enterPreview,
       exitPreview,
       tenantPlan,
+      onboardingStage,
+      onboardingStageResolved,
     }}>
       {children}
     </AuthContext.Provider>

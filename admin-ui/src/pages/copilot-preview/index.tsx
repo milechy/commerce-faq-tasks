@@ -105,6 +105,19 @@ type Card =
       message?: string;
       adoptedUrl?: string;
     }
+  // 声の候補提示〜採用。POST /match-voice はテキストの候補(id/title/description/score)
+  // のみを返し音声プレビューを持たないため(旧UIウィザードのStudioVoiceSectionも同様に
+  // 試聴機能を持たない)、本カードも一覧から選ぶ形にする。description は再検索(もう一度
+  // 探す)用に保持する。他の失敗系カードと同じく、必ず status="failed" で確定させる。
+  | {
+      kind: "avatarVoiceCandidates";
+      configId: string;
+      description: string;
+      status: "matching" | "done" | "failed";
+      recommendations?: Array<{ id: string; title: string; description: string; score: number }>;
+      message?: string;
+      adoptedVoiceId?: string;
+    }
   // D3: 一覧が15件・1行60/100字で黙って切れていたのを解消するための全件カード。
   | {
       kind: "rulesList";
@@ -114,6 +127,15 @@ type Card =
         expectedBehavior: string;
         priority: number;
         isActive: boolean;
+        // P4-1: 古い(このフィールドが無い)キャッシュ済み会話との後方互換のため任意。
+        source?: string | null;
+        status?: string | null;
+        evidence?: {
+          evaluationIds?: number[];
+          effectivePrinciples?: string[];
+          failedPrinciples?: string[];
+          avgScore?: number;
+        } | null;
       }>;
       totalCount: number;
     }
@@ -222,6 +244,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   suggest_faq_import_from_urls: "URLからのFAQ一括提案",
   commit_faq_import: "FAQの一括登録",
   discard_faq_import: "FAQ一括提案の破棄",
+  publish_faq_drafts: "下書きFAQの公開",
 };
 
 // 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名
@@ -242,6 +265,7 @@ const REAL_WRITE_TOOLS = new Set([
   "commit_faq_import",
   "reply_to_escalation",
   "resolve_escalation",
+  "publish_faq_drafts",
 ]);
 
 // Phase2 (P7): ログイン直後に能動的に状況を尋ねる自動キックオフメッセージ。
@@ -262,6 +286,47 @@ const INDUSTRY_CHIPS: Chip[] = ONBOARDING_INDUSTRIES.map((ind) => ({
   action: `__real:業種は「${ind.label}」です。この業種のFAQテンプレートを提案してください。`,
   tone: "ghost",
 }));
+
+// Asana 1217040702485762(P5): オンボーディング4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)。
+// 導出ロジックの単一の情報源は src/api/admin/agent/onboardingStage.ts(バックエンド)。
+// admin-ui と backend は別パッケージ(別ビルドルート)のため import できず、
+// GET /v1/admin/my-tenant が返す形をそのままここで受ける(4個の boolean のみの薄い型)。
+interface OnboardingStageFlags {
+  industryAnswered: boolean;
+  knowledgePublished: boolean;
+  widgetInstalled: boolean;
+  firstConversation: boolean;
+}
+
+// 4段階のうち、まだ到達していない最初の段階に対応する案内文＋チップを返す。
+// 全段階到達済みなら null(=通常の週次ブリーフィング側の起動に進む)。
+// 各段階の判定順序は onboardingStage.ts の STAGE_ORDER と揃える。
+function deriveOnboardingNextStep(stage: OnboardingStageFlags): { text: string; chips?: Chip[] } | null {
+  if (!stage.industryAnswered) {
+    return {
+      text: "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
+      chips: INDUSTRY_CHIPS,
+    };
+  }
+  if (!stage.knowledgePublished) {
+    return {
+      text: "業種のFAQたたき台は下書きとして登録済みです。内容をご確認のうえ、よろしければ公開しましょう。",
+      chips: [{ label: "下書きを見る", action: "__real:下書きのFAQを見せてください", tone: "ghost" }],
+    };
+  }
+  if (!stage.widgetInstalled) {
+    return {
+      text: "FAQの準備ができました。次はウィジェットをサイトに設置しましょう。埋め込みコードをお渡しします。",
+      chips: [{ label: "埋め込みコードを見る", action: "__real:埋め込みコードを教えてください", tone: "ghost" }],
+    };
+  }
+  if (!stage.firstConversation) {
+    return {
+      text: "設置は完了しています。お客様からの最初のご質問をお待ちしています。準備は万端です！",
+    };
+  }
+  return null;
+}
 
 // ─── 実APIのツール結果 → 見た目の良いカードへの変換 ────────────────────────────
 // actionExecutor.ts が返す日本語の定型文字列を軽くパースする。想定外の形式なら
@@ -345,6 +410,9 @@ const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
 
 const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_VOICE_MATCH_GENERIC_ERROR = "声を検索できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_VOICE_MATCH_EMPTY_ERROR = "合う声が見つかりませんでした。もう一度お試しください。";
+const AVATAR_VOICE_ADOPT_GENERIC_ERROR = "この声を反映できませんでした。少し時間をおいてもう一度お試しください。";
 
 // ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
 //     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
@@ -776,13 +844,16 @@ export default function CopilotPreviewPage() {
   };
 
   // マウント時、まず同一タブに保存済みの会話があれば復元する(リロード・ブラウザバック・
-  // モバイルのタブ破棄で会話が消えないように)。復元できた場合は既に進行中の会話がある
-  // ということなので、ブートストラップ(業種選択オンボーディング/週次ブリーフィングの
-  // 自動取得)は行わない。
+  // モバイルのタブ破棄で会話が消えないように)。
   //
-  // 復元できなかった場合は従来通り、新規テナント(onboarding_completed_at未設定)なら業種選択
-  // オンボーディングを、既存テナントなら実データの週次ブリーフィングを自動取得する。
-  // super_admin(プレビュー中含む)はオンボーディング判定の対象外(常に週次ブリーフィング側)。
+  // Asana 1217040702485762(P5): 復元できた場合でも、オンボーディングが未完了なら
+  // 必ず「次の一手」を提示する(以前は復元時にブートストラップ自体を丸ごとスキップして
+  // おり、2回目以降のログインで次に何をすべきかが消える欠陥があった)。
+  //
+  // 復元できなかった場合は、4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)のうち
+  // 最初に未到達の段階の案内を出す。全段階到達済み・または段階を取得できない
+  // (super_admin/previewMode含む)場合は、従来どおり実データの週次ブリーフィングを
+  // 自動取得する。
   const bootstrapped = useRef(false);
   useEffect(() => {
     // テナント選択待ちの間は取りに行かない（テナント未特定のブリーフィングは
@@ -793,33 +864,47 @@ export default function CopilotPreviewPage() {
     bootstrapped.current = true;
 
     const restored = restoreChatSession<Msg>(CHAT_SESSION_SURFACE_FULLSCREEN, scopedTenantId || null);
-    if (restored && restored.messages.length > 0) {
+    const hasRestoredConversation = !!(restored && restored.messages.length > 0);
+    if (hasRestoredConversation && restored) {
       reserveIds(restored.messages);
       adoptSessionId(restored.sessionId);
       setMsgs(restored.messages);
       setRealHistory(restored.history ?? []);
-      return;
     }
 
     void (async () => {
-      let isNewTenant = false;
-      if (!previewMode && user?.role === "client_admin") {
-        try {
+      let stage: OnboardingStageFlags | null = null;
+      // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
+      // オンボーディングの「次の一手」提示を使えるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)。
+      // previewMode中はJWTのtenant_idを見るmy-tenantではなくtargetTenantId明示の
+      // /v1/admin/tenants/:id(super_admin専用、useAuthのtenantPlan取得と同じ経路)を使う。
+      try {
+        if (previewMode && previewTenantId) {
+          const res = await authFetch(`${API_BASE}/v1/admin/tenants/${previewTenantId}`);
+          if (res.ok) {
+            const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+            stage = data.onboarding_stage ?? null;
+          }
+        } else if (!previewMode && user?.role === "client_admin") {
           const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
           if (res.ok) {
-            const data = (await res.json()) as { onboarding_completed_at?: string | null };
-            isNewTenant = !data.onboarding_completed_at;
+            const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+            stage = data.onboarding_stage ?? null;
           }
-        } catch {
-          // 取得失敗時は通常の週次ブリーフィング側にフォールバック
         }
+      } catch {
+        // 取得失敗時は通常の週次ブリーフィング側にフォールバック
       }
 
-      if (isNewTenant) {
-        push(say(
-          "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
-          INDUSTRY_CHIPS,
-        ));
+      const nextStep = stage ? deriveOnboardingNextStep(stage) : null;
+
+      if (hasRestoredConversation) {
+        if (nextStep) push(say(nextStep.text, nextStep.chips));
+        return;
+      }
+
+      if (nextStep) {
+        push(say(nextStep.text, nextStep.chips));
       } else {
         push({ id: nextId(), role: "ai", text: "ログイン、お疲れさまです。今週の実データを確認しています…" });
         await sendReal(BOOTSTRAP_PROMPT, { silent: true });
@@ -1197,6 +1282,73 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // ─── アバターの声の選択・採用 ─────────────────────────────────────────────────
+  // POST /match-voice はテキストの候補(id/title/description/score)のみを返す
+  // (旧UIウィザードのStudioVoiceSectionも同様に試聴機能を持たない。Fish Audio
+  // 検索APIの応答に音声プレビューURLが含まれないため)。「声の説明」は新たに
+  // 尋ねず、採用済みアバターの性格・話し方の説明をそのまま検索クエリに使う
+  // (「選ばせない」方針。ユーザーは声だけの追加質問に答えなくてよい)。
+  const updateAvatarVoiceCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "avatarVoiceCandidates" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "avatarVoiceCandidates" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  const matchAvatarVoice = async (configId: string, description: string) => {
+    const cardId = nextId();
+    const boundedDescription = description.slice(0, 300);
+    push({ id: cardId, role: "ai", card: { kind: "avatarVoiceCandidates", configId, description: boundedDescription, status: "matching" } });
+
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/match-voice`, {
+        method: "POST",
+        body: JSON.stringify({ description: boundedDescription }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarVoiceCard(cardId, { status: "failed", message: body?.error || AVATAR_VOICE_MATCH_GENERIC_ERROR });
+        return;
+      }
+      const data = (await res.json()) as { recommendations?: Array<{ id: string; title: string; description: string; score: number }> };
+      const recommendations = data.recommendations ?? [];
+      if (recommendations.length === 0) {
+        updateAvatarVoiceCard(cardId, { status: "failed", message: AVATAR_VOICE_MATCH_EMPTY_ERROR });
+        return;
+      }
+      updateAvatarVoiceCard(cardId, { status: "done", recommendations });
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_VOICE_MATCH_GENERIC_ERROR;
+      updateAvatarVoiceCard(cardId, { status: "failed", message });
+    }
+  };
+
+  const adoptAvatarVoice = async (cardMsgId: number, configId: string, voiceId: string) => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${configId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ voice_id: voiceId }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarVoiceCard(cardMsgId, { message: body?.error || AVATAR_VOICE_ADOPT_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarVoiceCard(cardMsgId, { adoptedVoiceId: voiceId });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_VOICE_ADOPT_GENERIC_ERROR;
+      updateAvatarVoiceCard(cardMsgId, { message });
+    }
+  };
+
   const handlePdfDrop = (e: React.DragEvent) => {
     e.preventDefault();
     pdfDragCounterRef.current = 0;
@@ -1373,6 +1525,8 @@ export default function CopilotPreviewPage() {
                 onChip={runAction}
                 onGenerateAvatarCandidates={generateAvatarCandidates}
                 onAdoptAvatarCandidate={adoptAvatarCandidate}
+                onMatchAvatarVoice={matchAvatarVoice}
+                onAdoptAvatarVoice={adoptAvatarVoice}
               />
             ))}
             {/* key に直近メッセージのidを与え、回答が変わるたびに新しい確認として出す
@@ -1618,11 +1772,15 @@ function MessageRow({
   onChip,
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
+  onMatchAvatarVoice,
+  onAdoptAvatarVoice,
 }: {
   m: Msg;
   onChip: (a: string, id: number) => void;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
+  onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
 }) {
   const isMe = m.role === "me";
   return (
@@ -1645,6 +1803,9 @@ function MessageRow({
           msgId={m.id}
           onGenerateAvatarCandidates={onGenerateAvatarCandidates}
           onAdoptAvatarCandidate={onAdoptAvatarCandidate}
+          onMatchAvatarVoice={onMatchAvatarVoice}
+          onAdoptAvatarVoice={onAdoptAvatarVoice}
+          onSendReal={(action) => onChip(action, m.id)}
         />
       )}
       {m.chips && !m.chipsUsed && (
@@ -1839,11 +2000,17 @@ function CardView({
   msgId,
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
+  onMatchAvatarVoice,
+  onAdoptAvatarVoice,
+  onSendReal,
 }: {
   card: Card;
   msgId: number;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
+  onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
+  onSendReal?: (action: string) => void;
 }) {
   switch (card.kind) {
     case "agentAction":
@@ -1879,20 +2046,71 @@ function CardView({
     case "rulesList":
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
-          {card.rules.map((r) => (
-            <div
-              key={r.id}
-              style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)" }}>
-                <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
-                <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
+          {card.rules.map((r) => {
+            // P4-1: AI(judge)が提案したルールは、店主が作ったものと同じ見た目で
+            // 並べない(出所が分からないと承認判断ができない)。is_activeだけでは
+            // 未承認(pending)と却下済み(rejected)を区別できないためstatusも見る。
+            const isJudgeProposal = r.source === "judge";
+            const isPendingApproval = isJudgeProposal && !r.isActive && r.status !== "rejected";
+            const isRejected = isJudgeProposal && r.status === "rejected";
+            return (
+              <div
+                key={r.id}
+                style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)", flexWrap: "wrap" }}>
+                  <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
+                  <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
+                  {isJudgeProposal && (
+                    <span style={{ fontWeight: 700, color: "#b45309", background: "rgba(245,158,11,0.14)", borderRadius: 6, padding: "2px 8px" }}>
+                      🤖 AIの提案{isPendingApproval ? "（未承認）" : isRejected ? "（却下済み）" : ""}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+                  <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
+                </div>
+                {/* 根拠は評価IDなどの内部識別子をそのまま出さず、店主の言葉に言い換える */}
+                {r.evidence && (
+                  <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", display: "flex", flexDirection: "column", gap: 2 }}>
+                    {r.evidence.avgScore !== undefined && (
+                      <div>もとになった会話の対応の質: 目安{r.evidence.avgScore}点</div>
+                    )}
+                    {r.evidence.effectivePrinciples && r.evidence.effectivePrinciples.length > 0 && (
+                      <div>効果があった対応: {r.evidence.effectivePrinciples.join("、")}</div>
+                    )}
+                    {r.evidence.failedPrinciples && r.evidence.failedPrinciples.length > 0 && (
+                      <div>うまくいかなかった対応: {r.evidence.failedPrinciples.join("、")}</div>
+                    )}
+                  </div>
+                )}
+                {isPendingApproval && onSendReal && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を承認して有効にしてください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "none", background: AGENT, color: "#fff", minHeight: 44 }}
+                    >
+                      有効にする
+                    </button>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を却下してください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                    >
+                      却下する
+                    </button>
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
-                <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </CardShell>
       );
     case "engagement":
@@ -1927,9 +2145,11 @@ function CardView({
         </CardShell>
       );
     case "avatarAdopted":
-      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} />;
+      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onMatchVoice={onMatchAvatarVoice} />;
     case "avatarCandidates":
       return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onAdopt={onAdoptAvatarCandidate} />;
+    case "avatarVoiceCandidates":
+      return <AvatarVoiceCard card={card} msgId={msgId} onMatch={onMatchAvatarVoice} onAdopt={onAdoptAvatarVoice} />;
     case "link":
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
@@ -2121,21 +2341,29 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
 function AvatarAdoptedCard({
   card,
   onGenerate,
+  onMatchVoice,
 }: {
   card: Extract<Card, { kind: "avatarAdopted" }>;
   onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onMatchVoice: (configId: string, description: string) => void | Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busyImage, setBusyImage] = useState(false);
+  const [busyVoice, setBusyVoice] = useState(false);
   const handleGenerate = () => {
-    setBusy(true);
-    void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusy(false));
+    setBusyImage(true);
+    void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusyImage(false));
+  };
+  const handleMatchVoice = () => {
+    setBusyVoice(true);
+    // 声の説明を新たに尋ねず、採用済みの性格・話し方の説明をそのまま検索クエリにする。
+    void Promise.resolve(onMatchVoice(card.configId, card.description)).finally(() => setBusyVoice(false));
   };
 
   return (
     <CardShell
       tone="good"
       hd={<><span>✅</span>アバター「{card.name}」を採用しました</>}
-      foot={<CardActionsNote note="生成のたびに少額の費用が発生します。気に入った1枚を選ぶまで何度でもやり直せます。" />}
+      foot={<CardActionsNote note="生成・検索のたびに少額の費用が発生します。気に入るまで何度でもやり直せます。" />}
     >
       {card.imageUrl && (
         <img
@@ -2145,17 +2373,30 @@ function AvatarAdoptedCard({
         />
       )}
       <Field k="性格・話し方" v={card.description} quote />
-      <button
-        onClick={handleGenerate}
-        disabled={busy}
-        style={{
-          alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
-          border: "none", background: AGENT, color: "#fff",
-          cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
-        }}
-      >
-        {busy ? "生成しています…" : "画像を新しく生成する"}
-      </button>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={handleGenerate}
+          disabled={busyImage}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "none", background: AGENT, color: "#fff",
+            cursor: busyImage ? "not-allowed" : "pointer", opacity: busyImage ? 0.6 : 1,
+          }}
+        >
+          {busyImage ? "生成しています…" : "画像を新しく生成する"}
+        </button>
+        <button
+          onClick={handleMatchVoice}
+          disabled={busyVoice}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)",
+            cursor: busyVoice ? "not-allowed" : "pointer", opacity: busyVoice ? 0.6 : 1,
+          }}
+        >
+          {busyVoice ? "声を探しています…" : "声を探す"}
+        </button>
+      </div>
     </CardShell>
   );
 }
@@ -2263,6 +2504,113 @@ function AvatarCandidatesCard({
                 }}
               >
                 {isAdopted ? "これに決定" : adopting === url ? "反映中…" : "これにする"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </CardShell>
+  );
+}
+
+// 声の候補〜採用。match-voice はテキストの候補(id/title/description/score)のみを
+// 返し、音声プレビューURLを持たない(旧UIウィザードのStudioVoiceSectionも試聴機能を
+// 持たない。Fish Audio検索APIの応答に含まれないため)。名前とスコアを頼りに選ぶ形になる。
+function AvatarVoiceCard({
+  card,
+  msgId,
+  onMatch,
+  onAdopt,
+}: {
+  card: Extract<Card, { kind: "avatarVoiceCandidates" }>;
+  msgId: number;
+  onMatch: (configId: string, description: string) => void | Promise<void>;
+  onAdopt: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
+}) {
+  const [adopting, setAdopting] = useState<string | null>(null);
+
+  if (card.status === "matching") {
+    return (
+      <CardShell hd={<><span>🔊</span>合う声を探しています</>}>
+        <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+          少し時間がかかることがあります。このまま他の操作もできます。
+        </div>
+      </CardShell>
+    );
+  }
+
+  if (card.status === "failed") {
+    return (
+      <CardShell
+        tone="bad"
+        hd={<><span>🔊</span>声を検索できませんでした</>}
+        foot={
+          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={() => void onMatch(card.configId, card.description)}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
+              }}
+            >
+              もう一度試す
+            </button>
+          </div>
+        }
+      >
+        {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+      </CardShell>
+    );
+  }
+
+  const handleAdopt = (voiceId: string) => {
+    setAdopting(voiceId);
+    void Promise.resolve(onAdopt(msgId, card.configId, voiceId)).finally(() => setAdopting(null));
+  };
+
+  return (
+    <CardShell
+      tone="good"
+      hd={<><span>🔊</span>声の候補です</>}
+      foot={
+        <CardActionsNote note="音声のプレビューは提供されていません。名前と説明を参考にお選びください。" />
+      }
+    >
+      {card.message && <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{card.message}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {(card.recommendations ?? []).map((rec) => {
+          const isAdopted = card.adoptedVoiceId === rec.id;
+          const disabled = !!card.adoptedVoiceId || adopting !== null;
+          return (
+            <div
+              key={rec.id}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                padding: "10px 14px", borderRadius: 10,
+                border: isAdopted ? `1px solid ${AGENT}` : "1px solid var(--border)",
+                background: isAdopted ? AGENT_SOFT : "transparent",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>{rec.title}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{Math.round(rec.score * 100)}%</span>
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", marginTop: 2 }}>{rec.description}</div>
+              </div>
+              <button
+                onClick={() => handleAdopt(rec.id)}
+                disabled={disabled}
+                style={{
+                  flexShrink: 0, fontSize: 12.5, fontWeight: 700, padding: "7px 14px", borderRadius: 999, minHeight: 36,
+                  border: isAdopted ? "none" : "1px solid var(--border)",
+                  background: isAdopted ? AGENT : "transparent",
+                  color: isAdopted ? "#fff" : "var(--muted-foreground)",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled && !isAdopted ? 0.5 : 1,
+                }}
+              >
+                {isAdopted ? "これに決定" : adopting === rec.id ? "反映中…" : "この声にする"}
               </button>
             </div>
           );

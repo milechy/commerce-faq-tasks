@@ -206,6 +206,26 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'publish_faq_drafts',
+      description:
+        '下書き(非公開)のFAQをユーザーに内容確認のうえ公開する。confirmed=falseで呼ぶと現在の下書き一覧を' +
+        '提示するだけで公開はしない。内容をユーザーに提示し、同意を得たターンでのみ confirmed=true で呼び出すこと。' +
+        '一度に公開できるのは最大20件。20件を超える下書きがある場合は複数回呼び出しが必要。',
+      parameters: {
+        type: 'object',
+        properties: {
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_avatar_status',
       description: 'アバターの稼働状況（有効/無効、稼働中の設定名）を取得する読み取り専用ツール。',
       parameters: {
@@ -384,7 +404,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_tuning_rules',
       description:
-        '現在の指示ルール（AIの振る舞いルール）の一覧を取得する読み取り専用ツール。suggest_tuning_rule/save_tuning_ruleで作成済みのものも含め、有効/無効の状態ごと全件を確認したい時に使う。',
+        '現在の指示ルール（AIの振る舞いルール）の一覧を取得する読み取り専用ツール。suggest_tuning_rule/save_tuning_ruleで作成済みのものに加え、AIが自動提案した未承認のルール（店主の承認なしには本番の応答に反映されない）も含む。一覧・承認判断の両方に使う。',
       parameters: {
         type: 'object',
         properties: {},
@@ -397,7 +417,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'update_tuning_rule',
       description:
-        '既存の指示ルールを編集する、または有効/無効を切り替える。編集する場合は trigger_pattern/expected_behavior を、有効/無効の切り替えのみの場合は is_active だけを指定する。必ず先に変更内容をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+        '既存の指示ルールを編集する、有効/無効を切り替える、またはAI提案ルールを承認/却下する。編集する場合は trigger_pattern/expected_behavior を、有効/無効の切り替えのみの場合は is_active だけを指定する。' +
+        'AI提案ルール（get_tuning_rulesの結果でsourceが"judge"のもの）を承認する場合は is_active=true と status="active" を両方指定し、却下する場合は is_active=false と status="rejected" を両方指定すること（is_active だけでは未承認と却下済みを区別できない）。通常のルールのON/OFF切替では status を指定しない。' +
+        '必ず先に変更内容（承認/却下の場合は根拠を含む）をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
       parameters: {
         type: 'object',
         properties: {
@@ -405,6 +427,11 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           trigger_pattern: { type: 'string', description: '新しいトリガー内容（変更する場合のみ指定）' },
           expected_behavior: { type: 'string', description: '新しい対応方針（変更する場合のみ指定）' },
           is_active: { type: 'boolean', description: '有効/無効の切り替え（変更する場合のみ指定）' },
+          status: {
+            type: 'string',
+            enum: ['active', 'rejected'],
+            description: 'AI提案ルールの承認("active")/却下("rejected")時のみ指定する。通常のルールのON/OFF切替では指定しない。',
+          },
           confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
         },
         required: ['id', 'confirmed'],

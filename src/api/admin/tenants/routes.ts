@@ -13,6 +13,7 @@ import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { DEFAULT_AVATARS } from "../avatar/routes";
 import { logger } from '../../../lib/logger';
 import { planHasFeature, type TenantPlan } from "../../../lib/billing/planFeatures";
+import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 
 const planValues = ["starter", "growth", "enterprise"] as const;
 
@@ -80,6 +81,46 @@ async function checkHasR2c2(db: Pool, tenantId: string): Promise<boolean> {
     logger.warn("[checkHasR2c2] aaas_clients query failed (migration not applied yet?)", err);
     return false;
   }
+}
+
+// Asana 1217040568432160: オンボーディング4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)のうち、
+// tenants テーブルの列だけでは導出できない2段階(知識公開/初回実会話)を取得する。
+// checkHasR2c2 と同じくフェイルセーフ(各クエリ失敗時は false のまま返し、
+// my-tenant 応答全体を壊さない)。導出ロジック自体は onboardingStage.ts の単一情報源に従う。
+async function fetchOnboardingStageStatus(
+  db: Pool,
+  tenantId: string,
+  onboardingIndustry: string | null,
+  onboardingWidgetSeenAt: string | null
+): Promise<OnboardingStageStatus> {
+  let hasPublishedFaq = false;
+  try {
+    const result = await db.query(
+      `SELECT 1 FROM faq_docs WHERE tenant_id = $1 AND is_published = true LIMIT 1`,
+      [tenantId]
+    );
+    hasPublishedFaq = (result.rowCount ?? 0) > 0;
+  } catch (err) {
+    logger.warn("[fetchOnboardingStageStatus] faq_docs query failed", err);
+  }
+
+  let hasRealConversation = false;
+  try {
+    const result = await db.query(
+      `SELECT 1 FROM chat_sessions WHERE tenant_id = $1 AND metadata->>'source' = 'user' LIMIT 1`,
+      [tenantId]
+    );
+    hasRealConversation = (result.rowCount ?? 0) > 0;
+  } catch (err) {
+    logger.warn("[fetchOnboardingStageStatus] chat_sessions query failed", err);
+  }
+
+  return deriveOnboardingStage({
+    onboardingIndustry,
+    onboardingWidgetSeenAt,
+    hasPublishedFaq,
+    hasRealConversation,
+  });
 }
 
 export function registerTenantAdminRoutes(app: Express, db: Pool): void {
@@ -155,14 +196,24 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, onboarding_widget_seen_at FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
       }
+      const row = result.rows[0] as {
+        onboarding_industry: string | null;
+        onboarding_widget_seen_at: string | null;
+      };
       const has_r2c2 = await checkHasR2c2(db, tenantId);
-      return res.json({ ...result.rows[0], has_r2c2 });
+      const onboarding_stage = await fetchOnboardingStageStatus(
+        db,
+        tenantId,
+        row.onboarding_industry,
+        row.onboarding_widget_seen_at
+      );
+      return res.json({ ...result.rows[0], has_r2c2, onboarding_stage });
     } catch (err) {
       logger.warn("[GET /v1/admin/my-tenant]", err);
       return res.status(500).json({ error: "取得に失敗しました" });
@@ -336,13 +387,26 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
       }
-      return res.json(result.rows[0]);
+      const row = result.rows[0] as {
+        onboarding_industry: string | null;
+        onboarding_widget_seen_at: string | null;
+      };
+      // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
+      // オンボーディングの「次の一手」提示を使えるようにするため、my-tenant同様に
+      // onboarding_stage を相乗りさせる(新規fetchは作らない)。
+      const onboarding_stage = await fetchOnboardingStageStatus(
+        db,
+        id,
+        row.onboarding_industry,
+        row.onboarding_widget_seen_at
+      );
+      return res.json({ ...result.rows[0], onboarding_stage });
     } catch (err) {
       logger.warn("[GET /v1/admin/tenants/:id]", err);
       return res.status(500).json({ error: "取得に失敗しました" });
