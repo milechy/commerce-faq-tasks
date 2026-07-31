@@ -404,9 +404,14 @@ export interface CommitFaqsResult {
 
 /**
  * テキスト由来のFAQをDBへ登録する。
- * POST /v1/admin/knowledge/text/commit（旧UI）と
+ * POST /v1/admin/knowledge/text/commit（旧UI。オンボーディングモーダルもこの経路を使う）と
  * チャットの commit_faq_import（テキスト由来のステージング）の両方から使う。
  * tags・商品メタ列は持たない（元のtext/commitエンドポイントと同一のINSERT列構成）。
+ *
+ * isPublished（既定 true）: 呼び出し元が明示的に false を渡さない限り、既存の挙動
+ * （即公開）を完全に維持する。false を渡すのは、内容が未確認のまま公開されると
+ * 事故になる経路（オンボーディングのテンプレ投入）のみ。既定値を変えてはならない
+ * ——通常のFAQテキスト取り込みまで非公開になってしまう。
  */
 export async function commitTextFaqs(
   db: Pool,
@@ -414,6 +419,7 @@ export async function commitTextFaqs(
   faqs: FaqEntry[],
   categoryOverride: string | undefined,
   source: string,
+  isPublished: boolean = true,
 ): Promise<CommitFaqsResult> {
   const existingQuestionsAtCommit = await fetchExistingQuestions(db, target);
 
@@ -432,9 +438,9 @@ export async function commitTextFaqs(
     try {
       const r = await db.query(
         `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
-         VALUES ($1, $2, $3, $4, true)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id`,
-        [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), faqCategory]
+        [target, faq.question.slice(0, 500), faq.answer.slice(0, 2000), faqCategory, isPublished]
       );
       const faqId = r.rows[0].id as number;
       inserted.push(faqId);

@@ -205,6 +205,26 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'publish_faq_drafts',
+      description:
+        '下書き(非公開)のFAQをユーザーに内容確認のうえ公開する。confirmed=falseで呼ぶと現在の下書き一覧を' +
+        '提示するだけで公開はしない。内容をユーザーに提示し、同意を得たターンでのみ confirmed=true で呼び出すこと。' +
+        '一度に公開できるのは最大20件。20件を超える下書きがある場合は複数回呼び出しが必要。',
+      parameters: {
+        type: 'object',
+        properties: {
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_avatar_status',
       description: 'アバターの稼働状況（有効/無効、稼働中の設定名）を取得する読み取り専用ツール。',
       parameters: {

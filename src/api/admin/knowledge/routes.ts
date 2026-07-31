@@ -336,6 +336,10 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .max(20),
       category: z.string().optional(), // 全FAQ共通の強制カテゴリ（未指定=各FAQの自動判定値を使用）
       target: z.string().optional(),
+      // GID 1216274591838389 / Asana 1217040715802747: このエンドポイントは通常のFAQ取り込みと
+      // オンボーディングモーダル(OnboardingModal.tsx)の両方が使う。既定は true(既存挙動=即公開)。
+      // オンボーディング経路のみ false を渡し、内容確認前の公開を防ぐ。
+      isPublished: z.boolean().optional(),
     });
     const parsed = schema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -344,7 +348,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         .json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { faqs, category: categoryOverride, target: rawTarget } = parsed.data;
+    const { faqs, category: categoryOverride, target: rawTarget, isPublished } = parsed.data;
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
@@ -352,7 +356,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
       return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
     }
 
-    const result = await commitTextFaqs(db, target, faqs, categoryOverride, "text");
+    const result = await commitTextFaqs(db, target, faqs, categoryOverride, "text", isPublished ?? true);
 
     return res.status(201).json({ ok: true, inserted: result.inserted, skipped: result.skipped });
   });
