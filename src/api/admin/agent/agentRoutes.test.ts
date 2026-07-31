@@ -2926,6 +2926,7 @@ describe('POST /v1/admin/agent/chat', () => {
       ['chat_test', 'テストチャット', '/admin/chat-test'],
       ['avatar_wizard', 'アバター新規作成', '/admin/avatar/wizard'],
       ['knowledge_pdf', 'PDFアップロード', '/admin/knowledge/tenant-abc?tab=pdf'],
+      ['knowledge_attribution', '成約への貢献度', '/admin/knowledge/tenant-abc?tab=attribution'],
     ])('feature=%s: 旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-lu-1', 'get_legacy_ui_link', { feature }))
@@ -3052,6 +3053,55 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+
+    // knowledge_pdf と同じ理由(path に tenantId を埋め込む必要がある)で専用ガードがある
+    it('feature=knowledge_attribution: super_admin がテナント未特定 → 「テナントが特定できません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-9b', 'get_legacy_ui_link', { feature: 'knowledge_attribution' }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '成約への貢献度を見せて', sessionId: 'sess-lu-06b' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+
+    // 「需要ゼロ」と「計測不能」を区別できる状態にすることが目的(docs/LEGACY_UI_SUNSET.md)。
+    // 「そんな機能はありません」と答えず旧UIへ案内し、agent_legacy_handoff に記録されることを確認する。
+    it('feature=knowledge_attribution: 「成約への貢献度を見せて」に対し旧UIリンクを案内し、agent_legacy_handoffに記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-attr-1', 'get_legacy_ui_link', { feature: 'knowledge_attribution' }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご確認ください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '成約への貢献度を見せて', sessionId: 'sess-lu-attr-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).not.toContain('そんな機能はありません');
+      expect(result).toContain('成約への貢献度');
+      expect(result).toContain('URL: /admin/knowledge/tenant-abc?tab=attribution\n');
+
+      expect(recordedMetrics('agent_legacy_handoff')).toEqual([
+        {
+          metricName: 'agent_legacy_handoff',
+          tenantId: 'tenant-abc',
+          labels: { feature: 'knowledge_attribution', surface: 'unknown' },
+          value: 1,
+        },
+      ]);
+
+      // card は既存の legacy_link 契約のまま(target="_blank"等のフロント描画がこの構造に依存する)
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'legacy_link',
+        label: '成約への貢献度',
+        url: '/admin/knowledge/tenant-abc?tab=attribution',
+        description: 'ナレッジ(FAQ・書籍)ごとの成約への貢献度はこちらの画面で確認できます',
+      });
     });
 
     // 冒頭が「できません」で始まると、旧UIへの案内が行き止まりの謝罪に見えてしまう。

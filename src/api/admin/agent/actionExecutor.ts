@@ -1843,6 +1843,14 @@ export async function executeToolCall(
           path: `/admin/knowledge/${tenantId}?tab=pdf`,
           description: 'PDFファイルからの知識登録はこちらの画面で行えます',
         },
+        // knowledge_pdf と同じ理由でtenantIdをpathに含める必要がある(下のガードで !tenantId は事前に弾いている)。
+        // GET /v1/admin/analytics/knowledge-attribution にプラン制限は無いため、ここでもゲートを設けない
+        // (R2Cは従量課金であり、上限/プランゲートを反射的に足す方針ではない。conversion等の既存ゲートは模倣しない)。
+        knowledge_attribution: {
+          label: '成約への貢献度',
+          path: `/admin/knowledge/${tenantId}?tab=attribution`,
+          description: 'ナレッジ(FAQ・書籍)ごとの成約への貢献度はこちらの画面で確認できます',
+        },
       };
 
       // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測)に基づくプラン制限。
@@ -1862,8 +1870,8 @@ export async function executeToolCall(
         }
       }
 
-      // knowledge_pdf は path に tenantId を埋め込む都合上、他のキーと違い必須。
-      if (feature === 'knowledge_pdf' && !tenantId) {
+      // knowledge_pdf / knowledge_attribution は path に tenantId を埋め込む都合上、他のキーと違い必須。
+      if ((feature === 'knowledge_pdf' || feature === 'knowledge_attribution') && !tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
