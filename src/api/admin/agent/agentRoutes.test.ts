@@ -2612,6 +2612,28 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('ありません');
     });
 
+    it('get_chat_sessions: limit="abc"（数値でない）は例外にならず既定件数(10)にフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-abc', 'get_chat_sessions', { limit: 'abc' }))
+        .mockResolvedValueOnce(makeGroqResponse('直近の会話です。'));
+
+      mockGetSessions.mockResolvedValueOnce({
+        sessions: [
+          { id: 'db-1', tenant_id: 'tenant-abc', session_id: 'sess-aaaaaaaa-1111', started_at: '2026-07-17T10:00:00Z', last_message_at: '2026-07-17T10:05:00Z', message_count: 4, first_message_preview: '送料はいくらですか', outcome: null, outcome_recorded_at: null },
+        ],
+        total: 1,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '最近の会話を見せて', sessionId: 'sess-rd-abc' });
+
+      expect(res.status).toBe(200);
+      // NaN のまま渡らず、既定値10にフォールバックしていることを確認する
+      expect(mockGetSessions).toHaveBeenCalledWith({ tenantId: 'tenant-abc', limit: 10 });
+      expect(res.body.actions[0].result).toContain('送料はいくらですか');
+    });
+
     it('get_escalations: 対応中の一覧を1つの結果文字列にまとめる', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-rd-4', 'get_escalations', {}))
