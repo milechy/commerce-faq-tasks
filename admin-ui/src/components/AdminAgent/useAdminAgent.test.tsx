@@ -116,6 +116,45 @@ describe("useAdminAgent — 会話の復元(sessionStorage)", () => {
     // 全画面UI側のキーは一切触られていない
     expect(window.sessionStorage.getItem(chatSessionKey(CHAT_SESSION_SURFACE_FULLSCREEN))).toBe(fullscreenBefore);
   });
+
+  // レビュー指摘(P1-2): マウント時の復元検証だけでは、パネルをunmountせずに
+  // super_adminがAppSwitcherで別テナントへ切り替えるケースを防げない。以前は
+  // 保存effectがtenantIdの変化を無視してそのまま保存し続けており、前テナントの
+  // 会話が新テナントの会話として保存され直っていた。
+  it("マウント後にtenantIdがライブで変わると、保持中の会話を破棄してから新テナントとして保存し直す", async () => {
+    saveChatSession(CHAT_SESSION_SURFACE_PANEL, {
+      sessionId: "panel-session-tenant-a",
+      messages: [{ role: "user", content: "テナントAの機密の質問" }],
+      tenantId: "tenant-a",
+    });
+
+    const { rerender } = render(<Probe tenantId="tenant-a" />);
+    expect(screen.getByTestId("messages").textContent).toBe("user:テナントAの機密の質問");
+
+    rerender(<Probe tenantId="tenant-b" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("messages").textContent).toBe("");
+    });
+
+    // まだ何も送信していない(messages.length===0)ため保存effectは書き込まないが、
+    // 破棄自体はclearChatSessionで即座に行われ、テナントAの会話は残らない。
+    const stored = restoreChatSession(CHAT_SESSION_SURFACE_PANEL, "tenant-a");
+    expect(stored).toBeNull();
+  });
+
+  it("同じtenantIdのままの再レンダーでは会話を破棄しない", () => {
+    saveChatSession(CHAT_SESSION_SURFACE_PANEL, {
+      sessionId: "panel-session-tenant-a",
+      messages: [{ role: "user", content: "テナントAの質問" }],
+      tenantId: "tenant-a",
+    });
+
+    const { rerender } = render(<Probe tenantId="tenant-a" />);
+    rerender(<Probe tenantId="tenant-a" />);
+
+    expect(screen.getByTestId("messages").textContent).toBe("user:テナントAの質問");
+  });
 });
 
 // GID 1217008695995707: サーバは全メトリクスの surface ラベルにこの値をそのまま載せる

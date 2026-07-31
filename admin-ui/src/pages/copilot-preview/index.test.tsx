@@ -2638,6 +2638,95 @@ describe("CopilotPreviewPage — テナント切替時の会話リセット", ()
     // 送信可能状態も壊れていない(遅れてきたtenant-bの完了処理がsendingを誤って書き換えていない)
     expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false);
   });
+
+  // レビュー指摘(P1-3): 以前はテナント切替後、オンボーディング段階を判定せず常に
+  // 週次ブリーフィングへ直行していた。マウント時の経路(次の一手を提示する)と
+  // 切替後の経路とで挙動が分かれていたため、super_adminが代行のため新規テナントへ
+  // 切り替えても「次の一手」が出ない不整合があった。
+  it("切替後もオンボーディング未完了なら次の一手が提示される(ブリーフィングへ直行しない)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/tenants/tenant-a")) {
+        return mockOk({ onboarding_stage: null });
+      }
+      if (String(url).includes("/v1/admin/tenants/tenant-b")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: false,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週の状況です。", actions: [] });
+    });
+
+    const { rerender } = renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-a" });
+    await waitFor(() => expect(screen.getByText("今週の状況です。")).toBeTruthy());
+
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-b" }));
+    rerender(<MemoryRouter><CopilotPreviewPage /></MemoryRouter>);
+
+    expect(await screen.findByText(/どんな業種ですか/)).toBeTruthy();
+    // ブリーフィングの自然文(週次まとめ)は出ていない
+    expect(screen.queryByText("今週の状況です。")).toBeNull();
+  });
+
+  // レビュー指摘(P2-1): テナント切替後のオンボーディング判定(await authFetch)の最中に
+  // さらに別テナントへ切り替わると、以前は世代カウンタで守られておらず、後から届いた
+  // 古い判定結果(前テナントの「次の一手」)が新テナントのスレッドに紛れ込んでいた。
+  it("切替後のオンボーディング判定中にさらに切替が発生しても、古い判定結果は新テナントのスレッドに反映されない", async () => {
+    let resolveTenantBOnboarding: (v: Response) => void = () => {};
+
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/tenants/tenant-a")) {
+        return mockOk({ onboarding_stage: null });
+      }
+      if (String(url).includes("/v1/admin/tenants/tenant-b")) {
+        // tenant-b の判定は保留のまま(手動で解決するまで待つ)
+        return new Promise<Response>((resolve) => { resolveTenantBOnboarding = resolve; });
+      }
+      if (String(url).includes("/v1/admin/tenants/tenant-c")) {
+        return mockOk({ onboarding_stage: null }); // tenant-c は判定完了済み扱い
+      }
+      return mockOk({ reply: "tenant-cの状況です。", actions: [] });
+    });
+
+    const { rerender } = renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-a" });
+    await waitFor(() => expect(vi.mocked(authFetch)).toHaveBeenCalled());
+
+    // tenant-b へ切替(オンボーディング判定は保留のまま)
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-b" }));
+    rerender(<MemoryRouter><CopilotPreviewPage /></MemoryRouter>);
+    await waitFor(() =>
+      expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("tenant-b"))).toBe(true),
+    );
+
+    // tenant-b の判定が届く前に、さらに tenant-c へ切替
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-c" }));
+    rerender(<MemoryRouter><CopilotPreviewPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("tenant-cの状況です。")).toBeTruthy());
+
+    // 遅延していた tenant-b の「次の一手」が今さら届いても、tenant-c のスレッドには出ない
+    resolveTenantBOnboarding({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          onboarding_stage: {
+            industryAnswered: false,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+          },
+        }),
+    } as unknown as Response);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/どんな業種ですか/)).toBeNull();
+    expect(screen.getByText("tenant-cの状況です。")).toBeTruthy();
+  });
 });
 
 // GID 1217007387443283: GUI固有として旧UIへ丸投げしていたPDF取り込みを、会話の中の
