@@ -734,6 +734,27 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_conversation_evaluation',
+      description:
+        '指定した会話セッションのAI品質評価（Judge）を取得する読み取り専用ツール。総合スコア・4軸' +
+        '（心理対応力・顧客対応力・商談進行力・禁止事項の遵守率）・所見を返す。get_chat_sessions が' +
+        '返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        '「この会話の対応品質はどうだった？」「評価を見せて」と聞かれた時に使う。未評価の会話もある。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_escalations',
       description:
         '有人対応にエスカレーションされた、対応中（未解決）の会話一覧を取得する読み取り専用ツール。',
