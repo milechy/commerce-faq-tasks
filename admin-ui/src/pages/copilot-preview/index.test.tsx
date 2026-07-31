@@ -629,6 +629,82 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     await waitFor(() => expect(screen.getByText("はい、お願いします")).toBeTruthy());
   });
 
+  it("record_session_outcome が確認待ちのときに「やめておく」を押すと、記録せず辞退の自然文を送る", async () => {
+    mockAgent({
+      reply: "確認をお願いします。",
+      actions: [
+        {
+          tool: "record_session_outcome",
+          result:
+            "セッション[oooo1111]の成果を「購入完了」として記録するには確認が必要です。ユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+        },
+      ],
+    });
+
+    await send("oooo1111の成果を購入完了で記録して");
+
+    const declineButton = await screen.findByRole("button", { name: "やめておく" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(screen.getByText("やめておきます")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("やめておきます");
+  });
+
+  it("delete_chat_session が確認待ちのときは「削除して」チップを出し、押すと実送信する", async () => {
+    mockAgent({
+      reply: "確認をお願いします。",
+      actions: [
+        {
+          tool: "delete_chat_session",
+          result:
+            "セッション[dddd1111]の削除には確認が必要です。この操作は取り消せません。\n理由: テストのため削除\nこの内容でよいかユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+        },
+      ],
+    });
+
+    await send("dddd1111をテストのため削除して");
+
+    const chip = await screen.findByRole("button", { name: "削除して" });
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("はい、削除してください")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("はい、削除してください");
+  });
+
+  it("delete_chat_session が確認待ちのときに「やめておく」を押すと、削除せず辞退の自然文を送る(不可逆操作なので取り消しが明確に効くことを確認)", async () => {
+    mockAgent({
+      reply: "確認をお願いします。",
+      actions: [
+        {
+          tool: "delete_chat_session",
+          result:
+            "セッション[dddd1111]の削除には確認が必要です。この操作は取り消せません。\n理由: テストのため削除\nこの内容でよいかユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+        },
+      ],
+    });
+
+    await send("dddd1111をテストのため削除して");
+
+    const declineButton = await screen.findByRole("button", { name: "やめておく" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(screen.getByText("やめておきます")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("やめておきます");
+  });
+
   it("conversation_evaluation カードは総合スコア・4軸・所見を表示する(旧UIと同一の閾値)", async () => {
     mockAgent({
       reply: "評価はこちらです。",
