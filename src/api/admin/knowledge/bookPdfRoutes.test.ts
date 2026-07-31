@@ -94,9 +94,12 @@ beforeEach(() => {
 // ─── POST テスト ────────────────────────────────────────────────────────────
 
 describe("POST /v1/admin/knowledge/book-pdf", () => {
+  // GID 1217040818410419: 書籍/PDF投入はR2C運用限定になったため、投入経路の検証(1〜4, 9, 9b)は
+  // super_admin で行う。client_admin側のガード自体は専用describe「R2C運用限定ガード」で検証する。
   it("1. 正常アップロード → 201 + { id, title, status: 'uploaded' }", async () => {
     const now = new Date().toISOString();
     const { app } = makeApp({
+      role: "super_admin",
       dbRows: [{ id: 1, title: "テスト書籍", status: "uploaded", created_at: now }],
     });
 
@@ -110,7 +113,7 @@ describe("POST /v1/admin/knowledge/book-pdf", () => {
   });
 
   it("2. 非PDFファイル → 400 + PDFエラーメッセージ", async () => {
-    const { app } = makeApp({});
+    const { app } = makeApp({ role: "super_admin" });
 
     const res = await request(app)
       .post("/v1/admin/knowledge/book-pdf")
@@ -122,7 +125,7 @@ describe("POST /v1/admin/knowledge/book-pdf", () => {
   });
 
   it("3. 50MB超過 → 413", async () => {
-    const { app } = makeApp({});
+    const { app } = makeApp({ role: "super_admin" });
     const bigBuffer = Buffer.alloc(51 * 1024 * 1024, "a");
 
     const res = await request(app)
@@ -135,7 +138,7 @@ describe("POST /v1/admin/knowledge/book-pdf", () => {
   });
 
   it("4. titleなし → 400", async () => {
-    const { app } = makeApp({});
+    const { app } = makeApp({ role: "super_admin" });
 
     const res = await request(app)
       .post("/v1/admin/knowledge/book-pdf")
@@ -161,26 +164,84 @@ describe("POST /v1/admin/knowledge/book-pdf", () => {
     expect(res.status).toBe(401);
   });
 
-  it("6. client_adminが他テナント → tenantIdはJWTから取得されるため403にならない（自テナントで保存）", async () => {
-    // client_admin は req.user.tenantId を使うため body の tenant_id は無視される
+  it("6. super_adminが?tenant=で対象テナントを指定 → そのテナントIDで保存される", async () => {
+    // GID 1217040818410419 以降、POST自体がsuper_admin限定になったため、この経路の主体も
+    // super_adminにした。resolveUploadTenantId のsuper_admin分岐(query指定)を検証する。
     const now = new Date().toISOString();
     const { app, db } = makeApp({
-      role: "client_admin",
-      tenantId: "tenant-a",
+      role: "super_admin",
+      tenantId: null,
       dbRows: [{ id: 2, title: "書籍", status: "uploaded", created_at: now }],
     });
 
     const res = await request(app)
-      .post("/v1/admin/knowledge/book-pdf")
+      .post("/v1/admin/knowledge/book-pdf?tenant=tenant-b")
       .field("title", "書籍")
       .attach("file", PDF_BUFFER, { filename: "test.pdf", contentType: "application/pdf" });
 
-    // tenant_id は JWT から取得 → tenant-a で保存される
     expect(res.status).toBe(201);
     const insertCall = (db.query as jest.Mock).mock.calls.find(
       (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("INSERT INTO book_uploads")
     );
-    expect(insertCall[1][0]).toBe("tenant-a");
+    expect(insertCall[1][0]).toBe("tenant-b");
+  });
+});
+
+// GID 1217040818410419: 「書籍/PDFはR2C運用限定」の実装反映。UI側の制限だけでは直叩きで
+// 破られるため、投入系エンドポイントのサーバー側ガードをここで固定する。
+describe("POST /v1/admin/knowledge/book-pdf — R2C運用限定ガード", () => {
+  it("client_admin JWT → 403（テナントからの投入は不可）", async () => {
+    const { app } = makeApp({ role: "client_admin" });
+
+    const res = await request(app)
+      .post("/v1/admin/knowledge/book-pdf")
+      .field("title", "テスト書籍")
+      .attach("file", PDF_BUFFER, { filename: "test.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(403);
+    // 専門用語(ステータスコード/権限/MIME等)を出さない、優しい日本語であること
+    expect(res.body.error).not.toMatch(/403|権限|MIME/);
+  });
+
+  it("super_admin JWT → 従来通り201で成功する（previewMode相当の回帰防止）", async () => {
+    const now = new Date().toISOString();
+    const { app } = makeApp({
+      role: "super_admin",
+      dbRows: [{ id: 3, title: "テスト書籍", status: "uploaded", created_at: now }],
+    });
+
+    const res = await request(app)
+      .post("/v1/admin/knowledge/book-pdf")
+      .field("title", "テスト書籍")
+      .attach("file", PDF_BUFFER, { filename: "test.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(201);
+  });
+});
+
+describe("POST /v1/admin/knowledge/book-pdf/:id/process — R2C運用限定ガード", () => {
+  it("client_admin JWT → 403（構造化パイプラインの起動もR2C運用限定）", async () => {
+    const { app } = makeApp({
+      role: "client_admin",
+      dbRows: [{ id: 1, tenant_id: "tenant-a", status: "uploaded" }],
+    });
+
+    const res = await request(app).post("/v1/admin/knowledge/book-pdf/1/process");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).not.toMatch(/403|権限|MIME/);
+  });
+
+  it("super_admin JWT → 従来通り202で処理を開始する", async () => {
+    const { app } = makeApp({
+      role: "super_admin",
+      dbRows: [{ id: 1, tenant_id: "tenant-a", status: "uploaded" }],
+    });
+
+    const res = await request(app).post("/v1/admin/knowledge/book-pdf/1/process");
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ ok: true, bookId: 1 });
   });
 });
 
@@ -270,6 +331,7 @@ describe("KNOWLEDGE_ENCRYPTION_KEY 暗号化", () => {
 
     const now = new Date().toISOString();
     const { app, db } = makeApp({
+      role: "super_admin",
       dbRows: [{ id: 1, title: "書籍", status: "uploaded", created_at: now }],
     });
 
@@ -296,6 +358,7 @@ describe("KNOWLEDGE_ENCRYPTION_KEY 暗号化", () => {
 
     const now = new Date().toISOString();
     const { app, db } = makeApp({
+      role: "super_admin",
       dbRows: [{ id: 2, title: "書籍", status: "uploaded", created_at: now }],
     });
 

@@ -9,7 +9,7 @@ import {
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
 import { callGroq8bSuggestFromText } from '../tuning/routes';
-import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse } from '../tuning/tuningRulesRepository';
+import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
 import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
@@ -27,7 +27,9 @@ import {
   recordPlanLimitMention,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
-import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation } from '../chat-history/chatHistoryRepository';
+import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation, normalizeSessionListParams, getConversionTypes, recordOutcome, getSessionOutcome } from '../chat-history/chatHistoryRepository';
+import { deleteSession } from '../chat-history/deleteSessionRepository';
+import { getEvaluationsBySession } from '../evaluations/evaluationsRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
@@ -43,6 +45,14 @@ const MAX_IMPORT_FAQS = 20;
 // 有人返信1件の最大文字数。POST /v1/admin/chat-history/sessions/:id/reply の
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
+
+// ツールの limit 引数を [1, max] にクランプする。"abc" のような非数値は Number() で
+// NaN になり、Math.min/max を素通りして NaN のまま残ってしまう(NaN との比較は常に false)。
+// NaN が SQL の LIMIT パラメータに渡ると実DBではエラーになるため、既定値にフォールバックする。
+function clampToolLimit(raw: unknown, defaultValue: number, max: number): number {
+  const n = Number(raw ?? defaultValue);
+  return Math.min(Math.max(Number.isFinite(n) ? n : defaultValue, 1), max);
+}
 
 // suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
 // save_tuning_rule にそのまま渡ってきた場合、文字列としてtrigger_patternに
@@ -188,6 +198,62 @@ export type LegacyLinkCardPayload = {
   description: string;
 };
 
+// suggest_avatar_preset が返す、既定アバター見本1件の提示カード。
+// presetId は adopt_avatar_preset にそのまま渡す r2c_default 側の avatar_configs.id。
+export type AvatarPresetCardPayload = {
+  kind: 'avatar_preset';
+  presetId: string;
+  name: string;
+  imageUrl: string | null;
+  description: string;
+};
+
+// adopt_avatar_preset が返す、採用直後のカード。configId は自テナント側の
+// avatar_configs.id（presetId とは別物）で、フロントはこの id を画像候補生成
+// （POST /v1/admin/avatar/fal/generate は本カードとは無関係にフロントから直接叩く）と
+// 採用確定（PATCH /v1/admin/avatar/configs/:id）にそのまま使う。
+export type AvatarAdoptedCardPayload = {
+  kind: 'avatar_adopted';
+  configId: string;
+  name: string;
+  imageUrl: string | null;
+  description: string;
+};
+
+// get_tuning_rules の全件データ。text(自然文・500字)は件数の要約のみとし、
+// 一覧の欠落(D3: 15件に切ってさらに1行60/100字に切っていたため実質3〜4件しか
+// 出ていなかった)を、件数によらず全件をここに載せることで解消する。
+export type TuningRulesListCardPayload = {
+  kind: 'tuning_rules_list';
+  rules: Array<{
+    id: number;
+    triggerPattern: string;
+    expectedBehavior: string;
+    priority: number;
+    isActive: boolean;
+    // AI提案(judge)か店主が作ったもの(manual)かの出所。無いと承認判断ができない。
+    source: string | null;
+    // pending(既定) / active(承認済み) / rejected(却下済み)。is_active だけでは
+    // pending と rejected が区別できない(どちらも is_active=false)ため必要。
+    status: string | null;
+    evidence: RuleEvidence | null;
+  }>;
+  totalCount: number;
+};
+
+// suggest_tuning_rule の下書き提案。D6: フロントは自然文を正規表現で
+// (トリガー:(.+) / 対応方針:(.+))読み直しており、①優先度を拾えない
+// ②対応方針が複数行だと1行目以降が失われる、という2つの欠落があった。
+// この card は truncate されない生の提案値を運ぶため、save_tuning_rule に
+// そのまま渡される内容(trigger_pattern/expected_behavior/priority)と
+// カードの表示内容が一致する。
+export type TuningRuleDraftCardPayload = {
+  kind: 'tuning_rule_draft';
+  triggerPattern: string;
+  expectedBehavior: string;
+  priority: number;
+};
+
 // get_weekly_briefing 用。数値はLLMの生成文を経由せず、この構造化データを
 // そのままカードとして描画する(数値=サーバ、解釈=LLMの文、という権威分離の実体)。
 // 各グループは対応するクエリが失敗した場合に null になる(Promise.allSettledでの
@@ -205,10 +271,50 @@ export type WeeklySummaryCardPayload = {
   gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
 };
 
+// 会話一覧カード。短縮ID(shortId)をそのまま次のツール呼び出しに使える形で持たせ、
+// フロント側が短縮IDの手打ちなしで次の1件を選べるようにする(チップの action に使う)。
+export type ChatSessionListCardPayload = {
+  kind: 'chat_session_list';
+  total: number;
+  sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+};
+
+// 会話本文カード。role のラベル化はサーバ側の CHAT_ROLE_LABELS を単一の情報源とし、
+// フロント側に同じ辞書を二重に持たせない(値が面によって違って見える事故を避ける)。
+export type ChatSessionMessagesCardPayload = {
+  kind: 'chat_session_messages';
+  shortId: string;
+  totalMessages: number;
+  messages: Array<{ roleLabel: string; content: string }>;
+};
+
+// AI品質評価(Judge)カード。4軸ラベルは旧UI(admin-ui の JudgeEvaluationSection.tsx)と
+// 同一の語彙をここで確定させ、フロント側に同じ辞書を二重に持たせない。
+export type ConversationEvaluationCardPayload = {
+  kind: 'conversation_evaluation';
+  shortId: string;
+  overallScore: number;
+  axes: Array<{ label: string; score: number | null }>;
+  notes: string | null;
+};
+
+export type ActionCardPayload =
+  | LegacyLinkCardPayload
+  | AvatarPresetCardPayload
+  | AvatarAdoptedCardPayload
+  | TuningRulesListCardPayload
+  | TuningRuleDraftCardPayload
+  | WeeklySummaryCardPayload
+  | ChatSessionListCardPayload
+  | ChatSessionMessagesCardPayload
+  | ConversationEvaluationCardPayload;
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
-// （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す）。
-export type ActionResult = string | { text: string; card?: LegacyLinkCardPayload | WeeklySummaryCardPayload };
+// （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す。
+// また text は LLM へ tool 結果として差し戻され、応答文の材料になるため、
+// 件数に依存しない要約であることが必須）。
+export type ActionResult = string | { text: string; card?: ActionCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -220,10 +326,23 @@ export async function executeToolCall(
   tenantId: string,
   db: Pool,
   sessionId: string,
-  isSuperAdmin: boolean = false
+  isSuperAdmin: boolean = false,
+  // delete_chat_session が audit_logs (actor_role/actor_email) に記録するために必要。
+  // 他のcaseはこれまで通り未使用のままでよいが、必須引数にすることで唯一の呼び出し元
+  // (executeHopToolCalls)が渡し忘れることをtypecheckで検出できるようにする。
+  actor: { role: string; email: string }
 ): Promise<ActionResult> {
-  // 結果は500字以内日本語
+  // 結果は500字以内日本語(書き込み系はこちらのまま)
   const truncate = (s: string) => s.slice(0, 500);
+  // 閲覧系(一覧・本文)の出力予算。書き込み系の500字とは別枠にする — 一覧・本文は
+  // 量そのものが本質的な機能であり、500字では「全N件中M件」の見出しを付けても
+  // 実際には数件しか読めないまま黙って切れていた。打ち切った場合は見出し(先頭)は
+  // そのまま残り、末尾に打ち切りが起きたこと自体が分かる注記を必ず付ける(黙って切らない)。
+  const READ_RESULT_MAX_CHARS = 4000;
+  const truncateRead = (s: string): string => {
+    if (s.length <= READ_RESULT_MAX_CHARS) return s;
+    return s.slice(0, READ_RESULT_MAX_CHARS) + '\n…(文字数上限のため以降省略。絞り込み条件やページを変えて再度お尋ねください)';
+  };
 
   switch (toolName) {
     // -----------------------------------------------------------------------
@@ -292,14 +411,18 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'get_faq_list': {
       try {
-        const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+        const limit = clampToolLimit(args['limit'], 10, 20);
         const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
         const whereParams: unknown[] = [tenantId];
         let whereClause = 'WHERE tenant_id = $1';
 
         if (search) {
-          whereParams.push(`%${search}%`);
+          // LIKE のワイルドカードを無効化し、意図しない広域一致を防ぐ（Postgres の既定エスケープ文字は \）。
+          // resolveSessionByShortId と同じ規約(この関数固有。呼び出しは1箇所に限る)。
+          // 例: 「50%オフ」で検索すると、エスケープ無しでは「50」+任意文字列+「オフ」に広域一致していた。
+          const escapedSearch = search.replace(/[\\%_]/g, (c) => `\\${c}`);
+          whereParams.push(`%${escapedSearch}%`);
           whereClause += ` AND (question ILIKE $${whereParams.length} OR answer ILIKE $${whereParams.length})`;
         }
 
@@ -319,6 +442,11 @@ export async function executeToolCall(
         ]);
 
         if (listRes.rows.length === 0) {
+          // search 指定時のヒット0件は「FAQが登録されていない」わけではない(FAQ自体は
+          // 大量にある可能性がある)。検索条件に一致するものが無いだけなので文言を分ける。
+          if (search) {
+            return truncate(`「${search.slice(0, 100)}」に一致する FAQ は見つかりませんでした`);
+          }
           return truncate('FAQ が登録されていません');
         }
 
@@ -721,6 +849,111 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // avatar_configs には業種を示す列が無く、既定の18体（見た目・性格の作り込まれた
+    // 見本）は業種ごとに分類されていない。したがって「業種に合わせて選ぶ」ことはできず、
+    // 業種を尋ねずに未採用の見本を1件そのまま提示する（質問0件は「選ばせない」方針にも
+    // 沿う）。採用済みかどうかは avatar_configs.name の一致で判定する
+    // （adopt側でdefault_template_idを引き継がないため、他に手掛かりが無い）。
+    case 'suggest_avatar_preset': {
+      try {
+        const res = await db.query(
+          `SELECT id, name, image_url, personality_prompt, default_template_id
+             FROM avatar_configs
+            WHERE tenant_id = 'r2c_default' AND is_default = true
+            ORDER BY default_template_id ASC NULLS LAST`,
+        );
+        const presets = res.rows as {
+          id: string; name: string; image_url: string | null;
+          personality_prompt: string | null; default_template_id: string | null;
+        }[];
+        if (presets.length === 0) {
+          return truncate('アバターの見本が見つかりませんでした');
+        }
+
+        const ownedRes = await db.query(`SELECT name FROM avatar_configs WHERE tenant_id = $1`, [tenantId]);
+        const ownedNames = new Set((ownedRes.rows as { name: string }[]).map((r) => r.name));
+        const preset = presets.find((p) => !ownedNames.has(p.name)) ?? presets[0]!;
+
+        const description = (preset.personality_prompt ?? '').slice(0, 120);
+        return {
+          text: truncate(
+            `「${preset.name}」というアバターの見本があります。\n${description}\n` +
+            `プリセットID: ${preset.id}\n` +
+            'このまま採用しますか？（採用後も名前・話し方はいつでも変更できます）',
+          ),
+          card: {
+            kind: 'avatar_preset',
+            presetId: preset.id,
+            name: preset.name,
+            imageUrl: preset.image_url,
+            description,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_avatar_preset failed', err);
+        return truncate('アバター見本の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 採用は自テナントへの複製のみで、is_active はここでは変えない（公開はしない）。
+    // 新規のアバターを作る/直す/出す/止めるまでの一連の流れの中で、公開は
+    // activate_avatar の役割として分離する（docs/AVATAR_CHAT_MIGRATION.md §4.4）。
+    case 'adopt_avatar_preset': {
+      const presetId = String(args['preset_id'] ?? '');
+      if (!presetId) {
+        return truncate('preset_id は必須です');
+      }
+      const confirmed = Boolean(args['confirmed']);
+      if (!confirmed) {
+        return truncate(
+          '採用には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください',
+        );
+      }
+
+      try {
+        const result = await db.query(
+          `INSERT INTO avatar_configs
+             (tenant_id, name, image_url, image_prompt, voice_id, voice_description,
+              personality_prompt, behavior_description, emotion_tags, lemonslice_agent_id,
+              anam_avatar_id, anam_voice_id, anam_persona_id, anam_llm_id, avatar_provider,
+              is_default, is_active)
+           SELECT $1, name, image_url, image_prompt, voice_id, voice_description,
+                  personality_prompt, behavior_description, emotion_tags, lemonslice_agent_id,
+                  anam_avatar_id, anam_voice_id, anam_persona_id, anam_llm_id, avatar_provider,
+                  false, false
+             FROM avatar_configs
+            WHERE id = $2 AND tenant_id = 'r2c_default' AND is_default = true
+           RETURNING id, name, image_url, personality_prompt`,
+          [tenantId, presetId],
+        );
+        const created = result.rows[0] as
+          { id: string; name: string; image_url: string | null; personality_prompt: string | null } | undefined;
+        if (!created) {
+          return truncate('指定のアバター見本が見つかりませんでした。suggest_avatar_preset で提案をやり直してください');
+        }
+        // card の configId は自テナント側の新規行（presetId とは別物）。
+        // フロントはこの id で以降の画像候補生成・PATCHを行う。
+        return {
+          text: truncate(
+            `アバター「${created.name}」を採用しました。まだ公開はされていません。` +
+            '声・名前・話し方を調整してから activate_avatar で公開できます',
+          ),
+          card: {
+            kind: 'avatar_adopted',
+            configId: created.id,
+            name: created.name,
+            imageUrl: created.image_url,
+            description: (created.personality_prompt ?? '').slice(0, 120),
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] adopt_avatar_preset failed', err);
+        return truncate('アバターの採用に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     case 'get_embed_code': {
       try {
         // 平文 API キーは保存されていないため key_prefix のみ返す
@@ -803,14 +1036,22 @@ export async function executeToolCall(
           );
         }
 
-        return truncate(
-          `提案:\n` +
-          `トリガー: ${suggestion.trigger_pattern}\n` +
-          `対応方針: ${suggestion.instruction}\n` +
-          `優先度: ${suggestion.priority}\n` +
-          (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
-          `\nこの内容でよいかユーザーに確認し、同意が得られたら save_tuning_rule を呼び出してください（trigger_pattern/expected_behavior/priority は上記の提案値を使うこと）。`
-        );
+        return {
+          text: truncate(
+            `提案:\n` +
+            `トリガー: ${suggestion.trigger_pattern}\n` +
+            `対応方針: ${suggestion.instruction}\n` +
+            `優先度: ${suggestion.priority}\n` +
+            (suggestion.reason ? `理由: ${suggestion.reason}\n` : '') +
+            `\nこの内容でよいかユーザーに確認し、同意が得られたら save_tuning_rule を呼び出してください（trigger_pattern/expected_behavior/priority は上記の提案値を使うこと）。`
+          ),
+          card: {
+            kind: 'tuning_rule_draft',
+            triggerPattern: suggestion.trigger_pattern,
+            expectedBehavior: suggestion.instruction,
+            priority: suggestion.priority,
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] suggest_tuning_rule failed', err);
         return truncate('ルールの提案に失敗しました');
@@ -869,10 +1110,27 @@ export async function executeToolCall(
         if (rules.length === 0) {
           return truncate('有効な指示ルールはありません');
         }
-        const lines = rules.slice(0, 15).map((r) =>
-          `[${r.id}]${r.is_active ? '' : '(無効)'} 「${r.trigger_pattern.slice(0, 60)}」→ ${r.expected_behavior.slice(0, 100)}`
-        );
-        return truncate(`指示ルール一覧（${rules.length}件）:\n` + lines.join('\n'));
+        const activeCount = rules.filter((r) => r.is_active).length;
+        // text は件数の要約のみ(件数によらず500字に収まる)。全件の中身はcardに載せる。
+        return {
+          text: truncate(
+            `指示ルール一覧（${rules.length}件、うち有効${activeCount}件・無効${rules.length - activeCount}件）です。詳しい内容は一覧でご確認いただけます。`
+          ),
+          card: {
+            kind: 'tuning_rules_list',
+            rules: rules.map((r) => ({
+              id: r.id,
+              triggerPattern: r.trigger_pattern,
+              expectedBehavior: r.expected_behavior,
+              priority: r.priority,
+              isActive: r.is_active,
+              source: r.source ?? null,
+              status: r.status ?? null,
+              evidence: r.evidence ?? null,
+            })),
+            totalCount: rules.length,
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_tuning_rules failed', err);
         return truncate('指示ルール一覧の取得に失敗しました');
@@ -894,8 +1152,12 @@ export async function executeToolCall(
       const triggerPattern = typeof args['trigger_pattern'] === 'string' ? args['trigger_pattern'].slice(0, 1000) : undefined;
       const expectedBehavior = typeof args['expected_behavior'] === 'string' ? args['expected_behavior'].slice(0, 4000) : undefined;
       const isActive = typeof args['is_active'] === 'boolean' ? args['is_active'] : undefined;
+      // AI提案(source='judge')の承認/却下でのみ指定される。is_activeだけではpending(未承認)と
+      // rejected(却下済み)を区別できない(どちらもis_active=falseのため)。
+      const statusRaw = args['status'];
+      const status = statusRaw === 'active' || statusRaw === 'rejected' ? statusRaw : undefined;
 
-      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined) {
+      if (triggerPattern === undefined && expectedBehavior === undefined && isActive === undefined && status === undefined) {
         return truncate('変更する内容がありません（trigger_pattern・expected_behavior・is_active のいずれかを指定してください）');
       }
 
@@ -903,11 +1165,17 @@ export async function executeToolCall(
         const ownerFilter = isSuperAdmin ? undefined : tenantId;
         const updated = await updateRule(
           id,
-          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive },
+          { trigger_pattern: triggerPattern, expected_behavior: expectedBehavior, is_active: isActive, status },
           ownerFilter,
         );
         if (!updated) {
           return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        if (status === 'active') {
+          return truncate(`指示ルール（ID: ${id}）を承認し、有効にしました: 「${updated.trigger_pattern}」`);
+        }
+        if (status === 'rejected') {
+          return truncate(`指示ルール（ID: ${id}）を却下しました: 「${updated.trigger_pattern}」`);
         }
         return truncate(`指示ルール（ID: ${id}）を更新しました: 「${updated.trigger_pattern}」${updated.is_active ? '' : '（現在無効）'}`);
       } catch (err) {
@@ -1102,10 +1370,15 @@ export async function executeToolCall(
              FROM faq_docs WHERE tenant_id = $1`,
             [tenantId],
           ),
-          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標
+          // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標。
+          // P4-1で修正: 以前は approved_at/rejected_at (どのコードパスからも
+          // 更新されない列)を見ており、店主が作った通常のルールも含めて
+          // 全件を「承認待ち」として数えていた。AI提案(source='judge')かつ
+          // 未承認(is_active=false)かつ却下されていない件数に修正する。
           db.query(
             `SELECT COUNT(*)::int AS n FROM tuning_rules
-             WHERE tenant_id = $1 AND approved_at IS NULL AND rejected_at IS NULL`,
+             WHERE tenant_id = $1 AND source = 'judge' AND is_active = false
+               AND status IS DISTINCT FROM 'rejected'`,
             [tenantId],
           ),
           getGaps({ tenantId, status: 'open', limit: 3 }),
@@ -1163,9 +1436,13 @@ export async function executeToolCall(
           const row = faqRes.value?.rows?.[0];
           const faqTotal = Number(row?.total ?? 0);
           const faqPublished = Number(row?.published ?? 0);
-          const lastUpdatedIso: string | null = row?.last_updated
-            ? new Date(row.last_updated).toISOString()
-            : null;
+          // last_updated が想定外の値(パース不能)でも toISOString() で例外を投げない。
+          // ここで投げると case 全体の try/catch に捕まり、他6指標が正常に取得できていても
+          // 「取得に失敗しました」に落ちる — Promise.allSettled で守っている部分失敗耐性が
+          // この1行のせいで無効化されてしまうため、必ず検証してから変換する。
+          const lastUpdatedDate = row?.last_updated ? new Date(row.last_updated) : null;
+          const lastUpdatedIso: string | null =
+            lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime()) ? lastUpdatedDate.toISOString() : null;
           card.faq = { total: faqTotal, published: faqPublished, lastUpdated: lastUpdatedIso };
           const lastUpdatedDisplay = lastUpdatedIso
             ? new Date(lastUpdatedIso).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
@@ -1210,7 +1487,7 @@ export async function executeToolCall(
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
-      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+      const limit = clampToolLimit(args['limit'], 10, 20);
 
       try {
         const { gaps, total } = await getGaps({ tenantId, status: 'open', limit });
@@ -1729,17 +2006,48 @@ export async function executeToolCall(
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
-      const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+      // limit はこのツール固有の既定値(10)・上限(20)を維持する(normalizeSessionListParams
+      // 側の全ツール共通の既定値20とは意図的に異なる。会話コンテキストに載る量を絞るため)。
+      // NaN等の非数値フォールバックは clampToolLimit に一本化済み。
+      const limit = clampToolLimit(args['limit'], 10, 20);
+      // sort_by/sort_order/period/sentiment/offset は LLM 由来の未検証な値なので、
+      // getSessions() 自身も内部で再検証するが、ここでも allowlist ヘルパを必ず通す
+      // (src/api/admin/CLAUDE.md の SQL 検証境界の規約)。args をそのまま渡さない。
+      const normalized = normalizeSessionListParams(args);
+      const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
       try {
-        const { sessions, total } = await getSessions({ tenantId, limit });
+        const { sessions, total } = await getSessions({
+          tenantId,
+          limit,
+          offset: normalized.offset,
+          sort_by: normalized.sort_by,
+          sort_order: normalized.sort_order,
+          period: normalized.period,
+          sentiment: normalized.sentiment,
+          search,
+        });
         if (sessions.length === 0) {
           return truncate('会話セッションはありません');
         }
         const lines = sessions.map(
           (s) => `[${s.session_id.slice(0, 8)}] ${s.started_at.slice(0, 10)} (${s.message_count}件) 「${s.first_message_preview}」`,
         );
-        return truncate(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n'));
+        return {
+          text: truncateRead(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n')),
+          // card は次の1件を選ぶ操作のため。フロントは card.sessions[].shortId をそのまま
+          // 次の get_chat_session_messages 呼び出しに使い、短縮IDの手打ちを不要にする。
+          card: {
+            kind: 'chat_session_list',
+            total,
+            sessions: sessions.map((s) => ({
+              shortId: s.session_id.slice(0, 8),
+              startedAt: s.started_at,
+              messageCount: s.message_count,
+              preview: s.first_message_preview,
+            })),
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_sessions failed', err);
         return truncate('会話セッション一覧の取得に失敗しました');
@@ -1752,8 +2060,7 @@ export async function executeToolCall(
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
       const shortId = String(args['session_id'] ?? '').trim();
-      const limitRaw = Number(args['limit'] ?? 20);
-      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 20;
+      const limit = clampToolLimit(args['limit'], 20, 50);
 
       try {
         const resolved = await resolveSessionByShortId(db, tenantId, shortId);
@@ -1768,13 +2075,134 @@ export async function executeToolCall(
 
         const recent = messages.slice(-limit);
         const lines = recent.map((m) => `${CHAT_ROLE_LABELS[m.role] ?? m.role}: ${m.content}`);
-        return truncate(
-          `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
-          lines.join('\n'),
-        );
+        return {
+          text: truncateRead(
+            `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
+            lines.join('\n'),
+          ),
+          card: {
+            kind: 'chat_session_messages',
+            shortId: resolved.session.session_id.slice(0, 8),
+            totalMessages: messages.length,
+            // role のラベル化はここ(CHAT_ROLE_LABELS)を単一の情報源とする。
+            // フロント側に同じ辞書を二重に持たせない。
+            messages: recent.map((m) => ({ roleLabel: CHAT_ROLE_LABELS[m.role] ?? m.role, content: m.content })),
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_session_messages failed', err);
         return truncate('会話内容の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 会話セッションの完全削除。不可逆操作のため deleteSessionRepository.deleteSession()
+    // (reason検証・audit_logs記録・行ロック・lock_timeoutを内包)を必ず経由し、
+    // ここに削除SQLを新規に書かない。
+    case 'delete_chat_session': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const reason = String(args['reason'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        if (reason.length < 5 || reason.length > 500) {
+          return truncate(
+            '削除理由(reason)は5文字以上500文字以内で指定してください。ユーザーに理由を尋ねてから再度実行してください',
+          );
+        }
+
+        if (!confirmed) {
+          // 契約文字列(BLOCKED_UNCONFIRMED_MARKER = '確認が必要です')を含めること。
+          // agentRoutes.ts の計測(agent_write_blocked)とフロントのチップ出し分けが
+          // この部分一致に依存している。
+          return truncate(
+            `セッション[${display}]の削除には確認が必要です。この操作は取り消せません。\n` +
+            `理由: ${reason}\n` +
+            'この内容でよいかユーザーに提示し、同意を得てから confirmed=true で再度実行してください',
+          );
+        }
+
+        // previewMode中のsuper_adminでも常にtenantスコープで削除する(globalスコープを
+        // 使わない)。resolveSessionByShortId が既に tenantId 条件でセッションを解決
+        // しているため、ここで global に切り替えると所有権チェックの意味が消える。
+        const result = await deleteSession({
+          sessionDbId: resolved.session.id,
+          scope: { kind: 'tenant', tenantId },
+          actorRole: actor.role,
+          actorEmail: actor.email,
+          reason,
+        });
+
+        if (!result) {
+          return truncate(`セッション[${display}]は見つかりません`);
+        }
+
+        return truncate(
+          `セッション[${display}]を削除しました（メッセージ${result.affected_counts.chat_messages}件を含む）`,
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] delete_chat_session failed', err);
+        return truncate('会話セッションの削除に失敗しました。時間をおいて再度お試しください');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_conversation_evaluation': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+
+        // conversation_evaluations.session_id は chat_sessions の公開文字列キー
+        // (DBの内部UUIDではない)。resolveSessionByShortId が返す session_id をそのまま使う。
+        const evaluations = await getEvaluationsBySession(resolved.session.session_id, tenantId);
+        if (evaluations.length === 0) {
+          // 未評価は0点や欠測として扱わず、明示する(閲覧側の判断材料を誤らせないため)。
+          return truncate(`セッション[${resolved.session.session_id.slice(0, 8)}]はまだ未評価です`);
+        }
+
+        const ev = evaluations[0]!;
+        // 4軸ラベルは旧UI(JudgeEvaluationSection.tsx)と同一の語彙を使う。
+        // 同じ会話が面によって違う評価に見えてはならない。
+        const axes: Array<{ label: string; score: number | null }> = [
+          { label: '心理対応力', score: ev.psychology_fit_score },
+          { label: '顧客対応力', score: ev.customer_reaction_score },
+          { label: '商談進行力', score: ev.stage_progress_score },
+          { label: '禁止事項の遵守率', score: ev.taboo_violation_score },
+        ];
+        const axesText = axes.map((a) => `${a.label}: ${a.score ?? '未測定'}`).join(' / ');
+        const shortId8 = resolved.session.session_id.slice(0, 8);
+        return {
+          text: truncate(
+            `セッション[${shortId8}]の対応品質評価: 総合${ev.overall_score}点\n${axesText}` +
+            (ev.notes ? `\n所見: ${ev.notes}` : ''),
+          ),
+          card: {
+            kind: 'conversation_evaluation',
+            shortId: shortId8,
+            overallScore: ev.overall_score,
+            axes,
+            notes: ev.notes,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_conversation_evaluation failed', err);
+        return truncate('評価データの取得に失敗しました');
       }
     }
 
@@ -1876,6 +2304,85 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] resolve_escalation failed', err);
         return truncate('対応完了の記録に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_session_outcome': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        const outcome = await getSessionOutcome(resolved.session.id);
+        if (!outcome?.outcome) {
+          return truncate(`セッション[${display}]の成果はまだ記録されていません`);
+        }
+        return truncate(
+          `セッション[${display}]の成果: ${outcome.outcome}` +
+          (outcome.outcomeRecordedAt ? `（${outcome.outcomeRecordedAt.slice(0, 10)}に記録）` : ''),
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] get_session_outcome failed', err);
+        return truncate('成果の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'record_session_outcome': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const outcomeValue = String(args['outcome'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      if (!outcomeValue) {
+        return truncate('outcome（記録する成果）は必須です');
+      }
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        const conversionTypes = await getConversionTypes(tenantId);
+        if (!conversionTypes.includes(outcomeValue)) {
+          return truncate(
+            `「${outcomeValue}」はこのテナントの成果選択肢に含まれていません。有効な選択肢: ${conversionTypes.join(' / ')}`,
+          );
+        }
+
+        if (!confirmed) {
+          return truncate(
+            `セッション[${display}]の成果を「${outcomeValue}」として記録するには確認が必要です。` +
+            'ユーザーに提示し、同意を得てから confirmed=true で再度実行してください',
+          );
+        }
+
+        // executeToolCall は現状、実行者(メールアドレス等)を受け取っていない
+        // (reply_to_escalation 等の既存の書き込みツールと同じ制約)。HTTP経由の
+        // PATCH /v1/admin/chat-history/sessions/:id/outcome は email を記録できるが、
+        // チャット経由はここでは null になる。
+        await recordOutcome({
+          sessionDbId: resolved.session.id,
+          tenantId,
+          outcome: outcomeValue,
+          recordedBy: null,
+        });
+        return truncate(`セッション[${display}]の成果を「${outcomeValue}」として記録しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] record_session_outcome failed', err);
+        return truncate('成果の記録に失敗しました');
       }
     }
 
@@ -2026,11 +2533,12 @@ export async function executeToolCall(
           path: '/admin/avatar/wizard',
           description: 'アバターを新しく作る手順（ウィザード）はこちらの画面で行えます',
         },
-        // PDFアップロードはファイル選択がGUI固有の操作のため、当初チャット化せず旧UIへ誘導していた。
-        // docs/CHAT_SURFACE_DECISION.md の方針に沿い、新UI(/copilot-preview)のコンポーザへの
-        // ドラッグ＆ドロップで会話内に取り込む経路を試作済み(同じ book-pdf エンドポイントを直接叩く)。
-        // ただし取り込み後の状態追跡・タイトル編集・書籍一覧はこの旧UIにしか無いため、案内先としては
-        // 引き続き有効。docs/LEGACY_UI_SUNSET.md のクローズ判定を通るまでこのキーは残す(追加のみ)。
+        // GID 1217040818410419(2026-07-31): 「書籍/PDFはR2C運用限定」の方針により、
+        // このキー自体はテナント向けの案内としてはもう使わない(system prompt からも誘導文を除去済み)。
+        // それでも feature enum とキーは残す — 削除すると LEGACY_UI_FEATURES から漏れ、
+        // agent_legacy_handoff{feature} のトリップワイヤー(docs/LEGACY_UI_SUNSET.md)が
+        // 無言で 'unknown' に丸められて死ぬため。path/label は旧UIの実体(super_adminには
+        // 引き続き見える画面)に合わせたまま、description だけ現状に更新する。
         // /admin/knowledge (tenantId無し)は KnowledgeIndexPage が navigate() で
         // /admin/knowledge/:tenantId へリダイレクトする際に location.search を引き継がず
         // ?tab=pdf が失われるため、他のキーと異なりここでは tenantId を path に含める必要がある
@@ -2038,7 +2546,15 @@ export async function executeToolCall(
         knowledge_pdf: {
           label: 'PDFアップロード',
           path: `/admin/knowledge/${tenantId}?tab=pdf`,
-          description: 'PDFファイルからの知識登録はこちらの画面で行えます',
+          description: 'PDFファイルからの知識登録は現在R2C運営チームが行っています。内容を文章で教えていただければ、代わりに登録できます。',
+        },
+        // knowledge_pdf と同じ理由でtenantIdをpathに含める必要がある(下のガードで !tenantId は事前に弾いている)。
+        // GET /v1/admin/analytics/knowledge-attribution にプラン制限は無いため、ここでもゲートを設けない
+        // (R2Cは従量課金であり、上限/プランゲートを反射的に足す方針ではない。conversion等の既存ゲートは模倣しない)。
+        knowledge_attribution: {
+          label: '成約への貢献度',
+          path: `/admin/knowledge/${tenantId}?tab=attribution`,
+          description: 'ナレッジ(FAQ・書籍)ごとの成約への貢献度はこちらの画面で確認できます',
         },
       };
 
@@ -2059,8 +2575,8 @@ export async function executeToolCall(
         }
       }
 
-      // knowledge_pdf は path に tenantId を埋め込む都合上、他のキーと違い必須。
-      if (feature === 'knowledge_pdf' && !tenantId) {
+      // knowledge_pdf / knowledge_attribution は path に tenantId を埋め込む都合上、他のキーと違い必須。
+      if ((feature === 'knowledge_pdf' || feature === 'knowledge_attribution') && !tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 

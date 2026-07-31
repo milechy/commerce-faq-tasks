@@ -5,9 +5,8 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
-import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage } from "./chatHistoryRepository";
+import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
-import { createNotification } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { z } from "zod";
@@ -56,49 +55,30 @@ export function registerChatHistoryRoutes(app: Express): void {
 
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
 
-      const limit = Math.max(1, Math.min(parseInt((req.query["limit"] as string) ?? "20", 10) || 20, 200));
-      const offset = Math.max(0, parseInt((req.query["offset"] as string) ?? "0", 10) || 0);
-
-      // Phase52b: sort/filter params
-      const validSortBy = ["last_message_at", "message_count", "score"] as const;
-      const sortByParam = req.query["sort_by"] as string | undefined;
-      const sort_by = validSortBy.includes(sortByParam as typeof validSortBy[number])
-        ? (sortByParam as typeof validSortBy[number])
-        : undefined;
-      const sortOrderParam = req.query["sort_order"] as string | undefined;
-      const sort_order = sortOrderParam === "asc" ? "asc" : sortOrderParam === "desc" ? "desc" : undefined;
-
-      const validPeriods = ["7", "30", "90", "all"] as const;
-      const periodParam = req.query["period"] as string | undefined;
-      const period = validPeriods.includes(periodParam as typeof validPeriods[number])
-        ? (periodParam as typeof validPeriods[number])
-        : undefined;
-
-      const validSentiments = ["positive", "negative", "neutral"] as const;
-      const sentimentParam = req.query["sentiment"] as string | undefined;
-      const sentiment = validSentiments.includes(sentimentParam as typeof validSentiments[number])
-        ? (sentimentParam as typeof validSentiments[number])
-        : undefined;
-
-      const search = (req.query["search"] as string | undefined)?.trim() ?? undefined;
+      // allowlist検証・クランプは chatHistoryRepository.normalizeSessionListParams に
+      // 一本化している(agent の actionExecutor.ts と共有するため)。外部挙動は従来と同一。
+      const normalized = normalizeSessionListParams({
+        limit: req.query["limit"],
+        offset: req.query["offset"],
+        sort_by: req.query["sort_by"],
+        sort_order: req.query["sort_order"],
+        period: req.query["period"],
+        sentiment: req.query["sentiment"],
+      });
+      const search = typeof req.query["search"] === "string" ? req.query["search"].trim() || undefined : undefined;
 
       try {
         const result = await getSessions({
           tenantId: tenantFilter,
-          limit,
-          offset,
-          sort_by,
-          sort_order,
-          period,
-          sentiment,
+          ...normalized,
           search,
         });
 
         return res.json({
           sessions: result.sessions,
           total: result.total,
-          limit,
-          offset,
+          limit: result.limit,
+          offset: result.offset,
         });
       } catch (err) {
         logger.warn("[GET /v1/admin/chat-history/sessions]", err);
@@ -287,12 +267,7 @@ export function registerChatHistoryRoutes(app: Express): void {
         }
 
         // テナントの conversion_types でバリデーション
-        const tenantResult = await pool.query<{ conversion_types: string[] | null }>(
-          `SELECT conversion_types FROM tenants WHERE id = $1`,
-          [session.tenant_id],
-        );
-        const conversionTypes: string[] = tenantResult.rows[0]?.conversion_types ??
-          ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
+        const conversionTypes = await getConversionTypes(session.tenant_id);
         if (!conversionTypes.includes(outcomeValue)) {
           return res.status(400).json({
             error: "指定されたoutcomeはこのテナントのconversion_typesに含まれていません",
@@ -300,29 +275,20 @@ export function registerChatHistoryRoutes(app: Express): void {
           });
         }
 
-        // 記録
-        await pool.query(
-          `UPDATE chat_sessions
-           SET outcome = $1, outcome_recorded_at = NOW(), outcome_recorded_by = $2
-           WHERE id = $3`,
-          [outcomeValue, email || null, sessionDbId],
-        );
-
-        // Phase52h: Trigger 5 — outcome記録通知
-        void createNotification({
-          recipientRole: 'super_admin',
-          type: 'outcome_recorded',
-          title: 'コンバージョン結果が記録されました',
-          message: `「${outcomeValue}」が記録されました`,
-          link: '/admin/analytics',
-          metadata: { sessionId: sessionDbId, outcome: outcomeValue, tenantId: session!.tenant_id },
+        // 記録 + 通知(検証・更新・通知の3点セットは recordOutcome() に集約。
+        // agent の record_session_outcome ツールと同じ経路を通る)
+        const recorded = await recordOutcome({
+          sessionDbId,
+          tenantId: session.tenant_id,
+          outcome: outcomeValue,
+          recordedBy: email || null,
         });
 
         return res.json({
           sessionId: sessionDbId,
-          outcome: outcomeValue,
-          recorded_at: new Date().toISOString(),
-          recorded_by: email || null,
+          outcome: recorded.outcome,
+          recorded_at: recorded.recordedAt,
+          recorded_by: recorded.recordedBy,
         });
       } catch (err) {
         logger.warn("[PATCH /v1/admin/chat-history/sessions/:id/outcome]", err);

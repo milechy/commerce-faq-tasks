@@ -335,3 +335,31 @@ git 履歴で追える事実：
 
 - 旧UIページを **畳まない** 経営判断が出た場合。パネルの終期が消えるため (c) の前提が崩れ、(b) を明示的に選んで共有層を恒久化する必要がある。
 - `/copilot-preview` の全画面UXが評価されず主面にならない場合。この場合は A が主面となり、A 側にカード・チップを移植する逆方向の統合（(a-2) の鏡像）になる。判断には §3.3 の面別メトリクス（即時アクション 4）が必要。
+
+---
+
+## 8 補記. 構造化カード(card)チャネルの移行状況（会話の履歴カテゴリ拡張、2026-07-31）
+
+**Asana:** 会話の履歴カテゴリ機能拡張（`docs/CHAT_HISTORY_CATEGORY_REQUIREMENTS.md`）
+**位置づけ:** §4 即時アクション4（surface計測）着地後、card チャネル（§2.1 #5 相当）の拡張実績を記録する。実コードの観測のみで、本番の面別メトリクス数値（テナント別の実利用状況）はこの追記の範囲外。
+
+### 何が増えたか
+
+`get_legacy_ui_link` のみだった card 送出元（`ActionCardPayload`、`actionExecutor.ts`）が、会話の履歴カテゴリ拡張で以下の3種を追加した。
+
+| ツール | card kind | 用途 |
+|---|---|---|
+| `get_chat_sessions` | `chat_session_list` | 会話一覧。短縮IDの手打ちを不要にする選択チップと組で使う |
+| `get_chat_session_messages` | `chat_session_messages` | 会話本文。role ラベル(お客様/AI/担当者)はサーバ側を単一の情報源にする |
+| `get_conversation_evaluation` | `conversation_evaluation` | Judge評価。閾値(80/60)・4軸ラベルは旧UI(`JudgeEvaluationSection.tsx`)と同一 |
+
+`delete_chat_session` / `get_session_outcome` / `record_session_outcome` は card を返さず、自然文(`text`)のみで完結させた（一覧・本文・評価と異なり、構造化表示が必要なほど複雑な返却形にならないため）。
+
+### 型定義箇所は増えていない
+
+`src/api/admin/CLAUDE.md` の制約（サーバ／transportの2箇所に限る）どおり、`actionExecutor.ts` の `ActionCardPayload` と `admin-ui/src/lib/useAgentChatTransport.ts` の `AgentActionCard` の2箇所のみを更新した。`copilot-preview/index.tsx` 側の `Card` union は既存の第3の表現（camelCase、`chatSessionList`/`chatSessionMessages`/`evaluation`）にマッピングするだけで、型定義の正本はサーバ側に留めている。
+
+### この追記で分からないこと（既知の限界）
+
+- **card 経由の描画が実際に旧来の正規表現パースより信頼される（誤描画が減る）かどうかは、本番トラフィックでの観測が必要**。本追記はコード上の変更点の記録であり、効果測定ではない。
+- パネル（Surface A）は引き続き card 非対応（機能凍結）。会話の履歴カテゴリの新カードはフルスクリーン面（B）のみで見える。
