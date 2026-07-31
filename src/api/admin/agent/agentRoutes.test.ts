@@ -1548,6 +1548,88 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_faq_list: 表示件数(上限20)と総数(COUNT)は別物
+  // -------------------------------------------------------------------------
+  describe('get_faq_list', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('総数が表示上限(20件)を超える場合、頭打ちにせず正しい総数を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-1', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('FAQは合計25件です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 25 }] }) // COUNT(*)
+        .mockResolvedValueOnce({
+          rows: Array.from({ length: 10 }, (_, i) => ({ id: i + 1, question: `q${i}`, answer: `a${i}` })),
+        }); // 表示用(デフォルトlimit=10)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQは何件ある?', sessionId: 'sess-fl-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('全25件中10件を表示');
+    });
+
+    it('総数が表示件数と同じ場合は「全N件中」を出さない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-2', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('FAQは3件です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 3 }] })
+        .mockResolvedValueOnce({
+          rows: [
+            { id: 1, question: 'q1', answer: 'a1' },
+            { id: 2, question: 'q2', answer: 'a2' },
+            { id: 3, question: 'q3', answer: 'a3' },
+          ],
+        });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('FAQ 一覧（3件）:');
+      expect(result).not.toContain('全');
+    });
+
+    it('FAQが0件のとき「登録されていません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-3', 'get_faq_list'))
+        .mockResolvedValueOnce(makeGroqResponse('まだ登録がありません。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('FAQ が登録されていません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Phase3: suggest_faq / save_faq
   // -------------------------------------------------------------------------
   describe('suggest_faq / save_faq', () => {
