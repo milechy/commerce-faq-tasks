@@ -56,6 +56,73 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 - LLM Defense: L5 Input Sanitizer → L6 Prompt Firewall → L7 Topic Guard → L8 Output Guard (Phase48)
 - Key endpoints / env vars: `docs/API_REFERENCE.md`
 
+## 管理チャットUI (/copilot-preview) 規約
+
+**目的**: 旧UI(GUI管理画面)をチャット1面へ置き換える。価値は「テナント管理者が見逃しを防ぎ、
+その場で着手できること」。数値の網羅表示・GUIの再現は目的ではない。
+**スコープ外**: グラフ/時系列/ドリルダウン(`/admin/analytics`・`/admin/conversion` に残す) /
+期間の自由指定 / super_admin向け横断集計 / パネル(Surface A)への新機能移植(機能凍結中)
+関連: `docs/CHAT_SURFACE_DECISION.md`(2面の役割) / `docs/LEGACY_UI_SUNSET.md`(旧UI閉鎖基準)
+
+### 拡張点 — 新規ファイル・新規ツールを作らない
+
+| 関心事 | 置き場所 |
+|---|---|
+| ツールの追加・変更 | `src/api/admin/agent/toolDefinitions.ts` + `actionExecutor.ts` の case |
+| 構造化データ | `ActionResult = string \| { text, card }`。**card は text への追加であって置換ではない** |
+| カード描画 | `admin-ui/src/pages/copilot-preview/index.tsx` の `Card` union |
+| 通信・履歴・テナント導出・エラー文言 | `admin-ui/src/lib/useAgentChatTransport.ts`(再実装禁止) |
+| 会話の永続化 | `admin-ui/src/lib/chatSessionStore.ts`(面別キー。新キー禁止) |
+| 計測 | `src/lib/metrics/agentMetrics.ts` → `metrics_snapshots`。契約は `docs/AGENT_METRICS.md` |
+
+判断基準: **まず「既存ツールの拡張で足りるか」を問う**。ツールを増やすとLLMのルーティング精度が
+落ち、ホップ上限を圧迫する。計測は `agentRoutes.ts` にのみ書き、`actionExecutor.ts` の
+45個の case には入れない(横断的に1箇所で取れる形を保つ)。
+
+### 絶対にやってはいけないこと
+
+1. 集計値をLLMの生成文のまま表示する — **数値=サーバ、解釈と提案=LLM**。この境界を越えない
+2. `text` を消して `card` だけ返す — 既存の正規表現パーサのフォールバック契約を破壊する
+3. 個別機能のために新ツール・新テーブル・新エンドポイントを作る
+4. transport / 永続化 / IME送信ロジックを画面側に再実装する(#574・#584 で一本化済み)
+5. 応答混線を防ぐカテゴリロック(`busy`)を導線都合で緩める
+6. LLM生成の文章をDBに保存し「レポート」として再利用する
+7. メトリクスのラベルにPII(質問本文・顧客名・FAQ本文)を入れる
+8. 履歴ウィンドウ定数(直近20件 / 4000字)を個別機能都合で変更する
+9. `AT TIME ZONE` を片側だけ書く — `timestamptz` との比較は往復変換必須。
+   サーバTZ依存の実装は**本番でのみ9時間ズレ、数値はもっともらしく出るため気づけない**
+10. `admin-ui/src` を auto-merge する(Tier S = hkobayashi の手動merge)
+
+### テストで最低限
+
+- **数値**はサーバ返却値と画面表示の一致を固定する。**LLMの文面はスナップショットしない**
+  (必ず壊れ、壊れたテストは無効化される)
+- 境界値: 全指標0 / 新規テナント / 前週0件(除算) / 上限頭打ち(`get_faq_list` は20件) /
+  `tenantId` 未特定(super_admin が previewMode 未選択) / **TZ=UTC での実行**
+- テストは既存ファイルに追記する — `copilot-preview/index.test.tsx`・`agentRoutes.test.ts`・
+  `tests/e2e/qa-copilot-preview.spec.ts`。面ごとの回帰が1ファイルに集まる構造を崩さない
+- E2Eは390pxモバイルビューポートを先に通す(DoD)
+
+### 命名
+
+- ツール名: `snake_case`。読み取り専用は `get_*`。description は日本語で「何を返すか + いつ使うか」
+  (LLMのルーティング材料であり、単なる説明文ではない)
+- カード: サーバ payload の `kind` は `snake_case`(`legacy_link`) / クライアント `Card.kind` は
+  短い名詞(`link`)
+- メトリクス: `agent_*` + `snake_case` ラベル。**`docs/AGENT_METRICS.md` に行を追加してから実装**
+  (docsが契約、コードが実装。順序を逆にしない)
+- UI文言: 内部語を出さない。例「知識ギャップ」→「AIが答えられなかった質問」
+
+### エラーハンドリング
+
+- ツール結果は500字以内(`actionExecutor` の `truncate`)。ユーザーに出る文は必ず
+  **次の行動が分かる形**にする(Core Principles: Partner Friendly)
+- テナント未特定・権限不足・対象なしで行き止まらせない。次にすべきことを案内する
+- 計測は fire-and-forget。失敗は `logger.warn` のみで、**チャット応答のステータスコード・本文を
+  変えてはならない**
+- 複数クエリを束ねるツールは部分失敗の方針を明示する
+  (現状 `get_weekly_briefing` は1本の失敗で全体を落とす)
+
 ## Security Middleware Order (src/index.ts)
 1. requestIdMiddleware (global)
 2. securityHeadersMiddleware (global)
