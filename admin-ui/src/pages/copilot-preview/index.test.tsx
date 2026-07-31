@@ -2729,6 +2729,34 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(screen.queryByText("今週も順調です。")).toBeNull();
   });
 
+  // N-1隣接(テスト強化パス): hasDraftFaqはfetchOnboardingStageStatus内の別クエリ由来で、
+  // industryAnsweredとは独立に決まる値。理論上あり得ないはずの組み合わせ(業種未回答なのに
+  // 下書きが存在する)でも、nextIncompleteStageが段階順序を守り業種チップを優先することを
+  // 防御的に固定する(hasDraftFaqがindustry_answeredの判定を誤って飛び越さないこと)。
+  it("N-1隣接: 業種未回答のままhasDraftFaq=trueでも、下書き確認ではなく業種チップが優先される", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: false,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: true,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/どんな業種ですか/)).toBeTruthy();
+    expect(screen.queryByText("下書きを見る")).toBeNull();
+  });
+
   // X-6(docs/ONBOARDING_FIRST_LOGIN.md §7.3、オンボ 是正D-2): ログアウト→再ログインの
   // 想定(復元なし+未完了+client_admin)。サーバ側の段階だけから正しく復元されることを
   // N-1と同じ入力組み合わせで固定する(実装上はmy-tenantを毎回叩くだけなので安全域だが、
