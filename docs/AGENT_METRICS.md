@@ -79,7 +79,7 @@ GROUP BY 1;
 - 既存行の遡及埋め（バックフィル）は行わない。当時の面は記録されておらず復元できないため、
   `"unknown"` を後付けすると「送ってこなかった」という別の意味と衝突する。
 
-## メトリクス一覧（この6つのみ）
+## メトリクス一覧（この7つのみ）
 
 | metric_name | labels | value | 発火タイミング |
 | --- | --- | --- | --- |
@@ -89,9 +89,27 @@ GROUP BY 1;
 | `agent_legacy_handoff` | `{ feature: string }` | 常に `1` | `get_legacy_ui_link` が呼ばれたとき。「チャットがまだ旧UIへ何回受け渡しているか」の**分子** |
 | `agent_turn_completed` | `{ answered_from: string }` | 常に `1` | 結果に関わらずターンが完了したとき。handoff率の**分母** |
 | `chat_first_toggle` | `{ enabled: boolean }` | 常に `1` | 「これを既定の画面にする」トグルが切り替わったとき（`POST /v1/admin/agent/ui-event`） |
+| `onboarding_stage_reached` | `{ stage: "industry_answered" \| "knowledge_published" \| "widget_installed" \| "first_conversation", actor: "self" \| "delegated" }` | 常に `1` | テナントが該当段階に**初めて**到達した瞬間（同一テナントで2回目以降は発火しない） |
 
-上表の `labels` は各メトリクス**固有**のキーのみを示す。`chat_first_toggle` 以外の5つは
-これに加えて共通ラベル `surface` を持つ（前節）。
+上表の `labels` は各メトリクス**固有**のキーのみを示す。`chat_first_toggle` と
+`onboarding_stage_reached` を除く5つは、これに加えて共通ラベル `surface` を持つ（前節）。
+
+### `onboarding_stage_reached`
+
+- `stage`:
+  - `industry_answered` — 業種ヒアリングに回答した（`import_industry_faq_templates` 確定実行）
+  - `knowledge_published` — テナントの `faq_docs` に `is_published = true` が1件以上できた
+  - `widget_installed` — ウィジェットの読み込みを検知した（`docs/ONBOARDING_FIRST_LOGIN.md` 決定2）
+  - `first_conversation` — `chat_sessions` に実会話（`metadata->>'source' = 'user'`）が1件以上できた
+- `actor`: `self`（テナント本人）/ `delegated`（super_admin のクライアントビュー経由）。
+  `widget_installed` / `first_conversation` はテナントの操作の外側で起きるため常に `self`。
+- `industry_answered` / `knowledge_published` は `POST /v1/admin/agent/chat` のターン内で起きるため
+  共通ラベル `surface` も持つ。`widget_installed`（`/api/widget/features`）と
+  `first_conversation`（`/api/chat` 経由のエンドユーザー会話）はチャットターンの外側のイベントのため
+  `surface` を持たない。
+- 「初めて到達した瞬間のみ」の判定は、記録前に現在の段階を読んでから記録するのではなく、
+  DB 更新（`UPDATE ... WHERE <未到達条件>`）が**実際に1行更新した場合のみ**発火させる
+  （読んでから書くと二重発火や取りこぼしが起きるため）。
 
 ### `agent_tool_invoked`
 
