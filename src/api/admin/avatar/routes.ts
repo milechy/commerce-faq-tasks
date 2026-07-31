@@ -10,6 +10,7 @@ import multer from 'multer';
 import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { tenantHasFeature } from '../../../lib/billing/planFeatures';
+import { resolveEffectiveTenantId } from '../../middleware/roleAuth';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
@@ -517,10 +518,20 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       }
 
       // base64 data URL → Supabase Storage HTTP URL に変換
+      // super_admin のpreviewMode中は ?tenant= を反映する(他の生成系ルートと同じ
+      // resolveEffectiveTenantId、#682でtrim・型ガード済み)。生の tenantId のままだと
+      // super_adminの空テナントでバケット直下に保存されていた(#P1-A)。この1箇所のみの
+      // 利用で、ファイル全体のextractAuthからの移行はしない(スコープ膨張防止)。
+      // SQLのWHERE句(552-555行、super_adminの跨テナント更新可)は既存仕様のまま変更しない。
       if (data.image_url?.startsWith("data:")) {
+        const storageTenantId = resolveEffectiveTenantId(req);
+        // #P0-3と同じ理由: テナントが解決できないままバケット直下へ書き込まない。
+        if (!storageTenantId) {
+          return res.status(400).json({ error: "テナント情報が取得できません" });
+        }
         const uploaded = await uploadBase64ToStorage(
           data.image_url,
-          tenantId,
+          storageTenantId,
           `avatar-${id}-${Date.now()}`
         );
         if (uploaded) data.image_url = uploaded;

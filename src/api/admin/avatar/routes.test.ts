@@ -13,8 +13,14 @@ jest.mock("../../../admin/http/supabaseAuthMiddleware", () => ({
   supabaseAuthMiddleware: (_req: any, _res: any, next: any) => next(),
 }));
 
+// 既定は null（＝ストレージ無効。多くの既存テストはこれで image_url をそのまま扱う）。
+// 保存先パスを検証する describe だけが mockSupabaseAdmin.current を差し替える
+// （falGenerationRoutes.test.ts の「Supabase Storage の保存先」describe、#682と同じパターン）。
+const mockSupabaseAdmin: { current: unknown } = { current: null };
 jest.mock("../../../auth/supabaseClient", () => ({
-  supabaseAdmin: null,
+  get supabaseAdmin() {
+    return mockSupabaseAdmin.current;
+  },
 }));
 
 const mockTenantHasFeature = jest.fn().mockResolvedValue(true);
@@ -629,5 +635,132 @@ describe("resizeForLemonSlice (I-6)", () => {
     const junk = Buffer.from("not-an-image");
     const out = await resizeForLemonSlice(junk);
     expect(out).toBe(junk);
+  });
+});
+
+// --------------------------------------------------------------------------
+// PATCH /v1/admin/avatar/configs/:id — base64画像アップロードの保存先(#P1-A)
+// --------------------------------------------------------------------------
+// このエンドポイントには元々テストが1件も無かった。super_adminのpreviewMode中に
+// ?tenant= を無視して生の(空の)tenantIdでバケット直下に保存していた欠陥
+// (POSTは effectiveTenantId を使うのに、同一ファイル内のPATCHだけ生のtenantIdを
+// 使っていた非対称)を固定する。
+
+const DATA_URL_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+describe("PATCH /v1/admin/avatar/configs/:id — 画像アップロードの保存先", () => {
+  const uploadedPaths: string[] = [];
+
+  function makeStorageAdmin() {
+    uploadedPaths.length = 0;
+    return {
+      storage: {
+        createBucket: () => Promise.resolve({ error: null }),
+        from: () => ({
+          upload: (filePath: string) => {
+            uploadedPaths.push(filePath);
+            return Promise.resolve({ error: null });
+          },
+          getPublicUrl: (filePath: string) => ({
+            data: { publicUrl: `https://cdn.example/${filePath}` },
+          }),
+        }),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    mockSupabaseAdmin.current = makeStorageAdmin();
+  });
+
+  afterEach(() => {
+    // 他のdescribe(ストレージ無効前提)へ影響を残さない
+    mockSupabaseAdmin.current = null;
+  });
+
+  it("super_admin + ?tenant=tenant-b → 保存パスが tenant-b/ で始まる", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ is_default: false }] }) // is_default チェック
+      .mockResolvedValueOnce({ rows: [{ ...CONFIG_ROW, id: "config-1" }] }); // UPDATE ... RETURNING
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .patch("/v1/admin/avatar/configs/config-1?tenant=tenant-b")
+      .send({ image_url: DATA_URL_PNG });
+
+    expect(res.status).toBe(200);
+    expect(uploadedPaths).toHaveLength(1);
+    expect(uploadedPaths[0]!.startsWith("tenant-b/")).toBe(true);
+  });
+
+  it("super_admin で ?tenant= なし → 400でテナント不明として止まり、バケット直下へ一切書き込まない", async () => {
+    // is_default チェックの1回のみ発行され、UPDATEには到達しない
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ is_default: false }] });
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .patch("/v1/admin/avatar/configs/config-1")
+      .send({ image_url: DATA_URL_PNG });
+
+    // 今回の欠陥そのものの回帰ガード: 修正前は空テナントのまま
+    // "/avatar-xxx.png" というバケット直下パスで実際に書き込まれていた
+    expect(res.status).toBe(400);
+    expect(uploadedPaths).toHaveLength(0);
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("[越権防止] client_adminが?tenant=tenant-bを付けても自テナント配下になる", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ is_default: false }] })
+      .mockResolvedValueOnce({ rows: [{ ...CONFIG_ROW, id: "config-1" }] });
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .patch("/v1/admin/avatar/configs/config-1?tenant=tenant-b")
+      .send({ image_url: DATA_URL_PNG });
+
+    expect(res.status).toBe(200);
+    expect(uploadedPaths).toHaveLength(1);
+    expect(uploadedPaths[0]!.startsWith("tenant-a/")).toBe(true);
+  });
+
+  it("base64でない(https URL)場合はStorageを一切触らない(チャットUI採用経路の回帰ガード)", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ is_default: false }] })
+      .mockResolvedValueOnce({ rows: [{ ...CONFIG_ROW, id: "config-1" }] });
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .patch("/v1/admin/avatar/configs/config-1?tenant=tenant-b")
+      .send({ image_url: "https://img.example/already-hosted.png" });
+
+    expect(res.status).toBe(200);
+    expect(uploadedPaths).toHaveLength(0);
+  });
+
+  it("PATCHのSQL挙動(super_adminの跨テナント更新可)は変えない — WHERE句にtenant_id条件が付かない", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ is_default: false }] })
+      .mockResolvedValueOnce({ rows: [{ ...CONFIG_ROW, id: "config-1" }] });
+
+    const db = { query: dbQuery };
+
+    await request(makeApp(db, "super_admin", ""))
+      .patch("/v1/admin/avatar/configs/config-1?tenant=tenant-b")
+      .send({ image_url: DATA_URL_PNG });
+
+    const updateCall = dbQuery.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.startsWith("UPDATE avatar_configs"),
+    );
+    expect(updateCall![0]).not.toContain("tenant_id");
   });
 });
