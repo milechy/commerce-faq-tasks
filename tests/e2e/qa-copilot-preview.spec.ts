@@ -47,6 +47,152 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
     expect(body).not.toContain(NO_TENANT_MSG);
   });
 
+  // CP-B-3: アバター設定フローの完走（未作成 → 推奨提示 → 採用 → 画像 → 声 → 有効化 → ライブテスト）。
+  // /v1/admin/agent/chat・fal/generate・match-voice・configs PATCH をすべてモックする。理由は3つ:
+  //   (1) 実LLM(Groq)のツール選択の揺れに依存させず決定論的にする
+  //   (2) fal.ai/Fish Audioへの実課金(#594で計上対応済みだが、CI実行毎に発生させる理由が無い)を発生させない
+  //   (3) carnationの実 avatar_configs を本番でCI実行のたびに書き換えない(このファイルの
+  //       他テストと同じ「実データで読む」前提を、書き込みを伴うこのテストにまで広げない)
+  // widget-fab-avatar.spec.ts が anam-session/room-token を同じ理由でモックしている先例に倣う。
+  // 検証したいのはUIの実配線(クリック→カード遷移→PATCH送出→復元)であって、LLM/外部APIの
+  // 中身そのものではないため、モックはこの目的に対して妥当な選択である。
+  test('CP-B-3: 未作成テナントが会話だけで公開まで到達し、離脱はライブテストの1回だけ', async ({ page, context }) => {
+    let chatCalls = 0;
+    const chatMessages: string[] = [];
+
+    await page.route('**/v1/admin/agent/chat', async (route) => {
+      const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
+      chatCalls += 1;
+      chatMessages.push(body.message ?? '');
+
+      if (chatCalls === 1) {
+        // 起動時ブリーフィング
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
+      }
+      if (body.message?.includes('アバターを作りたい')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            reply: '見本をご提案しました。',
+            actions: [{
+              tool: 'suggest_avatar_preset',
+              result: '「Haruka」というアバターの見本があります。\nプリセットID: preset-e2e-1\nこのまま採用しますか？',
+              card: { kind: 'avatar_preset', presetId: 'preset-e2e-1', name: 'Haruka', imageUrl: null, description: 'とても丁寧な性格です。' },
+            }],
+          }),
+        });
+      }
+      if (body.message === '採用してください') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            reply: '採用しました。',
+            actions: [{
+              tool: 'adopt_avatar_preset',
+              result: 'アバター「Haruka」を採用しました。まだ公開はされていません。',
+              card: { kind: 'avatar_adopted', configId: 'cfg-e2e-1', name: 'Haruka', imageUrl: null, description: 'とても丁寧な性格です。' },
+            }],
+          }),
+        });
+      }
+      if (body.message?.includes('有効化して')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ reply: '有効化しました。', actions: [{ tool: 'activate_avatar', result: 'アバター（ID: cfg-e2e-1）を有効化しました' }] }),
+        });
+      }
+      if (body.message?.includes('テストチャットで確認したい')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            reply: 'テストチャットをご案内しました。',
+            actions: [{
+              tool: 'get_legacy_ui_link',
+              result: 'この操作はテストチャット画面から行えます。',
+              card: { kind: 'legacy_link', label: 'テストチャット', url: '/admin/chat-test', description: '設定した内容を実際のチャットで試すのはこちらの画面で行えます' },
+            }],
+          }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '了解しました。', actions: [] }) });
+    });
+
+    await page.route('**/v1/admin/avatar/fal/generate', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ images: ['https://img.example/1.png', 'https://img.example/2.png', 'https://img.example/3.png', 'https://img.example/4.png'] }),
+      }),
+    );
+    await page.route('**/v1/admin/avatar/match-voice', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ recommendations: [{ id: 'voice-e2e-1', title: 'Haruka Voice', description: '明るく親しみやすい声', score: 0.9 }] }),
+      }),
+    );
+    let patchCount = 0;
+    await page.route('**/v1/admin/avatar/configs/cfg-e2e-1', (route) => {
+      if (route.request().method() === 'PATCH') {
+        patchCount += 1;
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'cfg-e2e-1' }) });
+      }
+      return route.continue();
+    });
+
+    await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await waitForBootstrapReply(page);
+
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+
+    // ① 未作成 → 推奨提示
+    await composer.fill('アバターを作りたい');
+    await send.click();
+    await expect(page.getByRole('button', { name: '採用して' })).toBeVisible({ timeout: 10000 });
+
+    // ② 採用（チップ経由）
+    await page.getByRole('button', { name: '採用して' }).click();
+    await expect(page.getByRole('button', { name: '画像を新しく生成する' })).toBeVisible({ timeout: 10000 });
+
+    // ③ 画像候補の生成・採用
+    await page.getByRole('button', { name: '画像を新しく生成する' }).click();
+    await expect(page.getByRole('button', { name: 'これにする' }).first()).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'これにする' }).first().click();
+    await expect(page.getByRole('button', { name: 'これに決定' })).toBeVisible({ timeout: 10000 });
+
+    // ④ 声の候補の検索・採用
+    await page.getByRole('button', { name: '声を探す' }).click();
+    await expect(page.getByRole('button', { name: 'この声にする' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'この声にする' }).click();
+    await expect(page.getByText('Haruka Voice')).toBeVisible();
+
+    expect(patchCount).toBe(2); // 画像1回 + 声1回。二重PATCHが起きていないこと
+
+    // ⑤ 有効化（公開）
+    await composer.fill('アバターを有効化してください');
+    await send.click();
+    await expect(page.getByText(/有効化しました/)).toBeVisible({ timeout: 10000 });
+
+    // ⑥ ライブテストへの受け渡し（唯一の離脱点）。別タブで開き、この会話は残ったままであること。
+    await composer.fill('テストチャットで確認したい');
+    await send.click();
+    const linkPromise = context.waitForEvent('page');
+    await page.getByRole('link', { name: /テストチャットを開く/ }).click();
+    const newTab = await linkPromise;
+    await newTab.waitForLoadState('domcontentloaded');
+    expect(newTab.url()).toContain('/admin/chat-test');
+    await newTab.close();
+
+    // 別タブに離脱しただけで、元の会話(アシスタントの発言・カード群)はそのまま残っている
+    expect(page.url()).toContain('/copilot-preview');
+    await expect(page.getByText('Haruka Voice')).toBeVisible();
+  });
+
   // GID 1217040318322843: 週次まとめカード(指標が5〜6個並ぶ)が最も崩れやすいカードのため、
   // 390pxモバイルビューポート(CLAUDE.md Mobile First)で個別に確認する。
   test.describe('390pxモバイルビューポート', () => {
