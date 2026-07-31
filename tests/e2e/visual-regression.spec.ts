@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ADMIN_BASE_URL, API_BASE_URL } from './config';
+import { ADMIN_BASE_URL, DEMO_INDEX_URL } from './config';
 
 // Phase C: ビジュアルリグレッションテスト
 // storageState (auth.setup.ts) で認証済み状態で実行される
@@ -74,7 +74,7 @@ test.describe('Visual Regression — Public Pages', () => {
 
   test('carnation-demo index — desktop', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(`${API_BASE_URL}/carnation-demo/index.html`);
+    await page.goto(DEMO_INDEX_URL);
     await page.waitForLoadState('networkidle');
     // widget初期化を待つ
     await page.waitForTimeout(2000);
@@ -85,7 +85,7 @@ test.describe('Visual Regression — Public Pages', () => {
 
   test('carnation-demo index — mobile 390px', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${API_BASE_URL}/carnation-demo/index.html`);
+    await page.goto(DEMO_INDEX_URL);
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('carnation-demo-mobile-390.png', {

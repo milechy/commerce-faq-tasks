@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
-import { API_BASE_URL } from './config';
+import { API_BASE_URL, DEMO_BASE_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const DEMO_BASE = `${API_BASE_URL}/carnation-demo`;
+const DEMO_BASE = DEMO_BASE_URL;
 
 test.describe('Phase65 carnation-demo サイト', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');

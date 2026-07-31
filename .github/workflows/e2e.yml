@@ -10,8 +10,8 @@ on:
       - 'tests/e2e/**'
       - 'playwright.config.ts'
 
-# E2E は playwright.config.ts の baseURL(https://admin.r2c.biz)経由で本番環境を直接叩く
-# (専用のstaging環境やサーバ起動ステップが無いため)。並行PRが同時にE2Eを走らせると
+# E2E は tests/e2e/config.ts の ADMIN_BASE_URL/API_BASE_URL(既定値は本番)経由で
+# 本番環境を直接叩く(専用のstaging環境やサーバ起動ステップが無いため)。並行PRが同時にE2Eを走らせると
 # 本番へのリクエストがレート制限(429)に達し、PRの内容と無関係にCIが赤くなる事象が
 # 確認された(GID 1216947610263309)。E2Eジョブを1本ずつ直列実行させることで回避する。
 # cancel-in-progress は必ず false — 後から来たPRのE2Eが先行PRの実行中E2Eをキャンセルして
