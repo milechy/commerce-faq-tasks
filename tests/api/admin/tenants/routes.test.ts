@@ -237,6 +237,66 @@ describe("Tenant Admin Routes", () => {
         });
       });
 
+      // X-16(docs/ONBOARDING_FIRST_LOGIN.md §7.3): テストチャット(/admin/chat-test)由来の
+      // セッションを実会話としてカウントしてはならない。Asana 1216970103691946の
+      // trafficSource分離に依存する制約を、SQL文レベルで固定する回帰テスト。
+      // モックはSQLの中身を見ないため、既存の「rowCountが返ればtrueになる」テストだけでは
+      // このフィルタが将来外れても検出できない。
+      it("X-16: firstConversationの判定クエリは metadata->>'source' = 'user' で絞り込んでいる(テスト/デモトラフィックの除外)", async () => {
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: "beauty", onboarding_widget_seen_at: "2026-07-02T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // faq_docs
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions
+
+        await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        const chatSessionsCall = mockDb.query.mock.calls.find(([sql]: [string]) =>
+          String(sql).includes("FROM chat_sessions"),
+        );
+        expect(chatSessionsCall).toBeDefined();
+        expect(String(chatSessionsCall[0])).toContain(`metadata->>'source' = 'user'`);
+      });
+
+      // X-14(docs/ONBOARDING_FIRST_LOGIN.md §7.3): super_adminの代行(previewMode)でも
+      // client_admin本人でも、段階の導出は同じクエリ・同じ判定になる(actorによる分岐が無い)。
+      // tenants テーブル自体に actor 列が無いため、代行で設定した状態はテナント本人からも
+      // 同じ内容で見える。actor の記録はメトリクス層(P5)の話であり、状態の見え方には影響しない。
+      it("X-14: 代行(super_admin)が設定した状態は、テナント本人が見ても同じ onboarding_stage になる", async () => {
+        // 代行完了直後を想定: onboarding_industry が既に設定済みの状態を、
+        // 本人の client_admin セッションで取得する。
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: "beauty", onboarding_completed_at: "2026-07-01T00:00:00.000Z",
+              onboarding_widget_seen_at: null,
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // faq_docs
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions
+
+        const res = await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        expect(res.status).toBe(200);
+        // 代行(super_admin)が完了させたか本人が完了させたかをこのクエリは区別しない —
+        // industryAnswered は onboarding_industry の非nullのみで判定するため、
+        // 「初めまして」が本人の次回ログインで再生されることはない。
+        expect(res.body.onboarding_stage.industryAnswered).toBe(true);
+      });
+
       it("faq_docs クエリが失敗しても my-tenant 応答全体は壊れない(フェイルセーフ)", async () => {
         mockDb.query
           .mockResolvedValueOnce({

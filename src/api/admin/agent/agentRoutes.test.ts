@@ -6153,6 +6153,85 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(recordedMetrics('onboarding_stage_reached')).toEqual([]);
     });
+
+    // Asana 1217040568430944(P7)関連: E-6(docs/ONBOARDING_FIRST_LOGIN.md §7.2)
+    it('E-6: super_adminがtargetTenantId未指定でconfirmed=true → 「テナントが特定できません」を返しDBに触らない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-5', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([]);
+    });
+
+    // E-2(docs/ONBOARDING_FIRST_LOGIN.md §7.2): 一部INSERT失敗時、表示件数と実登録件数が一致すること。
+    it('E-2: 5件中2件のINSERTが失敗しても、表示件数(3件)は実際にINSERTが成功した件数と一致する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-6', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+
+      // 5件中、2件目・4件目のINSERTだけ失敗させる(actionExecutor.tsは個別catchして継続する)
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 100, question: 'q0', answer: 'a0', is_published: false }] })
+        .mockRejectedValueOnce(new Error('duplicate key'))
+        .mockResolvedValueOnce({ rows: [{ id: 102, question: 'q2', answer: 'a2', is_published: false }] })
+        .mockRejectedValueOnce(new Error('connection lost'))
+        .mockResolvedValueOnce({ rows: [{ id: 104, question: 'q4', answer: 'a4', is_published: false }] })
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE tenants
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-07' });
+
+      expect(res.status).toBe(200);
+      // 「黙って5件成功」と表示してはならない — 実際に成功した3件だけを表示する
+      expect(res.body.actions[0].result).toContain('3件、下書きとして登録しました');
+      expect(res.body.actions[0].result).not.toContain('5件');
+    });
+
+    // E-3(docs/ONBOARDING_FIRST_LOGIN.md §7.2)。
+    // 【既知のギャップ】要件は「全件失敗なら段階を進めない・完了フラグを立てない」だが、
+    // actionExecutor.ts の UPDATE tenants は INSERT の成否に関わらず無条件に実行される
+    // (この分岐は本タスク群より前から存在する既存ロジックで、P3では is_published の値
+    // だけを変更した。挙動そのものは変えていない)。このテストは「あるべき姿」ではなく
+    // 「現状の実際の挙動」を固定する回帰テストであり、この挙動を仕様として推奨するもの
+    // ではない。修正するかどうかはプロダクト判断が必要。
+    it('E-3(既知のギャップ): 全件INSERT失敗でも onboarding_industry は更新され、段階到達メトリクスも発火してしまう', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-7', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+
+      for (let i = 0; i < 5; i++) {
+        mockQuery.mockRejectedValueOnce(new Error('insert failed'));
+      }
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants(無条件に実行される)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-08' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('0件、下書きとして登録しました');
+      // 現状の実装: 0件成功でも UPDATE tenants は実行され、メトリクスも発火する
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE tenants SET onboarding_industry'),
+        ['beauty', 'tenant-abc'],
+      );
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([
+        {
+          metricName: 'onboarding_stage_reached',
+          tenantId: 'tenant-abc',
+          labels: { stage: 'industry_answered', actor: 'self', surface: 'unknown' },
+          value: 1,
+        },
+      ]);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -6262,6 +6341,47 @@ describe('POST /v1/admin/agent/chat', () => {
           value: 1,
         },
       ]);
+    });
+
+    // E-6(docs/ONBOARDING_FIRST_LOGIN.md §7.2)
+    it('E-6: super_adminがtargetTenantId未指定でconfirmed=true → 「テナントが特定できません」を返しDBを更新しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-5', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-pub-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([]);
+    });
+
+    // X-10(docs/ONBOARDING_FIRST_LOGIN.md §7.3): commit_faq_import が使う knowledgeImportStaging
+    // (30分TTLのプロセス内Map)とは異なり、publish_faq_drafts は is_published カラムを直接見るため
+    // 期限切れという概念自体が存在しない。「下書きのまま何日放置しても消えない」ことを固定する。
+    it('X-10: 下書きは時間経過で失効しない(TTL staging を使っていないことの回帰テスト)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-6', 'publish_faq_drafts', { confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('下書きが見つかりました。'));
+
+      // 「何日も前に作られた」ことをシミュレートしても、SELECT自体に時間条件は無いので拾える
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, question: '何日も前に作られた下書き', answer: 'A' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '下書きを見せて', sessionId: 'sess-pub-06' });
+
+      expect(res.status).toBe(200);
+      // SQLに時間条件(created_at等)が含まれていないことを確認する
+      const selectCall = mockQuery.mock.calls.find(([sql]) => String(sql).includes('SELECT id, question, answer FROM faq_docs'));
+      expect(selectCall).toBeDefined();
+      expect(String(selectCall![0])).not.toMatch(/created_at|NOW\(\)|INTERVAL/i);
+      expect(res.body.actions[0].result).toContain('何日も前に作られた下書き');
     });
   });
 
