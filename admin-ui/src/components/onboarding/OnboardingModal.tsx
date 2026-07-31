@@ -248,14 +248,19 @@ export default function OnboardingModal({ tenantId, onClose }: OnboardingModalPr
 
         {step === "done" && (
           <div style={{ textAlign: "center", padding: "20px 0" }}>
-            <span style={{ fontSize: 44, display: "block", marginBottom: 12 }}>✅</span>
+            {/* 登録失敗時に「準備完了です！✅」の成功表示を出すと、実際は失敗しているのに
+                成功したかのように見えてしまう(errorステートが計算されるのにここで
+                無視されていた既存バグ)。error があるときは失敗の表示に切り替える。 */}
+            <span style={{ fontSize: 44, display: "block", marginBottom: 12 }}>{error ? "⚠️" : "✅"}</span>
             <h2 style={{ fontSize: 19, fontWeight: 700, color: "#f9fafb", margin: "0 0 8px" }}>
-              準備完了です！
+              {error ? "一部設定できませんでした" : "準備完了です！"}
             </h2>
             <p style={{ fontSize: 14, color: "#9ca3af", margin: "0 0 24px", lineHeight: 1.6 }}>
-              {importedCount > 0
-                ? `${importedCount}件のFAQを下書きとして登録しました。内容をご確認のうえ、ナレッジ画面から公開してください。`
-                : "ナレッジ画面からいつでもFAQを追加できます。"}
+              {error
+                ? error
+                : importedCount > 0
+                  ? `${importedCount}件のFAQを下書きとして登録しました。内容をご確認のうえ、ナレッジ画面から公開してください。`
+                  : "ナレッジ画面からいつでもFAQを追加できます。"}
             </p>
             <button
               onClick={onClose}
