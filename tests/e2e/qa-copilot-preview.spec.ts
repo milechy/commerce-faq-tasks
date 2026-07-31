@@ -59,11 +59,8 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
   // 検証したいのはUIの実配線(クリック→カード遷移→PATCH送出→復元)であって、LLM/外部APIの
   // 中身そのものではないため、モックはこの目的に対して妥当な選択である。
   test('CP-B-3: 未作成テナントが会話だけで公開まで到達し、離脱はライブテストの1回だけ', async ({ page, context }) => {
-    const chatMessages: string[] = [];
-
     await page.route('**/v1/admin/agent/chat', async (route) => {
       const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
-      chatMessages.push(body.message ?? '');
 
       // Asana 1217080508665459: 起動時ブリーフィングは「1回目の呼び出し」ではなく
       // BOOTSTRAP_PROMPT の内容で判定する。carnationのようにオンボーディング未完了

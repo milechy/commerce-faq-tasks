@@ -107,6 +107,9 @@ describe('isBootstrapMessage — admin-ui 側の BOOTSTRAP_PROMPT とのドリ�
 
   it('admin-ui/src/pages/copilot-preview/index.tsx の BOOTSTRAP_PROMPT にマーカーが含まれる', () => {
     const source = readFileSync(INDEX_TSX_PATH, 'utf8');
+    // この正規表現は index.tsx 側が「二重引用符の文字列リテラル1行」で宣言されている前提に依存する。
+    // テンプレートリテラル化や複数行連結に変えた場合はこの正規表現も更新すること。
+    // 乖離した場合は直下の expect(match).not.toBeNull() で落ちるため、サイレント失敗はしない。
     const match = source.match(/const BOOTSTRAP_PROMPT =\s*\n?\s*"([^"]+)"/);
     expect(match).not.toBeNull();
     const actualPrompt = match![1];
