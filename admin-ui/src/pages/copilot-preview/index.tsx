@@ -912,17 +912,6 @@ export default function CopilotPreviewPage() {
     myEpoch: number,
     opts: { hasRestoredConversation: boolean; loadingText: string; force?: boolean },
   ) => {
-    // TEMP DIAGNOSTIC (Asana 1217048227626635, do not merge): JWTを別途デコードした
-    // 診断ログ(PR #680)と、useAuthが実際に解決したReact stateが食い違う可能性を
-    // 切り分けるため、判定に使う値そのものをここで直接ダンプする。
-    // eslint-disable-next-line no-console
-    console.log('[DIAG2] runOnboardingAwareBriefing entry:', JSON.stringify({
-      role: user?.role,
-      tenantId: user?.tenantId,
-      previewMode,
-      previewTenantId,
-      scopedTenantId,
-    }));
     let stage: OnboardingStageFlags | null = null;
     // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
     // オンボーディングの「次の一手」提示を使えるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)。
@@ -965,13 +954,6 @@ export default function CopilotPreviewPage() {
     // 変更せず、admin-ui内のブラウザ単位フラグ(tuningRuleIntro.ts)だけで
     // 「1回きり」を保証する軽量な接続(既存テナント向けの移行導線は別途作らない — 4段階が
     // 全て真になるのは実質的にこのオンボーディングフローを新規に通過したテナントのみ)。
-    // eslint-disable-next-line no-console
-    console.log('[DIAG2] P6-1 gate check:', JSON.stringify({
-      hasStage: !!stage,
-      scopedTenantId,
-      hasShown: scopedTenantId ? hasShownTuningRuleIntro(scopedTenantId) : null,
-      gatePassed: !!(stage && scopedTenantId && !hasShownTuningRuleIntro(scopedTenantId || '')),
-    }));
     if (stage && scopedTenantId && !hasShownTuningRuleIntro(scopedTenantId)) {
       markTuningRuleIntroShown(scopedTenantId);
       push(say(

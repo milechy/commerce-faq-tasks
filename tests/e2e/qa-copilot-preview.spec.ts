@@ -221,14 +221,6 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
     // my-tenant(オンボーディング判定)とagent/chatをモックし、実LLM/実carnationデータの
     // 書き換えに依存させない(CP-B-3のコメントと同じ理由)。
     test('CP-B-4 (P6-1): 4段階完了直後の紹介から、旧UIに行かずに指示ルールを作成・確認できる', async ({ page }) => {
-      // TEMP DIAGNOSTIC (Asana 1217048227626635, do not merge): copilot-preview/index.tsx に
-      // 追加した [DIAG2] console.log をブラウザ→NodeのCIログへ転送する。
-      page.on('console', (msg) => {
-        if (msg.text().includes('[DIAG2]')) {
-          // eslint-disable-next-line no-console
-          console.log('[BROWSER]', msg.text());
-        }
-      });
       await page.route('**/v1/admin/my-tenant', (route) =>
         route.fulfill({
           status: 200,
@@ -286,6 +278,34 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
       });
 
       await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+      // TEMP DIAGNOSTIC (Asana 1217048227626635, do not merge): admin-ui はE2E実行時点で
+      // 本番デプロイ済みのバンドルがそのまま動くため、ソース側にconsole.logを足しても
+      // このPRブランチの変更としては反映されない(mainマージ後の再デプロイが必要)。
+      // そのためテスト側のpage.evaluate()で実行時のlocalStorage/JWTを直接読む
+      // (PR #680と同じ手法をこのテストの実行タイミングに合わせて再実施する)。
+      await page.waitForTimeout(3000); // bootstrap effect(fetch含む)が走るのを待つ
+      const diag = await page.evaluate(() => {
+        const authRaw = window.localStorage.getItem('sb-rpqrwifbrhlebbelyqog-auth-token');
+        let jwt: unknown = null;
+        try {
+          const parsed = authRaw ? JSON.parse(authRaw) : null;
+          const token = parsed?.access_token as string | undefined;
+          if (token) {
+            const payloadB64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+            jwt = JSON.parse(atob(payloadB64));
+          }
+        } catch (e) {
+          jwt = { error: String(e) };
+        }
+        return {
+          jwtAppMetadata: (jwt as any)?.app_metadata,
+          localStorageR2cKeys: Object.keys(window.localStorage).filter((k) => k.startsWith('r2c_')),
+          sessionStorageR2cKeys: Object.keys(window.sessionStorage).filter((k) => k.startsWith('r2c_')),
+        };
+      });
+      // eslint-disable-next-line no-console
+      console.log('[DIAG3]', JSON.stringify(diag));
 
       // 週次ブリーフィングの代わりに、指示ルールの初回紹介が出る
       await expect(page.getByText(/最初のルールを作ってみますか/)).toBeVisible({ timeout: 15000 });
