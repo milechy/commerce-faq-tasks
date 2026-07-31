@@ -475,6 +475,28 @@ async function executeHopToolCalls(
         value: 1,
       });
     }
+    // Asana 1217040702485762(P5): オンボーディング段階到達メトリクス。
+    // 発火回数(重複排除なし)・actorの定義・widget_installed/first_conversationが
+    // 未実装であることは docs/AGENT_METRICS.md の onboarding_stage_reached 節を参照。
+    if (outcome === 'ok' && metricTenantId) {
+      const actor = isSuperAdmin ? 'delegated' : 'self';
+      if (name === 'import_industry_faq_templates' && result.includes('下書きとして登録しました')) {
+        fireAgentMetric(db, {
+          metricName: 'onboarding_stage_reached',
+          tenantId: metricTenantId,
+          labels: { stage: 'industry_answered', actor, surface },
+          value: 1,
+        });
+      }
+      if (name === 'publish_faq_drafts' && result.includes('件のFAQを公開しました')) {
+        fireAgentMetric(db, {
+          metricName: 'onboarding_stage_reached',
+          tenantId: metricTenantId,
+          labels: { stage: 'knowledge_published', actor, surface },
+          value: 1,
+        });
+      }
+    }
   }
 }
 

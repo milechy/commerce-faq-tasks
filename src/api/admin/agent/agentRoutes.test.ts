@@ -5216,6 +5216,29 @@ describe('POST /v1/admin/agent/chat', () => {
       );
       expect(res.body.actions[0].result).toContain('5件、下書きとして登録しました');
       expect(res.body.actions[0].result).toContain('公開しますか');
+
+      // Asana 1217040702485762(P5): 段階到達メトリクス。actor は client_admin本人操作なので self。
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([
+        {
+          metricName: 'onboarding_stage_reached',
+          tenantId: 'tenant-abc',
+          labels: { stage: 'industry_answered', actor: 'self', surface: 'unknown' },
+          value: 1,
+        },
+      ]);
+    });
+
+    it('confirmed=false(一覧提示のみ)では段階到達メトリクスを記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-4', 'import_industry_faq_templates', { industry: 'beauty', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらでよろしいですか？'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '美容室です', sessionId: 'sess-ind-04' });
+
+      expect(res.status).toBe(200);
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([]);
     });
   });
 
@@ -5292,6 +5315,40 @@ describe('POST /v1/admin/agent/chat', () => {
       const updateCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('UPDATE faq_docs SET is_published = true'));
       expect(updateCalls).toHaveLength(1);
       expect(res.body.actions[0].result).toContain('2件のFAQを公開しました');
+
+      // Asana 1217040702485762(P5): 段階到達メトリクス
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([
+        {
+          metricName: 'onboarding_stage_reached',
+          tenantId: 'tenant-abc',
+          labels: { stage: 'knowledge_published', actor: 'self', surface: 'unknown' },
+          value: 1,
+        },
+      ]);
+    });
+
+    it('super_adminがtargetTenantId指定で代行実行した場合はactor:delegatedで記録される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-4', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, question: 'Q1', answer: 'A1' }],
+      });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-pub-04', targetTenantId: 'tenant-abc' });
+
+      expect(res.status).toBe(200);
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([
+        {
+          metricName: 'onboarding_stage_reached',
+          tenantId: 'tenant-abc',
+          labels: { stage: 'knowledge_published', actor: 'delegated', surface: 'unknown' },
+          value: 1,
+        },
+      ]);
     });
   });
 

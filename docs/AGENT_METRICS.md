@@ -89,7 +89,7 @@ GROUP BY 1;
 | `agent_legacy_handoff` | `{ feature: string }` | 常に `1` | `get_legacy_ui_link` が呼ばれたとき。「チャットがまだ旧UIへ何回受け渡しているか」の**分子** |
 | `agent_turn_completed` | `{ answered_from: string }` | 常に `1` | 結果に関わらずターンが完了したとき。handoff率の**分母** |
 | `chat_first_toggle` | `{ enabled: boolean }` | 常に `1` | 「これを既定の画面にする」トグルが切り替わったとき（`POST /v1/admin/agent/ui-event`） |
-| `onboarding_stage_reached` | `{ stage: "industry_answered" \| "knowledge_published" \| "widget_installed" \| "first_conversation", actor: "self" \| "delegated" }` | 常に `1` | テナントが該当段階に**初めて**到達した瞬間（同一テナントで2回目以降は発火しない） |
+| `onboarding_stage_reached` | `{ stage: "industry_answered" \| "knowledge_published" \| "widget_installed" \| "first_conversation", actor: "self" \| "delegated" }` | 常に `1` | 該当段階に対応するツール呼び出しが成功するたび（下記「発火回数について」参照） |
 
 上表の `labels` は各メトリクス**固有**のキーのみを示す。`chat_first_toggle` と
 `onboarding_stage_reached` を除く5つは、これに加えて共通ラベル `surface` を持つ（前節）。
@@ -107,9 +107,22 @@ GROUP BY 1;
   共通ラベル `surface` も持つ。`widget_installed`（`/api/widget/features`）と
   `first_conversation`（`/api/chat` 経由のエンドユーザー会話）はチャットターンの外側のイベントのため
   `surface` を持たない。
-- 「初めて到達した瞬間のみ」の判定は、記録前に現在の段階を読んでから記録するのではなく、
-  DB 更新（`UPDATE ... WHERE <未到達条件>`）が**実際に1行更新した場合のみ**発火させる
-  （読んでから書くと二重発火や取りこぼしが起きるため）。
+
+**発火回数について:** 他の5メトリクス（`agent_legacy_handoff` 等）と同じく、対応するツール呼び出しが
+成功するたびに発火する（重複排除の仕組みは持たない）。「テナントがその段階に**初めて**到達した日時」
+が必要な集計は、クエリ側で `tenant_id` ごとに `MIN(created_at)` を取ることで得られる
+（`metrics_snapshots` は追記専用のイベントログであり、状態の source of truth ではないため）。
+`actionExecutor.ts` の各 `case` には手を入れない制約（本ドキュメント冒頭）があるため、
+「初回のみDBに書き込む」形の重複排除（`onboarding_widget_seen_at` で採用した
+`UPDATE ... WHERE ... IS NULL` パターン）はここでは使えない。
+
+**実装状況（2026-07-31時点）:**
+- `industry_answered` / `knowledge_published`: `agentRoutes.ts` で実装済み（Asana 1217040702485762）。
+- `widget_installed` / `first_conversation`: **未実装**。`widget_installed` の検知自体は
+  `recordWidgetSeenOnce`（`src/lib/onboardingWidgetSeen.ts`、Asana 1217040715801275）で行っているが、
+  メトリクス発火はまだ追加していない。`first_conversation` はエンドユーザー向けチャット
+  （`src/api/chat/route.ts` 等、管理エージェントとは別系統かつ高頻度経路）に触れる必要があり、
+  本タスク群のスコープ外として意図的に残している。
 
 ### `agent_tool_invoked`
 
