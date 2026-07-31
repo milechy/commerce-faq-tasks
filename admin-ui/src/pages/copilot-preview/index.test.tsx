@@ -1629,7 +1629,7 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
     let agentCalls = 0;
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (isBadgeUrl(url)) return mockEmptyBadges();
-      if (String(url).includes("/v1/admin/my-tenant")) {
+      if (String(url).includes("/v1/admin/my-tenant") || String(url).includes("/v1/admin/tenants/tenant-preview")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
       if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
@@ -1657,8 +1657,8 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
     });
   }
 
-  async function sendAndAdopt() {
-    renderPage();
+  async function sendAndAdopt(authOverrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(authOverrides);
     // 起動時ブリーフィングのタイプライター演出が完了する(sendingがfalseへ確定する)まで待つ。
     // 早すぎるタイミングでdisabled判定すると、演出中にsendingが再びtrueへ倒れる前の
     // 初期レンダー(sending初期値false)を素通りしてしまい、直後のクリックが disabled な
@@ -1849,6 +1849,37 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
     expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toEqual({ image_url: "https://img/1-a.png" });
     expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toEqual({ image_url: "https://img/2-b.png" });
   });
+
+  // previewMode(super_adminのクライアントビュー)中は ?tenant= を付けないと、
+  // バックエンドが super_admin 自身の(空の)テナントで課金・保存してしまう(#P0-2)。
+  // uploadUrl(book-pdf)と同じ既存パターンを生成系にも適用したことの固定。
+  it("previewMode中は fal/generate に ?tenant=<プレビュー対象テナント> が付く", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt(SUPER_ADMIN_IN_PREVIEW);
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const generateCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/fal/generate"));
+    expect(String(generateCall![0])).toBe(
+      "http://localhost:3100/v1/admin/avatar/fal/generate?tenant=tenant-preview",
+    );
+  });
+
+  it("previewModeでない通常のclient_adminでは ?tenant= が付かない(越権にならない)", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const generateCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/fal/generate"));
+    expect(String(generateCall![0])).toBe("http://localhost:3100/v1/admin/avatar/fal/generate");
+  });
 });
 
 // POST /match-voice はテキストの候補(id/title/description/score)のみを返し音声
@@ -1865,7 +1896,7 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
     let agentCalls = 0;
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (isBadgeUrl(url)) return mockEmptyBadges();
-      if (String(url).includes("/v1/admin/my-tenant")) {
+      if (String(url).includes("/v1/admin/my-tenant") || String(url).includes("/v1/admin/tenants/tenant-preview")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
       if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
@@ -1895,8 +1926,8 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
     });
   }
 
-  async function sendAndFindVoiceButton() {
-    renderPage();
+  async function sendAndFindVoiceButton(authOverrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(authOverrides);
     await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.change(getComposer(), { target: { value: "採用してください" } });
@@ -2040,6 +2071,36 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
     for (const btn of remaining) expect((btn as HTMLButtonElement).disabled).toBe(true);
     // 「これに決定」は1件だけ(誤って複数がハイライトされていない)
     expect(screen.getAllByRole("button", { name: "これに決定" }).length).toBe(1);
+  });
+
+  // previewMode中は ?tenant= を付けないと、バックエンドが super_admin 自身の
+  // (空の)テナントで課金してしまう(generateAvatarCandidatesと同じ理由、#P0-2)。
+  it("previewMode中は match-voice に ?tenant=<プレビュー対象テナント> が付く", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton(SUPER_ADMIN_IN_PREVIEW);
+    fireEvent.click(voiceButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    const matchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/match-voice"));
+    expect(String(matchCall![0])).toBe(
+      "http://localhost:3100/v1/admin/avatar/match-voice?tenant=tenant-preview",
+    );
+  });
+
+  it("previewModeでない通常のclient_adminでは match-voice に ?tenant= が付かない(越権にならない)", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    const matchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/match-voice"));
+    expect(String(matchCall![0])).toBe("http://localhost:3100/v1/admin/avatar/match-voice");
   });
 });
 
