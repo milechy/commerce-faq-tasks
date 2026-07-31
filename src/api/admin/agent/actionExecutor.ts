@@ -26,7 +26,7 @@ import {
   recordPlanLimitMention,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
-import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation } from '../chat-history/chatHistoryRepository';
+import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation, normalizeSessionListParams } from '../chat-history/chatHistoryRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
@@ -199,8 +199,17 @@ export async function executeToolCall(
   sessionId: string,
   isSuperAdmin: boolean = false
 ): Promise<ActionResult> {
-  // 結果は500字以内日本語
+  // 結果は500字以内日本語(書き込み系はこちらのまま)
   const truncate = (s: string) => s.slice(0, 500);
+  // 閲覧系(一覧・本文)の出力予算。書き込み系の500字とは別枠にする — 一覧・本文は
+  // 量そのものが本質的な機能であり、500字では「全N件中M件」の見出しを付けても
+  // 実際には数件しか読めないまま黙って切れていた。打ち切った場合は見出し(先頭)は
+  // そのまま残り、末尾に打ち切りが起きたこと自体が分かる注記を必ず付ける(黙って切らない)。
+  const READ_RESULT_MAX_CHARS = 4000;
+  const truncateRead = (s: string): string => {
+    if (s.length <= READ_RESULT_MAX_CHARS) return s;
+    return s.slice(0, READ_RESULT_MAX_CHARS) + '\n…(文字数上限のため以降省略。絞り込み条件やページを変えて再度お尋ねください)';
+  };
 
   switch (toolName) {
     // -----------------------------------------------------------------------
@@ -1453,17 +1462,33 @@ export async function executeToolCall(
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
+      // limit はこのツール固有の既定値(10)・上限(20)を維持する(normalizeSessionListParams
+      // 側の全ツール共通の既定値20とは意図的に異なる。会話コンテキストに載る量を絞るため)。
       const limit = Math.min(Math.max(Number(args['limit'] ?? 10), 1), 20);
+      // sort_by/sort_order/period/sentiment/offset は LLM 由来の未検証な値なので、
+      // getSessions() 自身も内部で再検証するが、ここでも allowlist ヘルパを必ず通す
+      // (src/api/admin/CLAUDE.md の SQL 検証境界の規約)。args をそのまま渡さない。
+      const normalized = normalizeSessionListParams(args);
+      const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
       try {
-        const { sessions, total } = await getSessions({ tenantId, limit });
+        const { sessions, total } = await getSessions({
+          tenantId,
+          limit,
+          offset: normalized.offset,
+          sort_by: normalized.sort_by,
+          sort_order: normalized.sort_order,
+          period: normalized.period,
+          sentiment: normalized.sentiment,
+          search,
+        });
         if (sessions.length === 0) {
           return truncate('会話セッションはありません');
         }
         const lines = sessions.map(
           (s) => `[${s.session_id.slice(0, 8)}] ${s.started_at.slice(0, 10)} (${s.message_count}件) 「${s.first_message_preview}」`,
         );
-        return truncate(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n'));
+        return truncateRead(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n'));
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_sessions failed', err);
         return truncate('会話セッション一覧の取得に失敗しました');
@@ -1492,7 +1517,7 @@ export async function executeToolCall(
 
         const recent = messages.slice(-limit);
         const lines = recent.map((m) => `${CHAT_ROLE_LABELS[m.role] ?? m.role}: ${m.content}`);
-        return truncate(
+        return truncateRead(
           `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
           lines.join('\n'),
         );
