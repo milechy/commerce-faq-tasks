@@ -262,7 +262,13 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
     await page.getByRole('button', { name: '画像を新しく生成する' }).click();
     await page.getByRole('button', { name: 'これにする' }).first().waitFor({ timeout: 10000 });
 
-    // このタイミングで4枚の候補が既に描画されている(=生成は完了済み)。ここでリロードする。
+    // 会話の保存(chatSessionStore)は msgs 更新から300msデバウンスされている
+    // (index.tsx: タイプライター演出の1応答あたり数百回書き込みを避けるため)。
+    // 保存が実際にflushされる前にリロードすると、復元対象が無く会話が最初から
+    // やり直しになってしまうため、デバウンス分より余裕を持って待つ。
+    await page.waitForTimeout(800);
+
+    // このタイミングで4枚の候補が既に描画され、保存も完了している(=生成は完了済み)。ここでリロードする。
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForTimeout(1500);
 

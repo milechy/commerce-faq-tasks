@@ -169,14 +169,20 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
     await page.getByRole('button', { name: '声を探す' }).click();
     await expect(page.getByRole('button', { name: 'この声にする' })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'この声にする' }).click();
-    await expect(page.getByText('Haruka Voice')).toBeVisible();
+    // 「Haruka Voice」は候補提示の時点で既に表示されているため、それだけでは採用完了の
+    // 証拠にならない。「これに決定」が画像・声で2つに増えたことをもって採用完了を待つ。
+    await expect(page.getByRole('button', { name: 'これに決定' })).toHaveCount(2, { timeout: 10000 });
 
     expect(patchCount).toBe(2); // 画像1回 + 声1回。二重PATCHが起きていないこと
 
     // ⑤ 有効化（公開）
     await composer.fill('アバターを有効化してください');
     await send.click();
-    await expect(page.getByText(/有効化しました/)).toBeVisible({ timeout: 10000 });
+    // モック応答の reply(「有効化しました。」)と、agentActionカードの result
+    // (「アバター（ID: cfg-e2e-1）を有効化しました」句点なし)の両方が"有効化しました"を
+    // 含むため、緩い正規表現だと strict mode violation(複数要素にマッチ)になる。
+    // アシスタントの返信バブル(句点まで含めた完全一致)だけを狙う。
+    await expect(page.getByText('有効化しました。', { exact: true })).toBeVisible({ timeout: 10000 });
 
     // ⑥ ライブテストへの受け渡し（唯一の離脱点）。別タブで開き、この会話は残ったままであること。
     await composer.fill('テストチャットで確認したい');
