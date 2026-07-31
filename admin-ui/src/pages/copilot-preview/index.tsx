@@ -799,6 +799,11 @@ export default function CopilotPreviewPage() {
     const industryTemplatePendingConfirm = data.actions?.some(
       (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
     );
+    // オンボ 是正B-1: publish_faq_draftsだけ確認チップが無く、下書き公開の動線が
+    // 自由入力頼みになっていた(request_sai_task等の既存パターンに揃える)。
+    const publishDraftsPendingConfirm = data.actions?.some(
+      (a) => a.tool === "publish_faq_drafts" && a.result.includes("よろしければ公開しますか"),
+    );
     // 成果(コンバージョン)記録がconfirmed待ちでブロックされた場合も同様
     const outcomePendingConfirm = data.actions?.some(
       (a) => a.tool === "record_session_outcome" && a.result.includes(CONFIRM_REQUIRED_MARKER),
@@ -846,6 +851,11 @@ export default function CopilotPreviewPage() {
       : industryTemplatePendingConfirm
       ? [
           { label: "登録して", action: "__real:登録してください", tone: "primary" },
+          { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ]
+      : publishDraftsPendingConfirm
+      ? [
+          { label: "公開する", action: "__real:はい、公開してください", tone: "primary" },
           { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
         ]
       : outcomePendingConfirm

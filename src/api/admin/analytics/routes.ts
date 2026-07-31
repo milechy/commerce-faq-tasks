@@ -1129,6 +1129,9 @@ export function registerAnalyticsRoutes(app: Express): void {
     "rajiuce_loop_detected_total",
     "rajiuce_avatar_requests_total",
     "rajiuce_rag_duration_ms",
+    // オンボ 是正B-2: onboarding_stage_reached(P1で定義した計測契約)が
+    // metrics_snapshots に発火するだけで、どの画面からも参照できない状態だった。
+    "onboarding_stage_reached",
   ] as const);
 
   const VALID_GRANULARITIES: Record<string, string> = {
@@ -1162,7 +1165,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       const metricRaw = req.query["metric"] as string | undefined;
       if (!metricRaw || !VALID_METRICS.has(metricRaw as any)) {
         return res.status(400).json({
-          error: "metric パラメータが必要です。有効な値: rajiuce_conversation_terminal_total, rajiuce_loop_detected_total, rajiuce_avatar_requests_total, rajiuce_rag_duration_ms",
+          error: "metric パラメータが必要です。有効な値: rajiuce_conversation_terminal_total, rajiuce_loop_detected_total, rajiuce_avatar_requests_total, rajiuce_rag_duration_ms, onboarding_stage_reached",
         });
       }
       const metric = metricRaw;

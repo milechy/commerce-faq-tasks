@@ -813,6 +813,48 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(chatBodies.at(-1)?.message).toBe("やめておきます");
   });
 
+  // オンボ 是正B-1: publish_faq_draftsだけ確認チップが無く、下書き公開の動線が自由入力
+  // 頼みになっていた(他のconfirmed待ちツールと同じパターンに揃える)。
+  it("publish_faq_drafts が確認待ちのときは「公開する」チップを出し、押すと実送信する", async () => {
+    mockAgent({
+      reply: "公開してよろしいですか？",
+      actions: [
+        {
+          tool: "publish_faq_drafts",
+          result:
+            "下書き（未公開）のFAQが2件あります:\n1. Q: 送料は？ / A: 550円\nよろしければ公開しますか？（公開後も自由に編集・非公開に戻せます）",
+        },
+      ],
+    });
+
+    await send("下書きを公開して");
+
+    const chip = await screen.findByRole("button", { name: "公開する" });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("はい、公開してください")).toBeTruthy());
+  });
+
+  it("publish_faq_drafts が確認待ちのときに「あとで」を押すと、公開せず辞退の自然文を送る", async () => {
+    mockAgent({
+      reply: "公開してよろしいですか？",
+      actions: [
+        {
+          tool: "publish_faq_drafts",
+          result:
+            "下書き（未公開）のFAQが2件あります:\n1. Q: 送料は？ / A: 550円\nよろしければ公開しますか？（公開後も自由に編集・非公開に戻せます）",
+        },
+      ],
+    });
+
+    await send("下書きを公開して");
+
+    const declineButton = await screen.findByRole("button", { name: "あとで" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(screen.getByText("あとでにします")).toBeTruthy());
+  });
+
   it("delete_chat_session が確認待ちのときは「削除して」チップを出し、押すと実送信する", async () => {
     mockAgent({
       reply: "確認をお願いします。",
