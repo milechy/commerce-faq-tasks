@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ADMIN_BASE_URL, API_BASE_URL } from './config';
+import { ADMIN_BASE_URL, API_BASE_URL, DEMO_BASE_URL } from './config';
 
 // QA irregular (異常系) sweep — 2026-07-17
 // 3ロールが「イレギュラーな動作」をした場合に、拒むべき操作が正しく拒まれるか / スコープが
@@ -15,7 +15,7 @@ import { ADMIN_BASE_URL, API_BASE_URL } from './config';
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 const API = API_BASE_URL;
 const ADMIN = ADMIN_BASE_URL;
-const DEMO_BASE = `${API}/carnation-demo`;
+const DEMO_BASE = DEMO_BASE_URL;
 const USER_AUTH = 'tests/e2e/.auth/user.json';
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';
 const OWN_TENANT = 'carnation';

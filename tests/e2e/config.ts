@@ -50,3 +50,8 @@ const { adminBaseUrl, apiBaseUrl } = resolveE2eBaseUrls();
 
 export const ADMIN_BASE_URL = adminBaseUrl;
 export const API_BASE_URL = apiBaseUrl;
+
+// carnation-demo(社内デモ用テナント)のURL。複数のspecが同じパスを個別に
+// 組み立てていた重複を解消するための派生定数。
+export const DEMO_BASE_URL = `${API_BASE_URL}/carnation-demo`;
+export const DEMO_INDEX_URL = `${DEMO_BASE_URL}/index.html`;
