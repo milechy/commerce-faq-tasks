@@ -104,6 +104,30 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 **新規ファイルを作ってよいのは**、テスト可能な純関数として切り出す場合のみ。
 その場合も `confirmPolicy.ts` / `agentAuditLog.ts` と同じ粒度・同じディレクトリに置き、隣に `*.test.ts` を作る。
 
+## 指示ルール（tuning_rules）の不変ルール
+
+エンドユーザーへの応答方針を決める唯一のテナント設定。**壊れても画面に何も出ないため、事故が沈黙する。**
+
+**3層の役割分担を混ぜない**
+
+| 層 | 役割 | 破ってはいけないこと |
+|---|---|---|
+| FAQ / 知識データ（RAG） | **事実の単一情報源** | 他層の記述が事実と矛盾しても、事実はこちらを正とする |
+| `tuning_rules.expected_behavior` | **方針**（どう振る舞うか） | 事実の格納場所として使わない（「保証は2年」はFAQへ） |
+| `tuning_rules.approved_responses` | **文体・言い回しの見本** | 逐語コピーを強制しない。事実を上書きさせない |
+
+**置き場所（単一実装。2箇所目を作ると旧UIとチャットで挙動が割れる）**
+
+| やりたいこと | 置き場所（既存） |
+|---|---|
+| ルールの発火条件の判定 | `src/agent/tools/synthesisTool.ts` の `matchesTriggerPattern` |
+| ルールのプロンプト注入 | `src/api/admin/tuning/tuningRulesRepository.ts` の `buildTuningPromptSection` |
+| 優先度の3段階表現 | `admin-ui/src/lib/tuningPriority.ts`（閾値・代表値を他所に書かない） |
+
+**既知の破れ（是正前に触るなら前提を確認する）**: 自動生成ルールの無断有効化 / 採用済み返答が回答生成に未到達 /
+一致判定が半角カンマ区切りの部分一致のみ / ツール結果500字打ち切りによる一覧欠落。
+詳細と受け入れ条件: `docs/TUNING_RULE_CHAT_REQUIREMENTS.md`
+
 ## 絶対にやってはいけないこと
 
 1. **`tenantId` を request body から取る。** JWT または APIキーからのみ取得する。
@@ -115,6 +139,9 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 4. **確認ゲートを迂回する書き込み経路を作る。** 新しい書き込みツールは必ず `confirmPolicy` に分類する。
 5. **エンドユーザーに出る内容を、テナントの確認なしで公開する。**
    テンプレート・自動生成の知識は `is_published = false` で投入し、確認後に公開する。
+   **指示ルールも同じ**: AI が自動生成した `tuning_rules`（Judge 由来）は必ず `is_active = false` で INSERT する。
+   列を省略するとスキーマ既定 `DEFAULT true` が効いて即座に本番の応答方針へ入る（`src/agent/judge/evaluationAnalyzer.ts` が現に違反）。
+   逆に `migration.sql` の `DEFAULT` 自体は、既存データへの影響を評価せずに変えない。
 6. **同じ関心事を2ファイルに複製したまま片方だけ直す。**
    既知の重複: 業種テンプレ（`src/api/admin/agent/industryFaqTemplates.ts` と
    `admin-ui/src/components/onboarding/industryFaqTemplates.ts`）。増やさない、直すときは必ず両方。
@@ -143,6 +170,10 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 - **モバイル 390px を先に確認する。** タップ44px以上・フォント16px以上（Core Principles: Mobile First）。
 - **イレギュラー操作を1件以上書く。** 連打・途中リロード・途中ログアウト・別端末・複数タブ・
   プライベートブラウズ（localStorage 無効）。実ユーザーはこの順路で壊す。
+- **ツール戻り値は500字で切られる前提でテストする。** 一覧・下書きが件数超過や長文で黙って欠ける経路
+  （`get_*` の一覧、`suggest_*` の末尾指示）を必ず1件書く。
+- **「新規APIを作らない」もテストで固定する。** 既存エンドポイントを叩くことをテスト名に書く既存例に倣う
+  （`copilot-preview/index.test.tsx`）。
 
 ## 命名・エラーハンドリング
 
