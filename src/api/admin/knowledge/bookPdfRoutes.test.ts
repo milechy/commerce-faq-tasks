@@ -217,6 +217,23 @@ describe("POST /v1/admin/knowledge/book-pdf — R2C運用限定ガード", () =>
 
     expect(res.status).toBe(201);
   });
+
+  // ガードは `user?.role === "super_admin"` の厳密等価判定のみで安全側(拒否)に倒れる設計。
+  // JWTのroleクレームが欠落/破損した場合も、誤って通過しない(fail-closed)ことを固定する。
+  it.each([
+    ["null", null],
+    ["空文字列", ""],
+    ["大文字違い(Super_Admin)", "Super_Admin"],
+  ])("roleが%s → 403（super_adminと誤認しない）", async (_label, role) => {
+    const { app } = makeApp({ role: role as unknown as string });
+
+    const res = await request(app)
+      .post("/v1/admin/knowledge/book-pdf")
+      .field("title", "テスト書籍")
+      .attach("file", PDF_BUFFER, { filename: "test.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(403);
+  });
 });
 
 describe("POST /v1/admin/knowledge/book-pdf/:id/process — R2C運用限定ガード", () => {
@@ -242,6 +259,21 @@ describe("POST /v1/admin/knowledge/book-pdf/:id/process — R2C運用限定ガ�
 
     expect(res.status).toBe(202);
     expect(res.body).toMatchObject({ ok: true, bookId: 1 });
+  });
+
+  it.each([
+    ["null", null],
+    ["空文字列", ""],
+    ["大文字違い(Super_Admin)", "Super_Admin"],
+  ])("roleが%s → 403（super_adminと誤認しない）", async (_label, role) => {
+    const { app } = makeApp({
+      role: role as unknown as string,
+      dbRows: [{ id: 1, tenant_id: "tenant-a", status: "uploaded" }],
+    });
+
+    const res = await request(app).post("/v1/admin/knowledge/book-pdf/1/process");
+
+    expect(res.status).toBe(403);
   });
 });
 

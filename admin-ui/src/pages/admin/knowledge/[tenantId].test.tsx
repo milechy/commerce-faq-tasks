@@ -147,6 +147,22 @@ describe("TenantKnowledgePage — PDFタブの可視性(R2C運用限定, GID 121
     expect(screen.getByText("PDFアップロード")).toBeTruthy();
   });
 
+  // 上の2件(「PDFアップロード」ボタンが出る)はボタンの可視性しか検証していない。
+  // canManageBookPdf を参照する箇所はタブ配列・フォールバックuseEffect・実描画条件の
+  // 3箇所あり、将来どれか1つだけ更新されて分岐した場合、ボタンは出るのに中身(PdfUploadTab)
+  // が描画されない、という壊れ方をボタン可視性テストだけでは検知できない。
+  // 実際に ?tab=pdf へ遷移してタブ内容が描画されることまで固定する。
+  it("super_adminは?tab=pdfへ実際に遷移でき、PdfUploadTab(pdf-tab-stub)が描画される", async () => {
+    renderPage("/admin/knowledge/tenant-a?tab=pdf", {
+      isSuperAdmin: true,
+      isClientAdmin: false,
+      user: { id: "2", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null },
+    });
+
+    await screen.findByTestId("pdf-tab-stub");
+    expect(screen.queryByTestId("list-tab-stub")).toBeNull();
+  });
+
   it("client_adminが?tab=pdfへ直リンクしても、白画面にならずlistタブへフォールバックする", async () => {
     renderPage("/admin/knowledge/tenant-a?tab=pdf");
 

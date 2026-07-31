@@ -2176,6 +2176,40 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('ありません');
     });
 
+    it.each([
+      { input: 0, expected: 1 },
+      { input: -1, expected: 1 },
+      { input: 999, expected: 20 },
+    ])('get_knowledge_gaps: limit=$input は例外にならず$expectedにクランプされる(get_faq_listと同じclampToolLimitヘルパーへの信頼を個別に固定する)', async ({ input, expected }) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse(`call-kg-clamp-${input}`, 'get_knowledge_gaps', { limit: input }))
+        .mockResolvedValueOnce(makeGroqResponse('未対応の質問一覧です。'));
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '知識ギャップを見せて', sessionId: `sess-kg-clamp-${input}` });
+
+      expect(res.status).toBe(200);
+      expect(mockGetGaps).toHaveBeenCalledWith({ tenantId: 'tenant-abc', status: 'open', limit: expected });
+    });
+
+    it('get_knowledge_gaps: limit="abc"（数値でない）は例外にならず既定件数(10)にフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-kg-clamp-abc', 'get_knowledge_gaps', { limit: 'abc' }))
+        .mockResolvedValueOnce(makeGroqResponse('未対応の質問一覧です。'));
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '知識ギャップを見せて', sessionId: 'sess-kg-clamp-abc' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetGaps).toHaveBeenCalledWith({ tenantId: 'tenant-abc', status: 'open', limit: 10 });
+    });
+
     it('dismiss_knowledge_gap: confirmed=false → 更新されずブロックされる', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-kg-4', 'dismiss_knowledge_gap', { id: 1, confirmed: false }))
@@ -2363,6 +2397,48 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('取得に失敗しました');
       expect(result).toContain('FAQ 一覧（1件）:');
       // NaN のまま LIMIT の SQL パラメータに渡らず、既定値10にフォールバックしていることを確認する
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10]);
+    });
+
+    it('【既知の未対応】limit=1.5（小数）は整数化されずそのままSQLパラメータに渡る', async () => {
+      // clampToolLimit は Number.isFinite チェックのみで Math.floor/round を行わないため、
+      // JSON Schema上 type:'number' の limit にLLMが小数を返すと非整数のままLIMITへ渡る。
+      // 実DBでは型により無視/丸め/エラーいずれもありうる未検証の経路。このテストはバグを
+      // 推奨するものではなく、現状の挙動を固定して可視化するもの。
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-clamp-decimal', 'get_faq_list', { limit: 1.5 }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-clamp-decimal' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 1.5]);
+    });
+
+    it.each([
+      { input: Infinity, label: 'Infinity' },
+      { input: -Infinity, label: '-Infinity' },
+    ])('limit=$label は既定値(10)にフォールバックする', async ({ input }) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-clamp-inf', 'get_faq_list', { limit: input }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: `sess-fl-clamp-inf-${input}` });
+
+      expect(res.status).toBe(200);
+      // Number.isFinite(Infinity) は false なので defaultValue(10) にフォールバックする
       expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10]);
     });
 
@@ -3626,6 +3702,71 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('古い質問');
     });
 
+    it.each([
+      { input: 0, expectedShown: 1 },
+      { input: -1, expectedShown: 1 },
+    ])('limit=$input は例外にならず1件にクランプされる(0件表示にはならない)', async ({ input, expectedShown }) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse(`call-cm-clamp-${input}`, 'get_chat_session_messages', { session_id: 'a1b2c3d4', limit: input }))
+        .mockResolvedValueOnce(makeGroqResponse('直近の会話です。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([
+        { id: 1, role: 'user', content: '古い質問', metadata: {}, created_at: '2026-07-17T10:00:00Z' },
+        { id: 2, role: 'user', content: '新しい質問', metadata: {}, created_at: '2026-07-17T10:01:00Z' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '直近だけ見せて', sessionId: `sess-cm-clamp-${input}` });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain(`全2件中${expectedShown}件`);
+      expect(result).toContain('新しい質問');
+      expect(result).not.toContain('古い質問');
+    });
+
+    it('limit=999は上限(50)にクランプされ、実際のメッセージ数(3件)がそのまま返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-clamp-999', 'get_chat_session_messages', { session_id: 'a1b2c3d4', limit: 999 }))
+        .mockResolvedValueOnce(makeGroqResponse('会話全体です。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([
+        { id: 1, role: 'user', content: '質問1', metadata: {}, created_at: '2026-07-17T10:00:00Z' },
+        { id: 2, role: 'user', content: '質問2', metadata: {}, created_at: '2026-07-17T10:01:00Z' },
+        { id: 3, role: 'user', content: '質問3', metadata: {}, created_at: '2026-07-17T10:02:00Z' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '全部見せて', sessionId: 'sess-cm-clamp-999' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('全3件中3件');
+    });
+
+    it('limit="abc"（数値でない）は例外にならず既定件数(20)にフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-clamp-abc', 'get_chat_session_messages', { session_id: 'a1b2c3d4', limit: 'abc' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話内容はこちらです。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([
+        { id: 1, role: 'user', content: '質問1', metadata: {}, created_at: '2026-07-17T10:00:00Z' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話を見せて', sessionId: 'sess-cm-clamp-abc' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).not.toContain('失敗');
+      expect(result).toContain('全1件中1件');
+    });
+
     it('他テナントのセッションIDは「見つかりません」となり本文を漏らさない', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-cm-3', 'get_chat_session_messages', { session_id: 'ffeeddcc' }))
@@ -4642,6 +4783,25 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
     });
 
+    // 上のit.each(L4672付近)は label と URL のみ検証しており、description の本文は
+    // 未検証だった。knowledge_pdf は「R2C運用限定」の方針をユーザーに伝える文言そのもの
+    // であり、ここが「PDFファイルからの知識登録はこちらの画面で行えます」という
+    // 旧文言(旧UI誘導)に静かに戻っても既存テストは一切失敗しない。専用に固定する。
+    it('feature=knowledge_pdf: description が「R2C運営チームが行っている」旨で、旧UI誘導の文言に戻っていない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-desc', 'get_legacy_ui_link', { feature: 'knowledge_pdf' }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらでご案内します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'PDFをアップロードしたい', sessionId: 'sess-lu-desc-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('説明: PDFファイルからの知識登録は現在R2C運営チームが行っています');
+      expect(result).not.toContain('こちらの画面で行えます');
+    });
+
     // knowledge_pdf と同じ理由(path に tenantId を埋め込む必要がある)で専用ガードがある
     it('feature=knowledge_attribution: super_admin がテナント未特定 → 「テナントが特定できません」を返す', async () => {
       mockFetch
@@ -4689,6 +4849,46 @@ describe('POST /v1/admin/agent/chat', () => {
         url: '/admin/knowledge/tenant-abc?tab=attribution',
         description: 'ナレッジ(FAQ・書籍)ごとの成約への貢献度はこちらの画面で確認できます',
       });
+    });
+
+    // knowledge_pdf / knowledge_attribution は tenantId 必須の専用ガードがあるため、
+    // 「テナント未特定→エラー」だけでなく「previewModeでtargetTenantIdを指定すれば
+    // 成功する」側も固定する。他機能(session_deletion等)は前提が異なりpreviewModeの
+    // 成功系テストが元から無いため、この2機能で新規に検証する。
+    it.each([
+      ['knowledge_pdf', 'PDFアップロード', '/admin/knowledge/tenant-preview?tab=pdf'],
+      ['knowledge_attribution', '成約への貢献度', '/admin/knowledge/tenant-preview?tab=attribution'],
+    ])('feature=%s: super_adminがpreviewMode(targetTenantId指定)なら成功し、指定テナントのURLが返る', async (feature, label, expectedPath) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-preview', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご確認ください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '確認したい', sessionId: `sess-lu-preview-${feature}`, targetTenantId: 'tenant-preview' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain(label);
+      expect(result).toContain(`URL: ${expectedPath}\n`);
+    });
+
+    // LEGACY_UI_FEATURES に新しい値を足した際、上のit.each(通常8件+プラン制限2件)への
+    // 追加を忘れても既存テストは全部passし続ける(手書きリストのため機械的な強制力が無い)。
+    // このテストは追加漏れを検知する安全網として、有効なfeatureの集合と本ファイルで
+    // 実際にテストしている集合を突き合わせる。新しいfeatureを追加したらこの
+    // testedFeatures にも追記すること(追記を忘れるとこのテストが失敗して気づける)。
+    it('LEGACY_UI_FEATURES の全要素がいずれかのテストで検証されている(新feature追加時の検証漏れ検知)', () => {
+      const testedFeatures = new Set([
+        'billing', 'avatar_studio', 'escalation_reply', 'session_deletion',
+        'chat_test', 'avatar_wizard', 'knowledge_pdf', 'knowledge_attribution',
+        'analytics', 'conversion',
+      ]);
+      const untested = LEGACY_UI_FEATURES.filter((f) => !testedFeatures.has(f));
+      expect(untested).toEqual([]);
+      // 逆方向(テスト済みのつもりが実際にはenumから消えている)も検知する
+      const stale = [...testedFeatures].filter((f) => !(LEGACY_UI_FEATURES as readonly string[]).includes(f));
+      expect(stale).toEqual([]);
     });
 
     // 冒頭が「できません」で始まると、旧UIへの案内が行き止まりの謝罪に見えてしまう。
