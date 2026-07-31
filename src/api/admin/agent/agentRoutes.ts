@@ -8,7 +8,13 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
-import type { ActionResult, ActionCardPayload } from './actionExecutor';
+import type {
+  ActionResult,
+  LegacyLinkCardPayload,
+  AvatarPresetCardPayload,
+  TuningRulesListCardPayload,
+  WeeklySummaryCardPayload,
+} from './actionExecutor';
 import { requiresConfirmation } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
@@ -153,7 +159,11 @@ type AnsweredFrom = 'faq_list' | 'tool_action' | 'general';
 
 // クライアントへ返すツール実行結果。result(自然文)は構造化ツールでも必ず入るので
 // 既存クライアントと既存の正規表現パーサはそのまま動き、card は追加でのみ載る。
-type ChatAction = { tool: string; result: string; card?: ActionCardPayload };
+type ChatAction = {
+  tool: string;
+  result: string;
+  card?: LegacyLinkCardPayload | AvatarPresetCardPayload | TuningRulesListCardPayload | WeeklySummaryCardPayload;
+};
 
 function determineAnsweredFrom(actions: Array<{ tool: string; result: string }>): AnsweredFrom {
   if (actions.some((a) => a.tool === 'get_faq_list')) return 'faq_list';
@@ -395,7 +405,7 @@ async function executeHopToolCalls(
     const blockSameTurnChain = alreadySuggestedThisTurn && requiresConfirmation(name);
 
     let result: string;
-    let card: ActionCardPayload | undefined;
+    let card: LegacyLinkCardPayload | AvatarPresetCardPayload | TuningRulesListCardPayload | WeeklySummaryCardPayload | undefined;
     if (blockSameTurnChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
