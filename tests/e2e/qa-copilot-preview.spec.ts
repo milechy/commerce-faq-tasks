@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
+import { ADMIN_BASE_URL } from './config';
 
 // QA: /copilot-preview の実データ接続・super_adminテナントプレビュー回帰テスト — 2026-07-19
 // 本番で以下3件の不具合が実地発見されたため、再発防止として追加:
@@ -14,7 +15,7 @@ import fs from 'fs';
 //   Role C — tests/e2e/.auth/superadmin.json (superadmin.setup.ts, TEST_SUPERADMIN_EMAIL/PASSWORD)
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const ADMIN = 'https://admin.r2c.biz';
+const ADMIN = ADMIN_BASE_URL;
 const USER_AUTH = 'tests/e2e/.auth/user.json';
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';
 const PREVIEW_TENANT_ID = 'r2c_default';
@@ -213,6 +214,90 @@ test.describe('copilot-preview — Role B (client_admin)', () => {
 
       const body = (await page.textContent('body')) ?? '';
       expect(body).not.toContain(NO_TENANT_MSG);
+    });
+
+    // P6-1: 新規テナントが旧UI /admin/tuning に一度も行かずに、指示ルールの初回紹介 →
+    // 提案 → 保存 → 一覧確認まで /copilot-preview だけで完結できることの受け入れ確認。
+    // my-tenant(オンボーディング判定)とagent/chatをモックし、実LLM/実carnationデータの
+    // 書き換えに依存させない(CP-B-3のコメントと同じ理由)。
+    test('CP-B-4 (P6-1): 4段階完了直後の紹介から、旧UIに行かずに指示ルールを作成・確認できる', async ({ page }) => {
+      await page.route('**/v1/admin/my-tenant', (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            onboarding_stage: { industryAnswered: true, knowledgePublished: true, widgetInstalled: true, firstConversation: true },
+          }),
+        }),
+      );
+      await page.route('**/v1/admin/agent/chat', async (route) => {
+        const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
+        if (body.message?.includes('指示ルールを初めて作ります')) {
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              reply: '提案:\nトリガー: 保証\n対応方針: 保証期間は2年とお伝えする\n優先度: 5\nこの内容でよいか確認し、同意が得られたら保存します。',
+              actions: [{
+                tool: 'suggest_tuning_rule',
+                result: '提案:\nトリガー: 保証\n対応方針: 保証期間は2年とお伝えする\n優先度: 5',
+                card: { kind: 'tuning_rule_draft', triggerPattern: '保証', expectedBehavior: '保証期間は2年とお伝えする', priority: 5 },
+              }],
+            }),
+          });
+        }
+        if (body.message === '保存してください') {
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              reply: '保存しました。',
+              actions: [{ tool: 'save_tuning_rule', result: '指示ルールを保存しました（ID: 999）: 「保証」→ 保証期間は2年とお伝えする' }],
+            }),
+          });
+        }
+        if (body.message === '指示ルールの状況を教えて') {
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              reply: '1件あります。',
+              actions: [{
+                tool: 'get_tuning_rules',
+                result: '指示ルール一覧（1件、うち有効1件・無効0件）です。',
+                card: {
+                  kind: 'tuning_rules_list',
+                  totalCount: 1,
+                  rules: [{ id: 999, triggerPattern: '保証', expectedBehavior: '保証期間は2年とお伝えする', priority: 5, isActive: true, source: 'manual', status: null, evidence: null }],
+                },
+              }],
+            }),
+          });
+        }
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '了解しました。', actions: [] }) });
+      });
+
+      await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+      // 週次ブリーフィングの代わりに、指示ルールの初回紹介が出る
+      await expect(page.getByText(/最初のルールを作ってみますか/)).toBeVisible({ timeout: 15000 });
+      await page.getByRole('button', { name: '🎛️ 作ってみる' }).click();
+
+      // 提案 → 保存(チップ経由)
+      await expect(page.getByText('保証期間は2年とお伝えする')).toBeVisible({ timeout: 10000 });
+      await page.getByRole('button', { name: '保存して' }).click();
+      await expect(page.getByText('保存しました。', { exact: true })).toBeVisible({ timeout: 10000 });
+
+      // 一覧で作成したルールを確認できる(旧UI /admin/tuning への誘導は出ない)
+      const composer = page.getByPlaceholder(/指示ルール/);
+      const send = page.getByLabel('送信');
+      await composer.fill('指示ルールの状況を教えて');
+      await send.click();
+      await expect(page.getByText('指示ルール一覧（1件）', { exact: false })).toBeVisible({ timeout: 10000 });
+      expect((await page.textContent('body')) ?? '').not.toContain('/admin/tuning');
+
+      const bodyScrollWidth = await page.evaluate(() => document.body.scrollWidth);
+      expect(bodyScrollWidth).toBeLessThanOrEqual(400); // 10px tolerance
     });
   });
 });

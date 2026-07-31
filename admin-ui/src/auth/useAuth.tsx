@@ -27,6 +27,8 @@ export interface OnboardingStageFlags {
   knowledgePublished: boolean;
   widgetInstalled: boolean;
   firstConversation: boolean;
+  /** オンボ 是正A-2: 段階ではなくヒント。stage2の案内文の出し分けにのみ使う。 */
+  hasDraftFaq: boolean;
 }
 
 interface AuthContextValue {

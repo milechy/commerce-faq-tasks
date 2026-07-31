@@ -7,7 +7,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
 import { trackUsage } from "../../../lib/billing/usageTracker";
-import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
+import { roleAuthMiddleware, requireRole, resolveEffectiveTenantId, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
 
@@ -92,9 +92,10 @@ export function registerFalGenerationRoutes(app: Express): void {
 
       const { prompt, numImages } = parsed.data;
 
-      const su = (req as AuthReq).supabaseUser;
-      const suMeta = su?.app_metadata as Record<string, unknown> | undefined;
-      const tenantId = (suMeta?.tenant_id as string) ?? "";
+      const tenantId = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId = (req as AuthReq).requestId ?? crypto.randomUUID();
 
       const falKey = process.env.FAL_KEY?.trim();

@@ -48,10 +48,19 @@ export async function deleteSession(
     // FOR UPDATE で並行削除との競合を防ぐ
     const scope = params.scope;
     const isTenantScoped = scope.kind === "tenant";
-    const sessionResult = await client.query<{ id: string; tenant_id: string }>(
+    // outcome も併せて読むのは、削除後に「この会話にどんな成果が記録されていたか」を
+    // 追跡する手段が他に無いため。outcome は独立テーブルではなく chat_sessions の列で、
+    // 行の削除と同時に失われる(agent の record_session_outcome と delete_chat_session を
+    // 同一ターンで実行すると、記録直後に無音で消える経路が実在する)。
+    const sessionResult = await client.query<{
+      id: string;
+      tenant_id: string;
+      outcome: string | null;
+      outcome_recorded_at: string | null;
+    }>(
       isTenantScoped
-        ? `SELECT id, tenant_id FROM chat_sessions WHERE id = $1 AND tenant_id = $2 FOR UPDATE`
-        : `SELECT id, tenant_id FROM chat_sessions WHERE id = $1 FOR UPDATE`,
+        ? `SELECT id, tenant_id, outcome, outcome_recorded_at FROM chat_sessions WHERE id = $1 AND tenant_id = $2 FOR UPDATE`
+        : `SELECT id, tenant_id, outcome, outcome_recorded_at FROM chat_sessions WHERE id = $1 FOR UPDATE`,
       isTenantScoped && scope.kind === "tenant"
         ? [params.sessionDbId, scope.tenantId]
         : [params.sessionDbId],
@@ -100,12 +109,22 @@ export async function deleteSession(
     }
 
     // 5. audit_logs 記録（削除成功が証明された後のみ）
+    // 成果が記録済みだった場合のみ deleted_outcome を足す。未記録(null)のときに
+    // 空のフィールドを増やすと、既存の監査ログとの差分が読みにくくなるため付けない。
     const metadata = {
       reason: params.reason,
       affected_counts: {
         chat_messages: msgCount,
         option_orders_nulled: orderCount,
       },
+      ...(session.outcome
+        ? {
+            deleted_outcome: {
+              outcome: session.outcome,
+              recorded_at: session.outcome_recorded_at,
+            },
+          }
+        : {}),
     };
 
     await client.query(

@@ -1,6 +1,10 @@
 -- GID 1216274591838389: 初回ログイン時の1問オンボーディング(業種質問→FAQテンプレート提案)
 -- onboarding_industry: 回答した業種キー(auto/beauty/food/realestate/retail/other)。NULL=未回答。
--- onboarding_completed_at: オンボーディング完了日時。NULL=未完了(ダッシュボードでモーダル表示対象)。
+-- onboarding_completed_at: 業種質問への回答日時。NULL=未回答(ダッシュボードでモーダル表示対象)。
+-- 【オンボ 是正D-1で訂正】列名・当初コメントは「完了」だが、実際は業種回答(旧・単一問オンボの
+-- 完了)時点で更新される。新4段階モデル(onboarding_stage、onboardingStage.ts)導入後の
+-- 「全段階完了」とは別概念であり、両者は独立に管理されている。列名は変更していない
+-- (DBスキーマ変更は人間承認が必要なため、コメント訂正のみ)。
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS onboarding_industry TEXT;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMPTZ;
 

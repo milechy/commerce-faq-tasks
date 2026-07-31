@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL, API_BASE_URL, DEMO_BASE_URL } from './config';
 
 // QA irregular (異常系) sweep — 2026-07-17
 // 3ロールが「イレギュラーな動作」をした場合に、拒むべき操作が正しく拒まれるか / スコープが
@@ -12,9 +13,9 @@ import { test, expect } from '@playwright/test';
 //   Role C — beforeAll で TEST_SUPERADMIN_EMAIL/PASSWORD からログインし superadmin.json を再生成
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const API = 'https://api.r2c.biz';
-const ADMIN = 'https://admin.r2c.biz';
-const DEMO_BASE = `${API}/carnation-demo`;
+const API = API_BASE_URL;
+const ADMIN = ADMIN_BASE_URL;
+const DEMO_BASE = DEMO_BASE_URL;
 const USER_AUTH = 'tests/e2e/.auth/user.json';
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';
 const OWN_TENANT = 'carnation';
@@ -304,6 +305,99 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
     expect(await page.getByRole('button', { name: '採用して' }).count()).toBe(0);
     expect(mock.countMessage('採用してください')).toBe(1);
   });
+
+  // P6-1: アバターと同じ理由(実LLM/実carnationデータの書き換えに依存させない)で
+  // suggest_tuning_rule/save_tuning_ruleをモックする。
+  async function mockTuningRuleFlowUpToDraft(page: any) {
+    let saveCalls = 0;
+    const sentMessages: string[] = [];
+    let bootstrapDone = false;
+    await page.route('**/v1/admin/agent/chat', async (route: any) => {
+      const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
+      sentMessages.push(body.message ?? '');
+      if (!bootstrapDone) {
+        bootstrapDone = true;
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
+      }
+      if (body.message?.includes('保証について聞かれたら')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            reply: 'こう提案します。保存してよいですか？',
+            actions: [{
+              tool: 'suggest_tuning_rule',
+              result: '提案:\nトリガー: 保証\n対応方針: 保証期間は2年とお伝えする\n優先度: 5',
+              card: { kind: 'tuning_rule_draft', triggerPattern: '保証', expectedBehavior: '保証期間は2年とお伝えする', priority: 5 },
+            }],
+          }),
+        });
+      }
+      if (body.message === '保存してください') {
+        saveCalls += 1;
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            reply: '保存しました。',
+            actions: [{ tool: 'save_tuning_rule', result: '指示ルールを保存しました（ID: 999）: 「保証」→ 保証期間は2年とお伝えする' }],
+          }),
+        });
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '了解しました。', actions: [] }) });
+    });
+    return { saveCallCount: () => saveCalls, sentMessages };
+  }
+
+  // GID: 指示ルールの下書き提案チップ(保存して/やめておく)を連打しても、二重保存されない
+  // (アバターの採用チップ連打(B-IRR-6)と同じ仕組み・同じ検証)。
+  test('B-IRR-7 (P6-1): 指示ルールの「保存して」チップを連打しても保存は1回しか実行されない', async ({ page }) => {
+    const mock = await mockTuningRuleFlowUpToDraft(page);
+
+    await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(2000);
+
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('保証について聞かれたら2年と答えて');
+    await send.click();
+    const saveChip = page.getByRole('button', { name: '保存して' });
+    await saveChip.waitFor({ timeout: 10000 });
+
+    // 連打(2回)。1回目のクリックでチップは使用済みになり消えるため、2回目は同じ要素に当たらない想定。
+    await saveChip.click();
+    await saveChip.click({ timeout: 1000 }).catch(() => {});
+
+    await expect(page.getByText('保存しました。', { exact: true })).toBeVisible({ timeout: 10000 });
+    expect(await page.getByRole('button', { name: '保存して' }).count()).toBe(0);
+    expect(mock.saveCallCount()).toBe(1);
+  });
+
+  // GID: 下書き(保存して/やめておくチップ提示中)にリロードしても、sessionStorage復元で
+  // 会話とチップが機能したまま続けられる(アバターの生成完了後リロード(B-IRR-5)と対の
+  // シナリオ: こちらは「まだ何も書き込まれていない下書き段階」でのリロード)。
+  test('B-IRR-8 (P6-1): 指示ルールの下書き提示中にリロードしても会話が復元し、保存を続けられる', async ({ page }) => {
+    const mock = await mockTuningRuleFlowUpToDraft(page);
+
+    await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(2000);
+
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('保証について聞かれたら2年と答えて');
+    await send.click();
+    await page.getByRole('button', { name: '保存して' }).waitFor({ timeout: 10000 });
+
+    // 会話保存(chatSessionStore)のデバウンス分の余裕を持って待つ(B-IRR-5と同じ理由)
+    await page.waitForTimeout(800);
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(1500);
+
+    await expect(page.getByRole('button', { name: '保存して' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: '保存して' }).click();
+    await expect(page.getByText('保存しました。', { exact: true })).toBeVisible({ timeout: 10000 });
+    expect(mock.saveCallCount()).toBe(1);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -391,6 +485,30 @@ test.describe('Irregular — Role C (super_admin cross-tenant & preview)', () =>
     const composer = page.getByPlaceholder(/指示ルール/);
     const send = page.getByLabel('送信');
     await composer.fill('アバターを有効化してください');
+    const chatResP = page.waitForResponse(
+      (res) => res.url().includes('/v1/admin/agent/chat') && res.request().method() === 'POST',
+      { timeout: 20000 },
+    );
+    await send.click();
+    await chatResP;
+    await page.waitForTimeout(1500);
+
+    const body = (await page.textContent('body')) ?? '';
+    expect(body).toContain('テナントが特定できません');
+  });
+
+  // P6-1: C-IRR-5(activate_avatar)と同型。suggest_tuning_rule/save_tuning_ruleも
+  // tenantId未解決の場合、Groq呼び出し・DB読み書きの手前で拒否される(実backendに安全に実行できる)。
+  test('C-IRR-6 (P6-1): super_adminがpreview未選択のまま指示ルールの作成・保存を指示すると拒否される', async ({ page }) => {
+    await page.goto(`${ADMIN}/copilot-preview`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page
+      .waitForResponse((res) => res.url().includes('/v1/admin/agent/chat') && res.request().method() === 'POST', { timeout: 20000 })
+      .catch(() => {});
+    await page.waitForTimeout(2000);
+
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('「保証について聞かれたら2年と答えて」という指示ルールを作って保存してください');
     const chatResP = page.waitForResponse(
       (res) => res.url().includes('/v1/admin/agent/chat') && res.request().method() === 'POST',
       { timeout: 20000 },

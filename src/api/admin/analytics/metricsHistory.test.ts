@@ -158,6 +158,24 @@ describe('GET /v1/admin/analytics/metrics-history', () => {
     expect(res.body.error).toMatch(/granularity/);
   });
 
+  // オンボ 是正B-2: onboarding_stage_reached が VALID_METRICS の allowlist に無く、
+  // 書き込まれるだけでどの画面からも参照できなかった(400で弾かれていた)。
+  it('super_admin + metric=onboarding_stage_reached → 200(オンボ 是正B-2)', async () => {
+    const mockRows = [
+      { timestamp: new Date('2026-07-31T10:00:00Z'), value: 1, labels: { stage: 'industry_answered', actor: 'self' } },
+    ];
+    dbModule.pool = makeMockPool(mockRows);
+
+    const app = makeApp(SUPER_ADMIN_META);
+    const res = await request(app)
+      .get('/v1/admin/analytics/metrics-history')
+      .query({ metric: 'onboarding_stage_reached', period: '7d', granularity: '1h' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('metric', 'onboarding_stage_reached');
+    expect(res.body.series).toHaveLength(1);
+  });
+
   it('metric が未指定 → 400', async () => {
     dbModule.pool = makeMockPool();
 

@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
+import { DEMO_INDEX_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const DEMO_URL = 'https://api.r2c.biz/carnation-demo/index.html';
+const DEMO_URL = DEMO_INDEX_URL;
 
 test.describe('Widget — Mobile iPhone 12 (390px) M1-M4', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');

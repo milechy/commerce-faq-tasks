@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
+import { API_BASE_URL, DEMO_BASE_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const DEMO_BASE = 'https://api.r2c.biz/carnation-demo';
+const DEMO_BASE = DEMO_BASE_URL;
 
 test.describe('Phase65 carnation-demo サイト', () => {
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');
@@ -87,7 +88,7 @@ test.describe('Phase65 carnation-demo サイト', () => {
   test('旧URL /carnation-demo.html が /carnation-demo/index.html へリダイレクトされる', async ({ page }) => {
     test.setTimeout(90_000); // CI runner ↔ VPS の往復が遅い場合に対応: 3 × 25s + backoffs = 78s max
     // Playwrightはリダイレクトを自動追跡するため、最終URLを確認する
-    await gotoWithRetry(page, 'https://api.r2c.biz/carnation-demo.html', 3, 25_000);
+    await gotoWithRetry(page, `${API_BASE_URL}/carnation-demo.html`, 3, 25_000);
     expect(page.url()).toContain('/carnation-demo/index.html');
     const title = await page.title();
     expect(title).toContain('BROSS新潟');

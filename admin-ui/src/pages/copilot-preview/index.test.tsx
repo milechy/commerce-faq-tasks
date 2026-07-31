@@ -129,6 +129,23 @@ function renderPage(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
   );
 }
 
+// render()直後は、起動時ブリーフィングの自動送信(bootstrap useEffect内のsendReal)が
+// まだ authFetch を呼ぶ前(内部のawait前)の状態。この瞬間 sending state は初期値の
+// false のままなので、送信ボタンの disabled=false だけを見て操作すると、直後に
+// ブートストラップ自身が setSending(true) を呼んで sendReal の `if (sending) return`
+// ガードにこの後の送信操作が無言で弾かれる(textareaの値がクリアされず、リクエストも
+// 発生しない)。/v1/admin/agent/chat が実際に呼ばれたことを先に確認してから、
+// disabled=false を待つことでこのレースを避ける。
+// render() 直後にコンポーザへ操作する全テストがこのヘルパーを経由すること。
+async function waitForBootstrapSendStarted() {
+  await waitFor(() =>
+    expect(
+      vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
+    ).toBe(true),
+  );
+  await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+}
+
 describe("CopilotPreviewPage — ログアウト", () => {
   beforeEach(() => {
     vi.mocked(authFetch).mockReset();
@@ -361,15 +378,7 @@ describe("CopilotPreviewPage — 共通シェル機能パリティ(テーマ/言
   it("AppSwitcherのロックタブ(R2C2)の質問が、この画面自身のチャットに送られる", async () => {
     renderPage();
     // 起動時ブリーフィングの完了を待つ(sending中は sendReal が無視されるため)。
-    // render()直後はブートストラップの自動送信がまだ authFetch を呼ぶ前(内部のawait前)
-    // のため、disabled=falseだけを見ると早すぎるタイミングで捉えてしまう(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByTestId("app-switcher-stub"));
 
@@ -422,16 +431,7 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
 
   it("リンクは別タブで開き、会話が残る旨の補足が添えられる", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "請求書を再送したい" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -468,17 +468,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
   async function send(text: string) {
     renderPage();
-    // SCRATCH仮説検証(汎用版・特定の文言に依存しない): render()直後はブートストラップの
-    // 自動送信(sendReal)がまだ authFetch を呼ぶ前(内部のawait前)のため、ボタンの
-    // disabled=falseを早すぎるタイミングで捉えてしまうと、この操作がブートストラップ
-    // 自身のsending中に埋もれて無視される(レース条件)。/v1/admin/agent/chatが実際に
-    // 呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: text } });
     fireEvent.click(screen.getByLabelText("送信"));
   }
@@ -556,7 +546,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
           card: {
             kind: "chat_session_list",
             total: 1,
-            sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+            sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか", outcome: null }],
           },
         },
       ],
@@ -618,7 +608,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
               card: {
                 kind: "chat_session_list",
                 total: 1,
-                sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+                sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか", outcome: null }],
               },
             },
           ],
@@ -683,6 +673,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     const chip = await screen.findByRole("button", { name: "🎛️ この会話からルールを作る" });
     // お客様発言そのものにはボタンが出ない(AI応答1個・チップ1個であることの確認)
     expect(screen.getAllByRole("button", { name: "🎛️ この会話からルールを作る" })).toHaveLength(1);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(chip);
 
@@ -743,6 +734,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
     const chips = screen.getAllByRole("button", { name: "🎛️ このギャップからルールを作る" });
     expect(chips).toHaveLength(2);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(chips[0]);
 
@@ -811,6 +803,48 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
       .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
       .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
     expect(chatBodies.at(-1)?.message).toBe("やめておきます");
+  });
+
+  // オンボ 是正B-1: publish_faq_draftsだけ確認チップが無く、下書き公開の動線が自由入力
+  // 頼みになっていた(他のconfirmed待ちツールと同じパターンに揃える)。
+  it("publish_faq_drafts が確認待ちのときは「公開する」チップを出し、押すと実送信する", async () => {
+    mockAgent({
+      reply: "公開してよろしいですか？",
+      actions: [
+        {
+          tool: "publish_faq_drafts",
+          result:
+            "下書き（未公開）のFAQが2件あります:\n1. Q: 送料は？ / A: 550円\nよろしければ公開しますか？（公開後も自由に編集・非公開に戻せます）",
+        },
+      ],
+    });
+
+    await send("下書きを公開して");
+
+    const chip = await screen.findByRole("button", { name: "公開する" });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("はい、公開してください")).toBeTruthy());
+  });
+
+  it("publish_faq_drafts が確認待ちのときに「あとで」を押すと、公開せず辞退の自然文を送る", async () => {
+    mockAgent({
+      reply: "公開してよろしいですか？",
+      actions: [
+        {
+          tool: "publish_faq_drafts",
+          result:
+            "下書き（未公開）のFAQが2件あります:\n1. Q: 送料は？ / A: 550円\nよろしければ公開しますか？（公開後も自由に編集・非公開に戻せます）",
+        },
+      ],
+    });
+
+    await send("下書きを公開して");
+
+    const declineButton = await screen.findByRole("button", { name: "あとで" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(screen.getByText("あとでにします")).toBeTruthy());
   });
 
   it("delete_chat_session が確認待ちのときは「削除して」チップを出し、押すと実送信する", async () => {
@@ -1280,6 +1314,33 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByText("優先度")).toBeNull();
   });
 
+  // P6-1: 新規テナントが最初にこのカードを開いた時、技術的な「0件」表示にせず
+  // 何ができるか+最初の一手を示す。
+  it("P6-1: get_tuning_rules: 0件の場合は空表示ではなく説明と「最初のルールを作ってみる」ボタンが出る", async () => {
+    mockAgent({
+      reply: "まだ指示ルールはありません。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルールはまだありません。",
+          card: { kind: "tuning_rules_list", totalCount: 0, rules: [] },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/AIチャットボットの受け答えを1つずつ細かく調整できます/)).toBeTruthy();
+    const chip = screen.getByRole("button", { name: "🎛️ 最初のルールを作ってみる" });
+    expect(chip).toBeTruthy();
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(screen.getByText("指示ルールを初めて作ります。何をどう伝えればいいか教えてください")).toBeTruthy(),
+    );
+  });
+
   // P4-1: AI提案ルールの承認/却下と根拠提示
   it("get_tuning_rules: AI提案(未承認)には出所バッジと承認/却下ボタン、根拠が表示される", async () => {
     mockAgent({
@@ -1370,6 +1431,68 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
   });
 
+  // D5: 旧UIと同じ3段階(低/普通/高)語彙でチャットからも優先度を変えられる。
+  it("D5: 優先度チップは現在の段階を除く2つだけ表示され、押すと段階名を埋め込んだ自然文が実送信される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効1件・無効0件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 1, triggerPattern: "保証", expectedBehavior: "2年", priority: 5, isActive: true, source: "manual", status: null, evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    await screen.findByText("保証");
+
+    // priority=5 は「普通」なので、残る2チップ(低・高)だけが出る
+    expect(screen.queryByRole("button", { name: "優先度を普通にする" })).toBeNull();
+    const lowButton = screen.getByRole("button", { name: "優先度を低にする" });
+    const highButton = screen.getByRole("button", { name: "優先度を高にする" });
+    expect(lowButton).toBeTruthy();
+    expect(highButton).toBeTruthy();
+
+    fireEvent.click(highButton);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("指示ルール（ID: 1、「保証」）の優先度を「高」にしてください"),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("D5: 却下済み(status=rejected)のAI提案には優先度チップが出ない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 43, triggerPattern: "値引き", expectedBehavior: "応じない", priority: 3, isActive: false, source: "judge", status: "rejected", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    await screen.findByText("値引き");
+
+    expect(screen.queryByRole("button", { name: /優先度を.+にする/ })).toBeNull();
+  });
+
   it("get_tuning_rules: 「有効にする」を押すと承認の自然文が実送信される", async () => {
     mockAgent({
       reply: "指示ルールの状況をお伝えしました。",
@@ -1390,9 +1513,9 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
     await send("指示ルールの状況を教えて");
     const approveButton = await screen.findByRole("button", { name: "有効にする" });
-    // SCRATCH仮説検証: カード(承認ボタンを含む)はタイプライター演出の完了を待たずに
-    // 即座に描画される(push(...actionMsgs)がrevealText開始より前)。演出完了(=sending=false)
-    // を待たずにクリックすると、sendReal のsendingガードに無言で弾かれる。
+    // カード(承認ボタンを含む)はタイプライター演出の完了を待たずに即座に描画される
+    // (push(...actionMsgs)がrevealText開始より前)。演出完了(=sending=false)を
+    // 待たずにクリックすると、sendReal のsendingガードに無言で弾かれる。
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(approveButton);
@@ -1533,7 +1656,7 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
     let agentCalls = 0;
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (isBadgeUrl(url)) return mockEmptyBadges();
-      if (String(url).includes("/v1/admin/my-tenant")) {
+      if (String(url).includes("/v1/admin/my-tenant") || String(url).includes("/v1/admin/tenants/tenant-preview")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
       if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
@@ -1561,8 +1684,8 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
     });
   }
 
-  async function sendAndAdopt() {
-    renderPage();
+  async function sendAndAdopt(authOverrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(authOverrides);
     // 起動時ブリーフィングのタイプライター演出が完了する(sendingがfalseへ確定する)まで待つ。
     // 早すぎるタイミングでdisabled判定すると、演出中にsendingが再びtrueへ倒れる前の
     // 初期レンダー(sending初期値false)を素通りしてしまい、直後のクリックが disabled な
@@ -1642,6 +1765,191 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
     expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
     expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy();
   });
+
+  // 生成のたびに実費用(fal.ai)が発生する(#594)。busyImage state が正しく
+  // ボタンをdisabledにしていないと、連打でコストが二重に発生する。応答を
+  // 意図的に遅延させ、1回目の応答が返る前に2回目をクリックしても
+  // ネットワーク呼び出しが1回しか発生しないことを検証する。
+  it("「画像を新しく生成する」を連打しても、生成中はfal/generateが1回しか呼ばれない", async () => {
+    let resolveGenerate: (() => void) | null = null;
+    const pending = new Promise<Response>((resolve) => {
+      resolveGenerate = () =>
+        resolve({ ok: true, status: 200, json: () => Promise.resolve({ images: ["https://img/1.png"] }) } as Response);
+    });
+    mockAdoptedThenEndpoints({ generate: () => pending });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    // 1回目の応答がまだ解決していない間に2回目をクリックする(同じDOMノードを
+    // React が再利用するため、disabled化された後も同じ参照でクリックできる)。
+    await waitFor(() => expect((generateButton as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(generateButton);
+
+    const generateCallsWhileInFlight = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/fal/generate")).length;
+    expect(generateCallsWhileInFlight).toBe(1);
+
+    resolveGenerate!();
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    // 解決後も合計1回のまま(遅延クリックが後から発火していない)
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/fal/generate")).length).toBe(1);
+  });
+
+  // 旧UIウィザードの is_default=true 保護(routes.ts の image_url 変更禁止ガード)は
+  // 既存の仕様だが、チャットからのPATCH経路(#632)がこれに触れた場合の応答を
+  // 明示的に確認していなかった。500汎用エラーとは別の実際のレスポンス形状。
+  it("採用のPATCHがデフォルトアバター保護の400を返した場合も、その文言で確定する", async () => {
+    mockAdoptedThenEndpoints({
+      generate: () => mockOk({ images: ["https://img/1.png"] }),
+      patch: () =>
+        Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({ error: "デフォルトアバターの画像は変更できません" }) } as Response),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    const adoptButton = await screen.findByRole("button", { name: "これにする" });
+    fireEvent.click(adoptButton);
+
+    expect(await screen.findByText("デフォルトアバターの画像は変更できません")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
+  });
+
+  // 「気に入らなかったら何度でもやり直せる」(§7-1)という設計上の約束の直接検証。
+  // 【発見】AvatarCandidatesCard の「別の候補を見る」は !card.adoptedUrl の間だけ表示され、
+  // 一度採用するとそのカードからは消える。再生成の実際の導線は常に表示されている
+  // AvatarAdoptedCard 側の「画像を新しく生成する」であることを、このテストで確定する
+  // (「別の候補を見る」を押せばよいという誤った前提でテストを書くと、この非対称に
+  // 気づけないままになる)。
+  it("1回目を採用した後も、元のカードから再度「画像を新しく生成する」で2回目が独立して生成・採用できる", async () => {
+    let generateCalls = 0;
+    mockAdoptedThenEndpoints({
+      generate: () => {
+        generateCalls += 1;
+        const batch = generateCalls === 1
+          ? ["https://img/1-a.png", "https://img/1-b.png"]
+          : ["https://img/2-a.png", "https://img/2-b.png"];
+        return mockOk({ images: batch });
+      },
+      patch: () => mockOk({ id: "cfg-1" }),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "これにする" }).length).toBe(2));
+    fireEvent.click(screen.getAllByRole("button", { name: "これにする" })[0]!);
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+
+    // 採用後、1回目のカードには「別の候補を見る」が出ない(発見した非対称の固定)
+    expect(screen.queryByRole("button", { name: "別の候補を見る" })).toBeNull();
+    // 1回目のカードの未選択の1枚は「これにする」の文言のまま無効化されて残る
+    // (isAdopted=falseだがdisabled=trueのため、後段のフィルタで見分ける必要がある)
+    expect(
+      (screen.getAllByRole("button", { name: "これにする" })[0] as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    // 再生成は元の AvatarAdoptedCard の「画像を新しく生成する」から行う
+    fireEvent.click(generateButton);
+    await waitFor(() => {
+      const enabled = screen
+        .getAllByRole("button", { name: "これにする" })
+        .filter((btn) => !(btn as HTMLButtonElement).disabled);
+      expect(enabled.length).toBe(2);
+    });
+
+    // 1回目のカードの採用状態(これに決定)はそのまま残っている
+    expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy();
+    // 2回目バッチの「有効な(未採用の)これにする」だけを対象にする(1回目カードの
+    // 無効化された残骸1件と混同しない)
+    const secondBatchButtons = screen
+      .getAllByRole("button", { name: "これにする" })
+      .filter((btn) => !(btn as HTMLButtonElement).disabled);
+    expect(secondBatchButtons.length).toBe(2);
+
+    fireEvent.click(secondBatchButtons[1]!);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "これに決定" }).length).toBe(2));
+
+    const patchCalls = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(patchCalls.length).toBe(2);
+    expect(JSON.parse(String((patchCalls[0]![1] as RequestInit).body))).toEqual({ image_url: "https://img/1-a.png" });
+    expect(JSON.parse(String((patchCalls[1]![1] as RequestInit).body))).toEqual({ image_url: "https://img/2-b.png" });
+  });
+
+  // previewMode(super_adminのクライアントビュー)中は ?tenant= を付けないと、
+  // バックエンドが super_admin 自身の(空の)テナントで課金・保存してしまう(#P0-2)。
+  // uploadUrl(book-pdf)と同じ既存パターンを生成系にも適用したことの固定。
+  it("previewMode中は fal/generate に ?tenant=<プレビュー対象テナント> が付く", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt(SUPER_ADMIN_IN_PREVIEW);
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const generateCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/fal/generate"));
+    expect(String(generateCall![0])).toBe(
+      "http://localhost:3100/v1/admin/avatar/fal/generate?tenant=tenant-preview",
+    );
+  });
+
+  it("previewModeでない通常のclient_adminでは ?tenant= が付かない(越権にならない)", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const generateCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/fal/generate"));
+    expect(String(generateCall![0])).toBe("http://localhost:3100/v1/admin/avatar/fal/generate");
+  });
+
+  // テナントIDはURLに素で連結している。encodeURIComponent を外すと `&` や `=` が
+  // そのままクエリ構文として解釈され、別のパラメータを注入できてしまう
+  // （例: `a&numImages=99`）。エスケープが実際に効いていることを固定する。
+  it("テナントIDにクエリ構文の文字が含まれていてもエスケープされる", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt({
+      ...SUPER_ADMIN_IN_PREVIEW,
+      previewTenantId: "a&b=c d",
+    });
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const url = String(
+      vi.mocked(authFetch).mock.calls.find(([u]) => String(u).includes("/fal/generate"))![0],
+    );
+    expect(url).toBe("http://localhost:3100/v1/admin/avatar/fal/generate?tenant=a%26b%3Dc%20d");
+    // 生のまま連結されていない（=クエリが増えていない）こと
+    expect(new URL(url).searchParams.get("tenant")).toBe("a&b=c d");
+    expect([...new URL(url).searchParams.keys()]).toEqual(["tenant"]);
+  });
+
+  // previewMode に入っているのにテナントが未解決（previewTenantId=null）という
+  // 中間状態がありうる。ここで `?tenant=` を空で送ると、バックエンドは
+  // 「空白のみ/未指定」として400にするので、送らない方が挙動が素直になる。
+  // 空文字を付けて送っていないことを固定する。
+  it("previewMode中でもテナント未解決なら ?tenant= を空で送らない", async () => {
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images: ["https://img/1.png"] }) });
+
+    const generateButton = await sendAndAdopt({
+      ...SUPER_ADMIN_IN_PREVIEW,
+      previewTenantId: null,
+    });
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    const url = String(
+      vi.mocked(authFetch).mock.calls.find(([u]) => String(u).includes("/fal/generate"))![0],
+    );
+    expect(url).toBe("http://localhost:3100/v1/admin/avatar/fal/generate");
+    expect(url).not.toContain("tenant=");
+  });
 });
 
 // POST /match-voice はテキストの候補(id/title/description/score)のみを返し音声
@@ -1658,7 +1966,7 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
     let agentCalls = 0;
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (isBadgeUrl(url)) return mockEmptyBadges();
-      if (String(url).includes("/v1/admin/my-tenant")) {
+      if (String(url).includes("/v1/admin/my-tenant") || String(url).includes("/v1/admin/tenants/tenant-preview")) {
         return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
       }
       if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
@@ -1688,8 +1996,8 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
     });
   }
 
-  async function sendAndFindVoiceButton() {
-    renderPage();
+  async function sendAndFindVoiceButton(authOverrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(authOverrides);
     await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.change(getComposer(), { target: { value: "採用してください" } });
@@ -1770,6 +2078,100 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
     expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
     expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy();
   });
+
+  // match-voice もGroq LLM呼び出しを含み実費用が発生する。画像側と同じ理由で、
+  // busyVoice state による連打防止を明示的に検証する。
+  it("「声を探す」を連打しても、検索中はmatch-voiceが1回しか呼ばれない", async () => {
+    let resolveMatch: (() => void) | null = null;
+    const pending = new Promise<Response>((resolve) => {
+      resolveMatch = () =>
+        resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ recommendations: [{ id: "voice-1", title: "Haruka Voice", description: "明るい声", score: 0.9 }] }),
+        } as Response);
+    });
+    mockAdoptedThenVoiceEndpoints({ match: () => pending });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+    await waitFor(() => expect((voiceButton as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(voiceButton);
+
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/match-voice")).length).toBe(1);
+
+    resolveMatch!();
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/match-voice")).length).toBe(1);
+  });
+
+  // 画像候補は既に複数件(4枚)での排他制御をテスト済みだが、声の候補は単一の
+  // recommendationでしかテストしていなかった(#635実装時の全テストが1件のみ)。
+  // 複数候補のうち1件を採用したとき、他の候補が誤って選べてしまわないかを検証する。
+  it("複数の声の候補から1件を採用すると、残りの候補は選べなくなる", async () => {
+    mockAdoptedThenVoiceEndpoints({
+      match: () =>
+        mockOk({
+          recommendations: [
+            { id: "voice-1", title: "Haruka Voice", description: "明るく親しみやすい声", score: 0.92 },
+            { id: "voice-2", title: "Rei Voice", description: "落ち着いた声", score: 0.81 },
+            { id: "voice-3", title: "Sora Voice", description: "元気な声", score: 0.75 },
+          ],
+        }),
+    });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "この声にする" }).length).toBe(3));
+
+    // 真ん中(2番目)の候補を採用する
+    fireEvent.click(screen.getAllByRole("button", { name: "この声にする" })[1]!);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+    // 採用されたのは voice-2 であること
+    const patchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toEqual({ voice_id: "voice-2" });
+
+    // 残り2件(voice-1, voice-3)の「この声にする」は無効化されており、誤って
+    // 別の声を選び直せない(二重採用の防止)
+    const remaining = screen.getAllByRole("button", { name: "この声にする" });
+    expect(remaining.length).toBe(2);
+    for (const btn of remaining) expect((btn as HTMLButtonElement).disabled).toBe(true);
+    // 「これに決定」は1件だけ(誤って複数がハイライトされていない)
+    expect(screen.getAllByRole("button", { name: "これに決定" }).length).toBe(1);
+  });
+
+  // previewMode中は ?tenant= を付けないと、バックエンドが super_admin 自身の
+  // (空の)テナントで課金してしまう(generateAvatarCandidatesと同じ理由、#P0-2)。
+  it("previewMode中は match-voice に ?tenant=<プレビュー対象テナント> が付く", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton(SUPER_ADMIN_IN_PREVIEW);
+    fireEvent.click(voiceButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    const matchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/match-voice"));
+    expect(String(matchCall![0])).toBe(
+      "http://localhost:3100/v1/admin/avatar/match-voice?tenant=tenant-preview",
+    );
+  });
+
+  it("previewModeでない通常のclient_adminでは match-voice に ?tenant= が付かない(越権にならない)", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    const matchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/match-voice"));
+    expect(String(matchCall![0])).toBe("http://localhost:3100/v1/admin/avatar/match-voice");
+  });
 });
 
 // 想定ユーザーは100%日本語入力の店主。かな漢字変換の確定Enterで未変換のまま
@@ -1800,16 +2202,7 @@ describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
 
   it("IME変換中(compositionStart後)のEnterでは送信しない", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     const composer = getComposer();
     fireEvent.compositionStart(composer);
@@ -1824,16 +2217,7 @@ describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
 
   it("変換確定後(compositionEnd後)のEnterでは送信する", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     const composer = getComposer();
     fireEvent.compositionStart(composer);
@@ -1847,16 +2231,7 @@ describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
 
   it("Shift+Enterでは送信しない(改行のため)", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     const composer = getComposer();
     fireEvent.change(composer, { target: { value: "1行目" } });
@@ -1907,16 +2282,7 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
 
   it("チップを押さず自由入力を送ると、チップは使用済みになり新しいメッセージが送信される", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(getComposer(), { target: { value: "送料のFAQを作って" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -1966,16 +2332,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
       { reply: "対応中の会話が2件あります。", actions: [] },
     ]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /対応中の会話/ }));
 
@@ -1986,16 +2343,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("「会話の履歴」を押すと即送信せず、点検/照会のチップを提示する", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
 
@@ -2011,16 +2359,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
       { reply: "問題は見当たりませんでした。", actions: [] },
     ]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     fireEvent.click(await screen.findByRole("button", { name: "最近の会話を点検する" }));
 
@@ -2038,16 +2377,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
       { reply: "いつ頃の会話か、キーワードなどを教えてください。", actions: [] },
     ]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     fireEvent.click(await screen.findByRole("button", { name: "特定の会話を探す" }));
 
@@ -2058,16 +2388,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("会話の履歴のチップ提示中は他のカテゴリーへ切り替えられない", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     await screen.findByRole("button", { name: "最近の会話を点検する" });
 
@@ -2078,16 +2399,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("会話の履歴を連打してもチップメッセージが積み上がらない", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     await screen.findByRole("button", { name: "最近の会話を点検する" });
@@ -2099,16 +2411,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("7カテゴリー全てがレールに表示される", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     for (const label of ["アシスタント", "今週のまとめ", "対応中の会話", "会話の履歴", "知識データ", "指示ルール", "アバター"]) {
       expect(screen.getByRole("button", { name: new RegExp(label) })).toBeTruthy();
@@ -2315,6 +2618,7 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
             knowledgePublished: false,
             widgetInstalled: false,
             firstConversation: false,
+            hasDraftFaq: true,
           },
         });
       }
@@ -2337,6 +2641,32 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
     expect(await screen.findByText(/下書きとして登録済み/)).toBeTruthy();
     expect(screen.getByText("下書きを見る")).toBeTruthy();
+  });
+
+  // オンボ 是正A-2: 業種は答えたが下書きが1件も無い(全INSERT失敗や「あとで」離脱)場合、
+  // 「下書きを見る」チップを出すと空振りになる。業種チップに戻して詰まりを解消する。
+  it("業種回答済みだが下書きが1件も無いなら、下書き確認ではなく業種チップに戻る", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+
+    renderPage();
+
+    expect(await screen.findByText(/たたき台をまだお作りしていません/)).toBeTruthy();
+    expect(screen.queryByText("下書きを見る")).toBeNull();
   });
 
   // N-6/X-11(docs/ONBOARDING_FIRST_LOGIN.md §7.1/§7.3): deriveOnboardingNextStep の
@@ -2412,6 +2742,89 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     // チップは出ない(ユーザー側に取れるアクションが無い段階のため)
     expect(screen.queryByText("下書きを見る")).toBeNull();
     expect(screen.queryByText("埋め込みコードを見る")).toBeNull();
+  });
+
+  // N-1本体(docs/ONBOARDING_FIRST_LOGIN.md §7.1、オンボ 是正D-2): 決定Aの主経路
+  // (テナント本人の初回ログイン・会話復元なし・client_admin)が、これまでpreviewMode
+  // (super_admin代行)の1件でしか肯定検証されておらず、丸ごと未検証だった。
+  it("N-1: client_adminが復元なし・未完了で起動すると、業種チップ付き挨拶が出る(決定Aの主経路)", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: false,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/どんな業種ですか/)).toBeTruthy();
+    // 通常の週次ブリーフィングには進まない(業種未回答の間はブリーフィングより優先)
+    expect(screen.queryByText("今週も順調です。")).toBeNull();
+  });
+
+  // N-1隣接(テスト強化パス): hasDraftFaqはfetchOnboardingStageStatus内の別クエリ由来で、
+  // industryAnsweredとは独立に決まる値。理論上あり得ないはずの組み合わせ(業種未回答なのに
+  // 下書きが存在する)でも、nextIncompleteStageが段階順序を守り業種チップを優先することを
+  // 防御的に固定する(hasDraftFaqがindustry_answeredの判定を誤って飛び越さないこと)。
+  it("N-1隣接: 業種未回答のままhasDraftFaq=trueでも、下書き確認ではなく業種チップが優先される", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: false,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: true,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/どんな業種ですか/)).toBeTruthy();
+    expect(screen.queryByText("下書きを見る")).toBeNull();
+  });
+
+  // X-6(docs/ONBOARDING_FIRST_LOGIN.md §7.3、オンボ 是正D-2): ログアウト→再ログインの
+  // 想定(復元なし+未完了+client_admin)。サーバ側の段階だけから正しく復元されることを
+  // N-1と同じ入力組み合わせで固定する(実装上はmy-tenantを毎回叩くだけなので安全域だが、
+  // 復元経路を「重いので省略」に変えた瞬間に壊れる回帰を検出する)。
+  it("X-6: ログアウト後の再ログイン相当(復元なし)でも、サーバ側の段階から次の一手が復元される", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: true,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/ウィジェットをサイトに設置しましょう/)).toBeTruthy();
   });
 
   // E-1(docs/ONBOARDING_FIRST_LOGIN.md §7.2): my-tenant取得失敗時、詰まらず週次ブリーフィングへ
@@ -2557,16 +2970,7 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
 
   it("会話が更新されると、その面のキーで保存される", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -2581,6 +2985,97 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
       { role: "user", content: "営業時間を教えて" },
       { role: "assistant", content: "今週も順調です。" },
     ]);
+  });
+});
+
+// P6-1: 4段階のオンボーディングが全て完了した直後、指示ルールの初回体験へ
+// 一度だけ接続する軽量な導線(admin-ui内のlocalStorageフラグのみ。backendの
+// onboardingStage.tsは変更しない)。
+describe("CopilotPreviewPage — 指示ルールの初回紹介(P6-1)", () => {
+  const ALL_STAGES_COMPLETE = {
+    industryAnswered: true,
+    knowledgePublished: true,
+    widgetInstalled: true,
+    firstConversation: true,
+  };
+
+  // happy-dom は window.localStorage を提供しないため、Mapベースの最小実装で補う
+  // (chat_first_toggle のテストと同じパターン)。
+  function installFakeLocalStorage() {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        clear: () => void store.clear(),
+      },
+    });
+  }
+
+  beforeEach(() => {
+    installFakeLocalStorage();
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_stage: ALL_STAGES_COMPLETE });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+  });
+
+  it("4段階完了・未紹介・新規起動(復元なし) → 週次ブリーフィングの代わりに紹介メッセージが一度出る", async () => {
+    renderPage();
+
+    expect(await screen.findByText(/最初のルールを作ってみますか/)).toBeTruthy();
+    expect(screen.getByText("🎛️ 作ってみる")).toBeTruthy();
+    expect(screen.getByText("あとで")).toBeTruthy();
+    // 通常の週次ブリーフィングには進まない(このターンでは agent/chat を呼ばない)
+    const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/v1/admin/agent/chat"))).toBe(false);
+    expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-a")).toBe("true");
+  });
+
+  it("「🎛️ 作ってみる」を押すと、指示ルール作成を依頼する自然文が実送信される", async () => {
+    renderPage();
+    const chip = await screen.findByRole("button", { name: "🎛️ 作ってみる" });
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(screen.getByText("指示ルールを初めて作ります。何をどう伝えればいいか教えてください")).toBeTruthy(),
+    );
+  });
+
+  it("既に紹介済み(localStorageフラグあり) → 紹介メッセージは出ず、通常どおり週次ブリーフィングが走る", async () => {
+    window.localStorage.setItem("r2c_tuning_rule_intro_shown_tenant-a", "true");
+
+    renderPage();
+
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+    expect(screen.queryByText(/最初のルールを作ってみますか/)).toBeNull();
+  });
+
+  it("previewMode中のsuper_adminは対象テナントごとにフラグが分かれる", async () => {
+    // previewMode中はmy-tenantではなく/v1/admin/tenants/:idでオンボーディング判定する
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/tenants/tenant-preview")) {
+        return mockOk({ onboarding_stage: ALL_STAGES_COMPLETE });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+
+    expect(await screen.findByText(/最初のルールを作ってみますか/)).toBeTruthy();
+    expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-preview")).toBe("true");
+    // client_admin(tenant-a)側のフラグには影響しない
+    expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-a")).toBeNull();
   });
 });
 
@@ -2602,16 +3097,7 @@ describe("CopilotPreviewPage — リクエストボディの surface", () => {
 
   it("起動時ブリーフィングも手動送信も surface: fullscreen で送る", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -2637,16 +3123,7 @@ describe("CopilotPreviewPage — リクエストボディの surface", () => {
   // 定義が黙って割れる。核の一致を固定してその再発を防ぐ。
   it("起動時ブリーフィングと「今週のまとめ」クリックは同一の依頼文の核を送る", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /今週のまとめ/ }));
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
@@ -3569,16 +4046,7 @@ describe("CopilotPreviewPage — 回答の出どころ(answered_from)", () => {
 
   async function ask() {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.change(getComposer(), { target: { value: "送料はいくら？" } });
     fireEvent.click(screen.getByLabelText("送信"));
     expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
@@ -3637,16 +4105,7 @@ describe("CopilotPreviewPage — 解決確認プロンプト", () => {
 
   async function ask(text: string) {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.change(getComposer(), { target: { value: text } });
     fireEvent.click(screen.getByLabelText("送信"));
     return screen.findByText("このお返事で解決しましたか？");

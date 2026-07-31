@@ -8,7 +8,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 type AvatarReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
+import { roleAuthMiddleware, requireRole, resolveEffectiveTenantId, type AuthedReq } from "../../middleware/roleAuth";
 import { trackUsage } from "../../../lib/billing/usageTracker";
 import { logger } from '../../../lib/logger';
 import { containsBannedWord } from '../../../lib/contentGuard';
@@ -112,10 +112,10 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
         return res.status(400).json({ error: "このプロンプトにはビジネスに不適切な表現が含まれています" });
       }
 
-      const su = (req as AvatarReq).supabaseUser;
-      const suMeta = (su?.app_metadata as Record<string, unknown> | undefined);
-      const tenantId: string =
-        suMeta?.tenant_id as string ?? su?.tenant_id as string ?? "";
+      const tenantId: string = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 
@@ -256,10 +256,10 @@ Output ONLY the English prompt, nothing else.`,
       }
 
       const { description } = parsed.data;
-      const su = (req as AvatarReq).supabaseUser;
-      const suMeta = (su?.app_metadata as Record<string, unknown> | undefined);
-      const tenantId: string =
-        suMeta?.tenant_id as string ?? su?.tenant_id as string ?? "";
+      const tenantId: string = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 
@@ -386,10 +386,10 @@ JSONのみ返してください。`,
       }
 
       const { rules } = parsed.data;
-      const su = (req as AvatarReq).supabaseUser;
-      const suMeta = (su?.app_metadata as Record<string, unknown> | undefined);
-      const tenantId: string =
-        suMeta?.tenant_id as string ?? su?.tenant_id as string ?? "";
+      const tenantId: string = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 

@@ -21,6 +21,7 @@ import {
   saveChatSession,
 } from "../../lib/chatSessionStore";
 import { priorityToTier } from "../../lib/tuningPriority";
+import { hasShownTuningRuleIntro, markTuningRuleIntroShown } from "../../lib/tuningRuleIntro";
 import {
   AGENT_CHAT_AUTH_REQUIRED_MESSAGE,
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
@@ -45,8 +46,9 @@ import {
   type BookPdfRejection,
 } from "../../lib/bookPdfUpload";
 import { getAccessToken } from "../../components/knowledge/shared";
-import { useAuth } from "../../auth/useAuth";
+import { useAuth, type OnboardingStageFlags } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
+import { nextIncompleteStage } from "../../lib/landingDecision";
 import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
 // 旧UI(AppSidebar)の共通シェル機能パリティ(残り4件)。既に独立コンポーネント化
 // 済みのものはそのままimportし、テーマ切替だけ common/ThemeToggle として新規に
@@ -322,43 +324,48 @@ const INDUSTRY_CHIPS: Chip[] = ONBOARDING_INDUSTRIES.map((ind) => ({
 
 // Asana 1217040702485762(P5): オンボーディング4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)。
 // 導出ロジックの単一の情報源は src/api/admin/agent/onboardingStage.ts(バックエンド)。
-// admin-ui と backend は別パッケージ(別ビルドルート)のため import できず、
-// GET /v1/admin/my-tenant が返す形をそのままここで受ける(4個の boolean のみの薄い型)。
-interface OnboardingStageFlags {
-  industryAnswered: boolean;
-  knowledgePublished: boolean;
-  widgetInstalled: boolean;
-  firstConversation: boolean;
-}
+// admin-ui と backend は別パッケージ(別ビルドルート)のため import できないが、admin-ui内の
+// 段階順序(何が「次に足りない段階」か)は lib/landingDecision.ts の nextIncompleteStage に
+// 集約する(オンボ 是正C-2。以前はここに同じ判定順序をif連鎖で再実装しており、
+// landingDecision.ts のisOnboardingComplete・useAuthの型と3重に重複していた)。
+// stage の型自体は useAuth.tsx の OnboardingStageFlags を単一の情報源として使う。
 
 // 4段階のうち、まだ到達していない最初の段階に対応する案内文＋チップを返す。
 // 全段階到達済みなら null(=通常の週次ブリーフィング側の起動に進む)。
-// 各段階の判定順序は onboardingStage.ts の STAGE_ORDER と揃える。
 function deriveOnboardingNextStep(stage: OnboardingStageFlags): { text: string; chips?: Chip[] } | null {
-  if (!stage.industryAnswered) {
-    return {
-      text: "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
-      chips: INDUSTRY_CHIPS,
-    };
+  const incompleteStage = nextIncompleteStage(stage);
+  switch (incompleteStage) {
+    case "industry_answered":
+      return {
+        text: "初めまして！まず1つだけ教えてください。どんな業種ですか？\nお答えに合わせて、すぐ使えるFAQのたたき台をご提案します。",
+        chips: INDUSTRY_CHIPS,
+      };
+    case "knowledge_published":
+      // オンボ 是正A-2: 業種は答えたが下書きが1件も無い(全INSERT失敗、または
+      // 「あとで」を選んで抜けた等)場合は「下書きを見る」を出しても空振りになる。
+      // 下書きの有無で「公開を促す」か「たたき台作成に戻す」かを分ける。
+      if (!stage.hasDraftFaq) {
+        return {
+          text: "FAQのたたき台をまだお作りしていません。業種を教えていただければ、すぐ使えるたたき台をご提案します。",
+          chips: INDUSTRY_CHIPS,
+        };
+      }
+      return {
+        text: "業種のFAQたたき台は下書きとして登録済みです。内容をご確認のうえ、よろしければ公開しましょう。",
+        chips: [{ label: "下書きを見る", action: "__real:下書きのFAQを見せてください", tone: "ghost" }],
+      };
+    case "widget_installed":
+      return {
+        text: "FAQの準備ができました。次はウィジェットをサイトに設置しましょう。埋め込みコードをお渡しします。",
+        chips: [{ label: "埋め込みコードを見る", action: "__real:埋め込みコードを教えてください", tone: "ghost" }],
+      };
+    case "first_conversation":
+      return {
+        text: "設置は完了しています。お客様からの最初のご質問をお待ちしています。準備は万端です！",
+      };
+    case null:
+      return null;
   }
-  if (!stage.knowledgePublished) {
-    return {
-      text: "業種のFAQたたき台は下書きとして登録済みです。内容をご確認のうえ、よろしければ公開しましょう。",
-      chips: [{ label: "下書きを見る", action: "__real:下書きのFAQを見せてください", tone: "ghost" }],
-    };
-  }
-  if (!stage.widgetInstalled) {
-    return {
-      text: "FAQの準備ができました。次はウィジェットをサイトに設置しましょう。埋め込みコードをお渡しします。",
-      chips: [{ label: "埋め込みコードを見る", action: "__real:埋め込みコードを教えてください", tone: "ghost" }],
-    };
-  }
-  if (!stage.firstConversation) {
-    return {
-      text: "設置は完了しています。お客様からの最初のご質問をお待ちしています。準備は万端です！",
-    };
-  }
-  return null;
 }
 
 // ─── 実APIのツール結果 → 見た目の良いカードへの変換 ────────────────────────────
@@ -534,7 +541,7 @@ export default function CopilotPreviewPage() {
   // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
   // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
   // tenantIdがサーバー側で使われるため、previewMode=falseのままで問題ない。
-  const { user, isSuperAdmin, previewMode, previewTenantId, enterPreview, logout } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, enterPreview, logout, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   // super_adminがプレビューに入っていない場合、テナントが特定できないため
   // ほぼ全てのツールが「テナントが特定できません」になり会話が行き止まりになる。
@@ -788,6 +795,11 @@ export default function CopilotPreviewPage() {
     const industryTemplatePendingConfirm = data.actions?.some(
       (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
     );
+    // オンボ 是正B-1: publish_faq_draftsだけ確認チップが無く、下書き公開の動線が
+    // 自由入力頼みになっていた(request_sai_task等の既存パターンに揃える)。
+    const publishDraftsPendingConfirm = data.actions?.some(
+      (a) => a.tool === "publish_faq_drafts" && a.result.includes("よろしければ公開しますか"),
+    );
     // 成果(コンバージョン)記録がconfirmed待ちでブロックされた場合も同様
     const outcomePendingConfirm = data.actions?.some(
       (a) => a.tool === "record_session_outcome" && a.result.includes(CONFIRM_REQUIRED_MARKER),
@@ -835,6 +847,11 @@ export default function CopilotPreviewPage() {
       : industryTemplatePendingConfirm
       ? [
           { label: "登録して", action: "__real:登録してください", tone: "primary" },
+          { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ]
+      : publishDraftsPendingConfirm
+      ? [
+          { label: "公開する", action: "__real:はい、公開してください", tone: "primary" },
           { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
         ]
       : outcomePendingConfirm
@@ -932,6 +949,23 @@ export default function CopilotPreviewPage() {
       return;
     }
 
+    // P6-1: 新規テナントが指示ルールの存在に気づけるよう、4段階のオンボーディングが
+    // 全て完了した直後に一度だけ紹介する。backendのonboardingStage.ts(単一の情報源)は
+    // 変更せず、admin-ui内のブラウザ単位フラグ(tuningRuleIntro.ts)だけで
+    // 「1回きり」を保証する軽量な接続(既存テナント向けの移行導線は別途作らない — 4段階が
+    // 全て真になるのは実質的にこのオンボーディングフローを新規に通過したテナントのみ)。
+    if (stage && scopedTenantId && !hasShownTuningRuleIntro(scopedTenantId)) {
+      markTuningRuleIntroShown(scopedTenantId);
+      push(say(
+        "指示ルールも使えます。お客様への受け答えを1つずつAIチャットボットに教えられる機能です。最初のルールを作ってみますか？",
+        [
+          { label: "🎛️ 作ってみる", action: "__real:指示ルールを初めて作ります。何をどう伝えればいいか教えてください", tone: "primary" },
+          { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ],
+      ));
+      return;
+    }
+
     push({ id: nextId(), role: "ai", text: opts.loadingText });
     await sendReal(BOOTSTRAP_PROMPT, { silent: true, force: opts.force });
   };
@@ -953,6 +987,13 @@ export default function CopilotPreviewPage() {
     // 「テナントが特定できません」で埋まるだけのため）。選択してpreviewModeに
     // 入った時点でこのeffectが再評価され、通常どおりブリーフィングが走る。
     if (needsTenantSelection) return;
+    // P6-1で発見(既存の潜在バグ): /copilot-previewはRequireAuth外の隔離ルートのため、
+    // useAuth()のセッション確認(非同期)が終わる前に user=null のままこのeffectが
+    // 走ってしまうことがある。user未確定のままだとscopedTenantIdが空になり、
+    // オンボーディング段階(stage)判定そのものが飛ばされて通常の週次ブリーフィングに
+    // フォールバックしていた(既存の4段階次の一手が出ないことがある、同一の原因)。
+    // needsTenantSelectionと同じ理由でauth確認が終わるまで待つ。
+    if (authLoading) return;
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
@@ -971,7 +1012,7 @@ export default function CopilotPreviewPage() {
       loadingText: "ログイン、お疲れさまです。今週の実データを確認しています…",
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsTenantSelection]);
+  }, [needsTenantSelection, authLoading]);
 
   // super_adminがプレビュー中に別テナントへenterPreviewする経路(AppSwitcher/テナント詳細の
   // 「クライアントビューで見る」等)を検知し、会話を初期化して新テナントの週次ブリーフィングを
@@ -1301,8 +1342,15 @@ export default function CopilotPreviewPage() {
       background: "simple",
     });
 
+    // previewMode(super_adminのクライアントビュー)中は操作対象テナントを
+    // ?tenant= で明示する。付けないとバックエンドが自身の(空の)テナントで
+    // 課金・保存してしまう(uploadUrl と同じ既存パターン、#P0-2)。
+    const generateUrl = isSuperAdmin && scopedTenantId
+      ? `${API_BASE}/v1/admin/avatar/fal/generate?tenant=${encodeURIComponent(scopedTenantId)}`
+      : `${API_BASE}/v1/admin/avatar/fal/generate`;
+
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/fal/generate`, {
+      const res = await authFetch(generateUrl, {
         method: "POST",
         body: JSON.stringify({ prompt, numImages: 4 }),
       });
@@ -1368,8 +1416,14 @@ export default function CopilotPreviewPage() {
     const boundedDescription = description.slice(0, 300);
     push({ id: cardId, role: "ai", card: { kind: "avatarVoiceCandidates", configId, description: boundedDescription, status: "matching" } });
 
+    // previewMode中は操作対象テナントを ?tenant= で明示する(generateAvatarCandidates
+    // と同じ理由、#P0-2)。
+    const matchVoiceUrl = isSuperAdmin && scopedTenantId
+      ? `${API_BASE}/v1/admin/avatar/match-voice?tenant=${encodeURIComponent(scopedTenantId)}`
+      : `${API_BASE}/v1/admin/avatar/match-voice`;
+
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/match-voice`, {
+      const res = await authFetch(matchVoiceUrl, {
         method: "POST",
         body: JSON.stringify({ description: boundedDescription }),
       });
@@ -2111,6 +2165,26 @@ function CardView({
         </CardShell>
       );
     case "rulesList":
+      // P6-1: 新規テナントが最初にこのカードを開いた時、0件をそのまま出すと
+      // 「技術的な空表示」になり何をすればいいか分からない。何ができるか(具体例)と
+      // 最初の一手(チップ)を添える。
+      if (card.totalCount === 0) {
+        return (
+          <CardShell hd={<><span>🎛️</span>指示ルールはまだありません</>}>
+            <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+              指示ルールを使うと、「保証について聞かれたら2年とお伝えする」のように、AIチャットボットの受け答えを1つずつ細かく調整できます。
+            </div>
+            {onSendReal && (
+              <button
+                onClick={() => onSendReal("__real:指示ルールを初めて作ります。何をどう伝えればいいか教えてください")}
+                style={{ alignSelf: "flex-start", fontSize: 13.5, fontWeight: 700, padding: "9px 16px", borderRadius: 10, cursor: "pointer", border: "none", background: AGENT, color: "#fff", minHeight: 44 }}
+              >
+                🎛️ 最初のルールを作ってみる
+              </button>
+            )}
+          </CardShell>
+        );
+      }
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
           {card.rules.map((r) => {
@@ -2149,6 +2223,27 @@ function CardView({
                     {r.evidence.failedPrinciples && r.evidence.failedPrinciples.length > 0 && (
                       <div>うまくいかなかった対応: {r.evidence.failedPrinciples.join("、")}</div>
                     )}
+                  </div>
+                )}
+                {/* D5: 旧UIの3段階(低/普通/高)と同じ語彙でチャットからも優先度を変えられるようにする。
+                    却下済みのAI提案は編集の意味が無いため出さない。 */}
+                {onSendReal && !isRejected && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {(["low", "normal", "high"] as const)
+                      .filter((t) => t !== priorityToTier(r.priority))
+                      .map((t) => (
+                        <button
+                          key={t}
+                          onClick={() =>
+                            onSendReal(
+                              `__real:指示ルール（ID: ${r.id}、「${r.triggerPattern}」）の優先度を「${TIER_LABEL[t]}」にしてください`,
+                            )
+                          }
+                          style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 12px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                        >
+                          優先度を{TIER_LABEL[t]}にする
+                        </button>
+                      ))}
                   </div>
                 )}
                 {isPendingApproval && onSendReal && (
@@ -2243,7 +2338,7 @@ function CardView({
               <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
                 {s.startedAt.slice(0, 10)} ・ {s.messageCount}件
                 {s.outcome && (
-                  <span style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 600, background: "rgba(34,197,94,0.15)", color: "#16a34a" }}>
+                  <span style={{ marginLeft: 8, padding: "1px 8px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", color: "#16a34a" }}>
                     {s.outcome}
                   </span>
                 )}

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL } from './config';
 
 // 回帰検知用: super_admin の「クライアントビューで見る」プレビュー中に previewTenantId が
 // 正しく使われず、テナントスコープが壊れる/画面が空白になる不具合の恒久テスト群。
@@ -17,7 +18,7 @@ import { test, expect } from '@playwright/test';
 // 消えるため、各ページへは SPA 内リンククリックで遷移する（page.goto は使わない）。
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
-const ADMIN = 'https://admin.r2c.biz';
+const ADMIN = ADMIN_BASE_URL;
 const SA_AUTH = 'tests/e2e/.auth/superadmin.json';
 const PREVIEW_TENANT = 'carnation';
 const PREVIEW_TENANT_2 = 'lp-demo';
@@ -179,5 +180,90 @@ test.describe('Preview scope leak (known bug) — escalations が preview テナ
     await page.waitForTimeout(1500);
     const body = (await page.textContent('body')) ?? '';
     expect(body).not.toContain('テナントが特定できません');
+  });
+
+  // C-LEAK-5: /copilot-preview の画像生成(fal/generate)・声検索(match-voice)は
+  // エージェントツール経由でなくチャットUIから直接fetchするため、C-LEAK-4の
+  // targetTenantId自動付与の対象外(#P0-2で発見・是正)。previewMode中に
+  // ?tenant=<プレビュー対象テナント> が付かないと、fal.ai/Fish Audioの実費用が
+  // 操作対象テナントではなくsuper_admin自身に誤課金される。
+  // agent/chatは実LLMのツール選択に依存させると、carnationの実際のアバター
+  // 保有状況次第で見本提案が出ない(既に採用済み等)フローに揺れうるため、
+  // qa-copilot-preview.spec.ts の CP-B-3 と同じ理由でモックし決定論的にする。
+  // fal/generate・match-voiceも同じ理由(実課金)でモックし、送信URLだけを検証する。
+  test('C-LEAK-5: carnation プレビュー中、fal/generate・match-voiceのURLに?tenant=が付与される', async ({
+    page,
+  }) => {
+    let chatCalls = 0;
+    await page.route('**/v1/admin/agent/chat', async (route) => {
+      chatCalls += 1;
+      if (chatCalls === 1) {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: '今週も順調です。', actions: [] }) });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          reply: '採用しました。',
+          actions: [{
+            tool: 'adopt_avatar_preset',
+            result: 'アバター「Haruka」を採用しました。まだ公開はされていません。',
+            card: { kind: 'avatar_adopted', configId: 'cfg-leak5-1', name: 'Haruka', imageUrl: null, description: 'とても丁寧な性格です。' },
+          }],
+        }),
+      });
+    });
+
+    let generateUrl: string | null = null;
+    let matchVoiceUrl: string | null = null;
+    await page.route('**/v1/admin/avatar/fal/generate*', (route) => {
+      generateUrl = route.request().url();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ images: ['https://img.example/1.png'] }),
+      });
+    });
+    await page.route('**/v1/admin/avatar/match-voice*', (route) => {
+      matchVoiceUrl = route.request().url();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ recommendations: [{ id: 'voice-e2e-1', title: 'Haruka Voice', description: '明るい声', score: 0.9 }] }),
+      });
+    });
+
+    // 1. テナント詳細を開き、プレビュー投入
+    await page.goto(`${ADMIN}/admin/tenants/${PREVIEW_TENANT}`, { waitUntil: 'domcontentloaded' });
+    const previewBtn = page.getByRole('button', { name: /クライアントビューで見る/ });
+    await previewBtn.waitFor({ timeout: 15000 });
+    await previewBtn.click();
+    await expect(page.getByText(/プレビューモード|元に戻す/).first()).toBeVisible({ timeout: 10000 });
+
+    // 2. SPA内リンククリックでチャットへ(C-LEAK-4と同じ理由でpage.gotoは使わない)
+    await page.getByText('AIチャットに戻る').first().click();
+    await page.waitForURL((url) => url.pathname === '/copilot-preview', { timeout: 15000 });
+    await page.waitForResponse((r) => r.url().includes('/v1/admin/agent/chat') && r.request().method() === 'POST', { timeout: 20000 });
+
+    // 3. アバターを採用済みの状態にする(agent/chatはモック済みなので実LLMの揺れなし)
+    const composer = page.getByPlaceholder(/指示ルール/);
+    const send = page.getByLabel('送信');
+    await composer.fill('採用してください');
+    await send.click();
+    const generateBtn = page.getByRole('button', { name: '画像を新しく生成する' }).first();
+    await generateBtn.waitFor({ timeout: 15000 });
+
+    // 4. 画像生成・声探しボタンをクリックしてモックへのリクエストURLを捕捉
+    await generateBtn.click();
+    await page.waitForTimeout(1000);
+    const voiceBtn = page.getByRole('button', { name: '声を探す' }).first();
+    await voiceBtn.waitFor({ timeout: 10000 });
+    await voiceBtn.click();
+    await page.waitForTimeout(1000);
+
+    test.info().annotations.push({ type: 'fal-generate-url', description: String(generateUrl) });
+    test.info().annotations.push({ type: 'match-voice-url', description: String(matchVoiceUrl) });
+    expect(generateUrl).toContain(`tenant=${PREVIEW_TENANT}`);
+    expect(matchVoiceUrl).toContain(`tenant=${PREVIEW_TENANT}`);
   });
 });

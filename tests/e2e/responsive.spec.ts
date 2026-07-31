@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ADMIN_BASE_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 
@@ -10,7 +11,7 @@ test.describe('Responsive — 390px Mobile Viewport', () => {
   });
 
   test('admin.r2c.biz renders without horizontal overflow at 390px', async ({ page }) => {
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
     await page.waitForLoadState('domcontentloaded');
 
     // ページ幅が viewport 幅を超えていないこと（横スクロールなし）
@@ -19,7 +20,7 @@ test.describe('Responsive — 390px Mobile Viewport', () => {
   });
 
   test('admin.r2c.biz critical elements visible at 390px', async ({ page }) => {
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
     await page.waitForLoadState('domcontentloaded');
 
     // <main>, <nav>, <header> のいずれかが存在し、画面内に収まっていること
@@ -45,7 +46,7 @@ test.describe('Responsive — 390px Mobile Viewport', () => {
   });
 
   test('touch-target size: interactive elements at 390px (advisory)', async ({ page, browserName }) => {
-    await page.goto('https://admin.r2c.biz');
+    await page.goto(ADMIN_BASE_URL);
     await page.waitForLoadState('domcontentloaded');
 
     // ボタンが存在する場合、高さを計測してアノテーションとして記録

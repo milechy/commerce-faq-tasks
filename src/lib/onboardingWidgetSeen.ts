@@ -18,8 +18,11 @@ import { logger } from "./logger";
 
 export async function recordWidgetSeenOnce(db: Pool, tenantId: string): Promise<void> {
   try {
+    // オンボ 是正D-1: is_active 条件が無く、停止中テナントのAPIキーでもウィジェット
+    // 設置検知が立ってしまっていた(呼び出し元 src/index.ts では is_active チェックより
+    // 前にこの関数を呼ぶため、ここ自体に条件を持たせる必要がある)。
     await db.query(
-      "UPDATE tenants SET onboarding_widget_seen_at = NOW() WHERE id = $1 AND onboarding_widget_seen_at IS NULL",
+      "UPDATE tenants SET onboarding_widget_seen_at = NOW() WHERE id = $1 AND onboarding_widget_seen_at IS NULL AND is_active = true",
       [tenantId],
     );
   } catch (err) {

@@ -4,6 +4,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   roleAuthMiddleware,
   requireRole,
+  resolveEffectiveTenantId,
   type AuthenticatedUser,
 } from "./roleAuth";
 
@@ -264,6 +265,150 @@ describe("requireRole", () => {
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(next).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveEffectiveTenantId
+// ---------------------------------------------------------------------------
+// アバター生成系4ルート(fal/generate, generate-image, match-voice,
+// generate-prompt)が個別に app_metadata.tenant_id のみを見ており、
+// super_adminのpreviewMode中に ?tenant= を無視して空テナントで課金・
+// ストレージ書き込みしていた欠陥の是正で導入。routes.ts:647 の既存パターンを
+// 共有ヘルパーとして切り出したもの。
+describe("resolveEffectiveTenantId", () => {
+  it("super_adminは?tenant=クエリで操作対象テナントを上書きできる", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: { tenant: "tenant-b" },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-b");
+  });
+
+  it("super_adminが?tenant=を付けなければ従来通り空文字のまま(400ガードは別レイヤーの責務)", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: {},
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("");
+  });
+
+  it("[越権防止] client_adminが?tenant=を付けても無視され、JWTの自テナントが使われる", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "client_admin", tenant_id: "tenant-a" } },
+      query: { tenant: "tenant-b" },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-a");
+  });
+
+  it("client_adminは?tenant=なしなら自テナントをそのまま使う", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "client_admin", tenant_id: "tenant-a" } },
+      query: {},
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-a");
+  });
+
+  it("supabaseUserが無ければ空文字を返す(anonymous)", () => {
+    const req = mockReq({ query: {} });
+    expect(resolveEffectiveTenantId(req)).toBe("");
+  });
+
+  // ── 境界値・異常系 ──────────────────────────────────────────────────────
+  // 返り値は trackUsage の請求先テナントと Supabase Storage のパス
+  // (`${tenantId}/${filename}`) の両方に直接入る。string 以外や空白だけの値が
+  // 素通りすると、請求先が実在しないテナントになる/バケットの意図しない場所へ
+  // 書かれる、という形で静かに壊れる。呼び出し側の `if (!tenantId)` ガードは
+  // 空文字しか弾けないため、ここで型と中身を確定させておく必要がある。
+
+  it("[クエリ汚染] ?tenant= を複数回指定されても配列を返さない(Expressは配列にする)", () => {
+    // `?tenant=a&tenant=b` を Express は ['a','b'] としてパースする。
+    // `as string` のキャストは実行時には何も保証しないため、素通りすると
+    // `${tenantId}/...` が "a,b/..." というパスになり、trackUsage の
+    // tenantId にも配列が入る。
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: { tenant: ["tenant-a", "tenant-b"] },
+    });
+    const result = resolveEffectiveTenantId(req);
+    expect(typeof result).toBe("string");
+    // 曖昧な指定は採用せず、テナント未指定として扱う(呼び出し側の400ガードに委ねる)
+    expect(result).toBe("");
+  });
+
+  it("[クエリ汚染] ?tenant[x]=y のようなオブジェクト指定も文字列として扱わない", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: { tenant: { x: "y" } },
+    });
+    const result = resolveEffectiveTenantId(req);
+    expect(typeof result).toBe("string");
+    expect(result).toBe("");
+  });
+
+  it("[空白のみ] ?tenant=%20%20 は未指定として扱う(バケット直下に空白ディレクトリを作らない)", () => {
+    // "   " は truthy なので、trimしないと呼び出し側の `if (!tenantId)` を
+    // すり抜けて `"   /fal-xxx.jpg"` というパスで実際に書き込まれてしまう。
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: { tenant: "   " },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("");
+  });
+
+  it("[空白混じり] 前後の空白は落として返す", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin" } },
+      query: { tenant: "  tenant-b  " },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-b");
+  });
+
+  it("[空白のみ] client_admin の JWT テナントが空白だけの場合も未指定として扱う", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "client_admin", tenant_id: "   " } },
+      query: {},
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("");
+  });
+
+  it("[優先順位] super_adminが自身のtenant_idを持っていても ?tenant= が優先される", () => {
+    // R2C運用者のJWTにtenant_idが入っているケース。previewMode中の操作対象は
+    // あくまで ?tenant= 側なので、JWT側に引きずられてはいけない。
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin", tenant_id: "r2c-internal" } },
+      query: { tenant: "tenant-b" },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-b");
+  });
+
+  it("[フォールバック] super_adminが?tenant=を空文字で送ったらJWTのtenant_idに落ちる", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "super_admin", tenant_id: "r2c-internal" } },
+      query: { tenant: "" },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("r2c-internal");
+  });
+
+  it("[越権防止] client_adminには配列汚染も効かず、常に自テナントを返す", () => {
+    const req = mockReq({
+      supabaseUser: { app_metadata: { role: "client_admin", tenant_id: "tenant-a" } },
+      query: { tenant: ["tenant-b", "tenant-c"] },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-a");
+  });
+
+  it("[攻撃防止] user_metadata.role='super_admin' では ?tenant= を効かせない", () => {
+    // user_metadata はクライアント制御可能。ここで super_admin と誤認すると
+    // 任意テナントへの課金付け替えが誰でもできてしまう。
+    const req = mockReq({
+      supabaseUser: {
+        app_metadata: { role: "client_admin", tenant_id: "tenant-a" },
+        user_metadata: { role: "super_admin" },
+      },
+      query: { tenant: "tenant-b" },
+    });
+    expect(resolveEffectiveTenantId(req)).toBe("tenant-a");
   });
 });
 

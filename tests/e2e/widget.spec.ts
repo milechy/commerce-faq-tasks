@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
+import { DEMO_INDEX_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 
@@ -10,7 +11,7 @@ test.describe('Chat Widget — Rendering', () => {
     const errors: string[] = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
-    const response = await gotoWithRetry(page, 'https://api.r2c.biz/carnation-demo/index.html');
+    const response = await gotoWithRetry(page, DEMO_INDEX_URL);
 
     // ページ自体は 200 で返る
     expect(response?.status()).toBe(200);
@@ -23,7 +24,7 @@ test.describe('Chat Widget — Rendering', () => {
   });
 
   test('widget.js script tag is present in demo page', async ({ page }) => {
-    await gotoWithRetry(page, 'https://api.r2c.biz/carnation-demo/index.html');
+    await gotoWithRetry(page, DEMO_INDEX_URL);
 
     // widget.js の <script> タグが埋め込まれていること
     const widgetScript = page.locator('script[src*="widget.js"]');
@@ -31,7 +32,7 @@ test.describe('Chat Widget — Rendering', () => {
   });
 
   test('widget container or chat button appears in DOM', async ({ page }) => {
-    await gotoWithRetry(page, 'https://api.r2c.biz/carnation-demo/index.html');
+    await gotoWithRetry(page, DEMO_INDEX_URL);
 
     // Shadow DOM ホスト要素またはウィジェットコンテナが存在すること
     // widget.js が生成する要素を確認（data-api-key 属性付き script の後に挿入される）
