@@ -202,11 +202,9 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
   // 実LLM/実課金/carnationの実データ書き換えに依存させない)。検証対象はUIの実配線であり、
   // モックは非破壊性を担保する手段そのものである。
   async function mockAvatarFlowUpToAdopted(page: any) {
-    let chatCalls = 0;
     const sentMessages: string[] = [];
     await page.route('**/v1/admin/agent/chat', async (route: any) => {
       const body = JSON.parse(route.request().postData() || '{}') as { message?: string };
-      chatCalls += 1;
       sentMessages.push(body.message ?? '');
       // Asana 1217080508665459: 起動時ブリーフィングは回数ではなく内容で判定する
       // (qa-copilot-preview.spec.ts CP-B-3と同じ理由)。
@@ -251,7 +249,6 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
       }),
     );
     return {
-      totalCalls: () => chatCalls,
       countMessage: (message: string) => sentMessages.filter((m) => m === message).length,
     };
   }
