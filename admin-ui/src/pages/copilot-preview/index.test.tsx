@@ -509,6 +509,151 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText(description)).toBeTruthy();
   });
 
+  it("chat_session_list カードは一覧を表示し、次の1件を選ぶチップを添える(短縮IDの手打ち不要)", async () => {
+    mockAgent({
+      reply: "直近の会話は1件です。",
+      actions: [
+        {
+          tool: "get_chat_sessions",
+          result: "会話セッション一覧（全1件中1件）:\n[sess-aaa] 2026-07-17 (4件) 「送料はいくらですか」",
+          card: {
+            kind: "chat_session_list",
+            total: 1,
+            sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+          },
+        },
+      ],
+    });
+
+    await send("最近の会話を見せて");
+
+    expect(await screen.findByText("送料はいくらですか")).toBeTruthy();
+    expect(screen.getByText(/全1件中1件/)).toBeTruthy();
+    // 短縮IDを手打ちせず、チップから次の1件を選べる
+    const chip = await screen.findByRole("button", { name: /07-17 送料はいくらですか/ });
+    expect(chip).toBeTruthy();
+  });
+
+  it("chat_session_list のチップを押すと、短縮IDを含む自然文が実送信される", async () => {
+    vi.mocked(authFetch).mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "1件見つかりました。",
+          actions: [
+            {
+              tool: "get_chat_sessions",
+              result: "会話セッション一覧（全1件中1件）:\n[sess-aaa] 2026-07-17 (4件) 「送料はいくらですか」",
+              card: {
+                kind: "chat_session_list",
+                total: 1,
+                sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+              },
+            },
+          ],
+        });
+      }
+      return mockOk({ reply: "会話の内容はこちらです。", actions: [] });
+    });
+
+    await send("最近の会話を見せて");
+    const chip = await screen.findByRole("button", { name: /07-17 送料はいくらですか/ });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("[sess-aaa]の会話を見せて")).toBeTruthy());
+  });
+
+  it("chat_session_messages カードは会話本文をロールラベル付きで表示する", async () => {
+    mockAgent({
+      reply: "会話内容はこちらです。",
+      actions: [
+        {
+          tool: "get_chat_session_messages",
+          result: "セッション[a1b2c3d4]の会話（全1件中1件）:\nお客様: 送料はいくらですか",
+          card: {
+            kind: "chat_session_messages",
+            shortId: "a1b2c3d4",
+            totalMessages: 1,
+            messages: [{ roleLabel: "お客様", content: "送料はいくらですか" }],
+          },
+        },
+      ],
+    });
+
+    await send("a1b2c3d4の会話を見せて");
+
+    expect(await screen.findByText("お客様")).toBeTruthy();
+    expect(screen.getByText("送料はいくらですか")).toBeTruthy();
+  });
+
+  it("conversation_evaluation カードは総合スコア・4軸・所見を表示する(旧UIと同一の閾値)", async () => {
+    mockAgent({
+      reply: "評価はこちらです。",
+      actions: [
+        {
+          tool: "get_conversation_evaluation",
+          result: "セッション[eeee1111]の対応品質評価: 総合85点\n心理対応力: 90 / 顧客対応力: 80 / 商談進行力: 70 / 禁止事項の遵守率: 100\n所見: 丁寧な対応でした",
+          card: {
+            kind: "conversation_evaluation",
+            shortId: "eeee1111",
+            overallScore: 85,
+            axes: [
+              { label: "心理対応力", score: 90 },
+              { label: "顧客対応力", score: 80 },
+              { label: "商談進行力", score: 70 },
+              { label: "禁止事項の遵守率", score: 100 },
+            ],
+            notes: "丁寧な対応でした",
+          },
+        },
+      ],
+    });
+
+    await send("eeee1111の対応品質を教えて");
+
+    expect(await screen.findByText(/総合85点/)).toBeTruthy();
+    expect(screen.getByText(/心理対応力: 90/)).toBeTruthy();
+    expect(screen.getByText(/禁止事項の遵守率: 100/)).toBeTruthy();
+    expect(screen.getByText("丁寧な対応でした")).toBeTruthy();
+  });
+
+  it("conversation_evaluation カードは未測定(null)の軸を「未測定」と表示する(0点と混同しない)", async () => {
+    mockAgent({
+      reply: "評価はこちらです。",
+      actions: [
+        {
+          tool: "get_conversation_evaluation",
+          result: "セッション[eeee1111]の対応品質評価: 総合60点\n心理対応力: 未測定 / 顧客対応力: 60 / 商談進行力: 未測定 / 禁止事項の遵守率: 100",
+          card: {
+            kind: "conversation_evaluation",
+            shortId: "eeee1111",
+            overallScore: 60,
+            axes: [
+              { label: "心理対応力", score: null },
+              { label: "顧客対応力", score: 60 },
+              { label: "商談進行力", score: null },
+              { label: "禁止事項の遵守率", score: 100 },
+            ],
+            notes: null,
+          },
+        },
+      ],
+    });
+
+    await send("eeee1111の対応品質を教えて");
+
+    expect(await screen.findByText(/心理対応力: 未測定/)).toBeTruthy();
+    expect(screen.getByText(/商談進行力: 未測定/)).toBeTruthy();
+  });
+
   it("weekly_summary カードの数値をそのまま描画し、未回答質問・承認待ちルールがあれば行動チップを出す", async () => {
     mockAgent({
       reply: "今週も好調です。",

@@ -750,11 +750,32 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_chat_sessions',
       description:
-        '最近の会話セッション一覧（開始日時・メッセージ数・最初の質問プレビュー）を取得する読み取り専用ツール。会話履歴の概要を確認したい時に使う。',
+        '最近の会話セッション一覧（開始日時・メッセージ数・最初の質問プレビュー）を取得する読み取り専用ツール。会話履歴の概要を確認したい時に使う。' +
+        '期間・キーワード検索・評価スコア帯・並び順・ページ送りで絞り込める。' +
+        '「最近の会話を点検して」のような品質確認には period や sentiment=negative を、' +
+        '「〇〇についての会話を探して」のような照会には search を使うこと。',
       parameters: {
         type: 'object',
         properties: {
           limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
+          offset: { type: 'number', description: '取得開始位置（任意、省略時0）。前回の続きを見るときに limit ずつ進める' },
+          period: {
+            type: 'string',
+            enum: ['7', '30', '90', 'all'],
+            description: '対象期間（任意、省略時は全期間）。7=直近7日、30=直近30日、90=直近90日、all=全期間',
+          },
+          search: { type: 'string', description: 'お客様の最初の質問文に対する部分一致検索キーワード（任意）' },
+          sentiment: {
+            type: 'string',
+            enum: ['positive', 'negative', 'neutral'],
+            description: 'AI品質評価スコア帯での絞り込み（任意）。negative=要改善(60点未満)、positive=良好(70点以上)、neutral=その中間',
+          },
+          sort_by: {
+            type: 'string',
+            enum: ['last_message_at', 'message_count', 'score'],
+            description: '並び替えの基準（任意、省略時は最終メッセージ日時）',
+          },
+          sort_order: { type: 'string', enum: ['asc', 'desc'], description: '並び順（任意、省略時は降順）' },
         },
         required: [],
       },
@@ -776,6 +797,27 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
           },
           limit: { type: 'number', description: '取得するメッセージ数の上限（任意、省略時20、最大50。新しい方から取得）' },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_conversation_evaluation',
+      description:
+        '指定した会話セッションのAI品質評価（Judge）を取得する読み取り専用ツール。総合スコア・4軸' +
+        '（心理対応力・顧客対応力・商談進行力・禁止事項の遵守率）・所見を返す。get_chat_sessions が' +
+        '返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        '「この会話の対応品質はどうだった？」「評価を見せて」と聞かれた時に使う。未評価の会話もある。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
         },
         required: ['session_id'],
       },

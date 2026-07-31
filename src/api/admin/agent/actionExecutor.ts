@@ -27,7 +27,8 @@ import {
   recordPlanLimitMention,
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
-import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation } from '../chat-history/chatHistoryRepository';
+import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation, normalizeSessionListParams } from '../chat-history/chatHistoryRepository';
+import { getEvaluationsBySession } from '../evaluations/evaluationsRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
@@ -250,22 +251,49 @@ export type WeeklySummaryCardPayload = {
   gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
 };
 
+// 会話一覧カード。短縮ID(shortId)をそのまま次のツール呼び出しに使える形で持たせ、
+// フロント側が短縮IDの手打ちなしで次の1件を選べるようにする(チップの action に使う)。
+export type ChatSessionListCardPayload = {
+  kind: 'chat_session_list';
+  total: number;
+  sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+};
+
+// 会話本文カード。role のラベル化はサーバ側の CHAT_ROLE_LABELS を単一の情報源とし、
+// フロント側に同じ辞書を二重に持たせない(値が面によって違って見える事故を避ける)。
+export type ChatSessionMessagesCardPayload = {
+  kind: 'chat_session_messages';
+  shortId: string;
+  totalMessages: number;
+  messages: Array<{ roleLabel: string; content: string }>;
+};
+
+// AI品質評価(Judge)カード。4軸ラベルは旧UI(admin-ui の JudgeEvaluationSection.tsx)と
+// 同一の語彙をここで確定させ、フロント側に同じ辞書を二重に持たせない。
+export type ConversationEvaluationCardPayload = {
+  kind: 'conversation_evaluation';
+  shortId: string;
+  overallScore: number;
+  axes: Array<{ label: string; score: number | null }>;
+  notes: string | null;
+};
+
+export type ActionCardPayload =
+  | LegacyLinkCardPayload
+  | AvatarPresetCardPayload
+  | AvatarAdoptedCardPayload
+  | TuningRulesListCardPayload
+  | WeeklySummaryCardPayload
+  | ChatSessionListCardPayload
+  | ChatSessionMessagesCardPayload
+  | ConversationEvaluationCardPayload;
+
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
 // （text 側の自然文は既存の正規表現パーサのフォールバック契約として残す。
 // また text は LLM へ tool 結果として差し戻され、応答文の材料になるため、
 // 件数に依存しない要約であることが必須）。
-export type ActionResult =
-  | string
-  | {
-      text: string;
-      card?:
-        | LegacyLinkCardPayload
-        | AvatarPresetCardPayload
-        | AvatarAdoptedCardPayload
-        | TuningRulesListCardPayload
-        | WeeklySummaryCardPayload;
-    };
+export type ActionResult = string | { text: string; card?: ActionCardPayload };
 
 // ---------------------------------------------------------------------------
 // メインエントリ
@@ -279,8 +307,17 @@ export async function executeToolCall(
   sessionId: string,
   isSuperAdmin: boolean = false
 ): Promise<ActionResult> {
-  // 結果は500字以内日本語
+  // 結果は500字以内日本語(書き込み系はこちらのまま)
   const truncate = (s: string) => s.slice(0, 500);
+  // 閲覧系(一覧・本文)の出力予算。書き込み系の500字とは別枠にする — 一覧・本文は
+  // 量そのものが本質的な機能であり、500字では「全N件中M件」の見出しを付けても
+  // 実際には数件しか読めないまま黙って切れていた。打ち切った場合は見出し(先頭)は
+  // そのまま残り、末尾に打ち切りが起きたこと自体が分かる注記を必ず付ける(黙って切らない)。
+  const READ_RESULT_MAX_CHARS = 4000;
+  const truncateRead = (s: string): string => {
+    if (s.length <= READ_RESULT_MAX_CHARS) return s;
+    return s.slice(0, READ_RESULT_MAX_CHARS) + '\n…(文字数上限のため以降省略。絞り込み条件やページを変えて再度お尋ねください)';
+  };
 
   switch (toolName) {
     // -----------------------------------------------------------------------
@@ -1846,17 +1883,48 @@ export async function executeToolCall(
       if (!tenantId) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
+      // limit はこのツール固有の既定値(10)・上限(20)を維持する(normalizeSessionListParams
+      // 側の全ツール共通の既定値20とは意図的に異なる。会話コンテキストに載る量を絞るため)。
+      // NaN等の非数値フォールバックは clampToolLimit に一本化済み。
       const limit = clampToolLimit(args['limit'], 10, 20);
+      // sort_by/sort_order/period/sentiment/offset は LLM 由来の未検証な値なので、
+      // getSessions() 自身も内部で再検証するが、ここでも allowlist ヘルパを必ず通す
+      // (src/api/admin/CLAUDE.md の SQL 検証境界の規約)。args をそのまま渡さない。
+      const normalized = normalizeSessionListParams(args);
+      const search = typeof args['search'] === 'string' ? args['search'] : undefined;
 
       try {
-        const { sessions, total } = await getSessions({ tenantId, limit });
+        const { sessions, total } = await getSessions({
+          tenantId,
+          limit,
+          offset: normalized.offset,
+          sort_by: normalized.sort_by,
+          sort_order: normalized.sort_order,
+          period: normalized.period,
+          sentiment: normalized.sentiment,
+          search,
+        });
         if (sessions.length === 0) {
           return truncate('会話セッションはありません');
         }
         const lines = sessions.map(
           (s) => `[${s.session_id.slice(0, 8)}] ${s.started_at.slice(0, 10)} (${s.message_count}件) 「${s.first_message_preview}」`,
         );
-        return truncate(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n'));
+        return {
+          text: truncateRead(`会話セッション一覧（全${total}件中${sessions.length}件）:\n` + lines.join('\n')),
+          // card は次の1件を選ぶ操作のため。フロントは card.sessions[].shortId をそのまま
+          // 次の get_chat_session_messages 呼び出しに使い、短縮IDの手打ちを不要にする。
+          card: {
+            kind: 'chat_session_list',
+            total,
+            sessions: sessions.map((s) => ({
+              shortId: s.session_id.slice(0, 8),
+              startedAt: s.started_at,
+              messageCount: s.message_count,
+              preview: s.first_message_preview,
+            })),
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_sessions failed', err);
         return truncate('会話セッション一覧の取得に失敗しました');
@@ -1884,13 +1952,74 @@ export async function executeToolCall(
 
         const recent = messages.slice(-limit);
         const lines = recent.map((m) => `${CHAT_ROLE_LABELS[m.role] ?? m.role}: ${m.content}`);
-        return truncate(
-          `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
-          lines.join('\n'),
-        );
+        return {
+          text: truncateRead(
+            `セッション[${resolved.session.session_id.slice(0, 8)}]の会話（全${messages.length}件中${recent.length}件）:\n` +
+            lines.join('\n'),
+          ),
+          card: {
+            kind: 'chat_session_messages',
+            shortId: resolved.session.session_id.slice(0, 8),
+            totalMessages: messages.length,
+            // role のラベル化はここ(CHAT_ROLE_LABELS)を単一の情報源とする。
+            // フロント側に同じ辞書を二重に持たせない。
+            messages: recent.map((m) => ({ roleLabel: CHAT_ROLE_LABELS[m.role] ?? m.role, content: m.content })),
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_session_messages failed', err);
         return truncate('会話内容の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_conversation_evaluation': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+
+        // conversation_evaluations.session_id は chat_sessions の公開文字列キー
+        // (DBの内部UUIDではない)。resolveSessionByShortId が返す session_id をそのまま使う。
+        const evaluations = await getEvaluationsBySession(resolved.session.session_id, tenantId);
+        if (evaluations.length === 0) {
+          // 未評価は0点や欠測として扱わず、明示する(閲覧側の判断材料を誤らせないため)。
+          return truncate(`セッション[${resolved.session.session_id.slice(0, 8)}]はまだ未評価です`);
+        }
+
+        const ev = evaluations[0]!;
+        // 4軸ラベルは旧UI(JudgeEvaluationSection.tsx)と同一の語彙を使う。
+        // 同じ会話が面によって違う評価に見えてはならない。
+        const axes: Array<{ label: string; score: number | null }> = [
+          { label: '心理対応力', score: ev.psychology_fit_score },
+          { label: '顧客対応力', score: ev.customer_reaction_score },
+          { label: '商談進行力', score: ev.stage_progress_score },
+          { label: '禁止事項の遵守率', score: ev.taboo_violation_score },
+        ];
+        const axesText = axes.map((a) => `${a.label}: ${a.score ?? '未測定'}`).join(' / ');
+        const shortId8 = resolved.session.session_id.slice(0, 8);
+        return {
+          text: truncate(
+            `セッション[${shortId8}]の対応品質評価: 総合${ev.overall_score}点\n${axesText}` +
+            (ev.notes ? `\n所見: ${ev.notes}` : ''),
+          ),
+          card: {
+            kind: 'conversation_evaluation',
+            shortId: shortId8,
+            overallScore: ev.overall_score,
+            axes,
+            notes: ev.notes,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_conversation_evaluation failed', err);
+        return truncate('評価データの取得に失敗しました');
       }
     }
 
