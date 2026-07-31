@@ -199,8 +199,16 @@ export async function resolveSessionByShortId(
   if (!shortId) {
     return { ok: false, message: 'セッションIDを指定してください' };
   }
+  // session_id は生成時から常に小文字（ウィジェット側の crypto.randomUUID() と
+  // 手動フォールバック(toString(16))、サーバ側の randomUUID() のいずれも小文字を返す）。
+  // 一方 Postgres の LIKE は大文字小文字を区別するため、ユーザーがコピペ時に
+  // 大文字化されたIDや、LLMが整形し直したIDを渡すと、実在するセッションが
+  // 「見つかりません」になり存在しないIDと区別が付かなかった。照合用だけ小文字に
+  // 正規化する（SQL を ILIKE に変えないのは、インデックスを効かせたままにするため）。
+  // 表示用の shortId は入力のまま残し、エラー文にはユーザーが打った文字列を返す。
+  //
   // LIKE のワイルドカードを無効化し、意図しない広域一致を防ぐ（Postgres の既定エスケープ文字は \）
-  const prefix = shortId.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const prefix = shortId.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
 
   const result = await db.query<{ id: string; session_id: string }>(
     `SELECT id, session_id FROM chat_sessions
