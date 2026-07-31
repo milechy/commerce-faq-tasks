@@ -914,6 +914,43 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].tool).toBe('suggest_tuning_rule');
       expect(res.body.actions[0].result).toContain('保証期間は2年とお伝えする');
     });
+
+    it('D4: トリガーが決まらない場合は「（常時適用）」を提案せず、聞き返す文言を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-tr-2',
+                  type: 'function',
+                  function: { name: 'suggest_tuning_rule', arguments: JSON.stringify({ free_text: 'なるべく丁寧にお願いできますか' }) },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      mockCallGroq8bSuggestFromText.mockResolvedValueOnce({
+        trigger_pattern: '',
+        instruction: '丁寧な言葉遣いで応対する',
+        priority: 5,
+        reason: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'なるべく丁寧にお願いできますか', sessionId: 'sess-030b' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).not.toContain('常時適用');
+      expect(res.body.actions[0].result).toContain('どんな質問をした時に使いたいですか');
+      expect(res.body.actions[0].result).not.toContain('save_tuning_rule を呼び出してください');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1007,6 +1044,42 @@ describe('POST /v1/admin/agent/chat', () => {
         }),
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+
+    it('D4: trigger_pattern が「（常時適用）」のまま渡された場合は保存せず聞き返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-sv-3',
+                  type: 'function',
+                  function: {
+                    name: 'save_tuning_rule',
+                    arguments: JSON.stringify({
+                      trigger_pattern: '（常時適用）',
+                      expected_behavior: '丁寧な言葉遣いで応対する',
+                      confirmed: true,
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('どんな時か教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'お願い', sessionId: 'sess-032b' });
+
+      expect(res.status).toBe(200);
+      expect(mockCreateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('どんな質問の時にこの振る舞いを使うか');
     });
   });
 
