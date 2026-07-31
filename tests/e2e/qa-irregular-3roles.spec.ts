@@ -165,6 +165,15 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
     const selectCount = await page.locator('select').count();
     expect(selectCount).toBe(0); // テナント横断セレクタが出ない＝越境ビュー無し
   });
+
+  // GID 1217040818410419(2026-07-31): 「書籍/PDFはR2C運用限定」の実装反映。
+  // client_adminには旧UIのPDFタブボタン自体が出ず、?tab=pdf直リンクもlistへフォールバックする。
+  test('B-IRR-4: client_adminは/admin/knowledge/:tenantId?tab=pdfへ直URL到達してもPDFタブに入れない', async ({ page }) => {
+    await gotoAdmin(page, `/admin/knowledge/${OWN_TENANT}?tab=pdf`);
+    test.info().annotations.push({ type: 'final-url', description: page.url() });
+    const pdfTabCount = await page.getByText('PDFアップロード', { exact: true }).count();
+    expect(pdfTabCount).toBe(0);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -227,5 +236,14 @@ test.describe('Irregular — Role C (super_admin cross-tenant & preview)', () =>
     await page.waitForTimeout(2000);
     expect(page.url()).toContain('/admin/escalations');
     expect(page.url()).not.toContain('/login');
+  });
+
+  // GID 1217040818410419(2026-07-31): super_admin(previewMode外)は「書籍/PDFはR2C運用限定」
+  // の対象そのものなので、旧UIのPDFタブは従来通り出ることを固定する(client_adminのB-IRR-4と対)。
+  test('C-IRR-4: super_adminは/admin/knowledge/global?tab=pdfでPDFタブに到達できる（弾かれない）', async ({ page }) => {
+    await page.goto(`${ADMIN}/admin/knowledge/global?tab=pdf`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(2000);
+    const pdfTabCount = await page.getByText('PDFアップロード', { exact: true }).count();
+    expect(pdfTabCount).toBeGreaterThan(0);
   });
 });

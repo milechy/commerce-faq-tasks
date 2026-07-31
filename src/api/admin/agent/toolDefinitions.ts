@@ -33,6 +33,7 @@ export const LEGACY_UI_FEATURES = [
   'chat_test',
   'avatar_wizard',
   'knowledge_pdf',
+  'knowledge_attribution',
 ] as const;
 
 export const ADMIN_AGENT_TOOLS: GroqTool[] = [
@@ -87,7 +88,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_faq_list',
-      description: 'テナントの FAQ 一覧を取得する（最大20件）',
+      description: 'テナントの FAQ 一覧を取得する（最大20件。登録されている総件数も併記されるため、表示件数が上限に達していても総数は正しく分かる）',
       parameters: {
         type: 'object',
         properties: {
@@ -285,6 +286,45 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'suggest_avatar_preset',
+      description:
+        'アバターをまだ持っていないユーザーに、既定の見本（見た目・性格が作り込まれた雛形）から' +
+        '1件を提案する読み取り専用ツール。この時点では何も作成しない。ユーザーが' +
+        '「アバターを作りたい」「初めて設定したい」等と言ったときに使う。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'adopt_avatar_preset',
+      description:
+        'suggest_avatar_preset が提案した見本を、自テナントのアバター設定として採用する。' +
+        '採用してもまだ公開されない（別途 activate_avatar が必要）。' +
+        'ユーザーの明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          preset_id: {
+            type: 'string',
+            description: 'suggest_avatar_preset が返した見本の ID（プリセットID）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['preset_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_embed_code',
       description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示）',
       parameters: {
@@ -364,7 +404,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_tuning_rules',
       description:
-        '現在の指示ルール（AIの振る舞いルール）の一覧を取得する読み取り専用ツール。suggest_tuning_rule/save_tuning_ruleで作成済みのものも含め、有効/無効の状態ごと全件を確認したい時に使う。',
+        '現在の指示ルール（AIの振る舞いルール）の一覧を取得する読み取り専用ツール。suggest_tuning_rule/save_tuning_ruleで作成済みのものに加え、AIが自動提案した未承認のルール（店主の承認なしには本番の応答に反映されない）も含む。一覧・承認判断の両方に使う。',
       parameters: {
         type: 'object',
         properties: {},
@@ -377,7 +417,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'update_tuning_rule',
       description:
-        '既存の指示ルールを編集する、または有効/無効を切り替える。編集する場合は trigger_pattern/expected_behavior を、有効/無効の切り替えのみの場合は is_active だけを指定する。必ず先に変更内容をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+        '既存の指示ルールを編集する、有効/無効を切り替える、またはAI提案ルールを承認/却下する。編集する場合は trigger_pattern/expected_behavior を、有効/無効の切り替えのみの場合は is_active だけを指定する。' +
+        'AI提案ルール（get_tuning_rulesの結果でsourceが"judge"のもの）を承認する場合は is_active=true と status="active" を両方指定し、却下する場合は is_active=false と status="rejected" を両方指定すること（is_active だけでは未承認と却下済みを区別できない）。通常のルールのON/OFF切替では status を指定しない。' +
+        '必ず先に変更内容（承認/却下の場合は根拠を含む）をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
       parameters: {
         type: 'object',
         properties: {
@@ -385,6 +427,11 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           trigger_pattern: { type: 'string', description: '新しいトリガー内容（変更する場合のみ指定）' },
           expected_behavior: { type: 'string', description: '新しい対応方針（変更する場合のみ指定）' },
           is_active: { type: 'boolean', description: '有効/無効の切り替え（変更する場合のみ指定）' },
+          status: {
+            type: 'string',
+            enum: ['active', 'rejected'],
+            description: 'AI提案ルールの承認("active")/却下("rejected")時のみ指定する。通常のルールのON/OFF切替では指定しない。',
+          },
           confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
         },
         required: ['id', 'confirmed'],
@@ -730,11 +777,32 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_chat_sessions',
       description:
-        '最近の会話セッション一覧（開始日時・メッセージ数・最初の質問プレビュー）を取得する読み取り専用ツール。会話履歴の概要を確認したい時に使う。',
+        '最近の会話セッション一覧（開始日時・メッセージ数・最初の質問プレビュー）を取得する読み取り専用ツール。会話履歴の概要を確認したい時に使う。' +
+        '期間・キーワード検索・評価スコア帯・並び順・ページ送りで絞り込める。' +
+        '「最近の会話を点検して」のような品質確認には period や sentiment=negative を、' +
+        '「〇〇についての会話を探して」のような照会には search を使うこと。',
       parameters: {
         type: 'object',
         properties: {
           limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
+          offset: { type: 'number', description: '取得開始位置（任意、省略時0）。前回の続きを見るときに limit ずつ進める' },
+          period: {
+            type: 'string',
+            enum: ['7', '30', '90', 'all'],
+            description: '対象期間（任意、省略時は全期間）。7=直近7日、30=直近30日、90=直近90日、all=全期間',
+          },
+          search: { type: 'string', description: 'お客様の最初の質問文に対する部分一致検索キーワード（任意）' },
+          sentiment: {
+            type: 'string',
+            enum: ['positive', 'negative', 'neutral'],
+            description: 'AI品質評価スコア帯での絞り込み（任意）。negative=要改善(60点未満)、positive=良好(70点以上)、neutral=その中間',
+          },
+          sort_by: {
+            type: 'string',
+            enum: ['last_message_at', 'message_count', 'score'],
+            description: '並び替えの基準（任意、省略時は最終メッセージ日時）',
+          },
+          sort_order: { type: 'string', enum: ['asc', 'desc'], description: '並び順（任意、省略時は降順）' },
         },
         required: [],
       },
@@ -756,6 +824,58 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
           },
           limit: { type: 'number', description: '取得するメッセージ数の上限（任意、省略時20、最大50。新しい方から取得）' },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_chat_session',
+      description:
+        '指定した会話セッションを完全に削除する書き込みツール。取り消せない操作のため、' +
+        'get_chat_sessions が返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        'reason には必ずユーザー自身が話した理由をそのまま使い、モデルが理由を創作しないこと' +
+        '（ユーザーがまだ理由を言っていない場合は、先に理由を尋ねること）。' +
+        '必ず先に「どの会話を、どんな理由で削除するか」をユーザーに提示し、' +
+        '明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+          reason: {
+            type: 'string',
+            description: '削除する理由（5〜500文字）。ユーザー自身の言葉をそのまま使うこと',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['session_id', 'reason'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_conversation_evaluation',
+      description:
+        '指定した会話セッションのAI品質評価（Judge）を取得する読み取り専用ツール。総合スコア・4軸' +
+        '（心理対応力・顧客対応力・商談進行力・禁止事項の遵守率）・所見を返す。get_chat_sessions が' +
+        '返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        '「この会話の対応品質はどうだった？」「評価を見せて」と聞かれた時に使う。未評価の会話もある。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
         },
         required: ['session_id'],
       },
@@ -825,6 +945,57 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           },
         },
         required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_session_outcome',
+      description:
+        '指定した会話セッションの成果（コンバージョン結果。例: 購入完了・予約完了・離脱）が' +
+        '記録済みかどうかを取得する読み取り専用ツール。get_chat_sessions が返した [xxxxxxxx] の' +
+        '短縮IDをそのまま session_id に渡せる。「この会話の成果は記録されている？」と聞かれた時に使う。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'record_session_outcome',
+      description:
+        '指定した会話セッションの成果（コンバージョン結果）を記録する書き込みツール。' +
+        'outcome はテナントごとに決められた選択肢（例: 購入完了・予約完了・問い合わせ送信・離脱・不明）の' +
+        'いずれかでなければならず、範囲外の値を渡すと有効な選択肢が案内される。get_chat_sessions が' +
+        '返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。永続コンテンツの変更のため、' +
+        '必ず先にどの会話にどの成果を記録するかをユーザーに提示し、同意を得たターンでのみ' +
+        'confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+          outcome: {
+            type: 'string',
+            description: '記録する成果。このテナントの成果選択肢のいずれか(不明な場合はまず get_session_outcome か会話一覧で確認すること)',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['session_id', 'outcome'],
       },
     },
   },

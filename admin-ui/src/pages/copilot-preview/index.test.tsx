@@ -481,6 +481,24 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText(description)).toBeTruthy();
   });
 
+  it("アバター見本の提案(suggest_avatar_preset)はcardの構造化データがそのまま描画される", async () => {
+    mockAgent({
+      reply: "見本をご提案しました。",
+      actions: [
+        {
+          tool: "suggest_avatar_preset",
+          result: "「Haruka」というアバターの見本があります。\nとても丁寧な性格です。\nプリセットID: preset-1\nこのまま採用しますか？",
+          card: { kind: "avatar_preset", presetId: "preset-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+        },
+      ],
+    });
+
+    await send("アバターを作りたい");
+
+    expect(await screen.findByText("Haruka")).toBeTruthy();
+    expect(screen.getByText("とても丁寧な性格です。")).toBeTruthy();
+  });
+
   it("card が無い既存ツールは、従来どおり自然文の正規表現パースでリンクカードになる", async () => {
     const description = "会話内容の確認とその会話セッションの削除はこちらの画面で行えます";
     mockAgent({
@@ -499,6 +517,186 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(link.getAttribute("href")).toBe("/admin/chat-history");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(screen.getByText(description)).toBeTruthy();
+  });
+
+  it("chat_session_list カードは一覧を表示し、次の1件を選ぶチップを添える(短縮IDの手打ち不要)", async () => {
+    mockAgent({
+      reply: "直近の会話は1件です。",
+      actions: [
+        {
+          tool: "get_chat_sessions",
+          result: "会話セッション一覧（全1件中1件）:\n[sess-aaa] 2026-07-17 (4件) 「送料はいくらですか」",
+          card: {
+            kind: "chat_session_list",
+            total: 1,
+            sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+          },
+        },
+      ],
+    });
+
+    await send("最近の会話を見せて");
+
+    expect(await screen.findByText("送料はいくらですか")).toBeTruthy();
+    expect(screen.getByText(/全1件中1件/)).toBeTruthy();
+    // 短縮IDを手打ちせず、チップから次の1件を選べる
+    const chip = await screen.findByRole("button", { name: /07-17 送料はいくらですか/ });
+    expect(chip).toBeTruthy();
+  });
+
+  it("chat_session_list のチップを押すと、短縮IDを含む自然文が実送信される", async () => {
+    vi.mocked(authFetch).mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "1件見つかりました。",
+          actions: [
+            {
+              tool: "get_chat_sessions",
+              result: "会話セッション一覧（全1件中1件）:\n[sess-aaa] 2026-07-17 (4件) 「送料はいくらですか」",
+              card: {
+                kind: "chat_session_list",
+                total: 1,
+                sessions: [{ shortId: "sess-aaa", startedAt: "2026-07-17T10:00:00Z", messageCount: 4, preview: "送料はいくらですか" }],
+              },
+            },
+          ],
+        });
+      }
+      return mockOk({ reply: "会話の内容はこちらです。", actions: [] });
+    });
+
+    await send("最近の会話を見せて");
+    const chip = await screen.findByRole("button", { name: /07-17 送料はいくらですか/ });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("[sess-aaa]の会話を見せて")).toBeTruthy());
+  });
+
+  it("chat_session_messages カードは会話本文をロールラベル付きで表示する", async () => {
+    mockAgent({
+      reply: "会話内容はこちらです。",
+      actions: [
+        {
+          tool: "get_chat_session_messages",
+          result: "セッション[a1b2c3d4]の会話（全1件中1件）:\nお客様: 送料はいくらですか",
+          card: {
+            kind: "chat_session_messages",
+            shortId: "a1b2c3d4",
+            totalMessages: 1,
+            messages: [{ roleLabel: "お客様", content: "送料はいくらですか" }],
+          },
+        },
+      ],
+    });
+
+    await send("a1b2c3d4の会話を見せて");
+
+    expect(await screen.findByText("お客様")).toBeTruthy();
+    expect(screen.getByText("送料はいくらですか")).toBeTruthy();
+  });
+
+  it("record_session_outcome が確認待ちのときは「記録して」チップを出し、押すと実送信する", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let outcomeCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      outcomeCalls += 1;
+      if (outcomeCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      if (outcomeCalls === 2) {
+        return mockOk({
+          reply: "確認をお願いします。",
+          actions: [
+            {
+              tool: "record_session_outcome",
+              result:
+                "セッション[oooo1111]の成果を「購入完了」として記録するには確認が必要です。ユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+            },
+          ],
+        });
+      }
+      return mockOk({ reply: "記録しました。", actions: [] });
+    });
+
+    await send("oooo1111の成果を購入完了で記録して");
+
+    const chip = await screen.findByRole("button", { name: "記録して" });
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("はい、お願いします")).toBeTruthy());
+  });
+
+  it("conversation_evaluation カードは総合スコア・4軸・所見を表示する(旧UIと同一の閾値)", async () => {
+    mockAgent({
+      reply: "評価はこちらです。",
+      actions: [
+        {
+          tool: "get_conversation_evaluation",
+          result: "セッション[eeee1111]の対応品質評価: 総合85点\n心理対応力: 90 / 顧客対応力: 80 / 商談進行力: 70 / 禁止事項の遵守率: 100\n所見: 丁寧な対応でした",
+          card: {
+            kind: "conversation_evaluation",
+            shortId: "eeee1111",
+            overallScore: 85,
+            axes: [
+              { label: "心理対応力", score: 90 },
+              { label: "顧客対応力", score: 80 },
+              { label: "商談進行力", score: 70 },
+              { label: "禁止事項の遵守率", score: 100 },
+            ],
+            notes: "丁寧な対応でした",
+          },
+        },
+      ],
+    });
+
+    await send("eeee1111の対応品質を教えて");
+
+    expect(await screen.findByText(/総合85点/)).toBeTruthy();
+    expect(screen.getByText(/心理対応力: 90/)).toBeTruthy();
+    expect(screen.getByText(/禁止事項の遵守率: 100/)).toBeTruthy();
+    expect(screen.getByText("丁寧な対応でした")).toBeTruthy();
+  });
+
+  it("conversation_evaluation カードは未測定(null)の軸を「未測定」と表示する(0点と混同しない)", async () => {
+    mockAgent({
+      reply: "評価はこちらです。",
+      actions: [
+        {
+          tool: "get_conversation_evaluation",
+          result: "セッション[eeee1111]の対応品質評価: 総合60点\n心理対応力: 未測定 / 顧客対応力: 60 / 商談進行力: 未測定 / 禁止事項の遵守率: 100",
+          card: {
+            kind: "conversation_evaluation",
+            shortId: "eeee1111",
+            overallScore: 60,
+            axes: [
+              { label: "心理対応力", score: null },
+              { label: "顧客対応力", score: 60 },
+              { label: "商談進行力", score: null },
+              { label: "禁止事項の遵守率", score: 100 },
+            ],
+            notes: null,
+          },
+        },
+      ],
+    });
+
+    await send("eeee1111の対応品質を教えて");
+
+    expect(await screen.findByText(/心理対応力: 未測定/)).toBeTruthy();
+    expect(screen.getByText(/商談進行力: 未測定/)).toBeTruthy();
   });
 
   it("weekly_summary カードの数値をそのまま描画し、未回答質問・承認待ちルールがあれば行動チップを出す", async () => {
@@ -564,6 +762,40 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByRole("button", { name: "確認する" })).toBeNull();
   });
 
+  // GID: 1ターンに suggest_faq(下書き提案の確認待ち)と get_weekly_briefing(未回答質問あり)が
+  // 同時に来た場合、優先されるべきは「保存して/やめておく」(確認が必要な保留中の書き込み)で、
+  // 週次まとめのチップではない。同時発生は稀だが、chips は現状 if/elseif の単一選択(排他)で
+  // 実装されているため、優先順位が実装の分岐順そのものに委ねられている。この境界を固定する。
+  it("suggest_faqの確認待ちと週次まとめの行動チップが同一ターンに同居した場合、確認待ちの保存/やめるが優先される", async () => {
+    mockAgent({
+      reply: "下書きと今週の状況をまとめました。",
+      actions: [
+        { tool: "suggest_faq", result: "質問: 送料はいくら？\n回答: 全国一律550円です。\n分類: 配送" },
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 10件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "2026-08-05T03:00:00.000Z",
+            sessions: { total: 10, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: 2,
+            gaps: { total: 5, top: [{ id: 1, question: "返品はできますか？" }] },
+          },
+        },
+      ],
+    });
+
+    await send("FAQ案を作りつつ今週の状況も教えて");
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存して" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "FAQにする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "確認する" })).toBeNull();
+  });
+
   // GID 1217040318322843: 会話復元(sessionStorage)で古いまとめがそのまま画面に残り、
   // いつ時点のデータか分からないまま今日の数字として読まれてしまう問題の回帰テスト。
   it("集計時点(asOf)が今日なら鮮度の注記を出さない", async () => {
@@ -621,6 +853,38 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(await screen.findByText(/別の日に取得した内容です/)).toBeTruthy();
   });
 
+  // GID: asOf は改ざん/破損した sessionStorage から復元される可能性がある(手動編集・
+  // 古いスキーマのデータ等)。修正前は new Date(不正値) を toISOString() に渡した瞬間に
+  // 例外が飛び、WeeklySummaryCard の描画自体が失敗して画面がスレッドごと真っ白になっていた
+  // (このページに React Error Boundary は無い)。回帰テスト。
+  it("集計時点(asOf)が不正な値でもクラッシュせず「不明」として表示する", async () => {
+    mockAgent({
+      reply: "今週の状況です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\n会話数 50件",
+          card: {
+            kind: "weekly_summary",
+            asOf: "this-is-not-a-valid-date",
+            sessions: { total: 50, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: null,
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    // クラッシュしていれば "50件" を含むこの後続描画自体に到達しない
+    await screen.findByText("50件");
+    expect(screen.getByText(/集計時点: 不明/)).toBeTruthy();
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {
@@ -639,11 +903,538 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByText("get_avatar_list")).toBeNull();
     expect(screen.queryByText("deactivate_avatar")).toBeNull();
   });
+
+  // mockAgent は2回目以降すべて同じ応答を返す(単発の描画確認向け)ため、
+  // クリック後の3ターン目に別の応答を返す必要があるこのテストだけは自前でモックする。
+  it("見本提案が出たら「採用して」チップが出て、押すと自然文で採用を伝える", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "見本をご提案しました。",
+          actions: [
+            {
+              tool: "suggest_avatar_preset",
+              result: "「Haruka」というアバターの見本があります。\nプリセットID: preset-1\nこのまま採用しますか？",
+              card: { kind: "avatar_preset", presetId: "preset-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({
+        reply: "採用しました。",
+        actions: [{ tool: "adopt_avatar_preset", result: "アバター「Haruka」を採用しました。まだ公開はされていません。" }],
+      });
+    });
+
+    await send("アバターを作りたい");
+
+    const adoptButton = await screen.findByRole("button", { name: "採用して" });
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+
+    fireEvent.click(adoptButton);
+
+    await waitFor(() => expect(screen.getByText("採用してください")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("採用してください");
+    // 二度押し防止: 前のターンのチップは使用済みになり消える
+    expect(screen.queryByRole("button", { name: "採用して" })).toBeNull();
+  });
+
+  // D3: 500字のtextでは実質3〜4件しか出ていなかった一覧が、cardでは件数によらず全件出る回帰。
+  it("get_tuning_rules: 15件を超えても全件がカードに描画される(500字打ち切りの回帰)", async () => {
+    const rules = Array.from({ length: 20 }, (_, i) => ({
+      id: i + 1,
+      triggerPattern: `トリガー${i + 1}`,
+      expectedBehavior: `振る舞い${i + 1}`,
+      priority: 5,
+      isActive: i % 2 === 0,
+    }));
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（20件、うち有効10件・無効10件）です。詳しい内容は一覧でご確認いただけます。",
+          card: { kind: "tuning_rules_list", rules, totalCount: 20 },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText("トリガー1")).toBeTruthy();
+    expect(screen.getByText("トリガー20")).toBeTruthy();
+    expect(screen.getAllByText("✅ 有効")).toHaveLength(10);
+    expect(screen.getAllByText("⏸️ 無効")).toHaveLength(10);
+  });
+
+  it("get_tuning_rules: card が無い場合は従来どおり自然文の agentAction 表示になる(後方互換)", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        { tool: "get_tuning_rules", result: "有効な指示ルールはありません" },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    // agentAction汎用表示は「ラベル：結果」を1つのspanにまとめるため、
+    // 完全一致ではなく正規表現の部分一致で確認する(他のagentAction回帰テストと同じ形式)。
+    expect(await screen.findByText(/有効な指示ルールはありません/)).toBeTruthy();
+  });
+
+  // D6: 下書きカードの表示内容が保存内容(トリガー/対応方針/優先度)と一致することの回帰。
+  it("suggest_tuning_rule: cardがあれば優先度も表示される(D6、以前は黙って捨てられていた)", async () => {
+    mockAgent({
+      reply: "こう提案します。保存してよいですか？",
+      actions: [
+        {
+          tool: "suggest_tuning_rule",
+          result: "提案:\nトリガー: 保証\n対応方針: 2年とお伝えする\n優先度: 8\n",
+          card: { kind: "tuning_rule_draft", triggerPattern: "保証", expectedBehavior: "2年とお伝えする", priority: 8 },
+        },
+      ],
+    });
+
+    await send("保証について聞かれたら2年と答えて");
+
+    expect(await screen.findByText("どんな時に")).toBeTruthy();
+    expect(screen.getByText("保証")).toBeTruthy();
+    expect(screen.getByText("2年とお伝えする")).toBeTruthy();
+    expect(screen.getByText("優先度")).toBeTruthy();
+    expect(screen.getByText("高")).toBeTruthy();
+  });
+
+  it("suggest_tuning_rule: 対応方針が複数行でも1行目だけに切られず全行表示される(D6)", async () => {
+    const multiline = "1行目の案内。\n2行目の補足。\n3行目の締めくくり。";
+    mockAgent({
+      reply: "こう提案します。保存してよいですか？",
+      actions: [
+        {
+          tool: "suggest_tuning_rule",
+          result: `提案:\nトリガー: 保証\n対応方針: ${multiline}\n優先度: 5\n`,
+          card: { kind: "tuning_rule_draft", triggerPattern: "保証", expectedBehavior: multiline, priority: 5 },
+        },
+      ],
+    });
+
+    await send("保証について聞かれたら2年と答えて");
+
+    expect(await screen.findByText("1行目の案内。", { exact: false })).toBeTruthy();
+    expect(screen.getByText("2行目の補足。", { exact: false })).toBeTruthy();
+    expect(screen.getByText("3行目の締めくくり。", { exact: false })).toBeTruthy();
+  });
+
+  it("suggest_tuning_rule: cardが無い場合は従来どおり自然文の正規表現パースでカードになる(後方互換)", async () => {
+    mockAgent({
+      reply: "こう提案します。保存してよいですか？",
+      actions: [
+        { tool: "suggest_tuning_rule", result: "提案:\nトリガー: 保証\n対応方針: 2年とお伝えする\n優先度: 5\n" },
+      ],
+    });
+
+    await send("保証について聞かれたら2年と答えて");
+
+    expect(await screen.findByText("どんな時に")).toBeTruthy();
+    expect(screen.getByText("保証")).toBeTruthy();
+    expect(screen.getByText("2年とお伝えする")).toBeTruthy();
+    // card が無い正規表現フォールバック経路には優先度が無いため表示されない
+    expect(screen.queryByText("優先度")).toBeNull();
+  });
+
+  // P4-1: AI提案ルールの承認/却下と根拠提示
+  it("get_tuning_rules: AI提案(未承認)には出所バッジと承認/却下ボタン、根拠が表示される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              {
+                id: 42,
+                triggerPattern: "送料",
+                expectedBehavior: "一律500円とお伝えする",
+                priority: 5,
+                isActive: false,
+                source: "judge",
+                status: "pending",
+                evidence: { avgScore: 38, effectivePrinciples: ["共感"], failedPrinciples: ["クロージング"] },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/AIの提案（未承認）/)).toBeTruthy();
+    // 根拠は評価IDなど内部識別子をそのまま出さず、店主の言葉に言い換える
+    expect(screen.getByText(/もとになった会話の対応の質/)).toBeTruthy();
+    expect(screen.getByText(/共感/)).toBeTruthy();
+    expect(screen.getByText(/クロージング/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "有効にする" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "却下する" })).toBeTruthy();
+  });
+
+  it("get_tuning_rules: 自分で作ったルール(source=manual)にはAI提案バッジも承認ボタンも出ない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効1件・無効0件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 1, triggerPattern: "保証", expectedBehavior: "2年", priority: 5, isActive: true, source: "manual", status: null, evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    await screen.findByText("保証");
+    expect(screen.queryByText(/AIの提案/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "有効にする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
+  });
+
+  it("get_tuning_rules: 却下済み(status=rejected)には承認ボタンが出ず、却下済みバッジのみ表示される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 43, triggerPattern: "値引き", expectedBehavior: "応じない", priority: 3, isActive: false, source: "judge", status: "rejected", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/AIの提案（却下済み）/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "有効にする" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
+  });
+
+  it("get_tuning_rules: 「有効にする」を押すと承認の自然文が実送信される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 42, triggerPattern: "送料", expectedBehavior: "一律500円とお伝えする", priority: 5, isActive: false, source: "judge", status: "pending", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    const approveButton = await screen.findByRole("button", { name: "有効にする" });
+
+    fireEvent.click(approveButton);
+
+    await waitFor(() => {
+      const calls = vi.mocked(authFetch).mock.calls;
+      const chatCall = calls.find(([url]) => String(url).includes("/v1/admin/agent/chat"));
+      expect(chatCall).toBeTruthy();
+    });
+    const lastCall = vi.mocked(authFetch).mock.calls[vi.mocked(authFetch).mock.calls.length - 1];
+    const body = JSON.parse((lastCall![1] as RequestInit).body as string);
+    expect(body.message).toContain("ID: 42");
+    expect(body.message).toContain("承認して有効にしてください");
+  });
 });
 
 function getComposer(): HTMLTextAreaElement {
   return screen.getByPlaceholderText(/指示ルール/) as HTMLTextAreaElement;
 }
+
+// アバター画像候補の生成・採用は、エージェントツール経由にせずチャットから直接
+// POST /v1/admin/avatar/fal/generate / PATCH /v1/admin/avatar/configs/:id を叩く。
+// この2エンドポイントの応答を authFetch のURL分岐で個別に制御する。
+describe("CopilotPreviewPage — アバター画像候補の生成・採用", () => {
+  function mockAdoptedThenEndpoints(opts: {
+    generate?: () => Promise<Response>;
+    patch?: () => Promise<Response>;
+  }) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/fal/generate")) {
+        return opts.generate ? opts.generate() : mockOk({ images: ["https://img/1.png"] });
+      }
+      if (String(url).includes("/v1/admin/avatar/configs/")) {
+        return opts.patch ? opts.patch() : mockOk({ id: "cfg-1" });
+      }
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+  }
+
+  async function sendAndAdopt() {
+    renderPage();
+    // 起動時ブリーフィングのタイプライター演出が完了する(sendingがfalseへ確定する)まで待つ。
+    // 早すぎるタイミングでdisabled判定すると、演出中にsendingが再びtrueへ倒れる前の
+    // 初期レンダー(sending初期値false)を素通りしてしまい、直後のクリックが disabled な
+    // ボタンに当たって何も起きない(実際にこの競合でテストが落ちた)。
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByRole("button", { name: "画像を新しく生成する" });
+  }
+
+  it("生成→完了で候補4枚が描画され、採用でPATCHが呼ばれて二重押しできない", async () => {
+    const images = ["https://img/1.png", "https://img/2.png", "https://img/3.png", "https://img/4.png"];
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images }) });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "これにする" }).length).toBe(4));
+
+    const generateCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/fal/generate"));
+    expect(generateCall).toBeTruthy();
+    expect(JSON.parse(String((generateCall![1] as RequestInit).body)).numImages).toBe(4);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "これにする" })[1]!);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+    const patchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(patchCall).toBeTruthy();
+    expect((patchCall![1] as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toEqual({ image_url: images[1] });
+
+    // 決定後は残りの「これにする」ボタンが押せない(二重採用の防止)
+    const remaining = screen.getAllByRole("button", { name: "これにする" });
+    for (const btn of remaining) expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("生成が5xxで失敗しても確定し、無限スピナーを残さない", async () => {
+    mockAdoptedThenEndpoints({
+      generate: () =>
+        Promise.resolve({ ok: false, status: 502, json: () => Promise.resolve({ error: "画像生成サービスでエラーが発生しました" }) } as Response),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    expect(await screen.findByText("画像生成サービスでエラーが発生しました")).toBeTruthy();
+    expect(screen.queryByText("数十秒かかることがあります。このまま他の操作もできます。")).toBeNull();
+    expect(await screen.findByRole("button", { name: "もう一度試す" })).toBeTruthy();
+  });
+
+  it("ネットワークエラーでも失敗として確定する(汎用の文言)", async () => {
+    mockAdoptedThenEndpoints({ generate: () => Promise.reject(new Error("network down")) });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    expect(await screen.findByText("画像を生成できませんでした。少し時間をおいてもう一度お試しください。")).toBeTruthy();
+  });
+
+  it("採用のPATCHが失敗しても、まだ採用されていない扱いのままエラーを示す", async () => {
+    mockAdoptedThenEndpoints({
+      generate: () => mockOk({ images: ["https://img/1.png"] }),
+      patch: () => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "更新に失敗しました" }) } as Response),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    const adoptButton = await screen.findByRole("button", { name: "これにする" });
+    fireEvent.click(adoptButton);
+
+    expect(await screen.findByText("更新に失敗しました")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
+    expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy();
+  });
+});
+
+// POST /match-voice はテキストの候補(id/title/description/score)のみを返し音声
+// プレビューURLを持たない(旧UIウィザードのStudioVoiceSectionも試聴機能を持たない)。
+// 計画は「試聴要素の存在」を前提にしていたが、実装を確認するとその基盤が無いため、
+// 一覧から選ぶ形に修正し、代わりに「プレビューは提供されていない」旨を明示するテストを書く。
+describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
+  function mockAdoptedThenVoiceEndpoints(opts: {
+    match?: () => Promise<Response>;
+    patch?: () => Promise<Response>;
+  }) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/match-voice")) {
+        return opts.match
+          ? opts.match()
+          : mockOk({ recommendations: [{ id: "voice-1", title: "Haruka Voice", description: "明るく親しみやすい声", score: 0.92 }] });
+      }
+      if (String(url).includes("/v1/admin/avatar/configs/")) {
+        return opts.patch ? opts.patch() : mockOk({ id: "cfg-1" });
+      }
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+  }
+
+  async function sendAndFindVoiceButton() {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByRole("button", { name: "声を探す" });
+  }
+
+  it("候補が描画され、音声プレビューが無い旨が明示される(試聴URLを持たないため)", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    expect(await screen.findByText("Haruka Voice")).toBeTruthy();
+    expect(screen.getByText("明るく親しみやすい声")).toBeTruthy();
+    expect(screen.getByText("92%")).toBeTruthy();
+    expect(screen.getByText("音声のプレビューは提供されていません。名前と説明を参考にお選びください。")).toBeTruthy();
+    expect(document.querySelector("audio")).toBeNull();
+
+    const matchCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/match-voice"));
+    expect(matchCall).toBeTruthy();
+    // 声の説明を新たに尋ねず、採用済みの性格・話し方の説明をそのまま検索クエリにする
+    expect(JSON.parse(String((matchCall![1] as RequestInit).body))).toEqual({ description: "とても丁寧な性格です。" });
+  });
+
+  it("採用でPATCHが呼ばれ、二重押しできない", async () => {
+    mockAdoptedThenVoiceEndpoints({});
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    const adoptButton = await screen.findByRole("button", { name: "この声にする" });
+    fireEvent.click(adoptButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+    const patchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(patchCall).toBeTruthy();
+    expect((patchCall![1] as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toEqual({ voice_id: "voice-1" });
+    expect((screen.getByRole("button", { name: "これに決定" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("候補が0件でも失敗として確定する(無限スピナーを残さない)", async () => {
+    mockAdoptedThenVoiceEndpoints({ match: () => mockOk({ recommendations: [] }) });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    expect(await screen.findByText("合う声が見つかりませんでした。もう一度お試しください。")).toBeTruthy();
+    expect(screen.queryByText("少し時間がかかることがあります。このまま他の操作もできます。")).toBeNull();
+    expect(await screen.findByRole("button", { name: "もう一度試す" })).toBeTruthy();
+  });
+
+  it("検索が5xxで失敗しても確定する", async () => {
+    mockAdoptedThenVoiceEndpoints({
+      match: () => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "声マッチングに失敗しました" }) } as Response),
+    });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+
+    expect(await screen.findByText("声マッチングに失敗しました")).toBeTruthy();
+  });
+
+  it("採用のPATCHが失敗しても、まだ採用されていない扱いのままエラーを示す", async () => {
+    mockAdoptedThenVoiceEndpoints({
+      patch: () => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "更新に失敗しました" }) } as Response),
+    });
+
+    const voiceButton = await sendAndFindVoiceButton();
+    fireEvent.click(voiceButton);
+    const adoptButton = await screen.findByRole("button", { name: "この声にする" });
+    fireEvent.click(adoptButton);
+
+    expect(await screen.findByText("更新に失敗しました")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
+    expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy();
+  });
+});
 
 // 想定ユーザーは100%日本語入力の店主。かな漢字変換の確定Enterで未変換のまま
 // 送信されてしまう不具合の回帰テスト(判定条件自体は lib/utils.test.ts で検証済み)。
@@ -771,6 +1562,125 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
   });
 });
 
+// 「対応中の会話」(J1: 今すぐ対応が要る)と「会話の履歴」(J2点検/J3照会)は緊急性の軸が
+// 違うため別カテゴリーに分けた。会話の履歴は1回の定型質問ではなく、点検/照会どちらを
+// したいかをチップで選ばせる(反復探索に耐えないという課題への対応)。
+describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の履歴カテゴリー(点検/照会分岐)", () => {
+  function mockAgentSequential(replies: unknown[]) {
+    vi.mocked(authFetch).mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      const reply = replies[agentCalls] ?? replies[replies.length - 1];
+      agentCalls += 1;
+      return mockOk(reply);
+    });
+  }
+
+  function chatBodies() {
+    return vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+  }
+
+  it("「対応中の会話」は会話の履歴とは別の定型文を即送信する", async () => {
+    mockAgentSequential([
+      { reply: "今週も順調です。", actions: [] },
+      { reply: "対応中の会話が2件あります。", actions: [] },
+    ]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /対応中の会話/ }));
+
+    await waitFor(() => expect(chatBodies().length).toBe(2));
+    expect(chatBodies()[1]?.["message"]).toBe("対応中のエスカレーションの状況を教えて");
+  });
+
+  it("「会話の履歴」を押すと即送信せず、点検/照会のチップを提示する", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+
+    expect(await screen.findByRole("button", { name: "最近の会話を点検する" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "特定の会話を探す" })).toBeTruthy();
+    // チップを出しただけでは実APIを追加で叩かない(ブリーフィングの1本のみ)
+    expect(chatBodies().length).toBe(1);
+  });
+
+  it("「最近の会話を点検する」チップは点検用の定型文を送る", async () => {
+    mockAgentSequential([
+      { reply: "今週も順調です。", actions: [] },
+      { reply: "問題は見当たりませんでした。", actions: [] },
+    ]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "最近の会話を点検する" }));
+
+    await waitFor(() => expect(chatBodies().length).toBe(2));
+    expect(chatBodies()[1]?.["message"]).toBe(
+      "直近の会話を点検して、対応品質に問題がありそうな会話があれば教えて",
+    );
+    // 選んだ後はもう一方のチップも使用済みになり再表示されない
+    expect(screen.queryByRole("button", { name: "特定の会話を探す" })).toBeNull();
+  });
+
+  it("「特定の会話を探す」チップは照会用の定型文を送る", async () => {
+    mockAgentSequential([
+      { reply: "今週も順調です。", actions: [] },
+      { reply: "いつ頃の会話か、キーワードなどを教えてください。", actions: [] },
+    ]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "特定の会話を探す" }));
+
+    await waitFor(() => expect(chatBodies().length).toBe(2));
+    expect(chatBodies()[1]?.["message"]).toBe("特定の会話を探したい");
+  });
+
+  it("会話の履歴のチップ提示中は他のカテゴリーへ切り替えられない", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    await screen.findByRole("button", { name: "最近の会話を点検する" });
+
+    expect((screen.getByRole("button", { name: /知識データ/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /対応中の会話/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("会話の履歴を連打してもチップメッセージが積み上がらない", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+    await screen.findByRole("button", { name: "最近の会話を点検する" });
+    fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
+
+    expect(screen.getAllByRole("button", { name: "最近の会話を点検する" }).length).toBe(1);
+  });
+
+  it("7カテゴリー全てがレールに表示される", async () => {
+    mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    for (const label of ["アシスタント", "今週のまとめ", "対応中の会話", "会話の履歴", "知識データ", "指示ルール", "アバター"]) {
+      expect(screen.getByRole("button", { name: new RegExp(label) })).toBeTruthy();
+    }
+  });
+});
+
 // GID 1217007275511487: 左レールが「今どれだけ溜まっているか」を一切示しておらず、
 // 旧ダッシュボードのstatカード無しでは対応漏れに気づけなかった。既存エンドポイント
 // (knowledge/gaps/count・chat-history/escalations)の件数をバッジで出す。
@@ -816,9 +1726,21 @@ describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
 
     expect(await screen.findByLabelText("未回答質問 3件")).toBeTruthy();
     expect(screen.getByLabelText("対応中の会話 2件")).toBeTruthy();
-    // バッジはカテゴリーボタンの中に出る(独立した要素ではない)
+    // バッジはカテゴリーボタンの中に出る(独立した要素ではない)。
+    // escalationsバッジは「対応中の会話」カテゴリーに付く(「会話の履歴」からは移した)。
     expect(screen.getByRole("button", { name: /知識データ/ }).textContent).toContain("3");
-    expect(screen.getByRole("button", { name: /会話の履歴/ }).textContent).toContain("2");
+    expect(screen.getByRole("button", { name: /対応中の会話/ }).textContent).toContain("2");
+  });
+
+  it("「会話の履歴」カテゴリーにはescalationsバッジが付かない", async () => {
+    mockBadges({
+      gaps: { count: 0 },
+      escalations: { escalations: [{ id: "e1" }, { id: "e2" }] },
+    });
+    renderPage();
+
+    await screen.findByLabelText("対応中の会話 2件");
+    expect(screen.getByRole("button", { name: /会話の履歴/ }).textContent).not.toContain("2");
   });
 
   it("テナントのIDでスコープした既存エンドポイントを叩く(新規APIを作らない)", async () => {
@@ -1016,6 +1938,46 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(screen.queryByText("埋め込みコードを見る")).toBeNull();
   });
 
+  // GID: weeklySummary カードは複数フィールドが null になり得る構造(部分失敗を反映するため)。
+  // sessionStorage への JSON.stringify → 復元後の描画という往復で、null を含むネストが
+  // 壊れずに残ること、かつ復元されたカードは(取得した日と同じでない限り)鮮度が古いと
+  // 表示されることを確認する。
+  it("weeklySummaryカードを含む会話を復元しても、null混じりのフィールドが壊れず描画される", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 201, role: "me", text: "今週の状況を教えて" },
+        {
+          id: 202,
+          role: "ai",
+          card: {
+            kind: "weeklySummary",
+            asOf: "2020-01-01T00:00:00.000Z",
+            sessions: { total: 12, changePct: null, prevTotal: 0 },
+            avgScore: null,
+            conversions: null,
+            faq: { total: 3, published: 3, lastUpdated: null },
+            pendingTuningRules: null,
+            gaps: null,
+          },
+        },
+      ],
+      history: [],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("12件")).toBeTruthy();
+    // ラベルと値は別divなので、それぞれ別のテキストノードとして検証する
+    expect(screen.getByText("FAQ")).toBeTruthy();
+    expect(screen.getByText("3件（公開3件）")).toBeTruthy();
+    // avgScore/conversions/pendingTuningRules/gaps が null のため、それらの欄は描画されない
+    expect(screen.queryByText(/\/100/)).toBeNull();
+    expect(screen.queryByText("承認待ちの指示ルール")).toBeNull();
+    // 復元された古いasOfにより、鮮度の注記が出る
+    expect(screen.getByText(/別の日に取得した内容です/)).toBeTruthy();
+  });
+
   it("保存済みの会話が無ければ、従来通り起動時ブリーフィングを取得する(回帰)", async () => {
     renderPage();
 
@@ -1079,6 +2041,32 @@ describe("CopilotPreviewPage — リクエストボディの surface", () => {
     // ブリーフィングと手動送信の2本。どちらも同じ transport 経由なので同じ値を名乗る
     expect(chatBodies.length).toBeGreaterThanOrEqual(2);
     expect(chatBodies.map((b) => b.surface)).toEqual(chatBodies.map(() => "fullscreen"));
+  });
+
+  // GID: 起動時ブリーフィング(BOOTSTRAP_PROMPT)と左レール「今週のまとめ」クリックは
+  // 同一ツール(get_weekly_briefing)に着地する前提(「必ず再取得する」で統一、重複は
+  // 許容する設計)。起動時は「ログインしたところです。」という挨拶が前置されるが、
+  // 実際に状況を尋ねる依頼文の核("今週の状況を教えてください。要点と次にやるべき
+  // ことを最大3つまで、簡潔に教えてください。")は完全一致でなければならない。
+  // この2箇所は別々の文字列リテラルとして存在するため、片方だけ表現を直すと
+  // 定義が黙って割れる。核の一致を固定してその再発を防ぐ。
+  it("起動時ブリーフィングと「今週のまとめ」クリックは同一の依頼文の核を送る", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: /今週のまとめ/ }));
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+
+    expect(chatBodies.length).toBeGreaterThanOrEqual(2);
+    const [bootstrapMessage, categoryClickMessage] = chatBodies.map((b) => String(b.message));
+    const core = "今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。";
+    expect(categoryClickMessage).toBe(core);
+    expect(bootstrapMessage.endsWith(core)).toBe(true);
   });
 });
 
@@ -1191,6 +2179,78 @@ describe("CopilotPreviewPage — super_adminのテナント選択", () => {
   });
 });
 
+// GID: super_adminがプレビュー中に別テナントへ切り替えても、bootstrapped(useRef)が
+// needsTenantSelectionのみをキーにしており previewMode のままでは再評価されないため、
+// 会話スレッド(weeklySummaryカードを含む)が前テナントのまま残っていた。修正の回帰テスト。
+describe("CopilotPreviewPage — テナント切替時の会話リセット", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+  });
+
+  it("previewMode中に別テナントへ切り替えると、会話がリセットされ新テナントのブリーフィングが取り直される", async () => {
+    let currentTenant = "tenant-a";
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        return mockOk({ reply: `${currentTenant}の状況です。`, actions: [] });
+      }
+      return mockOk({});
+    });
+
+    const { rerender } = renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-a" });
+    await waitFor(() => expect(screen.getByText("tenant-aの状況です。")).toBeTruthy());
+
+    const callsBeforeSwitch = vi.mocked(authFetch).mock.calls.filter(([url]) =>
+      String(url).includes("/v1/admin/agent/chat"),
+    ).length;
+
+    // 別テナントへ切替(previewTenantIdのみ変化。previewMode/isSuperAdminは維持)
+    currentTenant = "tenant-b";
+    vi.mocked(useAuth).mockReturnValue(
+      baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-b" }),
+    );
+    rerender(
+      <MemoryRouter>
+        <CopilotPreviewPage />
+      </MemoryRouter>,
+    );
+
+    // 新テナントのブリーフィングが自動的に取り直される(手動操作不要)
+    await waitFor(() => expect(screen.getByText("tenant-bの状況です。")).toBeTruthy());
+    // 前テナントの応答は会話から消えている(リセットされた証拠)
+    expect(screen.queryByText("tenant-aの状況です。")).toBeNull();
+
+    const callsAfterSwitch = vi.mocked(authFetch).mock.calls.filter(([url]) =>
+      String(url).includes("/v1/admin/agent/chat"),
+    ).length;
+    expect(callsAfterSwitch).toBeGreaterThan(callsBeforeSwitch);
+  });
+
+  it("同じテナントのままの再レンダーでは会話をリセットしない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    const { rerender } = renderPage(SUPER_ADMIN_IN_PREVIEW);
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+
+    const callsBefore = vi.mocked(authFetch).mock.calls.length;
+
+    // previewTenantIdが変わらない通常の再レンダー(例: 他stateの更新に伴う再描画)
+    vi.mocked(useAuth).mockReturnValue(baseAuth(SUPER_ADMIN_IN_PREVIEW));
+    rerender(
+      <MemoryRouter>
+        <CopilotPreviewPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("今週も順調です。")).toBeTruthy();
+    expect(vi.mocked(authFetch).mock.calls.length).toBe(callsBefore);
+  });
+});
+
 // GID 1217007387443283: GUI固有として旧UIへ丸投げしていたPDF取り込みを、会話の中の
 // カードとして完結させる最初の1件。受付条件(拡張子/MIME/サイズ)は旧UIのPDFタブと
 // lib/bookPdfUpload.ts を共有しているため、ここで見るのは「会話UIとして成立しているか」
@@ -1288,14 +2348,19 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
   }
 
+  // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定になったため、投入が実際に始まる系の
+  // テストは(previewMode中の)super_adminで行う。client_adminの拒否は専用describeで検証する。
   it("PDFを落とすと旧UIと同じ既存エンドポイントへ送信が始まる(新APIを作らない)", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
 
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
     const xhr = MockXHR.instances[0]!;
-    expect(xhr.open).toHaveBeenCalledWith("POST", "http://localhost:3100/v1/admin/knowledge/book-pdf");
+    expect(xhr.open).toHaveBeenCalledWith(
+      "POST",
+      "http://localhost:3100/v1/admin/knowledge/book-pdf?tenant=tenant-preview",
+    );
     expect(xhr.setRequestHeader).toHaveBeenCalledWith("Authorization", "Bearer test-token");
     // 会話の中に進捗カードが出る
     expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
@@ -1318,7 +2383,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("PDF以外を落とすと、通信せずやわらかい日本語で断る", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("メモ.txt", "text/plain")]);
 
@@ -1328,7 +2393,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("上限を超えるPDFは通信する前に断る", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("大きい資料.pdf", "application/pdf", 11 * 1024 * 1024)]);
 
@@ -1337,7 +2402,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("通信に失敗してもチャットは壊れず、そのまま次のメッセージを送れる", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
@@ -1355,7 +2420,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("サーバー側で失敗した場合もやわらかい案内カードになる", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
@@ -1368,7 +2433,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("成功すると成功カードが出て、他の書き込み操作と同じく実操作の件数に加算される", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
     expect(screen.getByLabelText("実際の操作 0件")).toBeTruthy();
 
     dropFiles([makeFile("料金表.pdf", "application/pdf")]);
@@ -1383,7 +2448,7 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
   });
 
   it("📎ボタンからでも同じ取り込みができる(ドラッグできない環境向け)", async () => {
-    await readyPage();
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     expect(screen.getByLabelText("PDFを添付")).toBeTruthy();
@@ -1391,6 +2456,80 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
 
     await waitFor(() => expect(MockXHR.instances.length).toBe(1));
     expect(await screen.findByText("PDFを受け取っています")).toBeTruthy();
+  });
+});
+
+// GID 1217040818410419: 「書籍/PDFはR2C運用限定」の実装反映。テナント(client_admin)からの
+// D&D/添付ボタンからの受付を役割で条件化する。previewMode中のsuper_adminは従来通り成功すること
+// は上のdescribe(SUPER_ADMIN_IN_PREVIEW を使う各テスト)で既に固定済み。
+describe("CopilotPreviewPage — PDF取り込みのR2C運用限定ガード(client_admin)", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    MockXHR.instances = [];
+    vi.stubGlobal("XMLHttpRequest", MockXHR as unknown as typeof XMLHttpRequest);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function readyPage(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(overrides);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  }
+
+  it("client_adminがPDFを落としても通信せず、優しい日本語で断る", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+
+    expect(await screen.findByText("PDFを受け取れませんでした")).toBeTruthy();
+    expect(
+      screen.getByText("この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。"),
+    ).toBeTruthy();
+    expect(MockXHR.instances.length).toBe(0);
+    // 専門用語(ステータスコード/権限/MIME等)や、他の場所で誤ってblocked計測に載る文言を出さない
+    expect(screen.queryByText(/403|権限|MIME/)).toBeNull();
+    expect(screen.queryByText(/確認が必要です|確認をスキップできません/)).toBeNull();
+  });
+
+  it("client_adminが📎ボタンから選んでも同様に断る", async () => {
+    await readyPage();
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [makeFile("料金表.pdf", "application/pdf")] } });
+
+    expect(await screen.findByText("PDFを受け取れませんでした")).toBeTruthy();
+    expect(MockXHR.instances.length).toBe(0);
+  });
+
+  it("断られても会話は壊れず、そのまま次のメッセージを送れる", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
+    await screen.findByText("PDFを受け取れませんでした");
+
+    fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    expect(await screen.findByText("営業時間を教えて")).toBeTruthy();
   });
 });
 

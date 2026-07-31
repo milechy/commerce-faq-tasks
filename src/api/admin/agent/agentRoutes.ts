@@ -8,7 +8,7 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall } from './actionExecutor';
-import type { ActionResult, LegacyLinkCardPayload, WeeklySummaryCardPayload } from './actionExecutor';
+import type { ActionResult, ActionCardPayload } from './actionExecutor';
 import { requiresConfirmation } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
@@ -153,7 +153,7 @@ type AnsweredFrom = 'faq_list' | 'tool_action' | 'general';
 
 // クライアントへ返すツール実行結果。result(自然文)は構造化ツールでも必ず入るので
 // 既存クライアントと既存の正規表現パーサはそのまま動き、card は追加でのみ載る。
-type ChatAction = { tool: string; result: string; card?: LegacyLinkCardPayload | WeeklySummaryCardPayload };
+type ChatAction = { tool: string; result: string; card?: ActionCardPayload };
 
 function determineAnsweredFrom(actions: Array<{ tool: string; result: string }>): AnsweredFrom {
   if (actions.some((a) => a.tool === 'get_faq_list')) return 'faq_list';
@@ -377,6 +377,9 @@ async function executeHopToolCalls(
   sessionId: string,
   changedBy: string,
   surface: MetricSurface,
+  // delete_chat_session が audit_logs に記録する実行者ロール。changedBy(email)と
+  // 対にして executeToolCall へ渡す。
+  actorRole: string,
 ): Promise<void> {
   for (const toolCall of toolCalls) {
     const { id, name, args } = toolCall;
@@ -395,14 +398,17 @@ async function executeHopToolCalls(
     const blockSameTurnChain = alreadySuggestedThisTurn && requiresConfirmation(name);
 
     let result: string;
-    let card: LegacyLinkCardPayload | WeeklySummaryCardPayload | undefined;
+    let card: ActionCardPayload | undefined;
     if (blockSameTurnChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
     } else {
       let raw: ActionResult;
       try {
-        raw = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin);
+        raw = await executeToolCall(name, args, effectiveTenantId, db, sessionId, isSuperAdmin, {
+          role: actorRole,
+          email: changedBy,
+        });
       } catch (err) {
         fireAgentMetric(db, {
           metricName: 'agent_tool_invoked',
@@ -619,19 +625,23 @@ async function runStreamingHop(
 // 強制まとめ呼び出し(callGroqFinal)で必ず自然文の reply を返して終了する。
 const MAX_TOOL_HOPS = 4;
 
-// suggest_* → save_*(confirmed=true) の対応表。
-// G1導入により「suggest→save を同一ターン内で連鎖実行」が技術的に可能になったが、
+// 同一ターン内の危険な連鎖をブロックする対応表(トリガー側ツール → ブロック対象ツール)。
+// G1導入により「複数ツールを同一ターン内で連鎖実行」が技術的に可能になったが、
 // これは人間の確認を経ないまま書き込みが確定してしまう抜け道になるため、
 // プロンプト任せにせずコードで明示的にブロックする（下記ループ内で使用）。
-// suggest_faq_import_from_text / suggest_faq_import_from_urls は共に commit_faq_import へ
-// つながる多対一の対応のため、value(save側)は重複しうる点に注意
-// （下のブロック判定は「この save を指す suggest キーのいずれかが今ターン呼ばれたか」で見る）。
+// 元は suggest_*→save_* の対応表だったが、get_chat_session_messages→delete_chat_session
+// (顧客が書いた文字列を読んだ直後に、その内容に反応して削除する経路の遮断)も同じ
+// 仕組みで扱う。value(ブロック対象)は複数のtriggerから指されうる点に注意
+// （下のブロック判定は「このツールを指すtriggerキーのいずれかが今ターン呼ばれたか」で見る）。
 const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
   suggest_tuning_rule: 'save_tuning_rule',
   suggest_faq: 'save_faq',
   suggest_engagement_rule: 'save_engagement_rule',
   suggest_faq_import_from_text: 'commit_faq_import',
   suggest_faq_import_from_urls: 'commit_faq_import',
+  // 会話本文の取得直後に、その内容(顧客が書いた文字列=注入されうる)に反応して
+  // 同一ターンで削除が確定するのを防ぐ。削除は必ず別ターンでのユーザーの同意を要求する。
+  get_chat_session_messages: 'delete_chat_session',
 };
 
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ
@@ -697,7 +707,10 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         `使うのではなく suggest_faq_import_from_text（テキストから）または suggest_faq_import_from_urls` +
         `（URL 1〜5件から）でプレビューを作成し、内容を要約提示のうえ同意を得たら commit_faq_import で` +
         `登録してください（同じく同一ターン内での連鎖実行は避け、ユーザーの次のメッセージを待つこと）。` +
-        `PDFからの知識登録は get_legacy_ui_link(feature=knowledge_pdf) で旧管理画面へ案内してください。` +
+        `PDFからの知識登録はR2C運営チームのみが行うため、頼まれても旧管理画面へは案内せず、` +
+        `内容を文章で教えてもらえれば代わりに登録できる旨を伝えてください。` +
+        `ナレッジ(FAQ・書籍)ごとの成約への貢献度を尋ねられた場合は get_legacy_ui_link(feature=knowledge_attribution) で` +
+        `旧管理画面へ案内してください。` +
         `請求（支払い操作）、アバタースタジオ（画像/音声/性格/ライブテスト）、エスカレーションへの有人返信、` +
         `会話セッションの削除、テストチャット、アバター新規作成について尋ねられた場合は、` +
         `チャットで実行しようとせず get_legacy_ui_link を呼び出して旧管理画面へ案内してください。` +
@@ -767,7 +780,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             }));
 
             const beforeCount = actions.length;
-            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface);
+            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
             for (const action of actions.slice(beforeCount)) {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
@@ -865,7 +878,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           args: parseToolArgs(toolCall.function.arguments),
         }));
 
-        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface);
+        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
       }
 
       const hitHopLimit = finalReply === null;

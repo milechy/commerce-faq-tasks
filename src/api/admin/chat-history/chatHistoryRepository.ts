@@ -4,6 +4,7 @@
 import { getPool } from "../../../lib/db";
 import type { RagSource } from "../../../agent/types";
 import type { TrafficSource } from "../../../lib/traffic/trafficSource";
+import { createNotification } from "../../../lib/notifications";
 
 export interface SaveMessageParams {
   tenantId: string;
@@ -114,18 +115,83 @@ export interface SessionSummary {
   outcome_recorded_at: string | null;
 }
 
+const VALID_SORT_BY = ['last_message_at', 'message_count', 'score'] as const;
+const VALID_SORT_ORDER = ['asc', 'desc'] as const;
+const VALID_PERIOD = ['7', '30', '90', 'all'] as const;
+const VALID_SENTIMENT = ['positive', 'negative', 'neutral'] as const;
+
+function pickAllowlisted<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  if (typeof value !== 'string') return undefined;
+  return (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+}
+
+function coerceInt(value: unknown, fallback: number): number {
+  const n = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export interface NormalizedSessionListParams {
+  limit: number;
+  offset: number;
+  sort_by: SessionListParams['sort_by'];
+  sort_order: SessionListParams['sort_order'];
+  period: SessionListParams['period'];
+  sentiment: SessionListParams['sentiment'];
+}
+
+/**
+ * getSessions() が SQL へ文字列補間する period / sort_order 等を、呼び出し元に依存せず
+ * allowlist で検証する。呼び出し元は routes.ts の他に agent の LLM 由来引数
+ * (actionExecutor.ts) が増えるため、検証をここへ集約する。allowlist 外は例外にせず
+ * undefined にフォールバックする(routes.ts の既存挙動を維持するため)。
+ *
+ * 冪等なので複数箇所(routes.ts / getSessions() 内部)から呼んでよい。
+ * search のワイルドカードエスケープだけは非冪等(二重エスケープになる)なため、
+ * ここでは扱わず getSessions() 内で SQL 構築の直前に1回だけ適用する。
+ */
+export function normalizeSessionListParams(raw: {
+  limit?: unknown;
+  offset?: unknown;
+  sort_by?: unknown;
+  sort_order?: unknown;
+  period?: unknown;
+  sentiment?: unknown;
+}): NormalizedSessionListParams {
+  return {
+    limit: Math.max(1, Math.min(coerceInt(raw.limit, 20), 200)),
+    offset: Math.max(0, coerceInt(raw.offset, 0)),
+    sort_by: pickAllowlisted(raw.sort_by, VALID_SORT_BY),
+    sort_order: pickAllowlisted(raw.sort_order, VALID_SORT_ORDER),
+    period: pickAllowlisted(raw.period, VALID_PERIOD),
+    sentiment: pickAllowlisted(raw.sentiment, VALID_SENTIMENT),
+  };
+}
+
+// LIKE のワイルドカードを無効化し、意図しない広域一致を防ぐ（Postgres の既定エスケープ文字は \）。
+// resolveSessionByShortId (actionExecutor.ts) と同じ規約。非冪等なため呼び出しは1箇所に限る。
+function escapeLikeWildcards(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 /**
  * セッション一覧を取得する。
  * Phase52b: sort/filter/search/sentiment に対応。
+ *
+ * 引数は呼び出し元(routes.ts の allowlist 済みの値、または agent 経由の未検証の値)を
+ * 問わず、ここで必ず allowlist を再適用する。period と sort_order は下の SQL に
+ * 文字列補間されるため、検証を経ない値がここに到達することを絶対に防ぐ。
  */
 export async function getSessions(
   params: SessionListParams,
-): Promise<{ sessions: SessionSummary[]; total: number }> {
+): Promise<{ sessions: SessionSummary[]; total: number; limit: number; offset: number }> {
   const pool = getPool();
-  const limit = Math.min(params.limit ?? 20, 200);
-  const offset = params.offset ?? 0;
-  const sortOrder = (params.sort_order ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
-  const sortBy = params.sort_by ?? 'last_message_at';
+  const normalized = normalizeSessionListParams(params);
+  const limit = normalized.limit;
+  const offset = normalized.offset;
+  const sortOrder = (normalized.sort_order ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
+  const sortBy = normalized.sort_by ?? 'last_message_at';
+  const period = normalized.period;
+  const sentiment = normalized.sentiment;
 
   const conditions: string[] = [];
   const args: unknown[] = [];
@@ -135,20 +201,20 @@ export async function getSessions(
     conditions.push(`s.tenant_id = $${args.length}`);
   }
 
-  if (params.period && params.period !== 'all') {
-    conditions.push(`s.started_at >= NOW() - INTERVAL '${params.period} days'`);
+  if (period && period !== 'all') {
+    conditions.push(`s.started_at >= NOW() - INTERVAL '${period} days'`);
   }
 
   if (params.search?.trim()) {
-    args.push(`%${params.search.trim()}%`);
+    args.push(`%${escapeLikeWildcards(params.search.trim())}%`);
     conditions.push(`EXISTS (SELECT 1 FROM chat_messages WHERE session_id = s.id AND role = 'user' AND content ILIKE $${args.length})`);
   }
 
-  if (params.sentiment === 'positive') {
+  if (sentiment === 'positive') {
     conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score >= 70)`);
-  } else if (params.sentiment === 'negative') {
+  } else if (sentiment === 'negative') {
     conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score > 0 AND score < 60)`);
-  } else if (params.sentiment === 'neutral') {
+  } else if (sentiment === 'neutral') {
     conditions.push(`EXISTS (SELECT 1 FROM conversation_evaluations WHERE session_id = s.session_id AND score >= 60 AND score < 70)`);
   }
 
@@ -197,7 +263,9 @@ export async function getSessions(
     listArgs,
   );
 
-  return { sessions: listResult.rows, total };
+  // limit/offset は正規化後の実効値を返す。呼び出し元(routes.ts)がページング応答に
+  // 使う値を、渡した引数から独自に再計算せずここから読めるようにするため。
+  return { sessions: listResult.rows, total, limit, offset };
 }
 
 export interface MessageListParams {
@@ -372,4 +440,78 @@ export async function getNewOperatorMessages(params: {
     args,
   );
   return result.rows;
+}
+
+// ---------------------------------------------------------------------------
+// Phase52f: コンバージョン結果(outcome)。routes.ts の PATCH ハンドラと
+// agent の record_session_outcome ツールの両方から呼ばれるため、検証・更新・
+// 通知の3点セットをここへ集約する(両呼び出し元で片方だけ通知が飛ばない、
+// といった劣化を防ぐ)。
+// ---------------------------------------------------------------------------
+
+/** テナントの有効な outcome 値一覧。未設定テナントの既定値を単一の情報源にする。 */
+export async function getConversionTypes(tenantId: string): Promise<string[]> {
+  const pool = getPool();
+  const result = await pool.query<{ conversion_types: string[] | null }>(
+    `SELECT conversion_types FROM tenants WHERE id = $1`,
+    [tenantId],
+  );
+  return result.rows[0]?.conversion_types ?? ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
+}
+
+export interface RecordOutcomeParams {
+  sessionDbId: string;  // chat_sessions.id (UUID)
+  tenantId: string;
+  outcome: string;
+  recordedBy: string | null;
+}
+
+export interface RecordedOutcome {
+  outcome: string;
+  recordedAt: string;
+  recordedBy: string | null;
+}
+
+/**
+ * outcome を記録し、outcome_recorded 通知を発火する(fire-and-forget)。
+ * 呼び出し元は conversion_types との照合を事前に済ませておくこと(この関数自身は検証しない)。
+ */
+export async function recordOutcome(params: RecordOutcomeParams): Promise<RecordedOutcome> {
+  const pool = getPool();
+  await pool.query(
+    `UPDATE chat_sessions
+     SET outcome = $1, outcome_recorded_at = NOW(), outcome_recorded_by = $2
+     WHERE id = $3`,
+    [params.outcome, params.recordedBy, params.sessionDbId],
+  );
+
+  // Phase52h: Trigger 5 — outcome記録通知
+  void createNotification({
+    recipientRole: 'super_admin',
+    type: 'outcome_recorded',
+    title: 'コンバージョン結果が記録されました',
+    message: `「${params.outcome}」が記録されました`,
+    link: '/admin/analytics',
+    metadata: { sessionId: params.sessionDbId, outcome: params.outcome, tenantId: params.tenantId },
+  });
+
+  return { outcome: params.outcome, recordedAt: new Date().toISOString(), recordedBy: params.recordedBy };
+}
+
+export interface SessionOutcome {
+  outcome: string | null;
+  outcomeRecordedAt: string | null;
+  outcomeRecordedBy: string | null;
+}
+
+/** 指定セッションの記録済みoutcomeを取得する。存在しなければ null。 */
+export async function getSessionOutcome(sessionDbId: string): Promise<SessionOutcome | null> {
+  const pool = getPool();
+  const result = await pool.query<{ outcome: string | null; outcome_recorded_at: string | null; outcome_recorded_by: string | null }>(
+    `SELECT outcome, outcome_recorded_at, outcome_recorded_by FROM chat_sessions WHERE id = $1`,
+    [sessionDbId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return { outcome: row.outcome, outcomeRecordedAt: row.outcome_recorded_at, outcomeRecordedBy: row.outcome_recorded_by };
 }

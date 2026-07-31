@@ -18,6 +18,12 @@ type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 type BookPdfUser = { id?: string; role?: string; tenantId?: string | null };
 type BookPdfReq = Request & { user?: BookPdfUser };
 
+// GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定(2026-07-31決定)。テナント(client_admin)から
+// の投入導線をUIから外すだけでは直叩きで破られるため、投入系の2エンドポイントにサーバー側の
+// ガードを置く。専門用語(403/権限/MIME等)を出さず、優しい日本語で拒否する。
+const BOOK_PDF_TENANT_RESTRICTED_MESSAGE =
+  "この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。";
+
 // ── 定数 ──────────────────────────────────────────────────────────────────
 const ZIP_MIMETYPES = new Set([
   "application/zip",
@@ -234,6 +240,16 @@ export function registerBookPdfRoutes(
     "/v1/admin/knowledge/book-pdf",
     knowledgeAuth,
     requireKnowledgeRole,
+    // GID 1217040818410419: 書籍/PDF投入はR2C運用限定。multer(ファイル受信)より前に弾き、
+    // 対象外ロールの通信・ストレージ処理を無駄にしない。
+    (req: Request, res: Response, next: NextFunction) => {
+      const isSuperAdmin = (req as BookPdfReq).user?.role === "super_admin";
+      if (!isSuperAdmin) {
+        res.status(403).json({ error: BOOK_PDF_TENANT_RESTRICTED_MESSAGE });
+        return;
+      }
+      next();
+    },
     (req: Request, res: Response, next: NextFunction) => {
       upload.single("file")(req, res, (multerErr: unknown) => {
         if (multerErr instanceof MulterError) {
@@ -769,6 +785,11 @@ export function registerBookPdfRoutes(
     async (req: Request, res: Response) => {
       const user = (req as BookPdfReq).user;
       const isSuperAdmin = user?.role === "super_admin";
+
+      // GID 1217040818410419: 書籍/PDF投入(構造化パイプラインの起動含む)はR2C運用限定。
+      if (!isSuperAdmin) {
+        return res.status(403).json({ error: BOOK_PDF_TENANT_RESTRICTED_MESSAGE });
+      }
 
       const id = parseInt(req.params.id, 10);
       if (isNaN(id)) {

@@ -16,14 +16,20 @@ import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 import {
   CHAT_SESSION_SURFACE_FULLSCREEN,
+  clearChatSession,
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
+import { priorityToTier } from "../../lib/tuningPriority";
 import {
+  AGENT_CHAT_AUTH_REQUIRED_MESSAGE,
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
 import type { AnsweredFrom } from "../../lib/useAgentChatTransport";
+// アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
+// チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
+import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
 // 相談窓口(担当者への相談 → 返信 → 解決確認)のループ。ポーリング・既読化・相談投稿は
 // パネル(Surface A)と同じ実装を共有し(lib/feedbackReplies.ts)、見せ方だけこの面の
 // カード/メッセージの作法に合わせる。
@@ -75,11 +81,64 @@ interface TenantOption {
 
 type Card =
   | { kind: "faq"; question: string; answer: string; category: string }
-  | { kind: "rule"; trigger: string; behavior: string }
+  // priorityはcard経由(D6)の場合のみ入る。正規表現フォールバック時は未設定のまま。
+  | { kind: "rule"; trigger: string; behavior: string; priority?: number }
   | { kind: "engagement"; when: string; message: string }
   | { kind: "success"; text: string }
   | { kind: "link"; label: string; url: string; description: string }
   | { kind: "agentAction"; tool: string; result: string }
+  | { kind: "avatarPreset"; presetId: string; name: string; imageUrl: string | null; description: string }
+  // adopt_avatar_preset の採用直後カード。configId は自テナント側の avatar_configs.id
+  // (presetIdとは別物)で、以降の画像候補生成・採用はすべてこのidを使う。
+  | { kind: "avatarAdopted"; configId: string; name: string; imageUrl: string | null; description: string }
+  // 画像候補の生成(POST /v1/admin/avatar/fal/generate)と採用(PATCH /configs/:id)を
+  // チャット画面内で完結させるためのカード。生成はエージェントツール経由にしない
+  // (画像URL群はツール結果の500字に収まらないため)。フロントから直接叩き、
+  // タイムアウト・5xx・429いずれの失敗でも status="failed" で確定させる
+  // (無限スピナーを残さない)。adoptedUrl は採用済みの1枚(二重採用の防止・ハイライト用)。
+  | {
+      kind: "avatarCandidates";
+      configId: string;
+      name: string;
+      status: "generating" | "done" | "failed";
+      images?: string[];
+      message?: string;
+      adoptedUrl?: string;
+    }
+  // 声の候補提示〜採用。POST /match-voice はテキストの候補(id/title/description/score)
+  // のみを返し音声プレビューを持たないため(旧UIウィザードのStudioVoiceSectionも同様に
+  // 試聴機能を持たない)、本カードも一覧から選ぶ形にする。description は再検索(もう一度
+  // 探す)用に保持する。他の失敗系カードと同じく、必ず status="failed" で確定させる。
+  | {
+      kind: "avatarVoiceCandidates";
+      configId: string;
+      description: string;
+      status: "matching" | "done" | "failed";
+      recommendations?: Array<{ id: string; title: string; description: string; score: number }>;
+      message?: string;
+      adoptedVoiceId?: string;
+    }
+  // D3: 一覧が15件・1行60/100字で黙って切れていたのを解消するための全件カード。
+  | {
+      kind: "rulesList";
+      rules: Array<{
+        id: number;
+        triggerPattern: string;
+        expectedBehavior: string;
+        priority: number;
+        isActive: boolean;
+        // P4-1: 古い(このフィールドが無い)キャッシュ済み会話との後方互換のため任意。
+        source?: string | null;
+        status?: string | null;
+        evidence?: {
+          evaluationIds?: number[];
+          effectivePrinciples?: string[];
+          failedPrinciples?: string[];
+          avgScore?: number;
+        } | null;
+      }>;
+      totalCount: number;
+    }
   // GUI固有だった操作(PDF取り込み)を旧UIへ渡さず会話の中で完結させる最初の1件。
   // 送信の進捗までしか追わない(取り込み完了までの追跡は旧UIのPDFタブが担当)ため、
   // 状態は「送っている / 受け取った / 受け取れなかった」の3つで足りる。
@@ -89,6 +148,30 @@ type Card =
       fileName: string;
       progress?: number;
       message?: string;
+    }
+  // 会話一覧(get_chat_sessions)。短縮IDの手打ちを不要にするため、次の1件を選ぶ
+  // チップ(sessionListSelectionChips)とセットで使う。
+  | {
+      kind: "chatSessionList";
+      total: number;
+      sessions: Array<{ shortId: string; startedAt: string; messageCount: number; preview: string }>;
+    }
+  // 会話本文(get_chat_session_messages)。role のラベルはサーバ側(CHAT_ROLE_LABELS)を
+  // 単一の情報源とし、ここでは辞書を持たずそのまま描画する。
+  | {
+      kind: "chatSessionMessages";
+      shortId: string;
+      totalMessages: number;
+      messages: Array<{ roleLabel: string; content: string }>;
+    }
+  // AI品質評価(get_conversation_evaluation)。4軸ラベルはサーバ側で確定済みのものを
+  // そのまま描画する(旧UIの JudgeEvaluationSection.tsx と同一語彙)。
+  | {
+      kind: "evaluation";
+      shortId: string;
+      overallScore: number;
+      axes: Array<{ label: string; score: number | null }>;
+      notes: string | null;
     }
   // 週次まとめ。数値はサーバ集計値をそのまま描画する(LLMの生成文を経由しない)。
   // 各グループが null なのは、対応するクエリが失敗し取得できなかった場合(0とは区別する)。
@@ -102,6 +185,9 @@ type Card =
       pendingTuningRules: number | null;
       gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
     };
+
+// 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
+const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
 const REAL_TOOL_LABEL: Record<string, string> = {
@@ -122,6 +208,8 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_avatar_list: "アバター一覧の取得",
   activate_avatar: "アバターの有効化",
   deactivate_avatar: "アバターの停止",
+  suggest_avatar_preset: "アバター見本の提案",
+  adopt_avatar_preset: "アバター見本の採用",
   get_embed_code: "埋め込みコードの取得",
   set_widget_theme: "ウィジェットテーマの変更",
   get_tuning_rules: "指示ルール一覧の取得",
@@ -137,6 +225,10 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   dismiss_knowledge_gap: "知識ギャップの片付け",
   get_chat_sessions: "会話セッション一覧の取得",
   get_chat_session_messages: "会話の全文取得",
+  delete_chat_session: "会話セッションの削除",
+  get_session_outcome: "会話の成果の取得",
+  record_session_outcome: "会話の成果の記録",
+  get_conversation_evaluation: "対応品質評価の取得",
   get_escalations: "エスカレーション一覧の取得",
   reply_to_escalation: "エスカレーションへの返信",
   resolve_escalation: "エスカレーションの対応完了",
@@ -168,6 +260,7 @@ const REAL_WRITE_TOOLS = new Set([
   "set_widget_theme",
   "activate_avatar",
   "deactivate_avatar",
+  "adopt_avatar_preset",
   "import_industry_faq_templates",
   "commit_faq_import",
   "reply_to_escalation",
@@ -293,7 +386,7 @@ function parseLegacyUiLink(result: string): { label: string; url: string; descri
   return { label, url, description };
 }
 
-const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定)しました/;
+const SAVE_SUCCESS_RE = /を(保存|登録|削除|更新|有効化|設定|採用)しました/;
 
 // ─── PDF取り込みの案内文 ─────────────────────────────────────────────────────
 // 判定条件は lib/bookPdfUpload.ts で旧UIと共有し、文言だけをこの面の話し言葉に合わせる。
@@ -310,6 +403,16 @@ const PDF_UPLOAD_TOO_LARGE_ERROR = "ファイルが大きすぎて受け取れ�
 const PDF_UPLOAD_NETWORK_ERROR = "うまく送れませんでした。通信の状態を確かめて、もう一度お試しください。";
 const PDF_UPLOAD_GENERIC_ERROR = "うまく受け取れませんでした。少し時間をおいてお試しください。";
 const PDF_UPLOAD_ZIP_EMPTY_ERROR = "ZIPの中に取り込めるPDFが見つかりませんでした。";
+// GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定(2026-07-31決定)。専門用語(403/権限等)は
+// 出さず、優しい日本語で断る。バックエンド(bookPdfRoutes.ts)の拒否文言とも揃える。
+const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
+  "この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。";
+
+const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_VOICE_MATCH_GENERIC_ERROR = "声を検索できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_VOICE_MATCH_EMPTY_ERROR = "合う声が見つかりませんでした。もう一度お試しください。";
+const AVATAR_VOICE_ADOPT_GENERIC_ERROR = "この声を反映できませんでした。少し時間をおいてもう一度お試しください。";
 
 // ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
 //     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
@@ -374,7 +477,11 @@ const AGENT_BORDER = "rgba(124,58,237,0.30)";
 const CATEGORIES: Category[] = [
   { key: "assistant", label: "アシスタント", icon: "✨" },
   { key: "weekly", label: "今週のまとめ", icon: "📊" },
-  { key: "history", label: "会話の履歴", icon: "💬", badge: "escalations" },
+  // 「対応中の会話」(J1: 今すぐ人が出るべき会話)と「会話の履歴」(J2点検/J3照会)は
+  // 緊急性の軸が違うため別カテゴリーに分ける。バッジ(escalations件数)もこちらへ移す。
+  // ラベルは RAIL_BADGE_LABEL.escalations を直接参照し、新しい呼び名を作らない。
+  { key: "escalations", label: RAIL_BADGE_LABEL.escalations, icon: "💬", badge: "escalations" },
+  { key: "history", label: "会話の履歴", icon: "🗂️" },
   { key: "knowledge", label: "知識データ", icon: "📚", badge: "gaps" },
   { key: "rules", label: "指示ルール", icon: "🎛️" },
   { key: "avatar", label: "アバター", icon: "🎭" },
@@ -541,12 +648,45 @@ export default function CopilotPreviewPage() {
         const { label, url, description } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "link", label, url, description } };
       }
+      if (a.card?.kind === "chat_session_list") {
+        const { total, sessions } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "chatSessionList", total, sessions } };
+      }
+      if (a.card?.kind === "chat_session_messages") {
+        const { shortId, totalMessages, messages } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "chatSessionMessages", shortId, totalMessages, messages } };
+      }
+      if (a.card?.kind === "conversation_evaluation") {
+        const { shortId, overallScore, axes, notes } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "evaluation", shortId, overallScore, axes, notes } };
+      }
+      if (a.card?.kind === "avatar_preset") {
+        const { presetId, name, imageUrl, description } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "avatarPreset", presetId, name, imageUrl, description } };
+      }
+      if (a.card?.kind === "avatar_adopted") {
+        const { configId, name, imageUrl, description } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "avatarAdopted", configId, name, imageUrl, description } };
+      }
+      if (a.card?.kind === "tuning_rules_list") {
+        const { rules, totalCount } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "rulesList", rules, totalCount } };
+      }
       if (a.card?.kind === "weekly_summary") {
         const { asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps } = a.card;
         return {
           id: nextId(),
           role: "ai",
           card: { kind: "weeklySummary", asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps },
+        };
+      }
+      // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
+      if (a.card?.kind === "tuning_rule_draft") {
+        const { triggerPattern, expectedBehavior, priority } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "rule", trigger: triggerPattern, behavior: expectedBehavior, priority },
         };
       }
       if (a.tool === "suggest_faq") {
@@ -599,6 +739,21 @@ export default function CopilotPreviewPage() {
     const industryTemplatePendingConfirm = data.actions?.some(
       (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
     );
+    // 成果(コンバージョン)記録がconfirmed待ちでブロックされた場合も同様
+    const outcomePendingConfirm = data.actions?.some(
+      (a) => a.tool === "record_session_outcome" && a.result.includes("確認が必要"),
+    );
+    // 会話セッション削除(不可逆)がconfirmed待ちでブロックされた場合も同様
+    const deletePendingConfirm = data.actions?.some(
+      (a) => a.tool === "delete_chat_session" && a.result.includes("確認が必要"),
+    );
+    // 会話一覧(get_chat_sessions)が返ってきたら、短縮IDを手打ちさせず次の1件を
+    // 選べるチップを添える。同じターンに複数の会話一覧が返ることは無い前提(最初の1件)。
+    const sessionListAction = data.actions?.find((a) => a.card?.kind === "chat_session_list");
+    const sessionListCard =
+      sessionListAction?.card?.kind === "chat_session_list" ? sessionListAction.card : undefined;
+    // アバター見本の提案(suggest_avatar_preset)が出たら、そのまま採用できるチップを添える
+    const avatarPresetSuggested = data.actions?.some((a) => a.tool === "suggest_avatar_preset");
     // 週次まとめのアクションチップ: LLMの文には付けられない(chipsはsuggest_*系の
     // ツール結果パースからしか生成できない構造のため)。サーバ集計値(card)から
     // 決定的に導く — 未回答質問/承認待ちルールが実在する時だけ、その場で着手できる
@@ -611,6 +766,11 @@ export default function CopilotPreviewPage() {
     const chips: Chip[] | undefined = suggested
       ? [
           { label: "保存して", action: "__real:保存してください", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : avatarPresetSuggested
+      ? [
+          { label: "採用して", action: "__real:採用してください", tone: "primary" },
           { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
         ]
       : saiPendingConfirm
@@ -628,6 +788,22 @@ export default function CopilotPreviewPage() {
           { label: "登録して", action: "__real:登録してください", tone: "primary" },
           { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
         ]
+      : outcomePendingConfirm
+      ? [
+          { label: "記録して", action: "__real:はい、お願いします", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : deletePendingConfirm
+      ? [
+          { label: "削除して", action: "__real:はい、削除してください", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+        ]
+      : sessionListCard && sessionListCard.sessions.length > 0
+      ? sessionListCard.sessions.map((s) => ({
+          label: `${s.startedAt.slice(5, 10)} ${s.preview.slice(0, 12)}`,
+          action: `__real:[${s.shortId}]の会話を見せて`,
+          tone: "ghost" as const,
+        }))
       : weeklySummaryGapsActionable || weeklySummaryTuningActionable
       ? [
           ...(weeklySummaryGapsActionable
@@ -721,6 +897,37 @@ export default function CopilotPreviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsTenantSelection]);
 
+  // super_adminがプレビュー中に別テナントへenterPreviewする経路(AppSwitcher/テナント詳細の
+  // 「クライアントビューで見る」等)を検知し、会話を初期化して新テナントの週次ブリーフィングを
+  // 取り直す。上の bootstrap effect は needsTenantSelection のみを見ており、previewMode の
+  // まま別テナントへ切り替わるケースでは再評価されないため、前テナントの会話(weeklySummary
+  // カードを含む)が残ったまま新テナントの画面として表示され続けていた(GID: PR #633 で報告)。
+  //
+  // 初回確定("" → 最初のテナント)は上の effect が担当するため何もしない。空への遷移
+  // (プレビュー解除)も何もしない(その間は needsTenantSelection の描画分岐でチャット自体が
+  // 表示されない)。scopedTenantId が「別の非空値」に変わった場合だけリセットする。
+  const lastScopedTenantIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = lastScopedTenantIdRef.current;
+    lastScopedTenantIdRef.current = scopedTenantId || prev;
+
+    if (!prev || !scopedTenantId || scopedTenantId === prev) return;
+
+    // 会話・履歴・sessionId・進捗カウント・保存済みセッション(前テナントのもの)を
+    // すべて破棄してから、新テナントの週次ブリーフィングを取り直す。
+    clearChatSession(CHAT_SESSION_SURFACE_FULLSCREEN);
+    setMsgs([]);
+    setRealHistory([]);
+    setRealActionCount(0);
+    adoptSessionId(crypto.randomUUID());
+
+    void (async () => {
+      push({ id: nextId(), role: "ai", text: "テナントを切り替えました。今週の実データを確認しています…" });
+      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedTenantId]);
+
   // テナント選択用の一覧。既存の GET /v1/admin/tenants(super_admin限定)をそのまま使う。
   const [tenants, setTenants] = useState<TenantOption[] | null>(null);
   const [tenantsFailed, setTenantsFailed] = useState(false);
@@ -807,8 +1014,24 @@ export default function CopilotPreviewPage() {
       // 統一済み(BOOTSTRAP_PROMPT のコメント参照)。ここでキャッシュや直近取得のスキップは
       // 行わない — クリックした瞬間の最新状況を見せるのがこのカテゴリの役割。
       void sendReal("今週の状況を教えてください。要点と次にやるべきことを最大3つまで、簡潔に教えてください。");
+    } else if (key === "escalations") {
+      void sendReal("対応中のエスカレーションの状況を教えて");
     } else if (key === "history") {
-      void sendReal("最近の会話とエスカレーションの状況を教えて");
+      // 会話の履歴は「点検(品質を確かめる)」と「照会(特定の1件を探す)」で送る内容が
+      // 別物なので、定型プロンプト1本を即送信していた旧挙動をやめ、既存のチップ機構
+      // (__real: プレフィックスで自然文を代理送信)でユーザーに選ばせる。
+      // sendReal経由ではなくpushで直接積むため sendReal 自身の sending ガードが効かず、
+      // 既にチップ提示中(active === "history" かつ busy)に連打すると同じ質問が
+      // 積み上がってしまう。ここだけ明示的に多重投入を防ぐ。
+      if (busy) return;
+      push(say("会話の履歴について、何をしますか？", [
+        {
+          label: "最近の会話を点検する",
+          action: "__real:直近の会話を点検して、対応品質に問題がありそうな会話があれば教えて",
+          tone: "primary",
+        },
+        { label: "特定の会話を探す", action: "__real:特定の会話を探したい", tone: "ghost" },
+      ]));
     } else if (key === "avatar") {
       void sendReal("アバターの稼働状況と、設定の一覧を教えて");
     } else if (key === "knowledge") {
@@ -846,6 +1069,11 @@ export default function CopilotPreviewPage() {
     ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(scopedTenantId)}`
     : `${API_BASE}/v1/admin/knowledge/book-pdf`;
 
+  // GID 1217040818410419: previewMode中はisSuperAdminがclient_admin相当に落ちる(useAuth.tsx:213-214)
+  // ため、ここで isSuperAdmin(上の派生値)を使うと previewMode中のsuper_admin自身からもPDF投入が
+  // 消えてしまう。生のロールで判定する(この画面はテナントとsuper_adminのpreviewの両方が通る)。
+  const canUploadBookPdf = user?.role === "super_admin";
+
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const [pdfDragOver, setPdfDragOver] = useState(false);
   const pdfDragCounterRef = useRef(0);
@@ -859,8 +1087,27 @@ export default function CopilotPreviewPage() {
   }, []);
 
   const acceptFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0) return;
+
+    // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定。通信前にこの場で優しく断る
+    // (拡張子/サイズの受付判定と同じく、対象外の相手には通信させない)。
+    if (!canUploadBookPdf) {
+      push({
+        id: nextId(),
+        role: "ai",
+        card: {
+          kind: "pdfUpload",
+          status: "error",
+          fileName: fileArray.length === 1 ? fileArray[0].name : `${fileArray.length}件のファイル`,
+          message: PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE,
+        },
+      });
+      return;
+    }
+
     const accepted: { file: File; isZip: boolean }[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of fileArray) {
       const verdict = validateBookPdfFile(file);
       if (verdict.kind === "rejected") {
         // 受け付けない形式・大きさは通信する前にこの場で断る
@@ -940,6 +1187,145 @@ export default function CopilotPreviewPage() {
       }
       // 他の書き込み操作と同じく、実際にDBへ入った件数としてヘッダーのバッジに反映する
       setRealActionCount((n) => n + 1);
+    }
+  };
+
+  // ─── アバター画像候補の生成・採用(採用が気に入らなかった場合の分岐) ────────────
+  // PDF取り込みと同じ理由でエージェントツール経由にしない: 画像URL群はツール結果の
+  // 500字に収まらない。プロンプトは wizard と同じ buildAvatarPrompt を固定の標準的な
+  // 選択(人物・バストショット・自然な笑顔・シンプル背景)で使う。チャットは選択肢を
+  // 集めない(「選ばせない」方針)ため、雰囲気を変えたい場合は生成をやり直すだけで良い。
+  const updateAvatarCandidatesCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "avatarCandidates" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "avatarCandidates" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  const generateAvatarCandidates = async (configId: string, name: string) => {
+    const cardId = nextId();
+    push({ id: cardId, role: "ai", card: { kind: "avatarCandidates", configId, name, status: "generating" } });
+
+    const { prompt } = buildAvatarPrompt({
+      type: "human",
+      composition: "bust",
+      expression: "smile",
+      background: "simple",
+    });
+
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/fal/generate`, {
+        method: "POST",
+        body: JSON.stringify({ prompt, numImages: 4 }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarCandidatesCard(cardId, { status: "failed", message: body?.error || AVATAR_GENERATE_GENERIC_ERROR });
+        return;
+      }
+      const data = (await res.json()) as { images?: string[] };
+      const images = data.images ?? [];
+      if (images.length === 0) {
+        updateAvatarCandidatesCard(cardId, { status: "failed", message: AVATAR_GENERATE_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarCandidatesCard(cardId, { status: "done", images });
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_GENERATE_GENERIC_ERROR;
+      updateAvatarCandidatesCard(cardId, { status: "failed", message });
+    }
+  };
+
+  const adoptAvatarCandidate = async (cardMsgId: number, configId: string, imageUrl: string) => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${configId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ image_url: imageUrl }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarCandidatesCard(cardMsgId, { message: body?.error || AVATAR_ADOPT_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarCandidatesCard(cardMsgId, { adoptedUrl: imageUrl });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_ADOPT_GENERIC_ERROR;
+      updateAvatarCandidatesCard(cardMsgId, { message });
+    }
+  };
+
+  // ─── アバターの声の選択・採用 ─────────────────────────────────────────────────
+  // POST /match-voice はテキストの候補(id/title/description/score)のみを返す
+  // (旧UIウィザードのStudioVoiceSectionも同様に試聴機能を持たない。Fish Audio
+  // 検索APIの応答に音声プレビューURLが含まれないため)。「声の説明」は新たに
+  // 尋ねず、採用済みアバターの性格・話し方の説明をそのまま検索クエリに使う
+  // (「選ばせない」方針。ユーザーは声だけの追加質問に答えなくてよい)。
+  const updateAvatarVoiceCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "avatarVoiceCandidates" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "avatarVoiceCandidates" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  const matchAvatarVoice = async (configId: string, description: string) => {
+    const cardId = nextId();
+    const boundedDescription = description.slice(0, 300);
+    push({ id: cardId, role: "ai", card: { kind: "avatarVoiceCandidates", configId, description: boundedDescription, status: "matching" } });
+
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/match-voice`, {
+        method: "POST",
+        body: JSON.stringify({ description: boundedDescription }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarVoiceCard(cardId, { status: "failed", message: body?.error || AVATAR_VOICE_MATCH_GENERIC_ERROR });
+        return;
+      }
+      const data = (await res.json()) as { recommendations?: Array<{ id: string; title: string; description: string; score: number }> };
+      const recommendations = data.recommendations ?? [];
+      if (recommendations.length === 0) {
+        updateAvatarVoiceCard(cardId, { status: "failed", message: AVATAR_VOICE_MATCH_EMPTY_ERROR });
+        return;
+      }
+      updateAvatarVoiceCard(cardId, { status: "done", recommendations });
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_VOICE_MATCH_GENERIC_ERROR;
+      updateAvatarVoiceCard(cardId, { status: "failed", message });
+    }
+  };
+
+  const adoptAvatarVoice = async (cardMsgId: number, configId: string, voiceId: string) => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${configId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ voice_id: voiceId }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarVoiceCard(cardMsgId, { message: body?.error || AVATAR_VOICE_ADOPT_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarVoiceCard(cardMsgId, { adoptedVoiceId: voiceId });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_VOICE_ADOPT_GENERIC_ERROR;
+      updateAvatarVoiceCard(cardMsgId, { message });
     }
   };
 
@@ -1113,7 +1499,15 @@ export default function CopilotPreviewPage() {
         <div ref={threadRef} className="cp-thread" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}>
           <div style={{ width: "100%", maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 18 }}>
             {msgs.map((m) => (
-              <MessageRow key={m.id} m={m} onChip={runAction} />
+              <MessageRow
+                key={m.id}
+                m={m}
+                onChip={runAction}
+                onGenerateAvatarCandidates={generateAvatarCandidates}
+                onAdoptAvatarCandidate={adoptAvatarCandidate}
+                onMatchAvatarVoice={matchAvatarVoice}
+                onAdoptAvatarVoice={adoptAvatarVoice}
+              />
             ))}
             {/* key に直近メッセージのidを与え、回答が変わるたびに新しい確認として出す
                 (前の回答で「はい」を押した状態を持ち越さない) */}
@@ -1353,7 +1747,21 @@ function RealActionBadge({ count }: { count: number }) {
   );
 }
 
-function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => void }) {
+function MessageRow({
+  m,
+  onChip,
+  onGenerateAvatarCandidates,
+  onAdoptAvatarCandidate,
+  onMatchAvatarVoice,
+  onAdoptAvatarVoice,
+}: {
+  m: Msg;
+  onChip: (a: string, id: number) => void;
+  onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
+  onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
+  onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
+}) {
   const isMe = m.role === "me";
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 10 }}>
@@ -1369,7 +1777,17 @@ function MessageRow({ m, onChip }: { m: Msg; onChip: (a: string, id: number) => 
           {ANSWERED_FROM_LABEL[m.answeredFrom]}
         </div>
       )}
-      {m.card && <CardView card={m.card} />}
+      {m.card && (
+        <CardView
+          card={m.card}
+          msgId={m.id}
+          onGenerateAvatarCandidates={onGenerateAvatarCandidates}
+          onAdoptAvatarCandidate={onAdoptAvatarCandidate}
+          onMatchAvatarVoice={onMatchAvatarVoice}
+          onAdoptAvatarVoice={onAdoptAvatarVoice}
+          onSendReal={(action) => onChip(action, m.id)}
+        />
+      )}
       {m.chips && !m.chipsUsed && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {m.chips.map((c, i) => (
@@ -1548,16 +1966,32 @@ function CardShell({ hd, tone = "agent", children, foot }: { hd: React.ReactNode
   );
 }
 
-function Field({ k, v, quote, hi }: { k: string; v: string; quote?: boolean; hi?: boolean }) {
+function Field({ k, v, quote, hi, pre }: { k: string; v: string; quote?: boolean; hi?: boolean; pre?: boolean }) {
   return (
     <div style={{ fontSize: 15 }}>
       <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 4 }}>{k}</div>
-      <div style={{ color: "var(--foreground)", ...(quote ? { background: "var(--muted, rgba(120,120,140,0.1))", borderRadius: 10, padding: "10px 14px", borderLeft: `3px solid ${hi ? "#d99320" : AGENT}`, lineHeight: 1.7 } : {}) }}>{v}</div>
+      <div style={{ color: "var(--foreground)", ...(pre ? { whiteSpace: "pre-wrap" } : {}), ...(quote ? { background: "var(--muted, rgba(120,120,140,0.1))", borderRadius: 10, padding: "10px 14px", borderLeft: `3px solid ${hi ? "#d99320" : AGENT}`, lineHeight: 1.7 } : {}) }}>{v}</div>
     </div>
   );
 }
 
-function CardView({ card }: { card: Card }) {
+function CardView({
+  card,
+  msgId,
+  onGenerateAvatarCandidates,
+  onAdoptAvatarCandidate,
+  onMatchAvatarVoice,
+  onAdoptAvatarVoice,
+  onSendReal,
+}: {
+  card: Card;
+  msgId: number;
+  onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
+  onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
+  onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
+  onSendReal?: (action: string) => void;
+}) {
   switch (card.kind) {
     case "agentAction":
       return (
@@ -1583,7 +2017,80 @@ function CardView({ card }: { card: Card }) {
         <CardShell hd={<><span>🎛️</span>AIへの指示ルールを追加します</>}
           foot={<CardActionsNote note="「いつ・どう振る舞うか」を1つの指示にまとめました。" />}>
           <Field k="どんな時に" v={card.trigger} />
-          <Field k="こう振る舞う" v={card.behavior} quote />
+          <Field k="こう振る舞う" v={card.behavior} quote pre />
+          {card.priority !== undefined && (
+            <Field k="優先度" v={TIER_LABEL[priorityToTier(card.priority)]} />
+          )}
+        </CardShell>
+      );
+    case "rulesList":
+      return (
+        <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
+          {card.rules.map((r) => {
+            // P4-1: AI(judge)が提案したルールは、店主が作ったものと同じ見た目で
+            // 並べない(出所が分からないと承認判断ができない)。is_activeだけでは
+            // 未承認(pending)と却下済み(rejected)を区別できないためstatusも見る。
+            const isJudgeProposal = r.source === "judge";
+            const isPendingApproval = isJudgeProposal && !r.isActive && r.status !== "rejected";
+            const isRejected = isJudgeProposal && r.status === "rejected";
+            return (
+              <div
+                key={r.id}
+                style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)", flexWrap: "wrap" }}>
+                  <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
+                  <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
+                  {isJudgeProposal && (
+                    <span style={{ fontWeight: 700, color: "#b45309", background: "rgba(245,158,11,0.14)", borderRadius: 6, padding: "2px 8px" }}>
+                      🤖 AIの提案{isPendingApproval ? "（未承認）" : isRejected ? "（却下済み）" : ""}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
+                  <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
+                </div>
+                {/* 根拠は評価IDなどの内部識別子をそのまま出さず、店主の言葉に言い換える */}
+                {r.evidence && (
+                  <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", display: "flex", flexDirection: "column", gap: 2 }}>
+                    {r.evidence.avgScore !== undefined && (
+                      <div>もとになった会話の対応の質: 目安{r.evidence.avgScore}点</div>
+                    )}
+                    {r.evidence.effectivePrinciples && r.evidence.effectivePrinciples.length > 0 && (
+                      <div>効果があった対応: {r.evidence.effectivePrinciples.join("、")}</div>
+                    )}
+                    {r.evidence.failedPrinciples && r.evidence.failedPrinciples.length > 0 && (
+                      <div>うまくいかなかった対応: {r.evidence.failedPrinciples.join("、")}</div>
+                    )}
+                  </div>
+                )}
+                {isPendingApproval && onSendReal && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を承認して有効にしてください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "none", background: AGENT, color: "#fff", minHeight: 44 }}
+                    >
+                      有効にする
+                    </button>
+                    <button
+                      onClick={() =>
+                        onSendReal(
+                          `__real:AIが提案したルール（ID: ${r.id}、「${r.triggerPattern}」→「${r.expectedBehavior}」）を却下してください`,
+                        )
+                      }
+                      style={{ fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                    >
+                      却下する
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </CardShell>
       );
     case "engagement":
@@ -1602,6 +2109,27 @@ function CardView({ card }: { card: Card }) {
       );
     case "pdfUpload":
       return <PdfUploadCard card={card} />;
+    case "avatarPreset":
+      return (
+        <CardShell hd={<><span>🎭</span>アバターの見本を提案します</>}
+          foot={<CardActionsNote note="採用しても公開はされません。声や話し方はあとから自由に変更できます。" />}>
+          {card.imageUrl && (
+            <img
+              src={card.imageUrl}
+              alt={card.name}
+              style={{ width: 96, height: 96, borderRadius: 12, objectFit: "cover", alignSelf: "flex-start" }}
+            />
+          )}
+          <Field k="名前" v={card.name} />
+          <Field k="性格・話し方" v={card.description} quote />
+        </CardShell>
+      );
+    case "avatarAdopted":
+      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onMatchVoice={onMatchAvatarVoice} />;
+    case "avatarCandidates":
+      return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onAdopt={onAdoptAvatarCandidate} />;
+    case "avatarVoiceCandidates":
+      return <AvatarVoiceCard card={card} msgId={msgId} onMatch={onMatchAvatarVoice} onAdopt={onAdoptAvatarVoice} />;
     case "link":
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
@@ -1620,6 +2148,52 @@ function CardView({ card }: { card: Card }) {
           </div>
         </CardShell>
       );
+    case "chatSessionList":
+      return (
+        <CardShell hd={<><span>💬</span>会話セッション一覧（全{card.total}件中{card.sessions.length}件）</>}>
+          {card.sessions.map((s) => (
+            <div key={s.shortId} style={{ display: "flex", flexDirection: "column", gap: 3, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+                {s.startedAt.slice(0, 10)} ・ {s.messageCount}件
+              </div>
+              <div style={{ fontSize: 15, color: "var(--foreground)" }}>{s.preview}</div>
+            </div>
+          ))}
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+            下のボタンから会話を選ぶと、内容を表示します。
+          </div>
+        </CardShell>
+      );
+    case "chatSessionMessages":
+      return (
+        <CardShell hd={<><span>📜</span>会話[{card.shortId}]（全{card.totalMessages}件中{card.messages.length}件）</>}>
+          {card.messages.map((m, i) => <Field key={i} k={m.roleLabel} v={m.content} quote />)}
+        </CardShell>
+      );
+    case "evaluation": {
+      // 閾値(80以上=良好/60以上=許容/未満=要改善)は旧UI(JudgeEvaluationSection.tsx)と同一。
+      // 同じ会話が面によって違う評価に見えてはならない。
+      const tone = card.overallScore >= 80 ? "good" : card.overallScore >= 60 ? "brand" : "bad";
+      return (
+        <CardShell hd={<><span>🤖</span>対応品質評価（総合{card.overallScore}点）</>} tone={tone}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {card.axes.map((a) => {
+              const color =
+                a.score == null ? "var(--muted-foreground)" : a.score >= 80 ? "#4ade80" : a.score >= 60 ? "#fbbf24" : "#f87171";
+              return (
+                <span
+                  key={a.label}
+                  style={{ padding: "3px 10px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, background: "rgba(120,120,140,0.12)", border: "1px solid var(--border)", color }}
+                >
+                  {a.label}: {a.score ?? "未測定"}
+                </span>
+              );
+            })}
+          </div>
+          {card.notes && <Field k="所見" v={card.notes} quote />}
+        </CardShell>
+      );
+    }
     case "weeklySummary":
       return <WeeklySummaryCard card={card} />;
     default:
@@ -1664,10 +2238,17 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
   // 集計時点(asOf)を常に表示する。取得日時をJSTの暦日で比較し、今日でなければ
   // 「別の日に取得した内容」だと分かるようにする(取得直後かどうかは問わない — 復元も
   // 再取得も同じ card 構造なので、この表示ロジック1本だけで両方をカバーできる)。
+  //
+  // asOf は改ざん/破損したsessionStorageから復元される可能性がある(手動編集・古い
+  // スキーマのデータ等)。toISOString() は Invalid Date で例外を投げるため、ここで
+  // throw するとカード1枚のためにスレッド全体の描画が落ちる。素通しせず必ず検証する。
   const asOfDate = new Date(card.asOf);
+  const asOfValid = !Number.isNaN(asOfDate.getTime());
   const jstDayKey = (d: Date) => new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const isStale = jstDayKey(asOfDate) !== jstDayKey(new Date());
-  const asOfLabel = asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const isStale = !asOfValid || jstDayKey(asOfDate) !== jstDayKey(new Date());
+  const asOfLabel = asOfValid
+    ? asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "不明";
 
   return (
     <CardShell
@@ -1730,6 +2311,291 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
           </div>
         </div>
       )}
+    </CardShell>
+  );
+}
+
+// 採用直後のカード。この画面のまま画像候補の生成に進める入口を持つ。
+// ボタンは相談窓口の ResolutionPrompt/ConsultReplyCard と同じく、チャットの
+// ツール呼び出しループを経由せずここから直接バックエンドを叩く(チップとは別系統)。
+function AvatarAdoptedCard({
+  card,
+  onGenerate,
+  onMatchVoice,
+}: {
+  card: Extract<Card, { kind: "avatarAdopted" }>;
+  onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onMatchVoice: (configId: string, description: string) => void | Promise<void>;
+}) {
+  const [busyImage, setBusyImage] = useState(false);
+  const [busyVoice, setBusyVoice] = useState(false);
+  const handleGenerate = () => {
+    setBusyImage(true);
+    void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusyImage(false));
+  };
+  const handleMatchVoice = () => {
+    setBusyVoice(true);
+    // 声の説明を新たに尋ねず、採用済みの性格・話し方の説明をそのまま検索クエリにする。
+    void Promise.resolve(onMatchVoice(card.configId, card.description)).finally(() => setBusyVoice(false));
+  };
+
+  return (
+    <CardShell
+      tone="good"
+      hd={<><span>✅</span>アバター「{card.name}」を採用しました</>}
+      foot={<CardActionsNote note="生成・検索のたびに少額の費用が発生します。気に入るまで何度でもやり直せます。" />}
+    >
+      {card.imageUrl && (
+        <img
+          src={card.imageUrl}
+          alt={card.name}
+          style={{ width: 96, height: 96, borderRadius: 12, objectFit: "cover", alignSelf: "flex-start" }}
+        />
+      )}
+      <Field k="性格・話し方" v={card.description} quote />
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={handleGenerate}
+          disabled={busyImage}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "none", background: AGENT, color: "#fff",
+            cursor: busyImage ? "not-allowed" : "pointer", opacity: busyImage ? 0.6 : 1,
+          }}
+        >
+          {busyImage ? "生成しています…" : "画像を新しく生成する"}
+        </button>
+        <button
+          onClick={handleMatchVoice}
+          disabled={busyVoice}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)",
+            cursor: busyVoice ? "not-allowed" : "pointer", opacity: busyVoice ? 0.6 : 1,
+          }}
+        >
+          {busyVoice ? "声を探しています…" : "声を探す"}
+        </button>
+      </div>
+    </CardShell>
+  );
+}
+
+// 画像候補の生成〜採用。生成はエージェントツール経由にしない(画像URL群はツール結果の
+// 500字に収まらない)ため、直接バックエンドを叩く。3つの状態(生成中/完了/失敗)は
+// 必ずどれかで確定させ、無限スピナーを残さない。
+function AvatarCandidatesCard({
+  card,
+  msgId,
+  onGenerate,
+  onAdopt,
+}: {
+  card: Extract<Card, { kind: "avatarCandidates" }>;
+  msgId: number;
+  onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onAdopt: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+}) {
+  const [adopting, setAdopting] = useState<string | null>(null);
+
+  if (card.status === "generating") {
+    return (
+      <CardShell hd={<><span>🎨</span>新しい画像を生成しています</>}>
+        <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+          数十秒かかることがあります。このまま他の操作もできます。
+        </div>
+      </CardShell>
+    );
+  }
+
+  if (card.status === "failed") {
+    return (
+      <CardShell
+        tone="bad"
+        hd={<><span>🎨</span>画像を生成できませんでした</>}
+        foot={
+          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={() => void onGenerate(card.configId, card.name)}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
+              }}
+            >
+              もう一度試す
+            </button>
+          </div>
+        }
+      >
+        {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+      </CardShell>
+    );
+  }
+
+  const handleAdopt = (imageUrl: string) => {
+    setAdopting(imageUrl);
+    void Promise.resolve(onAdopt(msgId, card.configId, imageUrl)).finally(() => setAdopting(null));
+  };
+
+  return (
+    <CardShell
+      tone="good"
+      hd={<><span>🎨</span>新しい候補です</>}
+      foot={
+        !card.adoptedUrl ? (
+          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={() => void onGenerate(card.configId, card.name)}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer",
+              }}
+            >
+              別の候補を見る
+            </button>
+          </div>
+        ) : undefined
+      }
+    >
+      {card.message && <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{card.message}</div>}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {(card.images ?? []).map((url) => {
+          const isAdopted = card.adoptedUrl === url;
+          const disabled = !!card.adoptedUrl || adopting !== null;
+          return (
+            <div key={url} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <img
+                src={url}
+                alt="アバター候補"
+                style={{
+                  width: 96, height: 96, borderRadius: 12, objectFit: "cover",
+                  border: isAdopted ? `2px solid ${AGENT}` : "1px solid var(--border)",
+                }}
+              />
+              <button
+                onClick={() => handleAdopt(url)}
+                disabled={disabled}
+                style={{
+                  fontSize: 12.5, fontWeight: 700, padding: "5px 12px", borderRadius: 999, minHeight: 32,
+                  border: isAdopted ? "none" : "1px solid var(--border)",
+                  background: isAdopted ? AGENT : "transparent",
+                  color: isAdopted ? "#fff" : "var(--muted-foreground)",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled && !isAdopted ? 0.5 : 1,
+                }}
+              >
+                {isAdopted ? "これに決定" : adopting === url ? "反映中…" : "これにする"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </CardShell>
+  );
+}
+
+// 声の候補〜採用。match-voice はテキストの候補(id/title/description/score)のみを
+// 返し、音声プレビューURLを持たない(旧UIウィザードのStudioVoiceSectionも試聴機能を
+// 持たない。Fish Audio検索APIの応答に含まれないため)。名前とスコアを頼りに選ぶ形になる。
+function AvatarVoiceCard({
+  card,
+  msgId,
+  onMatch,
+  onAdopt,
+}: {
+  card: Extract<Card, { kind: "avatarVoiceCandidates" }>;
+  msgId: number;
+  onMatch: (configId: string, description: string) => void | Promise<void>;
+  onAdopt: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
+}) {
+  const [adopting, setAdopting] = useState<string | null>(null);
+
+  if (card.status === "matching") {
+    return (
+      <CardShell hd={<><span>🔊</span>合う声を探しています</>}>
+        <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+          少し時間がかかることがあります。このまま他の操作もできます。
+        </div>
+      </CardShell>
+    );
+  }
+
+  if (card.status === "failed") {
+    return (
+      <CardShell
+        tone="bad"
+        hd={<><span>🔊</span>声を検索できませんでした</>}
+        foot={
+          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={() => void onMatch(card.configId, card.description)}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
+              }}
+            >
+              もう一度試す
+            </button>
+          </div>
+        }
+      >
+        {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+      </CardShell>
+    );
+  }
+
+  const handleAdopt = (voiceId: string) => {
+    setAdopting(voiceId);
+    void Promise.resolve(onAdopt(msgId, card.configId, voiceId)).finally(() => setAdopting(null));
+  };
+
+  return (
+    <CardShell
+      tone="good"
+      hd={<><span>🔊</span>声の候補です</>}
+      foot={
+        <CardActionsNote note="音声のプレビューは提供されていません。名前と説明を参考にお選びください。" />
+      }
+    >
+      {card.message && <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{card.message}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {(card.recommendations ?? []).map((rec) => {
+          const isAdopted = card.adoptedVoiceId === rec.id;
+          const disabled = !!card.adoptedVoiceId || adopting !== null;
+          return (
+            <div
+              key={rec.id}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                padding: "10px 14px", borderRadius: 10,
+                border: isAdopted ? `1px solid ${AGENT}` : "1px solid var(--border)",
+                background: isAdopted ? AGENT_SOFT : "transparent",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>{rec.title}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{Math.round(rec.score * 100)}%</span>
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", marginTop: 2 }}>{rec.description}</div>
+              </div>
+              <button
+                onClick={() => handleAdopt(rec.id)}
+                disabled={disabled}
+                style={{
+                  flexShrink: 0, fontSize: 12.5, fontWeight: 700, padding: "7px 14px", borderRadius: 999, minHeight: 36,
+                  border: isAdopted ? "none" : "1px solid var(--border)",
+                  background: isAdopted ? AGENT : "transparent",
+                  color: isAdopted ? "#fff" : "var(--muted-foreground)",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  opacity: disabled && !isAdopted ? 0.5 : 1,
+                }}
+              >
+                {isAdopted ? "これに決定" : adopting === rec.id ? "反映中…" : "この声にする"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </CardShell>
   );
 }
