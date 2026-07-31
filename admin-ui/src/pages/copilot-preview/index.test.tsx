@@ -129,6 +129,23 @@ function renderPage(overrides: Partial<ReturnType<typeof useAuth>> = {}) {
   );
 }
 
+// render()直後は、起動時ブリーフィングの自動送信(bootstrap useEffect内のsendReal)が
+// まだ authFetch を呼ぶ前(内部のawait前)の状態。この瞬間 sending state は初期値の
+// false のままなので、送信ボタンの disabled=false だけを見て操作すると、直後に
+// ブートストラップ自身が setSending(true) を呼んで sendReal の `if (sending) return`
+// ガードにこの後の送信操作が無言で弾かれる(textareaの値がクリアされず、リクエストも
+// 発生しない)。/v1/admin/agent/chat が実際に呼ばれたことを先に確認してから、
+// disabled=false を待つことでこのレースを避ける。
+// render() 直後にコンポーザへ操作する全テストがこのヘルパーを経由すること。
+async function waitForBootstrapSendStarted() {
+  await waitFor(() =>
+    expect(
+      vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
+    ).toBe(true),
+  );
+  await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+}
+
 describe("CopilotPreviewPage — ログアウト", () => {
   beforeEach(() => {
     vi.mocked(authFetch).mockReset();
@@ -361,15 +378,7 @@ describe("CopilotPreviewPage — 共通シェル機能パリティ(テーマ/言
   it("AppSwitcherのロックタブ(R2C2)の質問が、この画面自身のチャットに送られる", async () => {
     renderPage();
     // 起動時ブリーフィングの完了を待つ(sending中は sendReal が無視されるため)。
-    // render()直後はブートストラップの自動送信がまだ authFetch を呼ぶ前(内部のawait前)
-    // のため、disabled=falseだけを見ると早すぎるタイミングで捉えてしまう(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByTestId("app-switcher-stub"));
 
@@ -422,16 +431,7 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
 
   it("リンクは別タブで開き、会話が残る旨の補足が添えられる", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "請求書を再送したい" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -468,17 +468,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
   async function send(text: string) {
     renderPage();
-    // SCRATCH仮説検証(汎用版・特定の文言に依存しない): render()直後はブートストラップの
-    // 自動送信(sendReal)がまだ authFetch を呼ぶ前(内部のawait前)のため、ボタンの
-    // disabled=falseを早すぎるタイミングで捉えてしまうと、この操作がブートストラップ
-    // 自身のsending中に埋もれて無視される(レース条件)。/v1/admin/agent/chatが実際に
-    // 呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: text } });
     fireEvent.click(screen.getByLabelText("送信"));
   }
@@ -683,6 +673,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     const chip = await screen.findByRole("button", { name: "🎛️ この会話からルールを作る" });
     // お客様発言そのものにはボタンが出ない(AI応答1個・チップ1個であることの確認)
     expect(screen.getAllByRole("button", { name: "🎛️ この会話からルールを作る" })).toHaveLength(1);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(chip);
 
@@ -743,6 +734,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
     const chips = screen.getAllByRole("button", { name: "🎛️ このギャップからルールを作る" });
     expect(chips).toHaveLength(2);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(chips[0]);
 
@@ -1452,9 +1444,9 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
     await send("指示ルールの状況を教えて");
     const approveButton = await screen.findByRole("button", { name: "有効にする" });
-    // SCRATCH仮説検証: カード(承認ボタンを含む)はタイプライター演出の完了を待たずに
-    // 即座に描画される(push(...actionMsgs)がrevealText開始より前)。演出完了(=sending=false)
-    // を待たずにクリックすると、sendReal のsendingガードに無言で弾かれる。
+    // カード(承認ボタンを含む)はタイプライター演出の完了を待たずに即座に描画される
+    // (push(...actionMsgs)がrevealText開始より前)。演出完了(=sending=false)を
+    // 待たずにクリックすると、sendReal のsendingガードに無言で弾かれる。
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
 
     fireEvent.click(approveButton);
@@ -2037,16 +2029,7 @@ describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
 
   it("IME変換中(compositionStart後)のEnterでは送信しない", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     const composer = getComposer();
     fireEvent.compositionStart(composer);
@@ -2061,16 +2044,7 @@ describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
 
   it("変換確定後(compositionEnd後)のEnterでは送信する", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     const composer = getComposer();
     fireEvent.compositionStart(composer);
@@ -2084,16 +2058,7 @@ describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
 
   it("Shift+Enterでは送信しない(改行のため)", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     const composer = getComposer();
     fireEvent.change(composer, { target: { value: "1行目" } });
@@ -2144,16 +2109,7 @@ describe("CopilotPreviewPage — 保留中の下書きチップを無視して�
 
   it("チップを押さず自由入力を送ると、チップは使用済みになり新しいメッセージが送信される", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(getComposer(), { target: { value: "送料のFAQを作って" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -2203,16 +2159,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
       { reply: "対応中の会話が2件あります。", actions: [] },
     ]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /対応中の会話/ }));
 
@@ -2223,16 +2170,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("「会話の履歴」を押すと即送信せず、点検/照会のチップを提示する", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
 
@@ -2248,16 +2186,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
       { reply: "問題は見当たりませんでした。", actions: [] },
     ]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     fireEvent.click(await screen.findByRole("button", { name: "最近の会話を点検する" }));
 
@@ -2275,16 +2204,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
       { reply: "いつ頃の会話か、キーワードなどを教えてください。", actions: [] },
     ]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     fireEvent.click(await screen.findByRole("button", { name: "特定の会話を探す" }));
 
@@ -2295,16 +2215,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("会話の履歴のチップ提示中は他のカテゴリーへ切り替えられない", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     await screen.findByRole("button", { name: "最近の会話を点検する" });
 
@@ -2315,16 +2226,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("会話の履歴を連打してもチップメッセージが積み上がらない", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /会話の履歴/ }));
     await screen.findByRole("button", { name: "最近の会話を点検する" });
@@ -2336,16 +2238,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
   it("7カテゴリー全てがレールに表示される", async () => {
     mockAgentSequential([{ reply: "今週も順調です。", actions: [] }]);
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     for (const label of ["アシスタント", "今週のまとめ", "対応中の会話", "会話の履歴", "知識データ", "指示ルール", "アバター"]) {
       expect(screen.getByRole("button", { name: new RegExp(label) })).toBeTruthy();
@@ -2794,16 +2687,7 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
 
   it("会話が更新されると、その面のキーで保存される", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -2839,16 +2723,7 @@ describe("CopilotPreviewPage — リクエストボディの surface", () => {
 
   it("起動時ブリーフィングも手動送信も surface: fullscreen で送る", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.change(getComposer(), { target: { value: "営業時間を教えて" } });
     fireEvent.click(screen.getByLabelText("送信"));
@@ -2874,16 +2749,7 @@ describe("CopilotPreviewPage — リクエストボディの surface", () => {
   // 定義が黙って割れる。核の一致を固定してその再発を防ぐ。
   it("起動時ブリーフィングと「今週のまとめ」クリックは同一の依頼文の核を送る", async () => {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
 
     fireEvent.click(screen.getByRole("button", { name: /今週のまとめ/ }));
     await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
@@ -3806,16 +3672,7 @@ describe("CopilotPreviewPage — 回答の出どころ(answered_from)", () => {
 
   async function ask() {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.change(getComposer(), { target: { value: "送料はいくら？" } });
     fireEvent.click(screen.getByLabelText("送信"));
     expect(await screen.findByText("全国一律550円です。")).toBeTruthy();
@@ -3874,16 +3731,7 @@ describe("CopilotPreviewPage — 解決確認プロンプト", () => {
 
   async function ask(text: string) {
     renderPage();
-    // render()直後はブートストラップの自動送信(sendReal)がまだ authFetch を呼ぶ前
-    // (内部のawait前)のため、disabled=falseを早すぎるタイミングで捉えると、この後の
-    // 操作がブートストラップ自身のsending中に埋もれて無視される(レース条件)。
-    // /v1/admin/agent/chatが実際に呼ばれたことを先に確認してから、disabled=falseを待つ。
-    await waitFor(() =>
-      expect(
-        vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/agent/chat")),
-      ).toBe(true),
-    );
-    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitForBootstrapSendStarted();
     fireEvent.change(getComposer(), { target: { value: text } });
     fireEvent.click(screen.getByLabelText("送信"));
     return screen.findByText("このお返事で解決しましたか？");
