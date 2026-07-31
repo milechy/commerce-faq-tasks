@@ -418,7 +418,11 @@ export async function executeToolCall(
         let whereClause = 'WHERE tenant_id = $1';
 
         if (search) {
-          whereParams.push(`%${search}%`);
+          // LIKE のワイルドカードを無効化し、意図しない広域一致を防ぐ（Postgres の既定エスケープ文字は \）。
+          // resolveSessionByShortId と同じ規約(この関数固有。呼び出しは1箇所に限る)。
+          // 例: 「50%オフ」で検索すると、エスケープ無しでは「50」+任意文字列+「オフ」に広域一致していた。
+          const escapedSearch = search.replace(/[\\%_]/g, (c) => `\\${c}`);
+          whereParams.push(`%${escapedSearch}%`);
           whereClause += ` AND (question ILIKE $${whereParams.length} OR answer ILIKE $${whereParams.length})`;
         }
 
@@ -1368,9 +1372,13 @@ export async function executeToolCall(
           const row = faqRes.value?.rows?.[0];
           const faqTotal = Number(row?.total ?? 0);
           const faqPublished = Number(row?.published ?? 0);
-          const lastUpdatedIso: string | null = row?.last_updated
-            ? new Date(row.last_updated).toISOString()
-            : null;
+          // last_updated が想定外の値(パース不能)でも toISOString() で例外を投げない。
+          // ここで投げると case 全体の try/catch に捕まり、他6指標が正常に取得できていても
+          // 「取得に失敗しました」に落ちる — Promise.allSettled で守っている部分失敗耐性が
+          // この1行のせいで無効化されてしまうため、必ず検証してから変換する。
+          const lastUpdatedDate = row?.last_updated ? new Date(row.last_updated) : null;
+          const lastUpdatedIso: string | null =
+            lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime()) ? lastUpdatedDate.toISOString() : null;
           card.faq = { total: faqTotal, published: faqPublished, lastUpdated: lastUpdatedIso };
           const lastUpdatedDisplay = lastUpdatedIso
             ? new Date(lastUpdatedIso).toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })
@@ -2461,11 +2469,12 @@ export async function executeToolCall(
           path: '/admin/avatar/wizard',
           description: 'アバターを新しく作る手順（ウィザード）はこちらの画面で行えます',
         },
-        // PDFアップロードはファイル選択がGUI固有の操作のため、当初チャット化せず旧UIへ誘導していた。
-        // docs/CHAT_SURFACE_DECISION.md の方針に沿い、新UI(/copilot-preview)のコンポーザへの
-        // ドラッグ＆ドロップで会話内に取り込む経路を試作済み(同じ book-pdf エンドポイントを直接叩く)。
-        // ただし取り込み後の状態追跡・タイトル編集・書籍一覧はこの旧UIにしか無いため、案内先としては
-        // 引き続き有効。docs/LEGACY_UI_SUNSET.md のクローズ判定を通るまでこのキーは残す(追加のみ)。
+        // GID 1217040818410419(2026-07-31): 「書籍/PDFはR2C運用限定」の方針により、
+        // このキー自体はテナント向けの案内としてはもう使わない(system prompt からも誘導文を除去済み)。
+        // それでも feature enum とキーは残す — 削除すると LEGACY_UI_FEATURES から漏れ、
+        // agent_legacy_handoff{feature} のトリップワイヤー(docs/LEGACY_UI_SUNSET.md)が
+        // 無言で 'unknown' に丸められて死ぬため。path/label は旧UIの実体(super_adminには
+        // 引き続き見える画面)に合わせたまま、description だけ現状に更新する。
         // /admin/knowledge (tenantId無し)は KnowledgeIndexPage が navigate() で
         // /admin/knowledge/:tenantId へリダイレクトする際に location.search を引き継がず
         // ?tab=pdf が失われるため、他のキーと異なりここでは tenantId を path に含める必要がある
@@ -2473,7 +2482,7 @@ export async function executeToolCall(
         knowledge_pdf: {
           label: 'PDFアップロード',
           path: `/admin/knowledge/${tenantId}?tab=pdf`,
-          description: 'PDFファイルからの知識登録はこちらの画面で行えます',
+          description: 'PDFファイルからの知識登録は現在R2C運営チームが行っています。内容を文章で教えていただければ、代わりに登録できます。',
         },
         // knowledge_pdf と同じ理由でtenantIdをpathに含める必要がある(下のガードで !tenantId は事前に弾いている)。
         // GET /v1/admin/analytics/knowledge-attribution にプラン制限は無いため、ここでもゲートを設けない

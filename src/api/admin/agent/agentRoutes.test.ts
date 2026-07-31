@@ -1911,6 +1911,212 @@ describe('POST /v1/admin/agent/chat', () => {
         jest.useRealTimers();
       }
     });
+
+    // 週境界の統合テスト。weekRange.test.ts は純関数単体のみを検証しているため、
+    // get_weekly_briefing の実クエリまで通した境界値をここで確認する。
+    it.each([
+      ['日曜23:59:59.999 JSTでもまだ今週として扱われる', '2026-08-09T14:59:59.999Z', '2026-08-02T15:00:00.000Z'],
+      ['月曜00:00:00.000 JSTちょうどで週が切り替わる', '2026-08-09T15:00:00.000Z', '2026-08-09T15:00:00.000Z'],
+    ])('%s', async (_label, nowIso, expectedWeekStartIso) => {
+      jest.useFakeTimers({
+        doNotFake: [
+          'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
+          'setImmediate', 'clearImmediate', 'queueMicrotask', 'nextTick',
+          'hrtime', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame',
+          'requestIdleCallback', 'cancelIdleCallback',
+        ],
+      }).setSystemTime(new Date(nowIso));
+
+      try {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              choices: [{
+                message: {
+                  content: null,
+                  tool_calls: [{
+                    id: 'call-wb-boundary',
+                    type: 'function',
+                    function: { name: 'get_weekly_briefing', arguments: '{}' },
+                  }],
+                },
+              }],
+            }),
+            text: async () => '',
+          })
+          .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+        mockQuery
+          .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ avg: '80' }] })
+          .mockResolvedValueOnce({ rows: [{ n: 0, total: '0' }] })
+          .mockResolvedValueOnce({ rows: [{ total: 1, published: 1, last_updated: null }] })
+          .mockResolvedValueOnce({ rows: [{ n: 0 }] });
+
+        mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '今週の状況を教えて', sessionId: 'sess-boundary' });
+
+        expect(res.status).toBe(200);
+        const [sessionsCall] = mockQuery.mock.calls as Array<[string, unknown[]]>;
+        expect((sessionsCall[1][1] as Date).toISOString()).toBe(expectedWeekStartIso);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('会話数が前週より減少した場合、マイナス符号付きで表示される', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-decrease',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週は少し落ち着いています。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 10 }] }) // 今週
+        .mockResolvedValueOnce({ rows: [{ n: 40 }] }) // 先週同時点(今週より多い)
+        .mockResolvedValueOnce({ rows: [{ avg: '80' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0, total: '0' }] })
+        .mockResolvedValueOnce({ rows: [{ total: 1, published: 1, last_updated: null }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] });
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-decrease' });
+
+      expect(res.status).toBe(200);
+      const card = res.body.actions[0].card;
+      expect(card.sessions).toEqual({ total: 10, changePct: -75, prevTotal: 40 });
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('-75%');
+      expect(result).not.toContain('+-75%'); // 符号が二重に付かないこと
+    });
+
+    it('未回答質問の総数が上位表示件数(3件)を超えても、上位は3件のみ・総数は正しい値を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-gaps-over',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('未対応の質問があります。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ avg: '80' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0, total: '0' }] })
+        .mockResolvedValueOnce({ rows: [{ total: 1, published: 1, last_updated: null }] })
+        .mockResolvedValueOnce({ rows: [{ n: 0 }] });
+
+      // getGaps は limit:3 で呼ばれる契約なので、上位3件のみ返す実装のふるまいをそのまま再現する
+      mockGetGaps.mockResolvedValueOnce({
+        gaps: [
+          { id: 1, tenant_id: 'tenant-abc', user_question: '質問A', session_id: null, message_id: null, rag_hit_count: 0, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+          { id: 2, tenant_id: 'tenant-abc', user_question: '質問B', session_id: null, message_id: null, rag_hit_count: 0, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+          { id: 3, tenant_id: 'tenant-abc', user_question: '質問C', session_id: null, message_id: null, rag_hit_count: 0, rag_top_score: 0, status: 'open', resolved_faq_id: null, created_at: '' },
+        ],
+        total: 42,
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-gaps-over' });
+
+      expect(res.status).toBe(200);
+      const card = res.body.actions[0].card;
+      expect(card.gaps.total).toBe(42);
+      expect(card.gaps.top).toHaveLength(3);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('42件');
+      expect(result).toContain('質問A');
+      expect(result).toContain('質問C');
+    });
+
+    // GID: FAQ最終更新日(last_updated)がパース不能な値の場合、以前は new Date(...).toISOString()
+    // が例外を投げ、Promise.allSettled で守られているはずの他6指標(会話数・スコア・成約・
+    // 承認待ちルール・未回答質問)まで巻き添えで「取得に失敗しました」に落ちていた
+    // (Promise.allSettled の外側、同期処理内での throw だったため)。修正の回帰テスト。
+    it('FAQのlast_updatedがパース不能な値でも、他の指標は正常に返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-baddate',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 25 }] })
+        .mockResolvedValueOnce({ rows: [{ n: 20 }] })
+        .mockResolvedValueOnce({ rows: [{ avg: '77' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 3, total: '5000' }] })
+        // last_updated が不正な文字列(DBドライバの想定外挙動・データ破損等を模擬)
+        .mockResolvedValueOnce({ rows: [{ total: 5, published: 4, last_updated: 'not-a-real-timestamp' }] })
+        .mockResolvedValueOnce({ rows: [{ n: 2 }] });
+
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-baddate' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      const card = res.body.actions[0].card;
+
+      // 全体が失敗メッセージに落ちていないこと(退行防止の主眼)
+      expect(result).not.toContain('取得に失敗しました');
+      expect(result).toContain('25件');
+      expect(result).toContain('77/100');
+      expect(result).toContain('承認待ちの指示ルール 2件');
+
+      // FAQ自体は不正な日付を握りつぶし、件数は出るが最終更新日は省略される
+      expect(card.faq).toEqual({ total: 5, published: 4, lastUpdated: null });
+      expect(result).toContain('FAQ 5件（公開4件）');
+      expect(result).not.toContain('最終更新');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -2244,6 +2450,30 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toBe('FAQ 一覧の取得に失敗しました');
+    });
+
+    // GID: 検索語に SQL LIKE のワイルドカード文字(%, _)が含まれると、エスケープ無しでは
+    // 文字通りの意味ではなくワイルドカードとして解釈され、意図しない広域一致を起こしていた
+    // (例:「50%オフ」→「50」+任意文字列+「オフ」に一致)。resolveSessionByShortId と
+    // 同じ規約でエスケープするよう修正した回帰テスト。
+    it('検索語に%や_が含まれてもワイルドカードとして解釈されず、リテラルとしてエスケープされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-13', 'get_faq_list', { search: '50%offセール_限定' }))
+        .mockResolvedValueOnce(makeGroqResponse('該当するFAQを確認しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: '50%offセール_限定はいつまで?', answer: '今月末までです' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '50%offセール_限定について教えて', sessionId: 'sess-fl-13' });
+
+      expect(res.status).toBe(200);
+      const [, listCall] = mockQuery.mock.calls as Array<[string, unknown[]]>;
+      // params[1] が検索パラメータ(%…%でラップされた値)。中身の % と _ がバックスラッシュで
+      // エスケープされていること(先頭と末尾のワイルドカード%はそのまま残る)。
+      expect(listCall[1][1]).toBe('%50\\%offセール\\_限定%');
     });
   });
 

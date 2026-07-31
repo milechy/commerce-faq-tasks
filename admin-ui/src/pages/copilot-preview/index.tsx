@@ -16,6 +16,7 @@ import { authFetch, API_BASE } from "../../lib/api";
 import { isChatFirstDefaultEnabled, setChatFirstDefaultEnabled } from "../../lib/chatFirstDefault";
 import {
   CHAT_SESSION_SURFACE_FULLSCREEN,
+  clearChatSession,
   restoreChatSession,
   saveChatSession,
 } from "../../lib/chatSessionStore";
@@ -346,6 +347,10 @@ const PDF_UPLOAD_TOO_LARGE_ERROR = "ファイルが大きすぎて受け取れ�
 const PDF_UPLOAD_NETWORK_ERROR = "うまく送れませんでした。通信の状態を確かめて、もう一度お試しください。";
 const PDF_UPLOAD_GENERIC_ERROR = "うまく受け取れませんでした。少し時間をおいてお試しください。";
 const PDF_UPLOAD_ZIP_EMPTY_ERROR = "ZIPの中に取り込めるPDFが見つかりませんでした。";
+// GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定(2026-07-31決定)。専門用語(403/権限等)は
+// 出さず、優しい日本語で断る。バックエンド(bookPdfRoutes.ts)の拒否文言とも揃える。
+const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
+  "この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。";
 
 const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでした。少し時間をおいてもう一度お試しください。";
@@ -816,6 +821,37 @@ export default function CopilotPreviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsTenantSelection]);
 
+  // super_adminがプレビュー中に別テナントへenterPreviewする経路(AppSwitcher/テナント詳細の
+  // 「クライアントビューで見る」等)を検知し、会話を初期化して新テナントの週次ブリーフィングを
+  // 取り直す。上の bootstrap effect は needsTenantSelection のみを見ており、previewMode の
+  // まま別テナントへ切り替わるケースでは再評価されないため、前テナントの会話(weeklySummary
+  // カードを含む)が残ったまま新テナントの画面として表示され続けていた(GID: PR #633 で報告)。
+  //
+  // 初回確定("" → 最初のテナント)は上の effect が担当するため何もしない。空への遷移
+  // (プレビュー解除)も何もしない(その間は needsTenantSelection の描画分岐でチャット自体が
+  // 表示されない)。scopedTenantId が「別の非空値」に変わった場合だけリセットする。
+  const lastScopedTenantIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = lastScopedTenantIdRef.current;
+    lastScopedTenantIdRef.current = scopedTenantId || prev;
+
+    if (!prev || !scopedTenantId || scopedTenantId === prev) return;
+
+    // 会話・履歴・sessionId・進捗カウント・保存済みセッション(前テナントのもの)を
+    // すべて破棄してから、新テナントの週次ブリーフィングを取り直す。
+    clearChatSession(CHAT_SESSION_SURFACE_FULLSCREEN);
+    setMsgs([]);
+    setRealHistory([]);
+    setRealActionCount(0);
+    adoptSessionId(crypto.randomUUID());
+
+    void (async () => {
+      push({ id: nextId(), role: "ai", text: "テナントを切り替えました。今週の実データを確認しています…" });
+      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedTenantId]);
+
   // テナント選択用の一覧。既存の GET /v1/admin/tenants(super_admin限定)をそのまま使う。
   const [tenants, setTenants] = useState<TenantOption[] | null>(null);
   const [tenantsFailed, setTenantsFailed] = useState(false);
@@ -957,6 +993,11 @@ export default function CopilotPreviewPage() {
     ? `${API_BASE}/v1/admin/knowledge/book-pdf?tenant=${encodeURIComponent(scopedTenantId)}`
     : `${API_BASE}/v1/admin/knowledge/book-pdf`;
 
+  // GID 1217040818410419: previewMode中はisSuperAdminがclient_admin相当に落ちる(useAuth.tsx:213-214)
+  // ため、ここで isSuperAdmin(上の派生値)を使うと previewMode中のsuper_admin自身からもPDF投入が
+  // 消えてしまう。生のロールで判定する(この画面はテナントとsuper_adminのpreviewの両方が通る)。
+  const canUploadBookPdf = user?.role === "super_admin";
+
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const [pdfDragOver, setPdfDragOver] = useState(false);
   const pdfDragCounterRef = useRef(0);
@@ -970,8 +1011,27 @@ export default function CopilotPreviewPage() {
   }, []);
 
   const acceptFiles = async (files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0) return;
+
+    // GID 1217040818410419: 書籍/PDF取り込みはR2C運用限定。通信前にこの場で優しく断る
+    // (拡張子/サイズの受付判定と同じく、対象外の相手には通信させない)。
+    if (!canUploadBookPdf) {
+      push({
+        id: nextId(),
+        role: "ai",
+        card: {
+          kind: "pdfUpload",
+          status: "error",
+          fileName: fileArray.length === 1 ? fileArray[0].name : `${fileArray.length}件のファイル`,
+          message: PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE,
+        },
+      });
+      return;
+    }
+
     const accepted: { file: File; isZip: boolean }[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of fileArray) {
       const verdict = validateBookPdfFile(file);
       if (verdict.kind === "rejected") {
         // 受け付けない形式・大きさは通信する前にこの場で断る
@@ -2021,10 +2081,17 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
   // 集計時点(asOf)を常に表示する。取得日時をJSTの暦日で比較し、今日でなければ
   // 「別の日に取得した内容」だと分かるようにする(取得直後かどうかは問わない — 復元も
   // 再取得も同じ card 構造なので、この表示ロジック1本だけで両方をカバーできる)。
+  //
+  // asOf は改ざん/破損したsessionStorageから復元される可能性がある(手動編集・古い
+  // スキーマのデータ等)。toISOString() は Invalid Date で例外を投げるため、ここで
+  // throw するとカード1枚のためにスレッド全体の描画が落ちる。素通しせず必ず検証する。
   const asOfDate = new Date(card.asOf);
+  const asOfValid = !Number.isNaN(asOfDate.getTime());
   const jstDayKey = (d: Date) => new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const isStale = jstDayKey(asOfDate) !== jstDayKey(new Date());
-  const asOfLabel = asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const isStale = !asOfValid || jstDayKey(asOfDate) !== jstDayKey(new Date());
+  const asOfLabel = asOfValid
+    ? asOfDate.toLocaleString("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "不明";
 
   return (
     <CardShell
