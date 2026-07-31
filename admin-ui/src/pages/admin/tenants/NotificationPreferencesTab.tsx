@@ -9,11 +9,12 @@ interface NotificationPref {
   threshold: Record<string, unknown> | null;
 }
 
+// 週次レポート(weekly_report)は撤去済み(weeklyReportGeneratorはチャットのget_weekly_briefing
+// に統合され、cron未配線のまま実配信されていなかった)。
 const DEFAULT_NOTIFICATION_TYPES = [
   { type: "ga4_error", label: "GA4接続エラー" },
   { type: "cv_drop", label: "CV数急減" },
   { type: "llm_cost_spike", label: "LLMコスト急増" },
-  { type: "weekly_report", label: "週次レポート" },
 ];
 
 export default function NotificationPreferencesTab({ tenantId }: { tenantId: string }) {
