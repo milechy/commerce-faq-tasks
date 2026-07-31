@@ -141,6 +141,12 @@ jest.mock('../chat-history/chatHistoryRepository', () => {
   };
 });
 
+// get_conversation_evaluation が使う依存をモック
+const mockGetEvaluationsBySession = jest.fn();
+jest.mock('../evaluations/evaluationsRepository', () => ({
+  getEvaluationsBySession: (...args: any[]) => mockGetEvaluationsBySession(...args),
+}));
+
 // get_monitoring_summary が使う依存をモック
 const mockComputeKpis = jest.fn();
 jest.mock('../monitoring/routes', () => ({
@@ -2884,6 +2890,153 @@ describe('POST /v1/admin/agent/chat', () => {
         sessionDbId: 'db-sess-outcome', tenantId: 'tenant-abc', outcome: '購入完了', recordedBy: null,
       });
       expect(res.body.actions[0].result).toContain('記録しました');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_conversation_evaluation（AI品質評価 / 未評価 / テナント境界）
+  // -------------------------------------------------------------------------
+  describe('get_conversation_evaluation', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    type SessionRow = { id: string; tenant_id: string; session_id: string };
+    const OWN_SESSION: SessionRow = {
+      id: 'db-sess-eval', tenant_id: 'tenant-abc', session_id: 'eeee1111-1111-4aaa-8000-000000000001',
+    };
+    const OTHER_TENANT_SESSION: SessionRow = {
+      id: 'db-sess-eval-other', tenant_id: 'tenant-zzz', session_id: 'ffff2222-2222-4bbb-8000-000000000002',
+    };
+
+    function seedSessions(rows: SessionRow[]) {
+      mockQuery.mockImplementation(async (_sql: string, params?: unknown[]) => {
+        if (!Array.isArray(params)) return { rows: [] };
+        const [tenantId, prefix] = params as [string, string];
+        return {
+          rows: rows
+            .filter((r) => r.tenant_id === tenantId && r.session_id.startsWith(prefix))
+            .map((r) => ({ id: r.id, session_id: r.session_id })),
+        };
+      });
+    }
+
+    beforeEach(() => {
+      mockGetEvaluationsBySession.mockReset();
+    });
+
+    it('評価済みの会話は総合スコア・4軸・所見をtextとcardの両方で返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ev-1', 'get_conversation_evaluation', { session_id: 'eeee1111' }))
+        .mockResolvedValueOnce(makeGroqResponse('評価はこちらです。'));
+
+      seedSessions([OWN_SESSION, OTHER_TENANT_SESSION]);
+      mockGetEvaluationsBySession.mockResolvedValueOnce([
+        {
+          id: 1, tenant_id: 'tenant-abc', session_id: OWN_SESSION.session_id, overall_score: 85,
+          used_principles: [], effective_principles: [], failed_principles: [], evaluation_axes: null,
+          notes: '丁寧な対応でした', model_used: null, judge_model: null, evaluated_at: '2026-07-17T10:00:00Z',
+          outcome: 'unknown', outcome_updated_by: null, outcome_updated_at: null,
+          psychology_fit_score: 90, customer_reaction_score: 80, stage_progress_score: 70, taboo_violation_score: 100,
+        },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'eeee1111の対応品質を教えて', sessionId: 'sess-ev-01' });
+
+      expect(res.status).toBe(200);
+      // conversation_evaluations.session_id は公開文字列キー(DBの内部UUIDではない)
+      expect(mockGetEvaluationsBySession).toHaveBeenCalledWith(OWN_SESSION.session_id, 'tenant-abc');
+      const action = res.body.actions[0] as { result: string; card?: Record<string, unknown> };
+      expect(action.result).toContain('総合85点');
+      expect(action.result).toContain('所見: 丁寧な対応でした');
+      expect(action.card).toEqual({
+        kind: 'conversation_evaluation',
+        shortId: 'eeee1111',
+        overallScore: 85,
+        axes: [
+          { label: '心理対応力', score: 90 },
+          { label: '顧客対応力', score: 80 },
+          { label: '商談進行力', score: 70 },
+          { label: '禁止事項の遵守率', score: 100 },
+        ],
+        notes: '丁寧な対応でした',
+      });
+    });
+
+    it('未評価の会話は0点や欠測として扱わず「未評価」と明示する(cardは返さない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ev-2', 'get_conversation_evaluation', { session_id: 'eeee1111' }))
+        .mockResolvedValueOnce(makeGroqResponse('まだ評価されていません。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetEvaluationsBySession.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'eeee1111の対応品質を教えて', sessionId: 'sess-ev-02' });
+
+      const action = res.body.actions[0] as { result: string; card?: unknown };
+      expect(action.result).toContain('未評価です');
+      expect(action.card).toBeUndefined();
+    });
+
+    it('一部の軸がnull(未測定)でもcardにはそのまま渡り、他の軸は正しい値を保つ', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ev-3', 'get_conversation_evaluation', { session_id: 'eeee1111' }))
+        .mockResolvedValueOnce(makeGroqResponse('評価はこちらです。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetEvaluationsBySession.mockResolvedValueOnce([
+        {
+          id: 2, tenant_id: 'tenant-abc', session_id: OWN_SESSION.session_id, overall_score: 60,
+          used_principles: [], effective_principles: [], failed_principles: [], evaluation_axes: null,
+          notes: null, model_used: null, judge_model: null, evaluated_at: '2026-07-17T10:00:00Z',
+          outcome: 'unknown', outcome_updated_by: null, outcome_updated_at: null,
+          psychology_fit_score: null, customer_reaction_score: 60, stage_progress_score: null, taboo_violation_score: 100,
+        },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'eeee1111の対応品質を教えて', sessionId: 'sess-ev-03' });
+
+      const action = res.body.actions[0] as { result: string; card?: { axes?: Array<{ label: string; score: number | null }>; notes?: unknown } };
+      expect(action.card?.axes).toEqual([
+        { label: '心理対応力', score: null },
+        { label: '顧客対応力', score: 60 },
+        { label: '商談進行力', score: null },
+        { label: '禁止事項の遵守率', score: 100 },
+      ]);
+      expect(action.card?.notes).toBeNull();
+      expect(action.result).not.toContain('所見:'); // notes が無ければ所見行を出さない
+    });
+
+    it('他テナントのセッションIDは不存在として扱う(権限エラーで存在を漏らさない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ev-4', 'get_conversation_evaluation', { session_id: 'ffff2222' }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      seedSessions([OTHER_TENANT_SESSION]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ffff2222の対応品質を教えて', sessionId: 'sess-ev-04' });
+
+      expect(mockGetEvaluationsBySession).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('見つかりません');
     });
   });
 

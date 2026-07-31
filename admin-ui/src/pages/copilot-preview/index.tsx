@@ -104,6 +104,15 @@ type Card =
       shortId: string;
       totalMessages: number;
       messages: Array<{ roleLabel: string; content: string }>;
+    }
+  // AI品質評価(get_conversation_evaluation)。4軸ラベルはサーバ側で確定済みのものを
+  // そのまま描画する(旧UIの JudgeEvaluationSection.tsx と同一語彙)。
+  | {
+      kind: "evaluation";
+      shortId: string;
+      overallScore: number;
+      axes: Array<{ label: string; score: number | null }>;
+      notes: string | null;
     };
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
@@ -140,6 +149,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_chat_session_messages: "会話の全文取得",
   get_session_outcome: "会話の成果の取得",
   record_session_outcome: "会話の成果の記録",
+  get_conversation_evaluation: "対応品質評価の取得",
   get_escalations: "エスカレーション一覧の取得",
   reply_to_escalation: "エスカレーションへの返信",
   resolve_escalation: "エスカレーションの対応完了",
@@ -500,6 +510,10 @@ export default function CopilotPreviewPage() {
       if (a.card?.kind === "chat_session_messages") {
         const { shortId, totalMessages, messages } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "chatSessionMessages", shortId, totalMessages, messages } };
+      }
+      if (a.card?.kind === "conversation_evaluation") {
+        const { shortId, overallScore, axes, notes } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "evaluation", shortId, overallScore, axes, notes } };
       }
       if (a.tool === "suggest_faq") {
         const parsed = parseSuggestFaq(a.result);
@@ -1576,6 +1590,30 @@ function CardView({ card }: { card: Card }) {
           {card.messages.map((m, i) => <Field key={i} k={m.roleLabel} v={m.content} quote />)}
         </CardShell>
       );
+    case "evaluation": {
+      // 閾値(80以上=良好/60以上=許容/未満=要改善)は旧UI(JudgeEvaluationSection.tsx)と同一。
+      // 同じ会話が面によって違う評価に見えてはならない。
+      const tone = card.overallScore >= 80 ? "good" : card.overallScore >= 60 ? "brand" : "bad";
+      return (
+        <CardShell hd={<><span>🤖</span>対応品質評価（総合{card.overallScore}点）</>} tone={tone}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {card.axes.map((a) => {
+              const color =
+                a.score == null ? "var(--muted-foreground)" : a.score >= 80 ? "#4ade80" : a.score >= 60 ? "#fbbf24" : "#f87171";
+              return (
+                <span
+                  key={a.label}
+                  style={{ padding: "3px 10px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, background: "rgba(120,120,140,0.12)", border: "1px solid var(--border)", color }}
+                >
+                  {a.label}: {a.score ?? "未測定"}
+                </span>
+              );
+            })}
+          </div>
+          {card.notes && <Field k="所見" v={card.notes} quote />}
+        </CardShell>
+      );
+    }
     default:
       return null;
   }

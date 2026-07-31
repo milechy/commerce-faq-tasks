@@ -27,6 +27,7 @@ import {
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
 import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation, normalizeSessionListParams, getConversionTypes, recordOutcome, getSessionOutcome } from '../chat-history/chatHistoryRepository';
+import { getEvaluationsBySession } from '../evaluations/evaluationsRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
@@ -199,7 +200,21 @@ export type ChatSessionMessagesCardPayload = {
   messages: Array<{ roleLabel: string; content: string }>;
 };
 
-export type ActionCardPayload = LegacyLinkCardPayload | ChatSessionListCardPayload | ChatSessionMessagesCardPayload;
+// AI品質評価(Judge)カード。4軸ラベルは旧UI(admin-ui の JudgeEvaluationSection.tsx)と
+// 同一の語彙をここで確定させ、フロント側に同じ辞書を二重に持たせない。
+export type ConversationEvaluationCardPayload = {
+  kind: 'conversation_evaluation';
+  shortId: string;
+  overallScore: number;
+  axes: Array<{ label: string; score: number | null }>;
+  notes: string | null;
+};
+
+export type ActionCardPayload =
+  | LegacyLinkCardPayload
+  | ChatSessionListCardPayload
+  | ChatSessionMessagesCardPayload
+  | ConversationEvaluationCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -1567,6 +1582,57 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_session_messages failed', err);
         return truncate('会話内容の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'get_conversation_evaluation': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+
+        // conversation_evaluations.session_id は chat_sessions の公開文字列キー
+        // (DBの内部UUIDではない)。resolveSessionByShortId が返す session_id をそのまま使う。
+        const evaluations = await getEvaluationsBySession(resolved.session.session_id, tenantId);
+        if (evaluations.length === 0) {
+          // 未評価は0点や欠測として扱わず、明示する(閲覧側の判断材料を誤らせないため)。
+          return truncate(`セッション[${resolved.session.session_id.slice(0, 8)}]はまだ未評価です`);
+        }
+
+        const ev = evaluations[0]!;
+        // 4軸ラベルは旧UI(JudgeEvaluationSection.tsx)と同一の語彙を使う。
+        // 同じ会話が面によって違う評価に見えてはならない。
+        const axes: Array<{ label: string; score: number | null }> = [
+          { label: '心理対応力', score: ev.psychology_fit_score },
+          { label: '顧客対応力', score: ev.customer_reaction_score },
+          { label: '商談進行力', score: ev.stage_progress_score },
+          { label: '禁止事項の遵守率', score: ev.taboo_violation_score },
+        ];
+        const axesText = axes.map((a) => `${a.label}: ${a.score ?? '未測定'}`).join(' / ');
+        const shortId8 = resolved.session.session_id.slice(0, 8);
+        return {
+          text: truncate(
+            `セッション[${shortId8}]の対応品質評価: 総合${ev.overall_score}点\n${axesText}` +
+            (ev.notes ? `\n所見: ${ev.notes}` : ''),
+          ),
+          card: {
+            kind: 'conversation_evaluation',
+            shortId: shortId8,
+            overallScore: ev.overall_score,
+            axes,
+            notes: ev.notes,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_conversation_evaluation failed', err);
+        return truncate('評価データの取得に失敗しました');
       }
     }
 
