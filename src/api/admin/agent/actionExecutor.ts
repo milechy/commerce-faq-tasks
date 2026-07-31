@@ -206,6 +206,18 @@ export type AvatarPresetCardPayload = {
   description: string;
 };
 
+// adopt_avatar_preset が返す、採用直後のカード。configId は自テナント側の
+// avatar_configs.id（presetId とは別物）で、フロントはこの id を画像候補生成
+// （POST /v1/admin/avatar/fal/generate は本カードとは無関係にフロントから直接叩く）と
+// 採用確定（PATCH /v1/admin/avatar/configs/:id）にそのまま使う。
+export type AvatarAdoptedCardPayload = {
+  kind: 'avatar_adopted';
+  configId: string;
+  name: string;
+  imageUrl: string | null;
+  description: string;
+};
+
 // get_tuning_rules の全件データ。text(自然文・500字)は件数の要約のみとし、
 // 一覧の欠落(D3: 15件に切ってさらに1行60/100字に切っていたため実質3〜4件しか
 // 出ていなかった)を、件数によらず全件をここに載せることで解消する。
@@ -250,6 +262,7 @@ export type ActionResult =
       card?:
         | LegacyLinkCardPayload
         | AvatarPresetCardPayload
+        | AvatarAdoptedCardPayload
         | TuningRulesListCardPayload
         | WeeklySummaryCardPayload;
     };
@@ -781,17 +794,29 @@ export async function executeToolCall(
                   false, false
              FROM avatar_configs
             WHERE id = $2 AND tenant_id = 'r2c_default' AND is_default = true
-           RETURNING name`,
+           RETURNING id, name, image_url, personality_prompt`,
           [tenantId, presetId],
         );
-        const created = result.rows[0] as { name: string } | undefined;
+        const created = result.rows[0] as
+          { id: string; name: string; image_url: string | null; personality_prompt: string | null } | undefined;
         if (!created) {
           return truncate('指定のアバター見本が見つかりませんでした。suggest_avatar_preset で提案をやり直してください');
         }
-        return truncate(
-          `アバター「${created.name}」を採用しました。まだ公開はされていません。` +
-          '声・名前・話し方を調整してから activate_avatar で公開できます',
-        );
+        // card の configId は自テナント側の新規行（presetId とは別物）。
+        // フロントはこの id で以降の画像候補生成・PATCHを行う。
+        return {
+          text: truncate(
+            `アバター「${created.name}」を採用しました。まだ公開はされていません。` +
+            '声・名前・話し方を調整してから activate_avatar で公開できます',
+          ),
+          card: {
+            kind: 'avatar_adopted',
+            configId: created.id,
+            name: created.name,
+            imageUrl: created.image_url,
+            description: (created.personality_prompt ?? '').slice(0, 120),
+          },
+        };
       } catch (err) {
         logger.warn('[actionExecutor] adopt_avatar_preset failed', err);
         return truncate('アバターの採用に失敗しました');

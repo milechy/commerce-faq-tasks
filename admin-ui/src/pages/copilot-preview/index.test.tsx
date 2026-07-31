@@ -745,6 +745,130 @@ function getComposer(): HTMLTextAreaElement {
   return screen.getByPlaceholderText(/指示ルール/) as HTMLTextAreaElement;
 }
 
+// アバター画像候補の生成・採用は、エージェントツール経由にせずチャットから直接
+// POST /v1/admin/avatar/fal/generate / PATCH /v1/admin/avatar/configs/:id を叩く。
+// この2エンドポイントの応答を authFetch のURL分岐で個別に制御する。
+describe("CopilotPreviewPage — アバター画像候補の生成・採用", () => {
+  function mockAdoptedThenEndpoints(opts: {
+    generate?: () => Promise<Response>;
+    patch?: () => Promise<Response>;
+  }) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/fal/generate")) {
+        return opts.generate ? opts.generate() : mockOk({ images: ["https://img/1.png"] });
+      }
+      if (String(url).includes("/v1/admin/avatar/configs/")) {
+        return opts.patch ? opts.patch() : mockOk({ id: "cfg-1" });
+      }
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+  }
+
+  async function sendAndAdopt() {
+    renderPage();
+    // 起動時ブリーフィングのタイプライター演出が完了する(sendingがfalseへ確定する)まで待つ。
+    // 早すぎるタイミングでdisabled判定すると、演出中にsendingが再びtrueへ倒れる前の
+    // 初期レンダー(sending初期値false)を素通りしてしまい、直後のクリックが disabled な
+    // ボタンに当たって何も起きない(実際にこの競合でテストが落ちた)。
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByRole("button", { name: "画像を新しく生成する" });
+  }
+
+  it("生成→完了で候補4枚が描画され、採用でPATCHが呼ばれて二重押しできない", async () => {
+    const images = ["https://img/1.png", "https://img/2.png", "https://img/3.png", "https://img/4.png"];
+    mockAdoptedThenEndpoints({ generate: () => mockOk({ images }) });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "これにする" }).length).toBe(4));
+
+    const generateCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/fal/generate"));
+    expect(generateCall).toBeTruthy();
+    expect(JSON.parse(String((generateCall![1] as RequestInit).body)).numImages).toBe(4);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "これにする" })[1]!);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+    const patchCall = vi
+      .mocked(authFetch)
+      .mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(patchCall).toBeTruthy();
+    expect((patchCall![1] as RequestInit).method).toBe("PATCH");
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toEqual({ image_url: images[1] });
+
+    // 決定後は残りの「これにする」ボタンが押せない(二重採用の防止)
+    const remaining = screen.getAllByRole("button", { name: "これにする" });
+    for (const btn of remaining) expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("生成が5xxで失敗しても確定し、無限スピナーを残さない", async () => {
+    mockAdoptedThenEndpoints({
+      generate: () =>
+        Promise.resolve({ ok: false, status: 502, json: () => Promise.resolve({ error: "画像生成サービスでエラーが発生しました" }) } as Response),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    expect(await screen.findByText("画像生成サービスでエラーが発生しました")).toBeTruthy();
+    expect(screen.queryByText("数十秒かかることがあります。このまま他の操作もできます。")).toBeNull();
+    expect(await screen.findByRole("button", { name: "もう一度試す" })).toBeTruthy();
+  });
+
+  it("ネットワークエラーでも失敗として確定する(汎用の文言)", async () => {
+    mockAdoptedThenEndpoints({ generate: () => Promise.reject(new Error("network down")) });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+
+    expect(await screen.findByText("画像を生成できませんでした。少し時間をおいてもう一度お試しください。")).toBeTruthy();
+  });
+
+  it("採用のPATCHが失敗しても、まだ採用されていない扱いのままエラーを示す", async () => {
+    mockAdoptedThenEndpoints({
+      generate: () => mockOk({ images: ["https://img/1.png"] }),
+      patch: () => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "更新に失敗しました" }) } as Response),
+    });
+
+    const generateButton = await sendAndAdopt();
+    fireEvent.click(generateButton);
+    const adoptButton = await screen.findByRole("button", { name: "これにする" });
+    fireEvent.click(adoptButton);
+
+    expect(await screen.findByText("更新に失敗しました")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "これに決定" })).toBeNull();
+    expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy();
+  });
+});
+
 // 想定ユーザーは100%日本語入力の店主。かな漢字変換の確定Enterで未変換のまま
 // 送信されてしまう不具合の回帰テスト(判定条件自体は lib/utils.test.ts で検証済み)。
 describe("CopilotPreviewPage — コンポーザのIME/改行", () => {

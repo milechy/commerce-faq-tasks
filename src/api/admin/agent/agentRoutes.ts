@@ -12,6 +12,7 @@ import type {
   ActionResult,
   LegacyLinkCardPayload,
   AvatarPresetCardPayload,
+  AvatarAdoptedCardPayload,
   TuningRulesListCardPayload,
   WeeklySummaryCardPayload,
 } from './actionExecutor';
@@ -162,7 +163,7 @@ type AnsweredFrom = 'faq_list' | 'tool_action' | 'general';
 type ChatAction = {
   tool: string;
   result: string;
-  card?: LegacyLinkCardPayload | AvatarPresetCardPayload | TuningRulesListCardPayload | WeeklySummaryCardPayload;
+  card?: LegacyLinkCardPayload | AvatarPresetCardPayload | AvatarAdoptedCardPayload | TuningRulesListCardPayload | WeeklySummaryCardPayload;
 };
 
 function determineAnsweredFrom(actions: Array<{ tool: string; result: string }>): AnsweredFrom {
@@ -405,7 +406,7 @@ async function executeHopToolCalls(
     const blockSameTurnChain = alreadySuggestedThisTurn && requiresConfirmation(name);
 
     let result: string;
-    let card: LegacyLinkCardPayload | AvatarPresetCardPayload | TuningRulesListCardPayload | WeeklySummaryCardPayload | undefined;
+    let card: LegacyLinkCardPayload | AvatarPresetCardPayload | AvatarAdoptedCardPayload | TuningRulesListCardPayload | WeeklySummaryCardPayload | undefined;
     if (blockSameTurnChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';

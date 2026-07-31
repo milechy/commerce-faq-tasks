@@ -4466,24 +4466,36 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).not.toHaveBeenCalled();
     });
 
-    it('confirmed=trueで自テナントへ複製され、is_default/is_activeともにfalseで作られる', async () => {
+    it('confirmed=trueで自テナントへ複製され、is_default/is_activeともにfalseで作られる。カードは自テナント側の新規idを持つ', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ap-2', 'adopt_avatar_preset', { preset_id: 'preset-1', confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('採用しました。'));
 
-      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'cfg-own-1', name: 'Haruka', image_url: 'https://img/haruka.png', personality_prompt: 'とても丁寧な性格です。' }],
+      });
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: '採用してください', sessionId: 'sess-ap-02' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Haruka」を採用しました');
-      expect(res.body.actions[0].result).toContain('まだ公開はされていません');
+      const action = res.body.actions[0];
+      expect(action.result).toContain('Haruka」を採用しました');
+      expect(action.result).toContain('まだ公開はされていません');
+      // configId は presetId(r2c_default側)とは別物。画像候補の生成・PATCHはこのidを使う。
+      expect(action.card).toEqual({
+        kind: 'avatar_adopted',
+        configId: 'cfg-own-1',
+        name: 'Haruka',
+        imageUrl: 'https://img/haruka.png',
+        description: 'とても丁寧な性格です。',
+      });
       const [sql, params] = mockQuery.mock.calls[0]!;
       expect(sql as string).toContain("tenant_id = 'r2c_default'");
       expect(sql as string).toContain('is_default = true');
       expect(sql as string).toContain('false, false');
+      expect(sql as string).toContain('RETURNING id, name, image_url, personality_prompt');
       expect(params).toEqual(['tenant-abc', 'preset-1']);
     });
 

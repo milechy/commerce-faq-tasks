@@ -42,6 +42,15 @@ export type AvatarPresetAgentActionCard = {
   description: string;
 };
 
+// adopt_avatar_preset の採用直後カード。configId は自テナント側の avatar_configs.id。
+export type AvatarAdoptedAgentActionCard = {
+  kind: "avatar_adopted";
+  configId: string;
+  name: string;
+  imageUrl: string | null;
+  description: string;
+};
+
 export type TuningRulesListAgentActionCard = {
   kind: "tuning_rules_list";
   rules: Array<{
@@ -69,6 +78,7 @@ export type WeeklySummaryAgentActionCard = {
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
+  | AvatarAdoptedAgentActionCard
   | TuningRulesListAgentActionCard
   | WeeklySummaryAgentActionCard;
 
