@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
+import { mockAvatarBackend } from './helpers/mockAvatarBackend';
 
 // QA sweep 2026-07-08: previously-uncovered Role A (end-user/anonymous) flows
 // from R2C_UIフローカタログ_2026-07-08.md (A2-3, A2-6, A2-13, A2-14, A3-2, A3-3, A3-5, A3-6, A3-8).
@@ -32,6 +33,9 @@ test.describe('QA 2026-07-08 — Role A widget interactions', () => {
   }
 
   test('A2-2/A2-3: FABを開いてテキスト質問を送るとAI応答が返る', async ({ page }) => {
+    // アバター実課金を避けるため、埋め込みページへ遷移する前に必ずモックする
+    // (widget.js は .fab クリックの有無に関係なくページ読込時に avatar config を fetch する)
+    await mockAvatarBackend(page);
     await gotoWithRetry(page, `${DEMO_BASE}/index.html`);
     await page.waitForFunction(
       () => {
@@ -102,6 +106,9 @@ test.describe('QA 2026-07-08 — Role A widget interactions', () => {
   });
 
   test('A2-6: 有人スタッフへのエスカレーションボタンが機能する', async ({ page }) => {
+    // アバター実課金を避けるため、埋め込みページへ遷移する前に必ずモックする
+    // (widget.js は .fab クリックの有無に関係なくページ読込時に avatar config を fetch する)
+    await mockAvatarBackend(page);
     await gotoWithRetry(page, `${DEMO_BASE}/index.html`);
     await page.waitForFunction(
       () => {
@@ -156,6 +163,9 @@ test.describe('QA 2026-07-08 — Role A widget interactions', () => {
   });
 
   test('A2-13: 入力文字数が2000文字に制限される', async ({ page }) => {
+    // アバター実課金を避けるため、埋め込みページへ遷移する前に必ずモックする
+    // (widget.js は .fab クリックの有無に関係なくページ読込時に avatar config を fetch する)
+    await mockAvatarBackend(page);
     await gotoWithRetry(page, `${DEMO_BASE}/index.html`);
     await page.waitForFunction(
       () => {
@@ -181,6 +191,9 @@ test.describe('QA 2026-07-08 — Role A widget interactions', () => {
   });
 
   test('A2-14: 閉じるボタンでパネルが閉じる', async ({ page }) => {
+    // アバター実課金を避けるため、埋め込みページへ遷移する前に必ずモックする
+    // (widget.js は .fab クリックの有無に関係なくページ読込時に avatar config を fetch する)
+    await mockAvatarBackend(page);
     await gotoWithRetry(page, `${DEMO_BASE}/index.html`);
     await page.waitForFunction(
       () => {
