@@ -157,6 +157,24 @@ describe('avatar generation routes — fail-closed: client_admin without tenant_
   });
 });
 
+// ── テナント解決: super_adminが?tenant=を付けないと400(外部API未呼び出し) ──
+// generate-premium(premiumGenerationRoutes.ts)は #P0-1〜#P0-3 のスコープ外
+// (同じ脆弱パターンが存在するが、別タスクとして扱う。ここでは対象外にする)。
+const TENANT_GUARDED_ENDPOINTS = GENERATION_ENDPOINTS.filter(
+  (e) => e.path !== '/v1/admin/avatar/generate-premium'
+);
+
+describe('avatar generation routes — テナント不明時は400、外部APIを呼ばない', () => {
+  TENANT_GUARDED_ENDPOINTS.forEach(({ method, path, body }) => {
+    it(`${method.toUpperCase()} ${path} — super_adminが?tenant=なし → 400、fetch未呼び出し`, async () => {
+      const app = makeApp({ app_metadata: { role: 'super_admin' }, email: 'sa@t.com' });
+      const res = await (request(app) as any)[method](path).send(body);
+      expect(res.status).toBe(400);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+});
+
 // ── allow-path: 認可通過時にログが出ないこと ─────────────────────────────────
 
 describe('avatar generation routes — allow-path: no authz warn on success', () => {
