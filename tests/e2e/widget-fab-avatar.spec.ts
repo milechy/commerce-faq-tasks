@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { mockAvatarBackend } from './helpers/mockAvatarBackend';
 import { DEMO_INDEX_URL } from './config';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
@@ -21,39 +22,8 @@ test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
   // 未指定時はアバター版にフォールバック → test 3 は従来どおり skip される（誤検証を防ぐ）。
   const NON_AVATAR_DEMO_URL = process.env.E2E_NON_AVATAR_TEST_URL || AVATAR_DEMO_URL;
 
-  // このスイートは毎回 .fab をクリックして isOpen=true にする → widget.js が
-  // POST /api/avatar/room-token を connect:true で送る → サーバー側で実際に
-  // LiveKitエージェント経由の LemonSlice アバターセッションが起動し課金が発生する
-  // (dispatchAgentToRoom はレスポンスを返す前に fire-and-forget で呼ばれるため、
-  // クライアント側でレスポンスをどう扱っても後から止められない)。
-  // ここでリクエストをブラウザ側でインターセプトし、本番バックエンドに一切到達させずに
-  // FABサムネイル永続化ロジック(UI挙動)だけを検証する。
-  async function mockAvatarBackend(page: any) {
-    await page.route('**/api/avatar/anam-session', (route: any) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ enabled: false }),
-      })
-    );
-    await page.route('**/api/avatar/room-token', (route: any) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          enabled: true,
-          livekitUrl: 'wss://e2e-mock.invalid',
-          token: 'e2e-mock-token',
-          roomName: 'e2e-mock-room',
-          agentId: 'e2e-mock-agent',
-          imageUrl:
-            'https://rpqrwifbrhlebbelyqog.supabase.co/storage/v1/object/public/avatar-defaults/default_01.png',
-          avatarName: 'E2E Mock Avatar',
-          preDispatchEnabled: false,
-        }),
-      })
-    );
-  }
+  // mockAvatarBackend の理由は tests/e2e/helpers/mockAvatarBackend.ts のコメントを参照。
+  // このスイートは毎回 .fab をクリックして isOpen=true にするため、必ず先に呼ぶこと。
 
   /** Wait for FAB to appear inside the widget Shadow DOM */
   async function getFabState(page: any) {
