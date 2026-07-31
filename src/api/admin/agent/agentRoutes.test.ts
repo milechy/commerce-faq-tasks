@@ -3631,6 +3631,142 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_avatar_list / deactivate_avatar
+  // 一覧が無いと activate_avatar は ID を知っている人しか使えない = チャットから実行不能
+  // だったため追加した経路。既定アバターの扱いが最大の罠なのでそこを固定する。
+  // -------------------------------------------------------------------------
+  describe('get_avatar_list / deactivate_avatar', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('既定アバター(r2c_default)は is_active=true でも「稼働中」と表示しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-1', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+
+      // 既定アバターは部分unique制約から除外されており全行 is_active = true。
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 'av-own-1', name: '自社スタッフ', is_active: false, tenant_id: 'tenant-abc' },
+          { id: 'av-def-1', name: '見本アバターA', is_active: true, tenant_id: 'r2c_default' },
+          { id: 'av-def-2', name: '見本アバターB', is_active: true, tenant_id: 'r2c_default' },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('自社スタッフ');
+      expect(result).toContain('見本アバターA（既定の見本）');
+      expect(result).not.toContain('見本アバターA（稼働中）');
+    });
+
+    it('自テナントの稼働中の設定には稼働中の印が付く', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-2', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'av-own-1', name: '接客担当', is_active: true, tenant_id: 'tenant-abc' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('接客担当（稼働中）');
+    });
+
+    it('件数が多くても500字で黙って欠けず、残件数を明示する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-3', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+
+      const rows = Array.from({ length: 30 }, (_, i) => ({
+        id: `550e8400-e29b-41d4-a716-4466554400${String(i).padStart(2, '0')}`,
+        name: `アバター${i}`,
+        is_active: false,
+        tenant_id: 'tenant-abc',
+      }));
+      mockQuery.mockResolvedValueOnce({ rows });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-03' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('アバター設定は30件あります');
+      expect(result).toMatch(/ほか\d+件/);
+      expect(result.length).toBeLessThanOrEqual(500);
+    });
+
+    it('設定が1件も無い場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-list-4', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('まだありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-list-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('まだありません');
+    });
+
+    it('稼働中を停止でき、既定アバターは停止対象から除外される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-deact-1', 'deactivate_avatar', {}))
+        .mockResolvedValueOnce(makeGroqResponse('停止しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: '接客担当' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを止めて', sessionId: 'sess-deact-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('停止しました');
+      const sql = mockQuery.mock.calls[0]![0] as string;
+      expect(sql).toContain('is_default = false OR is_default IS NULL');
+      expect(mockQuery.mock.calls[0]![1]).toEqual(['tenant-abc']);
+    });
+
+    it('稼働中が無いときは停止せずその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-deact-2', 'deactivate_avatar', {}))
+        .mockResolvedValueOnce(makeGroqResponse('稼働中はありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを止めて', sessionId: 'sess-deact-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('稼働中のアバターはありません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // activate_avatar — プラン制限(Growth〜)がチャット経由でも素通りしないことの回帰テスト
   // -------------------------------------------------------------------------
   describe('activate_avatar: プラン制限', () => {
@@ -3702,6 +3838,51 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('Growthプラン以上');
       expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    it('IDがUUIDでない場合も500にならず、一覧で確認するよう案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-act-4', 'activate_avatar', { id: 'それっぽいID' }))
+        .mockResolvedValueOnce(makeGroqResponse('IDをご確認ください。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      // Postgres は uuid 列への不正値で 22P02 を投げる。executor が握って日本語で返すこと。
+      const invalidUuid = Object.assign(new Error('invalid input syntax for type uuid'), { code: '22P02' });
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockRejectedValueOnce(invalidUuid) // deactivate all(idを使う前段で落ちる場合もある)
+        .mockResolvedValue({ rows: [] }); // ROLLBACK
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-act-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('get_avatar_list');
+    });
+
+    it('他テナントのIDは有効化されず、一覧で確認するよう案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-act-5', 'activate_avatar', { id: 'av-other-tenant' }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // deactivate all
+        .mockResolvedValueOnce({ rows: [] }) // activate target → tenant_id 不一致で0件
+        .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-act-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('設定が見つかりません');
+      expect(result).toContain('get_avatar_list');
     });
   });
 

@@ -217,17 +217,48 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_avatar_list',
+      description:
+        'アバター設定の一覧（ID・名前・稼働中かどうか）を取得する読み取り専用ツール。' +
+        'activate_avatar に渡す ID はこのツールで確認したものだけを使うこと。' +
+        'テナント自身の設定に加えて、そのまま使える既定の見本も返す。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'activate_avatar',
-      description: '指定した ID のアバター設定を有効化する（他のアバターは自動的に無効化される）',
+      description:
+        '指定した ID のアバター設定を有効化する（他のアバターは自動的に無効化される）。' +
+        'ID を推測してはならない。必ず get_avatar_list で確認した ID を使うこと。',
       parameters: {
         type: 'object',
         properties: {
           id: {
             type: 'string',
-            description: '有効化するアバター設定の ID',
+            description: '有効化するアバター設定の ID（get_avatar_list が返したもの）',
           },
         },
         required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'deactivate_avatar',
+      description:
+        '稼働中のアバターを停止する（ウィジェットにアバターが表示されなくなる）。' +
+        '再開したい場合は activate_avatar で同じ設定を有効化すればよい。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
       },
     },
   },
