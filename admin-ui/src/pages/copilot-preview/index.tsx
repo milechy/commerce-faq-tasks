@@ -329,6 +329,8 @@ interface OnboardingStageFlags {
   knowledgePublished: boolean;
   widgetInstalled: boolean;
   firstConversation: boolean;
+  /** オンボ 是正A-2: 段階ではなくヒント。stage2の案内文の出し分けにのみ使う。 */
+  hasDraftFaq: boolean;
 }
 
 // 4段階のうち、まだ到達していない最初の段階に対応する案内文＋チップを返す。
@@ -342,6 +344,15 @@ function deriveOnboardingNextStep(stage: OnboardingStageFlags): { text: string; 
     };
   }
   if (!stage.knowledgePublished) {
+    // オンボ 是正A-2: 業種は答えたが下書きが1件も無い(全INSERT失敗、または
+    // 「あとで」を選んで抜けた等)場合は「下書きを見る」を出しても空振りになる。
+    // 下書きの有無で「公開を促す」か「たたき台作成に戻す」かを分ける。
+    if (!stage.hasDraftFaq) {
+      return {
+        text: "FAQのたたき台をまだお作りしていません。業種を教えていただければ、すぐ使えるたたき台をご提案します。",
+        chips: INDUSTRY_CHIPS,
+      };
+    }
     return {
       text: "業種のFAQたたき台は下書きとして登録済みです。内容をご確認のうえ、よろしければ公開しましょう。",
       chips: [{ label: "下書きを見る", action: "__real:下書きのFAQを見せてください", tone: "ghost" }],

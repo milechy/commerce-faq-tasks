@@ -211,6 +211,10 @@ function recordedSettingsChanges(): Array<Record<string, any>> {
 
 import { registerAdminAgentRoutes } from './agentRoutes';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
+// オンボ 是正A-3: publish_faq_drafts が is_excluded_from_search を正しく引き継ぐことを
+// 検証するため、モック化された upsertToEsAsync への参照を取得する(上のjest.mockで
+// faqCrudRoutes モジュール全体が既にモック済み)。
+import { upsertToEsAsync as mockUpsertToEsAsync } from '../knowledge/faqCrudRoutes';
 // ステージング(knowledgeImportStaging.ts)はモックせず実物を使う。
 // suggest_faq_import_from_text/urls → commit_faq_import の2ターン検証、
 // TTL/上限とは独立にテスト間の状態リークを防ぐためのリセット関数として使う。
@@ -6473,20 +6477,48 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    it('confirmed=false → テンプレート一覧を提示するのみで登録されない', async () => {
+    // オンボ 是正A-2: confirmed=false でも業種はここで保存する(FAQ投入とは別の関心事
+    // のため確認ゲート対象外)。保存しないと「あとで」を選んだユーザーに次回ログインでも
+    // 「初めまして」の挨拶が再生され続ける(要件§0.2の既知バグ、X-3の回帰テスト)。
+    it('confirmed=false → テンプレート一覧を提示するのみで登録されないが、業種はここで保存される(X-3)', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ind-1', 'import_industry_faq_templates', { industry: 'beauty', confirmed: false }))
         .mockResolvedValueOnce(makeGroqResponse('こちらでよろしいですか？'));
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants (業種のみ、fire-and-forget)
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: '美容室です', sessionId: 'sess-ind-01' });
 
       expect(res.status).toBe(200);
-      expect(mockQuery).not.toHaveBeenCalled();
       const result = res.body.actions[0].result as string;
       expect(result).toContain('美容・サロン');
       expect(result).toContain('予約は必要ですか？');
+      // FAQはまだINSERTされない(確認ゲートの対象)
+      expect(mockQuery.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO faq_docs'))).toBe(false);
+      // 業種の保存は onboarding_completed_at を伴わない(FAQ投入の確認完了とは別の更新)
+      await new Promise((r) => setTimeout(r, 0)); // fire-and-forgetの発火を待つ
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE tenants SET onboarding_industry'),
+        ['beauty', 'tenant-abc'],
+      );
+      expect(mockQuery.mock.calls.some(([sql]) => String(sql).includes('onboarding_completed_at'))).toBe(false);
+    });
+
+    // オンボ 是正A-2: super_adminがテナント未指定でconfirmed=falseの場合、業種を保存する
+    // 先が無いため、一覧提示より前に「テナントが特定できません」を返す。
+    it('super_adminがtargetTenantId未指定でconfirmed=false → 「テナントが特定できません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-1b', 'import_industry_faq_templates', { industry: 'beauty', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '美容室です', sessionId: 'sess-ind-01b' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+      expect(mockQuery).not.toHaveBeenCalled();
     });
 
     it('不明な業種の場合はその旨を返す', async () => {
@@ -6548,6 +6580,7 @@ describe('POST /v1/admin/agent/chat', () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ind-4', 'import_industry_faq_templates', { industry: 'beauty', confirmed: false }))
         .mockResolvedValueOnce(makeGroqResponse('こちらでよろしいですか？'));
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants (業種のみ、fire-and-forget)
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -6598,42 +6631,30 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).not.toContain('5件');
     });
 
-    // E-3(docs/ONBOARDING_FIRST_LOGIN.md §7.2)。
-    // 【既知のギャップ】要件は「全件失敗なら段階を進めない・完了フラグを立てない」だが、
-    // actionExecutor.ts の UPDATE tenants は INSERT の成否に関わらず無条件に実行される
-    // (この分岐は本タスク群より前から存在する既存ロジックで、P3では is_published の値
-    // だけを変更した。挙動そのものは変えていない)。このテストは「あるべき姿」ではなく
-    // 「現状の実際の挙動」を固定する回帰テストであり、この挙動を仕様として推奨するもの
-    // ではない。修正するかどうかはプロダクト判断が必要。
-    it('E-3(既知のギャップ): 全件INSERT失敗でも onboarding_industry は更新され、段階到達メトリクスも発火してしまう', async () => {
+    // E-3(docs/ONBOARDING_FIRST_LOGIN.md §7.2、オンボ 是正A-2で修正)。
+    // 以前は INSERT の成否に関わらず UPDATE tenants が無条件実行され、0件成功でも
+    // industryAnswered=true・下書き0件のまま stage2 で永久にループする実害があった
+    // (「あるべき姿」を固定できていなかった既知のギャップ)。修正後は0件成功時は
+    // 段階を進めず、失敗を明示する。
+    it('E-3: 全件INSERT失敗なら onboarding_industry は更新せず、失敗を返し、段階到達メトリクスも発火しない', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ind-7', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
-        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+        .mockResolvedValueOnce(makeGroqResponse('失敗しました。'));
 
       for (let i = 0; i < 5; i++) {
         mockQuery.mockRejectedValueOnce(new Error('insert failed'));
       }
-      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants(無条件に実行される)
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: '登録して', sessionId: 'sess-ind-08' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('0件、下書きとして登録しました');
-      // 現状の実装: 0件成功でも UPDATE tenants は実行され、メトリクスも発火する
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE tenants SET onboarding_industry'),
-        ['beauty', 'tenant-abc'],
-      );
-      expect(recordedMetrics('onboarding_stage_reached')).toEqual([
-        {
-          metricName: 'onboarding_stage_reached',
-          tenantId: 'tenant-abc',
-          labels: { stage: 'industry_answered', actor: 'self', surface: 'unknown' },
-          value: 1,
-        },
-      ]);
+      expect(res.body.actions[0].result).toContain('登録に失敗しました');
+      expect(res.body.actions[0].result).not.toContain('下書きとして登録しました');
+      // 0件成功時は UPDATE tenants を実行しない(段階を進めない)
+      expect(mockQuery.mock.calls.some(([sql]) => String(sql).includes('UPDATE tenants'))).toBe(false);
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([]);
     });
   });
 
@@ -6720,6 +6741,32 @@ describe('POST /v1/admin/agent/chat', () => {
           value: 1,
         },
       ]);
+    });
+
+    // オンボ 是正A-3: is_excluded_from_search を引き継がないと、意図的に検索除外していた
+    // 下書きを公開した際にESが is_excluded_from_search:false で上書きされ、Phase69-2の
+    // ES永続フィルタ層が無効化される。RETURNING句と upsertToEsAsync 引数の両方を検証する。
+    it('オンボ 是正A-3: 公開時に is_excluded_from_search を引き継いで upsertToEsAsync を呼ぶ', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-3b', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 1, question: 'Q1', answer: 'A1', is_excluded_from_search: true },
+          { id: 2, question: 'Q2', answer: 'A2', is_excluded_from_search: false },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-pub-03b' });
+
+      expect(res.status).toBe(200);
+      const updateCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('UPDATE faq_docs SET is_published = true'));
+      expect(String(updateCalls[0][0])).toContain('is_excluded_from_search');
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 1, 'Q1', 'A1', true, true);
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 2, 'Q2', 'A2', true, false);
     });
 
     it('super_adminがtargetTenantId指定で代行実行した場合はactor:delegatedで記録される', async () => {

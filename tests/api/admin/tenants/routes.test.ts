@@ -190,6 +190,7 @@ describe("Tenant Admin Routes", () => {
             rows: [{
               id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
               onboarding_industry: null, onboarding_completed_at: null, onboarding_widget_seen_at: null,
+              created_at: "2026-08-01T00:00:00.000Z",
             }],
             rowCount: 1,
           })
@@ -207,6 +208,7 @@ describe("Tenant Admin Routes", () => {
           knowledgePublished: false,
           widgetInstalled: false,
           firstConversation: false,
+          hasDraftFaq: false,
         });
       });
 
@@ -217,11 +219,12 @@ describe("Tenant Admin Routes", () => {
               id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
               onboarding_industry: "beauty", onboarding_completed_at: "2026-07-01T00:00:00.000Z",
               onboarding_widget_seen_at: "2026-07-02T00:00:00.000Z",
+              created_at: "2026-08-01T00:00:00.000Z",
             }],
             rowCount: 1,
           })
           .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
-          .mockResolvedValueOnce({ rows: [{ "?column?": 1 }], rowCount: 1 }) // faq_docs: 公開FAQあり
+          .mockResolvedValueOnce({ rows: [{ published_count: "1", draft_count: "0" }], rowCount: 1 }) // faq_docs: 公開FAQあり
           .mockResolvedValueOnce({ rows: [{ "?column?": 1 }], rowCount: 1 }); // chat_sessions: 実会話あり
 
         const res = await request(app)
@@ -234,7 +237,32 @@ describe("Tenant Admin Routes", () => {
           knowledgePublished: true,
           widgetInstalled: true,
           firstConversation: true,
+          hasDraftFaq: false,
         });
+      });
+
+      // オンボ 是正A-2: 下書きが公開済みFAQと独立にカウントされること(1クエリ統合の回帰)。
+      it("公開済みFAQが無くても下書きがあれば hasDraftFaq が true になる", async () => {
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: "beauty", onboarding_completed_at: null, onboarding_widget_seen_at: null,
+              created_at: "2026-08-01T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [{ published_count: "0", draft_count: "3" }], rowCount: 1 }) // faq_docs: 下書きのみ
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions
+
+        const res = await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.onboarding_stage.hasDraftFaq).toBe(true);
+        expect(res.body.onboarding_stage.knowledgePublished).toBe(false);
       });
 
       // X-16(docs/ONBOARDING_FIRST_LOGIN.md §7.3): テストチャット(/admin/chat-test)由来の
@@ -248,6 +276,7 @@ describe("Tenant Admin Routes", () => {
             rows: [{
               id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
               onboarding_industry: "beauty", onboarding_widget_seen_at: "2026-07-02T00:00:00.000Z",
+              created_at: "2026-08-01T00:00:00.000Z",
             }],
             rowCount: 1,
           })
@@ -279,6 +308,7 @@ describe("Tenant Admin Routes", () => {
               id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
               onboarding_industry: "beauty", onboarding_completed_at: "2026-07-01T00:00:00.000Z",
               onboarding_widget_seen_at: null,
+              created_at: "2026-08-01T00:00:00.000Z",
             }],
             rowCount: 1,
           })
@@ -303,6 +333,7 @@ describe("Tenant Admin Routes", () => {
             rows: [{
               id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
               onboarding_industry: "beauty", onboarding_completed_at: null, onboarding_widget_seen_at: null,
+              created_at: "2026-08-01T00:00:00.000Z",
             }],
             rowCount: 1,
           })
@@ -317,6 +348,35 @@ describe("Tenant Admin Routes", () => {
         expect(res.status).toBe(200);
         expect(res.body.onboarding_stage.knowledgePublished).toBe(false);
         expect(res.body.onboarding_stage.industryAnswered).toBe(true);
+      });
+
+      // オンボ 是正A-1: P6マージ前(4段階モデル導入前)に作られたテナントは
+      // onboarding_industry が一律 NULL のため、カットオフが無いと「新規」と
+      // 誤判定され新UIに強制着地する(本番影響あり)。created_at がカットオフより
+      // 前なら onboarding_stage 自体が null になることを固定する。
+      it("カットオフより前に作られた既存テナントは onboarding_stage が null になる(新規誤判定の防止)", async () => {
+        // fetchOnboardingStageStatusはカットオフ判定より先にfaq_docs/chat_sessionsを
+        // 実行する(deriveOnboardingStage内でカットオフを見て初めてnullを返す)ため、
+        // 他のテストと同じ4回分のモックが必要。
+        mockDb.query
+          .mockResolvedValueOnce({
+            rows: [{
+              id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+              onboarding_industry: null, onboarding_completed_at: null, onboarding_widget_seen_at: null,
+              created_at: "2026-01-01T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // checkHasR2c2
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // faq_docs
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions
+
+        const res = await request(app)
+          .get("/v1/admin/my-tenant")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.onboarding_stage).toBeNull();
       });
     });
   });
@@ -416,6 +476,7 @@ describe("Tenant Admin Routes", () => {
           rows: [{
             id: "t1", name: "Test", plan: "starter", is_active: true, features: {},
             onboarding_industry: "beauty", onboarding_widget_seen_at: null,
+            created_at: "2026-08-01T00:00:00.000Z",
           }],
           rowCount: 1,
         })
@@ -432,6 +493,7 @@ describe("Tenant Admin Routes", () => {
         knowledgePublished: false,
         widgetInstalled: false,
         firstConversation: false,
+        hasDraftFaq: false,
       });
     });
 
@@ -440,6 +502,29 @@ describe("Tenant Admin Routes", () => {
         .get("/v1/admin/tenants/t1")
         .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
       expect(res.status).toBe(403);
+    });
+
+    // オンボ 是正A-1: super_adminの代行(previewMode)経路でも既存テナントの
+    // 誤判定を防ぐ。my-tenant側と同じカットオフ判定が :id 経路にも効くこと。
+    it("カットオフより前に作られたテナントは onboarding_stage が null になる", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: "t1", name: "Test", plan: "starter", is_active: true, features: {},
+            onboarding_industry: null, onboarding_widget_seen_at: null,
+            created_at: "2020-01-01T00:00:00.000Z",
+          }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // faq_docs
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // chat_sessions
+
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.onboarding_stage).toBeNull();
     });
   });
 

@@ -686,16 +686,27 @@ export async function executeToolCall(
       const templates = INDUSTRY_FAQ_TEMPLATES[industryRaw];
       const label = ONBOARDING_INDUSTRY_LABELS[industryRaw];
 
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
       if (!confirmed) {
+        // オンボ 是正A-2: 業種の回答自体はここで確定させる(FAQ投入とは別の関心事のため
+        // 確認ゲートの対象外)。保存しないと「あとで」を選んだユーザーに次回ログインでも
+        // 「初めまして」の挨拶が再生され続ける(要件§0.2の既知バグ)。
+        db.query(
+          `UPDATE tenants SET onboarding_industry = $1 WHERE id = $2`,
+          [industryRaw, tenantId],
+        ).catch((err) => {
+          logger.warn('[actionExecutor] import_industry_faq_templates industry save failed', err);
+        });
+
         const lines = templates.map((t, i) => `${i + 1}. Q: ${t.question} / A: ${t.answer}`);
         return truncate(
           `「${label}」向けのFAQたたき台を${templates.length}件ご用意しました:\n` +
           lines.join('\n') +
           `\nよろしければ登録しますか？（下書きとして登録し、内容を確認してから公開できます）`,
         );
-      }
-      if (!tenantId) {
-        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
       try {
@@ -718,6 +729,15 @@ export async function executeToolCall(
           } catch (err) {
             logger.warn('[actionExecutor] import_industry_faq_templates insert failed', err);
           }
+        }
+
+        // オンボ 是正A-2: 0件成功なら段階を進めない(要件どおり「登録しました」を返さない)。
+        // 以前はinsertedの値に関わらずUPDATEと成功文言を返しており、全INSERT失敗時でも
+        // industryAnswered=trueかつ下書き0件のまま stage2 で永久にループしていた。
+        if (inserted === 0) {
+          return truncate(
+            `「${label}」向けのFAQの登録に失敗しました。時間をおいてもう一度お試しください。`,
+          );
         }
 
         await db.query(
@@ -776,12 +796,15 @@ export async function executeToolCall(
            WHERE id IN (
              SELECT id FROM faq_docs WHERE tenant_id = $1 AND is_published = false ORDER BY id LIMIT 20
            )
-           RETURNING id, question, answer`,
+           RETURNING id, question, answer, is_excluded_from_search`,
           [tenantId],
         );
-        const rows = result.rows as { id: number; question: string; answer: string }[];
+        const rows = result.rows as { id: number; question: string; answer: string; is_excluded_from_search: boolean | null }[];
         for (const row of rows) {
-          upsertToEsAsync(tenantId, row.id, row.question, row.answer, true);
+          // オンボ 是正A-3: is_excluded_from_search を引き継がないと、意図的に検索除外
+          // していた下書きを公開した際にESドキュメントがfalseで上書きされ、Phase69-2
+          // PR-C2のES永続フィルタ層が無効化される(faqCrudRoutes.tsの一括公開と揃える)。
+          upsertToEsAsync(tenantId, row.id, row.question, row.answer, true, row.is_excluded_from_search ?? false);
         }
         if (rows.length === 0) {
           return truncate('公開できる下書きのFAQはありません');
