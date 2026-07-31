@@ -28,6 +28,7 @@ import {
 } from './knowledgeImportStaging';
 import { suggestEngagementRuleFromText } from './engagementSuggest';
 import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEscalation, normalizeSessionListParams, getConversionTypes, recordOutcome, getSessionOutcome } from '../chat-history/chatHistoryRepository';
+import { deleteSession } from '../chat-history/deleteSessionRepository';
 import { getEvaluationsBySession } from '../evaluations/evaluationsRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
@@ -305,7 +306,11 @@ export async function executeToolCall(
   tenantId: string,
   db: Pool,
   sessionId: string,
-  isSuperAdmin: boolean = false
+  isSuperAdmin: boolean = false,
+  // delete_chat_session が audit_logs (actor_role/actor_email) に記録するために必要。
+  // 他のcaseはこれまで通り未使用のままでよいが、必須引数にすることで唯一の呼び出し元
+  // (executeHopToolCalls)が渡し忘れることをtypecheckで検出できるようにする。
+  actor: { role: string; email: string }
 ): Promise<ActionResult> {
   // 結果は500字以内日本語(書き込み系はこちらのまま)
   const truncate = (s: string) => s.slice(0, 500);
@@ -1969,6 +1974,66 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_chat_session_messages failed', err);
         return truncate('会話内容の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 会話セッションの完全削除。不可逆操作のため deleteSessionRepository.deleteSession()
+    // (reason検証・audit_logs記録・行ロック・lock_timeoutを内包)を必ず経由し、
+    // ここに削除SQLを新規に書かない。
+    case 'delete_chat_session': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const shortId = String(args['session_id'] ?? '').trim();
+      const reason = String(args['reason'] ?? '').trim();
+      const confirmed = args['confirmed'] === true;
+
+      try {
+        const resolved = await resolveSessionByShortId(db, tenantId, shortId);
+        if (!resolved.ok) {
+          return truncate(resolved.message);
+        }
+        const display = resolved.session.session_id.slice(0, 8);
+
+        if (reason.length < 5 || reason.length > 500) {
+          return truncate(
+            '削除理由(reason)は5文字以上500文字以内で指定してください。ユーザーに理由を尋ねてから再度実行してください',
+          );
+        }
+
+        if (!confirmed) {
+          // 契約文字列(BLOCKED_UNCONFIRMED_MARKER = '確認が必要です')を含めること。
+          // agentRoutes.ts の計測(agent_write_blocked)とフロントのチップ出し分けが
+          // この部分一致に依存している。
+          return truncate(
+            `セッション[${display}]の削除には確認が必要です。この操作は取り消せません。\n` +
+            `理由: ${reason}\n` +
+            'この内容でよいかユーザーに提示し、同意を得てから confirmed=true で再度実行してください',
+          );
+        }
+
+        // previewMode中のsuper_adminでも常にtenantスコープで削除する(globalスコープを
+        // 使わない)。resolveSessionByShortId が既に tenantId 条件でセッションを解決
+        // しているため、ここで global に切り替えると所有権チェックの意味が消える。
+        const result = await deleteSession({
+          sessionDbId: resolved.session.id,
+          scope: { kind: 'tenant', tenantId },
+          actorRole: actor.role,
+          actorEmail: actor.email,
+          reason,
+        });
+
+        if (!result) {
+          return truncate(`セッション[${display}]は見つかりません`);
+        }
+
+        return truncate(
+          `セッション[${display}]を削除しました（メッセージ${result.affected_counts.chat_messages}件を含む）`,
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] delete_chat_session failed', err);
+        return truncate('会話セッションの削除に失敗しました。時間をおいて再度お試しください');
       }
     }
 

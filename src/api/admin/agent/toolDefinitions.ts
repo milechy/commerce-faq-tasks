@@ -805,6 +805,37 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'delete_chat_session',
+      description:
+        '指定した会話セッションを完全に削除する書き込みツール。取り消せない操作のため、' +
+        'get_chat_sessions が返した [xxxxxxxx] の短縮IDをそのまま session_id に渡せる。' +
+        'reason には必ずユーザー自身が話した理由をそのまま使い、モデルが理由を創作しないこと' +
+        '（ユーザーがまだ理由を言っていない場合は、先に理由を尋ねること）。' +
+        '必ず先に「どの会話を、どんな理由で削除するか」をユーザーに提示し、' +
+        '明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
+          },
+          reason: {
+            type: 'string',
+            description: '削除する理由（5〜500文字）。ユーザー自身の言葉をそのまま使うこと',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['session_id', 'reason'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_conversation_evaluation',
       description:
         '指定した会話セッションのAI品質評価（Judge）を取得する読み取り専用ツール。総合スコア・4軸' +

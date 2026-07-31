@@ -62,6 +62,8 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   delete_faq: 'high',
   delete_tuning_rule: 'high',
   delete_engagement_rule: 'high',
+  // 会話セッションの完全削除。不可逆な破棄(audit_logsに理由付きで残るのみ)。
+  delete_chat_session: 'high',
   // 顧客の画面に有人返信として表示される（取り消し手段がない）。
   reply_to_escalation: 'high',
   // 返信待ちの顧客対応を打ち切りエスカレーション一覧から外す。状態変更ではあるが
