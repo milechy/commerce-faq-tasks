@@ -87,6 +87,7 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_chat_sessions',
   'get_chat_session_messages',
   'get_session_outcome',
+  'get_conversation_evaluation',
   'get_escalations',
   'get_monitoring_summary',
   'get_sai_task_status',

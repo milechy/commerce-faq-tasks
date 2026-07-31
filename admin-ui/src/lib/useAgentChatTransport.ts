@@ -25,9 +25,17 @@ export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
 // バックエンド(actionExecutor.ts の各 *CardPayload)が自然文に添えて返す構造化カード。
 // card を返すのは get_legacy_ui_link / get_tuning_rules / get_weekly_briefing /
-// get_chat_sessions / get_chat_session_messages のみで、他のツールは従来どおり
-// result の自然文のみ。フィールド形はサーバ側の型と1:1で対応させる
+// get_chat_sessions / get_chat_session_messages / get_conversation_evaluation のみで、
+// 他のツールは従来どおり result の自然文のみ。フィールド形はサーバ側の型と1:1で対応させる
 // (型定義箇所はサーバ/ここの2箇所に限る)。
+export type ConversationEvaluationAgentActionCard = {
+  kind: "conversation_evaluation";
+  shortId: string;
+  overallScore: number;
+  axes: Array<{ label: string; score: number | null }>;
+  notes: string | null;
+};
+
 export type LegacyLinkAgentActionCard = {
   kind: "legacy_link";
   label: string;
@@ -86,7 +94,8 @@ export type AgentActionCard =
   | TuningRulesListAgentActionCard
   | WeeklySummaryAgentActionCard
   | ChatSessionListAgentActionCard
-  | ChatSessionMessagesAgentActionCard;
+  | ChatSessionMessagesAgentActionCard
+  | ConversationEvaluationAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

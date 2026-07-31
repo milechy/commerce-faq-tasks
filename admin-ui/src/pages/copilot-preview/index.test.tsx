@@ -629,6 +629,66 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     await waitFor(() => expect(screen.getByText("はい、お願いします")).toBeTruthy());
   });
 
+  it("conversation_evaluation カードは総合スコア・4軸・所見を表示する(旧UIと同一の閾値)", async () => {
+    mockAgent({
+      reply: "評価はこちらです。",
+      actions: [
+        {
+          tool: "get_conversation_evaluation",
+          result: "セッション[eeee1111]の対応品質評価: 総合85点\n心理対応力: 90 / 顧客対応力: 80 / 商談進行力: 70 / 禁止事項の遵守率: 100\n所見: 丁寧な対応でした",
+          card: {
+            kind: "conversation_evaluation",
+            shortId: "eeee1111",
+            overallScore: 85,
+            axes: [
+              { label: "心理対応力", score: 90 },
+              { label: "顧客対応力", score: 80 },
+              { label: "商談進行力", score: 70 },
+              { label: "禁止事項の遵守率", score: 100 },
+            ],
+            notes: "丁寧な対応でした",
+          },
+        },
+      ],
+    });
+
+    await send("eeee1111の対応品質を教えて");
+
+    expect(await screen.findByText(/総合85点/)).toBeTruthy();
+    expect(screen.getByText(/心理対応力: 90/)).toBeTruthy();
+    expect(screen.getByText(/禁止事項の遵守率: 100/)).toBeTruthy();
+    expect(screen.getByText("丁寧な対応でした")).toBeTruthy();
+  });
+
+  it("conversation_evaluation カードは未測定(null)の軸を「未測定」と表示する(0点と混同しない)", async () => {
+    mockAgent({
+      reply: "評価はこちらです。",
+      actions: [
+        {
+          tool: "get_conversation_evaluation",
+          result: "セッション[eeee1111]の対応品質評価: 総合60点\n心理対応力: 未測定 / 顧客対応力: 60 / 商談進行力: 未測定 / 禁止事項の遵守率: 100",
+          card: {
+            kind: "conversation_evaluation",
+            shortId: "eeee1111",
+            overallScore: 60,
+            axes: [
+              { label: "心理対応力", score: null },
+              { label: "顧客対応力", score: 60 },
+              { label: "商談進行力", score: null },
+              { label: "禁止事項の遵守率", score: 100 },
+            ],
+            notes: null,
+          },
+        },
+      ],
+    });
+
+    await send("eeee1111の対応品質を教えて");
+
+    expect(await screen.findByText(/心理対応力: 未測定/)).toBeTruthy();
+    expect(screen.getByText(/商談進行力: 未測定/)).toBeTruthy();
+  });
+
   it("weekly_summary カードの数値をそのまま描画し、未回答質問・承認待ちルールがあれば行動チップを出す", async () => {
     mockAgent({
       reply: "今週も好調です。",
