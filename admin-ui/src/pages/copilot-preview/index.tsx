@@ -535,7 +535,7 @@ export default function CopilotPreviewPage() {
   // super_adminがテナントプレビュー中の場合、対象テナントIDをtargetTenantIdとしてAPIに渡す
   // (他画面のescalations/knowledge-gaps等と同じパターン)。client_adminは自身のJWT由来の
   // tenantIdがサーバー側で使われるため、previewMode=falseのままで問題ない。
-  const { user, isSuperAdmin, previewMode, previewTenantId, enterPreview, logout } = useAuth();
+  const { user, isSuperAdmin, previewMode, previewTenantId, enterPreview, logout, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
   // super_adminがプレビューに入っていない場合、テナントが特定できないため
   // ほぼ全てのツールが「テナントが特定できません」になり会話が行き止まりになる。
@@ -971,6 +971,13 @@ export default function CopilotPreviewPage() {
     // 「テナントが特定できません」で埋まるだけのため）。選択してpreviewModeに
     // 入った時点でこのeffectが再評価され、通常どおりブリーフィングが走る。
     if (needsTenantSelection) return;
+    // P6-1で発見(既存の潜在バグ): /copilot-previewはRequireAuth外の隔離ルートのため、
+    // useAuth()のセッション確認(非同期)が終わる前に user=null のままこのeffectが
+    // 走ってしまうことがある。user未確定のままだとscopedTenantIdが空になり、
+    // オンボーディング段階(stage)判定そのものが飛ばされて通常の週次ブリーフィングに
+    // フォールバックしていた(既存の4段階次の一手が出ないことがある、同一の原因)。
+    // needsTenantSelectionと同じ理由でauth確認が終わるまで待つ。
+    if (authLoading) return;
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
@@ -989,7 +996,7 @@ export default function CopilotPreviewPage() {
       loadingText: "ログイン、お疲れさまです。今週の実データを確認しています…",
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsTenantSelection]);
+  }, [needsTenantSelection, authLoading]);
 
   // super_adminがプレビュー中に別テナントへenterPreviewする経路(AppSwitcher/テナント詳細の
   // 「クライアントビューで見る」等)を検知し、会話を初期化して新テナントの週次ブリーフィングを
