@@ -93,7 +93,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         type: 'object',
         properties: {
           limit: {
-            type: 'number',
+            type: 'integer',
             description: '取得件数（1〜20、デフォルト10）',
           },
           search: {
@@ -527,7 +527,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
+          limit: { type: 'integer', description: '取得件数の上限（任意、省略時10、最大20）' },
         },
         required: [],
       },
@@ -784,8 +784,8 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          limit: { type: 'number', description: '取得件数の上限（任意、省略時10、最大20）' },
-          offset: { type: 'number', description: '取得開始位置（任意、省略時0）。前回の続きを見るときに limit ずつ進める' },
+          limit: { type: 'integer', description: '取得件数の上限（任意、省略時10、最大20）' },
+          offset: { type: 'integer', description: '取得開始位置（任意、省略時0）。前回の続きを見るときに limit ずつ進める' },
           period: {
             type: 'string',
             enum: ['7', '30', '90', 'all'],
@@ -823,7 +823,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             type: 'string',
             description: 'セッションID。get_chat_sessions の [xxxxxxxx] 表記の短縮ID（8文字）をそのまま指定してよい',
           },
-          limit: { type: 'number', description: '取得するメッセージ数の上限（任意、省略時20、最大50。新しい方から取得）' },
+          limit: { type: 'integer', description: '取得するメッセージ数の上限（任意、省略時20、最大50。新しい方から取得）' },
         },
         required: ['session_id'],
       },
