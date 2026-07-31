@@ -22,8 +22,10 @@ import { authFetch } from "../../lib/api";
 const mockOk = (data: unknown): Promise<Response> =>
   Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) } as Response);
 
-function Probe() {
-  const { messages, sessionId, sendMessage } = useAdminAgent();
+// tenantId未指定(undefined)はchatSessionStore側でテナント検証をスキップする既定値。
+// 既存テスト(テナント検証を主眼としないもの)はこの既定のまま動く。
+function Probe({ tenantId }: { tenantId?: string | null }) {
+  const { messages, sessionId, sendMessage } = useAdminAgent(tenantId);
   return (
     <div>
       <div data-testid="session-id">{sessionId}</div>
@@ -62,6 +64,34 @@ describe("useAdminAgent — 会話の復元(sessionStorage)", () => {
       "user:送料を教えて|assistant:全国一律550円です。",
     );
     expect(screen.getByTestId("session-id").textContent).toBe("panel-session-id");
+  });
+
+  // GID: super_adminがプレビュー中に別テナントへ切り替えても、パネルのキーはsurfaceのみで
+  // テナントを区別しないため、前テナントの会話が「復元成功」として通ってしまっていた。
+  it("保存時と異なるテナントで開くと、前テナントの会話を復元しない", () => {
+    saveChatSession(CHAT_SESSION_SURFACE_PANEL, {
+      sessionId: "panel-session-tenant-a",
+      messages: [{ role: "user", content: "テナントAの質問" }],
+      tenantId: "tenant-a",
+    });
+
+    render(<Probe tenantId="tenant-b" />);
+
+    expect(screen.getByTestId("messages").textContent).toBe("");
+    expect(screen.getByTestId("session-id").textContent).not.toBe("panel-session-tenant-a");
+  });
+
+  it("保存時と同じテナントで開けば、通常どおり会話を復元する", () => {
+    saveChatSession(CHAT_SESSION_SURFACE_PANEL, {
+      sessionId: "panel-session-tenant-a",
+      messages: [{ role: "user", content: "テナントAの質問" }],
+      tenantId: "tenant-a",
+    });
+
+    render(<Probe tenantId="tenant-a" />);
+
+    expect(screen.getByTestId("messages").textContent).toBe("user:テナントAの質問");
+    expect(screen.getByTestId("session-id").textContent).toBe("panel-session-tenant-a");
   });
 
   it("送信するとパネルのキーへ保存され、全画面UIの会話は書き換わらない", async () => {

@@ -614,15 +614,27 @@ export default function CopilotPreviewPage() {
   const consumeChips = (msgId: number) =>
     setMsgs((prev) => prev.map((m) => (m.id === msgId ? { ...m, chipsUsed: true } : m)));
 
+  // 呼び出しのたびに進む世代カウンタ。テナント切替(force:true)が古い呼び出しを
+  // 追い越した場合、古い呼び出しの応答が届いても画面へ反映しない・sendingも
+  // 触らないようにする(GID: 連続テナント切替で古いテナントの応答が新しいテナントの
+  // 会話に紛れ込むレースの回避)。通常呼び出し(force無し)は sending ガードにより
+  // 同時に2本走らないため、この仕組みは通常時の挙動には影響しない。
+  const requestEpochRef = useRef(0);
+
   // Phase1/2: 実際の R2Cエージェント API を呼ぶ（自由入力欄・起動時ブリーフィングから）。
   // suggest_tuning_rule / save_tuning_rule / get_weekly_briefing 等が本物のDBを読み書きする。
   // silent=true はページ起動時の自動キックオフ用（ユーザーが打った体で me() バブルを積まない）。
-  const sendReal = async (text: string, opts?: { silent?: boolean }) => {
-    if (!text.trim() || sending) return;
+  // force=true はテナント切替専用。前の呼び出しがまだ sending 中でもガードを迂回して発火し、
+  // 前の呼び出しを世代カウンタで追い越す(「新しいテナントへの切替」が「前のテナントの
+  // 応答待ち」より優先されるべきであるため)。
+  const sendReal = async (text: string, opts?: { silent?: boolean; force?: boolean }) => {
+    if (!text.trim() || (sending && !opts?.force)) return;
+    const myEpoch = ++requestEpochRef.current;
     if (!opts?.silent) push(me(text));
     setSending(true);
 
     const result = await sendAgentChat(text, { history: realHistory });
+    if (requestEpochRef.current !== myEpoch) return; // より新しい呼び出しに追い越された
     if (!result.ok) {
       push(say(result.message));
       setSending(false);
@@ -821,6 +833,10 @@ export default function CopilotPreviewPage() {
     const replyId = nextId();
     push({ id: replyId, role: "ai", text: "", answeredFrom: data.answered_from });
     revealText(replyId, data.reply || "（応答なし）", () => {
+      // タイプライター演出の完了は非同期(setInterval)のため、演出中により新しい
+      // 呼び出し(テナント再切替等)に追い越されている可能性がある。追い越されていたら
+      // sending は触らない(そのより新しい呼び出し自身の完了処理に任せる)。
+      if (requestEpochRef.current !== myEpoch) return;
       if (chips) setMsgs((prev) => prev.map((m) => (m.id === replyId ? { ...m, chips } : m)));
       setSending(false);
     });
@@ -847,7 +863,7 @@ export default function CopilotPreviewPage() {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
-    const restored = restoreChatSession<Msg>(CHAT_SESSION_SURFACE_FULLSCREEN);
+    const restored = restoreChatSession<Msg>(CHAT_SESSION_SURFACE_FULLSCREEN, scopedTenantId || null);
     const hasRestoredConversation = !!(restored && restored.messages.length > 0);
     if (hasRestoredConversation && restored) {
       reserveIds(restored.messages);
@@ -923,7 +939,10 @@ export default function CopilotPreviewPage() {
 
     void (async () => {
       push({ id: nextId(), role: "ai", text: "テナントを切り替えました。今週の実データを確認しています…" });
-      await sendReal(BOOTSTRAP_PROMPT, { silent: true });
+      // force:true — 直前の切替の応答待ち(sending中)でも必ずこの切替を発火させる。
+      // 「新しい切替」は「前のテナントの応答待ち」より常に優先されるべきで、
+      // 追い越された古い呼び出し側は sendReal 内の世代カウンタが無害化する。
+      await sendReal(BOOTSTRAP_PROMPT, { silent: true, force: true });
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopedTenantId]);
@@ -960,10 +979,11 @@ export default function CopilotPreviewPage() {
         sessionId: realSessionId,
         messages: msgs,
         history: realHistory,
+        tenantId: scopedTenantId || null,
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [msgs, realHistory, realSessionId]);
+  }, [msgs, realHistory, realSessionId, scopedTenantId]);
 
   // 新UI(サイドバー型ではないため)にはログアウト手段が無く、Phase4トグルで
   // このブラウザの既定画面にすると詰む(GID: 新UI常用時にログアウトできない)。

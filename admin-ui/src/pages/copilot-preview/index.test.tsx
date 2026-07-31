@@ -639,6 +639,82 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     await waitFor(() => expect(screen.getByText("はい、お願いします")).toBeTruthy());
   });
 
+  it("record_session_outcome が確認待ちのときに「やめておく」を押すと、記録せず辞退の自然文を送る", async () => {
+    mockAgent({
+      reply: "確認をお願いします。",
+      actions: [
+        {
+          tool: "record_session_outcome",
+          result:
+            "セッション[oooo1111]の成果を「購入完了」として記録するには確認が必要です。ユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+        },
+      ],
+    });
+
+    await send("oooo1111の成果を購入完了で記録して");
+
+    const declineButton = await screen.findByRole("button", { name: "やめておく" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(screen.getByText("やめておきます")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("やめておきます");
+  });
+
+  it("delete_chat_session が確認待ちのときは「削除して」チップを出し、押すと実送信する", async () => {
+    mockAgent({
+      reply: "確認をお願いします。",
+      actions: [
+        {
+          tool: "delete_chat_session",
+          result:
+            "セッション[dddd1111]の削除には確認が必要です。この操作は取り消せません。\n理由: テストのため削除\nこの内容でよいかユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+        },
+      ],
+    });
+
+    await send("dddd1111をテストのため削除して");
+
+    const chip = await screen.findByRole("button", { name: "削除して" });
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+    fireEvent.click(chip);
+
+    await waitFor(() => expect(screen.getByText("はい、削除してください")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("はい、削除してください");
+  });
+
+  it("delete_chat_session が確認待ちのときに「やめておく」を押すと、削除せず辞退の自然文を送る(不可逆操作なので取り消しが明確に効くことを確認)", async () => {
+    mockAgent({
+      reply: "確認をお願いします。",
+      actions: [
+        {
+          tool: "delete_chat_session",
+          result:
+            "セッション[dddd1111]の削除には確認が必要です。この操作は取り消せません。\n理由: テストのため削除\nこの内容でよいかユーザーに提示し、同意を得てから confirmed=true で再度実行してください",
+        },
+      ],
+    });
+
+    await send("dddd1111をテストのため削除して");
+
+    const declineButton = await screen.findByRole("button", { name: "やめておく" });
+    fireEvent.click(declineButton);
+
+    await waitFor(() => expect(screen.getByText("やめておきます")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("やめておきます");
+  });
+
   it("conversation_evaluation カードは総合スコア・4軸・所見を表示する(旧UIと同一の閾値)", async () => {
     mockAgent({
       reply: "評価はこちらです。",
@@ -2088,6 +2164,28 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(screen.getByText(/別の日に取得した内容です/)).toBeTruthy();
   });
 
+  // GID: restoreChatSession/saveChatSession はこのファイルでモック化されているため、
+  // 実際のテナント一致検証ロジックは chatSessionStore.test.ts で検証済み。ここでは
+  // ページ側が正しい tenantId を引数として渡していること(配線)だけを確認する。
+  it("復元・保存の呼び出しに現在のscopedTenantIdを渡す(別テナントの会話を誤って復元しないための前提)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-scope-check" });
+
+    await waitFor(() => expect(vi.mocked(restoreChatSession)).toHaveBeenCalledWith(
+      CHAT_SESSION_SURFACE_FULLSCREEN,
+      "tenant-scope-check",
+    ));
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(vi.mocked(saveChatSession)).toHaveBeenCalledWith(
+      CHAT_SESSION_SURFACE_FULLSCREEN,
+      expect.objectContaining({ tenantId: "tenant-scope-check" }),
+    ));
+  });
+
   it("保存済みの会話が無ければ、従来通り起動時ブリーフィングを取得する(回帰)", async () => {
     renderPage();
 
@@ -2358,6 +2456,57 @@ describe("CopilotPreviewPage — テナント切替時の会話リセット", ()
 
     expect(screen.getByText("今週も順調です。")).toBeTruthy();
     expect(vi.mocked(authFetch).mock.calls.length).toBe(callsBefore);
+  });
+
+  // GID: 連続テナント切替のレース。1回目の切替(tenant-b)の応答待ち中に2回目の切替
+  // (tenant-c)が発生すると、修正前は(a) sendReal の sending ガードにより2回目の
+  // 再取得が無言でドロップされ、(b) 後から届いた1回目の応答が2回目の会話に紛れ込んで
+  // 表示されていた。世代カウンタ(requestEpochRef)による回帰テスト。
+  it("切替の応答待ち中にさらに切替が発生しても、古い応答は表示されず新しい切替が必ず反映される", async () => {
+    let resolveTenantB: (v: Response) => void = () => {};
+    let chatCallCount = 0;
+
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (!String(url).includes("/v1/admin/agent/chat")) return mockOk({});
+      chatCallCount += 1;
+      if (chatCallCount === 1) {
+        // 起動時ブリーフィング(tenant-a)
+        return mockOk({ reply: "tenant-aの状況です。", actions: [] });
+      }
+      if (chatCallCount === 2) {
+        // tenant-b への切替: 応答が遅延する(手動で解決するまで保留)
+        return new Promise<Response>((resolve) => { resolveTenantB = resolve; });
+      }
+      // tenant-c への切替: 即座に解決する
+      return mockOk({ reply: "tenant-cの状況です。", actions: [] });
+    });
+
+    const { rerender } = renderPage({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-a" });
+    await waitFor(() => expect(screen.getByText("tenant-aの状況です。")).toBeTruthy());
+
+    // tenant-b へ切替(応答は遅延したまま)
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-b" }));
+    rerender(<MemoryRouter><CopilotPreviewPage /></MemoryRouter>);
+    await waitFor(() => expect(chatCallCount).toBe(2));
+
+    // tenant-b の応答が届く前に、さらに tenant-c へ切替
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ ...SUPER_ADMIN_IN_PREVIEW, previewTenantId: "tenant-c" }));
+    rerender(<MemoryRouter><CopilotPreviewPage /></MemoryRouter>);
+    await waitFor(() => expect(chatCallCount).toBe(3));
+
+    // tenant-c の応答が表示される(sending guardに阻まれず必ず発火する)
+    await waitFor(() => expect(screen.getByText("tenant-cの状況です。")).toBeTruthy());
+    // 送信可能状態(sending=false)に戻っている
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    // 遅延していた tenant-b の応答が今さら届いても、画面には一切反映されない
+    resolveTenantB({ ok: true, status: 200, json: () => Promise.resolve({ reply: "tenant-bの状況です。", actions: [] }) } as unknown as Response);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText("tenant-bの状況です。")).toBeNull();
+    expect(screen.getByText("tenant-cの状況です。")).toBeTruthy();
+    // 送信可能状態も壊れていない(遅れてきたtenant-bの完了処理がsendingを誤って書き換えていない)
+    expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

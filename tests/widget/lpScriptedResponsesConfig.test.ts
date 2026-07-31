@@ -24,6 +24,7 @@ type ScriptedResponse = { keywords?: string[]; answer: string };
 function findScriptedAnswer(userText: string, responses: ScriptedResponse[]): string | null {
   const normalized = userText.toLowerCase().replace(/[？?！!。、\s]/g, '');
   for (const item of responses) {
+    if (!item.answer) continue;
     const kws = item.keywords || [];
     if (kws.indexOf('*') !== -1) continue;
     for (const raw of kws) {
@@ -32,7 +33,7 @@ function findScriptedAnswer(userText: string, responses: ScriptedResponse[]): st
       if (normalized.indexOf(kw) !== -1) return item.answer;
     }
   }
-  const wildcard = responses.find((r) => (r.keywords || []).indexOf('*') !== -1);
+  const wildcard = responses.find((r) => !!r.answer && (r.keywords || []).indexOf('*') !== -1);
   return wildcard ? wildcard.answer : null;
 }
 
