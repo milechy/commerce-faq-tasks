@@ -20,6 +20,9 @@ import {
   generateScrapeFaqPreview,
   commitTextFaqs,
   commitScrapeFaqs,
+  fetchExistingQuestions,
+  bigramSimilarity,
+  DUPLICATE_THRESHOLD,
 } from '../../../lib/knowledge/faqImport';
 import {
   setStagedFaqImport,
@@ -710,8 +713,21 @@ export async function executeToolCall(
       }
 
       try {
+        // オンボ 是正D-1: 生INSERTで既存質問との重複判定を一切していなかったため、
+        // 業種チップ連打・2業種連続選択・「登録して」の複数回送信で同じテンプレが
+        // 素直に二重登録されていた(X-2)。commitTextFaqs が使う既存の重複判定
+        // (bigram類似度)をここでも通す。
+        const existingQuestionsAtCommit = await fetchExistingQuestions(db, tenantId);
         let inserted = 0;
+        let skipped = 0;
         for (const t of templates) {
+          const isDuplicate = existingQuestionsAtCommit.some(
+            (q) => bigramSimilarity(t.question, q) >= DUPLICATE_THRESHOLD,
+          );
+          if (isDuplicate) {
+            skipped++;
+            continue;
+          }
           try {
             const result = await db.query(
               `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
@@ -725,6 +741,7 @@ export async function executeToolCall(
               faq_id: row.id,
             });
             upsertToEsAsync(tenantId, row.id, row.question, row.answer, row.is_published);
+            existingQuestionsAtCommit.push(row.question);
             inserted++;
           } catch (err) {
             logger.warn('[actionExecutor] import_industry_faq_templates insert failed', err);
@@ -734,7 +751,13 @@ export async function executeToolCall(
         // オンボ 是正A-2: 0件成功なら段階を進めない(要件どおり「登録しました」を返さない)。
         // 以前はinsertedの値に関わらずUPDATEと成功文言を返しており、全INSERT失敗時でも
         // industryAnswered=trueかつ下書き0件のまま stage2 で永久にループしていた。
+        // 全件が重複スキップだった場合も同様に扱う(段階は既に進んでいるはずのため)。
         if (inserted === 0) {
+          if (skipped > 0) {
+            return truncate(
+              `「${label}」向けのFAQはすべて登録済みでした(重複のため${skipped}件をスキップしました)。`,
+            );
+          }
           return truncate(
             `「${label}」向けのFAQの登録に失敗しました。時間をおいてもう一度お試しください。`,
           );
@@ -770,17 +793,30 @@ export async function executeToolCall(
 
       if (!confirmed) {
         try {
-          const draftResult = await db.query(
-            `SELECT id, question, answer FROM faq_docs WHERE tenant_id = $1 AND is_published = false ORDER BY id LIMIT 20`,
-            [tenantId],
-          );
+          // オンボ 是正D-1: LIMIT 20 のsilent cap対策。25件あっても「20件あります」とだけ
+          // 表示すると実数と食い違う(CLAUDE.mdの「silent capを作らない」方針に反する)ため、
+          // 総件数を別途取得して超過分を明示する。
+          const [draftResult, countResult] = await Promise.all([
+            db.query(
+              `SELECT id, question, answer FROM faq_docs WHERE tenant_id = $1 AND is_published = false ORDER BY id DESC LIMIT 20`,
+              [tenantId],
+            ),
+            db.query(
+              `SELECT COUNT(*)::int AS cnt FROM faq_docs WHERE tenant_id = $1 AND is_published = false`,
+              [tenantId],
+            ),
+          ]);
           const drafts = draftResult.rows as { id: number; question: string; answer: string }[];
+          const totalDrafts = (countResult.rows[0] as { cnt: number } | undefined)?.cnt ?? drafts.length;
           if (drafts.length === 0) {
             return truncate('公開できる下書きのFAQはありません');
           }
           const lines = drafts.map((d, i) => `${i + 1}. Q: ${d.question} / A: ${d.answer}`);
+          const countLine = totalDrafts > drafts.length
+            ? `下書き（未公開）のFAQが総${totalDrafts}件あります。うち新しい${drafts.length}件:\n`
+            : `下書き（未公開）のFAQが${drafts.length}件あります:\n`;
           return truncate(
-            `下書き（未公開）のFAQが${drafts.length}件あります:\n` +
+            countLine +
             lines.join('\n') +
             `\nよろしければ公開しますか？（公開後も自由に編集・非公開に戻せます）`,
           );
@@ -791,10 +827,18 @@ export async function executeToolCall(
       }
 
       try {
+        // オンボ 是正D-1: 確認時の一覧提示と同じ ORDER BY id DESC(新しい順)に揃える。
+        // ASC(古い順)のままだと、既存テナントが使った場合に「意図的に非公開のままに
+        // していた古いFAQ」が新しいオンボ由来の下書きより先に公開されてしまう。
+        //
+        // TOCTOU(確認時の一覧と実際の公開対象の集合が完全一致する保証が無い)は既知の
+        // トレードオフとして残す: 対象IDをLLM往復で固定する設計は、このツールが意図的に
+        // TTLステージングを持たない設計(X-10、docs/ONBOARDING_FIRST_LOGIN.md)と衝突し、
+        // LLMがID配列を正しく往復できない場合に誤動作するリスクの方が大きいと判断した。
         const result = await db.query(
           `UPDATE faq_docs SET is_published = true, updated_at = NOW()
            WHERE id IN (
-             SELECT id FROM faq_docs WHERE tenant_id = $1 AND is_published = false ORDER BY id LIMIT 20
+             SELECT id FROM faq_docs WHERE tenant_id = $1 AND is_published = false ORDER BY id DESC LIMIT 20
            )
            RETURNING id, question, answer, is_excluded_from_search`,
           [tenantId],
@@ -809,7 +853,18 @@ export async function executeToolCall(
         if (rows.length === 0) {
           return truncate('公開できる下書きのFAQはありません');
         }
-        return truncate(`${rows.length}件のFAQを公開しました`);
+        // オンボ 是正D-1: 残件数を明示する(公開後も「20件公開しました」だけでは
+        // 残りの下書きの存在が伝わらない)。
+        const remainingResult = await db.query(
+          `SELECT COUNT(*)::int AS cnt FROM faq_docs WHERE tenant_id = $1 AND is_published = false`,
+          [tenantId],
+        ).catch(() => null);
+        const remaining = (remainingResult?.rows[0] as { cnt: number } | undefined)?.cnt ?? 0;
+        return truncate(
+          remaining > 0
+            ? `${rows.length}件のFAQを公開しました(残り${remaining}件は次回以降に公開できます)`
+            : `${rows.length}件のFAQを公開しました`,
+        );
       } catch (err) {
         logger.warn('[actionExecutor] publish_faq_drafts failed', err);
         return truncate('FAQの公開に失敗しました');

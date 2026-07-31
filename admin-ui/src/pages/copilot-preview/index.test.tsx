@@ -2613,6 +2613,61 @@ describe("CopilotPreviewPage — 会話の復元(sessionStorage)", () => {
     expect(screen.queryByText("埋め込みコードを見る")).toBeNull();
   });
 
+  // N-1本体(docs/ONBOARDING_FIRST_LOGIN.md §7.1、オンボ 是正D-2): 決定Aの主経路
+  // (テナント本人の初回ログイン・会話復元なし・client_admin)が、これまでpreviewMode
+  // (super_admin代行)の1件でしか肯定検証されておらず、丸ごと未検証だった。
+  it("N-1: client_adminが復元なし・未完了で起動すると、業種チップ付き挨拶が出る(決定Aの主経路)", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: false,
+            knowledgePublished: false,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/どんな業種ですか/)).toBeTruthy();
+    // 通常の週次ブリーフィングには進まない(業種未回答の間はブリーフィングより優先)
+    expect(screen.queryByText("今週も順調です。")).toBeNull();
+  });
+
+  // X-6(docs/ONBOARDING_FIRST_LOGIN.md §7.3、オンボ 是正D-2): ログアウト→再ログインの
+  // 想定(復元なし+未完了+client_admin)。サーバ側の段階だけから正しく復元されることを
+  // N-1と同じ入力組み合わせで固定する(実装上はmy-tenantを毎回叩くだけなので安全域だが、
+  // 復元経路を「重いので省略」に変えた瞬間に壊れる回帰を検出する)。
+  it("X-6: ログアウト後の再ログイン相当(復元なし)でも、サーバ側の段階から次の一手が復元される", async () => {
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: {
+            industryAnswered: true,
+            knowledgePublished: true,
+            widgetInstalled: false,
+            firstConversation: false,
+            hasDraftFaq: false,
+          },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/ウィジェットをサイトに設置しましょう/)).toBeTruthy();
+  });
+
   // E-1(docs/ONBOARDING_FIRST_LOGIN.md §7.2): my-tenant取得失敗時、詰まらず週次ブリーフィングへ
   // フォールバックする。会話が復元されない(=新規起動)パスで検証する。
   it("E-1: my-tenant取得が例外を投げても、詰まらず週次ブリーフィングにフォールバックする", async () => {

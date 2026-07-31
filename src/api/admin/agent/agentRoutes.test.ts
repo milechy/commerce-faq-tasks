@@ -91,12 +91,24 @@ const mockGenerateTextFaqPreview = jest.fn();
 const mockGenerateScrapeFaqPreview = jest.fn();
 const mockCommitTextFaqs = jest.fn();
 const mockCommitScrapeFaqs = jest.fn();
-jest.mock('../../../lib/knowledge/faqImport', () => ({
-  generateTextFaqPreview: (...args: any[]) => mockGenerateTextFaqPreview(...args),
-  generateScrapeFaqPreview: (...args: any[]) => mockGenerateScrapeFaqPreview(...args),
-  commitTextFaqs: (...args: any[]) => mockCommitTextFaqs(...args),
-  commitScrapeFaqs: (...args: any[]) => mockCommitScrapeFaqs(...args),
-}));
+// オンボ 是正D-1: import_industry_faq_templates が既存質問との重複判定に
+// fetchExistingQuestions/bigramSimilarity/DUPLICATE_THRESHOLD を使うようになったため、
+// 一部モックのままだと undefined 呼び出しで同期例外になる。bigramSimilarity/
+// DUPLICATE_THRESHOLD は純関数/定数なので実物を使い、DB依存のfetchExistingQuestionsのみ
+// モックする(既定は「重複無し」= 空配列。個別テストで上書き可能)。
+const mockFetchExistingQuestions = jest.fn();
+jest.mock('../../../lib/knowledge/faqImport', () => {
+  const actual = jest.requireActual('../../../lib/knowledge/faqImport');
+  return {
+    generateTextFaqPreview: (...args: any[]) => mockGenerateTextFaqPreview(...args),
+    generateScrapeFaqPreview: (...args: any[]) => mockGenerateScrapeFaqPreview(...args),
+    commitTextFaqs: (...args: any[]) => mockCommitTextFaqs(...args),
+    commitScrapeFaqs: (...args: any[]) => mockCommitScrapeFaqs(...args),
+    fetchExistingQuestions: (...args: any[]) => mockFetchExistingQuestions(...args),
+    bigramSimilarity: actual.bigramSimilarity,
+    DUPLICATE_THRESHOLD: actual.DUPLICATE_THRESHOLD,
+  };
+});
 
 // suggest_engagement_rule が使う依存をモック
 const mockSuggestEngagementRuleFromText = jest.fn();
@@ -309,6 +321,8 @@ describe('POST /v1/admin/agent/chat', () => {
     mockSearchKnowledgeForSuggestion.mockResolvedValue({ results: [] });
     mockFormatKnowledgeContext.mockReturnValue('');
     mockCheckSaiMonthlyCostCeiling.mockResolvedValue({ ok: true });
+    // オンボ 是正D-1: jest.resetAllMocks() で既定実装([]を返す)も消えるため再設定する
+    mockFetchExistingQuestions.mockResolvedValue([]);
     // knowledgeImportStaging はモックしない実物のモジュールなので、
     // jest.resetAllMocks() では消えないプロセス内Mapをテストごとに明示的にリセットする。
     __resetKnowledgeImportStagingForTest();
@@ -6576,6 +6590,95 @@ describe('POST /v1/admin/agent/chat', () => {
       ]);
     });
 
+    // X-2(docs/ONBOARDING_FIRST_LOGIN.md §7.3、オンボ 是正D-1): 業種チップ連打・
+    // 「登録して」の複数回送信で、既存の重複判定(commitTextFaqsのbigram類似度)を
+    // 一切経由せずテンプレを素直に二重登録していた。既に同一質問が登録済みならスキップする。
+    it('X-2: 既に同一のテンプレ質問が登録済みなら重複スキップし、二重登録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-dup1', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+
+      // 5件中、最初の1件(「営業時間を教えてください」)が既に登録済みという想定
+      mockFetchExistingQuestions.mockResolvedValueOnce(['営業時間を教えてください']);
+      for (let i = 0; i < 4; i++) {
+        mockQuery.mockResolvedValueOnce({
+          rows: [{ id: 200 + i, question: `dup-q${i}`, answer: `dup-a${i}`, is_published: false }],
+        });
+      }
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // UPDATE tenants
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-dup1' });
+
+      expect(res.status).toBe(200);
+      // 重複した1件を除く4件だけがINSERTされる
+      const insertCalls = mockQuery.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO faq_docs'));
+      expect(insertCalls).toHaveLength(4);
+      expect(res.body.actions[0].result).toContain('4件、下書きとして登録しました');
+    });
+
+    it('X-2: 業種テンプレ5件すべてが既に登録済みなら1件もINSERTせず、段階も進めない(重複のみメッセージ)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-dup2', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録済みです。'));
+
+      mockFetchExistingQuestions.mockResolvedValueOnce([
+        '営業時間を教えてください',
+        '予約は必要ですか？',
+        '初めてでも大丈夫ですか？',
+        'クーポンや割引はありますか？',
+        '駐車場はありますか？',
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-dup2' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO faq_docs'))).toBe(false);
+      expect(mockQuery.mock.calls.some(([sql]) => String(sql).includes('UPDATE tenants'))).toBe(false);
+      expect(res.body.actions[0].result).toContain('すべて登録済みでした');
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([]);
+    });
+
+    // E-4(docs/ONBOARDING_FIRST_LOGIN.md §7.2、オンボ 是正D-2): FAQ本体のINSERTは
+    // 全件成功しているのに、直後の UPDATE tenants(onboarding_industry/completed_at)
+    // だけが失敗した場合の挙動を固定する。現状は .catch(warn) で握り潰し成功文言を
+    // 返す実装のまま(このタスクはテスト追加のみで実装は変更しない)。UPDATE失敗時は
+    // onboarding_industry が更新されないため、次回ログインで「初めまして」が
+    // 再生される既知の狭い窓が残る(A-2の詰まりとは別、より稀なケース)。
+    it('E-4(既知の挙動): FAQ本体は全件成功してもUPDATE tenantsが失敗すると、次回onboarding_industryは更新されないまま', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ind-e4', 'import_industry_faq_templates', { industry: 'beauty', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録しました。'));
+
+      for (let i = 0; i < 5; i++) {
+        mockQuery.mockResolvedValueOnce({
+          rows: [{ id: 300 + i, question: `e4-q${i}`, answer: `e4-a${i}`, is_published: false }],
+        });
+      }
+      mockQuery.mockRejectedValueOnce(new Error('UPDATE tenants connection lost'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '登録して', sessionId: 'sess-ind-e4' });
+
+      expect(res.status).toBe(200);
+      // 現状の実装: FAQは登録済みなのに成功文言を返す(UPDATE失敗はチャット応答に現れない)
+      expect(res.body.actions[0].result).toContain('5件、下書きとして登録しました');
+      // メトリクスは result の文言一致で判定するため、UPDATE失敗でも発火する
+      // (このメトリクス自体はFAQ登録の成功を表しており、onboarding_industry永続化とは別軸)
+      expect(recordedMetrics('onboarding_stage_reached')).toEqual([
+        {
+          metricName: 'onboarding_stage_reached',
+          tenantId: 'tenant-abc',
+          labels: { stage: 'industry_answered', actor: 'self', surface: 'unknown' },
+          value: 1,
+        },
+      ]);
+    });
+
     it('confirmed=false(一覧提示のみ)では段階到達メトリクスを記録しない', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ind-4', 'import_industry_faq_templates', { industry: 'beauty', confirmed: false }))
@@ -6682,9 +6785,12 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(toolCallResponse('call-pub-1', 'publish_faq_drafts', { confirmed: false }))
         .mockResolvedValueOnce(makeGroqResponse('こちらを公開しますか？'));
 
-      mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 1, question: 'Q1', answer: 'A1' }, { id: 2, question: 'Q2', answer: 'A2' }],
-      });
+      // オンボ 是正D-1: 一覧提示は draft本体 + 総件数(COUNT)を並行取得する(Promise.all)。
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ id: 1, question: 'Q1', answer: 'A1' }, { id: 2, question: 'Q2', answer: 'A2' }],
+        })
+        .mockResolvedValueOnce({ rows: [{ cnt: 2 }] }); // COUNT(*)
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -6704,7 +6810,9 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(toolCallResponse('call-pub-2', 'publish_faq_drafts', { confirmed: false }))
         .mockResolvedValueOnce(makeGroqResponse('下書きはありませんでした。'));
 
-      mockQuery.mockResolvedValueOnce({ rows: [] });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ cnt: 0 }] });
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -6719,9 +6827,11 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(toolCallResponse('call-pub-3', 'publish_faq_drafts', { confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
 
-      mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 1, question: 'Q1', answer: 'A1' }, { id: 2, question: 'Q2', answer: 'A2' }],
-      });
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ id: 1, question: 'Q1', answer: 'A1' }, { id: 2, question: 'Q2', answer: 'A2' }],
+        })
+        .mockResolvedValueOnce({ rows: [{ cnt: 0 }] }); // オンボ 是正D-1: 残件数取得
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -6751,12 +6861,14 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(toolCallResponse('call-pub-3b', 'publish_faq_drafts', { confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
 
-      mockQuery.mockResolvedValueOnce({
-        rows: [
-          { id: 1, question: 'Q1', answer: 'A1', is_excluded_from_search: true },
-          { id: 2, question: 'Q2', answer: 'A2', is_excluded_from_search: false },
-        ],
-      });
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [
+            { id: 1, question: 'Q1', answer: 'A1', is_excluded_from_search: true },
+            { id: 2, question: 'Q2', answer: 'A2', is_excluded_from_search: false },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [{ cnt: 0 }] }); // オンボ 是正D-1: 残件数取得
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -6769,14 +6881,38 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 2, 'Q2', 'A2', true, false);
     });
 
+    // オンボ 是正D-2: X-16(chat_sessionsのテナント境界)はSQL文字列レベルで固定されて
+    // いるのに、publish_faq_draftsのサブクエリのtenant_id境界は未検証だった。
+    // モックはrowCountを返すだけなので、この条件が外れて全テナント横断で公開されても
+    // 他のテストは緑のまま検出できなかった。
+    it('オンボ 是正D-2: UPDATE faq_docsのサブクエリにtenant_id境界が残っている(SQL文字列検証)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-pub-boundary', 'publish_faq_drafts', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'Q1', answer: 'A1' }] })
+        .mockResolvedValueOnce({ rows: [{ cnt: 0 }] });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '公開して', sessionId: 'sess-pub-boundary' });
+
+      const updateCall = mockQuery.mock.calls.find(([sql]) => String(sql).includes('UPDATE faq_docs SET is_published = true'));
+      expect(updateCall).toBeDefined();
+      expect(String(updateCall![0])).toContain('tenant_id = $1');
+      expect(updateCall![1]).toEqual(['tenant-abc']);
+    });
+
     it('super_adminがtargetTenantId指定で代行実行した場合はactor:delegatedで記録される', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-pub-4', 'publish_faq_drafts', { confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
 
-      mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 1, question: 'Q1', answer: 'A1' }],
-      });
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ id: 1, question: 'Q1', answer: 'A1' }],
+        })
+        .mockResolvedValueOnce({ rows: [{ cnt: 0 }] }); // オンボ 是正D-1: 残件数取得
 
       const res = await request(makeApp(SUPER_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -6818,9 +6954,11 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(makeGroqResponse('下書きが見つかりました。'));
 
       // 「何日も前に作られた」ことをシミュレートしても、SELECT自体に時間条件は無いので拾える
-      mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 1, question: '何日も前に作られた下書き', answer: 'A' }],
-      });
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ id: 1, question: '何日も前に作られた下書き', answer: 'A' }],
+        })
+        .mockResolvedValueOnce({ rows: [{ cnt: 1 }] }); // COUNT(*)
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -8030,9 +8168,11 @@ describe('POST /v1/admin/agent/chat', () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-au-ob3', 'publish_faq_drafts', { confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
-      mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 1, question: 'Q1', answer: 'A1' }],
-      });
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ id: 1, question: 'Q1', answer: 'A1' }],
+        })
+        .mockResolvedValueOnce({ rows: [{ cnt: 0 }] }); // オンボ 是正D-1: 残件数取得
 
       const res = await request(makeApp(AUDIT_USER))
         .post('/v1/admin/agent/chat')
