@@ -180,10 +180,12 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
     );
     test.info().annotations.push({ type: 'select-option-values', description: JSON.stringify(optionValues) });
 
-    // このリポジトリの他specが使う実在の他テナントID(qa-preview-scope-leak.spec.ts の
-    // PREVIEW_TENANT_2 / PREVIEW_TENANT_ID)。仮に他テナント選択UIが実装されて
-    // 選択肢に混入すればこのアサーションで落ちる(単なる0件カウントには戻さない)。
-    const OTHER_TENANT_IDS = ['lp-demo', 'r2c_default'];
+    // r2c_defaultは本ファイル冒頭のFOREIGN_TENANTを再利用(値の二重管理を避ける)。
+    // lp-demoはqa-preview-scope-leak.spec.tsのPREVIEW_TENANT_2と同値だが、
+    // spec間でテナントID定数を共有する仕組みが無いため手動で複製している。
+    // 仮に他テナント選択UIが実装されて選択肢に混入すればこのアサーションで落ちる
+    // (単なる0件カウントには戻さない)。
+    const OTHER_TENANT_IDS = [FOREIGN_TENANT, 'lp-demo'];
     const foreignOptions = optionValues.filter((v) => OTHER_TENANT_IDS.includes(v));
     expect(foreignOptions).toEqual([]);
   });
