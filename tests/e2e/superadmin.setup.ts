@@ -2,6 +2,7 @@ import { test as setup } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { ADMIN_BASE_URL } from './config';
+import { waitForAppReady } from './helpers/gotoRetry';
 
 // super_admin 用 storageState 生成（auth.setup.ts の client_admin 版と同方式）。
 // TEST_SUPERADMIN_EMAIL / TEST_SUPERADMIN_PASSWORD が無い場合は空スケルトンを書き、
@@ -20,9 +21,10 @@ setup('authenticate super_admin', async ({ page }) => {
     return;
   }
 
-  await page.goto(ADMIN_BASE_URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
-  await page.locator('input[type="email"]').waitFor({ timeout: 15000 });
+  // Asana 1217048228772841: mainマージ直後のCloudflare Pagesデプロイ直撃で
+  // input[type="email"]が現れない時間帯があるため、再読み込みしながら待つ
+  // (auth.setup.tsのclient_admin版と同方式)。
+  await waitForAppReady(page, ADMIN_BASE_URL, 'input[type="email"]');
   await page.fill('input[type="email"]', email);
   await page.fill('input[type="password"]', password);
   await page.locator('button[type="submit"]').click();
