@@ -318,8 +318,9 @@ export function registerChatHistoryRoutes(app: Express): void {
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
 
       try {
-        const escalations = await getActiveEscalations(tenantFilter);
-        return res.json({ escalations, total: escalations.length });
+        // limit を渡さないため従来どおり全件。レスポンスの形も従来と同一。
+        const { escalations, total } = await getActiveEscalations(tenantFilter);
+        return res.json({ escalations, total });
       } catch (err) {
         logger.warn("[GET /v1/admin/chat-history/escalations]", err);
         return res.status(500).json({ error: "一覧の取得に失敗しました" });

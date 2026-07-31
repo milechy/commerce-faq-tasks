@@ -47,6 +47,11 @@ const MAX_IMPORT_FAQS = 20;
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
 
+// get_escalations がチャットに載せる最大件数。1行あたり約110字で、閲覧系予算
+// (truncateRead の 4000字)に収まる範囲に余裕を持って収める。get_chat_sessions の
+// 上限(20)と揃えてあり、超過分は「全N件中M件」の見出しで存在が分かるようにする。
+const ESCALATION_LIST_LIMIT = 20;
+
 // ツールの limit 引数を [1, max] の整数にクランプする。"abc" のような非数値は Number() で
 // NaN になり、Math.min/max を素通りして NaN のまま残ってしまう(NaN との比較は常に false)。
 // NaN が SQL の LIMIT パラメータに渡ると実DBではエラーになるため、既定値にフォールバックする。
@@ -2332,16 +2337,19 @@ export async function executeToolCall(
       }
 
       try {
-        const escalations = await getActiveEscalations(tenantId);
-        if (escalations.length === 0) {
+        // 件数を絞らないと、対応待ちが多いテナントでは閲覧系予算(truncateRead, 4000字)
+        // でも末尾が切れる(1行あたり約110字のため36件前後が上限)。SQL側で先に絞り、
+        // 「全N件中M件」を出して取りこぼしを可視化する(get_chat_sessions と同じ形)。
+        const { escalations, total } = await getActiveEscalations(tenantId, ESCALATION_LIST_LIMIT);
+        if (total === 0) {
           return truncate('対応中のエスカレーションはありません');
         }
         const lines = escalations.map(
           (e) => `[${e.session_id.slice(0, 8)}] ${e.escalated_at.slice(0, 16).replace('T', ' ')} 「${e.first_message_preview}」`,
         );
-        // 件数の上限を設けていない一覧のため、書き込み系の500字予算(truncate)だと
-        // 対応待ちの顧客が黙って表示から消えうる。閲覧系の予算(truncateRead)を使う。
-        return truncateRead(`対応中のエスカレーション（${escalations.length}件）:\n` + lines.join('\n'));
+        return truncateRead(
+          `対応中のエスカレーション（全${total}件中${escalations.length}件）:\n` + lines.join('\n'),
+        );
       } catch (err) {
         logger.warn('[actionExecutor] get_escalations failed', err);
         return truncate('エスカレーション一覧の取得に失敗しました');

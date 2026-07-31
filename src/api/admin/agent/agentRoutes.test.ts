@@ -4045,16 +4045,19 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(toolCallResponse('call-rd-4', 'get_escalations', {}))
         .mockResolvedValueOnce(makeGroqResponse('1件対応中です。'));
 
-      mockGetActiveEscalations.mockResolvedValueOnce([
-        { id: 'db-2', tenant_id: 'tenant-abc', session_id: 'sess-bbbbbbbb-2222', escalated_at: '2026-07-17T12:00:00Z', last_message_at: '2026-07-17T12:05:00Z', message_count: 6, first_message_preview: '返品したいです' },
-      ]);
+      mockGetActiveEscalations.mockResolvedValueOnce({
+        escalations: [
+          { id: 'db-2', tenant_id: 'tenant-abc', session_id: 'sess-bbbbbbbb-2222', escalated_at: '2026-07-17T12:00:00Z', last_message_at: '2026-07-17T12:05:00Z', message_count: 6, first_message_preview: '返品したいです' },
+        ],
+        total: 1,
+      });
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: 'エスカレーションを見せて', sessionId: 'sess-rd-05' });
 
       expect(res.status).toBe(200);
-      expect(mockGetActiveEscalations).toHaveBeenCalledWith('tenant-abc');
+      expect(mockGetActiveEscalations).toHaveBeenCalledWith('tenant-abc', 20);
       const result = res.body.actions[0].result as string;
       expect(result).toContain('1件');
       expect(result).toContain('返品したいです');
@@ -4065,7 +4068,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(toolCallResponse('call-rd-6', 'get_escalations', {}))
         .mockResolvedValueOnce(makeGroqResponse('対応中のものはありません。'));
 
-      mockGetActiveEscalations.mockResolvedValueOnce([]);
+      mockGetActiveEscalations.mockResolvedValueOnce({ escalations: [], total: 0 });
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -4073,6 +4076,36 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('ありません');
+    });
+
+    // 対応待ちが多いテナントでは、SQL側で絞らないと閲覧系予算(4000字)でも末尾が
+    // 切れる。絞った件数を全件数として見せると「実際は120件あるのに20件」と
+    // 嘘の件数になるため、total は絞る前の実件数であることを固定する。
+    it('get_escalations: 上限を超えても total は実件数を示し、取りこぼしが見出しで分かる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rd-esc-cap', 'get_escalations', {}))
+        .mockResolvedValueOnce(makeGroqResponse('対応待ちが多数あります。'));
+
+      // SQL側で20件に絞られた結果を模し、total は絞る前の120件を返す
+      const capped = Array.from({ length: 20 }, (_, i) => ({
+        id: `db-esc-${i}`,
+        tenant_id: 'tenant-abc',
+        session_id: `esc${String(i).padStart(5, '0')}-1111-4aaa-8000-000000000001`,
+        escalated_at: '2026-07-17T12:00:00Z',
+        last_message_at: '2026-07-17T12:05:00Z',
+        message_count: 3,
+        first_message_preview: `対応待ち${i}`,
+      }));
+      mockGetActiveEscalations.mockResolvedValueOnce({ escalations: capped, total: 120 });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'エスカレーションを見せて', sessionId: 'sess-rd-esc-cap' });
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('全120件中20件');
+      // 絞った件数を全件数として見せていないこと
+      expect(result).not.toContain('（20件）');
     });
 
     it('get_monitoring_summary: 完了率・フォールバック率を返す', async () => {
@@ -5625,19 +5658,21 @@ describe('POST /v1/admin/agent/chat', () => {
         resolvedAt = '2026-07-18T09:00:00Z';
         return true;
       });
-      mockGetActiveEscalations.mockImplementation(async (tenantId: string) =>
-        resolvedAt || tenantId !== OWN_SESSION.tenant_id
-          ? []
-          : [{
-              id: OWN_SESSION.id,
-              tenant_id: OWN_SESSION.tenant_id,
-              session_id: OWN_SESSION.session_id,
-              escalated_at: '2026-07-18T08:00:00Z',
-              last_message_at: '2026-07-18T08:30:00Z',
-              message_count: 4,
-              first_message_preview: '返品したいです',
-            }],
-      );
+      mockGetActiveEscalations.mockImplementation(async (tenantId: string) => {
+        const escalations =
+          resolvedAt || tenantId !== OWN_SESSION.tenant_id
+            ? []
+            : [{
+                id: OWN_SESSION.id,
+                tenant_id: OWN_SESSION.tenant_id,
+                session_id: OWN_SESSION.session_id,
+                escalated_at: '2026-07-18T08:00:00Z',
+                last_message_at: '2026-07-18T08:30:00Z',
+                message_count: 4,
+                first_message_preview: '返品したいです',
+              }];
+        return { escalations, total: escalations.length };
+      });
 
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-er-8', 'resolve_escalation', { session_id: 'e5c0abcd', confirmed: true }))

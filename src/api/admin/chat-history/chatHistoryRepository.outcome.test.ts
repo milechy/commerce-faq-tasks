@@ -8,7 +8,7 @@ jest.mock("../../../lib/db", () => ({
   getPool: () => ({ query: (...args: unknown[]) => mockQuery(...args) }),
 }));
 
-import { getConversionTypes, recordOutcome, getSessionOutcome } from "./chatHistoryRepository";
+import { getConversionTypes, recordOutcome, getSessionOutcome, getActiveEscalations } from "./chatHistoryRepository";
 
 beforeEach(() => {
   mockQuery.mockReset();
@@ -174,5 +174,56 @@ describe("getSessionOutcome", () => {
     const result = await getSessionOutcome("sess-not-found");
 
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getActiveEscalations の件数上限。旧UIのHTTPルート(limit未指定)は従来どおり
+// 全件返す必要があり、チャットツールだけが上限を渡す。total は常に絞る前の
+// 実件数であること(絞った件数を全件数として見せない)を固定する。
+// ---------------------------------------------------------------------------
+
+describe("getActiveEscalations", () => {
+  const ROW = {
+    id: "s1", tenant_id: "tenant-a", session_id: "sess-1",
+    escalated_at: "2026-01-01T00:00:00Z", last_message_at: "2026-01-01T00:00:00Z",
+    message_count: 3, first_message_preview: "help",
+  };
+
+  it("limit未指定なら LIMIT を付けず全件返す(旧UIのHTTPルート経路の後方互換)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "2" }] });      // COUNT
+    mockQuery.mockResolvedValueOnce({ rows: [ROW, { ...ROW, id: "s2" }] }); // SELECT
+
+    const result = await getActiveEscalations("tenant-a");
+
+    const listSql = mockQuery.mock.calls[1]![0] as string;
+    expect(listSql).not.toContain("LIMIT $");
+    expect(result.escalations).toHaveLength(2);
+    expect(result.total).toBe(2);
+  });
+
+  it("limit指定時は LIMIT を付け、total は絞る前の実件数を返す", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "120" }] }); // COUNT: 実件数
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });              // SELECT: 絞られた結果
+
+    const result = await getActiveEscalations("tenant-a", 20);
+
+    const listSql = mockQuery.mock.calls[1]![0] as string;
+    const listArgs = mockQuery.mock.calls[1]![1] as unknown[];
+    expect(listSql).toContain("LIMIT $2");
+    expect(listArgs).toEqual(["tenant-a", 20]);
+    expect(result.escalations).toHaveLength(1);
+    expect(result.total).toBe(120); // 絞った件数(1)ではない
+  });
+
+  it("tenantId未指定(super_admin全テナント)でも limit を正しいプレースホルダ番号で渡す", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "5" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });
+
+    await getActiveEscalations(undefined, 20);
+
+    // tenant条件が無いぶん limit は $1 になる(番号ズレの回帰)
+    expect(mockQuery.mock.calls[1]![0] as string).toContain("LIMIT $1");
+    expect(mockQuery.mock.calls[1]![1] as unknown[]).toEqual([20]);
   });
 });

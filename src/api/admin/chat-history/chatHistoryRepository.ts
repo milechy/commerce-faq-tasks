@@ -334,9 +334,18 @@ export interface EscalatedSessionSummary {
 }
 
 /** 対応中（未解決）のエスカレーション一覧を取得する。tenantId未指定 = 全テナント（super_admin用）。 */
+/**
+ * 対応中（未解決）のエスカレーション一覧を返す。
+ *
+ * limit を渡すと件数を絞る。total は常に「絞る前の実件数」なので、
+ * 呼び出し元は「全N件中M件」を正しく表示できる（絞った件数を全件数として
+ * 見せてしまう事故を防ぐ）。getSessions() と同じ形に揃えてある。
+ * limit 未指定なら従来どおり全件返す。
+ */
 export async function getActiveEscalations(
   tenantId?: string,
-): Promise<EscalatedSessionSummary[]> {
+  limit?: number,
+): Promise<{ escalations: EscalatedSessionSummary[]; total: number }> {
   const pool = getPool();
   const conditions = ["s.is_escalated = true", "s.escalation_resolved_at IS NULL"];
   const args: unknown[] = [];
@@ -344,6 +353,21 @@ export async function getActiveEscalations(
     args.push(tenantId);
     conditions.push(`s.tenant_id = $${args.length}`);
   }
+  const whereClause = conditions.join(" AND ");
+
+  const countResult = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM chat_sessions s WHERE ${whereClause}`,
+    args,
+  );
+  const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+  const listArgs = [...args];
+  let limitClause = "";
+  if (limit !== undefined) {
+    listArgs.push(limit);
+    limitClause = ` LIMIT $${listArgs.length}`;
+  }
+
   const result = await pool.query<EscalatedSessionSummary>(
     `SELECT
        s.id, s.tenant_id, s.session_id, s.escalated_at, s.last_message_at, s.message_count,
@@ -354,11 +378,11 @@ export async function getActiveEscalations(
        WHERE session_id = s.id AND role = 'user'
        ORDER BY created_at DESC LIMIT 1
      ) m ON TRUE
-     WHERE ${conditions.join(" AND ")}
-     ORDER BY s.escalated_at DESC`,
-    args,
+     WHERE ${whereClause}
+     ORDER BY s.escalated_at DESC${limitClause}`,
+    listArgs,
   );
-  return result.rows;
+  return { escalations: result.rows, total };
 }
 
 /**
