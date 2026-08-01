@@ -4,6 +4,29 @@
 > Asana GID: 1215698617426707
 > 前提: PR #410 (Web Speech API → Fish Audio ASR 置換) 実装済み、`FISH_AUDIO_UPGRADE_PROPOSAL.md` Phase B-1 (HTTP ストリーミング) 実装済み
 
+> **実装不可の結論（2026-08-01 追記、公式ドキュメント確認済み）**
+>
+> 本ドキュメント §3.3 が前提としていた LemonSlice Control API の `viseme` イベントは**存在しない**。
+> 公式ドキュメント（https://lemonslice.com/docs/api-reference/control-session）で確認したところ、
+> サポートされるイベントは `terminate` / `update-image` / `update-agent-prompt` /
+> `update-idle-prompt` / `pose-trigger` / `reset-idle-timeout` の6種のみで、`viseme` `phoneme`
+> `mouth_shape` `blend_shapes` はいずれも含まれない。不正な `event` 値は HTTP 400 を返す。
+>
+> さらに LemonSlice 公式は口の動きの仕組みを次のように明言している（
+> https://lemonslice.com/docs/prompting-guide/avatar-image-tips ）:
+> 「Lip-Sync is Automatic — Mouth movement appears generated from audio rather than
+> externally controlled.」口の動きは音声から自動生成され、外部から音素データを送り込む
+> インターフェースは提供されていない。
+>
+> **したがって §2〜§4 の viseme スケジューラ実装（`_schedule_viseme_cues` 等）には着手しない。**
+> リップシンク精度向上という目的自体は有効なままなので、公式が案内する別の改善手段に
+> スコープを差し替えること:
+> 1. 参照画像の口元を最適化する（`docs/AVATAR_*` の画像ガイドライン準拠。LemonSlice Control API
+>    の `update-image` で差し替え可能）
+> 2. 声を変える（公式「Voice intonation impacts facial expression」。Fish Audio の voice 選定）
+>
+> 以降のセクション（§1〜§4）は調査当時の設計として履歴保存のため残す。実装の参照にしないこと。
+
 ---
 
 ## 1. 現状ギャップ分析
@@ -161,11 +184,13 @@ Lemonslice の Control API（`/api/liveai/sessions/{session_id}/control`）は `
 }
 ```
 
-**確認事項（実装前に Lemonslice サポートに問い合わせ or API ドキュメント照合）**:
-- [ ] `viseme` イベント名が正しいか（`phoneme`, `mouth_shape` など別名の可能性）
-- [ ] `intensity` パラメータのサポート有無
-- [ ] 対応 phoneme コードの一覧（ARPAbet vs 独自）
-- [ ] Fire-and-forget で安全か、順序保証が必要か
+**確認事項 → 確認済み（2026-08-01、公式ドキュメント照合。冒頭の「実装不可の結論」参照）**:
+- [x] `viseme` イベント名が正しいか（`phoneme`, `mouth_shape` など別名の可能性）
+      → **存在しない**。公式サポートは `terminate` / `update-image` / `update-agent-prompt` /
+      `update-idle-prompt` / `pose-trigger` / `reset-idle-timeout` の6種のみ。
+- [x] `intensity` パラメータのサポート有無 → viseme イベント自体が無いため該当なし。
+- [x] 対応 phoneme コードの一覧（ARPAbet vs 独自） → 該当なし。
+- [x] Fire-and-forget で安全か、順序保証が必要か → 該当なし（実装しないため）。
 
 ---
 
