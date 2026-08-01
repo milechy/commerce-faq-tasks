@@ -113,6 +113,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/api/admin/feedback/migration_feedback.sql` | feedback_messages テーブル初期作成 | ✅ |
 | `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | 要適用 |
 | `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | 要適用 |
+| `src/api/admin/avatar/migration_category_persona.sql` | LemonSliceペルソナスワップ: avatar_configs に category_persona_map(JSONB)追加 | 要適用 |
 
 ### Phase A Day 2 migration 実行手順
 
