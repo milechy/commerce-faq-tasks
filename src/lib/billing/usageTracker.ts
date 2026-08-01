@@ -23,6 +23,8 @@ export interface TrackUsageParams {
   marginOverride?: number;
   /** Phase40: Fish Audio TTSに送ったテキストのUTF-8バイト数 */
   ttsTextBytes?: number;
+  /** GID 1217083837550852: 実際に使用したFish Audio TTSモデル名（原価計算にのみ使う。DB列は追加しない） */
+  ttsModel?: string;
   /** Phase40: Lemonsliceのクレジット消費量 */
   avatarCredits?: number;
   /** Phase40: LiveKitセッション時間（ミリ秒） */
@@ -83,7 +85,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
 
   const {
     tenantId, requestId, model, inputTokens, outputTokens,
-    featureUsed, marginOverride, ttsTextBytes, avatarCredits, avatarSessionMs, imageCount,
+    featureUsed, marginOverride, ttsTextBytes, ttsModel, avatarCredits, avatarSessionMs, imageCount,
     anam_session_seconds, extraLlmUsages, saiAgentSteps,
     ocrPages, asrRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
     billable,
@@ -111,7 +113,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     costLlmCents   = calculateLLMCostCents({ model, inputTokens, outputTokens, extraLlmUsages });
     costTotalCents = calculateBillingAmountCents({
       model, inputTokens, outputTokens, marginOverride,
-      ttsTextBytes, avatarCredits, avatarSessionMs,
+      ttsTextBytes, ttsModel, avatarCredits, avatarSessionMs,
       featureUsed, imageCount, anam_session_seconds, extraLlmUsages, saiAgentSteps,
       ocrPages, asrRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
     });

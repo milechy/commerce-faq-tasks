@@ -57,6 +57,27 @@ export const NON_BILLABLE_FEATURES: ReadonlySet<string> = new Set([
 /** Phase40: Fish Audio TTS単価: $15.00 / 1M UTF-8バイト */
 export const FISH_AUDIO_COST_PER_BYTE_USD = 15.0 / 1_000_000;
 
+/**
+ * GID 1217083837550852: Fish Audio TTSはモデルによって単価が異なる
+ * （s2.1-pro-free は無料期間中のみ $0）。実際に使ったモデル名は
+ * trackUsage 呼び出し元（fishTtsRoutes.ts / agent.py）が申告する。
+ * 未知のモデル名や省略時は既存の FISH_AUDIO_COST_PER_BYTE_USD（有料単価）にフォールバックする。
+ */
+const FISH_AUDIO_MODEL_COST_PER_BYTE_USD: Record<string, number> = {
+  's2.1-pro-free': 0,
+  's2.1-pro': FISH_AUDIO_COST_PER_BYTE_USD,
+  's2-pro': FISH_AUDIO_COST_PER_BYTE_USD,
+  's1': FISH_AUDIO_COST_PER_BYTE_USD,
+};
+
+/** 既知のFish Audio TTSモデルID一覧（外部境界での allowlist 検証に使う単一の情報源） */
+export const FISH_AUDIO_KNOWN_TTS_MODELS: readonly string[] = Object.keys(FISH_AUDIO_MODEL_COST_PER_BYTE_USD);
+
+export function fishTtsCostPerByteUsd(model?: string): number {
+  if (!model) return FISH_AUDIO_COST_PER_BYTE_USD;
+  return FISH_AUDIO_MODEL_COST_PER_BYTE_USD[model] ?? FISH_AUDIO_COST_PER_BYTE_USD;
+}
+
 /** Phase40: Lemonslice単価: $7.00 / 1000クレジット */
 export const LEMONSLICE_COST_PER_CREDIT_USD = 7.0 / 1_000;
 
@@ -132,6 +153,8 @@ export interface UsageRecord {
   marginOverride?: number;
   /** Phase40: Fish Audio TTSに送ったテキストのUTF-8バイト数 */
   ttsTextBytes?: number;
+  /** GID 1217083837550852: 実際に使用したFish Audio TTSモデル名（単価の決定に使う） */
+  ttsModel?: string;
   /** Phase40: Lemonsliceのクレジット消費量 */
   avatarCredits?: number;
   /** Phase40: LiveKitセッション時間（ミリ秒） */
@@ -280,7 +303,7 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
   const margin   = usage.marginOverride ?? (isEndUser ? MARGIN_MULTIPLIER : 1);
   // 本行の LLM コスト + 同一リクエスト内の追加 LLM 呼び出し（planner 等）をモデル別実レートで合算。
   const llmUSD   = _calculateLLMCostUSD(usage) + _sumExtraLlmUsd(usage.extraLlmUsages);
-  const ttsUSD   = (usage.ttsTextBytes  ?? 0) * FISH_AUDIO_COST_PER_BYTE_USD;
+  const ttsUSD   = (usage.ttsTextBytes  ?? 0) * fishTtsCostPerByteUsd(usage.ttsModel);
   const avtrUSD  = (usage.avatarCredits ?? 0) * LEMONSLICE_COST_PER_CREDIT_USD;
   const imgUSD   = (usage.imageCount    ?? 0) * IMAGE_GENERATION_COST_USD;
   const anamUSD  = (usage.anam_session_seconds ?? 0) > 0
