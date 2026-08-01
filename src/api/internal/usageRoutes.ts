@@ -4,12 +4,13 @@
 //   認証: X-Internal-Request: 1（Prometheusメトリクスと同じ方式）
 //   avatar-agent/agent.py からTTS/Avatar使用量を受信してDBに記録する。
 //
-// Body: { tenantId, requestId?, ttsTextBytes?, avatarCredits?, avatarSessionMs? }
+// Body: { tenantId, requestId?, ttsTextBytes?, ttsModel?, avatarCredits?, avatarSessionMs? }
 
 import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import type { Express, Request, Response } from 'express';
 import { INTERNAL_REQUEST_HEADER } from '../../lib/metrics/kpiDefinitions';
 import { trackUsage, type FeatureUsed } from '../../lib/billing/usageTracker';
+import { FISH_AUDIO_KNOWN_TTS_MODELS } from '../../lib/billing/costCalculator';
 import { internalNetworkOnly } from '../middleware/internalNetworkOnly';
 
 const ALLOWED_FEATURES: readonly FeatureUsed[] = ['avatar', 'voice'];
@@ -21,7 +22,7 @@ export function registerInternalUsageRoutes(app: Express): void {
     }
 
     const body = req.body ?? {};
-    const { tenantId, requestId, ttsTextBytes, avatarCredits, avatarSessionMs, inputTokens, outputTokens, model, featureUsed } = body;
+    const { tenantId, requestId, ttsTextBytes, ttsModel, avatarCredits, avatarSessionMs, inputTokens, outputTokens, model, featureUsed } = body;
 
     if (!tenantId || typeof tenantId !== 'string') {
       return res.status(400).json({ error: 'tenantId required' });
@@ -47,6 +48,10 @@ export function registerInternalUsageRoutes(app: Express): void {
       featureUsed: resolvedFeature,
       ttsTextBytes:
         typeof ttsTextBytes === 'number' && ttsTextBytes >= 0 ? ttsTextBytes : undefined,
+      ttsModel:
+        typeof ttsModel === 'string' && FISH_AUDIO_KNOWN_TTS_MODELS.includes(ttsModel)
+          ? ttsModel
+          : undefined,
       avatarCredits:
         typeof avatarCredits === 'number' && avatarCredits >= 0 ? avatarCredits : undefined,
       avatarSessionMs:

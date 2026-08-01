@@ -6,6 +6,7 @@ import {
   calculateBillingAmountCents,
   calculateTTSCostCents,
   calculateAvatarCostCents,
+  fishTtsCostPerByteUsd,
   normalizeModelKey,
   LLM_COSTS,
   SERVER_COST_PER_REQUEST_USD,
@@ -426,6 +427,48 @@ describe('calculateBillingAmountCents with TTS/Avatar', () => {
     });
     expect(result).toBeGreaterThanOrEqual(7500);
     expect(Number.isInteger(result)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1217083837550852: fishTtsCostPerByteUsd / ttsModel 連動
+// ---------------------------------------------------------------------------
+describe('fishTtsCostPerByteUsd', () => {
+  it('s2.1-pro-free は無料(0)', () => {
+    expect(fishTtsCostPerByteUsd('s2.1-pro-free')).toBe(0);
+  });
+
+  it('s2.1-pro は有料単価($15/M byte)', () => {
+    expect(fishTtsCostPerByteUsd('s2.1-pro')).toBe(FISH_AUDIO_COST_PER_BYTE_USD);
+  });
+
+  it('未知のモデル名は有料単価にフォールバックする', () => {
+    expect(fishTtsCostPerByteUsd('unknown-model')).toBe(FISH_AUDIO_COST_PER_BYTE_USD);
+  });
+
+  it('モデル省略時は有料単価にフォールバックする(既存呼び出し元との後方互換)', () => {
+    expect(fishTtsCostPerByteUsd(undefined)).toBe(FISH_AUDIO_COST_PER_BYTE_USD);
+  });
+});
+
+describe('calculateBillingAmountCents: ttsModel', () => {
+  it('ttsModel=s2.1-pro-free のとき ttsTextBytes があってもTTS分は0円', () => {
+    const withFreeModel = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      ttsTextBytes: 1_000_000, ttsModel: 's2.1-pro-free',
+    });
+    const withoutTts = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+    });
+    expect(withFreeModel).toBe(withoutTts);
+  });
+
+  it('ttsModel未指定時は既存どおり有料単価で計上される（後方互換）', () => {
+    const withoutModel = calculateBillingAmountCents({
+      model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0,
+      ttsTextBytes: 1_000_000,
+    });
+    expect(withoutModel).toBeGreaterThanOrEqual(1500);
   });
 });
 

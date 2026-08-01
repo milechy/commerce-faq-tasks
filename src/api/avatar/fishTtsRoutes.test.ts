@@ -64,6 +64,7 @@ describe("POST /api/avatar/tts", () => {
     savedEnv = { ...process.env };
     process.env.FISH_AUDIO_API_KEY = "test-fish-key";
     delete process.env.FISH_AUDIO_REFERENCE_ID;
+    delete process.env.FISH_AUDIO_TTS_MODEL;
     mockQuery.mockReset();
     mockFetch.mockReset();
   });
@@ -153,6 +154,31 @@ describe("POST /api/avatar/tts", () => {
 
     expect(res.status).toBe(200);
     expect(sentBody().reference_id).toBe("env-voice-456");
+  });
+
+  it("GID 1217083837550852: env FISH_AUDIO_TTS_MODEL 未設定時は s2.1-pro-free を使う", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockFishAudioOk();
+
+    const res = await request(makeApp("tenant-a"))
+      .post("/api/avatar/tts")
+      .send({ text: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(sentBody().model).toBe("s2.1-pro-free");
+  });
+
+  it("GID 1217083837550852: env FISH_AUDIO_TTS_MODEL 設定時はその値を Fish への body に使う", async () => {
+    process.env.FISH_AUDIO_TTS_MODEL = "s2.1-pro";
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockFishAudioOk();
+
+    const res = await request(makeApp("tenant-a"))
+      .post("/api/avatar/tts")
+      .send({ text: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(sentBody().model).toBe("s2.1-pro");
   });
 
   it("テナント越境防止: body の voiceId は無視され DB 解決値が優先される", async () => {

@@ -110,6 +110,28 @@ describe("POST /api/internal/usage", () => {
     );
   });
 
+  it("GID 1217083837550852: 既知のttsModelはtrackUsageにそのまま渡る", async () => {
+    await request(makeApp())
+      .post("/api/internal/usage")
+      .set("X-Internal-Request", "1")
+      .send({ tenantId: "tenant-abc", ttsTextBytes: 100, ttsModel: "s2.1-pro-free" });
+
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ ttsModel: "s2.1-pro-free" }),
+    );
+  });
+
+  it("GID 1217083837550852: allowlist外のttsModel（なりすまし試行）はundefinedにフォールバックされ原価計算に到達しない", async () => {
+    await request(makeApp())
+      .post("/api/internal/usage")
+      .set("X-Internal-Request", "1")
+      .send({ tenantId: "tenant-abc", ttsTextBytes: 100, ttsModel: "free-model-that-does-not-exist" });
+
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ ttsModel: undefined }),
+    );
+  });
+
   it("requestId省略時は自動生成される", async () => {
     await request(makeApp())
       .post("/api/internal/usage")

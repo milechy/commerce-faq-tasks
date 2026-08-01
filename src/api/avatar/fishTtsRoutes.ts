@@ -45,6 +45,8 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
       logger.warn({ err, tenantId }, '[fishTts] voice_id resolve failed — env fallback');
     }
 
+    const ttsModel = process.env.FISH_AUDIO_TTS_MODEL?.trim() || 's2.1-pro-free';
+
     try {
       const fishRes = await fetch(FISH_AUDIO_API, {
         method: 'POST',
@@ -54,7 +56,7 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
         },
         body: JSON.stringify({
           text: text,
-          model: 's2.1-pro-free',
+          model: ttsModel,
           ...(referenceId ? { reference_id: referenceId } : {}),
           format: 'mp3',
           latency: 'balanced',
@@ -86,11 +88,12 @@ export function registerFishTtsRoutes(app: Express, apiStack: RequestHandler[]):
       trackUsage({
         tenantId,
         requestId: (req as any).requestId ?? `tts-${Date.now()}`,
-        model: 'fish-audio-s2.1-pro-free',
+        model: `fish-audio-${ttsModel}`,
         inputTokens: 0,
         outputTokens: 0,
         featureUsed: 'voice',
         ttsTextBytes: Buffer.byteLength(text, 'utf8'),
+        ttsModel,
       });
 
     } catch (err) {

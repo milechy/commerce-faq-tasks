@@ -95,6 +95,7 @@ const envSchema = z.object({
   ANAM_API_KEY: z.string().optional(),
   FISH_AUDIO_API_KEY: z.string().optional(),
   FISH_AUDIO_REFERENCE_ID: z.string().optional(),
+  FISH_AUDIO_TTS_MODEL: z.string().optional(),
   LEONARDO_API_KEY: z.string().optional(),
   LIVEKIT_URL: z.string().optional(),
   LIVEKIT_WS_URL: z.string().optional(),

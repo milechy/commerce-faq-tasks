@@ -222,7 +222,7 @@ async def _report_groq_usage(
 
 # --- Fish Audio TTS ---
 
-async def _report_tts_usage(tenant_id: str, tts_text_bytes: int) -> None:
+async def _report_tts_usage(tenant_id: str, tts_text_bytes: int, tts_model: str) -> None:
     """TTS使用量をRAJIUCE APIに非同期レポート（fire-and-forget）。"""
     api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
     try:
@@ -230,10 +230,10 @@ async def _report_tts_usage(tenant_id: str, tts_text_bytes: int) -> None:
             await http_session.post(
                 f"{api_url}/api/internal/usage",
                 headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
-                json={"tenantId": tenant_id, "ttsTextBytes": tts_text_bytes},
+                json={"tenantId": tenant_id, "ttsTextBytes": tts_text_bytes, "ttsModel": tts_model},
                 timeout=aiohttp.ClientTimeout(total=5),
             )
-        logger.debug(f"[usage] TTS usage reported: tenant={tenant_id} bytes={tts_text_bytes}")
+        logger.debug(f"[usage] TTS usage reported: tenant={tenant_id} bytes={tts_text_bytes} model={tts_model}")
     except Exception as e:
         logger.warning(f"[usage] TTS usage report failed (non-critical): {e}")
 
@@ -362,9 +362,10 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
             stream=False,
         )
         try:
+            tts_model = os.environ.get("FISH_AUDIO_TTS_MODEL", "s2.1-pro-free")
             request_body = {
                 "text": self._input_text,
-                "model": "s2.1-pro-free",  # Phase A: S2.1 Pro (Free) 明示指定（デフォルト依存を排除、低遅延+多言語）
+                "model": tts_model,
                 "format": "mp3",   # Fish Audio デフォルト形式。WAV より確実。
                 "normalize": True,
                 "latency": "balanced",
@@ -414,7 +415,7 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
             # 使用量レポート（fire-and-forget）
             if self._tenant_id:
                 tts_bytes = len(self._input_text.encode("utf-8"))
-                asyncio.ensure_future(_report_tts_usage(self._tenant_id, tts_bytes))
+                asyncio.ensure_future(_report_tts_usage(self._tenant_id, tts_bytes, tts_model))
         except Exception as e:
             logger.error(f"[TTS] Exception in _run: {type(e).__name__}: {e}")
 
