@@ -43,10 +43,37 @@ class TestResolveCategoryPersonaBoundary:
         assert resolve_category_persona("fashion", {}) is None
 
     def test_empty_string_category_returns_none(self):
-        persona_map = {"": {"voice_id": "v1"}}
-        # 空文字は isinstance チェックを通過しうるが、意味のあるカテゴリとしては扱われない
-        # ことを明示する（widget 側が category を送らず msg.get が "" を返すケースを模す）。
-        assert resolve_category_persona("", persona_map) == {"voice_id": "v1"}
+        # 空文字・空白のみは正規化後に空になるため、意味のあるカテゴリとして扱わない
+        # （widget 側が category を送らず msg.get が "" を返すケースを模す）。
+        persona_map = {"": {"voice_id": "v1"}, "   ": {"voice_id": "v2"}}
+        assert resolve_category_persona("", persona_map) is None
+        assert resolve_category_persona("   ", persona_map) is None
+
+
+class TestResolveCategoryPersonaNormalization:
+    """category は queryPlanner.ts が会話ごとに自由生成する値、
+    category_persona_map のキーは店主が save_category_persona で入力した値で、
+    双方が独立に生成されるため表記ゆれが起きうる。大文字小文字・前後空白の
+    ゆれだけは正規化で吸収されることを確認する（語彙自体のズレまでは救えない、
+    既知の制約）。
+    """
+
+    def test_case_insensitive_match(self):
+        persona_map = {"fashion": {"voice_id": "v1"}}
+        assert resolve_category_persona("Fashion", persona_map) == {"voice_id": "v1"}
+        assert resolve_category_persona("FASHION", persona_map) == {"voice_id": "v1"}
+
+    def test_whitespace_is_trimmed_on_both_sides(self):
+        persona_map = {" fashion ": {"voice_id": "v1"}}
+        assert resolve_category_persona("fashion", persona_map) == {"voice_id": "v1"}
+        assert resolve_category_persona("  Fashion  ", persona_map) == {"voice_id": "v1"}
+
+    def test_vocabulary_mismatch_still_returns_none(self):
+        # 正規化で救えるのは表記ゆれのみ。語彙自体が違えば従来通りマッチしない
+        # （既知の制約であり、この関数の責務外）。
+        persona_map = {"returns": {"voice_id": "v1"}}
+        assert resolve_category_persona("return", persona_map) is None
+        assert resolve_category_persona("返品", persona_map) is None
 
 
 class TestResolveCategoryPersonaIrregularInputs:

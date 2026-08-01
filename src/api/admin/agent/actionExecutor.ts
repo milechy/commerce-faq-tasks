@@ -1176,7 +1176,11 @@ export async function executeToolCall(
 
     // -----------------------------------------------------------------------
     case 'save_category_persona': {
-      const category = String(args['category'] ?? '').trim();
+      // category は queryPlanner.ts が会話ごとに自由生成する filters.category と
+      // 完全一致でしか照合されない（agent.py の resolve_category_persona）。
+      // 大文字小文字・前後空白のゆれだけは救えるよう正規化して保存する
+      // （語彙そのものがズレるケースまでは救えない。既知の制約）。
+      const category = String(args['category'] ?? '').trim().toLowerCase();
       if (!category) {
         return truncate('category は必須です');
       }

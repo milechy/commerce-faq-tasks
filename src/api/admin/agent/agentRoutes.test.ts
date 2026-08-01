@@ -7745,6 +7745,27 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(params).toEqual(['tenant-abc', 'fashion', JSON.stringify({ agent_prompt: 'stylish and confident' })]);
     });
 
+    it('save_category_persona: カテゴリ名は大文字小文字・前後空白を無視して正規化保存される', async () => {
+      // category は queryPlanner.ts が会話ごとに自由生成する filters.category と
+      // agent.py 側で完全一致照合される。表記ゆれ(大文字小文字・空白)だけは
+      // 保存時に正規化して吸収する（2026-08-01のレビューで発見した既知の制約への対処）。
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-norm', 'save_category_persona', {
+          category: '  Fashion  ', agent_prompt: 'stylish', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-norm' });
+
+      expect(res.status).toBe(200);
+      const [, params] = mockQuery.mock.calls[0]!;
+      expect((params as unknown[])[1]).toBe('fashion');
+    });
+
     it('save_category_persona: 空白のみの値は保存対象から除外される(トリム後に空ならそのフィールドは送らない)', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-scv-ws', 'save_category_persona', {
