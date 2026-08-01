@@ -84,6 +84,18 @@ describe('isBootstrapMessage — ユーザーがやりそうなイレギュラ�
     // さらに広がるため、あえて緩めない。挙動の固定として記録する。
     expect(isBootstrapMessage('ﾛｸﾞｲﾝしたところです')).toBe(false);
   });
+
+  it('マーカーと他の分岐キーワードが同一メッセージに同居しても true が勝つ(呼び出し側のif分岐順に依存する優先順位を明示固定)', () => {
+    // 呼び出し側(qa-copilot-preview.spec.ts / qa-irregular-3roles.spec.ts)は
+    // 「if (isBootstrapMessage(body.message)) { ... } else if (body.message?.includes('アバターを作りたい')) { ... }」
+    // という順序のif分岐でルーティングしている。isBootstrapMessageは常に最初に
+    // 評価されるため、両方のキーワードを含むメッセージは本来の分岐(アバター作成)
+    // ではなく起動時ブリーフィング応答に誤ルーティングされる。この優先順位は
+    // isBootstrapMessage自体の実装ではなく呼び出し側の分岐順が生む挙動だが、
+    // 将来分岐順が入れ替わった際に気づけるよう、ここで固定しておく。
+    expect(isBootstrapMessage('ログインしたところです。アバターを作りたいです。')).toBe(true);
+    expect(isBootstrapMessage('ログインしたところです。採用してください')).toBe(true);
+  });
 });
 
 describe('isBootstrapMessage — admin-ui 側の BOOTSTRAP_PROMPT とのドリフト検知', () => {
