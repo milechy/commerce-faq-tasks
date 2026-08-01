@@ -141,6 +141,55 @@ test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
     }
   });
 
+  test('PiP: closePanel() no longer disconnects window.__rajiuceRoom', async ({ page }) => {
+    // 回帰ガード: closePanel() が LiveKit Room を切断する実装に戻っていないことを検証する。
+    // window.__rajiuceRoom は connectLiveKit() 実行時に room.connect() の成否を待たず
+    // 同期的に設定される(widget.js: window.__rajiuceRoom = room)ため、
+    // モックのLiveKit URL(wss://e2e-mock.invalid、実際には接続できない)でも
+    // 「closePanelがnull化するかどうか」だけは確認できる。
+    await mockAvatarBackend(page);
+    const resp = await page.goto(AVATAR_DEMO_URL);
+    expect(resp?.status()).toBe(200);
+
+    await page.waitForFunction(
+      () => {
+        const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+        return !!host?.shadowRoot?.querySelector('.fab');
+      },
+      { timeout: 8000 }
+    );
+    await page.waitForTimeout(3000);
+
+    const fabInitial = await getFabState(page);
+    if (!fabInitial || !(fabInitial.hasImg || fabInitial.hasVideo)) {
+      test.skip(); // No avatar configured — connectLiveKit() が走らないため対象外
+      return;
+    }
+
+    // パネルを開く(connectLiveKit()がwindow.__rajiuceRoomを同期的にセットする)
+    await page.evaluate(() => {
+      const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+      host?.shadowRoot?.querySelector<HTMLButtonElement>('.fab')?.click();
+    });
+    await page.waitForTimeout(500);
+
+    const roomAfterOpen = await page.evaluate(() => !!(window as any).__rajiuceRoom);
+    if (!roomAfterOpen) {
+      test.skip(); // このページ/実行環境ではRoomが生成されなかった
+      return;
+    }
+
+    // パネルを閉じる
+    await page.evaluate(() => {
+      const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+      host?.shadowRoot?.querySelector<HTMLButtonElement>('.close-btn')?.click();
+    });
+    await page.waitForTimeout(500);
+
+    const roomAfterClose = await page.evaluate(() => !!(window as any).__rajiuceRoom);
+    expect(roomAfterClose).toBe(true); // PiP: 閉じてもRoomは保持される(nullにならない)
+  });
+
   test('FAB shows chat SVG icon for non-avatar tenant (demo page without avatar)', async ({ page }) => {
     // NON_AVATAR_DEMO_URL 未指定時は AVATAR_DEMO_URL(アバター設定済み実ページ)にフォールバックする。
     // その場合のみモックが必要 — 真の非アバターテナントは backend 側で avatarEnabled=false により
