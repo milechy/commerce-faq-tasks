@@ -183,4 +183,109 @@ describe('POST /api/voice/asr', () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(mockTrackUsage).not.toHaveBeenCalled();
   });
+
+  // ── 境界値 ───────────────────────────────────────────────────────────
+  // 実機で確認した挙動: multer/busboyのfileSize上限は「以下」ではなく「未満」で
+  // 判定される(ちょうど20MBも拒否される)。エラー文言は「20MB未満」に是正済み。
+  // ここでは実際の閾値が20MB-1バイトであることを両境界で固定する。
+  it('境界値: 20MBちょうどの録音は400で拒否される(multer/busboyのfileSize上限は"未満"判定)', async () => {
+    const exactly20MB = Buffer.alloc(20 * 1024 * 1024);
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', exactly20MB, { filename: 'test.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('20MB');
+  });
+
+  it('境界値: 20MB-1バイトの録音は拒否されない(実際に許容される最大サイズ)', async () => {
+    mockFishAsrOk();
+    const justUnder20MB = Buffer.alloc(20 * 1024 * 1024 - 1);
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', justUnder20MB, { filename: 'test.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('境界値: 0バイトの音声ファイルはクラッシュせず送信を試み、asrRequestCount:1にフォールバックする', async () => {
+    mockFishAsrOk();
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', Buffer.alloc(0), { filename: 'empty.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ asrRequestCount: 1 }),
+    );
+  });
+
+  // ── イレギュラーなアップロード操作（実機で確認した実害バグの回帰ガード） ──
+  // 修正前はどちらもExpressのデフォルトエラー処理に落ち、HTMLの500エラー
+  // (内部スタックトレース・サーバーのファイルパスを含む)が返っていた。
+  it('イレギュラー: 音声以外のMIMEタイプ(.txt等)は400のJSONで返り、スタックトレースを含むHTMLにならない', async () => {
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', Buffer.from('not audio content'), { filename: 'test.txt', contentType: 'text/plain' });
+
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toContain('application/json');
+    expect(res.body.error).toBeTruthy();
+    expect(res.text).not.toContain('<html');
+    expect(res.text).not.toContain('at fileFilter');
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it('イレギュラー: 同一フィールド名(audio)に複数ファイルを添付しても400のJSONで返る(HTMLの500にならない)', async () => {
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', Buffer.from('a1'), { filename: 'a.webm', contentType: 'audio/webm' })
+      .attach('audio', Buffer.from('a2'), { filename: 'b.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toContain('application/json');
+    expect(res.text).not.toContain('<html');
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it('実世界パターン: LISTチャンク付きのWAV(録音アプリのメタデータ混在)でも秒数を正しく計上する', async () => {
+    mockFishAsrOk();
+
+    function chunk(id: string, data: Buffer): Buffer {
+      const header = Buffer.alloc(8);
+      header.write(id, 0);
+      header.writeUInt32LE(data.length, 4);
+      const padding = data.length % 2 === 1 ? Buffer.alloc(1) : Buffer.alloc(0);
+      return Buffer.concat([header, data, padding]);
+    }
+    const fmtData = Buffer.alloc(16);
+    fmtData.writeUInt16LE(1, 0); fmtData.writeUInt16LE(1, 2);
+    fmtData.writeUInt32LE(44100, 4); fmtData.writeUInt32LE(88200, 8);
+    fmtData.writeUInt16LE(2, 12); fmtData.writeUInt16LE(16, 14);
+
+    const body = Buffer.concat([
+      chunk('fmt ', fmtData),
+      chunk('LIST', Buffer.from('INFOIART\x05\x00\x00\x00Me\x00\x00\x00')), // 奇数長パディング検証も兼ねる
+      chunk('data', Buffer.alloc(44100)), // 0.5秒
+    ]);
+    const header = Buffer.alloc(12);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(4 + body.length, 4);
+    header.write('WAVE', 8);
+    const wavWithList = Buffer.concat([header, body]);
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', wavWithList, { filename: 'recorded.wav', contentType: 'audio/wav' });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ asrAudioSeconds: 0.5 }),
+    );
+  });
 });

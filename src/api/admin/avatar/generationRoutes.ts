@@ -64,7 +64,8 @@ const designVoiceSchema = z.object({
   instruction: z.string().min(1).max(2000),
   reference_text: z.string().max(150).optional(),
   n: z.number().int().min(1).max(4).optional(),
-  speed: z.number().min(0).max(3).optional(),
+  // 公式仕様: 0 < speed <= 3 (0自体は不可)
+  speed: z.number().gt(0).max(3).optional(),
 });
 
 const generatePromptSchema = z.object({
@@ -397,6 +398,12 @@ JSONのみ返してください。`,
       }
 
       const { instruction, reference_text, n, speed } = parsed.data;
+
+      // Phase5-D: 禁止ワードチェック（二重防御。generate-imageと同じ判定を再利用）
+      if (containsBannedWord(instruction)) {
+        return res.status(400).json({ error: "この指示にはビジネスに不適切な表現が含まれています" });
+      }
+
       const tenantId: string = resolveEffectiveTenantId(req);
       if (!tenantId) {
         return res.status(400).json({ error: "テナント情報が取得できません" });

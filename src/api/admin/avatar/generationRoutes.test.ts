@@ -186,4 +186,193 @@ describe("POST /v1/admin/avatar/design-voice", () => {
     expect(res.status).toBe(500);
     expect(mockTrackUsage).not.toHaveBeenCalled();
   });
+
+  // ── 境界値: instruction ───────────────────────────────────────────────
+  it("バリデーション境界: instructionがちょうど2000字は通る(2001字だけが400)", async () => {
+    mockVoiceDesignOk();
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "あ".repeat(2000) });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("バリデーション境界: reference_textがちょうど150字は通る(151字だけが400)", async () => {
+    mockVoiceDesignOk();
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", reference_text: "あ".repeat(150) });
+
+    expect(res.status).toBe(200);
+  });
+
+  // ── 境界値: n(候補数) ─────────────────────────────────────────────────
+  it("バリデーション境界: n=0は400(1未満)、Fish APIに到達しない", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", n: 0 });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション境界: n=5は400(4を超える)、Fish APIに到達しない", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", n: 5 });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション境界: n=1.5(非整数)は400", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", n: 1.5 });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション境界: n=1〜4はいずれも通る", async () => {
+    for (const n of [1, 2, 3, 4]) {
+      mockVoiceDesignOk();
+      const res = await request(makeApp())
+        .post("/v1/admin/avatar/design-voice")
+        .send({ instruction: "落ち着いた声", n });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  // ── 境界値: speed ────────────────────────────────────────────────────
+  // 公式仕様は "0 < speed <= 3"。0自体は不可(除外境界)であることを固定する。
+  it("バリデーション境界: speed=0は400(公式仕様は0を含まない排他的下限)", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", speed: 0 });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション境界: speed=-1は400", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", speed: -1 });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション境界: speed=3ちょうどは通る(3.01だけが400)", async () => {
+    mockVoiceDesignOk();
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", speed: 3 });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("バリデーション境界: speed=3.01は400", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", speed: 3.01 });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("バリデーション境界: speedの極小正数(0.0001)は通る(下限は排他的だが正であればよい)", async () => {
+    mockVoiceDesignOk();
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", speed: 0.0001 });
+
+    expect(res.status).toBe(200);
+  });
+
+  // ── 禁止ワード（二重防御。generate-imageと同じ判定を再利用） ─────────────
+  it("禁止ワード: instructionにNSFW表現が含まれると400、Fish APIに到達しない", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "セクシーな声で話してください" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("不適切");
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it("禁止ワード: 大文字小文字を無視して判定される(NSFWの英語表記)", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "Sound like a NSFW voice" });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // ── イレギュラーなリクエスト形状 ─────────────────────────────────────
+  it("イレギュラー: instructionが数値型(文字列でない)は400", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: 12345 });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("イレギュラー: nが文字列(\"2\")は400(型強制しない)", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声", n: "2" });
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("イレギュラー: bodyがnull(JSON \"null\"送信)は400", async () => {
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .set("Content-Type", "application/json")
+      .send("null");
+
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // ── Fish Audioが200だが不正な形のJSONを返した場合 ─────────────────────
+  it("Fish Audioが200だがcandidatesフィールド自体が無い場合は空配列として返す(クラッシュしない)", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({}),
+    });
+
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.candidates).toEqual([]);
+    // 空配列でも「成功」扱いなのでtrackUsageは呼ばれる(design-voice自体は成功しているため。
+    // 0件フォールバックの判断はフロント側の責務 — match-voiceのような「空なら失敗扱い」に
+    // していない点に注意。フロント側テストで別途カバー)
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("Fish Audioが200だが本文がJSONとしてパースできない場合は500で確定する(無限待ちにしない)", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => {
+        throw new Error("Unexpected token in JSON");
+      },
+    });
+
+    const res = await request(makeApp())
+      .post("/v1/admin/avatar/design-voice")
+      .send({ instruction: "落ち着いた声" });
+
+    expect(res.status).toBe(500);
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
 });
