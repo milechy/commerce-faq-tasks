@@ -35,6 +35,35 @@ function mockFishAsrOk(text = 'こんにちは') {
   });
 }
 
+// GID 1217083837550916: 44.1kHz/16bit/モノラルの最小WAVバッファ（parseWavDurationSeconds が
+// 実測できる形式）。dataBytes=44100 は byteRate=88200 に対して 0.5 秒に相当する。
+function buildWavBuffer(dataBytes = 44100): Buffer {
+  const sampleRate = 44100;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const fmtChunkSize = 16;
+  const riffChunkSize = 4 + (8 + fmtChunkSize) + (8 + dataBytes);
+
+  const buf = Buffer.alloc(12 + 8 + fmtChunkSize + 8 + dataBytes);
+  let o = 0;
+  buf.write('RIFF', o); o += 4;
+  buf.writeUInt32LE(riffChunkSize, o); o += 4;
+  buf.write('WAVE', o); o += 4;
+  buf.write('fmt ', o); o += 4;
+  buf.writeUInt32LE(fmtChunkSize, o); o += 4;
+  buf.writeUInt16LE(1, o); o += 2;
+  buf.writeUInt16LE(numChannels, o); o += 2;
+  buf.writeUInt32LE(sampleRate, o); o += 4;
+  buf.writeUInt32LE(byteRate, o); o += 4;
+  buf.writeUInt16LE(blockAlign, o); o += 2;
+  buf.writeUInt16LE(bitsPerSample, o); o += 2;
+  buf.write('data', o); o += 4;
+  buf.writeUInt32LE(dataBytes, o); o += 4;
+  return buf;
+}
+
 describe('POST /api/voice/asr', () => {
   let savedEnv: NodeJS.ProcessEnv;
 
@@ -109,6 +138,49 @@ describe('POST /api/voice/asr', () => {
       .attach('audio', Buffer.from('fake-audio-bytes'), { filename: 'test.webm', contentType: 'audio/webm' });
 
     expect(res.status).toBe(503);
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it('GID 1217083837550916: WAVで実測できる場合はasrAudioSecondsを計上し、asrRequestCountは渡さない（二重計上防止）', async () => {
+    mockFishAsrOk('テスト音声のテキスト');
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', buildWavBuffer(44100), { filename: 'test.wav', contentType: 'audio/wav' });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ asrAudioSeconds: 0.5 }),
+    );
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect('asrRequestCount' in call).toBe(false);
+  });
+
+  it('GID 1217083837550916: 実測できない音声（非WAV等）はasrRequestCount:1にフォールバックする', async () => {
+    mockFishAsrOk();
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', Buffer.from('not-a-wav-file'), { filename: 'test.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ asrRequestCount: 1 }),
+    );
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect('asrAudioSeconds' in call).toBe(false);
+  });
+
+  it('GID 1217083837550916: 20MB超過の録音は400で親切な日本語メッセージを返し、trackUsageを呼ばない', async () => {
+    const oversized = Buffer.alloc(20 * 1024 * 1024 + 1);
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', oversized, { filename: 'test.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('20MB');
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 });

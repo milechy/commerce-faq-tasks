@@ -118,10 +118,16 @@ export const QWEN_OCR_COST_PER_PAGE_USD = Number(process.env.QWEN_OCR_COST_PER_P
 
 /**
  * Fish Audio ASR (Transcribe-1) 1リクエストあたりの原価見積もり(USD)。
- * ASR自体は音声長で変動しうるが、本APIは音声長を秒単位で計測していないため
- * リクエスト単位の概算値で暫定計上する(要検証)。
+ * 音声長(秒)を計測できない呼び出し元向けのフォールバック単価(要検証)。
+ * 音声長を計測できる場合は FISH_ASR_COST_PER_HOUR_USD（公式の実単価）を使う。
  */
 export const FISH_ASR_COST_PER_REQUEST_USD = Number(process.env.FISH_ASR_COST_PER_REQUEST_USD ?? '0.01') || 0.01;
+
+/**
+ * GID 1217083837550916: Fish Audio ASR (Transcribe-1) の公式単価: $0.36 / audio hour。
+ * 音声長(秒)を計測できる場合はこちらを使う（FISH_ASR_COST_PER_REQUEST_USD より正確）。
+ */
+export const FISH_ASR_COST_PER_HOUR_USD = Number(process.env.FISH_ASR_COST_PER_HOUR_USD ?? '0.36') || 0.36;
 
 /**
  * Freepik Magnific AI アップスケール1回あたりの原価見積もり(USD)。
@@ -179,8 +185,10 @@ export interface UsageRecord {
   saiAgentSteps?: number;
   /** GID 1216944049264977: Qwen OCRで処理したページ数 */
   ocrPages?: number;
-  /** GID 1216944049264977: Fish Audio ASR呼び出し回数（通常1リクエスト=1) */
+  /** GID 1216944049264977: Fish Audio ASR呼び出し回数（通常1リクエスト=1)。asrAudioSeconds未指定時のフォールバックのみに使う */
   asrRequestCount?: number;
+  /** GID 1217083837550916: Fish Audio ASRの実測音声長(秒)。指定時はこちらを優先し asrRequestCount とは二重計上しない */
+  asrAudioSeconds?: number;
   /** GID 1216944049264977: Magnificアップスケール実行回数 */
   magnificUpscaleCount?: number;
   /** GID 1216944049264977: Flux 2 Pro 画像生成枚数 */
@@ -312,7 +320,11 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
   const saiUSD   = (usage.saiAgentSteps ?? 0) * SAI_AGENT_COST_PER_STEP_USD;
   // GID 1216944049264977: これまでtrackUsage対象外だった外部API課金経路。
   const ocrUSD      = (usage.ocrPages ?? 0) * QWEN_OCR_COST_PER_PAGE_USD;
-  const asrUSD       = (usage.asrRequestCount ?? 0) * FISH_ASR_COST_PER_REQUEST_USD;
+  // GID 1217083837550916: 音声長(秒)が分かればそちらを優先(公式単価$0.36/hour、秒切り上げ)。
+  // 分からない場合のみ従来のリクエスト単位の概算値にフォールバックする。両方を足さない。
+  const asrUSD       = usage.asrAudioSeconds !== undefined
+    ? (Math.ceil(usage.asrAudioSeconds) / 3600) * FISH_ASR_COST_PER_HOUR_USD
+    : (usage.asrRequestCount ?? 0) * FISH_ASR_COST_PER_REQUEST_USD;
   const magnificUSD  = (usage.magnificUpscaleCount ?? 0) * MAGNIFIC_UPSCALE_COST_USD;
   const fluxUSD      = (usage.fluxImageCount ?? 0) * FLUX_PRO_COST_PER_IMAGE_USD;
   const lemonRegUSD  = (usage.lemonsliceRegistrationCount ?? 0) * LEMONSLICE_AVATAR_REGISTRATION_COST_USD;

@@ -122,7 +122,7 @@ Web Speech API の代替として Fish Audio の音声認識 API を使用。ブ
 **リクエスト**: `multipart/form-data`
 | フィールド | 説明 |
 |---|---|
-| `audio` | 音声ファイル（audio/* MIME、最大 25MB） |
+| `audio` | 音声ファイル（audio/* MIME、最大 20MB — Fish Audio公式ASR上限に合わせる） |
 
 **レスポンス**:
 ```json

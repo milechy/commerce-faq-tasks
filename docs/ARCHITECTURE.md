@@ -262,7 +262,7 @@ Data Flow の変更点: Widget が `tts_request` に `productCard` を同乗さ�
 
 Web Speech API の代替として Fish Audio の音声認識 API を導入。Firefox 非対応・ネットワーク依存の問題を解消。
 
-- エンドポイント: `POST /api/voice/asr`（multipart `audio`、最大 25MB）
+- エンドポイント: `POST /api/voice/asr`（multipart `audio`、最大 20MB — Fish Audio公式ASR上限に合わせる）
 - 実装: `src/api/avatar/fishAsrRoutes.ts`
 - `language: "ja"`, `ignore_timestamps: true` 固定
 - Widget の音声入力フローを Web Speech API から本エンドポイントへ完全置換

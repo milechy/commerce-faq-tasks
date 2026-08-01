@@ -1,20 +1,21 @@
 // POST /api/voice/asr
-//   body: multipart/form-data, field "audio" (audio blob, max 25MB)
+//   body: multipart/form-data, field "audio" (audio blob, max 20MB — Fish Audio公式ASR上限に合わせる)
 //   認証: apiStack
 //   Fish Audio Transcribe-1 ASR → { text: string }
 
 import crypto from 'node:crypto';
 import multer from 'multer';
-import type { Express, Request, Response, RequestHandler } from 'express';
+import type { Express, NextFunction, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
 import { trackUsage } from '../../lib/billing/usageTracker';
+import { parseWavDurationSeconds } from '../../lib/audio/wavDuration';
 
 const FISH_ASR_API = 'https://api.fish.audio/v1/asr';
 
 const audioUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (/^audio\//i.test(file.mimetype)) {
       cb(null, true);
@@ -24,6 +25,20 @@ const audioUpload = multer({
   },
 });
 
+// GID 1217083837550916: multer のファイルサイズ超過はデフォルトのExpressエラー処理に落ちると
+// 技術的な文言になるため、ここで親切な日本語メッセージに変換する。
+// Express は err.length===3 の通常ミドルウェアと err.length===4 のエラーハンドラを
+// 同一ルートのスタック内でも区別するため、single()の直後に置けば失敗時のみ呼ばれる。
+function handleAsrUploadError(err: unknown, _req: Request, res: Response, next: NextFunction): void {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    res.status(400).json({
+      error: '録音が長すぎます。20MB以内に収まるよう、もう一度短く録音してお試しください。',
+    });
+    return;
+  }
+  next(err);
+}
+
 export function registerFishAsrRoutes(app: Express, apiStack: RequestHandler[]): void {
   logger.info('[fishAsr] POST /api/voice/asr registered');
 
@@ -31,6 +46,7 @@ export function registerFishAsrRoutes(app: Express, apiStack: RequestHandler[]):
     '/api/voice/asr',
     ...apiStack,
     audioUpload.single('audio'),
+    handleAsrUploadError,
     async (req: Request, res: Response) => {
       const tenantId = (req as AuthedRequest).tenantId;
       if (!tenantId) {
@@ -45,6 +61,11 @@ export function registerFishAsrRoutes(app: Express, apiStack: RequestHandler[]):
       if (!fishApiKey) {
         return res.status(503).json({ error: 'ASR not configured' });
       }
+
+      // GID 1217083837550916: widgetは_blobToWav()でWAV化してから送るため、
+      // ここで実測秒数を算出できれば公式単価($0.36/audio hour)で正確に計上できる。
+      // WAV以外/解析不能な場合のみ従来のリクエスト単位の概算値にフォールバックする。
+      const durationSeconds = parseWavDurationSeconds(req.file.buffer);
 
       try {
         const fd = new FormData();
@@ -83,7 +104,9 @@ export function registerFishAsrRoutes(app: Express, apiStack: RequestHandler[]):
           inputTokens: 0,
           outputTokens: 0,
           featureUsed: 'voice',
-          asrRequestCount: 1,
+          ...(durationSeconds !== null
+            ? { asrAudioSeconds: durationSeconds }
+            : { asrRequestCount: 1 }),
         });
 
         return res.json({ text });
