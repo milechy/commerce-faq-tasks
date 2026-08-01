@@ -10,8 +10,40 @@
       window.addEventListener('error', function(e) {
         var root = document.getElementById('root');
         if (!root || root.children.length > 0) return; // Reactが描画済みなら何もしない
+
+        // CDNエッジキャッシュ破損(assetsのJSファイルURLがHTMLの中身を誤って
+        // 返す)の典型的な症状。PR #487の事故と同じ"Unexpected token '<'"。
+        // 1回だけ、同じスクリプトURLにキャッシュバスター用のクエリを付けて
+        // 再取得を試みる(=別URL扱いになりCDN側のキャッシュキーが変わるため、
+        // 破損したキャッシュエントリを迂回できる可能性がある)。タブを閉じる/
+        // 再訪問するまで1回限り(sessionStorage)。無限リロードループを防ぐ。
+        var RELOAD_FLAG = 'r2c_asset_reload_attempted';
+        var alreadyAttempted = true;
+        try {
+          alreadyAttempted = sessionStorage.getItem(RELOAD_FLAG) === '1';
+        } catch (storageErr) {
+          alreadyAttempted = true; // sessionStorage無効(プライベートブラウズ等)は再試行せず従来通り
+        }
+
+        var looksLikeStaleCache = /Unexpected token/i.test(e.message || '');
+        var mainScript = document.querySelector('script[type="module"][src]');
+
+        if (looksLikeStaleCache && !alreadyAttempted && mainScript) {
+          try { sessionStorage.setItem(RELOAD_FLAG, '1'); } catch (storageErr) { /* 書き込み不可でも再試行自体は続行 */ }
+
+          var bustedUrl = new URL(mainScript.getAttribute('src'), window.location.href);
+          bustedUrl.searchParams.set('r2c_cb', String(Date.now()));
+
+          var freshScript = document.createElement('script');
+          freshScript.type = 'module';
+          if (mainScript.crossOrigin) freshScript.crossOrigin = mainScript.crossOrigin;
+          freshScript.src = bustedUrl.toString();
+          document.body.appendChild(freshScript);
+          return;
+        }
+
         root.style.cssText = 'display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0f172a;color:#f9fafb;font-family:system-ui,sans-serif;padding:24px;text-align:center;';
-        root.innerHTML = '<div><div style="font-size:40px;margin-bottom:12px">⚠️</div><h1 style="font-size:20px;color:#fca5a5;margin-bottom:8px">起動エラー</h1><p style="color:#9ca3af;font-size:13px;max-width:400px">' + (e.message || 'JavaScriptの読み込みに失敗しました。') + '</p><p style="color:#6b7280;font-size:12px;margin-top:12px">ブラウザのコンソールで詳細を確認してください。</p></div>';
+        root.innerHTML = '<div><div style="font-size:40px;margin-bottom:12px">⚠️</div><h1 style="font-size:20px;color:#fca5a5;margin-bottom:8px">起動エラー</h1><p style="color:#9ca3af;font-size:13px;max-width:400px">画面の読み込みに失敗しました。少し時間をおいてから、もう一度開き直してください。</p><p style="color:#6b7280;font-size:12px;margin-top:12px">それでも解決しない場合は、サポートまでご連絡ください。</p></div>';
       });
     </script>
   </head>
