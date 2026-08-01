@@ -130,6 +130,12 @@ export const FISH_ASR_COST_PER_REQUEST_USD = Number(process.env.FISH_ASR_COST_PE
 export const FISH_ASR_COST_PER_HOUR_USD = Number(process.env.FISH_ASR_COST_PER_HOUR_USD ?? '0.36') || 0.36;
 
 /**
+ * GID 1217084040137242: Fish Audio Voice Design (voice-design-1) の公式単価:
+ * $0.01 / 成功リクエスト。候補数(n)によらず1リクエスト固定。失敗リクエストは非課金。
+ */
+export const VOICE_DESIGN_COST_PER_REQUEST_USD = Number(process.env.VOICE_DESIGN_COST_PER_REQUEST_USD ?? '0.01') || 0.01;
+
+/**
  * Freepik Magnific AI アップスケール1回あたりの原価見積もり(USD)。
  * 出力解像度・アップスケール倍率(2x〜16x)で価格が変動する従量制のため、
  * 本実装のデフォルト設定(scaleFactor=2, style=portrait)相当の概算値(要検証)。
@@ -189,6 +195,8 @@ export interface UsageRecord {
   asrRequestCount?: number;
   /** GID 1217083837550916: Fish Audio ASRの実測音声長(秒)。指定時はこちらを優先し asrRequestCount とは二重計上しない */
   asrAudioSeconds?: number;
+  /** GID 1217084040137242: Fish Audio Voice Design 呼び出し回数（成功リクエストのみ計上） */
+  voiceDesignRequestCount?: number;
   /** GID 1216944049264977: Magnificアップスケール実行回数 */
   magnificUpscaleCount?: number;
   /** GID 1216944049264977: Flux 2 Pro 画像生成枚数 */
@@ -328,7 +336,8 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
   const magnificUSD  = (usage.magnificUpscaleCount ?? 0) * MAGNIFIC_UPSCALE_COST_USD;
   const fluxUSD      = (usage.fluxImageCount ?? 0) * FLUX_PRO_COST_PER_IMAGE_USD;
   const lemonRegUSD  = (usage.lemonsliceRegistrationCount ?? 0) * LEMONSLICE_AVATAR_REGISTRATION_COST_USD;
+  const voiceDesignUSD = (usage.voiceDesignRequestCount ?? 0) * VOICE_DESIGN_COST_PER_REQUEST_USD;
   const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD + saiUSD
-    + ocrUSD + asrUSD + magnificUSD + fluxUSD + lemonRegUSD;
+    + ocrUSD + asrUSD + magnificUSD + fluxUSD + lemonRegUSD + voiceDesignUSD;
   return Math.ceil(totalUSD * margin * 100);
 }

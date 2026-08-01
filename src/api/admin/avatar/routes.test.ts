@@ -613,6 +613,152 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 });
 
 // --------------------------------------------------------------------------
+// GID 1217084040137242: POST /v1/admin/avatar/configs/:id/adopt-designed-voice
+// design-voice が返した候補音声(WAV)を永続音声モデルとして採用する。
+// voice-clone と同じ Fish /model 作成 + tenant スコープ規則を共有するため、
+// 権限境界(client_admin/super_admin)のテストを中心に、実装差分（multipart化・
+// train_mode）を検証する。
+// --------------------------------------------------------------------------
+describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
+  const CANDIDATE_AUDIO = Buffer.from("fake-wav-candidate-bytes");
+  let fetchSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    process.env.FISH_AUDIO_API_KEY = "test-fish-key";
+    mockTenantHasFeature.mockReset().mockResolvedValue(true);
+    fetchSpy = jest.spyOn(global, "fetch" as any).mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ _id: "fish-voice-designed-123" }),
+      text: async () => "",
+    } as any);
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    delete process.env.FISH_AUDIO_API_KEY;
+  });
+
+  it("正常系: client_admin + 自テナント config → Fish Audio呼び出し(train_mode=fast) + voice_id UPDATE + 200", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] })
+      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
+      .field("name", "設計した声")
+      .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ voiceId: "fish-voice-designed-123" });
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.fish.audio/model");
+    const fd = init.body as FormData;
+    expect(fd.get("train_mode")).toBe("fast");
+    expect(fd.get("title")).toBe("設計した声");
+
+    const [updateSql, updateParams] = dbQuery.mock.calls[1] as [string, unknown[]];
+    expect(updateSql).toContain("UPDATE avatar_configs SET voice_id = $1");
+    expect(updateSql).toContain("tenant_id = $3");
+    expect(updateParams).toEqual(["fish-voice-designed-123", "config-1", "tenant-a"]);
+  });
+
+  it("テナント越境: 他テナント configId → 404、Fish Audioに到達しない", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/other-tenant-config/adopt-designed-voice")
+      .field("name", "設計した声")
+      .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
+
+    expect(res.status).toBe(404);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("super_admin は他テナント config も操作可（tenant スコープなし — voice-clone と同規則）", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] })
+      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", ""))
+      .post("/v1/admin/avatar/configs/config-x/adopt-designed-voice")
+      .field("name", "設計した声")
+      .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
+
+    expect(res.status).toBe(200);
+    const [checkSql] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(checkSql).not.toContain("tenant_id");
+  });
+
+  it("previewMode相当: super_adminが空テナントで他テナントconfigを操作しても越境しない(super_adminスコープ確認)", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "config-y" }] })
+      .mockResolvedValueOnce({ rows: [{ id: "config-y" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin", "carnation-demo"))
+      .post("/v1/admin/avatar/configs/config-y/adopt-designed-voice")
+      .field("name", "設計した声")
+      .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("plan制限: client_adminがvoice_clone不可プランだと403、DB所有チェックにも到達しない", async () => {
+    mockTenantHasFeature.mockResolvedValueOnce(false);
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
+      .field("name", "設計した声")
+      .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
+
+    expect(res.status).toBe(403);
+    expect(dbQuery).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("Fish Audio エラー: ok=false → 502、DB UPDATEに到達しない・外部エラー本文を返さない", async () => {
+    fetchSpy.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "internal fish error detail",
+    } as any);
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ id: "config-1" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
+      .field("name", "設計した声")
+      .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
+
+    expect(res.status).toBe(502);
+    expect(JSON.stringify(res.body)).not.toContain("internal fish error detail");
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("音声ファイル未添付は400、Fish Audioに到達しない", async () => {
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
+      .field("name", "設計した声");
+
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --------------------------------------------------------------------------
 // resizeForLemonSlice — I-6 カスタム画像の 368x560 リサイズ
 // --------------------------------------------------------------------------
 

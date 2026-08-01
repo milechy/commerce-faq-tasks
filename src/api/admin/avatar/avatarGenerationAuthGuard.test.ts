@@ -64,6 +64,7 @@ function makeApp(user: Record<string, unknown> | null) {
 const GENERATION_ENDPOINTS = [
   { method: 'post' as const, path: '/v1/admin/avatar/generate-image',   body: { description: 'professional headshot' } },
   { method: 'post' as const, path: '/v1/admin/avatar/match-voice',      body: { description: 'calm professional voice' } },
+  { method: 'post' as const, path: '/v1/admin/avatar/design-voice',     body: { instruction: '落ち着いた30代女性の声。ゆっくり丁寧に話す。' } },
   { method: 'post' as const, path: '/v1/admin/avatar/generate-prompt',  body: { rules: 'You are a helpful assistant. Be professional and friendly.' } },
   { method: 'post' as const, path: '/v1/admin/avatar/fal/generate',     body: { prompt: 'professional headshot portrait of a business person' } },
   { method: 'post' as const, path: '/v1/admin/avatar/generate-premium', body: { prompt: 'professional headshot portrait of a business person' } },

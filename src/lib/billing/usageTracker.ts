@@ -46,6 +46,8 @@ export interface TrackUsageParams {
   asrRequestCount?: number;
   /** GID 1217083837550916: Fish Audio ASRの実測音声長(秒)。原価計算にのみ使う。DB列は追加しない */
   asrAudioSeconds?: number;
+  /** GID 1217084040137242: Fish Audio Voice Design 呼び出し回数（成功リクエストのみ計上） */
+  voiceDesignRequestCount?: number;
   /** GID 1216944049264977: Magnificアップスケール実行回数 */
   magnificUpscaleCount?: number;
   /** GID 1216944049264977: Flux 2 Pro 画像生成枚数 */
@@ -89,7 +91,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     tenantId, requestId, model, inputTokens, outputTokens,
     featureUsed, marginOverride, ttsTextBytes, ttsModel, avatarCredits, avatarSessionMs, imageCount,
     anam_session_seconds, extraLlmUsages, saiAgentSteps,
-    ocrPages, asrRequestCount, asrAudioSeconds, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
+    ocrPages, asrRequestCount, asrAudioSeconds, voiceDesignRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
     billable,
   } = params;
 
@@ -117,7 +119,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
       model, inputTokens, outputTokens, marginOverride,
       ttsTextBytes, ttsModel, avatarCredits, avatarSessionMs,
       featureUsed, imageCount, anam_session_seconds, extraLlmUsages, saiAgentSteps,
-      ocrPages, asrRequestCount, asrAudioSeconds, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
+      ocrPages, asrRequestCount, asrAudioSeconds, voiceDesignRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
     });
   } catch (err) {
     _logger?.warn({ err, requestId }, '[usageTracker] cost calculation error, defaulting to 0');

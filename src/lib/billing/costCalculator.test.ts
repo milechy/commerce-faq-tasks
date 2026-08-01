@@ -18,6 +18,7 @@ import {
   QWEN_OCR_COST_PER_PAGE_USD,
   FISH_ASR_COST_PER_REQUEST_USD,
   FISH_ASR_COST_PER_HOUR_USD,
+  VOICE_DESIGN_COST_PER_REQUEST_USD,
   MAGNIFIC_UPSCALE_COST_USD,
   FLUX_PRO_COST_PER_IMAGE_USD,
   LEMONSLICE_AVATAR_REGISTRATION_COST_USD,
@@ -761,6 +762,41 @@ describe('calculateBillingAmountCents: asrAudioSeconds（Fish Audio ASR秒数課
       featureUsed: 'voice', asrAudioSeconds: 3600, asrRequestCount: 100,
     });
     expect(secondsAndRequestCount).toBe(secondsOnly);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1217084040137242: calculateBillingAmountCents: voiceDesignRequestCount（Fish Audio Voice Design）
+// ---------------------------------------------------------------------------
+describe('calculateBillingAmountCents: voiceDesignRequestCount（Fish Audio Voice Design）', () => {
+  it('VOICE_DESIGN_COST_PER_REQUEST_USD は公式単価$0.01/成功リクエスト', () => {
+    expect(VOICE_DESIGN_COST_PER_REQUEST_USD).toBe(0.01);
+  });
+
+  it('voiceDesignRequestCount=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({ model: 'fish-audio-voice-design-1', inputTokens: 0, outputTokens: 0 });
+    const withZero = calculateBillingAmountCents({
+      model: 'fish-audio-voice-design-1', inputTokens: 0, outputTokens: 0, voiceDesignRequestCount: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('voiceDesignRequestCount=1: avatar_config_voiceはEND_USER_FEATURES外なのでmargin=1（原価のみ）', () => {
+    // serverCost=0.0001, voiceDesignCost=0.01 → total=0.0101 USD × margin1 = 0.0101 → Math.ceil(1.01) = 2 cents
+    const result = calculateBillingAmountCents({
+      model: 'fish-audio-voice-design-1', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'avatar_config_voice', voiceDesignRequestCount: 1,
+    });
+    expect(result).toBe(2);
+  });
+
+  it('voiceDesignRequestCount=2: 2件分のコストが加算される', () => {
+    // serverCost=0.0001, voiceDesignCost=2*0.01=0.02 → total=0.0201 USD × margin1 = 0.0201 → Math.ceil(2.01) = 3 cents
+    const result = calculateBillingAmountCents({
+      model: 'fish-audio-voice-design-1', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'avatar_config_voice', voiceDesignRequestCount: 2,
+    });
+    expect(result).toBe(3);
   });
 });
 
