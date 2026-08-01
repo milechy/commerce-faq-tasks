@@ -14,7 +14,7 @@ import crypto from "crypto";
 import type { Express, Request, Response, RequestHandler } from "express";
 import jwt from "jsonwebtoken";
 import { pool } from "../../lib/db";
-import { RoomServiceClient, AgentDispatchClient } from "livekit-server-sdk";
+import { RoomServiceClient, AgentDispatchClient, JobRestartPolicy } from "livekit-server-sdk";
 import type { AuthedRequest } from "../../agent/http/authMiddleware";
 import { logger } from '../../lib/logger';
 import { queryTenantPlan, planHasFeature } from "../../lib/billing/planFeatures";
@@ -76,7 +76,11 @@ async function dispatchAgentToRoom(
   }
 
   // 2. Agent Dispatch
-  const dispatch = await dispatchClient.createDispatch(roomName, "rajiuce-avatar");
+  // restartPolicy: JRP_ON_FAILURE(デフォルト)を明示指定。会話途中で agent job が
+  // 落ちても再起動されるようにする（LiveKit Cloud限定機能。以前は未指定=暗黙のデフォルト依存だった）。
+  const dispatch = await dispatchClient.createDispatch(roomName, "rajiuce-avatar", {
+    restartPolicy: JobRestartPolicy.JRP_ON_FAILURE,
+  });
   logger.info(`[livekitTokenRoutes] Agent dispatched to room: ${roomName} id=${dispatch.id} room=${dispatch.room}`);
 }
 

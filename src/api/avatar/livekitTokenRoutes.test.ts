@@ -27,6 +27,7 @@ jest.mock("livekit-server-sdk", () => ({
   AgentDispatchClient: jest.fn().mockImplementation(() => ({
     createDispatch: mockCreateDispatch,
   })),
+  JobRestartPolicy: { JRP_ON_FAILURE: 0, JRP_NEVER: 1 },
 }));
 
 import { pool } from "../../lib/db";
@@ -351,6 +352,9 @@ describe("POST /api/avatar/room-token", () => {
       // dispatch が呼ばれていることを確認（fire-and-forget のため Promise 解決を待つ）
       await new Promise(resolve => setImmediate(resolve));
       expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
+      // restartPolicy: JRP_ON_FAILURE(=0) が明示指定されていること
+      const dispatchCallArgs = mockCreateDispatch.mock.calls[0];
+      expect(dispatchCallArgs[2]).toEqual({ restartPolicy: 0 });
     });
 
     it("pre_dispatch=false かつ connect=false → dispatch 呼ばれず preDispatchEnabled=false（プラン確認自体スキップ）", async () => {
