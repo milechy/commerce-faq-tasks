@@ -17,6 +17,7 @@ import {
   END_USER_FEATURES,
   QWEN_OCR_COST_PER_PAGE_USD,
   FISH_ASR_COST_PER_REQUEST_USD,
+  FISH_ASR_COST_PER_HOUR_USD,
   MAGNIFIC_UPSCALE_COST_USD,
   FLUX_PRO_COST_PER_IMAGE_USD,
   LEMONSLICE_AVATAR_REGISTRATION_COST_USD,
@@ -710,6 +711,56 @@ describe('calculateBillingAmountCents: asrRequestCount（Fish Audio ASR）', () 
       featureUsed: 'voice', asrRequestCount: 1, marginOverride: 1,
     });
     expect(withDefaultMargin).toBeGreaterThan(atCost);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1217083837550916: calculateBillingAmountCents: asrAudioSeconds（Fish Audio ASR秒数課金）
+// ---------------------------------------------------------------------------
+describe('calculateBillingAmountCents: asrAudioSeconds（Fish Audio ASR秒数課金）', () => {
+  it('FISH_ASR_COST_PER_HOUR_USD は公式単価$0.36/audio hour', () => {
+    expect(FISH_ASR_COST_PER_HOUR_USD).toBe(0.36);
+  });
+
+  it('asrAudioSeconds=0 は既存と同結果', () => {
+    const base = calculateBillingAmountCents({ model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0 });
+    const withZero = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0, asrAudioSeconds: 0,
+    });
+    expect(withZero).toBe(base);
+  });
+
+  it('asrAudioSeconds=3600(1時間): $0.36の1件分が加算される（voiceはMARGIN_MULTIPLIER×5適用）', () => {
+    // serverCost=0.0001, asrCost=ceil(3600)/3600*0.36=0.36 → total=0.3601 USD × margin5 = 1.8005 → Math.ceil(180.05) = 181 cents
+    const result = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrAudioSeconds: 3600,
+    });
+    expect(result).toBe(181);
+  });
+
+  it('秒未満は切り上げられる（0.4秒は1秒として課金される）', () => {
+    const fractional = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrAudioSeconds: 0.4,
+    });
+    const oneSecond = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrAudioSeconds: 1,
+    });
+    expect(fractional).toBe(oneSecond);
+  });
+
+  it('asrAudioSeconds指定時はasrRequestCountが同時にあっても二重計上されない（asrAudioSecondsを優先）', () => {
+    const secondsOnly = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrAudioSeconds: 3600,
+    });
+    const secondsAndRequestCount = calculateBillingAmountCents({
+      model: 'fish-audio-asr', inputTokens: 0, outputTokens: 0,
+      featureUsed: 'voice', asrAudioSeconds: 3600, asrRequestCount: 100,
+    });
+    expect(secondsAndRequestCount).toBe(secondsOnly);
   });
 });
 
