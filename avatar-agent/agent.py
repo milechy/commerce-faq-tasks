@@ -611,6 +611,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             elif msg_type == "widget_connected":
                 logger.info("[data_channel] widget_connected received")
                 # 挨拶は AgentSession が自動的に行うため、手動呼び出し不要
+            elif msg_type == "pip_heartbeat":
+                # PiP常駐: パネルを閉じている間、widget側が定期的に送るハートビート。
+                # LemonSlice側の idle_timeout(300秒)より短い周期で reset-idle-timeout を
+                # 送ることで、PiP表示中にアバターが途中で固まるのを防ぐ(fire-and-forget)。
+                asyncio.create_task(control_lemonslice("reset-idle-timeout"))
         except Exception as e:
             logger.warning(f"[data_channel] parse error: {e}")
 

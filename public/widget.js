@@ -1064,6 +1064,18 @@
   var avatarInactivityTimer = null;
   var AVATAR_INACTIVITY_MS = 33000; // 大表示非アクティブタイムアウト（33秒）
 
+  // PiP常駐（パネルを閉じてもRoomを保持する）中のコスト制御。
+  // - ハートビート: パネルが閉じている間、LemonSlice側の idle_timeout(300秒、agent.py側で設定)
+  //   より短い周期で reset-idle-timeout を送り、PiP表示中に途中でアバターが固まるのを防ぐ。
+  // - アイドル切断: それでも一定時間パネルが開かれなければ、Roomごと切断してLemonSlice課金を
+  //   確実に止める（terminateはRoomを維持したままアバターだけ止めるため、再開時に新しい
+  //   AvatarSessionを作り直す手段がなく、映像が戻らないまま固まる。それよりRoomごと切断し、
+  //   既存のconnectLiveKit()の再接続経路にそのまま乗せる方が安全）。
+  var pipHeartbeatTimer = null;
+  var pipIdleDisconnectTimer = null;
+  var PIP_HEARTBEAT_MS = 60000;          // 1分ごとに reset-idle-timeout
+  var PIP_IDLE_DISCONNECT_MS = 300000;   // 5分間パネルが閉じたままなら切断
+
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
     var v = c === 'x' ? r : (r & 0x3 | 0x8);
@@ -2038,8 +2050,8 @@
   }
 
   function cleanupLiveKit() {
-    // 明示的な完全終了用（ページ離脱・SPA再注入前のdestroy()など）
-    // 通常の closePanel() では呼ばない — Room は切断せず保持する
+    // 明示的な完全終了用（ページ離脱・SPA再注入前のdestroy()、PiPアイドル切断など）
+    // 通常の closePanel() 直後には呼ばない — Room は切断せず保持する（PiP常駐）
     try {
       if (window.__rajiuceRoom) {
         var _cleanupRoom = window.__rajiuceRoom;
@@ -2064,6 +2076,44 @@
     fabMediaContainer = null;
     removeAvatarPlaceholder(); // data-avatar-mode="animated" 用の静止画/絵文字要素と avatarPlaceholderImg もリセット
     resetFabIcon();
+  }
+
+  /** PiP常駐中のハートビート送信。agent側で reset-idle-timeout を発火させる。 */
+  function sendPipHeartbeat() {
+    var room = window.__rajiuceRoom;
+    if (!room || room.state !== 'connected' || !room.localParticipant) return;
+    try {
+      var encoder = new TextEncoder();
+      var payload = encoder.encode(JSON.stringify({ type: 'pip_heartbeat' }));
+      var promise = room.localParticipant.publishData(payload, { reliable: true });
+      if (promise && typeof promise.catch === 'function') {
+        promise.catch(function (err) { console.warn('[FAQ Widget] pip_heartbeat publishData rejected:', err && (err.message || err)); });
+      }
+    } catch (e) {
+      console.warn('[FAQ Widget] pip_heartbeat send error:', e && (e.message || e));
+    }
+  }
+
+  /** PiP常駐（パネルを閉じてもRoomを保持する）タイマーを開始する。closePanel()から呼ぶ。 */
+  function startPipTimers() {
+    if (!window.__rajiuceRoom) return; // アバター無効時は何もしない
+    if (!pipHeartbeatTimer) {
+      pipHeartbeatTimer = setInterval(sendPipHeartbeat, PIP_HEARTBEAT_MS);
+    }
+    if (!pipIdleDisconnectTimer) {
+      pipIdleDisconnectTimer = setTimeout(function () {
+        pipIdleDisconnectTimer = null;
+        // PIP_IDLE_DISCONNECT_MS 経過してもまだパネルが閉じたままの場合のみ切断する
+        // （タイマー発火とほぼ同時にユーザーが再度パネルを開いた場合は何もしない）。
+        if (!isOpen) { cleanupLiveKit(); }
+      }, PIP_IDLE_DISCONNECT_MS);
+    }
+  }
+
+  /** PiP常駐タイマーを停止する。openPanel()から呼ぶ。 */
+  function stopPipTimers() {
+    if (pipHeartbeatTimer) { clearInterval(pipHeartbeatTimer); pipHeartbeatTimer = null; }
+    if (pipIdleDisconnectTimer) { clearTimeout(pipIdleDisconnectTimer); pipIdleDisconnectTimer = null; }
   }
 
   function renderMessages() {
@@ -2173,6 +2223,7 @@
     _fabRestored = false;
     dismissProactiveBubble();
     isOpen = true;
+    stopPipTimers(); // PiP常駐: 再開したのでハートビート/アイドル切断タイマーを止める
     panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
     fab.setAttribute('aria-label', 'チャットを閉じる');
@@ -2264,8 +2315,10 @@
     emitToHost('widget:closed', {});
     capturePostHog('widget_closed', {});
     // PiP常駐: LiveKit Room はここでは切断しない。パネルを閉じてもFABでアバター
-    // 映像を表示し続け、再度開いた時に接続待ち(1〜3秒)なしで再開できるようにする
-    // （真の終了経路は cleanupLiveKit() — beforeunload / FaqWidget.destroy()）。
+    // 映像を表示し続け、再度開いた時に接続待ち(1〜3秒)なしで再開できるようにする。
+    // ただし保持し続けるとLemonSlice/LiveKitのセッション課金が走り続けるため、
+    // ハートビート/アイドル切断タイマーを起動する(コスト制御。詳細は各関数コメント参照)。
+    startPipTimers();
     // アバターUI要素を同期的にクリーンアップ
     // （Disconnected イベントは非同期のため、ここで先に削除しておく）
     var _cpClose = avatarArea.querySelectorAll('.avatar-close-btn');
