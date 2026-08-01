@@ -244,6 +244,7 @@ export async function runSearchAgent(
     steps,
     ragStats,
     ragSources,
+    category: typeof plan.filters?.category === "string" ? plan.filters.category : undefined,
     gapSignal: synth.gapSignal,
     // Subtask 3: synthesis が usage を返さない場合（GROQ キー無し / fallback / エラー）でも
     // 既に消費済みの embedding トークンを課金に残すため、llmUsage は常に返す。

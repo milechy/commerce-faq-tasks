@@ -37,6 +37,8 @@ export interface ChatMessage {
     | "propose"
     | "recommend"
     | "close";
+  /** LemonSliceペルソナスワップ: queryPlanner が推定した質問カテゴリ（アバター見た目・人格切替用） */
+  ragCategory?: string;
   /** Phase73: recommend ステージ時に設定される商品カード情報 */
   productCard?: {
     product_id: string;
