@@ -180,4 +180,22 @@ describe('buildAvatarPrompt', () => {
       expect(prompt).toContain('8k resolution');
     });
   });
+
+  // GID 1215698617426707: LemonSlice公式ガイドライン(avatar-image-tips)は
+  // 「口を閉じた参照画像」がリップシンク品質を落とすと明示しており、口をわずかに
+  // 開けた画像を推奨している。viseme制御が実装不可と判明したため、この代替手段
+  // (参照画像の口元)へスコープを差し替えた際に追加した回帰テスト。
+  describe('mouth suffix（リップシンク品質・GID 1215698617426707）', () => {
+    it('全タイプで口を開けた状態の指定が含まれる', () => {
+      for (const type of ['human', 'anime', '3d', 'animal', 'robot'] as const) {
+        const { prompt } = buildAvatarPrompt({
+          type,
+          composition: 'bust',
+          expression: 'smile',
+          background: 'simple',
+        });
+        expect(prompt).toContain('mouth slightly open');
+      }
+    });
+  });
 });

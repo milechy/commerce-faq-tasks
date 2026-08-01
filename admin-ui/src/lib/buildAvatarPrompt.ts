@@ -102,6 +102,15 @@ const BACKGROUND_MAP: Record<Background, string> = {
   custom:  'clean studio background',
 };
 
+// LemonSlice公式ガイドライン(https://lemonslice.com/docs/prompting-guide/avatar-image-tips)準拠:
+// 「口を閉じた参照画像」はリップシンクの質を落とす。人物は「話している最中(口が開いている)」、
+// 非人間キャラクターは「口をわずかに開けた」画像を使うことが明示的に推奨されている。
+// Asana GID 1215698617426707(Fish Audioワードタイムスタンプでのリップシンク改善)は
+// LemonSlice Control APIにviseme制御が存在しないため実装不可と判明し、公式が案内する
+// この代替手段(参照画像の口元)にスコープを差し替えた(docs/FISH_AUDIO_WORD_TIMESTAMPS_LIPSYNC.md)。
+const MOUTH_SUFFIX =
+  'mouth slightly open as if speaking mid-sentence (required for accurate lip-sync animation on the avatar platform)';
+
 const QUALITY_SUFFIX =
   'high quality, professional lighting, sharp focus, 8k resolution, award-winning photography, centered composition, looking at camera';
 
@@ -158,6 +167,9 @@ export function buildAvatarPrompt(input: AvatarPromptInput): {
 
   // Expression
   parts.push(EXPRESSION_MAP[input.expression]);
+
+  // Mouth (リップシンク品質のためのLemonSlice推奨事項。全タイプ共通)
+  parts.push(MOUTH_SUFFIX);
 
   // Background
   const bgStr = input.background === 'custom' && input.customBgColor
