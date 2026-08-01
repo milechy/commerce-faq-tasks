@@ -1111,6 +1111,112 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // LemonSliceペルソナスワップ: category_persona_map(JSONB)は稼働中のアバター
+    // (is_active=true)1件に紐づく。対象を「稼働中のアバター」に限定するのは、
+    // activate_avatar/deactivate_avatar と同じ「ウィジェットに実際に出ているもの」
+    // という基準を踏襲するため。
+    case 'get_category_personas': {
+      try {
+        const res = await db.query(
+          `SELECT name, category_persona_map FROM avatar_configs
+             WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId],
+        );
+        const row = res.rows[0] as { name: string; category_persona_map: Record<string, unknown> | null } | undefined;
+        if (!row) {
+          return truncate('稼働中のアバターがありません。先に activate_avatar でアバターを有効化してください');
+        }
+        const map = row.category_persona_map ?? {};
+        const categories = Object.keys(map);
+        if (categories.length === 0) {
+          return truncate(`「${row.name}」にはカテゴリ別ペルソナがまだ設定されていません`);
+        }
+        return truncate(
+          `「${row.name}」のカテゴリ別ペルソナ（${categories.length}件）: ${categories.join('、')}`,
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] get_category_personas failed', err);
+        return truncate('カテゴリ別ペルソナの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 現在のアバター設定を土台にした下書きを返すのみで、何も保存しない
+    // （suggest_avatar_preset と同じ「提案は読み取り専用」の原則）。
+    case 'suggest_category_persona': {
+      const category = String(args['category'] ?? '').trim();
+      if (!category) {
+        return truncate('category は必須です');
+      }
+      try {
+        const res = await db.query(
+          `SELECT image_url, agent_prompt, agent_idle_prompt, voice_id FROM avatar_configs
+             WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId],
+        );
+        const row = res.rows[0] as
+          { image_url: string | null; agent_prompt: string | null; agent_idle_prompt: string | null; voice_id: string | null }
+          | undefined;
+        if (!row) {
+          return truncate('稼働中のアバターがありません。先に activate_avatar でアバターを有効化してください');
+        }
+        return truncate(
+          `「${category}」用のペルソナ下書き（現在の設定を土台にしています。変更したい項目だけ教えてください）:\n` +
+          `見た目: ${row.image_url ?? '（現在の画像のまま）'}\n` +
+          `話し方: ${row.agent_prompt ?? '（現在のまま）'}\n` +
+          `待機中の表情: ${row.agent_idle_prompt ?? '（現在のまま）'}\n` +
+          `声: ${row.voice_id ?? '（現在のまま）'}\n` +
+          'この内容で保存しますか？',
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] suggest_category_persona failed', err);
+        return truncate('ペルソナ下書きの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'save_category_persona': {
+      const category = String(args['category'] ?? '').trim();
+      if (!category) {
+        return truncate('category は必須です');
+      }
+      const confirmed = isConfirmed(args['confirmed']);
+      if (!confirmed) {
+        return truncate(
+          'カテゴリ別ペルソナの保存には確認が必要です。ユーザーに内容を提示し、同意を得てから confirmed=true で再度呼び出してください',
+        );
+      }
+      const persona: Record<string, string> = {};
+      for (const key of ['image_url', 'agent_prompt', 'idle_prompt', 'voice_id'] as const) {
+        const value = args[key];
+        if (typeof value === 'string' && value.trim()) {
+          persona[key] = value.trim();
+        }
+      }
+      if (Object.keys(persona).length === 0) {
+        return truncate('image_url・agent_prompt・idle_prompt・voice_id のいずれか1つ以上を指定してください');
+      }
+      try {
+        const res = await db.query(
+          `UPDATE avatar_configs
+             SET category_persona_map = COALESCE(category_persona_map, '{}'::jsonb)
+               || jsonb_build_object($2::text, $3::jsonb)
+             WHERE tenant_id = $1 AND is_active = true
+             RETURNING name`,
+          [tenantId, category, JSON.stringify(persona)],
+        );
+        const updated = res.rows[0] as { name: string } | undefined;
+        if (!updated) {
+          return truncate('稼働中のアバターがありません。先に activate_avatar でアバターを有効化してください');
+        }
+        return truncate(`「${updated.name}」にカテゴリ「${category}」のペルソナを保存しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] save_category_persona failed', err);
+        return truncate('カテゴリ別ペルソナの保存に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     case 'get_embed_code': {
       try {
         // 平文 API キーは保存されていないため key_prefix のみ返す

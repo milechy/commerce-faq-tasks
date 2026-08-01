@@ -327,6 +327,80 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_category_personas',
+      description:
+        '現在設定されているカテゴリ別ペルソナ（会話の話題（例: 「家電」「ファッション」）が' +
+        '変わった時にアバターの見た目・話し方・声を自動で切り替える設定）の一覧を取得する読み取り専用ツール。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_category_persona',
+      description:
+        '指定したカテゴリ用のペルソナ（見た目・話し方・声）の下書きを提案する読み取り専用ツール。' +
+        'この時点では何も保存しない。現在のアバター設定を土台に下書きを作る。' +
+        'ユーザーが「〇〇の話題の時は違う見た目にしたい」等と言ったときに使う。',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: {
+            type: 'string',
+            description: '対象のカテゴリ名（例: "returns" "product" 等、店主が自由に決めてよい）',
+          },
+        },
+        required: ['category'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_category_persona',
+      description:
+        'suggest_category_persona が提案した下書き、またはユーザーが直接指定した内容を' +
+        'カテゴリ別ペルソナとして保存する。ユーザーの明確な同意を得たターンでのみ' +
+        'confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: {
+            type: 'string',
+            description: '対象のカテゴリ名',
+          },
+          image_url: {
+            type: 'string',
+            description: 'このカテゴリの時に使うアバター参照画像URL（未指定なら見た目は変えない）',
+          },
+          agent_prompt: {
+            type: 'string',
+            description: 'このカテゴリの時の話し方・表情プロンプト（未指定なら変えない）',
+          },
+          idle_prompt: {
+            type: 'string',
+            description: 'このカテゴリの時の待機中の表情プロンプト（未指定なら変えない）',
+          },
+          voice_id: {
+            type: 'string',
+            description: 'このカテゴリの時に使う声のID（未指定なら声は変えない）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['category'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_embed_code',
       description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示）',
       parameters: {

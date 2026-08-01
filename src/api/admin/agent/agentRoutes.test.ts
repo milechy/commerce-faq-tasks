@@ -7584,6 +7584,182 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_category_personas / suggest_category_persona / save_category_persona
+  // LemonSliceペルソナスワップ: 話題カテゴリの変化でアバターの見た目・話し方・声を切り替える
+  // -------------------------------------------------------------------------
+  describe('get_category_personas / suggest_category_persona / save_category_persona', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('get_category_personas: 設定済みのカテゴリを一覧で返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-gcp-1', 'get_category_personas', {}))
+        .mockResolvedValueOnce(makeGroqResponse('カテゴリ別ペルソナをお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ name: 'Haruka', category_persona_map: { fashion: { agent_prompt: 'stylish' }, returns: { image_url: 'x' } } }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カテゴリ別ペルソナを教えて', sessionId: 'sess-gcp-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Haruka');
+      expect(result).toContain('2件');
+      expect(result).toContain('fashion');
+      expect(result).toContain('returns');
+    });
+
+    it('get_category_personas: 未設定の場合はその旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-gcp-2', 'get_category_personas', {}))
+        .mockResolvedValueOnce(makeGroqResponse('まだ設定されていません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka', category_persona_map: {} }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カテゴリ別ペルソナを教えて', sessionId: 'sess-gcp-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('まだ設定されていません');
+    });
+
+    it('get_category_personas: 稼働中のアバターが無ければ activate_avatar を案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-gcp-3', 'get_category_personas', {}))
+        .mockResolvedValueOnce(makeGroqResponse('アバターが必要です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カテゴリ別ペルソナを教えて', sessionId: 'sess-gcp-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('activate_avatar');
+    });
+
+    it('suggest_category_persona: category未指定はエラーでDBに触れない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scp-1', 'suggest_category_persona', {}))
+        .mockResolvedValueOnce(makeGroqResponse('カテゴリを教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カテゴリ別ペルソナを作りたい', sessionId: 'sess-scp-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('category は必須です');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('suggest_category_persona: 現在の設定を土台にした下書きを返す（何も保存しない）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scp-2', 'suggest_category_persona', { category: 'fashion' }))
+        .mockResolvedValueOnce(makeGroqResponse('下書きをご提案しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ image_url: 'https://img/base.png', agent_prompt: 'friendly', agent_idle_prompt: 'calm', voice_id: 'voice-1' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'fashionカテゴリのペルソナ下書きが欲しい', sessionId: 'sess-scp-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('fashion');
+      expect(result).toContain('https://img/base.png');
+      expect(result).toContain('friendly');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('save_category_persona: confirmed無しでは保存されず、DBに触れずに確認を促す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-1', 'save_category_persona', { category: 'fashion', agent_prompt: 'stylish' }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要です');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('save_category_persona: フィールド未指定はエラーでDBに触れない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-2', 'save_category_persona', { category: 'fashion', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('内容を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('いずれか1つ以上');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('save_category_persona: confirmed=trueでJSONBにマージ保存される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-3', 'save_category_persona', {
+          category: 'fashion', agent_prompt: 'stylish and confident', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-03' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Haruka');
+      expect(result).toContain('fashion');
+
+      const [sql, params] = mockQuery.mock.calls[0]!;
+      expect(sql as string).toContain('category_persona_map');
+      expect(sql as string).toContain('jsonb_build_object');
+      expect(params).toEqual(['tenant-abc', 'fashion', JSON.stringify({ agent_prompt: 'stylish and confident' })]);
+    });
+
+    it('save_category_persona: 稼働中のアバターが無ければ activate_avatar を案内し、失敗として扱う', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-4', 'save_category_persona', {
+          category: 'fashion', agent_prompt: 'stylish', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('アバターが必要です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('activate_avatar');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // activate_avatar — プラン制限(Growth〜)がチャット経由でも素通りしないことの回帰テスト
   // -------------------------------------------------------------------------
   describe('activate_avatar: プラン制限', () => {
