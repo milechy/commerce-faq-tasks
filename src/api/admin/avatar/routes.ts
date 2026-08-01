@@ -813,9 +813,12 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         }
 
         // Fish Audio POST /model — 永続クローン作成
+        // GID 1217084551565350: train_mode は公式APIの必須フィールド。欠落すると422で
+        // 常に失敗する（実APIで確認済み）。fast=作成直後から即座に利用可能。
         const fd = new FormData();
         fd.append("visibility", "private");
         fd.append("type", "tts");
+        fd.append("train_mode", "fast");
         fd.append("title", name);
         fd.append(
           "voices",
