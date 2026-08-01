@@ -244,6 +244,33 @@ class TestVoiceIdCategorySwitchRegression:
         src = AGENT_PY.read_text(encoding="utf-8")
         assert "fish_tts.update_options(voice_id=" in src
 
+    def test_voice_id_is_type_checked_before_switch(self):
+        """category_persona_map はテナントDB設定由来で、voice_id が数値や
+        リスト等の非文字列で紛れ込んでいても resolve_category_persona() は
+        弾かない（dict の値であることしか見ない）。truthy チェックだけで
+        fish_tts.update_options(voice_id=...) に渡すと、fishaudio API に
+        非文字列が渡り例外化する。isinstance(..., str) を先に見ていること。
+        """
+        src = AGENT_PY.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "isinstance":
+                if (
+                    len(node.args) == 2
+                    and isinstance(node.args[0], ast.Call)
+                    and isinstance(node.args[0].func, ast.Attribute)
+                    and node.args[0].func.attr == "get"
+                    and isinstance(node.args[1], ast.Name)
+                    and node.args[1].id == "str"
+                ):
+                    found = True
+                    break
+        assert found, (
+            "persona.get(\"voice_id\") を isinstance(..., str) で"
+            "型チェックしていません。voice_id 型チェック除去の回帰です。"
+        )
+
 
 if __name__ == "__main__":
     # pytest なし環境向けフォールバック assert ランナー（test_emotion_tags.py に倣う）
