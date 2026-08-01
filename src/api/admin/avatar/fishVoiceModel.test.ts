@@ -1,6 +1,6 @@
 // src/api/admin/avatar/fishVoiceModel.test.ts
 
-import { createFishVoiceModel, FishVoiceModelError } from "./fishVoiceModel";
+import { createFishVoiceModel, FishVoiceModelError, adoptVoiceForConfig } from "./fishVoiceModel";
 
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
@@ -203,5 +203,133 @@ describe("createFishVoiceModel", () => {
         mimeType: "audio/wav",
       }),
     ).rejects.toThrow("ECONNRESET");
+  });
+});
+
+// GID: voice-clone/adopt-designed-voiceの二重送信(二重課金)防止のための
+// トランザクション処理。ルートレベルの統合テスト(routes.test.ts)ではHTTP経由で
+// 到達しにくい「コネクション解放の保証」「ROLLBACK自体が失敗する二重障害」を
+// ここで直接検証する。
+describe("adoptVoiceForConfig", () => {
+  function makeTxDb(clientQueryImpl: (sql: string, values?: unknown[]) => Promise<any>) {
+    const clientQuery = jest.fn(clientQueryImpl);
+    const release = jest.fn();
+    const connect = jest.fn().mockResolvedValue({ query: clientQuery, release });
+    return { db: { connect }, clientQuery, release };
+  }
+
+  const baseParams = {
+    configId: "config-1",
+    tenantId: "tenant-a",
+    isSuperAdmin: false,
+    fishApiKey: "test-key",
+    title: "マイボイス",
+    audio: Buffer.from("dummy"),
+    mimeType: "audio/wav",
+    logEventPrefix: "voice_clone",
+    logContext: "[test] voice-clone",
+  };
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it("正常系: SELECT FOR UPDATE → Fish呼び出し → UPDATE → COMMITの順に実行し、コネクションを解放する", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ _id: "fish-voice-1" }) });
+    const { db, clientQuery, release } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("UPDATE avatar_configs")) return { rows: [], rowCount: 1 };
+      return { rows: [] };
+    });
+
+    const result = await adoptVoiceForConfig({ ...baseParams, db });
+
+    expect(result).toEqual({ ok: true, voiceId: "fish-voice-1" });
+    expect(clientQuery.mock.calls.map((c) => c[0])).toEqual([
+      "BEGIN",
+      "SET LOCAL lock_timeout = '3s'",
+      expect.stringContaining("FOR UPDATE"),
+      expect.stringContaining("UPDATE avatar_configs"),
+      "COMMIT",
+    ]);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("Fish呼び出し失敗時もコネクションを解放する(接続リーク防止)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, text: async () => "error" });
+    const { db, release } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      return { rows: [] };
+    });
+
+    const result = await adoptVoiceForConfig({ ...baseParams, db });
+
+    expect(result.ok).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("設定が見つからない場合、404を返しFishを一切呼ばない", async () => {
+    const { db } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [] };
+      return { rows: [] };
+    });
+
+    const result = await adoptVoiceForConfig({ ...baseParams, db });
+
+    expect(result).toEqual({ ok: false, status: 404, error: "設定が見つからないかアクセス権限がありません" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("ロックタイムアウトは409を返し、logEventPrefixごとに正しい汎用メッセージにフォールバックする(adopt-designed-voice側)", async () => {
+    const { db } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) throw new Error("canceling statement due to lock timeout");
+      return { rows: [] };
+    });
+
+    const result = await adoptVoiceForConfig({
+      ...baseParams,
+      db,
+      logEventPrefix: "adopt_designed_voice",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: "この設定は現在別の操作を処理中です。少し待ってからもう一度お試しください",
+    });
+  });
+
+  // 二重障害: ロック取得に失敗した直後、ROLLBACK自体もコネクション断等で失敗するケース。
+  // .catch(() => {}) で握りつぶさないと、本来のエラー(lock timeout起因の409判定)より
+  // ROLLBACK失敗のエラーが優先されてしまい、呼び出し元が500として扱ってしまう。
+  it("二重障害: ROLLBACK自体が失敗しても、元のロックタイムアウト起因の409判定を優先する", async () => {
+    const { db, release } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) throw new Error("canceling statement due to lock timeout");
+      if (sql === "ROLLBACK") throw new Error("connection terminated unexpectedly");
+      return { rows: [] };
+    });
+
+    const result = await adoptVoiceForConfig({ ...baseParams, db });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: "この設定は現在別の操作を処理中です。少し待ってからもう一度お試しください",
+    });
+    // ROLLBACK失敗時もコネクションは必ず解放される(finally節)
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("ロックタイムアウトでも予期しないDBエラー(接続断等)でもない場合は、呼び出し元に例外を投げる(既存の500ハンドリングに委ねる)", async () => {
+    const { db, release } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) throw new Error("relation \"avatar_configs\" does not exist");
+      if (sql === "ROLLBACK") return { rows: [] };
+      return { rows: [] };
+    });
+
+    await expect(adoptVoiceForConfig({ ...baseParams, db })).rejects.toThrow(
+      'relation "avatar_configs" does not exist',
+    );
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

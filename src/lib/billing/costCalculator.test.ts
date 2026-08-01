@@ -326,6 +326,54 @@ describe('calculateBillingAmountCents', () => {
     expect(Number.isInteger(result)).toBe(true);
     expect(result).toBeGreaterThan(0);
   });
+
+  // GID: totalUSDに加算される全フィールドは、負値を渡すと「請求額を減らす」
+  // 攻撃・不具合の経路になりうる(例: ttsTextBytes=-1000000で他の正当な費用を
+  // 相殺できてしまう)。inputTokens/outputTokensだけでなく全フィールドを一律で
+  // ガードすることを固定する。
+  describe('負の値は全フィールドで例外を投げる(請求額を減らす攻撃・不具合の防止)', () => {
+    const base = { model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0 } as const;
+
+    it.each([
+      ['ttsTextBytes', -1],
+      ['avatarCredits', -1],
+      ['imageCount', -1],
+      ['saiAgentSteps', -1],
+      ['ocrPages', -1],
+      ['asrRequestCount', -1],
+      ['asrAudioSeconds', -1],
+      ['magnificUpscaleCount', -1],
+      ['fluxImageCount', -1],
+      ['lemonsliceRegistrationCount', -1],
+      ['voiceDesignRequestCount', -1],
+    ] as const)('%s が負の場合に例外を投げる', (field, value) => {
+      expect(() =>
+        calculateBillingAmountCents({ ...base, [field]: value })
+      ).toThrow(`Invalid ${field}: ${value}`);
+    });
+
+    it('複数フィールドが同時に負でも(最初に検出した1件で)例外を投げる', () => {
+      expect(() =>
+        calculateBillingAmountCents({ ...base, ttsTextBytes: -100, avatarCredits: -5 })
+      ).toThrow();
+    });
+
+    it('巨大な負値(Number.MIN_SAFE_INTEGER)でも例外を投げる(オーバーフローで正の値に化けない)', () => {
+      expect(() =>
+        calculateBillingAmountCents({ ...base, asrAudioSeconds: Number.MIN_SAFE_INTEGER })
+      ).toThrow();
+    });
+
+    it('0はどのフィールドでも例外を投げない(負値ガードの境界は0を含む)', () => {
+      const result = calculateBillingAmountCents({
+        ...base,
+        ttsTextBytes: 0, avatarCredits: 0, imageCount: 0, saiAgentSteps: 0, ocrPages: 0,
+        asrRequestCount: 0, asrAudioSeconds: 0, magnificUpscaleCount: 0, fluxImageCount: 0,
+        lemonsliceRegistrationCount: 0, voiceDesignRequestCount: 0,
+      });
+      expect(result).toBeGreaterThanOrEqual(0);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

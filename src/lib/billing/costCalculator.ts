@@ -308,11 +308,28 @@ export function calculateAvatarCostCents(credits: number): number {
  *
  * @throws inputTokens / outputTokens が負の場合
  */
+// GID: totalUSDの計算式に加算されるフィールド群（マイナス値は「請求額を減らす」
+// 攻撃・不具合の経路になりうる）。現状の全呼び出し元(fishTtsRoutes/fishAsrRoutes/
+// generationRoutes/usageRoutes)は非負値しか渡さないため実害は無いが、将来別の
+// 呼び出し元が検証漏れの値をそのまま渡した場合に静かに請求額が減るのを防ぐため、
+// calculateBillingAmountCentsの入口で一括ガードする。
+const NEGATIVE_GUARD_FIELDS: ReadonlyArray<keyof UsageRecord> = [
+  'ttsTextBytes', 'avatarCredits', 'imageCount', 'saiAgentSteps', 'ocrPages',
+  'asrRequestCount', 'asrAudioSeconds', 'magnificUpscaleCount', 'fluxImageCount',
+  'lemonsliceRegistrationCount', 'voiceDesignRequestCount',
+];
+
 export function calculateBillingAmountCents(usage: UsageRecord): number {
   if (usage.inputTokens < 0 || usage.outputTokens < 0) {
     throw new Error(
       `Invalid token counts: input=${usage.inputTokens}, output=${usage.outputTokens}`
     );
+  }
+  for (const field of NEGATIVE_GUARD_FIELDS) {
+    const value = usage[field];
+    if (typeof value === 'number' && value < 0) {
+      throw new Error(`Invalid ${field}: ${value}`);
+    }
   }
 
   const isEndUser = usage.featureUsed === undefined || END_USER_FEATURES.has(usage.featureUsed);

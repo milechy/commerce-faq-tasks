@@ -317,6 +317,43 @@ describe('usageTracker', () => {
     });
   });
 
+  // GID: calculateBillingAmountCentsが例外を投げるケース(負値ガード等)が実際に
+  // trackUsage経由で発生した場合、INSERT自体はクラッシュせずcostTotalCents=0で
+  // 継続することを固定する。この経路はこれまでテストされていなかった。
+  describe('原価計算エラー時（負値ガード等でcalculateBillingAmountCentsが例外を投げた場合）', () => {
+    it('asrAudioSecondsが負の場合、warnログを出しcost_total_cents=0でINSERTは継続する（クラッシュしない）', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-negative-asr-seconds',
+        model: 'fish-audio-asr',
+        inputTokens: 0,
+        outputTokens: 0,
+        featureUsed: 'voice',
+        asrAudioSeconds: -100,
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: 'req-negative-asr-seconds' }),
+        expect.stringContaining('cost calculation error'),
+      );
+      const insertCall = mockQuery.mock.calls.find(
+        ([, p]: [string, any[]]) => p?.[1] === 'req-negative-asr-seconds'
+      );
+      expect(insertCall).toBeDefined();
+      const [, params] = insertCall!;
+      // cost_llm_cents / cost_total_cents 列は両方0にフォールバックする
+      expect(params[6]).toBe(0);
+      expect(params[7]).toBe(0);
+    });
+  });
+
   describe('DB エラー時', () => {
     it('INSERT 失敗時にエラーをログするが例外を投げない', async () => {
       const mockQuery = jest.fn().mockRejectedValue(new Error('DB connection lost'));
