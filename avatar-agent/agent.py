@@ -671,8 +671,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             }
         avatar = lemonslice.AvatarSession(**avatar_kwargs)
         # I-4: avatar.start() の戻り値が LemonSlice session_id（plugin avatar.py:132）
+        # avatar.start() 自体にはタイムアウト保護が無い（LemonSlice側の _post() は
+        # 最大3リトライ×60秒でハングしうる）。ここで明示的にタイムアウトさせないと、
+        # 挨拶も session.start() も一切実行されないまま無言で停止し続ける
+        # （wait_for_join の10秒タイムアウトはこの手前で止まるため効かない）。
         global _lemonslice_session_id
-        _lemonslice_session_id = await avatar.start(session, room=ctx.room)
+        try:
+            _lemonslice_session_id = await asyncio.wait_for(
+                avatar.start(session, room=ctx.room), timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[avatar] avatar.start() timed out after 30s (text-only fallback)")
+            raise
         # 課金: アバター起動成功時刻を記録（_close_avatar でセッション時間を算出）
         _avatar_started_at = time.monotonic()
         logger.info("=== LEMONSLICE AVATAR STARTED ===")
