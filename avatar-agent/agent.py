@@ -75,11 +75,30 @@ STATE_AGENT_PROMPTS = {
 }
 
 
+# LemonSlice Session Control API が受け付けるイベント名の全量（2026-08-01 公式ドキュメント確認済み）。
+# https://lemonslice.com/docs/api-reference/control-session
+# 未知の名前は HTTP 400 になるが、control_lemonslice() は fire-and-forget で warning に
+# 落とすだけのため、誤字（例: アンダースコア表記）があっても無音で失敗し気づけない
+# （update_agent_prompt の誤字で I-4 表情切替が実装以来動いていなかった実例がある）。
+# 送信前にここで弾き、誤字と本物の障害を区別できるようにする。
+LEMONSLICE_CONTROL_EVENTS = frozenset({
+    "terminate",
+    "update-image",
+    "update-agent-prompt",
+    "update-idle-prompt",
+    "pose-trigger",
+    "reset-idle-timeout",
+})
+
+
 async def control_lemonslice(event: str, **kwargs) -> bool:
     """LemonSlice Control API への fire-and-forget ラッパー（失敗は warning のみ・non-fatal）。
 
     注意: session_id / API キーはログに出さないこと。
     """
+    if event not in LEMONSLICE_CONTROL_EVENTS:
+        logger.error(f"[lemonslice-control] unknown event name (typo?): {event!r}")
+        return False
     if not _lemonslice_session_id:
         logger.debug("[lemonslice-control] session_id not available, skipping")
         return False
@@ -612,7 +631,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 if prompt:
                     logger.info(f"[data_channel] state_change received: state={state}")
                     asyncio.create_task(
-                        control_lemonslice("update_agent_prompt", agent_prompt=prompt)
+                        control_lemonslice("update-agent-prompt", agent_prompt=prompt)
                     )
                 else:
                     logger.debug(f"[data_channel] state_change with unknown state, skipping: {state!r}")
