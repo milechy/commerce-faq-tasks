@@ -1,8 +1,8 @@
 // GID: LP料金表(Growth〜: 会話分析/成約・効果分析)に基づくnav非表示の回帰テスト
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { AppSidebar } from "./AppSidebar";
+import { AppSidebar, MobileHeader } from "./AppSidebar";
 import { useAuth } from "../auth/useAuth";
 
 vi.mock("../auth/useAuth", () => ({
@@ -14,12 +14,33 @@ vi.mock("../contexts/ThemeContext", () => ({
 }));
 
 vi.mock("./common/NotificationBell", () => ({
-  NotificationBell: () => <div />,
+  NotificationBell: () => <div data-testid="notification-bell" />,
 }));
 
 vi.mock("./AppSwitcher", () => ({
   default: () => <div />,
 }));
+
+// happy-dom は matchMedia を実装していないため、既存テスト(デスクトップ幅前提)が
+// AppSidebar/MobileHeader の viewport 判定で例外を起こさないよう、既定でデスクトップ
+// (max-width: 767px に非マッチ)としてモックする。モバイル固有のテストは
+// このモックを個別に上書きする。
+function mockMatchMedia(matches: boolean) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
+
+beforeEach(() => {
+  mockMatchMedia(false);
+});
 
 function baseAuth(overrides: Partial<ReturnType<typeof useAuth>>) {
   return {
@@ -210,5 +231,67 @@ describe("AppSidebar — ThemeToggle切り出し後の回帰テスト", () => {
     expect(screen.getByTitle("ライト")).toBeTruthy();
     expect(screen.getByTitle("ダーク")).toBeTruthy();
     expect(screen.getByTitle("自動")).toBeTruthy();
+  });
+});
+
+// 通知ベルの3重マウント回帰テスト(オフスクリーンrailの非マウント化)。
+// .app-sidebar は @media(max-width:767px) で transform: translateX(-100%) されるだけで
+// DOMには残るため、NotificationBell(setIntervalでポーリング)がAppSidebar rail /
+// MobileHeader上部バー / モバイルドロワーの最大3箇所で同時にマウントされ得た。
+describe("AppSidebar / MobileHeader — 通知ベルの3重マウント解消", () => {
+  it("デスクトップ幅: ベルはAppSidebar(rail)の1個のみ描画される", () => {
+    mockMatchMedia(false); // (max-width: 767px) に非マッチ = デスクトップ
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
+    renderSidebar();
+
+    expect(screen.getAllByTestId("notification-bell")).toHaveLength(1);
+  });
+
+  it("デスクトップ幅: MobileHeaderはnullを返しベルを持たない(二重ポーリング防止)", () => {
+    mockMatchMedia(false);
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
+    const { container } = render(
+      <MemoryRouter>
+        <MobileHeader />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryAllByTestId("notification-bell")).toHaveLength(0);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("モバイル幅: AppSidebarはnullを返しベルを持たない(オフスクリーンrailの非マウント化)", () => {
+    mockMatchMedia(true); // (max-width: 767px) にマッチ = モバイル
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
+    const { container } = renderSidebar();
+
+    expect(screen.queryAllByTestId("notification-bell")).toHaveLength(0);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("モバイル幅: ベルはMobileHeader上部バーの1個のみ描画される", () => {
+    mockMatchMedia(true);
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
+    render(
+      <MemoryRouter>
+        <MobileHeader />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getAllByTestId("notification-bell")).toHaveLength(1);
+  });
+
+  it("モバイル幅でドロワーを開いても、ベルは1個のまま(ドロワー側のベルは出さない)", () => {
+    mockMatchMedia(true);
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ tenantPlan: "growth" }));
+    render(
+      <MemoryRouter>
+        <MobileHeader />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByLabelText("メニューを開く"));
+
+    expect(screen.getAllByTestId("notification-bell")).toHaveLength(1);
   });
 });
