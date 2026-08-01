@@ -159,3 +159,20 @@ ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/api/admin/feedb
 | PDF アップロード失敗 | `/v1/admin/knowledge/pdf` エンドポイントの実装確認 (Phase27) |
 | DB 接続エラー | `DATABASE_URL` のポート (5432 vs 5434) を VPS で確認 |
 | メモリ不足 | `free -h`, ES ヒープを `ES_JAVA_OPTS=-Xms1g -Xmx1g` に縮小 |
+
+## Admin UI (Cloudflare Pages) のCDNキャッシュ破損時の対応
+
+`admin.r2c.biz` は Cloudflare Pages 配信であり、`bash SCRIPTS/deploy-vps.sh` では更新されない
+（main push → Pages 自動ビルド）。したがって「Admin UI が起動しない」原因が
+デプロイ漏れではなくCDNキャッシュ破損（PR #487で実際に発生、`/assets/*.js` の
+URLに対しHTMLの中身が誤ってキャッシュされる事故）の場合、VPS側の対処では直らない。
+
+`bash SCRIPTS/post-deploy-smoke.sh` の「Admin UI asset」チェックがこの破損を自動検知する
+（`index.html` が参照する `/assets/*.js` の実ボディ先頭が `<` かどうかを見る。
+Content-Typeヘッダだけでは検知できない点に注意）。
+
+1. **対象URLの特定**: smoke test の出力、または `curl -s https://admin.r2c.biz | grep -oE '/assets/[A-Za-z0-9_.-]+\.js'` で破損している資産のパスを確認する。
+2. **Cloudflareキャッシュパージ**: Cloudflare ダッシュボード（該当ゾーン → Caching → Configuration → Purge Cache）から、特定したURL（`https://admin.r2c.biz/assets/xxxxx.js` 等）を個別パージする。ゾーン全体のパージは他のテナントへの影響が大きいため、まずは対象URLのみに絞る。
+3. **再検証**: `bash SCRIPTS/post-deploy-smoke.sh` を再実行し、「Admin UI asset」チェックが ✅ になることを確認する。
+
+なお `admin-ui/index.html` には自動復旧の仕組みが入っており（起動エラー検知時にキャッシュバスター付きで1回だけ再取得を試みる）、多くの場合はユーザー側で自然に復旧する。上記の手順は自動復旧後も破損が継続する場合、またはsmoke testで能動的に検知した場合の人手対応。

@@ -61,6 +61,26 @@ fi
 # ── 3. Admin UI (Cloudflare Pages) ────────────────────────────────────────
 check "Admin UI" "$ADMIN_URL"
 
+# ── 3b. Admin UI アセットのCDNキャッシュ破損検知 ───────────────────────
+# PR #487の事故: index.htmlは正しいJSファイル名を参照していたが、CDNの
+# 一部エッジがそのURLに対してHTML(SPAフォールバック)の中身を誤って
+# キャッシュしていた。Content-Typeヘッダは正しくJSを返しつつボディだけ
+# HTMLだったため、ヘッダだけでは検知できない。実ボディの先頭文字を見る。
+admin_html=$(curl -s --max-time 10 "$ADMIN_URL" 2>/dev/null || echo "")
+admin_js_path=$(echo "$admin_html" | grep -oE '/assets/[A-Za-z0-9_.-]+\.js' | head -1)
+if [ -n "$admin_js_path" ]; then
+  admin_js_body_head=$(curl -s --max-time 10 "$ADMIN_URL$admin_js_path" 2>/dev/null | head -c 1)
+  if [ "$admin_js_body_head" = "<" ]; then
+    echo "  ❌ Admin UI asset ($admin_js_path) body starts with '<' — CDNキャッシュ破損の疑い(HTMLが返っている)"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  ✅ Admin UI asset ($admin_js_path) — JS本文を確認"
+    PASS=$((PASS + 1))
+  fi
+else
+  echo "  ⚠️  Admin UI index.html から /assets/*.js を検出できず(スキップ)"
+fi
+
 # ── 4. Demo page ──────────────────────────────────────────────────────────
 check "Demo page" "$API_URL/carnation-demo/index.html"
 
