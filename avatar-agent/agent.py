@@ -329,6 +329,52 @@ def _build_agent_reply_payload(text: str) -> bytes:
     return json.dumps({"type": "agent_reply", "text": text}).encode()
 
 
+def _resolve_voice_id(reference_id: str | None) -> str | object:
+    """fishaudio.TTS の voice_id 引数を解決する（純粋関数）。
+
+    reference_id が None または空文字列の場合は NOT_GIVEN を返し、プラグインの
+    デフォルト音声(DEFAULT_VOICE_ID)を使わせる。空文字列を素通しすると
+    Fish Audio API が無効な voice_id として拒否するため、None と同じ扱いにする。
+    """
+    return reference_id if reference_id else NOT_GIVEN
+
+
+def _build_emotion_tags_prefix(emotion_tags: list[str] | None) -> str:
+    """テナントDB設定の emotion_tags から TTS用の "[tag][tag]" 形式プレフィックスを
+    組み立てる（純粋関数）。最大3個まで採用する（旧 FishAudioTTS.synthesize() の
+    挙動を踏襲）。
+
+    既知の未対応ケース: 空白のみのタグ（例 "  "）は真値のためここでは除外されず
+    "[  ]" のような見た目のプレフィックスになる。entrypoint() 側の
+    `effective_emotion_tags = [str(t) for t in effective_emotion_tags if t]` は
+    空文字列のみを除外し、空白のみの文字列までは除外しない。
+    """
+    if not emotion_tags:
+        return ""
+    return "".join(f"[{t}]" for t in emotion_tags[:3])
+
+
+def _compose_speak_texts(
+    text: str,
+    *,
+    emotion_prefix: bool,
+    sales_state: str | None,
+    emotion_tags_prefix: str,
+) -> tuple[str, str]:
+    """speak() のテキスト合成ロジック（純粋関数）。(tts_text, publish_text) を返す。
+
+    emotion_tags_prefix（テナントDB設定）は tts_text にのみ適用し、publish_text
+    （Widget のチャット吹き出しに送る文字列）には絶対に含めないこと——ここが
+    崩れると `[calm][happy]` のような装飾記法がそのまま顧客向けチャットUIに
+    露出する（速攻で気づかれる顧客可視のリグレッション）。
+    """
+    publish_text = (
+        sales_flow_emotion_prefix(sales_state) + text if emotion_prefix else text
+    )
+    tts_text = emotion_tags_prefix + publish_text
+    return tts_text, publish_text
+
+
 # --- Groq LLM (AgentSession 用 — session.say() のコンテキスト保持に使用) ---
 groq_llm = openai_plugin.LLM(
     model="llama-3.3-70b-versatile",
@@ -433,15 +479,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         model=_tts_model,
         output_format="mp3",
         sample_rate=44100,
-        voice_id=effective_reference_id if effective_reference_id else NOT_GIVEN,
+        voice_id=_resolve_voice_id(effective_reference_id),
         normalize=True,
         latency_mode="balanced",
     )
     # emotion_tags（テナントDB設定）は公式プラグインにコンストラクタ引数が無いため、
     # speak() が TTS 送信直前にテキスト先頭へ付与する（Widget のチャット吹き出しには漏らさない）。
-    _emotion_tags_prefix = (
-        "".join(f"[{t}]" for t in effective_emotion_tags[:3]) if effective_emotion_tags else ""
-    )
+    _emotion_tags_prefix = _build_emotion_tags_prefix(effective_emotion_tags)
 
     session = AgentSession(
         llm=groq_llm,
@@ -499,12 +543,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         emotion_tags（テナントDB設定）は _emotion_tags_prefix で TTS 音声にのみ適用し、
         Widget のチャット吹き出しには漏らさない（旧 FishAudioTTS.synthesize() の挙動を踏襲）。
         """
-        publish_text = (
-            sales_flow_emotion_prefix(_sales_state["current"]) + text
-            if emotion_prefix
-            else text
+        tts_text, publish_text = _compose_speak_texts(
+            text,
+            emotion_prefix=emotion_prefix,
+            sales_state=_sales_state["current"],
+            emotion_tags_prefix=_emotion_tags_prefix,
         )
-        tts_text = _emotion_tags_prefix + publish_text
         say_kwargs = {} if allow_interruptions is None else {"allow_interruptions": allow_interruptions}
         handle = session.say(tts_text, **say_kwargs)
         if tenant_id:
