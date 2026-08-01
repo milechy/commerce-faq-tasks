@@ -135,7 +135,7 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 
 | やりたいこと | 置き場所（既存） |
 |---|---|
-| ルールの発火条件の判定 | `src/agent/tools/synthesisTool.ts` の `matchesTriggerPattern` |
+| ルールの発火条件の判定 | `src/api/admin/tuning/triggerMatching.ts` の `matchesTriggerPattern` |
 | ルールのプロンプト注入 | `src/api/admin/tuning/tuningRulesRepository.ts` の `buildTuningPromptSection` |
 | 優先度の3段階表現 | `admin-ui/src/lib/tuningPriority.ts`（閾値・代表値を他所に書かない） |
 
@@ -155,7 +155,7 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 5. **エンドユーザーに出る内容を、テナントの確認なしで公開する。**
    テンプレート・自動生成の知識は `is_published = false` で投入し、確認後に公開する。
    **指示ルールも同じ**: AI が自動生成した `tuning_rules`（Judge 由来）は必ず `is_active = false` で INSERT する。
-   列を省略するとスキーマ既定 `DEFAULT true` が効いて即座に本番の応答方針へ入る（`src/agent/judge/evaluationAnalyzer.ts` が現に違反）。
+   列を省略するとスキーマ既定 `DEFAULT true` が効いて即座に本番の応答方針へ入る（`src/agent/judge/evaluationAnalyzer.ts` は現在この通り `is_active = false` を明示している。省略する変更をしない）。
    逆に `migration.sql` の `DEFAULT` 自体は、既存データへの影響を評価せずに変えない。
 6. **同じ関心事を2ファイルに複製したまま片方だけ直す。**
    既知の重複: 業種テンプレ（`src/api/admin/agent/industryFaqTemplates.ts` と
