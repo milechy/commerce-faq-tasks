@@ -379,6 +379,9 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
     const fd = init.body as FormData;
     expect(fd.get("visibility")).toBe("private");
     expect(fd.get("type")).toBe("tts");
+    // GID 1217084551565350: train_mode は公式Fish Audio APIの必須フィールド。
+    // 欠落すると422("train_mode: Field required")で常に失敗することを実APIで確認済み。
+    expect(fd.get("train_mode")).toBe("fast");
     expect(fd.get("title")).toBe("マイボイス");
     expect(fd.get("voices")).toBeTruthy();
 
