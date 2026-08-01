@@ -2,6 +2,7 @@
 // Phase38 Step4-BE: チューニングルール DB リポジトリ
 
 import { getPool } from "../../../lib/db";
+import { sanitizeInput } from "../../../lib/security/inputSanitizer";
 
 // ---------------------------------------------------------------------------
 // 型定義
@@ -126,7 +127,7 @@ export async function getActiveRulesForTenant(
   const result = await pool.query<TuningRule>(
     `SELECT id, tenant_id, trigger_pattern, expected_behavior,
             priority, is_active, created_by, source_message_id,
-            created_at, updated_at
+            created_at, updated_at, approved_responses
      FROM tuning_rules
      WHERE (tenant_id = $1 OR tenant_id = 'global')
        AND is_active = true
@@ -248,6 +249,32 @@ export async function deleteRule(
 // プロンプト注入用ユーティリティ
 // ---------------------------------------------------------------------------
 
+// 採用済み返答(文体の見本)1件あたりの最大文字数。システムプロンプトの肥大を防ぐ。
+const APPROVED_RESPONSE_MAX_CHARS = 300;
+
+/**
+ * ルールが持つ採用済み返答のうち最新の1件を「文体の見本」として整形する。
+ * G1(要件定義§7.5)の決定に基づく:
+ * - 事実の情報源にはしない(§7.1)。矛盾時はFAQを優先する旨を明示する
+ * - 複数採用時は approved_at が最新の1件のみ(X10: 全件注入の禁止)
+ * - 逐語コピーは強制しない(X9)
+ * - 防御層(L5 Input Sanitizer)を通し、危険なパターンを含む場合は注入しない(X11)
+ */
+function formatApprovedResponseHint(rule: TuningRule): string | null {
+  const responses = rule.approved_responses;
+  if (!responses || responses.length === 0) return null;
+
+  const latest = [...responses].sort(
+    (a, b) => new Date(b.approved_at).getTime() - new Date(a.approved_at).getTime(),
+  )[0]!;
+
+  const { safe, sanitized } = sanitizeInput(latest.text);
+  if (!safe) return null;
+
+  const excerpt = sanitized.slice(0, APPROVED_RESPONSE_MAX_CHARS);
+  return `  文体の見本（逐語コピーは不要。事実がFAQと異なる場合はFAQを優先する）: 「${excerpt}」`;
+}
+
 /**
  * アクティブなチューニングルールをシステムプロンプト用テキストに変換する。
  * ルールが空の場合は空文字を返す（呼び出し元で条件分岐不要）。
@@ -255,14 +282,17 @@ export async function deleteRule(
  * 出力例:
  * 以下の応答ルールに従ってください（優先度順）:
  * - 「返品」に関する質問 → 7日以内の返品を案内し、手続きURLを提示する
+ *   文体の見本（逐語コピーは不要。事実がFAQと異なる場合はFAQを優先する）: 「...」
  * - 「在庫」に関する質問 → 在庫確認は店舗に電話するよう案内する
  */
 export function buildTuningPromptSection(rules: TuningRule[]): string {
   if (rules.length === 0) return "";
 
-  const lines = rules.map(
-    (r) => `- 「${r.trigger_pattern}」に関する質問 → ${r.expected_behavior}`,
-  );
+  const lines = rules.flatMap((r) => {
+    const base = `- 「${r.trigger_pattern}」に関する質問 → ${r.expected_behavior}`;
+    const hint = formatApprovedResponseHint(r);
+    return hint ? [base, hint] : [base];
+  });
 
   return `以下の応答ルールに従ってください（優先度順）:\n${lines.join("\n")}`;
 }
