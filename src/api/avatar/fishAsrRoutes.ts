@@ -20,23 +20,35 @@ const audioUpload = multer({
     if (/^audio\//i.test(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('audio file required'));
+      cb(new Error('UNSUPPORTED_AUDIO_TYPE'));
     }
   },
 });
 
-// GID 1217083837550916: multer のファイルサイズ超過はデフォルトのExpressエラー処理に落ちると
-// 技術的な文言になるため、ここで親切な日本語メッセージに変換する。
+// GID 1217083837550916 / 実機発見: multer のアップロード失敗(サイズ超過・非audio MIME・
+// 同一フィールドへの複数ファイル添付など)はどれもデフォルトのExpressエラー処理に落ちると、
+// HTMLの500エラー(内部スタックトレース・サーバーのファイルパスを含む)が返っていた
+// （本番でも同様）。この位置に到達するエラーは multer(single('audio')の処理)由来のみ
+// のため、種別を問わずクライアント起因のアップロード失敗として安全な日本語400へ変換する。
 // Express は err.length===3 の通常ミドルウェアと err.length===4 のエラーハンドラを
 // 同一ルートのスタック内でも区別するため、single()の直後に置けば失敗時のみ呼ばれる。
-function handleAsrUploadError(err: unknown, _req: Request, res: Response, next: NextFunction): void {
+function handleAsrUploadError(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
     res.status(400).json({
-      error: '録音が長すぎます。20MB以内に収まるよう、もう一度短く録音してお試しください。',
+      error: '録音が長すぎます。20MB未満になるよう、もう一度短く録音してお試しください。',
     });
     return;
   }
-  next(err);
+  if (err instanceof Error && err.message === 'UNSUPPORTED_AUDIO_TYPE') {
+    res.status(400).json({
+      error: '音声ファイルの形式に対応していません。もう一度録音するか、別の音声ファイルでお試しください。',
+    });
+    return;
+  }
+  logger.warn({ err }, '[fishAsr] upload rejected by multer (unclassified)');
+  res.status(400).json({
+    error: '録音を受け取れませんでした。もう一度録音してお試しください。',
+  });
 }
 
 export function registerFishAsrRoutes(app: Express, apiStack: RequestHandler[]): void {

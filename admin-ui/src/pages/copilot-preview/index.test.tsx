@@ -2330,6 +2330,134 @@ describe("CopilotPreviewPage — アバターの声の作成・採用(Voice Desi
     const designCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/design-voice"));
     expect(String(designCall![0])).toBe("http://localhost:3100/v1/admin/avatar/design-voice");
   });
+
+  // design-voiceもGroq相当の実費用が発生する外部API呼び出しのため、match-voiceと
+  // 同じ連打防止(busyDesignVoice state)を検証する。
+  it("「声を作る」を連打しても、生成中はdesign-voiceが1回しか呼ばれない", async () => {
+    let resolveDesign: (() => void) | null = null;
+    const pending = new Promise<Response>((resolve) => {
+      resolveDesign = () =>
+        resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              candidates: [{ id: "cand-1", index: 0, audioBase64: "ZmFrZS13YXY=", sampleRate: 44100, durationMs: 3000, text: null, language: "ja" }],
+            }),
+        } as Response);
+    });
+    mockAdoptedThenDesignEndpoints({ design: () => pending });
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+    await waitFor(() => expect((designButton as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(designButton);
+
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/design-voice")).length).toBe(1);
+
+    resolveDesign!();
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/design-voice")).length).toBe(1);
+  });
+
+  // match-voiceの複数候補排他制御(#635実装時に無かった観点)と同じ検証をdesignモードにも適用する。
+  it("複数の声の候補から1件を採用すると、残りの候補は選べなくなる(design)", async () => {
+    mockAdoptedThenDesignEndpoints({
+      design: () =>
+        mockOk({
+          candidates: [
+            { id: "cand-1", index: 0, audioBase64: "AAA=", sampleRate: 44100, durationMs: 1000, text: null, language: "ja" },
+            { id: "cand-2", index: 1, audioBase64: "BBB=", sampleRate: 44100, durationMs: 1000, text: null, language: "ja" },
+            { id: "cand-3", index: 2, audioBase64: "CCC=", sampleRate: 44100, durationMs: 1000, text: null, language: "ja" },
+          ],
+        }),
+    });
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "この声にする" }).length).toBe(3));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "この声にする" })[1]!);
+
+    // 実装は「1件でも採用したら全候補を確定表示にする」設計(理由は下記コメント)
+    // のため、決定済みボタンは複数出現する。単数形getByRoleは使えない。
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "決定済み" }).length).toBe(3));
+    // 採用されたのはcand-2であること(fetchWithAuthのFormDataに反映される候補音声を確認)
+    const [, opts] = vi.mocked(fetchWithAuth).mock.calls[0]!;
+    const form = (opts as RequestInit).body as FormData;
+    expect(form.get("name")).toContain("cand-2".slice(0, 8));
+
+    // 残り2件の「この声にする」は無効化されており誤って選び直せない(二重採用防止)。
+    // 採用済みの候補IDが分からない設計(FishのvoiceIdとcandidate.idは別物)のため、
+    // 「1件でも採用したら全候補を確定表示にする」実装になっている。
+    expect(screen.queryAllByRole("button", { name: "この声にする" }).length).toBe(0);
+  });
+
+  // 万一サーバーが壊れたbase64を返した場合、atob()が例外を投げてページ全体が
+  // 白画面になる(Reactのレンダリング外での未捕捉例外)リスクがある。try/catch内に
+  // 収まっており、カードのエラー表示で確定することを固定する。
+  it("サーバーが壊れたbase64を返しても、ページ全体がクラッシュせずエラー表示で確定する", async () => {
+    mockAdoptedThenDesignEndpoints({
+      design: () =>
+        mockOk({
+          candidates: [{ id: "cand-broken", index: 0, audioBase64: "not-valid-base64!!!", sampleRate: 44100, durationMs: 1000, text: null, language: "ja" }],
+        }),
+    });
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+
+    const adoptButton = await screen.findByRole("button", { name: "この声にする" });
+    fireEvent.click(adoptButton);
+
+    // atob失敗はcatchされ、汎用エラーメッセージで確定する(白画面にならない)
+    expect(await screen.findByText("この声を反映できませんでした。少し時間をおいてもう一度お試しください。")).toBeTruthy();
+    // ページの他の要素(採用ボタン自体)がまだ描画されている=クラッシュしていないことの確認
+    expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy();
+  });
+
+  // card.description(採用済みアバターの性格・話し方)がVoice Designのinstruction上限(2000字)
+  // を超えている場合、クライアント側で静かに切り詰めてから送信する。表示上の説明とは
+  // 別に「実際に送られた文字数」が2000字以下であることを固定する。
+  it("性格・話し方の説明が2000字を超えていても、instructionは2000字に切り詰められて送信される", async () => {
+    const longDescription = "とても丁寧な性格です。".repeat(200); // 2000字超
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(fetchWithAuth).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/design-voice")) {
+        return mockOk({ candidates: [{ id: "cand-1", index: 0, audioBase64: "AAA=", sampleRate: 44100, durationMs: 1000, text: null, language: "ja" }] });
+      }
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "採用しました。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: longDescription },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    const designCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/design-voice"));
+    const sentInstruction = JSON.parse(String((designCall![1] as RequestInit).body)).instruction as string;
+    expect(sentInstruction.length).toBe(2000);
+    expect(longDescription.length).toBeGreaterThan(2000);
+  });
 });
 
 // 想定ユーザーは100%日本語入力の店主。かな漢字変換の確定Enterで未変換のまま
