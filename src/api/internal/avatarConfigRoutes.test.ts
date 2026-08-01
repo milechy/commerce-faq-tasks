@@ -164,4 +164,25 @@ describe("GET /api/internal/avatar-config", () => {
       expect(res.body.config).toBeNull();
     });
   });
+
+  describe("LemonSliceペルソナスワップ: category_persona_map の伝搬", () => {
+    it("SELECT句に category_persona_map が含まれる（avatar-agentがカテゴリ別ペルソナを取得できる）", async () => {
+      const mockQuery = mockPool([AVATAR_ROW]);
+      await request(makeApp())
+        .get("/api/internal/avatar-config?tenantId=r2c_default")
+        .set("X-Internal-Request", "1");
+
+      const sql: string = mockQuery.mock.calls[0][0];
+      expect(sql).toContain("category_persona_map");
+    });
+
+    it("category_persona_map を含む行がそのまま config として返る", async () => {
+      mockPool([{ ...AVATAR_ROW, category_persona_map: { fashion: { agent_prompt: "stylish" } } }]);
+      const res = await request(makeApp())
+        .get("/api/internal/avatar-config?tenantId=r2c_default")
+        .set("X-Internal-Request", "1");
+
+      expect(res.body.config.category_persona_map).toEqual({ fashion: { agent_prompt: "stylish" } });
+    });
+  });
 });
