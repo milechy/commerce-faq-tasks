@@ -656,7 +656,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         asyncio.create_task(
                             control_lemonslice("update-idle-prompt", idle_prompt=persona["idle_prompt"])
                         )
-                    if persona.get("voice_id"):
+                    if isinstance(persona.get("voice_id"), str) and persona["voice_id"]:
                         # 次回 TTS 合成から声を切り替える。公式 fishaudio.TTS は
                         # update_options() でインスタンスの声設定を更新できる
                         # （TTSインスタンスの再生成は不要）。
@@ -722,10 +722,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         global _lemonslice_session_id
         try:
             _lemonslice_session_id = await asyncio.wait_for(
-                avatar.start(session, room=ctx.room), timeout=30.0
+                avatar.start(session, room=ctx.room), timeout=15.0
             )
         except asyncio.TimeoutError:
-            logger.warning("[avatar] avatar.start() timed out after 30s (text-only fallback)")
+            logger.warning("[avatar] avatar.start() timed out after 15s (text-only fallback)")
+            try:
+                await avatar.aclose()
+            except Exception:
+                pass
             raise
         # 課金: アバター起動成功時刻を記録（_close_avatar でセッション時間を算出）
         _avatar_started_at = time.monotonic()
@@ -757,6 +761,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         ctx.add_shutdown_callback(_close_avatar)
     except Exception as e:
         logger.warning(f"Lemonslice avatar failed (text-only fallback): {e}")
+        # I-4 root fix: avatar.start() は失敗有無に関わらずネットワーク呼び出し前に
+        # session.output.audio を DataStreamAudioOutput (アバター宛て) へ差し替え済み
+        # （plugin avatar.py: replace_audio_tail）。失敗時にそのまま session.start() へ
+        # 進むと、音声出力が二度と参加しないアバター宛てに固定されたまま残り、
+        # テキストと課金だけが動いて音声が永久に無音になる。
+        # output.audio を None に戻すと、直後の session.start() が
+        # RoomIO の通常デフォルト音声出力を自動生成する（agent_session.py:
+        # `if self.output.audio is not None: [warn] ignoring` の分岐を利用）。
+        session.output.audio = None
 
     await session.start(
         room=ctx.room,

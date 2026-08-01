@@ -100,19 +100,90 @@ class TestAvatarStartWrappedInTimeout:
             "握りつぶされています。外側の text-only fallback に届きません。"
         )
 
+    def test_avatar_aclose_attempted_on_timeout(self):
+        """タイムアウト時、re-raise の前に avatar.aclose() をベストエフォートで
+        呼んでいることを確認する（LemonSlice側にセッションが作成済みのまま
+        放置されるゾンビセッションを防ぐ）。
+        """
+        src = AGENT_PY.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        handler = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler) and node.type is not None:
+                if ast.unparse(node.type) == "asyncio.TimeoutError":
+                    handler = node
+                    break
+        assert handler is not None
+        aclose_calls = _find_calls(handler, "avatar.aclose")
+        assert aclose_calls, (
+            "except asyncio.TimeoutError: 内で avatar.aclose() が"
+            "呼ばれていません。LemonSlice側にゾンビセッションが残ります。"
+        )
+
+
+class TestAudioOutputResetOnAvatarFailure:
+    """I-4 root fix: avatar.start() 失敗時、session.output.audio が
+    DataStreamAudioOutput（アバター宛て）に固定されたまま session.start() へ
+    進むと、音声が永久に無音になる不具合の回帰ガード。
+
+    plugin avatar.py の replace_audio_tail はネットワーク呼び出し前に走るため、
+    失敗の原因（タイムアウト/その他例外）に関わらず output.audio は既に
+    差し替わっている。text-only fallback の except Exception 節で
+    session.output.audio = None にリセットし、直後の session.start() が
+    RoomIO の通常デフォルト音声出力を自動生成できるようにする。
+    """
+
+    def test_output_audio_reset_in_text_only_fallback_handler(self):
+        src = AGENT_PY.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        handler = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler) and node.type is not None:
+                if ast.unparse(node.type) == "Exception":
+                    segment = ast.get_source_segment(src, node) or ""
+                    if "text-only fallback" in segment:
+                        handler = node
+                        break
+        assert handler is not None, (
+            "Lemonslice avatar failed (text-only fallback) の except節が"
+            "見つかりません。"
+        )
+        reset_found = False
+        for n in ast.walk(handler):
+            if (
+                isinstance(n, ast.Assign)
+                and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Attribute)
+                and n.targets[0].attr == "audio"
+                and isinstance(n.targets[0].value, ast.Attribute)
+                and n.targets[0].value.attr == "output"
+                and isinstance(n.value, ast.Constant)
+                and n.value.value is None
+            ):
+                reset_found = True
+                break
+        assert reset_found, (
+            "text-only fallback の except節内に "
+            "`session.output.audio = None` のリセットがありません。"
+            "avatar.start() 失敗後、音声出力がアバター宛てに固定されたまま"
+            "残り、音声が永久に無音になります。"
+        )
+
 
 if __name__ == "__main__":
-    runner = TestAvatarStartWrappedInTimeout()
+    classes = [TestAvatarStartWrappedInTimeout, TestAudioOutputResetOnAvatarFailure]
     passed = 0
     failed = 0
-    for t in [m for m in dir(runner) if m.startswith("test_")]:
-        try:
-            getattr(runner, t)()
-            print(f"  PASS  {t}")
-            passed += 1
-        except AssertionError as e:
-            print(f"  FAIL  {t}: {e}")
-            failed += 1
+    for cls in classes:
+        runner = cls()
+        for t in [m for m in dir(runner) if m.startswith("test_")]:
+            try:
+                getattr(runner, t)()
+                print(f"  PASS  {cls.__name__}.{t}")
+                passed += 1
+            except AssertionError as e:
+                print(f"  FAIL  {cls.__name__}.{t}: {e}")
+                failed += 1
     print(f"\n{passed} passed, {failed} failed")
     if failed:
         raise SystemExit(1)
