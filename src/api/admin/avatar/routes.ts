@@ -11,6 +11,7 @@ import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { tenantHasFeature } from '../../../lib/billing/planFeatures';
 import { resolveEffectiveTenantId } from '../../middleware/roleAuth';
+import { createFishVoiceModel, FishVoiceModelError } from './fishVoiceModel';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
@@ -812,44 +813,22 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
             .json({ error: "設定が見つからないかアクセス権限がありません" });
         }
 
-        // Fish Audio POST /model — 永続クローン作成
-        // GID 1217084551565350: train_mode は公式APIの必須フィールド。欠落すると422で
-        // 常に失敗する（実APIで確認済み）。fast=作成直後から即座に利用可能。
-        const fd = new FormData();
-        fd.append("visibility", "private");
-        fd.append("type", "tts");
-        fd.append("train_mode", "fast");
-        fd.append("title", name);
-        fd.append(
-          "voices",
-          new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }),
-          file.originalname || "voice-sample"
-        );
-
-        const fishRes = await fetch("https://api.fish.audio/model", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${fishApiKey}` },
-          body: fd,
-        });
-
-        if (!fishRes.ok) {
-          // 外部エラー本文はログのみ（レスポンスに含めない）
-          const detail = await fishRes.text().catch(() => "");
+        // Fish Audio POST /model — 永続クローン作成（共通ヘルパー経由。GID 1217084040137242）
+        let voiceId: string;
+        try {
+          voiceId = await createFishVoiceModel({
+            apiKey: fishApiKey,
+            title: name,
+            audio: file.buffer,
+            mimeType: file.mimetype,
+            filename: file.originalname,
+          });
+        } catch (err) {
           logger.warn({
             event: "voice_clone_fish_error",
-            status: fishRes.status,
-            detail: detail.slice(0, 300),
+            status: err instanceof FishVoiceModelError ? err.status : undefined,
+            detail: err instanceof Error ? err.message.slice(0, 300) : String(err),
           }, "[POST /v1/admin/avatar/configs/:id/voice-clone] Fish Audio API error");
-          return res.status(502).json({ error: "音声クローンの作成に失敗しました" });
-        }
-
-        const fishData = (await fishRes.json()) as Record<string, unknown>;
-        const voiceId = typeof fishData["_id"] === "string" ? fishData["_id"] : "";
-        if (!voiceId) {
-          logger.warn({
-            event: "voice_clone_fish_error",
-            reason: "missing_id_in_response",
-          }, "[POST /v1/admin/avatar/configs/:id/voice-clone] Fish Audio response has no _id");
           return res.status(502).json({ error: "音声クローンの作成に失敗しました" });
         }
 
@@ -888,6 +867,120 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       } catch (err) {
         logger.warn("[POST /v1/admin/avatar/configs/:id/voice-clone]", err);
         return res.status(500).json({ error: "音声クローンの作成に失敗しました" });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/avatar/configs/:id/adopt-designed-voice — GID 1217084040137242
+  // design-voice が生成した候補音声(WAV)を永続音声モデルとして採用する。
+  // voice-clone と同じ Fish /model 作成 + voice_id 保存の流れを共有する。
+  // 音声はJSONではなくmultipartで受ける（express.json()のグローバル上限1mbを
+  // WAV候補(数百KB〜)が超えうるため。詳細はPR説明欄）。
+  // -----------------------------------------------------------------------
+  app.post(
+    "/v1/admin/avatar/configs/:id/adopt-designed-voice",
+    voiceUpload.single("audio"),
+    async (req: Request, res: Response) => {
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
+      // voice-clone と同じplan制限（同じくFish Audio永続モデルを作成するため）。
+      if (!isSuperAdmin && !(await tenantHasFeature(tenantId, "voice_clone"))) {
+        return res.status(403).json({
+          error: "plan_upgrade_required",
+          message: "音声クローン機能はEnterpriseプランでご利用いただけます",
+        });
+      }
+      const id = req.params["id"];
+
+      const parsed = voiceCloneSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ error: "invalid_request", details: parsed.error.issues });
+      }
+      const { name } = parsed.data;
+
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) {
+        return res.status(400).json({ error: "音声ファイルが必要です" });
+      }
+      if (!(ALLOWED_VOICE_MIME_TYPES as readonly string[]).includes(file.mimetype)) {
+        return res.status(400).json({
+          error: "対応していない音声形式です（MP3 / WAV / MP4 / OGG をご利用ください）",
+        });
+      }
+
+      const fishApiKey = process.env.FISH_AUDIO_API_KEY?.trim();
+      if (!fishApiKey) {
+        return res.status(503).json({ error: "音声クローン機能が現在利用できません" });
+      }
+
+      try {
+        // 対象 config の存在 + テナント所有を先に確認（voice-clone と同規則）
+        let checkQuery = "SELECT id FROM avatar_configs WHERE id = $1";
+        const checkValues: unknown[] = [id];
+        if (!isSuperAdmin) {
+          checkQuery += " AND tenant_id = $2";
+          checkValues.push(tenantId);
+        }
+        const existing = await db.query(checkQuery, checkValues);
+        if (existing.rows.length === 0) {
+          return res
+            .status(404)
+            .json({ error: "設定が見つからないかアクセス権限がありません" });
+        }
+
+        let voiceId: string;
+        try {
+          voiceId = await createFishVoiceModel({
+            apiKey: fishApiKey,
+            title: name,
+            audio: file.buffer,
+            mimeType: file.mimetype,
+            filename: file.originalname,
+          });
+        } catch (err) {
+          logger.warn({
+            event: "adopt_designed_voice_fish_error",
+            status: err instanceof FishVoiceModelError ? err.status : undefined,
+            detail: err instanceof Error ? err.message.slice(0, 300) : String(err),
+          }, "[POST /v1/admin/avatar/configs/:id/adopt-designed-voice] Fish Audio API error");
+          return res.status(502).json({ error: "音声の登録に失敗しました" });
+        }
+
+        const updateValues: unknown[] = [voiceId, id];
+        let updateQuery =
+          "UPDATE avatar_configs SET voice_id = $1, updated_at = NOW() WHERE id = $2";
+        if (!isSuperAdmin) {
+          updateValues.push(tenantId);
+          updateQuery += " AND tenant_id = $3";
+        }
+        updateQuery += " RETURNING id";
+
+        const result = await db.query(updateQuery, updateValues);
+        if (result.rows.length === 0) {
+          return res
+            .status(404)
+            .json({ error: "設定が見つからないかアクセス権限がありません" });
+        }
+
+        trackUsage({
+          tenantId: tenantId ?? 'unknown',
+          requestId: (req as any).requestId ?? `adv-${id}-${Date.now()}`,
+          model: 'fish-audio-s2-pro',
+          inputTokens: 0,
+          outputTokens: 0,
+          featureUsed: 'avatar_config_voice',
+          marginOverride: 1,
+        });
+
+        return res.json({ voiceId });
+      } catch (err) {
+        logger.warn("[POST /v1/admin/avatar/configs/:id/adopt-designed-voice]", err);
+        return res.status(500).json({ error: "音声の登録に失敗しました" });
       }
     }
   );

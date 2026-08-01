@@ -58,6 +58,15 @@ const matchVoiceSchema = z.object({
   description: z.string().min(1).max(300),
 });
 
+// GID 1217084040137242: 上限は公式APIのバリデーション制約と一致させる
+// (instruction: 1-2000字 / reference_text: 最大150字 / n: 1-4)。
+const designVoiceSchema = z.object({
+  instruction: z.string().min(1).max(2000),
+  reference_text: z.string().max(150).optional(),
+  n: z.number().int().min(1).max(4).optional(),
+  speed: z.number().min(0).max(3).optional(),
+});
+
 const generatePromptSchema = z.object({
   rules: z.string().min(1).max(2000),
 });
@@ -367,6 +376,110 @@ JSONのみ返してください。`,
         return res
           .status(500)
           .json({ error: "声マッチングに失敗しました" });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/avatar/design-voice
+  // GID 1217084040137242: 説明文から声の候補を生成する(Fish Audio Voice Design)。
+  // 実音声ファイルが不要な点が voice-clone / match-voice との違い。
+  // -----------------------------------------------------------------------
+  app.post(
+    "/v1/admin/avatar/design-voice",
+    ...AVATAR_GEN_AUTHZ,
+    async (req: Request, res: Response) => {
+      const parsed = designVoiceSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ error: "invalid_request", details: parsed.error.issues });
+      }
+
+      const { instruction, reference_text, n, speed } = parsed.data;
+      const tenantId: string = resolveEffectiveTenantId(req);
+      if (!tenantId) {
+        return res.status(400).json({ error: "テナント情報が取得できません" });
+      }
+      const requestId: string =
+        (req as AvatarReq).requestId ?? crypto.randomUUID();
+
+      const fishApiKey = process.env.FISH_AUDIO_API_KEY?.trim();
+      if (!fishApiKey) {
+        return res
+          .status(500)
+          .json({ error: "Fish Audio API key not configured" });
+      }
+
+      try {
+        // GID 1217084040142043 (スパイク調査で実API確認済み):
+        // model は JSON body ではなく HTTP ヘッダで送る。TTS/ASR の body 指定と混同しないこと。
+        const fishRes = await fetch("https://api.fish.audio/v1/voice-design", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${fishApiKey}`,
+            model: "voice-design-1",
+          },
+          body: JSON.stringify({
+            instruction,
+            language: "ja",
+            ...(reference_text ? { reference_text } : {}),
+            ...(n !== undefined ? { n } : {}),
+            ...(speed !== undefined ? { speed } : {}),
+          }),
+        });
+
+        if (!fishRes.ok) {
+          // 公式仕様: 失敗リクエストは非課金。trackUsageを呼ばない。
+          const detail = await fishRes.text().catch(() => "");
+          logger.warn(
+            { status: fishRes.status, detail: detail.slice(0, 300), tenantId },
+            "[design-voice] Fish Audio API error",
+          );
+          return res.status(502).json({ error: "声の生成に失敗しました" });
+        }
+
+        const data = (await fishRes.json()) as {
+          candidates?: Array<{
+            id: string;
+            index: number;
+            audio_base64: string;
+            sample_rate: number;
+            duration_ms: number;
+            text?: string | null;
+            language?: string | null;
+          }>;
+        };
+        const candidates = data.candidates ?? [];
+
+        // Step: Usage tracking（成功時のみ計上。avatar_config_voiceはEND_USER_FEATURES外＝原価のみ）
+        trackUsage({
+          tenantId,
+          requestId,
+          featureUsed: "avatar_config_voice",
+          model: "fish-audio-voice-design-1",
+          inputTokens: 0,
+          outputTokens: 0,
+          voiceDesignRequestCount: 1,
+        });
+
+        return res.json({
+          candidates: candidates.map((c) => ({
+            id: c.id,
+            index: c.index,
+            audioBase64: c.audio_base64,
+            sampleRate: c.sample_rate,
+            durationMs: c.duration_ms,
+            text: c.text ?? null,
+            language: c.language ?? null,
+          })),
+        });
+      } catch (err) {
+        logger.warn("[POST /v1/admin/avatar/design-voice]", err);
+        return res
+          .status(500)
+          .json({ error: "声の生成に失敗しました" });
       }
     }
   );
