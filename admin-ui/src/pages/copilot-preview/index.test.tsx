@@ -49,8 +49,10 @@ vi.mock("../../lib/chatSessionStore", async () => {
 
 // PDF取り込みは multipart のため authFetch(常にJSONヘッダを付ける)ではなくXHRで送る。
 // トークン取得だけを差し替え、supabaseクライアントの実体はテストに持ち込まない。
+// GID 1217084040141851: adopt-designed-voiceも同じ理由でfetchWithAuthを使うため追加。
 vi.mock("../../components/knowledge/shared", () => ({
   getAccessToken: vi.fn(() => Promise.resolve("test-token")),
+  fetchWithAuth: vi.fn(),
 }));
 
 const mockNavigate = vi.fn();
@@ -63,6 +65,7 @@ vi.mock("react-router-dom", async () => {
 });
 
 import { authFetch } from "../../lib/api";
+import { fetchWithAuth } from "../../components/knowledge/shared";
 import {
   CHAT_SESSION_SURFACE_FULLSCREEN,
   restoreChatSession,
@@ -2171,6 +2174,161 @@ describe("CopilotPreviewPage — アバターの声の選択・採用", () => {
       .mocked(authFetch)
       .mock.calls.find(([url]) => String(url).includes("/match-voice"));
     expect(String(matchCall![0])).toBe("http://localhost:3100/v1/admin/avatar/match-voice");
+  });
+});
+
+// GID 1217084040141851: 説明文から声を作る(Fish Audio Voice Design)。design-voiceは
+// authFetch(JSON)、adopt-designed-voiceはfetchWithAuth(multipart)と経路が異なる点が
+// match-voice/PATCHの組と違う(候補WAVがexpress.json()のグローバル上限1mbを超えうるため)。
+describe("CopilotPreviewPage — アバターの声の作成・採用(Voice Design)", () => {
+  function mockAdoptedThenDesignEndpoints(opts: {
+    design?: () => Promise<Response>;
+    adopt?: () => Promise<Response>;
+  }) {
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(fetchWithAuth).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant") || String(url).includes("/v1/admin/tenants/tenant-preview")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/design-voice")) {
+        return opts.design
+          ? opts.design()
+          : mockOk({
+              candidates: [
+                { id: "cand-1", index: 0, audioBase64: "ZmFrZS13YXY=", sampleRate: 44100, durationMs: 3000, text: "テスト", language: "ja" },
+              ],
+            });
+      }
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+    vi.mocked(fetchWithAuth).mockImplementation(() =>
+      opts.adopt ? opts.adopt() : mockOk({ voiceId: "fish-voice-designed-1" }),
+    );
+  }
+
+  async function sendAndFindDesignVoiceButton(authOverrides: Partial<ReturnType<typeof useAuth>> = {}) {
+    renderPage(authOverrides);
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByRole("button", { name: "声を作る" });
+  }
+
+  it("候補が試聴できる形で描画され、性格・話し方の説明がそのままinstructionに使われる", async () => {
+    mockAdoptedThenDesignEndpoints({});
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+
+    expect(await screen.findByRole("button", { name: "この声にする" })).toBeTruthy();
+    expect(document.querySelector("audio")).toBeTruthy();
+
+    const designCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/design-voice"));
+    expect(designCall).toBeTruthy();
+    expect(JSON.parse(String((designCall![1] as RequestInit).body))).toEqual({ instruction: "とても丁寧な性格です。" });
+  });
+
+  it("採用でfetchWithAuth(multipart)が呼ばれ、二重押しできない", async () => {
+    mockAdoptedThenDesignEndpoints({});
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+
+    const adoptButton = await screen.findByRole("button", { name: "この声にする" });
+    fireEvent.click(adoptButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "決定済み" })).toBeTruthy());
+    expect(vi.mocked(fetchWithAuth)).toHaveBeenCalledTimes(1);
+    const [url, opts] = vi.mocked(fetchWithAuth).mock.calls[0]!;
+    expect(String(url)).toBe("http://localhost:3100/v1/admin/avatar/configs/cfg-1/adopt-designed-voice");
+    expect((opts as RequestInit).method).toBe("POST");
+    expect((opts as RequestInit).body).toBeInstanceOf(FormData);
+    const form = (opts as RequestInit).body as FormData;
+    expect(form.get("audio")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "決定済み" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("候補が0件でも失敗として確定する(無限スピナーを残さない)", async () => {
+    mockAdoptedThenDesignEndpoints({ design: () => mockOk({ candidates: [] }) });
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+
+    expect(await screen.findByText("声を作成できませんでした。もう一度お試しください。")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "もう一度試す" })).toBeTruthy();
+  });
+
+  it("生成が5xxで失敗しても確定する", async () => {
+    mockAdoptedThenDesignEndpoints({
+      design: () => Promise.resolve({ ok: false, status: 502, json: () => Promise.resolve({ error: "声の生成に失敗しました" }) } as Response),
+    });
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+
+    expect(await screen.findByText("声の生成に失敗しました")).toBeTruthy();
+  });
+
+  it("採用が失敗しても、まだ採用されていない扱いのままエラーを示す", async () => {
+    mockAdoptedThenDesignEndpoints({
+      adopt: () => Promise.resolve({ ok: false, status: 502, json: () => Promise.resolve({ error: "音声の登録に失敗しました" }) } as Response),
+    });
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+    const adoptButton = await screen.findByRole("button", { name: "この声にする" });
+    fireEvent.click(adoptButton);
+
+    expect(await screen.findByText("音声の登録に失敗しました")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "決定済み" })).toBeNull();
+    expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy();
+  });
+
+  // previewMode中は ?tenant= を付けないと、バックエンドが super_admin 自身の
+  // (空の)テナントで課金してしまう(match-voiceと同じ理由、#P0-2)。design-voiceは
+  // authFetch経由なので同じ仕組みが適用される。
+  it("previewMode中は design-voice に ?tenant=<プレビュー対象テナント> が付く", async () => {
+    mockAdoptedThenDesignEndpoints({});
+
+    const designButton = await sendAndFindDesignVoiceButton(SUPER_ADMIN_IN_PREVIEW);
+    fireEvent.click(designButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    const designCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/design-voice"));
+    expect(String(designCall![0])).toBe(
+      "http://localhost:3100/v1/admin/avatar/design-voice?tenant=tenant-preview",
+    );
+  });
+
+  it("previewModeでない通常のclient_adminでは design-voice に ?tenant= が付かない(越権にならない)", async () => {
+    mockAdoptedThenDesignEndpoints({});
+
+    const designButton = await sendAndFindDesignVoiceButton();
+    fireEvent.click(designButton);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "この声にする" })).toBeTruthy());
+    const designCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/design-voice"));
+    expect(String(designCall![0])).toBe("http://localhost:3100/v1/admin/avatar/design-voice");
   });
 });
 
