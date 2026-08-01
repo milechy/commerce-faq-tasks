@@ -130,6 +130,8 @@ export interface DialogTurnMeta {
   plannerLlmUsages?: Array<{ model: string; prompt_tokens: number; completion_tokens: number }>;
   /** Phase68: 応答生成に使用された RAG チャンク */
   ragSources?: import("../types").RagSource[];
+  /** LemonSliceペルソナスワップ: queryPlanner が推定した質問カテゴリ（アバター見た目・人格切替用） */
+  ragCategory?: string;
 }
 
 /** Phase73: recommend ステージで乗せる商品カード情報 */

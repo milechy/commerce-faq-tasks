@@ -71,6 +71,7 @@ const baseOrchestrated = {
   gapSignal: undefined,
   llmUsage: { prompt_tokens: 0, completion_tokens: 0 },
   ragSources: undefined,
+  category: undefined,
 };
 
 beforeEach(() => {
@@ -176,5 +177,40 @@ describe("runDialogTurn — Phase73 productCard", () => {
     // エラーは握りつぶされ productCard なしで応答
     expect(result.productCard).toBeUndefined();
     expect(result.answer).toBe("おすすめ"); // salesFlow.prompt が適用される
+  });
+});
+
+describe("runDialogTurn — LemonSliceペルソナスワップ ragCategory", () => {
+  it("orchestrator の category が meta.ragCategory にそのまま転送される", async () => {
+    mockOrchestrator.mockResolvedValue({ ...baseOrchestrated, category: "fashion" });
+    mockSalesFlow.mockResolvedValue({
+      nextStage: undefined,
+      prompt: undefined,
+      meta: {} as any,
+    });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-category",
+      tenantId: "test-tenant",
+      message: "このジャケットに合うスカートは？",
+    });
+
+    expect(result.meta?.ragCategory).toBe("fashion");
+  });
+
+  it("orchestrator が category を返さない場合 meta.ragCategory は undefined", async () => {
+    mockSalesFlow.mockResolvedValue({
+      nextStage: undefined,
+      prompt: undefined,
+      meta: {} as any,
+    });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-no-category",
+      tenantId: "test-tenant",
+      message: "こんにちは",
+    });
+
+    expect(result.meta?.ragCategory).toBeUndefined();
   });
 });

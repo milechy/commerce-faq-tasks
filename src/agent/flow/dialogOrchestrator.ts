@@ -31,6 +31,8 @@ export interface OrchestratorResult {
   llmUsage?: { prompt_tokens: number; completion_tokens: number }
   /** Phase68: 応答生成に使用された RAG チャンク */
   ragSources?: RagSource[]
+  /** LemonSliceペルソナスワップ: queryPlanner が推定した質問カテゴリ */
+  category?: string
 }
 
 /**
@@ -121,5 +123,6 @@ export async function runDialogOrchestrator(
     gapSignal: searchResult.gapSignal,
     llmUsage: searchResult.llmUsage,
     ragSources: searchResult.ragSources,
+    category: searchResult.category,
   }
 }

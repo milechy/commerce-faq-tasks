@@ -278,6 +278,8 @@ export function createChatHandler(logger: Logger) {
         timestamp: Date.now(),
         tenantId,
         flowState,
+        // LemonSliceペルソナスワップ: queryPlanner が推定した質問カテゴリ（アバター見た目・人格切替用）
+        ragCategory: result.meta?.ragCategory,
         // Phase73: recommend ステージで productCard が設定されていれば転送
         ...(result.productCard ? { productCard: result.productCard } : {}),
       };

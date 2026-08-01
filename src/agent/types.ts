@@ -78,6 +78,8 @@ export interface AgentSearchResponse {
   };
   /** Phase68: 応答生成に使用された RAG チャンク（rerank 後の topK） */
   ragSources?: RagSource[];
+  /** LemonSliceペルソナスワップ: queryPlanner が推定した質問カテゴリ（filters.category） */
+  category?: string;
   gapSignal?: { hitCount: number; topScore: number };
   /** Phase53: Groq API実トークン数 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number };
