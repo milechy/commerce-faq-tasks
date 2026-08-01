@@ -485,7 +485,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         effective_emotion_tags = []
     effective_emotion_tags = [str(t) for t in effective_emotion_tags if t]
 
-    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}, emotion_tags={len(effective_emotion_tags)} {effective_emotion_tags}")
+    # LemonSliceペルソナスワップ: カテゴリ名 → {image_url, agent_prompt, idle_prompt, voice_id}
+    # のマップ（migration_category_persona.sql の avatar_configs.category_persona_map、JSONB）。
+    # 未設定テナントは {} のまま（category_change を受けても何もしない）。
+    category_persona_map = (avatar_config.get("category_persona_map") if avatar_config else None) or {}
+    if not isinstance(category_persona_map, dict):
+        logger.warning(f"[entrypoint] category_persona_map is not a dict, ignoring: {type(category_persona_map)}")
+        category_persona_map = {}
+
+    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}, emotion_tags={len(effective_emotion_tags)} {effective_emotion_tags}, category_personas={len(category_persona_map)}")
 
     fish_tts = FishAudioTTS(
         api_key=os.environ["FISH_AUDIO_API_KEY"],
@@ -608,6 +616,36 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     )
                 else:
                     logger.debug(f"[data_channel] state_change with unknown state, skipping: {state!r}")
+            elif msg_type == "category_change":
+                # LemonSliceペルソナスワップ: 話題カテゴリの変化に応じて見た目・人格・声を
+                # 切り替える（LiveKit接続は維持したまま、fire-and-forget）。
+                category = msg.get("category")
+                persona = (
+                    category_persona_map.get(category)
+                    if isinstance(category, str) and isinstance(category_persona_map, dict)
+                    else None
+                )
+                if isinstance(persona, dict):
+                    logger.info(f"[data_channel] category_change received: category={category}")
+                    if persona.get("image_url"):
+                        asyncio.create_task(
+                            control_lemonslice("update-image", image_url=persona["image_url"])
+                        )
+                    if persona.get("agent_prompt"):
+                        asyncio.create_task(
+                            control_lemonslice("update-agent-prompt", agent_prompt=persona["agent_prompt"])
+                        )
+                    if persona.get("idle_prompt"):
+                        asyncio.create_task(
+                            control_lemonslice("update-idle-prompt", idle_prompt=persona["idle_prompt"])
+                        )
+                    if persona.get("voice_id"):
+                        # 次回 TTS 合成から声を切り替える。FishAudioTTS.synthesize() は
+                        # 呼び出しのたびに self._reference_id を読むため、インスタンス属性を
+                        # 直接更新するだけで反映される（TTSインスタンスの再生成は不要）。
+                        fish_tts._reference_id = persona["voice_id"]
+                else:
+                    logger.debug(f"[data_channel] category_change with unmapped category, skipping: {category!r}")
             elif msg_type == "widget_connected":
                 logger.info("[data_channel] widget_connected received")
                 # 挨拶は AgentSession が自動的に行うため、手動呼び出し不要

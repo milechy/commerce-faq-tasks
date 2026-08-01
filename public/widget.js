@@ -1063,6 +1063,7 @@
   var lastAvatarImageUrl = null; // 最後に確認されたアバター画像URL（closePanel時のフォールバック）
   var avatarInactivityTimer = null;
   var AVATAR_INACTIVITY_MS = 33000; // 大表示非アクティブタイムアウト（33秒）
+  var lastRagCategory = null;    // LemonSliceペルソナスワップ: 直近送信した話題カテゴリ（変化時のみ送信）
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -2564,6 +2565,21 @@
               }
             } catch (e) {
               console.warn('[FAQ Widget] state_change send error:', e && (e.message || e));
+            }
+          }
+          // LemonSliceペルソナスワップ: 話題カテゴリが変化した時だけ通知する
+          // （同じカテゴリが続く間は毎回送らない。接続は切らずに見た目・人格だけ切り替える）
+          if (json.data && typeof json.data.ragCategory === 'string' && json.data.ragCategory !== lastRagCategory) {
+            lastRagCategory = json.data.ragCategory;
+            try {
+              var categoryEncoder = new TextEncoder();
+              var categoryPayload = categoryEncoder.encode(JSON.stringify({ type: 'category_change', category: json.data.ragCategory }));
+              var categoryPromise = lkRoom.localParticipant.publishData(categoryPayload, { reliable: true });
+              if (categoryPromise && typeof categoryPromise.catch === 'function') {
+                categoryPromise.catch(function (err) { console.warn('[FAQ Widget] category_change publishData rejected:', err && (err.message || err)); });
+              }
+            } catch (e) {
+              console.warn('[FAQ Widget] category_change send error:', e && (e.message || e));
             }
           }
         }

@@ -25,7 +25,7 @@ export function registerInternalAvatarConfigRoutes(app: Express): void {
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const avatarConfigId = _rawConfigId && UUID_RE.test(_rawConfigId) ? _rawConfigId : undefined;
 
-    const COLS = "voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt";
+    const COLS = "voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt, category_persona_map";
 
     try {
       const pool = getPool();
