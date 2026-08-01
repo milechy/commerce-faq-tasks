@@ -60,6 +60,10 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 会話セッションの成果(コンバージョン結果)記録。永続コンテンツの変更だが、
   // 再記録すれば戻せるため medium。
   record_session_outcome: 'medium',
+  // カテゴリ別ペルソナ(見た目・話し方・声)の保存。顧客が話題を変えた瞬間に
+  // アバターの見た目が変わる、顧客が直接目にする永続コンテンツ。同じカテゴリで
+  // 再保存すれば上書きで戻せるため save_tuning_rule と同じ medium。
+  save_category_persona: 'medium',
 
   // --- high: 不可逆な破棄 / 課金 / 外部送出 ---
   delete_faq: 'high',
@@ -84,6 +88,8 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_avatar_status',
   'get_avatar_list',
   'suggest_avatar_preset',
+  'get_category_personas',
+  'suggest_category_persona',
   'get_embed_code',
   'get_tuning_rules',
   'get_weekly_briefing',
