@@ -124,6 +124,23 @@ async def control_lemonslice(event: str, **kwargs) -> bool:
         return False
 
 
+def resolve_category_persona(category: object, category_persona_map: object) -> dict | None:
+    """LemonSliceペルソナスワップ: category_change メッセージが指すカテゴリの
+    ペルソナ定義(image_url/agent_prompt/idle_prompt/voice_idの一部または全部を持つ辞書)を
+    解決する純粋関数(DB/ネットワークに触れない、on_data_received から分離してテスト可能にする)。
+
+    - category が文字列でない(widget側の壊れたメッセージ等) → None
+    - category_persona_map が辞書でない(DB異常値・avatar_config取得失敗等) → None
+    - 該当カテゴリが未設定、またはマップされた値が辞書でない(DBに不正な形で
+      保存された等) → None
+    戻り値が None の呼び出し元は、何もしない(ペルソナ切替をスキップする)こと。
+    """
+    if not isinstance(category, str) or not isinstance(category_persona_map, dict):
+        return None
+    persona = category_persona_map.get(category)
+    return persona if isinstance(persona, dict) else None
+
+
 # --- Groq LLM 直接呼び出し ---
 async def fetch_avatar_config(tenant_id: str, api_url: str, avatar_config_id: str | None = None) -> dict | None:
     """テナント別アバター設定を内部APIから取得。失敗時はNoneを返す。
@@ -570,12 +587,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # LemonSliceペルソナスワップ: 話題カテゴリの変化に応じて見た目・人格・声を
                 # 切り替える（LiveKit接続は維持したまま、fire-and-forget）。
                 category = msg.get("category")
-                persona = (
-                    category_persona_map.get(category)
-                    if isinstance(category, str) and isinstance(category_persona_map, dict)
-                    else None
-                )
-                if isinstance(persona, dict):
+                persona = resolve_category_persona(category, category_persona_map)
+                if persona is not None:
                     logger.info(f"[data_channel] category_change received: category={category}")
                     if persona.get("image_url"):
                         asyncio.create_task(

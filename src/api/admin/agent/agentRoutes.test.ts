@@ -7738,7 +7738,66 @@ describe('POST /v1/admin/agent/chat', () => {
       const [sql, params] = mockQuery.mock.calls[0]!;
       expect(sql as string).toContain('category_persona_map');
       expect(sql as string).toContain('jsonb_build_object');
+      // 壊れやすいポイント: SET category_persona_map = jsonb_build_object(...) のような
+      // 「丸ごと上書き」に書き換えられると、他カテゴリの既存ペルソナが黙って消える。
+      // COALESCE(...) || jsonb_build_object(...) のマージ形になっていることを固定する。
+      expect(sql as string).toMatch(/COALESCE\(category_persona_map,\s*'\{\}'::jsonb\)\s*\|\|\s*jsonb_build_object/);
       expect(params).toEqual(['tenant-abc', 'fashion', JSON.stringify({ agent_prompt: 'stylish and confident' })]);
+    });
+
+    it('save_category_persona: 空白のみの値は保存対象から除外される(トリム後に空ならそのフィールドは送らない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-ws', 'save_category_persona', {
+          category: 'fashion',
+          agent_prompt: '  stylish  ',
+          idle_prompt: '   ', // 空白のみ → 除外されるべき
+          confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-ws' });
+
+      expect(res.status).toBe(200);
+      const [, params] = mockQuery.mock.calls[0]!;
+      const savedPersona = JSON.parse((params as string[])[2]!);
+      expect(savedPersona).toEqual({ agent_prompt: 'stylish' }); // トリムされ、idle_promptは含まれない
+      expect(savedPersona.idle_prompt).toBeUndefined();
+    });
+
+    it('save_category_persona: 既存カテゴリを再保存すると内容が上書きされる(同じcategory名で2回呼ぶ)', async () => {
+      // このテストはSQL文字列の固定(COALESCE || jsonb_build_object)が正しいことの
+      // 間接的な裏付け。PostgreSQLの実merge挙動そのものはmockQueryでは検証できないため、
+      // 「同じcategoryキーで呼んだ時、送られるpersonaの中身が最新の引数のみになる」
+      // ことをJS側の責務として固定する(サーバ側で古い値と新しい値をマージしたりしない)。
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-re1', 'save_category_persona', {
+          category: 'fashion', agent_prompt: '古いプロンプト', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-re-a' });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-scv-re2', 'save_category_persona', {
+          category: 'fashion', agent_prompt: '新しいプロンプト', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('保存しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Haruka' }] });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '保存して', sessionId: 'sess-scv-re-b' });
+
+      const secondCallParams = mockQuery.mock.calls[1]!;
+      const savedPersona = JSON.parse((secondCallParams[1] as string[])[2]!);
+      expect(savedPersona).toEqual({ agent_prompt: '新しいプロンプト' }); // 古い値を持ち越さない
     });
 
     it('save_category_persona: 稼働中のアバターが無ければ activate_avatar を案内し、失敗として扱う', async () => {
@@ -7756,6 +7815,36 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('activate_avatar');
+    });
+
+    // 2026-08-01発見の欠陥: suggest_category_persona → save_category_persona が
+    // SUGGEST_TO_SAVE_TOOL に未登録のまま実装され、同一ターン内での連鎖が
+    // ブロックされずDBに保存されてしまっていた。suggest_avatar_preset →
+    // adopt_avatar_preset と同じ理由(confirmed=trueはモデルの自己申告でしかなく、
+    // 同一ターン内では人間の実際の同意を経ていない)で保護されるべきだった。
+    it('同一ターン内で suggest_category_persona → save_category_persona(confirmed=true) を連鎖しようとするとブロックされ、DBには保存されない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-chain-1', 'suggest_category_persona', { category: 'fashion' }))
+        .mockResolvedValueOnce(toolCallResponse('call-chain-2', 'save_category_persona', {
+          category: 'fashion', agent_prompt: 'stylish and confident', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ image_url: 'https://img/base.png', agent_prompt: 'friendly', agent_idle_prompt: 'calm', voice_id: 'voice-1' }],
+      }); // suggest_category_persona内のSELECTのみ
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'fashionカテゴリのペルソナを作りたい', sessionId: 'sess-cp-chain-01' });
+
+      expect(res.status).toBe(200);
+      // save_category_persona側のUPDATEが発火していないこと(suggest側のSELECT1回のみ)
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE avatar_configs'), expect.anything());
+
+      const saveAction = res.body.actions.find((a: any) => a.tool === 'save_category_persona');
+      expect(saveAction.result).toContain('同一ターン内での連続実行');
     });
   });
 
