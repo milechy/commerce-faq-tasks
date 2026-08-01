@@ -28,9 +28,9 @@ import time
 import aiohttp
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession
-from livekit.agents import tts as agents_tts
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice import SpeechHandle
+from livekit.plugins import fishaudio
 from livekit.plugins import lemonslice
 from livekit.plugins import openai as openai_plugin
 from emotion_tags import sales_flow_emotion_prefix
@@ -297,129 +297,6 @@ async def _report_avatar_usage(tenant_id: str, session_ms: int) -> None:
         logger.warning(f"[usage] avatar usage report failed (non-critical): {e}")
 
 
-class FishAudioTTS(agents_tts.TTS):
-    def __init__(
-        self,
-        api_key: str,
-        reference_id: str | None = None,
-        tenant_id: str | None = None,
-        emotion_tags: list[str] | None = None,
-    ):
-        super().__init__(
-            capabilities=agents_tts.TTSCapabilities(streaming=False),
-            sample_rate=44100,
-            num_channels=1,
-        )
-        self._api_key = api_key
-        self._reference_id = reference_id
-        self._tenant_id = tenant_id
-        self._emotion_tags = emotion_tags or []
-        logger.info(f"[TTS] FishAudioTTS initialized: ref={self._reference_id} tenant={self._tenant_id} emotion_tags={self._emotion_tags}")
-
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "FishAudioChunkedStream":
-        # S2-Pro 感情タグ注入: [empathetic][calm] 形式でテキスト先頭に付与（最大3個）
-        prefix = "".join(f"[{t}]" for t in self._emotion_tags[:3]) if self._emotion_tags else ""
-        return FishAudioChunkedStream(
-            tts=self,
-            input_text=prefix + text,
-            conn_options=conn_options,
-            api_key=self._api_key,
-            reference_id=self._reference_id,
-            tenant_id=self._tenant_id,
-        )
-
-
-class FishAudioChunkedStream(agents_tts.ChunkedStream):
-    def __init__(
-        self,
-        *,
-        tts: FishAudioTTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
-        api_key: str,
-        reference_id: str | None,
-        tenant_id: str | None = None,
-    ):
-        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._api_key = api_key
-        self._reference_id = reference_id
-        self._tenant_id = tenant_id
-
-    async def _run(self, output_emitter: agents_tts.AudioEmitter) -> None:
-        # initialize() は _run() の先頭で必ず呼ぶ。
-        # 呼ばずに return/例外で抜けると _main_task の end_input() が
-        # "AudioEmitter isn't started" RuntimeError を投げるため。
-        # mime_type="audio/mpeg" → AudioEmitter が PyAV 経由で MP3 → PCM デコードする。
-        output_emitter.initialize(
-            request_id=f"fish-audio-{id(self)}",
-            sample_rate=self._tts.sample_rate,
-            num_channels=self._tts.num_channels,
-            mime_type="audio/mpeg",
-            stream=False,
-        )
-        try:
-            request_body = {
-                "text": self._input_text,
-                "model": "s2.1-pro-free",  # Phase A: S2.1 Pro (Free) 明示指定（デフォルト依存を排除、低遅延+多言語）
-                "format": "mp3",   # Fish Audio デフォルト形式。WAV より確実。
-                "normalize": True,
-                "latency": "balanced",
-            }
-            if self._reference_id:
-                request_body["reference_id"] = self._reference_id
-
-            logger.info(f"[TTS] requesting Fish Audio: text={self._input_text[:60]!r} ref={self._reference_id}")
-            started_at = time.monotonic()
-            total_bytes = 0
-            async with aiohttp.ClientSession() as http_session:
-                async with http_session.post(
-                    "https://api.fish.audio/v1/tts",
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=request_body,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
-                    logger.info(f"[TTS] Fish Audio response: status={resp.status} content-type={resp.content_type}")
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        logger.error(f"[TTS] Fish Audio error {resp.status}: {error_text[:300]}")
-                        return
-
-                    # Phase B-1: chunk 受信ごとに push して TTFA を短縮
-                    # （公式 openai プラグイン ChunkedStream と同パターン。
-                    #   capabilities.streaming は False のまま — True にすると
-                    #   フレームワークが未実装の stream() を直接呼び NotImplementedError になる）
-                    first_chunk_at: float | None = None
-                    async for chunk in resp.content.iter_chunked(4096):
-                        if not chunk:
-                            continue
-                        if first_chunk_at is None:
-                            first_chunk_at = time.monotonic()
-                            logger.info(f"[TTS] TTFA: {(first_chunk_at - started_at) * 1000:.1f}ms")
-                        output_emitter.push(chunk)
-                        total_bytes += len(chunk)
-
-            if total_bytes < 1000:
-                # 旧実装は一括受信後に skip できたが、streaming では既に push 済みのため警告のみ
-                logger.warning(f"[TTS] Fish Audio returned suspiciously small audio ({total_bytes} bytes)")
-            output_emitter.flush()
-            logger.info(f"[TTS] streamed {total_bytes} bytes to emitter OK")
-
-            # 使用量レポート（fire-and-forget）
-            if self._tenant_id:
-                tts_bytes = len(self._input_text.encode("utf-8"))
-                asyncio.ensure_future(_report_tts_usage(self._tenant_id, tts_bytes))
-        except Exception as e:
-            logger.error(f"[TTS] Exception in _run: {type(e).__name__}: {e}")
-
-
 def _build_agent_reply_payload(text: str) -> bytes:
     """agent_reply 形式の Data Channel payload を組み立てる（純粋関数）。"""
     return json.dumps({"type": "agent_reply", "text": text}).encode()
@@ -520,11 +397,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}, emotion_tags={len(effective_emotion_tags)} {effective_emotion_tags}, category_personas={len(category_persona_map)}")
 
-    fish_tts = FishAudioTTS(
+    fish_tts = fishaudio.TTS(
         api_key=os.environ["FISH_AUDIO_API_KEY"],
-        reference_id=effective_reference_id,
-        tenant_id=tenant_id,
-        emotion_tags=effective_emotion_tags,
+        model="s2.1-pro-free",
+        output_format="mp3",
+        sample_rate=44100,
+        voice_id=effective_reference_id if effective_reference_id else NOT_GIVEN,
+        normalize=True,
+        latency_mode="balanced",
+    )
+    # emotion_tags（テナントDB設定）は公式プラグインにコンストラクタ引数が無いため、
+    # speak() が TTS 送信直前にテキスト先頭へ付与する（Widget のチャット吹き出しには漏らさない）。
+    _emotion_tags_prefix = (
+        "".join(f"[{t}]" for t in effective_emotion_tags[:3]) if effective_emotion_tags else ""
     )
 
     session = AgentSession(
@@ -576,20 +461,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         emotion_prefix: bool,
         allow_interruptions: bool | None = None,
     ) -> SpeechHandle:
-        """発話の唯一の入口。emotion prefix 適用と Data Channel publish を一元化する。
+        """発話の唯一の入口。emotion prefix 適用・課金計上・Data Channel publish を一元化する。
 
         session.say() を直接呼ばないこと — publish/prefix の付け忘れが過去に
         歓迎メッセージのチャット履歴欠落バグ（agent_reply 未送出）を起こした。
+        emotion_tags（テナントDB設定）は _emotion_tags_prefix で TTS 音声にのみ適用し、
+        Widget のチャット吹き出しには漏らさない（旧 FishAudioTTS.synthesize() の挙動を踏襲）。
         """
-        final_text = (
+        publish_text = (
             sales_flow_emotion_prefix(_sales_state["current"]) + text
             if emotion_prefix
             else text
         )
+        tts_text = _emotion_tags_prefix + publish_text
         say_kwargs = {} if allow_interruptions is None else {"allow_interruptions": allow_interruptions}
-        handle = session.say(final_text, **say_kwargs)
+        handle = session.say(tts_text, **say_kwargs)
+        if tenant_id:
+            asyncio.ensure_future(_report_tts_usage(tenant_id, len(tts_text.encode("utf-8"))))
         if publish:
-            asyncio.create_task(_publish_agent_reply(final_text))
+            asyncio.create_task(_publish_agent_reply(publish_text))
         return handle
 
     async def handle_tts_request(reply_text: str) -> None:
@@ -694,10 +584,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             control_lemonslice("update-idle-prompt", idle_prompt=persona["idle_prompt"])
                         )
                     if persona.get("voice_id"):
-                        # 次回 TTS 合成から声を切り替える。FishAudioTTS.synthesize() は
-                        # 呼び出しのたびに self._reference_id を読むため、インスタンス属性を
-                        # 直接更新するだけで反映される（TTSインスタンスの再生成は不要）。
-                        fish_tts._reference_id = persona["voice_id"]
+                        # 次回 TTS 合成から声を切り替える。公式 fishaudio.TTS は
+                        # update_options() でインスタンスの声設定を更新できる
+                        # （TTSインスタンスの再生成は不要）。
+                        fish_tts.update_options(voice_id=persona["voice_id"])
                 else:
                     logger.debug(f"[data_channel] category_change with unmapped category, skipping: {category!r}")
             elif msg_type == "widget_connected":
