@@ -80,10 +80,14 @@ export interface AdoptVoiceForConfigParams {
   audio: Buffer;
   mimeType: string;
   filename?: string;
-  /** ログイベント名の接頭辞（"voice_clone" | "adopt_designed_voice"）。呼び出し元ごとに区別する */
-  logEventPrefix: string;
+  /** ログイベント名の接頭辞。呼び出し元ごとに区別する */
+  logEventPrefix: AdoptVoiceLogEventPrefix;
   logContext: string;
 }
+
+/** adoptVoiceForConfig の呼び出し元識別子。genericErrorの分岐にも使うため、タイポ時に
+ *  誤ったエラーメッセージへ無言でフォールバックしないようリテラルユニオン型で固定する。 */
+export type AdoptVoiceLogEventPrefix = "voice_clone" | "adopt_designed_voice";
 
 export type AdoptVoiceForConfigResult =
   | { ok: true; voiceId: string }
@@ -147,17 +151,25 @@ export async function adoptVoiceForConfig(
       return { ok: false, status: 502, error: genericError };
     }
 
+    // Fish側は既にこの時点で課金対象のモデルを作成済み。ここから先のUPDATEが
+    // （0件更新ではなく）例外で失敗した場合、Fishのモデルはどこにも記録されず
+    // 孤児化する。UPDATE試行前にログしておき、失敗時に手動でFish側から追跡・
+    // 削除できるようにする。
+    logger.info({
+      event: `${params.logEventPrefix}_voice_created`,
+      voiceId,
+      configId: params.configId,
+    }, `${params.logContext} (Fish voice model created, persisting voice_id)`);
+
     const updateValues: unknown[] = [voiceId, params.configId];
     let updateQuery = "UPDATE avatar_configs SET voice_id = $1, updated_at = NOW() WHERE id = $2";
     if (!params.isSuperAdmin) {
       updateValues.push(params.tenantId);
       updateQuery += " AND tenant_id = $3";
     }
-    const result = await client.query(updateQuery, updateValues);
-    if ((result.rowCount ?? result.rows?.length ?? 0) === 0) {
-      await client.query("ROLLBACK");
-      return { ok: false, status: 404, error: "設定が見つからないかアクセス権限がありません" };
-    }
+    // 対象行は直前の SELECT ... FOR UPDATE で既にロック済みのため、この UPDATE が
+    // 0件になることはない（ロック保持中に他トランザクションが行を削除/移動できない）。
+    await client.query(updateQuery, updateValues);
 
     await client.query("COMMIT");
     return { ok: true, voiceId };

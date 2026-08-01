@@ -1,6 +1,7 @@
 // src/api/admin/avatar/fishVoiceModel.test.ts
 
 import { createFishVoiceModel, FishVoiceModelError, adoptVoiceForConfig } from "./fishVoiceModel";
+import { logger } from "../../../lib/logger";
 
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
@@ -226,7 +227,7 @@ describe("adoptVoiceForConfig", () => {
     title: "マイボイス",
     audio: Buffer.from("dummy"),
     mimeType: "audio/wav",
-    logEventPrefix: "voice_clone",
+    logEventPrefix: "voice_clone" as const,
     logContext: "[test] voice-clone",
   };
 
@@ -252,6 +253,44 @@ describe("adoptVoiceForConfig", () => {
       expect.stringContaining("UPDATE avatar_configs"),
       "COMMIT",
     ]);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  // GID: レビュー指摘 — Fish側の生成成功後にUPDATEが失敗すると、課金済みの永続モデルが
+  // どこにも記録されず孤児化する。UPDATE試行前にvoiceIdをログすることを固定する。
+  it("Fish呼び出し成功後、UPDATE実行前にvoiceIdをログする(UPDATE失敗時の孤児追跡用)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ _id: "fish-voice-2" }) });
+    const infoSpy = jest.spyOn(logger, "info").mockImplementation(() => {});
+    const { db } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("UPDATE avatar_configs")) return { rows: [], rowCount: 1 };
+      return { rows: [] };
+    });
+
+    await adoptVoiceForConfig({ ...baseParams, db });
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "voice_clone_voice_created", voiceId: "fish-voice-2", configId: "config-1" }),
+      expect.any(String),
+    );
+    infoSpy.mockRestore();
+  });
+
+  // UPDATEが(0件更新ではなく)例外で失敗するケース。対象行は直前のSELECT...FOR UPDATEで
+  // 既にロック済みのため0件更新は起こり得ない。例外時は呼び出し元の500ハンドリングに委ね、
+  // Fish側に残った孤児モデルの追跡は直前のvoiceIdログに依存する。
+  it("UPDATEが例外を投げた場合、Fish側は既に成功しているが呼び出し元に例外を伝播しコネクションは解放する", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ _id: "fish-voice-3" }) });
+    const { db, release } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("UPDATE avatar_configs")) throw new Error("connection terminated unexpectedly");
+      if (sql === "ROLLBACK") return { rows: [] };
+      return { rows: [] };
+    });
+
+    await expect(adoptVoiceForConfig({ ...baseParams, db })).rejects.toThrow(
+      "connection terminated unexpectedly",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 
