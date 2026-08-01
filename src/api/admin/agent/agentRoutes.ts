@@ -661,6 +661,10 @@ const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
   // suggest_*→save_* と同じ理由: confirmed=true はモデルが自己申告する値でしかなく、
   // 同一ターン内では人間の実際の同意を経ていない。
   suggest_avatar_preset: 'adopt_avatar_preset',
+  // カテゴリ別ペルソナの下書き提示と保存が同一ターンで連鎖しないようにする。
+  // 実装時に登録漏れがあり、suggest_category_persona → save_category_persona(confirmed=true)
+  // が同一ターンで素通りしていた欠陥の修正(2026-08-01)。
+  suggest_category_persona: 'save_category_persona',
 };
 
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ
