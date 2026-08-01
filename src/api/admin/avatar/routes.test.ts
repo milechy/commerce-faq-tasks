@@ -319,6 +319,32 @@ describe("POST /v1/admin/avatar/configs — emotion_tags validation", () => {
 // POST /v1/admin/avatar/configs/:id/voice-clone — FishAudio Phase B-2
 // --------------------------------------------------------------------------
 
+// GID: voice-clone / adopt-designed-voice はいずれも adoptVoiceForConfig() 経由で
+// db.connect() によるトランザクション(BEGIN → SET LOCAL lock_timeout → SELECT...FOR UPDATE
+// → [Fish呼び出し] → UPDATE → COMMIT)を使う(activateエンドポイントと同じ確立済みパターン)。
+// このヘルパーはそのクエリ列を組み立てる。
+function makeTxDb(clientQueryImpl: (sql: string, values?: unknown[]) => Promise<any>) {
+  const clientQuery = jest.fn(clientQueryImpl);
+  const release = jest.fn();
+  const connect = jest.fn().mockResolvedValue({ query: clientQuery, release });
+  return { db: { connect }, clientQuery, release };
+}
+
+// SELECT...FOR UPDATE → 成功 → UPDATE成功、という一番よくある成功シーケンスを
+// 組み立てる。個々のテストは必要な箇所だけ上書きする。
+function successTxQueries(opts: { checkRow: { id: string }; updateRowCount?: number }) {
+  let call = 0;
+  return async (sql: string) => {
+    call += 1;
+    if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "COMMIT") return { rows: [] };
+    if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [opts.checkRow] };
+    if (sql.startsWith("UPDATE avatar_configs SET voice_id")) {
+      return { rows: [], rowCount: opts.updateRowCount ?? 1 };
+    }
+    throw new Error(`unexpected query in test (call ${call}): ${sql}`);
+  };
+}
+
 describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
   const AUDIO_BUFFER = Buffer.from("dummy-audio-bytes");
   let fetchSpy: jest.SpyInstance;
@@ -352,12 +378,9 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
   });
 
   it("正常系: client_admin + 自テナント config → Fish Audio 呼び出し + voice_id UPDATE + 200", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] })   // 所有チェック SELECT
-      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] });  // UPDATE RETURNING id
-
-    const db = { query: dbQuery };
+    const { db, clientQuery, release } = makeTxDb(
+      successTxQueries({ checkRow: { id: "config-1" } }),
+    );
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -385,21 +408,25 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
     expect(fd.get("title")).toBe("マイボイス");
     expect(fd.get("voices")).toBeTruthy();
 
-    // 所有チェック + UPDATE の両方が tenant スコープ付き
-    const [checkSql, checkParams] = dbQuery.mock.calls[0] as [string, unknown[]];
-    expect(checkSql).toContain("tenant_id = $2");
-    expect(checkParams).toEqual(["config-1", "tenant-a"]);
-
-    const [updateSql, updateParams] = dbQuery.mock.calls[1] as [string, unknown[]];
-    expect(updateSql).toContain("UPDATE avatar_configs SET voice_id = $1");
-    expect(updateSql).toContain("updated_at = NOW()");
-    expect(updateSql).toContain("tenant_id = $3");
-    expect(updateParams).toEqual(["fish-voice-123", "config-1", "tenant-a"]);
+    // トランザクション: BEGIN → lock_timeout → SELECT FOR UPDATE(tenantスコープ付) →
+    // UPDATE(tenantスコープ付) → COMMIT
+    const calls = clientQuery.mock.calls as Array<[string, unknown[]?]>;
+    expect(calls[0]![0]).toBe("BEGIN");
+    expect(calls[1]![0]).toBe("SET LOCAL lock_timeout = '3s'");
+    expect(calls[2]![0]).toContain("FOR UPDATE");
+    expect(calls[2]![0]).toContain("tenant_id = $2");
+    expect(calls[2]![1]).toEqual(["config-1", "tenant-a"]);
+    expect(calls[3]![0]).toContain("UPDATE avatar_configs SET voice_id = $1");
+    expect(calls[3]![0]).toContain("updated_at = NOW()");
+    expect(calls[3]![0]).toContain("tenant_id = $3");
+    expect(calls[3]![1]).toEqual(["fish-voice-123", "config-1", "tenant-a"]);
+    expect(calls[4]![0]).toBe("COMMIT");
+    // ロックしたコネクションを必ず解放している(コネクションプール枯渇の防止)
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("認証エラー: role なし → 403、DB・fetch に到達しない", async () => {
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeAppNoRole(db))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -411,26 +438,24 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("AUTHZ_ROLE_DENIED");
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(clientQuery).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("バリデーション: audio ファイルなし → 400、DB・fetch に到達しない", async () => {
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
       .field("name", "マイボイス");
 
     expect(res.status).toBe(400);
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(clientQuery).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("バリデーション: name が 101 字 → 400", async () => {
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -442,13 +467,12 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(clientQuery).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("バリデーション: 許可外 MIME タイプ → 400、fetch に到達しない", async () => {
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -463,11 +487,7 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
   });
 
   it("回帰: audio/x-m4a (.m4a macOS Chrome) → Fish Audio 呼び出し + 200", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] });
-    const db = { query: dbQuery };
+    const { db } = makeTxDb(successTxQueries({ checkRow: { id: "config-1" } }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -481,12 +501,12 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("テナント越境: 他テナント configId → 404、Fish Audio に到達しない", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [] }); // 所有チェック SELECT → 0 件
-
-    const db = { query: dbQuery };
+  it("テナント越境: 他テナント configId → 404、Fish Audio に到達しない・ROLLBACKする", async () => {
+    const { db, clientQuery } = makeTxDb(async (sql) => {
+      if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [] }; // 所有チェック 0件
+      throw new Error(`unexpected query: ${sql}`);
+    });
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/other-tenant-config/voice-clone")
@@ -498,17 +518,13 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
     expect(res.status).toBe(404);
     expect(fetchSpy).not.toHaveBeenCalled();
-    // UPDATE は呼ばれない（SELECT のみ）
-    expect(dbQuery).toHaveBeenCalledTimes(1);
+    // UPDATE は呼ばれず、ROLLBACKで確定する（BEGIN, lock_timeout, SELECT, ROLLBACK の4回）
+    expect(clientQuery).toHaveBeenCalledTimes(4);
+    expect(clientQuery.mock.calls[3]![0]).toBe("ROLLBACK");
   });
 
   it("super_admin は他テナント config も操作可（tenant スコープなし — PATCH と同規則）", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] });
-
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(successTxQueries({ checkRow: { id: "config-x" } }));
 
     const res = await request(makeApp(db, "super_admin", ""))
       .post("/v1/admin/avatar/configs/config-x/voice-clone")
@@ -519,16 +535,14 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
       });
 
     expect(res.status).toBe(200);
-    const [checkSql] = dbQuery.mock.calls[0] as [string, unknown[]];
-    expect(checkSql).not.toContain("tenant_id");
-    const [updateSql] = dbQuery.mock.calls[1] as [string, unknown[]];
-    expect(updateSql).not.toContain("tenant_id");
+    const calls = clientQuery.mock.calls as Array<[string, unknown[]?]>;
+    expect(calls[2]![0]).not.toContain("tenant_id"); // SELECT
+    expect(calls[3]![0]).not.toContain("tenant_id"); // UPDATE
   });
 
   it("plan制限(GID: LP料金表 Enterprise〜): client_adminがvoice_clone不可プランだと403、DB所有チェックにも到達しない", async () => {
     mockTenantHasFeature.mockResolvedValueOnce(false);
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -540,18 +554,14 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("plan_upgrade_required");
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(clientQuery).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(mockTenantHasFeature).toHaveBeenCalledWith("tenant-a", "voice_clone");
   });
 
   it("super_adminはplan制限をバイパスする(tenantHasFeatureは呼ばれない)", async () => {
     mockTenantHasFeature.mockResolvedValueOnce(false);
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] });
-    const db = { query: dbQuery };
+    const { db } = makeTxDb(successTxQueries({ checkRow: { id: "config-x" } }));
 
     const res = await request(makeApp(db, "super_admin", ""))
       .post("/v1/admin/avatar/configs/config-x/voice-clone")
@@ -565,7 +575,7 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
     expect(mockTenantHasFeature).not.toHaveBeenCalled();
   });
 
-  it("Fish Audio エラー: ok=false → 502、DB UPDATE に到達しない・外部エラー本文を返さない", async () => {
+  it("Fish Audio エラー: ok=false → 502、DB UPDATE に到達しない・外部エラー本文を返さない・ROLLBACKする", async () => {
     fetchSpy.mockResolvedValue({
       ok: false,
       status: 500,
@@ -573,11 +583,11 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
       json: async () => ({}),
     } as any);
 
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] }); // 所有チェックは通る
-
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async (sql) => {
+      if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -589,14 +599,14 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
     expect(res.status).toBe(502);
     expect(JSON.stringify(res.body)).not.toContain("internal fish error detail");
-    // UPDATE は実行されない（SELECT のみ）
-    expect(dbQuery).toHaveBeenCalledTimes(1);
+    // UPDATE は実行されず、ROLLBACKで確定する
+    expect(clientQuery).toHaveBeenCalledTimes(4);
+    expect(clientQuery.mock.calls[3]![0]).toBe("ROLLBACK");
   });
 
   it("FISH_AUDIO_API_KEY 未設定 → 503、DB・fetch に到達しない", async () => {
     delete process.env.FISH_AUDIO_API_KEY;
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/voice-clone")
@@ -607,17 +617,48 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
       });
 
     expect(res.status).toBe(503);
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(clientQuery).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // GID: 二重クリック・複数タブでの同時リクエストを想定した回帰テスト。
+  // SELECT...FOR UPDATE のロック待ちが解決できない場合(=同時に別リクエストが
+  // 同じconfigを処理中)、Fishへ二重課金せず409で確定することを固定する。
+  it("イレギュラー: 同時に別リクエストが同じconfigをロック中(lock timeout)は409で確定し、Fishを呼ばない", async () => {
+    const { db, clientQuery } = makeTxDb(async (sql) => {
+      if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'") return { rows: [] };
+      if (sql.startsWith("SELECT id FROM avatar_configs")) {
+        // pg が lock_timeout 超過時に投げるエラーを再現
+        const err = new Error('canceling statement due to lock timeout');
+        throw err;
+      }
+      if (sql === "ROLLBACK") return { rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/voice-clone")
+      .field("name", "マイボイス")
+      .attach("audio", AUDIO_BUFFER, {
+        filename: "voice.mp3",
+        contentType: "audio/mpeg",
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("別の操作");
+    // ロック待ちで失敗しているため、Fish Audioへは一切到達しない(二重課金防止の核心)
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const calls = clientQuery.mock.calls as Array<[string, unknown[]?]>;
+    expect(calls[calls.length - 1]![0]).toBe("ROLLBACK");
   });
 });
 
 // --------------------------------------------------------------------------
 // GID 1217084040137242: POST /v1/admin/avatar/configs/:id/adopt-designed-voice
 // design-voice が返した候補音声(WAV)を永続音声モデルとして採用する。
-// voice-clone と同じ Fish /model 作成 + tenant スコープ規則を共有するため、
-// 権限境界(client_admin/super_admin)のテストを中心に、実装差分（multipart化・
-// train_mode）を検証する。
+// voice-clone と同じ Fish /model 作成 + tenant スコープ規則 + トランザクション
+// (adoptVoiceForConfig 経由)を共有するため、権限境界(client_admin/super_admin)の
+// テストを中心に、実装差分（multipart化・train_mode）を検証する。
 // --------------------------------------------------------------------------
 describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
   const CANDIDATE_AUDIO = Buffer.from("fake-wav-candidate-bytes");
@@ -640,11 +681,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
   });
 
   it("正常系: client_admin + 自テナント config → Fish Audio呼び出し(train_mode=fast) + voice_id UPDATE + 200", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "config-1" }] });
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(successTxQueries({ checkRow: { id: "config-1" } }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
@@ -660,15 +697,19 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
     expect(fd.get("train_mode")).toBe("fast");
     expect(fd.get("title")).toBe("設計した声");
 
-    const [updateSql, updateParams] = dbQuery.mock.calls[1] as [string, unknown[]];
-    expect(updateSql).toContain("UPDATE avatar_configs SET voice_id = $1");
-    expect(updateSql).toContain("tenant_id = $3");
-    expect(updateParams).toEqual(["fish-voice-designed-123", "config-1", "tenant-a"]);
+    const calls = clientQuery.mock.calls as Array<[string, unknown[]?]>;
+    expect(calls[3]![0]).toContain("UPDATE avatar_configs SET voice_id = $1");
+    expect(calls[3]![0]).toContain("tenant_id = $3");
+    expect(calls[3]![1]).toEqual(["fish-voice-designed-123", "config-1", "tenant-a"]);
+    expect(calls[4]![0]).toBe("COMMIT");
   });
 
   it("テナント越境: 他テナント configId → 404、Fish Audioに到達しない", async () => {
-    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [] });
-    const db = { query: dbQuery };
+    const { db } = makeTxDb(async (sql) => {
+      if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/other-tenant-config/adopt-designed-voice")
@@ -680,11 +721,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
   });
 
   it("super_admin は他テナント config も操作可（tenant スコープなし — voice-clone と同規則）", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "config-x" }] });
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(successTxQueries({ checkRow: { id: "config-x" } }));
 
     const res = await request(makeApp(db, "super_admin", ""))
       .post("/v1/admin/avatar/configs/config-x/adopt-designed-voice")
@@ -692,16 +729,11 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
       .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
 
     expect(res.status).toBe(200);
-    const [checkSql] = dbQuery.mock.calls[0] as [string, unknown[]];
-    expect(checkSql).not.toContain("tenant_id");
+    expect(clientQuery.mock.calls[2]![0]).not.toContain("tenant_id");
   });
 
   it("previewMode相当: super_adminが空テナントで他テナントconfigを操作しても越境しない(super_adminスコープ確認)", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "config-y" }] })
-      .mockResolvedValueOnce({ rows: [{ id: "config-y" }] });
-    const db = { query: dbQuery };
+    const { db } = makeTxDb(successTxQueries({ checkRow: { id: "config-y" } }));
 
     const res = await request(makeApp(db, "super_admin", "carnation-demo"))
       .post("/v1/admin/avatar/configs/config-y/adopt-designed-voice")
@@ -713,8 +745,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
 
   it("plan制限: client_adminがvoice_clone不可プランだと403、DB所有チェックにも到達しない", async () => {
     mockTenantHasFeature.mockResolvedValueOnce(false);
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
@@ -722,7 +753,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
       .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
 
     expect(res.status).toBe(403);
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(clientQuery).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -732,8 +763,11 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
       status: 500,
       text: async () => "internal fish error detail",
     } as any);
-    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ id: "config-1" }] });
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async (sql) => {
+      if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
+      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
@@ -742,18 +776,39 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
 
     expect(res.status).toBe(502);
     expect(JSON.stringify(res.body)).not.toContain("internal fish error detail");
-    expect(dbQuery).toHaveBeenCalledTimes(1);
+    expect(clientQuery.mock.calls[clientQuery.mock.calls.length - 1]![0]).toBe("ROLLBACK");
   });
 
   it("音声ファイル未添付は400、Fish Audioに到達しない", async () => {
-    const dbQuery = jest.fn();
-    const db = { query: dbQuery };
+    const { db, clientQuery } = makeTxDb(async () => ({ rows: [] }));
 
     const res = await request(makeApp(db, "client_admin", "tenant-a"))
       .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
       .field("name", "設計した声");
 
     expect(res.status).toBe(400);
+    expect(clientQuery).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // GID: adopt-designed-voiceはdesign-voiceの候補採用という性質上、同一候補に対して
+  // 連打・複数タブでの同時採用が起きやすい。voice-cloneと同じ二重課金防止を確認する。
+  it("イレギュラー: 同時に別リクエストが同じconfigをロック中(lock timeout)は409で確定し、Fishを呼ばない", async () => {
+    const { db } = makeTxDb(async (sql) => {
+      if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'") return { rows: [] };
+      if (sql.startsWith("SELECT id FROM avatar_configs")) {
+        throw new Error('canceling statement due to lock timeout');
+      }
+      if (sql === "ROLLBACK") return { rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/configs/config-1/adopt-designed-voice")
+      .field("name", "設計した声")
+      .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
+
+    expect(res.status).toBe(409);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

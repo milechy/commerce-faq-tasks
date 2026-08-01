@@ -4,6 +4,8 @@
 // voice-clone（実音声アップロード）と adopt-designed-voice（Voice Design候補の採用）の
 // 両方から呼ばれる — Fish /model への書き込み経路を1箇所に集約し、重複実装を防ぐ。
 
+import { logger } from "../../../lib/logger";
+
 export interface CreateFishVoiceModelParams {
   apiKey: string;
   title: string;
@@ -65,4 +67,108 @@ export async function createFishVoiceModel(
   }
 
   return voiceId;
+}
+
+export interface AdoptVoiceForConfigParams {
+  /** db.connect() を持つプール（routes.ts の activate エンドポイントと同じ注入パターン） */
+  db: { connect(): Promise<{ query: (sql: string, values?: unknown[]) => Promise<any>; release(): void }> };
+  configId: string;
+  tenantId: string;
+  isSuperAdmin: boolean;
+  fishApiKey: string;
+  title: string;
+  audio: Buffer;
+  mimeType: string;
+  filename?: string;
+  /** ログイベント名の接頭辞（"voice_clone" | "adopt_designed_voice"）。呼び出し元ごとに区別する */
+  logEventPrefix: string;
+  logContext: string;
+}
+
+export type AdoptVoiceForConfigResult =
+  | { ok: true; voiceId: string }
+  | { ok: false; status: 404 | 409 | 502; error: string };
+
+/**
+ * GID: voice-clone/adopt-designed-voiceの重複実装を避けるための共通トランザクション処理。
+ *
+ * 【解決している問題】connectAvatarConfigの所有権チェックとFish /model呼び出し・voice_id保存が
+ * 単純なquery()の連続だったため、同じconfigへ2回連続でリクエストされる(二重クリック・複数タブ・
+ * リプレイ)と、Fish側に音声モデルが2つ作成され課金が二重発生し、voice_idは後勝ちで上書きされる
+ * レースコンディションがあった。
+ *
+ * SELECT ... FOR UPDATE で対象行をロックし、Fish呼び出し+UPDATEを同一トランザクション内で
+ * 直列化する（chat-history/deleteSessionRepository.tsと同じ確立済みパターン）。
+ * ロック待ちが3秒を超えた場合（＝同時に別の登録が進行中）は409を返し、二重にFishへ課金しない。
+ *
+ * 外部APIコール(Fish Audio)をロック保持中に行う点は一般的には避けるべきだが、本エンドポイントは
+ * 低頻度の管理操作でありFishのレスポンスも数秒以内のため許容する。
+ */
+export async function adoptVoiceForConfig(
+  params: AdoptVoiceForConfigParams,
+): Promise<AdoptVoiceForConfigResult> {
+  const genericError =
+    params.logEventPrefix === "voice_clone" ? "音声クローンの作成に失敗しました" : "音声の登録に失敗しました";
+
+  const client = await params.db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL lock_timeout = '3s'");
+
+    let checkQuery = "SELECT id FROM avatar_configs WHERE id = $1";
+    const checkValues: unknown[] = [params.configId];
+    if (!params.isSuperAdmin) {
+      checkQuery += " AND tenant_id = $2";
+      checkValues.push(params.tenantId);
+    }
+    checkQuery += " FOR UPDATE";
+    const existing = await client.query(checkQuery, checkValues);
+    if (existing.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, status: 404, error: "設定が見つからないかアクセス権限がありません" };
+    }
+
+    let voiceId: string;
+    try {
+      voiceId = await createFishVoiceModel({
+        apiKey: params.fishApiKey,
+        title: params.title,
+        audio: params.audio,
+        mimeType: params.mimeType,
+        filename: params.filename,
+      });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      logger.warn({
+        event: `${params.logEventPrefix}_fish_error`,
+        status: err instanceof FishVoiceModelError ? err.status : undefined,
+        detail: err instanceof Error ? err.message.slice(0, 300) : String(err),
+      }, params.logContext);
+      return { ok: false, status: 502, error: genericError };
+    }
+
+    const updateValues: unknown[] = [voiceId, params.configId];
+    let updateQuery = "UPDATE avatar_configs SET voice_id = $1, updated_at = NOW() WHERE id = $2";
+    if (!params.isSuperAdmin) {
+      updateValues.push(params.tenantId);
+      updateQuery += " AND tenant_id = $3";
+    }
+    const result = await client.query(updateQuery, updateValues);
+    if ((result.rowCount ?? result.rows?.length ?? 0) === 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, status: 404, error: "設定が見つからないかアクセス権限がありません" };
+    }
+
+    await client.query("COMMIT");
+    return { ok: true, voiceId };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    // ロックタイムアウト = 同時に別の登録が進行中。二重にFishへ課金しないよう409で確定させる。
+    if (err instanceof Error && /lock timeout|canceling statement/i.test(err.message)) {
+      return { ok: false, status: 409, error: "この設定は現在別の操作を処理中です。少し待ってからもう一度お試しください" };
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
 }

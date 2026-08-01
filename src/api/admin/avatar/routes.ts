@@ -11,7 +11,7 @@ import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { tenantHasFeature } from '../../../lib/billing/planFeatures';
 import { resolveEffectiveTenantId } from '../../middleware/roleAuth';
-import { createFishVoiceModel, FishVoiceModelError } from './fishVoiceModel';
+import { adoptVoiceForConfig } from './fishVoiceModel';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
@@ -797,56 +797,25 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       }
 
       try {
-        // 対象 config の存在 + テナント所有を先に確認
-        // （他テナント config への外部 API 呼び出しを防ぐ。tenant スコープは PATCH と同規則:
-        //   super_admin は全テナント可、client_admin は自テナントのみ）
-        let checkQuery = "SELECT id FROM avatar_configs WHERE id = $1";
-        const checkValues: unknown[] = [id];
-        if (!isSuperAdmin) {
-          checkQuery += " AND tenant_id = $2";
-          checkValues.push(tenantId);
-        }
-        const existing = await db.query(checkQuery, checkValues);
-        if (existing.rows.length === 0) {
-          return res
-            .status(404)
-            .json({ error: "設定が見つからないかアクセス権限がありません" });
-        }
+        // GID: 二重クリック・複数タブでの同時リクエストによるFish二重課金/voice_id
+        // 後勝ち上書きを防ぐため、所有権チェック(FOR UPDATE)〜Fish呼び出し〜保存を
+        // 単一トランザクションに直列化する（fishVoiceModel.ts の共通ヘルパー経由）。
+        const outcome = await adoptVoiceForConfig({
+          db,
+          configId: id!,
+          tenantId,
+          isSuperAdmin,
+          fishApiKey,
+          title: name,
+          audio: file.buffer,
+          mimeType: file.mimetype,
+          filename: file.originalname,
+          logEventPrefix: "voice_clone",
+          logContext: "[POST /v1/admin/avatar/configs/:id/voice-clone] Fish Audio API error",
+        });
 
-        // Fish Audio POST /model — 永続クローン作成（共通ヘルパー経由。GID 1217084040137242）
-        let voiceId: string;
-        try {
-          voiceId = await createFishVoiceModel({
-            apiKey: fishApiKey,
-            title: name,
-            audio: file.buffer,
-            mimeType: file.mimetype,
-            filename: file.originalname,
-          });
-        } catch (err) {
-          logger.warn({
-            event: "voice_clone_fish_error",
-            status: err instanceof FishVoiceModelError ? err.status : undefined,
-            detail: err instanceof Error ? err.message.slice(0, 300) : String(err),
-          }, "[POST /v1/admin/avatar/configs/:id/voice-clone] Fish Audio API error");
-          return res.status(502).json({ error: "音声クローンの作成に失敗しました" });
-        }
-
-        // voice_id 保存（UPDATE にも同じ tenant スコープを適用 — 防御的二重化）
-        const updateValues: unknown[] = [voiceId, id];
-        let updateQuery =
-          "UPDATE avatar_configs SET voice_id = $1, updated_at = NOW() WHERE id = $2";
-        if (!isSuperAdmin) {
-          updateValues.push(tenantId);
-          updateQuery += " AND tenant_id = $3";
-        }
-        updateQuery += " RETURNING id";
-
-        const result = await db.query(updateQuery, updateValues);
-        if (result.rows.length === 0) {
-          return res
-            .status(404)
-            .json({ error: "設定が見つからないかアクセス権限がありません" });
+        if (!outcome.ok) {
+          return res.status(outcome.status).json({ error: outcome.error });
         }
 
         // GID 1216944003337122: marginOverride: 1 は「倍率×1=原価のみ」の意図で正しい
@@ -863,7 +832,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
           marginOverride: 1,
         });
 
-        return res.json({ voiceId });
+        return res.json({ voiceId: outcome.voiceId });
       } catch (err) {
         logger.warn("[POST /v1/admin/avatar/configs/:id/voice-clone]", err);
         return res.status(500).json({ error: "音声クローンの作成に失敗しました" });
@@ -919,52 +888,23 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       }
 
       try {
-        // 対象 config の存在 + テナント所有を先に確認（voice-clone と同規則）
-        let checkQuery = "SELECT id FROM avatar_configs WHERE id = $1";
-        const checkValues: unknown[] = [id];
-        if (!isSuperAdmin) {
-          checkQuery += " AND tenant_id = $2";
-          checkValues.push(tenantId);
-        }
-        const existing = await db.query(checkQuery, checkValues);
-        if (existing.rows.length === 0) {
-          return res
-            .status(404)
-            .json({ error: "設定が見つからないかアクセス権限がありません" });
-        }
+        // GID: voice-clone と同じ二重送信対策（FOR UPDATE + 単一トランザクション）を共有する。
+        const outcome = await adoptVoiceForConfig({
+          db,
+          configId: id!,
+          tenantId,
+          isSuperAdmin,
+          fishApiKey,
+          title: name,
+          audio: file.buffer,
+          mimeType: file.mimetype,
+          filename: file.originalname,
+          logEventPrefix: "adopt_designed_voice",
+          logContext: "[POST /v1/admin/avatar/configs/:id/adopt-designed-voice] Fish Audio API error",
+        });
 
-        let voiceId: string;
-        try {
-          voiceId = await createFishVoiceModel({
-            apiKey: fishApiKey,
-            title: name,
-            audio: file.buffer,
-            mimeType: file.mimetype,
-            filename: file.originalname,
-          });
-        } catch (err) {
-          logger.warn({
-            event: "adopt_designed_voice_fish_error",
-            status: err instanceof FishVoiceModelError ? err.status : undefined,
-            detail: err instanceof Error ? err.message.slice(0, 300) : String(err),
-          }, "[POST /v1/admin/avatar/configs/:id/adopt-designed-voice] Fish Audio API error");
-          return res.status(502).json({ error: "音声の登録に失敗しました" });
-        }
-
-        const updateValues: unknown[] = [voiceId, id];
-        let updateQuery =
-          "UPDATE avatar_configs SET voice_id = $1, updated_at = NOW() WHERE id = $2";
-        if (!isSuperAdmin) {
-          updateValues.push(tenantId);
-          updateQuery += " AND tenant_id = $3";
-        }
-        updateQuery += " RETURNING id";
-
-        const result = await db.query(updateQuery, updateValues);
-        if (result.rows.length === 0) {
-          return res
-            .status(404)
-            .json({ error: "設定が見つからないかアクセス権限がありません" });
+        if (!outcome.ok) {
+          return res.status(outcome.status).json({ error: outcome.error });
         }
 
         trackUsage({
@@ -977,7 +917,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
           marginOverride: 1,
         });
 
-        return res.json({ voiceId });
+        return res.json({ voiceId: outcome.voiceId });
       } catch (err) {
         logger.warn("[POST /v1/admin/avatar/configs/:id/adopt-designed-voice]", err);
         return res.status(500).json({ error: "音声の登録に失敗しました" });
