@@ -2264,23 +2264,9 @@
     _fabRestored = true; // 以降の非同期resetFabIcon呼び出しをブロック
     emitToHost('widget:closed', {});
     capturePostHog('widget_closed', {});
-    // LiveKit Room を切断（次回開閉時に新規接続で安定化）。
-    // disconnect() は非同期なので、完了前に __rajiuceRoom を null化しても
-    // 次の connectLiveKit() が正しく待てるよう window.__rajiuceRoomDisconnecting に
-    // Promise を残しておく（GID: パネル高速開閉時のreconnect race fix）。
-    if (window.__rajiuceRoom) {
-      var _closingRoom = window.__rajiuceRoom;
-      window.__rajiuceRoom = null;
-      try {
-        _intentionalDisconnect = true;
-        var _closeDp = _closingRoom.disconnect();
-        window.__rajiuceRoomDisconnecting = (_closeDp && typeof _closeDp.then === 'function')
-          ? _closeDp.catch(function () {})
-          : Promise.resolve();
-      } catch (_e) {
-        window.__rajiuceRoomDisconnecting = Promise.resolve();
-      }
-    }
+    // PiP常駐: LiveKit Room はここでは切断しない。パネルを閉じてもFABでアバター
+    // 映像を表示し続け、再度開いた時に接続待ち(1〜3秒)なしで再開できるようにする
+    // （真の終了経路は cleanupLiveKit() — beforeunload / FaqWidget.destroy()）。
     // アバターUI要素を同期的にクリーンアップ
     // （Disconnected イベントは非同期のため、ここで先に削除しておく）
     var _cpClose = avatarArea.querySelectorAll('.avatar-close-btn');
