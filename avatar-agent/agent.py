@@ -134,11 +134,21 @@ def resolve_category_persona(category: object, category_persona_map: object) -> 
     - 該当カテゴリが未設定、またはマップされた値が辞書でない(DBに不正な形で
       保存された等) → None
     戻り値が None の呼び出し元は、何もしない(ペルソナ切替をスキップする)こと。
+
+    マッチングは大文字小文字・前後空白を無視する(strip/lower正規化)。category は
+    queryPlanner.ts が会話ごとに自由生成する値、category_persona_map のキーは
+    save_category_persona で店主が入力した値で、双方が独立して生成されるため、
+    語彙自体が完全に一致する保証はない(既知の制約)が、表記ゆれだけはここで救う。
     """
     if not isinstance(category, str) or not isinstance(category_persona_map, dict):
         return None
-    persona = category_persona_map.get(category)
-    return persona if isinstance(persona, dict) else None
+    category_norm = category.strip().lower()
+    if not category_norm:
+        return None
+    for key, value in category_persona_map.items():
+        if isinstance(key, str) and key.strip().lower() == category_norm:
+            return value if isinstance(value, dict) else None
+    return None
 
 
 # --- Groq LLM 直接呼び出し ---

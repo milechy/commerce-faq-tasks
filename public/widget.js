@@ -1931,6 +1931,11 @@
           voiceModeIndicator.style.display = 'none';
         }
         window.__rajiuceRoom = null;
+        // LemonSliceペルソナスワップ: Room切断で新規agentプロセス側の状態は必ず失われる
+        // （新しいRoomは新しいagentジョブとして起動され、category_persona_mapは再適用が必要）。
+        // ここでリセットしないと、再接続後も「同じカテゴリのまま」と誤認して
+        // category_change を送らず、ペルソナが既定値のまま戻らなくなる。
+        lastRagCategory = null;
         // Room が切断されたら次のパネル開閉で再fetch可能にする
         avatarConfigFetched = false;
         // avatar thumbnail URL を disconnected 後のFAB復元用に保持してから avatarConfig を解放
@@ -2106,7 +2111,12 @@
         pipIdleDisconnectTimer = null;
         // PIP_IDLE_DISCONNECT_MS 経過してもまだパネルが閉じたままの場合のみ切断する
         // （タイマー発火とほぼ同時にユーザーが再度パネルを開いた場合は何もしない）。
-        if (!isOpen) { cleanupLiveKit(); }
+        if (!isOpen) {
+          cleanupLiveKit();
+          // 切断後は sendPipHeartbeat() が空振りするだけの pipHeartbeatTimer を
+          // 止め忘れると、ページ滞在中ずっと60秒毎に動き続けるリークになる。
+          stopPipTimers();
+        }
       }, PIP_IDLE_DISCONNECT_MS);
     }
   }
