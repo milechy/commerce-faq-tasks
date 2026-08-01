@@ -182,7 +182,7 @@ D7の実装で最も壊れやすい。**要件として先に固定する。**
 
 | 変えるもの | 置き場所（ここ以外に作らない） |
 |---|---|
-| 一致判定 | `src/agent/tools/synthesisTool.ts` の `matchesTriggerPattern` |
+| 一致判定 | `src/api/admin/tuning/triggerMatching.ts` の `matchesTriggerPattern` |
 | プロンプト注入（採用済み返答を含む） | `src/api/admin/tuning/tuningRulesRepository.ts` の `buildTuningPromptSection` |
 | ツール定義 / 実行 | `toolDefinitions.ts` / `actionExecutor.ts` の該当 case |
 | 確認ゲートの分類 | `src/api/admin/agent/confirmPolicy.ts`（新ツールは必ずどちらかの表へ。網羅性は `confirmPolicy.test.ts` が機械検出） |
