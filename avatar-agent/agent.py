@@ -30,6 +30,7 @@ from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession
 from livekit.agents import tts as agents_tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.voice import SpeechHandle
 from livekit.plugins import lemonslice
 from livekit.plugins import openai as openai_plugin
 from emotion_tags import sales_flow_emotion_prefix
@@ -420,6 +421,11 @@ class FishAudioChunkedStream(agents_tts.ChunkedStream):
             logger.error(f"[TTS] Exception in _run: {type(e).__name__}: {e}")
 
 
+def _build_agent_reply_payload(text: str) -> bytes:
+    """agent_reply 形式の Data Channel payload を組み立てる（純粋関数）。"""
+    return json.dumps({"type": "agent_reply", "text": text}).encode()
+
+
 # --- Groq LLM (AgentSession 用 — session.say() のコンテキスト保持に使用) ---
 groq_llm = openai_plugin.LLM(
     model="llama-3.3-70b-versatile",
@@ -552,6 +558,41 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # SalesFlow 現在ステート保持（dict でクロージャ越しに再代入可能にする）
     _sales_state: dict = {"current": None}
 
+    async def _publish_agent_reply(text: str) -> None:
+        """Data Channel 経由で Widget のチャット吹き出しへ送信する（fire-and-forget）。"""
+        try:
+            if not ctx.room.local_participant:
+                return
+            payload = _build_agent_reply_payload(text)
+            logger.debug(f"[data_channel] payload size={len(payload)} bytes, text={text!r}")
+            await ctx.room.local_participant.publish_data(payload, reliable=True)
+            logger.info("[data_channel] agent_reply sent to widget")
+        except Exception as e:
+            logger.warning(f"[data_channel] agent_reply publish failed (non-critical): {e}")
+
+    def speak(
+        text: str,
+        *,
+        publish: bool,
+        emotion_prefix: bool,
+        allow_interruptions: bool | None = None,
+    ) -> SpeechHandle:
+        """発話の唯一の入口。emotion prefix 適用と Data Channel publish を一元化する。
+
+        session.say() を直接呼ばないこと — publish/prefix の付け忘れが過去に
+        歓迎メッセージのチャット履歴欠落バグ（agent_reply 未送出）を起こした。
+        """
+        final_text = (
+            sales_flow_emotion_prefix(_sales_state["current"]) + text
+            if emotion_prefix
+            else text
+        )
+        say_kwargs = {} if allow_interruptions is None else {"allow_interruptions": allow_interruptions}
+        handle = session.say(final_text, **say_kwargs)
+        if publish:
+            asyncio.create_task(_publish_agent_reply(final_text))
+        return handle
+
     async def handle_tts_request(reply_text: str) -> None:
         """本体APIの応答テキストをそのままTTSに渡す（Groq呼び出しなし）。"""
         try:
@@ -565,7 +606,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _filler_state["handle"] = None
             prefix = sales_flow_emotion_prefix(_sales_state["current"])
             logger.info(f"[tts_request] TTS直渡し state={_sales_state['current']!r} prefix={prefix!r} ({len(reply_text)} chars): {reply_text[:80]!r}")
-            session.say(prefix + reply_text)
+            speak(reply_text, publish=False, emotion_prefix=True)
         except Exception as e:
             logger.error(f"[handle_tts_request] error: {e}")
 
@@ -577,8 +618,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt, tenant_id=tenant_id)
             logger.info(f"[Groq] reply ({len(reply)} chars): {reply!r}")
 
-            # 2. session.say() で FishAudio TTS パイプラインに渡す
-            session.say(reply)
+            # 2. speak() で FishAudio TTS パイプラインに渡し、Data Channel にも送信
+            #    （フォールバックメッセージは publish スキップ）
+            speak(reply, publish=(reply != FALLBACK_MSG), emotion_prefix=False)
             logger.debug(f"[say] sent to TTS: {reply!r}")
 
             # Phase75: 会話ログ永続化(fire-and-forget)。room名をsession_idとして使う。
@@ -590,13 +632,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     asyncio.ensure_future(
                         _report_avatar_transcript(tenant_id, ctx.room.name, "assistant", reply)
                     )
-
-            # 3. Data Channel 経由で Widget にもテキスト送信（フォールバックメッセージはスキップ）
-            if reply != FALLBACK_MSG and ctx.room.local_participant:
-                payload = json.dumps({"type": "agent_reply", "text": reply}).encode()
-                logger.debug(f"[data_channel] payload size={len(payload)} bytes, text={reply!r}")
-                await ctx.room.local_participant.publish_data(payload, reliable=True)
-                logger.info("[data_channel] agent_reply sent to widget")
         except Exception as e:
             logger.error(f"[handle_chat] error: {e}")
 
@@ -608,7 +643,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             if msg_type == "thinking_start":
                 # フィラー再生: APIレスポンス到着まで沈黙を埋める
                 logger.info("[data_channel] thinking_start — filler started")
-                handle = session.say("少々お待ちください", allow_interruptions=True)
+                handle = speak("少々お待ちください", publish=False, emotion_prefix=False, allow_interruptions=True)
                 _filler_state["handle"] = handle
             elif msg_type == "tts_request":
                 # Phase6-D: 本体APIの応答テキストをそのままTTSに渡す
@@ -766,16 +801,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         (avatar_config.get("initial_greeting") if avatar_config else None)
         or "こんにちは！何かご質問はありますか？"
     )
-    session.say(initial_greeting)
+    speak(initial_greeting, publish=True, emotion_prefix=False)
     logger.info(f"[avatar] idle animation kickstart: {initial_greeting!r}")
-
-    # 歓迎メッセージも通常返信(handle_chat)と同様に Data Channel へ送り、Widget の
-    # チャット吹き出し(messages UI)に表示させる。これが無いと session.say() の音声/字幕
-    # だけが出てチャット履歴に吹き出しが残らない（agent_reply 未送出の不整合）。
-    if ctx.room.local_participant:
-        payload = json.dumps({"type": "agent_reply", "text": initial_greeting}).encode()
-        await ctx.room.local_participant.publish_data(payload, reliable=True)
-        logger.info("[data_channel] initial_greeting agent_reply sent to widget")
 
 
 if __name__ == "__main__":
