@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -20,6 +21,7 @@ import {
   Headset,
   HelpCircle,
   Sparkles,
+  Menu,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
 import { NotificationBell } from "./common/NotificationBell";
@@ -218,7 +220,10 @@ function SidebarContent({ onClose }: SidebarContentProps) {
           </span>
         </NavLink>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <NotificationBell />
+          {/* onClose はモバイルドロワー呼び出し時のみ渡される。ドロワー展開中は
+              MobileHeader 自身の上部バーに既にベルがあるため、ここでは出さない
+              (両方出すと同一画面に2個同時表示・二重ポーリングになる)。 */}
+          {!onClose && <NotificationBell />}
           {onClose && (
             <button
               onClick={onClose}
@@ -389,9 +394,35 @@ function SidebarContent({ onClose }: SidebarContentProps) {
   );
 }
 
+// admin-ui/src/index.css の @media (max-width: 767px) と同じブレークポイント。
+// .app-sidebar は CSS の transform で画面外に押し出されるだけでDOMには残るため、
+// NotificationBell のようなポーリングを持つ子がオフスクリーンでもマウントされ続ける
+// (デスクトップrail + MobileHeader + モバイルドロワーの最大3重マウント)。
+// JS側でも早期returnし、非表示側を実際に非マウントにする。
+const MOBILE_BREAKPOINT_QUERY = "(max-width: 767px)";
+
+function useIsMobileViewport(): boolean {
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches,
+  );
+
+  useEffect(() => {
+    const mql = window.matchMedia(MOBILE_BREAKPOINT_QUERY);
+    const handleChange = () => setIsMobile(mql.matches);
+    handleChange();
+    mql.addEventListener("change", handleChange);
+    return () => mql.removeEventListener("change", handleChange);
+  }, []);
+
+  return isMobile;
+}
+
 // ─── Desktop sidebar ──────────────────────────────────────────────────
 
 export function AppSidebar() {
+  const isMobile = useIsMobileViewport();
+  if (isMobile) return null;
+
   return (
     <aside className="app-sidebar">
       <SidebarContent />
@@ -401,11 +432,10 @@ export function AppSidebar() {
 
 // ─── Mobile sidebar + header ──────────────────────────────────────────
 
-import { useState } from "react";
-import { Menu } from "lucide-react";
-
 export function MobileHeader() {
+  const isMobile = useIsMobileViewport();
   const [open, setOpen] = useState(false);
+  if (!isMobile) return null;
 
   return (
     <>
