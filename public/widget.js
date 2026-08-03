@@ -2008,19 +2008,42 @@
           } catch (_e) {}
         })
         .catch(function (e) {
-          avatarArea.style.display = 'none';
           console.warn('[FAQ Widget] LiveKit connect failed:', e && e.message);
-          // 接続自体が確立できなかった（LiveKit Cloud のレート制限/上限超過=429 を含む）。
-          // room-token は enabled:true なので、この層の失敗はテストチャットでしか可視化されない。
-          emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'livekit_connect_failed' });
+          // 接続自体が確立できなかった（LiveKit Cloud のレート制限/上限超過=429、
+          // LemonSlice の同時接続上限、ネットワーク断などを含む）。
+          failAvatarStartGracefully('livekit_connect_failed');
         });
 
       window.__rajiuceRoom = room;
     } catch (e) {
-      avatarArea.style.display = 'none';
       console.warn('[FAQ Widget] LiveKit init failed:', e && e.message);
-      emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: 'livekit_connect_failed' });
+      failAvatarStartGracefully('livekit_connect_failed');
     }
+  }
+
+  /**
+   * アバターの起動に失敗したときの後始末を1か所に集約する。
+   *
+   * パネルを開いた状態でここに到達する場合、すでに showAvatarPlaceholder() で静止画を出し
+   * setAvatarActive() で UI をアバターモードへ切り替え済み。avatarArea を隠すだけだと
+   * .panel.avatar-active の 2 カラム Grid（左=アバター固定幅・右=チャット）が残るため、
+   * 訪問者には「左半分が空白のまま横に広がった巨大パネル」が見える。
+   * 既存の collapseAvatarLargeView() でテキストレイアウトへ確実に戻す。
+   */
+  function failAvatarStartGracefully(reason) {
+    // 「静止画が出た後に消える」のを訪問者が見たかどうか。案内を出すかの判定に使うため
+    // レイアウトを戻す前に確定させる。
+    var wasVisibleToVisitor = panel.classList.contains('avatar-active');
+    removeAvatarPlaceholder();
+    collapseAvatarLargeView();
+    textarea.setAttribute('placeholder', placeholderText);
+    // アバターが見えていた場合だけ案内する。何も表示していない状態（パネル未オープン等）は
+    // 従来どおり黙ってテキストへフォールバックする — アバターを期待していない訪問者に
+    // 不要な不安を与えないため。
+    if (wasVisibleToVisitor) {
+      showError('アバターの映像を表示できませんでした。文字でのご案内は続けられますので、そのままご質問ください。');
+    }
+    emitAvatarStatus({ enabled: false, provider: 'lemonslice', reason: reason });
   }
 
   function sendTTSRequest(text) {
