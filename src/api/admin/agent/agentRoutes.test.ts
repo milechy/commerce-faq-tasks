@@ -6279,6 +6279,76 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // get_embed_code — set_widget_theme で保存した primaryColor が
+  // data-accent-color 属性として実際に反映されることの回帰テスト
+  // -------------------------------------------------------------------------
+  describe('get_embed_code', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('widget_theme.primaryColor が設定済みなら data-accent-color 属性を含める', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-1', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] }) // tenant_api_keys
+        .mockResolvedValueOnce({ rows: [{ widget_theme: { primaryColor: '#3B82F6' } }] }); // tenants.widget_theme
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('data-accent-color="#3B82F6"');
+    });
+
+    it('widget_theme が未設定なら data-accent-color 属性を含めない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-2', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+        .mockResolvedValueOnce({ rows: [{ widget_theme: null }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).not.toContain('data-accent-color');
+    });
+
+    it('primaryColor が #RRGGBB 形式でない場合は防御的に出力しない（直接DB編集などによる不正値）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-3', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+        .mockResolvedValueOnce({ rows: [{ widget_theme: { primaryColor: 'javascript:alert(1)' } }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).not.toContain('data-accent-color');
+      expect(res.body.actions[0].result).not.toContain('javascript:');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // get_analytics_summary / get_conversion_summary
   // -------------------------------------------------------------------------
   describe('get_analytics_summary / get_conversion_summary', () => {
@@ -8511,6 +8581,22 @@ describe('POST /v1/admin/agent/chat', () => {
           newValue: { primaryColor: '#3B82F6' },
         },
       ]);
+    });
+
+    it('set_widget_theme の primaryColor が #RRGGBB 形式でない場合は書き込まれず記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-au-3b', 'set_widget_theme', { theme: { primaryColor: 'javascript:alert(1)' } }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('形式が正しくありませんでした。'));
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'テーマ色を javascript:alert(1) にして', sessionId: 'sess-audit-03b' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('#RRGGBB');
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
     });
 
     it('activate_avatar 成功時に active_avatar_config_id の変更を記録する', async () => {
