@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { test, expect } from '@playwright/test';
 import { mockAvatarBackend } from './helpers/mockAvatarBackend';
 import { DEMO_INDEX_URL } from './config';
@@ -188,6 +190,83 @@ test.describe('Widget FAB — Avatar persistence on chat open/close', () => {
 
     const roomAfterClose = await page.evaluate(() => !!(window as any).__rajiuceRoom);
     expect(roomAfterClose).toBe(true); // PiP: 閉じてもRoomは保持される(nullにならない)
+  });
+
+  test('アバター接続に失敗したら、2カラムのアバターレイアウトを残さずテキストへ戻して案内する', async ({ page }) => {
+    // 回帰ガード: 接続失敗時に avatarArea を隠すだけの実装へ戻っていないことを検証する。
+    // .panel.avatar-active は 2 カラム Grid(左=アバター固定幅・右=チャット)なので、
+    // クラスを付けたまま avatarArea だけ隠すと左カラムが幅を確保したまま残り、
+    // 訪問者には「左半分が空白の巨大パネル」が見える。
+    //
+    // mockAvatarBackend は room-token に enabled:true + wss://e2e-mock.invalid を返すため、
+    // room.connect() は必ず失敗する。実 LiveKit / 実 LemonSlice には一切接続しないので
+    // このテストはアバターセッションの課金を発生させない。
+    await mockAvatarBackend(page);
+
+    // デモページは本番配信の widget.js を読み込むため、そのままだとリポジトリの変更を
+    // 検証できない(デプロイ後にしか赤にならない回帰ガードになってしまう)。
+    // public/widget.js の実物を差し込み、main のコードそのものを検証する。
+    const localWidgetJs = readFileSync(resolve(__dirname, '../../public/widget.js'), 'utf8');
+    await page.route('**/widget.js*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/javascript; charset=utf-8',
+        body: localWidgetJs,
+      })
+    );
+
+    const resp = await page.goto(AVATAR_DEMO_URL);
+    expect(resp?.status()).toBe(200);
+
+    await page.waitForFunction(
+      () => {
+        const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+        return !!host?.shadowRoot?.querySelector('.fab');
+      },
+      { timeout: 8000 }
+    );
+    await page.waitForTimeout(3000);
+
+    const fabInitial = await getFabState(page);
+    if (!fabInitial || !(fabInitial.hasImg || fabInitial.hasVideo)) {
+      test.skip(); // アバター未設定 — connectLiveKit() が走らないため対象外
+      return;
+    }
+
+    // パネルを開く → showAvatarPlaceholder() + setAvatarActive() が走り、
+    // その後 room.connect() が mock URL で失敗する。
+    await page.evaluate(() => {
+      const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+      host?.shadowRoot?.querySelector<HTMLButtonElement>('.fab')?.click();
+    });
+    await page.waitForTimeout(3000);
+
+    const state = await page.evaluate(() => {
+      const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+      const root = host?.shadowRoot;
+      const panel = root?.querySelector('.panel') as HTMLElement | null;
+      const errorBanner = root?.querySelector('.error-banner') as HTMLElement | null;
+      const textarea = root?.querySelector('textarea') as HTMLTextAreaElement | null;
+      return {
+        stillAvatarLayout: !!root?.querySelector('.panel.avatar-active'),
+        panelOpen: !!panel?.classList.contains('open'),
+        errorVisible: !!errorBanner && errorBanner.style.display !== 'none',
+        errorText: errorBanner?.textContent ?? '',
+        canStillType: !!textarea && !textarea.disabled,
+      };
+    });
+
+    // 1. アバター用の2カラムレイアウトが残っていないこと（本命の回帰ガード）
+    expect(state.stillAvatarLayout).toBe(false);
+    // 2. 会話自体は続けられること（テキストへのフォールバックが成立している）
+    expect(state.panelOpen).toBe(true);
+    expect(state.canStillType).toBe(true);
+    // 3. 無言で消えるのではなく案内が出ること。専門用語を画面に出さないこと
+    expect(state.errorVisible).toBe(true);
+    expect(state.errorText).toContain('アバター');
+    for (const jargon of ['LiveKit', 'LemonSlice', '429', 'WebSocket', 'error', 'Error']) {
+      expect(state.errorText).not.toContain(jargon);
+    }
   });
 
   test('FAB shows chat SVG icon for non-avatar tenant (demo page without avatar)', async ({ page }) => {
