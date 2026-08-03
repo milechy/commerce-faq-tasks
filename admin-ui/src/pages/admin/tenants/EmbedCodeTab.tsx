@@ -12,11 +12,14 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
   const activeKey = apiKeys.find((k) => k.status === "active");
   const displayKey = activeKey ? activeKey.maskedKey : "YOUR_API_KEY";
 
+  // widget.js が実際に読む属性のみ出力する。data-title / data-color は
+  // widget.js 側に対応する読み取りが存在せず(タイトルは固定文言、色は
+  // data-accent-color)、tenant.widgetTitle / widgetColor もバックエンドから
+  // 一度も返されたことがないため、常に "undefined" 文字列がテナントの
+  // コピペ用スニペットに混入していた。
   const embedCode = `<script src="https://cdn.r2c.biz/widget.js"
   data-api-key="${displayKey}"
-  data-tenant="${tenant.slug}"
-  data-title="${tenant.widgetTitle}"
-  data-color="${tenant.widgetColor}">
+  data-tenant="${tenant.slug}">
 </script>`;
 
   const purchaseTag = `<script>\n  window.r2c && r2c.trackConversion('purchase', /* 購入金額(円) */ 0);\n</script>`;
