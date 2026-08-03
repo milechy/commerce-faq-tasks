@@ -402,7 +402,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_embed_code',
-      description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示）',
+      description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示。set_widget_theme で primaryColor を設定済みなら data-accent-color 属性も含める）',
       parameters: {
         type: 'object',
         properties: {},
@@ -414,13 +414,13 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'set_widget_theme',
-      description: 'ウィジェットのテーマ設定（色・フォント等）を JSONB で更新する',
+      description: 'ウィジェットのブランドカラーを設定する。primaryColor（#RRGGBB形式の16進数）のみが実際にウィジェットへ反映され、埋め込みコードの data-accent-color 属性として出力される。他のキーは保存はされるが現時点でウィジェットの表示には反映されない',
       parameters: {
         type: 'object',
         properties: {
           theme: {
             type: 'object',
-            description: 'テーマ設定オブジェクト（例: {"primaryColor": "#3B82F6", "fontFamily": "sans-serif"}）',
+            description: 'テーマ設定オブジェクト（例: {"primaryColor": "#3B82F6"}）。primaryColor は #RRGGBB 形式の16進数カラーコードで指定する',
           },
         },
         required: ['theme'],

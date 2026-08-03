@@ -343,6 +343,46 @@ describe("GET /v1/admin/my-tenant — has_r2c2", () => {
 });
 
 // --------------------------------------------------------------------------
+// widget_theme — get_embed_code(チャットツール)の data-accent-color 反映元。
+// GET 応答から欠落すると、super_admin 側の EmbedCodeTab.tsx が反映を検知できない。
+// --------------------------------------------------------------------------
+
+describe("GET /v1/admin/my-tenant / GET /v1/admin/tenants/:id — widget_theme", () => {
+  it("GET /v1/admin/my-tenant は widget_theme を応答に含める", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ id: "tenant-a", name: "テストテナント", features: null, lemonslice_agent_id: null, conversion_types: [], widget_theme: { primaryColor: "#3B82F6" } }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .get("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.widget_theme).toEqual({ primaryColor: "#3B82F6" });
+  });
+
+  it("GET /v1/admin/tenants/:id (super_admin) は widget_theme を応答に含める", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({
+      rows: [{ id: "tenant-a", name: "テストテナント", features: null, lemonslice_agent_id: null, conversion_types: [], widget_theme: { primaryColor: "#3B82F6" } }],
+      rowCount: 1,
+    });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .get("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.widget_theme).toEqual({ primaryColor: "#3B82F6" });
+  });
+});
+
+// --------------------------------------------------------------------------
 // ⑦ PATCH /v1/admin/my-tenant — avatar/voice の plan ゲート(LP料金表: Growth〜)
 // --------------------------------------------------------------------------
 

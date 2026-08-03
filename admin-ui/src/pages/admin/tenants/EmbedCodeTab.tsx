@@ -17,9 +17,17 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
   // data-accent-color)、tenant.widgetTitle / widgetColor もバックエンドから
   // 一度も返されたことがないため、常に "undefined" 文字列がテナントの
   // コピペ用スニペットに混入していた。
+  //
+  // ブランドカラーは set_widget_theme(チャットツール)が widget_theme.primaryColor に
+  // 保存する。書き込み時に #RRGGBB 形式を検証済みだが、直接DBを触られた場合の
+  // 防御として出力直前にも再検証する。
+  const primaryColor = tenant.widget_theme?.primaryColor;
+  const accentColorLine = typeof primaryColor === "string" && /^#[0-9a-fA-F]{6}$/.test(primaryColor)
+    ? `\n  data-accent-color="${primaryColor}"`
+    : "";
   const embedCode = `<script src="https://cdn.r2c.biz/widget.js"
   data-api-key="${displayKey}"
-  data-tenant="${tenant.slug}">
+  data-tenant="${tenant.slug}"${accentColorLine}>
 </script>`;
 
   const purchaseTag = `<script>\n  window.r2c && r2c.trackConversion('purchase', /* 購入金額(円) */ 0);\n</script>`;

@@ -1224,17 +1224,30 @@ export async function executeToolCall(
     case 'get_embed_code': {
       try {
         // 平文 API キーは保存されていないため key_prefix のみ返す
-        const result = await db.query(
-          'SELECT key_prefix FROM tenant_api_keys WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1',
-          [tenantId]
-        );
-        const keyPrefix: string = result.rows.length > 0
-          ? String((result.rows[0] as { key_prefix: string }).key_prefix)
+        const [keyResult, themeResult] = await Promise.all([
+          db.query(
+            'SELECT key_prefix FROM tenant_api_keys WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1',
+            [tenantId]
+          ),
+          db.query('SELECT widget_theme FROM tenants WHERE id = $1', [tenantId]),
+        ]);
+        const keyPrefix: string = keyResult.rows.length > 0
+          ? String((keyResult.rows[0] as { key_prefix: string }).key_prefix)
           : '（キー未発行）';
+
+        // set_widget_theme で保存された primaryColor のみ、widget.js が実際に読む
+        // data-accent-color 属性として反映する(他のテーマキーは現状ウィジェット側に
+        // 読み取りが無いため出力しない)。値は set_widget_theme 側で #RRGGBB 形式に
+        // 検証済みだが、直接DBを触られた場合の防御として再検証する。
+        const widgetTheme = (themeResult.rows[0] as { widget_theme: Record<string, unknown> | null } | undefined)?.widget_theme;
+        const primaryColor = widgetTheme?.['primaryColor'];
+        const accentColorAttr = typeof primaryColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(primaryColor)
+          ? `\n  data-accent-color="${primaryColor}"`
+          : '';
 
         return truncate(
           `ウィジェット埋め込みコードのひな形:\n\n` +
-          `<script src="https://api.r2c.biz/widget.js" data-api-key="YOUR_API_KEY"></script>\n\n` +
+          `<script src="https://api.r2c.biz/widget.js" data-api-key="YOUR_API_KEY"${accentColorAttr}></script>\n\n` +
           `現在のAPIキー先頭: ${keyPrefix}...\n` +
           `※ 実際のAPIキーは発行時のみ表示されます。再確認が必要な場合は新しいキーを発行してください`
         );
@@ -1249,6 +1262,13 @@ export async function executeToolCall(
       const theme = args['theme'];
       if (typeof theme !== 'object' || theme === null || Array.isArray(theme)) {
         return truncate('theme はオブジェクト形式で指定してください（例: {"primaryColor": "#3B82F6"}）');
+      }
+      // primaryColor は埋め込みコードの data-accent-color 属性としてそのまま出力され、
+      // widget.js 側で CSS カスタムプロパティに直接埋め込まれる(public/widget.js:151)。
+      // 不正な値を許すと埋め込みコード自体が壊れた属性を持つため、ここで厳格に弾く。
+      const primaryColor = (theme as Record<string, unknown>)['primaryColor'];
+      if (primaryColor !== undefined && !/^#[0-9a-fA-F]{6}$/.test(String(primaryColor))) {
+        return truncate('primaryColor は #RRGGBB 形式の16進数カラーコードで指定してください（例: #3B82F6）');
       }
 
       try {

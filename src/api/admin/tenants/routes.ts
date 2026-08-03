@@ -207,7 +207,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, onboarding_widget_seen_at, created_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, onboarding_widget_seen_at, widget_theme, created_at FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (result.rowCount === 0) {
@@ -400,7 +400,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, widget_theme, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {

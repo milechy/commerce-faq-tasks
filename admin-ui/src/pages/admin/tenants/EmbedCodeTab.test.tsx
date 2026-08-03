@@ -61,4 +61,25 @@ describe("EmbedCodeTab", () => {
     const pre = screen.getByText(/data-api-key/);
     expect(pre.textContent).toContain('data-api-key="YOUR_API_KEY"');
   });
+
+  it("widget_theme.primaryColor が設定済みなら data-accent-color を出力する", () => {
+    const tenant = makeTenant({ widget_theme: { primaryColor: "#3B82F6" } });
+    render(<EmbedCodeTab tenant={tenant} apiKeys={[]} />);
+    const pre = screen.getByText(/data-api-key/);
+    expect(pre.textContent).toContain('data-accent-color="#3B82F6"');
+  });
+
+  it("widget_theme が未設定なら data-accent-color を出力しない", () => {
+    render(<EmbedCodeTab tenant={makeTenant({ widget_theme: null })} apiKeys={[]} />);
+    const pre = screen.getByText(/data-api-key/);
+    expect(pre.textContent).not.toContain("data-accent-color");
+  });
+
+  it("primaryColor が #RRGGBB 形式でない場合は出力しない（直接DB編集などによる不正値の防御）", () => {
+    const tenant = makeTenant({ widget_theme: { primaryColor: "javascript:alert(1)" } });
+    render(<EmbedCodeTab tenant={tenant} apiKeys={[]} />);
+    const pre = screen.getByText(/data-api-key/);
+    expect(pre.textContent).not.toContain("data-accent-color");
+    expect(pre.textContent).not.toContain("javascript:");
+  });
 });
