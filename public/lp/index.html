@@ -136,6 +136,16 @@
       box-shadow: 0 0 40px rgba(124,58,237,0.35), inset 0 1px 0 rgba(255,255,255,0.12);
       position: relative;
       z-index: 1;
+      overflow: hidden;
+    }
+    .lp-avatar-circle video,
+    .lp-avatar-circle img {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+      object-position: top center;
+      display: block;
     }
 
     /* Accordion */
@@ -1433,20 +1443,50 @@
   };
 
   // ===== 7. Avatar Image Loader =====
-  // LP上の全アバター円（装飾用）に静止画を表示する。
+  // LP上の全アバター円（装飾用）に、実際の会話セッションを収録した動画を表示する。
   // 以前は /api/avatar/room-token（LiveKitルーム発行を伴う）をページ表示のたびに
   // 呼び出して画像URLだけを取得していたが、これは全訪問者のページロード毎に発生する
-  // 不要なバックエンド負荷・コストだった。チャットウィジェット側の
-  // data-avatar-image-url と同じ既知の静止画URLを直接使うことでAPI呼び出しを排除する。
+  // 不要なバックエンド負荷・コストだった。訪問者ごとの実接続はせず、事前収録した
+  // 静的動画ファイル（このリポジトリのpublic/lp/media/配下）を直接使うことで
+  // API呼び出し・LiveKit費用を発生させずに「実際に使っている」動きを見せる。
   var LP_AVATAR_IMAGE_URL = 'https://rpqrwifbrhlebbelyqog.supabase.co/storage/v1/object/public/avatar-defaults/default_02.png';
+  var LP_AVATAR_VIDEO_WEBM = '/lp/media/avatar-live-demo.webm';
+  var LP_AVATAR_VIDEO_MP4 = '/lp/media/avatar-live-demo.mp4';
   function loadAvatarImage() {
+    var prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     document.querySelectorAll('.lp-avatar-circle').forEach(function(circle) {
-      var img = document.createElement('img');
-      img.src = LP_AVATAR_IMAGE_URL;
-      img.alt = 'Rei';
-      img.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover;object-position:top center;display:block;';
       circle.textContent = '';
-      circle.appendChild(img);
+      if (prefersReducedMotion) {
+        var img = document.createElement('img');
+        img.src = LP_AVATAR_IMAGE_URL;
+        img.alt = 'Rei';
+        circle.appendChild(img);
+        return;
+      }
+      var video = document.createElement('video');
+      video.autoplay = true;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.poster = LP_AVATAR_IMAGE_URL;
+      video.setAttribute('aria-label', 'AI接客アバターが実際に会話している様子');
+      var sourceWebm = document.createElement('source');
+      sourceWebm.src = LP_AVATAR_VIDEO_WEBM;
+      sourceWebm.type = 'video/webm';
+      var sourceMp4 = document.createElement('source');
+      sourceMp4.src = LP_AVATAR_VIDEO_MP4;
+      sourceMp4.type = 'video/mp4';
+      video.appendChild(sourceWebm);
+      video.appendChild(sourceMp4);
+      // 動画再生に失敗した環境（ネットワーク制限等）では静止画にフォールバック
+      video.addEventListener('error', function() {
+        var img = document.createElement('img');
+        img.src = LP_AVATAR_IMAGE_URL;
+        img.alt = 'Rei';
+        circle.textContent = '';
+        circle.appendChild(img);
+      });
+      circle.appendChild(video);
     });
   }
 
