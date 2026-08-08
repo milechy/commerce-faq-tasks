@@ -1,0 +1,147 @@
+# アバターに知らない人物が出るときの復旧手順
+
+**症状**: ライブアバターに R2C 公式アバター18体（Haruka / Rei / Sophia / ... / SERAPH）の
+いずれでもない人物が配信される。管理画面は「✅ アバターを起動しました（名前）」と
+成功表示を出すため、画面上は正常に見える。
+
+**最初の目印**: **複数のテナントで同じ人物**が出ていたら、テナント設定の問題ではない。
+下記のフォールバック経路がほぼ確定する。
+
+---
+
+## 1. 何が起きているか
+
+```
+GET /api/internal/avatar-config が 500
+  → avatar-agent が「アバター設定なし」と解釈（agent.py: fetch_avatar_config → None）
+  → 環境変数の汎用 LemonSlice エージェント agent_aee377cb0fec68ea へ無言でフォールバック
+  → テナントと無関係な第三者が配信される
+```
+
+このフォールバック ID は `avatar-agent/.env.example` の既定値と同一のため、
+**設定を解決できない限りどのテナントでも必ず同じ人物**になる。
+
+`image_url` は `agent_id` より優先される（`avatar-agent/agent.py:693`）。
+公式18体には全員 `image_url` が入っているので、**設定さえ読めていれば必ずその写真の顔になる**。
+つまり顔が違う時点で、設定は agent に届いていない。
+
+---
+
+## 2. 切り分け（VPS・読み取りのみ）
+
+まず症状を再現（管理画面のテストチャットでアバターを選んで起動）してから、直後に実行する。
+
+```bash
+pm2 logs rajiuce-avatar --lines 300 --nostream \
+  | grep -E "\[entrypoint\]|\[avatar-config\]|\[lemonslice\]"
+```
+
+決め手は `[entrypoint] effective config:` の行。
+
+| 出力 | 意味 |
+|---|---|
+| `agent_id='agent_aee377cb0fec68ea'` かつ `image_url=none` | フォールバック確定。下表で原因層を特定する |
+| `image_url=set` かつ `[lemonslice] using agent_image_url:` あり | 設定は取れている。本手順の対象外（LemonSlice 側を疑う） |
+
+フォールバックだった場合、直前の行で原因層が分かる。
+
+| 出力 | 原因 | 対処 |
+|---|---|---|
+| `[avatar-config] API returned 500` | **DBクエリが落ちている**（本手順の対象） | 手順3へ |
+| `[avatar-config] API returned 403` | ループバック判定 / `X-Internal-Request` で弾かれている | API と agent が同一ホストか、`RAJIUCE_API_URL` を確認 |
+| `[avatar-config] fetch failed ...` | API に到達できていない | `RAJIUCE_API_URL` とポート(既定 3100)を確認 |
+| 警告が何も出ずフォールバック | API は 200 だが該当行が 0 件 | 当該テナントに `is_active = true` のアバターが無い。管理画面 `/admin/avatar` で有効化する |
+| `extracted tenant_id=None` | room 名からのテナント抽出失敗 | 別問題（room 名の形式 `rajiuce-{tenantId}-{16hex}` を確認） |
+
+> 500 の詳細は API 側のログにも出る（PR #732 以降）。
+> `pm2 logs rajiuce-api --lines 200 --nostream | grep "avatar-config"`
+> それ以前のバージョンでは例外が握りつぶされており何も出ない。
+
+---
+
+## 3. 500 の原因を特定する
+
+`/api/internal/avatar-config` の SELECT が参照する10カラムのうち4つは後付けマイグレーションで
+追加されたもの。本番に適用漏れがあると、そのカラムを含む SELECT が丸ごと落ちる。
+
+失敗している SELECT をそのまま流すと、PostgreSQL が欠落カラム名を直接教えてくれる。
+
+```bash
+cd /opt/rajiuce && set -a && . ./.env && set +a && \
+psql "$DATABASE_URL" -c "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt, category_persona_map FROM avatar_configs LIMIT 1;"
+```
+
+`ERROR: column "..." does not exist` が出れば、それが原因。
+
+後付けカラムと追加元の対応:
+
+| カラム | 追加元 |
+|---|---|
+| `anam_*` / `avatar_provider` | `src/api/admin/avatar/migration_anam_fields.sql` |
+| `agent_prompt` / `agent_idle_prompt` | `src/api/admin/avatar/migration_agent_prompt.sql` |
+| `category_persona_map` | `src/api/admin/avatar/migration_category_persona.sql` |
+
+---
+
+## 4. 適用する（hkobayashi 手動実行）
+
+> **DB migration は不可逆操作にあたるため、Claude Code は実行しない。**
+> 24h 自走モード中も禁止項目（`docs/24H_AUTONOMOUS_PLAYBOOK.md`）。
+
+`docs/migrations/avatar_configs_missing_columns.sql` に上記3ファイル分をまとめてある。
+**全て `ADD COLUMN IF NOT EXISTS` の純 DDL でデータ変更を含まないため、
+どのカラムが欠けているかを特定しなくても、そのまま流して安全**。既にあるカラムは無視される。
+
+```bash
+cd /opt/rajiuce && set -a && . ./.env && set +a && \
+psql "$DATABASE_URL" -f docs/migrations/avatar_configs_missing_columns.sql
+```
+
+`ALTER TABLE` は ACCESS EXCLUSIVE ロックを取るが、`avatar_configs` は小さく、
+`avatar_provider` の `NOT NULL DEFAULT` も PostgreSQL 11 以降はテーブル書き換えを伴わない。
+スクリプト内で `lock_timeout = '5s'` を設定しており、詰まった場合は本番APIを巻き込まずに中断する。
+
+---
+
+## 5. 適用後の確認
+
+**(a) SELECT が通ること**（手順3と同じクエリ。エラーが出なければ OK）
+
+```bash
+cd /opt/rajiuce && set -a && . ./.env && set +a && \
+psql "$DATABASE_URL" -c "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt, category_persona_map FROM avatar_configs LIMIT 1;"
+```
+
+**(b) 実際にアバターを起動して顔を確認**
+
+管理画面のテストチャットでアバターを選んで起動し、**選んだ本人の顔が出ること**を目視で確認する。
+ログ側でも次を確認する（`agent_aee377cb0fec68ea` が消えていること）。
+
+```bash
+pm2 logs rajiuce-avatar --lines 100 --nostream | grep "effective config"
+```
+
+`image_url=set` になっていれば正常。
+
+**(c) 有効化されたアバターが存在すること**
+
+`config: null`（該当行 0 件）だと 500 は消えてもフォールバックは続く。
+管理画面 `/admin/avatar` で、対象テナントのアバターが有効化済みか確認する。
+テナント作成時に配られる18体は `is_active = false` で入るため、**誰かが明示的に有効化するまで
+どのテナントにも有効なアバターは存在しない**（`SCRIPTS/add-default-avatars.ts`）。
+
+---
+
+## 6. 再発防止の状況
+
+| 対策 | 状態 |
+|---|---|
+| 500 の原因がログに残る（例外の握りつぶし解消） | PR #732 |
+| LP から第三者の映像を撤去 | PR #733 |
+| 設定取得に失敗したとき、無関係な第三者にフォールバックしない | **未対応**。本番のアバター挙動を変えるため別途検討 |
+
+最後の項目が残っている限り、別の原因で設定取得が失敗すれば同じ症状が再発する。
+`agent.py` は「設定が無い」と「取得に失敗した」を区別しておらず、後者でも黙って
+第三者の顔を配信する。ここを直すのが本質的な再発防止になる。
+
+関連: PR #486（同じ症状にドロップダウン側の対症療法を入れたが再発した）
