@@ -170,3 +170,63 @@ pm2 logs rajiuce-avatar --lines 100 --nostream | grep "effective config"
 第三者の顔を配信する。ここを直すのが本質的な再発防止になる。
 
 関連: PR #486（同じ症状にドロップダウン側の対症療法を入れたが再発した）
+
+---
+
+## 付録: アバターが起動から約10秒で消える／声が出ない（PyAV 破損）
+
+**上の「顔が違う」とは別の障害。** 顔は正しいのに、起動して数秒後にアバターが消え、
+音声が一切出ない場合はこちら。2026-07-30 に発生し、**約9日間気づかれなかった**。
+
+**症状**
+- アバターは一度表示される（`AVATAR PARTICIPANT JOINED ROOM` まで到達する）
+- 挨拶のテキストは吹き出しに出るが、**声が出ない**
+- 起動から約10秒でアバターが消え、通常のテキストチャットに戻る
+
+**ログの目印**
+
+```bash
+pm2 logs rajiuce-avatar --lines 200 --nostream | grep -iE "error decoding|has no attribute"
+```
+
+```
+error decoding audio
+  livekit/agents/utils/codecs/decoder.py:416 → container = av.open(...)
+AttributeError: module 'av' has no attribute 'open'
+```
+
+この直後に `_main_task` / `_tts_inference_task` / `_tts_task` が連鎖的に落ちる。
+TTS が死ぬので LemonSlice に送る音声が無くなり、アバターが維持されない。
+
+**原因の見分け方**
+
+```bash
+/opt/rajiuce/avatar-agent/venv/bin/python -c "import av; print('file:', av.__file__); print('has open:', hasattr(av,'open')); print('attrs:', sorted(a for a in dir(av) if not a.startswith('_'))[:15])"
+```
+
+`file: None` かつ `attrs: []` なら **空の namespace package**。
+`__init__.py` を持たない `av` ディレクトリが sys.path 上にあると、Python は
+「import は通るが中身が空」のモジュールを暗黙に作る。**PyAV のバージョンや API の
+問題ではない**（v17/v18 とも `av.open` は削除されていない）。中断された pip install や
+失敗した uninstall で `av/` の残骸だけが残った状態。
+
+**復旧手順（`rm -rf` だけでは直らない — dist-info も消すこと）**
+
+```bash
+SP=/opt/rajiuce/avatar-agent/venv/lib/python3.12/site-packages
+rm -rf "$SP"/av "$SP"/av-*.dist-info      # dist-info を残すと pip が「導入済み」と誤認して何もしない
+/opt/rajiuce/avatar-agent/venv/bin/pip install --no-cache-dir --ignore-installed av==17.0.1
+/opt/rajiuce/avatar-agent/venv/bin/python -c "import av; print(av.__version__, hasattr(av,'open'))"  # 17.0.1 True
+/opt/rajiuce/avatar-agent/venv/bin/pip check                                                          # 他に壊れた依存が無いか
+pm2 restart rajiuce-avatar
+```
+
+`pip uninstall av` は RECORD ファイルが無いと `uninstall-no-record-file` で失敗する
+（＝壊れている証拠でもある）。その状態で `av/` だけ消すと `av-*.dist-info` が孤児として残り、
+続く `pip install` が «Requirement already satisfied» で**何もせず終わる**。
+結果 `av` が完全消滅してエージェントがクラッシュループする。両方消してから入れること。
+
+**未対応の弱点**: この障害は**ログにエラーが出続けていたのに9日間検知されなかった**。
+`av==17.0.1` の pin（`avatar-agent/requirements.txt`）はバージョンドリフトを防ぐだけで、
+インストール破損は防げない。起動時のセルフチェックか、`error decoding audio` の
+アラート化が本質的な再発防止になる。
