@@ -1908,9 +1908,25 @@
       room.on(LK.RoomEvent.TrackSubscribed, function (track) {
         if (track.kind === 'video') {
           console.log('[FAQ Widget][DIAG] video TrackSubscribed source=' + track.source + ' sid=' + track.sid + ' t=' + Math.round(performance.now()) + 'ms');
-          removeAvatarPlaceholder();
           var videoEl = track.attach();
           videoEl.className = 'avatar-video';
+          // 静止画は「映像が実際に描画され始めてから」外す。
+          //
+          // TrackSubscribed はトラックを購読した合図でしかなく、この時点では
+          // まだ1フレームも届いていない。ここで即座に静止画を外していたため、
+          // 静止画が消えたあと映像が来るまで暗い領域だけが残り、訪問者には
+          // 「起動して10秒ほどでアバターが消えた」ように見えていた。
+          // 実測: 静止画は t=10.7s で消え、映像の到着は t=12〜33s（LemonSlice の
+          // コールドスタート。写真から生成する agent_image_url 経路は特に遅い）。
+          //
+          // 静止画は position:absolute で映像に重ねてあるので、描画開始後に外せば
+          // 下の映像がそのまま現れる（継ぎ目が出ない）。映像が最後まで来なかった
+          // 場合は静止画が残るが、暗い領域を見せるよりはるかによい。
+          var revealVideo = function () { removeAvatarPlaceholder(); };
+          videoEl.addEventListener('loadeddata', revealVideo, { once: true });
+          videoEl.addEventListener('playing', revealVideo, { once: true });
+          // 再購読などで既にフレームを持っている場合はイベントが発火しないので即座に外す
+          if (videoEl.readyState >= 2) revealVideo();
           avatarStatusText.style.display = 'none';
           fab.classList.remove('avatar-loading');
           fabVideoEl = videoEl;
