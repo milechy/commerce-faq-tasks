@@ -64,14 +64,32 @@ pm2 logs rajiuce-avatar --lines 300 --nostream \
 `/api/internal/avatar-config` の SELECT が参照する10カラムのうち4つは後付けマイグレーションで
 追加されたもの。本番に適用漏れがあると、そのカラムを含む SELECT が丸ごと落ちる。
 
+> **2026-08-08 の実例（原因確定済み）**: 欠けていたのは `category_persona_map` 1本だけだった。
+> 原因は `migration_category_persona.sql` の `COMMENT ON ... IS 'a' || 'b'` という構文エラー。
+> `ALTER TABLE` は先に成功するが、直後の `COMMENT` でエラーになる。**トランザクション内
+> （`psql -1` や `BEGIN`〜`COMMIT`）で実行されていたため ALTER TABLE ごとロールバックされ、
+> 「実行したのにカラムが無い」状態**になっていた。migration ファイル側は修正済み（PR #734）。
+>
+> 教訓: migration が「流れた」ことと「反映された」ことは別。適用後は必ず手順5で実物を確認する。
+
 失敗している SELECT をそのまま流すと、PostgreSQL が欠落カラム名を直接教えてくれる。
 
 ```bash
-cd /opt/rajiuce && set -a && . ./.env && set +a && \
-psql "$DATABASE_URL" -c "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt, category_persona_map FROM avatar_configs LIMIT 1;"
+cd /opt/rajiuce
+DB=$(sed -n 's/^DATABASE_URL=//p' .env | head -1 | sed 's/^"//; s/"$//')
+psql "$DB" -c "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt, category_persona_map FROM avatar_configs LIMIT 1;"
 ```
 
 `ERROR: column "..." does not exist` が出れば、それが原因。
+
+> **`.env` を `source`（`. ./.env`）しないこと。**
+> `source` は `.env` を**シェルスクリプトとして実行**する。`.env` には
+> `FAL_KEY=<your-fal-key>` のようなプレースホルダや、値に空白・記号を含む行があり、
+> `<` がリダイレクトと解釈されて `syntax error near unexpected token 'newline'` になる。
+> さらに構文エラーの前後で**他の行がコマンドとして実行され、APIキーがそのまま
+> ターミナルに出力される**（実際に踏んだ。露出したキーは失効・再発行が必要になる）。
+> アプリ側は dotenv でパースしており実行しないため、`.env` 自体は壊れていない。
+> 上記のように**必要な変数だけを実行せずに取り出す**こと。
 
 後付けカラムと追加元の対応:
 
@@ -93,9 +111,15 @@ psql "$DATABASE_URL" -c "SELECT voice_id, personality_prompt, emotion_tags, lemo
 どのカラムが欠けているかを特定しなくても、そのまま流して安全**。既にあるカラムは無視される。
 
 ```bash
-cd /opt/rajiuce && set -a && . ./.env && set +a && \
-psql "$DATABASE_URL" -f docs/migrations/avatar_configs_missing_columns.sql
+cd /opt/rajiuce
+DB=$(sed -n 's/^DATABASE_URL=//p' .env | head -1 | sed 's/^"//; s/"$//')
+psql "$DB" -f docs/migrations/avatar_configs_missing_columns.sql
 ```
+
+**この SQL ファイルは `bash SCRIPTS/deploy-vps.sh` で VPS に配置される。**
+デプロイ前に急いで適用したい場合は、ファイルの中身をそのまま heredoc で流してもよい
+（`psql "$DB" -v ON_ERROR_STOP=1 <<'SQL' ... SQL`）。冪等なので、後からファイル版を
+流し直しても «already exists, skipping» になるだけで害はない。
 
 `ALTER TABLE` は ACCESS EXCLUSIVE ロックを取るが、`avatar_configs` は小さく、
 `avatar_provider` の `NOT NULL DEFAULT` も PostgreSQL 11 以降はテーブル書き換えを伴わない。
@@ -108,8 +132,9 @@ psql "$DATABASE_URL" -f docs/migrations/avatar_configs_missing_columns.sql
 **(a) SELECT が通ること**（手順3と同じクエリ。エラーが出なければ OK）
 
 ```bash
-cd /opt/rajiuce && set -a && . ./.env && set +a && \
-psql "$DATABASE_URL" -c "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt, category_persona_map FROM avatar_configs LIMIT 1;"
+cd /opt/rajiuce
+DB=$(sed -n 's/^DATABASE_URL=//p' .env | head -1 | sed 's/^"//; s/"$//')
+psql "$DB" -c "SELECT voice_id, personality_prompt, emotion_tags, lemonslice_agent_id, behavior_description, avatar_provider, image_url, agent_prompt, agent_idle_prompt, category_persona_map FROM avatar_configs LIMIT 1;"
 ```
 
 **(b) 実際にアバターを起動して顔を確認**
