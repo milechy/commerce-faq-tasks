@@ -29,6 +29,9 @@
   var avatarMode = currentScript ? (currentScript.getAttribute('data-avatar-mode') || '') : '';
   // avatarMode="animated" 時、絵文字の代わりに表示する静止画（任意）。未指定なら絵文字にフォールバック
   var avatarModeImageUrl = currentScript ? (currentScript.getAttribute('data-avatar-image-url') || '') : '';
+  // avatarMode="animated" 時、静止画の代わりに表示するループ動画（任意、音声なし想定）。
+  // 指定時は data-avatar-image-url をposter（読み込み中/失敗時のフォールバック）として使う。
+  var avatarModeVideoUrl = currentScript ? (currentScript.getAttribute('data-avatar-video-url') || '') : '';
 
   // GID 1216978855735482 follow-up: アバターA/Bテストの割当は widgetGenerator.ts が
   // GET /widget/:tenantSlug.js 生成時に window.__RAJIUCE_TENANT_CFG__ へ注入する
@@ -220,7 +223,8 @@
     '  border-radius: 50%;',
     '  overflow: visible;',
     '}',
-    '.avatar-animated-img-wrap img {',
+    '.avatar-animated-img-wrap img,',
+    '.avatar-animated-img-wrap video {',
     '  position: absolute; inset: 0;',
     '  width: 100%; height: 100%;',
     '  border-radius: 50%;',
@@ -1164,6 +1168,31 @@
   }
 
   function buildAnimatedAvatarEl() {
+    // reduced-motion環境ではループ動画を再生しない(既存のCSSアニメーション無効化方針と同じ)
+    if (avatarModeVideoUrl && !prefersReducedMotion) {
+      var videoWrap = document.createElement('div');
+      videoWrap.className = 'avatar-animated-img-wrap';
+      var videoRing = document.createElement('div');
+      videoRing.className = 'avatar-animated-ring';
+      var video = document.createElement('video');
+      video.src = avatarModeVideoUrl;
+      if (avatarModeImageUrl) video.poster = avatarModeImageUrl;
+      video.autoplay = true;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.setAttribute('aria-label', 'アバター');
+      // 動画読み込み失敗時は静止画(なければ絵文字)にフォールバック
+      video.addEventListener('error', function () {
+        if (!videoWrap.parentNode) return;
+        avatarModeVideoUrl = '';
+        videoWrap.parentNode.replaceChild(buildAnimatedAvatarEl(), videoWrap);
+      });
+      videoWrap.appendChild(video);
+      videoWrap.appendChild(videoRing);
+      videoWrap.setAttribute('aria-hidden', 'true');
+      return videoWrap;
+    }
     if (avatarModeImageUrl) {
       var wrap = document.createElement('div');
       wrap.className = 'avatar-animated-img-wrap';
