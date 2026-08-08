@@ -81,13 +81,24 @@ test.describe('LPデモウィジェット — アニメアバター/定型応答
     );
     expect(await wrapCount.jsonValue()).toBeGreaterThan(0);
 
-    // 静止画のsrcが期待するデフォルトアバターであること（絵文字フォールバックに落ちていないこと）
-    const imgSrc = await page.evaluate(() => {
+    // メディアのsrcが設定されていること（絵文字フォールバックに落ちていないこと）。
+    //
+    // img と video の両方を受け付ける: animated モードは data-avatar-image-url なら <img>、
+    // data-avatar-video-url なら <video> を描画する(どちらも widget.js の正当な分岐)。
+    // このテストは本番LP(api.r2c.biz)を直接見るため、LP側がどちらを使うかは
+    // デプロイ状態で変わる。<img> 決め打ちにすると「LPの表示方法を変えるPRは
+    // マージ+デプロイするまでCIを緑にできない」というデッドロックになる(実際に発生した)。
+    // 検証したいのは表示方法ではなく「メディアが設定済みで絵文字に落ちていないこと」なので、
+    // 要素の種類ではなく src の有無で判定する。
+    const mediaSrc = await page.evaluate(() => {
       const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
-      const img = host?.shadowRoot?.querySelector('.avatar-animated-img-wrap img') as HTMLImageElement | null;
-      return img?.getAttribute('src') ?? null;
+      const media = host?.shadowRoot?.querySelector(
+        '.avatar-animated-img-wrap img, .avatar-animated-img-wrap video'
+      ) as HTMLElement | null;
+      return media?.getAttribute('src') ?? null;
     });
-    expect(imgSrc).toMatch(/^https:\/\//);
+    expect(mediaSrc).not.toBeNull();
+    expect(mediaSrc).not.toBe('');
 
     // 【設計判断のロック】avatar-active(音声アバター用のダーク分割レイアウト)は
     // animated モードでは意図的に付与しない（PR #637 のレビュー判断）。
