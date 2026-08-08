@@ -1091,8 +1091,11 @@
   var fabMediaContainer = null;  // FABメディアコンテナ（アバター映像/静止画）
   var fabVideoEl = null;         // LiveKitビデオ要素（FAB↔avatarAreaで移動）
   var lastAvatarImageUrl = null; // 最後に確認されたアバター画像URL（closePanel時のフォールバック）
-  var avatarInactivityTimer = null;
-  var AVATAR_INACTIVITY_MS = 33000; // 大表示非アクティブタイムアウト（33秒）
+  // 「非アクティブならアバター大表示を33秒で畳む」タイマーは廃止した（2026-08-09）。
+  // このタイマーは LemonSlice セッションが生きたまま（=課金継続のまま）UI だけを隠す
+  // 動作で、#424 → #740 → #742 と3度もその周辺の修正を重ねた再発源だった。
+  // 実測でも track=live / room=connected のまま映像表示の33秒後に畳まれることを確認。
+  // 大表示のライフサイクルは「ユーザーが閉じる / 接続失敗 / セッション終了」にのみ従う。
   var lastRagCategory = null;    // LemonSliceペルソナスワップ: 直近送信した話題カテゴリ（変化時のみ送信）
 
   // PiP常駐（パネルを閉じてもRoomを保持する）中のコスト制御。
@@ -1895,14 +1898,6 @@
             renderMessages();
             // アバター返答は常に最新テキストが全文表示されるよう強制スクロール
             scrollToBottom(true);
-            // アバターが喋っている間は「非アクティブ」ではない。
-            // 折りたたみタイマーの延長契機が「利用者の送信」と「録音開始」しか
-            // 無かったため、黙って見ているだけの訪問者には、アバターが喋っている
-            // 最中でも 33 秒で大表示が畳まれていた（映像は正常に届いており
-            // videoReady=4 なのに avatar-area が display:none になる）。
-            // LemonSlice のコールドスタートが 12〜33 秒あるぶん可視時間が短く、
-            // 「立ち上がってすぐ消える」と受け取られる。
-            resetAvatarInactivityTimer();
           }
         } catch (_e) {}
       });
@@ -1973,7 +1968,15 @@
         if (track.kind === 'video') {
           var videos = avatarArea.querySelectorAll('.avatar-video');
           for (var i = 0; i < videos.length; i++) { videos[i].remove(); }
-          if (avatarStatusText) avatarStatusText.style.display = '';
+          fabVideoEl = null;
+          // 映像配信の終了（LemonSlice サーバ側 idle_timeout 等）は暗い箱ではなく
+          // 静止画に戻す。ここで何も出さないと、レイアウトだけ残った空の領域が
+          // 「アバターが消えた」に見える（この系統の再発源）。
+          if (lastAvatarImageUrl) {
+            showAvatarPlaceholder(lastAvatarImageUrl);
+          } else if (avatarStatusText) {
+            avatarStatusText.style.display = '';
+          }
         } else if (track.kind === 'audio') {
           var attached = track.detach();
           for (var j = 0; j < attached.length; j++) { attached[j].remove(); }
@@ -2394,7 +2397,6 @@
   function closePanel() {
     isOpen = false;
     avatarConfigFetched = false; // 次回 openPanel() で再fetch・再接続できるようリセット
-    if (avatarInactivityTimer) { clearTimeout(avatarInactivityTimer); avatarInactivityTimer = null; }
     panel.classList.remove('open');
     panel.setAttribute('aria-hidden', 'true');
     fab.setAttribute('aria-label', 'チャットを開く');
@@ -2488,25 +2490,10 @@
     return fallback;
   }
 
-  /* ------------------------------------------------------------------ */
-  /* アバター大表示 非アクティブタイマー                                     */
-  /* ------------------------------------------------------------------ */
-
-  function resetAvatarInactivityTimer() {
-    if (avatarInactivityTimer) { clearTimeout(avatarInactivityTimer); avatarInactivityTimer = null; }
-    if (!panel.classList.contains('avatar-active')) return;
-    // 折りたたみタイマーは「ライブアバターが実際に表示されている時」だけ起動する。
-    // 接続前の静止画プレースホルダー表示中（fabVideoEl 未設定 / Anam 未ストリーム）に
-    // アームすると、映像が来ないまま 33 秒で大表示が畳まれ「大表示にしたのに静止画のまま、
-    // ~10 秒でアバターが消えて通常チャットに戻る」症状になる。#424 は映像到着パス（L1707）
-    // のみ対処しており、映像が来ない／アバター OFF パスはここで防ぐ。
-    var avatarLive = !!fabVideoEl || (avatarProvider === 'anam' && (anamClient || window.__anamClient));
-    if (!avatarLive) return;
-    avatarInactivityTimer = setTimeout(collapseAvatarLargeView, AVATAR_INACTIVITY_MS);
-  }
-
+  // collapseAvatarLargeView はアバター表示の「正当な畳み方」としてのみ使う。
+  // 呼び出し元は failAvatarStartGracefully（接続失敗）だけ。非アクティブ経過による
+  // 自動折りたたみは廃止済み（理由は AVATAR_INACTIVITY_MS 跡地のコメントを参照）。
   function collapseAvatarLargeView() {
-    avatarInactivityTimer = null;
     panel.classList.remove('avatar-active');
     avatarArea.style.display = 'none';
     document.body.style.overflow = '';
@@ -2514,7 +2501,6 @@
 
   function setAvatarActive() {
     panel.classList.add('avatar-active');
-    resetAvatarInactivityTimer();
   }
 
   /**
@@ -2562,7 +2548,6 @@
       panel.classList.add('avatar-active');
       document.body.style.overflow = 'hidden';
     }
-    resetAvatarInactivityTimer();
 
     hideError();
 
@@ -3004,7 +2989,6 @@
       isRecording = true;
       micBtn.classList.add('recording');
       micBtn.setAttribute('aria-label', '録音中 — タップで停止');
-      resetAvatarInactivityTimer();
       audioChunks = [];
 
       navigator.mediaDevices.getUserMedia({ audio: true })
