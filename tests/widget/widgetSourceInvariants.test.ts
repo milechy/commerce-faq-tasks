@@ -123,6 +123,56 @@ describe('public/widget.js 設置位置の不変条件', () => {
   });
 });
 
+// アバターセッションの keep-alive / 復活（2026-08-09）
+//
+// 33秒非アクティブ折りたたみタイマー(AVATAR_INACTIVITY_MS)は #424→#740→#742 と
+// 3度の周辺修正でも再発し、PR #743 で機構ごと削除した(CLAUDE.md 禁止事項19)。
+// 続くPRで「パネルを開いて見ている間に無操作が続くとLemonSlice側のidle_timeoutで
+// セッションが切れ、メッセージを送っても音声・リップシンクが復活しない」症状に対応した。
+// ここではその再発防止を機械的にロックする。
+describe('public/widget.js アバターセッション keep-alive / 復活の不変条件', () => {
+  it('33秒非アクティブ折りたたみタイマーが復活していない（禁止事項19の機械化）', () => {
+    expect(WIDGET_SRC).not.toMatch(/AVATAR_INACTIVITY_MS/);
+    expect(WIDGET_SRC).not.toMatch(/avatarInactivityTimer/);
+    expect(WIDGET_SRC).not.toMatch(/resetAvatarInactivityTimer/);
+  });
+
+  it('パネル表示中ハートビートは document.hidden の間は送らない（タブを隠せば課金が止まる設計を保つ）', () => {
+    const m = WIDGET_SRC.match(/function startVisibleHeartbeat\(\) \{[\s\S]*?\n  \}/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toMatch(/if\s*\(\s*document\.hidden\s*\)\s*return;/);
+  });
+
+  it('openPanel/closePanel が表示中ハートビートの開始/停止を呼んでいる', () => {
+    expect(WIDGET_SRC).toMatch(/startVisibleHeartbeat\(\);/);
+    expect(WIDGET_SRC).toMatch(/stopVisibleHeartbeat\(\);/);
+  });
+
+  it('LemonSlice アバター離脱時に avatarSessionDead が立つ（TrackUnsubscribed video）', () => {
+    const m = WIDGET_SRC.match(/RoomEvent\.TrackUnsubscribed[\s\S]*?if \(track\.kind === 'video'\) \{[\s\S]*?\n(?:.*\n)*?\s*\}/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toMatch(/avatarSessionDead\s*=\s*true;/);
+  });
+
+  it('新しい映像到着時に avatarSessionDead が解除される（TrackSubscribed video）', () => {
+    const m = WIDGET_SRC.match(/RoomEvent\.TrackSubscribed[\s\S]*?if \(track\.kind === 'video'\) \{[\s\S]*?\n(?:.*\n)*?\s*fabVideoEl = videoEl;/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toMatch(/avatarSessionDead\s*=\s*false;/);
+  });
+
+  it('既存Room再利用の判定が avatarSessionDead を確認している（3箇所: connectLiveKit / cleanup後再開 / openPanel）', () => {
+    const occurrences = WIDGET_SRC.match(/window\.__rajiuceRoom\.state === 'connected' && !avatarSessionDead/g) || [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('sendMessage は avatarSessionDead のとき sendTTSRequest ではなく connectLiveKit で復活を試みる', () => {
+    const m = WIDGET_SRC.match(/if \(avatarProvider === 'lemonslice' && lkRoom && lkRoom\.localParticipant && avatarSessionDead\) \{[\s\S]*?\n\s*\}/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toContain('connectLiveKit();');
+    expect(m![0]).not.toContain('sendTTSRequest(');
+  });
+});
+
 describe('public/widget.min.js が壊れたビルド成果物になっていない', () => {
   // 当初は「特定の文字列(data-scripted-responses 等)が難読化後も残っているか」で
   // ビルド忘れを検知しようとしたが、javascript-obfuscator の文字列配列抽出は実行の
