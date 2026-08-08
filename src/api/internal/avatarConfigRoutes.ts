@@ -7,6 +7,7 @@
 import type { Express, Request, Response } from "express";
 import { INTERNAL_REQUEST_HEADER } from "../../lib/metrics/kpiDefinitions";
 import { getPool } from "../../lib/db";
+import { logger } from "../../lib/logger";
 import { internalNetworkOnly } from "../middleware/internalNetworkOnly";
 
 export function registerInternalAvatarConfigRoutes(app: Express): void {
@@ -51,7 +52,12 @@ export function registerInternalAvatarConfigRoutes(app: Express): void {
       }
 
       return res.json({ config: result.rows[0] });
-    } catch {
+    } catch (err) {
+      // 握りつぶさない: ここが無言で 500 を返していたため、本番でマイグレーション未適用による
+      // カラム欠落が起きても誰も気づけず、avatar-agent 側が「設定なし」と誤認して
+      // 環境変数の汎用 LemonSlice エージェント(テナントと無関係な第三者の顔)に
+      // 無言でフォールバックし続けた。原因特定に3週間かかった実例がある。
+      logger.warn("[GET /api/internal/avatar-config] query failed", err);
       return res.status(500).json({ error: "internal error" });
     }
   });

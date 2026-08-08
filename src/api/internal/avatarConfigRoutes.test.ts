@@ -9,7 +9,12 @@ jest.mock("../../lib/db", () => ({
   getPool: jest.fn(),
 }));
 
+jest.mock("../../lib/logger", () => ({
+  logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+
 import { getPool } from "../../lib/db";
+import { logger } from "../../lib/logger";
 const mockGetPool = getPool as jest.Mock;
 
 function makeApp() {
@@ -46,6 +51,7 @@ function mockPool(rows: object[]) {
 describe("GET /api/internal/avatar-config", () => {
   beforeEach(() => {
     mockGetPool.mockReset();
+    (logger.warn as jest.Mock).mockClear();
   });
 
   describe("fail-closed: X-Internal-Request ヘッダなし → 403", () => {
@@ -183,6 +189,36 @@ describe("GET /api/internal/avatar-config", () => {
         .set("X-Internal-Request", "1");
 
       expect(res.body.config.category_persona_map).toEqual({ fashion: { agent_prompt: "stylish" } });
+    });
+  });
+
+  describe("クエリ失敗時の可観測性", () => {
+    // 回帰ガード: catch が例外を握りつぶしていたため、本番でマイグレーション未適用による
+    // カラム欠落(例: category_persona_map)が起きても原因が一切ログに出ず、
+    // avatar-agent 側は 500 を「設定なし」と解釈して無関係な第三者のアバターに
+    // 無言でフォールバックし続けた。原因特定に3週間かかっている。
+    it("SQLエラーの内容をログに残したうえで 500 を返す", async () => {
+      const dbError = new Error('column "category_persona_map" does not exist');
+      mockGetPool.mockReturnValue({ query: jest.fn().mockRejectedValue(dbError) });
+
+      const res = await request(makeApp())
+        .get("/api/internal/avatar-config?tenantId=r2c_default")
+        .set("X-Internal-Request", "1");
+
+      expect(res.status).toBe(500);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("avatar-config"), dbError);
+    });
+
+    it("エラー応答に内部情報(SQL文・カラム名)を含めない", async () => {
+      mockGetPool.mockReturnValue({
+        query: jest.fn().mockRejectedValue(new Error('column "category_persona_map" does not exist')),
+      });
+
+      const res = await request(makeApp())
+        .get("/api/internal/avatar-config?tenantId=r2c_default")
+        .set("X-Internal-Request", "1");
+
+      expect(JSON.stringify(res.body)).not.toContain("category_persona_map");
     });
   });
 });
