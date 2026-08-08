@@ -1091,6 +1091,10 @@
   var fabMediaContainer = null;  // FABメディアコンテナ（アバター映像/静止画）
   var fabVideoEl = null;         // LiveKitビデオ要素（FAB↔avatarAreaで移動）
   var lastAvatarImageUrl = null; // 最後に確認されたアバター画像URL（closePanel時のフォールバック）
+  // LemonSlice アバター参加者が Room から離脱した（=サーバ側 idle_timeout 等でセッション終了）ことを示す。
+  // true の間は window.__rajiuceRoom が state='connected' でも「話しかける相手がいない」状態。
+  // sendTTSRequest しても届かず、既存 Room の再利用判定はここを見て新規接続へ切り替える。
+  var avatarSessionDead = false;
   // 「非アクティブならアバター大表示を33秒で畳む」タイマーは廃止した（2026-08-09）。
   // このタイマーは LemonSlice セッションが生きたまま（=課金継続のまま）UI だけを隠す
   // 動作で、#424 → #740 → #742 と3度もその周辺の修正を重ねた再発源だった。
@@ -1109,6 +1113,27 @@
   var pipIdleDisconnectTimer = null;
   var PIP_HEARTBEAT_MS = 60000;          // 1分ごとに reset-idle-timeout
   var PIP_IDLE_DISCONNECT_MS = 300000;   // 5分間パネルが閉じたままなら切断
+
+  // パネルを開いて見ている間のハートビート。
+  //
+  // 従来は PiP（パネルを閉じた状態）だけが reset-idle-timeout を送っており、
+  // パネルを開いて見ている間は無送信だった。LemonSlice 側の idle_timeout(300秒)は
+  // ユーザー入力の有無に関係なく経過するため、見ている最中に発話が終わり無操作が
+  // 続くと、まさに「見ている時だけ」セッションが切れて静止画に戻る逆向きの挙動になっていた。
+  //
+  // document.hidden の間は送らない: タブを裏に回せば PIP_IDLE_DISCONNECT_MS 相当の
+  // 時間で自然に課金が止まる、という既存の「非表示なら止まる」設計を維持するため。
+  var visibleHeartbeatTimer = null;
+  function startVisibleHeartbeat() {
+    if (visibleHeartbeatTimer) return;
+    visibleHeartbeatTimer = setInterval(function () {
+      if (document.hidden) return;
+      sendPipHeartbeat();
+    }, PIP_HEARTBEAT_MS);
+  }
+  function stopVisibleHeartbeat() {
+    if (visibleHeartbeatTimer) { clearInterval(visibleHeartbeatTimer); visibleHeartbeatTimer = null; }
+  }
 
   var conversationId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0;
@@ -1766,8 +1791,11 @@
   function connectLiveKit() {
     if (!avatarConfig || !window.LivekitClient) return;
 
-    // 既に接続済みなら再利用
-    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+    // 既に接続済み、かつアバターも生きているなら再利用。
+    // avatarSessionDead な Room を再利用すると、LiveKit的には繋がっているのに
+    // 話しかけても届かない（TTSリクエストの送り先であるアバター参加者が
+    // 既に離脱済み）状態のまま復活しない。その場合は下の「旧Room切断→新規接続」に進む。
+    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected' && !avatarSessionDead) {
       avatarArea.style.display = 'flex';
       return;
     }
@@ -1800,8 +1828,8 @@
   function _connectLiveKitAfterCleanup() {
     // avatarConfig / LivekitClient が上のPromise待機中に失われるケース（パネル再クローズ等）に備える
     if (!avatarConfig || !window.LivekitClient) return;
-    // 待機中に別の呼び出しが先に接続済みならそれを使う
-    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+    // 待機中に別の呼び出しが先に接続済み、かつアバターも生きているならそれを使う
+    if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected' && !avatarSessionDead) {
       avatarArea.style.display = 'flex';
       return;
     }
@@ -1905,6 +1933,7 @@
       room.on(LK.RoomEvent.TrackSubscribed, function (track) {
         if (track.kind === 'video') {
           console.log('[FAQ Widget][DIAG] video TrackSubscribed source=' + track.source + ' sid=' + track.sid + ' t=' + Math.round(performance.now()) + 'ms');
+          avatarSessionDead = false; // 新しいアバター参加者の映像が届いた = セッション復活
           var videoEl = track.attach();
           videoEl.className = 'avatar-video';
           // 静止画は「映像が実際に描画され始めてから」外す。
@@ -1969,6 +1998,10 @@
           var videos = avatarArea.querySelectorAll('.avatar-video');
           for (var i = 0; i < videos.length; i++) { videos[i].remove(); }
           fabVideoEl = null;
+          // LemonSlice アバター参加者の離脱＝セッション終了。LiveKit Room 自体（ローカル
+          // 参加者の接続）は生きたままのことが多く、このフラグが無いと「room.state===
+          // 'connected' だから再利用可能」と誤判定して、話しかけても届かない状態が続く。
+          avatarSessionDead = true;
           // 映像配信の終了（LemonSlice サーバ側 idle_timeout 等）は暗い箱ではなく
           // 静止画に戻す。ここで何も出さないと、レイアウトだけ残った空の領域が
           // 「アバターが消えた」に見える（この系統の再発源）。
@@ -2185,6 +2218,8 @@
     avatarConfig = null;
     fabVideoEl = null;
     fabMediaContainer = null;
+    avatarSessionDead = false; // 完全リセットにより「死んだセッション」自体が消える
+    stopVisibleHeartbeat();
     removeAvatarPlaceholder(); // data-avatar-mode="animated" 用の静止画/絵文字要素と avatarPlaceholderImg もリセット
     resetFabIcon();
   }
@@ -2340,6 +2375,7 @@
     dismissProactiveBubble();
     isOpen = true;
     stopPipTimers(); // PiP常駐: 再開したのでハートビート/アイドル切断タイマーを止める
+    startVisibleHeartbeat(); // 見ている間は idle_timeout を延長し続ける
     panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
     fab.setAttribute('aria-label', 'チャットを閉じる');
@@ -2374,11 +2410,19 @@
       // このクラスを付与すること（現状は意図的に未対応）。
       avatarArea.style.display = 'flex';
       showAnimatedAvatarPlaceholder();
-    } else if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected') {
+    } else if (window.__rajiuceRoom && window.__rajiuceRoom.state === 'connected' && !avatarSessionDead) {
       // 既存 Room が接続中ならエリアを再表示するだけ（再fetch・再接続しない）
       avatarArea.style.display = 'flex';
       setAvatarActive();
       document.body.style.overflow = 'hidden';
+    } else if (window.__rajiuceRoom && avatarSessionDead) {
+      // LiveKit Room 自体は接続中でも、LemonSlice アバターは既に離脱済み。
+      // このまま再利用すると「見えているのに応答しない」ままになるため、
+      // connectLiveKit() の既存の「旧Room切断→新規接続」経路に乗せて張り直す。
+      avatarArea.style.display = 'flex';
+      setAvatarActive();
+      document.body.style.overflow = 'hidden';
+      connectLiveKit();
     } else {
       // avatarConfig が事前取得済み、またはセッションキャッシュがあれば即ダークUI適用
       var shouldDark = avatarConfig !== null;
@@ -2396,6 +2440,7 @@
 
   function closePanel() {
     isOpen = false;
+    stopVisibleHeartbeat(); // 見えなくなったら表示中ハートビートは止める（PiP側のタイマーに引き継ぐ）
     avatarConfigFetched = false; // 次回 openPanel() で再fetch・再接続できるようリセット
     panel.classList.remove('open');
     panel.setAttribute('aria-hidden', 'true');
@@ -2491,8 +2536,9 @@
   }
 
   // collapseAvatarLargeView はアバター表示の「正当な畳み方」としてのみ使う。
-  // 呼び出し元は failAvatarStartGracefully（接続失敗）だけ。非アクティブ経過による
-  // 自動折りたたみは廃止済み（理由は AVATAR_INACTIVITY_MS 跡地のコメントを参照）。
+  // 呼び出し元は failAvatarStartGracefully（接続失敗）だけ。無操作の経過時間だけを
+  // 見て自動的に畳む機構は CLAUDE.md 禁止事項19により再導入禁止（理由: LemonSlice
+  // は UI を隠してもサーバ側 idle_timeout まで課金され続けるため）。
   function collapseAvatarLargeView() {
     panel.classList.remove('avatar-active');
     avatarArea.style.display = 'none';
@@ -2687,8 +2733,16 @@
 
         // アバター有効（LiveKit接続中）→ 応答テキストをTTSリクエストとして送信
         var lkRoom = window.__rajiuceRoom;
-        console.log('[FAQ Widget] sendMessage after API: avatarProvider=' + avatarProvider + ' roomState=' + (lkRoom ? lkRoom.state : 'null') + ' hasParticipant=' + !!(lkRoom && lkRoom.localParticipant));
-        if (avatarProvider === 'lemonslice' && lkRoom && lkRoom.localParticipant) {
+        console.log('[FAQ Widget] sendMessage after API: avatarProvider=' + avatarProvider + ' roomState=' + (lkRoom ? lkRoom.state : 'null') + ' hasParticipant=' + !!(lkRoom && lkRoom.localParticipant) + ' sessionDead=' + avatarSessionDead);
+        if (avatarProvider === 'lemonslice' && lkRoom && lkRoom.localParticipant && avatarSessionDead) {
+          // Room は繋がっているが、話しかける相手（LemonSlice アバター）は既に離脱済み。
+          // ここで sendTTSRequest しても届く相手がいないため、まず新しいセッションを
+          // 張り直す。今回の応答テキストはチャット欄には既に表示済みなので、音声・
+          // リップシンクだけが今回分は出ないが、次のセッション開始時のアイドル挨拶で
+          // アバターが戻ったことは分かる（会話が完全に無音のまま固まる方が悪い）。
+          console.log('[FAQ Widget] avatar session dead — reconnecting instead of speaking this reply');
+          connectLiveKit();
+        } else if (avatarProvider === 'lemonslice' && lkRoom && lkRoom.localParticipant) {
           sendTTSRequest(assistantContent);
           // I-4: フロー状態をアバターエージェントへ通知（表情プロンプト差し替え用）
           if (json.data && typeof json.data.flowState === 'string') {
