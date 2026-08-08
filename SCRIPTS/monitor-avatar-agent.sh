@@ -34,8 +34,41 @@ THROTTLE_FILE="${STATE_DIR}/avatar-agent-throttle"
 THROTTLE_SECONDS="${THROTTLE_SECONDS:-21600}"   # 6h
 NOTIFY="${SCRIPT_DIR}/notify-slack.sh"
 
+ENV_FILE="${ENV_FILE:-/opt/rajiuce/.env}"
+
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+# Slack 資格情報の読み込み。
+#
+# notify-slack.sh は $HOME/.claude-r2c-config/secrets/r2c-loop.env から秘匿値を読むが、
+# あれはローカル Mac の 24h ループ用のパスで VPS には存在しない。さらに cron は
+# 最小環境で起動するため、VPS の .env も自動では読まれない。
+# その状態で notify-slack.sh を呼ぶと、エラーも出さずに黙って何もしないまま終わる
+# （実際に踏んだ。「監視は動いているが通知だけ届かない」という、この監視が
+#   防ごうとしている状況そのものになる）。
+# ここで必要な変数だけを明示的に取り出して export する。
+#
+# .env を source しないこと。プレースホルダ（FAL_KEY=<...> 等）が
+# リダイレクトと解釈されて構文エラーになるうえ、前後の行がコマンドとして実行され
+# API キーが端末に露出する（2026-08-08 に実際に起きた）。
+load_env_var() {
+    [ -f "$ENV_FILE" ] || return 0
+    sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1 | sed 's/^"//; s/"$//'
+}
+for _v in SLACK_BOT_TOKEN SLACK_WEBHOOK_URL_R2C SLACK_WEBHOOK_URL; do
+    if [ -z "$(eval "echo \${$_v:-}")" ]; then
+        _val="$(load_env_var "$_v")"
+        [ -n "$_val" ] && export "$_v=$_val"
+    fi
+done
+unset _v _val
+
+# 通知経路が無いなら、それ自体を異常として扱う。
+# 黙って通知できないままにすると、監視があるという理由で余計に気づけなくなる。
+has_notify_channel() {
+    [ -n "${SLACK_BOT_TOKEN:-}" ] || [ -n "${SLACK_WEBHOOK_URL_R2C:-}" ] || [ -n "${SLACK_WEBHOOK_URL:-}" ]
+}
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 touch "$OFFSET_FILE" "$THROTTLE_FILE" 2>/dev/null || true
@@ -126,17 +159,35 @@ for entry in "${PATTERNS[@]}"; do
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] DRY-RUN 通知: $key (${count}件)"
         echo "$msg" | sed 's/^/    /'
-    elif [ -x "$NOTIFY" ]; then
+    elif [ ! -x "$NOTIFY" ]; then
+        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 通知不可: notify-slack.sh が見つかりません ($NOTIFY): $key (${count}件)" >&2
+        notify_broken=1
+    elif ! has_notify_channel; then
+        # 資格情報が無いと notify-slack.sh は何も言わずに終わる。ここで先に止めて明示する。
+        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 通知不可: Slack の資格情報がありません" >&2
+        echo "  $key を ${count} 件検知しましたが通知できません。" >&2
+        echo "  ${ENV_FILE} に SLACK_WEBHOOK_URL / SLACK_WEBHOOK_URL_R2C / SLACK_BOT_TOKEN のいずれかを設定してください。" >&2
+        notify_broken=1
+    else
         "$NOTIFY" "$msg" --color error --alert-type "avatar_${key}" >/dev/null 2>&1 \
             && echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 通知しました: $key (${count}件)" \
-            || echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 通知に失敗: $key (${count}件)" >&2
+            || { echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 通知に失敗: $key (${count}件)" >&2; notify_broken=1; }
         mark_throttle "$key"
-    else
-        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] notify-slack.sh が見つからないため通知できません: $key (${count}件)" >&2
     fi
 done
 
-[ "$found" -eq 0 ] && echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 異常なし"
+if [ "$found" -eq 0 ]; then
+    echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 異常なし"
+    # 平常時こそ通知経路の生死を確かめておく。異常が起きてから
+    # 「実は通知できませんでした」では手遅れになる。
+    if [ "$DRY_RUN" -eq 0 ] && ! has_notify_channel; then
+        echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] 警告: Slack の資格情報が無いため、異常を検知しても通知できません" >&2
+        exit 2
+    fi
+fi
+
+# 検知したのに通知できなかった場合は非ゼロで終わる。cron のログと終了コードに痕跡を残す。
+[ "${notify_broken:-0}" -eq 1 ] && exit 2
 exit 0
 
 # --- VPS へのインストール手順（hkobayashi 手動） ---
