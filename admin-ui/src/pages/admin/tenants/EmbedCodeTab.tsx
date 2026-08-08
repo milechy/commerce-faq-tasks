@@ -3,6 +3,31 @@ import { useLang } from "../../../i18n/LangContext";
 import type { TenantDetail, ApiKey } from "./types";
 import { CARD_STYLE } from "./types";
 
+/** 既定値と同じ設定・不正値は出力しない（コピペ用スニペットを短く保ち、壊れた属性を出さない） */
+function buildPlacementLines(theme: TenantDetail["widget_theme"]): string {
+  if (!theme) return "";
+  const lines: string[] = [];
+
+  if (theme.position === "bottom-left") {
+    lines.push(`data-position="bottom-left"`);
+  }
+  const offsets: Array<["offsetX" | "offsetY", string]> = [
+    ["offsetX", "data-offset-x"],
+    ["offsetY", "data-offset-y"],
+  ];
+  for (const [key, attr] of offsets) {
+    const raw = theme[key];
+    const n = typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw.trim()))
+      ? Number(raw)
+      : NaN;
+    if (Number.isInteger(n) && n >= 0 && n <= 320 && n !== 24) {
+      lines.push(`${attr}="${n}"`);
+    }
+  }
+
+  return lines.map((l) => `\n  ${l}`).join("");
+}
+
 export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail; apiKeys: ApiKey[] }) {
   const { t } = useLang();
   const [copied, setCopied] = useState(false);
@@ -25,9 +50,14 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
   const accentColorLine = typeof primaryColor === "string" && /^#[0-9a-fA-F]{6}$/.test(primaryColor)
     ? `\n  data-accent-color="${primaryColor}"`
     : "";
+  // 設置位置。FAB は z-index に int 最大値を使うため、サイト側の「トップへ戻る」ボタン等が
+  // 右下にあると相手がクリック不能になる。その逃げ道として position / offsetX / offsetY を出力する。
+  // ⚠️ 同じ判定が src/api/admin/agent/widgetPlacement.ts にもある(別ビルドで import 共有不可)。
+  // 片方だけ直さない。丸め範囲は public/widget.js の parseOffset() と一致させること。
+  const placementLines = buildPlacementLines(tenant.widget_theme);
   const embedCode = `<script src="https://cdn.r2c.biz/widget.js"
   data-api-key="${displayKey}"
-  data-tenant="${tenant.slug}"${accentColorLine}>
+  data-tenant="${tenant.slug}"${accentColorLine}${placementLines}>
 </script>`;
 
   const purchaseTag = `<script>\n  window.r2c && r2c.trackConversion('purchase', /* 購入金額(円) */ 0);\n</script>`;

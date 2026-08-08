@@ -402,7 +402,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_embed_code',
-      description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示。set_widget_theme で primaryColor を設定済みなら data-accent-color 属性も含める）',
+      description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示。set_widget_theme で primaryColor を設定済みなら data-accent-color 属性、position / offsetX / offsetY を設定済みなら data-position / data-offset-x / data-offset-y 属性も含める）',
       parameters: {
         type: 'object',
         properties: {},
@@ -414,13 +414,13 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'set_widget_theme',
-      description: 'ウィジェットのブランドカラーを設定する。primaryColor（#RRGGBB形式の16進数）のみが実際にウィジェットへ反映され、埋め込みコードの data-accent-color 属性として出力される。他のキーは保存はされるが現時点でウィジェットの表示には反映されない',
+      description: 'ウィジェットのブランドカラーと設置位置を設定する。実際にウィジェットへ反映されるのは primaryColor（#RRGGBB形式の16進数）と、設置位置の position / offsetX / offsetY の4キーのみで、いずれも埋め込みコードの data-* 属性として出力される。他のキーは保存はされるが現時点でウィジェットの表示には反映されない。設置位置はサイト右下の「トップへ戻る」ボタン等と重なる場合に変更する',
       parameters: {
         type: 'object',
         properties: {
           theme: {
             type: 'object',
-            description: 'テーマ設定オブジェクト（例: {"primaryColor": "#3B82F6"}）。primaryColor は #RRGGBB 形式の16進数カラーコードで指定する',
+            description: 'テーマ設定オブジェクト（例: {"primaryColor": "#3B82F6", "offsetY": 96}）。primaryColor は #RRGGBB 形式の16進数カラーコード。position は "bottom-right"（既定）か "bottom-left" で寄せる角を指定する。offsetX / offsetY は画面端からの余白 px で 0〜320 の整数（既定 24）',
           },
         },
         required: ['theme'],

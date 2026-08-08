@@ -6346,6 +6346,42 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).not.toContain('data-accent-color');
       expect(res.body.actions[0].result).not.toContain('javascript:');
     });
+
+    // 設置位置 — サイト右下の「トップへ戻る」ボタン等と FAB が重なると相手が
+    // クリック不能になるため、その逃げ道が埋め込みコードまで届くことを固定する
+    it('widget_theme の position / offset が既定と異なるなら data-position / data-offset-* を含める', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-4', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+        .mockResolvedValueOnce({ rows: [{ widget_theme: { position: 'bottom-left', offsetY: 96 } }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('data-position="bottom-left"');
+      expect(res.body.actions[0].result).toContain('data-offset-y="96"');
+    });
+
+    it('設置位置が既定のままなら data-position / data-offset-* を含めない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-5', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+        .mockResolvedValueOnce({ rows: [{ widget_theme: { position: 'bottom-right', offsetX: 24, offsetY: 24 } }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).not.toContain('data-position');
+      expect(res.body.actions[0].result).not.toContain('data-offset');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -8596,6 +8632,22 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('#RRGGBB');
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('set_widget_theme の設置位置が不正な場合は書き込まれず記録しない（壊れた属性を埋め込みコードに出さない）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-au-3c', 'set_widget_theme', { theme: { position: 'top-right' } }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('形式が正しくありませんでした。'));
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ウィジェットを右上に置いて', sessionId: 'sess-audit-03c' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('bottom-left');
       expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
     });
 

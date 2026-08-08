@@ -82,4 +82,37 @@ describe("EmbedCodeTab", () => {
     expect(pre.textContent).not.toContain("data-accent-color");
     expect(pre.textContent).not.toContain("javascript:");
   });
+
+  // 設置位置（サイト右下の「トップへ戻る」ボタン等との重なり回避）。
+  // 判定は src/api/admin/agent/widgetPlacement.ts と同一仕様を保つこと。
+  it("position / offsetX / offsetY が既定と異なるときだけ data-* 属性を出力する", () => {
+    const tenant = makeTenant({ widget_theme: { position: "bottom-left", offsetX: 16, offsetY: 96 } });
+    render(<EmbedCodeTab tenant={tenant} apiKeys={[]} />);
+    const pre = screen.getByText(/data-api-key/);
+    expect(pre.textContent).toContain('data-position="bottom-left"');
+    expect(pre.textContent).toContain('data-offset-x="16"');
+    expect(pre.textContent).toContain('data-offset-y="96"');
+  });
+
+  it("既定値と同じ設置位置は出力しない（スニペットを短く保つ）", () => {
+    const tenant = makeTenant({ widget_theme: { position: "bottom-right", offsetX: 24, offsetY: 24 } });
+    render(<EmbedCodeTab tenant={tenant} apiKeys={[]} />);
+    const pre = screen.getByText(/data-api-key/);
+    expect(pre.textContent).not.toContain("data-position");
+    expect(pre.textContent).not.toContain("data-offset");
+  });
+
+  it("offset 0 は既定と異なるので出力する（falsy 取り違えの回帰）", () => {
+    render(<EmbedCodeTab tenant={makeTenant({ widget_theme: { offsetX: 0 } })} apiKeys={[]} />);
+    expect(screen.getByText(/data-api-key/).textContent).toContain('data-offset-x="0"');
+  });
+
+  it("不正な設置位置は黙って捨てる（直接DB編集などによる不正値の防御）", () => {
+    const tenant = makeTenant({ widget_theme: { position: '" onload="alert(1)', offsetY: 9999 } });
+    render(<EmbedCodeTab tenant={tenant} apiKeys={[]} />);
+    const pre = screen.getByText(/data-api-key/);
+    expect(pre.textContent).not.toContain("data-position");
+    expect(pre.textContent).not.toContain("data-offset");
+    expect(pre.textContent).not.toContain("onload");
+  });
 });
