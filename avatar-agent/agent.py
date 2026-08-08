@@ -152,8 +152,19 @@ def resolve_category_persona(category: object, category_persona_map: object) -> 
 
 
 # --- Groq LLM 直接呼び出し ---
-async def fetch_avatar_config(tenant_id: str, api_url: str, avatar_config_id: str | None = None) -> dict | None:
-    """テナント別アバター設定を内部APIから取得。失敗時はNoneを返す。
+async def fetch_avatar_config(
+    tenant_id: str, api_url: str, avatar_config_id: str | None = None
+) -> tuple[dict | None, bool]:
+    """テナント別アバター設定を内部APIから取得し、(config, fetch_ok) を返す。
+
+    fetch_ok=False は「取得に失敗した = 誰のアバターか分からない」。
+    (None, True) は「取得できたが、そのテナントに有効なアバターが無い」。
+
+    この2つを必ず区別すること。区別せずに一律 None を返していたため、
+    /api/internal/avatar-config が 500 を返していた期間、呼び出し側が
+    「アバター未設定」と誤解し、環境変数の汎用エージェント（テナントと
+    無関係な第三者の顔）を無言で配信し続けた（2026-08-08）。
+
     avatar_config_id 指定時は特定アバターを取得（テスト用途）。
     """
     params: dict[str, str] = {"tenantId": tenant_id}
@@ -169,12 +180,48 @@ async def fetch_avatar_config(tenant_id: str, api_url: str, avatar_config_id: st
             ) as resp:
                 if resp.status != 200:
                     logger.warning(f"[avatar-config] API returned {resp.status}")
-                    return None
+                    return None, False
                 data = await resp.json()
-                return data.get("config")
+                return data.get("config"), True
     except Exception as e:
-        logger.warning(f"[avatar-config] fetch failed (using defaults): {e}")
+        logger.warning(f"[avatar-config] fetch failed: {e}")
+        return None, False
+
+
+def resolve_avatar_identity(
+    avatar_config: dict | None, config_fetch_ok: bool, env_agent_id: str | None
+) -> dict | None:
+    """LemonSlice に渡すアバターの同定情報を決める純関数。
+
+    返り値:
+      {"image_url": str} — テナントのアバター写真からトーキングヘッドを生成する
+      {"agent_id": str}  — LemonSlice に登録済みのペルソナを使う
+      None               — 誰のアバターか確定できない。アバターを起動しない
+
+    None を返すのは「顔が分からないなら誰の顔も出さない」ため。
+    以前はここで環境変数のハードコード既定値へ落ちており、設定取得に失敗した
+    テナントの訪問者に、そのテナントとは何の関係もない人物が表示されていた。
+    テキストチャットへの degrade は呼び出し側で既に実装済みなので、
+    起動しないことによる機能不全は起きない。
+    """
+    # 取得に失敗した = 誰のアバターか不明。この状態で誰かの顔を出してはいけない。
+    if not config_fetch_ok:
         return None
+
+    if avatar_config:
+        image_url = avatar_config.get("image_url")
+        if image_url:
+            return {"image_url": image_url}
+        agent_id = avatar_config.get("lemonslice_agent_id")
+        if agent_id:
+            return {"agent_id": agent_id}
+
+    # テナントに有効なアバターが無い場合のみ、運用者が明示的に設定した
+    # 環境変数の既定エージェントを使う。ハードコードの既定値は持たない
+    # （未設定なら None = アバター無しで、テキストチャットとして成立する）。
+    if env_agent_id:
+        return {"agent_id": env_agent_id}
+    return None
 
 
 async def call_groq_llm(
@@ -428,8 +475,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # アバター設定を動的取得
     api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
     avatar_config = None
+    # tenant_id が取れない = どのテナントの部屋か分からない。取得失敗と同じ扱いにする
+    # （この状態で既定アバターを出すと、素性の分からない部屋に誰かの顔を出すことになる）。
+    config_fetch_ok = False
     if tenant_id:
-        avatar_config = await fetch_avatar_config(tenant_id, api_url, avatar_config_id)
+        avatar_config, config_fetch_ok = await fetch_avatar_config(tenant_id, api_url, avatar_config_id)
 
     # 設定を適用（fallback: 環境変数のデフォルト）
     effective_system_prompt = (
@@ -440,14 +490,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         avatar_config.get("voice_id") if avatar_config and avatar_config.get("voice_id")
         else os.environ.get("FISH_AUDIO_REFERENCE_ID")
     )
-    effective_agent_id = (
-        avatar_config.get("lemonslice_agent_id") if avatar_config and avatar_config.get("lemonslice_agent_id")
-        else os.environ.get("LEMONSLICE_AGENT_ID", "agent_aee377cb0fec68ea")
+    avatar_identity = resolve_avatar_identity(
+        avatar_config, config_fetch_ok, os.environ.get("LEMONSLICE_AGENT_ID")
     )
-    effective_image_url = (
-        avatar_config.get("image_url") if avatar_config and avatar_config.get("image_url")
-        else None
-    )
+    effective_agent_id = (avatar_identity or {}).get("agent_id")
+    effective_image_url = (avatar_identity or {}).get("image_url")
     # emotion_tags: DB には JSON 文字列で格納される場合と list で届く場合の両対応
     effective_emotion_tags = avatar_config.get("emotion_tags") if avatar_config else None
     if isinstance(effective_emotion_tags, str):
@@ -468,7 +515,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         logger.warning(f"[entrypoint] category_persona_map is not a dict, ignoring: {type(category_persona_map)}")
         category_persona_map = {}
 
-    logger.info(f"[entrypoint] effective config: voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}, emotion_tags={len(effective_emotion_tags)} {effective_emotion_tags}, category_personas={len(category_persona_map)}")
+    logger.info(f"[entrypoint] effective config: config_fetch_ok={config_fetch_ok}, voice_id={effective_reference_id!r}, agent_id={effective_agent_id!r}, image_url={'set' if effective_image_url else 'none'}, custom_prompt={'yes' if avatar_config and avatar_config.get('personality_prompt') else 'no'}, emotion_tags={len(effective_emotion_tags)} {effective_emotion_tags}, category_personas={len(category_persona_map)}")
+    if avatar_identity is None:
+        # 沈黙させない: アバターが出ない理由をログの1行目で分かるようにする。
+        # 以前はここで無言で第三者にフォールバックしており、9日間気づかれなかった。
+        logger.error(
+            f"[entrypoint] アバターを起動しません: 設定を解決できませんでした "
+            f"(config_fetch_ok={config_fetch_ok}, avatar_config={'あり' if avatar_config else 'なし'})。"
+            "内部APIの応答と、テナントに有効なアバターがあるかを確認してください: "
+            "docs/AVATAR_CONFIG_500_RECOVERY.md"
+        )
 
     # FISH_AUDIO_TTS_MODEL: env で切替可能（有料モデルへの移行用）。
     # 実際に使用したモデル名は _report_tts_usage() へ申告し、原価計算をモデル別単価に
@@ -689,6 +745,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         f"agent_idle_prompt_src={'db' if avatar_config and avatar_config.get('agent_idle_prompt') else 'env'}"
     )
     try:
+        # 誰のアバターか確定できないならアバターを起動しない。
+        # ここで raise すると下の except が拾い、音声出力を戻したうえで
+        # テキストチャットとして継続する（既存の degrade 経路をそのまま使う）。
+        if avatar_identity is None:
+            raise RuntimeError(
+                "アバター設定を解決できないため起動しません"
+                f"(config_fetch_ok={config_fetch_ok}, tenant_id={tenant_id!r})。"
+                "無関係なアバターを表示しないための意図的な停止です。"
+                "テキストチャットは通常どおり利用できます。"
+            )
         # agent_id と agent_image_url は排他的（両方渡すとエラー）
         if effective_image_url:
             logger.info(f"[lemonslice] using agent_image_url: {effective_image_url[:80]!r}")
