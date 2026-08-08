@@ -47,8 +47,15 @@ export interface TenantDetail {
   ga4_error_message?: string | null;
   tenant_contact_email?: string | null;
   // set_widget_theme(チャットツール)が書き込む自由形式JSONB。widget.js が実際に
-  // 反映するのは primaryColor のみ(埋め込みコードの data-accent-color 属性)。
-  widget_theme?: { primaryColor?: string; [key: string]: unknown } | null;
+  // 反映するのは primaryColor(data-accent-color)と設置位置の position / offsetX /
+  // offsetY(data-position / data-offset-x / data-offset-y)のみ。
+  widget_theme?: {
+    primaryColor?: string;
+    position?: string;
+    offsetX?: number | string;
+    offsetY?: number | string;
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface ApiKey {

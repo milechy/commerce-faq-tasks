@@ -4,6 +4,11 @@
  * 使い方:
  *   <script src="/widget.js" data-tenant="YOUR_TENANT_ID" async></script>
  *
+ * 設置位置（任意 — サイト側の「トップへ戻る」ボタン等と重なる場合に使う）:
+ *   data-position="bottom-left"   寄せる角を左下に変える（既定: bottom-right）
+ *   data-offset-x="24"            画面端からの横余白 px（既定 24、0〜320 に丸め）
+ *   data-offset-y="96"            画面端からの縦余白 px（既定 24、0〜320 に丸め）
+ *
  * セキュリティ:
  *   - innerHTML 禁止 → textContent / createElement のみ使用
  *   - tenantId は data-tenant 属性から取得（body から禁止）
@@ -46,6 +51,20 @@
   var placeholderText = currentScript ? (currentScript.getAttribute('data-placeholder') || 'メッセージを入力…') : 'メッセージを入力…';
   var proactiveMessage = currentScript ? (currentScript.getAttribute('data-proactive-message') || '') : '';
   var proactiveDelay = currentScript ? parseInt(currentScript.getAttribute('data-proactive-delay') || '5000', 10) : 5000;
+  // 設置位置（既定は右下）。テナントサイト側の「トップへ戻る」ボタン等と重なると、
+  // FAB の z-index が最大値のため相手側がクリック不能になる。その回避手段として、
+  // 寄せる角（data-position）と余白（data-offset-x / data-offset-y）を公開する。
+  var positionRaw = currentScript ? (currentScript.getAttribute('data-position') || '') : '';
+  var horizontalSide = positionRaw.trim().toLowerCase() === 'bottom-left' ? 'left' : 'right';
+  // 画面外へ押し出さないよう 0〜320px に収める。数値でない指定は既定の 24px に戻す。
+  function parseOffset(raw) {
+    var n = parseInt(raw || '', 10);
+    if (isNaN(n)) return 24;
+    return Math.max(0, Math.min(320, n));
+  }
+  var offsetX = parseOffset(currentScript ? currentScript.getAttribute('data-offset-x') : '');
+  var offsetY = parseOffset(currentScript ? currentScript.getAttribute('data-offset-y') : '');
+
   var scriptedResponsesRaw = currentScript ? currentScript.getAttribute('data-scripted-responses') : '';
   var scriptedResponses = null;
   if (scriptedResponsesRaw) {
@@ -151,14 +170,15 @@
 
   var styleEl = document.createElement('style');
   styleEl.textContent = [
-    ':host { all: initial; font-family: system-ui, -apple-system, sans-serif; --accent: ' + accentColor + '; }',
+    ':host { all: initial; font-family: system-ui, -apple-system, sans-serif; --accent: ' + accentColor + ';',
+    '  --offset-x: ' + offsetX + 'px; --offset-y: ' + offsetY + 'px; }',
     '*,*::before,*::after { box-sizing: border-box; }',
 
     /* FABボタン */
     '.fab {',
     '  position: fixed;',
-    '  bottom: 24px;',
-    '  right: 24px;',
+    '  bottom: var(--offset-y);',
+    '  ' + horizontalSide + ': var(--offset-x);',
     '  z-index: 2147483647;',
     '  min-width: 120px;',
     '  min-height: 120px;',
@@ -262,11 +282,13 @@
     /* プロアクティブバブル */
     '.proactive-bubble {',
     '  position: fixed;',
-    '  bottom: 152px;',
-    '  right: 24px;',
+    /* FAB(120px) の上端 + 8px の間隔 */
+    '  bottom: calc(var(--offset-y) + 128px);',
+    '  ' + horizontalSide + ': var(--offset-x);',
     '  z-index: 2147483646;',
     '  background: #fff;',
-    '  border-radius: 16px 16px 4px 16px;',
+    /* 尻尾は FAB のある側の下角に向ける */
+    '  border-radius: ' + (horizontalSide === 'left' ? '16px 16px 16px 4px' : '16px 16px 4px 16px') + ';',
     '  padding: 12px 16px;',
     '  box-shadow: 0 4px 20px rgba(0,0,0,0.12);',
     '  font-size: 14px;',
@@ -280,7 +302,7 @@
     '.proactive-bubble-dismiss {',
     '  position: absolute;',
     '  top: -8px;',
-    '  right: -8px;',
+    '  ' + horizontalSide + ': -8px;',
     '  width: 20px;',
     '  height: 20px;',
     '  border-radius: 50%;',
@@ -302,11 +324,14 @@
     /* チャットパネル */
     '.panel {',
     '  position: fixed;',
-    '  bottom: 132px;',
-    '  right: 24px;',
+    /* FAB(120px) の上端 -12px（従来の bottom:132px 相当） */
+    '  bottom: calc(var(--offset-y) + 108px);',
+    '  ' + horizontalSide + ': var(--offset-x);',
     '  z-index: 2147483646;',
     '  width: min(390px, calc(100vw - 32px));',
-    '  height: min(672px, calc(100vh - 120px));',
+    /* 高さは下端(offset-y + 108px)を起点に算出する。定数にすると data-offset-y を
+       大きくした分だけパネルが画面上端からはみ出す（+16px は上端の余白） */
+    '  height: min(672px, calc(100vh - var(--offset-y) - 124px));',
     '  background: #fff;',
     '  border-radius: 16px;',
     '  box-shadow: 0 20px 60px rgba(0,0,0,0.18), 0 4px 16px rgba(0,0,0,0.08);',
@@ -315,7 +340,7 @@
     '  overflow: hidden;',
     '  opacity: 0;',
     '  transform: scale(0.9) translateY(16px);',
-    '  transform-origin: bottom right;',
+    '  transform-origin: bottom ' + horizontalSide + ';',
     '  transition: ' + (prefersReducedMotion ? 'none' : 'opacity 0.2s, transform 0.2s') + ';',
     '  pointer-events: none;',
     '}',
@@ -756,7 +781,8 @@
     '    flex-direction: column;',
     '    width: 100vw !important;',
     '    max-width: 100vw !important;',
-    '    right: 0 !important; bottom: 0 !important;',
+    /* 全画面表示。data-position="bottom-left" 時は base の left も打ち消す必要がある */
+    '    left: 0 !important; right: 0 !important; bottom: 0 !important;',
     '    height: 100dvh;',
     '    border-radius: 0;',
     '  }',

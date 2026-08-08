@@ -41,6 +41,7 @@ import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
 import { fetchAnalyticsSummary, fetchConversionSummary } from '../analytics/summaryQueries';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
+import { buildPlacementAttributes, validateWidgetPlacement } from './widgetPlacement';
 
 // チャットでの一括インポートで一度に生成・コミットできるFAQ数の上限。
 // POST /v1/admin/knowledge/text/commit・/scrape/commit の zod スキーマ(max 20)と揃える。
@@ -1244,10 +1245,12 @@ export async function executeToolCall(
         const accentColorAttr = typeof primaryColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(primaryColor)
           ? `\n  data-accent-color="${primaryColor}"`
           : '';
+        // 設置位置(position / offsetX / offsetY)。既定のままなら何も出力しない
+        const placementAttrs = buildPlacementAttributes(widgetTheme);
 
         return truncate(
           `ウィジェット埋め込みコードのひな形:\n\n` +
-          `<script src="https://api.r2c.biz/widget.js" data-api-key="YOUR_API_KEY"${accentColorAttr}></script>\n\n` +
+          `<script src="https://api.r2c.biz/widget.js" data-api-key="YOUR_API_KEY"${accentColorAttr}${placementAttrs}></script>\n\n` +
           `現在のAPIキー先頭: ${keyPrefix}...\n` +
           `※ 実際のAPIキーは発行時のみ表示されます。再確認が必要な場合は新しいキーを発行してください`
         );
@@ -1269,6 +1272,12 @@ export async function executeToolCall(
       const primaryColor = (theme as Record<string, unknown>)['primaryColor'];
       if (primaryColor !== undefined && !/^#[0-9a-fA-F]{6}$/.test(String(primaryColor))) {
         return truncate('primaryColor は #RRGGBB 形式の16進数カラーコードで指定してください（例: #3B82F6）');
+      }
+      // position / offsetX / offsetY も同様に埋め込みコードの属性として出力されるため、
+      // 壊れた属性を作らないよう書き込み前に弾く
+      const placementError = validateWidgetPlacement(theme as Record<string, unknown>);
+      if (placementError) {
+        return truncate(placementError);
       }
 
       try {
