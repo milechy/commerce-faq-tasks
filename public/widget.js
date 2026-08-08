@@ -329,7 +329,9 @@
     '  ' + horizontalSide + ': var(--offset-x);',
     '  z-index: 2147483646;',
     '  width: min(390px, calc(100vw - 32px));',
-    '  height: min(672px, calc(100vh - 120px));',
+    /* 高さは下端(offset-y + 108px)を起点に算出する。定数にすると data-offset-y を
+       大きくした分だけパネルが画面上端からはみ出す（+16px は上端の余白） */
+    '  height: min(672px, calc(100vh - var(--offset-y) - 124px));',
     '  background: #fff;',
     '  border-radius: 16px;',
     '  box-shadow: 0 20px 60px rgba(0,0,0,0.18), 0 4px 16px rgba(0,0,0,0.08);',
