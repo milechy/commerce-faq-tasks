@@ -1903,6 +1903,37 @@
         // 全 audio 要素にミュートを反映
         var audios = avatarArea.querySelectorAll('audio');
         for (var i = 0; i < audios.length; i++) { audios[i].muted = avatarMuted; }
+        // ミュート解除は貴重な「本物のユーザー操作」なので、ここで再生も復旧させる。
+        //
+        // 音声トラックの play() は FAB クリックから 15〜20 秒後（トラック到着時）に
+        // 走るため、ユーザー操作の文脈が切れており、自動再生ポリシーに拒否されて
+        // paused のまま止まることがある（実測: muted=true, paused=true, readyState=4,
+        // advancing=false — データは届いているのに再生だけが始まっていない）。
+        // muted フラグの切り替えだけでは paused は解けないので、解除しても無音のままだった。
+        if (!avatarMuted) {
+          // LiveKit 公式の復旧API: 内部の AudioContext を resume し、購読済み音声を再開する
+          // （「The AudioContext encountered an error…」で死んだ音声パイプラインもここで復帰する）。
+          try {
+            var _rm = window.__rajiuceRoom;
+            if (_rm && typeof _rm.startAudio === 'function') {
+              var _sa = _rm.startAudio();
+              if (_sa && typeof _sa.catch === 'function') {
+                _sa.catch(function (err) { console.warn('[FAQ Widget] startAudio failed:', err && (err.message || err)); });
+              }
+            }
+          } catch (_saErr) {
+            console.warn('[FAQ Widget] startAudio error:', _saErr && _saErr.message);
+          }
+          // 要素側も paused なら明示的に再生し直す（クリック直下なのでポリシーに許可される）
+          for (var pi = 0; pi < audios.length; pi++) {
+            if (audios[pi].paused) {
+              var _pp = audios[pi].play();
+              if (_pp && typeof _pp.catch === 'function') {
+                _pp.catch(function (err) { console.warn('[FAQ Widget] audio replay failed:', err && (err.message || err)); });
+              }
+            }
+          }
+        }
         // アイコン更新
         while (avatarMuteBtn.firstChild) { avatarMuteBtn.removeChild(avatarMuteBtn.firstChild); }
         avatarMuteBtn.appendChild(avatarMuted ? _muteSvg() : _speakerSvg());
@@ -2014,6 +2045,14 @@
           var attached = track.detach();
           for (var j = 0; j < attached.length; j++) { attached[j].remove(); }
         }
+      });
+
+      // 自動再生ポリシーで音声がブロックされた/解除された瞬間を記録する。
+      // 「声が出ない」報告の切り分けはこの行の有無を最初に見る
+      // （canPlaybackAudio=false なら room.startAudio() をユーザー操作内で呼べば復帰する。
+      //   ミュート解除ボタンのハンドラが実装済み）。
+      room.on(LK.RoomEvent.AudioPlaybackStatusChanged, function () {
+        console.warn('[FAQ Widget][DIAG] AudioPlaybackStatusChanged canPlaybackAudio=' + room.canPlaybackAudio + ' t=' + Math.round(performance.now()) + 'ms');
       });
 
       room.on(LK.RoomEvent.Disconnected, function (reason) {

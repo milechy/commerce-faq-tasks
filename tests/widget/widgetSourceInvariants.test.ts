@@ -171,6 +171,18 @@ describe('public/widget.js アバターセッション keep-alive / 復活の不
     expect(m![0]).toContain('connectLiveKit();');
     expect(m![0]).not.toContain('sendTTSRequest(');
   });
+
+  it('ミュート解除は muted フラグの切替だけでなく startAudio() と play() 再試行で再生を復旧する', () => {
+    // 音声トラックの play() はユーザー操作の文脈外（トラック到着時）で走るため
+    // 自動再生ポリシーに拒否されて paused のまま止まることがある
+    // （実測: muted=true, paused=true, readyState=4, advancing=false）。
+    // muted 切替だけに戻すと「ミュート解除しても無音」が再発する。
+    expect(WIDGET_SRC).toMatch(/if \(!avatarMuted\) \{[\s\S]*?startAudio[\s\S]*?\.paused[\s\S]*?\.play\(\)/);
+  });
+
+  it('自動再生ブロックの可観測性: AudioPlaybackStatusChanged を DIAG ログに出している', () => {
+    expect(WIDGET_SRC).toMatch(/AudioPlaybackStatusChanged[\s\S]{0,300}?canPlaybackAudio/);
+  });
 });
 
 describe('public/widget.min.js が壊れたビルド成果物になっていない', () => {
