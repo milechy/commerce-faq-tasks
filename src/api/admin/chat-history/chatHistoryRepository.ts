@@ -283,11 +283,14 @@ export interface ChatHistoryMessage {
 
 /**
  * セッション内の全メッセージを created_at ASC で返す。
- * tenantId が一致しない場合は空配列を返す（セキュリティ）。
+ * セッションが存在しない（またはtenantIdが一致しない = 越境）場合は null を返す。
+ * セッションは存在するが本文が0件の場合は [] を返す。
+ * 呼び出し元はこの2つを区別すること（CLAUDE.md 20: 「存在しない」と「空」を同じ値で表現しない）。
+ * 越境は必ず null 側に倒す — [] を返すとそのIDのセッションが実在することが漏れる。
  */
 export async function getMessages(
   params: MessageListParams,
-): Promise<ChatHistoryMessage[]> {
+): Promise<ChatHistoryMessage[] | null> {
   const pool = getPool();
 
   // テナント所有権を検証 (tenantId が undefined = super_admin → tenant チェック省略)
@@ -297,14 +300,14 @@ export async function getMessages(
       `SELECT id FROM chat_sessions WHERE id = $1 AND tenant_id = $2`,
       [params.sessionDbId, params.tenantId],
     );
-    if (sessionResult.rows.length === 0) return [];
+    if (sessionResult.rows.length === 0) return null;
     verifiedSessionId = sessionResult.rows[0].id;
   } else {
     const sessionResult = await pool.query<{ id: string }>(
       `SELECT id FROM chat_sessions WHERE id = $1`,
       [params.sessionDbId],
     );
-    if (sessionResult.rows.length === 0) return [];
+    if (sessionResult.rows.length === 0) return null;
     verifiedSessionId = sessionResult.rows[0].id;
   }
 

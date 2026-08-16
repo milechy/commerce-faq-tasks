@@ -36,7 +36,7 @@ export default function EscalationDetailPage() {
       setMessages(data.messages ?? []);
       setError(null);
     } catch {
-      setError("会話の取得に失敗しました");
+      setError("会話の取得に失敗しました。しばらく経ってから再度お試しください。");
     } finally {
       setLoading(false);
     }
@@ -168,6 +168,11 @@ export default function EscalationDetailPage() {
           <div style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)" }}>
             <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
             {t("chat_history.loading")}
+          </div>
+        ) : !error && messages.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)" }}>
+            <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>💬</span>
+            まだお客様の発言がありません
           </div>
         ) : (
           <>

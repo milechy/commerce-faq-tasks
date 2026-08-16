@@ -122,9 +122,8 @@ export function registerChatHistoryRoutes(app: Express): void {
       try {
         const messages = await getMessages({ sessionDbId, tenantId });
 
-        // messages が空 = セッションが存在しないかテナント不一致
-        if (messages.length === 0) {
-          // 存在確認は getMessages 内で実施済みなので 404 で返す
+        // null = セッションが存在しない（またはテナント不一致）。[] は「存在するが本文0件」で正常。
+        if (messages === null) {
           return res.status(404).json({ error: "セッションが見つかりません" });
         }
 
