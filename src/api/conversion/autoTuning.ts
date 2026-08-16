@@ -21,8 +21,12 @@ export async function detectRepeatedJudgeSuggestions(
   if (!pool) return [];
   try {
     const result = await pool.query(
-      `SELECT unnest(suggested_rules) AS rule, COUNT(*) AS cnt
-       FROM conversation_evaluations
+      // suggested_rules は JSONB(migration_evaluations.sql)。unnest() は配列型専用で
+       // JSONB を受け取れず必ず例外になる(evaluationsRepository と同じ不具合)。
+       // ここは catch で [] を返すため無症状だが、この関数を配線した瞬間に
+       // 「常に候補0件」として静かに壊れるため、同時に是正しておく。
+      `SELECT rule, COUNT(*) AS cnt
+       FROM conversation_evaluations, jsonb_array_elements_text(suggested_rules) AS rule
        WHERE tenant_id = $1
          AND created_at >= NOW() - INTERVAL '30 days'
          AND suggested_rules IS NOT NULL
