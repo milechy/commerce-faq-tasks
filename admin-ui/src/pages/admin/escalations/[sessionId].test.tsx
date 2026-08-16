@@ -3,8 +3,8 @@
 // 「セッション不在(404)」「サーバ障害(500)」は従来どおりエラー表示することを固定する。
 // (CLAUDE.md 20: 「存在しない」と「空」を同じ値で表現しない — 対応中の会話253件が
 //  全件404だった不具合の回帰テスト)
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import EscalationDetailPage from "./[sessionId]";
 import { authFetch } from "../../../lib/api";
@@ -186,5 +186,129 @@ describe("EscalationDetailPage", () => {
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
 
     expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1);
+  });
+
+  // ── イレギュラー操作: 連打・多重送信 ──────────────────────────────────
+  it("「対応完了にする」を連打しても対応完了リクエストは1回しか送られない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).endsWith("/resolve-escalation")) {
+        return Promise.resolve(jsonResponse(200, { ok: true }));
+      }
+      return Promise.resolve(jsonResponse(200, { messages: [], total: 0 }));
+    });
+
+    renderPage();
+    await screen.findByText(/まだお客様の発言がありません/);
+
+    const resolveButton = screen.getByRole("button", { name: /対応完了にする/ });
+    fireEvent.click(resolveButton);
+    fireEvent.click(resolveButton); // 連打
+    fireEvent.click(resolveButton);
+
+    await waitFor(() => {
+      const resolveCalls = vi
+        .mocked(authFetch)
+        .mock.calls.filter(([url]) => String(url).endsWith("/resolve-escalation"));
+      expect(resolveCalls.length).toBe(1);
+    });
+  });
+
+  it("送信ボタンを連打しても、送信中は2件目の返信が送られない", async () => {
+    let replyCalls = 0;
+    let resolveReplyPromise: (() => void) | null = null;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (String(url).endsWith("/reply")) {
+        replyCalls += 1;
+        // 1件目の返信POSTを人為的に「送信中」のまま止め、連打の窓を作る
+        return new Promise((resolve) => {
+          resolveReplyPromise = () => resolve(jsonResponse(201, { ok: true }));
+        });
+      }
+      return Promise.resolve(jsonResponse(200, { messages: [], total: 0 }));
+    });
+
+    renderPage();
+    await screen.findByText(/まだお客様の発言がありません/);
+
+    const textarea = screen.getByPlaceholderText(/お客様への返信を入力してください/);
+    fireEvent.change(textarea, { target: { value: "少々お待ちください" } });
+    const sendButton = screen.getByRole("button", { name: "送信" });
+    fireEvent.click(sendButton);
+    // 送信中はボタンが無効化され、連打しても2件目のPOSTが飛ばない
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    await waitFor(() => expect(replyCalls).toBe(1));
+    resolveReplyPromise?.();
+  });
+
+  // ── イレギュラー操作: 空白のみの入力 ────────────────────────────────
+  it("空白のみの返信は送信ボタンが無効のままで、送信されない", async () => {
+    vi.mocked(authFetch).mockResolvedValue(jsonResponse(200, { messages: [], total: 0 }));
+
+    renderPage();
+    await screen.findByText(/まだお客様の発言がありません/);
+
+    const textarea = screen.getByPlaceholderText(/お客様への返信を入力してください/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "   " } });
+
+    const sendButton = screen.getByRole("button", { name: "送信" }) as HTMLButtonElement;
+    expect(sendButton.disabled).toBe(true);
+
+    fireEvent.click(sendButton);
+    // 初回ロードの1回のみ(送信POSTは飛んでいない)
+    expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1);
+  });
+
+  // ── イレギュラー操作: 画面離脱後にポーリングが続かない ──────────────
+  describe("ポーリングのライフサイクル", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("画面を離れる(アンマウント)と、以降の5秒ポーリングは発火しない", async () => {
+      vi.useFakeTimers();
+      vi.mocked(authFetch).mockResolvedValue(jsonResponse(200, { messages: [], total: 0 }));
+
+      const { unmount } = renderPage();
+      await vi.waitFor(() => expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1));
+
+      unmount();
+
+      await vi.advanceTimersByTimeAsync(20_000); // 5秒間隔を4回分進める
+      expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1); // 増えていない
+    });
+
+    it("画面を開いたままだと、5秒ごとに新着メッセージを自動取得して表示する(ユーザー操作なし)", async () => {
+      vi.useFakeTimers();
+      vi.mocked(authFetch)
+        .mockResolvedValueOnce(jsonResponse(200, { messages: [], total: 0 })) // 初回
+        .mockResolvedValueOnce(
+          jsonResponse(200, {
+            messages: [
+              { id: "m1", role: "user", content: "追加で質問です", metadata: {}, created_at: "2026-08-10T00:00:00Z" },
+            ],
+            total: 1,
+          }),
+        ); // 1回目のポーリングで新着
+
+      renderPage();
+      await vi.waitFor(() => expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1));
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await vi.waitFor(() => expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(2));
+      expect(screen.getByText("追加で質問です")).toBeTruthy();
+    });
+  });
+
+  // ── ネットワーク例外(非ok応答ではなく fetch 自体が reject するケース) ──
+  it("fetch自体が例外を投げても(オフライン等)、生の例外メッセージを出さず同じ案内文になる", async () => {
+    vi.mocked(authFetch).mockRejectedValue(new TypeError("Failed to fetch"));
+
+    renderPage();
+
+    const errorBanner = await screen.findByText(/失敗しました/);
+    expect(errorBanner.textContent).not.toMatch(/TypeError|Failed to fetch/);
   });
 });

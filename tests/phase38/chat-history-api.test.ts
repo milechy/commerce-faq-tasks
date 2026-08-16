@@ -153,6 +153,51 @@ describe("Chat History API", () => {
       expect(res.status).toBe(404);
     });
 
+    it("returns 500 (not a crash) and does not leak the raw DB error when getMessages throws", async () => {
+      mockGetMessages.mockRejectedValueOnce(new Error("connection terminated unexpectedly"));
+
+      const res = await request(app)
+        .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(500);
+      expect(JSON.stringify(res.body)).not.toContain("connection terminated");
+    });
+
+    it("client_admin without a tenant_id claim on the JWT gets 403, not a crash or another tenant's data", async () => {
+      const noTenantToken = makeDevJwt({ app_metadata: { role: "client_admin" } });
+
+      const res = await request(app)
+        .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+        .set("Authorization", `Bearer ${noTenantToken}`);
+
+      expect(res.status).toBe(403);
+      expect(mockGetMessages).not.toHaveBeenCalled();
+    });
+
+    it("a role outside the admin allowlist gets 403 and never reaches getMessages", async () => {
+      const viewerToken = makeDevJwt({ app_metadata: { role: "viewer", tenant_id: "demo-tenant" } });
+
+      const res = await request(app)
+        .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+        .set("Authorization", `Bearer ${viewerToken}`);
+
+      expect(res.status).toBe(403);
+      expect(mockGetMessages).not.toHaveBeenCalled();
+    });
+
+    it("client_admin cannot escape their own tenant via a ?tenant= query override (super_admin-only param)", async () => {
+      const clientAdminToken = makeDevJwt({ app_metadata: { role: "client_admin", tenant_id: "demo-tenant" } });
+      mockGetMessages.mockResolvedValueOnce([MESSAGE_FIXTURE] as any);
+
+      await request(app)
+        .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages?tenant=other-tenant")
+        .set("Authorization", `Bearer ${clientAdminToken}`);
+
+      // client_admin の tenantId は常に JWT 由来。クエリの ?tenant= は無視される
+      expect(mockGetMessages).toHaveBeenCalledWith({ sessionDbId: "sess-uuid-1", tenantId: "demo-tenant" });
+    });
+
     it("returns 401 without auth token", async () => {
       const res = await request(app).get(
         "/v1/admin/chat-history/sessions/sess-uuid-1/messages"

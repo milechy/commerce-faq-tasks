@@ -4474,6 +4474,45 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].card).toBeUndefined();
     });
 
+    // CLAUDE.md 20: getMessages() は「セッション不在」= null と「本文0件」= []
+    // を区別する契約に是正した(2026-08-16, PR #751)。resolveSessionByShortId で
+    // 存在確認済みのこの経路では実際には0件配列しか返らないはずだが、両方の値を
+    // 明示的にテストし、どちらでも例外にならず同じ「メッセージはありません」に
+    // 落ちることを固定する(型変更に伴うnullガードの回帰防止)。
+    it('本文が0件(空配列)のセッションは「メッセージはありません」を返し、cardは付けない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-empty', 'get_chat_session_messages', { session_id: 'a1b2c3d4' }))
+        .mockResolvedValueOnce(makeGroqResponse('まだメッセージがありません。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetMessages.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'a1b2c3d4の会話を見せて', sessionId: 'sess-cm-empty' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('メッセージはありません');
+      expect(res.body.actions[0].card).toBeUndefined();
+    });
+
+    it('getMessages が null を返しても(存在確認済みの経路で理論上到達しない値でも)例外にならず同じ案内を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cm-null', 'get_chat_session_messages', { session_id: 'a1b2c3d4' }))
+        .mockResolvedValueOnce(makeGroqResponse('まだメッセージがありません。'));
+
+      seedSessions([OWN_SESSION]);
+      mockGetMessages.mockResolvedValueOnce(null);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'a1b2c3d4の会話を見せて', sessionId: 'sess-cm-null' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('メッセージはありません');
+      expect(res.body.actions[0].card).toBeUndefined();
+    });
+
     // 既知のリスク: resolveSessionByShortId は `LIMIT 6` で候補を取得し、6件返ってきた場合
     // 実際の一致件数がそれ以上あっても「result.rows.length」(=6)をそのまま件数として表示する。
     // 同じ短縮IDプレフィックスを持つセッションが7件以上ある(極めて起こりにくいが、テナントの
