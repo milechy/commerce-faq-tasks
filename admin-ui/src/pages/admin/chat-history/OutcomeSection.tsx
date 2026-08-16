@@ -79,8 +79,8 @@ export function OutcomeSection({
               background:
                 outcome === value
                   ? "rgba(34,197,94,0.2)"
-                  : "rgba(31,41,55,0.5)",
-              color: outcome === value ? "#4ade80" : "#9ca3af",
+                  : "var(--muted)",
+              color: outcome === value ? "#4ade80" : "var(--muted-foreground)",
               fontSize: 15,
               fontWeight: outcome === value ? 700 : 500,
               cursor: outcomeSubmitting ? "not-allowed" : "pointer",

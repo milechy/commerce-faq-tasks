@@ -145,7 +145,7 @@ export default function EscalationDetailPage() {
       </button>
 
       {error && (
-        <div style={{ marginBottom: 16, padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 15 }}>
+        <div style={{ marginBottom: 16, padding: "14px 18px", borderRadius: 12, background: "var(--destructive-surface)", border: "1px solid var(--destructive-border)", color: "var(--destructive)", fontSize: 15 }}>
           {error}
         </div>
       )}
@@ -242,7 +242,7 @@ export default function EscalationDetailPage() {
             borderRadius: 12,
             background: "rgba(15,23,42,0.95)",
             border: "1px solid var(--border)",
-            color: "var(--foreground)",
+            color: "#f9fafb",
             fontSize: 15,
             fontWeight: 600,
             boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
