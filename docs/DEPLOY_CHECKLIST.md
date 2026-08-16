@@ -114,7 +114,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | 要適用 |
 | `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | 要適用 |
 | `src/api/admin/avatar/migration_category_persona.sql` | LemonSliceペルソナスワップ: avatar_configs に category_persona_map(JSONB)追加 | 要適用 |
-| `src/lib/sai/migration_sai_tasks.sql` | Sai代行タスクの所有権レジストリ(sai_tasks)新設。get_sai_task_status の越境読み取り・課金誤帰属を止める (PR #755) | 要適用 |
+| `src/lib/sai/migration_sai_tasks.sql` | Sai代行タスクの所有権レジストリ(sai_tasks)新設。get_sai_task_status の越境読み取り・課金誤帰属を止める (PR #755) | ✅ 2026-08-16 |
 
 ### Phase A Day 2 migration 実行手順
 
@@ -152,6 +152,11 @@ ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/api/admin/feedb
 ```
 
 ### sai_tasks migration 実行手順 (PR #755)
+
+> **本番適用済み (2026-08-16)。** 以下は再構築時・別環境向けの記録。
+> `CREATE TABLE IF NOT EXISTS` なので再実行しても無害だが、通常は不要。
+> 適用時の確認結果: `task_id`(PK) / `tenant_id`(NOT NULL) / `tenants(id)` へのFK /
+> `idx_sai_tasks_tenant` がいずれも作成済み。
 
 **適用順序: デプロイ → migration。逆にはできない。**
 `migration_sai_tasks.sql` は rsync でVPSへ配布されるため、デプロイ前はVPS上にファイルが存在しない。
