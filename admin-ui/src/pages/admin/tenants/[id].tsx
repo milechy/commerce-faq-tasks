@@ -174,8 +174,12 @@ export default function TenantDetailPage() {
   const [tenant, setTenant] = useState<TenantDetail | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
+  // 500等の「読み込み失敗」と404の「見つかりません」を区別する(禁止事項21)。
+  // どちらも tenant===null で表れるが、文言と再試行導線を変える必要があるため別state。
+  const [loadError, setLoadError] = useState<"not_found" | "failed" | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("settings");
   const [toast, setToast] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -185,6 +189,7 @@ export default function TenantDetailPage() {
   useEffect(() => {
     const load = async () => {
       setLoading(true);
+      setLoadError(null);
       try {
         const [tenantData, keysData] = await Promise.all([
           fetchTenantDetail(tenantId),
@@ -197,13 +202,17 @@ export default function TenantDetailPage() {
           navigate("/login", { replace: true });
           return;
         }
-        // tenant not found — leave null
+        setTenant(null);
+        const status = err instanceof Error ? err.message.match(/^HTTP (\d+)$/)?.[1] : undefined;
+        setLoadError(status === "404" ? "not_found" : "failed");
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [tenantId, navigate]);
+  }, [tenantId, navigate, reloadKey]);
+
+  const handleRetryLoad = () => setReloadKey((k) => k + 1);
 
   const handleSaveSettings = async (data: {
     name: string;
@@ -291,6 +300,7 @@ export default function TenantDetailPage() {
         navigate={navigate}
         handleEnterPreview={handleEnterPreview}
         t={t}
+        emptyTitle={loadError === "failed" ? t("tenant_detail.load_failed") : t("tenant_detail.not_found")}
       />
 
       {loading ? (
@@ -394,7 +404,26 @@ export default function TenantDetailPage() {
             fontSize: 15,
           }}
         >
-          {t("tenant_detail.not_found")}
+          <div>{loadError === "not_found" ? t("tenant_detail.not_found") : t("tenant_detail.load_failed")}</div>
+          {loadError === "failed" && (
+            <button
+              onClick={handleRetryLoad}
+              style={{
+                marginTop: 16,
+                padding: "10px 20px",
+                minHeight: 44,
+                borderRadius: 10,
+                border: "1px solid var(--border)",
+                background: "var(--card)",
+                color: "var(--foreground)",
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {t("common.retry")}
+            </button>
+          )}
         </div>
       )}
     </div>
