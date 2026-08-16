@@ -78,7 +78,10 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
                ROUND(COUNT(*) / GREATEST($2::float, 1), 2)::text AS avg_per_day
              FROM chat_sessions
              WHERE tenant_id = $1
-               AND created_at >= NOW() - ($3::text)::interval`,
+               -- chat_sessions に created_at は存在しない。セッション開始時刻は started_at
+               -- (chat-history/migration.sql)。created_at を参照していたため
+               -- GET /v1/admin/tenants/:id/analytics-summary が常時500だった。
+               AND started_at >= NOW() - ($3::text)::interval`,
             [tenantId, days, interval],
           ),
           db.query<{ source: string; cnt: string }>(

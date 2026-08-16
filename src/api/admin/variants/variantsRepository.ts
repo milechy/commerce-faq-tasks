@@ -86,7 +86,8 @@ export async function getVariantStats(
      FROM chat_sessions cs
      LEFT JOIN conversation_evaluations e ON e.session_id = cs.session_id
      WHERE cs.tenant_id = $1
-       AND cs.created_at >= NOW() - INTERVAL '${days} days'
+       -- chat_sessions の時刻列は started_at(created_at は存在しない)
+       AND cs.started_at >= NOW() - INTERVAL '${days} days'
        AND cs.prompt_variant_id IS NOT NULL
      GROUP BY cs.prompt_variant_id`,
     [tenantId],
