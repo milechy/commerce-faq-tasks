@@ -690,7 +690,14 @@ export default function CopilotPreviewPage() {
     const result = await sendAgentChat(text, { history: realHistory });
     if (requestEpochRef.current !== myEpoch) return; // より新しい呼び出しに追い越された
     if (!result.ok) {
-      push(say(result.message));
+      // silent(起動時ブリーフィング等、ユーザーが打った体でない自動送信)の失敗は、
+      // 唯一の復帰手段が画面リロードになってしまう。同じ文面をチップから
+      // 再送できるようにする(runAction経由の既存の__real:ディスパッチをそのまま使う
+      // — 新しいチップ種別・新しい送信経路は作らない)。
+      const retryChips: Chip[] | undefined = opts?.silent
+        ? [{ label: "もう一度試す", action: `__real:${text}`, tone: "ghost" }]
+        : undefined;
+      push(say(result.message, retryChips));
       setSending(false);
       return;
     }

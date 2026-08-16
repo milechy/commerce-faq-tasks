@@ -4436,3 +4436,111 @@ describe("CopilotPreviewPage — 解決確認プロンプト", () => {
     expect(posted).toEqual([]);
   });
 });
+
+// Asana (8/8): 起動時ブリーフィング(BOOTSTRAP_PROMPT, silent送信)が5xxで失敗すると、
+// 復帰手段が画面リロードしかなくなっていた不具合の回帰テスト。silentな自動送信の
+// 失敗時だけ「もう一度試す」チップを出し、押すと同じ文面を既存のrunAction経由の
+// __real:ディスパッチで再送する(新しいチップ種別・新しい送信経路は作らない)。
+describe("CopilotPreviewPage — 起動時ブリーフィング失敗時の再試行", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+  });
+
+  // オンボーディング未完了だと業種ヒアリングの挨拶に分岐し、bootstrap(週次ブリーフィング)
+  // 自体が発火しないため、onboarding_completed_at を立てて通常の週次ブリーフィング
+  // パスに固定する(旧UI案内リンクカードのテストと同じ固定方法)。
+  function mockAgentChat(onCall: (n: number) => Promise<Response>) {
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      return onCall(agentCalls);
+    });
+  }
+
+  it("起動時ブリーフィングが500で失敗すると「もう一度試す」チップが表示される", async () => {
+    mockAgentChat(() =>
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ error: "AIエージェントの応答生成に失敗しました" }),
+      } as Response),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("エラー: AIエージェントの応答生成に失敗しました")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "もう一度試す" })).toBeTruthy();
+    // 送信中フラグが残らない(無限スピナーにならない)
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("「もう一度試す」を押すと再送信され、成功すれば通常の週次まとめに置き換わる", async () => {
+    mockAgentChat((n) =>
+      n === 1
+        ? Promise.resolve({
+            ok: false,
+            status: 500,
+            json: () => Promise.resolve({ error: "AIエージェントの応答生成に失敗しました" }),
+          } as Response)
+        : mockOk({ reply: "今週も順調です。", actions: [] }),
+    );
+
+    renderPage();
+    await screen.findByRole("button", { name: "もう一度試す" });
+
+    fireEvent.click(screen.getByRole("button", { name: "もう一度試す" }));
+
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "もう一度試す" })).toBeNull();
+  });
+
+  it("「もう一度試す」を連打しても2回目の送信は発火しない(1回目のクリックでチップが消える)", async () => {
+    mockAgentChat((n) =>
+      n === 1
+        ? Promise.resolve({
+            ok: false,
+            status: 500,
+            json: () => Promise.resolve({ error: "AIエージェントの応答生成に失敗しました" }),
+          } as Response)
+        : mockOk({ reply: "今週も順調です。", actions: [] }),
+    );
+
+    renderPage();
+    const retryBtn = await screen.findByRole("button", { name: "もう一度試す" });
+
+    fireEvent.click(retryBtn);
+    fireEvent.click(retryBtn); // 連打(チップは即座に chipsUsed=true になり再クリック不可)
+
+    await screen.findByText("今週も順調です。");
+    const agentCalls = vi
+      .mocked(authFetch)
+      .mock.calls.filter((c) => String(c[0]).includes("/v1/admin/agent/chat"));
+    expect(agentCalls.length).toBe(2); // 1回目の失敗 + 再試行1回のみ
+  });
+
+  it("通常の会話中の送信失敗(silentでない)には「もう一度試す」チップを出さない(自由入力欄で再送できるため)", async () => {
+    mockAgentChat((n) =>
+      n === 1
+        ? mockOk({ reply: "今週も順調です。", actions: [] })
+        : Promise.resolve({
+            ok: false,
+            status: 500,
+            json: () => Promise.resolve({ error: "AIエージェントの応答生成に失敗しました" }),
+          } as Response),
+    );
+
+    renderPage();
+    await waitForBootstrapSendStarted();
+
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "送料を教えて" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    await screen.findByText("エラー: AIエージェントの応答生成に失敗しました");
+    expect(screen.queryByRole("button", { name: "もう一度試す" })).toBeNull();
+  });
+});
