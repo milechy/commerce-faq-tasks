@@ -128,8 +128,23 @@ describe("Chat History API", () => {
       expect(msg).toHaveProperty("created_at");
     });
 
-    it("returns 404 when getMessages returns empty array", async () => {
+    // CLAUDE.md 20: 「存在しない」と「空」を同じ値で表現しない。
+    // getMessages() は不在= null / 存在するが本文0件= [] を返す契約(2026-08-16是正)。
+    // 以前はどちらも [] で表現され、messages.length===0 を一律404にしていたため、
+    // 「本文がまだ無い(対応待ち)セッション」まで全て404になっていた。
+    it("returns 200 with empty array when the session exists but has 0 messages", async () => {
       mockGetMessages.mockResolvedValueOnce([]);
+
+      const res = await request(app)
+        .get("/v1/admin/chat-history/sessions/sess-uuid-1/messages")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ messages: [], total: 0 });
+    });
+
+    it("returns 404 when getMessages returns null (session not found)", async () => {
+      mockGetMessages.mockResolvedValueOnce(null);
 
       const res = await request(app)
         .get("/v1/admin/chat-history/sessions/nonexistent/messages")

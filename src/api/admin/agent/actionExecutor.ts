@@ -2414,8 +2414,10 @@ export async function executeToolCall(
           return truncate(resolved.message);
         }
 
+        // resolveSessionByShortId が存在確認済みのため null は実質到達しないが、
+        // getMessages の戻り型が null|[] になった(CLAUDE.md 20)のでガードする。
         const messages = await getMessages({ sessionDbId: resolved.session.id, tenantId });
-        if (messages.length === 0) {
+        if (messages === null || messages.length === 0) {
           return truncate(`セッション[${resolved.session.session_id.slice(0, 8)}]にメッセージはありません`);
         }
 
