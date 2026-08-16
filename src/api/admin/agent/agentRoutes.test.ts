@@ -8318,7 +8318,23 @@ describe('POST /v1/admin/agent/chat', () => {
       });
     });
 
+    // sai_tasks レジストリ(所有権照合)の応答を SQL 内容で判定して返す。
+    // mockResolvedValueOnce のキューだと、他のクエリが先に消費した場合に
+    // 照合結果が undefined になり fail-closed へ倒れてテストが偽陽性になるため、
+    // 呼び出し順に依存しない形にする。
+    function seedSaiTaskOwners(owners: Record<string, string>) {
+      mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (typeof sql === 'string' && sql.includes('FROM sai_tasks')) {
+          const taskId = Array.isArray(params) ? String(params[0]) : '';
+          const ownerTenantId = owners[taskId];
+          return { rows: ownerTenantId ? [{ tenant_id: ownerTenantId }] : [] };
+        }
+        return { rows: [] };
+      });
+    }
+
     it('client_admin: get_sai_task_status で状態と自己申告非信用の注記を返す', async () => {
+      seedSaiTaskOwners({ 'sai-task-99': 'tenant-abc' });
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-99' }))
         .mockResolvedValueOnce(makeGroqResponse('進捗を確認しました。'));
@@ -8340,6 +8356,7 @@ describe('POST /v1/admin/agent/chat', () => {
     });
 
     it('タスク完了時のみ、他のLLM機能と同じtrackUsage(sai_agent)でコストが計上される', async () => {
+      seedSaiTaskOwners({ 'sai-task-100': 'tenant-abc' });
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-100' }))
         .mockResolvedValueOnce(makeGroqResponse('完了しました。'));
@@ -8365,6 +8382,142 @@ describe('POST /v1/admin/agent/chat', () => {
           saiAgentSteps: 5,
         }),
       );
+    });
+
+    // -----------------------------------------------------------------------
+    // get_sai_task_status: テナント所有権
+    // task_id は LLM/ユーザー由来の文字列であり、所有権照合が無いと
+    // 他テナントのタスクの status/outcome/last_action が読め、さらに
+    // usage_logs.request_id がグローバルUNIQUE + ON CONFLICT DO NOTHING のため
+    // 他テナント分のステップが自テナントに計上され、正当な計上が消える。
+    // -----------------------------------------------------------------------
+    describe('get_sai_task_status: テナント所有権', () => {
+      it('他テナントが依頼したtask_idは「見つかりません」を返し、Sai VPSに到達しない', async () => {
+        seedSaiTaskOwners({ 'sai-task-other': 'tenant-zzz' });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-other' }))
+          .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '進捗を教えて', sessionId: 'sess-sai-cross-01' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('見つかりません');
+        // 越境は「権限がない」ではなく「不存在」に倒す(IDの実在を漏らさない)
+        expect(result).not.toContain('権限');
+        expect(mockGetSaiTask).not.toHaveBeenCalled();
+        expect(mockTrackUsage).not.toHaveBeenCalledWith(
+          expect.objectContaining({ featureUsed: 'sai_agent' }),
+        );
+      });
+
+      it('記録の無いtask_idも「見つかりません」を返し、Sai VPSに到達しない', async () => {
+        seedSaiTaskOwners({});
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-unknown' }))
+          .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '進捗を教えて', sessionId: 'sess-sai-cross-02' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain('見つかりません');
+        expect(mockGetSaiTask).not.toHaveBeenCalled();
+      });
+
+      it('sai_tasks 未マイグレーション時は fail-closed で Sai VPS に到達しない(不存在とは別文言)', async () => {
+        mockQuery.mockImplementation(async () => {
+          const err = new Error('relation "sai_tasks" does not exist') as Error & { code: string };
+          err.code = '42P01';
+          throw err;
+        });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-99' }))
+          .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '進捗を教えて', sessionId: 'sess-sai-cross-03' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('確認できませんでした');
+        expect(result).not.toContain('見つかりません');
+        expect(mockGetSaiTask).not.toHaveBeenCalled();
+      });
+
+      it('super_admin も previewMode の実効テナントで照合される(ロールでバイパスしない)', async () => {
+        seedSaiTaskOwners({ 'sai-task-other': 'tenant-zzz' });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('get_sai_task_status', { task_id: 'sai-task-other' }))
+          .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+        const res = await request(makeApp(SUPER_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '進捗を教えて', sessionId: 'sess-sai-cross-04', targetTenantId: 'tenant-abc' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain('見つかりません');
+        expect(mockGetSaiTask).not.toHaveBeenCalled();
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // request_sai_task: 所有権の記録
+    // 記録が無いと後から進捗を照会できない(fail-closed で拒否される)ため、
+    // 「依頼できたが記録できなかった」を成功と同じ文言にしない。
+    // -----------------------------------------------------------------------
+    describe('request_sai_task: 所有権の記録', () => {
+      it('依頼元テナントと依頼内容が sai_tasks に記録される', async () => {
+        mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'enterprise' }] });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
+          .mockResolvedValueOnce(makeGroqResponse('依頼しました。'));
+
+        mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-301', status: 'queued' });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-sai-reg-01' });
+
+        expect(res.status).toBe(200);
+        const insertCall = mockQuery.mock.calls.find(
+          (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO sai_tasks'),
+        );
+        expect(insertCall).toBeDefined();
+        expect(insertCall![1]).toEqual(
+          expect.arrayContaining(['sai-task-301', 'tenant-abc', '送料表記を直して']),
+        );
+        expect(res.body.actions[0].result).toContain('sai-task-301');
+      });
+
+      it('記録に失敗した場合は成功を装わず、進捗確認ができない旨とタスクIDを返す', async () => {
+        mockQuery.mockImplementation(async (sql: string) => {
+          if (typeof sql === 'string' && sql.includes('INSERT INTO sai_tasks')) {
+            const err = new Error('relation "sai_tasks" does not exist') as Error & { code: string };
+            err.code = '42P01';
+            throw err;
+          }
+          return { rows: [{ plan: 'enterprise' }] };
+        });
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('request_sai_task', { description: '送料表記を直して', confirmed: true }))
+          .mockResolvedValueOnce(makeGroqResponse('依頼しました。'));
+
+        mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-302', status: 'queued' });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '送料表記を直して', sessionId: 'sess-sai-reg-02' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('sai-task-302');
+        expect(result).toContain('確認できません');
+      });
     });
   });
 

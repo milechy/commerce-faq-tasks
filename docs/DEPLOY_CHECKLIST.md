@@ -114,6 +114,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | 要適用 |
 | `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | 要適用 |
 | `src/api/admin/avatar/migration_category_persona.sql` | LemonSliceペルソナスワップ: avatar_configs に category_persona_map(JSONB)追加 | 要適用 |
+| `src/lib/sai/migration_sai_tasks.sql` | Sai代行タスクの所有権レジストリ(sai_tasks)新設。get_sai_task_status の越境読み取り・課金誤帰属を止める (PR #755) | 要適用 |
 
 ### Phase A Day 2 migration 実行手順
 
@@ -148,6 +149,51 @@ INTERNAL_API_HMAC_SECRET=<random-256bit-secret>
 ```bash
 # VPS で実行:
 ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/api/admin/feedback/migration_feedback_flagged.sql"
+```
+
+### sai_tasks migration 実行手順 (PR #755)
+
+**適用順序: デプロイ → migration。逆にはできない。**
+`migration_sai_tasks.sql` は rsync でVPSへ配布されるため、デプロイ前はVPS上にファイルが存在しない。
+
+この順序で安全な理由 — どの瞬間も現状より悪くならないため:
+
+| タイミング | `get_sai_task_status` の挙動 | 状態 |
+|---|---|---|
+| デプロイ前(現状) | 所有権照合なしで他テナントのタスクを読める | **脆弱** |
+| デプロイ後・migration前 | 照合先が無いため全件拒否 (fail-closed) | 安全・機能停止 |
+| migration後 | 依頼元テナントのタスクのみ読める | 安全・正常 |
+
+中間状態では進捗照会が「確認できませんでした」を返すのみで、依頼(`request_sai_task`)自体は通る。
+できるだけ短く畳むため、デプロイ直後に続けて実行すること。
+
+```bash
+# 1. デプロイ (唯一の手順)
+bash SCRIPTS/deploy-vps.sh
+
+# 2. バックアップ (必須)
+ssh root@65.108.159.161 "pg_dump \$DATABASE_URL > /opt/backups/pre_sai_tasks_\$(date +%Y%m%d_%H%M).sql"
+
+# 3. 適用前の確認 — 既に存在しないこと (存在するなら適用済み。二重実行は不要)
+ssh root@65.108.159.161 "psql \$DATABASE_URL -c \"\\d sai_tasks\""
+
+# 4. Migration 実行
+ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/lib/sai/migration_sai_tasks.sql"
+
+# 5. 確認 — task_id(PK) / tenant_id(NOT NULL) / tenants(id)へのFK / インデックスが揃っていること
+ssh root@65.108.159.161 "psql \$DATABASE_URL -c \"\\d sai_tasks\""
+```
+
+**動作確認**: 管理画面のチャットで代行を1件依頼し、返ってきたタスクIDで進捗照会する。
+「確認できませんでした」が消え、状態が表示されれば適用成功。
+別テナントのタスクIDを渡すと「見つかりません」になる（「権限がありません」ではない）。
+
+**ロールバック**: 新規テーブルのみで既存テーブルへの変更が無いため、コードを戻せばテーブルは無害な残骸になる。
+テーブル自体を消す必要がある場合のみ以下。**コードが新しいままだと進捗照会が全件拒否に戻る**ので、
+必ずコードのロールバックとセットで行う。
+
+```bash
+ssh root@65.108.159.161 "psql \$DATABASE_URL -c 'DROP TABLE IF EXISTS sai_tasks;'"
 ```
 
 ## トラブルシューティング
