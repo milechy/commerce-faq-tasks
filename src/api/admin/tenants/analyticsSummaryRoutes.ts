@@ -75,7 +75,10 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
           db.query<{ total: string; avg_per_day: string }>(
             `SELECT
                COUNT(*)::text AS total,
-               ROUND(COUNT(*) / GREATEST($2::float, 1), 2)::text AS avg_per_day
+               -- COUNT(*)/float は double precision になるが、PostgreSQL の2引数 round() は
+               -- numeric 版しか無く "function round(double precision, integer) does not exist"
+               -- で落ちる。numeric へキャストしてから丸める。
+               ROUND((COUNT(*) / GREATEST($2::float, 1))::numeric, 2)::text AS avg_per_day
              FROM chat_sessions
              WHERE tenant_id = $1
                -- chat_sessions に created_at は存在しない。セッション開始時刻は started_at

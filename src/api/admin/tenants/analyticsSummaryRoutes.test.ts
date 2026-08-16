@@ -107,4 +107,23 @@ describe("GET /v1/admin/tenants/:id/analytics-summary", () => {
     expect(res.status).toBe(200);
     expect(allSql()).toMatch(/FROM\s+chat_sessions/);
   });
+
+  // 2引数の ROUND() は numeric 版しか存在しない。COUNT(*)/float の結果
+  // (double precision)をそのまま渡すと `function round(double precision, integer)
+  // does not exist` で落ちる。started_at の修正後に実際に踏んだ二段目の不具合。
+  it("ROUND に渡す前に numeric へキャストする（double precision のままだと落ちる）", async () => {
+    await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    const sqls = chatSessionSql();
+    expect(sqls.length).toBeGreaterThan(0);
+    for (const sql of sqls) {
+      if (!/ROUND\s*\(/i.test(sql)) continue;
+      // ROUND(...) の第1引数が ::numeric でキャストされていること
+      expect(sql).toMatch(/ROUND\s*\([\s\S]*?::numeric\s*,\s*\d+\s*\)/i);
+      // float を直接 ROUND に渡す形に戻っていないこと
+      expect(sql).not.toMatch(/ROUND\s*\(\s*COUNT\(\*\)\s*\/[^,]*,\s*\d+\s*\)/i);
+    }
+  });
 });
