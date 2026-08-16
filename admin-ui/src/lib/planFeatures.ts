@@ -63,3 +63,63 @@ export function isPlanUpgradeRequired(body: unknown): boolean {
     (body as { error?: unknown }).error === "plan_upgrade_required"
   );
 }
+
+/** 複数レスポンスを一括判定した結果。planLimited と genericFailure は同時に立ちうる。 */
+export interface FetchOutcome {
+  /**
+   * 403 plan_upgrade_required を1本でも受けたか。
+   * message を持たない403もあるため、message の有無ではなくこのフラグで判定すること
+   * (planLimitMessage が null でも制限は掛かっている場合がある)。
+   */
+  planLimited: boolean;
+  /** サーバが返したプラン制限の理由文。無ければ null(呼び出し側で共通文言に落とす) */
+  planLimitMessage: string | null;
+  /** プラン制限以外の失敗(5xx・非JSON応答など)を1本でも受けたか */
+  genericFailure: boolean;
+}
+
+/**
+ * 「成功したものだけ state に反映し、失敗はプラン制限とそれ以外に仕分ける」処理。
+ *
+ * 複数エンドポイントを Promise.all で並列取得する画面(会話分析・成約分析)が
+ * 同じ処理を各自で持っていたため共通化した。ページごとに403判定を書かない
+ * (CLAUDE.md「実装の置き場所」: プラン制限のフロント判定は planFeatures.ts)。
+ *
+ * - 403 plan_upgrade_required は正常系の分岐であり genericFailure に含めない
+ * - 1本が失敗しても他の成功結果は巻き込まない(applyの呼び出しは独立)
+ * - 失敗した項目の apply は呼ばれないため、呼び出し元が「前回値を残すか null に
+ *   戻すか」を選べる。古い期間のデータが新しい期間ラベルの下に残らないよう、
+ *   呼び出し元は失敗時に null へ倒すこと。
+ */
+export async function applyFetchResults(
+  entries: Array<{ res: Response; apply: (data: unknown) => void }>,
+): Promise<FetchOutcome> {
+  let planLimited = false;
+  let planLimitMessage: string | null = null;
+  let genericFailure = false;
+
+  await Promise.all(
+    entries.map(async ({ res, apply }) => {
+      if (res.ok) {
+        apply(await res.json());
+        return;
+      }
+      let body: unknown = null;
+      try {
+        body = await res.json();
+      } catch {
+        // 非JSON応答(nginx の502 HTML など)は本文を読めない。generic 扱いにする。
+      }
+      if (isPlanUpgradeRequired(body)) {
+        planLimited = true;
+        // 複数本が403でも最初の message を代表として使う(同じ制限が並ぶだけのため)
+        planLimitMessage =
+          planLimitMessage ?? (body as { message?: string }).message ?? null;
+      } else {
+        genericFailure = true;
+      }
+    }),
+  );
+
+  return { planLimited, planLimitMessage, genericFailure };
+}

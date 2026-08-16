@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { planHasFeature, isPlanUpgradeRequired } from "./planFeatures";
+import { describe, it, expect, vi } from "vitest";
+import { planHasFeature, isPlanUpgradeRequired, applyFetchResults } from "./planFeatures";
 
 describe("planHasFeature", () => {
   it.each([
@@ -54,5 +54,98 @@ describe("isPlanUpgradeRequired", () => {
 
   it("空オブジェクトでは false", () => {
     expect(isPlanUpgradeRequired({})).toBe(false);
+  });
+});
+
+// applyFetchResults: 会話分析・成約分析が共有する「成功だけ反映し、失敗を
+// プラン制限とそれ以外に仕分ける」処理。以前は両ページに同じ実装が重複していた。
+describe("applyFetchResults", () => {
+  const res = (status: number, body: unknown): Response =>
+    ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: () => Promise.resolve(body),
+    }) as Response;
+
+  const rejectingRes = (status: number): Response =>
+    ({
+      ok: false,
+      status,
+      json: () => Promise.reject(new SyntaxError("Unexpected token <")),
+    }) as unknown as Response;
+
+  it("全て成功なら全ての apply が呼ばれ、失敗フラグは立たない", async () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const outcome = await applyFetchResults([
+      { res: res(200, { v: 1 }), apply: a },
+      { res: res(200, { v: 2 }), apply: b },
+    ]);
+
+    expect(a).toHaveBeenCalledWith({ v: 1 });
+    expect(b).toHaveBeenCalledWith({ v: 2 });
+    expect(outcome).toEqual({ planLimited: false, planLimitMessage: null, genericFailure: false });
+  });
+
+  it("403 plan_upgrade_required は genericFailure にせず、message を拾う", async () => {
+    const outcome = await applyFetchResults([
+      { res: res(403, { error: "plan_upgrade_required", message: "Growth以上です" }), apply: vi.fn() },
+    ]);
+
+    expect(outcome.planLimited).toBe(true);
+    expect(outcome.planLimitMessage).toBe("Growth以上です");
+    expect(outcome.genericFailure).toBe(false);
+  });
+
+  it("message の無い403でも planLimited は true になる(message有無で判定しない)", async () => {
+    const outcome = await applyFetchResults([
+      { res: res(403, { error: "plan_upgrade_required" }), apply: vi.fn() },
+    ]);
+
+    expect(outcome.planLimited).toBe(true);
+    expect(outcome.planLimitMessage).toBeNull();
+  });
+
+  it("失敗した項目の apply は呼ばれない(古い値を上書きしない)", async () => {
+    const ok = vi.fn();
+    const ng = vi.fn();
+    await applyFetchResults([
+      { res: res(200, { v: 1 }), apply: ok },
+      { res: res(500, { error: "internal_error" }), apply: ng },
+    ]);
+
+    expect(ok).toHaveBeenCalledTimes(1);
+    expect(ng).not.toHaveBeenCalled();
+  });
+
+  it("エラーボディがJSONでない(502のHTML等)場合は genericFailure 扱いにする", async () => {
+    const outcome = await applyFetchResults([{ res: rejectingRes(502), apply: vi.fn() }]);
+
+    expect(outcome.genericFailure).toBe(true);
+    expect(outcome.planLimited).toBe(false);
+  });
+
+  it("403と500が混在したら両方のフラグが立つ(表示側が復旧行動の要る方を優先できる)", async () => {
+    const outcome = await applyFetchResults([
+      { res: res(403, { error: "plan_upgrade_required", message: "Growth以上です" }), apply: vi.fn() },
+      { res: res(500, { error: "internal_error" }), apply: vi.fn() },
+    ]);
+
+    expect(outcome.planLimited).toBe(true);
+    expect(outcome.genericFailure).toBe(true);
+  });
+
+  it("複数本が403でも最初の message を代表として使う", async () => {
+    const outcome = await applyFetchResults([
+      { res: res(403, { error: "plan_upgrade_required", message: "1本目" }), apply: vi.fn() },
+      { res: res(403, { error: "plan_upgrade_required", message: "2本目" }), apply: vi.fn() },
+    ]);
+
+    expect(outcome.planLimitMessage).toBe("1本目");
+  });
+
+  it("空配列でも例外にならない", async () => {
+    const outcome = await applyFetchResults([]);
+    expect(outcome).toEqual({ planLimited: false, planLimitMessage: null, genericFailure: false });
   });
 });

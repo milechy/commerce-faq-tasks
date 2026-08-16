@@ -7,7 +7,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
 import { useLang } from "../../../i18n/LangContext";
-import { isPlanUpgradeRequired } from "../../../lib/planFeatures";
+import { applyFetchResults } from "../../../lib/planFeatures";
+import { LoadErrorBanner } from "../../../components/common/LoadErrorBanner";
+import { PlanLimitNotice } from "../../../components/common/PlanLimitNotice";
 
 // ------------------------------------------------------------------ //
 // Types
@@ -113,7 +115,8 @@ export default function ConversionDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   // 403 plan_upgrade_required は正常系の分岐であり、error(赤帯)とは別に持つ
   // (CLAUDE.md 絶対にやってはいけないこと 21: 403を「読み込みに失敗しました」/「0件」と混同しない)。
-  const [planLimitMessage, setPlanLimitMessage] = useState<string | null>(null);
+  // null = 制限なし / オブジェクト = 制限あり(message はサーバが返さなければ null)。
+  const [planLimit, setPlanLimit] = useState<{ message: string | null } | null>(null);
   // A/Bテスト件数は experiments=[] だと「0件成功」と「未取得」を区別できないため専用フラグを持つ
   const [expLoadFailed, setExpLoadFailed] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -127,7 +130,7 @@ export default function ConversionDashboardPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setPlanLimitMessage(null);
+    setPlanLimit(null);
     try {
       const [attrRes, effRes, expRes] = await Promise.all([
         authFetch(`${API_BASE}/v1/admin/conversion/attributions?period=${period}${tenantParam}`),
@@ -136,52 +139,31 @@ export default function ConversionDashboardPage() {
       ]);
 
       // 403 plan_upgrade_required は正常系の分岐(エラーではない)。それ以外の失敗だけを
-      // 「読み込み失敗」として扱う。いずれの失敗でも summary/experiments を [] や 0 のまま
-      // にしておくと「実績0件」と誤読されるため、成功したものだけ状態を更新する。
-      let sawPlanLimit = false;
-      let planLimitText: string | null = null;
-      let sawGenericFailure = false;
-
-      const handle = async (res: Response, onOk: (data: any) => void): Promise<void> => {
-        if (res.ok) {
-          onOk(await res.json());
-          return;
-        }
-        let body: unknown = null;
-        try {
-          body = await res.json();
-        } catch {
-          // JSON化できない失敗は generic 扱いへ
-        }
-        if (isPlanUpgradeRequired(body)) {
-          sawPlanLimit = true;
-          planLimitText =
-            planLimitText ??
-            (body as { message?: string }).message ??
-            "この機能は現在のプランではご利用いただけません。プランのアップグレードをご検討ください。";
-        } else {
-          sawGenericFailure = true;
-        }
-      };
-
-      await Promise.all([
-        handle(attrRes, (data) => setSummary(data.summary)),
-        handle(effRes, (data) => setRankings(data.rankings ?? [])),
-        handle(expRes, (data) => setExperiments(data.experiments ?? [])),
+      // 「読み込み失敗」として扱う。仕分けの実装は lib/planFeatures.ts に共通化してある
+      // (会話分析も同じものを使う)。
+      const outcome = await applyFetchResults([
+        { res: attrRes, apply: (d) => setSummary((d as { summary: ConversionSummary }).summary) },
+        { res: effRes, apply: (d) => setRankings((d as { rankings?: EffectivenessRanking[] }).rankings ?? []) },
+        { res: expRes, apply: (d) => setExperiments((d as { experiments?: ABExperiment[] }).experiments ?? []) },
       ]);
+
+      // 失敗した項目は「実績0件」と誤読されないよう未取得状態へ戻す。期間を切り替えて
+      // 失敗したときに前の期間の数値が新しい期間ラベルの下に残るのも防ぐ(CLAUDE.md 17)。
+      if (!attrRes.ok) setSummary(null);
+      if (!effRes.ok) setRankings([]);
       setExpLoadFailed(!expRes.ok);
 
-      if (sawGenericFailure) {
-        setError("データの読み込みに失敗しました。時間をおいて再試行してください。");
-      } else if (sawPlanLimit) {
-        setPlanLimitMessage(planLimitText);
+      if (outcome.genericFailure) {
+        setError(t("common.load_failed"));
+      } else if (outcome.planLimited) {
+        setPlanLimit({ message: outcome.planLimitMessage });
       }
     } catch {
-      setError("データの読み込みに失敗しました。時間をおいて再試行してください。");
+      setError(t("common.load_failed"));
     } finally {
       setLoading(false);
     }
-  }, [period, isSuperAdmin, effectiveTenantId, tenantParam]);
+  }, [period, isSuperAdmin, effectiveTenantId, tenantParam, t]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 
@@ -243,61 +225,11 @@ export default function ConversionDashboardPage() {
         </div>
       </div>
 
-      {/* Error(読み込み失敗。403プラン制限はここに出さない） */}
-      {error && (
-        <div
-          style={{
-            marginBottom: 20,
-            padding: "14px 18px",
-            borderRadius: 12,
-            background: "rgba(127,29,29,0.4)",
-            border: "1px solid rgba(248,113,113,0.3)",
-            color: "#fca5a5",
-            fontSize: 15,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <span>{error}</span>
-          <button
-            onClick={() => void loadData()}
-            style={{
-              padding: "8px 16px",
-              minHeight: 36,
-              borderRadius: 8,
-              border: "1px solid rgba(248,113,113,0.4)",
-              background: "transparent",
-              color: "#fca5a5",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            再試行
-          </button>
-        </div>
-      )}
+      {/* 読み込み失敗(5xx等)。403プラン制限はここに出さない */}
+      {error && <LoadErrorBanner message={error} onRetry={() => void loadData()} />}
 
       {/* プラン制限（正常系の分岐。エラーではないので赤帯にしない） */}
-      {!error && planLimitMessage && (
-        <div
-          style={{
-            marginBottom: 20,
-            padding: "14px 18px",
-            borderRadius: 12,
-            background: "var(--card)",
-            border: "1px solid var(--border)",
-            color: "var(--foreground)",
-            fontSize: 15,
-          }}
-        >
-          ✨ {planLimitMessage}
-        </div>
-      )}
+      {!error && planLimit && <PlanLimitNotice message={planLimit.message} />}
 
       {/* KPI Cards */}
       <div style={GRID4}>
