@@ -20,10 +20,10 @@ export default function KpiCard({
       style={{
         flex: "1 1 260px",
         borderRadius: 14,
-        border: met ? "1px solid #1f2937" : "1px solid rgba(248,113,113,0.4)",
+        border: met ? "1px solid #1f2937" : "1px solid var(--destructive-border)",
         background: met
           ? "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.7))"
-          : "linear-gradient(145deg, rgba(127,29,29,0.6), rgba(127,29,29,0.3))",
+          : "var(--destructive-surface)",
         padding: "20px 18px",
         minHeight: 56,
         display: "flex",
@@ -31,7 +31,7 @@ export default function KpiCard({
         gap: 8,
         boxShadow: met
           ? "0 4px 16px rgba(0,0,0,0.2)"
-          : "0 4px 20px rgba(239,68,68,0.2)",
+          : "0 4px 20px rgba(239,68,68,0.15)",
         transition: "all 0.2s ease",
       }}
     >
@@ -47,7 +47,7 @@ export default function KpiCard({
           style={{
             fontSize: 14,
             fontWeight: 600,
-            color: met ? "#9ca3af" : "#fca5a5",
+            color: met ? "#9ca3af" : "var(--destructive)",
             lineHeight: 1.3,
           }}
         >
@@ -59,8 +59,8 @@ export default function KpiCard({
             fontWeight: 700,
             padding: "3px 10px",
             borderRadius: 999,
-            background: met ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.2)",
-            color: met ? "#4ade80" : "#f87171",
+            background: met ? "rgba(34,197,94,0.15)" : "var(--destructive-border)",
+            color: met ? "#4ade80" : "var(--destructive)",
             whiteSpace: "nowrap",
             flexShrink: 0,
           }}
@@ -81,7 +81,7 @@ export default function KpiCard({
           style={{
             fontSize: 32,
             fontWeight: 700,
-            color: met ? "#f9fafb" : "#fca5a5",
+            color: met ? "#f9fafb" : "var(--destructive)",
             lineHeight: 1,
           }}
         >
@@ -92,7 +92,7 @@ export default function KpiCard({
             style={{
               fontSize: 14,
               fontWeight: 500,
-              color: met ? "#9ca3af" : "#fca5a5",
+              color: met ? "#9ca3af" : "var(--destructive)",
             }}
           >
             {unit}
@@ -103,7 +103,7 @@ export default function KpiCard({
       <div
         style={{
           fontSize: 12,
-          color: met ? "#6b7280" : "#f87171",
+          color: met ? "#6b7280" : "var(--destructive)",
           marginTop: 2,
         }}
       >
@@ -114,8 +114,8 @@ export default function KpiCard({
         <div
           style={{
             fontSize: 12,
-            color: met ? "#6b7280" : "#fca5a5",
-            opacity: 0.8,
+            color: met ? "#6b7280" : "var(--destructive)",
+            opacity: met ? 0.8 : 0.9,
           }}
         >
           {description}

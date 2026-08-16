@@ -45,6 +45,8 @@
   --accent:                 oklch(93% 0.03 240);
   --accent-foreground:      oklch(35% 0.08 240);
   --destructive:            oklch(54% 0.22 27);
+  --destructive-surface:    oklch(54% 0.22 27 / 0.08);
+  --destructive-border:     oklch(54% 0.22 27 / 0.35);
   --ring:                   oklch(52% 0.22 240);
 
   --sidebar:                oklch(97.5% 0.005 240);
@@ -75,6 +77,8 @@
   --accent:                 oklch(62% 0.22 240 / 0.15);
   --accent-foreground:      oklch(75% 0.15 240);
   --destructive:            oklch(60% 0.22 27);
+  --destructive-surface:    oklch(60% 0.22 27 / 0.18);
+  --destructive-border:     oklch(60% 0.22 27 / 0.4);
   --ring:                   oklch(62% 0.22 240);
 
   --card:                   oklch(17% 0.015 240);
