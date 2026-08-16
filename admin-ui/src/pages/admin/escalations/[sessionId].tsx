@@ -6,6 +6,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { shouldSubmitOnEnter } from "../../../lib/utils";
 import { MessageList } from "../chat-history/MessageList";
 import type { Message } from "../chat-history/types";
 
@@ -23,6 +24,7 @@ export default function EscalationDetailPage() {
   const [sending, setSending] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [isComposing, setIsComposing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
@@ -187,11 +189,13 @@ export default function EscalationDetailPage() {
           value={replyText}
           onChange={(e) => setReplyText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (shouldSubmitOnEnter(e, isComposing)) {
               e.preventDefault();
               void handleSend();
             }
           }}
+          onCompositionStart={() => setIsComposing(true)}
+          onCompositionEnd={() => setIsComposing(false)}
           placeholder="お客様への返信を入力してください..."
           rows={2}
           style={{

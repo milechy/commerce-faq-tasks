@@ -140,4 +140,51 @@ describe("EscalationDetailPage", () => {
     expect(await screen.findByText("担当します")).toBeTruthy();
     expect(screen.queryByText(/まだお客様の発言がありません/)).toBeNull();
   });
+
+  // CLAUDE.md 禁止事項2: IME/Enter判定を手書きしない。この重複は過去に
+  // 13日間の実バグを産んでいる。返信先はエンドユーザー(お客様)であり、
+  // 変換途中の文字列が送信されると取り消せない。
+  it("IME変換中のEnterでは送信されない(変換確定のEnterを誤送信しない)", async () => {
+    vi.mocked(authFetch).mockResolvedValue(jsonResponse(200, { messages: [], total: 0 }));
+
+    renderPage();
+    await screen.findByText(/まだお客様の発言がありません/);
+
+    const textarea = screen.getByPlaceholderText(/お客様への返信を入力してください/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "へんかんちゅう" } });
+    fireEvent.compositionStart(textarea);
+    fireEvent.keyDown(textarea, { key: "Enter", keyCode: 229 });
+
+    // 送信APIが叩かれていないこと(初回ロードの1回だけ)
+    expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1);
+  });
+
+  it("IME変換確定後のEnterでは送信される", async () => {
+    vi.mocked(authFetch).mockResolvedValue(jsonResponse(200, { messages: [], total: 0 }));
+
+    renderPage();
+    await screen.findByText(/まだお客様の発言がありません/);
+
+    const textarea = screen.getByPlaceholderText(/お客様への返信を入力してください/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "担当します" } });
+    fireEvent.compositionStart(textarea);
+    fireEvent.compositionEnd(textarea);
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    // 初回ロード(1回) + 返信POST(1回)
+    await vi.waitFor(() => expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(2));
+  });
+
+  it("Shift+Enterでは送信されず改行として扱われる(既存挙動を維持)", async () => {
+    vi.mocked(authFetch).mockResolvedValue(jsonResponse(200, { messages: [], total: 0 }));
+
+    renderPage();
+    await screen.findByText(/まだお客様の発言がありません/);
+
+    const textarea = screen.getByPlaceholderText(/お客様への返信を入力してください/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "1行目" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
+
+    expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1);
+  });
 });
