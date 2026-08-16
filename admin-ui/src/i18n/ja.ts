@@ -9,6 +9,12 @@ const ja = {
   "common.deleting": "削除中...",
   "common.refresh": "🔄 更新",
   "common.retry": "やり直す",
+  // 読み込み失敗(5xx・ネットワーク断など)の共通文言。
+  // 403 plan_upgrade_required はエラーではないので、こちらを使わない。
+  "common.load_failed": "データの読み込みに失敗しました。時間をおいて、もう一度お試しください。",
+  // サーバがプラン制限の理由文(message)を返さなかった場合のフォールバック。
+  // 通常はサーバの message をそのまま表示する。
+  "common.plan_limit_generic": "この機能は現在のプランではご利用いただけません。プランのアップグレードをご検討ください。",
 
   // Nav
   "nav.dashboard": "管理ダッシュボード",

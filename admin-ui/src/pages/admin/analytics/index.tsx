@@ -16,7 +16,10 @@ import {
 } from "chart.js";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { useAuth } from "../../../auth/useAuth";
-import { isPlanUpgradeRequired } from "../../../lib/planFeatures";
+import { useLang } from "../../../i18n/LangContext";
+import { applyFetchResults } from "../../../lib/planFeatures";
+import { LoadErrorBanner } from "../../../components/common/LoadErrorBanner";
+import { PlanLimitNotice } from "../../../components/common/PlanLimitNotice";
 import type {
   AnalyticsSummaryResponse,
   AnalyticsTrendsResponse,
@@ -52,6 +55,7 @@ ChartJS.register(
 export default function AnalyticsDashboardPage() {
   const navigate = useNavigate();
   const { user, isSuperAdmin, previewMode, previewTenantId } = useAuth();
+  const { t } = useLang();
 
   const [period, setPeriod] = useState<string>("30d");
   const [tenantFilter, setTenantFilter] = useState<string>("");
@@ -69,7 +73,9 @@ export default function AnalyticsDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   // 403 plan_upgrade_required は正常系の分岐であり、error(赤帯)とは別の状態として持つ
   // (CLAUDE.md 絶対にやってはいけないこと 21: 403を「読み込みに失敗しました」と混同しない)。
-  const [planLimitMessage, setPlanLimitMessage] = useState<string | null>(null);
+  // null = 制限なし / オブジェクト = 制限あり(message はサーバが返さなければ null)。
+  // message の有無で判定すると「403だが message 無し」を取りこぼすため状態で持つ。
+  const [planLimit, setPlanLimit] = useState<{ message: string | null } | null>(null);
 
   const tenantId = isSuperAdmin && !previewMode
     ? undefined
@@ -89,7 +95,7 @@ export default function AnalyticsDashboardPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setPlanLimitMessage(null);
+    setPlanLimit(null);
 
     const params = new URLSearchParams({ period });
     if (tenantId) params.set("tenant", tenantId);
@@ -103,46 +109,33 @@ export default function AnalyticsDashboardPage() {
         authFetch(`${API_BASE}/v1/admin/analytics/conversions?${params}`),
       ]);
 
-      // 各レスポンスを個別に判定する: 403 plan_upgrade_required は正常系の分岐であり
-      // 「読み込みに失敗しました」の赤帯にしない。1本が403でも残り3本の成功結果を
-      // 巻き込んで消さない(以前は !ok を1本でも検出すると全体を throw していた)。
-      let sawPlanLimit = false;
-      let planLimitText: string | null = null;
-      let sawGenericFailure = false;
-
-      const applyIfOk = async <T,>(res: Response, setter: (v: T) => void): Promise<void> => {
-        if (res.ok) {
-          setter((await res.json()) as T);
-          return;
-        }
-        let body: unknown = null;
-        try {
-          body = await res.json();
-        } catch {
-          // JSON化できない失敗は generic 扱いへ
-        }
-        if (isPlanUpgradeRequired(body)) {
-          sawPlanLimit = true;
-          planLimitText =
-            planLimitText ??
-            (body as { message?: string }).message ??
-            "この機能は現在のプランではご利用いただけません。プランのアップグレードをご検討ください。";
-        } else {
-          sawGenericFailure = true;
-        }
-      };
-
-      await Promise.all([
-        applyIfOk<AnalyticsSummaryResponse>(summaryRes, setSummary),
-        applyIfOk<AnalyticsTrendsResponse>(trendsRes, setTrends),
-        applyIfOk<AnalyticsEvaluationsResponse>(evalsRes, setEvaluations),
-        applyIfOk<ConversionResponse>(convRes, setConversion),
+      // 403 plan_upgrade_required は正常系の分岐であり「読み込みに失敗しました」に
+      // しない。1本が失敗しても他の成功結果は巻き込まない。仕分けの実装は
+      // lib/planFeatures.ts に共通化してある(成約分析も同じものを使う)。
+      // 失敗した項目は null に戻す — 期間を切り替えて失敗したときに、前の期間の
+      // 数値が新しい期間ラベルの下に残るのを防ぐ(CLAUDE.md 17)。
+      const outcome = await applyFetchResults([
+        {
+          res: summaryRes,
+          apply: (d) => setSummary(d as AnalyticsSummaryResponse),
+        },
+        { res: trendsRes, apply: (d) => setTrends(d as AnalyticsTrendsResponse) },
+        {
+          res: evalsRes,
+          apply: (d) => setEvaluations(d as AnalyticsEvaluationsResponse),
+        },
+        { res: convRes, apply: (d) => setConversion(d as ConversionResponse) },
       ]);
 
-      if (sawGenericFailure) {
-        setError("データの読み込みに失敗しました。時間をおいて再試行してください。");
-      } else if (sawPlanLimit) {
-        setPlanLimitMessage(planLimitText);
+      if (!summaryRes.ok) setSummary(null);
+      if (!trendsRes.ok) setTrends(null);
+      if (!evalsRes.ok) setEvaluations(null);
+      if (!convRes.ok) setConversion(null);
+
+      if (outcome.genericFailure) {
+        setError(t("common.load_failed"));
+      } else if (outcome.planLimited) {
+        setPlanLimit({ message: outcome.planLimitMessage });
       }
 
       // Phase68: ナレッジ貢献度（特定テナントが選ばれている場合のみ）
@@ -181,11 +174,11 @@ export default function AnalyticsDashboardPage() {
         setKnowledgeTop3AvgRate(null);
       }
     } catch {
-      setError("データの読み込みに失敗しました。時間をおいて再試行してください。");
+      setError(t("common.load_failed"));
     } finally {
       setLoading(false);
     }
-  }, [period, tenantId, isSuperAdmin, tenantFilter]);
+  }, [period, tenantId, isSuperAdmin, tenantFilter, t]);
 
   useEffect(() => {
     void loadData();
@@ -388,61 +381,11 @@ export default function AnalyticsDashboardPage() {
         setPeriod={setPeriod}
       />
 
-      {/* Error(読み込み失敗。403プラン制限はここに出さない） */}
-      {error && (
-        <div
-          style={{
-            marginBottom: 20,
-            padding: "14px 18px",
-            borderRadius: 12,
-            background: "rgba(127,29,29,0.4)",
-            border: "1px solid rgba(248,113,113,0.3)",
-            color: "#fca5a5",
-            fontSize: 15,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <span>{error}</span>
-          <button
-            onClick={() => void loadData()}
-            style={{
-              padding: "8px 16px",
-              minHeight: 36,
-              borderRadius: 8,
-              border: "1px solid rgba(248,113,113,0.4)",
-              background: "transparent",
-              color: "#fca5a5",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            再試行
-          </button>
-        </div>
-      )}
+      {/* 読み込み失敗(5xx等)。403プラン制限はここに出さない */}
+      {error && <LoadErrorBanner message={error} onRetry={() => void loadData()} />}
 
       {/* プラン制限（正常系の分岐。エラーではないので赤帯にしない） */}
-      {!error && planLimitMessage && (
-        <div
-          style={{
-            marginBottom: 20,
-            padding: "14px 18px",
-            borderRadius: 12,
-            background: "var(--card)",
-            border: "1px solid var(--border)",
-            color: "var(--foreground)",
-            fontSize: 15,
-          }}
-        >
-          ✨ {planLimitMessage}
-        </div>
-      )}
+      {!error && planLimit && <PlanLimitNotice message={planLimit.message} />}
 
       {loading ? (
         <div style={{ padding: 60, textAlign: "center", color: "var(--muted-foreground)" }}>

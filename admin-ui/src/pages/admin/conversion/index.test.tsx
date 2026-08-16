@@ -11,9 +11,25 @@ vi.mock('../../../auth/useAuth', () => ({
   useAuth: vi.fn(),
 }));
 
-vi.mock('../../../i18n/LangContext', () => ({
-  useLang: () => ({ t: (k: string) => k, lang: 'ja' }),
-}));
+// t() はキーをそのまま返すのではなく実辞書(ja.ts)を引く。
+// キー名を返すだけのモックだと「間違ったキーを参照していても素通りする」ため、
+// 画面に実際に出る日本語で検証できるようにする
+// (KnowledgeListTab.test.tsx / escalations/[sessionId].test.tsx と同じ既存パターン)。
+vi.mock('../../../i18n/LangContext', async () => {
+  const jaModule = await import('../../../i18n/ja');
+  const ja = jaModule.default as Record<string, string>;
+  const stableT = (key: string, vars?: Record<string, string | number>) => {
+    let text = ja[key] ?? key;
+    if (vars) {
+      for (const [k, v] of Object.entries(vars)) {
+        text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+      }
+    }
+    return text;
+  };
+  const stableValue = { lang: 'ja' as const, setLang: () => {}, t: stableT };
+  return { useLang: () => stableValue };
+});
 
 vi.mock('../../../lib/api', () => ({
   API_BASE: 'http://localhost:3100',
@@ -117,7 +133,7 @@ describe('ConversionDashboardPage — プラン制限(403)の表示', () => {
     await waitFor(() => {
       expect(screen.getByText(/読み込みに失敗しました/)).toBeTruthy();
     });
-    expect(screen.getByRole('button', { name: '再試行' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'やり直す' })).toBeTruthy();
     expect(screen.queryByText(/プランでご利用いただけます|プランのアップグレード/)).toBeNull();
   });
 

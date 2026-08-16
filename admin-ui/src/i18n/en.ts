@@ -11,6 +11,8 @@ const en: Record<TranslationKey, string> = {
   "common.deleting": "Deleting...",
   "common.refresh": "🔄 Refresh",
   "common.retry": "Try Again",
+  "common.load_failed": "Failed to load the data. Please wait a moment and try again.",
+  "common.plan_limit_generic": "This feature is not available on your current plan. Please consider upgrading.",
 
   // Nav
   "nav.dashboard": "Admin Dashboard",
