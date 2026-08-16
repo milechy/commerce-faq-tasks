@@ -37,6 +37,7 @@ import { getEvaluationsBySession } from '../evaluations/evaluationsRepository';
 import { computeKpis } from '../monitoring/routes';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
+import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
 import { fetchAnalyticsSummary, fetchConversionSummary } from '../analytics/summaryQueries';
@@ -2796,6 +2797,23 @@ export async function executeToolCall(
         }
 
         const { task_id } = await submitSaiTask({ description });
+
+        // 所有権を記録してからでないと、あとで進捗を照会できない（照合先が無いと
+        // fail-closed で拒否される）。記録に失敗しても依頼自体は VPS 側で進行して
+        // いるため、成功を装わず「進捗確認ができない」ことを明示して返す。
+        const recorded = await recordSaiTask(db, {
+          taskId: task_id,
+          tenantId,
+          description,
+          requestedBy: actor.email || null,
+        });
+        if (!recorded) {
+          return truncate(
+            `Saiにタスクを依頼しました（タスクID: ${task_id}）。` +
+            'ただし依頼の記録に失敗したため、このタスクの進捗はチャットから確認できません。' +
+            'お手数ですが運営（R2Cサポート）にタスクIDをお伝えください',
+          );
+        }
         return truncate(`Saiにタスクを依頼しました（タスクID: ${task_id}）。get_sai_task_status で進捗を確認できます`);
       } catch (err: any) {
         if (err?.message === 'SAI_API_KEY not set') {
@@ -2811,6 +2829,30 @@ export async function executeToolCall(
       const taskId = String(args['task_id'] ?? '').trim();
       if (!taskId) {
         return truncate('task_id は必須です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      // 所有権照合。task_id は LLM/ユーザー由来の文字列なので、依頼元テナントと
+      // 一致しない限り Sai VPS へ問い合わせない（越境で status/outcome/last_action が
+      // 読め、さらに他テナント分のステップが自テナントに計上されてしまうため）。
+      // super_admin もバイパスしない — チャット経路は常に実効テナントスコープで動く
+      // （previewMode 中は isSuperAdmin のまま対象テナントを見ているため、
+      //   ここでロールを見ると preview の意味が壊れる）。
+      const owner = await resolveSaiTaskTenant(db, taskId);
+      if (owner.status === 'unavailable') {
+        return truncate(
+          'タスクの進捗を確認できませんでした。時間をおいて再度お試しいただくか、' +
+          '解消しない場合は運営（R2Cサポート）にご連絡ください',
+        );
+      }
+      // 越境は「権限がない」ではなく「不存在」に倒す（IDの実在を漏らさない）。
+      if (owner.status === 'not_found' || owner.tenantId !== tenantId) {
+        return truncate(
+          `タスクID「${taskId}」の依頼が見つかりません。IDをご確認のうえ、` +
+          'もう一度お知らせください',
+        );
       }
 
       try {

@@ -8,6 +8,7 @@ import { logger } from '../../../lib/logger';
 import { chargeOneOffJpy } from '../../../lib/billing/stripeSync';
 import { createNotification } from '../../../lib/notifications';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
+import { recordSaiTask } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import {
   listSaiRules,
@@ -196,6 +197,17 @@ async function attemptSaiForOrder(
 
   try {
     const { task_id } = await submitSaiTask({ description, orderId: order.id, maxSteps });
+
+    // 所有権レジストリ（チャットの get_sai_task_status が照合する単一情報源）。
+    // option_orders.sai_task_id は試行のたびに上書きされ履歴を持たないため、
+    // 照合先には使えない。失敗しても発注フロー自体は止めない（super_admin の
+    // レビューは GET .../sai-task 経由で従来どおり到達できる）。
+    await recordSaiTask(pool, {
+      taskId: task_id,
+      tenantId: order.tenant_id,
+      description,
+      orderId: order.id,
+    });
 
     await pool
       .query(

@@ -72,6 +72,10 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // キュー(mockResolvedValueOnce)を使い切った後の既定値。undefined を返すと
+    // 呼び出し側の `pool.query(...).catch(...)` が TypeError になり、本来通るはずの
+    // 経路が502として観測されてしまうため、空の結果セットを既定にする。
+    mockQuery.mockResolvedValue({ rowCount: 0, rows: [] });
     // デフォルトは明示的に無制限('0')にしておき、上限そのものを検証したいテストだけが
     // 個別に上書き/未設定化する(GID 1216947740906009 で未設定時のデフォルト上限が有効化された
     // ため、上限チェックを意図しない既存テストへ副作用が及ぶのを防ぐ)。
@@ -116,6 +120,39 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
     );
   });
 
+  it('sai_tasks に依頼元テナントを記録する(チャットの進捗照会が所有権を照合できるようにする)', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'FAQ登録代行' }] });
+    mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
+
+    await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO sai_tasks'),
+    );
+    expect(insertCall).toBeDefined();
+    // task_id / tenant_id / order_id / description の順に渡す
+    expect(insertCall![1]).toEqual(['sai-task-1', 'tenant-x', 'order-1', 'FAQ登録代行', null]);
+  });
+
+  it('sai_tasks への記録が失敗しても発注フロー自体は止めない(202を返す)', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string' && sql.includes('INSERT INTO sai_tasks')) {
+        const err = new Error('relation "sai_tasks" does not exist') as Error & { code: string };
+        err.code = '42P01';
+        throw err;
+      }
+      if (typeof sql === 'string' && sql.includes('FROM option_orders')) {
+        return { rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'FAQ登録代行' }] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
+
+    const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
+
+    expect(res.status).toBe(202);
+  });
+
   it('Phase6: 承認済みルールが0件なら作業内容はそのまま渡す(現状のデフォルト挙動)', async () => {
     mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'order-1', tenant_id: 'tenant-x', description: 'FAQ登録代行' }] });
     mockSubmitSaiTask.mockResolvedValueOnce({ task_id: 'sai-task-1', status: 'queued' });
@@ -155,8 +192,9 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
     const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
 
     expect(res.status).toBe(202);
-    // env未設定でもデフォルト上限のチェックは行われる(発注SELECT+テナント上限SELECT+全体上限SELECT+UPDATE)
-    expect(mockQuery).toHaveBeenCalledTimes(4);
+    // env未設定でもデフォルト上限のチェックは行われる
+    // (発注SELECT+テナント上限SELECT+全体上限SELECT+sai_tasks INSERT+UPDATE)
+    expect(mockQuery).toHaveBeenCalledTimes(5);
   });
 
   it('env未設定でテナント使用量がデフォルト上限($50=5000セント)以上なら429で拒否される', async () => {
@@ -194,8 +232,9 @@ describe('POST /v1/admin/options/:id/try-sai', () => {
     const res = await request(superAdminApp()).post('/v1/admin/options/order-1/try-sai').send({});
 
     expect(res.status).toBe(202);
-    // 明示的に0を渡すと上限チェックSELECTは発火しない(発注SELECT+UPDATEのみ)
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    // 明示的に0を渡すと上限チェックSELECTは発火しない
+    // (発注SELECT+sai_tasks INSERT+UPDATEのみ)
+    expect(mockQuery).toHaveBeenCalledTimes(3);
   });
 
   it('月次コスト上限に達している場合は429を返しSaiに依頼しない', async () => {
