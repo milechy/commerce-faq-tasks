@@ -69,7 +69,12 @@ check "Admin UI" "$ADMIN_URL"
 admin_html=$(curl -s --max-time 10 "$ADMIN_URL" 2>/dev/null || echo "")
 admin_js_path=$(echo "$admin_html" | grep -oE '/assets/[A-Za-z0-9_.-]+\.js' | head -1)
 if [ -n "$admin_js_path" ]; then
-  admin_js_body_head=$(curl -s --max-time 10 "$ADMIN_URL$admin_js_path" 2>/dev/null | head -c 1)
+  # `curl | head -c 1` は head がパイプを閉じた後も curl が本体(数百KB〜)を
+  # 送り続けようとして SIGPIPE を受け、set -e + pipefail 下ではその場で
+  # スクリプト全体が無言で落ちる(以降の全チェックが未実行になる)。
+  # HTTP Range で1バイトだけをサーバに要求すれば、ローカルのパイプ切断も
+  # 大きな本体のダウンロードも発生しない。
+  admin_js_body_head=$(curl -s --max-time 10 -r 0-0 "$ADMIN_URL$admin_js_path" 2>/dev/null || echo "")
   if [ "$admin_js_body_head" = "<" ]; then
     echo "  ❌ Admin UI asset ($admin_js_path) body starts with '<' — CDNキャッシュ破損の疑い(HTMLが返っている)"
     FAIL=$((FAIL + 1))
