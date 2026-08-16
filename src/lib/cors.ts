@@ -22,6 +22,7 @@ const ALLOWED_HEADERS = [
   "X-API-Key",
   "X-Tenant-ID",
   "X-Request-ID",
+  "X-R2C-Traffic-Source",
 ].join(", ");
 const EXPOSED_HEADERS = [
   "X-Request-ID",

@@ -89,4 +89,26 @@ describe("corsMiddleware", () => {
     mw(req, res, nextFn);
     expect(nextFn).toHaveBeenCalled();
   });
+
+  // E2E(playwright.config.ts の extraHTTPHeaders)が x-r2c-traffic-source を全リクエストに
+  // 付けるが、この許可リストに無いとプリフライトで admin-ui の全 fetch が拒否される
+  // (CLAUDE.md 絶対にやってはいけないこと 22)。
+  it("includes X-R2C-Traffic-Source in Access-Control-Allow-Headers", () => {
+    const mw = createCorsMiddleware({ defaultAllowedOrigins: [] });
+    const req = mockReq({ headers: { origin: "https://anything.example" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    expect(res.headers["Access-Control-Allow-Headers"]).toContain("X-R2C-Traffic-Source");
+  });
+
+  it("still includes the pre-existing allowed headers", () => {
+    const mw = createCorsMiddleware({ defaultAllowedOrigins: [] });
+    const req = mockReq({ headers: { origin: "https://anything.example" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    const allowHeaders = res.headers["Access-Control-Allow-Headers"];
+    for (const h of ["Content-Type", "Authorization", "X-API-Key", "X-Tenant-ID", "X-Request-ID"]) {
+      expect(allowHeaders).toContain(h);
+    }
+  });
 });
