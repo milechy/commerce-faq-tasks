@@ -115,6 +115,11 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | 要適用 |
 | `src/api/admin/avatar/migration_category_persona.sql` | LemonSliceペルソナスワップ: avatar_configs に category_persona_map(JSONB)追加 | 要適用 |
 | `src/lib/sai/migration_sai_tasks.sql` | Sai代行タスクの所有権レジストリ(sai_tasks)新設。get_sai_task_status の越境読み取り・課金誤帰属を止める (PR #755) | ✅ 2026-08-16 |
+| `src/api/admin/tenants/migration_faq_hints.sql` | tenants に faq_question_hint / faq_answer_hint 追加 | 要適用 (本番500の原因) |
+| `src/api/admin/tenants/migration_onboarding.sql` | tenants に onboarding_industry / onboarding_completed_at / onboarding_widget_seen_at 追加 | 要適用 (本番500の原因) |
+| `src/api/admin/agent/migration_admin_agent_columns.sql` | tenants に ga4_measurement_id / posthog_host / widget_theme 追加 | 要適用 (本番500の原因) |
+| `src/api/admin/feedback/migration_admin_feedback_reply.sql` | admin_feedback に返信5列 + 未読返信の部分インデックス | 要適用 (本番500の原因) |
+| `src/migrations/phase72c_conversation_flow_logs.sql` | conversation_flow_logs テーブル新設 | 要適用 (本番500の原因) |
 
 ### Phase A Day 2 migration 実行手順
 
@@ -200,6 +205,274 @@ ssh root@65.108.159.161 "psql \$DATABASE_URL -c \"\\d sai_tasks\""
 ```bash
 ssh root@65.108.159.161 "psql \$DATABASE_URL -c 'DROP TABLE IF EXISTS sai_tasks;'"
 ```
+
+### 本番500の解消 migration 実行手順 (2026-08-16 実測、Asana 1217530758061266)
+
+> **未適用。** 本番の実機検証で以下4系統の500が確認されており、いずれも
+> 列/テーブルの未適用が原因。**コードのデプロイでは解消しない。**
+
+```
+GET /v1/admin/my-tenant                     500 {"error":"取得に失敗しました"}
+GET /v1/admin/tenants/:id                   500 (全テナントで再現)
+GET /v1/admin/feedback?unread=true&limit=5  500 {"error":"フィードバック一覧の取得に失敗しました"}
+GET /v1/admin/analytics/flow-transitions    500 {"error":"フロー遷移の集計に失敗しました"}
+```
+
+**原因の切り分け根拠**: 一覧の `GET /v1/admin/tenants` は200で通り、500になる2本
+(`my-tenant` / `tenants/:id`)だけが列を追加で SELECT している。差分列がそのまま原因。
+共通処理の `fetchOnboardingStageStatus` は全クエリが try/catch 済みで500を出せない構造。
+
+| 適用するファイル | 追加されるもの | どの500が直るか |
+|---|---|---|
+| `src/api/admin/tenants/migration_faq_hints.sql` | `tenants.faq_question_hint` / `faq_answer_hint` | my-tenant / tenants/:id |
+| `src/api/admin/tenants/migration_onboarding.sql` | `tenants.onboarding_industry` / `onboarding_completed_at` / `onboarding_widget_seen_at` | 同上 |
+| `src/api/admin/agent/migration_admin_agent_columns.sql` | `tenants.ga4_measurement_id` / `posthog_host` / `widget_theme` | 同上 |
+| `src/api/admin/feedback/migration_admin_feedback_reply.sql` | `admin_feedback` の返信5列 + 部分インデックス | feedback?unread=true |
+| `src/migrations/phase72c_conversation_flow_logs.sql` | `conversation_flow_logs` テーブル + 3インデックス | flow-transitions |
+
+**安全性(適用前に確認済み)**
+
+- 全て `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`。
+  **再実行しても無害**。既にどれかが適用済みでも順序を気にせず流せる。
+- `DROP`・既存列の型変更・既存行の UPDATE は**一つも含まれない**。
+- PostgreSQL 11+ では `ADD COLUMN ... DEFAULT` はテーブル書き換えを伴わないため、
+  行数に関わらずロックは一瞬(本番は PG16)。
+- FK は `admin_feedback.parent_feedback_id UUID → admin_feedback(id)` の自己参照1本のみ。
+  `admin_feedback.id` は `UUID PRIMARY KEY` で型は一致している。
+
+**リハーサル済み (2026-08-16)**
+
+本番と同じ前提スキーマ(`tenants` / `admin_feedback` / `knowledge_gaps`)を作った
+PostgreSQL 17 の使い捨てDBに対して、5本を実際に流して以下を確認済み:
+
+- 5本とも `ON_ERROR_STOP=1` 付きで**エラーなく完走**
+- **2回流しても EXIT 0**(2回目は全て `already exists, skipping` の NOTICE のみ)
+- 500になっている**4本の実クエリ**(`my-tenant` / `tenants/:id` の実SELECT、
+  feedback の未読WHERE句、flow-transitions の集計)が**いずれも正常に実行できる**
+
+**既知の副作用(実害なし、ただし見た目が変わる)**
+
+`posthog_host` は `DEFAULT 'https://app.posthog.com'` を持つため、適用後は全テナントで
+この値が入る(リハーサルで実際に全行へ入ることを確認済み。`widget_theme` は `{}`)。チャットの `get_tenant_settings` の表示が「PostHog ホスト: 未設定」から
+このURLに変わる。**PostHog の有効化は別列 `posthog_project_api_key_encrypted` が
+握っており、データ送信が始まることはない。**
+
+**デプロイとの順序**: どちらが先でもよい。コードは既に本番へ出ており(PR #748〜#759)、
+現在は「列が無いので500」の状態。migration 単独で解消する。
+
+適用対象の `.sql` は既に VPS 上にある(いずれも以前からの tracked file で、
+本日のデプロイで `/opt/rajiuce/` へ配布済み)。**このためデプロイ待ちは不要。**
+確認クエリだけは新規なので、ファイル参照ではなく標準入力で流す。
+
+```bash
+# 1. 適用前の確認 — MISSING が出た項目が原因。結果はAsanaに記録する
+#    heredoc はローカル側で組み立て、sshの標準入力経由でpsqlに渡す
+#    (ssh "..." の引用符の中にheredocを入れる形は壊れやすいので使わない)
+ssh root@65.108.159.161 'psql $DATABASE_URL -t -A -F" "' <<'SQL'
+SELECT 'tenants.'||c.name,
+       CASE WHEN col.column_name IS NULL THEN 'MISSING' ELSE 'ok' END
+FROM (VALUES ('faq_question_hint'),('faq_answer_hint'),('onboarding_industry'),
+             ('onboarding_completed_at'),('onboarding_widget_seen_at'),
+             ('widget_theme'),('ga4_measurement_id'),('posthog_host')) AS c(name)
+LEFT JOIN information_schema.columns col
+  ON col.table_name='tenants' AND col.column_name=c.name;
+SELECT 'admin_feedback.'||c.name,
+       CASE WHEN col.column_name IS NULL THEN 'MISSING' ELSE 'ok' END
+FROM (VALUES ('reply_body'),('replied_at'),('replied_by_email'),
+             ('reply_read_at'),('parent_feedback_id')) AS c(name)
+LEFT JOIN information_schema.columns col
+  ON col.table_name='admin_feedback' AND col.column_name=c.name;
+SELECT 'table.conversation_flow_logs',
+       CASE WHEN to_regclass('conversation_flow_logs') IS NULL THEN 'MISSING' ELSE 'ok' END;
+SQL
+
+# 2. バックアップ (必須)
+pg_dump $DATABASE_URL > /opt/backups/pre_phase_a_$(date +%Y%m%d_%H%M).sql
+
+# 3. Migration 実行
+psql $DATABASE_URL < /opt/rajiuce/src/api/admin/tenants/migration_phase_a.sql
+
+# 4. 確認
+psql $DATABASE_URL -c "\d tenants" | grep ga4
+psql $DATABASE_URL -c "\d notification_preferences"
+psql $DATABASE_URL -c "\d ga4_connection_logs"
+psql $DATABASE_URL -c "\d ga4_test_history"
+psql $DATABASE_URL -c "\d conversion_attributions" | grep event_id
+```
+
+### Phase A Day 2 環境変数追加 (.env)
+
+```bash
+# GA4 Data API (サービスアカウントJSON をbase64エンコード)
+GOOGLE_APPLICATION_CREDENTIALS_JSON=<base64-encoded-service-account-json>
+
+# Cloudflare Workers → VPS HMAC認証 (Workers側と同じ値を設定)
+INTERNAL_API_HMAC_SECRET=<random-256bit-secret>
+```
+
+```bash
+# VPS で実行:
+ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/api/admin/feedback/migration_feedback_flagged.sql"
+```
+
+### sai_tasks migration 実行手順 (PR #755)
+
+> **本番適用済み (2026-08-16)。** 以下は再構築時・別環境向けの記録。
+> `CREATE TABLE IF NOT EXISTS` なので再実行しても無害だが、通常は不要。
+> 適用時の確認結果: `task_id`(PK) / `tenant_id`(NOT NULL) / `tenants(id)` へのFK /
+> `idx_sai_tasks_tenant` がいずれも作成済み。
+
+**適用順序: デプロイ → migration。逆にはできない。**
+`migration_sai_tasks.sql` は rsync でVPSへ配布されるため、デプロイ前はVPS上にファイルが存在しない。
+
+この順序で安全な理由 — どの瞬間も現状より悪くならないため:
+
+| タイミング | `get_sai_task_status` の挙動 | 状態 |
+|---|---|---|
+| デプロイ前(現状) | 所有権照合なしで他テナントのタスクを読める | **脆弱** |
+| デプロイ後・migration前 | 照合先が無いため全件拒否 (fail-closed) | 安全・機能停止 |
+| migration後 | 依頼元テナントのタスクのみ読める | 安全・正常 |
+
+中間状態では進捗照会が「確認できませんでした」を返すのみで、依頼(`request_sai_task`)自体は通る。
+できるだけ短く畳むため、デプロイ直後に続けて実行すること。
+
+```bash
+# 1. デプロイ (唯一の手順)
+bash SCRIPTS/deploy-vps.sh
+
+# 2. バックアップ (必須)
+ssh root@65.108.159.161 "pg_dump \$DATABASE_URL > /opt/backups/pre_sai_tasks_\$(date +%Y%m%d_%H%M).sql"
+
+# 3. 適用前の確認 — 既に存在しないこと (存在するなら適用済み。二重実行は不要)
+ssh root@65.108.159.161 "psql \$DATABASE_URL -c \"\\d sai_tasks\""
+
+# 4. Migration 実行
+ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/lib/sai/migration_sai_tasks.sql"
+
+# 5. 確認 — task_id(PK) / tenant_id(NOT NULL) / tenants(id)へのFK / インデックスが揃っていること
+ssh root@65.108.159.161 "psql \$DATABASE_URL -c \"\\d sai_tasks\""
+```
+
+**動作確認**: 管理画面のチャットで代行を1件依頼し、返ってきたタスクIDで進捗照会する。
+「確認できませんでした」が消え、状態が表示されれば適用成功。
+別テナントのタスクIDを渡すと「見つかりません」になる（「権限がありません」ではない）。
+
+**ロールバック**: 新規テーブルのみで既存テーブルへの変更が無いため、コードを戻せばテーブルは無害な残骸になる。
+テーブル自体を消す必要がある場合のみ以下。**コードが新しいままだと進捗照会が全件拒否に戻る**ので、
+必ずコードのロールバックとセットで行う。
+
+```bash
+ssh root@65.108.159.161 "psql \$DATABASE_URL -c 'DROP TABLE IF EXISTS sai_tasks;'"
+```
+
+### 本番500の解消 migration 実行手順 (2026-08-16 実測、Asana 1217530758061266)
+
+> **未適用。** 本番の実機検証で以下4系統の500が確認されており、いずれも
+> 列/テーブルの未適用が原因。**コードのデプロイでは解消しない。**
+
+```
+GET /v1/admin/my-tenant                     500 {"error":"取得に失敗しました"}
+GET /v1/admin/tenants/:id                   500 (全テナントで再現)
+GET /v1/admin/feedback?unread=true&limit=5  500 {"error":"フィードバック一覧の取得に失敗しました"}
+GET /v1/admin/analytics/flow-transitions    500 {"error":"フロー遷移の集計に失敗しました"}
+```
+
+**原因の切り分け根拠**: 一覧の `GET /v1/admin/tenants` は200で通り、500になる2本
+(`my-tenant` / `tenants/:id`)だけが列を追加で SELECT している。差分列がそのまま原因。
+共通処理の `fetchOnboardingStageStatus` は全クエリが try/catch 済みで500を出せない構造。
+
+| 適用するファイル | 追加されるもの | どの500が直るか |
+|---|---|---|
+| `src/api/admin/tenants/migration_faq_hints.sql` | `tenants.faq_question_hint` / `faq_answer_hint` | my-tenant / tenants/:id |
+| `src/api/admin/tenants/migration_onboarding.sql` | `tenants.onboarding_industry` / `onboarding_completed_at` / `onboarding_widget_seen_at` | 同上 |
+| `src/api/admin/agent/migration_admin_agent_columns.sql` | `tenants.ga4_measurement_id` / `posthog_host` / `widget_theme` | 同上 |
+| `src/api/admin/feedback/migration_admin_feedback_reply.sql` | `admin_feedback` の返信5列 + 部分インデックス | feedback?unread=true |
+| `src/migrations/phase72c_conversation_flow_logs.sql` | `conversation_flow_logs` テーブル + 3インデックス | flow-transitions |
+
+**安全性(適用前に確認済み)**
+
+- 全て `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`。
+  **再実行しても無害**。既にどれかが適用済みでも順序を気にせず流せる。
+- `DROP`・既存列の型変更・既存行の UPDATE は**一つも含まれない**。
+- PostgreSQL 11+ では `ADD COLUMN ... DEFAULT` はテーブル書き換えを伴わないため、
+  行数に関わらずロックは一瞬(本番は PG16)。
+- FK は `admin_feedback.parent_feedback_id UUID → admin_feedback(id)` の自己参照1本のみ。
+  `admin_feedback.id` は `UUID PRIMARY KEY` で型は一致している。
+
+**既知の副作用(実害なし、ただし見た目が変わる)**
+
+`posthog_host` は `DEFAULT 'https://app.posthog.com'` を持つため、適用後は全テナントで
+この値が入る(リハーサルで実際に全行へ入ることを確認済み。`widget_theme` は `{}`)。チャットの `get_tenant_settings` の表示が「PostHog ホスト: 未設定」から
+このURLに変わる。**PostHog の有効化は別列 `posthog_project_api_key_encrypted` が
+握っており、データ送信が始まることはない。**
+
+**デプロイとの順序**: どちらが先でもよい。コードは既に本番へ出ており(PR #748〜#759)、
+現在は「列が無いので500」の状態。migration 単独で解消する。
+
+適用対象の `.sql` は既に VPS 上にある(いずれも以前からの tracked file で、
+本日のデプロイで `/opt/rajiuce/` へ配布済み)。**このためデプロイ待ちは不要。**
+確認クエリだけは新規なので、ファイル参照ではなく標準入力で流す。
+
+```bash
+# 1. 適用前の確認 — MISSING が出た項目が原因。結果はAsanaに記録する
+ssh root@65.108.159.161 "psql \$DATABASE_URL -t -A -F' ' <<'SQL'
+SELECT 'tenants.'||c.name,
+       CASE WHEN col.column_name IS NULL THEN 'MISSING' ELSE 'ok' END
+FROM (VALUES ('faq_question_hint'),('faq_answer_hint'),('onboarding_industry'),
+             ('onboarding_completed_at'),('onboarding_widget_seen_at'),
+             ('widget_theme'),('ga4_measurement_id'),('posthog_host')) AS c(name)
+LEFT JOIN information_schema.columns col
+  ON col.table_name='tenants' AND col.column_name=c.name;
+SELECT 'admin_feedback.'||c.name,
+       CASE WHEN col.column_name IS NULL THEN 'MISSING' ELSE 'ok' END
+FROM (VALUES ('reply_body'),('replied_at'),('replied_by_email'),
+             ('reply_read_at'),('parent_feedback_id')) AS c(name)
+LEFT JOIN information_schema.columns col
+  ON col.table_name='admin_feedback' AND col.column_name=c.name;
+SELECT 'table.conversation_flow_logs',
+       CASE WHEN to_regclass('conversation_flow_logs') IS NULL THEN 'MISSING' ELSE 'ok' END;
+SQL"
+
+# 2. バックアップ (必須)
+ssh root@65.108.159.161 "pg_dump \$DATABASE_URL > /opt/backups/pre_500fix_\$(date +%Y%m%d_%H%M).sql"
+
+# 3. 適用 (順序は任意。全て冪等)
+ssh root@65.108.159.161 "psql \$DATABASE_URL -v ON_ERROR_STOP=1 \
+  -f /opt/rajiuce/src/api/admin/tenants/migration_faq_hints.sql \
+  -f /opt/rajiuce/src/api/admin/tenants/migration_onboarding.sql \
+  -f /opt/rajiuce/src/api/admin/agent/migration_admin_agent_columns.sql \
+  -f /opt/rajiuce/src/api/admin/feedback/migration_admin_feedback_reply.sql \
+  -f /opt/rajiuce/src/migrations/phase72c_conversation_flow_logs.sql"
+
+# 4. 適用後の確認 — 手順1と同じクエリを再実行し、MISSING が0件になること
+```
+
+`ON_ERROR_STOP=1` を付けているため、途中で失敗すればそこで止まる(残りは流れない)。
+**API の再起動は不要** — 列の追加はアプリ側のキャッシュに影響しない。
+
+**動作確認 (4系統すべて 200 になること)**
+
+```bash
+# client_admin のトークンで
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" https://api.r2c.biz/v1/admin/my-tenant
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" "https://api.r2c.biz/v1/admin/feedback?unread=true&limit=5"
+# super_admin のトークンで
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $SA_TOKEN" https://api.r2c.biz/v1/admin/tenants/carnation
+curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $SA_TOKEN" "https://api.r2c.biz/v1/admin/analytics/flow-transitions?period=30d"
+```
+
+画面側は以下も確認する。**テナント詳細の15タブは今回の一連の作業で唯一まだ一度も
+検証できていない範囲**なので、ここで初めて確認できる。
+
+- `/admin/tenants/:id` が開き、15タブが描画される
+- client_admin のサイドバーにプランに応じて「会話分析」「成約・効果分析」が戻る
+  (`my-tenant` の500で `tenantPlan` が null になり、全テナントから消えていた)
+- チャットで `get_tenant_settings` / `get_embed_code` が「取得に失敗しました」を返さない
+
+**ロールバック**: 列の追加のみでデータ変更が無いため、通常は不要(コードを戻しても
+未使用の列が残るだけ)。列を消す場合は既存データの消失を伴うので、バックアップからの
+リストアを選ぶこと。`conversation_flow_logs` は新規テーブルのため
+`DROP TABLE IF EXISTS conversation_flow_logs;` で戻せる。
 
 ## トラブルシューティング
 
