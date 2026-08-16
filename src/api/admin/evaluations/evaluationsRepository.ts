@@ -209,16 +209,21 @@ export async function getDetailedStats(
   const stage_progression_rate = rawStage / 100;
 
   // principle_stats: used_principles の usage_count + effective_principles との照合で effectiveness_rate
+  // used_principles / effective_principles は JSONB(migration_conversation_evaluations.sql)。
+  // unnest() は配列型専用で JSONB を受け取れず `function unnest(jsonb) does not exist` で
+  // 落ちるため、GET /v1/admin/evaluations/stats が常時500になっていた
+  // (テナント詳細「AI改善レポート」タブ)。JSONB 用の jsonb_array_elements_text を使う。
+  // NULL や空配列の行は LATERAL 相当の暗黙結合で自然に除外されるため追加のガードは不要。
   const usageResult = await pool.query<{ principle: string; usage_count: string }>(
     `SELECT p AS principle, COUNT(*) AS usage_count
-     FROM conversation_evaluations, unnest(used_principles) AS p
+     FROM conversation_evaluations, jsonb_array_elements_text(used_principles) AS p
      ${where}
      GROUP BY p`,
     args,
   );
   const effectiveResult = await pool.query<{ principle: string; effective_count: string }>(
     `SELECT p AS principle, COUNT(*) AS effective_count
-     FROM conversation_evaluations, unnest(effective_principles) AS p
+     FROM conversation_evaluations, jsonb_array_elements_text(effective_principles) AS p
      ${where}
      GROUP BY p`,
     args,
