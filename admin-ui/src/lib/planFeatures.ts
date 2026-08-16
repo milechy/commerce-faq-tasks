@@ -50,3 +50,16 @@ export function planHasFeature(plan: TenantPlan | null, feature: GatedFeature): 
   if (plan === null) return false;
   return PLAN_RANK[plan] >= PLAN_RANK[FEATURE_MIN_PLAN[feature]];
 }
+
+/**
+ * API応答が「プラン制限による403」かどうかを判定する。
+ * 403 plan_upgrade_required は正常系の分岐であり、エラーではない
+ * （読み込み失敗の赤帯や「0件」表示と混同しない。CLAUDE.md 絶対にやってはいけないこと 21）。
+ */
+export function isPlanUpgradeRequired(body: unknown): boolean {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    (body as { error?: unknown }).error === "plan_upgrade_required"
+  );
+}

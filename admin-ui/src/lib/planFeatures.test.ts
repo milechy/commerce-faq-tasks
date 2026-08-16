@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planHasFeature } from "./planFeatures";
+import { planHasFeature, isPlanUpgradeRequired } from "./planFeatures";
 
 describe("planHasFeature", () => {
   it.each([
@@ -32,5 +32,27 @@ describe("planHasFeature", () => {
   it("plan=null(未取得)は常にfalse(fail-safe)", () => {
     expect(planHasFeature(null, "avatar")).toBe(false);
     expect(planHasFeature(null, "conversion")).toBe(false);
+  });
+});
+
+describe("isPlanUpgradeRequired", () => {
+  it("error: plan_upgrade_required の本文で true", () => {
+    expect(isPlanUpgradeRequired({ error: "plan_upgrade_required", message: "..." })).toBe(true);
+  });
+
+  it("他のerror文字列では false", () => {
+    expect(isPlanUpgradeRequired({ error: "not_found" })).toBe(false);
+    expect(isPlanUpgradeRequired({ error: "forbidden" })).toBe(false);
+  });
+
+  it("null / undefined / 非オブジェクトでは false(例外を投げない)", () => {
+    expect(isPlanUpgradeRequired(null)).toBe(false);
+    expect(isPlanUpgradeRequired(undefined)).toBe(false);
+    expect(isPlanUpgradeRequired("plan_upgrade_required")).toBe(false);
+    expect(isPlanUpgradeRequired(42)).toBe(false);
+  });
+
+  it("空オブジェクトでは false", () => {
+    expect(isPlanUpgradeRequired({})).toBe(false);
   });
 });
