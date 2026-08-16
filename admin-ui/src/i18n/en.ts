@@ -203,6 +203,7 @@ const en: Record<TranslationKey, string> = {
   "tenant_detail.back": "← Back to Tenant List",
   "tenant_detail.loading": "Loading...",
   "tenant_detail.not_found": "Tenant not found 🙏",
+  "tenant_detail.load_failed": "Failed to load. This may be a temporary problem — please try again 🙏",
   "tenant_detail.tab_settings": "⚙️ Settings",
   "tenant_detail.tab_apikeys": "🔑 API Keys",
   "tenant_detail.tab_embed": "📋 Embed Code",

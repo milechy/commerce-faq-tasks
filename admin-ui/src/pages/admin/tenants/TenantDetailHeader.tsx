@@ -11,12 +11,16 @@ export function TenantDetailHeader({
   navigate,
   handleEnterPreview,
   t,
+  emptyTitle,
 }: {
   loading: boolean;
   tenant: TenantDetail | null;
   navigate: NavigateFunction;
   handleEnterPreview: () => void;
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
+  // tenant===null のときに表示するタイトル。404の「見つかりません」と
+  // 500等の「読み込み失敗」を呼び出し元(loadError)で区別して渡す(禁止事項21)。
+  emptyTitle?: string;
 }) {
   return (
     <header style={{ marginBottom: 32 }}>
@@ -66,7 +70,7 @@ export function TenantDetailHeader({
         </div>
       </div>
       <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "var(--foreground)" }}>
-        {loading ? t("tenant_detail.loading") : (tenant?.name ?? t("tenant_detail.not_found"))}
+        {loading ? t("tenant_detail.loading") : (tenant?.name ?? emptyTitle ?? t("tenant_detail.not_found"))}
       </h1>
       {tenant && tenant.slug && (
         <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: 0 }}>

@@ -201,6 +201,7 @@ const ja = {
   "tenant_detail.back": "← テナント一覧に戻る",
   "tenant_detail.loading": "読み込み中...",
   "tenant_detail.not_found": "テナントが見つかりませんでした 🙏",
+  "tenant_detail.load_failed": "読み込みに失敗しました。一時的な問題の可能性があります。もう一度お試しください 🙏",
   "tenant_detail.tab_settings": "⚙️ 設定",
   "tenant_detail.tab_apikeys": "🔑 APIキー",
   "tenant_detail.tab_embed": "📋 埋め込みコード",
