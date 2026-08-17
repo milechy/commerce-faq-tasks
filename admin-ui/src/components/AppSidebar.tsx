@@ -293,7 +293,23 @@ function SidebarContent({ onClose }: SidebarContentProps) {
             素のsuper_adminにとってはチャットが機能しないため意図的に非表示にする。 */}
         {isClientAdmin && (
           <NavLink
-            to="/copilot-preview"
+            to="/copilot-preview?from=legacy"
+            onClick={(e) => {
+              // rel="opener"付きの内部リンクで開かれた新規タブならopenerが渡っている。
+              // SPA遷移せずタブごと閉じることで、元の会話が残っているタブへそのまま戻す。
+              // openerが無い(通常のブラウザ内遷移)場合は従来どおりNavLinkで遷移する。
+              if (window.opener) {
+                e.preventDefault();
+                window.close();
+                // ブラウザはタブ内で複数ページ遷移した後などclose()を無視することがある
+                // (script非開設扱いになるため)。閉じられなかった場合は「詰み」を避け、
+                // 通常のSPA遷移にフォールバックする。close()が成功していればこのタブ自体が
+                // 消えるため到達しない。
+                window.setTimeout(() => {
+                  if (!window.closed) navigate("/copilot-preview?from=legacy");
+                }, 150);
+              }
+            }}
             style={{
               display: "flex",
               alignItems: "center",
@@ -530,8 +546,18 @@ const BOTTOM_NAV: { path: string; icon: React.ElementType; label: string; end?: 
   { path: "/admin/tuning", icon: SlidersHorizontal, label: "設定" },
 ];
 
+// client_adminのモバイル下部バーは「分析」の代わりにAIチャットへの導線を出す。analyticsは
+// growth以上のプラン制限があり、starterテナントには意味の無い枠のため(isClientAdminは
+// previewMode中のsuper_adminも真になるため、previewModeでない素のsuper_adminには
+// 従来どおりanalyticsを出す)。
+const BOTTOM_NAV_CLIENT_ADMIN: typeof BOTTOM_NAV = BOTTOM_NAV.map((item) =>
+  item.path === "/admin/analytics" ? { path: "/copilot-preview", icon: Sparkles, label: "AIチャット" } : item,
+);
+
 export function MobileBottomBar() {
   const location = useLocation();
+  const { isClientAdmin } = useAuth();
+  const navItems = isClientAdmin ? BOTTOM_NAV_CLIENT_ADMIN : BOTTOM_NAV;
 
   return (
     <nav
@@ -549,7 +575,7 @@ export function MobileBottomBar() {
       }}
       className="mobile-bottom-bar"
     >
-      {BOTTOM_NAV.map(({ path, icon: Icon, label, end }) => {
+      {navItems.map(({ path, icon: Icon, label, end }) => {
         const isActive = end ? location.pathname === path : location.pathname.startsWith(path);
         return (
           <NavLink
