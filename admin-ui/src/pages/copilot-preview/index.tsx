@@ -2442,14 +2442,23 @@ function CardView({
         />
       );
     case "link": {
-      // 内部リンク(スラッシュ始まり=同一オリジンのSPA内パスで、"//"始まりのプロトコル相対URL
-      // は除く)だけ rel="opener" を付けて opener を明示的に維持する。主要ブラウザは
-      // target="_blank" を rel 省略時も暗黙に noopener 扱いする(2021年前後のブラウザ既定変更)
-      // ため、rel を外すだけでは window.opener が渡らない。opener を維持することで、旧UI側の
-      // 戻りリンク(AppSidebar)が window.close()で元のタブへ戻せる(=会話が復元できる)。
-      // 外部URL(http/https始まり)は一般のリンクなので、従来どおり rel="noopener noreferrer"
-      // を維持しopenerを渡さない。
-      const isInternalLink = card.url.startsWith("/") && !card.url.startsWith("//");
+      // 同一オリジンの内部パスだけ rel="opener" を付けて opener を明示的に維持する。主要
+      // ブラウザは target="_blank" を rel 省略時も暗黙に noopener 扱いする(2021年前後の
+      // ブラウザ既定変更)ため、rel を外すだけでは window.opener が渡らない。opener を維持
+      // することで、旧UI側の戻りリンク(AppSidebar)が window.close()で元のタブへ戻せる
+      // (=会話が復元できる)。外部URL(他オリジン)は一般のリンクなので、従来どおり
+      // rel="noopener noreferrer" を維持しopenerを渡さない。
+      // 判定は文字列の前方一致(例: startsWith("/"))ではなくURLパースでオリジンを比較する
+      // ("/\\evil.com" のようなバックスラッシュはWHATWG URLパーサでスラッシュに正規化され
+      // 別オリジンへの絶対URLになるため、前方一致だと内部パス扱いしてしまう=reverse
+      // tabnabbingの経路になる)。
+      const isInternalLink = (() => {
+        try {
+          return new URL(card.url, window.location.origin).origin === window.location.origin;
+        } catch {
+          return false;
+        }
+      })();
       return (
         <CardShell hd={<><span>🔗</span>{card.label}へご案内します</>}>
           <Field k="この操作について" v={card.description} />
