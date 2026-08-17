@@ -166,6 +166,9 @@ const ja = {
   "knowledge.url_max": "一度に処理できるURLは最大5件です",
 
   // Categories
+  // カテゴリ語彙の正はサーバ側の src/lib/knowledge/faqCategories.ts。
+  // admin-ui は別パッケージで import できないため、これは写しである。
+  // 変更するときは必ずサーバ側と両方直すこと。
   "category.inventory": "在庫・車両情報",
   "category.campaign": "キャンペーン・セール",
   "category.coupon": "クーポン・割引",

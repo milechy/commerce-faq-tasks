@@ -47,6 +47,9 @@ export interface OcrJobStatus {
 }
 
 export type DeleteState = "idle" | "confirming" | "deleting" | "success" | "error";
+// カテゴリ語彙の正はサーバ側の src/lib/knowledge/faqCategories.ts。
+// admin-ui は別パッケージで import できないため、これは写しである。
+// 変更するときは必ずサーバ側と両方直すこと。
 export type Category = "" | "inventory" | "campaign" | "coupon" | "store_info" | "product_info" | "pricing" | "booking" | "warranty" | "general";
 export type Tab = "list" | "text" | "scrape";
 

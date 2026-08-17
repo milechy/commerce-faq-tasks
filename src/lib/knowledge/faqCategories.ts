@@ -10,10 +10,8 @@
 // faqImport.ts / toolDefinitions.ts はここを参照する。admin-ui は別パッケージのため
 // import できず、上記ファイルへの手動複製が残る(既知の非対称。増やさない)。
 //
-// 既知の残課題: src/api/admin/knowledge/routes.ts にも同じ語彙のローカル定数
-// `CATEGORIES`/`Category` が残っている(現状どこからも参照されない未配線の複製)。
-// 同一パッケージ内でこのファイルを直接importできる場所のため、将来何かに配線すると
-// このファイルと再び乖離する。削除は本PRの範囲外(既存dead codeの削除は別タスク)。
+// GID 1217542880792819: src/api/admin/knowledge/routes.ts に残っていた同じ語彙の
+// 未配線ローカル定数(`CATEGORIES`/`Category`、どこからも参照されていなかった)は削除済み。
 
 export interface FaqCategory {
   id: string;
