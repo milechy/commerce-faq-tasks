@@ -110,6 +110,15 @@ function parsePriorityTier(raw: unknown): 'low' | 'normal' | 'high' | undefined 
   return raw === 'low' || raw === 'normal' || raw === 'high' ? raw : undefined;
 }
 
+// add_faq / update_faq が共有するcategory引数の解析。空文字列は「未指定」として扱う
+// (LLMのfunction callingで省略時に''が渡ってくることがあるため、nullと区別せず
+// 「不明なカテゴリです」で弾いてしまうと正当なquestion/answerの更新まで失敗する)。
+function parseFaqCategoryArg(raw: unknown): { ok: true; category: string | null } | { ok: false; error: string } {
+  if (typeof raw !== 'string' || raw.trim() === '') return { ok: true, category: null };
+  if (!FAQ_CATEGORY_IDS.includes(raw)) return { ok: false, error: `不明なカテゴリです: ${raw}` };
+  return { ok: true, category: raw };
+}
+
 // ---------------------------------------------------------------------------
 // プラン制限の案内文
 // ---------------------------------------------------------------------------
@@ -558,14 +567,15 @@ export async function executeToolCall(
     case 'add_faq': {
       const question = String(args['question'] ?? '').slice(0, 500);
       const answer = String(args['answer'] ?? '').slice(0, 2000);
-      const category = typeof args['category'] === 'string' ? args['category'] : null;
 
       if (!question || !answer) {
         return truncate('question と answer は必須です');
       }
-      if (category !== null && !FAQ_CATEGORY_IDS.includes(category)) {
-        return truncate(`不明なカテゴリです: ${category}`);
+      const categoryResult = parseFaqCategoryArg(args['category']);
+      if (!categoryResult.ok) {
+        return truncate(categoryResult.error);
       }
+      const category = categoryResult.category;
 
       try {
         const result = await db.query(
@@ -595,14 +605,15 @@ export async function executeToolCall(
       const id = Number(args['id']);
       const question = String(args['question'] ?? '').slice(0, 500);
       const answer = String(args['answer'] ?? '').slice(0, 2000);
-      const category = typeof args['category'] === 'string' ? args['category'] : null;
 
       if (!Number.isFinite(id) || !question || !answer) {
         return truncate('id・question・answer は必須です');
       }
-      if (category !== null && !FAQ_CATEGORY_IDS.includes(category)) {
-        return truncate(`不明なカテゴリです: ${category}`);
+      const categoryResult = parseFaqCategoryArg(args['category']);
+      if (!categoryResult.ok) {
+        return truncate(categoryResult.error);
       }
+      const category = categoryResult.category;
 
       try {
         // テナント確認
