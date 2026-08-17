@@ -23,10 +23,6 @@ import {
 // このパスからの import に依存しているため、ここから再エクスポートする形で後方互換を維持する。
 export { textToFaqs, type FaqEntry } from "../../../lib/knowledge/faqImport";
 
-
-const CATEGORIES = ["inventory", "campaign", "coupon", "store_info", "product_info", "pricing", "booking", "warranty", "general"] as const;
-type Category = (typeof CATEGORIES)[number];
-
 type KnowledgeUser = { id: string; email: string; role: string; tenantId: string | null };
 type KnowledgeReq = Request & {
   supabaseUser?: SupabaseJwtUser;
