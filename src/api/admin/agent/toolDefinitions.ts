@@ -192,6 +192,35 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'set_faq_published',
+      description:
+        '既存のFAQの公開状態（公開/非公開）を切り替える。公開を止めるとお客様とのチャットで' +
+        'その回答が使われなくなる。誤った回答をすぐ止めたいときはこれを使うこと（内容を作り直してから' +
+        '再度公開すればよく、元に戻せる）。delete_faq（削除・元に戻せない）と混同しないこと。' +
+        'confirmed=true の場合のみ実行される。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'number',
+            description: '対象の FAQ ID',
+          },
+          published: {
+            type: 'boolean',
+            description: 'true で公開、false で非公開にする',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '変更確認フラグ（true でのみ実行）',
+          },
+        },
+        required: ['id', 'published', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'import_industry_faq_templates',
       description:
         '新規テナントのオンボーディングで、ユーザーが答えた業種に合わせたFAQのたたき台を一括登録する。' +

@@ -47,6 +47,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 公開は is_published=false に戻せるため high ではなく medium。
   // ただし顧客の目に触れる内容を公開する操作のため low ではない。
   publish_faq_drafts: 'medium',
+  // 顧客の目に触れる内容の公開状態を変える点で publish_faq_drafts と同じ階層。
+  // is_published を戻せば元に戻る(delete_faq のような不可逆ではない)。
+  set_faq_published: 'medium',
   save_tuning_rule: 'medium',
   update_tuning_rule: 'medium',
   save_engagement_rule: 'medium',

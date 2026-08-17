@@ -3332,6 +3332,168 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // GID 1217535151495449(D2): 公開済みFAQをチャットから止められるようにする。
+  // -------------------------------------------------------------------------
+  describe('set_faq_published', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('公開中のFAQを非公開にできる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-sfp-1', 'set_faq_published', { id: 42, published: false, confirmed: true }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('非公開にしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] }) // テナント確認
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q', answer: 'a', is_published: false, is_excluded_from_search: false }],
+        }); // UPDATE
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答を止めて', sessionId: 'sess-sfp-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE faq_docs SET is_published = $1'),
+        [false, 42, 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('非公開にしました');
+      expect(result).toContain('ID: 42');
+      // 成功文言に確認ゲートの言い回しを混ぜない(計測・チップ表示が部分一致で判定するため)
+      expect(result).not.toContain('確認が必要');
+    });
+
+    it('非公開のFAQを公開にできる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-sfp-2', 'set_faq_published', { id: 43, published: true, confirmed: true }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('公開しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 43, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 43, question: 'q2', answer: 'a2', is_published: true, is_excluded_from_search: false }],
+        });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答をまた使えるようにして', sessionId: 'sess-sfp-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE faq_docs SET is_published = $1'),
+        [true, 43, 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('公開にしました');
+      expect(result).toContain('ID: 43');
+    });
+
+    it('confirmed無しではDBに触れずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-sfp-3', 'set_faq_published', { id: 42, published: false, confirmed: false }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('確認してから止めます。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答を止めて', sessionId: 'sess-sfp-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('他テナントのIDは不存在として扱われ、IDの実在を漏らさない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-sfp-4', 'set_faq_published', { id: 99, published: false, confirmed: true }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 99, tenant_id: 'tenant-zzz' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答を止めて', sessionId: 'sess-sfp-04' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      // 「不明」「アクセス権限がありません」のような存在を示唆する文言ではなく、不存在と同じ文言
+      expect(result).toContain('見つかりません');
+      expect(result).not.toContain('アクセス権限');
+      // 所有権確認のSELECTのみ呼ばれ、UPDATEには到達しない(他テナントのIDが実在することを漏らさない)
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('存在しないIDのときは次の行動(get_faq_listの案内)を示す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-sfp-5', 'set_faq_published', { id: 9999, published: false, confirmed: true }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答を止めて', sessionId: 'sess-sfp-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('見つかりません');
+      expect(result).toContain('get_faq_list');
+    });
+
+    it('検索索引の同期に失敗しても応答本文とステータスが変わらない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-sfp-6', 'set_faq_published', { id: 42, published: false, confirmed: true }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('非公開にしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q', answer: 'a', is_published: false, is_excluded_from_search: false }],
+        });
+      // fire-and-forgetのため、この失敗はawaitされずレスポンスに影響しない。実装の
+      // upsertToEsAsync も内部で fetch().catch(...) しており、呼び出し元には例外もrejectも
+      // 伝播しない(void を同期的に返す)設計のため、モックもその契約に合わせて自前でcatchする。
+      jest.mocked(mockUpsertToEsAsync).mockImplementationOnce(() => {
+        Promise.reject(new Error('ES down')).catch(() => {});
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答を止めて', sessionId: 'sess-sfp-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('非公開にしました');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // チャット版 FAQ一括取り込み: suggest_faq_import_from_text / suggest_faq_import_from_urls
   // / commit_faq_import / discard_faq_import（プロセス内ステージング経由）
   // -------------------------------------------------------------------------

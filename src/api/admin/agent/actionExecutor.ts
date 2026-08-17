@@ -698,6 +698,71 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // GID 1217535151495449(D2): 公開済みFAQをチャットから止められるようにする。
+    // 誤った回答をすぐ止めたいときに delete_faq(不可逆)しか選べない欠落を埋める。
+    case 'set_faq_published': {
+      const id = Number(args['id']);
+      const published = args['published'];
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(
+          `FAQ（ID: ${id}）の公開状態の変更には確認が必要です。confirmed=true を指定して再度実行してください`
+        );
+      }
+
+      if (!Number.isFinite(id) || typeof published !== 'boolean') {
+        return truncate('id・published は必須です');
+      }
+
+      try {
+        // テナント越境は「不存在」側に倒す(IDの実在を漏らさない)。delete_faq/update_faq の
+        // 「アクセス権限がありません」は既存の挙動として維持したまま、この新規ツールでは
+        // より安全な文言に統一する(意図的な差分。既存2ツールへの遡及修正は本タスクの範囲外)。
+        const check = await db.query(
+          'SELECT id, tenant_id FROM faq_docs WHERE id = $1',
+          [id]
+        );
+        const existing = check.rows[0] as { tenant_id: string } | undefined;
+        if (!existing || existing.tenant_id !== tenantId) {
+          return truncate(`FAQ（ID: ${id}）が見つかりません。get_faq_list で対象のFAQをご確認ください`);
+        }
+
+        const updateResult = await db.query(
+          `UPDATE faq_docs SET is_published = $1, updated_at = NOW()
+           WHERE id = $2 AND tenant_id = $3
+           RETURNING id, question, answer, is_published, is_excluded_from_search`,
+          [published, id, tenantId]
+        );
+        const updated = updateResult.rows[0] as {
+          id: number;
+          question: string;
+          answer: string;
+          is_published: boolean;
+          is_excluded_from_search: boolean | null;
+        };
+
+        // publish_faq_drafts と同じ理由でis_excluded_from_searchを引き継ぐ
+        // (検索除外中のFAQを誤ってES側で検索対象に戻さないため)。
+        upsertToEsAsync(
+          tenantId,
+          updated.id,
+          updated.question,
+          updated.answer,
+          updated.is_published,
+          updated.is_excluded_from_search ?? false
+        );
+
+        return truncate(
+          `FAQ（ID: ${id}）を${updated.is_published ? '公開' : '非公開'}にしました: ${updated.question}`
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] set_faq_published failed', err);
+        return truncate('FAQ の公開状態の変更に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // 新規テナントのオンボーディング(GID 1216274591838389のチャット版):
     // 業種別FAQたたき台を一括登録し、旧UI(OnboardingModal)と同じ条件で
     // onboarding_completed_at を更新する(業種選択のみで完了扱いになる仕様を踏襲)。
