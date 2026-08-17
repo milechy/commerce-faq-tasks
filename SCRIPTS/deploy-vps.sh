@@ -26,6 +26,28 @@ if [[ ! -f package.json ]] || [[ ! -f ecosystem.config.cjs ]]; then
   exit 1
 fi
 
+# Branch guard: this script deploys the LOCAL working tree (git build → rsync),
+# not origin/main. Deploying from a non-main branch silently puts production
+# ahead of main — anyone who later deploys from main will roll production back
+# without any error (past incident: fix/round-double-precision-analytics-summary
+# was deployed while main still lacked the fix, until the PR was merged).
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
+if [[ "${CURRENT_BRANCH}" != "main" ]] && [[ "${DEPLOY_ALLOW_NON_MAIN:-0}" != "1" ]]; then
+  echo "❌ ERROR: current branch is '${CURRENT_BRANCH}', not 'main'"
+  echo "  This script deploys whatever is checked out locally, not origin/main."
+  echo "  Deploying from a feature branch puts production ahead of main until"
+  echo "  that branch is merged — the next main-based deploy will silently roll it back."
+  echo ""
+  echo "  Fix: git checkout main && git pull --ff-only origin main, then re-run."
+  echo "  Intentional hotfix verification before merge? Re-run with:"
+  echo "    DEPLOY_ALLOW_NON_MAIN=1 bash SCRIPTS/deploy-vps.sh"
+  exit 1
+fi
+if [[ "${CURRENT_BRANCH}" != "main" ]]; then
+  echo "⚠️  WARNING: deploying from non-main branch '${CURRENT_BRANCH}' (DEPLOY_ALLOW_NON_MAIN=1)"
+  echo "  Remember to merge this branch to main promptly to avoid prod/main desync."
+fi
+
 # Pre-deploy: Environment Check (warning-only, does not block deploy)
 echo "=== Pre-deploy: Environment Check ==="
 bash SCRIPTS/env-check.sh 2>&1 || true
