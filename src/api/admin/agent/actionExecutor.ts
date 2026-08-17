@@ -1213,6 +1213,138 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // GID 1217536929600059(E2): アバターの基本設定（名前・性格・話し方）をチャットで
+    // 直せるようにする。既定の見本(is_default=true)は全テナント共通のひな形のため
+    // 更新対象から除外する — deactivate_avatar と同じガードの考え方（同コメント参照）。
+    // 実装照合(2026-08-18): reset_avatar_to_default とはガードの向きが逆になる
+    // （reset は is_default=true を要求する既定アバター専用の操作。routes.ts:700-745）。
+    case 'update_avatar_profile': {
+      const id = String(args['id'] ?? '');
+      if (!id) {
+        return truncate('id は必須です。get_avatar_list で対象の ID を確認してください');
+      }
+      const confirmed = isConfirmed(args['confirmed']);
+      if (!confirmed) {
+        return truncate('基本設定の更新には確認が必要です。confirmed=true を指定して再度実行してください');
+      }
+
+      const name = typeof args['name'] === 'string' ? args['name'] : undefined;
+      const personalityPrompt = typeof args['personality_prompt'] === 'string' ? args['personality_prompt'] : undefined;
+      const behaviorDescription = typeof args['behavior_description'] === 'string' ? args['behavior_description'] : undefined;
+
+      const sets: string[] = [];
+      const values: unknown[] = [];
+      if (name !== undefined) {
+        values.push(name);
+        sets.push(`name = $${values.length}`);
+      }
+      if (personalityPrompt !== undefined) {
+        values.push(personalityPrompt);
+        sets.push(`personality_prompt = $${values.length}`);
+      }
+      if (behaviorDescription !== undefined) {
+        values.push(behaviorDescription);
+        sets.push(`behavior_description = $${values.length}`);
+      }
+      if (sets.length === 0) {
+        return truncate('更新する項目がありません。name / personality_prompt / behavior_description のいずれかを指定してください');
+      }
+
+      values.push(id, tenantId);
+      const idPlaceholder = values.length - 1;
+      const tenantPlaceholder = values.length;
+
+      try {
+        const result = await db.query(
+          `UPDATE avatar_configs
+              SET ${sets.join(', ')}, updated_at = NOW()
+            WHERE id = $${idPlaceholder} AND tenant_id = $${tenantPlaceholder}
+              AND (is_default = false OR is_default IS NULL)
+          RETURNING name`,
+          values,
+        );
+        const updated = result.rows[0] as { name: string } | undefined;
+        if (!updated) {
+          return truncate('指定のアバター設定が見つかりませんでした。get_avatar_list で ID を確認してください');
+        }
+        return truncate(`アバター「${updated.name}」の基本設定を更新しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] update_avatar_profile failed', err);
+        return truncate('アバターの基本設定の更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // GID 1217536929600059(E2): 既定の見本(is_default=true)を作成時点の値に戻す。
+    // POST /v1/admin/avatar/configs/:id/reset-to-default（routes.ts:700-745）と
+    // 同じ処理をここに再実装する。Wave 0 調査2の結論: ルートハンドラは
+    // extractAuth(req)/res.status().json() に密結合で純関数として切り出されておらず、
+    // 既存のアバター系エージェントツールもすべて actionExecutor 側で生SQLを直書きして
+    // いる（ルートハンドラを再利用した前例が無い）ため、ここだけ別方式にすると読み手が
+    // 経路を2つ追うことになる。したがって再利用はせず、同等ロジックをここに書く。
+    // 既定値の取得元はルートと同じ「同一行の default_voice_id / default_personality_prompt /
+    // default_name の3列」のみ（phase44_default_avatars.sql）。復元する列を増やさない。
+    //
+    // 既知の未解決点（2026-08-18、コードレビューで判明・hkobayashi 要判断）:
+    // 下のSELECTは他ツール（activate_avatar 等）と同じく tenant_id = 呼び出し元テナント
+    // で絞っている。しかし migration_r2c_default.sql（Phase66）以降、is_default=true の
+    // 行は 'r2c_default' テナントに集約されており、実テナントが自分の tenant_id で
+    // is_default=true の行を所有することは想定されていない（tenants/routes.ts:353-380
+    // のテナント作成時シードが今も is_default=true をテナント自身の tenant_id で作って
+    // いるように見えるが、Phase66 の意図と矛盾しており未検証・本タスクのスコープ外）。
+    // 結果、現状のスコープ（自テナント限定）だと本ツールは実質的に「対象が見つからない」
+    // を返し続ける可能性が高い。対案は tenant_id = 'r2c_default' に絞ること
+    // （suggest_avatar_preset/adopt_avatar_preset と同じ形）だが、それは「どのテナントの
+    // チャットからでも全テナント共有の既定見本18体を書き換えられる」という、本タスクの
+    // 本文が明示的に許可していない越境操作を新設することになるため、独断で変更しない。
+    case 'reset_avatar_to_default': {
+      const id = String(args['id'] ?? '');
+      if (!id) {
+        return truncate('id は必須です。get_avatar_list で対象の ID を確認してください');
+      }
+      const confirmed = isConfirmed(args['confirmed']);
+      if (!confirmed) {
+        return truncate('既定に戻すには確認が必要です。confirmed=true を指定して再度実行してください');
+      }
+
+      try {
+        const existing = await db.query(
+          `SELECT is_default FROM avatar_configs WHERE id = $1 AND tenant_id = $2`,
+          [id, tenantId],
+        );
+        const row = existing.rows[0] as { is_default: boolean } | undefined;
+        if (!row) {
+          return truncate('指定のアバター設定が見つかりませんでした。get_avatar_list で ID を確認してください');
+        }
+        // 既定アバター専用の操作。テナント自身が作成・採用したアバターは対象外
+        // （routes.ts:725-727 の 404 相当。ただしチャットではエラーにせず次の行動が
+        // 分かる日本語1行で返す）。
+        if (!row.is_default) {
+          return truncate('このアバターは既定の見本ではないため、既定に戻す操作はできません');
+        }
+
+        const result = await db.query(
+          `UPDATE avatar_configs
+              SET voice_id = default_voice_id,
+                  personality_prompt = default_personality_prompt,
+                  name = default_name,
+                  updated_at = NOW()
+            WHERE id = $1
+          RETURNING name`,
+          [id],
+        );
+        const updated = result.rows[0] as { name: string } | undefined;
+        if (!updated) {
+          return truncate('既定に戻す処理に失敗しました');
+        }
+        return truncate(`アバター「${updated.name}」を既定の設定に戻しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] reset_avatar_to_default failed', err);
+        return truncate('既定に戻す処理に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // avatar_configs には業種を示す列が無く、既定の18体（見た目・性格の作り込まれた
     // 見本）は業種ごとに分類されていない。したがって「業種に合わせて選ぶ」ことはできず、
     // 業種を尋ねずに未採用の見本を1件そのまま提示する（質問0件は「選ばせない」方針にも

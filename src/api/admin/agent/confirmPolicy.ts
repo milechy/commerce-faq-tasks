@@ -44,6 +44,11 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 既定見本の自テナントへの複製。is_active=false で作るため公開はされないが、
   // 永続レコードを作成する点は add_faq と同じ階層。
   adopt_avatar_preset: 'medium',
+  // 名前・性格・話し方という顧客が接する内容そのものの変更。update_faq と同じ階層。
+  update_avatar_profile: 'medium',
+  // 既定値への戻しは1操作で完結し、対象も既定の見本に限られるが、顧客が接する
+  // 内容（名前・声・性格）を書き換える点は update_avatar_profile と同じ階層。
+  reset_avatar_to_default: 'medium',
   save_faq: 'medium',
   commit_faq_import: 'medium',
   import_industry_faq_templates: 'medium',
