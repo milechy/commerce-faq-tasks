@@ -38,9 +38,9 @@
 
 **参照した実装 (2026-07-30 実測):**
 
-- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は本文書作成時点の45本から増え続けている（会話の履歴カテゴリ拡張で4本、その後のPRでも追加あり。**`name:` の実測件数を都度 `grep -c "^\s*name: '" toolDefinitions.ts` で確認すること**。以下の行番号・件数は本文書の実測時点のスナップショットであり、この文書自体が更新頻度に追いつけていない前提で読むこと）。
+- ツール定義: `src/api/admin/agent/toolDefinitions.ts` — `ADMIN_AGENT_TOOLS` は本文書作成時点の45本から増え続けている（会話の履歴カテゴリ拡張で4本、その後のPRでも追加あり。**`name:` の実測件数を都度 `grep -c "^\s*name: '" toolDefinitions.ts` で確認すること**。以下の行番号・件数は本文書の実測時点のスナップショットであり、この文書自体が更新頻度に追いつけていない前提で読むこと。**2026-08-18実測: 61本**）。
 - 実行系: `src/api/admin/agent/actionExecutor.ts` — ツール定義と同数の `case` が存在するはず(乖離があれば `confirmPolicy.test.ts` が検出する)。
-- 旧UI案内: `actionExecutor.ts` の `LEGACY_UI_LINKS`（行番号は移動しやすいため `grep -n "LEGACY_UI_LINKS" actionExecutor.ts` で確認）— **10 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf` / `knowledge_attribution`)。`get_legacy_ui_link` の `feature` enum と 1:1 対応（§1.2-4 で `knowledge_attribution` を追加、以前の版は9キーだった）。
+- 旧UI案内: `actionExecutor.ts` の `LEGACY_UI_LINKS`（行番号は移動しやすいため `grep -n "LEGACY_UI_LINKS" actionExecutor.ts` で確認）— **2026-08-18実測: 15 キー** (`billing` / `avatar_studio` / `escalation_reply` / `session_deletion` / `analytics` / `conversion` / `chat_test` / `avatar_wizard` / `knowledge_pdf` / `knowledge_attribution` に加え、PR #768 で追加された `faq_publish_toggle` / `faq_bulk_ops` / `avatar_feature_toggle` / `avatar_profile` / `avatar_premium` の5キー)。`get_legacy_ui_link` の `feature` enum と 1:1 対応（`toolDefinitions.ts:28` の `LEGACY_UI_FEATURES`）。**この5キーは §1.2-4 / §1.2-9 の実装が追いついた後も削除しない** — 撤去は4週の計測窓が経過し、該当 handoff が実際に減ったことを確認してから行う（`session_deletion` の前例、§1.2-2 と同じ運用）。
 
 > **`feature` の 9 値の所在について**: `origin/main` (`ef9ac629`) 時点では `toolDefinitions.ts:839–849` の enum リテラルに直接書かれている。**PR #571 着地後は `LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) が唯一の値の所在**になり、enum は `enum: LEGACY_UI_FEATURES` (`:860`) として参照するだけになる。以下、本ドキュメントで「`feature` enum」と書いている箇所は**値の集合**を指しており、着地後は `LEGACY_UI_FEATURES` を読むこと (行番号は §3 Stage B に最新のものを記載)。
 
@@ -51,12 +51,12 @@
 | 1 | ダッシュボード | `/admin` | **Chat-partial** (集計値3つが欠) | なし |
 | 2 | 会話履歴 | `/admin/chat-history` | **Chat-complete**（2026-07-31追記: `delete_chat_session` 実装により削除も被覆） | `session_deletion`（残存。§1.2-2 参照） |
 | 3 | 対応中の会話 (エスカレーション) | `/admin/escalations` | **Chat-complete** | `escalation_reply` (履歴閲覧用に限定) |
-| 4 | AIの知識データ | `/admin/knowledge/:tenantId` | **Chat-partial** (タブごとに差、§1.2。2026-07-31: PDFタブをテナント可視面から除外、「成約への貢献度」もhandoffキー追加で解消。2026-08-17実測: 一覧タブに非公開化・一括操作・タグ・カテゴリ変更・ページ送りの未被覆が新たに判明。詳細は§1.2-4) | `knowledge_pdf` / `knowledge_attribution` (2026-07-31 両方解消済み、§1.2-4) |
+| 4 | AIの知識データ | `/admin/knowledge/:tenantId` | **Chat-partial** (タブごとに差、§1.2。2026-07-31: PDFタブをテナント可視面から除外、「成約への貢献度」もhandoffキー追加で解消。2026-08-17実測で一覧タブに非公開化・一括操作・タグ・カテゴリ変更・ページ送りの未被覆が判明したが、**2026-08-18実測: 非公開化(#772/#774)・カテゴリ変更(#770)・ページ送り/公開状態フィルタ/並び替え(#776) は解消済み**。残るのは一括操作・タグ・入力例カスタマイズのみ。詳細は§1.2-4) | `knowledge_pdf` / `knowledge_attribution` (2026-07-31 両方解消済み) / `faq_publish_toggle` / `faq_bulk_ops` (PR #768 追加、§1.2-4) |
 | 5 | 未回答質問 | `/admin/knowledge-gaps` | **Chat-complete** | なし |
 | 6 | 会話分析 | `/admin/analytics` | **Chat-partial** | `analytics` |
 | 7 | 成約・効果分析 | `/admin/conversion` | **Chat-partial** | `conversion` |
 | 8 | お客様への声がけ設定 | `/admin/engagement` | **Chat-complete** | なし |
-| 9 | アバター設定 | `/admin/avatar` (+`/wizard`, `/studio`) | **Chat-partial** (2026-07-31 に分類変更。旧: Legacy-link-only) | `avatar_wizard`, `avatar_studio` |
+| 9 | アバター設定 | `/admin/avatar` (+`/wizard`, `/studio`) | **Chat-partial** (2026-07-31 に分類変更。旧: Legacy-link-only。**2026-08-18実測: 層A完成**（#777/#778）、詳細§1.2-9) | `avatar_wizard`, `avatar_studio` / `avatar_feature_toggle`, `avatar_profile`, `avatar_premium` (PR #768 追加、§1.2-9) |
 | 10 | AIへの指示ルール | `/admin/tuning` | **Chat-complete** | なし |
 | 11 | テストチャット | `/admin/chat-test` | **Legacy-link-only (GUI固有)** | `chat_test` |
 | 12 | ご利用状況・お支払い | `/admin/billing` | **Legacy-link-only** | `billing` |
@@ -100,19 +100,19 @@
 | PDFアップロード (`pdf`) | `PdfUploadTab` + `BookUploadsSection` (`:11, 205`) | **済 (2026-07-31)** テナント可視面から除外済み。R2C運用限定になったため、そもそも「テナントのチャット被覆」の対象から外れた(super_adminの運用面としては旧UI/新UI(`/copilot-preview`)双方に残る)。`LEGACY_UI_LINKS.knowledge_pdf` のキー・enumは計測トリップワイヤーのため削除せず維持(説明文のみ更新) |
 | 成約への貢献度 (`attribution`) | `KnowledgeAttributionTab` (`:7, 206–207`) | ○ **解消済み**。`LEGACY_UI_LINKS.knowledge_attribution` (`actionExecutor.ts`) で受け渡し (GID `1217040615948155`, 2026-07-31) |
 
-**一覧タブの未被覆一覧 (2026-08-17実測、`KnowledgeListTab.tsx` とチャットのFAQツール群を突き合わせ)**:
+**一覧タブの未被覆一覧 (2026-08-17実測、`KnowledgeListTab.tsx` とチャットのFAQツール群を突き合わせ。取り消し線の3項目は2026-08-18実測でPR #770〜#776により解消済み)**:
 
-- **公開済み FAQ を非公開に戻す操作**（`is_published` を `false` にする方向）。`KnowledgeListTab.tsx` の `handleTogglePublish`（`:195-223`）は `PUT /v1/admin/knowledge/faq/{id}` に `is_published: false` を渡すが、`update_faq`（`toolDefinitions.ts:134-158`）に `is_published` フィールドが無い。チャット側にあるのは公開する方向の `publish_faq_drafts`（`:208`）のみで、非公開へ戻す経路が無い。
-- **一括選択 / 一括非公開 / 一括削除**。`KnowledgeListTab.tsx` の `handleBulkUnpublish`（`:238-258` → `PATCH /v1/admin/knowledge/faq/bulk-publish`）・`handleBulkDelete`（`:260-279` → `DELETE /v1/admin/knowledge/faq/bulk`）に相当するツールが無い。`delete_faq`（`:159-179`）は `id` 1件のみで配列を受け付けない。
-- **タグ**（FAQ編集モーダルの `tags` フィールド、`KnowledgeFaqEditModal.tsx:69, 118-119`）。チャット側のFAQ書き込みツールはいずれも `tags` を受け付けない。
-- **`update_faq` でのカテゴリ変更**。引数は `id` / `question` / `answer` のみで、3つとも `required`（`toolDefinitions.ts:134-158`）。既存FAQのカテゴリはチャットから変更できない。
-- **状態フィルタ・並び替え・ページ送り**。`get_faq_list`（`:88-107`）は `limit`（1〜20・デフォルト10）と `search` のみで `offset` が無い。`KnowledgeListTab.tsx` の `publishFilter`・`sortOption`・`Pagination`（`offset` state、`PAGE_SIZE = 20`）に相当する手段がチャットに無く、21件目以降を読む方法が無い。
-- **FAQ 入力例（プレースホルダ）のカスタマイズ**（`admin-ui/src/components/knowledge/FaqHintSettings.tsx` が `faq_question_hint` / `faq_answer_hint` を `PATCH /v1/admin/my-tenant` 等で更新）。対応するツールが無い。
-- **チャットのカテゴリ enum は4種のみ**。enum制約があるのは `add_faq` の `category`（`toolDefinitions.ts:127`、`['inventory', 'campaign', 'coupon', 'store_info']`）のみ。旧UI（`admin-ui/src/components/knowledge/shared.ts:50` の `Category` 型、`CATEGORY_LABEL_MAP` 等）は9値（上記4値 + `product_info` / `pricing` / `booking` / `warranty` / `general`）を持ち、うち5値はチャットのenumから明示的に選べない。`save_faq` の `category`（`:678`）はenum無しの自由文字列だが、ユーザーが確実に選べる手段ではない。
+- ~~**公開済み FAQ を非公開に戻す操作**~~ → **解消済み (2026-08-18実測、#772/#774)**。`set_faq_published`（`toolDefinitions.ts:204-231`）が `published: false` を受け付け、`KnowledgeListTab.tsx` の `handleTogglePublish` と同じ方向の操作をチャットから実行できる。旧`LEGACY_UI_LINKS.faq_publish_toggle`（PR #768 追加）はこの実装が追いついた後も**すぐには削除しない** — 撤去は4週の計測窓が経過し handoff が実際に減ったことを確認してから（`session_deletion` の前例、§1.2-2）。
+- **一括選択 / 一括非公開 / 一括削除**（未解消）。`KnowledgeListTab.tsx` の `handleBulkUnpublish`（`:238-258` → `PATCH /v1/admin/knowledge/faq/bulk-publish`）・`handleBulkDelete`（`:260-279` → `DELETE /v1/admin/knowledge/faq/bulk`）に相当するツールが無い。`delete_faq`（`:159-179`）は `id` 1件のみで配列を受け付けない。`LEGACY_UI_LINKS.faq_bulk_ops`（PR #768 追加）は実装が追いついていない現時点でも案内先として現役（§4参照）。
+- **タグ**（FAQ編集モーダルの `tags` フィールド、`KnowledgeFaqEditModal.tsx:69, 118-119`）（未解消）。チャット側のFAQ書き込みツールはいずれも `tags` を受け付けない。
+- ~~**`update_faq` でのカテゴリ変更**~~ → **解消済み (2026-08-18実測、#770)**。`update_faq` の `category` パラメータ（`toolDefinitions.ts:166-174`）が追加され、既存FAQのカテゴリをチャットから変更できるようになった（省略時は既存カテゴリを維持）。
+- ~~**状態フィルタ・並び替え・ページ送り**~~ → **解消済み (2026-08-18実測、#776)**。`get_faq_list`（`toolDefinitions.ts:96-119`）に `offset`・`published`（`all`/`published`/`draft`）・`sort_by`（`newest`/`oldest`/`updated`/`category`）が追加され、`KnowledgeListTab.tsx` の `publishFilter`・`sortOption`・`Pagination` に相当する操作がチャットから可能になった。
+- **FAQ 入力例（プレースホルダ）のカスタマイズ**（`admin-ui/src/components/knowledge/FaqHintSettings.tsx` が `faq_question_hint` / `faq_answer_hint` を `PATCH /v1/admin/my-tenant` 等で更新）（未解消）。対応するツールが無い。
+- ~~**チャットのカテゴリ enum は4種のみ**~~ → **解消済み (2026-08-18実測、#770)**。カテゴリ語彙が `src/lib/knowledge/faqCategories.ts` の `FAQ_CATEGORY_IDS` に単一情報源化され、`add_faq` / `update_faq` の `category` enum は旧UI（`shared.ts` の `Category` 型）と同じ9値（`product_info` / `pricing` / `store_info` / `campaign` / `inventory` / `coupon` / `booking` / `warranty` / `general`）をすべて受け付ける。旧enum（4値のみ）は廃止された。
 
 - **「成約への貢献度」タブは解消済み**: 2026-07-31 まではチャットから実行できず、`get_legacy_ui_link` で案内することすらできなかった (`feature` の値集合に対応するものが無い状態)。**チャットからは存在が見えない機能**で `agent_legacy_handoff` にも一切現れず、§2 の基準では「使われていない」と区別がつかなかった。`get_conversion_summary` (`:887`) は成約全体のサマリーで、ナレッジ単位の貢献度 (`/v1/admin/analytics/knowledge-attribution`, `components/knowledge/KnowledgeAttributionTab.tsx:136`) とは別物であることも変わらない。
 - **採用した方式と決定理由(handoffキー追加、ツール追加はしない)**: `LEGACY_UI_FEATURES` (`toolDefinitions.ts:26`) に `knowledge_attribution` を1語追加するだけで、`LEGACY_HANDOFF_FEATURES` (`agentRoutes.ts:32`、`LEGACY_UI_FEATURES` から import して導出) と `get_legacy_ui_link` の JSON Schema enum (`toolDefinitions.ts:860`、同じく `LEGACY_UI_FEATURES` を参照) の両方が自動的に追従する。閉鎖判定に必要なのは「計測に載ること」であって「機能をチャットから実行可能にすること」ではないため、新規ツール追加(専用の実行ロジック・テスト・システムプロンプト記述などタッチポイントが5倍になる)は過剰だった。プラン制限ゲート(`planLimitNotice()` 等)も付けていない — R2Cは従量課金であり、貢献度タブ自体もテナントに可視でプランゲートされていないため、`analytics` / `conversion` の既存ゲートを模倣する理由がない。
-- 判定: PDF・貢献度の2件の障害は解消済み(2026-07-31、GID `1217040818410419` + `1217040615948155`) — PDF タブはテナント可視面から除外、attribution タブはhandoffキー追加で計測対象化。**ただし一覧タブに別の未被覆が残っている**(2026-08-17実測、上記「一覧タブの未被覆一覧」参照)ため、5タブ全体としては「両方の障害が解消済み」だけで完結しない。§4 「クローズ対象外」表は本節の実測に合わせて更新済み(§4参照)。
+- 判定: PDF・貢献度の2件の障害は解消済み(2026-07-31、GID `1217040818410419` + `1217040615948155`) — PDF タブはテナント可視面から除外、attribution タブはhandoffキー追加で計測対象化。**一覧タブの未被覆も大半が解消した**(2026-08-18実測、#770/#772/#774/#776 — 非公開化・カテゴリ変更・ページ送り/フィルタ/並び替えの3項目)。**残る未解消は一括操作・タグ・入力例カスタマイズの3項目のみ**(上記「一覧タブの未被覆一覧」参照)。5タブ全体としては、テキスト入力・URL取得・成約への貢献度の3タブがChat-complete相当、一覧タブは大半解消・PDFはR2C運用限定によりテナントのチャット被覆対象外のまま。§4 「クローズ対象外」表は本節の実測に合わせて更新済み(§4参照)。
 
 #### 5. 未回答質問 `/admin/knowledge-gaps` — Chat-complete
 - サイドバー: `AppSidebar.tsx:61` / ルート: `App.tsx:208`
@@ -141,15 +141,16 @@
 
 #### 9. アバター設定 `/admin/avatar` — Chat-partial (Wave 3・2026-07-31 に分類変更)
 - サイドバー: `AppSidebar.tsx:77` / ルート: `App.tsx:214–217` (`/admin/avatar`, `/wizard`, `/studio`, `/studio/:id`)
-- チャット側のツール（2026-08-17実測。2026-07-31時点も同じ6本）: `get_avatar_status` / `get_avatar_list` / `activate_avatar` / `deactivate_avatar` / `suggest_avatar_preset` / `adopt_avatar_preset`（`toolDefinitions.ts:231-306`、`confirmPolicy.ts` に登録済みの全アバターツール）。画像候補の生成・採用（#632）と声の候補の検索・採用（#635）はエージェントツール経由にしていない（画像URL群がツール結果の500字に収まらないため）ので、この一覧には現れない。
-- **層A・層Bの実装状況（2026-08-17実測、`toolDefinitions.ts` 全文照合）**: `AVATAR_CHAT_MIGRATION.md` §4.1 の層A（設定一覧・状態確認・有効化・無効化・切替・業種推奨提示・名前/性格/口調の更新・既定に戻す）のうち、**名前/性格/口調の更新・既定に戻すはツール未実装**（該当ツールが `toolDefinitions.ts` に無い）。層B（画像候補カード・音声試聴カードは実装済みだが、**クローン音声の添付は未実装** — `admin-ui/src/lib/bookPdfUpload.ts` 相当のクローン音声版が admin-ui に無く、音声クローンは旧UI `pages/admin/avatar/studio.tsx` のみで可能）。したがって **Wave 3 の前提（層A・層Bの完成）はまだ満たされておらず、計測（V ゲート判定）を開始してはいけない**。
-- 旧UI受け渡し 2 キー: `avatar_studio` (`actionExecutor.ts:1665–1669` — 「画像候補の選択・音声クローン・性格設定・ライブテスト」)、`avatar_wizard` (`:1695–1699` — 新規作成ウィザード)。
+- チャット側のツール（**2026-08-18実測: 9本**。2026-08-17時点は6本、2026-07-31時点も6本）: `get_avatar_status` / `get_avatar_list` / `activate_avatar` / `deactivate_avatar` / `suggest_avatar_preset` / `adopt_avatar_preset` に加え、PR #777 で `set_avatar_feature`、PR #778 で `update_avatar_profile` / `reset_avatar_to_default` が追加された（`toolDefinitions.ts:231-419`、`confirmPolicy.ts` に登録済みの全アバターツール）。画像候補の生成・採用（#632）と声の候補の検索・採用（#635）はエージェントツール経由にしていない（画像URL群がツール結果の500字に収まらないため）ので、この一覧には現れない。
+- **層A・層Bの実装状況（2026-08-18実測、`toolDefinitions.ts` 全文照合）**: `AVATAR_CHAT_MIGRATION.md` §4.1 の層A（設定一覧・状態確認・有効化・無効化・切替・業種推奨提示・名前/性格/口調の更新・既定に戻す）は**すべて実装済みになった**。名前/性格/口調の更新は `update_avatar_profile`（PR #778）、既定に戻すは `reset_avatar_to_default`（同PR）で満たす。ただし `reset_avatar_to_default` の対象は**既定の見本（`is_default = true`）のみ**であり、テナントが自ら作成・採用したアバターを既定値へ戻す操作ではない（`actionExecutor.ts:1219` 付近のコード注記に実装者自身の指摘あり。`AVATAR_CHAT_MIGRATION.md` §17「既知の未解決事項」参照）。層B（画像候補カード・音声試聴カードは実装済みだが、**クローン音声の添付は未実装** — `admin-ui/src/lib/bookPdfUpload.ts` 相当のクローン音声版が admin-ui に無く、音声クローンは旧UI `pages/admin/avatar/studio.tsx` のみで可能）は変化なし。
+- **層Aの完成日 = 2026-08-18**（PR #778 のマージ時刻、`git log --format=%cd` 実測 07:40 JST）。`AVATAR_CHAT_MIGRATION.md` §6 の定義（層Aの完成日を8週観測窓の起算日とする）に従い、**8週観測窓は2026-08-18起算・2026-10-13終了予定**。層Bの完成は窓の開始条件ではない（§6の定義どおり）が、層Bが未完成のうちは §6 の一次指標（有効化までの到達率）に画像候補・声の候補の採否経路が反映されないため、V ゲート成立後も一次指標の解釈には注意が要る。
+- 旧UI受け渡し 2 キー: `avatar_studio` (`actionExecutor.ts:1665–1669` — 「画像候補の選択・音声クローン・性格設定・ライブテスト」)、`avatar_wizard` (`:1695–1699` — 新規作成ウィザード)。**PR #768 で追加された `avatar_feature_toggle` / `avatar_profile` は、その後 #777/#778 でチャットから実行可能になった**（マスターON/OFF・名前/性格/口調の更新・既定に戻す）。`avatar_premium`（高品質1枚生成）に相当するチャットツールは無く、真に未移行（§4参照）。この3キーもすぐには削除しない — 撤去は4週の計測窓が経過し handoff が実際に減ったことを確認してから（`session_deletion` の前例、§1.2-2）。
 - **2026-07-31 に「GUI 固有として恒久的に残る」判断を撤回した**（決定者: hkobayashi。要件定義: `docs/AVATAR_CHAT_MIGRATION.md`）。面の外に残すのは**ライブテストのみ**とし、画像候補の採否・音声の試聴採否は会話内カードとして持ち込む。旧判断は「見て・聴いて選ぶ操作はテキストに写像できない」だったが、写像すべきは操作の様式ではなく意思決定であり、同じ理由で対象外としていた知識データPDFが #585 で会話内完結へ移った先例がある。
 - **判定時の固有条件（`AVATAR_CHAT_MIGRATION.md` §5 で導出）**:
   - 母集団は `avatar` プラン保有テナント（Growth+）に限定する。このページはプランゲート無しで全 client_admin に可視（`AppSidebar.tsx:77`）で、かつ未契約テナントも意図的にフローへ入れる方針のため、絞らないと比率が薄まる。
   - **C1 の分子は `feature ∈ {avatar_wizard, avatar_studio}` のみ**。ライブテストへの `chat_test` handoff はフローの正常な一部（離脱1回を許容する決定）であり、分子に含めると恒久的に閉じられない。
   - 低頻度ページのため、handoff が 0 に近づくと C2 が自明に成立する。`/admin/engagement` と同じ例外（8週窓・新規テナント限定）に加え、**ファネル完了率**（未作成テナントがチャット経由で有効化まで到達した割合）を実使用証拠として要求する。
-- **判定用SQL・観測開始日は `AVATAR_CHAT_MIGRATION.md` §14/§15 に記録済み**。有効性ゲート V は2026-07-31時点で**未確認**（機能が同日に揃ったばかりで、本番DBへの接続も未実施のため）。V が8週連続で成立するまでクローズ判定は開始しない。
+- **判定用SQL・観測開始日は `AVATAR_CHAT_MIGRATION.md` §14/§15 に記録済み**（ただし§14/§15は層Aが未完成だった2026-07-31時点の記述であり、起算日は本節記載の2026-08-18が最新）。有効性ゲート V は2026-08-18時点でも**未確認**（本番DBへの接続がこの作業を行った環境からは一度もできていない。`AVATAR_CHAT_MIGRATION.md` §13参照）。V が8週連続で成立するまでクローズ判定は開始しない。
 
 #### 10. AIへの指示ルール `/admin/tuning` — Chat-complete
 - サイドバー: `AppSidebar.tsx:78` / モバイル下部バー: `AppSidebar.tsx:500` / ルート: `App.tsx:205`
@@ -168,6 +169,22 @@
 - **これは案内文の不整合として単体で直す価値がある** (本タスクの範囲外): テナントに `billing` を案内すると「できると言われた操作が画面に無い」状態になる。
 - テナントに残る価値は「自分の利用量と請求額を見る」閲覧のみで、これはチャット化可能 (未実装)。ただし金額の提示は誤りが直接クレームになるため、閲覧ツールを作るとしても数値の出所を単一にする設計が前提。
 - 判断: **当面クローズ対象外**。請求は「金額を画面で確認したい」という利用者側の要求が強く、テキスト応答で置き換える便益が薄い。
+
+### 1.3 計測窓の起算日一覧 (2026-08-18時点)
+
+各ページの N 週窓（§2.3）は「そのページが Chat-complete または Chat-partial として §2 の判定に使える状態になった最後の機能着地日」を起算日とする。**§2 の閾値・週数は変更していない。ここに記録するのは起算日の実測のみ。**
+
+| ページ | 起算日 | 根拠 | 窓 |
+|---|---|---|---|
+| 未回答質問 `/admin/knowledge-gaps` | (既存、変更なし) | `get_knowledge_gaps` / `dismiss_knowledge_gap` は本ラウンドの対象外 | 4週 |
+| AIへの指示ルール `/admin/tuning` | (既存、変更なし) | 8ツール体制は本ラウンドの対象外 | 4週（新規テナント限定は§5.1） |
+| 対応中の会話 `/admin/escalations` | 2026-07-29 | reply/resolve 着地（§1.2-3、PR #568） | 4週 |
+| お客様への声がけ設定 `/admin/engagement` | (既存、変更なし) | CRUD 5ツールは本ラウンドの対象外 | 8週（§2.3の例外） |
+| 会話履歴 `/admin/chat-history` | 2026-07-31 | `delete_chat_session` 着地（§1.2-2） | 4週 |
+| AIの知識データ `/admin/knowledge/:tenantId`（一覧タブの新規解消3項目） | **2026-08-18**（実測: PR #776 マージ時刻 06:05 JST） | 非公開化(#772/#774)・カテゴリ変更(#770)・ページ送り/フィルタ/並び替え(#776)。§1.2-4 | 4週（このページ自体は§4「クローズ対象外」に残り、一括操作・タグ・入力例設定が埋まるまでVゲート判定は開始しない） |
+| アバター設定 `/admin/avatar`（層A） | **2026-08-18**（実測: PR #778 マージ時刻 07:40 JST。`AVATAR_CHAT_MIGRATION.md` §6 の定義に従い層Aの完成日を起算） | `update_avatar_profile` / `reset_avatar_to_default` 着地（§1.2-9） | 8週（§2.3の例外・低頻度ページ）。終了予定 2026-10-13 |
+
+> アバターの起算日について: 本タスクの着手時に与えられた前提は「#778のマージ日2026-08-17」だったが、`git log --format=%cd` で実測した実際のマージ時刻は **2026-08-18 07:40 JST** であり、前提と1日ずれている。本表は実測値を採用した。
 
 ---
 
@@ -378,11 +395,27 @@ Wave 2 が「ツールを1つ足す→4週計測→閉じる」で進むのに�
 | ページ | 対象外の理由 |
 |---|---|
 | **テストチャット** `/admin/chat-test` | ウィジェットの実挙動確認が目的で、管理者チャット内で再現しても検証にならない。加えて super_admin のテナント詳細から流入 (`TenantTestTab.tsx:24`) |
-| **AIの知識データ** `/admin/knowledge/:tenantId` | **要再評価 (2026-08-17更新)**。従来の対象外理由(PDFアップロードのGUI固有操作、貢献度タブの計測不能)は両方解消済み — PDFはR2C運用限定としてテナント可視面から除外(GID `1217040818410419`)、貢献度は handoff キー追加(`knowledge_attribution`)で計測対象化(GID `1217040615948155`)。ただし**2026-08-17実測で一覧タブに別の未被覆が判明**(非公開化・一括操作・タグ・カテゴリ変更・ページ送り・入力例設定。§1.2-4)。5 タブ中Chat-complete相当なのはテキスト入力・URL取得・成約への貢献度の3タブのみ。一覧タブは一部未被覆、PDFはR2C運用限定によりテナントのチャット被覆対象外。**このページを本表から外し§2.3のVゲート判定にかけるのは、一覧タブの未被覆を埋めてから** |
+| **AIの知識データ** `/admin/knowledge/:tenantId` | **要再評価 (2026-08-18更新)**。従来の対象外理由(PDFアップロードのGUI固有操作、貢献度タブの計測不能)は両方解消済み — PDFはR2C運用限定としてテナント可視面から除外(GID `1217040818410419`)、貢献度は handoff キー追加(`knowledge_attribution`)で計測対象化(GID `1217040615948155`)。**2026-08-17実測で判明した一覧タブの未被覆5項目のうち3項目は2026-08-18実測で解消済み**(非公開化=#772/#774、カテゴリ変更=#770、ページ送り/公開状態フィルタ/並び替え=#776。§1.2-4)。**残る未被覆は一括操作・タグ・入力例設定の3項目のみ**。5 タブ中Chat-complete相当なのはテキスト入力・URL取得・成約への貢献度の3タブ。一覧タブは一部未被覆(一括操作/タグ/入力例設定)、PDFはR2C運用限定によりテナントのチャット被覆対象外。**このページを本表から外し§2.3のVゲート判定にかけるのは、一覧タブの残る3項目の未被覆を埋めてから** |
 | **会話分析** `/admin/analytics` / **成約・効果分析** `/admin/conversion` | 数値サマリーは既にチャット側 (`get_analytics_summary` / `get_conversion_summary`)。残るのはグラフ推移・低評価セッションのドリルダウン・ABテスト結果で、グラフと比較表は視覚表現そのものが価値 |
 | **ご利用状況・お支払い** `/admin/billing` | 案内文が指す操作 (請求書再送・金額調整・無料期間・一時停止/再開) は実質 super_admin の運用操作。テナント側の「金額を画面で確認したい」要求をテキストで置き換える便益が薄い |
 
 「対象外」は永久ではなく、**その機能を測る対象が handoff 率ではない**という意味。GUI 移行が進んで残存機能が消えたページは、その時点で Wave 2 に降りてくる。
+
+### 4.1 未移行のまま残っている機能 (2026-08-18実測。案内キーで計測対象)
+
+Wave 1/2 (PR #767〜#778) の実装後も、以下はチャットから実行できない。いずれも `LEGACY_UI_LINKS` の既存キー（PR #768 で追加した5キーを含む）が案内先を担っており、handoff の実測がこの節の裏付けになる。**チャット化はこのタスクのスコープ外** — ここでは実装するかどうかを判断せず、未移行であることを記録するだけ。
+
+| 機能 | 対応する案内キー | 備考 |
+|---|---|---|
+| 音声クローン | `avatar_studio` | 添付機構が admin-ui に無い（`AVATAR_CHAT_MIGRATION.md` §1.1・§4.1 層B） |
+| プレミアム画像生成（1枚高品質） | `avatar_premium`（PR #768 追加） | 生成系チャットツールが無い |
+| ウィザードの生成条件指定（タイプ/スタイル/構図/表情/背景） | `avatar_wizard` | `suggest_avatar_preset` は既定の見本から1案提示するのみで、6ステップの条件指定に相当しない |
+| FAQ の一括操作（一括非公開・一括削除） | `faq_bulk_ops`（PR #768 追加） | §1.2-4「一覧タブの未被覆一覧」参照。配列を受け付けるツールが無い |
+| FAQ のタグ | 案内キー無し（`AIの知識データ`一般の遷移で代替） | §1.2-4 参照 |
+| FAQ 入力例（プレースホルダ）のカスタマイズ | 案内キー無し（同上） | §1.2-4 参照 |
+| 請求の閲覧（利用量・請求額の確認） | `billing` | §1.2-12。閲覧専用ツールは未実装 |
+| 成約分析の改善提案の適用 | `conversion` | グラフ・ABテスト結果と同じ「視覚表現が本質」の理由でクローズ対象外（§4本表） |
+| ナレッジ単位の成約貢献度の数値取得 | `knowledge_attribution` | タブの閲覧はキーで案内できるが、数値をチャットが直接返す読み取りツールは無い |
 
 ---
 
@@ -492,6 +525,11 @@ GROUP BY 1 ORDER BY 1;
 ```
 
 窓の**全週**で `v_gate_ok` と各条件が true であることが合格条件。C2 / C2b / C3 も同じ形 (`metric_name` と `labels->>'tool'` / `->>'outcome'` のフィルタを差し替え) で書ける。
+
+### 6-4. 既知の未解決事項 (2026-08-18実測。§2 の判定基準そのものには影響しないが、被覆実装の前提として記録する)
+
+1. **FAQ一括インポートのプレビューがプロセス内Map + TTLに依存している**（`src/api/admin/agent/knowledgeImportStaging.ts`）。`suggest_faq_import_from_text` / `suggest_faq_import_from_urls` が生成したプレビューは `(tenantId, sessionId)` キーの単一プロセスMapに30分TTLで保持され、`commit_faq_import` がそれを読んで登録する。同ファイルの冒頭コメントが明記するとおり、これは PM2 が `instances: 1, exec_mode: "fork"`（単一プロセス）で動いていることに依存した設計であり、将来 cluster化・マルチプロセス化するとMapが共有されずプレビューが失われる。§1.2-4 のFAQ関連ツールが増えるほど、このステージング機構への依存も広がる。対応は本タスクのスコープ外（実装コードには触れない）だが、次にこの領域を触る際の前提として記録する。
+2. **`avatar_configs` の既定アバターシードが Phase66 の意図と食い違っている（テナント作成時シード vs `is_default` の集約先）**。`AVATAR_CHAT_MIGRATION.md` §17 に詳細を記録した。要点: Phase66 (`migration_r2c_default.sql`) は既定アバター18体を `tenant_id = 'r2c_default'` に一本化する意図だったが、`src/api/admin/tenants/routes.ts:353-380` のテナント作成時シードは今も**新規テナント自身の `tenant_id`** で `is_default = true` の行を作り続けている。実害は無い（`livekitTokenRoutes` 側で `OR is_default = true` のクエリ自体が既に除去済みのため、クロステナント誤表示は再発しない）が、データモデル上の意味のズレとして残っている。2026-08-18実測で `reset_avatar_to_default`（PR #778）のコードレビュー中にこのズレが再発見され、`actionExecutor.ts` に実装者自身が「hkobayashi要判断」として未解決点コメントを残している。
 
 ---
 
