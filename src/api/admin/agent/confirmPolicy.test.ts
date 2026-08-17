@@ -148,6 +148,55 @@ describe('confirmPolicy: フロントの REAL_WRITE_TOOLS との突き合わせ'
 });
 
 // ---------------------------------------------------------------------------
+// フロントの REAL_TOOL_LABEL（画面に出す日本語ラベル）との突き合わせ。
+//
+// CLAUDE.md「実装の置き場所」は、ツール追加を
+//   toolDefinitions.ts + actionExecutor.ts の case + copilot-preview の REAL_TOOL_LABEL
+// の3点セットと定めたうえで、REAL_TOOL_LABEL だけは
+//   「網羅性を強制するテストが無く、人力で守る唯一の箇所」
+// と明記していた。src/api/admin/CLAUDE.md の「ツールを追加・変更するときの必須手順」も
+// 手順4として同じことを人力に委ねている。
+//
+// ラベルが漏れると CardView は `REAL_TOOL_LABEL[card.tool] ?? card.tool` で
+// フォールバックするため、例外も型エラーも出ないまま
+// 画面に生の英語ツール名（例: set_avatar_feature）がテナントに表示される。
+// 静かに壊れる＝レビューでしか気づけない、という性質のため機械検査を置く。
+// ---------------------------------------------------------------------------
+
+function readFrontendRealToolLabels(): string[] {
+  const path = join(__dirname, '../../../../admin-ui/src/pages/copilot-preview/index.tsx');
+  const source = readFileSync(path, 'utf8');
+  const block = source.match(/const REAL_TOOL_LABEL: Record<string, string> = \{([\s\S]*?)\n\};/);
+  if (!block) {
+    throw new Error(`REAL_TOOL_LABEL not found in ${path} — 名称かファイル位置が変わった場合はこのテストも更新する`);
+  }
+  // キーは素の識別子（set_ga4_id のように数字を含むものがある）。値側の文字列を拾わないよう
+  // 行頭のキー位置に限定する。
+  return [...block[1]!.matchAll(/^\s*([A-Za-z0-9_]+):/gm)].map((m) => m[1]!);
+}
+
+describe('confirmPolicy: フロントの REAL_TOOL_LABEL との突き合わせ', () => {
+  it('全ツールにフロントの日本語ラベルがある（漏れると画面に生の英語ツール名が出る）', () => {
+    const labels = new Set(readFrontendRealToolLabels());
+    const missing = ALL_TOOL_NAMES.filter((name) => !labels.has(name));
+    expect(missing).toEqual([]);
+  });
+
+  it('存在しないツールのラベルが残っていない（ツール削除時の掃除漏れ検出）', () => {
+    const known = new Set(ALL_TOOL_NAMES);
+    const stale = readFrontendRealToolLabels().filter((name) => !known.has(name));
+    expect(stale).toEqual([]);
+  });
+
+  it('ラベルが重複していない（同じキーを二重定義すると後勝ちで片方が死ぬ）', () => {
+    const labels = readFrontendRealToolLabels();
+    const seen = new Set<string>();
+    const duplicated = labels.filter((name) => (seen.has(name) ? true : (seen.add(name), false)));
+    expect(duplicated).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 確認フラグ(confirmed)の読み取り方が1箇所に集約されていることの検証。
 //
 // かつては Boolean(args['confirmed']) と args['confirmed'] === true の2方式が
