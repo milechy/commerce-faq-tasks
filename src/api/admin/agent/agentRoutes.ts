@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';
 import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
-import { executeToolCall } from './actionExecutor';
+import { executeToolCall, parseBooleanArg } from './actionExecutor';
 import type { ActionResult, ActionCardPayload } from './actionExecutor';
 import { requiresConfirmation } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
@@ -96,6 +96,16 @@ const AUDITED_SETTINGS_TOOLS: Record<
     fieldName: 'active_avatar_config_id',
     successMarker: 'を有効化しました',
     readNewValue: (args) => args['id'],
+  },
+  // GID 1217535352042856(E1): tenants.features.avatar(マスターON/OFF)。
+  // PATCH /v1/admin/my-tenant と同じ tenant_settings_history に記録する。
+  set_avatar_feature: {
+    fieldName: 'features.avatar',
+    successMarker: 'アバター機能を',
+    // /code-review high 指摘: Groqがbooleanを文字列化して送ることがある(actionExecutor.ts
+    // 76-90行目)。case側はparseBooleanArgで正規化してから実行するが、ここで生のargsを
+    // そのまま読むと "true"(文字列)がbooleanのつもりで監査ログに残ってしまう。
+    readNewValue: (args) => parseBooleanArg(args['enabled']),
   },
   // オンボ 是正B-2: オンボ2ツールが未登録で tenant_settings_history に一切記録されず、
   // 「各段階の到達に actor が記録される」(AC-4)が未達だった。successMarker は

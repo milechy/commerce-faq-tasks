@@ -8862,6 +8862,158 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // GID 1217535352042856(E1): set_avatar_feature — tenants.features.avatar の
+  // マスターON/OFFをチャットから行えるようにする。
+  // -------------------------------------------------------------------------
+  describe('set_avatar_feature', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('enabled=true・プラン未契約(starter)は拒否され、案内文が返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-saf-1', 'set_avatar_feature', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をONにして', sessionId: 'sess-saf-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      // プラン確認のSELECTのみ呼ばれ、UPDATE tenantsには到達しない
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('enabled=true・growthプランは成功し、features.avatarがtrueで更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-saf-2', 'set_avatar_feature', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ plan: 'growth' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をONにして', sessionId: 'sess-saf-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('アバター機能をONにしました');
+      // 成功文言に確認ゲートの言い回しを混ぜない(計測・チップ表示が部分一致で判定するため)
+      expect(result).not.toContain('確認が必要');
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET features'),
+        [JSON.stringify({ avatar: true }), 'tenant-abc'],
+      );
+    });
+
+    // 実機照合(2026-08-18): PATCH /v1/admin/my-tenant はONにするときだけプラン判定を行い、
+    // OFFには掛けない。両方向を塞ぐと、プラン外へ落ちたテナントが「ONのまま消せない」
+    // 状態に陥るため、set_avatar_feature も同じ非対称にする。
+    it('enabled=false はプランに関わらず常に実行できる(starterプランでも拒否されない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-saf-3', 'set_avatar_feature', { enabled: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('OFFにしました。'));
+
+      // enabled=false はプランゲートを掛けないため queryTenantPlan は呼ばれず、
+      // 1件目のmockQueryがそのままUPDATE tenantsに使われる。
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をOFFにして', sessionId: 'sess-saf-03' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('アバター機能をOFFにしました');
+      expect(result).not.toContain('Growthプラン以上');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery.mock.calls[0]?.[0]).toContain('UPDATE tenants SET features');
+    });
+
+    it('confirmed無しではDBに触れずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-saf-4', 'set_avatar_feature', { enabled: true, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから切り替えます。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をONにして', sessionId: 'sess-saf-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('super_adminでもプランゲートをバイパスしない(previewMode中のstarterテナントは拒否)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-saf-5', 'set_avatar_feature', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をONにして', sessionId: 'sess-saf-05', targetTenantId: 'tenant-preview' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+    });
+
+    it('previewMode中は操作対象テナント側のfeaturesが更新される(super_admin自身のテナントには書かない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-saf-6', 'set_avatar_feature', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ plan: 'growth' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-preview' }] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をONにして', sessionId: 'sess-saf-06', targetTenantId: 'tenant-preview' });
+
+      expect(res.status).toBe(200);
+      // プラン確認・UPDATEとも操作対象テナント("tenant-preview")に対して行われ、
+      // super_admin自身のテナントには書かない
+      expect(mockQuery.mock.calls[0]?.[1]).toEqual(['tenant-preview']);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual([JSON.stringify({ avatar: true }), 'tenant-preview']);
+    });
+
+    it('DB更新が失敗した場合は例外を投げず日本語1行のエラーメッセージを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-saf-7', 'set_avatar_feature', { enabled: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('切り替えに失敗しました。'));
+
+      // enabled=false はプランゲートを掛けないため、1件目のmockQueryがそのままUPDATE文に使われる
+      mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をOFFにして', sessionId: 'sess-saf-07' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toBe('アバター機能の切り替えに失敗しました');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // GID 1217007275510096: 同じ会話の中で同じプラン制限の全文案内を毎回繰り返さない。
   // 初回は従来の全文のまま、2回目以降は短い確認だけ。判定はセッション単位・機能単位。
   // (制限そのものは変わらない = 数値やリンクは相変わらず返さない)
@@ -9685,6 +9837,59 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('Growthプラン以上');
       expect(mockConnect).not.toHaveBeenCalled();
       expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('set_avatar_feature 成功時に features.avatar の変更を記録する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-10', 'set_avatar_feature', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('アバター機能をONにしました。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ plan: 'growth' }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をONにして', sessionId: 'sess-audit-10' });
+
+      expect(res.status).toBe(200);
+      expect(recordedSettingsChanges()).toEqual([
+        {
+          tenantId: 'tenant-abc',
+          changedBy: 'admin@example.com',
+          fieldName: 'features.avatar',
+          oldValue: null,
+          newValue: true,
+        },
+      ]);
+    });
+
+    it('set_avatar_feature がプラン制限でブロックされた場合は記録しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-11', 'set_avatar_feature', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をONにして', sessionId: 'sess-audit-11' });
+
+      expect(res.status).toBe(200);
+      expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
+    });
+
+    it('set_avatar_feature の監査記録が失敗してもチャット応答は 200 のまま返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-au-12', 'set_avatar_feature', { enabled: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('アバター機能をOFFにしました。'));
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+      mockRecordAgentSettingsChange.mockRejectedValue(new Error('audit boom'));
+
+      const res = await request(makeApp(AUDIT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバター機能をOFFにして', sessionId: 'sess-audit-12' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('アバター機能をOFFにしました');
     });
 
     it('set_ga4_id が形式不正で書き込まれなかった場合は記録しない', async () => {

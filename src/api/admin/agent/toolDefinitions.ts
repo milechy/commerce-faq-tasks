@@ -338,6 +338,30 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'set_avatar_feature',
+      description:
+        'アバター機能全体のマスターON/OFFを切り替える。OFFにするとテナントのアバターが' +
+        'ウィジェットに一切表示されなくなる。ONにするにはGrowthプラン以上の契約が必要' +
+        '（OFFへの切り替えはプランに関わらず常に実行できる）。confirmed=true の場合のみ実行される。',
+      parameters: {
+        type: 'object',
+        properties: {
+          enabled: {
+            type: 'boolean',
+            description: 'true でアバター機能をON、false でOFFにする',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '変更確認フラグ（true でのみ実行）',
+          },
+        },
+        required: ['enabled', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'suggest_avatar_preset',
       description:
         'アバターをまだ持っていないユーザーに、既定の見本（見た目・性格が作り込まれた雛形）から' +

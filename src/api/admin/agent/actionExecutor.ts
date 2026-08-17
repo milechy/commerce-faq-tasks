@@ -86,11 +86,13 @@ function isConfirmed(raw: unknown): boolean {
   return typeof raw === 'string' && raw.trim().toLowerCase() === 'true';
 }
 
-// set_faq_published の published 引数を解析する。isConfirmed と同じ理由(Groqがbooleanを
-// 文字列化して送ってくることがある)で、真偽値そのものに加え "true"/"false" 文字列も受理する。
-// confirmed と違い true/false 両方を区別する必要があるため、どちらでもなければ
-// undefined(未指定/不正値)を返す。
-function parseBooleanArg(raw: unknown): boolean | undefined {
+// set_faq_published / set_avatar_feature の真偽値引数を解析する。isConfirmed と同じ理由
+// (Groqがbooleanを文字列化して送ってくることがある)で、真偽値そのものに加え "true"/"false"
+// 文字列も受理する。confirmed と違い true/false 両方を区別する必要があるため、どちらでも
+// なければ undefined(未指定/不正値)を返す。agentRoutes.ts の監査ログ(readNewValue)も
+// このパーサ経由で正規化した値を記録する(生のargsをそのまま使うと、Groqが文字列化した
+// ケースで tenant_settings_history に文字列"true"がbooleanのつもりで残ってしまう)。
+export function parseBooleanArg(raw: unknown): boolean | undefined {
   if (typeof raw === 'boolean') return raw;
   if (typeof raw === 'string') {
     const normalized = raw.trim().toLowerCase();
@@ -1157,6 +1159,56 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] deactivate_avatar failed', err);
         return truncate('アバターの停止に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // GID 1217535352042856(E1): アバター機能のマスターON/OFF(tenants.features.avatar)を
+    // チャットから行えるようにする。activate_avatar は avatar_configs.is_active しか触らず、
+    // 旧UIの AvatarFeatureToggle(client_admin専用)にしかこのフラグを変える手段が無かった
+    // ため、プラン契約済みでも features.avatar が false のテナントはチャットだけでは
+    // アバターを出せなかった(オンボーディングが途中で旧UIに落ちる原因)。
+    case 'set_avatar_feature': {
+      const enabled = parseBooleanArg(args['enabled']);
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (enabled === undefined) {
+        return truncate('enabled は必須です');
+      }
+      if (!confirmed) {
+        return truncate(
+          `アバター機能を${enabled ? 'ON' : 'OFF'}にするには確認が必要です。confirmed=true を指定して再度実行してください`,
+        );
+      }
+
+      // 実機照合(2026-08-18): PATCH /v1/admin/my-tenant はONにする(true)ときだけプラン判定を
+      // 行い、OFF(false)には掛けない。両方向を塞ぐと、契約を切ったテナントが「ONのまま
+      // 消せない」状態に陥る。ここも同じ非対称にする。
+      // 注入済みの db を使う（tenantHasFeature 経由だと内部で getPool() の実Poolを
+      // 使ってしまい、テストのモックPoolと食い違って汚染するため queryTenantPlan を直接使う）。
+      if (enabled) {
+        const plan = await queryTenantPlan(db, tenantId);
+        if (!planHasFeature(plan, 'avatar')) {
+          return truncate(planLimitNotice(tenantId, sessionId, 'avatar'));
+        }
+      }
+
+      try {
+        // features は他のフラグ(voice/rag等)も持つJSONBのため、avatarキーだけを
+        // マージで上書きする(my-tenantハンドラと同じ形。他のフラグを消さない)。
+        const result = await db.query(
+          `UPDATE tenants SET features = COALESCE(features, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+           WHERE id = $2
+           RETURNING id`,
+          [JSON.stringify({ avatar: enabled }), tenantId],
+        );
+        if (result.rowCount === 0) {
+          return truncate('テナントが見つかりません');
+        }
+        return truncate(`アバター機能を${enabled ? 'ON' : 'OFF'}にしました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] set_avatar_feature failed', err);
+        return truncate('アバター機能の切り替えに失敗しました');
       }
     }
 
