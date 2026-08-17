@@ -6069,6 +6069,8 @@ describe('POST /v1/admin/agent/chat', () => {
         'billing', 'avatar_studio', 'escalation_reply', 'session_deletion',
         'chat_test', 'avatar_wizard', 'knowledge_pdf', 'knowledge_attribution',
         'analytics', 'conversion',
+        'faq_publish_toggle', 'faq_bulk_ops', 'avatar_feature_toggle',
+        'avatar_profile', 'avatar_premium',
       ]);
       const untested = LEGACY_UI_FEATURES.filter((f) => !testedFeatures.has(f));
       expect(untested).toEqual([]);
@@ -6162,6 +6164,205 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('URL: /admin/chat-history\n');
       expect(result).not.toContain(OTHER_TENANT_SESSION.id);
     });
+
+    // GID 1217534700419544: 未移行機能(FAQ公開ON/OFF・一括操作・プロフィール編集)に
+    // 旧UI案内キーを追加した回帰テスト。avatar_feature_toggle / avatar_premium はプラン制限が
+    // あるため下の専用ブロックで検証する。
+    it.each([
+      ['faq_publish_toggle', 'AIの知識データ', '/admin/knowledge/tenant-abc'],
+      ['faq_bulk_ops', 'AIの知識データ', '/admin/knowledge/tenant-abc'],
+      ['avatar_profile', 'アバタースタジオ', '/admin/avatar/studio'],
+    ])('feature=%s: 旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-new', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご対応ください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '確認したい', sessionId: `sess-lu-new-${feature}` });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain(label);
+      expect(result).toContain(`URL: ${path}\n`);
+
+      expect(recordedMetrics('agent_legacy_handoff')).toEqual([
+        {
+          metricName: 'agent_legacy_handoff',
+          tenantId: 'tenant-abc',
+          labels: { feature, surface: 'unknown' },
+          value: 1,
+        },
+      ]);
+    });
+
+    // avatar_feature_toggle(ON/OFF切替) / avatar_premium(高品質生成) は実際の操作先が
+    // 403 plan_upgrade_required で拒否される(routes.ts / premiumGenerationRoutes.ts)ため、
+    // analytics/conversion と同じくGrowth未満のテナントにはリンクを返さず、プラン制限を返す。
+    it.each([
+      ['avatar_feature_toggle', 'アバター設定', '/admin/avatar'],
+      ['avatar_premium', 'アバター新規作成', '/admin/avatar/wizard'],
+    ])('feature=%s: growthプランなら旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-gate-1', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご対応ください。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '確認したい', sessionId: `sess-lu-gate-${feature}` });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain(label);
+      expect(result).toContain(`URL: ${path}\n`);
+    });
+
+    it.each([
+      ['avatar_feature_toggle'],
+      ['avatar_premium'],
+    ])('feature=%s: starterプランはリンクを返さずプラン制限メッセージを返す', async (feature) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-gate-2', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '確認したい', sessionId: `sess-lu-gate-starter-${feature}` });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
+      // 押せないリンクカードが出ないよう、成功時の3行フォーマット(画面:/URL:/説明:)に一致しないこと
+      expect(result).not.toMatch(/画面:/);
+      expect(result).not.toMatch(/URL:/);
+    });
+
+    // faq_publish_toggle / faq_bulk_ops は knowledge_pdf と同じ理由(path に tenantId を
+    // 埋め込む必要がある)で専用ガードがある。
+    it.each([
+      ['faq_publish_toggle'],
+      ['faq_bulk_ops'],
+    ])('feature=%s: super_admin がテナント未特定 → 「テナントが特定できません」を返す', async (feature) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-new-guard', 'get_legacy_ui_link', { feature }))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '確認したい', sessionId: `sess-lu-new-guard-${feature}` });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+
+    // avatar_studio の案内先を設定ID付きのスタジオURLにする回帰テスト(GID 1217534700419544)。
+    // studio.tsx はID無しだと新規作成の空フォームで開くため、既存アバターを編集している
+    // つもりの利用者が意図せず別の新規アバターを作ってしまう事故を防ぐ。
+    describe('feature=avatar_studio: 設定ID付きのスタジオURLへの解決', () => {
+      it('avatar_config_id を指定 → その設定のスタジオURLを返す', async () => {
+        mockFetch
+          .mockResolvedValueOnce(
+            toolCallResponse('call-lu-as-1', 'get_legacy_ui_link', {
+              feature: 'avatar_studio',
+              avatar_config_id: 'cfg-111',
+            }),
+          )
+          .mockResolvedValueOnce(makeGroqResponse('アバタースタジオをご案内しました。'));
+        mockQuery.mockResolvedValueOnce({ rows: [{ id: 'cfg-111' }] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '音声クローンをしたい', sessionId: 'sess-lu-as-01' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('URL: /admin/avatar/studio/cfg-111\n');
+        // 解決クエリは必ず tenant_id で絞られている(越境防止)
+        const [sql, params] = mockQuery.mock.calls[0];
+        expect(sql).toContain('tenant_id = $2');
+        expect(params).toEqual(['cfg-111', 'tenant-abc']);
+      });
+
+      it('avatar_config_id 未指定 + 稼働中の設定あり → 稼働中の設定のスタジオURLを返す', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-lu-as-2', 'get_legacy_ui_link', { feature: 'avatar_studio' }))
+          .mockResolvedValueOnce(makeGroqResponse('アバタースタジオをご案内しました。'));
+        mockQuery.mockResolvedValueOnce({ rows: [{ id: 'cfg-active-1' }] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'アバターを設定したい', sessionId: 'sess-lu-as-02' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('URL: /admin/avatar/studio/cfg-active-1\n');
+        const [sql, params] = mockQuery.mock.calls[0];
+        expect(sql).toContain('is_active = true');
+        expect(params).toEqual(['tenant-abc']);
+      });
+
+      it('avatar_config_id 未指定 + 稼働中の設定なし → 従来のID無しURLへフォールバックする', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-lu-as-3', 'get_legacy_ui_link', { feature: 'avatar_studio' }))
+          .mockResolvedValueOnce(makeGroqResponse('アバタースタジオをご案内しました。'));
+        mockQuery.mockResolvedValueOnce({ rows: [] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'アバターを設定したい', sessionId: 'sess-lu-as-03' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('URL: /admin/avatar/studio\n');
+      });
+
+      it('他テナントの avatar_config_id を指定 → 解決せず(越境は不存在側に倒す)従来のID無しURLへフォールバックする', async () => {
+        mockFetch
+          .mockResolvedValueOnce(
+            toolCallResponse('call-lu-as-4', 'get_legacy_ui_link', {
+              feature: 'avatar_studio',
+              avatar_config_id: 'cfg-other-tenant',
+            }),
+          )
+          .mockResolvedValueOnce(makeGroqResponse('アバタースタジオをご案内しました。'));
+        // tenant_id条件に一致しないため空(他テナントのIDでもこのモックはそのまま使い回せる)
+        mockQuery.mockResolvedValueOnce({ rows: [] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '設定を見たい', sessionId: 'sess-lu-as-04' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('URL: /admin/avatar/studio\n');
+        expect(result).not.toContain('cfg-other-tenant');
+      });
+
+      // avatar_profile は avatar_studio と同じ studio.tsx(/admin/avatar/studio)を指すため、
+      // 同じID解決を共有する。「名前を変えたい」でID無しURLに送ると新規作成の空フォームで
+      // 開いてしまう(このタスクが直す対象のバグそのもの)ため、同じ経路であることを固定する。
+      it('feature=avatar_profile も avatar_config_id を指定 → その設定のスタジオURLを返す', async () => {
+        mockFetch
+          .mockResolvedValueOnce(
+            toolCallResponse('call-lu-ap-1', 'get_legacy_ui_link', {
+              feature: 'avatar_profile',
+              avatar_config_id: 'cfg-222',
+            }),
+          )
+          .mockResolvedValueOnce(makeGroqResponse('アバタースタジオをご案内しました。'));
+        mockQuery.mockResolvedValueOnce({ rows: [{ id: 'cfg-222' }] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '名前を変えたい', sessionId: 'sess-lu-ap-01' });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).toContain('URL: /admin/avatar/studio/cfg-222\n');
+      });
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -6189,7 +6390,7 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    const BILLING_DESCRIPTION = '請求書の再送・金額調整・無料期間設定・一時停止/再開はこちらの画面で行えます';
+    const BILLING_DESCRIPTION = '今月の利用量と請求額の確認はこちらの画面で行えます';
 
     it('JSON経路: get_legacy_ui_link は自然文(result)に加えて card を返す', async () => {
       mockFetch
