@@ -3380,6 +3380,35 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('確認が必要');
     });
 
+    // Groq がbooleanを文字列化して送ってくることがある(isConfirmedと同じ既知の挙動)。
+    // 厳密な typeof チェックだと、確認済み(confirmed="true")の正当な要求が
+    // published="false" というだけで「id・publishedは必須です」に弾かれてしまう。
+    it('Groqがpublished/confirmedを文字列("false"/"true")で送っても正しく処理される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-sfp-7', 'set_faq_published', { id: 42, published: 'false', confirmed: 'true' }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('非公開にしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q', answer: 'a', is_published: false, is_excluded_from_search: false }],
+        });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答を止めて', sessionId: 'sess-sfp-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE faq_docs SET is_published = $1'),
+        [false, 42, 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('非公開にしました');
+    });
+
     it('非公開のFAQを公開にできる', async () => {
       mockFetch
         .mockResolvedValueOnce(

@@ -86,6 +86,20 @@ function isConfirmed(raw: unknown): boolean {
   return typeof raw === 'string' && raw.trim().toLowerCase() === 'true';
 }
 
+// set_faq_published の published 引数を解析する。isConfirmed と同じ理由(Groqがbooleanを
+// 文字列化して送ってくることがある)で、真偽値そのものに加え "true"/"false" 文字列も受理する。
+// confirmed と違い true/false 両方を区別する必要があるため、どちらでもなければ
+// undefined(未指定/不正値)を返す。
+function parseBooleanArg(raw: unknown): boolean | undefined {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return undefined;
+}
+
 // suggest_tuning_rule がトリガー未決定時に案内していたプレースホルダ文字列。
 // save_tuning_rule にそのまま渡ってきた場合、文字列としてtrigger_patternに
 // 保存させない(D4: 保存は成功するが質問文に一致せず永久に発火しない)。
@@ -702,7 +716,7 @@ export async function executeToolCall(
     // 誤った回答をすぐ止めたいときに delete_faq(不可逆)しか選べない欠落を埋める。
     case 'set_faq_published': {
       const id = Number(args['id']);
-      const published = args['published'];
+      const published = parseBooleanArg(args['published']);
       const confirmed = isConfirmed(args['confirmed']);
 
       if (!confirmed) {
@@ -711,7 +725,7 @@ export async function executeToolCall(
         );
       }
 
-      if (!Number.isFinite(id) || typeof published !== 'boolean') {
+      if (!Number.isFinite(id) || published === undefined) {
         return truncate('id・published は必須です');
       }
 
