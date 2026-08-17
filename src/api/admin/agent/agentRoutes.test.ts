@@ -9014,6 +9014,244 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // GID 1217536929600059(E2): update_avatar_profile — アバターの名前・性格・話し方を
+  // チャットで更新できるようにする。
+  // -------------------------------------------------------------------------
+  describe('update_avatar_profile', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('指定した項目だけが更新される(nameのみ)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uap-1', 'update_avatar_profile', { id: 'avatar-1', name: '新しい名前', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('名前を変更しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: '新しい名前' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの名前を変えて', sessionId: 'sess-uap-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('アバター「新しい名前」の基本設定を更新しました');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const [sql, values] = mockQuery.mock.calls[0]!;
+      expect(sql).toContain('SET name = $1, updated_at = NOW()');
+      expect(sql).not.toContain('personality_prompt');
+      expect(values).toEqual(['新しい名前', 'avatar-1', 'tenant-abc']);
+    });
+
+    it('複数項目を同時に指定すると全て更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uap-2', 'update_avatar_profile', {
+          id: 'avatar-1', name: '新名前', personality_prompt: '明るい', behavior_description: '丁寧',
+          confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: '新名前' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '基本設定を全部変えて', sessionId: 'sess-uap-02' });
+
+      expect(res.status).toBe(200);
+      const [sql, values] = mockQuery.mock.calls[0]!;
+      expect(sql).toContain('name = $1');
+      expect(sql).toContain('personality_prompt = $2');
+      expect(sql).toContain('behavior_description = $3');
+      expect(values).toEqual(['新名前', '明るい', '丁寧', 'avatar-1', 'tenant-abc']);
+    });
+
+    it('既定アバター(is_default=true)は更新対象から除外され、見つかりません扱いになる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uap-3', 'update_avatar_profile', { id: 'default-1', name: '勝手に変更', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('更新できませんでした。'));
+
+      // is_default=true の行は WHERE 句の (is_default = false OR is_default IS NULL) で
+      // 除外されるため、SQLレベルで0件になる(モックはその結果を模擬する)
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '既定アバターの名前を変えて', sessionId: 'sess-uap-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりませんでした');
+      const [sql] = mockQuery.mock.calls[0]!;
+      expect(sql).toContain('is_default = false OR is_default IS NULL');
+    });
+
+    it('他テナントのidは不存在側に倒す(IDの実在を漏らさない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uap-4', 'update_avatar_profile', { id: 'other-tenant-avatar', name: '乗っ取り', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('更新できませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '他社のアバターの名前を変えて', sessionId: 'sess-uap-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりませんでした');
+      const [, values] = mockQuery.mock.calls[0]!;
+      expect(values).toContain('tenant-abc');
+    });
+
+    it('confirmed無しではDBに触れずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uap-5', 'update_avatar_profile', { id: 'avatar-1', name: '新しい名前', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから変更します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの名前を変えて', sessionId: 'sess-uap-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('更新する項目が無い場合はDBに触れず案内を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uap-6', 'update_avatar_profile', { id: 'avatar-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('何を変更しますか？'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを更新して', sessionId: 'sess-uap-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('更新する項目がありません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GID 1217536929600059(E2): reset_avatar_to_default — 既定の見本(is_default=true)
+  // を作成時点の値に戻す。実装照合(2026-08-18): update_avatar_profile とはガードが
+  // 逆向きで、is_default=true を要求する既定アバター専用の操作
+  // （POST /v1/admin/avatar/configs/:id/reset-to-default, routes.ts:700-745 と同じ挙動）。
+  // -------------------------------------------------------------------------
+  describe('reset_avatar_to_default', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('is_default=trueの設定はvoice_id/personality_prompt/nameがdefault_*列の値に戻る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rst-1', 'reset_avatar_to_default', { id: 'default-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('既定に戻しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ is_default: true }] })
+        .mockResolvedValueOnce({ rows: [{ name: '既定の名前' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを既定に戻して', sessionId: 'sess-rst-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('アバター「既定の名前」を既定の設定に戻しました');
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      const [updateSql, updateValues] = mockQuery.mock.calls[1]!;
+      expect(updateSql).toContain('voice_id = default_voice_id');
+      expect(updateSql).toContain('personality_prompt = default_personality_prompt');
+      expect(updateSql).toContain('name = default_name');
+      expect(updateValues).toEqual(['default-1']);
+    });
+
+    it('is_default=falseの設定に実行するとDBを更新せず日本語の案内を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rst-2', 'reset_avatar_to_default', { id: 'avatar-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('戻せませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_default: false }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このアバターを既定に戻して', sessionId: 'sess-rst-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('既定の見本ではないため、既定に戻す操作はできません');
+      // is_defaultチェックのSELECTのみ呼ばれ、UPDATEには到達しない
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('他テナントのidは不存在側に倒す(IDの実在を漏らさない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rst-3', 'reset_avatar_to_default', { id: 'other-tenant-default', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '他社のアバターを既定に戻して', sessionId: 'sess-rst-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりませんでした');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const [, values] = mockQuery.mock.calls[0]!;
+      expect(values).toEqual(['other-tenant-default', 'tenant-abc']);
+    });
+
+    it('confirmed無しではDBに触れずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rst-4', 'reset_avatar_to_default', { id: 'default-1', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから戻します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを既定に戻して', sessionId: 'sess-rst-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('DB更新が失敗した場合は例外を投げず日本語1行のエラーメッセージを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-rst-5', 'reset_avatar_to_default', { id: 'default-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('失敗しました。'));
+
+      mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを既定に戻して', sessionId: 'sess-rst-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toBe('既定に戻す処理に失敗しました');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // GID 1217007275510096: 同じ会話の中で同じプラン制限の全文案内を毎回繰り返さない。
   // 初回は従来の全文のまま、2回目以降は短い確認だけ。判定はセッション単位・機能単位。
   // (制限そのものは変わらない = 数値やリンクは相変わらず返さない)

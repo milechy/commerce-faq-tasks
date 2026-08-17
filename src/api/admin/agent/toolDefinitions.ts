@@ -362,6 +362,67 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'update_avatar_profile',
+      description:
+        'アバターの基本設定（名前・性格・話し方）を更新する。指定した項目だけが更新され、' +
+        '省略した項目は変更されない。対象の ID は get_avatar_list で確認したものを使うこと' +
+        '（一覧を取るための専用ツールは他にないため、先にそちらを呼ぶ）。' +
+        '既定の見本（全テナント共通のひな形）はこのツールでは更新できない。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: '更新するアバター設定の ID（get_avatar_list が返したもの）',
+          },
+          name: {
+            type: 'string',
+            description: 'アバターの名前（省略時は変更しない）',
+          },
+          personality_prompt: {
+            type: 'string',
+            description: '性格の設定文（省略時は変更しない）',
+          },
+          behavior_description: {
+            type: 'string',
+            description: '話し方・振る舞いの説明（省略時は変更しない）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '変更確認フラグ（true でのみ実行）',
+          },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'reset_avatar_to_default',
+      description:
+        '既定の見本として作られたアバター設定を、名前・性格・声を作成時点の値に戻す。' +
+        '対象は既定の見本（is_default）のみで、テナントが独自に作成・採用したアバターには使えない。' +
+        '対象の ID は get_avatar_list で確認したものを使うこと（一覧を取るための専用ツールは他にない）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: '既定に戻すアバター設定の ID（get_avatar_list が返したもの）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '変更確認フラグ（true でのみ実行）',
+          },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'suggest_avatar_preset',
       description:
         'アバターをまだ持っていないユーザーに、既定の見本（見た目・性格が作り込まれた雛形）から' +
