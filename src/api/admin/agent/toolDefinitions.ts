@@ -1,6 +1,8 @@
 // src/api/admin/agent/toolDefinitions.ts
 // Phase B-Admin: AIエージェント用ツール定義（Groq function calling 形式）
 
+import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
+
 export interface GroqTool {
   type: 'function';
   function: {
@@ -128,8 +130,8 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           },
           category: {
             type: 'string',
-            description: 'カテゴリ（inventory / campaign / coupon / store_info のいずれか、任意）',
-            enum: ['inventory', 'campaign', 'coupon', 'store_info'],
+            description: `カテゴリ（${FAQ_CATEGORY_IDS.join(' / ')} のいずれか、任意）`,
+            enum: FAQ_CATEGORY_IDS,
           },
         },
         required: ['question', 'answer'],
@@ -155,6 +157,11 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           answer: {
             type: 'string',
             description: '新しい回答文（2000字以内）',
+          },
+          category: {
+            type: 'string',
+            description: `カテゴリ（${FAQ_CATEGORY_IDS.join(' / ')} のいずれか、任意。未指定なら既存のカテゴリを維持する）`,
+            enum: FAQ_CATEGORY_IDS,
           },
         },
         required: ['id', 'question', 'answer'],

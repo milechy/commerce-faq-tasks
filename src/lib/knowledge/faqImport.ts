@@ -25,6 +25,7 @@ import { groqClient } from '../../agent/llm/groqClient';
 import { embedText } from '../../agent/llm/openaiEmbeddingClient';
 import { encryptText } from '../crypto/textEncrypt';
 import { logger } from '../logger';
+import { buildFaqCategoryPromptSection } from './faqCategories';
 
 export interface FaqEntry {
   question: string;
@@ -74,15 +75,7 @@ export async function textToFaqs(
 * キャンペーン・割引
 ${existingSection}
 カテゴリの判定基準:
-* 商品・サービスの詳細情報 → "product_info"
-* 料金・価格・支払い方法 → "pricing"
-* 店舗・アクセス・営業時間 → "store_info"
-* キャンペーン・セール・割引 → "campaign"
-* 在庫・車両情報 → "inventory"
-* クーポン・割引コード → "coupon"
-* 予約・申し込み方法 → "booking"
-* 保証・アフターサービス → "warranty"
-* よくある質問・一般 → "general"
+${buildFaqCategoryPromptSection()}
 * 上記に当てはまらない場合 → 適切なカテゴリ名を英語スネークケースで生成
 
 テキスト:
