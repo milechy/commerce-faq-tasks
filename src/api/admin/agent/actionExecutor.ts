@@ -133,6 +133,32 @@ function parseFaqCategoryArg(raw: unknown): { ok: true; category: string | null 
   return { ok: true, category: raw };
 }
 
+// get_faq_list の published 引数。旧UI KnowledgeListTab の状態フィルタ3種(all/published/draft)
+// に合わせる。allowlist外・未指定はすべて 'all' に倒す(get_chat_sessions の LLM由来値検証と
+// 同じ安全側フォールバック)。
+function parseFaqPublishedFilter(raw: unknown): 'all' | 'published' | 'draft' {
+  return raw === 'published' || raw === 'draft' ? raw : 'all';
+}
+
+// get_faq_list の sort_by 引数。旧UI KnowledgeListTab の並び順4種(SORT_PARAMS)に合わせる。
+// SQLへ渡す列名・方向は固定マッピングのみを使い、LLM由来の生値をSQLへ直接補間しない
+// (faqCrudRoutes.ts の SORT_COLUMN_MAP と同じ二重保護)。
+const FAQ_SORT_OPTIONS = {
+  newest: { column: 'created_at', direction: 'DESC' },
+  oldest: { column: 'created_at', direction: 'ASC' },
+  updated: { column: 'updated_at', direction: 'DESC' },
+  category: { column: 'category', direction: 'ASC' },
+} as const;
+type FaqSortBy = keyof typeof FAQ_SORT_OPTIONS;
+function parseFaqSortBy(raw: unknown): FaqSortBy {
+  // `in` 演算子はプロトタイプチェーンを辿るため、raw="hasOwnProperty"等の値が
+  // 誤って許可されてしまう(/code-review high 指摘)。Object.hasOwn相当のown-property
+  // チェックに限定する。
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(FAQ_SORT_OPTIONS, raw)
+    ? (raw as FaqSortBy)
+    : 'newest';
+}
+
 // ---------------------------------------------------------------------------
 // プラン制限の案内文
 // ---------------------------------------------------------------------------
@@ -523,8 +549,15 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     case 'get_faq_list': {
       try {
+        // GID 1217534700543996(D3): get_chat_sessions と同じ引数設計(limit/offset の
+        // 扱い・LLM由来値のallowlist検証)を踏襲する。
         const limit = clampToolLimit(args['limit'], 10, 20);
+        const rawOffset = Number(args['offset'] ?? 0);
+        const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
         const search = typeof args['search'] === 'string' ? args['search'] : undefined;
+        const published = parseFaqPublishedFilter(args['published']);
+        const sortBy = parseFaqSortBy(args['sort_by']);
+        const { column, direction } = FAQ_SORT_OPTIONS[sortBy];
 
         const whereParams: unknown[] = [tenantId];
         let whereClause = 'WHERE tenant_id = $1';
@@ -537,32 +570,45 @@ export async function executeToolCall(
           whereParams.push(`%${escapedSearch}%`);
           whereClause += ` AND (question ILIKE $${whereParams.length} OR answer ILIKE $${whereParams.length})`;
         }
+        if (published === 'published') {
+          whereClause += ' AND is_published = true';
+        } else if (published === 'draft') {
+          whereClause += ' AND is_published = false';
+        }
 
-        const listParams = [...whereParams, limit];
+        const listParams = [...whereParams, limit, offset];
         // 表示件数(上限20)と総数(COUNT)を分けて取得する。以前は result.rows.length を
         // 「N件」として返しており、LIMIT 20 が総数の頭打ちに見えていた(#実測: 21件以上の
-        // テナントで常に「20件」と誤答していた)。
+        // テナントで常に「20件」と誤答していた)。総数は絞り込み(search/published)適用後の値。
         const [countRes, listRes] = await Promise.all([
           db.query(
             `SELECT COUNT(*)::int AS n FROM faq_docs ${whereClause}`,
             whereParams,
           ),
           db.query(
-            `SELECT id, question, answer FROM faq_docs ${whereClause} ORDER BY created_at DESC LIMIT $${listParams.length}`,
+            `SELECT id, question, answer FROM faq_docs ${whereClause} ORDER BY ${column} ${direction} ` +
+            `LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
             listParams,
           ),
         ]);
 
-        if (listRes.rows.length === 0) {
-          // search 指定時のヒット0件は「FAQが登録されていない」わけではない(FAQ自体は
-          // 大量にある可能性がある)。検索条件に一致するものが無いだけなので文言を分ける。
-          if (search) {
-            return truncate(`「${search.slice(0, 100)}」に一致する FAQ は見つかりませんでした`);
-          }
-          return truncate('FAQ が登録されていません');
-        }
+        const total = Number(countRes.rows[0]?.n ?? 0);
 
-        const total = Number(countRes.rows[0]?.n ?? listRes.rows.length);
+        if (listRes.rows.length === 0) {
+          if (total === 0) {
+            // search 指定時のヒット0件は「FAQが登録されていない」わけではない(FAQ自体は
+            // 大量にある可能性がある)。検索条件に一致するものが無いだけなので文言を分ける。
+            if (search) {
+              return truncate(`「${search.slice(0, 100)}」に一致する FAQ は見つかりませんでした`);
+            }
+            return truncate('FAQ が登録されていません');
+          }
+          // offset が総件数を超えている(FAQ自体は存在する)。次にどう頼めばよいかを示す。
+          return truncate(
+            `指定した位置には表示できるFAQがありません（全${total}件）。` +
+            `offset を0から${Math.max(total - 1, 0)}の間で指定し直してください`,
+          );
+        }
 
         // anti-slop: answer は .slice(0,200) 必須 / console.log で内容出力禁止
         const lines = (listRes.rows as { id: number; question: string; answer: string }[])
@@ -570,7 +616,11 @@ export async function executeToolCall(
         const header = total > listRes.rows.length
           ? `FAQ 一覧（全${total}件中${listRes.rows.length}件を表示）:`
           : `FAQ 一覧（${total}件）:`;
-        return truncate(`${header}\n` + lines.join('\n'));
+        const hasMore = offset + listRes.rows.length < total;
+        const nextHint = hasMore
+          ? `\n続きを見るには offset=${offset + listRes.rows.length} で再度お尋ねください。`
+          : '';
+        return truncateRead(`${header}\n` + lines.join('\n') + nextHint);
       } catch (err) {
         logger.warn('[actionExecutor] get_faq_list failed', err);
         return truncate('FAQ 一覧の取得に失敗しました');

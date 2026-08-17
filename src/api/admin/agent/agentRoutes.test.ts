@@ -2840,8 +2840,8 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'FAQ一覧を見せて', sessionId: `sess-fl-clamp-${input}` });
 
       expect(res.status).toBe(200);
-      // 1件目=COUNT(*)（tenant_idのみ）、2件目=一覧取得（tenant_id + limit）
-      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', expected]);
+      // 1件目=COUNT(*)（tenant_idのみ）、2件目=一覧取得（tenant_id + limit + offset）
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', expected, 0]);
     });
 
     it('limit="abc"（数値でない）は例外にならず既定件数(10)にフォールバックしてFAQ一覧が正しく返る', async () => {
@@ -2862,7 +2862,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('取得に失敗しました');
       expect(result).toContain('FAQ 一覧（1件）:');
       // NaN のまま LIMIT の SQL パラメータに渡らず、既定値10にフォールバックしていることを確認する
-      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10]);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10, 0]);
     });
 
     // LLMが小数を返しても、非整数のまま SQL の LIMIT に渡らないことを固定する
@@ -2887,7 +2887,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'FAQ一覧を見せて', sessionId: `sess-fl-clamp-decimal-${input}` });
 
       expect(res.status).toBe(200);
-      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', expected]);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', expected, 0]);
       expect(Number.isInteger(mockQuery.mock.calls[1]?.[1]?.[1])).toBe(true);
     });
 
@@ -2917,7 +2917,7 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       // Number.isFinite(Infinity) は false なので defaultValue(10) にフォールバックする
-      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10]);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10, 0]);
     });
 
     it('他テナントで呼び出すと0件になり、かつSQLに自テナントのtenant_idが渡る（テナント越境なし）', async () => {
@@ -2940,7 +2940,7 @@ describe('POST /v1/admin/agent/chat', () => {
       // COUNT(*)クエリにも一覧クエリにも自テナント("tenant-other")のIDが渡っており、
       // 他テナント("tenant-abc")のデータが混ざっていないことを確認する
       expect(mockQuery.mock.calls[0]?.[1]).toEqual(['tenant-other']);
-      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-other', 10]);
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-other', 10, 0]);
     });
 
     it('search指定時、総数(COUNT)も検索条件で絞り込まれた件数になる', async () => {
@@ -3028,6 +3028,155 @@ describe('POST /v1/admin/agent/chat', () => {
       // params[1] が検索パラメータ(%…%でラップされた値)。中身の % と _ がバックスラッシュで
       // エスケープされていること(先頭と末尾のワイルドカード%はそのまま残る)。
       expect(listCall[1][1]).toBe('%50\\%offセール\\_限定%');
+    });
+
+    // GID 1217534700543996(D3): get_chat_sessions と同じ絞り込み・ページングをFAQ一覧にも追加
+    it('offsetが総件数を超えるとき0件になり、次にどうすればよいかを示す文言を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-offset-over', 'get_faq_list', { offset: 100 }))
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 5 }] }) // FAQ自体は5件存在する
+        .mockResolvedValueOnce({ rows: [] }); // offset=100では表示対象が無い
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-offset-over' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      // FAQ自体は存在するので「FAQが登録されていません」に誤答してはいけない
+      expect(result).not.toContain('FAQ が登録されていません');
+      expect(result).toContain('全5件');
+      expect(result).toContain('offset');
+      expect(mockQuery.mock.calls[1]?.[1]).toEqual(['tenant-abc', 10, 100]);
+    });
+
+    it.each([
+      ['all', null],
+      ['published', 'is_published = true'],
+      ['draft', 'is_published = false'],
+    ])('published=%s のときCOUNT/一覧のWHERE句が正しく組み立てられる', async (published, expectedFragment) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-pub', 'get_faq_list', { published }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: `sess-fl-pub-${published}` });
+
+      expect(res.status).toBe(200);
+      const countCallSql = mockQuery.mock.calls[0]?.[0] as string;
+      const listCallSql = mockQuery.mock.calls[1]?.[0] as string;
+      if (expectedFragment) {
+        expect(countCallSql).toContain(expectedFragment);
+        expect(listCallSql).toContain(expectedFragment);
+      } else {
+        expect(countCallSql).not.toContain('is_published');
+        expect(listCallSql).not.toContain('is_published');
+      }
+    });
+
+    it.each([
+      ['newest', 'created_at', 'DESC'],
+      ['oldest', 'created_at', 'ASC'],
+      ['updated', 'updated_at', 'DESC'],
+      ['category', 'category', 'ASC'],
+    ])('sort_by=%s は ORDER BY %s %s でSQLに渡る（旧UI KnowledgeListTabの並び順と一致）', async (sortBy, column, direction) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-sort', 'get_faq_list', { sort_by: sortBy }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: `sess-fl-sort-${sortBy}` });
+
+      expect(res.status).toBe(200);
+      const listCallSql = mockQuery.mock.calls[1]?.[0] as string;
+      expect(listCallSql).toContain(`ORDER BY ${column} ${direction}`);
+    });
+
+    it('sort_by未指定・不正値は newest(created_at DESC) にフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-sort-invalid', 'get_faq_list', { sort_by: 'invalid_value' }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-sort-invalid' });
+
+      expect(res.status).toBe(200);
+      const listCallSql = mockQuery.mock.calls[1]?.[0] as string;
+      expect(listCallSql).toContain('ORDER BY created_at DESC');
+    });
+
+    // /code-review high 指摘: `in` 演算子はプロトタイプチェーンを辿るため、
+    // Object.prototype由来の名前(hasOwnProperty等)がallowlistを誤って通過しうる。
+    it('sort_by="hasOwnProperty"（Object.prototype由来）は許可されずnewestにフォールバックする', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-sort-proto', 'get_faq_list', { sort_by: 'hasOwnProperty' }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q1', answer: 'a1' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-sort-proto' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).not.toContain('取得に失敗しました');
+      const listCallSql = mockQuery.mock.calls[1]?.[0] as string;
+      expect(listCallSql).toContain('ORDER BY created_at DESC');
+      expect(listCallSql).not.toContain('undefined');
+    });
+
+    // Wave 0 調査1の観測(500字truncateだと実際には数件しか読めないまま黙って切れる)への
+    // 回帰テスト。get_faq_list は truncateRead(4000字)を使うため、打ち切り時は必ず末尾の
+    // 省略注記が付き、ヘッダーの件数表記(「全N件中M件を表示」)は実データのまま保持される。
+    it('4000字を超える場合、末尾に省略注記が付き、ヘッダーの件数表記は黙って切れない', async () => {
+      const longQuestion = 'あ'.repeat(50);
+      const longAnswer = 'い'.repeat(200);
+      const rows = Array.from({ length: 20 }, (_, i) => ({
+        id: i + 1,
+        question: longQuestion,
+        answer: longAnswer,
+      }));
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-long', 'get_faq_list', { limit: 20 }))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 25 }] })
+        .mockResolvedValueOnce({ rows });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-long' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      // 黙って切れない: 打ち切りが起きたこと自体が分かる注記が末尾に付く
+      expect(result).toContain('…(文字数上限のため以降省略');
+      // ヘッダーの「全25件中20件を表示」は実データの件数のままで、表示件数と実際の行数が
+      // 食い違わない(500字truncateの旧実装で起きていた「20件表示と嘘をつく」の回帰確認)
+      expect(result).toContain('全25件中20件を表示');
     });
   });
 
