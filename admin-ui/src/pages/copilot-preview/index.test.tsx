@@ -432,7 +432,7 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
     });
   });
 
-  it("リンクは別タブで開き、会話が残る旨の補足が添えられる", async () => {
+  it("リンクは別タブで開き、会話に戻れる旨の補足が添えられる(内部リンクはrel=opener)", async () => {
     renderPage();
     await waitForBootstrapSendStarted();
 
@@ -442,8 +442,113 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
     const link = await screen.findByRole("link", { name: /請求管理を開く/ });
     expect(link.getAttribute("href")).toBe("/admin/billing");
     expect(link.getAttribute("target")).toBe("_blank");
+    // /admin/billing は同一オリジンの内部パス(スラッシュ始まり)。主要ブラウザは target="_blank"
+    // を rel 省略時も暗黙にnoopener扱いするため、rel="opener"を明示しないとwindow.openerが
+    // 新規タブへ渡らず、旧UI側のwindow.close()による復路が繋がらない。
+    expect(link.getAttribute("rel")).toBe("opener");
+    expect(screen.getByText("別タブで開きます。終わったらこのタブを閉じると、さきほどの会話に戻れます。")).toBeTruthy();
+  });
+
+  it("「終わったら教えて」チップを押すと、旧画面での作業完了を伝える本文でagentに送信する", async () => {
+    renderPage();
+    await waitForBootstrapSendStarted();
+
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "請求書を再送したい" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    await screen.findByRole("link", { name: /請求管理を開く/ });
+    const doneChip = await screen.findByRole("button", { name: "終わったら教えて" });
+    fireEvent.click(doneChip);
+
+    await waitFor(() => {
+      const chatCall = vi
+        .mocked(authFetch)
+        .mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/v1/admin/agent/chat") &&
+            String((init as RequestInit | undefined)?.body).includes("旧画面での作業が終わりました。反映を確認してください"),
+        );
+      expect(chatCall).toBeTruthy();
+    });
+  });
+});
+
+// GID: rel の除去は「同一オリジンの内部パス」に限定する安全網。外部URL(http/https始まり)は
+// window.opener が渡ると閲覧者を騙るtabnabbingの経路になり得るため、従来どおり維持する。
+// get_legacy_ui_link は現状すべて内部パスしか返さないが、契約としてこの分岐を固定する。
+describe("CopilotPreviewPage — 旧UI案内リンクカード(外部URL)", () => {
+  it("card.url が http/https で始まる場合は rel=\"noopener noreferrer\" を維持する", async () => {
+    const description = "外部の請求代行サービスの画面です";
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      return mockOk({
+        reply: "外部の請求代行画面をご案内しました。",
+        actions: [
+          {
+            tool: "get_legacy_ui_link",
+            result: `この操作は請求代行画面から行えます。\n画面: 請求代行\nURL: https://billing.example.com/portal\n説明: ${description}`,
+            card: { kind: "legacy_link", label: "請求代行", url: "https://billing.example.com/portal", description },
+          },
+        ],
+      });
+    });
+
+    renderPage();
+    await waitForBootstrapSendStarted();
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "請求代行を見たい" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    const link = await screen.findByRole("link", { name: /請求代行を開く/ });
+    expect(link.getAttribute("href")).toBe("https://billing.example.com/portal");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(screen.getByText("別タブで開きます。この会話はそのまま残ります。")).toBeTruthy();
+  });
+
+  // GID: card.url.startsWith("/") だけの判定だと "//evil.example.com/phish" のような
+  // プロトコル相対URL(=別オリジンへの絶対URL)も内部パス扱いしてしまい、rel="opener"を
+  // 付けてtabnabbingの経路を開いてしまう。get_legacy_ui_link は現状この形式を返さないが、
+  // 「同一オリジンの内部パスにのみrel="opener"を付ける」という契約をこの分岐で固定する。
+  it("card.url が \"//\" で始まる場合(プロトコル相対URL)はrel=\"noopener noreferrer\"を維持する", async () => {
+    const description = "偽装された外部サイトへの誘導URL";
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      return mockOk({
+        reply: "案内しました。",
+        actions: [
+          {
+            tool: "get_legacy_ui_link",
+            result: `この操作は案内画面から行えます。\n画面: 案内\nURL: //evil.example.com/phish\n説明: ${description}`,
+            card: { kind: "legacy_link", label: "案内", url: "//evil.example.com/phish", description },
+          },
+        ],
+      });
+    });
+
+    renderPage();
+    await waitForBootstrapSendStarted();
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "案内を見たい" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    const link = await screen.findByRole("link", { name: /案内を開く/ });
+    expect(link.getAttribute("href")).toBe("//evil.example.com/phish");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 });
 
@@ -496,7 +601,8 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     const link = await screen.findByRole("link", { name: /アバタースタジオを開く/ });
     expect(link.getAttribute("href")).toBe("/admin/avatar/studio");
     expect(link.getAttribute("target")).toBe("_blank");
-    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    // 内部パス(スラッシュ始まり)なのでrel="opener"でwindow.openerを維持する
+    expect(link.getAttribute("rel")).toBe("opener");
     // 説明文も card の構造化フィールドから来ている
     expect(screen.getByText(description)).toBeTruthy();
   });
@@ -4542,5 +4648,53 @@ describe("CopilotPreviewPage — 起動時ブリーフィング失敗時の再�
 
     await screen.findByText("エラー: AIエージェントの応答生成に失敗しました");
     expect(screen.queryByRole("button", { name: "もう一度試す" })).toBeNull();
+  });
+});
+
+// GID 1217535151513730: 旧UIの「AIチャットに戻る」から ?from=legacy 付きで戻ってきたが
+// sessionStorage の会話を復元できなかった場合、ログイン直後と同じBOOTSTRAP_PROMPT(LLM 1
+// ターン + get_weekly_briefing の課金)を焚くと「ログインし直した画面」に見えてしまう。
+// 定型文だけを返し、余計な課金を避ける回帰テスト。
+describe("CopilotPreviewPage — 旧UIからの復路(from=legacy)", () => {
+  afterEach(() => {
+    window.history.pushState({}, "", "/copilot-preview");
+  });
+
+  it("会話を復元できなくても BOOTSTRAP_PROMPT を送らず定型文だけを出す", async () => {
+    window.history.pushState({}, "", "/copilot-preview?from=legacy");
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("旧画面から戻られましたね。続きから話せます。")).toBeTruthy();
+    const agentCalls = vi
+      .mocked(authFetch)
+      .mock.calls.filter((c) => String(c[0]).includes("/v1/admin/agent/chat"));
+    expect(agentCalls.length).toBe(0);
+  });
+
+  it("from=legacy が無ければ従来どおり週次ブリーフィングを自動取得する", async () => {
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+    expect(screen.queryByText("旧画面から戻られましたね。続きから話せます。")).toBeNull();
   });
 });

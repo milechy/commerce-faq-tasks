@@ -48,6 +48,10 @@ interface NavSection {
   superAdminOnly?: boolean;
 }
 
+// 旧UIから新UI(チャット)へ戻るリンクの遷移先。SidebarContentのNavLink `to` と、
+// window.close()が無視された場合のフォールバック navigate() の両方で使う(値を1箇所にする)。
+const COPILOT_PREVIEW_FROM_LEGACY_PATH = "/copilot-preview?from=legacy";
+
 const MAIN_SECTIONS: NavSection[] = [
   {
     items: [
@@ -293,7 +297,23 @@ function SidebarContent({ onClose }: SidebarContentProps) {
             素のsuper_adminにとってはチャットが機能しないため意図的に非表示にする。 */}
         {isClientAdmin && (
           <NavLink
-            to="/copilot-preview"
+            to={COPILOT_PREVIEW_FROM_LEGACY_PATH}
+            onClick={(e) => {
+              // rel="opener"付きの内部リンクで開かれた新規タブならopenerが渡っている。
+              // SPA遷移せずタブごと閉じることで、元の会話が残っているタブへそのまま戻す。
+              // openerが無い(通常のブラウザ内遷移)場合は従来どおりNavLinkで遷移する。
+              if (window.opener) {
+                e.preventDefault();
+                window.close();
+                // ブラウザはタブ内で複数ページ遷移した後などclose()を無視することがある
+                // (script非開設扱いになるため)。閉じられなかった場合は「詰み」を避け、
+                // 通常のSPA遷移にフォールバックする。close()が成功していればこのタブ自体が
+                // 消えるため到達しない。
+                window.setTimeout(() => {
+                  if (!window.closed) navigate(COPILOT_PREVIEW_FROM_LEGACY_PATH);
+                }, 150);
+              }
+            }}
             style={{
               display: "flex",
               alignItems: "center",
@@ -530,8 +550,21 @@ const BOTTOM_NAV: { path: string; icon: React.ElementType; label: string; end?: 
   { path: "/admin/tuning", icon: SlidersHorizontal, label: "設定" },
 ];
 
+// client_adminのモバイル下部バーは、plan(starter/growth)を問わず一律「分析」の代わりに
+// AIチャットへの導線を出す(デスクトップ側 MAIN_SECTIONS の analytics 項目のような
+// requiresPlan によるプラン別出し分けはここでは行わない — チャット導線を優先する設計判断)。
+// analytics自体はgrowth以上のプラン制限がありstarterテナントには意味の無い枠だったことが
+// この置き換えの動機だが、growthテナントでも下部バーからは無くなる(ハンバーガーメニュー
+// 経由のanalyticsアクセスは従来どおり残る)。isClientAdminはpreviewMode中のsuper_adminも
+// 真になるため、previewModeでない素のsuper_adminには従来どおりanalyticsを出す。
+const BOTTOM_NAV_CLIENT_ADMIN: typeof BOTTOM_NAV = BOTTOM_NAV.map((item) =>
+  item.path === "/admin/analytics" ? { path: "/copilot-preview", icon: Sparkles, label: "AIチャット" } : item,
+);
+
 export function MobileBottomBar() {
   const location = useLocation();
+  const { isClientAdmin } = useAuth();
+  const navItems = isClientAdmin ? BOTTOM_NAV_CLIENT_ADMIN : BOTTOM_NAV;
 
   return (
     <nav
@@ -549,7 +582,7 @@ export function MobileBottomBar() {
       }}
       className="mobile-bottom-bar"
     >
-      {BOTTOM_NAV.map(({ path, icon: Icon, label, end }) => {
+      {navItems.map(({ path, icon: Icon, label, end }) => {
         const isActive = end ? location.pathname === path : location.pathname.startsWith(path);
         return (
           <NavLink
