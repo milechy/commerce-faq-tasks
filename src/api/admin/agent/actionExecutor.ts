@@ -135,6 +135,20 @@ function parseFaqCategoryArg(raw: unknown): { ok: true; category: string | null 
   return { ok: true, category: raw };
 }
 
+// update_avatar_profile の任意テキスト引数(name / personality_prompt / behavior_description)の解析。
+// 空文字列・空白のみは「未指定」として扱う。
+// 理由: Groq の function calling は省略した任意引数に '' を入れて送ってくることがある
+// (parseFaqCategoryArg の #771、parseBooleanArg の #774 と同型の実測済み挙動)。
+// typeof raw === 'string' だけで判定すると '' が「値の指定あり」となり、
+// UPDATE ... SET name = '' が走ってアバター名が空になる破壊的更新になる。
+// 「意図的に空へ戻す」手段は失われるが、名前や性格を空にする正当な用途は無く、
+// 既定に戻したい場合は reset_avatar_to_default がある。
+function parseOptionalTextArg(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
 // get_faq_list の published 引数。旧UI KnowledgeListTab の状態フィルタ3種(all/published/draft)
 // に合わせる。allowlist外・未指定はすべて 'all' に倒す(get_chat_sessions の LLM由来値検証と
 // 同じ安全側フォールバック)。
@@ -1228,9 +1242,11 @@ export async function executeToolCall(
         return truncate('基本設定の更新には確認が必要です。confirmed=true を指定して再度実行してください');
       }
 
-      const name = typeof args['name'] === 'string' ? args['name'] : undefined;
-      const personalityPrompt = typeof args['personality_prompt'] === 'string' ? args['personality_prompt'] : undefined;
-      const behaviorDescription = typeof args['behavior_description'] === 'string' ? args['behavior_description'] : undefined;
+      // '' は「未指定」として扱う（parseOptionalTextArg のコメント参照）。
+      // typeof で判定していた頃は name:'' でアバター名が空に上書きされた。
+      const name = parseOptionalTextArg(args['name']);
+      const personalityPrompt = parseOptionalTextArg(args['personality_prompt']);
+      const behaviorDescription = parseOptionalTextArg(args['behavior_description']);
 
       const sets: string[] = [];
       const values: unknown[] = [];
