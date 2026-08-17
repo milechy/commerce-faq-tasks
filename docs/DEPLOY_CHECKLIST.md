@@ -112,16 +112,22 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 |---|---|---|
 | `src/api/admin/feedback/migration_feedback.sql` | feedback_messages テーブル初期作成 | ✅ |
 | `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | 要適用 |
-| `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | 要適用 |
-| `src/api/admin/avatar/migration_category_persona.sql` | LemonSliceペルソナスワップ: avatar_configs に category_persona_map(JSONB)追加 | 要適用 |
+| `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | ✅ (2026-08-16 実機確認) |
+| `src/api/admin/avatar/migration_category_persona.sql` | LemonSliceペルソナスワップ: avatar_configs に category_persona_map(JSONB)追加 | ✅ (2026-08-16 実機確認) |
 | `src/lib/sai/migration_sai_tasks.sql` | Sai代行タスクの所有権レジストリ(sai_tasks)新設。get_sai_task_status の越境読み取り・課金誤帰属を止める (PR #755) | ✅ 2026-08-16 |
-| `src/api/admin/tenants/migration_faq_hints.sql` | tenants に faq_question_hint / faq_answer_hint 追加 | 要適用 (本番500の原因) |
-| `src/api/admin/tenants/migration_onboarding.sql` | tenants に onboarding_industry / onboarding_completed_at / onboarding_widget_seen_at 追加 | 要適用 (本番500の原因) |
-| `src/api/admin/agent/migration_admin_agent_columns.sql` | tenants に ga4_measurement_id / posthog_host / widget_theme 追加 | 要適用 (本番500の原因) |
-| `src/api/admin/feedback/migration_admin_feedback_reply.sql` | admin_feedback に返信5列 + 未読返信の部分インデックス | 要適用 (本番500の原因) |
-| `src/migrations/phase72c_conversation_flow_logs.sql` | conversation_flow_logs テーブル新設 | 要適用 (本番500の原因) |
+| `src/api/admin/tenants/migration_faq_hints.sql` | tenants に faq_question_hint / faq_answer_hint 追加 | ✅ 2026-08-16 |
+| `src/api/admin/tenants/migration_onboarding.sql` | tenants に onboarding_industry / onboarding_completed_at / onboarding_widget_seen_at 追加 | ✅ 2026-08-16 |
+| `src/api/admin/agent/migration_admin_agent_columns.sql` | tenants に ga4_measurement_id / posthog_host / widget_theme 追加 | ✅ 2026-08-16 |
+| `src/api/admin/feedback/migration_admin_feedback_reply.sql` | admin_feedback に返信5列 + 未読返信の部分インデックス | ✅ 2026-08-16 |
+| `src/migrations/phase72c_conversation_flow_logs.sql` | conversation_flow_logs テーブル新設 | ✅ 2026-08-16 |
+| `src/migrations/phase72a_tenant_settings_history.sql` | tenant_settings_history テーブル新設（設定変更履歴の保存先） | ✅ 2026-08-16 |
+| `src/migrations/phase72d_metrics_snapshots.sql` | metrics_snapshots テーブル新設 | ✅ 2026-08-16 |
+| `src/api/conversion/migration_aaas_source.sql` | conversion_attributions の source CHECK に aaas_site_change 追加 + tenants.aaas_client_id 追加（Asana GID 1215614330355126） | ✅ (2026-08-16 実機確認) |
 
 ### Phase A Day 2 migration 実行手順
+
+> **本番適用済み (2026-08-16 実機確認)。** 以下は再構築時・別環境向けの記録。
+> `ADD COLUMN IF NOT EXISTS` 主体のため再実行しても無害だが、通常は不要。
 
 ```bash
 # 1. VPS SSH接続
@@ -208,8 +214,12 @@ ssh root@65.108.159.161 "psql \$DATABASE_URL -c 'DROP TABLE IF EXISTS sai_tasks;
 
 ### 本番500の解消 migration 実行手順 (2026-08-16 実測、Asana 1217530758061266)
 
-> **未適用。** 本番の実機検証で以下4系統の500が確認されており、いずれも
-> 列/テーブルの未適用が原因。**コードのデプロイでは解消しない。**
+> **本番適用済み・全て解消確認済み (2026-08-16)。** 以下は発生時の記録・再構築時の手順として残す。
+> 適用後、この5本に加えて `phase72a_tenant_settings_history.sql` / `phase72d_metrics_snapshots.sql`
+> (設定変更履歴500の追加対応) も適用し、テナント詳細17タブ全てで500が解消したことを実機確認済み。
+
+> 適用当時の状況: 本番の実機検証で以下4系統の500が確認されており、いずれも
+> 列/テーブルの未適用が原因だった。**コードのデプロイでは解消しない。**
 
 ```
 GET /v1/admin/my-tenant                     500 {"error":"取得に失敗しました"}
