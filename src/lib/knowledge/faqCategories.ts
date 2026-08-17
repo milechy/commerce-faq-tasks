@@ -1,13 +1,19 @@
 // src/lib/knowledge/faqCategories.ts
 //
-// FAQカテゴリ語彙の単一情報源。以前は下記3箇所で語彙が個別に維持され、実際に3重化していた:
+// FAQカテゴリ語彙の単一情報源。以前は下記の箇所で語彙が個別に維持され、実際に3重化していた:
 //   - src/lib/knowledge/faqImport.ts のAIへのカテゴリ判定プロンプト(9種)
 //   - src/api/admin/agent/toolDefinitions.ts の add_faq の category enum(旧: 4種のみ)
 //   - admin-ui側の表示ラベル(admin-ui/src/i18n/ja.ts の category.*、
-//     admin-ui/src/components/knowledge/TextInputTab.tsx・UrlScrapeTab.tsx の CATEGORIES)
+//     admin-ui/src/components/knowledge/TextInputTab.tsx・UrlScrapeTab.tsx の CATEGORIES、
+//     admin-ui/src/components/knowledge/shared.ts の CATEGORY_LABELS)
 // このファイルが src/lib/knowledge/ と src/api/admin/agent/ 側の正であり、
 // faqImport.ts / toolDefinitions.ts はここを参照する。admin-ui は別パッケージのため
-// import できず、上記3ファイルへの手動複製が残る(既知の非対称。増やさない)。
+// import できず、上記ファイルへの手動複製が残る(既知の非対称。増やさない)。
+//
+// 既知の残課題: src/api/admin/knowledge/routes.ts にも同じ語彙のローカル定数
+// `CATEGORIES`/`Category` が残っている(現状どこからも参照されない未配線の複製)。
+// 同一パッケージ内でこのファイルを直接importできる場所のため、将来何かに配線すると
+// このファイルと再び乖離する。削除は本PRの範囲外(既存dead codeの削除は別タスク)。
 
 export interface FaqCategory {
   id: string;

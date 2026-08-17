@@ -3201,6 +3201,52 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('不明なカテゴリです');
     });
 
+    // 空文字列は「未指定」として扱う(LLMのfunction callingで省略時に''が渡ることがあるため、
+    // nullと区別せず拒否すると正当な追加まで失敗する)。
+    it('add_faq: category="" は未指定として扱い、categoryにnullでINSERTされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-af-4', 'add_faq', { question: 'q', answer: 'a', category: '' }))
+        .mockResolvedValueOnce(makeGroqResponse('追加しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 2, question: 'q', answer: 'a', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを追加して', sessionId: 'sess-af-5' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO faq_docs'),
+        ['tenant-abc', 'q', 'a', null],
+      );
+      expect(res.body.actions[0].result).toContain('ID: 2');
+    });
+
+    it('update_faq: category="" は未指定として扱い、COALESCEでnullを渡して既存カテゴリを保持する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uf-7', 'update_faq', { id: 42, question: 'q', answer: 'a', category: '' }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 42, question: 'q', answer: 'a', is_published: true }] })
+        .mockResolvedValueOnce({ rows: [] }); // 古いembedding削除(fire-and-forget)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '本文だけ直して', sessionId: 'sess-uf-07' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('COALESCE($3, category)'),
+        ['q', 'a', null, 42, 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+
     it('update_faq: categoryだけを変更できる', async () => {
       mockFetch
         .mockResolvedValueOnce(
