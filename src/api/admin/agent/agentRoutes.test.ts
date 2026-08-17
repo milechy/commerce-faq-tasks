@@ -223,6 +223,7 @@ function recordedSettingsChanges(): Array<Record<string, any>> {
 
 import { registerAdminAgentRoutes } from './agentRoutes';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
+import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 // オンボ 是正A-3: publish_faq_drafts が is_excluded_from_search を正しく引き継ぐことを
 // 検証するため、モック化された upsertToEsAsync への参照を取得する(上のjest.mockで
 // faqCrudRoutes モジュール全体が既にモック済み)。
@@ -3142,6 +3143,145 @@ describe('POST /v1/admin/agent/chat', () => {
         ['tenant-abc', '送料はいくらですか？', '550円です。', 'store_info'],
       );
       expect(res.body.actions[0].result).toContain('ID: 99');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GID 1217534700360088: FAQカテゴリ語彙の単一情報源化(faqCategories.ts)に伴い、
+  // add_faq/update_faq が9種すべてに対応したことの回帰テスト。
+  // -------------------------------------------------------------------------
+  describe('add_faq / update_faq', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it.each(FAQ_CATEGORY_IDS as string[])('add_faq: category=%s を受け付ける', async (category) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-af-1', 'add_faq', { question: 'q', answer: 'a', category }))
+        .mockResolvedValueOnce(makeGroqResponse('追加しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 1, question: 'q', answer: 'a', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを追加して', sessionId: `sess-af-${category}` });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO faq_docs'),
+        ['tenant-abc', 'q', 'a', category],
+      );
+      expect(res.body.actions[0].result).toContain('ID: 1');
+    });
+
+    it('add_faq: 未知のカテゴリはDBに書き込まず拒否する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-af-2', 'add_faq', { question: 'q', answer: 'a', category: 'unknown_cat' }))
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを追加して', sessionId: 'sess-af-3' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('不明なカテゴリです');
+    });
+
+    it('update_faq: categoryだけを変更できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-uf-1', 'update_faq', { id: 42, question: 'q', answer: 'a', category: 'pricing' }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] }) // テナント確認
+        .mockResolvedValueOnce({ rows: [{ id: 42, question: 'q', answer: 'a', is_published: true }] }) // UPDATE
+        .mockResolvedValueOnce({ rows: [] }); // 古いembedding削除(fire-and-forget)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カテゴリを変更して', sessionId: 'sess-uf-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('COALESCE($3, category)'),
+        ['q', 'a', 'pricing', 42, 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+
+    it('update_faq: category未指定時はCOALESCEでnullを渡し、既存カテゴリを保持する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uf-2', 'update_faq', { id: 42, question: 'q2', answer: 'a2' }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 42, question: 'q2', answer: 'a2', is_published: true }] })
+        .mockResolvedValueOnce({ rows: [] }); // 古いembedding削除(fire-and-forget)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '本文だけ直して', sessionId: 'sess-uf-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('COALESCE($3, category)'),
+        ['q2', 'a2', null, 42, 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('ID: 42');
+    });
+
+    it('update_faq: 未知のカテゴリはDBに触れず拒否する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-uf-3', 'update_faq', { id: 42, question: 'q', answer: 'a', category: 'unknown_cat' }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カテゴリを変更して', sessionId: 'sess-uf-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('不明なカテゴリです');
+    });
+
+    it('update_faq: 他テナントのFAQは更新できない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-uf-5', 'update_faq', { id: 42, question: 'q', answer: 'a', category: 'pricing' }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-zzz' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カテゴリを変更して', sessionId: 'sess-uf-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('アクセス権限がありません');
+      // 所有権確認のSELECTのみ呼ばれ、UPDATEには到達しない
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
   });
 

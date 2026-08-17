@@ -8,6 +8,7 @@ import {
   insertEmbeddingAsync,
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
+import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 import { callGroq8bSuggestFromText, callGroq8bSuggest } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
 import { splitTriggerKeywords } from '../tuning/triggerMatching';
@@ -562,6 +563,9 @@ export async function executeToolCall(
       if (!question || !answer) {
         return truncate('question と answer は必須です');
       }
+      if (category !== null && !FAQ_CATEGORY_IDS.includes(category)) {
+        return truncate(`不明なカテゴリです: ${category}`);
+      }
 
       try {
         const result = await db.query(
@@ -591,9 +595,13 @@ export async function executeToolCall(
       const id = Number(args['id']);
       const question = String(args['question'] ?? '').slice(0, 500);
       const answer = String(args['answer'] ?? '').slice(0, 2000);
+      const category = typeof args['category'] === 'string' ? args['category'] : null;
 
       if (!Number.isFinite(id) || !question || !answer) {
         return truncate('id・question・answer は必須です');
+      }
+      if (category !== null && !FAQ_CATEGORY_IDS.includes(category)) {
+        return truncate(`不明なカテゴリです: ${category}`);
       }
 
       try {
@@ -610,11 +618,12 @@ export async function executeToolCall(
           return truncate('この FAQ へのアクセス権限がありません');
         }
 
+        // category は未指定(null)なら COALESCE で既存値を保持する(指定時のみ更新)。
         const updateResult = await db.query(
-          `UPDATE faq_docs SET question = $1, answer = $2, updated_at = NOW()
-           WHERE id = $3 AND tenant_id = $4
+          `UPDATE faq_docs SET question = $1, answer = $2, category = COALESCE($3, category), updated_at = NOW()
+           WHERE id = $4 AND tenant_id = $5
            RETURNING id, question, answer, is_published`,
-          [question, answer, id, tenantId]
+          [question, answer, category, id, tenantId]
         );
         const updated = updateResult.rows[0] as {
           id: number; question: string; answer: string; is_published: boolean;
