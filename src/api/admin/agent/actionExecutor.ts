@@ -117,12 +117,16 @@ function parsePriorityTier(raw: unknown): 'low' | 'normal' | 'high' | undefined 
 // 同じ会話の中で同じ機能について何度も full を返すと同じ売り込みの繰り返しになるため、
 // 2回目以降は short に切り替える(制限そのものは変わらない)。判定は
 // knowledgeImportStaging.ts の recordPlanLimitMention((tenantId, sessionId, feature)単位)。
-type PlanLimitedFeature = 'avatar' | 'analytics' | 'conversion' | 'sai_task';
+type PlanLimitedFeature = 'avatar' | 'premium_avatar' | 'analytics' | 'conversion' | 'sai_task';
 
 const PLAN_LIMIT_NOTICES: Record<PlanLimitedFeature, { full: string; short: string }> = {
   avatar: {
     full: 'AIアバター機能はGrowthプラン以上でご利用いただけます',
     short: 'AIアバター機能はプラン対象外のままです',
+  },
+  premium_avatar: {
+    full: '高品質なアバター画像の生成はGrowthプラン以上でご利用いただけます',
+    short: '高品質なアバター画像の生成はプラン対象外のままです',
   },
   analytics: {
     full: 'この機能はGrowthプラン以上でご利用いただけます',
@@ -2889,10 +2893,13 @@ export async function executeToolCall(
     case 'get_legacy_ui_link': {
       const feature = String(args['feature'] ?? '');
       const LEGACY_UI_LINKS: Record<string, { label: string; path: string; description: string }> = {
+        // 請求書の再送・金額調整・無料期間設定・一時停止/再開は実装上すべてsuper_adminガードの
+        // 内側にあり、テナントがこの画面へ行っても実行できない。案内文はテナントが実際に
+        // できること(利用量・請求額の確認)だけを書く。
         billing: {
           label: '請求管理',
           path: '/admin/billing',
-          description: '請求書の再送・金額調整・無料期間設定・一時停止/再開はこちらの画面で行えます',
+          description: '今月の利用量と請求額の確認はこちらの画面で行えます',
         },
         avatar_studio: {
           label: 'アバタースタジオ',
@@ -2952,27 +2959,72 @@ export async function executeToolCall(
           path: `/admin/knowledge/${tenantId}?tab=attribution`,
           description: 'ナレッジ(FAQ・書籍)ごとの成約への貢献度はこちらの画面で確認できます',
         },
+        // knowledge_pdf と同じ理由でtenantIdをpathに含める必要がある(下のガードで !tenantId は事前に弾いている)。
+        faq_publish_toggle: {
+          label: 'AIの知識データ',
+          path: `/admin/knowledge/${tenantId}`,
+          description: 'FAQごとにAIが答えるかどうかを切り替えられます',
+        },
+        faq_bulk_ops: {
+          label: 'AIの知識データ',
+          path: `/admin/knowledge/${tenantId}`,
+          description: 'まとめて非公開・まとめて削除はこちらの画面です',
+        },
+        avatar_feature_toggle: {
+          label: 'アバター設定',
+          path: '/admin/avatar',
+          description: 'アバター機能全体のON/OFFはこちらの画面です',
+        },
+        avatar_profile: {
+          label: 'アバタースタジオ',
+          path: '/admin/avatar/studio',
+          description: '名前・性格・話し方の編集はこちらの画面です',
+        },
+        avatar_premium: {
+          label: 'アバター新規作成',
+          path: '/admin/avatar/wizard',
+          description: '高品質な画像の生成はこちらの画面です',
+        },
       };
 
-      // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測)に基づくプラン制限。
-      // AppSidebar.tsx(225行付近)とは異なり、ここでは super_admin もバイパスさせない。
-      // super_admin がこの新UIに入る経路は「クライアントビューで見る」(previewMode)であり、
-      // 目的はテナントに見えている状態の再現なので、Starterテナントのプレビューで
-      // Growth限定機能の案内を出すのは再現として誤り。読み取り専用の案内でしかなく、
+      // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測、AIアバター、プレミアムアバター生成)に
+      // 基づくプラン制限。AppSidebar.tsx(225行付近)とは異なり、ここでは super_admin も
+      // バイパスさせない。super_admin がこの新UIに入る経路は「クライアントビューで見る」
+      // (previewMode)であり、目的はテナントに見えている状態の再現なので、Starterテナントの
+      // プレビューでGrowth限定機能の案内を出すのは再現として誤り。読み取り専用の案内でしかなく、
       // planFeatures.ts の GID 1216961878992581 が扱う「永続的な権能付与 vs 都度原価」の
       // 判断軸（activate_avatar 等）にも当てはまらない。
-      if (feature === 'analytics' || feature === 'conversion') {
+      // avatar_feature_toggle(ON/OFF切替) / avatar_premium(高品質生成) は実際の操作先が
+      // 403 plan_upgrade_required で拒否される(routes.ts / premiumGenerationRoutes.ts)ため、
+      // 案内リンク側でも同じ制限を返す — さもないと使えない画面へ自信満々に案内してしまう。
+      // get_legacy_ui_link の feature 語彙と GatedFeature/PlanLimitedFeature の語彙が
+      // 異なるキーは、ここで対応付ける。
+      const PLAN_GATED_LEGACY_FEATURES: Partial<Record<string, PlanLimitedFeature>> = {
+        analytics: 'analytics',
+        conversion: 'conversion',
+        avatar_feature_toggle: 'avatar',
+        avatar_premium: 'premium_avatar',
+      };
+      const gatedFeature = PLAN_GATED_LEGACY_FEATURES[feature];
+      if (gatedFeature) {
         if (!tenantId) {
           return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
         }
         const plan = await queryTenantPlan(db, tenantId);
-        if (!planHasFeature(plan, feature)) {
-          return truncate(planLimitNotice(tenantId, sessionId, feature));
+        if (!planHasFeature(plan, gatedFeature)) {
+          return truncate(planLimitNotice(tenantId, sessionId, gatedFeature));
         }
       }
 
-      // knowledge_pdf / knowledge_attribution は path に tenantId を埋め込む都合上、他のキーと違い必須。
-      if ((feature === 'knowledge_pdf' || feature === 'knowledge_attribution') && !tenantId) {
+      // knowledge_pdf / knowledge_attribution / faq_publish_toggle / faq_bulk_ops は
+      // path に tenantId を埋め込む都合上、他のキーと違い必須。
+      if (
+        (feature === 'knowledge_pdf' ||
+          feature === 'knowledge_attribution' ||
+          feature === 'faq_publish_toggle' ||
+          feature === 'faq_bulk_ops') &&
+        !tenantId
+      ) {
         return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
       }
 
@@ -2995,6 +3047,38 @@ export async function executeToolCall(
           } catch (err) {
             logger.warn('[actionExecutor] get_legacy_ui_link session resolve failed', err);
           }
+        }
+      }
+
+      // avatar_studio / avatar_profile はどちらも同じ studio.tsx (/admin/avatar/studio)へ
+      // 案内するため、同じ解決ロジックを適用する。avatar_config_id が渡っていればそれを使い
+      // (tenant_id条件により、他テナントのIDは越境せず「不存在」側に倒れる)、渡っていなければ
+      // 稼働中(is_active=true)の設定を1件解決して使う。どちらも解決できないときだけ
+      // 従来のID無しURLに戻す。studio.tsx はID無しだと新規作成の空フォームで開くため、
+      // 既存アバターを編集しているつもりの利用者(例: 「音声クローンをした」「名前を変えたい」)が
+      // 意図せず別の新規アバターを作ってしまう事故を防ぐ(session_deletion の既存パターンに倣う)。
+      if ((feature === 'avatar_studio' || feature === 'avatar_profile') && tenantId) {
+        const configId = String(args['avatar_config_id'] ?? '').trim();
+        try {
+          if (configId) {
+            const resolved = await db.query<{ id: string }>(
+              `SELECT id FROM avatar_configs WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+              [configId, tenantId]
+            );
+            if (resolved.rows.length > 0) {
+              path = `/admin/avatar/studio/${resolved.rows[0].id}`;
+            }
+          } else {
+            const activeRes = await db.query<{ id: string }>(
+              `SELECT id FROM avatar_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+              [tenantId]
+            );
+            if (activeRes.rows.length > 0) {
+              path = `/admin/avatar/studio/${activeRes.rows[0].id}`;
+            }
+          }
+        } catch (err) {
+          logger.warn('[actionExecutor] get_legacy_ui_link avatar_studio resolve failed', err);
         }
       }
 

@@ -34,6 +34,11 @@ export const LEGACY_UI_FEATURES = [
   'avatar_wizard',
   'knowledge_pdf',
   'knowledge_attribution',
+  'faq_publish_toggle',
+  'faq_bulk_ops',
+  'avatar_feature_toggle',
+  'avatar_profile',
+  'avatar_premium',
 ] as const;
 
 export const ADMIN_AGENT_TOOLS: GroqTool[] = [
@@ -1169,7 +1174,12 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'ユーザーが明示した場合にのみ案内すること。' +
         'また会話分析・成約/効果分析の「数値サマリー」は get_analytics_summary / get_conversion_summary で' +
         'チャット上に直接返せるため、まずそちらを使うこと。この2機能でこのツールを使うのは、' +
-        'グラフの詳細・個別の低評価セッション・ABテスト結果を旧UIで見たい場合に限る。',
+        'グラフの詳細・個別の低評価セッション・ABテスト結果を旧UIで見たい場合に限る。' +
+        'FAQごとにAIが答えるかどうかを切り替えたいと聞かれたら feature="faq_publish_toggle" を使うこと。' +
+        'FAQのまとめて非公開・まとめて削除をしたいと聞かれたら feature="faq_bulk_ops" を使うこと。' +
+        'アバター機能全体のON/OFFを切り替えたいと聞かれたら feature="avatar_feature_toggle" を使うこと。' +
+        'アバターの名前・性格・話し方を編集したいと聞かれたら feature="avatar_profile" を使うこと。' +
+        '高品質なアバター画像を生成したいと聞かれたら feature="avatar_premium" を使うこと。',
       parameters: {
         type: 'object',
         properties: {
@@ -1183,6 +1193,12 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             description:
               '対象の会話の短縮ID（get_chat_sessions や get_escalations が返す8文字のID）。' +
               'session_deletion で使うと、その会話を直接開くリンクになる。',
+          },
+          avatar_config_id: {
+            type: 'string',
+            description:
+              '対象のアバター設定ID。avatar_studio / avatar_profile で使うと、そのアバターを直接開く' +
+              'リンクになる。指定が無ければ稼働中のアバター設定を自動で解決する。',
           },
         },
         required: ['feature'],
