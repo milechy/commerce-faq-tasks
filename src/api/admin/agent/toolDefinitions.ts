@@ -95,17 +95,26 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_faq_list',
-      description: 'テナントの FAQ 一覧を取得する（最大20件。登録されている総件数も併記されるため、表示件数が上限に達していても総数は正しく分かる）',
+      description:
+        'テナントの FAQ 一覧を取得する読み取り専用ツール。公開状態・並び順・キーワード検索・ページ送りで絞り込める。' +
+        '（絞り込み適用後の総件数も併記されるため、表示件数が上限に達していても総数は正しく分かる）',
       parameters: {
         type: 'object',
         properties: {
-          limit: {
-            type: 'integer',
-            description: '取得件数（1〜20、デフォルト10）',
-          },
-          search: {
+          limit: { type: 'integer', description: '取得件数の上限（任意、省略時10、最大20）' },
+          offset: { type: 'integer', description: '取得開始位置（任意、省略時0）。前回の続きを見るときに limit ずつ進める' },
+          search: { type: 'string', description: '検索キーワード（任意）' },
+          published: {
             type: 'string',
-            description: '検索キーワード（任意）',
+            enum: ['all', 'published', 'draft'],
+            description: '公開状態での絞り込み（任意、省略時は全件）。published=公開中のみ、draft=下書きのみ',
+          },
+          sort_by: {
+            type: 'string',
+            enum: ['newest', 'oldest', 'updated', 'category'],
+            description:
+              '並び替えの基準（任意、省略時は新しい順）。newest=登録が新しい順、oldest=登録が古い順、' +
+              'updated=更新が新しい順、category=カテゴリ順',
           },
         },
         required: [],
