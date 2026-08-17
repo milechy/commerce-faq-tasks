@@ -32,6 +32,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 同じ is_active フラグを倒すだけで、activate_avatar で元に戻せる。
   // 顧客の画面からアバターが消えるが、コンテンツは失われないため activate と同じ階層。
   deactivate_avatar: 'low',
+  // activate_avatar と同じくフラグ(tenants.features.avatar)を倒すだけで、
+  // 再度trueにすれば元に戻せる。
+  set_avatar_feature: 'low',
   // 社内向け分析レコードのステータス変更のみ。顧客影響なし・再度拾い直せる。
   dismiss_knowledge_gap: 'low',
 
