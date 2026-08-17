@@ -29,10 +29,10 @@
 | 対象 | 実測 |
 |---|---|
 | 新UIの入口 | 左レール「🎭アバター」= 定型文 `アバターの稼働状況を教えて` を送るだけ（`copilot-preview/index.tsx:315, 702`） |
-| ツール | **6本**（作成時点2026-07-31は2本だったが #611/#632/#635 で増加、`toolDefinitions.ts:231-306`） — `get_avatar_status` / `get_avatar_list` / `activate_avatar` / `deactivate_avatar` / `suggest_avatar_preset` / `adopt_avatar_preset`（`confirmPolicy.ts` に登録済みの全アバターツール）。加えて画像候補カード・音声試聴カード（直接fetch、ツール経由ではない）がある |
+| ツール | **6本**（`toolDefinitions.ts:231-306`）— `get_avatar_status` / `get_avatar_list` / `activate_avatar` / `deactivate_avatar` / `suggest_avatar_preset` / `adopt_avatar_preset`（`confirmPolicy.ts` に登録済みの全アバターツール）。本ドキュメント作成時（2026-07-31 00:30 UTC、commit `faeed7c4`）の §1.1 は「2本のみ」と記載していたが、これは**同日中に古くなった誤り**だった — 14分後の #593（`a4becd61`）で `get_avatar_list` / `deactivate_avatar` が、同日中の #611（`6a0fdafe`）で `suggest_avatar_preset` / `adopt_avatar_preset` が入り、2026-07-31のうちに6本になっていた（`git log -S` で実測確認）。加えて画像候補カード・音声試聴カード（直接fetch、ツール経由ではない、#632/#635）がある |
 | `get_avatar_status` が返すもの | `features->>'avatar'` の有効/無効と、`is_active = true` の設定名 **1件** |
 | `activate_avatar` | `id` 必須。`queryTenantPlan` → `planHasFeature(plan, 'avatar')` のプランゲートあり（super_admin でもバイパス不可） |
-| `get_avatar_list` | 自テナントの設定一覧＋既定アバターを返す（作成時点2026-07-31には無く、一覧が無いことが§2-1の課題だった。現在は解消済み） |
+| `get_avatar_list` | 自テナントの設定一覧＋既定アバターを返す（#593で追加。§2-1が課題とした「一覧が無い」状態は、本ドキュメント作成の14分後には既に解消されていた） |
 | **層A・層Bの未実装分（2026-08-17実測）** | 層A: 名前/性格/口調の更新・既定に戻すはツール未実装。層B: 音声クローンの添付は未実装（`bookPdfUpload.ts` 相当のクローン音声版が admin-ui に無く、音声クローンは旧UI `studio.tsx` のみ）。詳細: `LEGACY_UI_SUNSET.md` §1.2-9 |
 | 旧UI受け渡し | `avatar_studio`（`actionExecutor.ts:1718`）/ `avatar_wizard`（`:1748`）。`legacy_link` カードで**別タブ固定** |
 
