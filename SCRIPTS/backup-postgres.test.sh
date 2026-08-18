@@ -45,7 +45,12 @@ run() {
 }
 check() {  # $1: 説明, $2: 実際, $3: 期待
     if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "  ✓ $1"
-    else FAIL=$((FAIL+1)); echo "  ✗ $1 — 期待:[$3] 実際:[$2]"; fi
+    else
+        FAIL=$((FAIL+1)); echo "  ✗ $1 — 期待:[$3] 実際:[$2]"
+        # 失敗理由を推測させない。どのガードが発火したかを必ず出す。
+        # (CI で落ちたときローカルで再現せず、原因の特定に時間を溶かしたため)
+        [ -s "${WORK}/stderr" ] && sed 's/^/      stderr> /' "${WORK}/stderr"
+    fi
 }
 reset_out() { rm -rf "${WORK}/out" "${WORK}/notify.log"; mkdir -p "${WORK}/out"; touch "${WORK}/notify.log"; }
 count_gz() { ls -1 "${WORK}/out"/pg_*.sql.gz 2>/dev/null | wc -l | tr -d ' '; }

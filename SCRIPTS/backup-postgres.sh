@@ -135,10 +135,19 @@ if ! gzip -t "$TMP" 2>/dev/null; then
     rm -f "$TMP"
     fail "ダンプの gzip 整合性チェックに失敗しました"
 fi
-if ! gzip -dc "$TMP" 2>/dev/null | head -c 4096 | grep -q "PostgreSQL database dump"; then
-    rm -f "$TMP"
-    fail "ダンプの内容が pg_dump の出力に見えません"
-fi
+# head が先に閉じると gzip に SIGPIPE が飛び、pipefail のせいで
+# grep が一致していてもパイプライン全体が非ゼロになる。
+# Linux(本番・CI)で顕在化し、macOS では再現しなかった。ダンプが大きいほど確実に踏むため、
+# そのままだと「取得に成功した直後に失敗と判定してファイルを消す」動きになる。
+# パイプの終了コードに依存させず、取り出した文字列だけで判定する。
+HEAD_TEXT="$(gzip -dc "$TMP" 2>/dev/null | head -c 4096 || true)"
+case "$HEAD_TEXT" in
+    *"PostgreSQL database dump"*) ;;
+    *)
+        rm -f "$TMP"
+        fail "ダンプの内容が pg_dump の出力に見えません"
+        ;;
+esac
 
 mv -f "$TMP" "$FINAL" || fail "バックアップの確定（rename）に失敗しました"
 log "完了: ${FINAL} ($(du -h "$FINAL" | cut -f1))"
