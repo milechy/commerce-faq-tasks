@@ -704,14 +704,23 @@ const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
 // トリガー側ツールを列挙する方式は登録漏れが静かに積み上がるため、「顧客・外部が書いた
 // 文字列をコンテキストへ入れたか」という状態1つで判定する方式に変更する。
 //
-// 実測で顧客・外部由来の文字列を返すことを確認済みなのは以下の4本
+// 実測で顧客・外部由来の文字列を返すことを確認済みなのは以下の6本
 // (get_chat_session_messages は会話本文そのもの、get_escalations / get_chat_sessions は
-// first_message_preview、get_knowledge_gaps は user_question で、同様に顧客の発言をそのまま返す)。
+// first_message_preview、get_knowledge_gaps は user_question で、同様に顧客の発言をそのまま返す。
+// get_conversation_evaluation の text/card は ev.notes = 顧客との会話からJudge(Gemini)が
+// 生成した所見であり、顧客が書いた指示文が要約を経て残りうる。suggest_faq_import_from_urls は
+// 外部サイト本文からの生成物で、テナント自身が制御できない入力源)。
 //
-// suggest_faq_import_from_urls(外部サイトの本文取得)は対象に含めない: 既に
-// SUGGEST_TO_SAVE_TOOL の suggest→commit連鎖ブロックで直接の下流(commit_faq_import)は
-// 塞がれており、対象を広げるとGate 2.5の影響範囲評価が肥大化するため、別タスクとして
-// 検討する(要件のスコープ外)。
+// 2026-08-18 是正(Asana 1217568022159772・PR #781の積み残し): この2本は#781時点で
+// 未収録だったため、以下の書き込みツールへの連鎖ブロックが効いていなかった:
+//   get_conversation_evaluation → 「評価を見てから指示ルールを作る」等の任意の確認ゲート対象ツール
+//   suggest_faq_import_from_urls → commit_faq_import以外の任意の確認ゲート対象ツール
+//     (commit_faq_importへの連鎖は元々SUGGEST_TO_SAVE_TOOLで別途ブロックされていたが、
+//      それ以外の書き込みツールへの連鎖は無防備だった)
+//
+// get_conversation_evaluationを対象に含めると「評価を見てから指示ルールを作る」フローが
+// 2ターンに分かれる副作用があるが、顧客発の指示文がJudge要約を経て書き込みへ連鎖する経路を
+// 塞ぐことを優先し、他の読み取りツールと同じ安全側の既定に揃える。
 const UNTRUSTED_TEXT_READ_TOOLS: ReadonlySet<string> = new Set([
   'get_chat_session_messages',
   // 露出は first_message_preview に限られ get_chat_session_messages より注入面は小さいが、
@@ -719,7 +728,16 @@ const UNTRUSTED_TEXT_READ_TOOLS: ReadonlySet<string> = new Set([
   'get_escalations',
   'get_chat_sessions',
   'get_knowledge_gaps',
+  'get_conversation_evaluation',
+  'suggest_faq_import_from_urls',
 ]);
+
+// 中期案(ActionResult に「外部・顧客由来テキストを含む」というメタ情報を持たせ、この集合の
+// 手動管理をやめる)は本PRでは見送る。理由: actionExecutor.ts は本PRと同時並行の別タスク
+// (Lane α)が編集中のファイル分離ルールにより本PRからは触れない。メタ情報化は45ケース全体
+// (最低でも本集合が対象とする6ケース)へ配線する変更になり、actionExecutor.ts への手入れが
+// 必須のため、この制約下では実施できない。列挙方式は残り、登録漏れの再発余地も残る。
+// 実施する場合は別タスクとして起票し、actionExecutor.ts が空くタイミングで着手する。
 
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ
 // ツールを呼びたい場合に "<function=...>" のような擬似構文をテキストとして出力することが
