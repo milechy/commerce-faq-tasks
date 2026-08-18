@@ -9,7 +9,7 @@ import { logger } from '../../../lib/logger';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall, parseBooleanArg } from './actionExecutor';
 import type { ActionResult, ActionCardPayload } from './actionExecutor';
-import { requiresConfirmation } from './confirmPolicy';
+import { requiresConfirmation, WRITE_TOOL_RISK_TIERS } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
 import { recordAgentSettingsChange } from './agentAuditLog';
@@ -391,11 +391,19 @@ function parseToolArgs(raw: string): Record<string, unknown> {
   }
 }
 
+// 同一ターン連鎖ブロックの対象かどうか。requiresConfirmation() は未分類ツール(読み取り専用含む)を
+// 例外にするため、先に WRITE_TOOL_RISK_TIERS でのメンバーシップを確認してから呼ぶ
+// （読み取り専用ツールに対して呼ぶと例外になる）。
+function isConfirmationGatedWriteTool(name: string): boolean {
+  return name in WRITE_TOOL_RISK_TIERS && requiresConfirmation(name);
+}
+
 async function executeHopToolCalls(
   toolCalls: ParsedToolCall[],
   effectiveTenantId: string,
   db: Pool,
   suggestedThisTurn: Set<string>,
+  untrustedReadToolsThisTurn: Set<string>,
   actions: ChatAction[],
   messages: GroqMessage[],
   isSuperAdmin: boolean,
@@ -417,16 +425,27 @@ async function executeHopToolCalls(
 
     // 同一ターン連鎖のブロックは「確認ゲートの対象ツール」にのみ効かせる。
     // 対象かどうかの判定は confirmPolicy.ts に集約する（リスク階層の単一の情報源）。
-    // requiresConfirmation は分類済みの書き込みツールすべてに対して true を返すため、
-    // ここでの判定結果は従来と完全に同一（挙動不変）。未分類ツールでは例外を投げるが、
-    // 短絡評価により連鎖を検出した save 側ツールしか渡らない。
-    const blockSameTurnChain = alreadySuggestedThisTurn && requiresConfirmation(name);
+    // isConfirmationGatedWriteTool は分類済みの書き込みツールすべてに対して true を返すため、
+    // ここでの判定結果は従来と完全に同一（挙動不変）。未分類の読み取りツールは
+    // WRITE_TOOL_RISK_TIERS のメンバーシップで先に弾かれるため requiresConfirmation は呼ばれない。
+    //
+    // ブロック条件は2つ（どちらも「人間の実際の同意を経ていない書き込み」を防ぐ）:
+    //  1. blockedBySuggestChain … suggest_*→save_* の連鎖（SUGGEST_TO_SAVE_TOOL）
+    //  2. blockedByUntrustedRead … 信頼できないテキストの読み取り直後の書き込み（下記参照）
+    const blockedBySuggestChain = alreadySuggestedThisTurn && isConfirmationGatedWriteTool(name);
+    const blockedByUntrustedRead = untrustedReadToolsThisTurn.size > 0 && isConfirmationGatedWriteTool(name);
 
     let result: string;
     let card: ActionCardPayload | undefined;
-    if (blockSameTurnChain) {
+    if (blockedByUntrustedRead) {
+      // 同一ターン内で「顧客・外部が書いた文字列」を読んだ直後に書き込みが連鎖しようとしている:
+      // 人間の確認を経ていないためブロック。次ターンで一覧を取り直すと再びこのブロックに
+      // 当たり続けるため（新しいリクエストのたびにフラグはリセットされる）、一覧の再取得ではなく
+      // 直前に得たIDを使って依頼し直すよう明示的に誘導する。
+      result = `この書き込みは、直前に顧客・外部由来のテキストを読み取った同一ターン内での実行のため${BLOCKED_CHAIN_MARKER}。一覧を取り直さず、直前に得た [ID] を使ってもう一度依頼してください。`;
+    } else if (blockedBySuggestChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
-      result = 'この保存は同一ターン内での連続実行のため確認をスキップできません。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。';
+      result = `この保存は同一ターン内での連続実行のため${BLOCKED_CHAIN_MARKER}。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。`;
     } else {
       let raw: ActionResult;
       try {
@@ -453,6 +472,7 @@ async function executeHopToolCalls(
         card = raw.card;
       }
       if (name in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(name);
+      if (UNTRUSTED_TEXT_READ_TOOLS.has(name)) untrustedReadToolsThisTurn.add(name);
     }
 
     // card を持たないツールでは JSON に card キー自体を出さない(既存レスポンス形と同一)。
@@ -654,19 +674,15 @@ const MAX_TOOL_HOPS = 4;
 // G1導入により「複数ツールを同一ターン内で連鎖実行」が技術的に可能になったが、
 // これは人間の確認を経ないまま書き込みが確定してしまう抜け道になるため、
 // プロンプト任せにせずコードで明示的にブロックする（下記ループ内で使用）。
-// 元は suggest_*→save_* の対応表だったが、get_chat_session_messages→delete_chat_session
-// (顧客が書いた文字列を読んだ直後に、その内容に反応して削除する経路の遮断)も同じ
-// 仕組みで扱う。value(ブロック対象)は複数のtriggerから指されうる点に注意
-// （下のブロック判定は「このツールを指すtriggerキーのいずれかが今ターン呼ばれたか」で見る）。
+// suggest_* → save_* の対応（下書きの提示と、その採用の連鎖防止）専用。value(ブロック対象)は
+// 複数のtriggerから指されうる点に注意（下のブロック判定は「このツールを指すtriggerキーの
+// いずれかが今ターン呼ばれたか」で見る）。
 const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
   suggest_tuning_rule: 'save_tuning_rule',
   suggest_faq: 'save_faq',
   suggest_engagement_rule: 'save_engagement_rule',
   suggest_faq_import_from_text: 'commit_faq_import',
   suggest_faq_import_from_urls: 'commit_faq_import',
-  // 会話本文の取得直後に、その内容(顧客が書いた文字列=注入されうる)に反応して
-  // 同一ターンで削除が確定するのを防ぐ。削除は必ず別ターンでのユーザーの同意を要求する。
-  get_chat_session_messages: 'delete_chat_session',
   // 見本の提示と採用(永続レコード作成)が同一ターンで連鎖しないようにする。他の
   // suggest_*→save_* と同じ理由: confirmed=true はモデルが自己申告する値でしかなく、
   // 同一ターン内では人間の実際の同意を経ていない。
@@ -676,6 +692,34 @@ const SUGGEST_TO_SAVE_TOOL: Record<string, string> = {
   // が同一ターンで素通りしていた欠陥の修正(2026-08-01)。
   suggest_category_persona: 'save_category_persona',
 };
+
+// 方針決定(2026-08-18・hkobayashi・Asana 1217566291608806): 「信頼できないテキストの
+// 読み取り元」を1つの集合として持ち、これらのいずれかが今ターン既に呼ばれていたら、
+// 以降の確認ゲート対象ツール(isConfirmationGatedWriteTool)を無差別にブロックする。
+//
+// 経緯: 上のSUGGEST_TO_SAVE_TOOLは元々 get_chat_session_messages → delete_chat_session の
+// 連鎖も1エントリとして登録していたが、Record<string, string>は1キーにつき1値しか持てず、
+// record_session_outcome / set_faq_published 等、他の書き込みツールへは連鎖ブロックが
+// 効かないという穴が実測で判明した(32ツール中7ツールにしか効いていなかった)。
+// トリガー側ツールを列挙する方式は登録漏れが静かに積み上がるため、「顧客・外部が書いた
+// 文字列をコンテキストへ入れたか」という状態1つで判定する方式に変更する。
+//
+// 実測で顧客・外部由来の文字列を返すことを確認済みなのは以下の4本
+// (get_chat_session_messages は会話本文そのもの、get_escalations / get_chat_sessions は
+// first_message_preview、get_knowledge_gaps は user_question で、同様に顧客の発言をそのまま返す)。
+//
+// suggest_faq_import_from_urls(外部サイトの本文取得)は対象に含めない: 既に
+// SUGGEST_TO_SAVE_TOOL の suggest→commit連鎖ブロックで直接の下流(commit_faq_import)は
+// 塞がれており、対象を広げるとGate 2.5の影響範囲評価が肥大化するため、別タスクとして
+// 検討する(要件のスコープ外)。
+const UNTRUSTED_TEXT_READ_TOOLS: ReadonlySet<string> = new Set([
+  'get_chat_session_messages',
+  // 露出は first_message_preview に限られ get_chat_session_messages より注入面は小さいが、
+  // 安全側の既定(受け入れ条件)に従い対象に含める。
+  'get_escalations',
+  'get_chat_sessions',
+  'get_knowledge_gaps',
+]);
 
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ
 // ツールを呼びたい場合に "<function=...>" のような擬似構文をテキストとして出力することが
@@ -780,6 +824,9 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       // このリクエスト(ターン)内で suggest_* が呼ばれたツール名を記録し、
       // 対応する save_* が同一ターン内で連鎖実行されるのを防ぐ（G1のリスク軽減策）
       const suggestedThisTurn = new Set<string>();
+      // このリクエスト(ターン)内で UNTRUSTED_TEXT_READ_TOOLS のいずれかが呼ばれたかを記録し、
+      // 以降の確認ゲート対象ツールを一律ブロックする（新しいリクエストのたびにリセットされる）。
+      const untrustedReadToolsThisTurn = new Set<string>();
 
       // -----------------------------------------------------------------
       // SSE: stream:true をオプトインした場合のみ本物のトークンストリーミング経路へ。
@@ -816,7 +863,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             }));
 
             const beforeCount = actions.length;
-            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
+            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, untrustedReadToolsThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
             for (const action of actions.slice(beforeCount)) {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
@@ -914,7 +961,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           args: parseToolArgs(toolCall.function.arguments),
         }));
 
-        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
+        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, untrustedReadToolsThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
       }
 
       const hitHopLimit = finalReply === null;
