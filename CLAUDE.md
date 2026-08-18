@@ -255,13 +255,11 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 - Gate 1 が走らせるのは root の `typecheck` / `lint`(oxlint) / `test`(jest)。
   oxlint は `admin-ui/src` も対象（`oxlint src admin-ui/src`）なので、lint は両側を見ている。
 - jest の testMatch は `{src,tests}/**/*.test.ts` で、**`.tsx` は対象外**。
-- **admin-ui の vitest は Gate 3 で走る**（`Gate 3 — admin-ui test + build`。2026-08-18 に追加）。
+- **admin-ui の vitest / `tsc -b` は Gate 3 で走る**（`Gate 3 — admin-ui typecheck + test + build`。
+  vitest は2026-08-18、typecheck は既存エラー24件解消後の同日に追加）。
   それ以前は CI 非実行で、`useAuth.test.tsx` のフレークが #662 以降ずっと赤いまま
   誰にも気づかれていなかった。同じ穴を作らないため、admin-ui にテストランナーを
   増やす場合は必ず CI に配線すること。
-- **admin-ui の `tsc -b`（型チェック）は依然として CI 非実行。** テストファイル中心に
-  24件の既存エラーがあり、まとめて直さないと有効化できない（別タスク）。
-  したがって admin-ui の型エラーは merge を止めない。
 - Cloudflare Pages は main merge = 即本番。上記の穴に入る変更は検出機会が無いまま本番に出る。
 
 **最低限意識すること**

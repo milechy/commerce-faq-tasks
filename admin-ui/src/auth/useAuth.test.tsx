@@ -10,7 +10,7 @@ import {
 } from "../lib/chatSessionStore";
 
 const mockGetSession = vi.fn();
-const mockOnAuthStateChange = vi.fn(() => ({ data: { subscription: { unsubscribe: vi.fn() } } }));
+const mockOnAuthStateChange = vi.fn((..._args: unknown[]) => ({ data: { subscription: { unsubscribe: vi.fn() } } }));
 
 vi.mock("../lib/supabaseClient", () => ({
   supabase: {

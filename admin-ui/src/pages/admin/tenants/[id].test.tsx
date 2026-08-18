@@ -80,7 +80,7 @@ describe("TenantDetailPage — エラー意味論(500 vs 404 vs 401)", () => {
   });
 
   it("200のとき: タブが描画される", async () => {
-    global.fetch = vi.fn().mockResolvedValue(
+    globalThis.fetch = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         id: "carnation", name: "carnation", plan: "starter", is_active: true,
         allowed_origins: [], billing_enabled: false, billing_free_from: null,
@@ -97,7 +97,7 @@ describe("TenantDetailPage — エラー意味論(500 vs 404 vs 401)", () => {
   });
 
   it("404のとき: 「テナントが見つかりませんでした」を表示し、再試行ボタンは出さない", async () => {
-    global.fetch = vi.fn().mockResolvedValue(jsonResponse(404, { error: "not_found" }));
+    globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse(404, { error: "not_found" }));
 
     renderPage();
 
@@ -107,7 +107,7 @@ describe("TenantDetailPage — エラー意味論(500 vs 404 vs 401)", () => {
   });
 
   it("500のとき: 「テナントが見つかりませんでした」を表示せず、読み込み失敗+再試行ボタンを出す", async () => {
-    global.fetch = vi.fn().mockResolvedValue(jsonResponse(500, { error: "取得に失敗しました" }));
+    globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse(500, { error: "取得に失敗しました" }));
 
     renderPage();
 
@@ -128,7 +128,7 @@ describe("TenantDetailPage — エラー意味論(500 vs 404 vs 401)", () => {
           lemonslice_agent_id: null, conversion_types: [],
         }),
       );
-    global.fetch = fetchMock;
+    globalThis.fetch = fetchMock;
 
     renderPage();
 
@@ -147,9 +147,9 @@ describe("TenantDetailPage — エラー意味論(500 vs 404 vs 401)", () => {
   // したがって setState の実行順に依存する競合は実際には発生しない。
   // この「loadingがボタンを隠すことによる暗黙のガード」が壊れていないことを固定する。
   it("読み込み中は「やり直す」ボタンが画面から消え、二重にクリックできない", async () => {
-    let resolveFirst: ((r: Response) => void) | null = null;
+    let resolveFirst: ((r: Response) => void) | undefined;
     let callCount = 0;
-    global.fetch = vi.fn().mockImplementation(() => {
+    globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount += 1;
       if (callCount === 1) {
         return Promise.resolve(jsonResponse(500, { error: "取得に失敗しました" }));
@@ -176,12 +176,12 @@ describe("TenantDetailPage — エラー意味論(500 vs 404 vs 401)", () => {
       }),
     );
     await waitFor(() => expect(screen.getByText("⚙️ 設定")).toBeTruthy());
-    expect(global.fetch).toHaveBeenCalledTimes(2); // 初回 + やり直す1回のみ
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2); // 初回 + やり直す1回のみ
   });
 
   it("401(未ログイン)のとき: 既存どおり /login へ遷移する(挙動を変えない)", async () => {
     mockGetSession.mockResolvedValue({ data: { session: null } });
-    global.fetch = vi.fn();
+    globalThis.fetch = vi.fn();
 
     render(
       <MemoryRouter initialEntries={["/admin/tenants/carnation"]}>

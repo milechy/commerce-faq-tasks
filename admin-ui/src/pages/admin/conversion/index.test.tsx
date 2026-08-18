@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import ConversionDashboardPage from './index';
 import { useAuth } from '../../../auth/useAuth';
 import { authFetch } from '../../../lib/api';
+import { createAuthMock } from '../../../test/authMock';
 
 vi.mock('../../../auth/useAuth', () => ({
   useAuth: vi.fn(),
@@ -36,18 +37,13 @@ vi.mock('../../../lib/api', () => ({
   authFetch: vi.fn(),
 }));
 
-const SUPER_ADMIN_PREVIEWING = {
+const SUPER_ADMIN_PREVIEWING = createAuthMock({
   user: { id: '1', email: 'admin@example.com', role: 'super_admin', tenantId: null, tenantName: null },
-  isSuperAdmin: false,
   isClientAdmin: true,
-  isLoading: false,
-  logout: vi.fn(),
   previewMode: true,
   previewTenantId: 'lp-demo-avator',
   previewTenantName: 'LP Demo',
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
 const mockOk = (data: unknown): Promise<Response> =>
   Promise.resolve({ ok: true, json: () => Promise.resolve(data) } as Response);
@@ -67,7 +63,7 @@ describe('ConversionDashboardPage — super_adminプレビューmodeのテナン
   });
 
   it('プレビューmode中はpreviewTenantIdでtenant_idパラメータをリクエストに含める（修正前は空のuser.tenantIdでフィルタ無しになっていた）', async () => {
-    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING);
     renderPage();
 
     await waitFor(() => {
@@ -98,7 +94,7 @@ const mockStatus = (status: number, body: unknown): Promise<Response> =>
 
 describe('ConversionDashboardPage — プラン制限(403)の表示', () => {
   beforeEach(() => {
-    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING);
     vi.mocked(authFetch).mockReset();
   });
 

@@ -39,7 +39,7 @@ jobs:
         run: pnpm test
 
   admin-ui-build:
-    name: Gate 3 — admin-ui test + build
+    name: Gate 3 — admin-ui typecheck + test + build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: verify
@@ -62,6 +62,11 @@ jobs:
 
       - name: Install admin-ui
         run: cd admin-ui && pnpm install --frozen-lockfile
+
+      # admin-ui の tsc -b は長らく CI 非実行だった(既存エラー24件のため配線できなかった)。
+      # テストより先に置く: 型が壊れているならテストを走らせる前に落としたい。
+      - name: Typecheck admin-ui (tsc -b)
+        run: cd admin-ui && pnpm typecheck
 
       # admin-ui の vitest は長らく CI 非実行で、Gate 1(pnpm verify)をローカルで
       # 回した人しか結果を見ていなかった。そのため useAuth.test.tsx のフレークが

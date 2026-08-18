@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import ChatTestPage from './index';
 import { useAuth } from '../../../auth/useAuth';
 import { authFetch } from '../../../lib/api';
+import { createAuthMock } from '../../../test/authMock';
 
 vi.mock('../../../auth/useAuth', () => ({
   useAuth: vi.fn(),
@@ -29,43 +30,27 @@ const AVATARS_TENANT_B = [
   { id: 'av-b-1', name: 'Tenant B Avatar', image_url: null, is_default: false, tenant_id: 'tenant-b' },
 ];
 
-const mockClientAdmin = {
+const mockClientAdmin = createAuthMock({
   user: {
     id: '1',
     email: 'client@example.com',
-    role: 'client_admin' as const,
+    role: 'client_admin',
     tenantId: 'tenant-a',
     tenantName: 'Tenant A',
   },
-  isSuperAdmin: false,
   isClientAdmin: true,
-  isLoading: false,
-  logout: vi.fn(),
-  previewMode: false,
-  previewTenantId: null,
-  previewTenantName: null,
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
-const mockSuperAdmin = {
+const mockSuperAdmin = createAuthMock({
   user: {
     id: '2',
     email: 'admin@example.com',
-    role: 'super_admin' as const,
+    role: 'super_admin',
     tenantId: null,
     tenantName: null,
   },
   isSuperAdmin: true,
-  isClientAdmin: false,
-  isLoading: false,
-  logout: vi.fn(),
-  previewMode: false,
-  previewTenantId: null,
-  previewTenantName: null,
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
