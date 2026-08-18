@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import OptionManagementPage from './index';
 import { useAuth } from '../../../auth/useAuth';
 import { authFetch } from '../../../lib/api';
+import { createAuthMock } from '../../../test/authMock';
 
 vi.mock('../../../auth/useAuth', () => ({
   useAuth: vi.fn(),
@@ -19,18 +20,10 @@ vi.mock('../../../lib/api', () => ({
   authFetch: vi.fn(),
 }));
 
-const SUPER_ADMIN = {
+const SUPER_ADMIN = createAuthMock({
   user: { id: '1', email: 'admin@example.com', role: 'super_admin', tenantId: null, tenantName: null },
   isSuperAdmin: true,
-  isClientAdmin: false,
-  isLoading: false,
-  logout: vi.fn(),
-  previewMode: false,
-  previewTenantId: null,
-  previewTenantName: null,
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
 const ORDER = {
   id: 'order-1',
@@ -52,7 +45,7 @@ const mockOk = (data: unknown, status = 200): Promise<Response> =>
 
 describe('OptionManagementPage — Sai(Agent S)セクション', () => {
   beforeEach(() => {
-    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN);
     vi.mocked(authFetch).mockReset();
   });
 
@@ -123,7 +116,7 @@ describe('OptionManagementPage — Sai(Agent S)セクション', () => {
 
 describe('OptionManagementPage — Phase6 R2Cエージェント提案ルール承認キュー', () => {
   beforeEach(() => {
-    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN);
     vi.mocked(authFetch).mockReset();
   });
 

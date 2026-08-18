@@ -9,6 +9,7 @@ import { MemoryRouter } from 'react-router-dom';
 import AnalyticsDashboardPage from './index';
 import { useAuth } from '../../../auth/useAuth';
 import { authFetch } from '../../../lib/api';
+import { createAuthMock } from '../../../test/authMock';
 
 vi.mock('../../../auth/useAuth', () => ({
   useAuth: vi.fn(),
@@ -40,18 +41,10 @@ vi.mock('react-chartjs-2', () => ({
   Pie: () => null,
 }));
 
-const CLIENT_ADMIN = {
+const CLIENT_ADMIN = createAuthMock({
   user: { id: '1', email: 'admin@carnation.example.com', role: 'client_admin', tenantId: 'carnation', tenantName: 'carnation' },
-  isSuperAdmin: false,
   isClientAdmin: true,
-  isLoading: false,
-  logout: vi.fn(),
-  previewMode: false,
-  previewTenantId: null,
-  previewTenantName: null,
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
 const mockStatus = (status: number, body: unknown): Promise<Response> =>
   Promise.resolve({
@@ -70,7 +63,7 @@ function renderPage() {
 
 describe('AnalyticsDashboardPage — プラン制限(403)の表示', () => {
   beforeEach(() => {
-    vi.mocked(useAuth).mockReturnValue(CLIENT_ADMIN as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(CLIENT_ADMIN);
     vi.mocked(authFetch).mockReset();
   });
 

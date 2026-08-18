@@ -215,7 +215,7 @@ describe("EscalationDetailPage", () => {
 
   it("送信ボタンを連打しても、送信中は2件目の返信が送られない", async () => {
     let replyCalls = 0;
-    let resolveReplyPromise: (() => void) | null = null;
+    let resolveReplyPromise: (() => void) | undefined;
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (String(url).endsWith("/reply")) {
         replyCalls += 1;
