@@ -189,11 +189,18 @@ describe("useAuth — onboardingStage", () => {
       </AuthProvider>,
     );
 
+    // resolved=true を待つだけでは不十分。useAuth の useEffect は
+    // [user, previewMode, previewTenantId] に依存しており、マウント直後の
+    // user=null の回で最後の分岐に落ちて resolved=true / stage=null を先に確定させる。
+    // その後 user が確定して2回目が走り、my-tenant を fetch して stage が入る。
+    // resolved=true だけを待つと1回目の結果を掴んでしまい、負荷が高いときだけ
+    // stage=null で落ちる(全体実行でのみ再現するフレークだった)。
+    // 実際に確認したい値そのものを待つ。
     await waitFor(() => {
-      expect(screen.getByTestId("stage-probe").textContent).toContain("resolved=true");
+      expect(screen.getByTestId("stage-probe").textContent).toContain('"industryAnswered":true');
     });
     const text = screen.getByTestId("stage-probe").textContent ?? "";
-    expect(text).toContain('"industryAnswered":true');
+    expect(text).toContain("resolved=true");
     expect(text).toContain('"knowledgePublished":false');
   });
 
