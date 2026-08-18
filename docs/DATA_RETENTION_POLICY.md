@@ -163,7 +163,10 @@ function getOrCreateVisitorId() {
    2026-08-08 に OpenAI キーが実際に露出した経路）
 3. 設置の翌日に**実際にファイルが出ていること**と**サイズが妥当なこと**を確認する。
    cron を書いた＝動作確認ではない
-4. **リストアを1度だけ実地で試す。** 取れているが戻せない、が最悪のケース
+4. **リストアを実地で試す**（`bash SCRIPTS/backup-postgres.sh --restore-test`）。
+   取れているが戻せない、が最悪のケース。検証用DB `r2c_restore_test` へ戻して
+   テーブル数を本番と突き合わせ、終わったら削除する。本番には書き込まない。
+   **一度きりにしないこと** — バックアップは静かに腐るので定期的に回す
 
 **Cold Storage（将来）:**
 - Hetzner Object Storage または AWS S3 Glacier
