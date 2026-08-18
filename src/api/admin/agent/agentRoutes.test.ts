@@ -7211,6 +7211,27 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // GID 1217567940165423(P1) 問題2: PR #768 で追加した feature キーのうち
+  // faq_publish_toggle / avatar_feature_toggle / avatar_profile の3つは、
+  // その後 set_faq_published(#772) / set_avatar_feature(#777) / update_avatar_profile(#778)
+  // が実装されたのに get_legacy_ui_link の description が旧UI誘導のままだった
+  // （実装済み機能をわざわざ旧UIへ送り、agent_legacy_handoff を水増しして
+  // LEGACY_UI_SUNSET.md の閉鎖判定を妨げる）。機械検査で再発を防ぐ
+  // （文言の一致ではなく、実装済みツール名が description に含まれることを見る）。
+  // -------------------------------------------------------------------------
+  describe('get_legacy_ui_link description: 実装済みツールへの言及', () => {
+    it.each([
+      ['set_faq_published'],
+      ['set_avatar_feature'],
+      ['update_avatar_profile'],
+    ])('description に %s への言及がある', (toolName) => {
+      const tool = ADMIN_AGENT_TOOLS.find((t) => t.function.name === 'get_legacy_ui_link');
+      expect(tool).toBeDefined();
+      expect(tool!.function.description).toContain(toolName);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // 構造化カード(card)チャネル
   //
   // ツールが自然文に加えて構造化データを返せる経路。フロントが自然文を正規表現で
@@ -8398,8 +8419,9 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
       expect(result).toContain('自社スタッフ');
-      expect(result).toContain('見本アバターA（既定の見本）');
+      expect(result).toContain('見本アバターA（R2C提供の見本）');
       expect(result).not.toContain('見本アバターA（稼働中）');
+      expect(result).not.toContain('見本アバターA（既定に戻せます）');
     });
 
     it('自テナントの稼働中の設定には稼働中の印が付く', async () => {
@@ -8449,15 +8471,19 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('試作中（稼働中）');
     });
 
-    it('件数が多くても500字で黙って欠けず、残件数を明示する', async () => {
+    // truncateRead(#776)と同じ4000字予算を使うが、その汎用注記(「絞り込み条件やページを
+    // 変えて」)はこのツールに limit/offset/search が無いため実行不能な案内になる。行の
+    // 途中で切らず、実際に表示した件数を「全N件中M件」で必ず残す(CLAUDE.mdの必須事項)。
+    it('件数が多くても黙って欠けず、全件数と表示件数の両方が分かる', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-list-3', 'get_avatar_list', {}))
         .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
 
-      const rows = Array.from({ length: 30 }, (_, i) => ({
-        id: `550e8400-e29b-41d4-a716-4466554400${String(i).padStart(2, '0')}`,
+      const rows = Array.from({ length: 120 }, (_, i) => ({
+        id: `550e8400-e29b-41d4-a716-${String(i).padStart(12, '0')}`,
         name: `アバター${i}`,
         is_active: false,
+        is_default: false,
         tenant_id: 'tenant-abc',
       }));
       mockQuery.mockResolvedValueOnce({ rows });
@@ -8468,9 +8494,13 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
-      expect(result).toContain('アバター設定は30件あります');
-      expect(result).toMatch(/ほか\d+件/);
-      expect(result.length).toBeLessThanOrEqual(500);
+      expect(result).toMatch(/アバター設定は全120件中\d+件を表示しています/);
+      expect(result).toContain('このツールに絞り込み条件が無いため、残りはこの一覧には出せません');
+      expect(result).not.toContain('アバター119');
+      // 行の途中(idの半端な位置)で切れていないこと。最後は必ず完全な1行で終わる
+      expect(result.trimEnd()).toMatch(/ID: 550e8400-e29b-41d4-a716-\d{12}$/);
+      // truncateRead(4000字)の予算に収まっていること(見積もりのズレで超過しないことの固定)
+      expect(result.length).toBeLessThanOrEqual(4000);
     });
 
     it('設定が1件も無い場合はその旨を返す', async () => {
@@ -8519,6 +8549,118 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('稼働中のアバターはありません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GID 1217567940165423(P1): get_avatar_list の印と reset_avatar_to_default の
+  // 成否は同じ条件（自テナント かつ is_default=true）でなければならない。
+  // 一覧は「r2c_default 所属か」、reset は「is_default=true か」という別の軸で
+  // 判定していたため、一覧の「既定の見本」表示と reset の成否が食い違っていた
+  // （越境行に印が付き必ず失敗する一方、実際に reset が成功する自テナントの
+  // is_default 行には印が無かった）。本テストは表示とツールの前提一致を固定する。
+  // -------------------------------------------------------------------------
+  describe('get_avatar_list の「既定に戻せます」表示と reset_avatar_to_default の成否一致', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('一覧で「既定に戻せます」と表示された自テナント行の ID は reset_avatar_to_default で成功する', async () => {
+      // 1) 一覧を取得し、印が付いた行の ID を確認する
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-consist-list', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 'own-default-1', name: '接客見本', is_active: false, is_default: true, tenant_id: 'tenant-abc' },
+          { id: 'own-custom-1', name: '自作アバター', is_active: false, is_default: false, tenant_id: 'tenant-abc' },
+        ],
+      });
+      const listRes = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-consist-01' });
+      const listResult = listRes.body.actions[0].result as string;
+      expect(listResult).toContain('接客見本（既定に戻せます） ID: own-default-1');
+      expect(listResult).not.toContain('自作アバター（既定に戻せます）');
+
+      // 2) 印が付いた own-default-1 で reset_avatar_to_default を実行 → 成功する
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-consist-reset', 'reset_avatar_to_default', { id: 'own-default-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('既定に戻しました。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ is_default: true }] })
+        .mockResolvedValueOnce({ rows: [{ name: '接客見本' }] });
+      const resetRes = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'own-default-1を既定に戻して', sessionId: 'sess-consist-02' });
+
+      expect(resetRes.status).toBe(200);
+      expect(resetRes.body.actions[0].result).toContain('既定の設定に戻しました');
+    });
+
+    it('印が付かない自テナント行（is_default=false）で reset を実行すると、一覧の表示に対応した案内を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-consist-reset-fail', 'reset_avatar_to_default', { id: 'own-custom-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('戻せませんでした。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_default: false }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'own-custom-1を既定に戻して', sessionId: 'sess-consist-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('一覧で「既定に戻せます」と表示された設定だけです');
+    });
+
+    it('r2c_default 所属（越境）行は一覧で「R2C提供の見本」と表示され、reset は不存在側に倒れる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-consist-list-2', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'r2c-sample-1', name: '見本C', is_active: true, is_default: true, tenant_id: 'r2c_default' }],
+      });
+      const listRes = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-consist-04' });
+      expect(listRes.body.actions[0].result).toContain('見本C（R2C提供の見本） ID: r2c-sample-1');
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-consist-reset-2', 'reset_avatar_to_default', { id: 'r2c-sample-1', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const resetRes = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'r2c-sample-1を既定に戻して', sessionId: 'sess-consist-05' });
+
+      expect(resetRes.status).toBe(200);
+      expect(resetRes.body.actions[0].result).toContain('見つかりませんでした');
+    });
+
+    it('自テナントかつ稼働中かつ既定の行は「稼働中」「既定に戻せます」の両方を表示する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-consist-list-3', 'get_avatar_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 'own-active-default-1', name: '見本D', is_active: true, is_default: true, tenant_id: 'tenant-abc' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-consist-06' });
+
+      expect(res.body.actions[0].result).toContain('見本D（稼働中・既定に戻せます） ID: own-active-default-1');
     });
   });
 
@@ -9631,7 +9773,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'このアバターを既定に戻して', sessionId: 'sess-rst-02' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('既定の見本ではないため、既定に戻す操作はできません');
+      expect(res.body.actions[0].result).toContain('一覧で「既定に戻せます」と表示された設定だけです');
       // is_defaultチェックのSELECTのみ呼ばれ、UPDATEには到達しない
       expect(mockQuery).toHaveBeenCalledTimes(1);
     });
