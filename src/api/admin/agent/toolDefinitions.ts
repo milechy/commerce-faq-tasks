@@ -292,8 +292,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_avatar_list',
       description:
-        'アバター設定の一覧（ID・名前・稼働中かどうか）を取得する読み取り専用ツール。' +
-        'activate_avatar に渡す ID はこのツールで確認したものだけを使うこと。' +
+        'アバター設定の一覧（ID・名前・稼働中かどうか・既定に戻せるかどうか）を取得する読み取り専用ツール。' +
+        'activate_avatar / reset_avatar_to_default に渡す ID はこのツールで確認したものだけを使うこと。' +
+        'reset_avatar_to_default が使えるのは「（既定に戻せます）」と表示された行だけ。' +
         'テナント自身の設定に加えて、そのまま使える既定の見本も返す。',
       parameters: {
         type: 'object',
@@ -402,7 +403,8 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       name: 'reset_avatar_to_default',
       description:
         '既定の見本として作られたアバター設定を、名前・性格・声を作成時点の値に戻す。' +
-        '対象は既定の見本（is_default）のみで、テナントが独自に作成・採用したアバターには使えない。' +
+        '対象は get_avatar_list で「（既定に戻せます）」と表示された設定のみで、' +
+        'テナントが独自に作成・採用したアバターには使えない。' +
         '対象の ID は get_avatar_list で確認したものを使うこと（一覧を取るための専用ツールは他にない）。',
       parameters: {
         type: 'object',
@@ -1305,10 +1307,13 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'また会話分析・成約/効果分析の「数値サマリー」は get_analytics_summary / get_conversion_summary で' +
         'チャット上に直接返せるため、まずそちらを使うこと。この2機能でこのツールを使うのは、' +
         'グラフの詳細・個別の低評価セッション・ABテスト結果を旧UIで見たい場合に限る。' +
-        'FAQごとにAIが答えるかどうかを切り替えたいと聞かれたら feature="faq_publish_toggle" を使うこと。' +
-        'FAQのまとめて非公開・まとめて削除をしたいと聞かれたら feature="faq_bulk_ops" を使うこと。' +
-        'アバター機能全体のON/OFFを切り替えたいと聞かれたら feature="avatar_feature_toggle" を使うこと。' +
-        'アバターの名前・性格・話し方を編集したいと聞かれたら feature="avatar_profile" を使うこと。' +
+        'FAQごとの公開/非公開切替は set_faq_published で直接実行できるため、まずそちらを使うこと。' +
+        'feature="faq_publish_toggle" は set_faq_published で対応できない場合にのみ使うこと' +
+        '（まとめて非公開・まとめて削除をしたい場合は feature="faq_bulk_ops" を使うこと）。' +
+        'アバター機能全体のON/OFFは set_avatar_feature で直接実行できるため、まずそちらを使うこと。' +
+        'feature="avatar_feature_toggle" は set_avatar_feature で対応できない場合にのみ使うこと。' +
+        'アバターの名前・性格・話し方の編集は update_avatar_profile で直接実行できるため、まずそちらを使うこと。' +
+        'feature="avatar_profile" は update_avatar_profile で対応できない場合にのみ使うこと。' +
         '高品質なアバター画像を生成したいと聞かれたら feature="avatar_premium" を使うこと。',
       parameters: {
         type: 'object',

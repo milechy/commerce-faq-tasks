@@ -1081,33 +1081,56 @@ export async function executeToolCall(
     case 'get_avatar_list': {
       try {
         const res = await db.query(
-          `SELECT id, name, is_active, tenant_id
+          `SELECT id, name, is_active, is_default, tenant_id
              FROM avatar_configs
             WHERE tenant_id = $1 OR tenant_id = 'r2c_default'
             ORDER BY (tenant_id = $1) DESC, is_default ASC, created_at DESC`,
           [tenantId],
         );
-        const rows = res.rows as { id: string; name: string; is_active: boolean; tenant_id: string }[];
+        const rows = res.rows as { id: string; name: string; is_active: boolean; is_default: boolean; tenant_id: string }[];
         if (rows.length === 0) {
           return truncate('アバター設定はまだありません');
         }
 
-        // 戻り値は500字で切られる。切られると一覧の末尾が黙って欠けるため、
-        // 収まる分だけ出して残件数を明示する（欠落を沈黙させない）。
-        const LIST_CHAR_BUDGET = 420;
-        const lines: string[] = [];
-        let used = 0;
-        for (const row of rows) {
+        // reset_avatar_to_default が成功するのは「自テナント かつ is_default=true」の行だけ
+        // （下の case のガード参照）。一覧の印はその条件と完全に一致させる。r2c_default
+        // 所属行は reset の対象外（越境）なので、「既定」を含まない別語彙にして、
+        // 一覧とツールで「既定の見本」の意味が食い違わないようにする。
+        const lines = rows.map((row) => {
           const own = row.tenant_id === tenantId;
-          const mark = own ? (row.is_active ? '（稼働中）' : '') : '（既定の見本）';
-          const line = `- ${row.name}${mark} ID: ${row.id}`;
-          if (used + line.length > LIST_CHAR_BUDGET) break;
-          lines.push(line);
-          used += line.length + 1;
+          if (!own) return `- ${row.name}（R2C提供の見本） ID: ${row.id}`;
+          const parts: string[] = [];
+          if (row.is_active) parts.push('稼働中');
+          if (row.is_default) parts.push('既定に戻せます');
+          const mark = parts.length > 0 ? `（${parts.join('・')}）` : '';
+          return `- ${row.name}${mark} ID: ${row.id}`;
+        });
+
+        // このツールには get_faq_list と違い limit/offset/search が無く、絞り込めない
+        // （toolDefinitions.ts の parameters 参照）。truncateRead の汎用注記
+        // 「絞り込み条件やページを変えて」はこのツールには実行不能な案内になるため使わない。
+        // 行の途中では切らず、実際に表示した件数を必ず残す
+        // （src/api/admin/CLAUDE.md: 打ち切るなら「全N件中M件」を必ず残し、黙って切らない）。
+        // 予算は truncateRead と同じ READ_RESULT_MAX_CHARS を使い、新しい予算は作らない。
+        // header は打ち切り判定と実際の返却値の両方から呼び、文言を1箇所に保つ。
+        const header = (shownCount: number): string =>
+          shownCount < rows.length
+            ? `アバター設定は全${rows.length}件中${shownCount}件を表示しています` +
+              '（このツールに絞り込み条件が無いため、残りはこの一覧には出せません）:\n'
+            : `アバター設定は${rows.length}件あります:\n`;
+
+        let used = header(0).length;
+        let shown = 0;
+        for (const line of lines) {
+          const next = used + line.length + 1;
+          if (next > READ_RESULT_MAX_CHARS) break;
+          used = next;
+          shown++;
         }
-        const remaining = rows.length - lines.length;
-        const footer = remaining > 0 ? `\nほか${remaining}件` : '';
-        return truncate(`アバター設定は${rows.length}件あります:\n${lines.join('\n')}${footer}`);
+        const shownLines = shown === rows.length ? lines : lines.slice(0, shown);
+        // truncateRead は上のループで既に予算内に収めているため通常は no-op だが、
+        // 行単位の見積もりがズレた場合の保険として最後に一度だけ掛ける。
+        return truncateRead(`${header(shown)}${shownLines.join('\n')}`);
       } catch (err) {
         logger.warn('[actionExecutor] get_avatar_list failed', err);
         return truncate('アバター一覧の取得に失敗しました');
@@ -1301,18 +1324,17 @@ export async function executeToolCall(
     // 既定値の取得元はルートと同じ「同一行の default_voice_id / default_personality_prompt /
     // default_name の3列」のみ（phase44_default_avatars.sql）。復元する列を増やさない。
     //
-    // 既知の未解決点（2026-08-18、コードレビューで判明・hkobayashi 要判断）:
-    // 下のSELECTは他ツール（activate_avatar 等）と同じく tenant_id = 呼び出し元テナント
-    // で絞っている。しかし migration_r2c_default.sql（Phase66）以降、is_default=true の
-    // 行は 'r2c_default' テナントに集約されており、実テナントが自分の tenant_id で
-    // is_default=true の行を所有することは想定されていない（tenants/routes.ts:353-380
-    // のテナント作成時シードが今も is_default=true をテナント自身の tenant_id で作って
-    // いるように見えるが、Phase66 の意図と矛盾しており未検証・本タスクのスコープ外）。
-    // 結果、現状のスコープ（自テナント限定）だと本ツールは実質的に「対象が見つからない」
-    // を返し続ける可能性が高い。対案は tenant_id = 'r2c_default' に絞ること
-    // （suggest_avatar_preset/adopt_avatar_preset と同じ形）だが、それは「どのテナントの
-    // チャットからでも全テナント共有の既定見本18体を書き換えられる」という、本タスクの
-    // 本文が明示的に許可していない越境操作を新設することになるため、独断で変更しない。
+    // 実機照合(2026-08-18): 下のSELECTは他ツール（activate_avatar 等）と同じく
+    // tenant_id = 呼び出し元テナント で絞っている。tenants/routes.ts:352-380 の
+    // テナント作成時シードは今も is_default=true を自テナントの tenant_id で18体作る
+    // ため、これは「対象が見つからない」を返し続けるツールではない — 自テナントの
+    // シード済み見本に対しては成功する（get_avatar_list の「（既定に戻せます）」印と
+    // 揃えたのはこの行）。'r2c_default' テナント所属行（Phase66 で追加された、
+    // 全テナント共有の別プール）はここでは対象外のまま（越境）。対案は
+    // tenant_id = 'r2c_default' も許容すること（suggest_avatar_preset/adopt_avatar_preset
+    // と同じ形）だが、それは「どのテナントのチャットからでも全テナント共有の見本を
+    // 書き換えられる」という、本タスクの本文が明示的に許可していない越境操作を
+    // 新設することになるため、独断で変更しない。
     case 'reset_avatar_to_default': {
       const id = String(args['id'] ?? '');
       if (!id) {
@@ -1336,7 +1358,7 @@ export async function executeToolCall(
         // （routes.ts:725-727 の 404 相当。ただしチャットではエラーにせず次の行動が
         // 分かる日本語1行で返す）。
         if (!row.is_default) {
-          return truncate('このアバターは既定の見本ではないため、既定に戻す操作はできません');
+          return truncate('既定に戻せるのは、一覧で「既定に戻せます」と表示された設定だけです。get_avatar_list でご確認ください');
         }
 
         const result = await db.query(
