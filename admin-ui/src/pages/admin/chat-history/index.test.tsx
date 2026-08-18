@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import ChatHistoryPage from './index';
 import { useAuth } from '../../../auth/useAuth';
 import { authFetch } from '../../../lib/api';
+import { createAuthMock } from '../../../test/authMock';
 
 vi.mock('../../../auth/useAuth', () => ({
   useAuth: vi.fn(),
@@ -20,31 +21,18 @@ vi.mock('../../../lib/api', () => ({
   authFetch: vi.fn(),
 }));
 
-const SUPER_ADMIN_PREVIEWING = {
+const SUPER_ADMIN_PREVIEWING = createAuthMock({
   user: { id: '1', email: 'admin@example.com', role: 'super_admin', tenantId: null, tenantName: null },
-  isSuperAdmin: false, // プレビュー中は client_admin 相当にフォールバック
-  isClientAdmin: true,
-  isLoading: false,
-  logout: vi.fn(),
+  isClientAdmin: true, // プレビュー中は client_admin 相当にフォールバック
   previewMode: true,
   previewTenantId: 'lp-demo-avator',
   previewTenantName: 'LP Demo',
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
-const SUPER_ADMIN_NOT_PREVIEWING = {
+const SUPER_ADMIN_NOT_PREVIEWING = createAuthMock({
   user: { id: '1', email: 'admin@example.com', role: 'super_admin', tenantId: null, tenantName: null },
   isSuperAdmin: true,
-  isClientAdmin: false,
-  isLoading: false,
-  logout: vi.fn(),
-  previewMode: false,
-  previewTenantId: null,
-  previewTenantName: null,
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
 const mockOk = (data: unknown): Promise<Response> =>
   Promise.resolve({ ok: true, json: () => Promise.resolve(data) } as Response);
@@ -67,7 +55,7 @@ describe('ChatHistoryPage — super_adminプレビューmodeのテナントス�
   });
 
   it('プレビューmode中はpreviewTenantIdでスコープされたリクエストを送る（修正前は tenant パラメータ無しで全件取得していた）', async () => {
-    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING);
     renderPage();
 
     await waitFor(() => {
@@ -80,7 +68,7 @@ describe('ChatHistoryPage — super_adminプレビューmodeのテナントス�
   });
 
   it('プレビューしていない通常のsuper_adminはtenantパラメータ無しで全テナント取得のまま（回帰確認）', async () => {
-    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_NOT_PREVIEWING as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_NOT_PREVIEWING);
     renderPage();
 
     await waitFor(() => {

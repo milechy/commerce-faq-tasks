@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import KnowledgeListTab from "./KnowledgeListTab";
 import { useAuth } from "../../auth/useAuth";
+import { createAuthMock } from "../../test/authMock";
 
 vi.mock("../../auth/useAuth", () => ({
   useAuth: vi.fn(),
@@ -51,18 +52,10 @@ vi.mock("./shared", async () => {
 
 import { fetchWithAuth } from "./shared";
 
-const CLIENT_ADMIN = {
+const CLIENT_ADMIN = createAuthMock({
   user: { id: "1", email: "owner@example.com", role: "client_admin", tenantId: "tenant-abc", tenantName: "テスト店舗" },
-  isSuperAdmin: false,
   isClientAdmin: true,
-  isLoading: false,
-  logout: vi.fn(),
-  previewMode: false,
-  previewTenantId: null,
-  previewTenantName: null,
-  enterPreview: vi.fn(),
-  exitPreview: vi.fn(),
-};
+});
 
 const ITEM_A = {
   id: 1,
@@ -102,7 +95,7 @@ function renderTab() {
 
 describe("KnowledgeListTab", () => {
   beforeEach(() => {
-    vi.mocked(useAuth).mockReturnValue(CLIENT_ADMIN as ReturnType<typeof useAuth>);
+    vi.mocked(useAuth).mockReturnValue(CLIENT_ADMIN);
     vi.mocked(fetchWithAuth).mockReset();
   });
 
