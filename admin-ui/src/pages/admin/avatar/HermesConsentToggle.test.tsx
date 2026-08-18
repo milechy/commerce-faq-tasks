@@ -81,10 +81,25 @@ describe("HermesConsentToggle", () => {
     const btn = await screen.findByRole("button");
     fireEvent.click(btn);
 
+    // 初期状態が「未同意」なので、getByText("⏸️ 未同意") はロールバック後だけでなく
+    // クリック処理が完了する前でも通ってしまう。既定の 1000ms では CI の負荷時に
+    // PATCH の解決が間に合わず、「未同意はあるがトーストが無い」状態でタイムアウトする
+    // (実際に CI で落ちた。ローカルでは PATCH に遅延を注入して再現済み)。
+    // まず PATCH が実行されたことを呼び出し回数で確定させ、UI の検証と budget を分ける。
+    // こうすると失敗時に「PATCHが飛んでいない」のか「UIが反応していない」のか切り分けられる。
     await waitFor(() => {
-      expect(screen.getByText("⏸️ 未同意")).toBeTruthy();
-      expect(screen.getByText("❌ 保存に失敗しました。もう一度お試しください。")).toBeTruthy();
+      expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(2);
     });
+
+    // トーストは 3000ms で自動的に消える(コンポーネントの setTimeout)。
+    // ここの timeout はそれより短くしないと、待っている間に消えて別の理由で落ちる。
+    await waitFor(
+      () => {
+        expect(screen.getByText("⏸️ 未同意")).toBeTruthy();
+        expect(screen.getByText("❌ 保存に失敗しました。もう一度お試しください。")).toBeTruthy();
+      },
+      { timeout: 2000 },
+    );
   });
 
   it("T5: ネットワーク例外でもロールバックする", async () => {
