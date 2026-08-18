@@ -28,6 +28,9 @@
 #   bash SCRIPTS/backup-postgres.sh              # 通常実行
 #   bash SCRIPTS/backup-postgres.sh --dry-run    # 接続と空き容量だけ確認し、dumpしない
 #   bash SCRIPTS/backup-postgres.sh --list       # 保管中のバックアップを一覧表示
+#   bash SCRIPTS/backup-postgres.sh --restore-test [ファイル]
+#                                                # 検証用DBへ実際に戻して健全性を確かめる
+#                                                # (省略時は最新のバックアップ)
 #
 # 関連: docs/DATA_RETENTION_POLICY.md / Asana 1217570014112316
 
@@ -42,16 +45,22 @@ MIN_FREE_MB="${MIN_FREE_MB:-2048}"
 # 「接続はできたが中身がほぼ空」を成功と数えないための歯。
 MIN_DUMP_BYTES="${MIN_DUMP_BYTES:-10240}"
 PG_DUMP="${PG_DUMP:-pg_dump}"
+PSQL="${PSQL:-psql}"
+# 検証用DBの名前は固定する。呼び出し側に決めさせない。
+# 変数にすると、いつか本番のDB名が渡されて DROP される事故が起きる。
+RESTORE_TEST_DB="r2c_restore_test"
 # テストから差し替えられるようにしておく。既定は本物の通知スクリプト。
 # 差し替え口が無いと、失敗経路のテストが実際に Slack へ投稿してしまう。
 NOTIFY="${NOTIFY:-${SCRIPT_DIR}/notify-slack.sh}"
 
 MODE=normal
+RESTORE_FILE=""
 case "${1:-}" in
-  --dry-run) MODE=dry ;;
-  --list)    MODE=list ;;
-  "")        ;;
-  *) echo "使い方: $0 [--dry-run|--list]" >&2; exit 64 ;;
+  --dry-run)     MODE=dry ;;
+  --list)        MODE=list ;;
+  --restore-test) MODE=restore; RESTORE_FILE="${2:-}" ;;
+  "")            ;;
+  *) echo "使い方: $0 [--dry-run|--list|--restore-test [ファイル]]" >&2; exit 64 ;;
 esac
 
 log() { echo "[$(date +%Y-%m-%dT%H:%M:%S%z)] $*"; }
@@ -111,6 +120,61 @@ if [ "$MODE" = "dry" ]; then
             fail "DBへ接続できませんでした（接続文字列は表示しません。${ENV_FILE} の DATABASE_URL を確認してください）"
         fi
     fi
+    exit 0
+fi
+
+if [ "$MODE" = "restore" ]; then
+    # 取れているが戻せない、が最悪のケース。テストで代替できない唯一の検証なので、
+    # 手組みの一行コマンドを本番へ投げるのではなくここに置く。
+    # 定期的に繰り返すべき作業でもある(バックアップは静かに腐る)。
+    [ -n "$RESTORE_FILE" ] || RESTORE_FILE="$(ls -1t "${BACKUP_DIR}"/pg_*.sql.gz 2>/dev/null | head -1)"
+    [ -n "$RESTORE_FILE" ] || fail "検証するバックアップがありません（${BACKUP_DIR} が空です）"
+    [ -f "$RESTORE_FILE" ] || fail "指定されたバックアップが見つかりません: ${RESTORE_FILE}"
+
+    # 接続文字列から検証用DBのURLを導く。クエリ文字列(?sslmode=... 等)は保持する。
+    BASE="${DB_URL%%\?*}"
+    QS="${DB_URL#"$BASE"}"
+    SRC_DB="${BASE##*/}"
+    TEST_URL="${BASE%/*}/${RESTORE_TEST_DB}${QS}"
+
+    # 最重要のガード。導出を1文字でも誤ると本番DBを DROP しかねない。
+    # 「検証用の名前になっていること」と「元のDBと違うこと」の両方を確かめる。
+    [ "${RESTORE_TEST_DB}" != "${SRC_DB}" ] \
+        || fail "検証用DB名が本番DB名と同一です。中止しました"
+    case "$TEST_URL" in
+        *"/${RESTORE_TEST_DB}"|*"/${RESTORE_TEST_DB}?"*) ;;
+        *) fail "検証用DBのURLを正しく導出できませんでした。中止しました" ;;
+    esac
+
+    log "リストア検証: ${RESTORE_FILE} → ${RESTORE_TEST_DB}"
+    "$PSQL" "$DB_URL" -q -c "DROP DATABASE IF EXISTS ${RESTORE_TEST_DB}" >/dev/null 2>&1 \
+        || fail "検証用DBの初期化に失敗しました"
+    "$PSQL" "$DB_URL" -q -c "CREATE DATABASE ${RESTORE_TEST_DB} TEMPLATE template0" >/dev/null 2>&1 \
+        || fail "検証用DBの作成に失敗しました"
+
+    RESTORE_ERR="$(mktemp)"
+    # ON_ERROR_STOP を付けないと、途中のエラーを無視して最後まで走り「成功」に見える。
+    if ! gzip -dc "$RESTORE_FILE" 2>/dev/null | "$PSQL" "$TEST_URL" -q -v ON_ERROR_STOP=1 >/dev/null 2>"$RESTORE_ERR"; then
+        ERR_HEAD="$(head -3 "$RESTORE_ERR" | tr '\n' ' ')"
+        rm -f "$RESTORE_ERR"
+        "$PSQL" "$DB_URL" -q -c "DROP DATABASE IF EXISTS ${RESTORE_TEST_DB}" >/dev/null 2>&1
+        fail "リストアに失敗しました: ${ERR_HEAD}"
+    fi
+    rm -f "$RESTORE_ERR"
+
+    TABLES="$("$PSQL" "$TEST_URL" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d ' ')"
+    SRC_TABLES="$("$PSQL" "$DB_URL" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d ' ')"
+
+    "$PSQL" "$DB_URL" -q -c "DROP DATABASE IF EXISTS ${RESTORE_TEST_DB}" >/dev/null 2>&1 \
+        || log "警告: 検証用DB ${RESTORE_TEST_DB} の後片付けに失敗しました。手動で削除してください" >&2
+
+    # 戻せたことと、戻した中身が本番と釣り合っていることは別。両方見る。
+    [ -n "$TABLES" ] && [ "$TABLES" -gt 0 ] 2>/dev/null \
+        || fail "リストアはできましたが、テーブルが1つもありません"
+    if [ -n "$SRC_TABLES" ] && [ "$SRC_TABLES" -gt 0 ] 2>/dev/null && [ "$TABLES" -lt "$SRC_TABLES" ]; then
+        fail "リストア後のテーブル数が本番より少ないです（${TABLES} < ${SRC_TABLES}）"
+    fi
+    log "リストア検証OK: テーブル ${TABLES}件（本番 ${SRC_TABLES}件）。検証用DBは削除済み"
     exit 0
 fi
 
@@ -192,9 +256,10 @@ exit 0
 #   4) **翌日に実ファイルとサイズを確認する。** cron を書いた＝動作確認ではない:
 #        bash /opt/rajiuce/SCRIPTS/backup-postgres.sh --list
 #
-#   5) **リストアを1度だけ実地で試す。** 取れているが戻せない、が最悪のケース。
-#      本番へ流し込まないこと。検証用DBを作って戻す:
-#        createdb -T template0 restore_test
-#        gzip -dc /backup/pg_YYYYMMDD.sql.gz | psql restore_test
-#        psql restore_test -c '\dt' | head
-#        dropdb restore_test
+#   5) リストアを実地で試す。取れているが戻せない、が最悪のケース:
+#        bash /opt/rajiuce/SCRIPTS/backup-postgres.sh --restore-test
+#
+#      検証用DB(r2c_restore_test)を作って最新のバックアップを戻し、
+#      テーブル数を本番と突き合わせてから削除する。本番には書き込まない。
+#      DB名は固定で、本番DB名と同一なら DROP 前に中止する。
+#      **一度きりにしないこと。** バックアップは静かに腐るので定期的に回す。
