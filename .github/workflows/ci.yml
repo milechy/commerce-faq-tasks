@@ -38,6 +38,13 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # SCRIPTS/ の shell テストは jest の testMatch({src,tests}/**/*.test.ts)に入らないため
+      # 明示的に走らせる。配線しないと、admin-ui の vitest が #662 以降ずっと赤いまま
+      # 誰にも気づかれなかったのと同じ穴になる(CLAUDE.md「テストの最低ライン」)。
+      # backup-postgres.test.sh は本物のDB・Slackに触れない(PG_DUMP と NOTIFY を差し替える)。
+      - name: Test shell scripts
+        run: bash SCRIPTS/backup-postgres.test.sh
+
   admin-ui-build:
     name: Gate 3 — admin-ui typecheck + test + build
     runs-on: ubuntu-latest
