@@ -104,12 +104,17 @@ describe("useAdminAgent — 会話の復元(sessionStorage)", () => {
     render(<Probe />);
     fireEvent.click(screen.getByText("send"));
 
-    await waitFor(() =>
-      expect(screen.getByTestId("messages").textContent).toContain("assistant:10時から19時です。"),
-    );
-
-    const stored = restoreChatSession<{ role: string; content: string }>(CHAT_SESSION_SURFACE_PANEL);
-    expect(stored?.messages).toEqual([
+    // DOM の描画を待つだけでは足りない。永続化は useAdminAgent の useEffect([messages,...])
+    // 経由で走るため、DOM に assistant が出た「後」に sessionStorage が書かれる。
+    // その隙間でアサーションが走ると user 1件だけを読んでしまい、CI の負荷が高いときだけ落ちた
+    // (#782 で直した useAuth のフレークと同型: 実際に検証したい値ではなく別の指標を待っていた)。
+    // ここでは検証対象そのもの = sessionStorage の中身が揃うのを待つ。
+    let stored: ReturnType<typeof restoreChatSession<{ role: string; content: string }>>;
+    await waitFor(() => {
+      stored = restoreChatSession<{ role: string; content: string }>(CHAT_SESSION_SURFACE_PANEL);
+      expect(stored?.messages).toHaveLength(2);
+    });
+    expect(stored!.messages).toEqual([
       { role: "user", content: "営業時間を教えて" },
       { role: "assistant", content: "10時から19時です。", actions: [] },
     ]);
