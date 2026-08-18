@@ -128,7 +128,7 @@ function getOrCreateVisitorId() {
 
 | 対象 | 方法 | 頻度 | 保持期間 |
 |---|---|---|---|
-| PostgreSQL | `SCRIPTS/backup-postgres.sh`（VPS cron 毎日 02:00） | 日次 | 7日 |
+| PostgreSQL | `SCRIPTS/backup-postgres.sh`（VPS cron `0 17 * * *` = **02:00 JST**） | 日次 | 7日 |
 | Elasticsearch | — | 未実装 | — |
 | ファイルストレージ | Supabase Storage 内蔵 | — | — |
 
@@ -137,7 +137,7 @@ function getOrCreateVisitorId() {
 | 項目 | 結果 |
 |---|---|
 | 手動取得 | `/backup/pg_20260818.sql.gz` 3.0MB |
-| cron 登録 | `0 2 * * * bash /opt/rajiuce/SCRIPTS/backup-postgres.sh >> /var/log/r2c-pg-backup.log 2>&1` |
+| cron 登録 | `0 17 * * * bash /opt/rajiuce/SCRIPTS/backup-postgres.sh >> /var/log/r2c-pg-backup.log 2>&1` |
 | **リストア検証** | **OK — 41テーブル（本番41件と一致）** |
 | 空き容量 | 22GB（7日分に対して十分） |
 
@@ -157,11 +157,19 @@ function getOrCreateVisitorId() {
 ### 4.2 cron の中身と設置手順
 
 ```bash
-# PostgreSQL 日次バックアップ（未設置。設置するならこの形）
-0 2 * * * pg_dump $DATABASE_URL | gzip > /backup/pg_$(date +%Y%m%d).sql.gz
+# 実際の設定（SCRIPTS/backup-postgres.sh が保持期間の削除まで行う）
+0 17 * * * bash /opt/rajiuce/SCRIPTS/backup-postgres.sh >> /var/log/r2c-pg-backup.log 2>&1
+```
 
-# 7日以上古いバックアップを削除
-0 3 * * * find /backup -name "pg_*.sql.gz" -mtime +7 -delete
+**`0 17` は誤記ではない。cron はサーバのタイムゾーンで動き、VPS は UTC。**
+17:00 UTC = **02:00 JST**。ここを `0 2` と書くと **11:00 JST = 日本の業務時間帯**に走る
+（最初これで設置し、後から直した）。時刻を変えるときは必ず JST との対応を書き添えること。
+
+参考: 素の cron でやるならこの形になるが、**そのまま貼ると壊れる**（理由は下記）。
+
+```bash
+0 17 * * * pg_dump $DATABASE_URL | gzip > /backup/pg_$(date +%Y%m%d).sql.gz
+0 18 * * * find /backup -name "pg_*.sql.gz" -mtime +7 -delete
 ```
 
 **この cron をそのまま貼ると動かない。** cron は `/opt/rajiuce/.env` を読まないため

@@ -250,8 +250,15 @@ exit 0
 #        bash /opt/rajiuce/SCRIPTS/backup-postgres.sh
 #        bash /opt/rajiuce/SCRIPTS/backup-postgres.sh --list
 #
-#   3) crontab -e で以下を追加（毎日 02:00）:
-#        0 2 * * * bash /opt/rajiuce/SCRIPTS/backup-postgres.sh >> /var/log/r2c-pg-backup.log 2>&1
+#   3) crontab -e で以下を追加。
+#      **cron はサーバのタイムゾーンで動く。VPS は UTC。**
+#      JST 深夜 02:00 に取りたいなら 17:00 UTC を指定する。
+#      「0 2」と書くと 11:00 JST = 日本の業務時間帯に走る（最初これで入れて後から直した）:
+#        0 17 * * * bash /opt/rajiuce/SCRIPTS/backup-postgres.sh >> /var/log/r2c-pg-backup.log 2>&1
+#
+#      既存の cron 行（avatar-agent 監視）を消さないよう、追記形式で入れること:
+#        crontab -l 2>/dev/null | grep -q backup-postgres || \
+#          (crontab -l 2>/dev/null; echo "0 17 * * * bash /opt/rajiuce/SCRIPTS/backup-postgres.sh >> /var/log/r2c-pg-backup.log 2>&1") | crontab -
 #
 #   4) **翌日に実ファイルとサイズを確認する。** cron を書いた＝動作確認ではない:
 #        bash /opt/rajiuce/SCRIPTS/backup-postgres.sh --list
