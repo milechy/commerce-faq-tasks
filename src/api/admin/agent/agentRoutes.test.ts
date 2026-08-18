@@ -1754,6 +1754,64 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('変更する内容がありません');
     });
 
+    // -----------------------------------------------------------------------
+    // 空文字列の扱い。#780(update_avatar_profileのname='')と同型で、Groqの
+    // function callingは省略した任意引数に''を入れて送ってくる実測がある。
+    // expected_behaviorは「壊れても画面に何も出ないため事故が沈黙する」tuning_rulesの
+    // 応答方針そのものなので、実害が最も見えにくい経路。
+    // -----------------------------------------------------------------------
+    it('update_tuning_rule: expected_behavior="" のみ → 「変更する内容がありません」を返し、updateRule が呼ばれない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-eb-empty', 'update_tuning_rule', { id: 1, expected_behavior: '', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('変更内容を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '振る舞いを空にして', sessionId: 'sess-tr-eb-empty' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('変更する内容がありません');
+    });
+
+    it('update_tuning_rule: expected_behavior="" と is_active=false を同時指定 → is_active だけ更新され、expected_behavior は undefined のまま updateRule に渡る（空文字列で上書きしない）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-eb-mixed', 'update_tuning_rule', { id: 1, expected_behavior: '', is_active: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('無効にしました。'));
+
+      mockUpdateRule.mockResolvedValueOnce({
+        id: 1, tenant_id: 'tenant-abc', trigger_pattern: '保証', expected_behavior: '2年と案内する', priority: 5, is_active: false, created_by: null, source_message_id: null, created_at: '', updated_at: '',
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1を無効にして', sessionId: 'sess-tr-eb-mixed' });
+
+      expect(res.status).toBe(200);
+      // expected_behavior が undefined で渡ることが本質。''がそのまま渡ると
+      // repository層の COALESCE($2, expected_behavior) が効かず空文字列で上書きされる。
+      expect(mockUpdateRule).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ is_active: false, expected_behavior: undefined }),
+        'tenant-abc',
+      );
+      expect(res.body.actions[0].result).toContain('現在無効');
+    });
+
+    it('update_tuning_rule: expected_behavior="   "（空白のみ）も未指定として扱われる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-tr-eb-ws', 'update_tuning_rule', { id: 1, expected_behavior: '   ', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('変更内容を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '振る舞いを空白にして', sessionId: 'sess-tr-eb-ws' });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRule).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('変更する内容がありません');
+    });
+
     it('delete_tuning_rule: confirmed=false → 削除されずブロックされる', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-tr-6', 'delete_tuning_rule', { id: 1, confirmed: false }))
@@ -4333,6 +4391,46 @@ describe('POST /v1/admin/agent/chat', () => {
         [null, null, null, null, false, 1],
       );
       expect(res.body.actions[0].result).toContain('現在無効');
+    });
+
+    // -----------------------------------------------------------------------
+    // 空文字列の扱い。#780(update_avatar_profileのname='')と同型で、Groqの
+    // function callingは省略した任意引数に''を入れて送ってくる実測がある。
+    // message_templateはエンドユーザーに出る文面なので、空になると顧客に
+    // 空メッセージが表示される。
+    // -----------------------------------------------------------------------
+    it('update_engagement_rule: message_template="" のみ → 「変更する内容がありません」で UPDATE に到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-mt-empty', 'update_engagement_rule', { id: 1, message_template: '', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('変更内容を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '声がけ文言を空にして', sessionId: 'sess-er-mt-empty' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('変更する内容がありません');
+    });
+
+    it('update_engagement_rule: message_template="" と priority=50 を同時指定 → UPDATE は走るが $3 は "" ではなく null（COALESCE で既存値を残す）', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-er-mt-mixed', 'update_engagement_rule', { id: 1, message_template: '', priority: 50, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('優先度を変更しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] }) // SELECT ownership
+        .mockResolvedValueOnce({ rows: [{ id: 1, trigger_type: 'idle_time', message_template: '既存の文言', is_active: true }] }); // UPDATE
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール1の優先度を50にして', sessionId: 'sess-er-mt-mixed' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenLastCalledWith(
+        expect.stringContaining('UPDATE trigger_rules'),
+        [null, null, null, 50, null, 1],
+      );
     });
 
     it('delete_engagement_rule: confirmed=false → 削除されずブロックされる', async () => {
