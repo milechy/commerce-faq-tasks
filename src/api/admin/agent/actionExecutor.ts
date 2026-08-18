@@ -1841,7 +1841,9 @@ export async function executeToolCall(
       }
 
       const triggerPattern = typeof args['trigger_pattern'] === 'string' ? args['trigger_pattern'].slice(0, 1000) : undefined;
-      const expectedBehavior = typeof args['expected_behavior'] === 'string' ? args['expected_behavior'].slice(0, 4000) : undefined;
+      // parseOptionalTextArg で '' を未指定扱いにする(#780と同型)。trimもするが、
+      // 空白だけの応答方針に正当な用途は無いため未指定と同一視してよい。
+      const expectedBehavior = parseOptionalTextArg(args['expected_behavior'])?.slice(0, 4000);
       const isActive = typeof args['is_active'] === 'boolean' ? args['is_active'] : undefined;
       // AI提案(source='judge')の承認/却下でのみ指定される。is_activeだけではpending(未承認)と
       // rejected(却下済み)を区別できない(どちらもis_active=falseのため)。
@@ -2643,7 +2645,9 @@ export async function executeToolCall(
         typeof triggerConfigRaw === 'object' && triggerConfigRaw !== null && !Array.isArray(triggerConfigRaw)
           ? triggerConfigRaw
           : undefined;
-      const messageTemplate = typeof args['message_template'] === 'string' ? args['message_template'].slice(0, 500) : undefined;
+      // parseOptionalTextArg で '' を未指定扱いにする(#780と同型)。trimもするが、
+      // 空白だけの声がけ文言に正当な用途は無いため未指定と同一視してよい。
+      const messageTemplate = parseOptionalTextArg(args['message_template'])?.slice(0, 500);
       const priorityRaw = args['priority'];
       const priority =
         typeof priorityRaw === 'number' && Number.isFinite(priorityRaw)
