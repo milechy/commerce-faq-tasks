@@ -128,19 +128,42 @@ function getOrCreateVisitorId() {
 
 | 対象 | 方法 | 頻度 | 保持期間 |
 |---|---|---|---|
-| PostgreSQL | `pg_dump` (VPS cron) | 日次 | 7日 |
+| PostgreSQL | **未実装** | — | — |
 | Elasticsearch | — | 未実装 | — |
 | ファイルストレージ | Supabase Storage 内蔵 | — | — |
+
+> ⚠ **本番Postgresのバックアップは取られていない**（2026-08-18 実測）。
+> `crontab -l` は avatar-agent 監視の1本のみ、`/etc/cron.d/` は OS 既定（certbot / e2scrub_all /
+> sysstat）のみ、`/backup/` はディレクトリ自体が存在しない。
+> この表は以前「`pg_dump` (VPS cron) / 日次 / 7日」と**実装済みであるかのように書いていた**が、
+> 下の §4.2 では同じ cron を「想定」と書いており自己矛盾していた。正しいのは §4.2（未実装）側。
+>
+> **「バックアップがある」という誤記は、無いことより危険。** 障害時に復旧できると誤認したまま
+> 判断してしまう。設置は Asana 1217570014112316。設置時は下の注意書きを必ず読むこと。
 
 ### 4.2 将来の拡張計画
 
 ```bash
-# PostgreSQL 日次バックアップ（VPS cron 想定）
+# PostgreSQL 日次バックアップ（未設置。設置するならこの形）
 0 2 * * * pg_dump $DATABASE_URL | gzip > /backup/pg_$(date +%Y%m%d).sql.gz
 
 # 7日以上古いバックアップを削除
 0 3 * * * find /backup -name "pg_*.sql.gz" -mtime +7 -delete
 ```
+
+**この cron をそのまま貼ると動かない。** cron は `/opt/rajiuce/.env` を読まないため
+`$DATABASE_URL` が空になり、`pg_dump` は既定のUNIXソケット接続にフォールバックして
+`FATAL: role "root" does not exist` で失敗する。しかも**出力先ファイルは作られるので
+（空または壊れた .gz）、一見成功しているように見える**。設置時は:
+
+1. `/backup` を先に作る（権限・ディスク空きも確認）
+2. `$DATABASE_URL` を cron 側で明示的に渡すか、`.env` から1行だけ読むラッパを噛ませる。
+   **`.env` の `source` / `. ./.env` は禁止**（値にプレースホルダの山括弧が残っていると
+   リダイレクトと解釈され、前後の行がコマンドとして実行されてシークレットが端末に出る。
+   2026-08-08 に OpenAI キーが実際に露出した経路）
+3. 設置の翌日に**実際にファイルが出ていること**と**サイズが妥当なこと**を確認する。
+   cron を書いた＝動作確認ではない
+4. **リストアを1度だけ実地で試す。** 取れているが戻せない、が最悪のケース
 
 **Cold Storage（将来）:**
 - Hetzner Object Storage または AWS S3 Glacier
