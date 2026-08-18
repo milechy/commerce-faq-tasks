@@ -111,7 +111,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | ファイル | 内容 | 適用済み |
 |---|---|---|
 | `src/api/admin/feedback/migration_feedback.sql` | feedback_messages テーブル初期作成 | ✅ |
-| `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | 要適用 |
+| `src/api/admin/feedback/migration_feedback_flagged.sql` | flagged_for_improvement カラム追加 + インデックス | ✅ (2026-08-18 実機確認) |
 | `src/api/admin/tenants/migration_phase_a.sql` | Phase A Day 2: tenants GA4/PostHog拡張 + notification_preferences + ga4_connection_logs + ga4_test_history + conversion_attributions拡張 | ✅ (2026-08-16 実機確認) |
 | `src/api/admin/avatar/migration_category_persona.sql` | LemonSliceペルソナスワップ: avatar_configs に category_persona_map(JSONB)追加 | ✅ (2026-08-16 実機確認) |
 | `src/lib/sai/migration_sai_tasks.sql` | Sai代行タスクの所有権レジストリ(sai_tasks)新設。get_sai_task_status の越境読み取り・課金誤帰属を止める (PR #755) | ✅ 2026-08-16 |
@@ -157,10 +157,37 @@ GOOGLE_APPLICATION_CREDENTIALS_JSON=<base64-encoded-service-account-json>
 INTERNAL_API_HMAC_SECRET=<random-256bit-secret>
 ```
 
+> **適用済み (2026-08-18 実機確認)。** 列 `flagged_for_improvement`(boolean, default false) と
+> 部分インデックス `idx_feedback_flagged` の両方が本番に存在することを確認済み。
+> 以下は再構築時・別環境向けの記録。
+
 ```bash
-# VPS で実行:
-ssh root@65.108.159.161 "psql \$DATABASE_URL -f /opt/rajiuce/src/api/admin/feedback/migration_feedback_flagged.sql"
+# DATABASE_URL の渡し方に注意。
+# `ssh ... "psql \$DATABASE_URL ..."` は動かない — リモートの非対話シェルに
+# DATABASE_URL は無く(/opt/rajiuce/.env にあるだけ)、psql が既定のUNIXソケット接続に
+# フォールバックして `FATAL: role "root" does not exist` になる。接続情報が違うのではなく、
+# 渡せていないだけなので、この失敗を「DBが壊れた」と誤診しないこと。
+#
+# .env を `source` / `. ./.env` しないこと。値にプレースホルダの山括弧が残っていると
+# リダイレクトと解釈され、前後の行がコマンドとして実行されてシークレットが端末に出る
+# (2026-08-08 に OpenAI キーが実際に露出した経路)。DATABASE_URL の行だけ取り出して渡す。
+#
+# 外側をシングルクォートにするとローカルシェルが中身に触れない。
+# grep はローカル側で結果を絞るだけなので、接続文字列は画面にも履歴にも出ない。
+
+# 1) 適用済みかの確認（何か出れば適用済み）
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "\d feedback_messages"' | grep -E 'flagged_for_improvement|idx_feedback_flagged'
+
+# 2) 未適用なら適用（ADD COLUMN IF NOT EXISTS なので二重実行しても無害）
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -f /opt/rajiuce/src/api/admin/feedback/migration_feedback_flagged.sql'
+
+# 3) 適用後は 1) を再実行して列とインデックスの両方を確認する。pm2 再起動は不要（列追加のみ）
 ```
+
+**この列が無いと壊れるのは一覧だけではない。** `feedbackRepository.ts` の3関数すべてが参照しており、
+とくに `sendMessage()` は `INSERT ... RETURNING flagged_for_improvement` なので**送信自体が失敗する**。
+同ファイルに try/catch が0件のため、画面には一般文言しか出ず原因が分からない。
+動作確認では一覧・送信・改善マークの**3つとも**見ること。
 
 ### sai_tasks migration 実行手順 (PR #755)
 
