@@ -985,7 +985,7 @@ describe("Tenant Admin Routes", () => {
       expect(res.status).toBe(404);
     });
 
-    it("失効させたキーのハッシュを revokeTenantApiKeyIfCurrent に正しい (tenantId, keyHash) で渡す（インメモリ即時反映の配線）", async () => {
+    it("失効させたキーのハッシュを revokeTenantApiKey に正しい (tenantId, keyHash) で渡す（インメモリ即時反映の配線）", async () => {
       mockDb.query.mockResolvedValueOnce({ rows: [{ id: "k1", tenant_id: "t1", is_active: false, key_hash: "the-real-key-hash" }], rowCount: 1 });
       const res = await request(app)
         .delete("/v1/admin/tenants/t1/keys/k1")
