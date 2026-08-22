@@ -270,5 +270,150 @@ describe('createStripeWebhookHandler', () => {
       expect(res._status).toBe(400);
       expect(dedupDb.query).not.toHaveBeenCalled();
     });
+
+    it('同一event.idが連続で2回配信された場合、1回目は処理され2回目のみ重複扱いになる（実際のハンドラ呼び出しをまたぐ検証）', async () => {
+      const invoice = { id: 'inv_012', subscription: 'sub_idem_003', amount_due: 300 };
+      const event = { id: 'evt_idem_003', type: 'invoice.payment_succeeded', data: { object: invoice } };
+
+      // 1回目は新規(rowCount:1)、2回目は同一event.idの重複配信(rowCount:0)を、
+      // 同じdbモックへの連続呼び出しで表現する（真の同時実行ではないが、
+      // 「1回目で状態が変わり2回目の判定に影響する」ことを検証する）。
+      const sequentialDb = {
+        query: jest
+          .fn()
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // dedup insert #1: 新規
+          .mockResolvedValueOnce({ rowCount: 5, rows: [] }) // billing_status update #1
+          .mockResolvedValueOnce({ rowCount: 0, rows: [] }), // dedup insert #2: 重複
+      };
+
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementation(() => ({
+        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+      }));
+
+      const handler = createStripeWebhookHandler(sequentialDb as any, mockLogger);
+      const { req: req1, res: res1 } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+      const { req: req2, res: res2 } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req1, res1);
+      await handler(req2, res2);
+
+      expect(res1._body).toEqual({ received: true });
+      expect(res2._body).toEqual({ received: true, duplicate: true });
+      expect(sequentialDb.query).toHaveBeenCalledTimes(3); // dedup×2 + billing_status更新×1（2回目はスキップされる）
+    });
+
+    it('【設計上の既知リスク】冪等INSERT成功後にハンドラが失敗すると、再送時は"処理済み"と誤判定され副作用が永久に実行されない', async () => {
+      // _recordWebhookEvent は _handleStripeEvent より前に成功しているため、
+      // ハンドラ側で例外が起きて500を返しStripeに再送を促しても、
+      // 再送時点では既にevent_idがDBに記録済み＝rowCount:0で「重複」と誤判定され、
+      // 実際には一度も成功していない副作用（billing_status更新等）が二度と実行されない。
+      // このテストはバグ修正ではなく、現状の挙動を固定して可視化するためのもの。
+      const invoice = { id: 'inv_013', subscription: 'sub_poison', amount_due: 999 };
+      const event = { id: 'evt_poison_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
+
+      const poisonDb = {
+        query: jest
+          .fn()
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // 1回目 dedup insert: 新規として記録される
+          .mockRejectedValueOnce(new Error('DB connection lost')) // 1回目 billing_status更新: 失敗
+          .mockResolvedValueOnce({ rowCount: 0, rows: [] }), // 2回目(Stripeの自動再送) dedup insert: 既に記録済み扱い
+      };
+
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementation(() => ({
+        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+      }));
+
+      const handler = createStripeWebhookHandler(poisonDb as any, mockLogger);
+
+      // 1回目: ハンドラ内で例外 → 500（Stripeは5xxで再送する）
+      const { req: req1, res: res1 } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+      await handler(req1, res1);
+      expect(res1._status).toBe(500);
+
+      // 2回目(再送): 既に「新規」として記録済みのため duplicate 扱いになり、
+      // billing_status 更新は一度も成功しないまま 200 が返る。
+      const { req: req2, res: res2 } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+      await handler(req2, res2);
+      expect(res2._status).toBe(200);
+      expect(res2._body).toEqual({ received: true, duplicate: true });
+
+      // 呼び出しは dedup(1回目) → billing_status更新(1回目・失敗) → dedup(2回目・重複判定) の3回のみ。
+      // 4回目（billing_status更新の再試行）が発生しないこと＝再送では二度とハンドラ本体に
+      // 到達しないことを示す。
+      expect(poisonDb.query).toHaveBeenCalledTimes(3);
+      const billingUpdateCalls = poisonDb.query.mock.calls.filter(([sql]) =>
+        typeof sql === 'string' && sql.includes("billing_status = 'paid'")
+      );
+      expect(billingUpdateCalls).toHaveLength(1); // 試行は1回だけ（それも失敗）。再送では二度と試みられない。
+    });
+
+    it('冪等INSERT自体がDBエラーで失敗した場合、200を返さずエラーとして扱う（誤って"処理済み"にしない）', async () => {
+      const invoice = { id: 'inv_014', subscription: 'sub_dberr', amount_due: 100 };
+      const event = { id: 'evt_dberr_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
+
+      const failingDb = {
+        query: jest.fn().mockRejectedValueOnce(new Error('connection timeout')),
+      };
+
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementationOnce(() => ({
+        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+      }));
+
+      const handler = createStripeWebhookHandler(failingDb as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      // 冪等INSERT自体の失敗は「重複」ではなくハンドラエラーとして扱われ、
+      // Stripeに再送を促すため 200 を返してはならない。
+      expect(res._status).toBe(500);
+      expect(res._body).not.toMatchObject({ received: true });
+    });
+
+    it('event.id が undefined の異常なイベントでも同期的に例外を投げず、DBクエリへ処理を委譲する', async () => {
+      // Stripe SDK の constructEvent は通常 event.id を必ず含むオブジェクトを返すが、
+      // モック/改ざん耐性として「idが無い」場合にサーバが同期クラッシュしないことを確認する。
+      // 実際の一意性制約はDBスキーマ側の責務であり、ここではアプリ層が例外を吸収し
+      // 500として扱うことのみを検証する（重複判定を誤ってtrueにしない）。
+      const malformedEvent = { type: 'invoice.payment_succeeded', data: { object: { id: 'inv_x' } } };
+
+      const strictDb = {
+        query: jest.fn().mockRejectedValueOnce(
+          new Error('null value in column "event_id" violates not-null constraint')
+        ),
+      };
+
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementationOnce(() => ({
+        webhooks: { constructEvent: jest.fn().mockReturnValue(malformedEvent) },
+      }));
+
+      const handler = createStripeWebhookHandler(strictDb as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(malformedEvent)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await expect(handler(req, res)).resolves.not.toThrow();
+      expect(res._status).toBe(500);
+    });
   });
 });
