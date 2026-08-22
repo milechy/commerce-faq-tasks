@@ -44,6 +44,10 @@ export function addTenantApiKey(
 /**
  * 追加キー（主キー以外）を失効させる。対象が追加キーに存在しない場合は
  * 何もせず false を返す（主キーの失効は revokeTenantApiKeyIfCurrent が担当）。
+ *
+ * 注意: 呼び出し側が「主キーか追加キーか」を判断する必要はない。
+ * DELETE ハンドラからは必ず revokeTenantApiKey() を使うこと
+ * （片方だけ呼ぶと失効漏れになる。実際に super_admin 側で発生した）。
  */
 export function revokeAdditionalTenantApiKey(
   tenantId: string,
@@ -58,6 +62,25 @@ export function revokeAdditionalTenantApiKey(
     }
   }
   return false;
+}
+
+/**
+ * テナントのAPIキーを、主キー・追加キーのどちらであっても失効させる。
+ *
+ * DBで is_active=false にしたキーを in-memory からも即座に落とすための
+ * 単一の入口。主キー用(revokeTenantApiKeyIfCurrent)と追加キー用
+ * (revokeAdditionalTenantApiKey)を個別に呼ぶ形だと、呼び出し側の一方が
+ * 片方しか呼ばず「DBはinactiveなのに認証は通り続ける」fail-open を招くため
+ * （super_admin の DELETE で実際に発生）、失効の呼び出し口はこの関数に統一する。
+ *
+ * 戻り値: in-memory 側で実際に無効化したら true。
+ */
+export function revokeTenantApiKey(tenantId: string, revokedKeyHash: string): boolean {
+  // 両方に問い合わせる。短絡評価にすると主キーがヒットした時点で
+  // 追加キー側が評価されず、同一ハッシュが両方に残る事故を見逃す。
+  const revokedPrimary = revokeTenantApiKeyIfCurrent(tenantId, revokedKeyHash);
+  const revokedAdditional = revokeAdditionalTenantApiKey(tenantId, revokedKeyHash);
+  return revokedPrimary || revokedAdditional;
 }
 
 export function registerTenant(config: TenantConfig): void {
@@ -260,31 +283,64 @@ export async function seedTenantsFromDB(pool: Pool, logger?: Logger): Promise<vo
       WHERE k.is_active = true
         AND (k.expires_at IS NULL OR k.expires_at > NOW())
         AND t.is_active = true
+      ORDER BY t.id, k.created_at DESC, k.key_hash
     `);
 
-    let count = 0;
+    // このSELECTは「アクティブなキー1本につき1行」を返すため、N本のキーを持つ
+    // テナントはN行に現れる。テナント単位にまとめてから登録する。
+    const rowsByTenant = new Map<string, typeof result.rows>();
     for (const row of result.rows) {
-      const existing = tenantStore.get(row.tenant_id);
-      // env-var entries take precedence over DB entries
-      if (existing) continue;
+      const rows = rowsByTenant.get(row.tenant_id);
+      if (rows) rows.push(row);
+      else rowsByTenant.set(row.tenant_id, [row]);
+    }
+
+    let tenantCount = 0;
+    let keyCount = 0;
+    for (const [tenantId, rows] of rowsByTenant) {
+      // env-var entries take precedence over DB entries.
+      // seedTenantsFromEnv() が先に走るため、env で定義済みのテナントは
+      // 設定もキー集合も env が唯一の情報源とみなし、DB側は一切足さない
+      // （キーだけ足すと env で意図的に絞ったキー集合を DB が広げてしまう）。
+      if (tenantStore.has(tenantId)) continue;
+
+      // ORDER BY で最新キーが先頭に来る。ORDER BY が無いとPostgresの
+      // 物理行順・プラン依存で「どれが主キーになるか」が再起動ごとに変わり、
+      // 引退させたはずの旧キーが主キーとして復活しうる。
+      const [primary, ...additional] = rows;
+      if (!primary) continue;
+
       registerTenant({
-        tenantId: row.tenant_id,
-        name: row.name || row.tenant_id,
-        plan: (["starter", "growth", "enterprise"].includes(row.plan) ? row.plan : "starter") as TenantConfig["plan"],
-        features: (row.features as TenantConfig["features"]) ?? { avatar: false, voice: false, rag: true },
+        tenantId: primary.tenant_id,
+        name: primary.name || primary.tenant_id,
+        plan: (["starter", "growth", "enterprise"].includes(primary.plan) ? primary.plan : "starter") as TenantConfig["plan"],
+        features: (primary.features as TenantConfig["features"]) ?? { avatar: false, voice: false, rag: true },
         security: {
-          apiKeyHash: row.key_hash,
+          apiKeyHash: primary.key_hash,
           hashAlgorithm: "sha256",
-          allowedOrigins: row.allowed_origins ?? [],
-          rateLimit: row.rate_limit ?? 100,
+          allowedOrigins: primary.allowed_origins ?? [],
+          rateLimit: primary.rate_limit ?? 100,
           rateLimitWindowMs: 60_000,
         },
         enabled: true,
       });
-      setTenantApiKeyExpiry(row.tenant_id, row.expires_at ? new Date(row.expires_at) : null);
-      count++;
+      setTenantApiKeyExpiry(tenantId, primary.expires_at ? new Date(primary.expires_at) : null);
+
+      // 残りのアクティブキーも復元する。これが無いと、client_admin が無停止
+      // ローテーションで追加したキーが PM2 再起動のたびに消え、DB上は
+      // is_active=true のまま認証できなくなる（ローテーション機能が
+      // プロセス内でしか成立しない）。
+      for (const row of additional) {
+        addTenantApiKey(tenantId, row.key_hash, row.expires_at ? new Date(row.expires_at) : null);
+      }
+
+      tenantCount++;
+      keyCount += rows.length;
     }
-    logger?.info({ count }, "seedTenantsFromDB: loaded tenant API keys from DB");
+    logger?.info(
+      { count: tenantCount, keyCount },
+      "seedTenantsFromDB: loaded tenant API keys from DB"
+    );
   } catch (err) {
     logger?.warn({ err }, "seedTenantsFromDB: failed to load tenants from DB");
   }

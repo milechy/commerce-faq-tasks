@@ -8,8 +8,10 @@ import {
   getTenantByApiKeyHash,
   setTenantApiKeyExpiry,
   revokeTenantApiKeyIfCurrent,
+  revokeTenantApiKey,
   addTenantApiKey,
   revokeAdditionalTenantApiKey,
+  seedTenantsFromDB,
 } from "./tenant-context";
 
 describe("seedTenantsFromEnv — numbered keys", () => {
@@ -482,32 +484,71 @@ describe("addTenantApiKey / revokeAdditionalTenantApiKey — 無停止ローテ�
     expect(getTenantByApiKeyHash(RESCUE_HASH)?.tenantId).toBe(TENANT_ID);
   });
 
-  it("既知のリスク: super_admin向けPOST /tenants/:id/keysのregisterTenant(上書き)は、client_adminが無停止ローテーションで追加した副キーには影響しないが、旧・主キーはDB側is_active=trueのままin-memoryでは無効化される", () => {
+  it("super_admin のキー発行後も旧・主キーと副キーが有効なまま（DB上activeなのに認証できないキーを作らない）", () => {
     // client_adminが無停止ローテーションで追加キーを発行済みの状態を再現
     addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
 
-    // super_adminが自分のエンドポイント(POST /tenants/:id/keys)で新しい主キーを発行すると、
-    // ルート実装は addTenantApiKey ではなく registerTenant を呼ぶ(既存実装のまま)。
-    const SUPER_ADMIN_NEW_HASH = "multikey-superadmin-overwrite-hash";
-    registerTenant({
-      tenantId: TENANT_ID,
-      name: "Multikey Test",
-      plan: "starter",
-      features: { avatar: false, voice: false, rag: true },
-      security: { apiKeyHash: SUPER_ADMIN_NEW_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
-      enabled: true,
-    });
+    // super_adminのPOST /tenants/:id/keysは、in-memory登録済みテナントに対しては
+    // registerTenant(上書き)ではなく addTenantApiKey(追加)を使う。
+    // DBのINSERT・UIのキー一覧・client_admin側POSTと同じ「追加」の意味論。
+    const SUPER_ADMIN_NEW_HASH = "multikey-superadmin-added-hash";
+    const added = addTenantApiKey(TENANT_ID, SUPER_ADMIN_NEW_HASH, null);
+    expect(added).toBe(true);
 
-    // 新しい主キーは有効
+    // 新しいキーは有効
     expect(getTenantByApiKeyHash(SUPER_ADMIN_NEW_HASH)?.tenantId).toBe(TENANT_ID);
-    // client_adminが追加した副キーは無停止ローテーションの約束どおり生き残る
+    // client_adminが追加した副キーも生き残る
     expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
-    // 旧・主キーはtenantStoreから消えるため in-memory では二度と認証できない。
-    // DB(tenant_api_keys.is_active)側はこの操作だけでは更新されないため、
-    // 「DB上はactiveなのに実際には使えないキー」というdesyncが生まれる。
-    // (super_adminが自分のキー発行前に旧キーを明示的にDELETEしていれば起きないが、
-    //  ルートの実装はそれを強制していない — 既知のリスクとして報告する)
+    // 旧・主キーも生き残る。DB側は is_active=true のままなので、
+    // in-memory だけが先に消えて「DB上はactiveなのに401」になる desync が起きない。
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  // --- revokeTenantApiKey: 失効の単一入口（主キー・追加キーを区別せず落とす） ---
+  // 以前は呼び出し側が revokeTenantApiKeyIfCurrent と revokeAdditionalTenantApiKey を
+  // 個別に呼ぶ形で、super_admin の DELETE が前者しか呼んでいなかった。その結果
+  // 「DBは is_active=false なのに in-memory では認証が通り続ける」fail-open が発生していた。
+
+  it("revokeTenantApiKey は追加キーを失効させる（super_adminのDELETEで発生していたfail-openの回帰防止）", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+
+    const revoked = revokeTenantApiKey(TENANT_ID, ADDITIONAL_HASH);
+
+    expect(revoked).toBe(true);
+    // ここが本丸: 追加キーが in-memory からも落ちていること
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)).toBeUndefined();
+    // 主キーは巻き添えにしない
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKey は主キーも失効させる（主キー用の経路も同じ入口で賄える）", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+
+    const revoked = revokeTenantApiKey(TENANT_ID, PRIMARY_HASH);
+
+    expect(revoked).toBe(true);
     expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+    // 追加キーは巻き添えにしない
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKey は在籍しないハッシュには false を返す（DBだけにある行を失効させた場合）", () => {
+    expect(revokeTenantApiKey(TENANT_ID, "hash-that-was-never-in-memory")).toBe(false);
+    // 既存キーには影響しない
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKey で複数の追加キーを1本ずつ失効させても、残りは有効なまま", () => {
+    const hashB = "revoke-unified-hash-b";
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    addTenantApiKey(TENANT_ID, hashB, null);
+
+    revokeTenantApiKey(TENANT_ID, ADDITIONAL_HASH);
+
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)).toBeUndefined();
+    expect(getTenantByApiKeyHash(hashB)?.tenantId).toBe(TENANT_ID);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
   });
 
   it("結線確認: 実際のAPIキー生成(generateApiKey)→ハッシュ化(hashApiKey)→addTenantApiKey→getTenantByApiKeyHashの一連の流れが、POSTルートと同じ手順で成立する", () => {
@@ -532,5 +573,128 @@ describe("addTenantApiKey / revokeAdditionalTenantApiKey — 無停止ローテ�
     // 失効させれば同じ平文キーはもう認証できない
     revokeAdditionalTenantApiKey(TENANT_ID, keyHash);
     expect(getTenantByApiKeyHash(authHash)).toBeUndefined();
+  });
+});
+
+describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
+  // このパスは従来テストが1本も無く、PM2再起動のたびに
+  // 「テナントごと1本のキーしか復元されない」バグが検出されないままだった。
+
+  type SeedRow = {
+    tenant_id: string;
+    name: string;
+    plan: string;
+    is_active: boolean;
+    features: Record<string, boolean>;
+    allowed_origins: string[];
+    key_hash: string;
+    rate_limit: number | null;
+    expires_at: string | null;
+  };
+
+  const row = (over: Partial<SeedRow> & Pick<SeedRow, "tenant_id" | "key_hash">): SeedRow => ({
+    name: over.tenant_id,
+    plan: "starter",
+    is_active: true,
+    features: { avatar: false, voice: false, rag: true },
+    allowed_origins: [],
+    rate_limit: null,
+    expires_at: null,
+    ...over,
+  });
+
+  /** pool.query だけを持つ最小のフェイク（seedTenantsFromDB が使うのはこれだけ） */
+  const fakePool = (rows: SeedRow[]) =>
+    ({ query: jest.fn().mockResolvedValue({ rows, rowCount: rows.length }) }) as unknown as Parameters<typeof seedTenantsFromDB>[0];
+
+  it("1テナントに複数のアクティブキーがある場合、全キーを復元する（再起動でローテーションキーが消えない）", async () => {
+    const TENANT = "seed-multi-key-tenant";
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "seed-key-newest" }),
+        row({ tenant_id: TENANT, key_hash: "seed-key-older" }),
+        row({ tenant_id: TENANT, key_hash: "seed-key-oldest" }),
+      ])
+    );
+
+    // 3本すべてが認証に使える = 無停止ローテーションが再起動を跨いで成立する
+    expect(getTenantByApiKeyHash("seed-key-newest")?.tenantId).toBe(TENANT);
+    expect(getTenantByApiKeyHash("seed-key-older")?.tenantId).toBe(TENANT);
+    expect(getTenantByApiKeyHash("seed-key-oldest")?.tenantId).toBe(TENANT);
+  });
+
+  it("SQLの先頭行(ORDER BYで最新)が主キーになる — 復元後の主キーが非決定的にならない", async () => {
+    const TENANT = "seed-primary-order-tenant";
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "seed-primary-expected" }),
+        row({ tenant_id: TENANT, key_hash: "seed-primary-not-expected" }),
+      ])
+    );
+
+    expect(getTenantConfig(TENANT)?.security.apiKeyHash).toBe("seed-primary-expected");
+  });
+
+  it("複数テナントを取り違えずに復元する（キーがテナント間で混ざらない）", async () => {
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: "seed-tenant-a", key_hash: "seed-a-key1" }),
+        row({ tenant_id: "seed-tenant-a", key_hash: "seed-a-key2" }),
+        row({ tenant_id: "seed-tenant-b", key_hash: "seed-b-key1" }),
+      ])
+    );
+
+    expect(getTenantByApiKeyHash("seed-a-key1")?.tenantId).toBe("seed-tenant-a");
+    expect(getTenantByApiKeyHash("seed-a-key2")?.tenantId).toBe("seed-tenant-a");
+    expect(getTenantByApiKeyHash("seed-b-key1")?.tenantId).toBe("seed-tenant-b");
+  });
+
+  it("追加キーは行ごとの expires_at を保持する（期限切れの追加キーは復元後も認証できない）", async () => {
+    const TENANT = "seed-expiry-tenant";
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "seed-expiry-primary" }),
+        row({ tenant_id: TENANT, key_hash: "seed-expiry-valid", expires_at: new Date(Date.now() + 600_000).toISOString() }),
+        row({ tenant_id: TENANT, key_hash: "seed-expiry-stale", expires_at: new Date(Date.now() - 1_000).toISOString() }),
+      ])
+    );
+
+    expect(getTenantByApiKeyHash("seed-expiry-valid")?.tenantId).toBe(TENANT);
+    // 期限切れの行がDBの WHERE をすり抜けて届いても、in-memory側で弾く
+    expect(getTenantByApiKeyHash("seed-expiry-stale")).toBeUndefined();
+  });
+
+  it("env由来で登録済みのテナントはDBで上書きしない（キーも足さない — envが唯一の情報源）", async () => {
+    const TENANT = "seed-env-precedence-tenant";
+    registerTenant({
+      tenantId: TENANT,
+      name: "From Env",
+      plan: "enterprise",
+      features: { avatar: true, voice: true, rag: true },
+      security: { apiKeyHash: "env-key-hash", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "db-key-should-be-ignored", name: "From DB", plan: "starter" }),
+      ])
+    );
+
+    expect(getTenantConfig(TENANT)?.name).toBe("From Env");
+    expect(getTenantConfig(TENANT)?.security.apiKeyHash).toBe("env-key-hash");
+    expect(getTenantByApiKeyHash("db-key-should-be-ignored")).toBeUndefined();
+  });
+
+  it("DB接続に失敗しても例外を投げずに起動を継続する（起動をブロックしない）", async () => {
+    const failingPool = {
+      query: jest.fn().mockRejectedValue(new Error("connection refused")),
+    } as unknown as Parameters<typeof seedTenantsFromDB>[0];
+
+    await expect(seedTenantsFromDB(failingPool)).resolves.toBeUndefined();
+  });
+
+  it("0件でも例外を投げない", async () => {
+    await expect(seedTenantsFromDB(fakePool([]))).resolves.toBeUndefined();
   });
 });

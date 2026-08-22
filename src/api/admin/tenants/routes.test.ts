@@ -4,7 +4,7 @@
 import express from "express";
 import request from "supertest";
 import { registerTenantAdminRoutes } from "./routes";
-import { registerTenant, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent } from "../../../lib/tenant-context";
+import { registerTenant, setTenantApiKeyExpiry, revokeTenantApiKey } from "../../../lib/tenant-context";
 
 // --------------------------------------------------------------------------
 // モック
@@ -18,7 +18,10 @@ jest.mock("../../../lib/tenant-context", () => ({
   registerTenant: jest.fn(),
   updateTenantEnabled: jest.fn(),
   setTenantApiKeyExpiry: jest.fn(),
-  revokeTenantApiKeyIfCurrent: jest.fn(),
+  revokeTenantApiKey: jest.fn(),
+  // 既定は false = in-memory 未登録(DB-onlyテナント)。個別テストで true に上書きする。
+  addTenantApiKey: jest.fn().mockReturnValue(false),
+  updateTenantAllowedOrigins: jest.fn(),
 }));
 
 jest.mock("../../../agent/openclaw/workspaceCache", () => ({
@@ -480,7 +483,7 @@ describe("POST /v1/admin/tenants/:id/keys — in-memory登録がDBの現行設�
     jest.clearAllMocks();
   });
 
-  it("DB上の allowed_origins / features を registerTenant にそのまま引き継ぐ（固定値で上書きしない）", async () => {
+  it("in-memory未登録(DB-onlyテナント)では、DB上の allowed_origins / features を registerTenant にそのまま引き継ぐ（固定値で上書きしない）", async () => {
     const dbQuery = jest
       .fn()
       // テナント存在チェック（features/allowed_originsも取得）
@@ -551,7 +554,7 @@ describe("DELETE /v1/admin/tenants/:id/keys/:keyId — PM2再起動を待たず�
     jest.clearAllMocks();
   });
 
-  it("失効したキーのハッシュで revokeTenantApiKeyIfCurrent を呼ぶ", async () => {
+  it("失効したキーのハッシュで revokeTenantApiKey を呼ぶ（主キー・追加キーを区別しない単一入口）", async () => {
     const dbQuery = jest.fn().mockResolvedValueOnce({
       rows: [{ id: "key-1", tenant_id: "tenant-a", is_active: false, key_hash: "the-revoked-key-hash" }],
       rowCount: 1,
@@ -563,10 +566,10 @@ describe("DELETE /v1/admin/tenants/:id/keys/:keyId — PM2再起動を待たず�
       .set("Authorization", "Bearer dummy");
 
     expect(res.status).toBe(200);
-    expect(revokeTenantApiKeyIfCurrent).toHaveBeenCalledWith("tenant-a", "the-revoked-key-hash");
+    expect(revokeTenantApiKey).toHaveBeenCalledWith("tenant-a", "the-revoked-key-hash");
   });
 
-  it("存在しないキーIDは404で、revokeTenantApiKeyIfCurrentは呼ばれない", async () => {
+  it("存在しないキーIDは404で、revokeTenantApiKeyは呼ばれない", async () => {
     const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const db = { query: dbQuery };
 
@@ -575,6 +578,6 @@ describe("DELETE /v1/admin/tenants/:id/keys/:keyId — PM2再起動を待たず�
       .set("Authorization", "Bearer dummy");
 
     expect(res.status).toBe(404);
-    expect(revokeTenantApiKeyIfCurrent).not.toHaveBeenCalled();
+    expect(revokeTenantApiKey).not.toHaveBeenCalled();
   });
 });
