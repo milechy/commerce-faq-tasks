@@ -175,3 +175,61 @@ describe('scrape — product URL scheme guard (safeHttpUrl)', () => {
     expect(preview[0]?.productMeta?.product_cta_url).toBe('https://example.com/p/safe');
   });
 });
+
+// Phase82 A2 — text/commit・scrape/commit の body.target 越境write遮断
+describe('knowledge commit — target による越境write遮断', () => {
+  const clientAdminT1 = { app_metadata: { role: 'client_admin', tenant_id: 't1' }, email: 't@t.com' };
+  const superAdmin = { app_metadata: { role: 'super_admin', tenant_id: null }, email: 'sa@t.com' };
+
+  const faq = { question: 'Q', answer: 'A' };
+
+  it('POST /text/commit: client_admin が target=他テナントを指定 → 403、自テナントには書き込まれない', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: 'tenantB' });
+    expect(res.status).toBe(403);
+    expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+  });
+
+  it('POST /text/commit: client_admin が target 省略（自テナント） → 201', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq] });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /text/commit: super_admin は target=他テナントを指定でき、そのテナントに書き込まれる', async () => {
+    const app = makeApp(superAdmin);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: 'tenantB' });
+    expect(res.status).toBe(201);
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO faq_docs')
+    );
+    expect(insertCall?.[1]?.[0]).toBe('tenantB');
+  });
+
+  it('POST /scrape/commit: client_admin が target=他テナントを指定 → 403', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/scrape/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ items: [{ url: 'https://example.com/p/1', faqs: [faq] }], target: 'tenantB' });
+    expect(res.status).toBe(403);
+    expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+  });
+
+  it('GET /structurize-status: client_admin が ?tenant=他テナントを指定 → 403（requireKnowledgeTenant）', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .get('/v1/admin/knowledge/structurize-status?tenant=tenantB')
+      .set('Authorization', 'Bearer fake');
+    expect(res.status).toBe(403);
+  });
+});

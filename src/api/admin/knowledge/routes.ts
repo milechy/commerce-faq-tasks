@@ -341,11 +341,18 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { faqs, category: categoryOverride, target: rawTarget } = parsed.data;
+    const isSuperAdmin = (req as KnowledgeReq).user?.role === "super_admin";
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
-    if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
+    if (target === "global" && !isSuperAdmin) {
       return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
+    }
+    // target は body 由来のクライアント制御値。requireKnowledgeTenant は body を見ないため、
+    // super_admin 以外が他テナントへの書き込みを指定できてしまう穴を防ぐ
+    // （actionExecutor.ts の commit_faq_import と同じ判断基準）。
+    if (target !== tenantId && !isSuperAdmin) {
+      return res.status(403).json({ error: "forbidden", message: "他のテナントには登録できません" });
     }
 
     const result = await commitTextFaqs(db, target, faqs, categoryOverride, "text");
@@ -418,11 +425,18 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { items, category: categoryOverride, target: rawTarget } = parsed.data;
+    const isSuperAdmin = (req as KnowledgeReq).user?.role === "super_admin";
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
-    if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
+    if (target === "global" && !isSuperAdmin) {
       return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
+    }
+    // target は body 由来のクライアント制御値。requireKnowledgeTenant は body を見ないため、
+    // super_admin 以外が他テナントへの書き込みを指定できてしまう穴を防ぐ
+    // （actionExecutor.ts の commit_faq_import と同じ判断基準）。
+    if (target !== tenantId && !isSuperAdmin) {
+      return res.status(403).json({ error: "forbidden", message: "他のテナントには登録できません" });
     }
 
     const result = await commitScrapeFaqs(db, target, items, categoryOverride, "scrape");
@@ -435,6 +449,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     '/v1/admin/knowledge/structurize-status',
     knowledgeAuth,
     requireKnowledgeRole,
+    requireKnowledgeTenant,
     async (req: Request, res: Response) => {
       const user = (req as KnowledgeReq).user;
       const tenantId = resolveTenantId(req);
