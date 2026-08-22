@@ -190,7 +190,7 @@ describe('POST /api/avatar/chat-stream — usage計測(trackUsage)', () => {
     expect(mockTrackUsage).toHaveBeenCalledWith({
       tenantId: 'carnation',
       requestId: 'req-usage-ok',
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       inputTokens: 42,
       outputTokens: 7,
       featureUsed: 'chat',

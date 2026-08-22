@@ -1,7 +1,7 @@
 // src/api/admin/feedback/optionEstimator.ts
 // Phase62: オプションサービス料金試算（Groq 70B呼び出し）
 
-import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 
@@ -54,7 +54,7 @@ export async function estimateOptionPrice(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL_70B ?? GROQ_VERSATILE_70B,
+        model: process.env.GROQ_MODEL_70B ?? GPT_OSS_120B,
         messages: [
           { role: 'system', content: ESTIMATE_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
@@ -80,7 +80,7 @@ export async function estimateOptionPrice(
       trackUsage({
         tenantId,
         requestId: `admin-option-estimator:${tenantId}:${Date.now()}`,
-        model: process.env.GROQ_MODEL_70B ?? GROQ_VERSATILE_70B,
+        model: process.env.GROQ_MODEL_70B ?? GPT_OSS_120B,
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
         featureUsed: 'admin_option_estimator',

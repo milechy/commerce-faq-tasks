@@ -7,7 +7,7 @@
 import pino from "pino";
 
 import { groqClient } from "../llm/groqClient";
-import { GROQ_VERSATILE_70B } from "../../config/groqModels";
+import { GPT_OSS_120B } from "../../config/groqModels";
 import { embedText } from "../llm/openaiEmbeddingClient";
 import {
   isLearnedMemoryWriteEnabled,
@@ -55,7 +55,7 @@ async function distillConversation(
     .join("\n");
 
   const raw = await groqClient.call({
-    model: GROQ_VERSATILE_70B,
+    model: GPT_OSS_120B,
     messages: [
       { role: "system", content: DISTILL_SYSTEM_PROMPT },
       { role: "user", content: conversationLog },
@@ -128,7 +128,7 @@ export async function distillAndPromote(
       embedding,
       sourceSessionId: sessionId,
       judgeScore,
-      metadata: { distilled_by: GROQ_VERSATILE_70B },
+      metadata: { distilled_by: GPT_OSS_120B },
     };
 
     const repo = createLearnedMemoryRepository();

@@ -12,7 +12,7 @@ import {
   GroqCallParams,
   groqClient,
 } from './groqClient';
-import { GROQ_VERSATILE_70B, GROQ_INSTANT_8B, GPT_OSS_120B, GPT_OSS_20B, GROQ_VERSATILE_70B as VERSATILE } from '../../config/groqModels';
+import { GPT_OSS_120B, GPT_OSS_20B, GROQ_COMPOUND, GROQ_COMPOUND_MINI } from '../../config/groqModels';
 
 function makeParams(model: string): GroqCallParams {
   return {
@@ -84,58 +84,58 @@ describe('callGroqWithModelFallback — 正常系', () => {
   it('最初の呼び出しが成功した場合はそのまま返す', async () => {
     callSpy.mockResolvedValueOnce('ok-response');
 
-    const result = await callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger });
+    const result = await callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger });
 
     expect(result).toBe('ok-response');
     expect(callSpy).toHaveBeenCalledTimes(1);
-    expect(callSpy).toHaveBeenCalledWith(expect.objectContaining({ model: GROQ_VERSATILE_70B }));
+    expect(callSpy).toHaveBeenCalledWith(expect.objectContaining({ model: GPT_OSS_120B }));
     // 最初の試行が成功した場合は warn を出さない
     expect(warnMock).not.toHaveBeenCalled();
   });
 
   it('1 回 model_not_found → フォールバック先で成功', async () => {
-    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GROQ_VERSATILE_70B);
+    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GPT_OSS_120B);
     callSpy
       .mockRejectedValueOnce(notFoundError)
       .mockResolvedValueOnce('fallback-response');
 
-    const result = await callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger });
+    const result = await callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger });
 
     expect(result).toBe('fallback-response');
     expect(callSpy).toHaveBeenCalledTimes(2);
     // 2 回目はフォールバック先モデルで呼ばれること
-    expect(callSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: GROQ_INSTANT_8B }));
+    expect(callSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: GPT_OSS_20B }));
   });
 
   it('フォールバック発生時に warn ログが出力される（無言フォールバック禁止）', async () => {
-    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GROQ_VERSATILE_70B);
+    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GPT_OSS_120B);
     callSpy
       .mockRejectedValueOnce(notFoundError)
       .mockResolvedValueOnce('ok');
 
-    await callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger });
+    await callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger });
 
     expect(warnMock).toHaveBeenCalledTimes(1);
     expect(warnMock.mock.calls[0][0]).toMatchObject({
-      originalModel: GROQ_VERSATILE_70B,
-      failedModel: GROQ_VERSATILE_70B,
-      fallbackModel: GROQ_INSTANT_8B,
+      originalModel: GPT_OSS_120B,
+      failedModel: GPT_OSS_120B,
+      fallbackModel: GPT_OSS_20B,
     });
     expect(warnMock.mock.calls[0][1]).toMatch(/groq-fallback/);
   });
 
   it('フォールバック成功後に info ログが出力される', async () => {
-    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GROQ_VERSATILE_70B);
+    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GPT_OSS_120B);
     callSpy
       .mockRejectedValueOnce(notFoundError)
       .mockResolvedValueOnce('ok');
 
-    await callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger });
+    await callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger });
 
     expect(infoMock).toHaveBeenCalledTimes(1);
     expect(infoMock.mock.calls[0][0]).toMatchObject({
-      originalModel: GROQ_VERSATILE_70B,
-      resolvedModel: GROQ_INSTANT_8B,
+      originalModel: GPT_OSS_120B,
+      resolvedModel: GPT_OSS_20B,
     });
   });
 
@@ -152,15 +152,15 @@ describe('callGroqWithModelFallback — 正常系', () => {
   });
 
   it('onFallback コールバックが呼ばれる', async () => {
-    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GROQ_VERSATILE_70B);
+    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GPT_OSS_120B);
     callSpy
       .mockRejectedValueOnce(notFoundError)
       .mockResolvedValueOnce('ok');
 
     const onFallback = jest.fn();
-    await callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger, onFallback });
+    await callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger, onFallback });
 
-    expect(onFallback).toHaveBeenCalledWith(GROQ_VERSATILE_70B, GROQ_INSTANT_8B);
+    expect(onFallback).toHaveBeenCalledWith(GPT_OSS_120B, GPT_OSS_20B);
   });
 });
 
@@ -172,7 +172,7 @@ describe('callGroqWithModelFallback — エラー系', () => {
     const serverError = new GroqServerError(500, 'internal error');
     callSpy.mockRejectedValueOnce(serverError);
 
-    await expect(callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger }))
+    await expect(callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger }))
       .rejects.toBeInstanceOf(GroqServerError);
 
     expect(callSpy).toHaveBeenCalledTimes(1);
@@ -183,7 +183,7 @@ describe('callGroqWithModelFallback — エラー系', () => {
     const rateLimitError = new GroqRateLimitError(429, 'rate limit exceeded');
     callSpy.mockRejectedValueOnce(rateLimitError);
 
-    await expect(callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger }))
+    await expect(callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger }))
       .rejects.toBeInstanceOf(GroqRateLimitError);
 
     expect(callSpy).toHaveBeenCalledTimes(1);
@@ -193,17 +193,17 @@ describe('callGroqWithModelFallback — エラー系', () => {
     const badRequestError = new GroqBadRequestError(400, 'bad request');
     callSpy.mockRejectedValueOnce(badRequestError);
 
-    await expect(callGroqWithModelFallback(makeParams(GROQ_VERSATILE_70B), { logger }))
+    await expect(callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger }))
       .rejects.toBeInstanceOf(GroqBadRequestError);
 
     expect(callSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('チェーン終端（GROQ_INSTANT_8B）はフォールバック先なしでエラーを投げる', async () => {
-    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GROQ_INSTANT_8B);
+  it('チェーン終端（GPT_OSS_20B）はフォールバック先なしでエラーを投げる', async () => {
+    const notFoundError = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GPT_OSS_20B);
     callSpy.mockRejectedValue(notFoundError);
 
-    await expect(callGroqWithModelFallback(makeParams(GROQ_INSTANT_8B), { logger }))
+    await expect(callGroqWithModelFallback(makeParams(GPT_OSS_20B), { logger }))
       .rejects.toBeInstanceOf(GroqModelNotFoundError);
 
     // フォールバック試行なし（チェーン終端なので 1 回のみ）
@@ -214,19 +214,20 @@ describe('callGroqWithModelFallback — エラー系', () => {
   });
 
   it('フォールバック先でも model_not_found になった場合にチェーンを辿る', async () => {
-    // GPT_OSS_120B → GPT_OSS_20B → GROQ_VERSATILE_70B と辿る
-    const notFoundFor120b = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GPT_OSS_120B);
-    const notFoundFor20b = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GPT_OSS_20B);
+    // GROQ_COMPOUND → GROQ_COMPOUND_MINI → GPT_OSS_120B と辿る
+    const notFoundForCompound = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GROQ_COMPOUND);
+    const notFoundForMini = new GroqModelNotFoundError(404, '{"error":"model_not_found"}', GROQ_COMPOUND_MINI);
     callSpy
-      .mockRejectedValueOnce(notFoundFor120b)
-      .mockRejectedValueOnce(notFoundFor20b)
+      .mockRejectedValueOnce(notFoundForCompound)
+      .mockRejectedValueOnce(notFoundForMini)
       .mockResolvedValueOnce('final-fallback');
 
-    const result = await callGroqWithModelFallback(makeParams(GPT_OSS_120B), { logger });
+    const result = await callGroqWithModelFallback(makeParams(GROQ_COMPOUND), { logger });
 
     expect(result).toBe('final-fallback');
     expect(callSpy).toHaveBeenCalledTimes(3);
-    expect(callSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: GROQ_VERSATILE_70B }));
+    expect(callSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: GROQ_COMPOUND_MINI }));
+    expect(callSpy).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: GPT_OSS_120B }));
     // warn は 2 回（各フォールバック発生時）
     expect(warnMock).toHaveBeenCalledTimes(2);
   });

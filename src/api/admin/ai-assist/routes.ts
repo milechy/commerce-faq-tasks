@@ -3,7 +3,7 @@
 // Phase43 P2: インテント振り分け + RAG統合
 // POST /v1/admin/ai-assist/chat
 
-import { GROQ_INSTANT_8B, GROQ_VERSATILE_70B } from '../../../config/groqModels';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
@@ -63,7 +63,7 @@ async function detectIntent(message: string, tenantId: string): Promise<Intent> 
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: GROQ_INSTANT_8B,
+        model: GPT_OSS_120B,
         messages: [
           {
             role: "user",
@@ -85,7 +85,7 @@ async function detectIntent(message: string, tenantId: string): Promise<Intent> 
       trackUsage({
         tenantId,
         requestId: `admin-ai-assist-intent:${tenantId}:${Date.now()}`,
-        model: GROQ_INSTANT_8B,
+        model: GPT_OSS_120B,
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
         featureUsed: "admin_ai_assist",
@@ -99,7 +99,7 @@ async function detectIntent(message: string, tenantId: string): Promise<Intent> 
 }
 
 // ---------------------------------------------------------------------------
-// Groq LLM 呼び出し（llama-3.1-8b-instant）— admin_guide モード
+// Groq LLM 呼び出し（openai/gpt-oss-120b）— admin_guide モード
 // ---------------------------------------------------------------------------
 
 async function callGroq8b(userMessage: string, tenantId: string): Promise<string> {
@@ -113,7 +113,7 @@ async function callGroq8b(userMessage: string, tenantId: string): Promise<string
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: GROQ_INSTANT_8B,
+      model: GPT_OSS_120B,
       messages: [
         { role: "system", content: ADMIN_AI_SYSTEM_PROMPT },
         { role: "user", content: userMessage },
@@ -134,7 +134,7 @@ async function callGroq8b(userMessage: string, tenantId: string): Promise<string
     trackUsage({
       tenantId,
       requestId: `admin-ai-assist-guide:${tenantId}:${Date.now()}`,
-      model: GROQ_INSTANT_8B,
+      model: GPT_OSS_120B,
       inputTokens: data.usage?.prompt_tokens ?? 0,
       outputTokens: data.usage?.completion_tokens ?? 0,
       featureUsed: "admin_ai_assist",
@@ -145,7 +145,7 @@ async function callGroq8b(userMessage: string, tenantId: string): Promise<string
 }
 
 // ---------------------------------------------------------------------------
-// Groq LLM 呼び出し（llama-3.3-70b-versatile）— business_faq モード
+// Groq LLM 呼び出し（openai/gpt-oss-120b）— business_faq モード
 // ---------------------------------------------------------------------------
 
 async function callGroq70b(userMessage: string, ragContext: string, tenantId: string): Promise<string> {
@@ -173,7 +173,7 @@ ${ragContext}`
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: GROQ_VERSATILE_70B,
+      model: GPT_OSS_120B,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },
@@ -194,7 +194,7 @@ ${ragContext}`
     trackUsage({
       tenantId,
       requestId: `admin-ai-assist-faq:${tenantId}:${Date.now()}`,
-      model: GROQ_VERSATILE_70B,
+      model: GPT_OSS_120B,
       inputTokens: data.usage?.prompt_tokens ?? 0,
       outputTokens: data.usage?.completion_tokens ?? 0,
       featureUsed: "admin_ai_assist",

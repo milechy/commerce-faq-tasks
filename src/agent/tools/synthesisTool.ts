@@ -1,6 +1,6 @@
 // src/agent/tools/synthesisTool.ts
 
-import { GROQ_VERSATILE_70B } from '../../config/groqModels';
+import { GPT_OSS_120B } from '../../config/groqModels';
 import type { RerankItem } from '../types';
 import { groqClient, type GroqUsage } from '../llm/groqClient';
 import {
@@ -125,7 +125,7 @@ const BASE_SYSTEM_PROMPT = `あなたは中古車販売店のAIコンシェル�
 - FAQ情報が不十分な場合は「詳しくはお問い合わせください」と案内する`;
 
 /**
- * Groq LLM（llama-3.3-70b-versatile）で自然な日本語回答を生成する。
+ * Groq LLM（openai/gpt-oss-120b）で自然な日本語回答を生成する。
  * tenantId が指定された場合、アクティブなチューニングルールをシステムプロンプトに注入する。
  * APIキー未設定・エラー時は箇条書きフォールバックを返す。
  */
@@ -263,7 +263,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       : `お客様の質問: ${query}\n上記の応答ルールに従って、お客様の質問に自然な日本語で回答してください。`;
 
     const synthResult = await groqClient.callWithUsage({
-      model: GROQ_VERSATILE_70B,
+      model: GPT_OSS_120B,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },

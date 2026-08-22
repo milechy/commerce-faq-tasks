@@ -2,7 +2,7 @@
 // types/contracts.ts の内容を src/ 以下に取り込んだもの。
 // tsconfig の rootDir: src に合わせるため、ここで再定義する。
 
-import type { GROQ_INSTANT_8B, GROQ_VERSATILE_70B } from '../config/groqModels';
+import type { GPT_OSS_120B } from '../config/groqModels';
 
 export interface TenantConfig {
   tenantId: string;
@@ -56,7 +56,7 @@ export interface ChatAction {
 }
 
 // Groq モデル ID は src/config/groqModels.ts が単一の正典。型もそこから導出する。
-export type GroqModel = typeof GROQ_INSTANT_8B | typeof GROQ_VERSATILE_70B;
+export type GroqModel = typeof GPT_OSS_120B;
 
 export interface RagContextItem {
   score: number;

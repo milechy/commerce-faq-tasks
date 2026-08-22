@@ -68,7 +68,7 @@ describe('evaluateConversation', () => {
     expect(result.evaluationAxes.customer_reaction).toBe(85);
     expect(result.evaluationAxes.stage_progression).toBe(80);
     expect(result.evaluationAxes.contraindication_compliance).toBe(85);
-    expect(result.modelUsed).toBe('llama-3.3-70b-versatile');
+    expect(result.modelUsed).toBe('openai/gpt-oss-120b');
   });
 
   it('2. JSONパースエラー1回目 → リトライして成功', async () => {

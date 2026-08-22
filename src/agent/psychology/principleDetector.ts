@@ -2,7 +2,7 @@
 // Phase44: 心理学原則検出器
 // キーワードマッチング + Groq 8b LLMフォールバック
 
-import { GROQ_INSTANT_8B } from '../../config/groqModels';
+import { GPT_OSS_120B } from '../../config/groqModels';
 import { groqClient } from '../llm/groqClient';
 
 const KEYWORD_MAP: Record<string, string[]> = {
@@ -24,7 +24,7 @@ export interface PrincipleDetectionResult {
 
 /**
  * 直近3件のユーザーメッセージからキーワードマッチで心理学原則を検出する。
- * マッチなし → Groq 8b (llama-3.1-8b-instant) でLLM判定（フォールバック）。
+ * マッチなし → Groq 経由の openai/gpt-oss-120b でLLM判定（フォールバック）。
  * salesStage が propose/recommend/close の場合、最低1原則を返す。
  *
  * セキュリティ: LLMに渡すメッセージ内容は slice(0,500) でトリミング
@@ -82,7 +82,7 @@ async function detectWithLlm(
 
   try {
     const response = await groqClient.call({
-      model: GROQ_INSTANT_8B,
+      model: GPT_OSS_120B,
       messages: [
         {
           role: "system",
