@@ -22,9 +22,6 @@ function makeApp(db: any) {
   const app = express();
   app.use(express.json());
   process.env.NODE_ENV = "development";
-  // supabaseAuthMiddleware は NODE_ENV!=='production' に加え ALLOW_INSECURE_DEV_AUTH='true'
-  // の明示指定が無いと署名検証なしデコードを行わない（fail-closed 強化）。
-  process.env.ALLOW_INSECURE_DEV_AUTH = "true";
   registerNotificationPreferencesRoutes(app, db);
   return app;
 }
@@ -34,7 +31,7 @@ function makeToken(tenantId: string) {
 }
 
 describe("Notification Preferences Routes", () => {
-  afterEach(() => { delete process.env.NODE_ENV; delete process.env.ALLOW_INSECURE_DEV_AUTH; });
+  afterEach(() => { delete process.env.NODE_ENV; });
 
   describe("GET /v1/admin/tenants/:id/notification-preferences", () => {
     it("returns preferences list", async () => {
