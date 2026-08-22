@@ -426,4 +426,85 @@ describe("addTenantApiKey / revokeAdditionalTenantApiKey — 無停止ローテ�
   it("未登録テナントの追加キーMapに対する getTenantByApiKeyHash 探索は例外を投げない", () => {
     expect(getTenantByApiKeyHash("hash-with-no-additional-keys-anywhere")).toBeUndefined();
   });
+
+  it("イレギュラー: 主キー・追加キーを全て失効させるとテナントは完全にロックアウトされる（想定される最悪ケース）", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    revokeTenantApiKeyIfCurrent(TENANT_ID, PRIMARY_HASH);
+    revokeAdditionalTenantApiKey(TENANT_ID, ADDITIONAL_HASH);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)).toBeUndefined();
+    // client_admin自身の失効操作だけでは復旧経路がない（POST /my-tenant/keysで新規発行するには
+    // 依然として認証済みリクエストが必要で、キーで認証するAPI経路からは発行し直せない）。
+    // super_adminの registerTenant による強制上書きだけが復旧経路になる。
+  });
+
+  it("復旧経路: 全キー失効後もsuper_admin相当のregisterTenant(強制上書き)でテナントを即座に復旧できる", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    revokeTenantApiKeyIfCurrent(TENANT_ID, PRIMARY_HASH);
+    revokeAdditionalTenantApiKey(TENANT_ID, ADDITIONAL_HASH);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+
+    const RESCUE_HASH = "multikey-rescue-hash";
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Multikey Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: RESCUE_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    expect(getTenantByApiKeyHash(RESCUE_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("既知のリスク: super_admin向けPOST /tenants/:id/keysのregisterTenant(上書き)は、client_adminが無停止ローテーションで追加した副キーには影響しないが、旧・主キーはDB側is_active=trueのままin-memoryでは無効化される", () => {
+    // client_adminが無停止ローテーションで追加キーを発行済みの状態を再現
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+
+    // super_adminが自分のエンドポイント(POST /tenants/:id/keys)で新しい主キーを発行すると、
+    // ルート実装は addTenantApiKey ではなく registerTenant を呼ぶ(既存実装のまま)。
+    const SUPER_ADMIN_NEW_HASH = "multikey-superadmin-overwrite-hash";
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Multikey Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: SUPER_ADMIN_NEW_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+
+    // 新しい主キーは有効
+    expect(getTenantByApiKeyHash(SUPER_ADMIN_NEW_HASH)?.tenantId).toBe(TENANT_ID);
+    // client_adminが追加した副キーは無停止ローテーションの約束どおり生き残る
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+    // 旧・主キーはtenantStoreから消えるため in-memory では二度と認証できない。
+    // DB(tenant_api_keys.is_active)側はこの操作だけでは更新されないため、
+    // 「DB上はactiveなのに実際には使えないキー」というdesyncが生まれる。
+    // (super_adminが自分のキー発行前に旧キーを明示的にDELETEしていれば起きないが、
+    //  ルートの実装はそれを強制していない — 既知のリスクとして報告する)
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+  });
+
+  it("結線確認: 実際のAPIキー生成(generateApiKey)→ハッシュ化(hashApiKey)→addTenantApiKey→getTenantByApiKeyHashの一連の流れが、POSTルートと同じ手順で成立する", () => {
+    // routes.test.ts は tenant-context を丸ごとモックしているため、
+    // 「発行された平文キーが実際に認証に使えるか」はモック越しには検証できない。
+    // ここでは実際の apiKeyUtils と組み合わせ、ルートが行う手順をそのまま再現して検証する。
+    const { generateApiKey, hashApiKey } = jest.requireActual("../api/admin/tenants/apiKeyUtils") as {
+      generateApiKey: () => string;
+      hashApiKey: (key: string) => string;
+    };
+    const plainKey = generateApiKey();
+    expect(plainKey).toMatch(/^rjc_[0-9a-f]{64}$/);
+    const keyHash = hashApiKey(plainKey);
+
+    const added = addTenantApiKey(TENANT_ID, keyHash, null);
+    expect(added).toBe(true);
+
+    // 発行された平文キーを再度ハッシュ化して認証する(実際のミドルウェアが行う手順)
+    const authHash = hashApiKey(plainKey);
+    expect(getTenantByApiKeyHash(authHash)?.tenantId).toBe(TENANT_ID);
+
+    // 失効させれば同じ平文キーはもう認証できない
+    revokeAdditionalTenantApiKey(TENANT_ID, keyHash);
+    expect(getTenantByApiKeyHash(authHash)).toBeUndefined();
+  });
 });
