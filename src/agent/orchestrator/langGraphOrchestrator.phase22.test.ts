@@ -1,5 +1,7 @@
 // src/agent/orchestrator/langGraphOrchestrator.phase22.test.ts
 
+import { readFileSync } from "fs";
+import { join } from "path";
 import { resetFlowSessionMeta } from "../dialog/flowContextStore";
 import { runDialogGraph } from "./langGraphOrchestrator";
 
@@ -58,3 +60,22 @@ describe("Phase22 flow control (must reach terminal)", () => {
 // flowContextStore のTTL掃き出し検証は ./flowContextStore.test.ts (agent/dialog配下) に
 // 集約した。#837 で専用テストファイルが無かったためこのファイルに間借りしていたが、
 // ここに移動した。
+
+// evaluateSession は dynamic import + setImmediate の fire-and-forget で呼ばれるため
+// supertest/直接呼び出しでは到達しにくい。wiringInvariants.test.ts と同じ手法(ソース構造検査)で、
+// tenantId 引数の伝播漏れ(=手動trigger経路だけがテナント検証を通す非対称)を防ぐ。
+describe("evaluateSession 呼び出しのテナントID伝播（ソース構造検査）", () => {
+  const source = readFileSync(join(__dirname, "langGraphOrchestrator.ts"), "utf-8");
+
+  it("全ての evaluateSession(sid, ...) 呼び出しが tenantId を渡している", () => {
+    const bareCalls = source.match(/evaluateSession\(sid\)/g) ?? [];
+    expect(bareCalls).toHaveLength(0);
+
+    const calls = source.match(/evaluateSession\(sid,\s*[^)]+\)/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(5);
+    for (const call of calls) {
+      expect(call).toMatch(/evaluateSession\(sid,\s*(input\.tenantId|flowKey\.tenantId)\)/);
+    }
+  });
+});
+

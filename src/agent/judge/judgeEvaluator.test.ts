@@ -158,6 +158,13 @@ describe('evaluateSession', () => {
     const insertCall = mockPool.query.mock.calls[3]!;
     expect(insertCall[1]).toContain('tenant-abc');
     expect(insertCall[1]).toContain('session-123');
+
+    // callGeminiJudge が正しい tenantId を usageContext として渡していること
+    // （billable:false は維持=Stripe請求には含めないが、テナント別消費量として計上する）
+    expect(mockCallGroq).toHaveBeenCalledWith(
+      expect.any(String),
+      { tenantId: 'tenant-abc', billable: false },
+    );
   });
 
   it('2. low score triggers tuning_rules insert (score < 60)', async () => {

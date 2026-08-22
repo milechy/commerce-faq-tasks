@@ -104,7 +104,7 @@ export async function runDialogGraph(
       const sid = input.conversationId;
       setImmediate(() => {
         import('../judge/judgeEvaluator').then(({ evaluateSession }) =>
-          evaluateSession(sid),
+          evaluateSession(sid, input.tenantId),
         ).catch((err: unknown) => {
           logger.warn({ err, sessionId: sid }, 'judge.auto.failed (non-blocking)');
         });
@@ -160,7 +160,7 @@ export async function runDialogGraph(
         const sid = input.conversationId;
         setImmediate(() => {
           import('../judge/judgeEvaluator').then(({ evaluateSession }) =>
-            evaluateSession(sid),
+            evaluateSession(sid, input.tenantId),
           ).catch((err: unknown) => {
             logger.warn({ err, sessionId: sid }, 'judge.auto.failed (non-blocking)');
           });
@@ -199,7 +199,7 @@ export async function runDialogGraph(
         const sid = input.conversationId;
         setImmediate(() => {
           import('../judge/judgeEvaluator').then(({ evaluateSession }) =>
-            evaluateSession(sid),
+            evaluateSession(sid, input.tenantId),
           ).catch((err: unknown) => {
             logger.warn({ err, sessionId: sid }, 'judge.auto.failed (non-blocking)');
           });
@@ -239,7 +239,7 @@ export async function runDialogGraph(
         const sid = input.conversationId;
         setImmediate(() => {
           import('../judge/judgeEvaluator').then(({ evaluateSession }) =>
-            evaluateSession(sid),
+            evaluateSession(sid, input.tenantId),
           ).catch((err: unknown) => {
             logger.warn({ err, sessionId: sid }, 'judge.auto.failed (non-blocking)');
           });
@@ -280,7 +280,7 @@ export async function runDialogGraph(
         const sid = input.conversationId;
         setImmediate(() => {
           import('../judge/judgeEvaluator').then(({ evaluateSession }) =>
-            evaluateSession(sid),
+            evaluateSession(sid, input.tenantId),
           ).catch((err: unknown) => {
             logger.warn({ err, sessionId: sid }, 'judge.auto.failed (non-blocking)');
           });

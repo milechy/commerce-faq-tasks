@@ -301,7 +301,7 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const fullPrompt = `厳格な営業チャット品質評価Judgeです。指定されたJSON形式のみで回答します。\n\n${prompt}${knowledgeAppendix}`;
-        const raw = await callGeminiJudge(fullPrompt);
+        const raw = await callGeminiJudge(fullPrompt, { tenantId, billable: false });
         result = parseJudgeResponse(raw);
         break;
       } catch (err) {
