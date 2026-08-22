@@ -29,7 +29,7 @@ jest.mock("../../src/lib/crossTenantContext", () => ({
 import { callGeminiJudge } from "../../src/lib/gemini/client";
 import { getPool } from "../../src/lib/db";
 import { readFile } from "fs/promises";
-import { evaluateSession } from "../../src/agent/judge/judgeEvaluator";
+import { evaluateSession, SessionTooShortError } from "../../src/agent/judge/judgeEvaluator";
 
 const mockCallGemini = callGeminiJudge as jest.MockedFunction<typeof callGeminiJudge>;
 const mockGetPool = getPool as jest.MockedFunction<typeof getPool>;
@@ -66,7 +66,7 @@ beforeEach(() => {
 });
 
 describe("evaluateSession — 空/単一メッセージセッションのスキップ", () => {
-  it("1. 0メッセージのセッション → null を返す（Gemini呼び出しなし）", async () => {
+  it("1. 0メッセージのセッション → SessionTooShortError を投げる（Gemini呼び出しなし）", async () => {
     const mockPool = makeMockPool();
     mockGetPool.mockReturnValue(mockPool);
 
@@ -74,13 +74,11 @@ describe("evaluateSession — 空/単一メッセージセッションのスキ�
       .mockResolvedValueOnce({ rows: [{ id: "internal-uuid-empty", tenant_id: "tenant-a" }] })
       .mockResolvedValueOnce({ rows: [] }); // 0 messages
 
-    const result = await evaluateSession("session-empty");
-
-    expect(result).toBeNull();
+    await expect(evaluateSession("session-empty")).rejects.toThrow(SessionTooShortError);
     expect(mockCallGemini).not.toHaveBeenCalled();
   });
 
-  it("2. 1メッセージのセッション → null を返す（Gemini呼び出しなし）", async () => {
+  it("2. 1メッセージのセッション → SessionTooShortError を投げる（Gemini呼び出しなし）", async () => {
     const mockPool = makeMockPool();
     mockGetPool.mockReturnValue(mockPool);
 
@@ -90,9 +88,7 @@ describe("evaluateSession — 空/単一メッセージセッションのスキ�
         rows: [{ role: "user", content: "こんにちは", created_at: new Date() }],
       }); // 1 message only
 
-    const result = await evaluateSession("session-single");
-
-    expect(result).toBeNull();
+    await expect(evaluateSession("session-single")).rejects.toThrow(SessionTooShortError);
     expect(mockCallGemini).not.toHaveBeenCalled();
   });
 
