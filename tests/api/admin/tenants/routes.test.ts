@@ -6,6 +6,9 @@ import { generateApiKey, hashApiKey, maskApiKey, maskApiKeyPrefix } from "../../
 // tenant-context をモック
 jest.mock("../../../../src/lib/tenant-context", () => ({
   registerTenant: jest.fn(),
+  updateTenantEnabled: jest.fn(),
+  setTenantApiKeyExpiry: jest.fn(),
+  revokeTenantApiKeyIfCurrent: jest.fn(),
 }));
 
 // supabaseClient をモック（招待API用 — テストでは不要）
