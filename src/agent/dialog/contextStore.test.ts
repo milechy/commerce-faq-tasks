@@ -1,4 +1,9 @@
-import { appendToSessionHistory, getSessionHistory } from "./contextStore";
+import {
+  appendToSessionHistory,
+  evictExpiredSessionHistories,
+  getSessionHistory,
+  sessionHistoryCount,
+} from "./contextStore";
 
 describe("contextStore", () => {
   it("同一sessionIdでも別tenantの履歴は取得できない", () => {
@@ -128,5 +133,78 @@ describe("contextStore", () => {
         { role: "user", content: "tenant=A, session=other-session の発話" },
       ]);
     });
+  });
+});
+
+describe("contextStore — TTLによるエントリ掃き出し", () => {
+  const TTL_MS = 30 * 60 * 1000;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("最終アクセスからTTLを超過したエントリは掃き出される", () => {
+    const t0 = Date.now();
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(t0);
+
+    appendToSessionHistory("tenant-ttl-expire", "s1", [
+      { role: "user", content: "古い発話" },
+    ]);
+    expect(getSessionHistory("tenant-ttl-expire", "s1")).toHaveLength(1);
+    expect(sessionHistoryCount()).toBeGreaterThanOrEqual(1);
+
+    nowSpy.mockReturnValue(t0 + TTL_MS + 1);
+    expect(evictExpiredSessionHistories()).toBeGreaterThanOrEqual(1);
+    expect(getSessionHistory("tenant-ttl-expire", "s1")).toEqual([]);
+  });
+
+  it("TTLちょうどでは掃き出さない（超過して初めて削除される境界）", () => {
+    const t0 = Date.now();
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(t0);
+
+    appendToSessionHistory("tenant-ttl-boundary", "s1", [
+      { role: "user", content: "境界値の発話" },
+    ]);
+
+    nowSpy.mockReturnValue(t0 + TTL_MS); // ちょうど TTL（> ではないので残る）
+    evictExpiredSessionHistories();
+    expect(getSessionHistory("tenant-ttl-boundary", "s1")).toHaveLength(1);
+  });
+
+  it("【最重要】読み取りでも最終アクセス時刻が更新され、継続中の会話は掃き出されない", () => {
+    // これが壊れると「会話中のユーザーの履歴がTTLで突然消える」= 修正の目的を裏切る。
+    const t0 = Date.now();
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(t0);
+
+    appendToSessionHistory("tenant-ttl-alive", "s1", [
+      { role: "user", content: "継続中の発話" },
+    ]);
+
+    // TTLの9割時点で「読み取りだけ」行う（ユーザーが会話を続けている状況）
+    nowSpy.mockReturnValue(t0 + TTL_MS * 0.9);
+    expect(getSessionHistory("tenant-ttl-alive", "s1")).toHaveLength(1);
+
+    // 最初の書き込みからは TTL を超過しているが、直近の読み取りからは超過していない
+    nowSpy.mockReturnValue(t0 + TTL_MS * 0.9 * 2);
+    evictExpiredSessionHistories();
+
+    expect(getSessionHistory("tenant-ttl-alive", "s1")).toEqual([
+      { role: "user", content: "継続中の発話" },
+    ]);
+  });
+
+  it("定期スイープの setInterval は unref されている（プロセス終了/jestをブロックしない）", () => {
+    jest.resetModules();
+    const unref = jest.fn();
+    const setIntervalSpy = jest
+      .spyOn(global, "setInterval")
+      .mockReturnValue({ unref } as unknown as NodeJS.Timeout);
+
+    jest.isolateModules(() => {
+      require("./contextStore");
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), TTL_MS);
+    expect(unref).toHaveBeenCalledTimes(1);
   });
 });
