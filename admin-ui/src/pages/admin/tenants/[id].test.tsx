@@ -195,3 +195,60 @@ describe("TenantDetailPage — エラー意味論(500 vs 404 vs 401)", () => {
     await waitFor(() => expect(screen.getByText("login-page")).toBeTruthy());
   });
 });
+
+// LAUNCH: テナント招待UI(InviteTab)のロール境界。招待タブはsuper_admin専用。
+// このファイルの他テストは useAuth を isSuperAdmin: true 固定でモックしているため、
+// client_admin視点は vi.doMock + vi.resetModules で個別に上書きする。
+describe("TenantDetailPage — 招待タブのロール境界", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    mockGetSession.mockReset().mockResolvedValue(okSession);
+    mockApiKeysAuthFetch.mockReset().mockResolvedValue(jsonResponse(200, { keys: [] }));
+  });
+
+  it("super_adminには✉️ 招待タブが表示される(デフォルトモック=isSuperAdmin:true)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "carnation", name: "carnation", plan: "starter", is_active: true,
+        allowed_origins: [], billing_enabled: false, billing_free_from: null,
+        billing_free_until: null, features: { avatar: false, voice: false, rag: true },
+        lemonslice_agent_id: null, conversion_types: [],
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("⚙️ 設定")).toBeTruthy());
+    expect(screen.getByText("✉️ 招待")).toBeTruthy();
+  });
+
+  it("client_admin(isSuperAdmin:false)には✉️ 招待タブがそもそも一覧に現れない", async () => {
+    vi.resetModules();
+    vi.doMock("../../../auth/useAuth", () => ({
+      useAuth: () => ({ enterPreview: vi.fn(), isSuperAdmin: false }),
+    }));
+    const { default: TenantDetailPageAsClientAdmin } = await import("./[id]");
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: "carnation", name: "carnation", plan: "starter", is_active: true,
+        allowed_origins: [], billing_enabled: false, billing_free_from: null,
+        billing_free_until: null, features: { avatar: false, voice: false, rag: true },
+        lemonslice_agent_id: null, conversion_types: [],
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/admin/tenants/carnation"]}>
+        <Routes>
+          <Route path="/admin/tenants/:id" element={<TenantDetailPageAsClientAdmin />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("⚙️ 設定")).toBeTruthy());
+    expect(screen.queryByText("✉️ 招待")).toBeNull();
+    // タブ一覧に無いのに加え、activeTab側にも isSuperAdmin ガードが二重にかかっている
+    // ([id].tsx: {activeTab === "invite" && isSuperAdmin && <InviteTab .../>})ため、
+    // 万一タブ状態が"invite"のまま来ても本文は描画されない。
+    expect(screen.queryByText("client_admin を招待")).toBeNull();
+  });
+});
