@@ -7,6 +7,8 @@ jest.mock('../../lib/analytics/flowLogger', () => ({
   initFlowLogger: jest.fn(),
 }));
 
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { logFlowTransition } from '../../lib/analytics/flowLogger';
 import { applyPhase22FlowAfterGeneration } from './flowControl';
 import { resetFlowSessionMeta, getOrInitFlowSessionMeta, defaultFlowBudgets } from '../dialog/flowContextStore';
@@ -130,5 +132,23 @@ describe('flowControl.ts — logFlowTransition フック (Phase72-C)', () => {
     }
     // forcedTerminal が返らないケース（ループ条件が満たされない環境）でも落とさない
     expect(true).toBe(true);
+  });
+});
+
+// evaluateSession は dynamic import + setImmediate の fire-and-forget で呼ばれるため
+// supertest/直接呼び出しでは到達しにくい。wiringInvariants.test.ts と同じ手法(ソース構造検査)で、
+// tenantId 引数の伝播漏れを防ぐ。
+describe('evaluateSession 呼び出しのテナントID伝播（ソース構造検査）', () => {
+  const source = readFileSync(join(__dirname, 'flowControl.ts'), 'utf-8');
+
+  it('全ての evaluateSession(sid, ...) 呼び出しが tenantId を渡している', () => {
+    const bareCalls = source.match(/evaluateSession\(sid\)/g) ?? [];
+    expect(bareCalls).toHaveLength(0);
+
+    const calls = source.match(/evaluateSession\(sid,\s*[^)]+\)/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of calls) {
+      expect(call).toMatch(/evaluateSession\(sid,\s*flowKey\.tenantId\)/);
+    }
   });
 });

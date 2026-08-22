@@ -357,7 +357,7 @@ export function applyPhase22FlowAfterGeneration(params: {
       const sid = input.conversationId;
       setImmediate(() => {
         import('../judge/judgeEvaluator').then(({ evaluateSession }) =>
-          evaluateSession(sid),
+          evaluateSession(sid, flowKey.tenantId),
         ).catch((err: unknown) => {
           logger.warn({ err, sessionId: sid }, 'judge.auto.failed (non-blocking)');
         });
@@ -425,7 +425,7 @@ export function applyPhase22FlowAfterGeneration(params: {
       const sid = input.conversationId;
       setImmediate(() => {
         import('../judge/judgeEvaluator').then(({ evaluateSession }) =>
-          evaluateSession(sid),
+          evaluateSession(sid, flowKey.tenantId),
         ).catch((err: unknown) => {
           logger.warn({ err, sessionId: sid }, 'judge.auto.failed (non-blocking)');
         });
