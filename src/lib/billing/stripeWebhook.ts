@@ -43,47 +43,55 @@ export function createStripeWebhookHandler(db: any, logger: pino.Logger) {
     }
 
     try {
-      const status = await _recordOrCheckWebhookEvent(event, db);
-      if (status === 'done') {
-        logger.info({ eventId: event.id, eventType: event.type }, '[webhook] duplicate event, already completed, skipped');
+      const claimed = await _claimWebhookEvent(event, db);
+      if (!claimed) {
+        // 完了済み、または他リクエストが処理中。どちらも副作用を実行してはならない。
+        logger.info({ eventId: event.id, eventType: event.type }, '[webhook] event not claimed (completed or in progress), skipped');
         res.json({ received: true, duplicate: true });
         return;
       }
-      // 'new'（初回）または 'retry'（前回未完了 = ハンドラ失敗/処理中クラッシュ）は
-      // どちらも副作用を実行する。'retry' はハンドラ内の各処理が個別に冪等
-      // （UPDATE ... WHERE 条件一致のみ更新、Slack通知は再送の可能性を許容）である前提。
       await _handleStripeEvent(event, db, logger);
       await _markWebhookEventCompleted(event, db);
       res.json({ received: true });
     } catch (err) {
-      // completed_at を更新しないため、Stripeの再送時は 'retry' として再試行される。
+      // completed_at を更新しないため、claim が STALE_CLAIM_MINUTES 経過した後の
+      // Stripe再送で再試行される。
       logger.error({ err, eventType: event.type }, '[webhook] event handling failed');
       res.status(500).json({ error: 'handler_error' });
     }
   };
 }
 
-/**
- * event.id を stripe_webhook_events に記録し、処理方針を返す。
- * - 'new'   : 初回受信（ON CONFLICT に当たらず新規INSERTできた）
- * - 'retry' : 過去に受信済みだが completed_at が NULL＝前回ハンドラが失敗/未完了
- *             （record-before-handleのため、成功保証はINSERTではなくcompleted_atが持つ）
- * - 'done'  : 過去に受信済みかつ completed_at が設定済み＝ハンドラは最後まで成功した
- */
-async function _recordOrCheckWebhookEvent(event: any, db: any): Promise<'new' | 'retry' | 'done'> {
-  const insertResult = await db.query(
-    `INSERT INTO stripe_webhook_events (event_id, event_type)
-     VALUES ($1, $2)
-     ON CONFLICT (event_id) DO NOTHING`,
-    [event.id, event.type]
-  );
-  if (insertResult.rowCount > 0) return 'new';
+/** claim をこの時間放置したら、処理中プロセスの異常終了とみなして再獲得を許可する。 */
+const STALE_CLAIM_MINUTES = 15;
 
-  const statusResult = await db.query(
-    `SELECT completed_at FROM stripe_webhook_events WHERE event_id = $1`,
-    [event.id]
+/**
+ * このリクエストが event の処理権を獲得できたかを返す。
+ *
+ * 単一の条件付きUPSERTで判定するのが要点。INSERT成功/失敗を見てから別クエリで
+ * 状態をSELECTする方式だと、同一イベントが並行到達したときに両方が「未完了だから
+ * 再試行」と判断してハンドラを二重実行しうる（DB更新は WHERE 条件付きで冪等だが、
+ * Slack通知は非冪等なので実害が出る）。
+ *
+ * 獲得できる = 次のいずれか
+ *   - 初回受信（衝突せずINSERTできた）
+ *   - 過去に受信済みだが未完了で、かつ前回の claim が STALE_CLAIM_MINUTES 以上前
+ *     （＝処理中プロセスが落ちたとみなせる）
+ * 獲得できない = 完了済み、または他リクエストが現在処理中。
+ */
+async function _claimWebhookEvent(event: any, db: any): Promise<boolean> {
+  const result = await db.query(
+    `INSERT INTO stripe_webhook_events (event_id, event_type, claimed_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (event_id) DO UPDATE
+       SET claimed_at = NOW()
+     WHERE stripe_webhook_events.completed_at IS NULL
+       AND (stripe_webhook_events.claimed_at IS NULL
+            OR stripe_webhook_events.claimed_at < NOW() - ($3 || ' minutes')::INTERVAL)
+     RETURNING event_id`,
+    [event.id, event.type, String(STALE_CLAIM_MINUTES)]
   );
-  return statusResult.rows[0]?.completed_at ? 'done' : 'retry';
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** ハンドラが最後まで成功した後にのみ呼ぶ。再送時の 'retry' 判定に使う。 */
