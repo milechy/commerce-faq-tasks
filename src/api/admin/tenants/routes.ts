@@ -6,7 +6,7 @@ import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { Pool } from "pg";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { registerTenant, updateTenantEnabled, updateTenantAllowedOrigins, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent, addTenantApiKey, revokeAdditionalTenantApiKey } from "../../../lib/tenant-context";
+import { registerTenant, updateTenantEnabled, updateTenantAllowedOrigins, setTenantApiKeyExpiry, revokeTenantApiKey, addTenantApiKey } from "../../../lib/tenant-context";
 import { invalidateWorkspaceCache } from "../../../agent/openclaw/workspaceCache";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
@@ -420,10 +420,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         return res.status(404).json({ error: "not_found", message: "APIキーが見つかりません。" });
       }
       const revokedHash = result.rows[0].key_hash;
-      // 主キーであれば revokeTenantApiKeyIfCurrent、無停止ローテーションで追加された
-      // キーであれば revokeAdditionalTenantApiKey が反応する。両方試して即時反映する。
-      revokeTenantApiKeyIfCurrent(tenantId, revokedHash);
-      revokeAdditionalTenantApiKey(tenantId, revokedHash);
+      // 主キー・追加キーのどちらでも失効させる（revokeTenantApiKey が両方を見る）
+      revokeTenantApiKey(tenantId, revokedHash);
       return res.json({ ok: true, id: keyId, is_active: false });
     } catch (err) {
       logger.warn("[DELETE /v1/admin/my-tenant/keys/:keyId]", err);
@@ -777,8 +775,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "APIキーが見つかりません。" });
       }
-      // 失効させたキーが現在in-memoryで有効なキーと一致する場合、PM2再起動を待たず即時に無効化する
-      revokeTenantApiKeyIfCurrent(id, result.rows[0].key_hash);
+      // 失効させたキーを in-memory からも即時に落とす。主キーだけでなく
+      // client_admin が無停止ローテーションで追加したキーも対象にする
+      // （以前は主キーのみを見ており、追加キーがDB上inactiveでも認証が通り続けていた）。
+      revokeTenantApiKey(id, result.rows[0].key_hash);
       return res.json({ ok: true, id: keyId, is_active: false });
     } catch (err) {
       logger.warn("[DELETE /v1/admin/tenants/:id/keys/:keyId]", err);

@@ -8,6 +8,7 @@ import {
   getTenantByApiKeyHash,
   setTenantApiKeyExpiry,
   revokeTenantApiKeyIfCurrent,
+  revokeTenantApiKey,
   addTenantApiKey,
   revokeAdditionalTenantApiKey,
 } from "./tenant-context";
@@ -482,6 +483,53 @@ describe("addTenantApiKey / revokeAdditionalTenantApiKey — 無停止ローテ�
     // (super_adminが自分のキー発行前に旧キーを明示的にDELETEしていれば起きないが、
     //  ルートの実装はそれを強制していない — 既知のリスクとして報告する)
     expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+  });
+
+  // --- revokeTenantApiKey: 失効の単一入口（主キー・追加キーを区別せず落とす） ---
+  // 以前は呼び出し側が revokeTenantApiKeyIfCurrent と revokeAdditionalTenantApiKey を
+  // 個別に呼ぶ形で、super_admin の DELETE が前者しか呼んでいなかった。その結果
+  // 「DBは is_active=false なのに in-memory では認証が通り続ける」fail-open が発生していた。
+
+  it("revokeTenantApiKey は追加キーを失効させる（super_adminのDELETEで発生していたfail-openの回帰防止）", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+
+    const revoked = revokeTenantApiKey(TENANT_ID, ADDITIONAL_HASH);
+
+    expect(revoked).toBe(true);
+    // ここが本丸: 追加キーが in-memory からも落ちていること
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)).toBeUndefined();
+    // 主キーは巻き添えにしない
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKey は主キーも失効させる（主キー用の経路も同じ入口で賄える）", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+
+    const revoked = revokeTenantApiKey(TENANT_ID, PRIMARY_HASH);
+
+    expect(revoked).toBe(true);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+    // 追加キーは巻き添えにしない
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKey は在籍しないハッシュには false を返す（DBだけにある行を失効させた場合）", () => {
+    expect(revokeTenantApiKey(TENANT_ID, "hash-that-was-never-in-memory")).toBe(false);
+    // 既存キーには影響しない
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKey で複数の追加キーを1本ずつ失効させても、残りは有効なまま", () => {
+    const hashB = "revoke-unified-hash-b";
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    addTenantApiKey(TENANT_ID, hashB, null);
+
+    revokeTenantApiKey(TENANT_ID, ADDITIONAL_HASH);
+
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)).toBeUndefined();
+    expect(getTenantByApiKeyHash(hashB)?.tenantId).toBe(TENANT_ID);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
   });
 
   it("結線確認: 実際のAPIキー生成(generateApiKey)→ハッシュ化(hashApiKey)→addTenantApiKey→getTenantByApiKeyHashの一連の流れが、POSTルートと同じ手順で成立する", () => {

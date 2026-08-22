@@ -44,6 +44,10 @@ export function addTenantApiKey(
 /**
  * 追加キー（主キー以外）を失効させる。対象が追加キーに存在しない場合は
  * 何もせず false を返す（主キーの失効は revokeTenantApiKeyIfCurrent が担当）。
+ *
+ * 注意: 呼び出し側が「主キーか追加キーか」を判断する必要はない。
+ * DELETE ハンドラからは必ず revokeTenantApiKey() を使うこと
+ * （片方だけ呼ぶと失効漏れになる。実際に super_admin 側で発生した）。
  */
 export function revokeAdditionalTenantApiKey(
   tenantId: string,
@@ -58,6 +62,25 @@ export function revokeAdditionalTenantApiKey(
     }
   }
   return false;
+}
+
+/**
+ * テナントのAPIキーを、主キー・追加キーのどちらであっても失効させる。
+ *
+ * DBで is_active=false にしたキーを in-memory からも即座に落とすための
+ * 単一の入口。主キー用(revokeTenantApiKeyIfCurrent)と追加キー用
+ * (revokeAdditionalTenantApiKey)を個別に呼ぶ形だと、呼び出し側の一方が
+ * 片方しか呼ばず「DBはinactiveなのに認証は通り続ける」fail-open を招くため
+ * （super_admin の DELETE で実際に発生）、失効の呼び出し口はこの関数に統一する。
+ *
+ * 戻り値: in-memory 側で実際に無効化したら true。
+ */
+export function revokeTenantApiKey(tenantId: string, revokedKeyHash: string): boolean {
+  // 両方に問い合わせる。短絡評価にすると主キーがヒットした時点で
+  // 追加キー側が評価されず、同一ハッシュが両方に残る事故を見逃す。
+  const revokedPrimary = revokeTenantApiKeyIfCurrent(tenantId, revokedKeyHash);
+  const revokedAdditional = revokeAdditionalTenantApiKey(tenantId, revokedKeyHash);
+  return revokedPrimary || revokedAdditional;
 }
 
 export function registerTenant(config: TenantConfig): void {
