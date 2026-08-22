@@ -23,6 +23,7 @@ import { SettingsTab } from "./SettingsTab";
 import { TenantDetailHeader } from "./TenantDetailHeader";
 import { TenantDetailTabs } from "./TenantDetailTabs";
 import { SettingsHistoryTab } from "./SettingsHistoryTab";
+import { InviteTab } from "./InviteTab";
 import type { TenantFeatures, TenantDetail, ApiKey, TabId } from "./types";
 
 // ─── 型定義 (TenantFeatures, TenantDetail, ApiKey は ./types に移動) ──────────
@@ -255,6 +256,7 @@ export default function TenantDetailPage() {
         { id: "ab-test", label: "🔬 A/Bテスト" },
         { id: "objection-patterns", label: "💬 反論パターン" },
         { id: "settings-history", label: "設定変更履歴" },
+        { id: "invite", label: "✉️ 招待" },
       ]
     : baseTabs;
 
@@ -371,6 +373,9 @@ export default function TenantDetailPage() {
           )}
           {activeTab === "settings-history" && isSuperAdmin && (
             <SettingsHistoryTab tenantId={tenantId} />
+          )}
+          {activeTab === "invite" && isSuperAdmin && (
+            <InviteTab tenantId={tenantId} />
           )}
           {activeTab === "conversion" && tenant && (
             <ConversionTypesTab
