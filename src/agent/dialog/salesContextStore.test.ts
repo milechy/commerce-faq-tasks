@@ -1,7 +1,9 @@
 import {
   clearAllSalesSessionMeta,
   clearSalesSessionMeta,
+  evictExpiredSalesSessionMetas,
   getSalesSessionMeta,
+  salesSessionMetaCount,
   setSalesSessionMeta,
   updateSalesSessionMeta,
   type SalesSessionKey,
@@ -145,5 +147,68 @@ describe("salesContextStore", () => {
         { role: "user", content: "会話履歴側の発話" },
       ]);
     });
+  });
+});
+
+describe("salesContextStore — TTLによるエントリ掃き出し", () => {
+  const TTL_MS = 30 * 60 * 1000;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("最終アクセスからTTLを超過したエントリは掃き出される", () => {
+    const t0 = Date.now();
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(t0);
+    const k: SalesSessionKey = { tenantId: "t-ttl-expire", sessionId: "s1" };
+
+    setSalesSessionMeta(k, { currentStage: "propose" as any });
+    expect(getSalesSessionMeta(k)).toBeDefined();
+    expect(salesSessionMetaCount()).toBeGreaterThanOrEqual(1);
+
+    nowSpy.mockReturnValue(t0 + TTL_MS + 1);
+    expect(evictExpiredSalesSessionMetas()).toBeGreaterThanOrEqual(1);
+    expect(getSalesSessionMeta(k)).toBeUndefined();
+  });
+
+  it("【最重要】読み取りでも最終アクセス時刻が更新され、継続中の会話は掃き出されない", () => {
+    const t0 = Date.now();
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(t0);
+    const k: SalesSessionKey = { tenantId: "t-ttl-alive", sessionId: "s1" };
+
+    setSalesSessionMeta(k, { currentStage: "propose" as any });
+
+    // TTLの9割時点で「読み取りだけ」行う
+    nowSpy.mockReturnValue(t0 + TTL_MS * 0.9);
+    expect(getSalesSessionMeta(k)).toBeDefined();
+
+    // 書き込みからはTTL超過だが、直近の読み取りからは超過していない
+    nowSpy.mockReturnValue(t0 + TTL_MS * 0.9 * 2);
+    evictExpiredSalesSessionMetas();
+    expect(getSalesSessionMeta(k)?.currentStage).toBe("propose");
+  });
+
+  it("定期スイープの setInterval は unref されている", () => {
+    jest.resetModules();
+    const unref = jest.fn();
+    const setIntervalSpy = jest
+      .spyOn(global, "setInterval")
+      .mockReturnValue({ unref } as unknown as NodeJS.Timeout);
+
+    jest.isolateModules(() => {
+      require("./salesContextStore");
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), TTL_MS);
+    expect(unref).toHaveBeenCalledTimes(1);
+  });
+
+  it("公開型 SalesSessionMeta に内部のTTL用フィールドが漏れていない", () => {
+    // lastAccessedAt は内部エントリ側だけが持つ。呼び出し側の toEqual を壊さないこと。
+    clearAllSalesSessionMeta();
+    const k: SalesSessionKey = { tenantId: "t-shape", sessionId: "s1" };
+    const saved = setSalesSessionMeta(k, { currentStage: "propose" as any });
+    expect(getSalesSessionMeta(k)).toEqual(saved);
+    expect(Object.keys(saved)).not.toContain("lastAccessedAt");
   });
 });

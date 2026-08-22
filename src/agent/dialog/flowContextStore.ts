@@ -1,6 +1,7 @@
 // src/agent/dialog/flowContextStore.ts
 
 import crypto from "crypto";
+import { buildTenantSessionKey } from "./sessionKey";
 
 export type FlowState = "clarify" | "answer" | "confirm" | "terminal";
 
@@ -40,10 +41,24 @@ export interface FlowSessionKey {
   conversationId: string;
 }
 
-const toInternalKey = (key: FlowSessionKey): string =>
-  `${key.tenantId}::${key.conversationId}`;
+/**
+ * TTL 掃き出し用の最終アクセス時刻を内部だけで持つ。
+ * 公開型 FlowSessionMeta の形は変えない（snapshot/peek の呼び出し側を壊さないため）。
+ */
+interface FlowSessionEntry {
+  meta: FlowSessionMeta;
+  lastAccessedAt: number;
+}
 
-const sessionStore = new Map<string, FlowSessionMeta>();
+// キー生成は sessionKey.ts に一本化（contextStore.ts / salesContextStore.ts と共有）。
+// conversationId は他ストアの sessionId と同じ役割。
+const toInternalKey = (key: FlowSessionKey): string =>
+  buildTenantSessionKey(key.tenantId, key.conversationId);
+
+const sessionStore = new Map<string, FlowSessionEntry>();
+
+// contextStore.ts と同じ理由・同じ値。middleware 側の既存スイープとも揃える。
+const SESSION_ENTRY_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 export const defaultFlowBudgets = (): FlowBudgets => ({
   maxTurnsPerSession: Number(process.env.PHASE22_MAX_TURNS ?? 12),
@@ -54,8 +69,13 @@ export const defaultFlowBudgets = (): FlowBudgets => ({
 });
 
 export function getOrInitFlowSessionMeta(key: FlowSessionKey): FlowSessionMeta {
-  const existing = sessionStore.get(toInternalKey(key));
-  if (existing) return existing;
+  const internalKey = toInternalKey(key);
+  const existing = sessionStore.get(internalKey);
+  if (existing) {
+    // 毎ターン呼ばれる経路なので、ここが flow セッションの生存signalになる。
+    existing.lastAccessedAt = Date.now();
+    return existing.meta;
+  }
 
   const now = new Date().toISOString();
   const init: FlowSessionMeta = {
@@ -67,22 +87,24 @@ export function getOrInitFlowSessionMeta(key: FlowSessionKey): FlowSessionMeta {
     recentStates: [],
     lastUpdatedAt: now,
   };
-  sessionStore.set(toInternalKey(key), init);
+  sessionStore.set(internalKey, { meta: init, lastAccessedAt: Date.now() });
   return init;
 }
 
 // Phase47-B: 副作用なしの読み取り専用 getter（reward signal 用）
+// TTL の最終アクセス時刻も更新しない（同一ターン内で getOrInit が既に更新しており、
+// 生存判定はそちらに委ねる。ここで更新すると「副作用なし」の契約が壊れる）。
 export function peekFlowSessionMeta(
   key: FlowSessionKey
 ): FlowSessionMeta | undefined {
-  return sessionStore.get(toInternalKey(key));
+  return sessionStore.get(toInternalKey(key))?.meta;
 }
 
 export function setFlowSessionMeta(
   key: FlowSessionKey,
   meta: FlowSessionMeta
 ): FlowSessionMeta {
-  sessionStore.set(toInternalKey(key), meta);
+  sessionStore.set(toInternalKey(key), { meta, lastAccessedAt: Date.now() });
   return meta;
 }
 
@@ -91,9 +113,35 @@ export function resetFlowSessionMeta(key: FlowSessionKey): void {
 }
 
 // Phase47-D: heartbeat 集計用の読み取り専用 snapshot（副作用なし）
+// 全件を走査するため、ここで最終アクセス時刻を更新すると全エントリが
+// 永久に TTL を逃れてしまう。意図的に更新しない。
 export function snapshotFlowSessionMetas(): FlowSessionMeta[] {
-  return Array.from(sessionStore.values());
+  return Array.from(sessionStore.values(), (entry) => entry.meta);
 }
+
+/**
+ * TTL を超過したエントリを掃き出す。戻り値は削除件数（監視・テスト用）。
+ * resetFlowSessionMeta は本番の呼び出し元が無く、実質この掃き出しが唯一の回収経路。
+ */
+export function evictExpiredFlowSessionMetas(): number {
+  const now = Date.now();
+  let evicted = 0;
+  for (const [key, entry] of sessionStore.entries()) {
+    if (now - entry.lastAccessedAt > SESSION_ENTRY_TTL_MS) {
+      sessionStore.delete(key);
+      evicted++;
+    }
+  }
+  return evicted;
+}
+
+/** 現在保持しているセッション数（メモリ蓄積の観測用）。 */
+export function flowSessionMetaCount(): number {
+  return sessionStore.size;
+}
+
+// .unref() は必須（プロセス終了 / jest をブロックしないため）
+setInterval(evictExpiredFlowSessionMetas, SESSION_ENTRY_TTL_MS).unref?.();
 
 /**
  * Clarify の「同一質問繰り返し」検知用シグネチャ。
