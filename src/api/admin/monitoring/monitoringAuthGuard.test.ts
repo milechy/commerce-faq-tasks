@@ -11,13 +11,14 @@ jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
   },
 }));
 jest.mock('../../../lib/db', () => ({
-  getPool: () => null,
+  getPool: jest.fn(() => null),
   pool: null,
 }));
 
 import express from 'express';
 import request from 'supertest';
 import { logger } from '../../../lib/logger';
+import { getPool } from '../../../lib/db';
 import { registerMonitoringRoutes, computeKpis } from './routes';
 
 function makeApp(user: Record<string, unknown> | null) {
@@ -165,5 +166,36 @@ describe('computeKpis — DB例外はそのまま伝播する(呼び出し元の
   it('DBクエリが例外を投げると computeKpis も reject する（握りつぶさない）', async () => {
     const db = { query: jest.fn().mockRejectedValue(new Error('relation "chat_sessions" does not exist')) };
     await expect(computeKpis(db, null)).rejects.toThrow();
+  });
+});
+
+// tuning/objection-patterns と異なり、monitoring KPIs には super_admin 向けの
+// 「?tenant= で対象テナントを指定してプレビューする」経路が存在しない
+// (routes.ts: `tenantFilter = isSuperAdmin ? null : jwtTenantId` — クエリを一切見ない)。
+// この非対称性を明示的にテストで固定し、将来誰かがクエリパースを追加した際に
+// 「対象テナント指定のはずが全テナント集計のまま」という無自覚な回帰を防ぐ。
+describe('monitoring — previewMode: super_adminにテナント指定プレビュー経路が無いことの固定', () => {
+  it('super_admin が ?tenant=other-tenant を付けても、DBには常に tenantFilter=null(全テナント集計)で問い合わせる', async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const fakeDb = {
+      query: jest.fn(async (sql: string, params: unknown[]) => {
+        queries.push({ sql, params });
+        if (sql.includes('COUNT(*) AS total')) return { rows: [{ total: '10' }] };
+        if (sql.includes('COUNT(*) AS completed')) return { rows: [{ completed: '5' }] };
+        if (sql.includes('fallback_count')) return { rows: [{ fallback_count: '1' }] };
+        return { rows: [] };
+      }),
+    };
+    (getPool as jest.Mock).mockReturnValueOnce(fakeDb);
+
+    const app = makeApp({ app_metadata: { role: 'super_admin' }, email: 't@t.com' });
+    const res = await request(app).get(`${PATH}?tenant=other-tenant`);
+
+    expect(res.status).toBe(200);
+    const fallbackCall = queries.find((q) => q.sql.includes('fallback_count'));
+    expect(fallbackCall).toBeDefined();
+    // tenantFilter=null なら fallback クエリに tenant_id 条件が入らない
+    // (computeKpis の既存テストが固定している契約と同じ)。
+    expect(fallbackCall!.sql).not.toContain('tenant_id');
   });
 });

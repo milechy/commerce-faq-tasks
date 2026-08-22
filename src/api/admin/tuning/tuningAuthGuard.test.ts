@@ -51,6 +51,7 @@ import request from 'supertest';
 import { logger } from '../../../lib/logger';
 import { registerTuningRoutes } from './routes';
 import { registerTestResponseRoutes } from './testResponseRoutes';
+import { listRules } from './tuningRulesRepository';
 
 // ---------------------------------------------------------------------------
 // App factories
@@ -189,6 +190,32 @@ describe('tuning routes — allow-path: client_admin passes ANY_ADMIN routes', (
     const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
     const res = await request(app).delete('/v1/admin/tuning-rules/1');
     expect(res.status).not.toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// previewMode: super_adminが?tenant=経由でテナント代理操作するケースの境界テスト
+// ---------------------------------------------------------------------------
+
+describe('tuning routes — previewMode: super_adminの?tenant=プレビュー', () => {
+  it('super_admin(自身のtenant_idはtenant-a)が?tenant=tenant-bを指定すると、listRulesはtenant-bでフィルタされる(actor自身のテナントにフォールバックしない)', async () => {
+    const app = makeApp({ role: 'super_admin', tenant_id: 'tenant-a' });
+    await request(app).get('/v1/admin/tuning-rules?tenant=tenant-b');
+    expect(listRules).toHaveBeenCalledWith('tenant-b', expect.anything());
+    expect(listRules).not.toHaveBeenCalledWith('tenant-a', expect.anything());
+  });
+
+  it('super_adminが?tenant=を指定しない場合は未指定(全テナント)でlistRulesが呼ばれる', async () => {
+    const app = makeApp({ role: 'super_admin', tenant_id: 'tenant-a' });
+    await request(app).get('/v1/admin/tuning-rules');
+    expect(listRules).toHaveBeenCalledWith(undefined, expect.anything());
+  });
+
+  it('client_adminは?tenant=を指定しても無視され、常にJWTのtenant_idでフィルタされる(他テナントのぞき見不可)', async () => {
+    const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
+    await request(app).get('/v1/admin/tuning-rules?tenant=tenant-b');
+    expect(listRules).toHaveBeenCalledWith('tenant-a', expect.anything());
+    expect(listRules).not.toHaveBeenCalledWith('tenant-b', expect.anything());
   });
 });
 

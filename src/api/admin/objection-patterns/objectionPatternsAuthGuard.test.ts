@@ -140,6 +140,29 @@ describe('objection-patterns — GET list: query tenantId cross-tenant guard', (
     await request(app).get('/v1/admin/objection-patterns?tenantId=t2');
     expect(listObjectionPatterns).toHaveBeenCalledWith('t2');
   });
+
+  // previewMode(super_adminが?tenantId=経由でテナント代理操作するケース)の境界テスト:
+  // 自分自身のJWT tenant_id(t1)とは別のテナント(t2)を指定した際、レスポンスがt2のデータ
+  // のみになり、actor自身のtenant_id(t1)のコンテキストと混ざらないことを固定する。
+  it('previewMode: super_admin(自身はt1)がt2をプレビューすると、t2スコープのレスポンスのみが返る', async () => {
+    const app = makeApp({ app_metadata: { role: 'super_admin', tenant_id: 't1' }, email: 't@t.com' });
+    (listObjectionPatterns as jest.Mock).mockResolvedValueOnce([
+      { id: 1, tenant_id: 't2', pattern: 'preview-only' },
+    ]);
+    const res = await request(app).get('/v1/admin/objection-patterns?tenantId=t2');
+    expect(res.status).toBe(200);
+    expect(listObjectionPatterns).toHaveBeenCalledWith('t2');
+    expect(listObjectionPatterns).not.toHaveBeenCalledWith('t1');
+    expect(res.body.patterns).toEqual([{ id: 1, tenant_id: 't2', pattern: 'preview-only' }]);
+  });
+
+  // :id ルート(GET/DELETE)にはpreviewMode(クエリでのテナント指定)が存在しないことを
+  // 明示的に固定する。既存の「DELETE — super_adminは常にtenantId=undefined」テストと対をなす。
+  it('previewMode不在の確認: GET /:id はsuper_adminに?tenantId=を渡してもtenantId=undefinedのまま(常に全テナント検索)', async () => {
+    const app = makeApp({ app_metadata: { role: 'super_admin', tenant_id: 't1' }, email: 't@t.com' });
+    await request(app).get('/v1/admin/objection-patterns/123?tenantId=t2');
+    expect(getObjectionPattern).toHaveBeenCalledWith(123, undefined);
+  });
 });
 
 describe('objection-patterns — :id boundary/malformed input', () => {
