@@ -1,3 +1,11 @@
+const mockPoolQuery = jest.fn().mockResolvedValue({ rows: [] });
+jest.mock("./db", () => ({
+  pool: { query: (...args: unknown[]) => mockPoolQuery(...args) },
+}));
+jest.mock("./logger", () => ({
+  logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
+}));
+
 import {
   seedTenantsFromEnv,
   getTenantConfig,
@@ -13,6 +21,7 @@ import {
   revokeAdditionalTenantApiKey,
   seedTenantsFromDB,
 } from "./tenant-context";
+import { logger as mockedLogger } from "./logger";
 
 describe("seedTenantsFromEnv — numbered keys", () => {
   const savedEnv: Record<string, string | undefined> = {};
@@ -696,5 +705,133 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
 
   it("0件でも例外を投げない", async () => {
     await expect(seedTenantsFromDB(fakePool([]))).resolves.toBeUndefined();
+  });
+});
+
+describe("getTenantByApiKeyHash — last_used_at の非同期更新", () => {
+  beforeEach(() => {
+    mockPoolQuery.mockClear();
+    mockPoolQuery.mockResolvedValue({ rows: [] });
+    jest.useRealTimers();
+    let now = Date.now();
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+    (global as unknown as { __advanceMockNow: (ms: number) => void }).__advanceMockNow = (ms: number) => {
+      now += ms;
+    };
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  function advanceMockNow(ms: number): void {
+    (global as unknown as { __advanceMockNow: (ms: number) => void }).__advanceMockNow(ms);
+  }
+
+  it("有効なキーで認証成功すると last_used_at のUPDATEが発火する", () => {
+    registerTenant({
+      tenantId: "last-used-tenant-1",
+      name: "t",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: "lu-key-1", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+
+    const cfg = getTenantByApiKeyHash("lu-key-1");
+
+    expect(cfg?.tenantId).toBe("last-used-tenant-1");
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+    expect(mockPoolQuery.mock.calls[0]?.[0]).toMatch(/UPDATE tenant_api_keys SET last_used_at/);
+    expect(mockPoolQuery.mock.calls[0]?.[1]).toEqual(["lu-key-1"]);
+  });
+
+  it("認証失敗（キー不一致）では last_used_at を更新しない", () => {
+    registerTenant({
+      tenantId: "last-used-tenant-2",
+      name: "t",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: "lu-key-2", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+
+    const cfg = getTenantByApiKeyHash("wrong-key");
+
+    expect(cfg).toBeUndefined();
+    expect(mockPoolQuery).not.toHaveBeenCalled();
+  });
+
+  it("デバウンス窓内（5分未満）の連続リクエストは1回しかUPDATEしない", () => {
+    registerTenant({
+      tenantId: "last-used-tenant-3",
+      name: "t",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: "lu-key-3", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+
+    getTenantByApiKeyHash("lu-key-3");
+    advanceMockNow(60_000); // 1分後
+    getTenantByApiKeyHash("lu-key-3");
+    advanceMockNow(60_000); // 2分後（累計3分、まだデバウンス窓内）
+    getTenantByApiKeyHash("lu-key-3");
+
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("デバウンス窓（5分）を超えると再度UPDATEする", () => {
+    registerTenant({
+      tenantId: "last-used-tenant-4",
+      name: "t",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: "lu-key-4", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+
+    getTenantByApiKeyHash("lu-key-4");
+    advanceMockNow(6 * 60 * 1000); // 6分後（デバウンス窓超過）
+    getTenantByApiKeyHash("lu-key-4");
+
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it("DB書き込みが失敗しても認証結果には影響せず、warnログに落ちる", async () => {
+    registerTenant({
+      tenantId: "last-used-tenant-5",
+      name: "t",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: "lu-key-5", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    mockPoolQuery.mockRejectedValueOnce(new Error("write failed"));
+
+    const cfg = getTenantByApiKeyHash("lu-key-5");
+    expect(cfg?.tenantId).toBe("last-used-tenant-5"); // 同期的な認証結果は即座に返る（DB書き込みは待たない）
+
+    // fire-and-forgetのPromise rejectionが処理されるのを待つ
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockedLogger.warn).toHaveBeenCalled();
+  });
+
+  it("追加キー（無停止ローテーション）経由の認証成功でも last_used_at が更新される", () => {
+    registerTenant({
+      tenantId: "last-used-tenant-6",
+      name: "t",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: "lu-key-6-primary", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    addTenantApiKey("last-used-tenant-6", "lu-key-6-additional", null);
+
+    const cfg = getTenantByApiKeyHash("lu-key-6-additional");
+
+    expect(cfg?.tenantId).toBe("last-used-tenant-6");
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+    expect(mockPoolQuery.mock.calls[0]?.[1]).toEqual(["lu-key-6-additional"]);
   });
 });

@@ -5,6 +5,8 @@ import type { Pool } from "pg";
 import type { TenantConfig } from "../types/contracts";
 import type { AuthedRequest } from "../agent/http/authMiddleware";
 import { isOriginAllowed } from "../api/middleware/originCheck";
+import { pool } from "./db";
+import { logger as appLogger } from "./logger";
 
 // ---------------------------------------------------------------------------
 // In-memory tenant registry (DB-backed via seedTenantsFromDB at startup)
@@ -125,6 +127,26 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(hashA, hashB);
 }
 
+// last_used_at のDB書き込みは認証のホットパスなので同期的に待たない。
+// 毎リクエスト書き込むと負荷になるため、同一キーハッシュに対しては
+// LAST_USED_DEBOUNCE_MS 以内の再書き込みをスキップする（インメモリのデバウンス
+// テーブルなので、PM2再起動直後は1回分の書き込みが増えるだけで実害はない）。
+const LAST_USED_DEBOUNCE_MS = 5 * 60 * 1000; // 5分
+const lastUsedWriteAttemptAt = new Map<string, number>();
+
+function touchLastUsedAt(keyHash: string): void {
+  if (!pool) return; // DATABASE_URL未設定（テスト環境等）では何もしない
+  const now = Date.now();
+  const last = lastUsedWriteAttemptAt.get(keyHash);
+  if (last !== undefined && now - last < LAST_USED_DEBOUNCE_MS) return;
+  lastUsedWriteAttemptAt.set(keyHash, now);
+  pool
+    .query(`UPDATE tenant_api_keys SET last_used_at = NOW() WHERE key_hash = $1`, [keyHash])
+    .catch((err: unknown) => {
+      appLogger.warn({ err }, "tenant-context: failed to update last_used_at (non-blocking)");
+    });
+}
+
 export function getTenantByApiKeyHash(
   hash: string
 ): TenantConfig | undefined {
@@ -135,6 +157,7 @@ export function getTenantByApiKeyHash(
       if (expiresAt !== undefined && expiresAt !== null && expiresAt <= Date.now()) {
         return undefined; // 稼働中に期限切れ（起動時seedはDB側でフィルタ済みだが、以降の失効を反映）
       }
+      touchLastUsedAt(hash);
       return cfg;
     }
     // 無停止ローテーションで追加されたキー（主キーとは独立して有効期限を持つ）。
@@ -146,6 +169,7 @@ export function getTenantByApiKeyHash(
       for (const [additionalHash, expiresAt] of additional) {
         if (!safeCompare(additionalHash, hash)) continue;
         if (expiresAt !== null && expiresAt <= Date.now()) return undefined;
+        touchLastUsedAt(hash);
         return cfg;
       }
     }
