@@ -53,7 +53,7 @@ export async function runDialogTurn(
   const effectiveSessionId = ensureSessionId(sessionId);
 
   // 既存セッション履歴を取得
-  const history = getSessionHistory(effectiveSessionId);
+  const history = getSessionHistory(effectiveTenantId, effectiveSessionId);
 
   // 1) Multi-Step Planner
   const useMultiStepPlanner = options?.useMultiStepPlanner ?? true;
@@ -176,7 +176,7 @@ export async function runDialogTurn(
     updates.push({ role: "assistant", content: orchestrated.answer });
   }
 
-  appendToSessionHistory(effectiveSessionId, updates);
+  appendToSessionHistory(effectiveTenantId, effectiveSessionId, updates);
 
   // 4) DialogTurnResult を構築
   const result: DialogTurnResult = {
