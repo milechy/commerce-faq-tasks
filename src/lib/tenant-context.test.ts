@@ -202,6 +202,32 @@ describe("isOriginKnownToAnyTenant — CORS preflight tenant-domain lookup", () 
     });
     expect(isOriginKnownToAnyTenant("https://some-random-site.example")).toBe(false);
   });
+
+  // この関数は cors.ts の isKnownTenantOrigin に配線されており、true を返すと
+  // Access-Control-Allow-Origin に当該オリジンが credentials 付きで反射される。
+  // 1テナントが `https://*` を保存するだけで全テナント分のCORSが緩む越境影響があったため、
+  // 照合側(originCheck.ts)でこの形を無効化した。その遮断がここで効くことを固定する。
+  it("does not leak a bare https://* wildcard into the cross-tenant CORS lookup", () => {
+    registerTenant({
+      tenantId: "greedy-wildcard-tenant",
+      name: "Greedy Wildcard Tenant",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: {
+        apiKeyHash: "dummyhash-greedy",
+        hashAlgorithm: "sha256",
+        allowedOrigins: ["https://*"],
+        rateLimit: 100,
+        rateLimitWindowMs: 60_000,
+      },
+      enabled: true,
+    });
+
+    expect(isOriginKnownToAnyTenant("https://attacker.example")).toBe(false);
+    expect(isOriginKnownToAnyTenant("https://unrelated-tenant-site.example")).toBe(false);
+    // 正規に登録された他テナントのオリジンは引き続き通る
+    expect(isOriginKnownToAnyTenant("https://shop.example.com")).toBe(true);
+  });
 });
 
 describe("APIキー失効・期限切れの即時反映", () => {

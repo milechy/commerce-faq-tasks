@@ -1,5 +1,6 @@
 import type { NextFunction, Response } from "express";
 import { createSecurityPolicyMiddleware } from "./security-policy";
+import { isOriginAllowed } from "../api/middleware/originCheck";
 import type { AuthedRequest } from "../agent/http/authMiddleware";
 import type { TenantConfig } from "../types/contracts";
 
@@ -90,4 +91,85 @@ describe("securityPolicyMiddleware", () => {
     mw(req as any, mockRes(), nextFn);
     expect(nextFn).toHaveBeenCalled();
   });
+
+  // 以前は完全一致(allowed.includes)だったため、UIが案内する
+  // `https://*.example.com` は securityPolicy(apiStackで先に走る)で必ず403になり、
+  // 後段の originCheck.ts が持つワイルドカード対応は到達しなかった。
+  it("honours a subdomain wildcard (previously always 403 here)", () => {
+    const req = mockReq({
+      tenantConfig: {
+        ...baseTenant,
+        security: { ...baseTenant.security, allowedOrigins: ["https://*.example.com"] },
+      },
+      headers: { origin: "https://shop.example.com" },
+    });
+    mw(req as any, mockRes(), nextFn);
+    expect(nextFn).toHaveBeenCalled();
+  });
+
+  it("still rejects an origin outside the wildcard", () => {
+    const req = mockReq({
+      tenantConfig: {
+        ...baseTenant,
+        security: { ...baseTenant.security, allowedOrigins: ["https://*.example.com"] },
+      },
+      headers: { origin: "https://evil.com" },
+    });
+    const res = mockRes();
+    mw(req as any, res, nextFn);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(nextFn).not.toHaveBeenCalled();
+  });
+
+  it("does not honour a bare https:// wildcard as match-all", () => {
+    const req = mockReq({
+      tenantConfig: {
+        ...baseTenant,
+        security: { ...baseTenant.security, allowedOrigins: ["https://*"] },
+      },
+      headers: { origin: "https://evil.com" },
+    });
+    const res = mockRes();
+    mw(req as any, res, nextFn);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(nextFn).not.toHaveBeenCalled();
+  });
+});
+
+// securityPolicy(インメモリ) と originCheck(DB) が同じ判定に収束したことの証明。
+// 片方だけワイルドカードを解釈する状態に戻ると、この表のどこかが必ず食い違う。
+describe("securityPolicy / originCheck 判定の一致", () => {
+  const mw = createSecurityPolicyMiddleware();
+
+  const cases: Array<[origin: string, allowed: string[], expected: boolean]> = [
+    ["https://app.example.com", ["https://app.example.com"], true],
+    ["https://shop.example.com", ["https://*.example.com"], true],
+    ["https://a.b.example.com", ["https://*.example.com"], true],
+    ["https://example.com", ["https://*.example.com"], false],
+    ["https://evil.com", ["https://*.example.com"], false],
+    ["https://x.example.com.evil.com", ["https://*.example.com"], false],
+    ["https://evil.com", ["https://*"], false],
+    ["https://notevil.com", ["https://*evil.com"], false],
+  ];
+
+  it.each(cases)(
+    "origin=%s allowed=%j → allowed=%s (両実装で一致)",
+    (origin, allowed, expected) => {
+      // originCheck 側の純関数
+      expect(isOriginAllowed(origin, allowed)).toBe(expected);
+
+      // securityPolicy 側(ミドルウェア経由)
+      const next = jest.fn();
+      const res = mockRes();
+      const req = mockReq({
+        tenantConfig: {
+          ...baseTenant,
+          security: { ...baseTenant.security, allowedOrigins: allowed },
+        },
+        headers: { origin },
+      });
+      mw(req as any, res, next);
+      expect(next.mock.calls.length > 0).toBe(expected);
+    }
+  );
 });

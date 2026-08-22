@@ -14,8 +14,24 @@ import { DEFAULT_AVATARS } from "../avatar/routes";
 import { logger } from '../../../lib/logger';
 import { planHasFeature, type TenantPlan } from "../../../lib/billing/planFeatures";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
+import { isValidOriginPattern } from "../../middleware/originCheck";
 
 const planValues = ["starter", "growth", "enterprise"] as const;
+
+// 許可オリジンの検証。super_admin用(updateTenantSchema)と client_admin 自己申告用
+// (PATCH /v1/admin/my-tenant)で同一インスタンスを共有し、片方だけ緩いという事故を防ぐ。
+// 判定本体は originCheck.ts の isValidOriginPattern に置き、照合ロジックと同じ定義を使う。
+const allowedOriginsSchema = z
+  .array(
+    z
+      .string()
+      .refine(isValidOriginPattern, {
+        message:
+          "URLはhttps://で始まる必要があります。ワイルドカードは https://*.example.com の形式のみ使用できます",
+      })
+  )
+  .max(20)
+  .optional();
 
 // 日付のみの文字列("2026-01-01"等)はUTC深夜と解釈されるため、意図したタイムゾーンと
 // ズレて「まだ未来のつもりが過去判定される」事故が起きやすい。バリデーションのロジックは
@@ -65,12 +81,7 @@ const updateTenantSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   plan: z.enum(planValues).optional(),
   is_active: z.boolean().optional(),
-  allowed_origins: z
-    .array(
-      z.string().regex(/^https:\/\//, "URLはhttps://で始まる必要があります")
-    )
-    .max(20)
-    .optional(),
+  allowed_origins: allowedOriginsSchema,
   // Phase38 Step6: テナント固有システムプロンプト（空文字でリセット可）
   system_prompt: z.string().max(5000).optional(),
   // Phase39: 課金管理（Super Adminのみ）
@@ -251,15 +262,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       // GID 1216274591838389: 初回ログインオンボーディングの回答業種（設定時にonboarding_completed_atも自動更新）
       onboarding_industry: z.enum(onboardingIndustryValues).optional(),
       // LAUNCH: ウィジェット許可オリジンのテナント自己設定。super_admin用updateTenantSchemaと
-      // 同じ検証（https://始まりのみ）を使う。ワイルドカードは originCheck.ts と
-      // security-policy.ts の判定不一致を避けるためUI側で入力を拒否する想定（バックエンドは
-      // super_admin用と同じ検証のみでワイルドカード自体は文字列として許可される）。
-      allowed_origins: z
-        .array(
-          z.string().regex(/^https:\/\//, "URLはhttps://で始まる必要があります")
-        )
-        .max(20)
-        .optional(),
+      // 同一のスキーマインスタンスを共有する（片方だけ検証が緩い状態を作らないため）。
+      // client_admin向けフォーム(AllowedOriginsSettings.tsx)はワイルドカードを一律拒否する
+      // より厳しいUIだが、バックエンドはここで安全な形(https://*.example.com)のみ通す。
+      allowed_origins: allowedOriginsSchema,
     });
     const parsed = bodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
