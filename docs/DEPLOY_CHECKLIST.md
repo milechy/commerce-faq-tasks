@@ -492,6 +492,23 @@ curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $SA_TOKEN" "h
 リストアを選ぶこと。`conversation_flow_logs` は新規テーブルのため
 `DROP TABLE IF EXISTS conversation_flow_logs;` で戻せる。
 
+## PM2 instances を増やす前に (現在は instances:1 / fork モードのため未対応)
+
+`ecosystem.config.cjs` の `rajiuce-api` は現在 `instances: 1` / `exec_mode: "fork"`。
+将来スケールアウトのために `instances` を1より大きくする、または `exec_mode: "cluster"` に
+変更する場合、以下4つのプロセスローカルなインメモリ状態が**プロセスごとに別々の値を持ち、
+同時に不整合を起こす**。1つでも対応漏れがあると、リクエストがどのワーカーに振られるかで
+挙動が変わる不具合になる。
+
+| 状態 | 場所 | 増やすと何が起きるか | 対応の方向性 |
+|---|---|---|---|
+| 会話履歴3ストア | `src/agent/dialog/{contextStore,salesContextStore,flowContextStore}.ts` | 同一セッションの続きが別ワーカーに振られると会話履歴が消えたように見える | Redis 等の外部ストアへ移行、または L4(ロードバランサ)でセッションIDによる sticky routing |
+| rate-limit バケット | `src/lib/rate-limit.ts` | 上限がワーカー数倍に緩む(各ワーカーが独立してカウントするため) | Redis 等の外部カウンタへ移行 |
+| テナントレジストリ | `src/lib/tenant-context.ts` (`tenantStore`, `additionalApiKeys`) | キー発行・失効・allowed_origins更新の即時反映(#809/#814/#824/#836)が反映されたワーカーとされていないワーカーで割れる | PM2 の `pm2 reload` はゼロダウンタイムでワーカーを順次再起動するため、DB更新をトリガーに全ワーカーへブロードキャストする仕組み(pub/sub 等)が必要 |
+
+**現状の結論**: `instances:1` のままである限り対応不要。上記表は「増やすと決めた時」の
+着手前チェックリストとして残す。
+
 ## トラブルシューティング
 
 | 症状 | 対処 |

@@ -507,6 +507,7 @@ export default function ChatHistorySessionPage() {
             evaluation={evaluation}
             isSuperAdmin={isSuperAdmin}
             setEvaluation={setEvaluation}
+            sessionId={sessionId}
           />
 
           {/* 営業結果入力（Client Adminのみ表示） */}
