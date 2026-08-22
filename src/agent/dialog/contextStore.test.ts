@@ -74,30 +74,34 @@ describe("contextStore", () => {
     expect(trimmed[19].content).toBe("tenant-full の21件目");
   });
 
-  describe("キー連結（`${tenantId}::${sessionId}`）のセパレータ衝突", () => {
-    it("【既知の制約】sessionId/tenantIdに区切り文字`::`を含む値を組み合わせると、異なるテナント/セッションの組が同一内部キーに衝突しうる", () => {
-      // tenantId="A", sessionId="B::C" と tenantId="A::B", sessionId="C" は
-      // どちらも内部キー "A::B::C" になり、同じ履歴を共有してしまう。
-      // sessionId はクライアント（req.body.sessionId）が任意の文字列を送れるため、
-      // 攻撃者が他テナントのIDを知っていれば意図的にこの衝突を起こせる可能性がある。
+  describe("キー連結（`${tenantId}::${sessionId}`）のセパレータ衝突防止", () => {
+    it("【修正確認】tenantIdに区切り文字`::`が含まれる場合は例外を投げ、衝突を未然に防ぐ", () => {
+      // tenantId は作成時バリデーション(/^[a-z0-9_-]+$/)によりコロンを含まない
+      // 前提だが、将来その前提が崩れて "A::B" のような tenantId が渡された場合、
+      // sessionId="C" との組み合わせが tenantId="A", sessionId="B::C" と
+      // 同一内部キーに衝突しうる。サイレントな履歴混在よりも早期失敗を優先する。
+      expect(() => appendToSessionHistory("A::B", "C", [
+        { role: "user", content: "should not be stored" },
+      ])).toThrow(/tenantId must not contain/);
+      expect(() => getSessionHistory("A::B", "C")).toThrow(/tenantId must not contain/);
+    });
+
+    it("sessionIdに区切り文字`::`が含まれてもtenantIdがコロンを含まなければ衝突しない（最初の`::`が境界として一意に定まるため）", () => {
+      // tenantId="A", sessionId="B::C" は内部キー "A::B::C" になるが、
+      // tenantId は常にコロン不含のため、他のどの正当な(tenantId, sessionId)の
+      // 組み合わせもこのキーとは衝突しない。
       appendToSessionHistory("A", "B::C", [
         { role: "user", content: "tenant=A, session=B::C の発話" },
       ]);
-      appendToSessionHistory("A::B", "C", [
-        { role: "user", content: "tenant=A::B, session=C の発話" },
+      appendToSessionHistory("A", "other-session", [
+        { role: "user", content: "tenant=A, session=other-session の発話" },
       ]);
 
-      // 現状の実装では両者が同一キーに収束し、appendToSessionHistory はマージ（追記）
-      // であるため、上書きではなく「両テナントのメッセージが同一配列に混在する」
-      // というさらに深刻な形で現れる。このテストは「安全である」ことの証明ではなく、
-      // 現状の挙動を固定して可視化するためのもの。tenantId/sessionId に
-      // エスケープ不能な区切り文字を許す設計は残存リスクとして別途対応を検討すべき。
-      const viaA = getSessionHistory("A", "B::C");
-      const viaAB = getSessionHistory("A::B", "C");
-      expect(viaA).toEqual(viaAB); // 衝突している＝本来は異なるべき2つの取得結果が一致してしまう
-      expect(viaA).toEqual([
+      expect(getSessionHistory("A", "B::C")).toEqual([
         { role: "user", content: "tenant=A, session=B::C の発話" },
-        { role: "user", content: "tenant=A::B, session=C の発話" }, // 別テナントの発話が同一履歴に混入
+      ]);
+      expect(getSessionHistory("A", "other-session")).toEqual([
+        { role: "user", content: "tenant=A, session=other-session の発話" },
       ]);
     });
   });
