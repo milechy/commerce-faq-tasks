@@ -384,4 +384,94 @@ describe('evaluateSession', () => {
       outcome: 'unknown', // flow メタ未存在（プロセス再起動後・手動評価）は中立
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // expectedTenantId によるテナント越境防止（D1a, evaluations/trigger 経由）
+  // ユニットレベルでは今まで未検証だった実ロジック本体（routes.ts側はモックのみでテスト済み）。
+  // ---------------------------------------------------------------------------
+
+  it('9. [正常系] expectedTenantId がセッションのtenant_idと一致 → 通常通り評価される', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-match', tenant_id: 'tenant-a', prompt_variant_id: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: 'hi', created_at: new Date() },
+          { role: 'assistant', content: 'hello', created_at: new Date() },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 80 }));
+
+    const result = await evaluateSession('session-match', 'tenant-a');
+    expect(result).not.toBeNull();
+    expect(result!.overall_score).toBe(80);
+  });
+
+  it('10. [境界値] expectedTenantId がセッションの実tenant_idと不一致 → SessionTenantMismatchErrorをthrow、messagesクエリは実行されない', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+
+    mockPool.query.mockResolvedValueOnce({
+      rows: [{ id: 'internal-uuid-victim', tenant_id: 'tenant-victim', prompt_variant_id: null }],
+    });
+
+    await expect(evaluateSession('session-victim', 'tenant-attacker')).rejects.toThrow(
+      'session session-victim does not belong to the expected tenant',
+    );
+
+    // messages/tuning_rules/INSERT へは到達しない（chat_sessions取得の1回のみ）
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
+    expect(mockCallGroq).not.toHaveBeenCalled();
+  });
+
+  it('11. [正常系] expectedTenantId=undefined（super_admin相当）→ tenant一致チェックをスキップし全テナントを評価できる', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-any', tenant_id: 'tenant-any-other', prompt_variant_id: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: 'hi', created_at: new Date() },
+          { role: 'assistant', content: 'hello', created_at: new Date() },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 80 }));
+
+    const result = await evaluateSession('session-any', undefined);
+    expect(result).not.toBeNull();
+  });
+
+  it('12. [イレギュラー] expectedTenantId が空文字列 → 実テナントIDと一致しない限り不一致扱いになる（空文字を「未指定」として扱わない）', async () => {
+    // routes.ts側は isSuperAdmin ? undefined : jwtTenantId を渡す設計であり、
+    // roleAuthMiddleware が空tenantを事前に403で弾くため理論上到達しない経路だが、
+    // 万一呼び出し規約が破られた場合に「空文字列だから素通り」という劣化防御に
+    // ならないことを固定する（'' !== 'tenant-a' で確実に不一致判定される）。
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+
+    mockPool.query.mockResolvedValueOnce({
+      rows: [{ id: 'internal-uuid-x', tenant_id: 'tenant-a', prompt_variant_id: null }],
+    });
+
+    await expect(evaluateSession('session-x', '')).rejects.toThrow(
+      'session session-x does not belong to the expected tenant',
+    );
+  });
+
+  it('13. [既存動作の確認] セッション自体が存在しない場合は expectedTenantId の有無に関わらず null を返す（throwしない）', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query.mockResolvedValueOnce({ rows: [] }); // chat_sessions: 0行
+
+    const result = await evaluateSession('session-does-not-exist', 'tenant-a');
+    expect(result).toBeNull();
+    expect(mockCallGroq).not.toHaveBeenCalled();
+  });
 });

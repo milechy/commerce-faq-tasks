@@ -85,5 +85,19 @@ describe('evaluations — ALLOWED_ROLES whitelist', () => {
       const res = await (request(app) as any)[method](path).send({ session_id: 's', action: 'approve', outcome: 'replied' });
       expect(res.status).not.toBe(403);
     });
+    // [回帰] roleAuthMiddleware配線(D1a)のfail-closed: tenant_id空/欠落は全ルートで403。
+    // 壊れやすいポイント: /v1/admin/evaluations と /v1/admin/tuning の app.use に
+    // roleAuthMiddleware が外れると、この403だけが静かに消える（他の403テストは
+    // isAllowedEvaluationRole 等ルート内の別チェックでも403になり得るため気づけない）。
+    it(`${method.toUpperCase()} ${path} — client_admin + tenant_id空文字 → 403`, async () => {
+      const app = makeApp({ app_metadata: { role: 'client_admin', tenant_id: '' }, email: 't@t.com' });
+      const res = await (request(app) as any)[method](path).send({ session_id: 's', action: 'approve', outcome: 'replied' });
+      expect(res.status).toBe(403);
+    });
+    it(`${method.toUpperCase()} ${path} — client_admin + tenant_idクレーム欠落 → 403`, async () => {
+      const app = makeApp({ app_metadata: { role: 'client_admin' }, email: 't@t.com' });
+      const res = await (request(app) as any)[method](path).send({ session_id: 's', action: 'approve', outcome: 'replied' });
+      expect(res.status).toBe(403);
+    });
   });
 });

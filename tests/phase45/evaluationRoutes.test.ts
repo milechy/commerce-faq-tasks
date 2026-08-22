@@ -196,6 +196,50 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("session_id is required");
   });
+
+  // 壊れやすいポイント: roleAuthMiddleware配線(D1a)の実物を通す統合テスト。
+  // makeApp は supabaseAuthMiddleware のみバイパスし roleAuthMiddleware はモックしていない。
+  it("[回帰] client_admin + tenant_id空文字 → roleAuthMiddlewareで403、evaluateSessionは呼ばれない", async () => {
+    const res = await request(makeApp("client_admin", ""))
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(403);
+    expect(evaluateSession).not.toHaveBeenCalled();
+  });
+
+  // 既知のリスク（未修正・報告目的のテスト）: evaluateSession は
+  // 「セッションが存在しない」→ null（routes.ts側で500 evaluation_failed）と
+  // 「セッションは存在するが他テナント」→ SessionTenantMismatchError（404）を
+  // 異なるステータスコードで返す。CLAUDE.mdの禁止事項20
+  // 「テナント越境だけは必ず『不存在』側に倒す（[]を返すとIDの実在が漏れる）」に反しており、
+  // 攻撃者は session_id を総当たりして「存在するが自分のではない(404)」と
+  // 「存在しない(500)」を区別できる＝他テナントの有効な session_id を列挙できる。
+  // このテストは現状の(壊れた)挙動を固定して可視化するものであり、本来は両方とも
+  // 同一の404に統一すべき。修正は本タスクのスコープ外のため実施していない。
+  it("[既知のリスク・要修正] session未検出は500、tenant不一致は404 — 存在確認オラクルになっている", async () => {
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+
+    (evaluateSession as jest.Mock).mockResolvedValueOnce(null); // 本当に存在しない
+    const notFoundRes = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-does-not-exist" });
+
+    const { SessionTenantMismatchError } = jest.requireMock(
+      "../../src/agent/judge/judgeEvaluator",
+    ) as { SessionTenantMismatchError: new (sessionId: string) => Error };
+    (evaluateSession as jest.Mock).mockRejectedValueOnce(
+      new SessionTenantMismatchError("sess-other-tenant"),
+    );
+    const mismatchRes = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-other-tenant" });
+
+    // 現状の実際の挙動（オラクルが存在することの証跡）
+    expect(notFoundRes.status).toBe(500);
+    expect(mismatchRes.status).toBe(404);
+    expect(notFoundRes.status).not.toBe(mismatchRes.status); // ← 本来はここが同一であるべき
+  });
 });
 
 // ===========================================================================
