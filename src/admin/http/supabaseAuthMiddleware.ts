@@ -68,8 +68,16 @@ export function supabaseAuthMiddleware(
     return;
   }
 
+  // スキーム名を検証せず空白区切りの2番目をトークン扱いすると、
+  // `Basic xxx` / `Foo xxx` のような非Bearerヘッダでも token が取れてしまう
+  // (最終的に jwt.verify が弾くため実害は無いが、上のdevelopment分岐と同じ
+  // startsWith("Bearer ") チェックに揃える)。
   const authHeader = req.headers.authorization || "";
-  const [, token] = authHeader.split(" ");
+  if (!authHeader.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Missing Bearer token" });
+    return;
+  }
+  const token = authHeader.slice("Bearer ".length).trim();
 
   if (!token) {
     res.status(401).json({ error: "Missing Bearer token" });

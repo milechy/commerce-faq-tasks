@@ -183,6 +183,36 @@ describe("supabaseAuthMiddleware", () => {
       expect(next).toHaveBeenCalledTimes(1);
       expect(req.supabaseUser).toMatchObject({ app_metadata: { role: "client_admin" } });
     });
+
+    it("Bearerスキームでない Authorization ヘッダ（Basic）は401（スキーム名を見ずに2番目のトークンを取ってしまう回帰防止）", () => {
+      const token = jwt.sign({ app_metadata: { role: "super_admin" } }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Basic ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(401);
+      expect(res.body).toEqual({ error: "Missing Bearer token" });
+    });
+
+    it("未知のスキーム名（Foo）も401", () => {
+      const token = jwt.sign({ app_metadata: { role: "super_admin" } }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Foo ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(401);
+    });
+
+    it("Authorization ヘッダが 'Bearer' のみ（トークン本体なし）は401", () => {
+      const { req, res, next } = makeReqRes({ authorization: "Bearer" });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(401);
+    });
   });
 
   describe("isAdminUsableToken配線: 署名は正しいが管理面で使えないトークンは403", () => {
@@ -356,17 +386,16 @@ describe("supabaseAuthMiddleware", () => {
       expect(res.statusCode).toBe(401);
     });
 
-    // 実装は Authorization ヘッダを split(" ") して2番目のトークンを取るだけで、
-    // "Bearer" というスキーム名自体は検証していない。そのため大文字小文字はおろか
-    // スキーム名が何であっても(例: "token xxx")署名済みトークンなら通ってしまう。
-    // HTTPの仕様上は非準拠だが、実害はjwt.verifyが最終防御のため無い。
-    // 仕様変更でスキーム検証が追加された際に気づけるよう、現状の挙動を固定する。
-    it("スキーム名は検証されない: 'bearer'(小文字)でも有効な署名済みトークンなら通る（現状仕様の固定。将来スキーム検証を追加する場合は要更新）", () => {
+    // スキーム名を startsWith("Bearer ") で検証するようになった（developmentバイパス
+    // と同じチェックに統一）。大文字小文字違いのスキーム名は401になる
+    // （以前は split(" ") で2番目の要素を無条件にトークン扱いしていたため通っていた）。
+    it("スキーム名は大文字小文字を区別する: 'bearer'(小文字)は署名済みトークンでも401", () => {
       const token = jwt.sign({ sub: "u1", app_metadata: { role: "super_admin" } }, SECRET);
       const { req, res, next } = makeReqRes({ authorization: `bearer ${token}` });
       supabaseAuthMiddleware(req, res, next);
-      expect(next).toHaveBeenCalledTimes(1);
-      expect(req.supabaseUser).toMatchObject({ app_metadata: { role: "super_admin" } });
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(401);
+      expect(res.body).toEqual({ error: "Missing Bearer token" });
     });
   });
 });
