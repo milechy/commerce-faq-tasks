@@ -701,25 +701,31 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       );
       const row = result.rows[0];
 
-      // in-memory storeのAPIキーハッシュを更新（最新キーで上書き）。
-      // allowedOrigins/features は固定値で潰さず、DB上の現行値を引き継ぐ
-      // （さもないとキー再発行のたびに許可オリジン設定が消える）。
+      // 意味論: このエンドポイントはキーを「追加」する（既存キーは失効しない）。
+      // DBのINSERT・UIのキー一覧(個別に失効ボタンを持つ)・client_admin側の
+      // POST /my-tenant/keys がいずれも追加型であり、in-memory だけが
+      // registerTenant による「上書き」だったため、旧キーが
+      // DB上は is_active=true のまま in-memory から消えて 401 になっていた。
       const tenantRow = tenantCheck.rows[0];
-      registerTenant({
-        tenantId: tenantRow.id,
-        name: tenantRow.name || tenantRow.id,
-        plan: tenantRow.plan || "starter",
-        features: (tenantRow.features as { avatar: boolean; voice: boolean; rag: boolean }) ?? { avatar: false, voice: false, rag: true },
-        security: {
-          apiKeyHash: keyHash,
-          hashAlgorithm: "sha256",
-          allowedOrigins: tenantRow.allowed_origins ?? [],
-          rateLimit: 100,
-          rateLimitWindowMs: 60_000,
-        },
-        enabled: true,
-      });
-      setTenantApiKeyExpiry(tenantRow.id, expiresAt);
+      if (!addTenantApiKey(tenantRow.id, keyHash, expiresAt)) {
+        // in-memory 未登録(DB-onlyテナント)の場合のみ、新キーを主キーとして登録する。
+        // allowedOrigins/features は固定値で潰さず、DB上の現行値を引き継ぐ。
+        registerTenant({
+          tenantId: tenantRow.id,
+          name: tenantRow.name || tenantRow.id,
+          plan: tenantRow.plan || "starter",
+          features: (tenantRow.features as { avatar: boolean; voice: boolean; rag: boolean }) ?? { avatar: false, voice: false, rag: true },
+          security: {
+            apiKeyHash: keyHash,
+            hashAlgorithm: "sha256",
+            allowedOrigins: tenantRow.allowed_origins ?? [],
+            rateLimit: 100,
+            rateLimitWindowMs: 60_000,
+          },
+          enabled: true,
+        });
+        setTenantApiKeyExpiry(tenantRow.id, expiresAt);
+      }
 
       // 平文キーはこのレスポンスでのみ返す（二度と取得不可）
       return res.status(201).json({

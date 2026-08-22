@@ -268,6 +268,50 @@ describe("Tenant Admin Routes", () => {
       const passedExpiry = (mockSetTenantApiKeyExpiry as jest.Mock).mock.calls.at(-1)?.[1] as Date;
       expect(passedExpiry.getTime()).toBeGreaterThan(Date.now());
     });
+
+    // --- 追加型の意味論（DB・UI・client_admin側と揃える） ---
+    // 以前は in-memory だけが registerTenant による「上書き」で、旧キーが
+    // DB上 is_active=true のまま in-memory から消え 401 になっていた。
+
+    it("in-memory登録済みのテナントには addTenantApiKey で追加し、registerTenant(上書き)は呼ばない", async () => {
+      // addTenantApiKey が true = tenantStore に既存エントリがある（＝追加で足せた）
+      (mockAddTenantApiKey as jest.Mock).mockReturnValueOnce(true);
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true, features: null, allowed_origins: null }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "key-uuid", tenant_id: "t1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null }],
+          rowCount: 1,
+        });
+      const registerCallsBefore = (mockRegisterTenant as jest.Mock).mock.calls.length;
+
+      const res = await request(app)
+        .post("/v1/admin/tenants/t1/keys")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(201);
+      expect(mockAddTenantApiKey).toHaveBeenLastCalledWith("t1", expect.any(String), null);
+      // 上書きしない = 既存キーが in-memory から消えない
+      expect((mockRegisterTenant as jest.Mock).mock.calls.length).toBe(registerCallsBefore);
+    });
+
+    it("in-memory未登録(DB-onlyテナント)の場合のみ registerTenant で主キーとして登録する", async () => {
+      // addTenantApiKey が false = tenantStore に未登録
+      (mockAddTenantApiKey as jest.Mock).mockReturnValueOnce(false);
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "t-db-only", name: "DBOnly", plan: "starter", is_active: true, features: null, allowed_origins: null }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "key-uuid", tenant_id: "t-db-only", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null }],
+          rowCount: 1,
+        });
+
+      const res = await request(app)
+        .post("/v1/admin/tenants/t-db-only/keys")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(201);
+      const lastCall = (mockRegisterTenant as jest.Mock).mock.calls.at(-1)?.[0];
+      expect(lastCall.tenantId).toBe("t-db-only");
+    });
   });
 
   describe("GET /v1/admin/tenants/:id/keys", () => {

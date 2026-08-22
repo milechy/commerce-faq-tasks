@@ -458,32 +458,24 @@ describe("addTenantApiKey / revokeAdditionalTenantApiKey — 無停止ローテ�
     expect(getTenantByApiKeyHash(RESCUE_HASH)?.tenantId).toBe(TENANT_ID);
   });
 
-  it("既知のリスク: super_admin向けPOST /tenants/:id/keysのregisterTenant(上書き)は、client_adminが無停止ローテーションで追加した副キーには影響しないが、旧・主キーはDB側is_active=trueのままin-memoryでは無効化される", () => {
+  it("super_admin のキー発行後も旧・主キーと副キーが有効なまま（DB上activeなのに認証できないキーを作らない）", () => {
     // client_adminが無停止ローテーションで追加キーを発行済みの状態を再現
     addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
 
-    // super_adminが自分のエンドポイント(POST /tenants/:id/keys)で新しい主キーを発行すると、
-    // ルート実装は addTenantApiKey ではなく registerTenant を呼ぶ(既存実装のまま)。
-    const SUPER_ADMIN_NEW_HASH = "multikey-superadmin-overwrite-hash";
-    registerTenant({
-      tenantId: TENANT_ID,
-      name: "Multikey Test",
-      plan: "starter",
-      features: { avatar: false, voice: false, rag: true },
-      security: { apiKeyHash: SUPER_ADMIN_NEW_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
-      enabled: true,
-    });
+    // super_adminのPOST /tenants/:id/keysは、in-memory登録済みテナントに対しては
+    // registerTenant(上書き)ではなく addTenantApiKey(追加)を使う。
+    // DBのINSERT・UIのキー一覧・client_admin側POSTと同じ「追加」の意味論。
+    const SUPER_ADMIN_NEW_HASH = "multikey-superadmin-added-hash";
+    const added = addTenantApiKey(TENANT_ID, SUPER_ADMIN_NEW_HASH, null);
+    expect(added).toBe(true);
 
-    // 新しい主キーは有効
+    // 新しいキーは有効
     expect(getTenantByApiKeyHash(SUPER_ADMIN_NEW_HASH)?.tenantId).toBe(TENANT_ID);
-    // client_adminが追加した副キーは無停止ローテーションの約束どおり生き残る
+    // client_adminが追加した副キーも生き残る
     expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
-    // 旧・主キーはtenantStoreから消えるため in-memory では二度と認証できない。
-    // DB(tenant_api_keys.is_active)側はこの操作だけでは更新されないため、
-    // 「DB上はactiveなのに実際には使えないキー」というdesyncが生まれる。
-    // (super_adminが自分のキー発行前に旧キーを明示的にDELETEしていれば起きないが、
-    //  ルートの実装はそれを強制していない — 既知のリスクとして報告する)
-    expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+    // 旧・主キーも生き残る。DB側は is_active=true のままなので、
+    // in-memory だけが先に消えて「DB上はactiveなのに401」になる desync が起きない。
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
   });
 
   // --- revokeTenantApiKey: 失効の単一入口（主キー・追加キーを区別せず落とす） ---
