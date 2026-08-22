@@ -357,4 +357,86 @@ describe('POST /api/avatar/chat-stream — 入力上限とL5/L7/L6ガード', ()
 
     expect(res.status).toBe(200);
   });
+
+  it.each(['1', 'TRUE', 'yes', ''])(
+    "TOPIC_GUARD_ENABLED=%j（'false'以外の非標準値）はproductionで既定ONのまま維持される",
+    async (flag) => {
+      process.env.NODE_ENV = 'production';
+      process.env.TOPIC_GUARD_ENABLED = flag;
+
+      const res = await request(makeApp())
+        .post('/api/avatar/chat-stream')
+        .send({ messages: [{ role: 'user', content: '次の選挙で誰に投票すべき?' }], sessionId: `sess-flag-${flag}` });
+
+      expect(res.status).toBe(400);
+    },
+  );
+});
+
+describe('POST /api/avatar/chat-stream — abuseカウンタのテナント/セッション分離（越境DoS防止の核心）', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.NODE_ENV = 'production';
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    process.env.GROQ_API_KEY = 'test-groq-key';
+  });
+
+  // NOTE: L5(inputSanitizer)は同一文言の3回目送信を独自にrepeat_abuseとしてブロックする
+  // （L5自身の閾値は既定5回でshouldTerminateSessionには至らないが、先に400を返しL6まで
+  // 到達しなくなる）。L6(topicGuard)自体のエスカレーション閾値(既定3回)を検証するには、
+  // L5の重複検知に引っかからないよう毎回異なる文言（かつ全てOBVIOUS_OFF_TOPICに一致する
+  // 文言）を使う必要がある。
+
+  const OFF_TOPIC_VARIANTS = ['政治について', '宗教について', 'ギャンブルについて', '恋愛相談したい', '株式投資の話'];
+
+  it('同一テナント内でも異なるsessionIdならabuseカウントは独立する（同一テナントの他利用者を巻き込まない）', async () => {
+    const sessionA = 'sess-isolation-same-tenant-a';
+    const sessionB = 'sess-isolation-same-tenant-b';
+
+    // セッションAで異なる話題外発話を3回送り、3回目でセッション終了(403)に到達させる。
+    for (let i = 0; i < 2; i++) {
+      await request(makeApp('carnation'))
+        .post('/api/avatar/chat-stream')
+        .send({ messages: [{ role: 'user', content: OFF_TOPIC_VARIANTS[i] }], sessionId: sessionA });
+    }
+    const terminated = await request(makeApp('carnation'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: OFF_TOPIC_VARIANTS[2] }], sessionId: sessionA });
+    expect(terminated.status).toBe(403);
+
+    // 同一テナントの別セッションBは初回なので、まだ通常ブロック(400)であり
+    // セッションAの終了状態(403)を引き継がない。
+    const freshInSameTenant = await request(makeApp('carnation'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: OFF_TOPIC_VARIANTS[0] }], sessionId: sessionB });
+    expect(freshInSameTenant.status).toBe(400);
+  });
+
+  it('異なるテナントで同一のsessionId文字列が使われても、abuseカウントは越境しない（本修正の核心）', async () => {
+    const sharedSessionIdString = 'sess-shared-across-tenants';
+
+    // テナントAで同じsessionId文字列を使い、異なる話題外発話を3回送って
+    // 3回目でセッション終了(403)に到達させる。
+    for (let i = 0; i < 2; i++) {
+      await request(makeApp('tenant-a'))
+        .post('/api/avatar/chat-stream')
+        .send({ messages: [{ role: 'user', content: OFF_TOPIC_VARIANTS[i] }], sessionId: sharedSessionIdString });
+    }
+    const tenantATerminated = await request(makeApp('tenant-a'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: OFF_TOPIC_VARIANTS[2] }], sessionId: sharedSessionIdString });
+    expect(tenantATerminated.status).toBe(403);
+
+    // テナントBが「同じsessionId文字列」で初めて話題外発話を送っても、
+    // テナントAのabuseカウントを引き継がない(越境DoSにならない)ことを確認する。
+    // guardKeyが `${tenantId}:${sessionId}` でスコープされているため独立しているはず。
+    const tenantBFirstOffense = await request(makeApp('tenant-b'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: OFF_TOPIC_VARIANTS[0] }], sessionId: sharedSessionIdString });
+    expect(tenantBFirstOffense.status).toBe(400);
+  });
 });
