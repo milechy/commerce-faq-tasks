@@ -215,4 +215,121 @@ describe("initAuthMiddleware — Bearer JWT path", () => {
     expect(nextFn).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(401);
   });
+
+  it("rejects an explicit empty-string tenant_id (falsy-value trap, not just undefined)", () => {
+    mockVerifySupabaseJwt.mockReturnValue({
+      sub: "user-1",
+      app_metadata: { tenant_id: "", role: "client_admin" },
+    });
+    const req = bearerReq("empty-tenant");
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it("does NOT fall back to top-level tenant_id when app_metadata.tenant_id is an explicit empty string (?? vs || trap)", () => {
+    // app_metadata.tenant_id === "" is not null/undefined, so `??` must NOT skip past it
+    // to the top-level tenant_id, even though the top-level value looks usable.
+    mockVerifySupabaseJwt.mockReturnValue({
+      sub: "user-1",
+      tenant_id: "top-level-tenant",
+      app_metadata: { tenant_id: "", role: "client_admin" },
+    });
+    const req = bearerReq("empty-app-metadata-tenant-with-toplevel-fallback");
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it("prefers app_metadata.tenant_id over a differing top-level tenant_id when both are present", () => {
+    mockVerifySupabaseJwt.mockReturnValue({
+      sub: "user-1",
+      tenant_id: "top-level-tenant",
+      app_metadata: { tenant_id: "app-metadata-tenant", role: "client_admin" },
+    });
+    const req = bearerReq("both-present-differing");
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).toHaveBeenCalled();
+    expect(req.tenantId).toBe("app-metadata-tenant");
+  });
+
+  it("falls back to top-level tenant_id only when app_metadata.tenant_id is genuinely absent (undefined)", () => {
+    mockVerifySupabaseJwt.mockReturnValue({
+      sub: "user-1",
+      tenant_id: "top-level-tenant",
+      app_metadata: { role: "client_admin" },
+    });
+    const req = bearerReq("toplevel-fallback-only-when-undefined");
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).toHaveBeenCalled();
+    expect(req.tenantId).toBe("top-level-tenant");
+  });
+
+  it("rejects when app_metadata itself is null (optional chaining must not throw, falls through to 401)", () => {
+    mockVerifySupabaseJwt.mockReturnValue({
+      sub: "user-1",
+      app_metadata: null,
+    });
+    const req = bearerReq("null-app-metadata");
+    const res = mockRes();
+    expect(() => middleware(req, res, nextFn)).not.toThrow();
+
+    expect(nextFn).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it("rejects a Bearer header with an empty token after the prefix", () => {
+    const req = bearerReq("");
+    // bearerReq builds "Bearer " + token, so an empty token yields header "Bearer " (trailing space, no token)
+    const res = mockRes();
+    mockVerifySupabaseJwt.mockReturnValue(null);
+    middleware(req, res, nextFn);
+
+    expect(nextFn).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(mockVerifySupabaseJwt).toHaveBeenCalledWith("");
+  });
+
+  it("does not treat a lowercase 'bearer ' prefix as the Bearer path (case-sensitive prefix check)", () => {
+    // authHeader.startsWith("Bearer ") is case-sensitive; "bearer xxx" must NOT match Path 1,
+    // and since it also doesn't match x-api-key/Basic, it must fall through to the generic 401.
+    const headers: Record<string, string> = { authorization: "bearer some-token" };
+    const req = mockReq({ headers, header: (name: string) => headers[name.toLowerCase()] });
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(mockVerifySupabaseJwt).not.toHaveBeenCalled();
+    expect(nextFn).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "unauthorized" })
+    );
+  });
+
+  it("takes the Bearer path even when x-api-key is also present (Bearer has priority)", () => {
+    const headers: Record<string, string> = {
+      authorization: "Bearer valid-with-tenant",
+      "x-api-key": TEST_API_KEY,
+    };
+    const req = mockReq({ headers, header: (name: string) => headers[name.toLowerCase()] });
+    mockVerifySupabaseJwt.mockReturnValue({
+      sub: "user-1",
+      app_metadata: { tenant_id: "tenant-from-jwt", role: "client_admin" },
+    });
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).toHaveBeenCalled();
+    // Must resolve via the JWT path, not silently fall through to api-key resolution.
+    expect(req.tenantId).toBe("tenant-from-jwt");
+    expect(req.tenantConfig).toBeUndefined();
+  });
 });
