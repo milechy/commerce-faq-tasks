@@ -25,6 +25,7 @@ jest.mock("../../src/api/admin/evaluations/evaluationsRepository", () => ({
 // Mock judgeEvaluator
 jest.mock("../../src/agent/judge/judgeEvaluator", () => ({
   evaluateSession: jest.fn(),
+  SessionTenantMismatchError: class SessionTenantMismatchError extends Error {},
 }));
 
 import {
@@ -130,7 +131,37 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.evaluation.overall_score).toBe(72);
-    expect(evaluateSession).toHaveBeenCalledWith("sess-001");
+    // client_admin: 越境防止のため自テナントIDを第2引数として必ず渡す
+    expect(evaluateSession).toHaveBeenCalledWith("sess-001", "tenant-a");
+  });
+
+  it("passes undefined tenantId for super_admin (no ownership restriction)", async () => {
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+    (evaluateSession as jest.Mock).mockResolvedValue(JUDGE_RESULT);
+
+    const res = await request(makeApp("super_admin"))
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(200);
+    expect(evaluateSession).toHaveBeenCalledWith("sess-001", undefined);
+  });
+
+  it("returns 404 when evaluateSession reports a tenant mismatch (cross-tenant trigger blocked)", async () => {
+    const { SessionTenantMismatchError } = jest.requireMock(
+      "../../src/agent/judge/judgeEvaluator",
+    ) as { SessionTenantMismatchError: new (sessionId: string) => Error };
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+    (evaluateSession as jest.Mock).mockRejectedValue(
+      new SessionTenantMismatchError("sess-001"),
+    );
+
+    const res = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(404);
+    expect(evaluateSession).toHaveBeenCalledWith("sess-001", "tenant-a");
   });
 
   it("returns 409 when session already evaluated", async () => {
