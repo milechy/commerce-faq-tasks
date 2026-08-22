@@ -72,11 +72,6 @@ export function TenantDetailHeader({
       <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", color: "var(--foreground)" }}>
         {loading ? t("tenant_detail.loading") : (tenant?.name ?? emptyTitle ?? t("tenant_detail.not_found"))}
       </h1>
-      {tenant && tenant.slug && (
-        <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: 0 }}>
-          slug: <span style={{ fontFamily: "monospace" }}>{tenant.slug}</span>
-        </p>
-      )}
     </header>
   );
 }

@@ -9,7 +9,6 @@ function makeTenant(overrides: Partial<TenantDetail> = {}): TenantDetail {
   return {
     id: "tenant-a",
     name: "Tenant A",
-    slug: "tenant-a",
     plan: "starter",
     status: "active",
     createdAt: "2026-01-01T00:00:00Z",
