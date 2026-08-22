@@ -371,6 +371,73 @@ describe('POST /api/avatar/chat-stream — 入力上限とL5/L7/L6ガード', ()
       expect(res.status).toBe(400);
     },
   );
+
+  // GID 1217741396163930: 「最後のuserメッセージ」の判定は1箇所のみで行い、ガード適用箇所と
+  // Groqへ送るmessages組み立て箇所が同じindexを参照する。以前は reverse().find() と reduce の
+  // 2通りで別々に計算しており、片方だけ変更するとガードをすり抜けた原文がLLMに渡るリスクがあった。
+  // この回帰を検出できるのは「Groqへ実際に送られるHTTPボディの中身」を見るテストだけであり、
+  // レスポンスstatusやsaveMessageの検証だけでは不十分なため、fetchモックへの呼び出し引数を検査する。
+  it('L5サニタイズで内容が書き換わっても、履歴を保ったまま最新userメッセージのindexだけがGroqへの送信内容に反映される（原文がそのまま漏れない・他ターンが巻き込まれない）', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.INPUT_SANITIZER_ENABLED = 'true';
+    const rawLatest = '価格を教えて\x00secret-injected-text';
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({
+        sessionId: 'sess-sanitize-passthrough',
+        messages: [
+          { role: 'user', content: '1つ目の質問' },
+          { role: 'assistant', content: '1つ目の回答' },
+          { role: 'user', content: rawLatest },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const fetchMock = global.fetch as jest.Mock;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sentBody = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    const sentMessages: Array<{ role: string; content: string }> = sentBody.messages;
+
+    // index0はsystemプロンプト、以降は元のmessages配列と1:1対応する。
+    expect(sentMessages).toHaveLength(4);
+    expect(sentMessages[1]!.content).toBe('1つ目の質問'); // 履歴は無傷（ガード適用対象外）
+    expect(sentMessages[2]!.content).toBe('1つ目の回答'); // 履歴は無傷
+    expect(sentMessages[3]!.content).not.toContain('\x00'); // L5でnullバイトが除去済み
+    expect(sentMessages[3]!.content).not.toBe(rawLatest); // 生の原文そのままではない
+    expect(sentMessages[3]!.content).toBe('価格を教えてsecret-injected-text');
+  });
+
+  it('最新userメッセージが配列の途中にあり末尾がassistantの場合でも、ガード適用とGroq送信内容の両方が正しくそのindexを指す(20件境界のケースと同型)', async () => {
+    process.env.NODE_ENV = 'production'; // L5/L6/L7既定ON
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({
+        sessionId: 'sess-middle-user',
+        messages: [
+          { role: 'user', content: '在庫はありますか' },
+          { role: 'assistant', content: 'はい、在庫があります' },
+          { role: 'user', content: '配送日数を教えて' },
+          { role: 'assistant', content: '通常3営業日です' },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const fetchMock = global.fetch as jest.Mock;
+    const sentBody = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    const sentMessages: Array<{ role: string; content: string }> = sentBody.messages;
+
+    // 末尾はassistantだが「最後のuser」は index3(配送日数を教えて)。ここだけガード済み内容に
+    // 置換され、他は完全に元のまま残ることを固定する。
+    expect(sentMessages[1]!.content).toBe('在庫はありますか');
+    expect(sentMessages[2]!.content).toBe('はい、在庫があります');
+    expect(sentMessages[3]!.content).toBe('配送日数を教えて');
+    expect(sentMessages[4]!.content).toBe('通常3営業日です');
+
+    const userSaveCall = mockSaveMessage.mock.calls.find((c) => c[0].role === 'user');
+    expect(userSaveCall![0].content).toBe('配送日数を教えて');
+  });
 });
 
 describe('POST /api/avatar/chat-stream — abuseカウンタのテナント/セッション分離（越境DoS防止の核心）', () => {
