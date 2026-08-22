@@ -265,9 +265,10 @@ ssh root@65.108.159.161 "psql \$DATABASE_URL -c 'DROP TABLE IF EXISTS sai_tasks;
 
 > **未適用。** Stripe webhook の冪等化に必要。**適用しないまま新コードをデプロイすると Stripe webhook が全件 500 になる。**
 
-`createStripeWebhookHandler` は署名検証の直後に `stripe_webhook_events` を読み書きする
-（`SELECT completed_at FROM stripe_webhook_events ...` / `INSERT ... ON CONFLICT`）。
-テーブルまたは `completed_at` 列が無いと毎回例外になり、`handler_error` で 500 を返す。
+`createStripeWebhookHandler` は署名検証の直後に `stripe_webhook_events` へ処理権獲得の
+条件付きUPSERTを発行する（`INSERT ... ON CONFLICT (event_id) DO UPDATE SET claimed_at = NOW()
+WHERE completed_at IS NULL AND (claimed_at IS NULL OR claimed_at < ...)`）。
+テーブル、または `completed_at` / `claimed_at` 列が無いと毎回例外になり、`handler_error` で 500 を返す。
 Stripe は 5xx を一定期間リトライするが、migration を当てるまで**一度も成功しない**ため、
 請求状態の更新 (`billing_status`)・支払い失敗の Slack 通知がすべて止まる。
 
@@ -293,7 +294,8 @@ ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env
 # 4. Migration 実行 (CREATE TABLE IF NOT EXISTS + ADD COLUMN IF NOT EXISTS なので二重実行しても無害)
 ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -f /opt/rajiuce/src/lib/billing/migration_stripe_webhook_events.sql'
 
-# 5. 確認 — event_id(PK) / event_type(NOT NULL) / created_at / completed_at が揃っていること
+# 5. 確認 — event_id(PK) / event_type(NOT NULL) / created_at / completed_at / claimed_at の5列が揃っていること
+#    (claimed_at が無いと並行配信時の二重実行防止が効かず、UPSERTが例外になる)
 ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "\d stripe_webhook_events"'
 ```
 
