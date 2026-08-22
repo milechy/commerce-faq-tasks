@@ -127,6 +127,16 @@ if (db) {
 // ---------------------------------------------------------------------------
 app.use(requestIdMiddleware);
 app.use(securityHeadersMiddleware);
+
+// Stripe Webhook（raw body 必須 — グローバル express.json より前に登録し、
+// このルートだけ json パーサーの対象から外す。ここで先にマッチしなければ
+// req.body が object に変換されて署名検証(constructEvent)が常に失敗する）
+app.post(
+  "/v1/billing/webhook",
+  express.raw({ type: "application/json" }),
+  createStripeWebhookHandler(db, logger)
+);
+
 app.use(express.json({ limit: "1mb" }));
 
 // ---------------------------------------------------------------------------
@@ -151,11 +161,15 @@ app.use(corsMiddleware);
 //   3. tenantContext  → load TenantConfig into req
 //   4. securityPolicy → per-tenant origin / policy enforcement
 // ---------------------------------------------------------------------------
-const globalRateLimiter = createRateLimitMiddleware({ logger });
+// pre-auth: keyed by nginx X-Real-IP — catches flood traffic before tenantId
+// exists, so one client can no longer exhaust every tenant's shared bucket.
+const ipRateLimiter = createRateLimitMiddleware({ logger, stage: "ip" });
 const authMiddleware = initAuthMiddleware({
   resolveByApiKeyHash: getTenantByApiKeyHash,
 });
 const tenantContext = createTenantContextMiddleware({ logger });
+// post-auth: keyed by tenantId once authMiddleware/tenantContext resolved it.
+const tenantRateLimiter = createRateLimitMiddleware({ logger, stage: "tenant" });
 const securityPolicy = createSecurityPolicyMiddleware({ logger });
 const originCheck = createOriginCheckMiddleware(db, { logger });
 
@@ -223,9 +237,10 @@ app.get("/metrics", internalNetworkOnly, async (req, res) => {
 // Protected API routes — full middleware chain applied
 // ---------------------------------------------------------------------------
 const apiStack = [
-  globalRateLimiter,     // 1. Rate limit
+  ipRateLimiter,         // 1. Rate limit (pre-auth, IP-keyed)
   authMiddleware,        // 2. Auth → tenantId
   tenantContext,         // 3. Load TenantConfig
+  tenantRateLimiter,     // 3.5 Rate limit (post-auth, tenantId-keyed)
   securityPolicy,        // 4. Per-tenant policy (in-memory allowedOrigins)
   originCheck,           // 5. DB-backed per-tenant Origin check
   langDetectMiddleware,  // 6. Phase33: Accept-Language → req.lang
@@ -267,7 +282,8 @@ app.post("/search", ...apiStack, async (req, res) => {
   const { q } = parsed.data;
 
   try {
-    const results = await hybridSearch(q);
+    const tenantId = (req as AuthedRequest).tenantId;
+    const results = await hybridSearch(q, tenantId);
     const re = await rerank(q, results.items, 12);
     return res.json({
       ...results,
@@ -302,8 +318,9 @@ app.post("/search.v1", ...apiStack, async (req, res) => {
   const routeStr = "hybrid:es50+pg50";
 
   try {
+    const tenantId = (req as AuthedRequest).tenantId;
     const tSearch0 = Date.now();
-    const results = await hybridSearch(q);
+    const results = await hybridSearch(q, tenantId);
     const tSearch1 = Date.now();
     const search_ms = Math.max(0, tSearch1 - tSearch0);
 
@@ -377,7 +394,8 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
   }
 
   try {
-    const turn = await runDialogTurn(parsed.data);
+    const tenantId = (req as AuthedRequest).tenantId;
+    const turn = await runDialogTurn({ ...parsed.data, tenantId });
     return res.json(turn);
   } catch (error) {
     logger.error({ error }, "[dialog] failed to run dialog turn");
@@ -542,13 +560,6 @@ if (db) initFlowLogger(db, logger);
 
 // Phase72-C: State Machine 遷移ログ
 if (db) initFlowLogger(db, logger);
-
-// Stripe Webhook（raw body 必須 — express.json より前にマッチさせること）
-app.post(
-  "/v1/billing/webhook",
-  express.raw({ type: "application/json" }),
-  createStripeWebhookHandler(db, logger)
-);
 
 // 課金管理API（super_admin / client_admin）
 // ロール検査は registerBillingAdminRoutes 内部で行うため supabaseAuthMiddleware のみ渡す
