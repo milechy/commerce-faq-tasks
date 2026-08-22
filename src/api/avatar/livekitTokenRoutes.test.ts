@@ -204,7 +204,7 @@ describe("POST /api/avatar/room-token", () => {
     it("avatarConfigId 未指定 (undefined) は素通し (fallback Q3 へ)", async () => {
       mockQuery
         .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [] });
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] });
 
       const app = makeApp("tenant-a");
       const res = await request(app)
@@ -218,7 +218,7 @@ describe("POST /api/avatar/room-token", () => {
     it("avatarConfigId が null は素通し (fallback Q3 へ)", async () => {
       mockQuery
         .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [] });
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] });
 
       const app = makeApp("tenant-a");
       const res = await request(app)
@@ -254,7 +254,7 @@ describe("POST /api/avatar/room-token", () => {
       expect(sql).toContain("is_active = true");
     });
 
-    it("is_active アバターがない場合は imageUrl=null で enabled=true を返す", async () => {
+    it("is_active アバターがない場合は reason=no_active_config で enabled=false を返す（テナント自力有効化の裏面: 設定完了までは起動しない）", async () => {
       mockQuery
         .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
         .mockResolvedValueOnce({ rows: [] });
@@ -264,8 +264,9 @@ describe("POST /api/avatar/room-token", () => {
         .post("/api/avatar/room-token")
         .send({});
 
-      expect(res.body.enabled).toBe(true);
-      expect(res.body.imageUrl).toBeNull();
+      expect(res.body.enabled).toBe(false);
+      expect(res.body.reason).toBe("no_active_config");
+      expect(mockCreateDispatch).not.toHaveBeenCalled();
     });
   });
 
@@ -290,7 +291,7 @@ describe("POST /api/avatar/room-token", () => {
     it("avatarConfigId 未指定時: createRoom の metadata は undefined", async () => {
       mockQuery
         .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [] });
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] });
 
       const app = makeApp("tenant-a");
       await request(app)
@@ -336,7 +337,7 @@ describe("POST /api/avatar/room-token", () => {
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
           rowCount: 1,
         })
-        .mockResolvedValueOnce({ rows: [] }) // Q3: avatarConfigId 未指定 → fallback
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }) // Q3: avatarConfigId 未指定 → fallback
         .mockResolvedValueOnce({ rows: [{ plan: "enterprise" }] }); // queryTenantPlan
 
       const app = makeApp("tenant-a");
@@ -363,7 +364,7 @@ describe("POST /api/avatar/room-token", () => {
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: false } }],
           rowCount: 1,
         })
-        .mockResolvedValueOnce({ rows: [] }); // Q3 fallback
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }); // Q3 fallback
 
       const app = makeApp("tenant-a");
       const res = await request(app)
@@ -386,7 +387,7 @@ describe("POST /api/avatar/room-token", () => {
           rows: [{ ...TENANT_ROW, features: { avatar: true } }],
           rowCount: 1,
         })
-        .mockResolvedValueOnce({ rows: [] }); // Q3 fallback
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }); // Q3 fallback
 
       const app = makeApp("tenant-a");
       const res = await request(app)
@@ -414,7 +415,7 @@ describe("POST /api/avatar/room-token", () => {
             rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
             rowCount: 1,
           })
-          .mockResolvedValueOnce({ rows: [] }) // Q3 fallback
+          .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }) // Q3 fallback
           .mockResolvedValueOnce({ rows: [{ plan }] }); // queryTenantPlan
 
         const app = makeApp("tenant-a");
@@ -436,7 +437,7 @@ describe("POST /api/avatar/room-token", () => {
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
           rowCount: 1,
         })
-        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] })
         .mockResolvedValueOnce({ rows: [{ plan: "enterprise" }] });
 
       const app = makeApp("tenant-a");
@@ -457,7 +458,7 @@ describe("POST /api/avatar/room-token", () => {
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
           rowCount: 1,
         })
-        .mockResolvedValueOnce({ rows: [] }) // Q3 fallback
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }) // Q3 fallback
         .mockRejectedValueOnce(new Error("db down")); // queryTenantPlan内部でcatchされstarter扱いになる
 
       const app = makeApp("tenant-a");
@@ -480,7 +481,7 @@ describe("POST /api/avatar/room-token", () => {
             rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: false } }],
             rowCount: 1,
           })
-          .mockResolvedValueOnce({ rows: [] }); // Q3 fallback
+          .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }); // Q3 fallback
         // pre_dispatch=false なので queryTenantPlan は呼ばれない(connect=trueの経路はplan判定を経由しない)
 
         const app = makeApp("tenant-a");
@@ -502,7 +503,7 @@ describe("POST /api/avatar/room-token", () => {
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
           rowCount: 1,
         })
-        .mockResolvedValueOnce({ rows: [] }) // Q3 fallback
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }) // Q3 fallback
         .mockResolvedValueOnce({ rows: [{ plan: "starter" }] }); // queryTenantPlan → starterなのでpreDispatchEnabled=false
 
       const app = makeApp("tenant-a");
@@ -553,16 +554,51 @@ describe("POST /api/avatar/room-token", () => {
       expect(res.body.reason).toBe("avatar_disabled");
     });
 
-    it("lemonslice_agent_id 未設定 → reason=agent_not_configured", async () => {
-      mockQuery.mockResolvedValueOnce({
-        rows: [{ ...TENANT_ROW, lemonslice_agent_id: null }],
-        rowCount: 1,
-      });
+    it("lemonslice_agent_id 未設定でも active な avatar_config があれば有効化される（テナント自力有効化）", async () => {
+      // lemonslice_agent_id は PATCH /my-tenant から書けず、super_adminしか設定できない
+      // ダミー列（agent.py は実際には使わない）。テナントは自力でここまで到達できる必要がある。
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, lemonslice_agent_id: null }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({
+          rows: [{ image_url: "https://example.com/img.png", name: "Haruka" }],
+        });
+
+      const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
+
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.agentId).toBeNull();
+      expect(res.body.imageUrl).toBe("https://example.com/img.png");
+    });
+
+    it("active な avatar_config が無い（configId未指定の通常経路） → reason=no_active_config、第三者の顔にフォールバックしない", async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] }); // Q3: 0件
 
       const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
 
       expect(res.body.enabled).toBe(false);
-      expect(res.body.reason).toBe("agent_not_configured");
+      expect(res.body.reason).toBe("no_active_config");
+      // dispatch されていないこと（無関係な第三者の顔で起動しない）
+      expect(mockCreateRoom).not.toHaveBeenCalled();
+      expect(mockCreateDispatch).not.toHaveBeenCalled();
+    });
+
+    it("avatarConfigId 明示指定時に見つからない場合は既存挙動のまま（enabled:true, imageUrl:null）— no_active_configの対象外", async () => {
+      const UUID_MISSING = "11111111-2222-3333-4444-555555555555";
+      mockQuery
+        .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp("tenant-a"))
+        .post("/api/avatar/room-token")
+        .send({ avatarConfigId: UUID_MISSING });
+
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.imageUrl).toBeNull();
     });
 
     it("LiveKit 環境変数が未設定 → reason=livekit_not_configured", async () => {
@@ -589,7 +625,7 @@ describe("POST /api/avatar/room-token", () => {
     it("正常時は reason を含まず enabled=true を返す（後方互換）", async () => {
       mockQuery
         .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [] });
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] });
 
       const res = await request(makeApp("tenant-a")).post("/api/avatar/room-token").send({});
 

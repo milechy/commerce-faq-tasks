@@ -129,16 +129,16 @@ export function registerLiveKitTokenRoutes(
       }
 
       const avatarEnabled = row.features?.avatar === true;
+      // lemonslice_agent_id は avatar-agent (Python) の実際の顔解決には使われない
+      // （agent.py は avatar_configs テーブルの is_active な行を見る）。
+      // 純粋な情報フィールドとしてレスポンスに残すが、ゲート判定には使わない
+      // （テナント自身は PATCH /my-tenant からこの列を書けず、書けるsuper_adminが
+      //  代行しない限りアバターが永久に起動できなかった）。
       const agentId = row.lemonslice_agent_id?.trim() || null;
 
       if (!avatarEnabled) {
         logger.warn(`[livekitTokenRoutes] avatar feature disabled for tenant: ${tenantId}`);
         return res.status(403).json({ error: 'Avatar not enabled for this tenant', enabled: false, reason: "avatar_disabled" });
-      }
-
-      if (!agentId) {
-        logger.warn(`[livekitTokenRoutes] lemonslice_agent_id missing for tenant: ${tenantId}`);
-        return res.json({ enabled: false, reason: "agent_not_configured" });
       }
 
       // LiveKit 環境変数チェック
@@ -198,6 +198,17 @@ export function registerLiveKitTokenRoutes(
         if (avatarErr?.code !== "42P01") {
           logger.warn("[livekitTokenRoutes] avatar_configs query warn:", avatarErr?.message);
         }
+      }
+
+      // active な avatar_config が無いままエージェントを dispatch すると、agent.py が
+      // 顔を解決できず15秒でタイムアウトする（無駄なLiveKit dispatch）か、env
+      // LEMONSLICE_AGENT_ID フォールバックで無関係な第三者の顔が出る事故経路になる。
+      // features.avatar=true でも「設定未完了」を明示して早期returnする。
+      // ただし avatarConfigId 明示指定時（テスト用途の特定アバタープレビュー）は対象外 —
+      // 指定IDが見つからない場合の挙動は既存のまま変更しない（別のテスト観点のため）。
+      if (!requestedAvatarConfigId && !imageUrl) {
+        logger.warn(`[livekitTokenRoutes] no active avatar_config for tenant: ${tenantId}`);
+        return res.json({ enabled: false, reason: "no_active_config" });
       }
 
       // GID 1216945619969548: features.pre_dispatch はテナント側フラグに過ぎず、
