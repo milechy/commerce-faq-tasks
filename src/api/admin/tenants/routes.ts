@@ -5,7 +5,7 @@ import { isAllowedAdminRole } from "../../middleware/roleAuth";
 
 import { Pool } from "pg";
 import { z } from "zod";
-import jwt from "jsonwebtoken";
+import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { registerTenant, updateTenantEnabled } from "../../../lib/tenant-context";
 import { invalidateWorkspaceCache } from "../../../agent/openclaw/workspaceCache";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
@@ -135,41 +135,18 @@ async function fetchOnboardingStageStatus(
 }
 
 export function registerTenantAdminRoutes(app: Express, db: Pool): void {
-  // ── インライン認証スタック（knowledge/routes.ts と同パターン） ──────────────
-  function tenantAuth(req: Request, res: Response, next: NextFunction): void {
-    const authHeader = req.headers.authorization ?? "";
-
-    if (process.env.NODE_ENV === "development") {
-      if (authHeader.startsWith("Bearer ")) {
-        try {
-          (req as AuthedReq).supabaseUser = jwt.decode(authHeader.slice(7).trim()) as import("../../middleware/roleAuth").SupabaseJwtUser ?? undefined;
-        } catch {
-          // decode失敗は無視
-        }
-      }
-      next();
-      return;
-    }
-
-    const secret = process.env.SUPABASE_JWT_SECRET;
-    if (!secret) {
-      next();
-      return;
-    }
-
-    if (!authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "Missing Bearer token" });
-      return;
-    }
-    const token = authHeader.slice(7).trim();
-    try {
-      (req as AuthedReq).supabaseUser = jwt.verify(token, secret) as import("../../middleware/roleAuth").SupabaseJwtUser;
-      next();
-    } catch (err) {
-      logger.warn("[tenantAuth] invalid token", err);
-      res.status(401).json({ error: "Invalid token" });
-    }
-  }
+  // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
+  // ここでは req.supabaseUser の型を AuthedReq として扱えるよう別名で束ねるのみ。
+  //
+  // 以前はこのファイルだけインライン実装が残っており、secret 未設定時に production でも
+  // 無条件 next() する fail-open だった（共有実装は production で503）。テナントCRUD・
+  // APIキー発行/失効・招待という最高権限面が、他ルータより弱い認証で守られていた状態。
+  // alg 固定(HS256)も共有実装側に集約されている。
+  const tenantAuth = supabaseAuthMiddleware as (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => void;
 
   function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
     const su = (req as AuthedReq).supabaseUser;

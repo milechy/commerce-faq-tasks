@@ -193,7 +193,7 @@ export function registerFaqAdminRoutes(app: Express) {
       logger.error("[GET /admin/faqs] error", err);
       return res
         .status(500)
-        .json({ error: "Failed to fetch FAQs", detail: String(err) });
+        .json({ error: "internal_error", message: "FAQ一覧の取得に失敗しました。時間をおいて再度お試しください。" });
     }
   });
 
@@ -241,7 +241,7 @@ export function registerFaqAdminRoutes(app: Express) {
       logger.error("[GET /admin/faqs/:id] error", err);
       return res
         .status(500)
-        .json({ error: "Failed to fetch FAQ", detail: String(err) });
+        .json({ error: "internal_error", message: "FAQの取得に失敗しました。時間をおいて再度お試しください。" });
     }
   });
 
@@ -327,7 +327,7 @@ export function registerFaqAdminRoutes(app: Express) {
       logger.error("[POST /admin/faqs] error", err);
       return res
         .status(500)
-        .json({ error: "Failed to create FAQ", detail: String(err) });
+        .json({ error: "internal_error", message: "FAQの登録に失敗しました。時間をおいて再度お試しください。" });
     }
   });
 
@@ -432,7 +432,7 @@ export function registerFaqAdminRoutes(app: Express) {
       logger.error("[PUT /admin/faqs/:id] error", err);
       return res
         .status(500)
-        .json({ error: "Failed to update FAQ", detail: String(err) });
+        .json({ error: "internal_error", message: "FAQの更新に失敗しました。時間をおいて再度お試しください。" });
     }
   });
 
@@ -484,7 +484,7 @@ export function registerFaqAdminRoutes(app: Express) {
       logger.error("[DELETE /admin/faqs/:id] error", err);
       return res
         .status(500)
-        .json({ error: "Failed to delete FAQ", detail: String(err) });
+        .json({ error: "internal_error", message: "FAQの削除に失敗しました。時間をおいて再度お試しください。" });
     }
   });
 

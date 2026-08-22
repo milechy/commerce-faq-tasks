@@ -7,6 +7,7 @@ import { GROQ_INSTANT_8B, GROQ_VERSATILE_70B } from '../../../config/groqModels'
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { roleAuthMiddleware, requireRole, type AuthedReq } from "../../middleware/roleAuth";
 import { ADMIN_AI_SYSTEM_PROMPT, isUnanswered } from "./systemPrompt";
 import { getPool } from "../../../lib/db";
 import { logger } from '../../../lib/logger';
@@ -36,10 +37,13 @@ type FeedbackCategory = "operation_guide" | "knowledge_gap" | "other";
 // ---------------------------------------------------------------------------
 
 function extractAuth(req: Request) {
+  // roleAuthMiddleware が req.user を app_metadata のみから解決済み（トップレベル
+  // tenant_id フォールバックは採用しない — chat-test トークン等の悪用経路を断つ）。
+  const user = (req as AuthedReq).user;
   const su = (req as any).supabaseUser as Record<string, any> | undefined;
-  const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+  const tenantId: string = user?.tenantId ?? "";
   const email: string = su?.email ?? "";
-  const authenticated: boolean = !!su;
+  const authenticated: boolean = !!user && user.role !== "anonymous";
   return { tenantId, email, authenticated };
 }
 
@@ -314,6 +318,8 @@ export function registerAdminAiAssistRoutes(app: Express): void {
   app.post(
     "/v1/admin/ai-assist/chat",
     supabaseAuthMiddleware,
+    roleAuthMiddleware,
+    requireRole("super_admin", "client_admin"),
     async (req: Request, res: Response) => {
       const { tenantId, email, authenticated } = extractAuth(req);
 

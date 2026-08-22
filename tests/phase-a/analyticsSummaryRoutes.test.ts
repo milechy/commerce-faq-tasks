@@ -35,6 +35,9 @@ function makeApp(db: any) {
   const app = express();
   app.use(express.json());
   process.env.NODE_ENV = "development";
+  // supabaseAuthMiddleware は NODE_ENV!=='production' に加え ALLOW_INSECURE_DEV_AUTH='true'
+  // の明示指定が無いと署名検証なしデコードを行わない（fail-closed 強化）。
+  process.env.ALLOW_INSECURE_DEV_AUTH = "true";
   registerAnalyticsSummaryRoutes(app, db);
   return app;
 }
@@ -44,7 +47,7 @@ function makeToken(tenantId: string) {
 }
 
 describe("GET /v1/admin/tenants/:id/analytics-summary", () => {
-  afterEach(() => { delete process.env.NODE_ENV; });
+  afterEach(() => { delete process.env.NODE_ENV; delete process.env.ALLOW_INSECURE_DEV_AUTH; });
 
   it("returns summary with conversations and CV data", async () => {
     const db = makeMockDb({
