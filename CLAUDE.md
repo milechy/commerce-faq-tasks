@@ -148,8 +148,12 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 
 ## 絶対にやってはいけないこと
 
-1. **`tenantId` を request body から取る。** JWT または APIキーからのみ取得する。
-   super_admin の `targetTenantId` は super_admin のときのみ有効、という既存条件を変えない。
+1. **`tenantId` を client 由来（request body / query / `x-tenant-id` ヘッダ）から取る。**
+   常に認証済み `req.tenantId`（JWT の `app_metadata.tenant_id` / APIキー）からのみ取得する。
+   `x-tenant-id` ヘッダは読まない。書き込みの宛先を `body.target` で受けない。
+   super_admin の `targetTenantId` は `isSuperAdmin` ガード下でのみ有効、という既存条件を変えない。
+   （2026-08-22 監査で `agentSearchRoute.ts` がヘッダ信用で越境read、`knowledge/routes.ts` の commit が
+   `body.target` で越境write していた。姉妹の `agentDialogRoute.ts` は `req.tenantId` を使う正しい実装）。
 2. **共有済みの層を手書きでコピーする**（transport / IME / セッションストア / 確認ポリシー）。
 3. **フローの分岐を LLM の応答文の文字列一致で新規に作る。**
    既存3箇所（確認ブロック判定・監査の `successMarker`・計測のブロック判定）は現状維持するが、
@@ -239,6 +243,34 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     共有APIの障害は「1画面の故障」ではなく「全画面の仕様変更」として扱う
     （`my-tenant` の500で `AppSidebar.tsx` の `planHasFeature(null, …)` が全テナントから
     プラン機能メニューを静かに消していた）。
+24. **tenant 述語のない SQL / 検索クエリを書く。** 非 super_admin の list / update / delete / 検索で
+    `WHERE tenant_id = $自テナント` を欠くと越境になる。`:id` 系は取得・更新・削除のいずれでも
+    所有チェック（`AND tenant_id = $自テナント`）を必須にする（IDOR）。DB に RLS は無く、API は
+    Postgres superuser 接続なので、**テナント境界は各ルートの手書き `WHERE` が唯一の防壁**。
+    1 箇所の欠落がそのまま全面リークになる（監査で tuning / evaluations / chat-history の
+    `resolve-escalation` 等に欠落を確認）。全 admin ルータに `roleAuthMiddleware`
+    （client_admin の tenant 空を 403 に倒す）を配線し、リポジトリは「`null`=super_admin のみ許容」の
+    明示スコープにする。「`isSuperAdmin ? undefined : jwtTenantId || undefined`」で空 tenant を
+    super_admin と同じ undefined に潰さない。
+25. **セッション / キャッシュ / インメモリ Map をテナント非スコープでキー付けする。**
+    対話履歴・abuse カウンタ等は必ず `${tenantId}::${sessionId}` でキー付けする
+    （正例 `salesContextStore.ts`。違反例 `contextStore.ts` は生 `sessionId` のみで越境リークした）。
+    `sessionId` はクライアント任意文字列なので、別テナントが同じ値を送れば履歴を相互参照できる。
+26. **認証を fail-open にする。** `SUPABASE_JWT_SECRET` 未設定で素通し（warn だけで next）や、
+    `NODE_ENV==="development"` で `jwt.decode` のみの署名スキップを残さない。production では secret 必須で
+    fail-fast、それ以外でも secret 未設定は 503。`jwt.verify` は `algorithms:['HS256']` を固定し、
+    `aud` / `role` / `purpose` を検証する。**tenant 不明の JWT を `"demo"` テナントに落とさない**（401 にする）。
+    ロール検査のない管理ルート（「認証済みなら通す」だけ）を作らない。
+27. **公開配布物と管理 API で同じ署名鍵を使う。** widget が配布するセッショントークンは
+    管理用（Supabase）とは別 secret（`WIDGET_JWT_SECRET`）で署名し、`purpose` クレームで用途を固定する。
+    `SUPABASE_JWT_SECRET` で署名した任意トークン（widget の `_wt`、admin-ui バンドル同梱の Supabase anon key、
+    chat-test トークン）が Bearer として管理面に届く状態を作らない。`"widget-secret-dev"` の
+    ハードコードフォールバックを残さない。
+28. **レートリミッタを認証前・全テナント単一バケットで運用する。** 認証前は nginx 注入の `X-Real-IP` を
+    キーにした IP リミッタ、認証後は `tenantId` をキーにしたテナント別リミッタの 2 段にする。
+    `req.tenantId ?? "anonymous"` の単一バケットにすると、攻撃者 1 人の flood で全テナントの
+    ウィジェットが 429 になり、マルチテナント SaaS として成立しない
+    （`trust proxy` 未設定のため `req.ip` は常に 127.0.0.1。IP キーには `X-Real-IP` の採用が必要）。
 
 ## テストの最低ライン
 
