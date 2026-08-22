@@ -338,6 +338,36 @@ describe("createRateLimitMiddleware", () => {
     expect(JSON.stringify(res2.body)).not.toContain("7.7.7.7");
   });
 
+  it("getLimit returning 0 (explicit deny-all) is honored, not confused with undefined (fall through to default) — nullish-coalescing boundary", () => {
+    // `getLimit?.(key) ?? tenantCfg?.security.rateLimit ?? DEFAULT_MAX_REQUESTS` uses `??`,
+    // which only falls through on null/undefined. 0 is a valid, distinct "deny everything"
+    // signal a caller might return (e.g. a suspended-tenant plan check). If this were `||`
+    // instead of `??`, 0 would incorrectly fall through to DEFAULT_MAX_REQUESTS (100) and
+    // silently defeat the deny-all intent.
+    const mw = createRateLimitMiddleware({ stage: "tenant", getLimit: () => 0 });
+    const req = mockReq({ tenantId: "tenant-zero-limit" });
+    const res = mockRes();
+    let called = false;
+    mw(req as never, res as never, () => {
+      called = true;
+    });
+    expect(called).toBe(false);
+    expect(res.statusCode).toBe(429);
+    expect(res.headers["X-RateLimit-Limit"]).toBe("0");
+  });
+
+  it("getLimit returning undefined falls through to tenantConfig/DEFAULT (distinct from explicit 0)", () => {
+    const mw = createRateLimitMiddleware({ stage: "tenant", getLimit: () => undefined });
+    const req = mockReq({ tenantId: "tenant-undefined-limit" });
+    const res = mockRes();
+    let called = false;
+    mw(req as never, res as never, () => {
+      called = true;
+    });
+    expect(called).toBe(true);
+    expect(res.headers["X-RateLimit-Limit"]).toBe("100"); // DEFAULT_MAX_REQUESTS
+  });
+
   it("two-stage independence — same tenant hammered from many IPs: tenant-stage aggregates all of them, ip-stage does not block a fresh IP", () => {
     const tenantMw = createRateLimitMiddleware({ stage: "tenant", getLimit: () => 2 });
     const ipMw = createRateLimitMiddleware({ stage: "ip", getLimit: () => 100 });

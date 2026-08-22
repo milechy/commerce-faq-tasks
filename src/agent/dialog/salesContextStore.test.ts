@@ -6,6 +6,7 @@ import {
   updateSalesSessionMeta,
   type SalesSessionKey,
 } from "./salesContextStore";
+import { appendToSessionHistory, getSessionHistory } from "./contextStore";
 
 describe("salesContextStore", () => {
   const key: SalesSessionKey = {
@@ -111,6 +112,38 @@ describe("salesContextStore", () => {
       expect(getSalesSessionMeta(normalKey)).toBeUndefined();
       const saved = setSalesSessionMeta(normalKey, { currentStage: "clarify" as any });
       expect(saved.currentStage).toBe("clarify");
+    });
+
+    it("同一の内部キー文字列でも、contextStore(会話履歴)とsalesContextStore(商談ステージ)は別Mapのため互いを汚染しない", () => {
+      // 両ストアは buildTenantSessionKey で同じキー生成規則を共有するが、
+      // Map実体（sessions / sessionStore）は完全に別モジュールスコープ。
+      // 同一tenantId+sessionIdの組でも一方の書き込みが他方に漏れないことを確認する。
+      const sharedTenant = "tenant-cross-store";
+      const sharedSession = "session-cross-store";
+
+      appendToSessionHistory(sharedTenant, sharedSession, [
+        { role: "user", content: "会話履歴側の発話" },
+      ]);
+      setSalesSessionMeta(
+        { tenantId: sharedTenant, sessionId: sharedSession },
+        { currentStage: "propose" as any, lastIntent: "trial_lesson_offer" }
+      );
+
+      expect(getSessionHistory(sharedTenant, sharedSession)).toEqual([
+        { role: "user", content: "会話履歴側の発話" },
+      ]);
+      const salesMeta = getSalesSessionMeta({
+        tenantId: sharedTenant,
+        sessionId: sharedSession,
+      });
+      expect(salesMeta?.currentStage).toBe("propose");
+
+      // salesContextStoreをクリアしても会話履歴側は影響を受けない
+      clearSalesSessionMeta({ tenantId: sharedTenant, sessionId: sharedSession });
+      expect(getSalesSessionMeta({ tenantId: sharedTenant, sessionId: sharedSession })).toBeUndefined();
+      expect(getSessionHistory(sharedTenant, sharedSession)).toEqual([
+        { role: "user", content: "会話履歴側の発話" },
+      ]);
     });
   });
 });
