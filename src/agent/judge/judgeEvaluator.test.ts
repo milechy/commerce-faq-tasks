@@ -42,7 +42,7 @@ jest.mock('../openclaw/rewardBridge', () => ({
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
-import { evaluateSession, SessionNotFoundError, SessionTenantMismatchError, SessionTooShortError } from './judgeEvaluator';
+import { evaluateSession, SessionNotFoundError, SessionTenantMismatchError, SessionTooShortError, SessionAlreadyEvaluatedError } from './judgeEvaluator';
 import { sendRewardSignal } from '../openclaw/rewardBridge';
 import {
   getOrInitFlowSessionMeta,
@@ -129,7 +129,7 @@ describe('evaluateSession', () => {
       // Phase60-A: tuning_rules SELECT
       .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
     mockCallGroq.mockResolvedValueOnce(makeGroqResponse({
       overall_score: 75,
@@ -175,7 +175,7 @@ describe('evaluateSession', () => {
       // Phase60-A: tuning_rules SELECT
       .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
-      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       // INSERT tuning_rules
       .mockResolvedValueOnce({ rows: [] });
 
@@ -217,7 +217,7 @@ describe('evaluateSession', () => {
       // Phase60-A: tuning_rules SELECT
       .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
     mockCallGroq.mockResolvedValueOnce(makeGroqResponse({
       overall_score: 82,
@@ -290,7 +290,7 @@ describe('evaluateSession', () => {
       // Phase60-A: tuning_rules SELECT
       .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
     mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 70 }));
 
@@ -323,7 +323,7 @@ describe('evaluateSession', () => {
       // Phase60-A: tuning_rules SELECT
       .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
     mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 75 }));
 
@@ -366,7 +366,7 @@ describe('evaluateSession', () => {
       // Phase60-A: tuning_rules SELECT
       .mockResolvedValueOnce({ rows: [] })
       // INSERT conversation_evaluations
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
     mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 80 }));
 
@@ -556,5 +556,221 @@ describe('evaluateSession', () => {
     // searchKnowledgeForSuggestion は firstUserMsg 空文字列のためスキップされ、
     // Gemini 呼び出しには到達すること（クラッシュせず先に進んだ証跡）
     expect(mockCallGroq).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // 多重評価ガード（Phase75）
+  //
+  // 自動評価は langGraphOrchestrator / flowControl の計7箇所から fire-and-forget で
+  // 叩かれる。ターン予算超過セッションでは turnIndex > maxTurnsPerSession が以降ずっと
+  // 真になるため、ユーザーが発言するたびに何度でも再発火する（並行性を伴わない決定的な
+  // 多重実行）。Gemini の二重課金と、重複行による KPI 平均の下振れを防ぐ。
+  // -------------------------------------------------------------------------
+
+  it('19. [多重発火防止] 既に評価済みのセッションは SessionAlreadyEvaluatedError をthrowし、Geminiを呼ばない', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    // chat_sessions + EXISTS(conversation_evaluations) を1クエリで返す
+    mockPool.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'internal-uuid-dup',
+        tenant_id: 'tenant-a',
+        prompt_variant_id: null,
+        already_evaluated: true,
+      }],
+    });
+
+    await expect(evaluateSession('session-already-done')).rejects.toThrow(SessionAlreadyEvaluatedError);
+
+    // 最重要: Gemini に到達していないこと（二重課金が起きない証跡）
+    expect(mockCallGroq).not.toHaveBeenCalled();
+    // messages 取得にも進まない = 後続クエリを一切発行していない
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('20. [多重発火防止] 未評価(already_evaluated=false)なら従来どおり評価が走る（ガードが常時発火しないことの反対側を固定）', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'internal-uuid-fresh',
+          tenant_id: 'tenant-a',
+          prompt_variant_id: null,
+          already_evaluated: false,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: 'こんにちは', created_at: new Date() },
+          { role: 'assistant', content: 'いらっしゃいませ', created_at: new Date() },
+        ],
+      })
+      // tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
+      // INSERT conversation_evaluations
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 70 }));
+
+    const result = await evaluateSession('session-fresh');
+
+    expect(result).not.toBeNull();
+    expect(mockCallGroq).toHaveBeenCalledTimes(1);
+  });
+
+  it('21. [多重発火防止] 予算超過セッションを何度evaluateしても Gemini は1回だけ（決定的な再発火のシミュレーション）', async () => {
+    // langGraphOrchestrator は「終端到達」ごとに evaluateSession を叩く。
+    // 予算超過後は毎ターン再発火するため、同じ sessionId で複数回呼ばれる状況を再現する。
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+
+    // 1回目は未評価 → 通常評価。2回目以降は評価済み → ガードで打ち切り。
+    let evaluated = false;
+    mockPool.query.mockImplementation((sql: string) => {
+      if (typeof sql === 'string' && sql.includes('FROM chat_sessions')) {
+        return Promise.resolve({
+          rows: [{
+            id: 'internal-uuid-budget',
+            tenant_id: 'tenant-a',
+            prompt_variant_id: null,
+            already_evaluated: evaluated,
+          }],
+        });
+      }
+      if (typeof sql === 'string' && sql.includes('FROM chat_messages')) {
+        return Promise.resolve({
+          rows: [
+            { role: 'user', content: 'まだ続けたい', created_at: new Date() },
+            { role: 'assistant', content: '承知しました', created_at: new Date() },
+          ],
+        });
+      }
+      if (typeof sql === 'string' && sql.includes('INSERT INTO conversation_evaluations')) {
+        evaluated = true; // 以降のセッション取得は already_evaluated=true を返す
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    mockCallGroq.mockResolvedValue(makeGroqResponse({ overall_score: 70 }));
+
+    // 13ターン目
+    const first = await evaluateSession('session-over-budget');
+    expect(first).not.toBeNull();
+
+    // 14・15ターン目（ユーザーが発言し続けた場合の再発火）
+    await expect(evaluateSession('session-over-budget')).rejects.toThrow(SessionAlreadyEvaluatedError);
+    await expect(evaluateSession('session-over-budget')).rejects.toThrow(SessionAlreadyEvaluatedError);
+
+    // Gemini 課金は1回だけ
+    expect(mockCallGroq).toHaveBeenCalledTimes(1);
+  });
+
+  it('22. [同時実行] INSERTがON CONFLICTで弾かれた敗者は、評価結果は返すが副作用(tuning_rules/通知/reward)をスキップする', async () => {
+    // 事前チェック(1b)は「確認してから実行」なので、真に並行した2本は両方すり抜けうる。
+    // 行を入れられるのは片方だけなので、敗者は rowCount=0 で検知して副作用を止める。
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'internal-uuid-race',
+          tenant_id: 'tenant-race',
+          prompt_variant_id: 'v-race',
+          already_evaluated: false,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: '雑な対応だな', created_at: new Date() },
+          { role: 'assistant', content: 'すみません', created_at: new Date() },
+        ],
+      })
+      // tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [] })
+      // INSERT conversation_evaluations → 競合で0行（敗者）
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    // 低スコア = 本来なら tuning_rules INSERT・通知・gap検出が走る条件
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 20 }));
+
+    const result = await evaluateSession('session-race-loser');
+    await flushFireAndForget();
+
+    // 評価自体は成立しているので結果は返す
+    expect(result).not.toBeNull();
+    expect(result!.overall_score).toBe(20);
+
+    // 副作用は一切追加で走らない: クエリはINSERTまでの4本で打ち切られている
+    expect(mockPool.query).toHaveBeenCalledTimes(4);
+    // reward signal も送られない（勝者側が送るため）
+    expect(mockSendRewardSignal).not.toHaveBeenCalled();
+  });
+
+  it('23. [同時実行] 勝者(rowCount=1)は従来どおり副作用が走る（22の反対側を固定）', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'internal-uuid-winner',
+          tenant_id: 'tenant-winner',
+          prompt_variant_id: 'v-win',
+          already_evaluated: false,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: '雑な対応だな', created_at: new Date() },
+          { role: 'assistant', content: 'すみません', created_at: new Date() },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      // INSERT conversation_evaluations → 1行入った（勝者）
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      // INSERT tuning_rules
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 20 }));
+
+    const result = await evaluateSession('session-race-winner');
+    await flushFireAndForget();
+
+    expect(result).not.toBeNull();
+    // tuning_rules INSERT まで進んでいる（敗者の4本との差分が副作用の有無）
+    expect(mockPool.query.mock.calls.length).toBeGreaterThan(4);
+    const tuningInsertCall = mockPool.query.mock.calls[4]!;
+    expect(tuningInsertCall[0]).toContain('INSERT INTO tuning_rules');
+    expect(mockSendRewardSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('24. [ON CONFLICTターゲット] 両INSERTが一意制約のターゲットを明示している（無指定だとSERIAL idにしか反応せずno-opになる回帰の防止）', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'internal-uuid-conflict',
+          tenant_id: 'tenant-c',
+          prompt_variant_id: null,
+          already_evaluated: false,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: 'ひどい', created_at: new Date() },
+          { role: 'assistant', content: '申し訳ありません', created_at: new Date() },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 20 }));
+
+    await evaluateSession('session-conflict-target');
+    await flushFireAndForget();
+
+    const evalInsertSql = mockPool.query.mock.calls[3]![0] as string;
+    expect(evalInsertSql).toMatch(/ON CONFLICT\s*\(\s*tenant_id\s*,\s*session_id\s*\)\s*DO NOTHING/);
+
+    const ruleInsertSql = mockPool.query.mock.calls[4]![0] as string;
+    expect(ruleInsertSql).toMatch(/ON CONFLICT\s*\(\s*tenant_id\s*,\s*trigger_pattern\s*\)\s*DO NOTHING/);
   });
 });
