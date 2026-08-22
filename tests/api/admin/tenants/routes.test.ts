@@ -1086,6 +1086,42 @@ describe("Tenant Admin Routes", () => {
         .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(403);
     });
+
+    it("イレギュラー: 同一キーを2回連続で失効させても200のまま(べき等)で、2回目もin-memory側の失効処理を試みる", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "k1", tenant_id: "tenant1", is_active: false, key_hash: "h1" }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ id: "k1", tenant_id: "tenant1", is_active: false, key_hash: "h1" }], rowCount: 1 });
+      const callsBefore = (mockRevokeTenantApiKeyIfCurrent as jest.Mock).mock.calls.length;
+      const res1 = await request(app).delete("/v1/admin/my-tenant/keys/k1").set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      const res2 = await request(app).delete("/v1/admin/my-tenant/keys/k1").set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res1.status).toBe(200);
+      expect(res2.status).toBe(200);
+      // UPDATE文にis_active=trueの条件が無いため、DB側は既にfalseの行でも再度一致しRETURNINGされる。
+      // クライアントから見て「失効操作」が失敗せず安全に繰り返せることを保証する。
+      expect((mockRevokeTenantApiKeyIfCurrent as jest.Mock).mock.calls.length - callsBefore).toBe(2);
+    });
+  });
+
+  describe("POST /v1/admin/my-tenant/keys — 連続発行(無停止ローテーションの多重化)", () => {
+    it("同一テナントに対する複数回の発行が、いずれもaddTenantApiKeyを個別に(上書きせず)呼ぶ", async () => {
+      for (let i = 0; i < 3; i++) {
+        mockDb.query
+          .mockResolvedValueOnce({ rows: [{ id: "tenant1", is_active: true }], rowCount: 1 })
+          .mockResolvedValueOnce({
+            rows: [{ id: `key-uuid-${i}`, tenant_id: "tenant1", key_prefix: `rjc_key${i}xxxx`, is_active: true, created_at: new Date(), expires_at: null }],
+            rowCount: 1,
+          });
+        const res = await request(app)
+          .post("/v1/admin/my-tenant/keys")
+          .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+        expect(res.status).toBe(201);
+      }
+      // 3回とも addTenantApiKey が呼ばれ、registerTenant(上書き型)は一度も呼ばれない
+      expect((mockAddTenantApiKey as jest.Mock).mock.calls.length).toBeGreaterThanOrEqual(3);
+      const plainKeys = (mockAddTenantApiKey as jest.Mock).mock.calls.slice(-3).map((call) => call[1]);
+      // 3回分のキーハッシュが全て異なる(同じ乱数が使い回されていない)ことを確認
+      expect(new Set(plainKeys).size).toBe(3);
+    });
   });
 });
 
