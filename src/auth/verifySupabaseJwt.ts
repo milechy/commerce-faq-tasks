@@ -27,7 +27,12 @@ export function verifySupabaseJwt(
   if (!token || !jwtSecret) return null;
 
   try {
-    return jwt.verify(token, jwtSecret) as SupabaseJwtPayload;
+    // アルゴリズム混同攻撃 (alg:none 等) を防ぐため HS256 に固定する。
+    // audience は固定しない — この関数は Supabase 発行トークンだけでなく、
+    // widget セッション/chat-test トークン (同じ secret で署名、aud クレーム無し) の検証にも
+    // 共用されているため、ここでの検証は署名の正当性確認に限定する。
+    // 用途ごとの許可判定 (purpose/role) は jwtClaims.ts の isAdminUsableToken で行う。
+    return jwt.verify(token, jwtSecret, { algorithms: ["HS256"] }) as SupabaseJwtPayload;
   } catch (err) {
     logger.warn("[verifySupabaseJwt] invalid token:", (err as Error).message);
     return null;
