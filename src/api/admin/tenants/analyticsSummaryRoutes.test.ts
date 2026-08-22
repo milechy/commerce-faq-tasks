@@ -42,9 +42,6 @@ let app: Express;
 
 beforeAll(() => {
   process.env.NODE_ENV = "development";
-  // supabaseAuthMiddleware は NODE_ENV!=='production' に加え ALLOW_INSECURE_DEV_AUTH='true'
-  // の明示指定が無いと署名検証なしデコードを行わない（fail-closed 強化）。
-  process.env.ALLOW_INSECURE_DEV_AUTH = "true";
 });
 
 beforeEach(() => {

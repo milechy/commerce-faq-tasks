@@ -46,17 +46,12 @@ import { logger } from '../../../lib/logger';
 import { registerKnowledgeAdminRoutes } from './routes';
 
 const ORIGINAL_NODE_ENV = process.env['NODE_ENV'];
-const ORIGINAL_ALLOW_INSECURE_DEV_AUTH = process.env['ALLOW_INSECURE_DEV_AUTH'];
 
 beforeAll(() => {
   process.env['NODE_ENV'] = 'development';
-  // supabaseAuthMiddleware は NODE_ENV!=='production' に加え ALLOW_INSECURE_DEV_AUTH='true'
-  // の明示指定が無いと署名検証なしデコードを行わない（fail-closed 強化）。
-  process.env['ALLOW_INSECURE_DEV_AUTH'] = 'true';
 });
 afterAll(() => {
   process.env['NODE_ENV'] = ORIGINAL_NODE_ENV;
-  process.env['ALLOW_INSECURE_DEV_AUTH'] = ORIGINAL_ALLOW_INSECURE_DEV_AUTH;
 });
 beforeEach(() => {
   jest.clearAllMocks();
