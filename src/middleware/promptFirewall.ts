@@ -70,6 +70,73 @@ const ROLE_MARKER_PATTERNS: Array<{ pattern: RegExp }> = [
 ];
 
 // ---------------------------------------------------------------------------
+// 難読化（全角化・不可視文字挿入）による検出回避への対策
+// ---------------------------------------------------------------------------
+
+// 不可視文字（ゼロ幅スペース/接合子/word joiner/BOM/ソフトハイフン）。
+// "a​ct as" のように単語内へ挿入すると、上のパターンの文字列一致が崩れる。
+const INVISIBLE_CHARS = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
+
+// 難読化の痕跡とみなす文字: 全角ASCII(U+FF01-FF5E) と不可視文字。
+// 半角カナ(U+FF66-FF9D)は NFKC で全角カナに畳まれるが、正当な入力手段なので
+// ここには含めない。含めると「ﾘｾｯﾄ方法を教えて」のような正常な問い合わせが
+// role_override_ja の '^リセット' に新規一致してブロックされてしまう。
+const OBFUSCATION_MARKERS = /[\uFF01-\uFF5E\u200B-\u200D\u2060\uFEFF\u00AD]/;
+
+/**
+ * 検査専用の正規化コピーを作る。**戻り値をLLMに渡してはいけない**
+ * （正当な全角入力を書き換えてしまうため）。判定にのみ使う。
+ *
+ * 不可視文字は「除去」と「空白化」の2通りを作る。攻撃者の挿入位置によって
+ * 復元に必要な操作が逆になるため、片方だけでは取りこぼす:
+ *   - "a​ct as"  → 除去   で "act as"（空白化だと "a ct as"）
+ *   - "act​as"   → 空白化 で "act as"（除去だと "actas"）
+ */
+function detectionProbes(message: string): string[] {
+  const stripped = message.replace(INVISIBLE_CHARS, '').normalize('NFKC');
+  const spaced = message.replace(INVISIBLE_CHARS, ' ').normalize('NFKC');
+  return stripped === spaced ? [stripped] : [stripped, spaced];
+}
+
+/** 除去を伴わずパターン名だけを集める（gフラグはstatefulなので毎回lastIndexを戻す）。 */
+function detectionNames(text: string): string[] {
+  const names: string[] = [];
+  for (const { name, pattern } of [...SYSTEM_PROMPT_PATTERNS, ...ROLE_OVERRIDE_PATTERNS]) {
+    pattern.lastIndex = 0;
+    if (pattern.test(text)) names.push(name);
+  }
+  for (const { pattern } of ROLE_MARKER_PATTERNS) {
+    pattern.lastIndex = 0;
+    if (pattern.test(text)) {
+      names.push('role_marker');
+      break;
+    }
+  }
+  return names;
+}
+
+/**
+ * 「正規化すると一致するが、原文のままでは一致しない」パターン名を返す。
+ * これは正当な入力では起こり得ず、意図的な難読化の証拠とみなす。
+ *
+ * 原文に難読化の痕跡（全角ASCII・不可視文字）が無ければ何もしない。
+ * NFKC は半角カナ畳み込み等も行うため、痕跡で絞らないと正常な日本語入力を
+ * 巻き込む（上の OBFUSCATION_MARKERS のコメント参照）。
+ */
+function findObfuscatedDetections(message: string): string[] {
+  if (!OBFUSCATION_MARKERS.test(message)) return [];
+  const asWritten = new Set(detectionNames(message));
+  const evaded = new Set<string>();
+  for (const probe of detectionProbes(message)) {
+    if (probe === message) continue;
+    for (const name of detectionNames(probe)) {
+      if (!asWritten.has(name)) evaded.add(name);
+    }
+  }
+  return [...evaded];
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -138,6 +205,25 @@ export function applyPromptFirewall(message: string): FirewallResult {
   // Enabled check — fast path
   if (!isPromptFirewallEnabled()) {
     return { allowed: true, sanitizedMessage: message, detections: [] };
+  }
+
+  // 難読化された注入は原文のまま除去できない（正規化後の一致位置を原文の
+  // インデックスへ戻せない）ため、部分stripを試みずメッセージ全体をブロックする。
+  const evaded = findObfuscatedDetections(message);
+  if (evaded.length > 0) {
+    // ブロックは稀な事象なので常にwarnで残す（shadowフラグに依存させない）。
+    // 本文は出さない（Anti-Slop: PII/RAGコンテンツ非出力）。
+    logger.warn(
+      { obfuscatedDetections: evaded, messageLength: message.length },
+      '[promptFirewall] obfuscated injection blocked'
+    );
+    return {
+      allowed: false,
+      sanitizedMessage: '',
+      detections: evaded.map((name) => `${name}_obfuscated`),
+      userFacingMessage:
+        'その質問にはお答えできません。商品やサービスについてお気軽にお聞きください。',
+    };
   }
 
   const detections: string[] = [];
