@@ -1,13 +1,29 @@
 // src/agent/llm/openaiEmbeddingClient.ts
 // OpenAI Embeddings を REST API 経由で呼ぶラッパー（SDK 不使用）
 
+import { trackUsage } from "../../lib/billing/usageTracker";
+
 export interface EmbedTextResult {
   embedding: number[];
   /** OpenAI total_tokens（課金合算用）。テストモードでは 0。 */
   totalTokens: number;
 }
 
-export async function embedTextWithUsage(text: string): Promise<EmbedTextResult> {
+/**
+ * 呼び出し元がテナントコンテキストを持つ場合に渡す（省略可）。
+ * 省略時も trackUsage は必ず計上する（tenantId="unknown" / billable=false）—
+ * 呼び出し元を横断して埋め込みコストが一切計上されていなかったため、
+ * 帰属先が未確定でも「原価が見える」状態を優先する。
+ */
+export interface EmbedUsageContext {
+  tenantId?: string;
+  requestId?: string;
+}
+
+export async function embedTextWithUsage(
+  text: string,
+  usageContext?: EmbedUsageContext,
+): Promise<EmbedTextResult> {
   if (process.env.NODE_ENV === "test") {
     return {
       embedding: Array.from({ length: 1536 }, () => Math.random()),
@@ -48,20 +64,34 @@ export async function embedTextWithUsage(text: string): Promise<EmbedTextResult>
     throw new Error("OpenAI embedding not found in response");
   }
 
+  const totalTokens = json?.usage?.total_tokens ?? 0;
+
+  // 呼び出し元がtenantIdを渡していない場合は帰属先不明として billable=false で
+  // 原価のみ記録する（誤って"unknown"テナントへ請求しないため）。
+  trackUsage({
+    tenantId: usageContext?.tenantId ?? "unknown",
+    requestId: usageContext?.requestId ?? `embed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    model,
+    inputTokens: totalTokens,
+    outputTokens: 0,
+    featureUsed: "admin_guide",
+    billable: usageContext?.tenantId ? undefined : false,
+  });
+
   return {
     embedding: embedding.map((v) => (typeof v === "number" ? v : Number(v) || 0)),
-    totalTokens: json?.usage?.total_tokens ?? 0,
+    totalTokens,
   };
 }
 
-export async function embedText(text: string): Promise<number[]> {
-  const { embedding } = await embedTextWithUsage(text);
+export async function embedText(text: string, usageContext?: EmbedUsageContext): Promise<number[]> {
+  const { embedding } = await embedTextWithUsage(text, usageContext);
   return embedding;
 }
 
 // Backward compatibility: older code expects embedTextOpenAI()
-export async function embedTextOpenAI(text: string): Promise<number[]> {
-  return embedText(text);
+export async function embedTextOpenAI(text: string, usageContext?: EmbedUsageContext): Promise<number[]> {
+  return embedText(text, usageContext);
 }
 // src/agent/llm/modelRouter.ts
 // Phase8: lightweight routing model for planner / answer models (20B / 120B)

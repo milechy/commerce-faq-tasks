@@ -2,13 +2,26 @@
 // Gemini 2.5 Flash REST client (Phase46)
 
 import pino from 'pino';
+import { trackUsage } from '../billing/usageTracker';
 
 const logger = pino();
 
 const GEMINI_MODEL = process.env['GEMINI_MODEL'] ?? 'gemini-2.5-flash';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-export async function callGeminiJudge(prompt: string): Promise<string> {
+/**
+ * 呼び出し元がテナント/リクエストコンテキストを持つ場合に渡す（省略可）。
+ * 現状の呼び出し元（judgeEvaluator / gapRecommender / contentAnalyzer / bookStructurizer）は
+ * いずれもR2C運用側のLLM機能のため、省略時は billable=false・featureUsed="admin_tuning" で
+ * 原価のみ記録する（Stripe請求数量には含めない）。
+ */
+export interface GeminiUsageContext {
+  tenantId?: string;
+  requestId?: string;
+  billable?: boolean;
+}
+
+export async function callGeminiJudge(prompt: string, usageContext?: GeminiUsageContext): Promise<string> {
   const apiKey = process.env['GEMINI_API_KEY'];
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
@@ -34,5 +47,20 @@ export async function callGeminiJudge(prompt: string): Promise<string> {
   const content = candidates?.[0]?.['content'] as Record<string, unknown> | undefined;
   const parts = content?.['parts'] as Array<Record<string, unknown>> | undefined;
   const text = (parts?.[0]?.['text'] as string) ?? '';
+
+  const usageMetadata = data['usageMetadata'] as
+    | { promptTokenCount?: number; candidatesTokenCount?: number }
+    | undefined;
+
+  trackUsage({
+    tenantId: usageContext?.tenantId ?? 'unknown',
+    requestId: usageContext?.requestId ?? `gemini-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    model: GEMINI_MODEL,
+    inputTokens: usageMetadata?.promptTokenCount ?? 0,
+    outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
+    featureUsed: 'admin_tuning',
+    billable: usageContext?.billable ?? false,
+  });
+
   return text;
 }
