@@ -24,9 +24,16 @@ jest.mock("../../../auth/supabaseClient", () => ({
 }));
 
 const mockTenantHasFeature = jest.fn().mockResolvedValue(true);
-jest.mock("../../../lib/billing/planFeatures", () => ({
-  tenantHasFeature: (...args: any[]) => mockTenantHasFeature(...args),
-}));
+// queryTenantPlan の既定は "growth"（avatar機能あり）。プラン制限テストのみ個別に上書きする。
+const mockQueryTenantPlan = jest.fn().mockResolvedValue("growth");
+jest.mock("../../../lib/billing/planFeatures", () => {
+  const actual = jest.requireActual("../../../lib/billing/planFeatures");
+  return {
+    tenantHasFeature: (...args: any[]) => mockTenantHasFeature(...args),
+    queryTenantPlan: (...args: any[]) => mockQueryTenantPlan(...args),
+    planHasFeature: actual.planHasFeature, // 実装をそのまま使う（純関数、モック不要）
+  };
+});
 
 // --------------------------------------------------------------------------
 // ヘルパー
@@ -119,6 +126,58 @@ describe("POST /v1/admin/avatar/configs/:id/activate", () => {
       ([sql]) => typeof sql === "string" && sql.includes("UPDATE tenants")
     );
     expect(tenantUpdate).toBeUndefined();
+  });
+
+  it("starterプランのclient_adminは403で弾かれ、DBへ一切書き込まない（旧UIの取りこぼし修正）", async () => {
+    mockQueryTenantPlan.mockResolvedValueOnce("starter");
+
+    const clientQuery = jest.fn(); // 呼ばれてはいけない
+    const db = {
+      connect: jest.fn().mockResolvedValue({
+        query: clientQuery,
+        release: jest.fn(),
+      }),
+    };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/avatar/configs/config-1/activate")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    // BEGIN すら発行されていないこと（プラン判定はトランザクション開始直後・破壊的操作の前）
+    const writeCalls = clientQuery.mock.calls.filter(
+      ([sql]) => typeof sql === "string" && /UPDATE|DELETE|INSERT/i.test(sql)
+    );
+    expect(writeCalls).toHaveLength(0);
+  });
+
+  it("super_adminはプラン制限をバイパスする（queryTenantPlanが呼ばれない）", async () => {
+    // 他テストの呼び出し履歴が残っているため、このテスト内の呼び出し有無だけを見る
+    mockQueryTenantPlan.mockClear();
+    mockQueryTenantPlan.mockResolvedValueOnce("starter"); // 呼ばれれば starter で弾かれるはずの値
+
+    const clientQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })                      // BEGIN
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })         // deactivate all
+      .mockResolvedValueOnce({ rows: [CONFIG_ROW], rowCount: 1 }) // activate target
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })         // UPDATE tenants features
+      .mockResolvedValueOnce({ rows: [] });                     // COMMIT
+
+    const db = {
+      connect: jest.fn().mockResolvedValue({
+        query: clientQuery,
+        release: jest.fn(),
+      }),
+    };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .post("/v1/admin/avatar/configs/config-1/activate")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(mockQueryTenantPlan).not.toHaveBeenCalled();
   });
 });
 
