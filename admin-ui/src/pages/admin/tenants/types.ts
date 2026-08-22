@@ -25,7 +25,6 @@ export interface TenantFeatures {
 export interface TenantDetail {
   id: string;
   name: string;
-  slug: string;
   plan: TenantPlan;
   status: "active" | "inactive";
   createdAt: string;
