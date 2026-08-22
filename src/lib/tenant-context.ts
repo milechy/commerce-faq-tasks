@@ -15,6 +15,51 @@ const tenantStore = new Map<string, TenantConfig>();
 // registerTenant と対で更新する（型 TenantConfig は他モジュール共有のため変更しない）。
 const apiKeyExpiresAt = new Map<string, number | null>();
 
+// 無停止ローテーション用の「追加キー」。TenantConfig.security.apiKeyHash は
+// 引き続き単一の「主キー」を保持する（authMiddleware.ts等の既存参照を壊さない）。
+// client_adminが新キーを発行しても旧キー(主キー)を即座に失効させたくない場合、
+// 新キーはここに追加され、主キーと並行して有効になる。
+// tenantId -> (keyHash -> expiresAtMs|null)
+const additionalApiKeys = new Map<string, Map<string, number | null>>();
+
+/**
+ * 主キーを失効させずに、追加のAPIキーを有効化する（無停止ローテーション）。
+ * テナントが tenantStore に存在しない場合は false を返す。
+ */
+export function addTenantApiKey(
+  tenantId: string,
+  keyHash: string,
+  expiresAt: Date | null
+): boolean {
+  if (!tenantStore.has(tenantId)) return false;
+  let keys = additionalApiKeys.get(tenantId);
+  if (!keys) {
+    keys = new Map<string, number | null>();
+    additionalApiKeys.set(tenantId, keys);
+  }
+  keys.set(keyHash, expiresAt ? expiresAt.getTime() : null);
+  return true;
+}
+
+/**
+ * 追加キー（主キー以外）を失効させる。対象が追加キーに存在しない場合は
+ * 何もせず false を返す（主キーの失効は revokeTenantApiKeyIfCurrent が担当）。
+ */
+export function revokeAdditionalTenantApiKey(
+  tenantId: string,
+  keyHash: string
+): boolean {
+  const keys = additionalApiKeys.get(tenantId);
+  if (!keys) return false;
+  for (const existingHash of keys.keys()) {
+    if (safeCompare(existingHash, keyHash)) {
+      keys.delete(existingHash);
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerTenant(config: TenantConfig): void {
   tenantStore.set(config.tenantId, config);
 }
@@ -62,13 +107,24 @@ export function getTenantByApiKeyHash(
 ): TenantConfig | undefined {
   const entries = Array.from(tenantStore.values());
   for (const cfg of entries) {
-    if (!cfg.security.apiKeyHash) continue; // 失効済み(revokeTenantApiKeyIfCurrent)
-    if (safeCompare(cfg.security.apiKeyHash, hash)) {
+    if (cfg.security.apiKeyHash && safeCompare(cfg.security.apiKeyHash, hash)) {
       const expiresAt = apiKeyExpiresAt.get(cfg.tenantId);
       if (expiresAt !== undefined && expiresAt !== null && expiresAt <= Date.now()) {
         return undefined; // 稼働中に期限切れ（起動時seedはDB側でフィルタ済みだが、以降の失効を反映）
       }
       return cfg;
+    }
+    // 無停止ローテーションで追加されたキー（主キーとは独立して有効期限を持つ）。
+    // 引き続き safeCompare による定数時間比較で線形探索する（Map.getによる
+    // O(1)逆引きに置き換えると、既に呼び出し側でハッシュ化済みとはいえ
+    // タイミング差を持ち込むため採用しない）。
+    const additional = additionalApiKeys.get(cfg.tenantId);
+    if (additional) {
+      for (const [additionalHash, expiresAt] of additional) {
+        if (!safeCompare(additionalHash, hash)) continue;
+        if (expiresAt !== null && expiresAt <= Date.now()) return undefined;
+        return cfg;
+      }
     }
   }
   return undefined;
