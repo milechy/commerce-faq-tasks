@@ -283,6 +283,93 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
     expect(checkAlreadyEvaluated).toHaveBeenCalledWith("sess-does-not-exist", "tenant-a");
     expect(checkAlreadyEvaluated).toHaveBeenCalledWith("sess-other-tenant", "tenant-a");
   });
+
+  // 壊れやすいポイント: 5つの終端ステータス(200/404/409/422/500)が互いに独立して
+  // 決まっていること — どれか1つの分岐を触った変更が他のケースを巻き込んで
+  // 意図せず変えていないかを1つの表で固定する。
+  it.each([
+    {
+      label: "200 正常評価",
+      setup: () => {
+        (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+        (evaluateSession as jest.Mock).mockResolvedValue(JUDGE_RESULT);
+      },
+      expectedStatus: 200,
+    },
+    {
+      label: "404 セッション不在/他テナント",
+      setup: () => {
+        const { SessionNotFoundError } = jest.requireMock(
+          "../../src/agent/judge/judgeEvaluator",
+        ) as { SessionNotFoundError: new (sessionId: string) => Error };
+        (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+        (evaluateSession as jest.Mock).mockRejectedValue(new SessionNotFoundError("sess-001"));
+      },
+      expectedStatus: 404,
+    },
+    {
+      label: "409 評価済み",
+      setup: () => {
+        (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(true);
+      },
+      expectedStatus: 409,
+    },
+    {
+      label: "422 短すぎるセッション（空/1通話のみ、障害ではない）",
+      setup: () => {
+        const { SessionTooShortError } = jest.requireMock(
+          "../../src/agent/judge/judgeEvaluator",
+        ) as { SessionTooShortError: new (sessionId: string) => Error };
+        (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+        (evaluateSession as jest.Mock).mockRejectedValue(new SessionTooShortError("sess-001"));
+      },
+      expectedStatus: 422,
+    },
+    {
+      label: "500 真の内部エラー（Gemini呼び出し失敗などnull返却）",
+      setup: () => {
+        (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+        (evaluateSession as jest.Mock).mockResolvedValue(null);
+      },
+      expectedStatus: 500,
+    },
+  ])("$label → HTTP $expectedStatus", async ({ setup, expectedStatus }) => {
+    setup();
+
+    const res = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(expectedStatus);
+  });
+
+  // 既知のリスク（未修正、テストで可視化のみ）: checkAlreadyEvaluated → evaluateSession は
+  // 「確認してから実行」の非アトミックな2段階であり、conversation_evaluations テーブルには
+  // (tenant_id, session_id) の UNIQUE 制約が無い
+  // (src/agent/judge/migration_conversation_evaluations.sql 参照。judgeEvaluator.ts の
+  // INSERT ... ON CONFLICT DO NOTHING は対象となる制約が存在しないため実質no-op)。
+  // 同一セッションへの評価トリガーが競合すると、両方が checkAlreadyEvaluated=false を見て
+  // 両方が evaluateSession を実行し、Gemini呼び出し・通知・tuning_rules挿入が重複しうる
+  // (Stripe webhookで修正した二重処理と同型の問題だが、ここは未修正)。
+  // このテストはその非アトミック性をユニットテストレベルで可視化するためのものであり、
+  // 実装修正はスコープ外(親からの指示により、発見のみ・修正はしない)。
+  it("[既知のリスク・未修正] 同一session_idへの2並行トリガーは両方とも200になりうる（checkAlreadyEvaluatedがDBの一意制約でなくアプリ側の事前確認のみのため）", async () => {
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+    (evaluateSession as jest.Mock).mockResolvedValue(JUDGE_RESULT);
+
+    const app = makeApp();
+    const [res1, res2] = await Promise.all([
+      request(app).post("/v1/admin/evaluations/trigger").send({ session_id: "sess-race" }),
+      request(app).post("/v1/admin/evaluations/trigger").send({ session_id: "sess-race" }),
+    ]);
+
+    // 本来は「評価トリガーは冪等であってほしい」が、現状の実装ではどちらも
+    // checkAlreadyEvaluated=false を見て両方 evaluateSession まで進むため、
+    // 両方 200 になる（片方が409になるような排他制御が無い）。
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    expect(evaluateSession).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ===========================================================================
