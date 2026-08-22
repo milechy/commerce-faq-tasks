@@ -147,5 +147,52 @@ describe("Chat History Escalation API", () => {
       expect(res.status).toBe(200);
       expect(mockResolveEscalation).toHaveBeenCalledWith({ sessionDbId: "s1", tenantId: undefined });
     });
+
+    // 壊れやすいポイント: roleAuthMiddleware配線(D1a)が外れると、tenant_id空の
+    // client_adminがリポジトリ層まで到達してしまう。実際のミドルウェア連鎖(mock無し)を
+    // 通す統合テストで固定する — ルーティング単体テストでは検出できない再発パターン。
+    it("[回帰] client_admin + tenant_id空文字 → roleAuthMiddlewareで403、resolveEscalationは呼ばれない", async () => {
+      const emptyTenantToken = makeDevJwt({ app_metadata: { role: "client_admin", tenant_id: "" } });
+      const res = await request(app)
+        .patch("/v1/admin/chat-history/sessions/s1/resolve-escalation")
+        .set("Authorization", `Bearer ${emptyTenantToken}`);
+      expect(res.status).toBe(403);
+      expect(mockResolveEscalation).not.toHaveBeenCalled();
+    });
+
+    it("[回帰] client_admin + tenant_idクレーム欠落 → 403、resolveEscalationは呼ばれない", async () => {
+      const noTenantToken = makeDevJwt({ app_metadata: { role: "client_admin" } });
+      const res = await request(app)
+        .patch("/v1/admin/chat-history/sessions/s1/resolve-escalation")
+        .set("Authorization", `Bearer ${noTenantToken}`);
+      expect(res.status).toBe(403);
+      expect(mockResolveEscalation).not.toHaveBeenCalled();
+    });
+
+    // 存在確認オラクル防止の確認: 「他テナントのセッション」も「存在しないセッション」も
+    // resolveEscalation内部で同一のtenant_id述語付きWHEREにより false を返す設計なので、
+    // レスポンスは区別不能な404で統一されているべき（evaluations/triggerとは対照的 —後述）。
+    it("他テナントのセッションIDを指定 → 存在しない場合と同じ404（存在有無を漏らさない）", async () => {
+      mockResolveEscalation.mockResolvedValueOnce(false); // tenant_id述語で0行 = 他テナント所有と同じ結果
+      const res = await request(app)
+        .patch("/v1/admin/chat-history/sessions/other-tenant-session/resolve-escalation")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: "セッションが見つかりません" });
+    });
+
+    it("トップレベルclaimのtenant_id（app_metadata外）は無視され、client_adminは403になる", async () => {
+      // P1-2是正の回帰: su.tenant_id（トップレベル）はもう読まれないこと。
+      const topLevelOnlyToken = makeDevJwt({
+        role: "client_admin",
+        tenant_id: "tenant-a", // トップレベル — app_metadata配下ではない
+      });
+      const res = await request(app)
+        .patch("/v1/admin/chat-history/sessions/s1/resolve-escalation")
+        .set("Authorization", `Bearer ${topLevelOnlyToken}`);
+      // app_metadata.role が無いため isAllowedAdminRole すら通らず 403
+      expect(res.status).toBe(403);
+      expect(mockResolveEscalation).not.toHaveBeenCalled();
+    });
   });
 });

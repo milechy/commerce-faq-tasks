@@ -125,7 +125,7 @@ import {
 import { searchTool } from "../../src/agent/tools/searchTool";
 import { synthesizeAnswer } from "../../src/agent/tools/synthesisTool";
 import { getActiveRulesForTenant } from "../../src/api/admin/tuning/tuningRulesRepository";
-import { evaluateSession } from "../../src/agent/judge/judgeEvaluator";
+import { evaluateSession, SessionNotFoundError } from "../../src/agent/judge/judgeEvaluator";
 import { sanitizeInput } from "../../src/middleware/inputSanitizer";
 import { applyPromptFirewall } from "../../src/middleware/promptFirewall";
 import { guardOutput } from "../../src/middleware/outputGuard";
@@ -435,12 +435,10 @@ describe("Flow 3: Judge evaluateSession → Gemini → DB persistence", () => {
     expect(MOCK_POOL.query).toHaveBeenCalledTimes(4);
   });
 
-  it("evaluateSession returns null when session not found in DB", async () => {
+  it("evaluateSession throws SessionNotFoundError when session not found in DB (存在確認オラクル防止のためnullではなくthrow)", async () => {
     MOCK_POOL.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
-    const result = await evaluateSession("nonexistent-session");
-
-    expect(result).toBeNull();
+    await expect(evaluateSession("nonexistent-session")).rejects.toThrow(SessionNotFoundError);
     expect(callGeminiJudge).not.toHaveBeenCalled();
   });
 

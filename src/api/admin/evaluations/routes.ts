@@ -5,6 +5,7 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { roleAuthMiddleware } from "../../middleware/roleAuth";
 import {
   listEvaluations,
   getDetailedStats,
@@ -41,7 +42,7 @@ function resolveAuth(req: Request): { su: Record<string, any> | undefined; role:
   return {
     su,
     role,
-    jwtTenantId: su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "",
+    jwtTenantId: su?.app_metadata?.tenant_id ?? "", // トップレベルclaimは信用しない（P1-2: 越境）
     isSuperAdmin: role === "super_admin",
     email: su?.email ?? "",
   };
@@ -90,8 +91,8 @@ const outcomeSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export function registerEvaluationRoutes(app: Express): void {
-  app.use("/v1/admin/evaluations", supabaseAuthMiddleware);
-  app.use("/v1/admin/tuning", supabaseAuthMiddleware);
+  app.use("/v1/admin/evaluations", supabaseAuthMiddleware, roleAuthMiddleware);
+  app.use("/v1/admin/tuning", supabaseAuthMiddleware, roleAuthMiddleware);
 
   // -------------------------------------------------------------------------
   // GET /v1/admin/evaluations
@@ -181,7 +182,7 @@ export function registerEvaluationRoutes(app: Express): void {
   // 指定セッションの評価を手動トリガー（未評価の場合のみ）
   // -------------------------------------------------------------------------
   app.post("/v1/admin/evaluations/trigger", async (req: Request, res: Response) => {
-    const { su, role } = resolveAuth(req);
+    const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
     if (!isAllowedEvaluationRole(role)) {
       return denyEvaluationRole(req, res, su, role);
     }
@@ -191,19 +192,29 @@ export function registerEvaluationRoutes(app: Express): void {
     }
 
     try {
-      const alreadyDone = await checkAlreadyEvaluated(session_id);
+      // 越境防止: checkAlreadyEvaluated もtenant_idで絞る。絞らないと、他テナントの
+      // 評価済みセッションに対して409(=存在する)が返り、ownership検証より前の
+      // 存在確認オラクルになる。
+      const expectedTenantId = isSuperAdmin ? undefined : jwtTenantId;
+      const alreadyDone = await checkAlreadyEvaluated(session_id, expectedTenantId);
       if (alreadyDone) {
         return res.status(409).json({ error: "already_evaluated" });
       }
 
       // Dynamic import to avoid circular deps
       const { evaluateSession } = await import("../../../agent/judge/judgeEvaluator");
-      const result = await evaluateSession(session_id);
+      // 越境防止: session_id はbody由来のためtenant所有を必ず検証する（super_adminは検証省略）
+      const result = await evaluateSession(session_id, expectedTenantId);
       if (!result) {
         return res.status(500).json({ error: "evaluation_failed" });
       }
       return res.json({ evaluation: result });
     } catch (err) {
+      const { SessionTenantMismatchError, SessionNotFoundError } = await import("../../../agent/judge/judgeEvaluator");
+      // 「不在」と「他テナントのもの」を同一の404にし、存在確認オラクルにしない。
+      if (err instanceof SessionTenantMismatchError || err instanceof SessionNotFoundError) {
+        return res.status(404).json({ error: "セッションが見つかりません" });
+      }
       logger.warn("[POST /v1/admin/evaluations/trigger]", err);
       return res.status(500).json({ error: "評価の実行に失敗しました" });
     }

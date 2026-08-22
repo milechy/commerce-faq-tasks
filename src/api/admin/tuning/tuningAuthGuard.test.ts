@@ -246,3 +246,44 @@ describe('tuning routes — logger.warn structured payload on 403 (observability
     expect(res.body).toMatchObject({ code: 'AUTHZ_ROLE_DENIED' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// [回帰] roleAuthMiddleware配線: client_admin + tenant_id 空/欠落 → 全ルートで403
+// 壊れやすいポイント: このミドルウェアは jest.mock されておらず実物が動作する。
+// app.use への配線(fail-closed)が将来外れた場合にここで検知する。
+// ---------------------------------------------------------------------------
+
+describe('tuning routes — roleAuthMiddleware fail-closed: client_admin + empty/missing tenant_id', () => {
+  TUNING_ALL_ROUTES.forEach(({ method, path }) => {
+    it(`${method.toUpperCase()} ${path} — client_admin + tenant_id:'' → 403`, async () => {
+      const app = makeApp({ role: 'client_admin', tenant_id: '' });
+      const res = await (request(app) as any)[method](path);
+      expect(res.status).toBe(403);
+    });
+
+    it(`${method.toUpperCase()} ${path} — client_admin + tenant_idクレーム欠落 → 403`, async () => {
+      const app = makeApp({ role: 'client_admin' }); // tenant_id自体が無い
+      const res = await (request(app) as any)[method](path);
+      expect(res.status).toBe(403);
+    });
+
+    it(`${method.toUpperCase()} ${path} — client_admin + tenant_id:'   '(空白のみ) → 403`, async () => {
+      const app = makeApp({ role: 'client_admin', tenant_id: '   ' });
+      const res = await (request(app) as any)[method](path);
+      expect(res.status).toBe(403);
+    });
+  });
+
+  // P1-2是正の回帰: トップレベル tenant_id（app_metadata外）はもう信用されない。
+  // roleAuthMiddleware は app_metadata.tenant_id のみを見るため、role が
+  // app_metadata に無ければ isAllowedAdminRole 判定自体も通らず 403 になる。
+  it('トップレベルclaimのみに正しい値があっても、app_metadata.role が無ければ403（越境の芽を断つ）', async () => {
+    const app = makeAppWithUser({
+      role: 'client_admin', // トップレベル — 無視されるべき
+      tenant_id: 'tenant-a', // トップレベル — 無視されるべき
+      email: 'legacy-token@test.com',
+    });
+    const res = await request(app).get('/v1/admin/tuning-rules');
+    expect(res.status).toBe(403);
+  });
+});

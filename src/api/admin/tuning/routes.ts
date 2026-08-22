@@ -5,6 +5,7 @@
 import { GROQ_INSTANT_8B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
+import { roleAuthMiddleware } from "../../middleware/roleAuth";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import {
@@ -244,7 +245,7 @@ const updateSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export function registerTuningRoutes(app: Express): void {
-  app.use("/v1/admin/tuning-rules", supabaseAuthMiddleware);
+  app.use("/v1/admin/tuning-rules", supabaseAuthMiddleware, roleAuthMiddleware);
 
   // -----------------------------------------------------------------------
   // POST /v1/admin/tuning/suggest-rule
@@ -254,6 +255,7 @@ export function registerTuningRoutes(app: Express): void {
   app.post(
     "/v1/admin/tuning/suggest-rule",
     supabaseAuthMiddleware,
+    roleAuthMiddleware,
     async (req: Request, res: Response) => {
       const su = (req as AuthedReq).supabaseUser;
       if (!su) {
@@ -294,7 +296,7 @@ export function registerTuningRoutes(app: Express): void {
       }
 
       const anchorText = isFreeTextMode ? (freeText as string).trim() : (userMessage as string).trim();
-      const tenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const tenantId: string = su?.app_metadata?.tenant_id ?? ""; // トップレベルclaimは信用しない（P1-2: 越境）
 
       // deep_researchフラグ確認（DB失敗時はfalse）
       const deepResearchEnabled = await isDeepResearchEnabled(tenantId);
@@ -367,7 +369,7 @@ export function registerTuningRoutes(app: Express): void {
   app.get("/v1/admin/tuning-rules", async (req: Request, res: Response) => {
     const su = (req as any).supabaseUser as Record<string, any> | undefined;
     const role = su?.app_metadata?.role;
-    const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+    const jwtTenantId: string = su?.app_metadata?.tenant_id ?? ""; // トップレベルclaimは信用しない（P1-2: 越境）
     const isSuperAdmin: boolean = role === "super_admin";
     if (!isAllowedTuningRole(role)) {
       logger.warn({
@@ -407,7 +409,7 @@ export function registerTuningRoutes(app: Express): void {
   app.post("/v1/admin/tuning-rules", async (req: Request, res: Response) => {
     const su = (req as any).supabaseUser as Record<string, any> | undefined;
     const role = su?.app_metadata?.role;
-    const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+    const jwtTenantId: string = su?.app_metadata?.tenant_id ?? ""; // トップレベルclaimは信用しない（P1-2: 越境）
     const isSuperAdmin: boolean = role === "super_admin";
     const jwtEmail: string = su?.email ?? "";
     if (!isAllowedTuningRole(role)) {
@@ -466,7 +468,7 @@ export function registerTuningRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const su = (req as AuthedReq).supabaseUser;
       const role = su?.app_metadata?.role;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? ""; // トップレベルclaimは信用しない（P1-2: 越境）
       const isSuperAdmin: boolean = role === "super_admin";
       if (!isAllowedTuningRole(role)) {
         logger.warn({
@@ -521,7 +523,7 @@ export function registerTuningRoutes(app: Express): void {
     async (req: Request, res: Response) => {
       const su = (req as AuthedReq).supabaseUser;
       const role = su?.app_metadata?.role;
-      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? su?.tenant_id ?? "";
+      const jwtTenantId: string = su?.app_metadata?.tenant_id ?? ""; // トップレベルclaimは信用しない（P1-2: 越境）
       const isSuperAdmin: boolean = role === "super_admin";
       if (!isAllowedTuningRole(role)) {
         logger.warn({

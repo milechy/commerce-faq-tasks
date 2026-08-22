@@ -21,6 +21,26 @@ import {
 
 const logger = pino();
 
+/** evaluateSession に expectedTenantId を渡した際、セッションの実tenant_idと一致しない場合に投げる。 */
+export class SessionTenantMismatchError extends Error {
+  constructor(sessionId: string) {
+    super(`session ${sessionId} does not belong to the expected tenant`);
+    this.name = 'SessionTenantMismatchError';
+  }
+}
+
+/**
+ * セッション自体が存在しない場合に投げる。
+ * 呼び出し元(routes.ts)は SessionTenantMismatchError と同一の404に変換し、
+ * 「存在しない」と「他テナントのもの」を区別可能な応答にしない（存在確認オラクル防止）。
+ */
+export class SessionNotFoundError extends Error {
+  constructor(sessionId: string) {
+    super(`session ${sessionId} not found`);
+    this.name = 'SessionNotFoundError';
+  }
+}
+
 const JUDGE_MODEL = process.env['GEMINI_MODEL'] ?? 'gemini-2.5-flash';
 
 const FALLBACK_PROMPT_TEMPLATE = `あなたは営業チャットAIの品質評価Judgeです。
@@ -130,7 +150,7 @@ async function loadPromptTemplate(): Promise<string> {
   }
 }
 
-export async function evaluateSession(sessionId: string): Promise<JudgeEvaluationResult | null> {
+export async function evaluateSession(sessionId: string, expectedTenantId?: string): Promise<JudgeEvaluationResult | null> {
   try {
     const pool = getPool();
 
@@ -141,11 +161,21 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
     );
     if (sessionResult.rows.length === 0) {
       logger.warn({ sessionId }, 'judgeEvaluator: session not found');
-      return null;
+      // 「不在」と「他テナントのもの」を呼び出し元が同一の404にできるよう、
+      // null(=処理失敗として500)ではなく専用エラーを投げる（存在確認オラクル防止）。
+      throw new SessionNotFoundError(sessionId);
     }
     const internalId: string = sessionResult.rows[0]!.id;
     const tenantId: string = sessionResult.rows[0]!.tenant_id;
     const variantId: string | null = sessionResult.rows[0]!.prompt_variant_id ?? null;
+
+    // 越境防止: 非super_adminの呼び出し元は自テナントのセッションのみ評価可能。
+    // 存在有無を漏らさないため「見つからない」場合と同じ扱いにはせず、呼び出し元(routes.ts)が
+    // 明示的に404へ変換できるよう専用エラーを投げる。
+    if (expectedTenantId !== undefined && tenantId !== expectedTenantId) {
+      logger.warn({ sessionId }, 'judgeEvaluator: tenant mismatch, refusing evaluation');
+      throw new SessionTenantMismatchError(sessionId);
+    }
 
     // 2. Fetch all messages using internal UUID (chat_messages.session_id → chat_sessions.id)
     const msgResult = await pool.query<ChatMessageRow>(
@@ -368,6 +398,7 @@ export async function evaluateSession(sessionId: string): Promise<JudgeEvaluatio
 
     return result;
   } catch (err) {
+    if (err instanceof SessionTenantMismatchError || err instanceof SessionNotFoundError) throw err;
     logger.error({ err, sessionId }, 'judgeEvaluator: unexpected error in evaluateSession');
     return null;
   }
