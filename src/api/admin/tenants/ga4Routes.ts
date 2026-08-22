@@ -1,10 +1,10 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
 import type { AuthedReq } from "../../middleware/roleAuth";
-import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { runGa4HealthCheck } from "../../../lib/ga4/ga4HealthCheck";
 import { logger } from "../../../lib/logger";
+import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 
 const connectSchema = z.object({
   property_id: z
@@ -16,36 +16,13 @@ const connectSchema = z.object({
 });
 
 export function registerGa4TenantRoutes(app: Express, db: Pool): void {
-  function tenantAuth(req: Request, res: Response, next: NextFunction): void {
-    const authHeader = req.headers.authorization ?? "";
-    if (process.env.NODE_ENV === "development") {
-      if (authHeader.startsWith("Bearer ")) {
-        try {
-          (req as AuthedReq).supabaseUser =
-            (jwt.decode(authHeader.slice(7).trim()) as import("../../middleware/roleAuth").SupabaseJwtUser) ?? undefined;
-        } catch {
-          // ignore
-        }
-      }
-      next();
-      return;
-    }
-    const secret = process.env.SUPABASE_JWT_SECRET;
-    if (!secret) { next(); return; }
-    if (!authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "Missing Bearer token" });
-      return;
-    }
-    try {
-      (req as AuthedReq).supabaseUser = jwt.verify(
-        authHeader.slice(7).trim(),
-        secret,
-      ) as import("../../middleware/roleAuth").SupabaseJwtUser;
-      next();
-    } catch {
-      res.status(401).json({ error: "Invalid token" });
-    }
-  }
+  // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
+  // ここでは req.supabaseUser の型を AuthedReq として扱えるよう別名で束ねるのみ。
+  const tenantAuth = supabaseAuthMiddleware as (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => void;
 
   function canAccessTenant(
     req: Request,

@@ -1,9 +1,9 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
 import type { AuthedReq } from "../../middleware/roleAuth";
-import jwt from "jsonwebtoken";
 import { getMonthlyLLMUsageFromPostHog } from "../../../lib/billing/posthogUsageTracker";
 import { logger } from "../../../lib/logger";
+import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 
 const PERIOD_DAYS: Record<string, number> = {
   last_7d: 7,
@@ -12,34 +12,12 @@ const PERIOD_DAYS: Record<string, number> = {
 };
 
 export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
-  function tenantAuth(req: Request, res: Response, next: NextFunction): void {
-    const authHeader = req.headers.authorization ?? "";
-    if (process.env.NODE_ENV === "development") {
-      if (authHeader.startsWith("Bearer ")) {
-        try {
-          (req as AuthedReq).supabaseUser =
-            (jwt.decode(authHeader.slice(7).trim()) as import("../../middleware/roleAuth").SupabaseJwtUser) ?? undefined;
-        } catch { /* ignore */ }
-      }
-      next();
-      return;
-    }
-    const secret = process.env.SUPABASE_JWT_SECRET;
-    if (!secret) { next(); return; }
-    if (!authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "Missing Bearer token" });
-      return;
-    }
-    try {
-      (req as AuthedReq).supabaseUser = jwt.verify(
-        authHeader.slice(7).trim(),
-        secret,
-      ) as import("../../middleware/roleAuth").SupabaseJwtUser;
-      next();
-    } catch {
-      res.status(401).json({ error: "Invalid token" });
-    }
-  }
+  // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
+  const tenantAuth = supabaseAuthMiddleware as (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => void;
 
   function canAccessTenant(req: Request, res: Response, tenantId: string, next: NextFunction): void {
     const su = (req as AuthedReq).supabaseUser;

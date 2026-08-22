@@ -2,6 +2,7 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { logger } from '../../../lib/logger';
+import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
@@ -16,37 +17,12 @@ function isAllowedChatTestRole(role: unknown): role is AllowedChatTestRole {
 
 
 export function registerChatTestRoutes(app: Express): void {
-  // ── インライン認証スタック (knowledge/routes.ts と同パターン) ──────────────
-  function chatTestAuth(req: Request, res: Response, next: NextFunction): void {
-    const authHeader = req.headers.authorization ?? "";
-
-    if (process.env.NODE_ENV === "development") {
-      if (authHeader.startsWith("Bearer ")) {
-        try {
-          (req as any).supabaseUser = jwt.decode(authHeader.slice(7).trim());
-        } catch { /* ignore */ }
-      }
-      next();
-      return;
-    }
-
-    const secret = process.env.SUPABASE_JWT_SECRET;
-    if (!secret) { next(); return; }
-
-    if (!authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "Missing Bearer token" });
-      return;
-    }
-    const token = authHeader.slice(7).trim();
-    try {
-      (req as any).supabaseUser = jwt.verify(token, secret);
-      next();
-    } catch (err) {
-      logger.warn("[chatTestAuth] invalid token", err);
-      res.status(401).json({ error: "Invalid token" });
-    }
-  }
-  // ─────────────────────────────────────────────────────────────────────────
+  // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
+  const chatTestAuth = supabaseAuthMiddleware as (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => void;
 
   // GET /v1/admin/chat-test/token?tenantId=xxx
   app.get("/v1/admin/chat-test/token", chatTestAuth, async (req: Request, res: Response) => {

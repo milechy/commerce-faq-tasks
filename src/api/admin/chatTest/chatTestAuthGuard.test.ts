@@ -5,6 +5,13 @@ jest.mock('../../../lib/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
+// このテストはロール判定(isAllowedChatTestRole)のみを検証する対象なので、
+// 共有JWT検証(src/admin/http/supabaseAuthMiddleware.ts)はスルーさせ、
+// makeApp() が注入する req.supabaseUser をそのまま下流に渡す。
+jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
+  supabaseAuthMiddleware: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 import express from 'express';
 import request from 'supertest';
 import { logger } from '../../../lib/logger';

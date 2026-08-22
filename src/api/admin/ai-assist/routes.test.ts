@@ -58,7 +58,15 @@ function makeApp(tenantId: string | null = 'tenant-a') {
   app.use(express.json());
   app.use((req: any, _res: any, next: any) => {
     req._mockUser =
-      tenantId === null ? null : { app_metadata: { tenant_id: tenantId }, email: 'test@test.com' };
+      tenantId === null
+        ? null
+        : {
+            app_metadata: {
+              tenant_id: tenantId || undefined,
+              role: tenantId ? 'client_admin' : 'super_admin',
+            },
+            email: 'test@test.com',
+          };
     next();
   });
   app.use((req: any, _res: any, next: any) => {
