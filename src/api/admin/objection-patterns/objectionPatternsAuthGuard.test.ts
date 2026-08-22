@@ -20,6 +20,7 @@ import express from 'express';
 import request from 'supertest';
 import { logger } from '../../../lib/logger';
 import { registerObjectionPatternRoutes } from './routes';
+import { getObjectionPattern, deleteObjectionPattern } from './objectionPatternsRepository';
 
 function makeApp(user: Record<string, unknown> | null) {
   const app = express();
@@ -69,5 +70,34 @@ describe('objection-patterns — ALLOWED_ROLES whitelist', () => {
       const res = await (request(app) as any)[method](path);
       expect(res.status).not.toBe(403);
     });
+  });
+});
+
+describe('objection-patterns — client_admin missing tenant_id (fail-closed)', () => {
+  const idRoutes = [
+    { method: 'get' as const, path: '/v1/admin/objection-patterns/123' },
+    { method: 'delete' as const, path: '/v1/admin/objection-patterns/123' },
+  ];
+  idRoutes.forEach(({ method, path }) => {
+    it(`${method.toUpperCase()} ${path} — client_admin with empty tenant_id → 403 (not unscoped lookup)`, async () => {
+      const app = makeApp({ app_metadata: { role: 'client_admin', tenant_id: '' }, email: 't@t.com' });
+      const res = await (request(app) as any)[method](path);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('AUTHZ_TENANT_MISSING');
+      expect(getObjectionPattern).not.toHaveBeenCalled();
+      expect(deleteObjectionPattern).not.toHaveBeenCalled();
+    });
+  });
+
+  it('GET /v1/admin/objection-patterns/123 — client_admin with tenant_id scopes the repository call', async () => {
+    const app = makeApp({ app_metadata: { role: 'client_admin', tenant_id: 't1' }, email: 't@t.com' });
+    await request(app).get('/v1/admin/objection-patterns/123');
+    expect(getObjectionPattern).toHaveBeenCalledWith(123, 't1');
+  });
+
+  it('DELETE /v1/admin/objection-patterns/123 — super_admin is not tenant-scoped', async () => {
+    const app = makeApp({ app_metadata: { role: 'super_admin', tenant_id: 't1' }, email: 't@t.com' });
+    await request(app).delete('/v1/admin/objection-patterns/123');
+    expect(deleteObjectionPattern).toHaveBeenCalledWith(123, undefined);
   });
 });

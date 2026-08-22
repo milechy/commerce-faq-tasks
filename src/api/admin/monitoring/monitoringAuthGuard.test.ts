@@ -70,3 +70,19 @@ describe('monitoring — ALLOWED_ROLES whitelist', () => {
     expect(res.status).not.toBe(403);
   });
 });
+
+describe('monitoring — client_admin missing tenant_id (fail-closed)', () => {
+  it('client_admin with empty tenant_id → 403 AUTHZ_TENANT_MISSING (not unscoped KPI aggregate)', async () => {
+    const app = makeApp({ app_metadata: { role: 'client_admin', tenant_id: '' }, email: 't@t.com' });
+    const res = await request(app).get(PATH);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('AUTHZ_TENANT_MISSING');
+    expect(logger.warn).toHaveBeenCalled();
+  });
+  it('client_admin without app_metadata.tenant_id at all → 403 AUTHZ_TENANT_MISSING', async () => {
+    const app = makeApp({ app_metadata: { role: 'client_admin' }, email: 't@t.com' });
+    const res = await request(app).get(PATH);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('AUTHZ_TENANT_MISSING');
+  });
+});
