@@ -112,15 +112,12 @@ describe("callGeminiJudge — 境界値・異常系", () => {
     expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 
-  it("【既知の残存リスク】呼び出し箇所はtrackUsage()をtry/catchで囲んでいないため、同期的に例外を投げると" +
-    "callGeminiJudge自体が失敗し、せっかく取得できたJudge結果（大事なLLM出力）ごと失われる。" +
-    "実運用のtrackUsageは設計上ここで例外を投げないが、それは呼び出し元のガードではなく実装依存の暗黙契約。" +
-    "本テストはこの構造的な脆さを固定して可視化する（対処はスコープ外）",
+  it("[修正確認] trackUsageが同期的に例外を投げても呼び出し元でtry/catchされ、正常取得できたJudge結果は失われずそのまま返る",
   async () => {
     mockFetchOk("大事な判定結果");
     mockTrackUsage.mockImplementationOnce(() => {
       throw new Error("db pool exploded");
     });
-    await expect(callGeminiJudge("prompt")).rejects.toThrow("db pool exploded");
+    await expect(callGeminiJudge("prompt")).resolves.toBe("大事な判定結果");
   });
 });

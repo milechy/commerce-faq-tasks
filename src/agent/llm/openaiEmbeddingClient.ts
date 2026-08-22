@@ -2,6 +2,7 @@
 // OpenAI Embeddings を REST API 経由で呼ぶラッパー（SDK 不使用）
 
 import { trackUsage } from "../../lib/billing/usageTracker";
+import { logger } from "../../lib/logger";
 
 export interface EmbedTextResult {
   embedding: number[];
@@ -68,15 +69,22 @@ export async function embedTextWithUsage(
 
   // 呼び出し元がtenantIdを渡していない場合は帰属先不明として billable=false で
   // 原価のみ記録する（誤って"unknown"テナントへ請求しないため）。
-  trackUsage({
-    tenantId: usageContext?.tenantId ?? "unknown",
-    requestId: usageContext?.requestId ?? `embed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    model,
-    inputTokens: totalTokens,
-    outputTokens: 0,
-    featureUsed: "admin_guide",
-    billable: usageContext?.tenantId ? undefined : false,
-  });
+  // trackUsageは現状setImmediateでスケジュールするだけの同期voidだが、将来の実装変更で
+  // 同期例外を投げるようになっても、正常取得できたembedding結果を道連れにしないよう
+  // 明示的に隔離する（CLAUDE.md: 副作用の記録の失敗が応答を変えてはならない）。
+  try {
+    trackUsage({
+      tenantId: usageContext?.tenantId ?? "unknown",
+      requestId: usageContext?.requestId ?? `embed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      model,
+      inputTokens: totalTokens,
+      outputTokens: 0,
+      featureUsed: "admin_guide",
+      billable: usageContext?.tenantId ? undefined : false,
+    });
+  } catch (err) {
+    logger.warn({ err }, "embedTextWithUsage: trackUsage failed (non-blocking)");
+  }
 
   return {
     embedding: embedding.map((v) => (typeof v === "number" ? v : Number(v) || 0)),

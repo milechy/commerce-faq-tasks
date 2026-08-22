@@ -52,15 +52,22 @@ export async function callGeminiJudge(prompt: string, usageContext?: GeminiUsage
     | { promptTokenCount?: number; candidatesTokenCount?: number }
     | undefined;
 
-  trackUsage({
-    tenantId: usageContext?.tenantId ?? 'unknown',
-    requestId: usageContext?.requestId ?? `gemini-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    model: GEMINI_MODEL,
-    inputTokens: usageMetadata?.promptTokenCount ?? 0,
-    outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
-    featureUsed: 'admin_tuning',
-    billable: usageContext?.billable ?? false,
-  });
+  // trackUsageは現状setImmediateでスケジュールするだけの同期voidだが、将来の実装変更で
+  // 同期例外を投げるようになっても、正常取得できたJudge結果を道連れにしないよう
+  // 明示的に隔離する（CLAUDE.md: 副作用の記録の失敗が応答を変えてはならない）。
+  try {
+    trackUsage({
+      tenantId: usageContext?.tenantId ?? 'unknown',
+      requestId: usageContext?.requestId ?? `gemini-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      model: GEMINI_MODEL,
+      inputTokens: usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
+      featureUsed: 'admin_tuning',
+      billable: usageContext?.billable ?? false,
+    });
+  } catch (err) {
+    logger.warn({ err }, 'callGeminiJudge: trackUsage failed (non-blocking)');
+  }
 
   return text;
 }

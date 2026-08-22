@@ -138,17 +138,14 @@ describe("openaiEmbeddingClient — 本番相当分岐（NODE_ENV一時的に上
     expect(firstCall[0].requestId).not.toBe(secondCall[0].requestId);
   });
 
-  it("【既知の残存リスク】呼び出し箇所はtrackUsage()をtry/catchで囲んでいないため、trackUsageが同期的に例外を投げるとembedTextWithUsage自体が失敗する。" +
-    "実運用のtrackUsage(usageTracker.ts)はsetImmediate+内部try/catchで同期例外を投げない設計だが、それは" +
-    "呼び出し元のガードではなく実装依存の暗黙契約でしかない。本テストはこの構造的な脆さを固定して可視化する（対処はスコープ外）",
-  async () => {
+  it("[修正確認] trackUsageが同期的に例外を投げても呼び出し元でtry/catchされ、正常取得できたembedding結果は失われずそのまま返る", async () => {
     mockFetchOk(7);
     mockTrackUsage.mockImplementationOnce(() => {
       throw new Error("db pool exploded");
     });
-    // 現状: trackUsageの例外はそのままembedTextWithUsageの失敗として伝播する
-    // （＝正常に取得できたembeddingごと呼び出し元に返せず失う）
-    await expect(embedTextWithUsage("resilient", { tenantId: "tenant-a" })).rejects.toThrow("db pool exploded");
+    const result = await embedTextWithUsage("resilient", { tenantId: "tenant-a" });
+    expect(result.embedding).toEqual([0.1, 0.2, 0.3]);
+    expect(result.totalTokens).toBe(7);
   });
 
   it("embedText/embedTextOpenAI（互換ラッパー）もtrackUsageを同様に発火させる", async () => {
