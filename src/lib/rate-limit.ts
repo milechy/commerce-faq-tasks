@@ -57,14 +57,27 @@ export interface RateLimitOptions {
   /** Override per-tenant limit. Falls back to TenantConfig or DEFAULT. */
   getLimit?: (tenantId: string) => number | undefined;
   logger?: Logger;
+  /**
+   * 'ip'    — pre-auth stage: key by nginx-injected X-Real-IP (flood/DDoS
+   *           protection before tenantId is known). Falls back to req.ip
+   *           when the header is absent (e.g. direct/local requests).
+   * 'tenant'— post-auth stage: key by tenantId (current default behavior).
+   * unset   — legacy behavior, identical to 'tenant' (backward compatible).
+   */
+  stage?: "ip" | "tenant";
 }
 
+const ANONYMOUS_IP_KEY = "unknown-ip";
+
 /**
- * Express middleware: tenant-aware sliding-window rate limiter.
+ * Express middleware: sliding-window rate limiter, staged.
  *
- * Position 2 in the chain — runs before auth so it can also throttle
- * unauthenticated flood traffic (keyed by IP). After auth sets tenantId
- * the key switches to tenantId for per-tenant enforcement.
+ * Two instances run in `apiStack`:
+ *   1. pre-auth (`stage: 'ip'`)     — throttles by X-Real-IP, catches
+ *      unauthenticated flood traffic before any tenantId exists.
+ *   2. post-auth (`stage: 'tenant'`)— throttles by tenantId, so one
+ *      client can no longer exhaust every tenant's shared "anonymous"
+ *      bucket (the bug this stage split fixes).
  *
  * When tenantConfig is available (loaded by tenantContextMiddleware),
  * uses `security.rateLimit` and `security.rateLimitWindowMs`.
@@ -72,7 +85,7 @@ export interface RateLimitOptions {
 export function createRateLimitMiddleware(opts: RateLimitOptions = {}) {
   ensureCleanup();
 
-  const { getLimit, logger } = opts;
+  const { getLimit, logger, stage } = opts;
 
   return function rateLimitMiddleware(
     req: Request,
@@ -80,18 +93,34 @@ export function createRateLimitMiddleware(opts: RateLimitOptions = {}) {
     next: NextFunction
   ): void {
     const authed = req as Request & { tenantId?: string; tenantConfig?: { security: { rateLimit: number; rateLimitWindowMs: number } } };
-    const tenantId: string = authed.tenantId ?? "anonymous";
+
+    let key: string;
+    if (stage === "ip") {
+      const realIp = req.header("x-real-ip")?.trim();
+      if (realIp) {
+        key = `ip:${realIp}`;
+      } else {
+        logger?.warn(
+          { requestId: req.requestId },
+          "rate_limit_missing_x_real_ip"
+        );
+        key = `ip:${req.ip ?? ANONYMOUS_IP_KEY}`;
+      }
+    } else {
+      // stage === "tenant" or unset (legacy/back-compat)
+      key = authed.tenantId ?? "anonymous";
+    }
 
     const tenantCfg = authed.tenantConfig;
     const limit =
-      getLimit?.(tenantId) ??
+      getLimit?.(key) ??
       tenantCfg?.security.rateLimit ??
       DEFAULT_MAX_REQUESTS;
     const windowMs =
       tenantCfg?.security.rateLimitWindowMs ?? DEFAULT_WINDOW_MS;
 
     const now = Date.now();
-    const entry = getWindow(tenantId, windowMs);
+    const entry = getWindow(key, windowMs);
     const current = countRecentRequests(entry, now, windowMs);
 
     const remaining = Math.max(0, limit - current);
@@ -104,7 +133,8 @@ export function createRateLimitMiddleware(opts: RateLimitOptions = {}) {
     if (current >= limit) {
       logger?.warn(
         {
-          tenantId,
+          key,
+          stage: stage ?? "tenant",
           requestId: req.requestId,
           limit,
           current,
@@ -121,7 +151,7 @@ export function createRateLimitMiddleware(opts: RateLimitOptions = {}) {
         message:
           "リクエスト数の上限に達しました。しばらくしてから再試行してください。",
         requestId: req.requestId,
-        tenantId,
+        tenantId: authed.tenantId ?? "anonymous",
       });
       return;
     }
