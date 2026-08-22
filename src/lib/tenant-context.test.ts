@@ -3,6 +3,7 @@ import {
   getTenantConfig,
   registerTenant,
   updateTenantEnabled,
+  updateTenantAllowedOrigins,
   isOriginKnownToAnyTenant,
   getTenantByApiKeyHash,
   setTenantApiKeyExpiry,
@@ -98,6 +99,63 @@ describe("updateTenantEnabled — kill-switch in-memory sync", () => {
     expect(cfg?.name).toBe("Kill Switch Test");
     expect(cfg?.plan).toBe("starter");
     expect(cfg?.security.apiKeyHash).toBe("dummyhash");
+  });
+});
+
+describe("updateTenantAllowedOrigins — CORS allowlist in-memory sync (PATCH live reload)", () => {
+  const TENANT_ID = "test-origins-live-reload-tenant";
+
+  beforeEach(() => {
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Origins Live Reload Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: {
+        apiKeyHash: "origins-test-hash",
+        hashAlgorithm: "sha256",
+        allowedOrigins: ["https://old-shop.example.com"],
+        rateLimit: 100,
+        rateLimitWindowMs: 60_000,
+      },
+      enabled: true,
+    });
+  });
+
+  it("PATCH直後、再起動なしで新規ドメインが isOriginKnownToAnyTenant に反映される", () => {
+    expect(isOriginKnownToAnyTenant("https://new-shop.example.com")).toBe(false);
+
+    const result = updateTenantAllowedOrigins(TENANT_ID, ["https://new-shop.example.com"]);
+
+    expect(result).toBe(true);
+    expect(isOriginKnownToAnyTenant("https://new-shop.example.com")).toBe(true);
+  });
+
+  it("ドメインを外す方向の更新も即座に反映される（旧ドメインが二度と許可されない）", () => {
+    expect(isOriginKnownToAnyTenant("https://old-shop.example.com")).toBe(true);
+
+    updateTenantAllowedOrigins(TENANT_ID, []);
+
+    expect(isOriginKnownToAnyTenant("https://old-shop.example.com")).toBe(false);
+  });
+
+  it("空配列は「オリジン制限なし」ではなく、DBの値どおりそのまま書き込む（呼び出し元がフィールド省略と区別する責務を持つ）", () => {
+    updateTenantAllowedOrigins(TENANT_ID, []);
+    expect(getTenantConfig(TENANT_ID)?.security.allowedOrigins).toEqual([]);
+  });
+
+  it("存在しないtenantIdに対してもno-opで例外を投げず、falseを返す", () => {
+    expect(() => updateTenantAllowedOrigins("non-existent-tenant-xyz", ["https://x.example.com"])).not.toThrow();
+    const result = updateTenantAllowedOrigins("non-existent-tenant-xyz", ["https://x.example.com"]);
+    expect(result).toBe(false);
+  });
+
+  it("allowedOrigins以外のTenantConfigフィールド（apiKeyHash等）を巻き込まない", () => {
+    updateTenantAllowedOrigins(TENANT_ID, ["https://new-shop.example.com"]);
+    const cfg = getTenantConfig(TENANT_ID);
+    expect(cfg?.security.apiKeyHash).toBe("origins-test-hash");
+    expect(cfg?.name).toBe("Origins Live Reload Test");
+    expect(cfg?.enabled).toBe(true);
   });
 });
 

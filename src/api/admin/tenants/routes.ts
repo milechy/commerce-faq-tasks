@@ -6,7 +6,7 @@ import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { Pool } from "pg";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { registerTenant, updateTenantEnabled, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent } from "../../../lib/tenant-context";
+import { registerTenant, updateTenantEnabled, updateTenantAllowedOrigins, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent } from "../../../lib/tenant-context";
 import { invalidateWorkspaceCache } from "../../../agent/openclaw/workspaceCache";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
@@ -451,6 +451,11 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       // in-memory store を即時同期 (is_active 変更が次リクエストから有効になる)
       if (fields.is_active !== undefined) {
         updateTenantEnabled(id, fields.is_active);
+      }
+      // allowed_origins も同様。未指定なら呼ばない（フィールド省略と空配列指定を区別する）。
+      // これが無いとCORS許可ドメインの追加/削除がPM2再起動まで反映されなかった。
+      if (fields.allowed_origins !== undefined) {
+        updateTenantAllowedOrigins(id, fields.allowed_origins);
       }
       // Phase47-C: system_prompt 変更時は OpenClaw Workspace キャッシュを無効化
       if (fields.system_prompt !== undefined) {

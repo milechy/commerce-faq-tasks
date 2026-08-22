@@ -6,12 +6,14 @@ import {
   registerTenant as mockRegisterTenant,
   setTenantApiKeyExpiry as mockSetTenantApiKeyExpiry,
   revokeTenantApiKeyIfCurrent as mockRevokeTenantApiKeyIfCurrent,
+  updateTenantAllowedOrigins as mockUpdateTenantAllowedOrigins,
 } from "../../../../src/lib/tenant-context";
 
 // tenant-context をモック
 jest.mock("../../../../src/lib/tenant-context", () => ({
   registerTenant: jest.fn(),
   updateTenantEnabled: jest.fn(),
+  updateTenantAllowedOrigins: jest.fn(),
   setTenantApiKeyExpiry: jest.fn(),
   revokeTenantApiKeyIfCurrent: jest.fn(),
 }));
@@ -744,6 +746,55 @@ describe("Tenant Admin Routes", () => {
       expect(res.status).toBe(200);
       expect(res.body.faq_question_hint).toBe("例: 保証期間は？");
       expect(res.body.faq_answer_hint).toBe("例: 3年間です");
+    });
+
+    it("allowed_originsを更新した場合、updateTenantAllowedOriginsを(tenantId, origins)で呼びインメモリを即時反映する（PM2再起動なしでCORSが通る配線）", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "t1", plan: "starter", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true, allowed_origins: ["https://new-shop.example.com"] }],
+          rowCount: 1,
+        })
+        .mockResolvedValue({ rows: [], rowCount: 0 });
+      const res = await request(app)
+        .patch("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ allowed_origins: ["https://new-shop.example.com"] });
+      expect(res.status).toBe(200);
+      expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("t1", ["https://new-shop.example.com"]);
+    });
+
+    it("allowed_originsを含まない更新では updateTenantAllowedOrigins を呼ばない（フィールド省略と空配列指定の区別）", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "t1", plan: "starter", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "t1", name: "更新後の名前", plan: "starter", is_active: true }],
+          rowCount: 1,
+        })
+        .mockResolvedValue({ rows: [], rowCount: 0 });
+      const callsBefore = (mockUpdateTenantAllowedOrigins as jest.Mock).mock.calls.length;
+      const res = await request(app)
+        .patch("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ name: "更新後の名前" });
+      expect(res.status).toBe(200);
+      expect((mockUpdateTenantAllowedOrigins as jest.Mock).mock.calls.length).toBe(callsBefore);
+    });
+
+    it("allowed_originsを空配列で更新すると、空配列のままupdateTenantAllowedOriginsに渡る（全ドメイン解除の意図を保持する）", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "t1", plan: "starter", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true, allowed_origins: [] }],
+          rowCount: 1,
+        })
+        .mockResolvedValue({ rows: [], rowCount: 0 });
+      const res = await request(app)
+        .patch("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ allowed_origins: [] });
+      expect(res.status).toBe(200);
+      expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("t1", []);
     });
   });
 

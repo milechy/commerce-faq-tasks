@@ -100,6 +100,26 @@ export function updateTenantEnabled(tenantId: string, enabled: boolean): boolean
   return true;
 }
 
+/**
+ * Update only `security.allowedOrigins` of an existing in-memory tenant.
+ * Used by PATCH /v1/admin/tenants/:id to propagate a DB change instantly,
+ * so a new origin (or a removed one) takes effect without a PM2 restart.
+ * Call only when the PATCH body explicitly included `allowed_origins` —
+ * passing `[]` means "no origins configured" (as stored in the DB) and is
+ * written as-is; the distinction between "field omitted" and "set to []"
+ * must be made by the caller before invoking this function.
+ * Returns true if tenant was found in store, false if not (DB-only tenant).
+ */
+export function updateTenantAllowedOrigins(tenantId: string, origins: string[]): boolean {
+  const existing = tenantStore.get(tenantId);
+  if (!existing) return false;
+  tenantStore.set(tenantId, {
+    ...existing,
+    security: { ...existing.security, allowedOrigins: origins },
+  });
+  return true;
+}
+
 
 // ---------------------------------------------------------------------------
 // Seed from environment (TENANT_CONFIGS_JSON or individual vars)
