@@ -254,34 +254,33 @@ describe("createRateLimitMiddleware", () => {
     expect(called).toBe(true);
   });
 
-  it("key namespace collision — a tenantId equal to an ip-stage key string can collide with that IP's bucket", () => {
-    // stage:'ip' keys are prefixed "ip:<addr>"; stage:'tenant' keys are the
-    // raw tenantId with NO prefix. A tenant literally named "ip:1.2.3.4"
-    // collides with the rate-limit bucket for that IP address, since both
-    // stages share the same module-level `store`. tenantId is client-chosen
-    // at tenant-creation time (see tenants/routes.ts), so this is reachable,
-    // not merely theoretical.
+  it("[修正確認] 名前空間の対称化により、ip-stageキー文字列と同名のtenantIdでも衝突しない", () => {
+    // 修正前: stage:'ip' キーは "ip:<addr>" 接頭辞付き、stage:'tenant' キーは
+    // 生のtenantIdで接頭辞無し。tenantが文字通り "ip:1.2.3.4" という名前だと
+    // 両stageが同一の module-level `store` を共有しているため、そのIPアドレスの
+    // レートリミットバケットと衝突していた（tenantIdはtenant作成時にクライアント側で
+    // 選択可能なため、tenants/routes.ts のバリデーション次第では到達しうる形だった）。
+    // 修正後: stage:'tenant' にも "tenant:" 接頭辞を付与し、両stageを完全に独立させた。
     const ipMw = createRateLimitMiddleware({ stage: "ip", getLimit: () => 1 });
     const tenantMw = createRateLimitMiddleware({ stage: "tenant", getLimit: () => 1 });
 
     const ipReq = mockReq({ xRealIp: "5.5.5.5" });
     const ipRes = mockRes();
     ipMw(ipReq as never, ipRes as never, () => {});
-    expect(ipRes.statusCode).toBe(200); // consumes the "ip:5.5.5.5" bucket
+    expect(ipRes.statusCode).toBe(200); // "ip:5.5.5.5" バケットを消費
 
-    const collidingTenantReq = mockReq({ tenantId: "ip:5.5.5.5" });
+    const formerlyCollidingTenantReq = mockReq({ tenantId: "ip:5.5.5.5" });
     const tenantRes = mockRes();
     let calledTenant = false;
-    tenantMw(collidingTenantReq as never, tenantRes as never, () => {
+    tenantMw(formerlyCollidingTenantReq as never, tenantRes as never, () => {
       calledTenant = true;
     });
-    // Demonstrates the collision: a brand-new tenant is blocked on its very
-    // first tenant-scoped request because an unrelated IP bucket of the
-    // same name was already exhausted.
-    expect(calledTenant).toBe(false);
+    // 修正後は独立した名前空間 ("tenant:ip:5.5.5.5") になるため、
+    // 新規テナントの初回リクエストが無関係なIPバケット枯渇の影響を受けない。
+    expect(calledTenant).toBe(true);
   });
 
-  it("getLimit receives the resolved key (IP-prefixed for stage:'ip', raw tenantId for stage:'tenant')", () => {
+  it("getLimit receives the resolved key (IP-prefixed for stage:'ip', tenant-prefixed for stage:'tenant')", () => {
     const seenKeys: string[] = [];
     const ipMw = createRateLimitMiddleware({
       stage: "ip",
@@ -301,7 +300,29 @@ describe("createRateLimitMiddleware", () => {
     ipMw(mockReq({ xRealIp: "8.8.8.8" }) as never, mockRes() as never, () => {});
     tenantMw(mockReq({ tenantId: "tenantX" }) as never, mockRes() as never, () => {});
 
-    expect(seenKeys).toEqual(["ip:8.8.8.8", "tenantX"]);
+    expect(seenKeys).toEqual(["ip:8.8.8.8", "tenant:tenantX"]);
+  });
+
+  it("stage未指定（legacy/back-compat）は接頭辞無しの既存キー形式を維持する", () => {
+    const legacyMw = createRateLimitMiddleware({ getLimit: () => 1 });
+    const tenantMw = createRateLimitMiddleware({ stage: "tenant", getLimit: () => 1 });
+
+    // legacy(stage未指定)は "tenantY" そのまま、tenant段は "tenant:tenantY" と
+    // 別名前空間になるため、legacy呼び出し元とstage移行後の呼び出し元は
+    // バケットを共有しない（意図的な非共有。将来的にlegacy呼び出しを
+    // 全てstage指定へ移行すべきだが、それ自体は本修正の範囲外）。
+    const legacyReq = mockReq({ tenantId: "tenantY" });
+    const legacyRes = mockRes();
+    legacyMw(legacyReq as never, legacyRes as never, () => {});
+    expect(legacyRes.statusCode).toBe(200); // legacy "tenantY" バケットを消費
+
+    const tenantReq = mockReq({ tenantId: "tenantY" });
+    const tenantRes = mockRes();
+    let called = false;
+    tenantMw(tenantReq as never, tenantRes as never, () => {
+      called = true;
+    });
+    expect(called).toBe(true); // "tenant:tenantY" は別バケットなので影響を受けない
   });
 
   it("429 response always reports authed.tenantId (or 'anonymous'), never the IP-based key — avoids leaking the rate-limit key to the client", () => {

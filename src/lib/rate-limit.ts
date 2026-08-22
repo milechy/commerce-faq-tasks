@@ -106,8 +106,14 @@ export function createRateLimitMiddleware(opts: RateLimitOptions = {}) {
         );
         key = `ip:${req.ip ?? ANONYMOUS_IP_KEY}`;
       }
+    } else if (stage === "tenant") {
+      // ip段と対称の名前空間にする（`tenant:`接頭辞）。tenantIdのバリデーション
+      // (`/^[a-z0-9_-]+$/`、コロン不可）により現状 ip段のキーと衝突する余地は無いが、
+      // 将来バリデーションが緩和された場合の防御として、両段を完全に独立させる。
+      key = `tenant:${authed.tenantId ?? "anonymous"}`;
     } else {
-      // stage === "tenant" or unset (legacy/back-compat)
+      // stage未指定（legacy/back-compat）: 既存呼び出し元（stage移行前）と
+      // 完全に同一のキー形式を維持する。新規呼び出しは必ず stage を指定すること。
       key = authed.tenantId ?? "anonymous";
     }
 
