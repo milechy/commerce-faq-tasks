@@ -175,3 +175,158 @@ describe('scrape — product URL scheme guard (safeHttpUrl)', () => {
     expect(preview[0]?.productMeta?.product_cta_url).toBe('https://example.com/p/safe');
   });
 });
+
+// Phase82 A2 — text/commit・scrape/commit の body.target 越境write遮断
+describe('knowledge commit — target による越境write遮断', () => {
+  const clientAdminT1 = { app_metadata: { role: 'client_admin', tenant_id: 't1' }, email: 't@t.com' };
+  const superAdmin = { app_metadata: { role: 'super_admin', tenant_id: null }, email: 'sa@t.com' };
+
+  const faq = { question: 'Q', answer: 'A' };
+
+  it('POST /text/commit: client_admin が target=他テナントを指定 → 403、自テナントには書き込まれない', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: 'tenantB' });
+    expect(res.status).toBe(403);
+    expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+  });
+
+  it('POST /text/commit: client_admin が target 省略（自テナント） → 201', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq] });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /text/commit: super_admin は target=他テナントを指定でき、そのテナントに書き込まれる', async () => {
+    const app = makeApp(superAdmin);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: 'tenantB' });
+    expect(res.status).toBe(201);
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO faq_docs')
+    );
+    expect(insertCall?.[1]?.[0]).toBe('tenantB');
+  });
+
+  it('POST /scrape/commit: client_admin が target=他テナントを指定 → 403', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/scrape/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ items: [{ url: 'https://example.com/p/1', faqs: [faq] }], target: 'tenantB' });
+    expect(res.status).toBe(403);
+    expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+  });
+
+  it('GET /structurize-status: client_admin が ?tenant=他テナントを指定 → 403（requireKnowledgeTenant）', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .get('/v1/admin/knowledge/structurize-status?tenant=tenantB')
+      .set('Authorization', 'Bearer fake');
+    expect(res.status).toBe(403);
+  });
+
+  // --- 壊れやすいポイント: target の境界値・イレギュラー値 ---
+
+  it('POST /text/commit: client_admin が target=自テナントを明示指定 → 201（許可されるべき）', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: 't1' });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /text/commit: client_admin が target="" (空文字列) → falsyフォールバックで自テナントに書き込まれる（201）', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: '' });
+    expect(res.status).toBe(201);
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO faq_docs')
+    );
+    // target="" は `rawTarget || tenantId` で自テナント(t1)にフォールバックする設計。
+    // 空文字列が「意図しないテナント」として素通りしないことを固定する。
+    expect(insertCall?.[1]?.[0]).toBe('t1');
+  });
+
+  it('POST /text/commit: client_admin が target="global" → 403（他テナント越境ガードにも一致し二重に防がれる）', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: 'global' });
+    expect(res.status).toBe(403);
+    expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+  });
+
+  it('POST /text/commit: client_admin が自テナントIDの大文字小文字違い(target="T1")を指定 → 403（大小区別する厳密一致）', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: 'T1' });
+    // target !== tenantId は厳密文字列比較のため、大小文字違いは「別テナント」として拒否される。
+    // 大小無視の緩い一致に変わっていないことを固定する。
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /text/commit: client_admin が target に長大・特殊文字列（SQLインジェクション様）を指定 → 403、DBに到達しない', async () => {
+    const app = makeApp(clientAdminT1);
+    const malicious = "tenantB'; DROP TABLE faq_docs; --" + 'x'.repeat(500);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq], target: malicious });
+    expect(res.status).toBe(403);
+    // 越境ガードが文字列比較のみで弾くため、悪意ある値がSQLクエリの引数として
+    // DBレイヤーに到達しないことを確認する（防御は認可層で完結する）。
+    expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
+  });
+
+  it('POST /text/commit: super_admin が target 省略 → tenant クエリパラメータ(自身が指定したテナント)に書き込まれる', async () => {
+    const app = makeApp(superAdmin);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/text/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ faqs: [faq] });
+    expect(res.status).toBe(201);
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO faq_docs')
+    );
+    // target未指定時のsuper_adminの既定挙動: `?tenant=`クエリの値にフォールバックする
+    // （bodyのtargetを省略しても無認可の書き込み先にならないことを固定）。
+    expect(insertCall?.[1]?.[0]).toBe('t1');
+  });
+
+  it('POST /scrape/commit: client_admin が target="" (空文字列) → 自テナントにフォールバックし成功する', async () => {
+    const app = makeApp(clientAdminT1);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/scrape/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ items: [{ url: 'https://example.com/p/1', faqs: [faq] }], target: '' });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('POST /scrape/commit: super_admin が target=他テナントを指定 → そのテナントに書き込まれる（text/commitと同じ判断基準）', async () => {
+    const app = makeApp(superAdmin);
+    const res = await request(app)
+      .post('/v1/admin/knowledge/scrape/commit?tenant=t1')
+      .set('Authorization', 'Bearer fake')
+      .send({ items: [{ url: 'https://example.com/p/1', faqs: [faq] }], target: 'tenantB' });
+    expect(res.status).toBe(201);
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('INSERT INTO faq_docs')
+    );
+    expect(insertCall?.[1]?.[0]).toBe('tenantB');
+  });
+});
