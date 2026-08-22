@@ -25,7 +25,16 @@ function mockRes() {
 const nextFn: NextFunction = jest.fn();
 
 describe("corsMiddleware", () => {
-  beforeEach(() => jest.clearAllMocks());
+  let savedNodeEnv: string | undefined;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    savedNodeEnv = process.env.NODE_ENV;
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = savedNodeEnv;
+  });
 
   it("reflects origin when in the global allowlist", () => {
     const mw = createCorsMiddleware({ defaultAllowedOrigins: ["https://admin.r2c.biz"] });
@@ -65,12 +74,56 @@ describe("corsMiddleware", () => {
     expect(res.headers["Access-Control-Allow-Origin"]).toBeUndefined();
   });
 
-  it("reflects any origin when the global allowlist is empty (dev wildcard mode)", () => {
+  it("reflects any origin when the global allowlist is empty (dev wildcard mode, development/test only)", () => {
+    process.env.NODE_ENV = "test";
     const mw = createCorsMiddleware({ defaultAllowedOrigins: [] });
     const req = mockReq({ headers: { origin: "https://anything.example" } });
     const res = mockRes();
     mw(req, res, nextFn);
     expect(res.headers["Access-Control-Allow-Origin"]).toBe("https://anything.example");
+  });
+
+  it("does NOT reflect any origin when the global allowlist is empty in production (fail-safe; config drift must not open CORS to everyone)", () => {
+    process.env.NODE_ENV = "production";
+    const mw = createCorsMiddleware({ defaultAllowedOrigins: [] });
+    const req = mockReq({ headers: { origin: "https://anything.example" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    expect(res.headers["Access-Control-Allow-Origin"]).toBeUndefined();
+  });
+
+  it("in production with empty allowlist, still reflects an origin known to a tenant", () => {
+    process.env.NODE_ENV = "production";
+    const mw = createCorsMiddleware({
+      defaultAllowedOrigins: [],
+      isKnownTenantOrigin: (origin) => origin === "https://tenant.example.com",
+    });
+    const req = mockReq({ headers: { origin: "https://tenant.example.com" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    expect(res.headers["Access-Control-Allow-Origin"]).toBe("https://tenant.example.com");
+  });
+
+  it("warns at middleware creation when ALLOWED_ORIGINS is empty outside dev wildcard mode", () => {
+    process.env.NODE_ENV = "production";
+    const warn = jest.fn();
+    createCorsMiddleware({ defaultAllowedOrigins: [], logger: { warn } as any });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("ALLOWED_ORIGINS");
+  });
+
+  it("does not warn when ALLOWED_ORIGINS is empty but dev wildcard mode is active", () => {
+    process.env.NODE_ENV = "development";
+    const warn = jest.fn();
+    createCorsMiddleware({ defaultAllowedOrigins: [], logger: { warn } as any });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when ALLOWED_ORIGINS is configured", () => {
+    process.env.NODE_ENV = "production";
+    const warn = jest.fn();
+    createCorsMiddleware({ defaultAllowedOrigins: ["https://admin.r2c.biz"], logger: { warn } as any });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("ends the response with 204 for OPTIONS without calling next()", () => {

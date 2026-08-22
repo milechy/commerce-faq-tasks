@@ -15,6 +15,21 @@ export interface CorsOptions {
   logger?: Logger;
 }
 
+/**
+ * `defaultAllowedOrigins` が空(=ALLOWED_ORIGINS env未設定)のとき、development/test では
+ * 全オリジンを許可する「dev wildcard mode」を維持する。ただしこれを production にまで
+ * 適用すると、env設定漏れが「テナント登録の有無に関わらず全オリジン許可+
+ * Access-Control-Allow-Credentials:true」という fail-open になる
+ * (isKnownTenantOrigin によるテナント単位の絞り込みごと迂回されるため)。
+ * securityLayerConfig.ts と同じ考え方で、known でない環境は「本番かもしれない」側に倒す
+ * (fail-safe)。
+ */
+const DEV_WILDCARD_ENVS = new Set(["development", "test"]);
+
+function isDevWildcardModeActive(): boolean {
+  return DEV_WILDCARD_ENVS.has(process.env["NODE_ENV"] ?? "");
+}
+
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const ALLOWED_HEADERS = [
   "Content-Type",
@@ -44,6 +59,13 @@ const EXPOSED_HEADERS = [
 export function createCorsMiddleware(opts: CorsOptions = {}) {
   const allowedSet = new Set(opts.defaultAllowedOrigins ?? []);
 
+  if (allowedSet.size === 0 && !isDevWildcardModeActive()) {
+    opts.logger?.warn(
+      "[cors] ALLOWED_ORIGINS が未設定です。テナント登録済みのオリジンのみ許可します" +
+        "（isKnownTenantOrigin）。意図した設定か確認してください。"
+    );
+  }
+
   return function corsMiddleware(
     req: Request,
     res: Response,
@@ -53,9 +75,9 @@ export function createCorsMiddleware(opts: CorsOptions = {}) {
 
     const isAllowed =
       !!origin &&
-      (allowedSet.size === 0 ||
-        allowedSet.has(origin) ||
-        (opts.isKnownTenantOrigin?.(origin) ?? false));
+      (allowedSet.has(origin) ||
+        (opts.isKnownTenantOrigin?.(origin) ?? false) ||
+        (allowedSet.size === 0 && isDevWildcardModeActive()));
 
     if (isAllowed) {
       res.setHeader("Access-Control-Allow-Origin", origin as string);
