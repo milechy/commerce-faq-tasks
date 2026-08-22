@@ -129,3 +129,25 @@ describe("POST /api/chat — trafficSource判定", () => {
     expect(new Set(sources)).toEqual(new Set(["e2e"]));
   });
 });
+
+describe("POST /api/chat — tenantId解決", () => {
+  it("req.tenantId が未解決(空文字)の場合は401 unauthorizedを返す", async () => {
+    const res = await request(makeApp({ tenantId: "" }))
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("unauthorized");
+    expect(mockRunDialogTurn).not.toHaveBeenCalled();
+  });
+
+  it("認証済みtenantIdがrunDialogTurnにそのまま渡る（\"demo-tenant\"へのフォールバックは発生しない）", async () => {
+    await request(makeApp({ tenantId: "tenant-xyz" }))
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(mockRunDialogTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-xyz" })
+    );
+  });
+});

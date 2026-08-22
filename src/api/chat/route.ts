@@ -88,10 +88,19 @@ type ChatRequest = z.infer<typeof ChatRequestSchema>;
 export function createChatHandler(logger: Logger) {
   return async (req: Request, res: Response): Promise<void> => {
     const requestId = req.requestId;
-    // tenantId は authMiddleware が JWT/APIキーから設定する（bodyから取得禁止）
-    const tenantId = (req as Request & { tenantId?: string }).tenantId ?? "demo-tenant";
     // Phase33: lang は langDetectMiddleware が設定する（フォールバック: "ja"）
     const lang: Lang = (req as any).lang ?? "ja";
+    // tenantId は authMiddleware が JWT/APIキーから設定する（bodyから取得禁止）
+    const tenantId = (req as Request & { tenantId?: string }).tenantId;
+    if (!tenantId) {
+      logger.warn({ requestId }, "chat.request.tenant_unresolved");
+      res.status(401).json({
+        error: "unauthorized",
+        message: t("error.unauthorized", lang),
+        requestId,
+      });
+      return;
+    }
     // GID 1216970103691946: 実ユーザー/E2E/chat-test/デモの判定（セッション新規作成時のみ記録）
     const trafficSource = resolveTrafficSource({
       headerValue: req.header(TRAFFIC_SOURCE_HEADER),
