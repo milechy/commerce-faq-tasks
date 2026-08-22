@@ -4,9 +4,12 @@ import { embedText } from "../../agent/llm/openaiEmbeddingClient";
 import { pool } from "../../lib/db";
 import { supabaseAuthMiddleware } from "./supabaseAuthMiddleware";
 import { logger } from '../../lib/logger';
-import { resolveFaqWriteIndex } from "../../search/langIndex";
+import { upsertFaqToEs, deleteFaqFromEs } from "../../lib/knowledge/faqIndexSync";
 
-
+// es_doc_id 列は使用しない: 非NULL値を書き込む箇所がコードベース全体に無く、
+// 索引同期は src/lib/knowledge/faqIndexSync.ts の `${faqId}_${tenantId}` 規約に
+// 一本化されている（faqCrudRoutes.ts / actionExecutor.ts / faqImport.ts と共通）。
+// 列自体はDBに残るがコードからは参照しない。
 
 type FaqRow = {
   id: number;
@@ -14,9 +17,9 @@ type FaqRow = {
   question: string;
   answer: string;
   category: string | null;
-  es_doc_id: string | null;
   tags: string[] | null;
   is_published: boolean;
+  is_excluded_from_search?: boolean | null;
   created_at: string;
   updated_at: string;
 };
@@ -76,54 +79,6 @@ function requireFaqTenant(req: Request, res: Response, next: NextFunction): void
     req.query.tenantId = jwtTenantId;
   }
   next();
-}
-
-async function updateEsFaqDocument(row: FaqRow) {
-  try {
-    const esUrl = process.env.ES_URL;
-    // Phase69-2-E: write index を read path と同じ faq_${tenantId} に統一
-    const esFaqIndex = resolveFaqWriteIndex(row.tenant_id);
-
-    if (!esUrl) {
-      logger.warn("[updateEsFaqDocument] ES_URL is not set");
-      return;
-    }
-    if (!row.es_doc_id) {
-      logger.warn(
-        "[updateEsFaqDocument] es_doc_id is not set for FAQ id",
-        row.id
-      );
-      return;
-    }
-
-    const url = `${esUrl.replace(
-      /\/$/,
-      ""
-    )}/${esFaqIndex}/_doc/${encodeURIComponent(row.es_doc_id)}`;
-
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        tenant_id: row.tenant_id,
-        question: row.question,
-        answer: row.answer,
-        category: row.category,
-        tags: row.tags,
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      logger.warn(
-        `[updateEsFaqDocument] Failed to update ES document ${row.es_doc_id}: status ${response.status}, response: ${text}`
-      );
-    }
-  } catch (err) {
-    logger.warn("[updateEsFaqDocument] error", err);
-  }
 }
 
 export function registerFaqAdminRoutes(app: Express) {
@@ -322,6 +277,8 @@ export function registerFaqAdminRoutes(app: Express) {
         logger.warn("[POST /admin/faqs] failed to insert embedding", err);
       }
 
+      upsertFaqToEs(row.tenant_id, row.id, row.question, row.answer, row.is_published);
+
       return res.status(201).json(row);
     } catch (err) {
       logger.error("[POST /admin/faqs] error", err);
@@ -355,7 +312,6 @@ export function registerFaqAdminRoutes(app: Express) {
           question = COALESCE($2, question),
           answer = COALESCE($3, answer),
           category = COALESCE($4, category),
-          es_doc_id = es_doc_id,
           tags = COALESCE($5, tags),
           is_published = COALESCE($6, is_published),
           updated_at = NOW()
@@ -389,11 +345,7 @@ export function registerFaqAdminRoutes(app: Express) {
 
       const row = result.rows[0];
 
-      try {
-        await updateEsFaqDocument(row);
-      } catch (err) {
-        logger.warn("[PUT /admin/faqs/:id] failed to update ES", err);
-      }
+      upsertFaqToEs(row.tenant_id, row.id, row.question, row.answer, row.is_published);
 
       try {
         const embeddingText = `${row.question}\n${row.answer}`;
@@ -478,6 +430,8 @@ export function registerFaqAdminRoutes(app: Express) {
         `,
         [tenantId, id]
       );
+
+      await deleteFaqFromEs(tenantId, id);
 
       return res.json({ ok: true, id });
     } catch (err) {

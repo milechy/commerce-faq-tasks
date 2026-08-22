@@ -20,6 +20,8 @@
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { Pool } = require("pg") as { Pool: any };
 
+import { faqEsDocId } from "../src/lib/knowledge/faqIndexSync";
+
 const pgUrl = process.env.DATABASE_URL;
 const esUrl = (process.env.ES_URL || "").replace(/\/$/, "");
 
@@ -163,7 +165,9 @@ async function bulkIndex(index: string, rows: any[]): Promise<number> {
   // バルクAPIフォーマット: action\ndoc\n 繰り返し
   const lines: string[] = [];
   for (const row of rows) {
-    const action = JSON.stringify({ index: { _index: index, _id: String(row.id) } });
+    const action = JSON.stringify({
+      index: { _index: index, _id: faqEsDocId(row.tenant_id, row.id) },
+    });
     const doc = JSON.stringify({
       tenant_id: row.tenant_id,
       question: row.question,

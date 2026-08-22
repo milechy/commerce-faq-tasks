@@ -8,6 +8,7 @@ import {
   insertEmbeddingAsync,
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
+import { deleteFaqFromEs } from '../../../lib/knowledge/faqIndexSync';
 import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 import { callGroq8bSuggestFromText, callGroq8bSuggest } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
@@ -769,6 +770,7 @@ export async function executeToolCall(
           [tenantId, id]
         );
         await db.query('DELETE FROM faq_docs WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+        await deleteFaqFromEs(tenantId, id);
 
         return truncate(`FAQ（ID: ${id}）を削除しました`);
       } catch (err) {
