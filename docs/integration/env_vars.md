@@ -56,13 +56,40 @@ DBスキーマ変更: src/api/admin/tenants/migration.sql を実行すること
 
 ## Phase48: LLM防御 L5-L8
 
+**既定値の決まり方（`src/middleware/securityLayerConfig.ts`）**:
+`NODE_ENV` が `development` / `test` の時だけ既定OFF（`"true"` 明示でON）。
+それ以外（`production` / `staging` / **`NODE_ENV`未設定**）はすべて既定ON（`"false"` 明示でOFF）。
+未知の環境名を「本番かもしれない」側に倒す fail-safe。
+
+> ⚠️ **ローカル開発では `.env` に `NODE_ENV=development` が必要**（`.env.example` に記載済み）。
+> `pnpm dev` / `pnpm start` は `NODE_ENV` を設定しないため、未設定のままだと4層が既定ONになり、
+> 開発中にURL送信ブロック等が効き始める。
+>
+> 逆に本番側は、`pm2 start` に `--env production` を付け忘れると `NODE_ENV` が未設定になる。
+> 以前はこれで**4層すべてが無言でOFF**になっていた（fail-open）。現在は既定ONに倒れる。
+
 | 変数 | 説明 / デフォルト | Phase |
 |---|---|---|
-| INPUT_SANITIZER_ENABLED | 入力サニタイザー有効化 / true | Phase48 |
+| INPUT_SANITIZER_ENABLED | 入力サニタイザー有効化 / 既定ON（dev/testのみOFF） | Phase48 |
 | INPUT_MAX_LENGTH | 最大メッセージ長 / 500 | Phase48 |
-| PROMPT_FIREWALL_ENABLED | プロンプトファイアウォール有効化 / true | Phase48 |
-| TOPIC_GUARD_ENABLED | トピックガード有効化 / true | Phase48 |
+| PROMPT_FIREWALL_ENABLED | プロンプトファイアウォール有効化 / 既定ON（dev/testのみOFF） | Phase48 |
+| PROMPT_FIREWALL_SHADOW_ENABLED | 文中インジェクションのshadow計測（ブロックしない） / 既定ON（dev/testのみOFF） | Phase48 |
+| TOPIC_GUARD_ENABLED | トピックガード有効化 / 既定ON（dev/testのみOFF） | Phase48 |
 | TOPIC_GUARD_LLM_ENABLED | トピックガードLLM判定 / false | Phase48 |
-| OUTPUT_GUARD_ENABLED | 出力ガード有効化 / true | Phase48 |
+| OUTPUT_GUARD_ENABLED | 出力ガード有効化 / 既定ON（dev/testのみOFF） | Phase48 |
 | SESSION_ABUSE_LIMIT | セッション終了までの違反回数 / 3 | Phase48 |
 | SESSION_REPEAT_LIMIT | 同一メッセージ反復ブロック回数 / 3 | Phase48 |
+
+### 難読化による検出回避への対策（L7）
+
+全角英字（`ａｃｔ ａｓ`）やゼロ幅スペース（`a<ZWSP>ct as`）を使うと、ASCII前提の
+検出パターンを100%回避できていた。現在は L7 が **検査専用の正規化コピー**（NFKC +
+不可視文字の除去/空白化の2通り）を作り、「正規化すると禁止パターンに一致するが
+原文のままでは一致しない」場合を意図的な難読化とみなしてメッセージ全体をブロックする。
+
+- **LLMに渡る本文は原文のまま**（正規化コピーは判定にのみ使用）。正当な全角入力は壊さない
+- 難読化の痕跡は全角ASCII（U+FF01-FF5E）と不可視文字のみ。**半角カナは含めない**
+  （`ﾘｾｯﾄ方法を教えて` のような正常な問い合わせを誤ブロックしないため）
+- ブロック時は `[promptFirewall] obfuscated injection blocked` を **warn** で常時記録
+  （`PROMPT_FIREWALL_SHADOW_ENABLED` に依存しない）。本文はログに出さない
+- 検出名は `<パターン名>_obfuscated`（例: `role_override_en_obfuscated`）
