@@ -509,4 +509,52 @@ describe('evaluateSession', () => {
     await expect(evaluateSession('session-single-message')).rejects.toThrow(SessionTooShortError);
     expect(mockCallGroq).not.toHaveBeenCalled();
   });
+
+  it('17. [境界値] メッセージがちょうど2件 → SessionTooShortErrorはthrowされず通常通り評価される（0/1件との境界を挟んで反対側を固定する）', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-boundary', tenant_id: 'tenant-a', prompt_variant_id: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: 'こんにちは', created_at: new Date() },
+          { role: 'assistant', content: 'いらっしゃいませ', created_at: new Date() },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 70 }));
+
+    const result = await evaluateSession('session-boundary-2msgs');
+
+    expect(result).not.toBeNull();
+    expect(mockCallGroq).toHaveBeenCalledTimes(1);
+  });
+
+  it('18. [イレギュラー] 全メッセージがassistant発言のみ（ユーザー発言ゼロ）でも評価は継続する（firstUserMsg空文字列でクラッシュしない）', async () => {
+    // 実運用では通常あり得ない（AIが先に2回連続発話するセッション構成）が、
+    // messages.length <= 1 のガードは role を見ないため、この構成でも
+    // SessionTooShortError にはならず素通りする。firstUserMsg = '' になった際に
+    // searchKnowledgeForSuggestion がスキップされ、以降の処理が例外を投げないことを固定する。
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-noUser', tenant_id: 'tenant-a', prompt_variant_id: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'assistant', content: 'いらっしゃいませ', created_at: new Date() },
+          { role: 'assistant', content: '何かお探しですか？', created_at: new Date() },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 60 }));
+
+    const result = await evaluateSession('session-no-user-messages');
+
+    expect(result).not.toBeNull();
+    // searchKnowledgeForSuggestion は firstUserMsg 空文字列のためスキップされ、
+    // Gemini 呼び出しには到達すること（クラッシュせず先に進んだ証跡）
+    expect(mockCallGroq).toHaveBeenCalledTimes(1);
+  });
 });
