@@ -74,10 +74,17 @@ export function initAuthMiddleware(opts: AuthMiddlewareOptions = {}) {
       const payload = verifySupabaseJwt(token);
 
       if (payload) {
-        req.authUser = payload;
         // CLAUDE.md: tenantId は JWT payload からのみ取得
         // Supabase JWT は app_metadata 内に tenant_id を格納するため両方参照
-        req.tenantId = payload.app_metadata?.tenant_id ?? payload.tenant_id ?? "demo";
+        const tenantId = payload.app_metadata?.tenant_id ?? payload.tenant_id;
+        if (!tenantId) {
+          return res.status(401).json({
+            error: "invalid_token",
+            message: "JWT に tenant_id が含まれていません。",
+          });
+        }
+        req.authUser = payload;
+        req.tenantId = tenantId;
         return next();
       }
 

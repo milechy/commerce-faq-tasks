@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import type { NextFunction, Response } from "express";
 import { initAuthMiddleware, type AuthedRequest } from "./authMiddleware";
 import type { TenantConfig } from "../../types/contracts";
+import { verifySupabaseJwt } from "../../auth/verifySupabaseJwt";
+
+jest.mock("../../auth/verifySupabaseJwt", () => ({
+  verifySupabaseJwt: jest.fn(),
+}));
+const mockVerifySupabaseJwt = verifySupabaseJwt as jest.Mock;
 
 function mockReq(overrides: Record<string, unknown> = {}): AuthedRequest {
   const headers: Record<string, string> = {};
@@ -158,5 +164,55 @@ describe("initAuthMiddleware — legacy API_KEY fallback", () => {
     expect(nextFn).toHaveBeenCalled();
     // API_KEY_TENANT_ID が未設定なので "default" が使われる
     expect(req.tenantId).toBe("default");
+  });
+});
+
+describe("initAuthMiddleware — Bearer JWT path", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const middleware = initAuthMiddleware({
+    resolveByApiKeyHash: () => undefined,
+    legacyApiKey: undefined,
+    legacyBasicUser: undefined,
+    legacyBasicPass: undefined,
+  });
+
+  function bearerReq(token: string): AuthedRequest {
+    const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+    return mockReq({ headers, header: (name: string) => headers[name.toLowerCase()] });
+  }
+
+  it("rejects a valid JWT that has no tenant_id (no demo fallback)", () => {
+    mockVerifySupabaseJwt.mockReturnValue({ sub: "user-1", app_metadata: {} });
+    const req = bearerReq("valid-but-no-tenant");
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(req.tenantId).toBeUndefined();
+  });
+
+  it("accepts a valid JWT with app_metadata.tenant_id", () => {
+    mockVerifySupabaseJwt.mockReturnValue({
+      sub: "user-1",
+      app_metadata: { tenant_id: "tenant-abc", role: "client_admin" },
+    });
+    const req = bearerReq("valid-with-tenant");
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).toHaveBeenCalled();
+    expect(req.tenantId).toBe("tenant-abc");
+  });
+
+  it("rejects an invalid/unverifiable JWT", () => {
+    mockVerifySupabaseJwt.mockReturnValue(null);
+    const req = bearerReq("garbage");
+    const res = mockRes();
+    middleware(req, res, nextFn);
+
+    expect(nextFn).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
   });
 });
