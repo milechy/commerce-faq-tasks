@@ -1,5 +1,16 @@
 // src/middleware/inputSanitizer.ts
 // Phase48 Pane 1: L5 Input Sanitizer
+//
+// chat/avatar の対話ストリーム専用。L5-L8 の多層防御(inputSanitizer→
+// promptFirewall→topicGuard→outputGuard)の1層として、env切り替え可能な
+// (isSecurityLayerEnabled)セッション単位の乱用検知・エンコーディング攻撃検知を行う。
+// ../../lib/security/inputSanitizer.ts とはURL検出という関心が一部重なるが、
+// 別物として意図的に併存させている:
+//   - あちら: feedback/tuning等の複数admin機能から使われる汎用の同期・
+//     ステートレスなベースラインチェック（feature flag無し、常時ON）
+//   - こちら: 対話ストリーム専用。セッション単位の状態を持つ多層防御の1層
+// URL検出ロジックが両ファイルにそれぞれ実装されている点はドリフトリスクなので、
+// 片方のURLパターンだけ更新して他方を放置しないよう注意すること。
 
 import { logger } from '../lib/logger';
 import { isSecurityLayerEnabled } from './securityLayerConfig';
