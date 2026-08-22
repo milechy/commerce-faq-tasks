@@ -11,6 +11,7 @@ import {
   revokeTenantApiKey,
   addTenantApiKey,
   revokeAdditionalTenantApiKey,
+  seedTenantsFromDB,
 } from "./tenant-context";
 
 describe("seedTenantsFromEnv — numbered keys", () => {
@@ -554,5 +555,128 @@ describe("addTenantApiKey / revokeAdditionalTenantApiKey — 無停止ローテ�
     // 失効させれば同じ平文キーはもう認証できない
     revokeAdditionalTenantApiKey(TENANT_ID, keyHash);
     expect(getTenantByApiKeyHash(authHash)).toBeUndefined();
+  });
+});
+
+describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
+  // このパスは従来テストが1本も無く、PM2再起動のたびに
+  // 「テナントごと1本のキーしか復元されない」バグが検出されないままだった。
+
+  type SeedRow = {
+    tenant_id: string;
+    name: string;
+    plan: string;
+    is_active: boolean;
+    features: Record<string, boolean>;
+    allowed_origins: string[];
+    key_hash: string;
+    rate_limit: number | null;
+    expires_at: string | null;
+  };
+
+  const row = (over: Partial<SeedRow> & Pick<SeedRow, "tenant_id" | "key_hash">): SeedRow => ({
+    name: over.tenant_id,
+    plan: "starter",
+    is_active: true,
+    features: { avatar: false, voice: false, rag: true },
+    allowed_origins: [],
+    rate_limit: null,
+    expires_at: null,
+    ...over,
+  });
+
+  /** pool.query だけを持つ最小のフェイク（seedTenantsFromDB が使うのはこれだけ） */
+  const fakePool = (rows: SeedRow[]) =>
+    ({ query: jest.fn().mockResolvedValue({ rows, rowCount: rows.length }) }) as unknown as Parameters<typeof seedTenantsFromDB>[0];
+
+  it("1テナントに複数のアクティブキーがある場合、全キーを復元する（再起動でローテーションキーが消えない）", async () => {
+    const TENANT = "seed-multi-key-tenant";
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "seed-key-newest" }),
+        row({ tenant_id: TENANT, key_hash: "seed-key-older" }),
+        row({ tenant_id: TENANT, key_hash: "seed-key-oldest" }),
+      ])
+    );
+
+    // 3本すべてが認証に使える = 無停止ローテーションが再起動を跨いで成立する
+    expect(getTenantByApiKeyHash("seed-key-newest")?.tenantId).toBe(TENANT);
+    expect(getTenantByApiKeyHash("seed-key-older")?.tenantId).toBe(TENANT);
+    expect(getTenantByApiKeyHash("seed-key-oldest")?.tenantId).toBe(TENANT);
+  });
+
+  it("SQLの先頭行(ORDER BYで最新)が主キーになる — 復元後の主キーが非決定的にならない", async () => {
+    const TENANT = "seed-primary-order-tenant";
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "seed-primary-expected" }),
+        row({ tenant_id: TENANT, key_hash: "seed-primary-not-expected" }),
+      ])
+    );
+
+    expect(getTenantConfig(TENANT)?.security.apiKeyHash).toBe("seed-primary-expected");
+  });
+
+  it("複数テナントを取り違えずに復元する（キーがテナント間で混ざらない）", async () => {
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: "seed-tenant-a", key_hash: "seed-a-key1" }),
+        row({ tenant_id: "seed-tenant-a", key_hash: "seed-a-key2" }),
+        row({ tenant_id: "seed-tenant-b", key_hash: "seed-b-key1" }),
+      ])
+    );
+
+    expect(getTenantByApiKeyHash("seed-a-key1")?.tenantId).toBe("seed-tenant-a");
+    expect(getTenantByApiKeyHash("seed-a-key2")?.tenantId).toBe("seed-tenant-a");
+    expect(getTenantByApiKeyHash("seed-b-key1")?.tenantId).toBe("seed-tenant-b");
+  });
+
+  it("追加キーは行ごとの expires_at を保持する（期限切れの追加キーは復元後も認証できない）", async () => {
+    const TENANT = "seed-expiry-tenant";
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "seed-expiry-primary" }),
+        row({ tenant_id: TENANT, key_hash: "seed-expiry-valid", expires_at: new Date(Date.now() + 600_000).toISOString() }),
+        row({ tenant_id: TENANT, key_hash: "seed-expiry-stale", expires_at: new Date(Date.now() - 1_000).toISOString() }),
+      ])
+    );
+
+    expect(getTenantByApiKeyHash("seed-expiry-valid")?.tenantId).toBe(TENANT);
+    // 期限切れの行がDBの WHERE をすり抜けて届いても、in-memory側で弾く
+    expect(getTenantByApiKeyHash("seed-expiry-stale")).toBeUndefined();
+  });
+
+  it("env由来で登録済みのテナントはDBで上書きしない（キーも足さない — envが唯一の情報源）", async () => {
+    const TENANT = "seed-env-precedence-tenant";
+    registerTenant({
+      tenantId: TENANT,
+      name: "From Env",
+      plan: "enterprise",
+      features: { avatar: true, voice: true, rag: true },
+      security: { apiKeyHash: "env-key-hash", hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+
+    await seedTenantsFromDB(
+      fakePool([
+        row({ tenant_id: TENANT, key_hash: "db-key-should-be-ignored", name: "From DB", plan: "starter" }),
+      ])
+    );
+
+    expect(getTenantConfig(TENANT)?.name).toBe("From Env");
+    expect(getTenantConfig(TENANT)?.security.apiKeyHash).toBe("env-key-hash");
+    expect(getTenantByApiKeyHash("db-key-should-be-ignored")).toBeUndefined();
+  });
+
+  it("DB接続に失敗しても例外を投げずに起動を継続する（起動をブロックしない）", async () => {
+    const failingPool = {
+      query: jest.fn().mockRejectedValue(new Error("connection refused")),
+    } as unknown as Parameters<typeof seedTenantsFromDB>[0];
+
+    await expect(seedTenantsFromDB(failingPool)).resolves.toBeUndefined();
+  });
+
+  it("0件でも例外を投げない", async () => {
+    await expect(seedTenantsFromDB(fakePool([]))).resolves.toBeUndefined();
   });
 });
