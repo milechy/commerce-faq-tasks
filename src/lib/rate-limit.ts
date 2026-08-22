@@ -54,15 +54,29 @@ function countRecentRequests(
 }
 
 export interface RateLimitOptions {
-  /** Override per-tenant limit. Falls back to TenantConfig or DEFAULT. */
-  getLimit?: (tenantId: string) => number | undefined;
+  /**
+   * Override the limit for a resolved bucket key. Falls back to TenantConfig
+   * or DEFAULT. The key is the *prefixed* bucket key actually used to bucket
+   * requests (e.g. `tenant:acme`, `ip:1.2.3.4`, or the unprefixed legacy
+   * `acme` / `anonymous` when `stage` is unset) — NOT a raw tenantId. A
+   * callback written as `(tenantId) => plans[tenantId]` will silently miss
+   * (`plans['tenant:acme']` is undefined) and fall through to DEFAULT with
+   * no error, so treat the argument as an opaque key, not a tenantId.
+   */
+  getLimit?: (key: string) => number | undefined;
   logger?: Logger;
   /**
    * 'ip'    — pre-auth stage: key by nginx-injected X-Real-IP (flood/DDoS
    *           protection before tenantId is known). Falls back to req.ip
    *           when the header is absent (e.g. direct/local requests).
-   * 'tenant'— post-auth stage: key by tenantId (current default behavior).
-   * unset   — legacy behavior, identical to 'tenant' (backward compatible).
+   * 'tenant'— post-auth stage: key by tenantId, prefixed `tenant:` to keep
+   *           its namespace independent from the 'ip' stage's `ip:` prefix.
+   * unset   — legacy/back-compat: keys by the *unprefixed* tenantId
+   *           (`authed.tenantId ?? "anonymous"`). This is NOT the same
+   *           bucket namespace as 'tenant' (which prefixes with `tenant:`) —
+   *           the two stages share no buckets. New call sites must specify
+   *           `stage` explicitly; leave this branch only for pre-existing
+   *           unmigrated callers.
    */
   stage?: "ip" | "tenant";
 }

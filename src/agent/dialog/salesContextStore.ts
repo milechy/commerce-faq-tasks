@@ -1,4 +1,5 @@
 import type { SalesStage } from "../orchestrator/sales/salesStageMachine";
+import { buildTenantSessionKey } from "./sessionKey";
 
 export interface SalesSessionMeta {
   currentStage: SalesStage;
@@ -13,7 +14,7 @@ export interface SalesSessionKey {
 }
 
 const toInternalKey = (key: SalesSessionKey): string =>
-  `${key.tenantId}::${key.sessionId}`;
+  buildTenantSessionKey(key.tenantId, key.sessionId);
 
 const sessionStore = new Map<string, SalesSessionMeta>();
 
