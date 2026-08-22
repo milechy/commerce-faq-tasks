@@ -8,6 +8,8 @@ import {
   getTenantByApiKeyHash,
   setTenantApiKeyExpiry,
   revokeTenantApiKeyIfCurrent,
+  addTenantApiKey,
+  revokeAdditionalTenantApiKey,
 } from "./tenant-context";
 
 describe("seedTenantsFromEnv — numbered keys", () => {
@@ -329,5 +331,99 @@ describe("APIキー失効・期限切れの即時反映", () => {
     // setTenantApiKeyExpiry を再度呼ばずに新キー登録した場合、失効時にMapが掃除されていなければ
     // 古い期限(60秒後)が誤って新キーに適用されてしまう可能性がある — undefined（無期限扱い）が正しい
     expect(getTenantByApiKeyHash(NEW_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+});
+
+describe("addTenantApiKey / revokeAdditionalTenantApiKey — 無停止ローテーション", () => {
+  const TENANT_ID = "test-multikey-tenant";
+  const PRIMARY_HASH = "multikey-primary-hash";
+  const ADDITIONAL_HASH = "multikey-additional-hash";
+
+  beforeEach(() => {
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Multikey Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: PRIMARY_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    setTenantApiKeyExpiry(TENANT_ID, null);
+  });
+
+  it("addTenantApiKey で追加したキーは主キーと同時に有効になる", () => {
+    const added = addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    expect(added).toBe(true);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("addTenantApiKey は tenantStore に存在しない未知テナントには false を返す", () => {
+    expect(addTenantApiKey("unknown-tenant-xyz", "some-hash", null)).toBe(false);
+  });
+
+  it("追加キーには独立した有効期限を設定できる（主キーの期限には影響しない）", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, new Date(Date.now() - 1000)); // 既に期限切れ
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)).toBeUndefined(); // 追加キーは期限切れ
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID); // 主キーは無期限のまま有効
+  });
+
+  it("追加キーが未来の期限なら有効に解決される", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, new Date(Date.now() + 60_000));
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeAdditionalTenantApiKey は追加キーのみ失効させ、主キーは有効なまま", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    const revoked = revokeAdditionalTenantApiKey(TENANT_ID, ADDITIONAL_HASH);
+    expect(revoked).toBe(true);
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)).toBeUndefined();
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeAdditionalTenantApiKey は主キーのハッシュを渡しても何もしない（担当範囲外のハッシュ）", () => {
+    const revoked = revokeAdditionalTenantApiKey(TENANT_ID, PRIMARY_HASH);
+    expect(revoked).toBe(false);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeAdditionalTenantApiKey は存在しない追加キーに対して false を返す", () => {
+    expect(revokeAdditionalTenantApiKey(TENANT_ID, "never-added-hash")).toBe(false);
+  });
+
+  it("複数の追加キーを同時に有効化でき、個別に失効させられる", () => {
+    const hashB = "multikey-additional-hash-b";
+    const hashC = "multikey-additional-hash-c";
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    addTenantApiKey(TENANT_ID, hashB, null);
+    addTenantApiKey(TENANT_ID, hashC, null);
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+    expect(getTenantByApiKeyHash(hashB)?.tenantId).toBe(TENANT_ID);
+    expect(getTenantByApiKeyHash(hashC)?.tenantId).toBe(TENANT_ID);
+
+    revokeAdditionalTenantApiKey(TENANT_ID, hashB);
+    expect(getTenantByApiKeyHash(hashB)).toBeUndefined();
+    // 他の2本(主キー含む)は無傷
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)?.tenantId).toBe(TENANT_ID);
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+    expect(getTenantByApiKeyHash(hashC)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("主キーを revokeTenantApiKeyIfCurrent で失効させても、追加キーは影響を受けず有効なまま", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null);
+    const revoked = revokeTenantApiKeyIfCurrent(TENANT_ID, PRIMARY_HASH);
+    expect(revoked).toBe(true);
+    expect(getTenantByApiKeyHash(PRIMARY_HASH)).toBeUndefined();
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("同じハッシュを addTenantApiKey で2回登録しても例外にならず、後勝ちの期限で上書きされる", () => {
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, new Date(Date.now() + 60_000));
+    addTenantApiKey(TENANT_ID, ADDITIONAL_HASH, null); // 無期限に上書き
+    expect(getTenantByApiKeyHash(ADDITIONAL_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("未登録テナントの追加キーMapに対する getTenantByApiKeyHash 探索は例外を投げない", () => {
+    expect(getTenantByApiKeyHash("hash-with-no-additional-keys-anywhere")).toBeUndefined();
   });
 });

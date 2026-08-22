@@ -6,7 +6,7 @@ import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { Pool } from "pg";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { registerTenant, updateTenantEnabled, updateTenantAllowedOrigins, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent } from "../../../lib/tenant-context";
+import { registerTenant, updateTenantEnabled, updateTenantAllowedOrigins, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent, addTenantApiKey, revokeAdditionalTenantApiKey } from "../../../lib/tenant-context";
 import { invalidateWorkspaceCache } from "../../../agent/openclaw/workspaceCache";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
@@ -16,6 +16,28 @@ import { planHasFeature, type TenantPlan } from "../../../lib/billing/planFeatur
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 
 const planValues = ["starter", "growth", "enterprise"] as const;
+
+// 日付のみの文字列("2026-01-01"等)はUTC深夜と解釈されるため、意図したタイムゾーンと
+// ズレて「まだ未来のつもりが過去判定される」事故が起きやすい。バリデーションのロジックは
+// 変えず、エラーメッセージでタイムゾーン付きISO-8601形式を案内する。
+const EXPIRES_AT_FORMAT_HINT = "expires_atはタイムゾーンを含むISO-8601形式（例: 2026-01-01T00:00:00+09:00）で指定してください。日付のみの指定はUTC深夜として解釈されます。";
+
+// APIキー発行時の expires_at 検証。super_admin向け・client_admin向け両方の
+// キー発行エンドポイントで共有する（複製しない）。
+function validateExpiresAt(
+  raw: unknown
+): { expiresAt: Date | null } | { error: string; message: string } {
+  if (!raw) return { expiresAt: null };
+  const expiresAt = new Date(raw as string);
+  if (isNaN(expiresAt.getTime())) {
+    return { error: "invalid_expires_at", message: EXPIRES_AT_FORMAT_HINT };
+  }
+  // 過去日時を許可すると、発行直後から使えない「死んだキー」が201で作れてしまう。
+  if (expiresAt.getTime() <= Date.now()) {
+    return { error: "expires_at_in_past", message: `expires_atは未来の日時である必要があります。${EXPIRES_AT_FORMAT_HINT}` };
+  }
+  return { expiresAt };
+}
 
 // GID 1216274591838389: 初回ログイン時オンボーディングの業種選択肢
 const onboardingIndustryValues = ["auto", "beauty", "food", "realestate", "retail", "other"] as const;
@@ -279,6 +301,120 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
   });
 
+  // POST /v1/admin/my-tenant/keys — Client Admin専用: 自テナントのAPIキーを自力発行する。
+  // super_admin向け POST /v1/admin/tenants/:id/keys と異なり、in-memory側は
+  // registerTenant(既存キーを上書き)ではなく addTenantApiKey(既存キーを維持したまま追加)を
+  // 使う。旧キーはclient_adminが明示的に失効させるまで有効のまま＝無停止ローテーション。
+  app.post("/v1/admin/my-tenant/keys", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
+    const su = (req as AuthedReq).supabaseUser;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+    try {
+      const tenantCheck = await db.query("SELECT id, is_active FROM tenants WHERE id = $1", [tenantId]);
+      if (tenantCheck.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
+      }
+      if (!tenantCheck.rows[0].is_active) {
+        return res.status(403).json({ error: "tenant_disabled", message: "無効なテナントにはAPIキーを発行できません。" });
+      }
+
+      const expiresAtResult = validateExpiresAt(req.body?.expires_at);
+      if ("error" in expiresAtResult) {
+        return res.status(400).json({ error: expiresAtResult.error, message: expiresAtResult.message });
+      }
+      const expiresAt = expiresAtResult.expiresAt;
+
+      const plainKey = generateApiKey();
+      const keyHash = hashApiKey(plainKey);
+      const keyPrefix = plainKey.slice(0, 12);
+
+      const result = await db.query(
+        `INSERT INTO tenant_api_keys (tenant_id, key_hash, key_prefix, is_active, expires_at)
+         VALUES ($1, $2, $3, true, $4)
+         RETURNING id, tenant_id, key_prefix, is_active, created_at, expires_at`,
+        [tenantId, keyHash, keyPrefix, expiresAt]
+      );
+      const row = result.rows[0];
+
+      // 既存キー(主キー・追加キー問わず)を失効させず、新キーを追加で有効化する。
+      // addTenantApiKey は tenantStore に既存エントリがある場合のみ true を返す
+      // （DB-onlyテナント=in-memory未登録の場合は静かにスキップ。DBが正なので発行自体は成功扱い）。
+      addTenantApiKey(tenantId, keyHash, expiresAt);
+
+      // 平文キーはこのレスポンスでのみ返す（二度と取得不可）
+      return res.status(201).json({
+        api_key: plainKey,
+        tenant_id: row.tenant_id,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        id: row.id,
+      });
+    } catch (err) {
+      logger.warn("[POST /v1/admin/my-tenant/keys]", err);
+      return res.status(500).json({ error: "APIキー発行に失敗しました" });
+    }
+  });
+
+  // GET /v1/admin/my-tenant/keys — Client Admin専用: 自テナントのAPIキー一覧（マスク表示）
+  app.get("/v1/admin/my-tenant/keys", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
+    const su = (req as AuthedReq).supabaseUser;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+    try {
+      const result = await db.query(
+        `SELECT id, key_prefix, is_active, created_at, expires_at, last_used_at
+         FROM tenant_api_keys
+         WHERE tenant_id = $1
+         ORDER BY created_at DESC`,
+        [tenantId]
+      );
+      const keys = (result.rows as Array<{ id: string; key_prefix: string; is_active: boolean; created_at: string; expires_at: string | null; last_used_at: string | null }>).map((row) => ({
+        ...row,
+        prefix: maskApiKeyPrefix(row.key_prefix),
+      }));
+      return res.json({ keys, total: keys.length });
+    } catch (err) {
+      logger.warn("[GET /v1/admin/my-tenant/keys]", err);
+      return res.status(500).json({ error: "APIキー一覧の取得に失敗しました" });
+    }
+  });
+
+  // DELETE /v1/admin/my-tenant/keys/:keyId — Client Admin専用: 自テナントのAPIキーを失効する
+  app.delete("/v1/admin/my-tenant/keys/:keyId", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
+    const su = (req as AuthedReq).supabaseUser;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+    const { keyId } = req.params;
+    try {
+      // tenant_id = $2 で自テナント以外のキーIDを指定されても404にする(越境防止)
+      const result = await db.query(
+        `UPDATE tenant_api_keys
+         SET is_active = false, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, tenant_id, is_active, key_hash`,
+        [keyId, tenantId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "APIキーが見つかりません。" });
+      }
+      const revokedHash = result.rows[0].key_hash;
+      // 主キーであれば revokeTenantApiKeyIfCurrent、無停止ローテーションで追加された
+      // キーであれば revokeAdditionalTenantApiKey が反応する。両方試して即時反映する。
+      revokeTenantApiKeyIfCurrent(tenantId, revokedHash);
+      revokeAdditionalTenantApiKey(tenantId, revokedHash);
+      return res.json({ ok: true, id: keyId, is_active: false });
+    } catch (err) {
+      logger.warn("[DELETE /v1/admin/my-tenant/keys/:keyId]", err);
+      return res.status(500).json({ error: "APIキー無効化に失敗しました" });
+    }
+  });
+
   // GET /v1/admin/tenants
   app.get("/v1/admin/tenants", tenantAuth, requireSuperAdmin, async (_req: Request, res: Response) => {
     try {
@@ -533,15 +669,11 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       }
 
       // expires_at (オプション: body.expires_at)
-      const expiresAtRaw = req.body?.expires_at;
-      const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
-      if (expiresAt && isNaN(expiresAt.getTime())) {
-        return res.status(400).json({ error: "invalid_expires_at", message: "expires_atの日時形式が不正です。" });
+      const expiresAtResult = validateExpiresAt(req.body?.expires_at);
+      if ("error" in expiresAtResult) {
+        return res.status(400).json({ error: expiresAtResult.error, message: expiresAtResult.message });
       }
-      // 過去日時を許可すると、発行直後から使えない「死んだキー」が201で作れてしまう。
-      if (expiresAt && expiresAt.getTime() <= Date.now()) {
-        return res.status(400).json({ error: "expires_at_in_past", message: "expires_atは未来の日時である必要があります。" });
-      }
+      const expiresAt = expiresAtResult.expiresAt;
 
       const plainKey = generateApiKey();
       const keyHash = hashApiKey(plainKey);

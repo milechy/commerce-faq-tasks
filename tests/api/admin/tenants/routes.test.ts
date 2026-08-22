@@ -7,6 +7,8 @@ import {
   setTenantApiKeyExpiry as mockSetTenantApiKeyExpiry,
   revokeTenantApiKeyIfCurrent as mockRevokeTenantApiKeyIfCurrent,
   updateTenantAllowedOrigins as mockUpdateTenantAllowedOrigins,
+  addTenantApiKey as mockAddTenantApiKey,
+  revokeAdditionalTenantApiKey as mockRevokeAdditionalTenantApiKey,
 } from "../../../../src/lib/tenant-context";
 
 // tenant-context をモック
@@ -16,6 +18,8 @@ jest.mock("../../../../src/lib/tenant-context", () => ({
   updateTenantAllowedOrigins: jest.fn(),
   setTenantApiKeyExpiry: jest.fn(),
   revokeTenantApiKeyIfCurrent: jest.fn(),
+  addTenantApiKey: jest.fn(),
+  revokeAdditionalTenantApiKey: jest.fn(),
 }));
 
 // supabaseClient をモック（招待API用 — テストでは不要）
@@ -854,6 +858,168 @@ describe("Tenant Admin Routes", () => {
       expect(res1.status).toBe(200);
       expect(res2.status).toBe(200);
       expect(res2.body.ok).toBe(true);
+    });
+  });
+
+  describe("POST /v1/admin/my-tenant/keys", () => {
+    it("client_admin が自テナントのキーを発行できる（201, rjc_始まり）", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "tenant1", is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "key-uuid", tenant_id: "tenant1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null }],
+          rowCount: 1,
+        });
+      const res = await request(app)
+        .post("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(201);
+      expect(res.body.api_key).toMatch(/^rjc_/);
+      expect(res.body.tenant_id).toBe("tenant1");
+    });
+
+    it("registerTenant(上書き)ではなく addTenantApiKey(追加)を呼ぶ — 既存キーを失効させない無停止ローテーション", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "tenant1", is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "key-uuid", tenant_id: "tenant1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null }],
+          rowCount: 1,
+        });
+      const registerCallsBefore = (mockRegisterTenant as jest.Mock).mock.calls.length;
+      const res = await request(app)
+        .post("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(201);
+      expect((mockRegisterTenant as jest.Mock).mock.calls.length).toBe(registerCallsBefore);
+      expect(mockAddTenantApiKey).toHaveBeenLastCalledWith("tenant1", expect.any(String), null);
+    });
+
+    it("tenant_id claim が無い場合は403で、キーは一切発行されない", async () => {
+      const callsBefore = (mockAddTenantApiKey as jest.Mock).mock.calls.length;
+      const res = await request(app)
+        .post("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`); // tenant_id claim なし
+      expect(res.status).toBe(403);
+      expect((mockAddTenantApiKey as jest.Mock).mock.calls.length).toBe(callsBefore);
+    });
+
+    it("越境不可: JWTのtenant_id以外のテナントにキーを発行することはできない（bodyでの指定は無視される）", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "tenant1", is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "key-uuid", tenant_id: "tenant1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null }],
+          rowCount: 1,
+        });
+      const res = await request(app)
+        .post("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ tenant_id: "other-tenant" });
+      expect(res.status).toBe(201);
+      // DB問い合わせは常にJWT由来のtenantIdで行われる（bodyのtenant_idは無視）
+      expect(mockDb.query.mock.calls[0][1]).toEqual(["tenant1"]);
+    });
+
+    it("無効化済み(is_active=false)テナントへのキー発行は403で、追加登録は一切行わない", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [{ id: "tenant1", is_active: false }], rowCount: 1 });
+      const callsBefore = (mockAddTenantApiKey as jest.Mock).mock.calls.length;
+      const res = await request(app)
+        .post("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(403);
+      expect((mockAddTenantApiKey as jest.Mock).mock.calls.length).toBe(callsBefore);
+    });
+
+    it("不正な expires_at は400で拒否され、タイムゾーン付きISO-8601形式を案内するメッセージを返す", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [{ id: "tenant1", is_active: true }], rowCount: 1 });
+      const res = await request(app)
+        .post("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ expires_at: "not-a-real-date" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_expires_at");
+      expect(res.body.message).toMatch(/ISO-8601/);
+      expect(res.body.message).toMatch(/タイムゾーン/);
+    });
+
+    it("過去日時のexpires_atは400で拒否され、案内メッセージにタイムゾーンの注意書きを含む", async () => {
+      const pastDate = new Date(Date.now() - 86_400_000).toISOString();
+      mockDb.query.mockResolvedValueOnce({ rows: [{ id: "tenant1", is_active: true }], rowCount: 1 });
+      const res = await request(app)
+        .post("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ expires_at: pastDate });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("expires_at_in_past");
+      expect(res.body.message).toMatch(/ISO-8601/);
+    });
+  });
+
+  describe("GET /v1/admin/my-tenant/keys", () => {
+    it("client_admin が自テナントのキー一覧をマスク表示で取得できる", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "k1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: null, last_used_at: null }],
+      });
+      const res = await request(app)
+        .get("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.keys[0].prefix).toMatch(/\*\*\*\*$/);
+      expect(mockDb.query.mock.calls[0][1]).toEqual(["tenant1"]);
+    });
+
+    it("super_admin以外・client_admin以外(viewer等)は403", async () => {
+      const viewerToken = makeDevJwt({ sub: "u", app_metadata: { role: "viewer", tenant_id: "tenant1" } });
+      const res = await request(app)
+        .get("/v1/admin/my-tenant/keys")
+        .set("Authorization", `Bearer ${viewerToken}`);
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe("DELETE /v1/admin/my-tenant/keys/:keyId", () => {
+    it("client_admin が自テナントのキーを失効できる", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [{ id: "k1", tenant_id: "tenant1", is_active: false, key_hash: "h1" }], rowCount: 1 });
+      const res = await request(app)
+        .delete("/v1/admin/my-tenant/keys/k1")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+    });
+
+    it("主キー・追加キーの両方の失効経路を試す（どちらが一致するか呼び出し時点では分からないため）", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [{ id: "k1", tenant_id: "tenant1", is_active: false, key_hash: "h1" }], rowCount: 1 });
+      const res = await request(app)
+        .delete("/v1/admin/my-tenant/keys/k1")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(mockRevokeTenantApiKeyIfCurrent).toHaveBeenLastCalledWith("tenant1", "h1");
+      expect(mockRevokeAdditionalTenantApiKey).toHaveBeenLastCalledWith("tenant1", "h1");
+    });
+
+    it("存在しないキーは404", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      const res = await request(app)
+        .delete("/v1/admin/my-tenant/keys/no-key")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(404);
+    });
+
+    it("越境不可: 他テナントのkeyIdはWHERE tenant_id条件で一致せず404になり、失効処理も走らない", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      const callsBefore = (mockRevokeTenantApiKeyIfCurrent as jest.Mock).mock.calls.length;
+      const res = await request(app)
+        .delete("/v1/admin/my-tenant/keys/key-belongs-to-other-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(404);
+      expect((mockRevokeTenantApiKeyIfCurrent as jest.Mock).mock.calls.length).toBe(callsBefore);
+      // DBクエリのtenant_id条件が常にJWT由来のtenant_id("tenant1")であることを確認
+      expect(mockDb.query.mock.calls[0][1]).toEqual(["key-belongs-to-other-tenant", "tenant1"]);
+    });
+
+    it("tenant_id claim が無い場合は403", async () => {
+      const res = await request(app)
+        .delete("/v1/admin/my-tenant/keys/k1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+      expect(res.status).toBe(403);
     });
   });
 });
