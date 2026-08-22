@@ -22,7 +22,12 @@ const WIDGET_SRC_PATH = path.resolve(process.cwd(), "public", "widget.js");
 
 /** Generate a 24h widget session token (tenantId + nonce) */
 function generateWidgetToken(tenantId: string): string {
-  const secret = process.env.SUPABASE_JWT_SECRET ?? process.env.WIDGET_JWT_SECRET ?? "widget-secret-dev";
+  // 公開配布される widget token は管理API(SUPABASE_JWT_SECRET)とは別鍵で署名する。
+  // 同じ鍵を使うと、widget.js に埋め込まれたトークンが Bearer として管理APIを通過してしまう。
+  const secret = process.env.WIDGET_JWT_SECRET;
+  if (!secret) {
+    throw new Error("[widgetGenerator] WIDGET_JWT_SECRET is not configured");
+  }
   return jwt.sign(
     {
       sub: tenantId,

@@ -5,12 +5,12 @@ import type { Express, NextFunction, Request, Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { pool } from "../../../lib/db";
-import jwt from "jsonwebtoken";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { logger } from '../../../lib/logger';
 import { resolveFaqWriteIndex } from "../../../search/langIndex";
 import type { SupabaseJwtUser } from '../../middleware/roleAuth';
+import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import {
   generateTextFaqPreview,
   generateScrapeFaqPreview,
@@ -54,44 +54,10 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
 
   const db = pool;
 
-  // ── インライン認証スタック（モジュールキャッシュ問題を回避） ─────────────────
-  // JWT 検証 → req.supabaseUser / req.user をセット
+  // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
+  // req.user への変換(setUserAndNext)はこのファイル固有のロジックのため維持する。
   function knowledgeAuth(req: Request, res: Response, next: NextFunction): void {
-    const authHeader = req.headers.authorization ?? "";
-
-    if (process.env.NODE_ENV === "development") {
-      // development: 署名検証なしでデコードし req.supabaseUser をセット
-      if (authHeader.startsWith("Bearer ")) {
-        try {
-          (req as KnowledgeReq).supabaseUser = jwt.decode(authHeader.slice(7).trim()) as SupabaseJwtUser ?? undefined;
-        } catch {
-          // decode 失敗は無視して通す
-        }
-        return setUserAndNext(req, next);
-      }
-      if (req.headers["x-api-key"]) return next();
-      res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
-      return;
-    }
-
-    const secret = process.env.SUPABASE_JWT_SECRET;
-    if (!secret) {
-      // SECRET 未設定時はスキップ（ステージング等）
-      return setUserAndNext(req, next);
-    }
-
-    if (!authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "Missing Bearer token" });
-      return;
-    }
-    const token = authHeader.slice(7).trim();
-    try {
-      (req as KnowledgeReq).supabaseUser = jwt.verify(token, secret) as SupabaseJwtUser;
-      return setUserAndNext(req, next);
-    } catch (err) {
-      logger.warn("[knowledgeAuth] invalid token", err);
-      res.status(401).json({ error: "Invalid token" });
-    }
+    supabaseAuthMiddleware(req, res, () => setUserAndNext(req, next));
   }
 
   function setUserAndNext(req: Request, next: NextFunction): void {
@@ -341,11 +307,18 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { faqs, category: categoryOverride, target: rawTarget } = parsed.data;
+    const isSuperAdmin = (req as KnowledgeReq).user?.role === "super_admin";
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
-    if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
+    if (target === "global" && !isSuperAdmin) {
       return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
+    }
+    // target は body 由来のクライアント制御値。requireKnowledgeTenant は body を見ないため、
+    // super_admin 以外が他テナントへの書き込みを指定できてしまう穴を防ぐ
+    // （actionExecutor.ts の commit_faq_import と同じ判断基準）。
+    if (target !== tenantId && !isSuperAdmin) {
+      return res.status(403).json({ error: "forbidden", message: "他のテナントには登録できません" });
     }
 
     const result = await commitTextFaqs(db, target, faqs, categoryOverride, "text");
@@ -418,11 +391,18 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     const { items, category: categoryOverride, target: rawTarget } = parsed.data;
+    const isSuperAdmin = (req as KnowledgeReq).user?.role === "super_admin";
     const target = rawTarget || tenantId;
 
     // "global" は super_admin のみ許可
-    if (target === "global" && (req as KnowledgeReq).user?.role !== "super_admin") {
+    if (target === "global" && !isSuperAdmin) {
       return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ登録可能です" });
+    }
+    // target は body 由来のクライアント制御値。requireKnowledgeTenant は body を見ないため、
+    // super_admin 以外が他テナントへの書き込みを指定できてしまう穴を防ぐ
+    // （actionExecutor.ts の commit_faq_import と同じ判断基準）。
+    if (target !== tenantId && !isSuperAdmin) {
+      return res.status(403).json({ error: "forbidden", message: "他のテナントには登録できません" });
     }
 
     const result = await commitScrapeFaqs(db, target, items, categoryOverride, "scrape");
@@ -435,6 +415,7 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     '/v1/admin/knowledge/structurize-status',
     knowledgeAuth,
     requireKnowledgeRole,
+    requireKnowledgeTenant,
     async (req: Request, res: Response) => {
       const user = (req as KnowledgeReq).user;
       const tenantId = resolveTenantId(req);

@@ -8,7 +8,7 @@ import { getPool } from "../../../lib/db";
 import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
 import { logger } from '../../../lib/logger';
-import { isAllowedAdminRole } from "../../middleware/roleAuth";
+import { isAllowedAdminRole, roleAuthMiddleware } from "../../middleware/roleAuth";
 import { z } from "zod";
 
 /**
@@ -31,7 +31,7 @@ function resolveTenantFilter(
 
 export function registerChatHistoryRoutes(app: Express): void {
   // 認証ミドルウェアを適用
-  app.use("/v1/admin/chat-history", supabaseAuthMiddleware);
+  app.use("/v1/admin/chat-history", supabaseAuthMiddleware, roleAuthMiddleware);
 
   // -----------------------------------------------------------------------
   // GET /v1/admin/chat-history/sessions

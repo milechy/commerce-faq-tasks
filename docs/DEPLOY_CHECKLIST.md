@@ -88,7 +88,27 @@ API_KEY_TENANT_ID=partner
 ALLOWED_ORIGINS=http://65.108.159.161,http://65.108.159.161:5173
 PHASE22_MAX_CONFIRM_REPEATS=2
 DEFAULT_TENANT_ID=partner
+
+# 認証用の署名鍵。production では両方とも必須（未設定だと起動時に process.exit(1)）。
+# 2つは必ず別の値にする — WIDGET_JWT_SECRET で署名するトークンは
+# widget.js として公開配布されるため、管理API用の鍵と共用すると
+# 公開トークンで管理面に到達できてしまう。
+SUPABASE_JWT_SECRET=<supabase-project-jwt-secret>
+WIDGET_JWT_SECRET=<別途生成した独立のランダム値>
 ```
+
+> **⚠️ 新規env `WIDGET_JWT_SECRET` は、デプロイより先に本番 `.env` へ投入すること。**
+> production 必須化（`src/config/env.ts` の起動時バリデーション）と同時に入るため、
+> 未設定のままデプロイすると**起動時に `exit(1)` → PM2 が再起動ループ → API 全断**になる。
+> `SCRIPTS/deploy-vps.sh` は `.env*` を rsync 除外するので、**デプロイでは配布されない**。
+> 順序: ① 本番 `.env` に `WIDGET_JWT_SECRET` を追記 → ② `bash SCRIPTS/deploy-vps.sh`。
+>
+> ```bash
+> # 投入（値は環境ごとに生成する）
+> ssh root@65.108.159.161 'cd /opt/rajiuce && grep -q "^WIDGET_JWT_SECRET=" .env || echo "WIDGET_JWT_SECRET=$(openssl rand -hex 32)" >> .env'
+> # 確認（キー名だけを見る。値は出さない）
+> ssh root@65.108.159.161 'cd /opt/rajiuce && grep -c "^WIDGET_JWT_SECRET=." .env'
+> ```
 
 ```bash
 # Admin UI: /opt/rajiuce/admin-ui/.env.production
@@ -123,6 +143,8 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/migrations/phase72a_tenant_settings_history.sql` | tenant_settings_history テーブル新設（設定変更履歴の保存先） | ✅ 2026-08-16 |
 | `src/migrations/phase72d_metrics_snapshots.sql` | metrics_snapshots テーブル新設 | ✅ 2026-08-16 |
 | `src/api/conversion/migration_aaas_source.sql` | conversion_attributions の source CHECK に aaas_site_change 追加 + tenants.aaas_client_id 追加（Asana GID 1215614330355126） | ✅ (2026-08-16 実機確認) |
+| `src/lib/billing/migration_stripe_webhook_events.sql` | stripe_webhook_events テーブル新規作成（Stripe webhook の event.id 冪等化。同一イベント再送での二重処理を防ぐ） | ⬜ 未適用 |
+| `src/lib/billing/migration_stripe_webhook_events.sql` | 同ファイル: `completed_at` カラム追加（2状態管理。ハンドラ失敗後の再送で副作用が永久にスキップされる問題の解消）。**テーブル作成分を先に適用済みの環境でも、この列のために再実行が必要** | ⬜ 未適用 |
 
 ### Phase A Day 2 migration 実行手順
 
@@ -238,6 +260,47 @@ ssh root@65.108.159.161 "psql \$DATABASE_URL -c \"\\d sai_tasks\""
 ```bash
 ssh root@65.108.159.161 "psql \$DATABASE_URL -c 'DROP TABLE IF EXISTS sai_tasks;'"
 ```
+
+### stripe_webhook_events migration 実行手順
+
+> **未適用。** Stripe webhook の冪等化に必要。**適用しないまま新コードをデプロイすると Stripe webhook が全件 500 になる。**
+
+`createStripeWebhookHandler` は署名検証の直後に `stripe_webhook_events` を読み書きする
+（`SELECT completed_at FROM stripe_webhook_events ...` / `INSERT ... ON CONFLICT`）。
+テーブルまたは `completed_at` 列が無いと毎回例外になり、`handler_error` で 500 を返す。
+Stripe は 5xx を一定期間リトライするが、migration を当てるまで**一度も成功しない**ため、
+請求状態の更新 (`billing_status`)・支払い失敗の Slack 通知がすべて止まる。
+
+**適用順序: デプロイ → migration。逆にはできない。**
+`migration_stripe_webhook_events.sql` は rsync でVPSへ配布されるため、デプロイ前はVPS上にファイルが存在しない。
+
+中間状態（デプロイ後・migration前）では webhook が 500 を返し続ける。Stripe のリトライ期間内に
+migration を当てれば取りこぼしは自動で追いつくが、**リトライ期間を過ぎたイベントは失われる**
+（その場合は Stripe ダッシュボードから手動で再送する）。
+**できるだけ短く畳むため、デプロイ直後に続けて実行すること。**
+
+```bash
+# 1. デプロイ (唯一の手順)
+bash SCRIPTS/deploy-vps.sh
+
+# 2. バックアップ (必須)
+ssh root@65.108.159.161 'cd /opt/rajiuce && pg_dump "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" > /opt/backups/pre_stripe_webhook_events_$(date +%Y%m%d_%H%M).sql'
+
+# 3. 適用前の確認 — テーブルと completed_at 列の有無
+#    (テーブルだけ存在して completed_at が無い状態がありうる。両方見ること)
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "\d stripe_webhook_events"'
+
+# 4. Migration 実行 (CREATE TABLE IF NOT EXISTS + ADD COLUMN IF NOT EXISTS なので二重実行しても無害)
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -f /opt/rajiuce/src/lib/billing/migration_stripe_webhook_events.sql'
+
+# 5. 確認 — event_id(PK) / event_type(NOT NULL) / created_at / completed_at が揃っていること
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "\d stripe_webhook_events"'
+```
+
+**動作確認**: Stripe ダッシュボードの webhook ログで、直近のイベントが 200 を返していること。
+同一イベントを手動再送すると 2回目は `{"received":true,"duplicate":true}` になる。
+
+**ロールバック**: 新規テーブルのみで既存テーブルへの変更が無いため、コードを戻せばテーブルは無害な残骸になる。
 
 ### 本番500の解消 migration 実行手順 (2026-08-16 実測、Asana 1217530758061266)
 

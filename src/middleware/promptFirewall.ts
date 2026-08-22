@@ -1,6 +1,8 @@
 // src/middleware/promptFirewall.ts
 // Phase48 Pane 2: L7 Prompt Firewall
 
+import { logger } from '../lib/logger';
+
 export interface FirewallResult {
   allowed: boolean;
   sanitizedMessage: string; // 有害パターンを除去した安全なメッセージ
@@ -40,6 +42,23 @@ const ROLE_OVERRIDE_PATTERNS: StripPattern[] = [
   { name: 'dan_jailbreak', pattern: /\b(DAN|jailbreak)\b/gi },
 ];
 
+// Shadowモード専用: ROLE_OVERRIDE_PATTERNS と同じ語彙だが、行頭アンカー(^)を
+// 「文字列先頭 or 文末記号+空白の直後」に緩めたバージョン。
+// 「よろしくお願いします。act as a pirate」のような文中埋め込みインジェクションを拾う。
+// ブロック判定・文字列除去には一切使わず、検出頻度の計測(ログ出力のみ)に用いる
+// （'forget'/'あなたは'は「パスワードを忘れました」等の正常な問い合わせにも頻出するため、
+// 誤検知でエンドユーザーの会話を壊すコストの方が高い可能性があり、即ブロック昇格はしない）。
+const ROLE_OVERRIDE_SHADOW_PATTERNS: StripPattern[] = [
+  {
+    name: 'role_override_en_shadow',
+    pattern: /(?:^|[.!?。！？]\s*)(you are|act as|pretend|from now on|forget)\b/gim,
+  },
+  {
+    name: 'role_override_ja_shadow',
+    pattern: /(?:^|[.!?。！？]\s*)(あなたは|ふりをして|なりきって|今から|これから|忘れて|リセット)/gm,
+  },
+];
+
 // Group 3: Role marker injection
 const ROLE_MARKER_PATTERNS: Array<{ pattern: RegExp }> = [
   { pattern: /^(System|Assistant|Human|User):\s*/gim },
@@ -54,13 +73,57 @@ function normalizeWhitespace(s: string): string {
   return s.replace(/\s{2,}/g, ' ').trim();
 }
 
+// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
+function isPromptFirewallEnabled(): boolean {
+  const flag = process.env['PROMPT_FIREWALL_ENABLED'];
+  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
+  return flag === 'true';
+}
+
+// shadowモード: ブロックには使わず、緩めたパターンの発火頻度をログのみで計測する。
+// 誤検知率を実トラフィックで確認してからブロック昇格を判断するための計測スイッチ。
+function isPromptFirewallShadowEnabled(): boolean {
+  const flag = process.env['PROMPT_FIREWALL_SHADOW_ENABLED'];
+  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
+  return flag === 'true';
+}
+
+logger.info(`[promptFirewall] L7 Prompt Firewall enabled=${isPromptFirewallEnabled()}`);
+logger.info(`[promptFirewall] shadow detection enabled=${isPromptFirewallShadowEnabled()}`);
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
+/**
+ * shadowパターンで元メッセージを検査し、マッチしたパターン名をログ出力するのみ。
+ * 本番の判定（allowed/sanitizedMessage/detections）には一切影響しない。
+ * メッセージ本文はログに出さない（Anti-Slop: RAGコンテンツ・PIIをログに出さない方針）。
+ */
+function logShadowDetections(message: string): void {
+  if (!isPromptFirewallShadowEnabled()) return;
+  const shadowDetections: string[] = [];
+  for (const { name, pattern } of ROLE_OVERRIDE_SHADOW_PATTERNS) {
+    // 各パターンは stateful(g フラグ) な RegExp なので lastIndex をリセットしてから使う
+    pattern.lastIndex = 0;
+    if (pattern.test(message)) {
+      shadowDetections.push(name);
+    }
+  }
+  if (shadowDetections.length > 0) {
+    logger.info(
+      { shadowDetections, messageLength: message.length },
+      '[promptFirewall] shadow detection (not blocked, measurement only)'
+    );
+  }
+}
+
 export function applyPromptFirewall(message: string): FirewallResult {
+  // shadow計測は本番の有効/無効判定から独立して行う（メッセージのstrip前に検査する）
+  logShadowDetections(message);
+
   // Enabled check — fast path
-  if (process.env['PROMPT_FIREWALL_ENABLED'] !== 'true') {
+  if (!isPromptFirewallEnabled()) {
     return { allowed: true, sanitizedMessage: message, detections: [] };
   }
 

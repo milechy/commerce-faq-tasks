@@ -47,6 +47,7 @@ import { planMultiStepQuery } from "../flow/multiStepPlanner";
 import { runSalesFlowWithLogging } from "../orchestrator/sales/runSalesFlowWithLogging";
 import { detectSalesIntents } from "../orchestrator/sales/salesIntentDetector";
 import { pool } from "../../lib/db";
+import { getSessionHistory, appendToSessionHistory } from "./contextStore";
 
 const mockOrchestrator = runDialogOrchestrator as jest.MockedFunction<typeof runDialogOrchestrator>;
 const mockPlanner = planMultiStepQuery as jest.MockedFunction<typeof planMultiStepQuery>;
@@ -212,5 +213,71 @@ describe("runDialogTurn — LemonSliceペルソナスワップ ragCategory", () 
     });
 
     expect(result.meta?.ragCategory).toBeUndefined();
+  });
+});
+
+describe("runDialogTurn — tenantId の contextStore への伝播", () => {
+  const mockGetHistory = getSessionHistory as jest.MockedFunction<typeof getSessionHistory>;
+  const mockAppendHistory = appendToSessionHistory as jest.MockedFunction<typeof appendToSessionHistory>;
+
+  beforeEach(() => {
+    mockSalesFlow.mockResolvedValue({
+      nextStage: undefined,
+      prompt: undefined,
+      meta: {} as any,
+    });
+  });
+
+  it("tenantId を指定した場合、getSessionHistory/appendToSessionHistory に同じ tenantId が渡る", async () => {
+    await runDialogTurn({
+      sessionId: "tenant-propagation-session",
+      tenantId: "tenant-x",
+      message: "こんにちは",
+    });
+
+    expect(mockGetHistory).toHaveBeenCalledWith("tenant-x", "tenant-propagation-session");
+    expect(mockAppendHistory).toHaveBeenCalledWith(
+      "tenant-x",
+      "tenant-propagation-session",
+      expect.any(Array)
+    );
+  });
+
+  it("tenantId 未指定（undefined）の場合、DEFAULT_TENANT_ID にフォールバックする（この既定挙動により tenantId 省略時は全リクエストが同一テナントの履歴を共有する残存リスクがある）", async () => {
+    await runDialogTurn({
+      sessionId: "tenant-propagation-session-default",
+      message: "こんにちは",
+    } as any);
+
+    const defaultTenantId = process.env.DEFAULT_TENANT_ID ?? "english-demo";
+    expect(mockGetHistory).toHaveBeenCalledWith(defaultTenantId, "tenant-propagation-session-default");
+  });
+
+  it("tenantId が空文字列の場合、空文字列がそのまま tenantId として使われる（DEFAULT_TENANT_ID にフォールバックしない ── `??` は空文字列を「値あり」とみなすため）", async () => {
+    await runDialogTurn({
+      sessionId: "tenant-propagation-session-empty",
+      tenantId: "",
+      message: "こんにちは",
+    });
+
+    // "" ?? DEFAULT は "" を返す（null/undefined のみフォールバックする ?? の仕様どおり）。
+    // 呼び出し元がテナント未解決を空文字列で表現すると、DEFAULT_TENANT_ID 保護を素通りする点に注意。
+    expect(mockGetHistory).toHaveBeenCalledWith("", "tenant-propagation-session-empty");
+  });
+
+  it("同じ sessionId でも tenantId が異なれば別々に history を要求する", async () => {
+    await runDialogTurn({
+      sessionId: "shared-session-id",
+      tenantId: "tenant-y",
+      message: "tenant-y から",
+    });
+    await runDialogTurn({
+      sessionId: "shared-session-id",
+      tenantId: "tenant-z",
+      message: "tenant-z から",
+    });
+
+    expect(mockGetHistory).toHaveBeenNthCalledWith(1, "tenant-y", "shared-session-id");
+    expect(mockGetHistory).toHaveBeenNthCalledWith(2, "tenant-z", "shared-session-id");
   });
 });

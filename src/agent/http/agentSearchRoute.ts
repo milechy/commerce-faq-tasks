@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { WebhookNotifier } from "../../integration/webhookNotifier";
 import { runSearchAgent } from "../flow/searchAgent";
 import { fetchDefaultExcludedIds, mergeExcludedIds } from "../../lib/defaultExcludedIds";
+import type { AuthedRequest } from "./authMiddleware";
 
 const AgentSearchSchema = z.object({
   q: z.string().min(1),
@@ -75,11 +76,16 @@ export function createAgentSearchHandler(
     const { q, topK, debug, useLlmPlanner, excluded_ids } = parsed.data;
     const startedAt = Date.now();
 
-    const headerTenantId = req.header("x-tenant-id");
-    const tenantId =
-      headerTenantId && headerTenantId.trim().length > 0
-        ? headerTenantId.trim()
-        : "demo";
+    // CLAUDE.md: tenantId は認証済みコンテキスト（JWT/APIキー）からのみ取得する。
+    // x-tenant-id ヘッダは信用しない（テナント越境検索の温床になるため）。
+    const tenantId = (req as AuthedRequest).tenantId;
+    if (!tenantId) {
+      res.status(401).json({
+        error: "unauthorized",
+        message: "有効な認証情報が必要です（Bearer JWT / x-api-key / Basic）。",
+      });
+      return;
+    }
 
     try {
       // Phase69-2: DB の default_excluded_ids をリクエスト側とマージする

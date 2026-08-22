@@ -52,6 +52,20 @@ function denyObjectionPatternRole(req: Request, res: Response, su: Record<string
   return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
 }
 
+// 防御深度: client_admin は必ず tenant_id を持つこと（roleAuthMiddleware と同じ方針）。
+// これが無いと `isSuperAdmin ? undefined : jwtTenantId` が undefined に落ち、
+// 下位の :id 系クエリがテナント述語なしで実行され越境到達になる。
+function denyMissingTenant(req: Request, res: Response, su: Record<string, any> | undefined) {
+  logger.warn({
+    event: 'objection_patterns_access_denied',
+    reason: 'missing_tenant_id',
+    errorCode: 'AUTHZ_TENANT_MISSING',
+    requested_path: req.path,
+    actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+  }, 'objection-patterns access denied: client_admin without tenant_id');
+  return res.status(403).json({ error: 'テナント情報が取得できません', code: 'AUTHZ_TENANT_MISSING' });
+}
+
 // ---------------------------------------------------------------------------
 // ルート登録
 // ---------------------------------------------------------------------------
@@ -67,6 +81,9 @@ export function registerObjectionPatternRoutes(app: Express): void {
     const { su, role, jwtTenantId, isSuperAdmin } = resolveAuth(req);
     if (!isAllowedObjectionPatternRole(role)) {
       return denyObjectionPatternRole(req, res, su, role);
+    }
+    if (!isSuperAdmin && !jwtTenantId) {
+      return denyMissingTenant(req, res, su);
     }
     const queryTenantId = req.query["tenantId"] as string | undefined;
 
@@ -97,13 +114,16 @@ export function registerObjectionPatternRoutes(app: Express): void {
     if (!isAllowedObjectionPatternRole(role)) {
       return denyObjectionPatternRole(req, res, su, role);
     }
+    if (!isSuperAdmin && !jwtTenantId) {
+      return denyMissingTenant(req, res, su);
+    }
 
     const id = Number(req.params["id"]);
     if (!Number.isFinite(id) || id <= 0) {
       return res.status(400).json({ error: "idが不正です" });
     }
 
-    const tenantId = isSuperAdmin ? undefined : jwtTenantId || undefined;
+    const tenantId = isSuperAdmin ? undefined : jwtTenantId;
 
     try {
       const pattern = await getObjectionPattern(id, tenantId);
@@ -125,13 +145,16 @@ export function registerObjectionPatternRoutes(app: Express): void {
     if (!isAllowedObjectionPatternRole(role)) {
       return denyObjectionPatternRole(req, res, su, role);
     }
+    if (!isSuperAdmin && !jwtTenantId) {
+      return denyMissingTenant(req, res, su);
+    }
 
     const id = Number(req.params["id"]);
     if (!Number.isFinite(id) || id <= 0) {
       return res.status(400).json({ error: "idが不正です" });
     }
 
-    const tenantId = isSuperAdmin ? undefined : jwtTenantId || undefined;
+    const tenantId = isSuperAdmin ? undefined : jwtTenantId;
 
     try {
       const deleted = await deleteObjectionPattern(id, tenantId);

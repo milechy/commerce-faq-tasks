@@ -25,6 +25,8 @@ jest.mock("../../src/api/admin/evaluations/evaluationsRepository", () => ({
 // Mock judgeEvaluator
 jest.mock("../../src/agent/judge/judgeEvaluator", () => ({
   evaluateSession: jest.fn(),
+  SessionTenantMismatchError: class SessionTenantMismatchError extends Error {},
+  SessionNotFoundError: class SessionNotFoundError extends Error {},
 }));
 
 import {
@@ -130,7 +132,37 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.evaluation.overall_score).toBe(72);
-    expect(evaluateSession).toHaveBeenCalledWith("sess-001");
+    // client_admin: 越境防止のため自テナントIDを第2引数として必ず渡す
+    expect(evaluateSession).toHaveBeenCalledWith("sess-001", "tenant-a");
+  });
+
+  it("passes undefined tenantId for super_admin (no ownership restriction)", async () => {
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+    (evaluateSession as jest.Mock).mockResolvedValue(JUDGE_RESULT);
+
+    const res = await request(makeApp("super_admin"))
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(200);
+    expect(evaluateSession).toHaveBeenCalledWith("sess-001", undefined);
+  });
+
+  it("returns 404 when evaluateSession reports a tenant mismatch (cross-tenant trigger blocked)", async () => {
+    const { SessionTenantMismatchError } = jest.requireMock(
+      "../../src/agent/judge/judgeEvaluator",
+    ) as { SessionTenantMismatchError: new (sessionId: string) => Error };
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+    (evaluateSession as jest.Mock).mockRejectedValue(
+      new SessionTenantMismatchError("sess-001"),
+    );
+
+    const res = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(404);
+    expect(evaluateSession).toHaveBeenCalledWith("sess-001", "tenant-a");
   });
 
   it("returns 409 when session already evaluated", async () => {
@@ -145,7 +177,7 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
     expect(evaluateSession).not.toHaveBeenCalled();
   });
 
-  it("returns 500 when evaluateSession returns null", async () => {
+  it("returns 500 when evaluateSession returns null (e.g. 空/1通話のみで評価をスキップした場合。'不在'とは区別される — 下記オラクル防止テスト参照)", async () => {
     (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
     (evaluateSession as jest.Mock).mockResolvedValue(null);
 
@@ -164,6 +196,74 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("session_id is required");
+  });
+
+  // 壊れやすいポイント: roleAuthMiddleware配線(D1a)の実物を通す統合テスト。
+  // makeApp は supabaseAuthMiddleware のみバイパスし roleAuthMiddleware はモックしていない。
+  it("[回帰] client_admin + tenant_id空文字 → roleAuthMiddlewareで403、evaluateSessionは呼ばれない", async () => {
+    const res = await request(makeApp("client_admin", ""))
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(403);
+    expect(evaluateSession).not.toHaveBeenCalled();
+  });
+
+  // 存在確認オラクル防止（修正済み）: 「セッションが存在しない」
+  // (SessionNotFoundError) と「セッションは存在するが他テナント」
+  // (SessionTenantMismatchError) を、攻撃者から見て区別不能な同一の404に統一する。
+  // CLAUDE.md禁止事項20「テナント越境だけは必ず『不存在』側に倒す」に対応。
+  // checkAlreadyEvaluated もtenant_idで絞るため、「他テナントの評価済みセッション」に
+  // 対して409(存在する)が漏れないことも併せて検証する（409はここに至るオラクルの
+  // もう一つの経路だったため）。
+  it("[存在確認オラクル防止] session不在・他テナント(未評価/評価済み)がいずれも同一の404になる", async () => {
+    const { SessionTenantMismatchError, SessionNotFoundError } = jest.requireMock(
+      "../../src/agent/judge/judgeEvaluator",
+    ) as {
+      SessionTenantMismatchError: new (sessionId: string) => Error;
+      SessionNotFoundError: new (sessionId: string) => Error;
+    };
+
+    // ケース1: 本当に存在しない
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValueOnce(false);
+    (evaluateSession as jest.Mock).mockRejectedValueOnce(
+      new SessionNotFoundError("sess-does-not-exist"),
+    );
+    const notFoundRes = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-does-not-exist" });
+
+    // ケース2: 存在するが他テナント・未評価
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValueOnce(false);
+    (evaluateSession as jest.Mock).mockRejectedValueOnce(
+      new SessionTenantMismatchError("sess-other-tenant"),
+    );
+    const mismatchRes = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-other-tenant" });
+
+    // ケース3: 存在するが他テナント・評価済み — checkAlreadyEvaluated が
+    // tenant_idで絞られていれば「自テナント分は0件」なのでfalseのまま
+    // evaluateSession まで進み、同じ404に落ちる（絞っていなければここで
+    // 409が返り、409自体が独立した存在確認オラクルになる）。
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValueOnce(false);
+    (evaluateSession as jest.Mock).mockRejectedValueOnce(
+      new SessionTenantMismatchError("sess-other-tenant-evaluated"),
+    );
+    const mismatchEvaluatedRes = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-other-tenant-evaluated" });
+
+    expect(notFoundRes.status).toBe(404);
+    expect(mismatchRes.status).toBe(404);
+    expect(mismatchEvaluatedRes.status).toBe(404);
+    expect(notFoundRes.body).toEqual(mismatchRes.body);
+    expect(mismatchRes.body).toEqual(mismatchEvaluatedRes.body);
+
+    // checkAlreadyEvaluated がクライアント指定の tenantId で呼ばれていること
+    // （routes.ts が絞り込みをtenant_id引数に渡す責務を持つことの回帰確認）
+    expect(checkAlreadyEvaluated).toHaveBeenCalledWith("sess-does-not-exist", "tenant-a");
+    expect(checkAlreadyEvaluated).toHaveBeenCalledWith("sess-other-tenant", "tenant-a");
   });
 });
 

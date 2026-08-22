@@ -309,3 +309,15 @@ describe('feedback management routes — allow-path: client_admin passes ANY_ADM
     });
   });
 });
+
+// D1b (roleAuth配線監査) で feedback は既存パターンで安全と確認済み・未変更。
+// 回帰防止のため tenant_id 欠落時の挙動を明示的に固定する。
+describe('feedback management routes — 回帰pin: client_admin missing tenant_id', () => {
+  MGMT_ANY_ADMIN_ROUTES.forEach(({ method, path }) => {
+    it(`${method.toUpperCase()} ${path} — client_admin with empty tenant_id は 200 を返さない`, async () => {
+      const app = makeAppMgmt({ role: 'client_admin', tenant_id: '' });
+      const res = await (request(app) as any)[method](path);
+      expect(res.status).not.toBe(200);
+    });
+  });
+});
