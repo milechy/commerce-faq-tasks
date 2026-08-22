@@ -268,5 +268,105 @@ describe("supabaseAuthMiddleware", () => {
       expect(next).not.toHaveBeenCalled();
       expect(res.statusCode).toBe(401);
     });
+
+    // 実運用で起きうる「古いUIキャッシュがuser_metadataだけを見て管理者だと誤信する」バグの
+    // 再発防止。isAdminUsableTokenはapp_metadata.roleのみを見る仕様のため、
+    // user_metadata側にsuper_adminを積んだだけの署名は正しいトークンは弾かれるべき。
+    // 単体テスト(jwtClaims.test.ts)ではuser_metadataというフィールド自体を扱っていないため、
+    // ミドルウェア統合レベルで「本物のJWT署名 + user_metadataのみにroleがある」形を固定する。
+    it("user_metadata.roleのみにsuper_adminが設定された署名済みトークン(app_metadataは無し)は403", () => {
+      const token = jwt.sign(
+        { sub: "u1", user_metadata: { role: "super_admin" } },
+        SECRET
+      );
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    // app_metadataとuser_metadataでroleが食い違う場合(旧UIが二重に書き込んでいた等)、
+    // 判定に使われるのは常にapp_metadata側であることを固定する。
+    it("app_metadata.role='client_admin'かつuser_metadata.role='super_admin'の食い違いでは、app_metadata側(client_admin)が採用され通る", () => {
+      const token = jwt.sign(
+        {
+          sub: "u1",
+          app_metadata: { role: "client_admin", tenant_id: "t1" },
+          user_metadata: { role: "super_admin" },
+        },
+        SECRET
+      );
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(req.supabaseUser).toMatchObject({ app_metadata: { role: "client_admin" } });
+    });
+
+    it("app_metadata.roleが空文字列は403（'unknown role'と同じ扱い）", () => {
+      const token = jwt.sign({ sub: "u1", app_metadata: { role: "" } }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    // 大文字小文字や前後空白は正規化されない仕様であることを明示する。
+    // 万一Supabase側やadmin UIの実装がロール文字列を大文字化して送るような変更が
+    // 入った場合、ここが先に落ちて気づけるようにする（サイレントに全管理者が
+    // ロックアウトされる事故の早期検知）。
+    it("app_metadata.roleの大文字小文字・前後空白違い（'Super_Admin'、' super_admin'）は完全一致しないため403", () => {
+      for (const role of ["Super_Admin", " super_admin", "super_admin "]) {
+        const token = jwt.sign({ sub: "u1", app_metadata: { role } }, SECRET);
+        const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+        supabaseAuthMiddleware(req, res, next);
+
+        expect(next).not.toHaveBeenCalled();
+        expect(res.statusCode).toBe(403);
+      }
+    });
+
+    // widget/chat-testトークンがSUPABASE_JWT_SECRETと同じ鍵で誤発行された場合でも
+    // （B3で鍵を分離済みだが、設定ミスで同一鍵に戻る事故は起こりうる）、purposeクレームの
+    // 存在だけで機械的に弾かれることを、super_admin roleを併せ持つ極端なケースで固定する。
+    // 「roleさえ持たせれば通る」という誤った実装への回帰を防ぐ。
+    it("purposeクレームとsuper_admin roleを同時に持つトークン（設定ミスで鍵が共用された想定）でも403（purposeが優先して拒否）", () => {
+      const token = jwt.sign(
+        { sub: "u1", purpose: "widget-session", app_metadata: { role: "super_admin", tenant_id: "t1" } },
+        SECRET
+      );
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("Authorizationヘッダに'Bearer'のみ(トークン本体が空文字)は401", () => {
+      const { req, res, next } = makeReqRes({ authorization: "Bearer " });
+      supabaseAuthMiddleware(req, res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(401);
+    });
+
+    // 実装は Authorization ヘッダを split(" ") して2番目のトークンを取るだけで、
+    // "Bearer" というスキーム名自体は検証していない。そのため大文字小文字はおろか
+    // スキーム名が何であっても(例: "token xxx")署名済みトークンなら通ってしまう。
+    // HTTPの仕様上は非準拠だが、実害はjwt.verifyが最終防御のため無い。
+    // 仕様変更でスキーム検証が追加された際に気づけるよう、現状の挙動を固定する。
+    it("スキーム名は検証されない: 'bearer'(小文字)でも有効な署名済みトークンなら通る（現状仕様の固定。将来スキーム検証を追加する場合は要更新）", () => {
+      const token = jwt.sign({ sub: "u1", app_metadata: { role: "super_admin" } }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `bearer ${token}` });
+      supabaseAuthMiddleware(req, res, next);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(req.supabaseUser).toMatchObject({ app_metadata: { role: "super_admin" } });
+    });
   });
 });
