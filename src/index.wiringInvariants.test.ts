@@ -1,0 +1,111 @@
+// src/index.wiringInvariants.test.ts
+//
+// src/index.ts は app.listen() を含む起動エントリポイントで、DB/ES接続などの
+// 副作用を伴うため supertest で丸ごとimportして統合テストすることができない。
+// そのためミドルウェア登録順序という「型では守れない・実行時にしか壊れない」
+// 不変条件を、ソースを直接読んで機械的に検査する(confirmPolicy.test.ts と同じ手法)。
+//
+// このファイルが守る不変条件はいずれも過去に一度壊れた実績がある:
+// - webhook登録順序: グローバル express.json が先に来ると req.body が object化され、
+//   Stripe署名検証(constructEvent)が常に失敗する(今回のC0修正の対象そのもの)。
+// - apiStackの順序: レートリミッタをauth前に置くと全テナント合算の単一バケットになる。
+// - search/dialogのtenantId伝播漏れ: legacy検索がデフォルトインデックスへ無差別に流れる。
+
+import { readFileSync } from "fs";
+import { join } from "path";
+
+const SOURCE_PATH = join(__dirname, "index.ts");
+const source = readFileSync(SOURCE_PATH, "utf-8");
+
+function firstIndexOf(pattern: RegExp): number {
+  const m = source.match(pattern);
+  if (!m || m.index === undefined) {
+    throw new Error(`pattern not found in src/index.ts: ${pattern}`);
+  }
+  return m.index;
+}
+
+describe("src/index.ts 配線の不変条件（ソース構造検査）", () => {
+  describe("Stripe webhook 登録順序", () => {
+    it("/v1/billing/webhook の登録が、グローバル express.json より前にある", () => {
+      const webhookIdx = firstIndexOf(/app\.post\(\s*["']\/v1\/billing\/webhook["']/);
+      const jsonIdx = firstIndexOf(/app\.use\(express\.json\(/);
+      expect(webhookIdx).toBeLessThan(jsonIdx);
+    });
+
+    it("webhook 登録が express.raw({ type: \"application/json\" }) を使っている（rawボディでの署名検証が前提）", () => {
+      const webhookBlock = source.slice(
+        firstIndexOf(/app\.post\(\s*["']\/v1\/billing\/webhook["']/),
+        firstIndexOf(/app\.post\(\s*["']\/v1\/billing\/webhook["']/) + 300
+      );
+      expect(webhookBlock).toMatch(/express\.raw\(\s*\{\s*type:\s*["']application\/json["']\s*\}\s*\)/);
+    });
+
+    it("webhook ルートは1箇所にしか登録されていない（重複登録による二重処理を防ぐ）", () => {
+      const matches = source.match(/app\.(post|use)\(\s*["']\/v1\/billing\/webhook["']/g) ?? [];
+      expect(matches.length).toBe(1);
+    });
+  });
+
+  describe("apiStack のミドルウェア順序（レートリミッタ2段化）", () => {
+    const apiStackMatch = source.match(/const apiStack = \[([\s\S]*?)\] as express\.RequestHandler\[\];/);
+    if (!apiStackMatch) throw new Error("apiStack literal not found in src/index.ts");
+    const apiStackBody = apiStackMatch[1];
+    // 行コメント（例: "// 1. Rate limit (pre-auth, IP-keyed)"）はカンマを含みうるため、
+    // まず行ごとに "//" 以降を切り捨ててから識別子を抽出する（単純な split(",") はコメント内の
+    // カンマで誤爆する）。
+    const order = apiStackBody
+      .split("\n")
+      .map((line) => line.split("//")[0].trim().replace(/,$/, ""))
+      .filter((name) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name));
+
+    it("ipRateLimiter が authMiddleware より前（認証前のIP段）", () => {
+      expect(order.indexOf("ipRateLimiter")).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf("ipRateLimiter")).toBeLessThan(order.indexOf("authMiddleware"));
+    });
+
+    it("tenantRateLimiter が authMiddleware・tenantContext より後（認証後のtenant段）", () => {
+      expect(order.indexOf("tenantRateLimiter")).toBeGreaterThan(order.indexOf("authMiddleware"));
+      expect(order.indexOf("tenantRateLimiter")).toBeGreaterThan(order.indexOf("tenantContext"));
+    });
+
+    it("apiStack に旧単一リミッタ(globalRateLimiter)が残っていない（2段化の巻き戻り検出）", () => {
+      expect(order).not.toContain("globalRateLimiter");
+    });
+
+    it("securityPolicy が authMiddleware より後（テナント未確定でorigin検証しない）", () => {
+      expect(order.indexOf("securityPolicy")).toBeGreaterThan(order.indexOf("authMiddleware"));
+    });
+  });
+
+  describe("legacy 検索・対話エンドポイントへの tenantId 伝播", () => {
+    it("/search が hybridSearch に tenantId を渡している", () => {
+      const searchBlock = source.slice(
+        firstIndexOf(/app\.post\(\s*["']\/search["'],/),
+        firstIndexOf(/app\.post\(\s*["']\/search\.v1["']/)
+      );
+      expect(searchBlock).toMatch(/hybridSearch\(\s*q\s*,\s*tenantId\s*\)/);
+    });
+
+    it("/search.v1 が hybridSearch に tenantId を渡している", () => {
+      const idx = firstIndexOf(/app\.post\(\s*["']\/search\.v1["']/);
+      const block = source.slice(idx, idx + 2000);
+      expect(block).toMatch(/hybridSearch\(\s*q\s*,\s*tenantId\s*\)/);
+    });
+
+    it("/dialog/turn が runDialogTurn に tenantId を含めて渡している", () => {
+      const idx = firstIndexOf(/app\.post\(\s*["']\/dialog\/turn["']/);
+      const block = source.slice(idx, idx + 2000);
+      expect(block).toMatch(/runDialogTurn\(\s*\{\s*\.\.\.parsed\.data\s*,\s*tenantId\s*\}\s*\)/);
+    });
+
+    it("/search・/search.v1・/dialog/turn は3箇所とも (req as AuthedRequest).tenantId から取得している（body/queryからの取得を禁止 — CLAUDE.md不変条件1）", () => {
+      // AuthedRequest 経由の取得パターンが最低3回（各ルート1回ずつ）出現することを確認
+      const authedTenantIdUses = source.match(/\(req as AuthedRequest\)\.tenantId/g) ?? [];
+      expect(authedTenantIdUses.length).toBeGreaterThanOrEqual(3);
+      // body/query からの tenantId 直接取得が無いこと
+      expect(source).not.toMatch(/req\.body\.tenantId/);
+      expect(source).not.toMatch(/req\.query\.tenantId/);
+    });
+  });
+});
