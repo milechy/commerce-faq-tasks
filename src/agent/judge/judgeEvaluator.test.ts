@@ -42,7 +42,7 @@ jest.mock('../openclaw/rewardBridge', () => ({
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
-import { evaluateSession } from './judgeEvaluator';
+import { evaluateSession, SessionNotFoundError, SessionTenantMismatchError } from './judgeEvaluator';
 import { sendRewardSignal } from '../openclaw/rewardBridge';
 import {
   getOrInitFlowSessionMeta,
@@ -465,13 +465,26 @@ describe('evaluateSession', () => {
     );
   });
 
-  it('13. [既存動作の確認] セッション自体が存在しない場合は expectedTenantId の有無に関わらず null を返す（throwしない）', async () => {
+  it('13. [存在確認オラクル防止] セッション自体が存在しない場合は expectedTenantId の有無に関わらず SessionNotFoundError をthrowする（nullを返さない）', async () => {
     const mockPool = makeMockPool();
     mockGetPool.mockReturnValue(mockPool as any);
     mockPool.query.mockResolvedValueOnce({ rows: [] }); // chat_sessions: 0行
 
-    const result = await evaluateSession('session-does-not-exist', 'tenant-a');
-    expect(result).toBeNull();
+    await expect(evaluateSession('session-does-not-exist', 'tenant-a')).rejects.toThrow(SessionNotFoundError);
     expect(mockCallGroq).not.toHaveBeenCalled();
+  });
+
+  it('14. [存在確認オラクル防止] 「不在」(SessionNotFoundError)と「他テナントのもの」(SessionTenantMismatchError)が別のエラークラスとして区別できる（呼び出し元routes.tsが同一404に統合するための前提）', async () => {
+    const mockPool1 = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool1 as any);
+    mockPool1.query.mockResolvedValueOnce({ rows: [] });
+    await expect(evaluateSession('missing-session', 'tenant-a')).rejects.toBeInstanceOf(SessionNotFoundError);
+
+    const mockPool2 = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool2 as any);
+    mockPool2.query.mockResolvedValueOnce({
+      rows: [{ id: 'internal-1', tenant_id: 'tenant-b', prompt_variant_id: null }],
+    });
+    await expect(evaluateSession('other-tenant-session', 'tenant-a')).rejects.toBeInstanceOf(SessionTenantMismatchError);
   });
 });

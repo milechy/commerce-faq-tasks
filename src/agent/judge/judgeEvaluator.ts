@@ -29,6 +29,18 @@ export class SessionTenantMismatchError extends Error {
   }
 }
 
+/**
+ * セッション自体が存在しない場合に投げる。
+ * 呼び出し元(routes.ts)は SessionTenantMismatchError と同一の404に変換し、
+ * 「存在しない」と「他テナントのもの」を区別可能な応答にしない（存在確認オラクル防止）。
+ */
+export class SessionNotFoundError extends Error {
+  constructor(sessionId: string) {
+    super(`session ${sessionId} not found`);
+    this.name = 'SessionNotFoundError';
+  }
+}
+
 const JUDGE_MODEL = process.env['GEMINI_MODEL'] ?? 'gemini-2.5-flash';
 
 const FALLBACK_PROMPT_TEMPLATE = `あなたは営業チャットAIの品質評価Judgeです。
@@ -149,7 +161,9 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
     );
     if (sessionResult.rows.length === 0) {
       logger.warn({ sessionId }, 'judgeEvaluator: session not found');
-      return null;
+      // 「不在」と「他テナントのもの」を呼び出し元が同一の404にできるよう、
+      // null(=処理失敗として500)ではなく専用エラーを投げる（存在確認オラクル防止）。
+      throw new SessionNotFoundError(sessionId);
     }
     const internalId: string = sessionResult.rows[0]!.id;
     const tenantId: string = sessionResult.rows[0]!.tenant_id;
@@ -384,7 +398,7 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
 
     return result;
   } catch (err) {
-    if (err instanceof SessionTenantMismatchError) throw err;
+    if (err instanceof SessionTenantMismatchError || err instanceof SessionNotFoundError) throw err;
     logger.error({ err, sessionId }, 'judgeEvaluator: unexpected error in evaluateSession');
     return null;
   }

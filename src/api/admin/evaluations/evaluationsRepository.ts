@@ -572,12 +572,23 @@ export async function getEvaluationById(
 // セッション評価済みチェック - Stream B
 // ---------------------------------------------------------------------------
 
-export async function checkAlreadyEvaluated(sessionId: string): Promise<boolean> {
+/**
+ * expectedTenantId 指定時（非super_admin）は自テナント分のみを対象にする。
+ * 未指定（super_admin）はテナント問わず判定する。
+ * tenant_id で絞らないと、他テナントの評価済みセッションに対して409を返してしまい、
+ * ownership検証（evaluateSession内）より前に session_id の存在確認オラクルになる。
+ */
+export async function checkAlreadyEvaluated(sessionId: string, expectedTenantId?: string): Promise<boolean> {
   const pool = getPool();
-  const result = await pool.query<{ count: string }>(
-    `SELECT COUNT(*) AS count FROM conversation_evaluations WHERE session_id = $1`,
-    [sessionId],
-  );
+  const result = expectedTenantId !== undefined
+    ? await pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM conversation_evaluations WHERE session_id = $1 AND tenant_id = $2`,
+        [sessionId, expectedTenantId],
+      )
+    : await pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM conversation_evaluations WHERE session_id = $1`,
+        [sessionId],
+      );
   return parseInt(result.rows[0]?.count ?? "0", 10) > 0;
 }
 

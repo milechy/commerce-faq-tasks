@@ -192,7 +192,11 @@ export function registerEvaluationRoutes(app: Express): void {
     }
 
     try {
-      const alreadyDone = await checkAlreadyEvaluated(session_id);
+      // 越境防止: checkAlreadyEvaluated もtenant_idで絞る。絞らないと、他テナントの
+      // 評価済みセッションに対して409(=存在する)が返り、ownership検証より前の
+      // 存在確認オラクルになる。
+      const expectedTenantId = isSuperAdmin ? undefined : jwtTenantId;
+      const alreadyDone = await checkAlreadyEvaluated(session_id, expectedTenantId);
       if (alreadyDone) {
         return res.status(409).json({ error: "already_evaluated" });
       }
@@ -200,14 +204,15 @@ export function registerEvaluationRoutes(app: Express): void {
       // Dynamic import to avoid circular deps
       const { evaluateSession } = await import("../../../agent/judge/judgeEvaluator");
       // 越境防止: session_id はbody由来のためtenant所有を必ず検証する（super_adminは検証省略）
-      const result = await evaluateSession(session_id, isSuperAdmin ? undefined : jwtTenantId);
+      const result = await evaluateSession(session_id, expectedTenantId);
       if (!result) {
         return res.status(500).json({ error: "evaluation_failed" });
       }
       return res.json({ evaluation: result });
     } catch (err) {
-      const { SessionTenantMismatchError } = await import("../../../agent/judge/judgeEvaluator");
-      if (err instanceof SessionTenantMismatchError) {
+      const { SessionTenantMismatchError, SessionNotFoundError } = await import("../../../agent/judge/judgeEvaluator");
+      // 「不在」と「他テナントのもの」を同一の404にし、存在確認オラクルにしない。
+      if (err instanceof SessionTenantMismatchError || err instanceof SessionNotFoundError) {
         return res.status(404).json({ error: "セッションが見つかりません" });
       }
       logger.warn("[POST /v1/admin/evaluations/trigger]", err);
