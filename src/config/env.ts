@@ -143,6 +143,7 @@ const envSchema = z.object({
   TOPIC_GUARD_ENABLED: z.string().optional(),
   TOPIC_GUARD_LLM_ENABLED: z.string().optional(),
   PROMPT_FIREWALL_ENABLED: z.string().optional(),
+  PROMPT_FIREWALL_SHADOW_ENABLED: z.string().optional(),
   OUTPUT_GUARD_ENABLED: z.string().optional(),
   SESSION_ABUSE_LIMIT: z.string().optional(),
   SESSION_REPEAT_LIMIT: z.string().optional(),

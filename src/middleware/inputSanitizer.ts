@@ -2,6 +2,7 @@
 // Phase48 Pane 1: L5 Input Sanitizer
 
 import { logger } from '../lib/logger';
+import { isSecurityLayerEnabled } from './securityLayerConfig';
 
 export interface SanitizeResult {
   allowed: boolean;
@@ -55,11 +56,8 @@ function getSessionAbuseLimit(): number {
   return parseInt(process.env['SESSION_ABUSE_LIMIT'] ?? '5', 10);
 }
 
-// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
 function isInputSanitizerEnabled(): boolean {
-  const flag = process.env['INPUT_SANITIZER_ENABLED'];
-  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
-  return flag === 'true';
+  return isSecurityLayerEnabled('INPUT_SANITIZER_ENABLED');
 }
 
 logger.info(`[inputSanitizer] L5 Input Sanitizer enabled=${isInputSanitizerEnabled()}`);

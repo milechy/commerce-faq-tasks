@@ -2,6 +2,7 @@
 // Phase48 Pane 4: L8 Output Guard
 
 import { logger } from '../lib/logger';
+import { isSecurityLayerEnabled } from './securityLayerConfig';
 
 export interface OutputGuardResult {
   safe: boolean;
@@ -52,11 +53,8 @@ function getMaxRagExcerptLength(): number {
   return 200;
 }
 
-// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
 function isOutputGuardEnabled(): boolean {
-  const flag = process.env['OUTPUT_GUARD_ENABLED'];
-  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
-  return flag === 'true';
+  return isSecurityLayerEnabled('OUTPUT_GUARD_ENABLED');
 }
 
 logger.info(`[outputGuard] L8 Output Guard enabled=${isOutputGuardEnabled()}`);
