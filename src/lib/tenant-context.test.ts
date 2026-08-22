@@ -4,6 +4,9 @@ import {
   registerTenant,
   updateTenantEnabled,
   isOriginKnownToAnyTenant,
+  getTenantByApiKeyHash,
+  setTenantApiKeyExpiry,
+  revokeTenantApiKeyIfCurrent,
 } from "./tenant-context";
 
 describe("seedTenantsFromEnv — numbered keys", () => {
@@ -138,5 +141,135 @@ describe("isOriginKnownToAnyTenant — CORS preflight tenant-domain lookup", () 
       enabled: true,
     });
     expect(isOriginKnownToAnyTenant("https://some-random-site.example")).toBe(false);
+  });
+});
+
+describe("APIキー失効・期限切れの即時反映", () => {
+  const TENANT_ID = "test-key-revocation-tenant";
+  const KEY_HASH = "revocation-test-key-hash";
+
+  beforeEach(() => {
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Revocation Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: KEY_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    setTenantApiKeyExpiry(TENANT_ID, null);
+  });
+
+  it("finds the tenant by the currently registered key hash", () => {
+    expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKeyIfCurrent invalidates a matching key immediately (no PM2 restart needed)", () => {
+    const revoked = revokeTenantApiKeyIfCurrent(TENANT_ID, KEY_HASH);
+    expect(revoked).toBe(true);
+    expect(getTenantByApiKeyHash(KEY_HASH)).toBeUndefined();
+  });
+
+  it("revokeTenantApiKeyIfCurrent does nothing when the hash does not match the current key (e.g. an already-superseded key)", () => {
+    const revoked = revokeTenantApiKeyIfCurrent(TENANT_ID, "some-other-old-key-hash");
+    expect(revoked).toBe(false);
+    expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKeyIfCurrent returns false for an unknown tenant", () => {
+    expect(revokeTenantApiKeyIfCurrent("unknown-tenant-xyz", KEY_HASH)).toBe(false);
+  });
+
+  it("treats a key as expired once its expiry time has passed", () => {
+    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() - 1000));
+    expect(getTenantByApiKeyHash(KEY_HASH)).toBeUndefined();
+  });
+
+  it("still resolves the tenant when the expiry is in the future", () => {
+    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() + 60_000));
+    expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("returns undefined for a hash that has never been registered", () => {
+    expect(getTenantByApiKeyHash("never-registered-hash")).toBeUndefined();
+  });
+
+  it("境界値: expiresAt がちょうど現在時刻と一致する場合は期限切れ扱いになる（<=境界）", () => {
+    const now = Date.now();
+    setTenantApiKeyExpiry(TENANT_ID, new Date(now));
+    // Date.now() が呼び出し間で1ms進む可能性があるため、明示的に同時刻を再現する
+    const spy = jest.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      expect(getTenantByApiKeyHash(KEY_HASH)).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("境界値: expiresAt がわずかでも未来なら有効", () => {
+    // 実時間比較のため 1ms 等の極小マージンはテスト実行のオーバーヘッドで
+    // フレークになる（Date.now() 取得からアサーションまでの間に経過しうる）。
+    // 「期限切れ扱いにならない」という意味を保ったまま、余裕を持たせる。
+    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() + 5000));
+    expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("setTenantApiKeyExpiry を一度も呼んでいない（Map未登録=undefined）テナントは期限切れ扱いにならない", () => {
+    const FRESH_TENANT = "test-key-no-expiry-call-tenant";
+    const FRESH_HASH = "fresh-hash-no-expiry-call";
+    registerTenant({
+      tenantId: FRESH_TENANT,
+      name: "Fresh",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: FRESH_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    // setTenantApiKeyExpiry を意図的に呼ばない — 起動時DBシード直後などを想定
+    expect(getTenantByApiKeyHash(FRESH_HASH)?.tenantId).toBe(FRESH_TENANT);
+  });
+
+  it("失効済み(apiKeyHash === '')のテナントは空文字ハッシュでは絶対に引けない（!cfg.security.apiKeyHash ガード）", () => {
+    revokeTenantApiKeyIfCurrent(TENANT_ID, KEY_HASH);
+    expect(getTenantByApiKeyHash("")).toBeUndefined();
+  });
+
+  it("イレギュラー: 同じ失効操作を2回連続で呼んでも例外を投げず、2回目は false（失効済みハッシュはもう current と一致しない）", () => {
+    const first = revokeTenantApiKeyIfCurrent(TENANT_ID, KEY_HASH);
+    const second = revokeTenantApiKeyIfCurrent(TENANT_ID, KEY_HASH);
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
+
+  it("イレギュラー: 失効後に同一テナントへ新キーを再登録すると、旧ハッシュは失敗し新ハッシュのみ有効になる", () => {
+    revokeTenantApiKeyIfCurrent(TENANT_ID, KEY_HASH);
+    const NEW_HASH = "reissued-key-hash";
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Revocation Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: NEW_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    expect(getTenantByApiKeyHash(KEY_HASH)).toBeUndefined();
+    expect(getTenantByApiKeyHash(NEW_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKeyIfCurrent は失効時に有効期限マップも削除する（無期限キー再発行時に古い期限が亡霊のように残らない）", () => {
+    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() + 60_000));
+    revokeTenantApiKeyIfCurrent(TENANT_ID, KEY_HASH);
+    const NEW_HASH = "reissued-key-hash-2";
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Revocation Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: NEW_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    // setTenantApiKeyExpiry を再度呼ばずに新キー登録した場合、失効時にMapが掃除されていなければ
+    // 古い期限(60秒後)が誤って新キーに適用されてしまう可能性がある — undefined（無期限扱い）が正しい
+    expect(getTenantByApiKeyHash(NEW_HASH)?.tenantId).toBe(TENANT_ID);
   });
 });

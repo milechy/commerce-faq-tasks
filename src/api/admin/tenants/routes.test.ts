@@ -4,6 +4,7 @@
 import express from "express";
 import request from "supertest";
 import { registerTenantAdminRoutes } from "./routes";
+import { registerTenant, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent } from "../../../lib/tenant-context";
 
 // --------------------------------------------------------------------------
 // モック
@@ -16,6 +17,8 @@ jest.mock("../../../auth/supabaseClient", () => ({
 jest.mock("../../../lib/tenant-context", () => ({
   registerTenant: jest.fn(),
   updateTenantEnabled: jest.fn(),
+  setTenantApiKeyExpiry: jest.fn(),
+  revokeTenantApiKeyIfCurrent: jest.fn(),
 }));
 
 jest.mock("../../../agent/openclaw/workspaceCache", () => ({
@@ -465,5 +468,113 @@ describe("PATCH /v1/admin/my-tenant — avatar/voice plan ゲート", () => {
       .send({ features: { avatar: true, voice: false, rag: true } });
 
     expect(res.status).toBe(403);
+  });
+});
+
+// --------------------------------------------------------------------------
+// ⑤ POST /v1/admin/tenants/:id/keys — 発行時に allowedOrigins/features を保持
+// --------------------------------------------------------------------------
+
+describe("POST /v1/admin/tenants/:id/keys — in-memory登録がDBの現行設定を上書きしない", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("DB上の allowed_origins / features を registerTenant にそのまま引き継ぐ（固定値で上書きしない）", async () => {
+    const dbQuery = jest
+      .fn()
+      // テナント存在チェック（features/allowed_originsも取得）
+      .mockResolvedValueOnce({
+        rows: [{
+          id: "tenant-a",
+          name: "テストテナント",
+          plan: "growth",
+          is_active: true,
+          features: { avatar: true, voice: true, rag: true },
+          allowed_origins: ["https://shop.example.com"],
+        }],
+        rowCount: 1,
+      })
+      // INSERT INTO tenant_api_keys ... RETURNING
+      .mockResolvedValueOnce({
+        rows: [{ id: "key-1", tenant_id: "tenant-a", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date().toISOString(), expires_at: null }],
+        rowCount: 1,
+      });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .post("/v1/admin/tenants/tenant-a/keys")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(registerTenant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-a",
+        features: { avatar: true, voice: true, rag: true },
+        security: expect.objectContaining({ allowedOrigins: ["https://shop.example.com"] }),
+      })
+    );
+    expect(setTenantApiKeyExpiry).toHaveBeenCalledWith("tenant-a", null);
+  });
+
+  it("expires_at 指定時に setTenantApiKeyExpiry へ渡す", async () => {
+    const expiresAtIso = new Date(Date.now() + 86_400_000).toISOString();
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ id: "tenant-a", name: "テストテナント", plan: "starter", is_active: true, features: {}, allowed_origins: [] }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: "key-2", tenant_id: "tenant-a", key_prefix: "rjc_xyz98765", is_active: true, created_at: new Date().toISOString(), expires_at: expiresAtIso }],
+        rowCount: 1,
+      });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .post("/v1/admin/tenants/tenant-a/keys")
+      .set("Authorization", "Bearer dummy")
+      .send({ expires_at: expiresAtIso });
+
+    expect(res.status).toBe(201);
+    expect(setTenantApiKeyExpiry).toHaveBeenCalledWith("tenant-a", expect.any(Date));
+  });
+});
+
+// --------------------------------------------------------------------------
+// ⑥ DELETE /v1/admin/tenants/:id/keys/:keyId — 失効を即時にin-memoryへ反映
+// --------------------------------------------------------------------------
+
+describe("DELETE /v1/admin/tenants/:id/keys/:keyId — PM2再起動を待たずに失効", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("失効したキーのハッシュで revokeTenantApiKeyIfCurrent を呼ぶ", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({
+      rows: [{ id: "key-1", tenant_id: "tenant-a", is_active: false, key_hash: "the-revoked-key-hash" }],
+      rowCount: 1,
+    });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .delete("/v1/admin/tenants/tenant-a/keys/key-1")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(revokeTenantApiKeyIfCurrent).toHaveBeenCalledWith("tenant-a", "the-revoked-key-hash");
+  });
+
+  it("存在しないキーIDは404で、revokeTenantApiKeyIfCurrentは呼ばれない", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .delete("/v1/admin/tenants/tenant-a/keys/nonexistent")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(404);
+    expect(revokeTenantApiKeyIfCurrent).not.toHaveBeenCalled();
   });
 });
