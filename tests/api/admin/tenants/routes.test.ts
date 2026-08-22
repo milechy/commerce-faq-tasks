@@ -224,21 +224,45 @@ describe("Tenant Admin Routes", () => {
       expect((mockSetTenantApiKeyExpiry as jest.Mock).mock.calls.at(-1)?.[1]).toBeNull();
     });
 
-    it("イレギュラー: 過去日時の expires_at を指定しても発行自体は201で成功する（＝発行直後から使えない『死んだキー』が作られる、既知の挙動として固定）", async () => {
+    it("[修正確認] 過去日時の expires_at は400で拒否され、『死んだキー』が発行されない", async () => {
       const pastDate = new Date(Date.now() - 86_400_000).toISOString();
+      mockDb.query.mockResolvedValueOnce({ rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true }], rowCount: 1 });
+      const callsBefore = (mockRegisterTenant as jest.Mock).mock.calls.length;
+      const res = await request(app)
+        .post("/v1/admin/tenants/t1/keys")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ expires_at: pastDate });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("expires_at_in_past");
+      expect((mockRegisterTenant as jest.Mock).mock.calls.length).toBe(callsBefore);
+    });
+
+    it("境界値: 現在時刻ちょうどのexpires_atは『未来ではない』として400で拒否される", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true }], rowCount: 1 });
+      const now = new Date();
+      const res = await request(app)
+        .post("/v1/admin/tenants/t1/keys")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ expires_at: now.toISOString() });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("expires_at_in_past");
+    });
+
+    it("未来日時のexpires_atは201で正常に発行される", async () => {
+      const futureDate = new Date(Date.now() + 86_400_000).toISOString();
       mockDb.query
         .mockResolvedValueOnce({ rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true }], rowCount: 1 })
         .mockResolvedValueOnce({
-          rows: [{ id: "key-uuid", tenant_id: "t1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: pastDate }],
+          rows: [{ id: "key-uuid", tenant_id: "t1", key_prefix: "rjc_abcd1234", is_active: true, created_at: new Date(), expires_at: futureDate }],
           rowCount: 1,
         });
       const res = await request(app)
         .post("/v1/admin/tenants/t1/keys")
         .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
-        .send({ expires_at: pastDate });
+        .send({ expires_at: futureDate });
       expect(res.status).toBe(201);
       const passedExpiry = (mockSetTenantApiKeyExpiry as jest.Mock).mock.calls.at(-1)?.[1] as Date;
-      expect(passedExpiry.getTime()).toBeLessThan(Date.now());
+      expect(passedExpiry.getTime()).toBeGreaterThan(Date.now());
     });
   });
 

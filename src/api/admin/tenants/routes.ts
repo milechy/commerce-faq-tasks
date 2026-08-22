@@ -560,6 +560,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (expiresAt && isNaN(expiresAt.getTime())) {
         return res.status(400).json({ error: "invalid_expires_at", message: "expires_atの日時形式が不正です。" });
       }
+      // 過去日時を許可すると、発行直後から使えない「死んだキー」が201で作れてしまう。
+      if (expiresAt && expiresAt.getTime() <= Date.now()) {
+        return res.status(400).json({ error: "expires_at_in_past", message: "expires_atは未来の日時である必要があります。" });
+      }
 
       const plainKey = generateApiKey();
       const keyHash = hashApiKey(plainKey);
