@@ -20,7 +20,7 @@
 // （actionExecutor.ts は今後もこのファイルではなく routes.ts から textToFaqs を import する）。
 
 import type { Pool } from 'pg';
-import { GROQ_VERSATILE_70B } from '../../config/groqModels';
+import { GPT_OSS_120B } from '../../config/groqModels';
 import { groqClient } from '../../agent/llm/groqClient';
 import { logger } from '../logger';
 import { buildFaqCategoryPromptSection } from './faqCategories';
@@ -43,7 +43,7 @@ export async function textToFaqs(
   categoryOverride?: string | null,
   existingQuestions?: string[]
 ): Promise<FaqEntry[]> {
-  const model = process.env.GROQ_FAQ_GEN_MODEL ?? GROQ_VERSATILE_70B;
+  const model = process.env.GROQ_FAQ_GEN_MODEL ?? GPT_OSS_120B;
 
   const existingSection =
     existingQuestions && existingQuestions.length > 0

@@ -7,7 +7,7 @@
 //   Anam JS SDKのcreateTalkMessageStream()でTTS化される。
 
 import { randomUUID } from 'node:crypto';
-import { GROQ_VERSATILE_70B } from '../../config/groqModels';
+import { GPT_OSS_120B, getFallbackGroqModel } from '../../config/groqModels';
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
@@ -33,10 +33,12 @@ const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 function trackAnamChatUsage(params: {
   tenantId: string;
   requestId: string;
+  /** 実際に応答を返したモデル。フォールバックが起きた場合は退避先が入る。 */
+  model: string;
   inputTokens: number | undefined;
   outputTokens: number | undefined;
 }): void {
-  const { tenantId, requestId, inputTokens, outputTokens } = params;
+  const { tenantId, requestId, model, inputTokens, outputTokens } = params;
   if (inputTokens === undefined || outputTokens === undefined) {
     // Groqがusageチャンクを返さないまま完了/中断した場合。
     // silentに0計上せず、原価・請求が過少になり得ることを可視化する。
@@ -48,7 +50,7 @@ function trackAnamChatUsage(params: {
   trackUsage({
     tenantId,
     requestId,
-    model: GROQ_VERSATILE_70B,
+    model,
     inputTokens: inputTokens ?? 0,
     outputTokens: outputTokens ?? 0,
     featureUsed: 'chat',
@@ -190,29 +192,70 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
     res.setHeader('Connection', 'keep-alive');
 
     try {
-      const groqRes = await fetch(GROQ_API_BASE, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${groqApiKey}`,
-        },
-        body: JSON.stringify({
-          model: GROQ_VERSATILE_70B,
-          messages: groqMessages,
-          stream: true,
-          // usage計測: 最終チャンクにusage(prompt_tokens/completion_tokens)を含めてもらう。
-          stream_options: { include_usage: true },
-          max_tokens: 150,
-          temperature: 0.7,
-        }),
-      });
+      // モデル配信停止(404 model_not_found)時は groqModels.ts のフォールバックチェーンを辿る。
+      // 共通の callGroqWithModelFallback は非ストリーミング(Promise<string>)のためここでは使えない。
+      // ただし 404 判定は本文を1バイトも書き出す前に確定するので、この位置での退避は安全
+      // (ストリーム開始後は応答を撤回できないため、退避もしない)。
+      let candidateModel: string | null = GPT_OSS_120B;
+      let groqRes: Awaited<ReturnType<typeof fetch>> | undefined;
+      const attemptedModels: string[] = [];
 
-      if (!groqRes.ok) {
-        const errText = await groqRes.text();
-        logger.error(`[anamChatStream] Groq API error ${groqRes.status}: ${errText.slice(0, 200)}`);
+      while (candidateModel !== null) {
+        attemptedModels.push(candidateModel);
+        const attempt = await fetch(GROQ_API_BASE, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${groqApiKey}`,
+          },
+          body: JSON.stringify({
+            model: candidateModel,
+            messages: groqMessages,
+            stream: true,
+            // usage計測: 最終チャンクにusage(prompt_tokens/completion_tokens)を含めてもらう。
+            stream_options: { include_usage: true },
+            max_tokens: 150,
+            temperature: 0.7,
+          }),
+        });
+
+        if (attempt.ok) {
+          groqRes = attempt;
+          break;
+        }
+
+        const errText = await attempt.text();
+        const isModelNotFound =
+          attempt.status === 404 && errText.includes('model_not_found');
+
+        if (!isModelNotFound) {
+          // モデル不在以外の失敗は退避しても直らないため、そのまま返す。
+          logger.error(
+            `[anamChatStream] Groq API error ${attempt.status}: ${errText.slice(0, 200)}`,
+          );
+          res.write(JSON.stringify({ error: 'LLM error' }) + '\n');
+          return res.end();
+        }
+
+        const nextModel = getFallbackGroqModel(candidateModel);
+        // 無言フォールバック禁止: 退避も打ち切りも必ずログに残す。
+        logger.warn(
+          { requestId: req.requestId, tenantId, failedModel: candidateModel, nextModel },
+          '[anamChatStream] model_not_found — falling back to next catalog model',
+        );
+        candidateModel = nextModel;
+      }
+
+      if (!groqRes || candidateModel === null) {
+        logger.error(
+          { requestId: req.requestId, tenantId, attemptedModels },
+          '[anamChatStream] all fallback models returned model_not_found — giving up',
+        );
         res.write(JSON.stringify({ error: 'LLM error' }) + '\n');
         return res.end();
       }
+
+      const resolvedModel: string = candidateModel;
 
       const reader = groqRes.body?.getReader();
       if (!reader) {
@@ -265,7 +308,7 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
         // ストリームが正常完了/中断のどちらでも、ここまでに得たusage(未取得ならundefined)で計上する。
         // requestId(req.requestId)は1リクエストにつき固定なので、再接続で二重にPOSTされない限り
         // 二重計上は発生しない。二重POST自体はusage_logsのrequest_id UNIQUE制約で防がれる。
-        trackAnamChatUsage({ tenantId, requestId: req.requestId, inputTokens, outputTokens });
+        trackAnamChatUsage({ tenantId, requestId: req.requestId, model: resolvedModel, inputTokens, outputTokens });
       }
 
       res.end();

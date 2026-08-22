@@ -1,13 +1,13 @@
 // src/agent/judge/conversationJudge.ts
-// Phase45: Judge評価エンジン - Groq 70b (llama-3.3-70b-versatile) で会話を評価
+// Phase45: Judge評価エンジン - Groq 経由の openai/gpt-oss-120b で会話を評価
 
-import { GROQ_VERSATILE_70B } from '../../config/groqModels';
+import { GPT_OSS_120B } from '../../config/groqModels';
 import pino from 'pino';
 import { callGroqWith429Retry } from '../llm/groqClient';
 
 const logger = pino();
 
-const JUDGE_MODEL = GROQ_VERSATILE_70B;
+const JUDGE_MODEL = GPT_OSS_120B;
 
 export interface JudgeInput {
   tenantId: string;

@@ -1,7 +1,7 @@
 // src/agent/judge/evaluationRepository.ts
 // Phase45: Judge評価結果のDBリポジトリ
 
-import { GROQ_VERSATILE_70B } from '../../config/groqModels';
+import { GPT_OSS_120B } from '../../config/groqModels';
 import { Pool } from 'pg';
 import { getPool as _getDefaultPool } from '../../lib/db';
 
@@ -87,7 +87,7 @@ export function createEvaluationRepository(pool?: InstanceType<typeof Pool>) {
           JSON.stringify(evaluation.failedPrinciples),
           JSON.stringify(evaluation.evaluationAxes),
           evaluation.notes ?? null,
-          evaluation.modelUsed ?? GROQ_VERSATILE_70B,
+          evaluation.modelUsed ?? GPT_OSS_120B,
         ],
       );
       return rowToEvaluation(result.rows[0]!);

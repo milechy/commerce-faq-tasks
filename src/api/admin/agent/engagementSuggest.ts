@@ -2,7 +2,7 @@
 // Phase3: 自然文からお客様への声がけ(trigger_rules)を構造化提案する。
 // tuning/routes.ts の callGroq8bSuggestFromText と同型のパターン。
 
-import { GROQ_INSTANT_8B } from '../../../config/groqModels';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 
 export type EngagementTriggerType = 'scroll_depth' | 'idle_time' | 'exit_intent' | 'page_url_match';
@@ -93,7 +93,7 @@ trigger_type は次の4種類から最も適切なものを1つ選んでくだ�
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+        model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.4,
         max_tokens: 400,
@@ -114,7 +114,7 @@ trigger_type は次の4種類から最も適切なものを1つ選んでくだ�
       trackUsage({
         tenantId,
         requestId: `admin-engagement-suggest:${tenantId}:${Date.now()}`,
-        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+        model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
         featureUsed: 'admin_engagement_suggest',

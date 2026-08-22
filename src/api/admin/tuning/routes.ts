@@ -2,7 +2,7 @@
 
 // Phase38 Step4-BE: チューニングルール CRUD API
 
-import { GROQ_INSTANT_8B } from '../../../config/groqModels';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { roleAuthMiddleware } from "../../middleware/roleAuth";
@@ -100,7 +100,7 @@ ${knowledgePart}${rulesPart}${crossTenantPart}${researchPart}
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+        model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.4,
         max_tokens: 400,
@@ -178,7 +178,7 @@ ${knowledgePart}${rulesPart}${crossTenantPart}
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+        model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.4,
         max_tokens: 400,
@@ -352,7 +352,7 @@ export function registerTuningRoutes(app: Express): void {
         trackUsage({
           tenantId,
           requestId: `admin-tuning-suggest:${Date.now()}`,
-          model: process.env.GROQ_MODEL_8B ?? GROQ_INSTANT_8B,
+          model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
           inputTokens: Math.ceil(promptChars / 4),
           outputTokens: Math.ceil(outputChars / 4),
           featureUsed: 'admin_tuning',

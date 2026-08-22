@@ -1,4 +1,4 @@
-import { GROQ_VERSATILE_70B } from '../../config/groqModels';
+import { GPT_OSS_120B } from '../../config/groqModels';
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { z } from "zod";
@@ -21,7 +21,7 @@ import { checkTopic } from "../../middleware/topicGuard";
 import { guardOutput } from "../../middleware/outputGuard";
 
 // チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
-const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? GROQ_VERSATILE_70B;
+const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? GPT_OSS_120B;
 
 // ---------------------------------------------------------------------------
 // ナレッジギャップ検出

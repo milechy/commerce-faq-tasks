@@ -13,7 +13,7 @@ import { requiresConfirmation, WRITE_TOOL_RISK_TIERS } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
 import { recordAgentSettingsChange } from './agentAuditLog';
-import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import { isUnanswered } from '../ai-assist/systemPrompt';
 
 // ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ async function callGroqWithTools(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: GROQ_VERSATILE_70B,
+      model: GPT_OSS_120B,
       messages,
       tools,
       tool_choice: 'auto',
@@ -342,7 +342,7 @@ async function callGroqFinal(messages: GroqMessage[]): Promise<{ reply: string; 
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: GROQ_VERSATILE_70B,
+      model: GPT_OSS_120B,
       messages,
       max_tokens: 512,
       temperature: 0.2,
@@ -566,7 +566,7 @@ async function runStreamingHop(
   if (!apiKey) throw new Error('GROQ_API_KEY not configured');
 
   const body: Record<string, unknown> = {
-    model: GROQ_VERSATILE_70B,
+    model: GPT_OSS_120B,
     messages,
     max_tokens: 1024,
     temperature: 0.2,
@@ -904,7 +904,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             trackUsage({
               tenantId: effectiveTenantId,
               requestId: `admin-agent-${sessionId}-${Date.now()}`,
-              model: GROQ_VERSATILE_70B,
+              model: GPT_OSS_120B,
               inputTokens: totalPromptTokens,
               outputTokens: totalCompletionTokens,
               featureUsed: 'admin_agent',
@@ -943,7 +943,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         trackUsage({
           tenantId: effectiveTenantId,
           requestId: `admin-agent-${sessionId}-${Date.now()}`,
-          model: GROQ_VERSATILE_70B,
+          model: GPT_OSS_120B,
           inputTokens: totalPromptTokens,
           outputTokens: totalCompletionTokens,
           featureUsed: 'admin_agent',

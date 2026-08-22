@@ -1,7 +1,7 @@
 // src/api/admin/feedback/feedbackAI.ts
 // Phase62: FAQチャット代行提案 + 試算フロー統合
 
-import { GROQ_INSTANT_8B } from '../../../config/groqModels';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import { sanitizeOutput } from "../../../lib/security/inputSanitizer";
 import { trackUsage } from "../../../lib/billing/usageTracker";
 import { logger } from '../../../lib/logger';
@@ -10,7 +10,7 @@ import { estimateOptionPrice } from './optionEstimator';
 import { getPool } from '../../../lib/db';
 import { createNotification } from '../../../lib/notifications';
 
-const FEEDBACK_AI_MODEL = process.env.FEEDBACK_AI_MODEL ?? GROQ_INSTANT_8B;
+const FEEDBACK_AI_MODEL = process.env.FEEDBACK_AI_MODEL ?? GPT_OSS_120B;
 
 // ---------------------------------------------------------------------------
 // システムプロンプト（Phase62: 代行案内ルール追加）

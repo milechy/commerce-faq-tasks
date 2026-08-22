@@ -1,7 +1,7 @@
 // src/api/admin/tuning/testResponseRoutes.ts
 // Phase6-B: チューニングルール LLMテスト返答生成API
 
-import { GROQ_VERSATILE_70B } from '../../../config/groqModels';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
@@ -9,7 +9,7 @@ import { getPool } from "../../../lib/db";
 import { logger } from "../../../lib/logger";
 import { trackUsage } from "../../../lib/billing/usageTracker";
 
-const GROQ_MODEL_70B = GROQ_VERSATILE_70B;
+const GROQ_MODEL_70B = GPT_OSS_120B;
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist

@@ -93,7 +93,7 @@ describe("POST /api/internal/usage", () => {
     );
   });
 
-  it("inputTokens/outputTokens/model/featureUsed省略時は後方互換のデフォルト値(0/0/GROQ_VERSATILE_70B/avatar)を使う", async () => {
+  it("inputTokens/outputTokens/model/featureUsed省略時は後方互換のデフォルト値(0/0/GPT_OSS_120B/avatar)を使う", async () => {
     await request(makeApp())
       .post("/api/internal/usage")
       .set("X-Internal-Request", "1")
@@ -103,7 +103,7 @@ describe("POST /api/internal/usage", () => {
       expect.objectContaining({
         inputTokens: 0,
         outputTokens: 0,
-        model: "llama-3.3-70b-versatile",
+        model: "openai/gpt-oss-120b",
         featureUsed: "avatar",
         ttsTextBytes: 100,
       }),

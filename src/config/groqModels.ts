@@ -10,14 +10,20 @@
 //   - 新モデル採用: ACTIVE に定数を足し、call site をその定数経由に。
 //   - モデル廃止: Groq の deprecation 告知が出たら KNOWN_DEPRECATED に id を追記。
 //     検知層が src/ 内の残存使用を洗い出すので、移行漏れを防げる。
+//
+// 2026-08-23 の移行:
+//   Groq が llama-3.3-70b-versatile / llama-3.1-8b-instant を配信停止したため
+//   (実測: /v1/models に存在せず 404 model_not_found)、両者を openai/gpt-oss-120b へ集約した。
+//   Groq に残る汎用チャットモデルは gpt-oss 系と compound 系のみで、Llama 系の汎用モデルは無い。
+//   8B 相当の安価枠を gpt-oss-20b ではなく 120b に寄せたのは、20b が低い max_tokens 下で
+//   推論トークンを使い切って本文が空になり、JSON 出力用途(objectionDetector 等)が
+//   無言で機能停止する挙動を実測したため。
 
 /** 現在アクティブな Groq チャットモデル（実機で呼び出している実 ID）。値は実 ID と完全一致させること。 */
-export const GROQ_INSTANT_8B = 'llama-3.1-8b-instant';
-export const GROQ_VERSATILE_70B = 'llama-3.3-70b-versatile';
 export const GROQ_COMPOUND = 'groq/compound';
 export const GROQ_COMPOUND_MINI = 'groq/compound-mini';
 
-/** gpt-oss（Groq 経由）— アーキテクチャ上の 20B / 120B。 */
+/** gpt-oss（Groq 経由）— アーキテクチャ上の 20B / 120B。汎用チャットの主力は 120B。 */
 export const GPT_OSS_20B = 'openai/gpt-oss-20b';
 export const GPT_OSS_120B = 'openai/gpt-oss-120b';
 
@@ -26,14 +32,12 @@ export type GroqModelStatus = 'active' | 'deprecated';
 export interface GroqModelEntry {
   id: string;
   /** 用途の目安。集約後の選定で参照する。 */
-  tier: 'instant' | 'versatile' | 'compound' | 'compound-mini' | 'oss-20b' | 'oss-120b';
+  tier: 'compound' | 'compound-mini' | 'oss-20b' | 'oss-120b';
   status: GroqModelStatus;
 }
 
 /** アクティブモデルのレジストリ（COST マップ・テスト・検知層が参照する単一の真実）。 */
 export const ACTIVE_GROQ_MODELS: readonly GroqModelEntry[] = [
-  { id: GROQ_INSTANT_8B, tier: 'instant', status: 'active' },
-  { id: GROQ_VERSATILE_70B, tier: 'versatile', status: 'active' },
   { id: GROQ_COMPOUND, tier: 'compound', status: 'active' },
   { id: GROQ_COMPOUND_MINI, tier: 'compound-mini', status: 'active' },
   { id: GPT_OSS_20B, tier: 'oss-20b', status: 'active' },
@@ -48,7 +52,10 @@ export const ACTIVE_GROQ_MODEL_IDS: readonly string[] = ACTIVE_GROQ_MODELS.map((
  * 出典: Groq deprecations (https://console.groq.com/docs/deprecations)。
  */
 export const KNOWN_DEPRECATED_GROQ_MODELS: readonly string[] = [
-  'llama-3.1-70b-versatile', // → llama-3.3-70b-versatile に移行済み
+  // 2026-08-23 実測で /v1/models から消滅を確認（告知の見落としにより本番障害化した2件）。
+  'llama-3.3-70b-versatile', // → openai/gpt-oss-120b に移行済み
+  'llama-3.1-8b-instant', // → openai/gpt-oss-120b に移行済み
+  'llama-3.1-70b-versatile', // → llama-3.3-70b-versatile 経由で openai/gpt-oss-120b へ
   'llama3-70b-8192',
   'llama3-8b-8192',
   'mixtral-8x7b-32768',
@@ -86,24 +93,26 @@ export function assertActiveGroqModel(model: string): void {
  * モデルが 404 / model_not_found エラーを返した際のフォールバックチェーン。
  *
  * キー: 優先モデルの ID
- * 値: 退避先モデルの ID（カタログの ACTIVE_GROQ_MODELS 内のみ許可）
+ * 値: 退避先モデルの ID
  *
  * 設計方針:
- *   - 高性能モデルから汎用モデルへ段階的に下げる。
- *   - 最後は必ず llama-3.1-8b-instant（最小/最安）。
- *   - 120B 系は compound に退避（ANTI-SLOP: 120B は複雑クエリ/safety のみ使用）。
- *   - チェーンは最大 2 段。無限ループ防止のため resolve 時に検証する。
+ *   - **退避先は必ず ACTIVE_GROQ_MODEL_IDS の中から選ぶこと。**
+ *     2026-08-23 まで、退避先が既に配信停止された llama 系を指しており、
+ *     「生きているモデルから退避すると必ず死んだモデルに着地する」状態だった。
+ *     404 時の救済のための仕組みが、逆に全経路を確実な失敗へ導いていた。
+ *     この不変条件は groqModels.test.ts が機械的に検証する。
+ *   - compound 系 → 汎用の gpt-oss-120b へ抜けられるようにする。
+ *   - 終端は gpt-oss-20b（Groq に残る唯一の他の汎用チャットモデル）。
+ *     20b は JSON 用途では不安定だが、緊急退避先としては「何も返さない」より良い。
+ *   - 無限ループ防止のため resolve 側(callGroqWithModelFallback)で visited 検証する。
  */
 export const GROQ_FALLBACK_CHAIN: Readonly<Record<string, string>> = {
-  // gpt-oss 系: EOL 通知前の緊急退避
+  // 主力 120B → 20B（終端）
   [GPT_OSS_120B]: GPT_OSS_20B,
-  [GPT_OSS_20B]: GROQ_VERSATILE_70B,
-  // compound 系
+  // compound 系 → mini → 汎用 120B
   [GROQ_COMPOUND]: GROQ_COMPOUND_MINI,
-  [GROQ_COMPOUND_MINI]: GROQ_VERSATILE_70B,
-  // versatile → instant
-  [GROQ_VERSATILE_70B]: GROQ_INSTANT_8B,
-  // instant: これ以上退避先なし（チェーン終端）
+  [GROQ_COMPOUND_MINI]: GPT_OSS_120B,
+  // gpt-oss-20b: これ以上退避先なし（チェーン終端）
 };
 
 /**

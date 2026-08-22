@@ -3,8 +3,8 @@ import { logger } from "../logger";
 import {
   GROQ_COMPOUND,
   GROQ_COMPOUND_MINI,
-  GROQ_VERSATILE_70B,
-  GROQ_INSTANT_8B,
+  GPT_OSS_120B,
+  GPT_OSS_20B,
 } from "../../config/groqModels";
 
 export interface LlmAnalyticsEvent {
@@ -20,8 +20,10 @@ export interface LlmAnalyticsEvent {
 const COST_PER_1K: Record<string, { input: number; output: number }> = {
   [GROQ_COMPOUND]: { input: 0.0009, output: 0.0009 },
   [GROQ_COMPOUND_MINI]: { input: 0.0006, output: 0.0006 },
-  [GROQ_VERSATILE_70B]: { input: 0.00059, output: 0.00079 },
-  [GROQ_INSTANT_8B]: { input: 0.00005, output: 0.00008 },
+  // 単価は src/lib/billing/costCalculator.ts (per 1M) を per 1K に換算した値。
+  // 旧 llama-3.3-70b / llama-3.1-8b の 2 行は配信停止に伴い gpt-oss へ集約した。
+  [GPT_OSS_120B]: { input: 0.00015, output: 0.0006 },
+  [GPT_OSS_20B]: { input: 0.000075, output: 0.0003 },
 };
 
 function estimateCostUsd(

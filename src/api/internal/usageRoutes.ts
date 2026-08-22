@@ -6,7 +6,7 @@
 //
 // Body: { tenantId, requestId?, ttsTextBytes?, ttsModel?, avatarCredits?, avatarSessionMs? }
 
-import { GROQ_VERSATILE_70B } from '../../config/groqModels';
+import { GPT_OSS_120B } from '../../config/groqModels';
 import type { Express, Request, Response } from 'express';
 import { INTERNAL_REQUEST_HEADER } from '../../lib/metrics/kpiDefinitions';
 import { trackUsage, type FeatureUsed } from '../../lib/billing/usageTracker';
@@ -42,7 +42,7 @@ export function registerInternalUsageRoutes(app: Express): void {
     trackUsage({
       tenantId,
       requestId: rid,
-      model: typeof model === 'string' && model ? model : GROQ_VERSATILE_70B,
+      model: typeof model === 'string' && model ? model : GPT_OSS_120B,
       inputTokens: typeof inputTokens === 'number' && inputTokens >= 0 ? inputTokens : 0,
       outputTokens: typeof outputTokens === 'number' && outputTokens >= 0 ? outputTokens : 0,
       featureUsed: resolvedFeature,
