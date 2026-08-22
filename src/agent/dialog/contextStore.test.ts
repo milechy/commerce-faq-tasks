@@ -74,6 +74,30 @@ describe("contextStore", () => {
     expect(trimmed[19].content).toBe("tenant-full の21件目");
   });
 
+  it("空配列でappendしても既存履歴を壊さず、Mapに空エントリとして残る（no-opではなくキーが作成される）", () => {
+    appendToSessionHistory("tenant-empty-append", "session-1", []);
+    // 空配列でも一度appendすればMapにキーは作られる（undefinedとの違いを保証）
+    expect(getSessionHistory("tenant-empty-append", "session-1")).toEqual([]);
+
+    appendToSessionHistory("tenant-empty-append", "session-1", [
+      { role: "user", content: "後続の発話" },
+    ]);
+    expect(getSessionHistory("tenant-empty-append", "session-1")).toEqual([
+      { role: "user", content: "後続の発話" },
+    ]);
+  });
+
+  it("極端に長いtenantId/sessionIdでもクラッシュせずキー生成できる", () => {
+    const longTenant = "t-" + "a".repeat(2000);
+    const longSession = "s-" + "b".repeat(2000);
+    expect(() =>
+      appendToSessionHistory(longTenant, longSession, [
+        { role: "user", content: "long key test" },
+      ])
+    ).not.toThrow();
+    expect(getSessionHistory(longTenant, longSession)).toHaveLength(1);
+  });
+
   describe("キー連結（`${tenantId}::${sessionId}`）のセパレータ衝突防止", () => {
     it("【修正確認】tenantIdに区切り文字`::`が含まれる場合は例外を投げ、衝突を未然に防ぐ", () => {
       // tenantId は作成時バリデーション(/^[a-z0-9_-]+$/)によりコロンを含まない
