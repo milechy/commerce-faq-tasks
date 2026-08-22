@@ -119,6 +119,21 @@ export function registerMonitoringRoutes(app: Express): void {
     const isSuperAdmin = role === "super_admin";
     const jwtTenantId: string | null =
       su?.app_metadata?.tenant_id ?? su?.tenant_id ?? null;
+
+    // 防御深度: client_admin は必ず tenant_id を持つこと（roleAuthMiddleware と同じ方針）。
+    // これが無いと tenantFilter が null に落ち、computeKpis が全テナント合算で実行される。
+    if (!isSuperAdmin && !jwtTenantId) {
+      logger.warn({
+        event: 'monitoring_access_denied',
+        reason: 'missing_tenant_id',
+        errorCode: 'AUTHZ_TENANT_MISSING',
+        requested_path: req.path,
+        actor_email: su?.['email'] ? String(su['email']).slice(0, 3) + '***' : 'unknown',
+      }, 'monitoring access denied: client_admin without tenant_id');
+      res.status(403).json({ error: "テナント情報が取得できません", code: 'AUTHZ_TENANT_MISSING' });
+      return;
+    }
+
     const tenantFilter = isSuperAdmin ? null : jwtTenantId;
 
     // DB が利用不可の場合はフォールバック値を返す
