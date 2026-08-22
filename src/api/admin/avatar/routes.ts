@@ -9,7 +9,7 @@ import { supabaseAdmin } from "../../../auth/supabaseClient";
 import multer from 'multer';
 import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
-import { tenantHasFeature } from '../../../lib/billing/planFeatures';
+import { tenantHasFeature, queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
 import { resolveEffectiveTenantId } from '../../middleware/roleAuth';
 import { adoptVoiceForConfig } from './fishVoiceModel';
 
@@ -658,6 +658,23 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         const effectiveTenantId = isSuperAdmin
           ? (req.query["tenant"] as string || tenantId)
           : tenantId;
+
+        // プラン制限（LP料金表 Growth〜: AIアバター）。actionExecutor.ts の
+        // activate_avatar ツールと同じ基準・同じ実装パターンを適用する
+        // （チャット経由は既にゲートされているのに旧UIだけ素通りする不整合を解消）。
+        // 注入済み client を使う（tenantHasFeature 経由だと内部で getPool() の
+        // 実Poolを使ってしまい、テストのモックPoolと食い違うため queryTenantPlan を直接使う）。
+        // super_adminはプラン制限をバイパスする（他ツールと同じ規則）。
+        if (!isSuperAdmin) {
+          const plan = await queryTenantPlan(client, effectiveTenantId);
+          if (!planHasFeature(plan, "avatar")) {
+            await client.query("ROLLBACK");
+            return res.status(403).json({
+              error: "plan_upgrade_required",
+              message: "アバター機能はGrowthプラン以上でご利用いただけます。",
+            });
+          }
+        }
 
         // 全て deactivate
         await client.query(

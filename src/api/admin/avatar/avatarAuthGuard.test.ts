@@ -19,11 +19,27 @@ import request from 'supertest';
 import { logger } from '../../../lib/logger';
 import { registerAvatarConfigRoutes } from './routes';
 
+/**
+ * このファイルはロール認可（super_admin/client_adminがブロックされないこと）のみを
+ * 検証する。activate ルートが追加したプラン制限（queryTenantPlan経由のSELECT plan
+ * FROM tenants）に空行を返すと、ロールとは無関係にplan_upgrade_requiredの403で
+ * 落ちてしまうため、そのクエリだけ有償プラン('growth')を返す。他のクエリは
+ * 従来どおり空行（rowCount:0）のままにし、既存の他テストの前提を変えない。
+ */
+function mockQueryWithPlan(): jest.Mock {
+  return jest.fn().mockImplementation((sql: string) => {
+    if (typeof sql === "string" && sql.includes("SELECT plan FROM tenants")) {
+      return Promise.resolve({ rows: [{ plan: "growth" }], rowCount: 1 });
+    }
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  });
+}
+
 function makeApp(user: Record<string, unknown> | null) {
   const fakeDb = {
-    query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+    query: mockQueryWithPlan(),
     connect: jest.fn().mockResolvedValue({
-      query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+      query: mockQueryWithPlan(),
       release: jest.fn(),
     }),
   };
