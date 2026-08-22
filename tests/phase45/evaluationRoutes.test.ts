@@ -28,6 +28,7 @@ jest.mock("../../src/agent/judge/judgeEvaluator", () => ({
   SessionTenantMismatchError: class SessionTenantMismatchError extends Error {},
   SessionNotFoundError: class SessionNotFoundError extends Error {},
   SessionTooShortError: class SessionTooShortError extends Error {},
+  SessionAlreadyEvaluatedError: class SessionAlreadyEvaluatedError extends Error {},
 }));
 
 import {
@@ -326,6 +327,20 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
       expectedStatus: 422,
     },
     {
+      label: "409 事前チェックをすり抜けた同時実行の敗者（evaluateSession側のガードが発火）",
+      setup: () => {
+        const { SessionAlreadyEvaluatedError } = jest.requireMock(
+          "../../src/agent/judge/judgeEvaluator",
+        ) as { SessionAlreadyEvaluatedError: new (sessionId: string) => Error };
+        // 事前チェックは「まだ評価されていない」と判断したが、その後に別実行が先に評価を終えた
+        (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+        (evaluateSession as jest.Mock).mockRejectedValue(
+          new SessionAlreadyEvaluatedError("sess-001"),
+        );
+      },
+      expectedStatus: 409,
+    },
+    {
       label: "500 真の内部エラー（Gemini呼び出し失敗などnull返却）",
       setup: () => {
         (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
@@ -343,19 +358,27 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
     expect(res.status).toBe(expectedStatus);
   });
 
-  // 既知のリスク（未修正、テストで可視化のみ）: checkAlreadyEvaluated → evaluateSession は
-  // 「確認してから実行」の非アトミックな2段階であり、conversation_evaluations テーブルには
-  // (tenant_id, session_id) の UNIQUE 制約が無い
-  // (src/agent/judge/migration_conversation_evaluations.sql 参照。judgeEvaluator.ts の
-  // INSERT ... ON CONFLICT DO NOTHING は対象となる制約が存在しないため実質no-op)。
-  // 同一セッションへの評価トリガーが競合すると、両方が checkAlreadyEvaluated=false を見て
-  // 両方が evaluateSession を実行し、Gemini呼び出し・通知・tuning_rules挿入が重複しうる
-  // (Stripe webhookで修正した二重処理と同型の問題だが、ここは未修正)。
-  // このテストはその非アトミック性をユニットテストレベルで可視化するためのものであり、
-  // 実装修正はスコープ外(親からの指示により、発見のみ・修正はしない)。
-  it("[既知のリスク・未修正] 同一session_idへの2並行トリガーは両方とも200になりうる（checkAlreadyEvaluatedがDBの一意制約でなくアプリ側の事前確認のみのため）", async () => {
+  // Phase75で修正済み。routes側の checkAlreadyEvaluated → evaluateSession は依然として
+  // 「確認してから実行」の非アトミックな2段階だが、多重実行は下の3層で止まるようになった:
+  //   1層目: routes の checkAlreadyEvaluated（速い409。ほとんどのケースはここで止まる）
+  //   2層目: evaluateSession 内のガード（セッション取得時のEXISTSで既評価を検知。
+  //          Gemini呼び出しより前なので二重課金が起きない。自動評価の7経路もここで守られる）
+  //   3層目: conversation_evaluations の UNIQUE(tenant_id, session_id) + ON CONFLICT
+  //          （真に並行した2本が1・2層をすり抜けても、行を入れられるのは片方だけ。
+  //            敗者は rowCount=0 を見て tuning_rules・通知・reward をスキップする）
+  // このテストは routes 層に排他制御が無いこと自体は変わっていない（＝1層目をすり抜けた側は
+  // 2層目に委ねる設計である）ことを固定する。
+  it("[多層防御] routes層は同一session_idの2並行トリガーを止めないが、evaluateSession側のガードが409に落とす", async () => {
+    const { SessionAlreadyEvaluatedError } = jest.requireMock(
+      "../../src/agent/judge/judgeEvaluator",
+    ) as { SessionAlreadyEvaluatedError: new (sessionId: string) => Error };
+
+    // 2本とも事前チェックは「未評価」を見る（routes層は競合を検知できない）
     (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
-    (evaluateSession as jest.Mock).mockResolvedValue(JUDGE_RESULT);
+    // 先着1本だけが評価に成功し、後続は evaluateSession 内のガードで弾かれる
+    (evaluateSession as jest.Mock)
+      .mockResolvedValueOnce(JUDGE_RESULT)
+      .mockRejectedValueOnce(new SessionAlreadyEvaluatedError("sess-race"));
 
     const app = makeApp();
     const [res1, res2] = await Promise.all([
@@ -363,12 +386,11 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
       request(app).post("/v1/admin/evaluations/trigger").send({ session_id: "sess-race" }),
     ]);
 
-    // 本来は「評価トリガーは冪等であってほしい」が、現状の実装ではどちらも
-    // checkAlreadyEvaluated=false を見て両方 evaluateSession まで進むため、
-    // 両方 200 になる（片方が409になるような排他制御が無い）。
-    expect(res1.status).toBe(200);
-    expect(res2.status).toBe(200);
+    // routes層は2本とも evaluateSession まで通す（1層目では止まらない）
     expect(evaluateSession).toHaveBeenCalledTimes(2);
+    // 結果は「片方が200・片方が409」に落ち着く（両方200にはならない）
+    const statuses = [res1.status, res2.status].sort();
+    expect(statuses).toEqual([200, 409]);
   });
 });
 

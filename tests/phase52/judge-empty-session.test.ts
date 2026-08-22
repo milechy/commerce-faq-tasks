@@ -97,14 +97,17 @@ describe("evaluateSession — 空/単一メッセージセッションのスキ�
     mockGetPool.mockReturnValue(mockPool);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ id: "internal-uuid-two", tenant_id: "tenant-a" }] })
+      .mockResolvedValueOnce({
+        rows: [{ id: "internal-uuid-two", tenant_id: "tenant-a", already_evaluated: false }],
+      })
       .mockResolvedValueOnce({
         rows: [
           { role: "user", content: "商品の価格を教えて", created_at: new Date() },
           { role: "assistant", content: "こちらが価格表です。", created_at: new Date() },
         ],
       })
-      .mockResolvedValueOnce({ rows: [] }); // INSERT evaluations
+      .mockResolvedValueOnce({ rows: [] }) // tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // INSERT evaluations
 
     mockCallGemini.mockResolvedValueOnce(makeGeminiResponse(72));
 
@@ -120,7 +123,9 @@ describe("evaluateSession — 空/単一メッセージセッションのスキ�
     mockGetPool.mockReturnValue(mockPool);
 
     mockPool.query
-      .mockResolvedValueOnce({ rows: [{ id: "internal-uuid-three", tenant_id: "tenant-b" }] })
+      .mockResolvedValueOnce({
+        rows: [{ id: "internal-uuid-three", tenant_id: "tenant-b", already_evaluated: false }],
+      })
       .mockResolvedValueOnce({
         rows: [
           { role: "user", content: "予算は100万円です", created_at: new Date() },
@@ -128,7 +133,8 @@ describe("evaluateSession — 空/単一メッセージセッションのスキ�
           { role: "user", content: "詳しく教えてください", created_at: new Date() },
         ],
       })
-      .mockResolvedValueOnce({ rows: [] }); // INSERT evaluations
+      .mockResolvedValueOnce({ rows: [] }) // tuning_rules SELECT
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // INSERT evaluations
 
     mockCallGemini.mockResolvedValueOnce(makeGeminiResponse(85));
 

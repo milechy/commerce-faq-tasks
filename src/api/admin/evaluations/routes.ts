@@ -210,10 +210,15 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json({ evaluation: result });
     } catch (err) {
-      const { SessionTenantMismatchError, SessionNotFoundError, SessionTooShortError } = await import("../../../agent/judge/judgeEvaluator");
+      const { SessionTenantMismatchError, SessionNotFoundError, SessionTooShortError, SessionAlreadyEvaluatedError } = await import("../../../agent/judge/judgeEvaluator");
       // 「不在」と「他テナントのもの」を同一の404にし、存在確認オラクルにしない。
       if (err instanceof SessionTenantMismatchError || err instanceof SessionNotFoundError) {
         return res.status(404).json({ error: "セッションが見つかりません" });
+      }
+      // 上の checkAlreadyEvaluated をすり抜けた同時実行の敗者。事前チェックと同じ409に揃える
+      // (評価済みは障害ではないので500にしない)。
+      if (err instanceof SessionAlreadyEvaluatedError) {
+        return res.status(409).json({ error: "already_evaluated" });
       }
       // 会話が短すぎて評価対象外なのは障害ではない。500(evaluation_failed)と
       // 区別し、理由が分かる422で返す。

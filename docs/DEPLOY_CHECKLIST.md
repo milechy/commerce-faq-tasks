@@ -145,6 +145,8 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/api/conversion/migration_aaas_source.sql` | conversion_attributions の source CHECK に aaas_site_change 追加 + tenants.aaas_client_id 追加（Asana GID 1215614330355126） | ✅ (2026-08-16 実機確認) |
 | `src/lib/billing/migration_stripe_webhook_events.sql` | stripe_webhook_events テーブル新規作成（Stripe webhook の event.id 冪等化。同一イベント再送での二重処理を防ぐ） | ⬜ 未適用 |
 | `src/lib/billing/migration_stripe_webhook_events.sql` | 同ファイル: `completed_at` カラム追加（2状態管理。ハンドラ失敗後の再送で副作用が永久にスキップされる問題の解消）。**テーブル作成分を先に適用済みの環境でも、この列のために再実行が必要** | ⬜ 未適用 |
+| `src/migrations/phase75_conversation_evaluations_unique.sql` | 重複評価行の削除 + `UNIQUE(tenant_id, session_id)` 追加。judge の `ON CONFLICT` がターゲット無しで実質no-opだったため同一セッションの評価が重複し、KPI平均が下振れしていた。**★migration → デプロイの順。逆順は評価INSERTが全件失敗** | ⬜ 未適用 |
+| `src/migrations/phase75_tuning_rules_unique.sql` | 重複ルールの削除 + `UNIQUE(tenant_id, trigger_pattern)` 追加。同上（`evaluationAnalyzer` がコメントで謳っていた一意性がDB側に無かった）。**★migration → デプロイの順** | ⬜ 未適用 |
 
 ### Phase A Day 2 migration 実行手順
 
@@ -303,6 +305,62 @@ ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env
 同一イベントを手動再送すると 2回目は `{"received":true,"duplicate":true}` になる。
 
 **ロールバック**: 新規テーブルのみで既存テーブルへの変更が無いため、コードを戻せばテーブルは無害な残骸になる。
+
+### phase75 judge 一意制約 migration 実行手順
+
+> **未適用。** judge 評価の多重登録を止めるために必要。
+> **★これまでの migration と適用順序が逆。「migration → デプロイ」で当てること。**
+
+`judgeEvaluator.ts` / `evaluationAnalyzer.ts` の INSERT は
+`ON CONFLICT (tenant_id, session_id)` / `ON CONFLICT (tenant_id, trigger_pattern)` と
+**ターゲットを明示**するようになった。対応する一意インデックスが無い状態でこのコードが動くと
+Postgres が `there is no unique or exclusion constraint matching the ON CONFLICT specification`
+を返し、**評価の保存と提案ルールの保存が全件失敗する**（チャット自体は止まらないが、
+Judge 評価機能が無言で死ぬ。管理画面の手動トリガーは 500）。
+
+**先に migration を当てられる。** この2本は既存テーブルにしか触れず、新コードに依存しないため、
+rsync を待たずローカルから stdin で流し込める。中間状態を作らずに済むので、この順で当てること。
+
+```bash
+# 1. バックアップ (必須。重複削除は元に戻せない)
+ssh root@65.108.159.161 'cd /opt/rajiuce && pg_dump "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" > /opt/backups/pre_phase75_judge_unique_$(date +%Y%m%d_%H%M).sql'
+
+# 2. 適用前の確認 — 重複がどれだけあるか / 消える行に人の判断が乗っていないか
+#    ★各SQLファイル冒頭の「1. 事前確認」のクエリを実行し、結果を目視してから 3 へ進む。
+#      特に「削除対象に承認済みルールが含まれていないか」は 0 件であることを確認する。
+#      0 件でない場合は、そのまま流さず残す行の優先順位を見直すこと。
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "
+  SELECT tenant_id, session_id, COUNT(*) AS dup FROM conversation_evaluations
+  GROUP BY tenant_id, session_id HAVING COUNT(*) > 1 ORDER BY dup DESC LIMIT 20;"'
+
+# 3. Migration 実行 (デプロイ前。ローカルのファイルを stdin で流す)
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)"' \
+  < src/migrations/phase75_conversation_evaluations_unique.sql
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)"' \
+  < src/migrations/phase75_tuning_rules_unique.sql
+
+# 4. 確認 — 一意インデックスが2本とも表示されること
+#    (SQL内にシングルクォートを持ち込まないよう \d で確認する)
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "\d conversation_evaluations" -c "\d tuning_rules" | grep -E "uniq_conv_eval_session|uniq_tuning_rules_tenant_trigger"'
+
+# 5. デプロイ
+bash SCRIPTS/deploy-vps.sh
+```
+
+**動作確認**: デプロイ後、`JUDGE_AUTO_EVALUATE=true` の状態で会話を1本終端まで進め、
+`conversation_evaluations` に**1行だけ**入ること。ターン予算(既定12)を超えて会話を続けても
+行が増えないこと（従来は1ターンごとに増えていた）。
+
+```bash
+ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "
+  SELECT session_id, COUNT(*) FROM conversation_evaluations
+  GROUP BY session_id ORDER BY COUNT(*) DESC LIMIT 5;"'
+```
+
+**ロールバック**: `DROP INDEX uniq_conv_eval_session;` / `DROP INDEX uniq_tuning_rules_tenant_trigger;`
+でインデックスは戻せるが、**重複削除した行は戻らない**（手順1のバックアップから復旧すること）。
+なお、インデックスを落とすなら **コードも同時に戻す**こと（ターゲット付き ON CONFLICT が
+残ったままインデックスだけ消すと INSERT が全件失敗する）。
 
 ### 本番500の解消 migration 実行手順 (2026-08-16 実測、Asana 1217530758061266)
 

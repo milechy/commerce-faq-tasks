@@ -54,6 +54,26 @@ export class SessionTooShortError extends Error {
   }
 }
 
+/**
+ * すでに評価済みのセッションを再評価しようとした場合に投げる。
+ *
+ * 自動評価の呼び出し元(langGraphOrchestrator / flowControl)は「終端到達」を検知するたびに
+ * evaluateSession を fire-and-forget で叩くが、ターン予算超過セッションでは
+ * `turnIndex > maxTurnsPerSession` が以降ずっと真になるため、ユーザーが発言するたびに
+ * 何度でも再発火する(並行性を伴わない決定的な多重実行)。Gemini課金の二重発生と、
+ * conversation_evaluations の重複行による KPI 平均の下振れを防ぐため、
+ * Gemini を呼ぶ前にこのガードで打ち切る。
+ *
+ * 障害ではなく「もう終わっている」という正常状態なので、呼び出し元(routes.ts)は
+ * 500 ではなく 409(already_evaluated)に変換する。
+ */
+export class SessionAlreadyEvaluatedError extends Error {
+  constructor(sessionId: string) {
+    super(`session ${sessionId} has already been evaluated`);
+    this.name = 'SessionAlreadyEvaluatedError';
+  }
+}
+
 const JUDGE_MODEL = process.env['GEMINI_MODEL'] ?? 'gemini-2.5-flash';
 
 const FALLBACK_PROMPT_TEMPLATE = `あなたは営業チャットAIの品質評価Judgeです。
@@ -94,6 +114,11 @@ interface ChatSessionRow {
   id: string;
   tenant_id: string;
   prompt_variant_id: string | null;
+  /**
+   * 同一 (tenant_id, session_id) の評価行が既にあるか。
+   * セッション取得と同じクエリの EXISTS で解決し、多重評価ガードの往復を増やさない。
+   */
+  already_evaluated: boolean;
 }
 
 function clamp(v: number): number {
@@ -168,8 +193,16 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
     const pool = getPool();
 
     // 1. Fetch internal id + tenant_id from chat_sessions (session_id is the public text key)
+    //    併せて「このセッションが既に評価済みか」を EXISTS で同時に引く(1b のガード用)。
     const sessionResult = await pool.query<ChatSessionRow>(
-      'SELECT id, tenant_id, prompt_variant_id FROM chat_sessions WHERE session_id = $1 LIMIT 1',
+      `SELECT s.id, s.tenant_id, s.prompt_variant_id,
+              EXISTS (
+                SELECT 1 FROM conversation_evaluations ce
+                WHERE ce.tenant_id = s.tenant_id AND ce.session_id = s.session_id
+              ) AS already_evaluated
+         FROM chat_sessions s
+        WHERE s.session_id = $1
+        LIMIT 1`,
       [sessionId],
     );
     if (sessionResult.rows.length === 0) {
@@ -188,6 +221,19 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
     if (expectedTenantId !== undefined && tenantId !== expectedTenantId) {
       logger.warn({ sessionId }, 'judgeEvaluator: tenant mismatch, refusing evaluation');
       throw new SessionTenantMismatchError(sessionId);
+    }
+
+    // 1b. 多重評価ガード: Gemini を呼ぶ前に既評価を弾く。
+    //     自動評価は「終端到達」ごとに fire-and-forget で叩かれるが、ターン予算超過後は
+    //     毎ターン再発火するため、ここで止めないと Gemini 課金と重複行が積み上がる。
+    //     呼び出し元が7箇所あるため、各呼び出し側ではなくこの関数内に寄せて漏れを防ぐ。
+    //     判定は 1. のセッション取得と同じクエリ内の EXISTS で済ませており、
+    //     往復を増やしていない。
+    //     真の同時実行はこの事前チェックをすり抜けうるが、その最終防波堤は
+    //     conversation_evaluations の UNIQUE(tenant_id, session_id) + ON CONFLICT が担う。
+    if (sessionResult.rows[0]!.already_evaluated === true) {
+      logger.info({ sessionId, tenantId }, 'judgeEvaluator: session already evaluated, skipping');
+      throw new SessionAlreadyEvaluatedError(sessionId);
     }
 
     // 2. Fetch all messages using internal UUID (chat_messages.session_id → chat_sessions.id)
@@ -271,8 +317,13 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
       return null;
     }
 
-    // 6. Persist evaluation with new columns (INSERT ... ON CONFLICT DO NOTHING)
-    await pool.query(
+    // 6. Persist evaluation with new columns.
+    //    ON CONFLICT のターゲットを明示する。以前は無指定で、SERIAL の id にしか反応できず
+    //    実質 no-op だった(= 重複行がそのまま入っていた)。
+    //    ★このターゲット指定は UNIQUE(tenant_id, session_id) の存在が前提。
+    //     マイグレーション未適用の状態でこのコードをデプロイすると INSERT が全て失敗する。
+    //     必ず migration → deploy の順で適用すること(docs/DEPLOY_CHECKLIST.md 参照)。
+    const insertResult = await pool.query(
       `INSERT INTO conversation_evaluations
          (tenant_id, session_id, score,
           used_principles, effective_principles, failed_principles, evaluation_axes,
@@ -283,7 +334,7 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
           '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
           $4, $5, $6, $7,
           $8::jsonb, $9::jsonb, $10, $11)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT (tenant_id, session_id) DO NOTHING`,
       [
         tenantId,
         sessionId,
@@ -298,6 +349,18 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
         JUDGE_MODEL,
       ],
     );
+
+    // 6a. 同時実行の敗者はここで打ち切る。1b のガードは「確認してから実行」なので
+    //     真に並行した2本は両方すり抜けうるが、行を入れられるのは片方だけ。
+    //     敗者がこのまま進むと tuning_rules・通知・蒸留・reward が二重に走るため、
+    //     評価結果は返しつつ副作用だけをスキップする。
+    if ((insertResult.rowCount ?? 0) === 0) {
+      logger.info(
+        { sessionId, tenantId },
+        'judgeEvaluator: evaluation row already persisted by a concurrent run, skipping side effects',
+      );
+      return result;
+    }
 
     // 6b. Phase71-A: 高スコア会話を learned_memory に蒸留 (fire-and-forget)
     //     書込み Feature Flag + スコア閾値のガードは distillAndPromote 内で行う。
@@ -353,7 +416,7 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
             `INSERT INTO tuning_rules
                (tenant_id, trigger_pattern, expected_behavior, priority, is_active, source)
              VALUES ($1, $2, $3, $4, false, 'judge')
-             ON CONFLICT DO NOTHING`,
+             ON CONFLICT (tenant_id, trigger_pattern) DO NOTHING`,
             [
               tenantId,
               rule.rule_text,
@@ -414,7 +477,8 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
     if (
       err instanceof SessionTenantMismatchError ||
       err instanceof SessionNotFoundError ||
-      err instanceof SessionTooShortError
+      err instanceof SessionTooShortError ||
+      err instanceof SessionAlreadyEvaluatedError
     ) throw err;
     logger.error({ err, sessionId }, 'judgeEvaluator: unexpected error in evaluateSession');
     return null;

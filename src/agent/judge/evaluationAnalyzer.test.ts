@@ -5,6 +5,9 @@ jest.mock('../llm/groqClient', () => ({
   callGroqWith429Retry: jest.fn(),
 }));
 
+import fs from 'fs';
+import path from 'path';
+
 import { callGroqWith429Retry } from '../llm/groqClient';
 import { analyzeTuningRules } from './evaluationAnalyzer';
 import type { ConversationEvaluation } from './evaluationRepository';
@@ -143,8 +146,8 @@ describe('analyzeTuningRules', () => {
     expect(insertCalls.length).toBeGreaterThan(0);
     // source='judge' が含まれていること
     expect(insertCalls[0][0]).toContain("'judge'");
-    // ON CONFLICT DO NOTHING が含まれていること
-    expect(insertCalls[0][0]).toContain('ON CONFLICT DO NOTHING');
+    // ON CONFLICT が一意制約のターゲット付きで含まれていること（詳細は test 4）
+    expect(insertCalls[0][0]).toContain('ON CONFLICT (tenant_id, trigger_pattern) DO NOTHING');
   });
 
   it('3c. INSERT文でis_activeがfalseに明示される（列を省略するとスキーマ既定DEFAULT trueで無断有効化されるため）', async () => {
@@ -178,19 +181,64 @@ describe('analyzeTuningRules', () => {
     expect(persistedEvidence).toEqual(result[0]!.evidence);
   });
 
-  it('4. 重複ルールは挿入されない（ON CONFLICT DO NOTHING）', async () => {
+  it('4. 重複ルールは挿入されない — ON CONFLICT が一意制約のターゲットを明示している', async () => {
+    // 旧テストは「SQL文字列に ON CONFLICT DO NOTHING が含まれること」しか見ていなかった。
+    // ターゲット無しの ON CONFLICT は SERIAL の id にしか反応できず実質 no-op なので、
+    // 重複が入り放題の状態でもこのテストは通り続けていた（誤った安心感）。
+    // 重複排除が本当に効く条件は「ターゲットが実在の一意制約と一致していること」なので、
+    // そこを検証する。
     const mockRepo = createMockRepo(sampleEvaluations);
     const mockPool = createMockPool();
     mockCallGroq.mockResolvedValueOnce(mockRulesResponse);
 
     await analyzeTuningRules('tenant-test', mockRepo as any, mockPool as any);
 
-    // INSERT文に ON CONFLICT DO NOTHING が含まれていること
-    const calls = (mockPool.query as jest.Mock).mock.calls;
-    for (const call of calls) {
-      if (call[0].includes('INSERT')) {
-        expect(call[0]).toContain('ON CONFLICT DO NOTHING');
-      }
+    const insertCalls = (mockPool.query as jest.Mock).mock.calls.filter(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO tuning_rules'),
+    );
+    expect(insertCalls.length).toBeGreaterThan(0);
+
+    for (const call of insertCalls) {
+      // ターゲット無しの `ON CONFLICT DO NOTHING` は退行とみなす
+      expect(call[0]).not.toMatch(/ON CONFLICT\s+DO NOTHING/);
+      expect(call[0]).toMatch(/ON CONFLICT\s*\(\s*tenant_id\s*,\s*trigger_pattern\s*\)\s*DO NOTHING/);
     }
+  });
+
+  it('5. ON CONFLICT のターゲットが phase75 マイグレーションの一意インデックスと一致している（コードとスキーマの乖離防止）', () => {
+    // ON CONFLICT のターゲットは、実在する一意制約と一致しないと Postgres が
+    // 「there is no unique or exclusion constraint matching the ON CONFLICT specification」
+    // を返して INSERT が全て失敗する。コード側だけ・スキーマ側だけを直す片肺変更を防ぐため、
+    // 両者を突き合わせる。
+    const migrationPath = path.join(__dirname, '../../migrations/phase75_tuning_rules_unique.sql');
+    const migration = fs.readFileSync(migrationPath, 'utf-8');
+
+    // マイグレーションが (tenant_id, trigger_pattern) の UNIQUE INDEX を作っていること
+    expect(migration).toMatch(
+      /CREATE UNIQUE INDEX[\s\S]*?ON tuning_rules\s*\(\s*tenant_id\s*,\s*trigger_pattern\s*\)/,
+    );
+
+    // コード側の ON CONFLICT ターゲットが同じ列の組であること
+    const analyzerSrc = fs.readFileSync(path.join(__dirname, 'evaluationAnalyzer.ts'), 'utf-8');
+    expect(analyzerSrc).toMatch(/ON CONFLICT\s*\(\s*tenant_id\s*,\s*trigger_pattern\s*\)/);
+
+    const judgeSrc = fs.readFileSync(path.join(__dirname, 'judgeEvaluator.ts'), 'utf-8');
+    expect(judgeSrc).toMatch(/ON CONFLICT\s*\(\s*tenant_id\s*,\s*trigger_pattern\s*\)/);
+  });
+
+  it('6. conversation_evaluations 側も同様にコードとスキーマが一致している', () => {
+    const migrationPath = path.join(
+      __dirname,
+      '../../migrations/phase75_conversation_evaluations_unique.sql',
+    );
+    const migration = fs.readFileSync(migrationPath, 'utf-8');
+    expect(migration).toMatch(
+      /CREATE UNIQUE INDEX[\s\S]*?ON conversation_evaluations\s*\(\s*tenant_id\s*,\s*session_id\s*\)/,
+    );
+
+    const judgeSrc = fs.readFileSync(path.join(__dirname, 'judgeEvaluator.ts'), 'utf-8');
+    expect(judgeSrc).toMatch(/ON CONFLICT\s*\(\s*tenant_id\s*,\s*session_id\s*\)\s*DO NOTHING/);
+    // ターゲット無しの退行が残っていないこと
+    expect(judgeSrc).not.toMatch(/ON CONFLICT\s+DO NOTHING/);
   });
 });
