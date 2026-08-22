@@ -778,12 +778,10 @@ describe("Tenant Admin Routes", () => {
       expect(mockDb.query).not.toHaveBeenCalled();
     });
 
-    // 既知のギャップ（コード内コメントで明示済み）: バックエンドの検証は https:// プレフィックスの
-    // 正規表現のみで、ワイルドカード(*)自体は文字列として通ってしまう。フロント(AllowedOriginsSettings.tsx)
-    // 側でのみ拒否している。originCheck.ts / security-policy.ts のワイルドカード展開判定不一致を
-    // 避けるための意図的な設計だが、フロントを経由しない直接API呼び出し(curl等)では素通りする。
-    // この既知の挙動を「知らずに壊す」ことを防ぐためのピン留めテスト。
-    it("[既知のギャップ] ワイルドカードを含むoriginはバックエンド単体のバリデーションでは通ってしまう（フロント側でのみ拒否）", async () => {
+    // 安全な形のワイルドカード(サブドメイン指定)はバックエンドでも許可する。
+    // client_admin向けフォーム(AllowedOriginsSettings.tsx)はUIとしてより厳しく
+    // 一律拒否するが、API契約としてはこの形を通す。
+    it("サブドメインワイルドカード(https://*.example.com)は許可する", async () => {
       mockDb.query.mockResolvedValueOnce({
         rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, allowed_origins: ["https://*.example.com"] }],
         rowCount: 1,
@@ -793,6 +791,22 @@ describe("Tenant Admin Routes", () => {
         .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
         .send({ allowed_origins: ["https://*.example.com"] });
       expect(res.status).toBe(200);
+    });
+
+    // `https://*` は isOriginKnownToAnyTenant(tenant-context.ts) 経由で CORS に効くため、
+    // 1テナントが保存するだけで全テナント分の Access-Control-Allow-Origin が任意オリジンを
+    // credentials 付きで反射するようになる。フロントを経由しないcurl等での保存を塞ぐ。
+    it.each([
+      ["https://*", "全オリジンにマッチする貪欲なワイルドカード"],
+      ["https://*evil.com", "ラベル途中のワイルドカード(notevil.comにもマッチする)"],
+      ["https://*.a.*.com", "ワイルドカード2個"],
+    ])("危険な形のワイルドカード %s を400で拒否する（%s）", async (origin) => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: [origin] });
+      expect(res.status).toBe(400);
+      expect(mockDb.query).not.toHaveBeenCalled();
     });
   });
 
@@ -922,6 +936,36 @@ describe("Tenant Admin Routes", () => {
         .send({ allowed_origins: [] });
       expect(res.status).toBe(200);
       expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("t1", []);
+    });
+
+    // super_admin 側と client_admin 側(PATCH /v1/admin/my-tenant)は同一のスキーマ
+    // インスタンスを共有する。片方だけ緩いという状態を作らないことをここで固定する。
+    it.each([
+      ["https://*", "全オリジンにマッチする貪欲なワイルドカード"],
+      ["https://*evil.com", "ラベル途中のワイルドカード"],
+      ["https://*.a.*.com", "ワイルドカード2個"],
+    ])("危険な形のワイルドカード %s を400で拒否する（%s）", async (origin) => {
+      const res = await request(app)
+        .patch("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ allowed_origins: [origin] });
+      expect(res.status).toBe(400);
+    });
+
+    it("サブドメインワイルドカード(https://*.example.com)はsuper_adminでも許可する（UIが案内している形）", async () => {
+      mockDb.query
+        .mockResolvedValueOnce({ rows: [{ id: "t1", plan: "starter", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{ id: "t1", name: "T1", plan: "starter", is_active: true, allowed_origins: ["https://*.example.com"] }],
+          rowCount: 1,
+        })
+        .mockResolvedValue({ rows: [], rowCount: 0 });
+      const res = await request(app)
+        .patch("/v1/admin/tenants/t1")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`)
+        .send({ allowed_origins: ["https://*.example.com"] });
+      expect(res.status).toBe(200);
+      expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("t1", ["https://*.example.com"]);
     });
   });
 

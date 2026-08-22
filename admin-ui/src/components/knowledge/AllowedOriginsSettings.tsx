@@ -77,6 +77,9 @@ export default function AllowedOriginsSettings({ tenantId }: AllowedOriginsSetti
       setInputError(t("knowledge.allowed_origins_invalid_https"));
       return;
     }
+    // ワイルドカードは super_admin のテナント設定画面(SettingsTab)専用の機能とし、
+    // テナント自己申告のこのフォームでは一律拒否する（バックエンドは
+    // https://*.example.com の形なら受け付けるが、UIとしてはより厳しい側に倒す）。
     if (candidate.includes("*")) {
       setInputError(t("knowledge.allowed_origins_invalid_wildcard"));
       return;

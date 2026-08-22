@@ -1,7 +1,7 @@
 // src/api/middleware/originCheck.test.ts
 
 import type { NextFunction, Request, Response } from "express";
-import { createOriginCheckMiddleware, isOriginAllowed } from "./originCheck";
+import { createOriginCheckMiddleware, isOriginAllowed, isValidOriginPattern } from "./originCheck";
 
 function mockDb(allowedOrigins: string[]) {
   return {
@@ -34,6 +34,64 @@ describe("isOriginAllowed", () => {
 
   it("rejects non-matching origin", () => {
     expect(isOriginAllowed("https://evil.com", ["https://example.com"])).toBe(false);
+  });
+
+  // --- ワイルドカードの厳格化 ---------------------------------------------
+  // `https://*` は tenant-context.ts の isOriginKnownToAnyTenant 経由で CORS に効くため、
+  // 1テナントが登録するだけで全テナントの Access-Control-Allow-Origin が任意オリジンを
+  // 反射するようになる。照合側でも無効化して二重に塞ぐ。
+  it("does not treat a bare https://* as a match-all pattern", () => {
+    expect(isOriginAllowed("https://evil.com", ["https://*"])).toBe(false);
+    expect(isOriginAllowed("https://anything.at.all", ["https://*"])).toBe(false);
+  });
+
+  it("does not expand a mid-label wildcard (https://*evil.com must not match notevil.com)", () => {
+    expect(isOriginAllowed("https://notevil.com", ["https://*evil.com"])).toBe(false);
+  });
+
+  it("rejects patterns with more than one wildcard", () => {
+    expect(isOriginAllowed("https://a.b.com", ["https://*.a.*.com"])).toBe(false);
+  });
+
+  it("matches nested subdomains under a subdomain wildcard", () => {
+    expect(isOriginAllowed("https://a.b.example.com", ["https://*.example.com"])).toBe(true);
+  });
+
+  it("does not match the apex domain under a subdomain wildcard", () => {
+    expect(isOriginAllowed("https://example.com", ["https://*.example.com"])).toBe(false);
+  });
+
+  it("does not match an empty label under a subdomain wildcard", () => {
+    expect(isOriginAllowed("https://.example.com", ["https://*.example.com"])).toBe(false);
+  });
+
+  // 既存のエスケープ順序(`.`→`\.` を先、`*` 展開を後)が壊れていないことの回帰防止。
+  // 壊れると https://x.example.com.evil.com が https://*.example.com にマッチしてしまう。
+  it("does not match a suffix-smuggling origin", () => {
+    expect(
+      isOriginAllowed("https://x.example.com.evil.com", ["https://*.example.com"])
+    ).toBe(false);
+  });
+});
+
+describe("isValidOriginPattern", () => {
+  it.each([
+    "https://example.com",
+    "https://shop.example.com",
+    "https://*.example.com",
+  ])("accepts %s", (value) => {
+    expect(isValidOriginPattern(value)).toBe(true);
+  });
+
+  it.each([
+    "https://*",
+    "https://*evil.com",
+    "https://*.a.*.com",
+    "https://*.example.com/path",
+    "http://example.com",
+    "example.com",
+  ])("rejects %s", (value) => {
+    expect(isValidOriginPattern(value)).toBe(false);
   });
 });
 

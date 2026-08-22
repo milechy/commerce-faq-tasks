@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import type { Logger } from "pino";
 import type { AuthedRequest } from "../agent/http/authMiddleware";
+import { isOriginAllowed } from "../api/middleware/originCheck";
 
 export interface SecurityPolicyOptions {
   logger?: Logger;
@@ -52,10 +53,14 @@ export function createSecurityPolicyMiddleware(
     }
 
     // --- Origin enforcement ---
+    // 照合は originCheck.ts の isOriginAllowed に一本化する。以前はここだけ完全一致
+    // (allowed.includes)で、DB側の originCheck.ts だけがワイルドカードを解釈していた。
+    // securityPolicy の方が apiStack で先に走るため、UIが案内している
+    // `https://*.example.com` は実テナントでは常に403になり機能していなかった。
     const allowed = config.security.allowedOrigins;
     if (allowed.length > 0) {
       const origin = req.headers.origin;
-      if (origin && !allowed.includes(origin)) {
+      if (origin && !isOriginAllowed(origin, allowed)) {
         opts.logger?.warn(
           {
             tenantId: authed.tenantId,
