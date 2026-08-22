@@ -118,4 +118,123 @@ describe("InviteTab", () => {
       expect(screen.getByText(/通信エラーが発生しました/)).toBeTruthy();
     });
   });
+
+  it("not_found: テナント不在時の専用文言", async () => {
+    mockedAuthFetch.mockResolvedValue(jsonResponse(404, { error: "not_found" }));
+    render(<InviteTab tenantId="t1" />);
+    fireEvent.change(screen.getByLabelText("招待するメールアドレス"), {
+      target: { value: "z@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /招待メールを送信/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("テナントが見つかりません。")).toBeTruthy();
+    });
+  });
+
+  it("503: Supabase Admin未設定時の専用文言（bodyにerrorコードが無くてもstatusだけで判定する）", async () => {
+    mockedAuthFetch.mockResolvedValue(jsonResponse(503, {}));
+    render(<InviteTab tenantId="t1" />);
+    fireEvent.change(screen.getByLabelText("招待するメールアドレス"), {
+      target: { value: "w@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /招待メールを送信/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/招待機能が現在利用できません/)).toBeTruthy();
+    });
+  });
+
+  it("未知のエラーコードでもbody.messageがあればそのまま表示する", async () => {
+    mockedAuthFetch.mockResolvedValue(
+      jsonResponse(422, { error: "some_future_error_code", message: "将来追加されるエラー文言" })
+    );
+    render(<InviteTab tenantId="t1" />);
+    fireEvent.change(screen.getByLabelText("招待するメールアドレス"), {
+      target: { value: "future@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /招待メールを送信/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("将来追加されるエラー文言")).toBeTruthy();
+    });
+  });
+
+  it("errorコードもmessageも無い失敗（例: JSONパース不能なbody）では最終フォールバック文言を表示する", async () => {
+    mockedAuthFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => {
+        throw new Error("not json");
+      },
+    });
+    render(<InviteTab tenantId="t1" />);
+    fireEvent.change(screen.getByLabelText("招待するメールアドレス"), {
+      target: { value: "broken@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /招待メールを送信/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("招待処理に失敗しました。時間をおいて再度お試しください。")).toBeTruthy();
+    });
+  });
+
+  it("Enterキー押下でも送信できる", async () => {
+    mockedAuthFetch.mockResolvedValue(jsonResponse(201, { ok: true }));
+    render(<InviteTab tenantId="t1" />);
+    const input = screen.getByLabelText("招待するメールアドレス");
+    fireEvent.change(input, { target: { value: "enter@example.com" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(mockedAuthFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("前後に空白を含むメールはtrimしてから送信・バリデーションする", async () => {
+    mockedAuthFetch.mockResolvedValue(jsonResponse(201, { ok: true }));
+    render(<InviteTab tenantId="t1" />);
+    fireEvent.change(screen.getByLabelText("招待するメールアドレス"), {
+      target: { value: "  padded@example.com  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /招待メールを送信/ }));
+
+    await waitFor(() => {
+      expect(mockedAuthFetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ body: JSON.stringify({ email: "padded@example.com" }) })
+      );
+    });
+  });
+
+  it("送信中に連打しても二重送信しない（submitting中はボタンがdisabledになりhandleSubmitも早期returnする）", async () => {
+    let resolveFetch: (value: unknown) => void = () => {};
+    mockedAuthFetch.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+    render(<InviteTab tenantId="t1" />);
+    fireEvent.change(screen.getByLabelText("招待するメールアドレス"), {
+      target: { value: "double@example.com" },
+    });
+    const button = screen.getByRole("button", { name: /招待メールを送信/ });
+    fireEvent.click(button);
+    // 送信中はボタンがdisabledになる
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+    // disabled状態でのクリックはReact Testing Library上も発火しうるため、
+    // handleSubmit内のsubmittingガードで二重送信されないことを直接確認する
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    resolveFetch(jsonResponse(201, { ok: true }));
+    // 成功後はメール欄がクリアされ isValid=false になるためボタンは
+    // 「未入力」理由で再びdisabledになる(submitting起因ではない)。
+    // ここでは submitting ラベルが解除されたことと、fetchが1回しか
+    // 呼ばれていないこと(二重送信防止)を確認する。
+    await waitFor(() => expect(screen.getByRole("button", { name: /招待メールを送信/ })).toBeTruthy());
+    expect(screen.queryByText("送信中…")).toBeNull();
+
+    expect(mockedAuthFetch).toHaveBeenCalledTimes(1);
+  });
 });

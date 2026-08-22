@@ -736,6 +736,64 @@ describe("Tenant Admin Routes", () => {
       // JWTのtenant_id("t1")で呼ばれ、body.tenant_idは無視される
       expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("tenant1", ["https://own.example.com"]);
     });
+
+    it("originsが21件（max=20超過）だと400で拒否しDBを触らない", async () => {
+      const tooMany = Array.from({ length: 21 }, (_, i) => `https://o${i}.example.com`);
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: tooMany });
+      expect(res.status).toBe(400);
+      expect(mockDb.query).not.toHaveBeenCalled();
+    });
+
+    it("originsがちょうど20件（境界値）なら受理される", async () => {
+      const exactly20 = Array.from({ length: 20 }, (_, i) => `https://o${i}.example.com`);
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, allowed_origins: exactly20 }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: exactly20 });
+      expect(res.status).toBe(200);
+    });
+
+    it("allowed_originsが配列でない（文字列単体）場合は400で拒否する", async () => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: "https://not-an-array.example.com" });
+      expect(res.status).toBe(400);
+      expect(mockDb.query).not.toHaveBeenCalled();
+    });
+
+    it("配列内に1件でもhttps://で始まらない値が混ざっていると全体を400で拒否する（部分適用しない）", async () => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: ["https://ok.example.com", "ftp://bad.example.com"] });
+      expect(res.status).toBe(400);
+      expect(mockDb.query).not.toHaveBeenCalled();
+    });
+
+    // 既知のギャップ（コード内コメントで明示済み）: バックエンドの検証は https:// プレフィックスの
+    // 正規表現のみで、ワイルドカード(*)自体は文字列として通ってしまう。フロント(AllowedOriginsSettings.tsx)
+    // 側でのみ拒否している。originCheck.ts / security-policy.ts のワイルドカード展開判定不一致を
+    // 避けるための意図的な設計だが、フロントを経由しない直接API呼び出し(curl等)では素通りする。
+    // この既知の挙動を「知らずに壊す」ことを防ぐためのピン留めテスト。
+    it("[既知のギャップ] ワイルドカードを含むoriginはバックエンド単体のバリデーションでは通ってしまう（フロント側でのみ拒否）", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, allowed_origins: ["https://*.example.com"] }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: ["https://*.example.com"] });
+      expect(res.status).toBe(200);
+    });
   });
 
   // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
