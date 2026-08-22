@@ -34,6 +34,8 @@ const envSchema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_JWT_SECRET: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  // 公開配布物（widget.js の埋め込みトークン）を管理APIと同じ鍵で署名しないための専用secret
+  WIDGET_JWT_SECRET: z.string().optional(),
 
   // ── LLM / AI APIs ─────────────────────────────────────────────────────
   GROQ_API_KEY: z.string().min(1),
@@ -148,6 +150,24 @@ const envSchema = z.object({
   // ── Misc ──────────────────────────────────────────────────────────────
   KNOWLEDGE_ENCRYPTION_KEY: z.string().optional(),
   LOGS_DIR: z.string().optional(),
+}).superRefine((data, ctx) => {
+  // production では fail-open な認証secretを許さない（欠落時は validateEnv() が exit(1) する）
+  if (data.NODE_ENV === "production") {
+    if (!data.SUPABASE_JWT_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SUPABASE_JWT_SECRET"],
+        message: "SUPABASE_JWT_SECRET is required in production",
+      });
+    }
+    if (!data.WIDGET_JWT_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["WIDGET_JWT_SECRET"],
+        message: "WIDGET_JWT_SECRET is required in production",
+      });
+    }
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;
