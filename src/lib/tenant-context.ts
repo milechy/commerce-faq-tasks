@@ -11,8 +11,38 @@ import { isOriginAllowed } from "../api/middleware/originCheck";
 // ---------------------------------------------------------------------------
 const tenantStore = new Map<string, TenantConfig>();
 
+// APIキーの有効期限。TenantConfig 本体には含めず、キー発行/失効時にのみ
+// registerTenant と対で更新する（型 TenantConfig は他モジュール共有のため変更しない）。
+const apiKeyExpiresAt = new Map<string, number | null>();
+
 export function registerTenant(config: TenantConfig): void {
   tenantStore.set(config.tenantId, config);
+}
+
+/**
+ * APIキー発行/更新時に有効期限を記録する。null は無期限。
+ * registerTenant と同じタイミングで呼び出すこと。
+ */
+export function setTenantApiKeyExpiry(tenantId: string, expiresAt: Date | null): void {
+  apiKeyExpiresAt.set(tenantId, expiresAt ? expiresAt.getTime() : null);
+}
+
+/**
+ * キー失効（DELETE /keys/:keyId）時に、失効対象のハッシュが現在
+ * in-memory に保持中のキーと一致する場合のみ、その場で無効化する。
+ * PM2 再起動を待たずに反映するための即時反映処理。
+ * 戻り値: in-memory 側を無効化したら true。
+ */
+export function revokeTenantApiKeyIfCurrent(tenantId: string, revokedKeyHash: string): boolean {
+  const existing = tenantStore.get(tenantId);
+  if (!existing) return false;
+  if (!safeCompare(existing.security.apiKeyHash, revokedKeyHash)) return false;
+  tenantStore.set(tenantId, {
+    ...existing,
+    security: { ...existing.security, apiKeyHash: "" },
+  });
+  apiKeyExpiresAt.delete(tenantId);
+  return true;
 }
 
 export function getTenantConfig(
@@ -32,7 +62,14 @@ export function getTenantByApiKeyHash(
 ): TenantConfig | undefined {
   const entries = Array.from(tenantStore.values());
   for (const cfg of entries) {
-    if (safeCompare(cfg.security.apiKeyHash, hash)) return cfg;
+    if (!cfg.security.apiKeyHash) continue; // 失効済み(revokeTenantApiKeyIfCurrent)
+    if (safeCompare(cfg.security.apiKeyHash, hash)) {
+      const expiresAt = apiKeyExpiresAt.get(cfg.tenantId);
+      if (expiresAt !== undefined && expiresAt !== null && expiresAt <= Date.now()) {
+        return undefined; // 稼働中に期限切れ（起動時seedはDB側でフィルタ済みだが、以降の失効を反映）
+      }
+      return cfg;
+    }
   }
   return undefined;
 }
@@ -130,6 +167,7 @@ export async function seedTenantsFromDB(pool: Pool, logger?: Logger): Promise<vo
       allowed_origins: string[];
       key_hash: string;
       rate_limit: number | null;
+      expires_at: string | null;
     }>(`
       SELECT
         t.id            AS tenant_id,
@@ -139,6 +177,7 @@ export async function seedTenantsFromDB(pool: Pool, logger?: Logger): Promise<vo
         t.features,
         t.allowed_origins,
         k.key_hash,
+        k.expires_at,
         NULL::int       AS rate_limit
       FROM tenant_api_keys k
       JOIN tenants t ON t.id = k.tenant_id
@@ -166,6 +205,7 @@ export async function seedTenantsFromDB(pool: Pool, logger?: Logger): Promise<vo
         },
         enabled: true,
       });
+      setTenantApiKeyExpiry(row.tenant_id, row.expires_at ? new Date(row.expires_at) : null);
       count++;
     }
     logger?.info({ count }, "seedTenantsFromDB: loaded tenant API keys from DB");

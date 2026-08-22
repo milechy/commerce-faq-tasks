@@ -4,6 +4,9 @@ import {
   registerTenant,
   updateTenantEnabled,
   isOriginKnownToAnyTenant,
+  getTenantByApiKeyHash,
+  setTenantApiKeyExpiry,
+  revokeTenantApiKeyIfCurrent,
 } from "./tenant-context";
 
 describe("seedTenantsFromEnv — numbered keys", () => {
@@ -138,5 +141,56 @@ describe("isOriginKnownToAnyTenant — CORS preflight tenant-domain lookup", () 
       enabled: true,
     });
     expect(isOriginKnownToAnyTenant("https://some-random-site.example")).toBe(false);
+  });
+});
+
+describe("APIキー失効・期限切れの即時反映", () => {
+  const TENANT_ID = "test-key-revocation-tenant";
+  const KEY_HASH = "revocation-test-key-hash";
+
+  beforeEach(() => {
+    registerTenant({
+      tenantId: TENANT_ID,
+      name: "Revocation Test",
+      plan: "starter",
+      features: { avatar: false, voice: false, rag: true },
+      security: { apiKeyHash: KEY_HASH, hashAlgorithm: "sha256", allowedOrigins: [], rateLimit: 100, rateLimitWindowMs: 60_000 },
+      enabled: true,
+    });
+    setTenantApiKeyExpiry(TENANT_ID, null);
+  });
+
+  it("finds the tenant by the currently registered key hash", () => {
+    expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKeyIfCurrent invalidates a matching key immediately (no PM2 restart needed)", () => {
+    const revoked = revokeTenantApiKeyIfCurrent(TENANT_ID, KEY_HASH);
+    expect(revoked).toBe(true);
+    expect(getTenantByApiKeyHash(KEY_HASH)).toBeUndefined();
+  });
+
+  it("revokeTenantApiKeyIfCurrent does nothing when the hash does not match the current key (e.g. an already-superseded key)", () => {
+    const revoked = revokeTenantApiKeyIfCurrent(TENANT_ID, "some-other-old-key-hash");
+    expect(revoked).toBe(false);
+    expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("revokeTenantApiKeyIfCurrent returns false for an unknown tenant", () => {
+    expect(revokeTenantApiKeyIfCurrent("unknown-tenant-xyz", KEY_HASH)).toBe(false);
+  });
+
+  it("treats a key as expired once its expiry time has passed", () => {
+    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() - 1000));
+    expect(getTenantByApiKeyHash(KEY_HASH)).toBeUndefined();
+  });
+
+  it("still resolves the tenant when the expiry is in the future", () => {
+    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() + 60_000));
+    expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
+  });
+
+  it("returns undefined for a hash that has never been registered", () => {
+    expect(getTenantByApiKeyHash("never-registered-hash")).toBeUndefined();
   });
 });

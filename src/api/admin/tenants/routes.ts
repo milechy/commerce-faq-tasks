@@ -6,7 +6,7 @@ import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { Pool } from "pg";
 import { z } from "zod";
 import jwt from "jsonwebtoken";
-import { registerTenant, updateTenantEnabled } from "../../../lib/tenant-context";
+import { registerTenant, updateTenantEnabled, setTenantApiKeyExpiry, revokeTenantApiKeyIfCurrent } from "../../../lib/tenant-context";
 import { invalidateWorkspaceCache } from "../../../agent/openclaw/workspaceCache";
 import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
@@ -542,8 +542,11 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   app.post("/v1/admin/tenants/:id/keys", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     try {
-      // テナント存在チェック
-      const tenantCheck = await db.query("SELECT id, name, plan, is_active FROM tenants WHERE id = $1", [id]);
+      // テナント存在チェック（in-memory登録を上書きする際に allowedOrigins/features を保持するため取得）
+      const tenantCheck = await db.query(
+        "SELECT id, name, plan, is_active, features, allowed_origins FROM tenants WHERE id = $1",
+        [id]
+      );
       if (tenantCheck.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
       }
@@ -570,22 +573,25 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       );
       const row = result.rows[0];
 
-      // in-memory storeのAPIキーハッシュを更新（最新キーで上書き）
+      // in-memory storeのAPIキーハッシュを更新（最新キーで上書き）。
+      // allowedOrigins/features は固定値で潰さず、DB上の現行値を引き継ぐ
+      // （さもないとキー再発行のたびに許可オリジン設定が消える）。
       const tenantRow = tenantCheck.rows[0];
       registerTenant({
         tenantId: tenantRow.id,
         name: tenantRow.name || tenantRow.id,
         plan: tenantRow.plan || "starter",
-        features: { avatar: false, voice: false, rag: true },
+        features: (tenantRow.features as { avatar: boolean; voice: boolean; rag: boolean }) ?? { avatar: false, voice: false, rag: true },
         security: {
           apiKeyHash: keyHash,
           hashAlgorithm: "sha256",
-          allowedOrigins: [],
+          allowedOrigins: tenantRow.allowed_origins ?? [],
           rateLimit: 100,
           rateLimitWindowMs: 60_000,
         },
         enabled: true,
       });
+      setTenantApiKeyExpiry(tenantRow.id, expiresAt);
 
       // 平文キーはこのレスポンスでのみ返す（二度と取得不可）
       return res.status(201).json({
@@ -635,12 +641,14 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         `UPDATE tenant_api_keys
          SET is_active = false, updated_at = NOW()
          WHERE id = $1 AND tenant_id = $2
-         RETURNING id, tenant_id, is_active`,
+         RETURNING id, tenant_id, is_active, key_hash`,
         [keyId, id]
       );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "APIキーが見つかりません。" });
       }
+      // 失効させたキーが現在in-memoryで有効なキーと一致する場合、PM2再起動を待たず即時に無効化する
+      revokeTenantApiKeyIfCurrent(id, result.rows[0].key_hash);
       return res.json({ ok: true, id: keyId, is_active: false });
     } catch (err) {
       logger.warn("[DELETE /v1/admin/tenants/:id/keys/:keyId]", err);
