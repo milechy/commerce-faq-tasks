@@ -95,4 +95,22 @@ describe("salesContextStore", () => {
     expect(getSalesSessionMeta(key)).toBeUndefined();
     expect(getSalesSessionMeta(anotherKey)).toBeUndefined();
   });
+
+  describe("キー生成はsessionKey.tsのbuildTenantSessionKeyに一本化されている（contextStore.tsとの重複解消）", () => {
+    it("【回帰】tenantIdに区切り文字`::`が含まれる場合は例外を投げ、衝突を未然に防ぐ（contextStore.tsと同じ挙動）", () => {
+      const badKey: SalesSessionKey = { tenantId: "A::B", sessionId: "C" };
+      expect(() =>
+        setSalesSessionMeta(badKey, { currentStage: "clarify" as any })
+      ).toThrow(/tenantId must not contain/);
+      expect(() => getSalesSessionMeta(badKey)).toThrow(/tenantId must not contain/);
+    });
+
+    it("通常のtenantId（単一コロン混在含む）は従来どおり動作する", () => {
+      // 既存フィクスチャの "tenant:demo" は単一コロンで "::" ではないため許可される
+      const normalKey: SalesSessionKey = { tenantId: "tenant:demo", sessionId: "s1" };
+      expect(getSalesSessionMeta(normalKey)).toBeUndefined();
+      const saved = setSalesSessionMeta(normalKey, { currentStage: "clarify" as any });
+      expect(saved.currentStage).toBe("clarify");
+    });
+  });
 });
