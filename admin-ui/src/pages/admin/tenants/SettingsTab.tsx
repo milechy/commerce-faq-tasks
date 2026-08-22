@@ -39,9 +39,21 @@ export function SettingsTab({
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const allowed_origins = parseOrigins(originsText);
-    const invalid = allowed_origins.filter((u) => !u.startsWith("https://"));
-    if (invalid.length > 0) {
-      setError(`URLはhttps://で始まる必要があります: ${invalid[0]}`);
+    const invalidHttps = allowed_origins.filter((u) => !u.startsWith("https://"));
+    if (invalidHttps.length > 0) {
+      setError(`URLはhttps://で始まる必要があります: ${invalidHttps[0]}`);
+      return;
+    }
+    // バックエンド(originCheck.ts の isValidOriginPattern)と同じ形のみ許可する。
+    // ワイルドカードは「先頭ラベルが *. のサブドメイン指定」のみで、https://* や
+    // https://*evil.com は保存時に400で拒否される — ここで先に弾いて即時フィードバックする。
+    const invalidWildcard = allowed_origins.filter(
+      (u) => u.includes("*") && !/^https:\/\/\*\.[^*/]+$/.test(u)
+    );
+    if (invalidWildcard.length > 0) {
+      setError(
+        `ワイルドカードは https://*.example.com の形のみ使用できます: ${invalidWildcard[0]}`
+      );
       return;
     }
     setSaving(true);

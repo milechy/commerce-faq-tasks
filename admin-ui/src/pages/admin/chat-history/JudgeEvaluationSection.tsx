@@ -1,18 +1,62 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import type { Evaluation } from "./types";
 import { SuggestedRulesCard } from "./SuggestedRulesCard";
+import { authFetch, API_BASE } from "../../../lib/api";
 
 // ─── Judge評価セクション（AI品質評価） ─────────────────────────────────────────
+
+// POST /v1/admin/evaluations/trigger のレスポンスに応じたフィードバック文言。
+// 200/404/409/422/500 の意味論は Phase45(#823/#829) と Phase75(#839) で確定済み。
+function triggerErrorMessage(status: number, body: { error?: string; message?: string } | null): string {
+  switch (status) {
+    case 404:
+      return "セッションが見つかりません（削除された、または他テナントのセッションの可能性があります）";
+    case 409:
+      return "既に評価済みです（画面を更新してください）";
+    case 422:
+      return body?.message ?? "会話が短すぎるため評価対象外です";
+    default:
+      return "評価の実行に失敗しました。しばらくしてから再度お試しください";
+  }
+}
 
 export function JudgeEvaluationSection({
   evaluation,
   isSuperAdmin,
   setEvaluation,
+  sessionId,
 }: {
   evaluation: Evaluation | null;
   isSuperAdmin: boolean;
   setEvaluation: Dispatch<SetStateAction<Evaluation | null>>;
+  sessionId?: string;
 }) {
+  const [triggering, setTriggering] = useState(false);
+  const [triggerError, setTriggerError] = useState<string | null>(null);
+
+  const handleTrigger = async () => {
+    if (!sessionId || triggering) return;
+    setTriggering(true);
+    setTriggerError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/evaluations/trigger`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      const body = await res.json().catch(() => null);
+      if (res.ok) {
+        setEvaluation(body?.evaluation ?? null);
+        return;
+      }
+      setTriggerError(triggerErrorMessage(res.status, body));
+    } catch {
+      setTriggerError("通信に失敗しました。しばらくしてから再度お試しください");
+    } finally {
+      setTriggering(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -27,11 +71,38 @@ export function JudgeEvaluationSection({
         🤖 AI品質評価 (Judge)
       </p>
       {evaluation == null ? (
-        <span style={{
-          display: "inline-flex", alignItems: "center", padding: "4px 12px",
-          borderRadius: 999, fontSize: 12, fontWeight: 700,
-          background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "var(--muted-foreground)",
-        }}>未評価</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", padding: "4px 12px",
+            borderRadius: 999, fontSize: 12, fontWeight: 700,
+            background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "var(--muted-foreground)",
+          }}>未評価</span>
+          {sessionId && (
+            <button
+              type="button"
+              onClick={() => void handleTrigger()}
+              disabled={triggering}
+              style={{
+                padding: "8px 16px",
+                minHeight: 36,
+                borderRadius: 8,
+                border: "1px solid rgba(96,165,250,0.4)",
+                background: triggering ? "rgba(96,165,250,0.1)" : "rgba(96,165,250,0.15)",
+                color: "#93c5fd",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: triggering ? "not-allowed" : "pointer",
+              }}
+            >
+              {triggering ? "評価を実行中…" : "今すぐ評価を実行"}
+            </button>
+          )}
+          {triggerError && (
+            <p style={{ margin: 0, fontSize: 12, color: "#fca5a5", lineHeight: 1.5 }}>
+              {triggerError}
+            </p>
+          )}
+        </div>
       ) : (() => {
         const overall = evaluation.overall_score ?? evaluation.score;
         const scoreColor = overall >= 80 ? "#4ade80" : overall >= 60 ? "#fbbf24" : "#f87171";
