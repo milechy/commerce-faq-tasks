@@ -1,5 +1,5 @@
 // src/api/admin/chatTest/routes.ts
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { logger } from '../../../lib/logger';
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
@@ -18,11 +18,7 @@ function isAllowedChatTestRole(role: unknown): role is AllowedChatTestRole {
 
 export function registerChatTestRoutes(app: Express): void {
   // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
-  const chatTestAuth = supabaseAuthMiddleware as (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) => void;
+  const chatTestAuth = supabaseAuthMiddleware;
 
   // GET /v1/admin/chat-test/token?tenantId=xxx
   app.get("/v1/admin/chat-test/token", chatTestAuth, async (req: Request, res: Response) => {

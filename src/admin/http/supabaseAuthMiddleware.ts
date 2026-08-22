@@ -2,6 +2,8 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { logger } from '../../lib/logger';
+import { isAdminUsableToken } from '../../auth/jwtClaims';
+import type { SupabaseJwtPayload } from '../../auth/verifySupabaseJwt';
 
 /**
  * Supabase の JWT を検証するミドルウェア
@@ -12,7 +14,7 @@ export function supabaseAuthMiddleware(
   req: Request,
   res: Response,
   next: NextFunction
-) {
+): void {
   // development: 署名検証なしで JWT をデコードし req.supabaseUser をセットして通す
   // （roleAuthMiddleware が role を正しく解決できるようにするため decode は必須）
   // 二重条件化(ALLOW_INSECURE_DEV_AUTH併用必須)も検討したが、35箇所以上の既存呼び出し元と
@@ -29,11 +31,16 @@ export function supabaseAuthMiddleware(
       } catch {
         // decode 失敗は無視して通す
       }
-      return next();
+      next();
+      return;
     }
     const apiKey = req.headers["x-api-key"];
-    if (apiKey) return next();
-    return res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
+    if (apiKey) {
+      next();
+      return;
+    }
+    res.status(401).json({ error: "Missing X-Api-Key or Bearer token" });
+    return;
   }
 
   // SUPABASE_JWT_SECRET 未設定時の扱い:
@@ -51,35 +58,49 @@ export function supabaseAuthMiddleware(
       logger.error(
         "[supabaseAuthMiddleware] SUPABASE_JWT_SECRET が設定されていません。認証を拒否します。"
       );
-      return res.status(503).json({ error: "auth_not_configured" });
+      res.status(503).json({ error: "auth_not_configured" });
+      return;
     }
     logger.warn(
       "[supabaseAuthMiddleware] SUPABASE_JWT_SECRET が設定されていないため、認証をスキップします。"
     );
-    return next();
+    next();
+    return;
   }
 
   const authHeader = req.headers.authorization || "";
   const [, token] = authHeader.split(" ");
 
   if (!token) {
-    return res.status(401).json({ error: "Missing Bearer token" });
+    res.status(401).json({ error: "Missing Bearer token" });
+    return;
   }
 
   try {
     // algorithms を HS256 に固定する。省略すると jsonwebtoken はトークン側の alg を
     // 信用するため、alg confusion 攻撃(RS256 を名乗るトークンを HMAC 秘密鍵で検証させる等)
     // の余地が残る。verifySupabaseJwt.ts(別経路)と同じ制約をこの管理面入口にも効かせる。
-    const decoded = jwt.verify(token, secret, { algorithms: ["HS256"] });
+    const decoded = jwt.verify(token, secret, { algorithms: ["HS256"] }) as SupabaseJwtPayload;
 
-    // 必要ならここでロールチェック (e.g. decoded["role"] === "service_role" など)
-    // logger.info("[supabaseAuth] decoded =", decoded);
+    // 署名が正しいだけでは「管理面で使ってよいトークン」とは限らない
+    // （widget/anon/chat-testトークンも同じsecretで署名されうる）。
+    // purpose クレーム保持・role='anon'・super_admin/client_admin以外のroleを拒否する。
+    if (!isAdminUsableToken(decoded)) {
+      logger.warn("[supabaseAuthMiddleware] token rejected: not admin-usable", {
+        hasPurpose: Boolean((decoded as Record<string, unknown>).purpose),
+        role: decoded.app_metadata?.role ?? decoded.role,
+      });
+      res.status(403).json({ error: "forbidden", message: "この操作を行う権限がありません" });
+      return;
+    }
 
     // 型を拡張してないので any でぶら下げる
     (req as any).supabaseUser = decoded;
-    return next();
+    next();
+    return;
   } catch (err) {
     logger.warn("[supabaseAuthMiddleware] invalid token", err);
-    return res.status(401).json({ error: "Invalid token" });
+    res.status(401).json({ error: "Invalid token" });
+    return;
   }
 }
