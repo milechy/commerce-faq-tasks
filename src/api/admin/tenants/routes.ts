@@ -142,11 +142,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   // 無条件 next() する fail-open だった（共有実装は production で503）。テナントCRUD・
   // APIキー発行/失効・招待という最高権限面が、他ルータより弱い認証で守られていた状態。
   // alg 固定(HS256)も共有実装側に集約されている。
-  const tenantAuth = supabaseAuthMiddleware as (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) => void;
+  const tenantAuth = supabaseAuthMiddleware;
 
   function requireSuperAdmin(req: Request, res: Response, next: NextFunction): void {
     const su = (req as AuthedReq).supabaseUser;

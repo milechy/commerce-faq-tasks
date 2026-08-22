@@ -32,13 +32,12 @@ export function verifySupabaseJwt(
     // widget セッション/chat-test トークン (同じ secret で署名、aud クレーム無し) の検証にも
     // 共用されているため、ここでの検証は署名の正当性確認に限定する。
     // 用途ごとの許可判定 (purpose/role) は本関数では行わない。
-    // ⚠️ jwtClaims.ts の isAdminUsableToken がその判定を担う想定だが、
-    //    **現時点ではどの認証ミドルウェアからも呼ばれていない**（配線は未完了）。
-    //    「この関数を通ったトークン = 管理面で使ってよいトークン」ではないことに注意。
-    //    現状 widget/anon/chat-test トークンを管理面で弾いているのは
-    //    (a) widget は別鍵(WIDGET_JWT_SECRET)署名なのでそもそも検証を通らない
-    //    (b) roleAuthMiddleware が app_metadata.role 不在を 403 にする
-    //    の2層であり、purpose クレームによる遮断は効いていない。
+    // jwtClaims.ts の isAdminUsableToken がその判定を担う。
+    // 管理面の共通認証入口 src/admin/http/supabaseAuthMiddleware.ts の
+    // jwt.verify 成功パスで isAdminUsableToken を呼び、purpose クレーム保持
+    // トークン・role='anon'・super_admin/client_admin以外のroleを403で拒否する。
+    // 「この関数(verifySupabaseJwt)を通った」だけでは管理面で使える保証にならない点は変わらない
+    // （本関数は署名の正当性確認に限定し、用途判定は呼び出し側の責務）。
     return jwt.verify(token, jwtSecret, { algorithms: ["HS256"] }) as SupabaseJwtPayload;
   } catch (err) {
     logger.warn("[verifySupabaseJwt] invalid token:", (err as Error).message);

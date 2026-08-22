@@ -174,6 +174,76 @@ describe("supabaseAuthMiddleware", () => {
       expect(res.statusCode).toBe(401);
     });
 
+    it("client_adminも正しく通る", () => {
+      const token = jwt.sign({ app_metadata: { role: "client_admin", tenant_id: "t1" } }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(req.supabaseUser).toMatchObject({ app_metadata: { role: "client_admin" } });
+    });
+  });
+
+  describe("isAdminUsableToken配線: 署名は正しいが管理面で使えないトークンは403", () => {
+    const SECRET = "test-secret-value";
+
+    beforeEach(() => {
+      process.env.NODE_ENV = "test";
+      process.env.SUPABASE_JWT_SECRET = SECRET;
+    });
+
+    it("purposeクレーム保持トークン（widget-session等、同じsecretで署名されうる）は403", () => {
+      const token = jwt.sign({ sub: "t1", purpose: "widget-session" }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+      expect(req.supabaseUser).toBeUndefined();
+    });
+
+    it("purposeクレーム保持トークン（chat-test）は403", () => {
+      const token = jwt.sign({ tenant_id: "t1", purpose: "chat-test" }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("role='anon'（トップレベル）は403", () => {
+      const token = jwt.sign({ sub: "u1", role: "anon" }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("app_metadata.role='anon'は403", () => {
+      const token = jwt.sign({ sub: "u1", app_metadata: { role: "anon" } }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("app_metadata.roleが未知の値（super_admin/client_admin以外）は403", () => {
+      const token = jwt.sign({ sub: "u1", app_metadata: { role: "viewer" } }, SECRET);
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${token}` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
     it("Bearerトークンなしは401", () => {
       const { req, res, next } = makeReqRes({});
       supabaseAuthMiddleware(req, res, next);

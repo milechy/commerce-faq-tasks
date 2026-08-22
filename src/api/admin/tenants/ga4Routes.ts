@@ -18,11 +18,7 @@ const connectSchema = z.object({
 export function registerGa4TenantRoutes(app: Express, db: Pool): void {
   // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
   // ここでは req.supabaseUser の型を AuthedReq として扱えるよう別名で束ねるのみ。
-  const tenantAuth = supabaseAuthMiddleware as (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) => void;
+  const tenantAuth = supabaseAuthMiddleware;
 
   function canAccessTenant(
     req: Request,

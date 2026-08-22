@@ -13,11 +13,7 @@ const PERIOD_DAYS: Record<string, number> = {
 
 export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
   // JWT検証は共有実装(src/admin/http/supabaseAuthMiddleware.ts)に一本化。
-  const tenantAuth = supabaseAuthMiddleware as (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) => void;
+  const tenantAuth = supabaseAuthMiddleware;
 
   function canAccessTenant(req: Request, res: Response, tenantId: string, next: NextFunction): void {
     const su = (req as AuthedReq).supabaseUser;
