@@ -21,6 +21,12 @@ jest.mock('../crypto/textEncrypt', () => ({
   encryptText: (s: string) => `enc(${s})`,
 }));
 
+const mockUpsertFaqToEs = jest.fn();
+jest.mock('./faqIndexSync', () => ({
+  ...jest.requireActual('./faqIndexSync'),
+  upsertFaqToEs: (...args: unknown[]) => mockUpsertFaqToEs(...args),
+}));
+
 import type { Pool } from 'pg';
 import {
   textToFaqs,
@@ -44,6 +50,7 @@ function makeMockPool(queryImpl: jest.Mock): Pool {
 beforeEach(() => {
   jest.clearAllMocks();
   mockEmbedText.mockResolvedValue([0.1, 0.2, 0.3]);
+  mockUpsertFaqToEs.mockReset();
 });
 
 describe('bigramSimilarity', () => {
@@ -273,6 +280,29 @@ describe('commitTextFaqs', () => {
     expect(insertCall[1]).toEqual(['t1', 'Q1', 'A1', 'general']);
     expect(String(insertCall[0])).toContain('VALUES ($1, $2, $3, $4, true)');
   });
+
+  // GID [LAUNCH][P0]: commitTextFaqs はテキスト取込の主力経路だが、
+  // 従来ESへの同期が一切なく「登録したのに検索でヒットしない」状態だった。
+  it('登録したFAQをupsertFaqToEsでESにも同期する', async () => {
+    const queryMock = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 9 }] });
+    const db = makeMockPool(queryMock);
+
+    await commitTextFaqs(db, 't1', [{ question: 'Q1', answer: 'A1' }], undefined, 'text');
+
+    expect(mockUpsertFaqToEs).toHaveBeenCalledWith('t1', 9, 'Q1', 'A1', true);
+  });
+
+  it('重複スキップされたFAQはESにも同期しない', async () => {
+    const queryMock = jest.fn().mockResolvedValueOnce({ rows: [{ question: '営業時間を教えてください' }] });
+    const db = makeMockPool(queryMock);
+
+    await commitTextFaqs(db, 't1', [{ question: '営業時間は', answer: '9-18時です' }], undefined, 'text');
+
+    expect(mockUpsertFaqToEs).not.toHaveBeenCalled();
+  });
 });
 
 describe('commitScrapeFaqs', () => {
@@ -308,5 +338,29 @@ describe('commitScrapeFaqs', () => {
       '1000',
       null,
     ]);
+  });
+
+  // GID [LAUNCH][P0]: スクレイプ取込もcommitTextFaqsと同じくES同期が欠けていた主力経路。
+  it('登録したFAQをupsertFaqToEsでESにも同期する', async () => {
+    const queryMock = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 5 }] });
+    const db = makeMockPool(queryMock);
+
+    await commitScrapeFaqs(
+      db,
+      't1',
+      [
+        {
+          url: 'https://example.com/p/1',
+          faqs: [{ question: 'Q1', answer: 'A1' }],
+        },
+      ],
+      undefined,
+      'scrape',
+    );
+
+    expect(mockUpsertFaqToEs).toHaveBeenCalledWith('t1', 5, 'Q1', 'A1', true);
   });
 });

@@ -22,10 +22,9 @@
 import type { Pool } from 'pg';
 import { GROQ_VERSATILE_70B } from '../../config/groqModels';
 import { groqClient } from '../../agent/llm/groqClient';
-import { embedText } from '../../agent/llm/openaiEmbeddingClient';
-import { encryptText } from '../crypto/textEncrypt';
 import { logger } from '../logger';
 import { buildFaqCategoryPromptSection } from './faqCategories';
+import { insertFaqEmbeddingAsync, upsertFaqToEs } from './faqIndexSync';
 
 export interface FaqEntry {
   question: string;
@@ -243,7 +242,12 @@ export function bigramSimilarity(a: string, b: string): number {
 
 export const DUPLICATE_THRESHOLD = 0.6;
 
-/** embedding を非同期で挿入（fire-and-forget） */
+/**
+ * embedding を非同期で挿入（fire-and-forget）。
+ * 実装は src/lib/knowledge/faqIndexSync.ts に一本化されている。
+ * このファイルの呼び出し元（テキスト/URL取込）は元々 encryptText で本文を暗号化して
+ * いたため、その挙動を保つ薄いラッパーとして残す。
+ */
 export function insertEmbeddingAsync(
   db: Pool,
   tenantId: string,
@@ -251,14 +255,7 @@ export function insertEmbeddingAsync(
   faqId: number,
   meta: Record<string, unknown>
 ): void {
-  embedText(text)
-    .then((vec) =>
-      db.query(
-        "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata) VALUES ($1, $2, $3::vector, $4::jsonb)",
-        [tenantId, encryptText(text), `[${vec.join(",")}]`, JSON.stringify(meta)]
-      )
-    )
-    .catch((e) => logger.warn("[knowledge] embedding insert failed", e));
+  insertFaqEmbeddingAsync(db, tenantId, text, faqId, meta, { encrypt: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +435,7 @@ export async function commitTextFaqs(
         source,
         faq_id: faqId,
       });
+      upsertFaqToEs(target, faqId, faq.question.slice(0, 500), faq.answer.slice(0, 2000), true);
     } catch (err) {
       logger.error("[commit] insert failed for faq:", faq.question, err);
     }
@@ -509,6 +507,7 @@ export async function commitScrapeFaqs(
           faq_id: faqId,
           url: item.url,
         });
+        upsertFaqToEs(target, faqId, faq.question.slice(0, 500), faq.answer.slice(0, 2000), true);
       } catch (err) {
         logger.error("[scrape/commit] insert failed", err);
       }

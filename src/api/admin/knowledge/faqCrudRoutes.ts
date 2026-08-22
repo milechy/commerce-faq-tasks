@@ -4,87 +4,27 @@
 import type { Express, NextFunction, Request, Response } from "express";
 import { Pool } from "pg";
 import { z } from "zod";
-import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 import { logger } from '../../../lib/logger';
-import { resolveFaqWriteIndex } from "../../../search/langIndex";
+import {
+  insertFaqEmbeddingAsync,
+  upsertFaqToEs,
+  syncFaqExcludedToEs,
+  deleteFaqFromEs,
+} from "../../../lib/knowledge/faqIndexSync";
+
+// 索引同期の実装は src/lib/knowledge/faqIndexSync.ts に一本化されている
+// （faqAdminRoutes.ts / actionExecutor.ts / faqImport.ts と共通）。
+// このファイルは既存の関数名を維持したまま再エクスポートし、
+// actionExecutor.ts 等の既存importを壊さない。
+export const insertEmbeddingAsync = insertFaqEmbeddingAsync;
+export const upsertToEsAsync = upsertFaqToEs;
+const syncIsExcludedToEsAsync = syncFaqExcludedToEs;
 
 /** query/header からテナントIDを解決（bodyから取得禁止 — CLAUDE.md） */
 function resolveTenantId(req: Request): string | null {
   const fromQuery = (req.query.tenant || req.query.tenant_id) as string | undefined;
   const fromHeader = req.headers["x-tenant-id"] as string | undefined;
   return fromQuery || fromHeader || null;
-}
-
-/** ESインデックスからドキュメントを削除（best-effort）
- * Phase69-2-E: write index を read path と同じ faq_${tenantId} に統一 */
-async function deleteFromEs(tenantId: string, esDocId: string): Promise<void> {
-  const esUrl = process.env.ES_URL;
-  const index = resolveFaqWriteIndex(tenantId);
-  if (!esUrl || !esDocId) return;
-  const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(esDocId)}`;
-  await fetch(url, { method: "DELETE" }).catch(() => {});
-}
-
-/** embedding を非同期で挿入（fire-and-forget） */
-export function insertEmbeddingAsync(
-  db: Pool,
-  tenantId: string,
-  text: string,
-  faqId: number,
-  meta: Record<string, unknown>
-): void {
-  const isExcluded = Boolean(meta.is_excluded_from_search);
-  embedText(text)
-    .then((vec) =>
-      db.query(
-        "INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata, is_excluded_from_search) VALUES ($1, $2, $3::vector, $4::jsonb, $5)",
-        [tenantId, text, `[${vec.join(",")}]`, JSON.stringify(meta), isExcluded]
-      )
-    )
-    .catch((e) => logger.warn("[faqCrud] embedding insert failed", e));
-}
-
-/** ESにドキュメントをupsert（fire-and-forget） */
-export function upsertToEsAsync(
-  tenantId: string,
-  faqId: number,
-  question: string,
-  answer: string,
-  isPublished = true,
-  isExcludedFromSearch = false
-): void {
-  const esUrl = process.env.ES_URL;
-  const index = resolveFaqWriteIndex(tenantId);
-  if (!esUrl) return;
-  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: isPublished, is_excluded_from_search: isExcludedFromSearch };
-  const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${faqId}_${tenantId}`;
-  fetch(url, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(doc),
-  }).catch((e) => logger.warn("[faqCrud] ES upsert failed", e));
-}
-
-// Phase69-2 PR-C2 Round 2: ES に is_excluded_from_search を partial update で伝搬する
-// 設計判断 (Codex adversarial Round 1):
-//   - fire-and-forget: DB が source-of-truth、ES は eventual consistency
-//   - POST _update: question/answer 等を消さない partial doc 更新
-//   - pgvector layer (永続フィルター) + ES layer (今回追加) + リクエスト excluded_ids の三層防御
-/** ESインデックスの is_excluded_from_search のみ partial update（fire-and-forget） */
-function syncIsExcludedToEsAsync(
-  tenantId: string,
-  faqId: number,
-  isExcludedFromSearch: boolean
-): void {
-  const esUrl = process.env.ES_URL;
-  const index = resolveFaqWriteIndex(tenantId);
-  if (!esUrl) return;
-  const url = `${esUrl.replace(/\/$/, "")}/${index}/_update/${faqId}_${tenantId}`;
-  fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ doc: { is_excluded_from_search: isExcludedFromSearch } }),
-  }).catch((e) => logger.warn("[faqCrud] ES is_excluded_from_search sync failed", e));
 }
 
 const listQuerySchema = z.object({
@@ -555,7 +495,7 @@ export function registerFaqCrudRoutes(
       let failed = 0;
       for (const id of ids) {
         try {
-          await deleteFromEs(tenantId, `${id}_${tenantId}`);
+          await deleteFaqFromEs(tenantId, id);
         } catch {
           failed++;
           logger.warn(`[DELETE /v1/admin/knowledge/faq/bulk] ES delete failed for id=${id}`);
@@ -674,7 +614,7 @@ export function registerFaqCrudRoutes(
       );
 
       // ES 削除（best-effort）
-      await deleteFromEs(tenantId, `${id}_${tenantId}`);
+      await deleteFaqFromEs(tenantId, id);
 
       return res.json({ ok: true, id });
     } catch (err) {
