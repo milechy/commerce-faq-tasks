@@ -67,7 +67,10 @@ export function supabaseAuthMiddleware(
   }
 
   try {
-    const decoded = jwt.verify(token, secret);
+    // algorithms を HS256 に固定する。省略すると jsonwebtoken はトークン側の alg を
+    // 信用するため、alg confusion 攻撃(RS256 を名乗るトークンを HMAC 秘密鍵で検証させる等)
+    // の余地が残る。verifySupabaseJwt.ts(別経路)と同じ制約をこの管理面入口にも効かせる。
+    const decoded = jwt.verify(token, secret, { algorithms: ["HS256"] });
 
     // 必要ならここでロールチェック (e.g. decoded["role"] === "service_role" など)
     // logger.info("[supabaseAuth] decoded =", decoded);
