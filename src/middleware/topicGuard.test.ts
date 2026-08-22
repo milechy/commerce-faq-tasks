@@ -34,6 +34,17 @@ describe("checkTopic: enabled-flag default", () => {
     const result = await checkTopic("次の選挙で誰に投票すべき?", "tenant-a", "sess-dev-default-topic");
     expect(result.allowed).toBe(true);
   });
+
+  it.each(["1", "TRUE", "yes", "", " false"])(
+    "production かつ TOPIC_GUARD_ENABLED=%j（'false'以外の非標準値）は既定ONのまま",
+    async (flag) => {
+      process.env.NODE_ENV = "production";
+      process.env.TOPIC_GUARD_ENABLED = flag;
+
+      const result = await checkTopic("次の選挙で誰に投票すべき?", "tenant-a", `sess-flag-${flag}`);
+      expect(result.allowed).toBe(false);
+    },
+  );
 });
 
 describe("checkTopic: カテゴリ別検出とエスカレーション", () => {

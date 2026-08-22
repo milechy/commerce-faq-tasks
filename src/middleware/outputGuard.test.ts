@@ -36,6 +36,17 @@ describe("guardOutput: enabled-flag default", () => {
     const result = guardOutput("ご連絡先は taro@example.com までお願いします");
     expect(result.safe).toBe(true);
   });
+
+  it.each(["1", "TRUE", "yes", "", " false"])(
+    "production かつ OUTPUT_GUARD_ENABLED=%j（'false'以外の非標準値）は既定ONのまま",
+    (flag) => {
+      process.env.NODE_ENV = "production";
+      process.env.OUTPUT_GUARD_ENABLED = flag;
+
+      const result = guardOutput("ご連絡先は taro@example.com までお願いします");
+      expect(result.safe).toBe(false);
+    },
+  );
 });
 
 describe("guardOutput: 複数redaction・境界値", () => {
