@@ -206,8 +206,11 @@ describe("APIキー失効・期限切れの即時反映", () => {
     }
   });
 
-  it("境界値: expiresAt が1ミリ秒でも未来なら有効", () => {
-    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() + 1));
+  it("境界値: expiresAt がわずかでも未来なら有効", () => {
+    // 実時間比較のため 1ms 等の極小マージンはテスト実行のオーバーヘッドで
+    // フレークになる（Date.now() 取得からアサーションまでの間に経過しうる）。
+    // 「期限切れ扱いにならない」という意味を保ったまま、余裕を持たせる。
+    setTenantApiKeyExpiry(TENANT_ID, new Date(Date.now() + 5000));
     expect(getTenantByApiKeyHash(KEY_HASH)?.tenantId).toBe(TENANT_ID);
   });
 
