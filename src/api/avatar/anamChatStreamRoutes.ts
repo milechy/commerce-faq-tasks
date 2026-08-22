@@ -93,7 +93,14 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       isChatTestToken: (req as any).isChatTestToken === true,
     });
 
-    const latestUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+    // 「最後のuserメッセージ」の判定はここ1箇所のみで行う。以前はガード適用箇所(index 96)と
+    // groqMessages組み立て箇所(旧index 171)で別々に(reverse().find() とreduceで)計算しており、
+    // 片方だけ変更するとガードをすり抜けた原文がLLMに渡るリスクがあった(GID 1217741396163930)。
+    const latestUserMessageIndex = messages.reduce<number>(
+      (lastIdx, m, i) => (m.role === 'user' ? i : lastIdx),
+      -1
+    );
+    const latestUserMessage = latestUserMessageIndex >= 0 ? messages[latestUserMessageIndex] : undefined;
 
     // L5/L7/L6: RAGを介さないGroq直呼び出し経路にも、通常チャット(/api/chat)と同じ
     // 入力ガードを適用する。abuseカウンタはconversationId等の共有バケットではなく
@@ -167,11 +174,8 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
 - マークダウンや箇条書きは使わないでください（音声化されるため）
 - 専門用語は避け、わかりやすい言葉で説明してください`;
 
-    // 直近ユーザー発言のみ、L5/L7/L6ガード済みの内容に差し替える（履歴は元のまま）
-    const latestUserMessageIndex = messages.reduce(
-      (lastIdx, m, i) => (m.role === 'user' ? i : lastIdx),
-      -1
-    );
+    // 直近ユーザー発言のみ、L5/L7/L6ガード済みの内容に差し替える（履歴は元のまま）。
+    // latestUserMessageIndex は冒頭で1回だけ計算したものを再利用する。
     const groqMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
       ...messages.map((m, i) => ({

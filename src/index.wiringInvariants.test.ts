@@ -48,32 +48,42 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
   });
 
   describe("apiStack のミドルウェア順序（レートリミッタ2段化）", () => {
-    const apiStackMatch = source.match(/const apiStack = \[([\s\S]*?)\] as express\.RequestHandler\[\];/);
-    if (!apiStackMatch) throw new Error("apiStack literal not found in src/index.ts");
-    const apiStackBody = apiStackMatch[1];
-    // 行コメント（例: "// 1. Rate limit (pre-auth, IP-keyed)"）はカンマを含みうるため、
-    // まず行ごとに "//" 以降を切り捨ててから識別子を抽出する（単純な split(",") はコメント内の
-    // カンマで誤爆する）。
-    const order = apiStackBody
-      .split("\n")
-      .map((line) => line.split("//")[0].trim().replace(/,$/, ""))
-      .filter((name) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name));
+    // apiStack リテラルの解析を it() の内側に置く: describe 直下（it の外）で throw すると
+    // スイート読み込み自体がクラッシュし、他の describe のテストまで巻き込んで
+    // 「何が壊れたか」が読み取れなくなる。it() 内の失敗として報告されるよう、
+    // 解析をこの関数に閉じ込めて各 it() から呼び出す。
+    function getApiStackOrder(): string[] {
+      const apiStackMatch = source.match(/const apiStack = \[([\s\S]*?)\] as express\.RequestHandler\[\];/);
+      if (!apiStackMatch) throw new Error("apiStack literal not found in src/index.ts");
+      const apiStackBody = apiStackMatch[1];
+      // 行コメント（例: "// 1. Rate limit (pre-auth, IP-keyed)"）はカンマを含みうるため、
+      // まず行ごとに "//" 以降を切り捨ててから識別子を抽出する（単純な split(",") はコメント内の
+      // カンマで誤爆する）。
+      return apiStackBody
+        .split("\n")
+        .map((line) => line.split("//")[0].trim().replace(/,$/, ""))
+        .filter((name) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name));
+    }
 
     it("ipRateLimiter が authMiddleware より前（認証前のIP段）", () => {
+      const order = getApiStackOrder();
       expect(order.indexOf("ipRateLimiter")).toBeGreaterThanOrEqual(0);
       expect(order.indexOf("ipRateLimiter")).toBeLessThan(order.indexOf("authMiddleware"));
     });
 
     it("tenantRateLimiter が authMiddleware・tenantContext より後（認証後のtenant段）", () => {
+      const order = getApiStackOrder();
       expect(order.indexOf("tenantRateLimiter")).toBeGreaterThan(order.indexOf("authMiddleware"));
       expect(order.indexOf("tenantRateLimiter")).toBeGreaterThan(order.indexOf("tenantContext"));
     });
 
     it("apiStack に旧単一リミッタ(globalRateLimiter)が残っていない（2段化の巻き戻り検出）", () => {
+      const order = getApiStackOrder();
       expect(order).not.toContain("globalRateLimiter");
     });
 
     it("securityPolicy が authMiddleware より後（テナント未確定でorigin検証しない）", () => {
+      const order = getApiStackOrder();
       expect(order.indexOf("securityPolicy")).toBeGreaterThan(order.indexOf("authMiddleware"));
     });
   });
