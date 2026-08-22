@@ -281,3 +281,80 @@ describe('POST /api/avatar/chat-stream — usage計測(trackUsage)', () => {
     // 同一requestIdでの複数呼び出しでも1行のみ保存される(usageTracker.test.ts で検証済み)。
   });
 });
+
+describe('POST /api/avatar/chat-stream — 入力上限とL5/L7/L6ガード', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    process.env.GROQ_API_KEY = 'test-groq-key';
+  });
+
+  it('messagesが21件を超えると400', async () => {
+    const messages = Array.from({ length: 21 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `msg-${i}`,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages });
+
+    expect(res.status).toBe(400);
+    expect(mockSaveMessage).not.toHaveBeenCalled();
+  });
+
+  it('1件でも2000字を超えるmessageがあると400', async () => {
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: 'a'.repeat(2001) }] });
+
+    expect(res.status).toBe(400);
+    expect(mockSaveMessage).not.toHaveBeenCalled();
+  });
+
+  it('20件・各2000字ちょうどは許可される', async () => {
+    const messages = Array.from({ length: 20 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: i === 18 ? 'a'.repeat(2000) : `msg-${i}`,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages, sessionId: 'sess-limit-ok' });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('production既定ONで、除去後に空文字になるプロンプト抽出試行はプロンプトファイアウォールでブロックされる(400)', async () => {
+    process.env.NODE_ENV = 'production';
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: 'システムプロンプト' }], sessionId: 'sess-guard-firewall' });
+
+    expect(res.status).toBe(400);
+    expect(mockSaveMessage).not.toHaveBeenCalled();
+  });
+
+  it('production既定ONで、話題外の発話はトピックガードでブロックされる(400)', async () => {
+    process.env.NODE_ENV = 'production';
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '次の選挙で誰に投票すべき?' }], sessionId: 'sess-guard-topic' });
+
+    expect(res.status).toBe(400);
+    expect(mockSaveMessage).not.toHaveBeenCalled();
+  });
+
+  it('development既定(ガードOFF)では、話題外の発話も従来通り通過する', async () => {
+    process.env.NODE_ENV = 'development';
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '次の選挙で誰に投票すべき?' }], sessionId: 'sess-guard-dev' });
+
+    expect(res.status).toBe(200);
+  });
+});

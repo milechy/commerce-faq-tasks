@@ -1,6 +1,8 @@
 // src/middleware/inputSanitizer.ts
 // Phase48 Pane 1: L5 Input Sanitizer
 
+import { logger } from '../lib/logger';
+
 export interface SanitizeResult {
   allowed: boolean;
   reason?: string; // 'url_detected' | 'too_long' | 'encoding_attack' | 'repeat_abuse'
@@ -52,6 +54,15 @@ function getMaxLength(): number {
 function getSessionAbuseLimit(): number {
   return parseInt(process.env['SESSION_ABUSE_LIMIT'] ?? '5', 10);
 }
+
+// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
+function isInputSanitizerEnabled(): boolean {
+  const flag = process.env['INPUT_SANITIZER_ENABLED'];
+  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
+  return flag === 'true';
+}
+
+logger.info(`[inputSanitizer] L5 Input Sanitizer enabled=${isInputSanitizerEnabled()}`);
 
 function checkUrl(message: string): SanitizeResult | null {
   for (const pattern of URL_PATTERNS) {
@@ -146,7 +157,7 @@ export function sanitizeInput(
   sessionHistory?: Map<string, SessionEntry>
 ): SanitizeResult {
   // Enabled check — fast path
-  if (process.env['INPUT_SANITIZER_ENABLED'] !== 'true') {
+  if (!isInputSanitizerEnabled()) {
     return { allowed: true, sanitizedMessage: message };
   }
 

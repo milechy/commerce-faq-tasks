@@ -1,6 +1,8 @@
 // src/middleware/topicGuard.ts
 // Phase48 Pane 3: L6 Topic Guard
 
+import { logger } from '../lib/logger';
+
 export interface TopicGuardResult {
   allowed: boolean;
   category: 'on_topic' | 'off_topic' | 'prompt_injection' | 'harmful';
@@ -59,6 +61,15 @@ function getSessionAbuseLimit(): number {
   return parseInt(process.env['SESSION_ABUSE_LIMIT'] ?? '3', 10);
 }
 
+// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
+function isTopicGuardEnabled(): boolean {
+  const flag = process.env['TOPIC_GUARD_ENABLED'];
+  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
+  return flag === 'true';
+}
+
+logger.info(`[topicGuard] L6 Topic Guard enabled=${isTopicGuardEnabled()}`);
+
 // Placeholder for future LLM-based classification
 async function classifyWithLLM(
   _message: string
@@ -77,7 +88,7 @@ export async function checkTopic(
   externalAbuseCounts?: Map<string, number>
 ): Promise<TopicGuardResult> {
   // Enabled check — fast path
-  if (process.env['TOPIC_GUARD_ENABLED'] !== 'true') {
+  if (!isTopicGuardEnabled()) {
     return { allowed: true, category: 'on_topic', confidence: 1 };
   }
 

@@ -14,6 +14,12 @@ import { logger } from '../../lib/logger';
 import { saveMessage } from '../admin/chat-history/chatHistoryRepository';
 import { resolveTrafficSource, TRAFFIC_SOURCE_HEADER } from '../../lib/traffic/trafficSource';
 import { trackUsage } from '../../lib/billing/usageTracker';
+import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from '../../middleware/inputSanitizer';
+import { applyPromptFirewall } from '../../middleware/promptFirewall';
+import { checkTopic } from '../../middleware/topicGuard';
+
+const MAX_ANAM_MESSAGES = 20;
+const MAX_ANAM_MESSAGE_LENGTH = 2000;
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -65,14 +71,12 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array required' });
     }
-
-    // GID 1216970103691946: 実ユーザー/E2E/chat-test/デモの判定（セッション新規作成時のみ記録）
-    const trafficSource = resolveTrafficSource({
-      headerValue: req.header(TRAFFIC_SOURCE_HEADER),
-      userAgent: req.header('user-agent'),
-      referer: req.header('referer'),
-      isChatTestToken: (req as any).isChatTestToken === true,
-    });
+    if (messages.length > MAX_ANAM_MESSAGES) {
+      return res.status(400).json({ error: `messages array must not exceed ${MAX_ANAM_MESSAGES} items` });
+    }
+    if (messages.some((m) => typeof m.content !== 'string' || m.content.length > MAX_ANAM_MESSAGE_LENGTH)) {
+      return res.status(400).json({ error: `each message must be a string of at most ${MAX_ANAM_MESSAGE_LENGTH} characters` });
+    }
 
     // Phase75: 会話ログ永続化。Widgetがsession_idを送ってこない場合、この呼び出し単位を
     // 1セッションとして扱う(継続性は失うが、Hermes MCP等の学習用途には十分な単発Q&Aとして
@@ -81,7 +85,43 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       typeof bodySessionId === 'string' && bodySessionId.trim().length > 0
         ? bodySessionId
         : randomUUID();
+    // GID 1216970103691946: 実ユーザー/E2E/chat-test/デモの判定（セッション新規作成時のみ記録）
+    const trafficSource = resolveTrafficSource({
+      headerValue: req.header(TRAFFIC_SOURCE_HEADER),
+      userAgent: req.header('user-agent'),
+      referer: req.header('referer'),
+      isChatTestToken: (req as any).isChatTestToken === true,
+    });
+
     const latestUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+
+    // L5/L7/L6: RAGを介さないGroq直呼び出し経路にも、通常チャット(/api/chat)と同じ
+    // 入力ガードを適用する。abuseカウンタはconversationId等の共有バケットではなく
+    // tenantId+sessionIdでスコープする。
+    let guardedUserContent = latestUserMessage?.content ?? '';
+    if (latestUserMessage?.content) {
+      const guardKey = `${tenantId}:${sessionId}`;
+
+      const sanitizeResult = l5SanitizeInput(latestUserMessage.content, guardKey, sessionHistoryStore);
+      if (!sanitizeResult.allowed) {
+        const status = sanitizeResult.shouldTerminateSession ? 403 : 400;
+        return res.status(status).json({ error: sanitizeResult.userFacingMessage ?? 'メッセージを確認してください。' });
+      }
+      guardedUserContent = sanitizeResult.sanitizedMessage ?? latestUserMessage.content;
+
+      const firewallResult = applyPromptFirewall(guardedUserContent);
+      if (!firewallResult.allowed) {
+        return res.status(400).json({ error: firewallResult.userFacingMessage ?? 'その質問にはお答えできません。' });
+      }
+      guardedUserContent = firewallResult.sanitizedMessage;
+
+      const topicResult = await checkTopic(guardedUserContent, tenantId, guardKey);
+      if (!topicResult.allowed) {
+        const status = topicResult.shouldTerminateSession ? 403 : 400;
+        return res.status(status).json({ error: topicResult.userFacingMessage ?? 'ご質問の内容が対応範囲外です。' });
+      }
+    }
+
     if (latestUserMessage?.content) {
       saveMessage({
         tenantId,
@@ -127,11 +167,16 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
 - マークダウンや箇条書きは使わないでください（音声化されるため）
 - 専門用語は避け、わかりやすい言葉で説明してください`;
 
+    // 直近ユーザー発言のみ、L5/L7/L6ガード済みの内容に差し替える（履歴は元のまま）
+    const latestUserMessageIndex = messages.reduce(
+      (lastIdx, m, i) => (m.role === 'user' ? i : lastIdx),
+      -1
+    );
     const groqMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
-      ...messages.map((m) => ({
+      ...messages.map((m, i) => ({
         role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: m.content,
+        content: i === latestUserMessageIndex ? guardedUserContent : m.content,
       })),
     ];
 

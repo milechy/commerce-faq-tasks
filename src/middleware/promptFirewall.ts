@@ -1,6 +1,8 @@
 // src/middleware/promptFirewall.ts
 // Phase48 Pane 2: L7 Prompt Firewall
 
+import { logger } from '../lib/logger';
+
 export interface FirewallResult {
   allowed: boolean;
   sanitizedMessage: string; // 有害パターンを除去した安全なメッセージ
@@ -54,13 +56,22 @@ function normalizeWhitespace(s: string): string {
   return s.replace(/\s{2,}/g, ' ').trim();
 }
 
+// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
+function isPromptFirewallEnabled(): boolean {
+  const flag = process.env['PROMPT_FIREWALL_ENABLED'];
+  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
+  return flag === 'true';
+}
+
+logger.info(`[promptFirewall] L7 Prompt Firewall enabled=${isPromptFirewallEnabled()}`);
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
 export function applyPromptFirewall(message: string): FirewallResult {
   // Enabled check — fast path
-  if (process.env['PROMPT_FIREWALL_ENABLED'] !== 'true') {
+  if (!isPromptFirewallEnabled()) {
     return { allowed: true, sanitizedMessage: message, detections: [] };
   }
 
