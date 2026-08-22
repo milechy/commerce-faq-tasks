@@ -214,12 +214,18 @@ describe('createStripeWebhookHandler', () => {
       );
     });
 
-    it('同一 event.id の再送では副作用（DB更新等）をスキップし received:true, duplicate:true を返す', async () => {
+    it('同一 event.id の再送で、前回completed_at済み（=ハンドラが最後まで成功済み）なら副作用をスキップし received:true, duplicate:true を返す', async () => {
       const invoice = { id: 'inv_011', subscription: 'sub_idem_002', amount_due: 700 };
       const event = { id: 'evt_idem_002', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
-      // 冪等INSERTが ON CONFLICT に当たった状態（rowCount: 0）＝ 既に処理済み
-      const dedupDb = { query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }) };
+      // 冪等INSERTが ON CONFLICT に当たり（rowCount: 0）、続くSELECTで
+      // completed_at が設定済み ＝ 前回ハンドラが最後まで成功している状態。
+      const dedupDb = {
+        query: jest
+          .fn()
+          .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // dedup insert: 重複
+          .mockResolvedValueOnce({ rows: [{ completed_at: new Date() }] }), // completed_at 確認: 完了済み
+      };
 
       const stripeMock = require('stripe');
       stripeMock.mockImplementationOnce(() => ({
@@ -236,8 +242,8 @@ describe('createStripeWebhookHandler', () => {
 
       expect(res._status).toBe(200);
       expect(res._body).toEqual({ received: true, duplicate: true });
-      // dedup INSERT の1回だけが呼ばれ、payment_succeeded の billing_status 更新クエリは呼ばれない
-      expect(dedupDb.query).toHaveBeenCalledTimes(1);
+      // dedup INSERT + completed_at確認SELECT の2回のみ。billing_status 更新は呼ばれない
+      expect(dedupDb.query).toHaveBeenCalledTimes(2);
       expect(dedupDb.query).not.toHaveBeenCalledWith(
         expect.stringContaining("billing_status = 'paid'"),
         expect.anything()
@@ -245,6 +251,44 @@ describe('createStripeWebhookHandler', () => {
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({ eventId: 'evt_idem_002', eventType: 'invoice.payment_succeeded' }),
         expect.any(String)
+      );
+    });
+
+    it('同一 event.id の再送で、前回completed_at未設定（=ハンドラ未完了）なら副作用を再試行する', async () => {
+      const invoice = { id: 'inv_011b', subscription: 'sub_idem_002b', amount_due: 700 };
+      const event = { id: 'evt_idem_002b', type: 'invoice.payment_succeeded', data: { object: invoice } };
+
+      const retryDb = {
+        query: jest
+          .fn()
+          .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // dedup insert: 重複
+          .mockResolvedValueOnce({ rows: [{ completed_at: null }] }) // completed_at確認: 未完了
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // billing_status更新: 今回は成功
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }), // completed_atマーク
+      };
+
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementationOnce(() => ({
+        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+      }));
+
+      const handler = createStripeWebhookHandler(retryDb as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(res._body).toEqual({ received: true }); // duplicateフラグ無し = 実際に処理された
+      expect(retryDb.query).toHaveBeenCalledWith(
+        expect.stringContaining("billing_status = 'paid'"),
+        ['sub_idem_002b']
+      );
+      expect(retryDb.query).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE stripe_webhook_events SET completed_at'),
+        ['evt_idem_002b']
       );
     });
 
@@ -275,15 +319,16 @@ describe('createStripeWebhookHandler', () => {
       const invoice = { id: 'inv_012', subscription: 'sub_idem_003', amount_due: 300 };
       const event = { id: 'evt_idem_003', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
-      // 1回目は新規(rowCount:1)、2回目は同一event.idの重複配信(rowCount:0)を、
-      // 同じdbモックへの連続呼び出しで表現する（真の同時実行ではないが、
-      // 「1回目で状態が変わり2回目の判定に影響する」ことを検証する）。
+      // 1回目: dedup insert新規 → billing_status更新 → completed_atマーク（成功で完結）
+      // 2回目: dedup insert重複 → completed_at確認 → 完了済みなのでスキップ
       const sequentialDb = {
         query: jest
           .fn()
           .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // dedup insert #1: 新規
           .mockResolvedValueOnce({ rowCount: 5, rows: [] }) // billing_status update #1
-          .mockResolvedValueOnce({ rowCount: 0, rows: [] }), // dedup insert #2: 重複
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // completed_atマーク #1
+          .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // dedup insert #2: 重複
+          .mockResolvedValueOnce({ rows: [{ completed_at: new Date() }] }), // completed_at確認 #2: 完了済み
       };
 
       const stripeMock = require('stripe');
@@ -306,24 +351,25 @@ describe('createStripeWebhookHandler', () => {
 
       expect(res1._body).toEqual({ received: true });
       expect(res2._body).toEqual({ received: true, duplicate: true });
-      expect(sequentialDb.query).toHaveBeenCalledTimes(3); // dedup×2 + billing_status更新×1（2回目はスキップされる）
+      expect(sequentialDb.query).toHaveBeenCalledTimes(5);
     });
 
-    it('【設計上の既知リスク】冪等INSERT成功後にハンドラが失敗すると、再送時は"処理済み"と誤判定され副作用が永久に実行されない', async () => {
-      // _recordWebhookEvent は _handleStripeEvent より前に成功しているため、
-      // ハンドラ側で例外が起きて500を返しStripeに再送を促しても、
-      // 再送時点では既にevent_idがDBに記録済み＝rowCount:0で「重複」と誤判定され、
-      // 実際には一度も成功していない副作用（billing_status更新等）が二度と実行されない。
-      // このテストはバグ修正ではなく、現状の挙動を固定して可視化するためのもの。
+    it('[修正確認] 冪等INSERT成功後にハンドラが失敗しても、completed_atが未設定のため再送時に副作用が再試行される', async () => {
+      // 1回目: dedup insert新規 → billing_status更新が失敗 → completed_atはマークされない(500)
+      // 2回目(Stripeの自動再送): dedup insert重複 → completed_at確認で未完了と判明 →
+      //   'retry'としてbilling_status更新を再試行し、今度は成功してcompleted_atをマークする。
       const invoice = { id: 'inv_013', subscription: 'sub_poison', amount_due: 999 };
       const event = { id: 'evt_poison_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
-      const poisonDb = {
+      const recoveringDb = {
         query: jest
           .fn()
-          .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // 1回目 dedup insert: 新規として記録される
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // 1回目 dedup insert: 新規
           .mockRejectedValueOnce(new Error('DB connection lost')) // 1回目 billing_status更新: 失敗
-          .mockResolvedValueOnce({ rowCount: 0, rows: [] }), // 2回目(Stripeの自動再送) dedup insert: 既に記録済み扱い
+          .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // 2回目 dedup insert: 重複
+          .mockResolvedValueOnce({ rows: [{ completed_at: null }] }) // 2回目 completed_at確認: 未完了 → retry
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // 2回目 billing_status更新: 今度は成功
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }), // 2回目 completed_atマーク
       };
 
       const stripeMock = require('stripe');
@@ -331,7 +377,7 @@ describe('createStripeWebhookHandler', () => {
         webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
       }));
 
-      const handler = createStripeWebhookHandler(poisonDb as any, mockLogger);
+      const handler = createStripeWebhookHandler(recoveringDb as any, mockLogger);
 
       // 1回目: ハンドラ内で例外 → 500（Stripeは5xxで再送する）
       const { req: req1, res: res1 } = makeReqRes({
@@ -341,24 +387,23 @@ describe('createStripeWebhookHandler', () => {
       await handler(req1, res1);
       expect(res1._status).toBe(500);
 
-      // 2回目(再送): 既に「新規」として記録済みのため duplicate 扱いになり、
-      // billing_status 更新は一度も成功しないまま 200 が返る。
+      // 2回目(再送): completed_at未設定と分かり再試行 → 今回は成功
       const { req: req2, res: res2 } = makeReqRes({
         body: Buffer.from(JSON.stringify(event)),
         headers: { 'stripe-signature': 'valid_sig' },
       });
       await handler(req2, res2);
       expect(res2._status).toBe(200);
-      expect(res2._body).toEqual({ received: true, duplicate: true });
+      expect(res2._body).toEqual({ received: true }); // duplicateフラグ無し = 実際に再試行され成功した
 
-      // 呼び出しは dedup(1回目) → billing_status更新(1回目・失敗) → dedup(2回目・重複判定) の3回のみ。
-      // 4回目（billing_status更新の再試行）が発生しないこと＝再送では二度とハンドラ本体に
-      // 到達しないことを示す。
-      expect(poisonDb.query).toHaveBeenCalledTimes(3);
-      const billingUpdateCalls = poisonDb.query.mock.calls.filter(([sql]) =>
+      const billingUpdateCalls = recoveringDb.query.mock.calls.filter(([sql]) =>
         typeof sql === 'string' && sql.includes("billing_status = 'paid'")
       );
-      expect(billingUpdateCalls).toHaveLength(1); // 試行は1回だけ（それも失敗）。再送では二度と試みられない。
+      expect(billingUpdateCalls).toHaveLength(2); // 1回目(失敗)・2回目(成功)の両方試行された
+      const markCompletedCalls = recoveringDb.query.mock.calls.filter(([sql]) =>
+        typeof sql === 'string' && sql.includes('UPDATE stripe_webhook_events SET completed_at')
+      );
+      expect(markCompletedCalls).toHaveLength(1); // 成功した2回目のみマークされる
     });
 
     it('冪等INSERT自体がDBエラーで失敗した場合、200を返さずエラーとして扱う（誤って"処理済み"にしない）', async () => {

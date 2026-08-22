@@ -43,15 +43,20 @@ export function createStripeWebhookHandler(db: any, logger: pino.Logger) {
     }
 
     try {
-      const isNewEvent = await _recordWebhookEvent(event, db);
-      if (!isNewEvent) {
-        logger.info({ eventId: event.id, eventType: event.type }, '[webhook] duplicate event, skipped');
+      const status = await _recordOrCheckWebhookEvent(event, db);
+      if (status === 'done') {
+        logger.info({ eventId: event.id, eventType: event.type }, '[webhook] duplicate event, already completed, skipped');
         res.json({ received: true, duplicate: true });
         return;
       }
+      // 'new'（初回）または 'retry'（前回未完了 = ハンドラ失敗/処理中クラッシュ）は
+      // どちらも副作用を実行する。'retry' はハンドラ内の各処理が個別に冪等
+      // （UPDATE ... WHERE 条件一致のみ更新、Slack通知は再送の可能性を許容）である前提。
       await _handleStripeEvent(event, db, logger);
+      await _markWebhookEventCompleted(event, db);
       res.json({ received: true });
     } catch (err) {
+      // completed_at を更新しないため、Stripeの再送時は 'retry' として再試行される。
       logger.error({ err, eventType: event.type }, '[webhook] event handling failed');
       res.status(500).json({ error: 'handler_error' });
     }
@@ -59,18 +64,34 @@ export function createStripeWebhookHandler(db: any, logger: pino.Logger) {
 }
 
 /**
- * event.id を stripe_webhook_events に記録し、初回受信かどうかを返す。
- * ON CONFLICT DO NOTHING で重複INSERTを無視し、rowCount で新規/既知を判定する
- * （usageTracker.ts の request_id 冪等パターンと同じ方式）。
+ * event.id を stripe_webhook_events に記録し、処理方針を返す。
+ * - 'new'   : 初回受信（ON CONFLICT に当たらず新規INSERTできた）
+ * - 'retry' : 過去に受信済みだが completed_at が NULL＝前回ハンドラが失敗/未完了
+ *             （record-before-handleのため、成功保証はINSERTではなくcompleted_atが持つ）
+ * - 'done'  : 過去に受信済みかつ completed_at が設定済み＝ハンドラは最後まで成功した
  */
-async function _recordWebhookEvent(event: any, db: any): Promise<boolean> {
-  const result = await db.query(
+async function _recordOrCheckWebhookEvent(event: any, db: any): Promise<'new' | 'retry' | 'done'> {
+  const insertResult = await db.query(
     `INSERT INTO stripe_webhook_events (event_id, event_type)
      VALUES ($1, $2)
      ON CONFLICT (event_id) DO NOTHING`,
     [event.id, event.type]
   );
-  return result.rowCount > 0;
+  if (insertResult.rowCount > 0) return 'new';
+
+  const statusResult = await db.query(
+    `SELECT completed_at FROM stripe_webhook_events WHERE event_id = $1`,
+    [event.id]
+  );
+  return statusResult.rows[0]?.completed_at ? 'done' : 'retry';
+}
+
+/** ハンドラが最後まで成功した後にのみ呼ぶ。再送時の 'retry' 判定に使う。 */
+async function _markWebhookEventCompleted(event: any, db: any): Promise<void> {
+  await db.query(
+    `UPDATE stripe_webhook_events SET completed_at = NOW() WHERE event_id = $1`,
+    [event.id]
+  );
 }
 
 async function _handleStripeEvent(event: any, db: any, logger: pino.Logger): Promise<void> {
