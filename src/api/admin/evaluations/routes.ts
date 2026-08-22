@@ -210,10 +210,15 @@ export function registerEvaluationRoutes(app: Express): void {
       }
       return res.json({ evaluation: result });
     } catch (err) {
-      const { SessionTenantMismatchError, SessionNotFoundError } = await import("../../../agent/judge/judgeEvaluator");
+      const { SessionTenantMismatchError, SessionNotFoundError, SessionTooShortError } = await import("../../../agent/judge/judgeEvaluator");
       // 「不在」と「他テナントのもの」を同一の404にし、存在確認オラクルにしない。
       if (err instanceof SessionTenantMismatchError || err instanceof SessionNotFoundError) {
         return res.status(404).json({ error: "セッションが見つかりません" });
+      }
+      // 会話が短すぎて評価対象外なのは障害ではない。500(evaluation_failed)と
+      // 区別し、理由が分かる422で返す。
+      if (err instanceof SessionTooShortError) {
+        return res.status(422).json({ error: "session_too_short", message: "会話が短すぎるため評価対象外です" });
       }
       logger.warn("[POST /v1/admin/evaluations/trigger]", err);
       return res.status(500).json({ error: "評価の実行に失敗しました" });

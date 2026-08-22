@@ -42,7 +42,7 @@ jest.mock('../openclaw/rewardBridge', () => ({
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
-import { evaluateSession, SessionNotFoundError, SessionTenantMismatchError } from './judgeEvaluator';
+import { evaluateSession, SessionNotFoundError, SessionTenantMismatchError, SessionTooShortError } from './judgeEvaluator';
 import { sendRewardSignal } from '../openclaw/rewardBridge';
 import {
   getOrInitFlowSessionMeta,
@@ -486,5 +486,27 @@ describe('evaluateSession', () => {
       rows: [{ id: 'internal-1', tenant_id: 'tenant-b', prompt_variant_id: null }],
     });
     await expect(evaluateSession('other-tenant-session', 'tenant-a')).rejects.toBeInstanceOf(SessionTenantMismatchError);
+  });
+
+  it('15. [境界値] メッセージが0件のセッション → SessionTooShortErrorをthrowする（nullを返さない）', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-empty', tenant_id: 'tenant-a', prompt_variant_id: null }] })
+      .mockResolvedValueOnce({ rows: [] }); // messages: 0件
+
+    await expect(evaluateSession('session-empty')).rejects.toThrow(SessionTooShortError);
+    expect(mockCallGroq).not.toHaveBeenCalled();
+  });
+
+  it('16. [境界値] メッセージが1件のみのセッション → SessionTooShortErrorをthrowする（nullを返さない）', async () => {
+    const mockPool = makeMockPool();
+    mockGetPool.mockReturnValue(mockPool as any);
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'internal-uuid-2', tenant_id: 'tenant-a', prompt_variant_id: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: 'user', content: 'こんにちは', created_at: new Date() }] });
+
+    await expect(evaluateSession('session-single-message')).rejects.toThrow(SessionTooShortError);
+    expect(mockCallGroq).not.toHaveBeenCalled();
   });
 });

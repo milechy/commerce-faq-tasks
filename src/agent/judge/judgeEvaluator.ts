@@ -41,6 +41,19 @@ export class SessionNotFoundError extends Error {
   }
 }
 
+/**
+ * セッションが存在し所有権も一致するが、会話が0〜1通のみで評価対象にならない場合に投げる。
+ * これは障害ではなく正常な「評価対象外」状態のため、呼び出し元(routes.ts)は
+ * 500(evaluation_failed)ではなく422で理由を返す。Gemini呼び出し失敗など
+ * 真の内部エラー（null を返す経路）とは区別する。
+ */
+export class SessionTooShortError extends Error {
+  constructor(sessionId: string) {
+    super(`session ${sessionId} has too few messages to evaluate`);
+    this.name = 'SessionTooShortError';
+  }
+}
+
 const JUDGE_MODEL = process.env['GEMINI_MODEL'] ?? 'gemini-2.5-flash';
 
 const FALLBACK_PROMPT_TEMPLATE = `あなたは営業チャットAIの品質評価Judgeです。
@@ -187,7 +200,7 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
     // 2b. Skip evaluation for empty/single-message sessions
     if (messages.length <= 1) {
       logger.warn({ sessionId, messageCount: messages.length }, 'judgeEvaluator: skipping empty/single-message session');
-      return null;
+      throw new SessionTooShortError(sessionId);
     }
 
     // 3. Build conversation log — content sliced to 200 chars (Anti-Slop rule)
@@ -398,7 +411,11 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
 
     return result;
   } catch (err) {
-    if (err instanceof SessionTenantMismatchError || err instanceof SessionNotFoundError) throw err;
+    if (
+      err instanceof SessionTenantMismatchError ||
+      err instanceof SessionNotFoundError ||
+      err instanceof SessionTooShortError
+    ) throw err;
     logger.error({ err, sessionId }, 'judgeEvaluator: unexpected error in evaluateSession');
     return null;
   }
