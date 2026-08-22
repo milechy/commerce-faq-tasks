@@ -43,13 +43,63 @@ export function createStripeWebhookHandler(db: any, logger: pino.Logger) {
     }
 
     try {
+      const claimed = await _claimWebhookEvent(event, db);
+      if (!claimed) {
+        // 完了済み、または他リクエストが処理中。どちらも副作用を実行してはならない。
+        logger.info({ eventId: event.id, eventType: event.type }, '[webhook] event not claimed (completed or in progress), skipped');
+        res.json({ received: true, duplicate: true });
+        return;
+      }
       await _handleStripeEvent(event, db, logger);
+      await _markWebhookEventCompleted(event, db);
       res.json({ received: true });
     } catch (err) {
+      // completed_at を更新しないため、claim が STALE_CLAIM_MINUTES 経過した後の
+      // Stripe再送で再試行される。
       logger.error({ err, eventType: event.type }, '[webhook] event handling failed');
       res.status(500).json({ error: 'handler_error' });
     }
   };
+}
+
+/** claim をこの時間放置したら、処理中プロセスの異常終了とみなして再獲得を許可する。 */
+const STALE_CLAIM_MINUTES = 15;
+
+/**
+ * このリクエストが event の処理権を獲得できたかを返す。
+ *
+ * 単一の条件付きUPSERTで判定するのが要点。INSERT成功/失敗を見てから別クエリで
+ * 状態をSELECTする方式だと、同一イベントが並行到達したときに両方が「未完了だから
+ * 再試行」と判断してハンドラを二重実行しうる（DB更新は WHERE 条件付きで冪等だが、
+ * Slack通知は非冪等なので実害が出る）。
+ *
+ * 獲得できる = 次のいずれか
+ *   - 初回受信（衝突せずINSERTできた）
+ *   - 過去に受信済みだが未完了で、かつ前回の claim が STALE_CLAIM_MINUTES 以上前
+ *     （＝処理中プロセスが落ちたとみなせる）
+ * 獲得できない = 完了済み、または他リクエストが現在処理中。
+ */
+async function _claimWebhookEvent(event: any, db: any): Promise<boolean> {
+  const result = await db.query(
+    `INSERT INTO stripe_webhook_events (event_id, event_type, claimed_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (event_id) DO UPDATE
+       SET claimed_at = NOW()
+     WHERE stripe_webhook_events.completed_at IS NULL
+       AND (stripe_webhook_events.claimed_at IS NULL
+            OR stripe_webhook_events.claimed_at < NOW() - ($3 || ' minutes')::INTERVAL)
+     RETURNING event_id`,
+    [event.id, event.type, String(STALE_CLAIM_MINUTES)]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** ハンドラが最後まで成功した後にのみ呼ぶ。再送時の 'retry' 判定に使う。 */
+async function _markWebhookEventCompleted(event: any, db: any): Promise<void> {
+  await db.query(
+    `UPDATE stripe_webhook_events SET completed_at = NOW() WHERE event_id = $1`,
+    [event.id]
+  );
 }
 
 async function _handleStripeEvent(event: any, db: any, logger: pino.Logger): Promise<void> {
