@@ -2,6 +2,7 @@
 // Phase48 Pane 3: L6 Topic Guard
 
 import { logger } from '../lib/logger';
+import { isSecurityLayerEnabled } from './securityLayerConfig';
 
 export interface TopicGuardResult {
   allowed: boolean;
@@ -61,11 +62,8 @@ function getSessionAbuseLimit(): number {
   return parseInt(process.env['SESSION_ABUSE_LIMIT'] ?? '3', 10);
 }
 
-// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
 function isTopicGuardEnabled(): boolean {
-  const flag = process.env['TOPIC_GUARD_ENABLED'];
-  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
-  return flag === 'true';
+  return isSecurityLayerEnabled('TOPIC_GUARD_ENABLED');
 }
 
 logger.info(`[topicGuard] L6 Topic Guard enabled=${isTopicGuardEnabled()}`);

@@ -2,6 +2,7 @@
 // Phase48 Pane 2: L7 Prompt Firewall
 
 import { logger } from '../lib/logger';
+import { isSecurityLayerEnabled } from './securityLayerConfig';
 
 export interface FirewallResult {
   allowed: boolean;
@@ -32,18 +33,21 @@ const SYSTEM_PROMPT_PATTERNS: StripPattern[] = [
   { name: 'print_instructions', pattern: /print\s*your\s*(instructions|prompt|rules)/gi },
 ];
 
+// 役割上書き試行の語彙。本番用(行頭アンカー)とshadow用(緩めたアンカー)の
+// 両パターンがこの1箇所だけを参照する。新語を足す際に片方だけ直す事故を防ぐため、
+// 語彙とアンカーの関心をここで分離する。
+const ROLE_OVERRIDE_WORDS_EN = 'you are|act as|pretend|from now on|forget';
+const ROLE_OVERRIDE_WORDS_JA = 'あなたは|ふりをして|なりきって|今から|これから|忘れて|リセット';
+
 // Group 2: Role override attempts
 const ROLE_OVERRIDE_PATTERNS: StripPattern[] = [
-  { name: 'role_override_en', pattern: /^(you are|act as|pretend|from now on|forget)\b/gim },
-  {
-    name: 'role_override_ja',
-    pattern: /^(あなたは|ふりをして|なりきって|今から|これから|忘れて|リセット)/gm,
-  },
+  { name: 'role_override_en', pattern: new RegExp(`^(${ROLE_OVERRIDE_WORDS_EN})\\b`, 'gim') },
+  { name: 'role_override_ja', pattern: new RegExp(`^(${ROLE_OVERRIDE_WORDS_JA})`, 'gm') },
   { name: 'dan_jailbreak', pattern: /\b(DAN|jailbreak)\b/gi },
 ];
 
-// Shadowモード専用: ROLE_OVERRIDE_PATTERNS と同じ語彙だが、行頭アンカー(^)を
-// 「文字列先頭 or 文末記号+空白の直後」に緩めたバージョン。
+// Shadowモード専用: ROLE_OVERRIDE_PATTERNSと同じ語彙(上記定数を共有)だが、
+// 行頭アンカー(^)を「文字列先頭 or 文末記号+空白の直後」に緩めたバージョン。
 // 「よろしくお願いします。act as a pirate」のような文中埋め込みインジェクションを拾う。
 // ブロック判定・文字列除去には一切使わず、検出頻度の計測(ログ出力のみ)に用いる
 // （'forget'/'あなたは'は「パスワードを忘れました」等の正常な問い合わせにも頻出するため、
@@ -51,11 +55,11 @@ const ROLE_OVERRIDE_PATTERNS: StripPattern[] = [
 const ROLE_OVERRIDE_SHADOW_PATTERNS: StripPattern[] = [
   {
     name: 'role_override_en_shadow',
-    pattern: /(?:^|[.!?。！？]\s*)(you are|act as|pretend|from now on|forget)\b/gim,
+    pattern: new RegExp(`(?:^|[.!?。！？]\\s*)(${ROLE_OVERRIDE_WORDS_EN})\\b`, 'gim'),
   },
   {
     name: 'role_override_ja_shadow',
-    pattern: /(?:^|[.!?。！？]\s*)(あなたは|ふりをして|なりきって|今から|これから|忘れて|リセット)/gm,
+    pattern: new RegExp(`(?:^|[.!?。！？]\\s*)(${ROLE_OVERRIDE_WORDS_JA})`, 'gm'),
   },
 ];
 
@@ -73,19 +77,14 @@ function normalizeWhitespace(s: string): string {
   return s.replace(/\s{2,}/g, ' ').trim();
 }
 
-// production は既定ON（未設定/'false'以外はON）。development/test は既定OFF（明示的'true'時のみON）。
 function isPromptFirewallEnabled(): boolean {
-  const flag = process.env['PROMPT_FIREWALL_ENABLED'];
-  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
-  return flag === 'true';
+  return isSecurityLayerEnabled('PROMPT_FIREWALL_ENABLED');
 }
 
 // shadowモード: ブロックには使わず、緩めたパターンの発火頻度をログのみで計測する。
 // 誤検知率を実トラフィックで確認してからブロック昇格を判断するための計測スイッチ。
 function isPromptFirewallShadowEnabled(): boolean {
-  const flag = process.env['PROMPT_FIREWALL_SHADOW_ENABLED'];
-  if (process.env['NODE_ENV'] === 'production') return flag !== 'false';
-  return flag === 'true';
+  return isSecurityLayerEnabled('PROMPT_FIREWALL_SHADOW_ENABLED');
 }
 
 logger.info(`[promptFirewall] L7 Prompt Firewall enabled=${isPromptFirewallEnabled()}`);
@@ -99,20 +98,34 @@ logger.info(`[promptFirewall] shadow detection enabled=${isPromptFirewallShadowE
  * shadowパターンで元メッセージを検査し、マッチしたパターン名をログ出力するのみ。
  * 本番の判定（allowed/sanitizedMessage/detections）には一切影響しない。
  * メッセージ本文はログに出さない（Anti-Slop: RAGコンテンツ・PIIをログに出さない方針）。
+ *
+ * shadowパターンは本番パターンを包含する上位集合（行頭ケースは両方にマッチする）。
+ * 「アンカーを緩めたら新たに何を拾うか」を測る計測の趣旨上、本番側で既に検出済みの
+ * 行頭ケースかどうかをパターン名単位で判定し alreadyDetectedByLive として残す
+ * （ログを削らず、集計時にnewOnly = !alreadyDetectedByLiveで絞り込めるようにする）。
  */
 function logShadowDetections(message: string): void {
   if (!isPromptFirewallShadowEnabled()) return;
   const shadowDetections: string[] = [];
+  const newDetections: string[] = [];
   for (const { name, pattern } of ROLE_OVERRIDE_SHADOW_PATTERNS) {
     // 各パターンは stateful(g フラグ) な RegExp なので lastIndex をリセットしてから使う
     pattern.lastIndex = 0;
-    if (pattern.test(message)) {
-      shadowDetections.push(name);
-    }
+    if (!pattern.test(message)) continue;
+    shadowDetections.push(name);
+
+    const livePattern = ROLE_OVERRIDE_PATTERNS.find((p) => p.name === name.replace(/_shadow$/, ''));
+    if (livePattern) livePattern.pattern.lastIndex = 0;
+    const alreadyDetectedByLive = livePattern ? livePattern.pattern.test(message) : false;
+    if (!alreadyDetectedByLive) newDetections.push(name);
   }
   if (shadowDetections.length > 0) {
     logger.info(
-      { shadowDetections, messageLength: message.length },
+      {
+        shadowDetections,
+        newDetections, // 本番側では拾えていない=行頭以外(文中)で新たに検出した分のみ
+        messageLength: message.length,
+      },
       '[promptFirewall] shadow detection (not blocked, measurement only)'
     );
   }
