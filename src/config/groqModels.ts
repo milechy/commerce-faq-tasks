@@ -3,13 +3,31 @@
 //
 // 目的:
 //   1. 集約 — モデル ID をコード全体に散らさず、ここだけを更新すれば差し替えられる。
-//   2. EOL 検知 — Groq が decommission したモデルを KNOWN_DEPRECATED に列挙し、
-//      `SCRIPTS/check-groq-models.sh` が src/ にその文字列が混入したら CI を落とす。
+//   2. EOL 検知 — 廃止モデルが本番に残るのを 2 層で防ぐ（下記）。
+//
+// EOL 検知は 2 層構成:
+//   [静的] SCRIPTS/check-groq-models.sh
+//     KNOWN_DEPRECATED に列挙した ID が src/ (非 test) に混入したら落とす。
+//     ネットワーク非依存。security-scan.sh 経由で PR / push / 週次 CI すべてで走る。
+//     限界: リストが手動メンテなので、告知を見落とすと検知できない。
+//   [ライブ] SCRIPTS/check-groq-models-live.sh
+//     Groq の /v1/models が返す実配信リストと ACTIVE_GROQ_MODELS を突き合わせ、
+//     「コードはアクティブだと思っているが Groq には無い」ID を検出する。
+//     告知を見落としても気づける代わりにネットワークと API キーが要る。
+//     GROQ_API_KEY が GitHub Actions の secret に無いため CI には入れず、手動 / cron で回す。
+//     終了コード: 0=PASS / 1=廃止検知 / 2=検知不能（キー無し・API 到達不可。赤扱いしない）。
+//
+// なぜ 2 層必要か:
+//   2026-08 に Groq が llama-3.3-70b-versatile / llama-3.1-8b-instant を廃止した際、
+//   誰も KNOWN_DEPRECATED に追記しなかったため静的層は素通りし、
+//   アバターチャットが本番で全面停止した。ライブ層はこの取りこぼしを埋めるためにある。
 //
 // 追加・変更時のルール:
 //   - 新モデル採用: ACTIVE に定数を足し、call site をその定数経由に。
 //   - モデル廃止: Groq の deprecation 告知が出たら KNOWN_DEPRECATED に id を追記。
 //     検知層が src/ 内の残存使用を洗い出すので、移行漏れを防げる。
+//   - ACTIVE を変更したら GROQ_FALLBACK_CHAIN の退避先が生存モデルを指すか必ず確認する
+//     （2026-08 の障害では、生存モデルからの退避先が全て廃止モデルに着地する状態だった）。
 //
 // 2026-08-23 の移行:
 //   Groq が llama-3.3-70b-versatile / llama-3.1-8b-instant を配信停止したため
