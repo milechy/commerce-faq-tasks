@@ -77,6 +77,18 @@ const en: Record<TranslationKey, string> = {
   "knowledge.faq_hint_saved": "✅ Examples saved",
   "knowledge.faq_hint_save_error": "❌ Failed to save. Please try again.",
 
+  // LAUNCH: tenant self-service widget allowed-domain settings
+  "knowledge.allowed_origins_settings_title": "Widget Allowed Domains",
+  "knowledge.allowed_origins_settings_desc": "Register the domains where the chat Widget may be embedded. Leave empty to allow all domains (development use only).",
+  "knowledge.allowed_origins_input_placeholder": "https://shop.example.com",
+  "knowledge.allowed_origins_add": "Add",
+  "knowledge.allowed_origins_empty": "No allowed domains registered",
+  "knowledge.allowed_origins_invalid_https": "URL must start with https://",
+  "knowledge.allowed_origins_invalid_wildcard": "Domains with a wildcard (*) cannot be registered from this form",
+  "knowledge.allowed_origins_duplicate": "Already registered",
+  "knowledge.allowed_origins_saved": "✅ Allowed domains saved",
+  "knowledge.allowed_origins_save_error": "❌ Failed to save. Please try again.",
+
   // Tabs
   "knowledge.tab_list": "Knowledge List",
   "knowledge.tab_text": "Text Input",

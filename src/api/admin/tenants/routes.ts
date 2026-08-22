@@ -250,6 +250,16 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       faq_answer_hint: z.string().max(200).nullable().optional(),
       // GID 1216274591838389: 初回ログインオンボーディングの回答業種（設定時にonboarding_completed_atも自動更新）
       onboarding_industry: z.enum(onboardingIndustryValues).optional(),
+      // LAUNCH: ウィジェット許可オリジンのテナント自己設定。super_admin用updateTenantSchemaと
+      // 同じ検証（https://始まりのみ）を使う。ワイルドカードは originCheck.ts と
+      // security-policy.ts の判定不一致を避けるためUI側で入力を拒否する想定（バックエンドは
+      // super_admin用と同じ検証のみでワイルドカード自体は文字列として許可される）。
+      allowed_origins: z
+        .array(
+          z.string().regex(/^https:\/\//, "URLはhttps://で始まる必要があります")
+        )
+        .max(20)
+        .optional(),
     });
     const parsed = bodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -284,15 +294,21 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         setClauses.push(`onboarding_industry = $${params.length}`);
         setClauses.push(`onboarding_completed_at = NOW()`);
       }
+      if (fields.allowed_origins !== undefined) { params.push(fields.allowed_origins); setClauses.push(`allowed_origins = $${params.length}`); }
       setClauses.push(`updated_at = NOW()`);
       params.push(tenantId);
       const result = await db.query(
         `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length}
-         RETURNING id, name, features, lemonslice_agent_id, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at`,
+         RETURNING id, name, features, lemonslice_agent_id, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, allowed_origins`,
         params
       );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
+      }
+      // allowed_originsはインメモリのtenantStoreも参照されるため即時反映する
+      // （未指定なら呼ばない。空配列指定=制限全解除と未指定=変更なしを区別する）。
+      if (fields.allowed_origins !== undefined) {
+        updateTenantAllowedOrigins(tenantId, fields.allowed_origins);
       }
       return res.json(result.rows[0]);
     } catch (err) {

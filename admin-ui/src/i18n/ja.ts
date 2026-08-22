@@ -79,6 +79,18 @@ const ja = {
   "knowledge.faq_hint_saved": "✅ 入力例を保存しました",
   "knowledge.faq_hint_save_error": "❌ 保存に失敗しました。もう一度お試しください。",
 
+  // LAUNCH: テナント自身によるWidget許可ドメイン設定
+  "knowledge.allowed_origins_settings_title": "Widgetの許可ドメイン設定",
+  "knowledge.allowed_origins_settings_desc": "チャットWidgetを設置してよいドメインを登録します。空欄のままにすると全ドメインで動作します（開発用途のみ推奨）。",
+  "knowledge.allowed_origins_input_placeholder": "https://shop.example.com",
+  "knowledge.allowed_origins_add": "追加",
+  "knowledge.allowed_origins_empty": "許可ドメインが登録されていません",
+  "knowledge.allowed_origins_invalid_https": "URLはhttps://で始まる必要があります",
+  "knowledge.allowed_origins_invalid_wildcard": "このフォームからはワイルドカード（*）を含むドメインは登録できません",
+  "knowledge.allowed_origins_duplicate": "既に登録されています",
+  "knowledge.allowed_origins_saved": "✅ 許可ドメインを保存しました",
+  "knowledge.allowed_origins_save_error": "❌ 保存に失敗しました。もう一度お試しください。",
+
   // Tabs
   "knowledge.tab_list": "ナレッジ一覧",
   "knowledge.tab_text": "テキスト入力",

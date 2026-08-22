@@ -671,6 +671,71 @@ describe("Tenant Admin Routes", () => {
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("no_fields");
     });
+
+    // LAUNCH: allowed_originsのテナント自己設定（PR#814のupdateTenantAllowedOriginsを再利用）
+    it("client_adminがallowed_originsを更新でき、インメモリへ即時反映される", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, allowed_origins: ["https://new-shop.example.com"] }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: ["https://new-shop.example.com"] });
+      expect(res.status).toBe(200);
+      expect(res.body.allowed_origins).toEqual(["https://new-shop.example.com"]);
+      expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("tenant1", ["https://new-shop.example.com"]);
+    });
+
+    it("http://始まりのoriginは400で拒否する", async () => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: ["http://insecure.example.com"] });
+      expect(res.status).toBe(400);
+      expect(mockDb.query).not.toHaveBeenCalled();
+    });
+
+    it("allowed_origins未指定の更新ではupdateTenantAllowedOriginsを呼ばない（フィールド省略と空配列の区別）", async () => {
+      const callsBefore = (mockUpdateTenantAllowedOrigins as jest.Mock).mock.calls.length;
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, onboarding_industry: "auto" }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ onboarding_industry: "auto" });
+      expect(res.status).toBe(200);
+      expect((mockUpdateTenantAllowedOrigins as jest.Mock).mock.calls.length).toBe(callsBefore);
+    });
+
+    it("空配列を指定すると制限を全解除でき、インメモリにも反映される（未指定との区別）", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, allowed_origins: [] }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: [] });
+      expect(res.status).toBe(200);
+      expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("tenant1", []);
+    });
+
+    it("他テナントのoriginsは書き換えられない（tenant_idはJWTのapp_metadataからのみ取得、bodyのtenant_idは無視）", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, allowed_origins: ["https://own.example.com"] }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ allowed_origins: ["https://own.example.com"], tenant_id: "other-tenant" });
+      expect(res.status).toBe(200);
+      // JWTのtenant_id("t1")で呼ばれ、body.tenant_idは無視される
+      expect(mockUpdateTenantAllowedOrigins).toHaveBeenLastCalledWith("tenant1", ["https://own.example.com"]);
+    });
   });
 
   // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも

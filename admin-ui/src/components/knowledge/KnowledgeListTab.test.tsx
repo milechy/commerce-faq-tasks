@@ -212,4 +212,26 @@ describe("KnowledgeListTab", () => {
     // CATEGORY_LABEL_MAP の inventory ラベル
     expect(await screen.findByText("在庫・車両情報")).toBeTruthy();
   });
+
+  // LAUNCH: Widget許可ドメイン設定パネル（client_admin専用、super_adminは既存のSettingsTabで管理）
+  it("client_adminにはWidget許可ドメイン設定パネルが表示される", async () => {
+    vi.mocked(fetchWithAuth).mockReturnValue(mockList([]));
+    renderTab();
+
+    await waitFor(() => screen.getByText("🔒 Widgetの許可ドメイン設定"));
+  });
+
+  it("super_adminにはWidget許可ドメイン設定パネルが表示されない（/admin/tenants/:idのSettingsTabで管理するため）", async () => {
+    vi.mocked(useAuth).mockReturnValue(createAuthMock({
+      user: { id: "1", email: "admin@example.com", role: "super_admin", tenantId: "tenant-abc", tenantName: "テスト店舗" },
+      isSuperAdmin: true,
+    }));
+    vi.mocked(fetchWithAuth).mockReturnValue(mockList([]));
+    renderTab();
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchWithAuth)).toHaveBeenCalled();
+    });
+    expect(screen.queryByText("🔒 Widgetの許可ドメイン設定")).toBeNull();
+  });
 });
