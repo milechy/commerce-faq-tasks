@@ -145,3 +145,70 @@ describe('POST /v1/admin/ai-assist/chat — trackUsage計測', () => {
     expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /v1/admin/ai-assist/chat — 公開配布されうるJWTでのロール検査（roleAuthMiddleware配線の回帰防止）", () => {
+  beforeEach(() => {
+    process.env.GROQ_API_KEY = "test-groq-key";
+    mockTrackUsage.mockReset();
+    mockFetch.mockReset();
+  });
+
+  function makeAppWithRawSupabaseUser(supabaseUser: unknown) {
+    const app = express();
+    app.use(express.json());
+    // モジュール冒頭の supabaseAuthMiddleware モック（top of file）は
+    // `req.supabaseUser = req._mockUser ?? null` で上書きするため、
+    // ここでは _mockUser 経由で「widget/anonトークンがdecodeされた実在ペイロード」を注入する。
+    // req.supabaseUser へ直接セットすると mock に上書きされ、常にnull扱いの偽陽性になる。
+    app.use((req: any, _res: any, next: any) => {
+      req._mockUser = supabaseUser;
+      next();
+    });
+    registerAdminAiAssistRoutes(app);
+    return app;
+  }
+
+  it("widgetセッショントークンのdecode結果（purpose='widget-session'、app_metadataなし）は403で拒否されGroqを呼ばない", async () => {
+    const res = await request(
+      makeAppWithRawSupabaseUser({ sub: "widget-tenant-a", purpose: "widget-session" })
+    )
+      .post("/v1/admin/ai-assist/chat")
+      .send({ message: "FAQの登録方法は？" });
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it("Supabase anon key相当のdecode結果（role='anon'、app_metadataなし）は403で拒否されGroqを呼ばない", async () => {
+    const res = await request(
+      makeAppWithRawSupabaseUser({ role: "anon", aud: "authenticated" })
+    )
+      .post("/v1/admin/ai-assist/chat")
+      .send({ message: "FAQの登録方法は？" });
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("app_metadata.roleが未知の文字列（改ざん/不正値）は403で拒否される", async () => {
+    const res = await request(
+      makeAppWithRawSupabaseUser({ app_metadata: { role: "editor", tenant_id: "tenant-a" } })
+    )
+      .post("/v1/admin/ai-assist/chat")
+      .send({ message: "FAQの登録方法は？" });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("app_metadata.roleがclient_adminでもtenant_idが空文字の場合は403（roleAuthMiddlewareのfail-closed）", async () => {
+    const res = await request(
+      makeAppWithRawSupabaseUser({ app_metadata: { role: "client_admin", tenant_id: "" } })
+    )
+      .post("/v1/admin/ai-assist/chat")
+      .send({ message: "FAQの登録方法は？" });
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});

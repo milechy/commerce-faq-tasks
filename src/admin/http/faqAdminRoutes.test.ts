@@ -283,3 +283,68 @@ describe("DELETE /admin/faqs/:id — faq_embeddings 連鎖削除 (F1)", () => {
     expect(mockQuery).not.toHaveBeenCalled();
   });
 });
+
+describe("500エラー応答のサニタイズ（D1c: detail: String(err) 撤去の回帰防止）", () => {
+  const DB_ERROR = new Error(
+    "relation \"faq_docs\" does not exist: SELECT * FROM faq_docs WHERE tenant_id=$1 [password=hunter2]"
+  );
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("GET /admin/faqs: DBエラー時にスタックトレース/SQL文字列を含まない汎用メッセージを返す", async () => {
+    mockQuery.mockRejectedValueOnce(DB_ERROR);
+    const res = await request(makeApp())
+      .get("/admin/faqs")
+      .set("Authorization", bearerOf(CLIENT_A));
+
+    expect(res.status).toBe(500);
+    expect(res.body).not.toHaveProperty("detail");
+    expect(res.body).not.toHaveProperty("stack");
+    expect(JSON.stringify(res.body)).not.toMatch(/SELECT|password|relation/i);
+    expect(res.body.message).toMatch(/取得に失敗しました/);
+  });
+
+  it("GET /admin/faqs/:id: DBエラー時に内部情報を含まない", async () => {
+    mockQuery.mockRejectedValueOnce(DB_ERROR);
+    const res = await request(makeApp())
+      .get("/admin/faqs/1")
+      .set("Authorization", bearerOf(CLIENT_A));
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toMatch(/SELECT|password|relation/i);
+  });
+
+  it("POST /admin/faqs: DBエラー時に内部情報を含まない", async () => {
+    mockQuery.mockRejectedValueOnce(DB_ERROR);
+    const res = await request(makeApp())
+      .post("/admin/faqs")
+      .set("Authorization", bearerOf(CLIENT_A))
+      .send({ question: "q", answer: "a" });
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toMatch(/SELECT|password|relation/i);
+  });
+
+  it("PUT /admin/faqs/:id: DBエラー時に内部情報を含まない", async () => {
+    mockQuery.mockRejectedValueOnce(DB_ERROR); // UPDATE本体（所有チェックはWHERE句のtenant_id条件で兼ねる）
+    const res = await request(makeApp())
+      .put("/admin/faqs/1")
+      .set("Authorization", bearerOf(CLIENT_A))
+      .send({ question: "q2", answer: "a2" });
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toMatch(/SELECT|password|relation/i);
+  });
+
+  it("DELETE /admin/faqs/:id: DBエラー時に内部情報を含まない", async () => {
+    mockQuery.mockRejectedValueOnce(DB_ERROR);
+    const res = await request(makeApp())
+      .delete("/admin/faqs/1")
+      .set("Authorization", bearerOf(CLIENT_A));
+
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toMatch(/SELECT|password|relation/i);
+  });
+});
