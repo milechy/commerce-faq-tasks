@@ -125,7 +125,7 @@ import {
 import { searchTool } from "../../src/agent/tools/searchTool";
 import { synthesizeAnswer } from "../../src/agent/tools/synthesisTool";
 import { getActiveRulesForTenant } from "../../src/api/admin/tuning/tuningRulesRepository";
-import { evaluateSession, SessionNotFoundError } from "../../src/agent/judge/judgeEvaluator";
+import { evaluateSession, SessionNotFoundError, SessionTooShortError } from "../../src/agent/judge/judgeEvaluator";
 import { sanitizeInput } from "../../src/middleware/inputSanitizer";
 import { applyPromptFirewall } from "../../src/middleware/promptFirewall";
 import { guardOutput } from "../../src/middleware/outputGuard";
@@ -442,7 +442,7 @@ describe("Flow 3: Judge evaluateSession → Gemini → DB persistence", () => {
     expect(callGeminiJudge).not.toHaveBeenCalled();
   });
 
-  it("evaluateSession skips evaluation for single-message sessions", async () => {
+  it("evaluateSession throws SessionTooShortError for single-message sessions (障害ではなく評価対象外を示すため、nullではなくthrow)", async () => {
     MOCK_POOL.query
       .mockResolvedValueOnce({
         rows: [{ id: "internal-uuid-2", tenant_id: "test-tenant" }],
@@ -453,9 +453,7 @@ describe("Flow 3: Judge evaluateSession → Gemini → DB persistence", () => {
         rowCount: 1,
       });
 
-    const result = await evaluateSession(SESSION_ID);
-
-    expect(result).toBeNull();
+    await expect(evaluateSession(SESSION_ID)).rejects.toThrow(SessionTooShortError);
     expect(callGeminiJudge).not.toHaveBeenCalled();
   });
 });

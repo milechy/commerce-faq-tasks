@@ -27,6 +27,7 @@ jest.mock("../../src/agent/judge/judgeEvaluator", () => ({
   evaluateSession: jest.fn(),
   SessionTenantMismatchError: class SessionTenantMismatchError extends Error {},
   SessionNotFoundError: class SessionNotFoundError extends Error {},
+  SessionTooShortError: class SessionTooShortError extends Error {},
 }));
 
 import {
@@ -177,7 +178,7 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
     expect(evaluateSession).not.toHaveBeenCalled();
   });
 
-  it("returns 500 when evaluateSession returns null (e.g. 空/1通話のみで評価をスキップした場合。'不在'とは区別される — 下記オラクル防止テスト参照)", async () => {
+  it("returns 500 when evaluateSession returns null (真の内部エラー、例: Gemini呼び出し失敗。空/1通話のみのケースはSessionTooShortErrorで区別される — 下記参照)", async () => {
     (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
     (evaluateSession as jest.Mock).mockResolvedValue(null);
 
@@ -187,6 +188,23 @@ describe("1. POST /v1/admin/evaluations/trigger", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toBe("evaluation_failed");
+  });
+
+  it("returns 422 (not 500) when evaluateSession throws SessionTooShortError — 空/1通話のみのセッションは障害ではなく評価対象外として区別する", async () => {
+    const { SessionTooShortError } = jest.requireMock(
+      "../../src/agent/judge/judgeEvaluator",
+    ) as { SessionTooShortError: new (sessionId: string) => Error };
+    (checkAlreadyEvaluated as jest.Mock).mockResolvedValue(false);
+    (evaluateSession as jest.Mock).mockRejectedValue(
+      new SessionTooShortError("sess-001"),
+    );
+
+    const res = await request(makeApp())
+      .post("/v1/admin/evaluations/trigger")
+      .send({ session_id: "sess-001" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("session_too_short");
   });
 
   it("returns 400 when session_id is missing", async () => {
