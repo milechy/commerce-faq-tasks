@@ -6,7 +6,7 @@ echo "pnpm:" $(pnpm -v)
 echo "Docker:" $(docker --version 2>/dev/null || echo none)
 echo "jq:" $(jq --version 2>/dev/null || echo none)
 echo
-echo "# Checking Docker Desktop..."
+echo "# Checking Docker runtime..."
 docker info >/dev/null 2>&1 && echo ok || echo warn
 echo "# Checking ES..."
 curl -fsS http://localhost:9200 >/dev/null && echo ok || echo warmup

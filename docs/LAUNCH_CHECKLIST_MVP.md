@@ -707,7 +707,7 @@ curl -s -X POST http://localhost:3000/search \
    ```bash
    docker stats
    ```
-   → メモリ/CPU が逼迫している場合、Docker Desktop 設定を調整
+   → メモリ/CPU が逼迫している場合、Docker ランタイムのリソース割り当てを調整
 
 3. **TypeScript コンパイルエラー**:
    ```bash
@@ -718,7 +718,7 @@ curl -s -X POST http://localhost:3000/search \
 4. **環境依存の問題**:
    - macOS バージョン
    - Node.js バージョン（20.x 推奨）
-   - Docker Desktop バージョン
+   - Docker ランタイムの種類とバージョン（`docker version` / `docker context ls`）
 
 ---
 
