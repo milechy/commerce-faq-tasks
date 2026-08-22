@@ -43,6 +43,12 @@ export function createStripeWebhookHandler(db: any, logger: pino.Logger) {
     }
 
     try {
+      const isNewEvent = await _recordWebhookEvent(event, db);
+      if (!isNewEvent) {
+        logger.info({ eventId: event.id, eventType: event.type }, '[webhook] duplicate event, skipped');
+        res.json({ received: true, duplicate: true });
+        return;
+      }
       await _handleStripeEvent(event, db, logger);
       res.json({ received: true });
     } catch (err) {
@@ -50,6 +56,21 @@ export function createStripeWebhookHandler(db: any, logger: pino.Logger) {
       res.status(500).json({ error: 'handler_error' });
     }
   };
+}
+
+/**
+ * event.id を stripe_webhook_events に記録し、初回受信かどうかを返す。
+ * ON CONFLICT DO NOTHING で重複INSERTを無視し、rowCount で新規/既知を判定する
+ * （usageTracker.ts の request_id 冪等パターンと同じ方式）。
+ */
+async function _recordWebhookEvent(event: any, db: any): Promise<boolean> {
+  const result = await db.query(
+    `INSERT INTO stripe_webhook_events (event_id, event_type)
+     VALUES ($1, $2)
+     ON CONFLICT (event_id) DO NOTHING`,
+    [event.id, event.type]
+  );
+  return result.rowCount > 0;
 }
 
 async function _handleStripeEvent(event: any, db: any, logger: pino.Logger): Promise<void> {

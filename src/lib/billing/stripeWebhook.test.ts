@@ -31,7 +31,9 @@ function makeReqRes(overrides: {
 }
 
 describe('createStripeWebhookHandler', () => {
-  const mockDb     = { query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }) };
+  // rowCount: 1 が既定 = stripe_webhook_events への冪等INSERTが「新規」として通る状態。
+  // 重複挙動を検証するテストでは個別に rowCount: 0 をmockする。
+  const mockDb     = { query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }) };
   const mockLogger = {
     warn:  jest.fn(),
     error: jest.fn(),
@@ -102,7 +104,7 @@ describe('createStripeWebhookHandler', () => {
       subscription: 'sub_abc123',
       amount_due:   1000,
     };
-    const event = { type: 'invoice.payment_succeeded', data: { object: invoice } };
+    const event = { id: 'evt_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
     const stripeMock = require('stripe');
     stripeMock.mockImplementationOnce(() => ({
@@ -133,7 +135,7 @@ describe('createStripeWebhookHandler', () => {
       subscription: 'sub_abc456',
       amount_due:   2000,
     };
-    const event = { type: 'invoice.payment_failed', data: { object: invoice } };
+    const event = { id: 'evt_002', type: 'invoice.payment_failed', data: { object: invoice } };
 
     const stripeMock = require('stripe');
     stripeMock.mockImplementationOnce(() => ({
@@ -159,7 +161,7 @@ describe('createStripeWebhookHandler', () => {
 
   it('customer.subscription.deleted イベントでテナントを非アクティブ化する', async () => {
     const subscription = { id: 'sub_deleted_001' };
-    const event = { type: 'customer.subscription.deleted', data: { object: subscription } };
+    const event = { id: 'evt_003', type: 'customer.subscription.deleted', data: { object: subscription } };
 
     const stripeMock = require('stripe');
     stripeMock.mockImplementationOnce(() => ({
@@ -185,5 +187,88 @@ describe('createStripeWebhookHandler', () => {
       expect.objectContaining({ subscriptionId: 'sub_deleted_001' }),
       expect.any(String)
     );
+  });
+
+  describe('冪等性: event.id の重複', () => {
+    it('stripe_webhook_events への冪等INSERTを event.id / event.type で行う', async () => {
+      const invoice = { id: 'inv_010', subscription: 'sub_idem_001', amount_due: 500 };
+      const event = { id: 'evt_idem_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
+
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementationOnce(() => ({
+        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+      }));
+
+      const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(mockDb.query).toHaveBeenCalledWith(
+        expect.stringContaining('ON CONFLICT (event_id) DO NOTHING'),
+        ['evt_idem_001', 'invoice.payment_succeeded']
+      );
+    });
+
+    it('同一 event.id の再送では副作用（DB更新等）をスキップし received:true, duplicate:true を返す', async () => {
+      const invoice = { id: 'inv_011', subscription: 'sub_idem_002', amount_due: 700 };
+      const event = { id: 'evt_idem_002', type: 'invoice.payment_succeeded', data: { object: invoice } };
+
+      // 冪等INSERTが ON CONFLICT に当たった状態（rowCount: 0）＝ 既に処理済み
+      const dedupDb = { query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }) };
+
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementationOnce(() => ({
+        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+      }));
+
+      const handler = createStripeWebhookHandler(dedupDb as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(res._body).toEqual({ received: true, duplicate: true });
+      // dedup INSERT の1回だけが呼ばれ、payment_succeeded の billing_status 更新クエリは呼ばれない
+      expect(dedupDb.query).toHaveBeenCalledTimes(1);
+      expect(dedupDb.query).not.toHaveBeenCalledWith(
+        expect.stringContaining("billing_status = 'paid'"),
+        expect.anything()
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId: 'evt_idem_002', eventType: 'invoice.payment_succeeded' }),
+        expect.any(String)
+      );
+    });
+
+    it('署名不正の場合は冪等チェックより前に拒否される（重複INSERTしない）', async () => {
+      const dedupDb = { query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }) };
+      const stripeMock = require('stripe');
+      stripeMock.mockImplementationOnce(() => ({
+        webhooks: {
+          constructEvent: jest.fn().mockImplementation(() => {
+            throw new Error('No signatures found matching the expected signature');
+          }),
+        },
+      }));
+
+      const handler = createStripeWebhookHandler(dedupDb as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from('{"type":"test"}'),
+        headers: { 'stripe-signature': 'invalid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(400);
+      expect(dedupDb.query).not.toHaveBeenCalled();
+    });
   });
 });
