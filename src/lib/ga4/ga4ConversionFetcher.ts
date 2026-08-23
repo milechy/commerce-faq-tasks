@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { v5 as uuidv5 } from "uuid";
+import { createHash } from "crypto";
 import { runGa4ConversionReport } from "./ga4Client";
 import { logger } from "../logger";
 import { recordAndDedupe } from "../posthog/eventIdDedupe";
@@ -8,7 +8,23 @@ import { recordAndDedupe } from "../posthog/eventIdDedupe";
 // 文字列キー(`ga4_${propertyId}_${date}`)しか持たないため、固定の名前空間UUIDから
 // 決定的に UUID を生成する(v5)。同じ入力から常に同じ UUID になることで
 // ON CONFLICT (event_id) の重複排除(recordAndDedupe)が同期の再実行をまたいで機能する。
+//
+// npm の `uuid` パッケージ(v13)は ESM only で、jest のデフォルト transform では
+// import できない(このファイルを経由する既存の tests/phase-a/ga4SyncRoutesAll.test.ts
+// が SyntaxError で落ちる)。jest.config.cjs の transformIgnorePatterns は
+// 全テストに影響する共有設定のため、本PRの範囲では変更せず、
+// RFC 4122 v5 を Node 標準の crypto だけで実装する(依存追加なし)。
 const GA4_EVENT_NAMESPACE = "3022cb2e-ebde-46c3-9de3-55221e7c9bed";
+
+function uuidV5(name: string, namespace: string): string {
+  const namespaceBytes = Buffer.from(namespace.replace(/-/g, ""), "hex");
+  const hash = createHash("sha1").update(namespaceBytes).update(name, "utf8").digest();
+  const bytes = Buffer.from(hash.subarray(0, 16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50; // version 5
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80; // variant (RFC 4122)
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 export interface Ga4ConversionSummary {
   propertyId: string;
@@ -33,7 +49,7 @@ export async function fetchGa4Conversions(
     for (const row of rows) {
       await recordAndDedupe(
         {
-          eventId: uuidv5(`ga4:${tenantId}:${propertyId}:${row.date}`, GA4_EVENT_NAMESPACE),
+          eventId: uuidV5(`ga4:${tenantId}:${propertyId}:${row.date}`, GA4_EVENT_NAMESPACE),
           tenantId,
           source: "ga4",
           eventType: "macro",
