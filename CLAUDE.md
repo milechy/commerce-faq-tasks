@@ -37,6 +37,9 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 - pnpm test → all pass
 - pnpm test:e2e → mobile viewport passes
 - Codex Gate → P0/P1 none
+- **追加した機能に到達する経路がある。** API を足したなら呼ぶUI/ツールが、ツールを足したなら
+  呼ばせる導線が、同じPRに入っている。「後続PRでUIを繋ぐ」は**到達しないコードを本番に置くことと同義**
+  （上の5項目は到達しないコードでも全て通る。実例は「絶対にやってはいけないこと」15）。
 
 ## Anti-Slop
 - ragExcerpt.slice(0, 200) 必須
@@ -111,7 +114,7 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | チャット送信・sessionId・履歴窓・`targetTenantId`・エラー文言 | `admin-ui/src/lib/useAgentChatTransport.ts` |
 | 会話の保存・復元 | `admin-ui/src/lib/chatSessionStore.ts` |
 | Enter送信・IME合成の扱い | `admin-ui/src/lib/utils.ts` の `shouldSubmitOnEnter` |
-| 構造化カードの追加 | `useAgentChatTransport.ts` の `card.kind` に `kind` を足す |
+| 構造化カードの追加 | **3層すべてに同じフィールド形状を書く**（サーバ／フロントの境界を跨ぐため型を共有できず手動同期）。①`actionExecutor.ts` の `*CardPayload` 型 + `ActionCardPayload` union ②`admin-ui/src/lib/useAgentChatTransport.ts` の `AgentActionCard` union ③`copilot-preview/index.tsx` の `Card` union + `a.card?.kind === "..."` の変換分岐。`kind` のみ **サーバ snake_case → クライアント camelCase** に変換し、他は `Omit<XAgentActionCard, "kind">` で再利用して二重定義を避ける（`weekly_summary` → `weeklySummary` が基準）。**1層でも漏れると型は通るのに描画されない。** |
 | エージェントのツール追加 | `src/api/admin/agent/toolDefinitions.ts` + `actionExecutor.ts` の `switch` に `case` + `copilot-preview/index.tsx` の `REAL_TOOL_LABEL`（**この3点セット**。ラベル漏れは生の英語ツール名が画面に出る。網羅性を強制するテストが無く、人力で守る唯一の箇所） |
 | ファイル添付（コンポーザの📎／ドラッグ＆ドロップ） | `admin-ui/src/lib/bookPdfUpload.ts` の検証 + `pdfUpload` カードの進捗表示を拡張。**第2の添付経路を作らない** |
 | ツール内でのプラン機能判定 | 注入済み `db` に `queryTenantPlan` + `planHasFeature`。`tenantHasFeature` は内部で `getPool()` を呼び、テストのモックPoolと食い違う |
@@ -160,7 +163,13 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | 優先度の3段階表現 | `admin-ui/src/lib/tuningPriority.ts`（閾値・代表値を他所に書かない） |
 
 **既知の破れ（是正前に触るなら前提を確認する）**: 自動生成ルールの無断有効化 / 採用済み返答が回答生成に未到達 /
-一致判定が半角カンマ区切りの部分一致のみ / ツール結果500字打ち切りによる一覧欠落。
+一致判定が半角カンマ区切りの部分一致のみ / ツール結果500字打ち切りによる一覧欠落 /
+**`approved_at` を書くのは `approveTuningRule`・`rejectTuningRule`（`evaluationsRepository.ts`）のみで、
+チャット経由の `updateRule` は書かない。** 前者のエンドポイント自体は `super_admin` / `client_admin`
+双方に開いているが（`evaluations/routes.ts` の `ALLOWED_EVALUATION_ROLES`）、呼び出す旧UI
+（`AIReportTab.tsx` / `SuggestedRulesCard.tsx`）が super_admin 限定のため、店主が実際に使える唯一の
+承認経路（チャット）だけが承認時刻を残さない。`approved_at` を before/after の境界に使う効果測定
+（`analytics/ruleEffect.ts`）は、チャット承認したルールを永久に「未承認」として扱う。
 詳細と受け入れ条件: `docs/TUNING_RULE_CHAT_REQUIREMENTS.md`
 
 ## 絶対にやってはいけないこと
@@ -207,12 +216,19 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     （前例: `pre_dispatch` の Enterprise 制限がUIのみで `livekitTokenRoutes` に強制が無かった）。
 15. **動線として閉じていないツールを足す。** 一覧を返す手段が無いのに id 必須の `activate_avatar` だけがある状態は、
     チャットからは実行不能で「あるのに使えない」。ツールは**ユーザーが会話だけで完了できる単位**で追加する。
+    **同じことが API と UI の間でも起きる。** `GET /v1/admin/analytics/rule-effect/:ruleId` は
+    DiD推定・信頼区間・母数ゲートまで実装され全テスト緑のまま、`admin-ui` 側に呼び出しが1件も無い状態で
+    マージされた（PR #869）。**「作った」と「届いた」は別。** 実装前に「誰がどの画面から呼ぶか」を
+    1行で答えられること（Definition of Done の到達可能性）。
 16. **`AT TIME ZONE` を片側だけ書く。** `timestamptz` カラムとの比較は往復変換が必須。
     サーバTZ依存の実装は**本番でのみ実際の時刻とズレ、数値はもっともらしく出るため気づけない**
     （`src/lib/date/weekRange.ts` は process TZ に一切依存しない実装で、この事故を回避している）。
 17. **チャットに出す集計値をLLMの生成文のまま表示する。** 数値・期間・件数はサーバが構造化データ
     （card）として返し、LLMは解釈・提案のみを担う。丸め・省略・語り換えが構造的に起こり得るため
     （例: `get_weekly_briefing`。詳細: `docs/WEEKLY_SUMMARY_REQUIREMENTS.md`）。
+    `text` と `card` は**同一オブジェクトから組み立てる**（2箇所で計算すると必ず食い違う）。
+    **既知の違反**: `get_analytics_summary` / `get_conversion_summary` / `get_monitoring_summary` は
+    数値を扱いながらカード化されておらず自然文のみを返す（是正対象）。新しい数値ツールはこれらに倣わない。
 18. **チャットUIからバックエンドを直接fetchする経路を足すとき、previewMode中のテナントスコープ
     (`?tenant=`)を載せ忘れる。** エージェントツール経由の呼び出しは `targetTenantId` が自動で載るが、
     直接fetch（`generateAvatarCandidates`・`matchAvatarVoice`・`uploadUrl`のような、500字制約や
@@ -348,6 +364,10 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 
 - **回帰テストを消さない。** 既に直したバグ（IME誤送信、previewMode のテナントスコープ漏れ、
   super_admin バイパス）は、テストが唯一の再発防止装置。
+- **書いた回帰テストが実際に噛むことを確認する。** 修正を一時的に戻して**そのテストが赤くなること**を
+  見てから復元する。通ることだけを確認したテストは、条件を取り違えていても緑のままになる。
+  実例: 効果測定の打ち切り開示テストは、`truncated` を `false` 固定に戻して初めて
+  「片側だけが上限を超えた場合を見ていない」ことが判明した（PR #872）。
 - **正常系だけで通さない。** 外部API・DB書き込みは「一部失敗」「全件失敗」「タイムアウト」を必ず書く。
   特に**一部失敗時に表示件数と実件数が一致すること**（黙って成功と表示しない）。
 - **権限の境界を必ずテストする。** client_admin / super_admin / previewMode の3ロールで、
