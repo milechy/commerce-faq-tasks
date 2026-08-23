@@ -1253,6 +1253,140 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByText(/集計時点: 不明/)).toBeTruthy();
   });
 
+  // GID 1217752900578379 (R4): ルール効果(get_tuning_rule_effect)カード。
+  // 統計計算自体はサーバ側(ruleEffect.test.ts)で検証済みのため、ここでは描画のみを確認する。
+  describe("rule_effect カード", () => {
+    it("母数充足のときはDiD推定値・95%信頼区間・参考差分が描画される", async () => {
+      mockAgent({
+        reply: "効果はこちらです。",
+        actions: [
+          {
+            tool: "get_tuning_rule_effect",
+            result: "指示ルール（ID: 42）の効果: 効いている可能性が高いです\n推定差分: 5.2点（95%信頼区間: 1.1〜9.3）",
+            card: {
+              kind: "rule_effect",
+              ruleId: 42,
+              approvedAt: "2026-08-01T00:00:00.000Z",
+              truncated: false,
+              analyzedSessions: 40,
+              comparison: { didEstimate: 5.2, ci95Low: 1.1, ci95High: 9.3, naiveTreatmentDelta: 8.5 },
+              progress: null,
+            },
+          },
+        ],
+      });
+
+      await send("ルール42の効果を教えて");
+
+      expect(await screen.findByText("効いている可能性が高いです")).toBeTruthy();
+      expect(screen.getByText(/5\.2点（95%信頼区間: 1\.1〜9\.3）/)).toBeTruthy();
+      expect(screen.getByText(/8\.5点/)).toBeTruthy();
+    });
+
+    // CLAUDE.md 禁止34: 母数不足のときは差分・率・パーセント・矢印を一切出さず到達条件のみ。
+    it("回帰: 母数不足のときは到達条件のみが描画され、数値(%・矢印・0埋め)が一切出ない", async () => {
+      mockAgent({
+        reply: "まだ判定できません。",
+        actions: [
+          {
+            tool: "get_tuning_rule_effect",
+            result: "指示ルール（ID: 42）はまだ効果を判定できません（判定に必要な会話数が不足しています）\n・承認後・該当する会話: 現在2件 / 必要5件、現ペースであと約10日",
+            card: {
+              kind: "rule_effect",
+              ruleId: 42,
+              approvedAt: "2026-08-01T00:00:00.000Z",
+              truncated: false,
+              analyzedSessions: 6,
+              comparison: null,
+              progress: [
+                { group: "afterTreatment", groupLabel: "承認後・該当する会話", currentN: 2, requiredN: 5, etaDays: 10 },
+                { group: "beforeControl", groupLabel: "承認前・該当しない会話", currentN: 4, requiredN: 5, etaDays: null },
+              ],
+            },
+          },
+        ],
+      });
+
+      await send("ルール42の効果を教えて");
+
+      expect(await screen.findByText("まだ判定できません（判定に必要な会話数が不足しています）")).toBeTruthy();
+      expect(screen.getByText(/承認後・該当する会話: 現在2件 \/ 必要5件（現ペースであと約10日）/)).toBeTruthy();
+      expect(screen.getByText(/承認前・該当しない会話: 現在4件 \/ 必要5件/)).toBeTruthy();
+      // 信頼区間・推定差分(母数充足時のみの文言)が混入していない
+      expect(screen.queryByText(/信頼区間/)).toBeNull();
+      expect(screen.queryByText(/推定差分/)).toBeNull();
+    });
+
+    it("信頼区間の上限が0未満のときは「逆効果の可能性」を赤系トーンで表示する", async () => {
+      mockAgent({
+        reply: "効果はこちらです。",
+        actions: [
+          {
+            tool: "get_tuning_rule_effect",
+            result: "指示ルール（ID: 42）の効果: 逆効果の可能性があります",
+            card: {
+              kind: "rule_effect",
+              ruleId: 42,
+              approvedAt: "2026-08-01T00:00:00.000Z",
+              truncated: false,
+              analyzedSessions: 40,
+              comparison: { didEstimate: -6, ci95Low: -10, ci95High: -2, naiveTreatmentDelta: -3 },
+              progress: null,
+            },
+          },
+        ],
+      });
+
+      await send("ルール42の効果を教えて");
+
+      expect(await screen.findByText("逆効果の可能性があります")).toBeTruthy();
+      expect(screen.queryByText("効いている可能性が高いです")).toBeNull();
+    });
+
+    it("truncated=trueのときは「直近N件のセッションで判定しています」を表示する(無言の打ち切り禁止)", async () => {
+      mockAgent({
+        reply: "効果はこちらです。",
+        actions: [
+          {
+            tool: "get_tuning_rule_effect",
+            result: "指示ルール（ID: 42）の効果: まだ判定できません（差が誤差の範囲内です）",
+            card: {
+              kind: "rule_effect",
+              ruleId: 42,
+              approvedAt: "2026-08-01T00:00:00.000Z",
+              truncated: true,
+              analyzedSessions: 5000,
+              comparison: { didEstimate: 2, ci95Low: -3, ci95High: 7, naiveTreatmentDelta: 2 },
+              progress: null,
+            },
+          },
+        ],
+      });
+
+      await send("ルール42の効果を教えて");
+
+      expect(await screen.findByText(/直近5000件のセッションで判定しています/)).toBeTruthy();
+    });
+
+    it("未承認のルールは効果カードを描画しない(効果欄自体を出さない)", async () => {
+      mockAgent({
+        reply: "このルールはまだ承認されていません。承認後に効果を確認できます",
+        actions: [
+          {
+            tool: "get_tuning_rule_effect",
+            result: "このルールはまだ承認されていません。承認後に効果を確認できます",
+          },
+        ],
+      });
+
+      await send("ルール42の効果を教えて");
+
+      await screen.findByText("このルールはまだ承認されていません。承認後に効果を確認できます");
+      expect(screen.queryByText(/推定差分/)).toBeNull();
+      expect(screen.queryByText(/まだ判定できません（判定に必要な会話数が不足しています）/)).toBeNull();
+    });
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {
