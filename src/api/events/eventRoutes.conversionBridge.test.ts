@@ -213,6 +213,7 @@ describe('bridgeConversionEvents', () => {
     ]);
     expect(mockRecordOutcome).not.toHaveBeenCalled();
   });
+
   it('chat_conversion以外のevent_typeでは resolve も INSERT も行われない', async () => {
     await bridgeConversionEvents(mockDb, 'tenant-1', { chatSessionId: 'conv-1' }, [
       { event_type: 'page_view', event_data: {} },

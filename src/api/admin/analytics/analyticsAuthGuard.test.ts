@@ -47,6 +47,7 @@ const TENANT_SCOPED_ROUTES = [
   '/v1/admin/analytics/conversions',
   '/v1/admin/analytics/knowledge-attribution',
   '/v1/admin/analytics/events',
+  '/v1/admin/analytics/measurement-health',
 ];
 
 // All routes including super_admin-only endpoints (cv-status, avatar-settings-summary, flow-transitions)
