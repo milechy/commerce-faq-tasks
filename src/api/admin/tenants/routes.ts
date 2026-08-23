@@ -439,7 +439,13 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
   app.get("/v1/admin/tenants", tenantAuth, requireSuperAdmin, async (_req: Request, res: Response) => {
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, conversion_types, created_at, updated_at FROM tenants ORDER BY created_at DESC`
+        `SELECT t.id, t.name, t.plan, t.is_active, t.allowed_origins, t.system_prompt,
+                t.billing_enabled, t.billing_free_from, t.billing_free_until, t.features,
+                t.conversion_types, t.created_at, t.updated_at,
+                (SELECT COUNT(*)::int FROM tenant_api_keys k
+                 WHERE k.tenant_id = t.id AND k.is_active) AS api_key_count
+         FROM tenants t
+         ORDER BY t.created_at DESC`
       );
       return res.json({ tenants: result.rows, total: result.rows.length });
     } catch (err) {

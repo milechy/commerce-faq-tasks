@@ -83,6 +83,33 @@ describe("Tenant Admin Routes", () => {
       expect(res.status).toBe(200);
       expect(res.body.tenants).toHaveLength(1);
     });
+
+    it("includes api_key_count reflecting only active keys", async () => {
+      // carnation相当: アクティブ2件・失効1件 → api_key_countは2
+      mockDb.query.mockResolvedValueOnce({
+        rows: [
+          { id: "carnation", name: "Carnation", plan: "starter", is_active: true, created_at: new Date(), updated_at: new Date(), api_key_count: 2 },
+          { id: "empty-tenant", name: "Empty", plan: "starter", is_active: true, created_at: new Date(), updated_at: new Date(), api_key_count: 0 },
+        ],
+      });
+      const res = await request(app)
+        .get("/v1/admin/tenants")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.tenants[0].api_key_count).toBe(2);
+      expect(res.body.tenants[1].api_key_count).toBe(0);
+    });
+
+    it("aggregates api_key_count via a subquery scoped to active keys per tenant", async () => {
+      mockDb.query.mockResolvedValueOnce({ rows: [] });
+      await request(app)
+        .get("/v1/admin/tenants")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+      const sql = mockDb.query.mock.calls[0][0] as string;
+      expect(sql).toMatch(/tenant_api_keys/);
+      expect(sql).toMatch(/api_key_count/);
+      expect(sql).toMatch(/k\.is_active/);
+    });
   });
 
   describe("POST /v1/admin/tenants", () => {
