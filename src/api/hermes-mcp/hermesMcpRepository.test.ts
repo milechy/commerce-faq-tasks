@@ -49,6 +49,14 @@ describe("searchConversations", () => {
     expect(args).toEqual(["carnation", 50]); // デフォルトlimit=50
   });
 
+  it("PR-3: 学習データ汚染防止のためsource='user'以外のセッションを常に除外する", async () => {
+    const query = mockQuery([]);
+    await searchConversations({ tenantId: "carnation" });
+
+    const [sql] = query.mock.calls[0];
+    expect(sql).toContain("s.metadata->>'source' = 'user'");
+  });
+
   it("query指定時: ILIKE条件を追加する", async () => {
     const query = mockQuery([]);
     await searchConversations({ tenantId: "carnation", query: "保証" });

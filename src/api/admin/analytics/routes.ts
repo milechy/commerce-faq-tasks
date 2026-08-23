@@ -678,6 +678,7 @@ export function registerAnalyticsRoutes(app: Express): void {
                MAX(created_at) AS last_cv_at
              FROM conversion_attributions
              WHERE created_at > NOW() - INTERVAL '30 days'
+               ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}
              GROUP BY tenant_id
            ) ca_stats ON ca_stats.tenant_id = t.id
            LEFT JOIN (
@@ -839,6 +840,7 @@ export function registerAnalyticsRoutes(app: Express): void {
               AND cm.role = 'assistant'
               AND cm.created_at >= NOW() - $2::interval
               ${sourceFilterClause}
+              ${userSourceClause("cs")}
           ),
           previous_period AS (
             SELECT
@@ -855,6 +857,7 @@ export function registerAnalyticsRoutes(app: Express): void {
               AND cm.created_at >= NOW() - ($2::interval * 2)
               AND cm.created_at <  NOW() - $2::interval
               ${sourceFilterClause}
+              ${userSourceClause("cs")}
           ),
           current_agg AS (
             SELECT

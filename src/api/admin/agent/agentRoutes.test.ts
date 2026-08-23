@@ -180,6 +180,10 @@ const mockFetchConversionSummary = jest.fn();
 jest.mock('../analytics/summaryQueries', () => ({
   fetchAnalyticsSummary: (...args: any[]) => mockFetchAnalyticsSummary(...args),
   fetchConversionSummary: (...args: any[]) => mockFetchConversionSummary(...args),
+  // PR-3: get_weekly_briefing の集計クエリにsource='user'絞り込みを追加した際に実配線した
+  userSourceClause: (alias: string) => `AND ${alias}.metadata->>'source' = 'user'`,
+  userSourceExists: (sessionIdExpr: string, tenantIdExpr: string, chatSessionsColumn = 'session_id') =>
+    `AND EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.${chatSessionsColumn} = ${sessionIdExpr} AND cs.tenant_id = ${tenantIdExpr} AND cs.metadata->>'source' = 'user')`,
 }));
 
 // logger モック
@@ -2610,6 +2614,42 @@ describe('POST /v1/admin/agent/chat', () => {
       // 修正前の条件式が紛れ込んでいないことも確認する(巻き戻しの検出)
       expect(tuningSql).not.toContain('approved_at IS NULL');
       expect(tuningSql).not.toContain('rejected_at IS NULL');
+    });
+
+    it('PR-3: 会話数(今週/前週)・品質スコアのクエリにsource="user"絞り込みが入っている', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-source-filter',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+      mockQuery.mockResolvedValue({ rows: [{ n: 0 }] });
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-source-filter' });
+
+      // Promise.allSettled の0,1,2番目(sessions/prevSessions/eval)
+      const [sessionsSql] = mockQuery.mock.calls[0]!;
+      const [prevSessionsSql] = mockQuery.mock.calls[1]!;
+      const [evalSql] = mockQuery.mock.calls[2]!;
+      expect(sessionsSql).toContain("chat_sessions.metadata->>'source' = 'user'");
+      expect(prevSessionsSql).toContain("chat_sessions.metadata->>'source' = 'user'");
+      expect(evalSql).toContain("cs.metadata->>'source' = 'user'");
     });
   });
 

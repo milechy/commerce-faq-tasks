@@ -113,6 +113,8 @@ export interface SessionSummary {
   // Phase52f: コンバージョン記録
   outcome: string | null;
   outcome_recorded_at: string | null;
+  // GID 1216970103691946: e2e/chat-test/実ユーザーを画面上で見分けるため
+  source: string | null;
 }
 
 const VALID_SORT_BY = ['last_message_at', 'message_count', 'score'] as const;
@@ -248,6 +250,7 @@ export async function getSessions(
        s.message_count,
        s.outcome,
        s.outcome_recorded_at,
+       s.metadata->>'source' AS source,
        COALESCE(LEFT(m.content, 50), '') AS first_message_preview
      FROM chat_sessions s
      LEFT JOIN LATERAL (

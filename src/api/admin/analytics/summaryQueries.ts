@@ -188,7 +188,8 @@ export async function fetchAnalyticsSummary({
     `SELECT COUNT(*) AS total_knowledge_gaps
      FROM knowledge_gaps
      WHERE created_at >= NOW() - $1::interval
-     ${kgTenantClause}`,
+     ${kgTenantClause}
+     ${userSourceExists("knowledge_gaps.session_id", "knowledge_gaps.tenant_id", "id")}`,
     kgParams,
   );
 
