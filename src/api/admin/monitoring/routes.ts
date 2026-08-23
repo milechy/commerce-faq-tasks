@@ -4,6 +4,7 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { logger } from "../../../lib/logger";
+import { userSourceClause } from "../analytics/summaryQueries";
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
@@ -42,7 +43,8 @@ export async function computeKpis(
   const totalRes = await db.query(
     `SELECT COUNT(*) AS total
      FROM chat_sessions
-     WHERE started_at >= NOW() - $1::INTERVAL ${tenantClause}`,
+     WHERE started_at >= NOW() - $1::INTERVAL ${tenantClause}
+       ${userSourceClause("chat_sessions")}`,
     params
   );
   const total = parseInt(totalRes.rows[0]?.total ?? "0", 10);
@@ -57,7 +59,8 @@ export async function computeKpis(
      FROM chat_sessions
      WHERE started_at >= NOW() - $1::INTERVAL
        AND message_count >= 2
-       ${tenantClause}`,
+       ${tenantClause}
+       ${userSourceClause("chat_sessions")}`,
     params
   );
   const completed = parseInt(completedRes.rows[0]?.completed ?? "0", 10);
@@ -81,7 +84,8 @@ export async function computeKpis(
      WHERE cm.role = 'assistant'
        AND cm.created_at >= NOW() - $1::INTERVAL
        AND (${fallbackCondition})
-       ${tenantFilter ? `AND cm.tenant_id = $2` : ""}`,
+       ${tenantFilter ? `AND cm.tenant_id = $2` : ""}
+       ${userSourceClause("cs")}`,
     fallbackParams
   );
   const fallbackCount = parseInt(fallbackRes.rows[0]?.fallback_count ?? "0", 10);

@@ -6,6 +6,7 @@
 // このファイルは「同意済みと確認された tenantId」を渡された前提で動く。
 
 import { getPool } from "../../lib/db";
+import { userSourceClause } from "../admin/analytics/summaryQueries";
 
 export interface HermesConversationMessage {
   sessionId: string; // chat_sessions.session_id (アプリ側の文字列ID)
@@ -39,7 +40,12 @@ export async function searchConversations(
   const pool = getPool();
   const limit = Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
-  const conditions: string[] = [`s.tenant_id = $1`];
+  // 学習データ汚染防止: Hermesにはe2e/chat-test由来のセッションを一切渡さない
+  // (userSourceClauseは"AND ..."形式を返すため、conditions配列の要素としてはAND抜きで積む)
+  const conditions: string[] = [
+    `s.tenant_id = $1`,
+    userSourceClause("s").replace(/^AND /, ""),
+  ];
   const args: unknown[] = [params.tenantId];
 
   if (params.query?.trim()) {

@@ -111,3 +111,30 @@ describe("GET /v1/admin/analytics/conversions — source='user'フィルタ", ()
     }
   });
 });
+
+describe("GET /v1/admin/analytics/cv-status — source='user'フィルタ (PR-3)", () => {
+  it("conversion_attributions のCVカウントにsource='user'絞り込みが入っている", async () => {
+    const res = await request(makeApp()).get("/v1/admin/analytics/cv-status");
+    expect(res.status).toBe(200);
+
+    const allSql = mockQuery.mock.calls.map((c) => c[0] as string);
+    const caQuery = allSql.find((sql) => /FROM conversion_attributions/.test(sql));
+    expect(caQuery).toBeDefined();
+    expect(caQuery).toContain(USER_SOURCE_SQL);
+  });
+});
+
+describe("GET /v1/admin/analytics/knowledge-attribution — source='user'フィルタ (PR-3)", () => {
+  it("current_period・previous_period 両方のCTEにsource='user'絞り込みが入っている", async () => {
+    const res = await request(makeApp()).get(
+      "/v1/admin/analytics/knowledge-attribution?tenant_id=carnation",
+    );
+    expect(res.status).toBe(200);
+
+    const allSql = mockQuery.mock.calls.map((c) => c[0] as string);
+    const kaQuery = allSql.find((sql) => /current_period AS/.test(sql));
+    expect(kaQuery).toBeDefined();
+    // current_period・previous_period 両方のCTEに絞り込みが入っている(2箇所)ことを確認
+    expect(kaQuery!.split(USER_SOURCE_SQL).length - 1).toBe(2);
+  });
+});
