@@ -29,6 +29,13 @@ export interface SaveMessageParams {
    * 後方互換のため。呼び出し元がトラフィック種別を判定できない場合の安全側デフォルト)。
    */
   trafficSource?: TrafficSource;
+  /**
+   * G6: widget EventTracker が生成する visitor_id(localStorage 'r2c_vid')。
+   * chat_sessions.visitor_id に「セッション新規作成時のみ」記録する(trafficSource と
+   * 同じ理由。2回目以降のメッセージでは既存値を保持する)。テナントを跨いで衝突しうる
+   * ため、単独ではキーにせず必ず (tenant_id, visitor_id) の複合で扱うこと。
+   */
+  visitorId?: string;
 }
 
 /**
@@ -45,18 +52,19 @@ export async function saveMessage(params: SaveMessageParams): Promise<void> {
   // これにより「最初にどの経路でセッションが作られたか」がぶれずに残る。
   const initialMetadata = JSON.stringify({ source: params.trafficSource ?? "user" });
   await pool.query(
-    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count, prompt_variant_id, prompt_variant_name, metadata)
-     VALUES ($1, $2, NOW(), 1, $3, $4, $5::jsonb)
+    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count, prompt_variant_id, prompt_variant_name, metadata, visitor_id)
+     VALUES ($1, $2, NOW(), 1, $3, $4, $5::jsonb, $6)
      ON CONFLICT (tenant_id, session_id) DO UPDATE SET
        last_message_at = NOW(),
        message_count = chat_sessions.message_count + 1,
        prompt_variant_id = COALESCE(chat_sessions.prompt_variant_id, EXCLUDED.prompt_variant_id),
        prompt_variant_name = COALESCE(chat_sessions.prompt_variant_name, EXCLUDED.prompt_variant_name),
+       visitor_id = COALESCE(chat_sessions.visitor_id, EXCLUDED.visitor_id),
        metadata = CASE
          WHEN chat_sessions.metadata ? 'source' THEN chat_sessions.metadata
          ELSE COALESCE(chat_sessions.metadata, '{}'::jsonb) || EXCLUDED.metadata
        END`,
-    [params.tenantId, params.sessionId, params.promptVariantId ?? null, params.promptVariantName ?? null, initialMetadata],
+    [params.tenantId, params.sessionId, params.promptVariantId ?? null, params.promptVariantName ?? null, initialMetadata, params.visitorId ?? null],
   );
 
   // 2. chat_sessions の UUID を取得
