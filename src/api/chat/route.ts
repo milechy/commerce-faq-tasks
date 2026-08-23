@@ -194,6 +194,7 @@ export function createChatHandler(logger: Logger) {
       role: "user",
       content: body.message,
       trafficSource,
+      visitorId: body.visitor_id || undefined,
     }).catch((err) =>
       logger.warn({ err }, "[chat-history] save user message failed")
     );
@@ -344,6 +345,7 @@ export function createChatHandler(logger: Logger) {
         },
         ragSources: result.meta?.ragSources,
         trafficSource,
+        visitorId: body.visitor_id || undefined,
       }).catch((err) =>
         logger.warn({ err }, "[chat-history] save assistant message failed")
       );

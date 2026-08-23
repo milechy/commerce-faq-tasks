@@ -37,6 +37,7 @@ import { getSessions, getActiveEscalations, getMessages, saveMessage, resolveEsc
 import { deleteSession } from '../chat-history/deleteSessionRepository';
 import { getEvaluationsBySession } from '../evaluations/evaluationsRepository';
 import { computeKpis } from '../monitoring/routes';
+import { userSourceClause, userSourceExists } from '../analytics/summaryQueries';
 import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
@@ -2100,19 +2101,22 @@ export async function executeToolCall(
         const [sessionsRes, prevSessionsRes, evalRes, cvRes, faqRes, tuningRes, gapsRes] = await Promise.allSettled([
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
-             WHERE tenant_id = $1 AND started_at >= $2`,
+             WHERE tenant_id = $1 AND started_at >= $2
+               ${userSourceClause("chat_sessions")}`,
             [tenantId, weekStart],
           ),
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
              WHERE tenant_id = $1
                AND started_at >= $2
-               AND started_at < $3`,
+               AND started_at < $3
+               ${userSourceClause("chat_sessions")}`,
             [tenantId, prevWeekStart, prevWeekEnd],
           ),
           db.query(
             `SELECT AVG(score) AS avg FROM conversation_evaluations
-             WHERE tenant_id = $1 AND evaluated_at >= $2 AND score > 0`,
+             WHERE tenant_id = $1 AND evaluated_at >= $2 AND score > 0
+               ${userSourceExists("conversation_evaluations.session_id", "conversation_evaluations.tenant_id")}`,
             [tenantId, weekStart],
           ),
           db.query(
@@ -3151,7 +3155,7 @@ export async function executeToolCall(
           );
         }
 
-        await recordOutcome({
+        const recorded = await recordOutcome({
           sessionDbId: resolved.session.id,
           tenantId,
           outcome: outcomeValue,
@@ -3159,6 +3163,11 @@ export async function executeToolCall(
           // 持たないため null に正規化する。HTTP経路(routes.ts)と同じ規約)。
           recordedBy: actor.email || null,
         });
+        if (!recorded) {
+          // 直前のresolveSessionByShortIdでは存在確認済みのため通常到達しないが、
+          // 競合(削除)に備える。
+          return truncate(`セッション[${display}]が見つかりませんでした`);
+        }
         return truncate(`セッション[${display}]の成果を「${outcomeValue}」として記録しました`);
       } catch (err) {
         logger.warn('[actionExecutor] record_session_outcome failed', err);

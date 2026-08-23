@@ -932,6 +932,9 @@
   /* --- GID 1216275508391900: 有人スタッフへのエスカレーション導線 --- */
   var escalateBtn = el('button', { className: 'escalate-btn', type: 'button' });
   escalateBtn.textContent = '🙋 有人スタッフに相談する';
+  // R0-②: 会話がまだ無い状態でのエスカレーション（空セッション防止）を防ぐため、
+  // アシスタントの応答を受け取るまでは無効化しておく（renderMessages で解除）。
+  escalateBtn.disabled = true;
   var escalateRow = el('div', { className: 'escalate-row' }, [escalateBtn]);
   panel.appendChild(escalateRow);
 
@@ -2307,6 +2310,15 @@
   }
 
   function renderMessages() {
+    // R0-②: エスカレーションボタンは会話開始前(空セッション)では無効。
+    // scriptedモード/Anamクライアント側LLM/通常の/api/chatのいずれの経路で
+    // assistant応答が来ても、ここで一元的に有効化する(escalated/pending中は
+    // setEscalateBtnState 側の表示を上書きしない)。
+    if (!escalated && !escalatePending) {
+      var hasAssistantReply = messages.some(function (m) { return m.role === 'assistant'; });
+      escalateBtn.disabled = !hasAssistantReply;
+    }
+
     // DOM再構築でscrollTopがリセットされるため、クリア前に最下部付近かどうかを保存
     var wasNearBottom = (messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight) < 50;
 
@@ -2697,12 +2709,20 @@
       return { role: m.role, content: m.content };
     });
 
+    // G6: _tracker は /api/widget/features 取得後の非同期初期化のため、
+    // ページ表示直後の最初の1通では未生成のことがある。trackConversion と同じ
+    // localStorage直読みにフォールバックし、visitor_id の欠落を減らす。
+    var chatVisitorId = (_tracker && _tracker.visitorId) ? _tracker.visitorId : undefined;
+    if (!chatVisitorId) {
+      try { chatVisitorId = localStorage.getItem('r2c_vid') || undefined; } catch (_e) {}
+    }
+
     var requestBody = JSON.stringify({
       message: text.trim(),
       conversationId: conversationId,
       history: historyForApi,
       // Phase57: 行動コンテキスト注入のためvisitor_idを送信
-      visitor_id: (_tracker && _tracker.visitorId) ? _tracker.visitorId : undefined,
+      visitor_id: chatVisitorId,
     });
 
     var headers = {
@@ -2887,7 +2907,7 @@
   }
 
   escalateBtn.addEventListener('click', function () {
-    if (escalated || escalatePending) return;
+    if (escalated || escalatePending || escalateBtn.disabled) return;
     escalatePending = true;
     setEscalateBtnState('接続中…', true);
     fetch(apiBase + '/api/chat/escalate', {
@@ -3622,6 +3642,10 @@
     var payload = {
       visitor_id: visitorId || 'unknown',
       session_id: sessionId || 'unknown',
+      // GID 1216970103691946 (PR-5): chat_sessions.session_id と同じ値を送り、
+      // conversion_attributions を正しい chat_sessions.id に結合できるようにする。
+      // 会話が発生していないページで呼ばれることもあるため任意項目として送る。
+      chat_session_id: conversationId,
       events: [{
         event_type: 'chat_conversion',
         event_data: {

@@ -76,6 +76,18 @@ describe("GET /v1/admin/tenants/:id/analytics-summary", () => {
     }
   });
 
+  it("PR-3 (GID 1216970103691946): chat_sessions のクエリにsource='user'絞り込みが入っている", async () => {
+    await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    const sqls = chatSessionSql();
+    expect(sqls.length).toBeGreaterThan(0);
+    for (const sql of sqls) {
+      expect(sql).toContain("chat_sessions.metadata->>'source' = 'user'");
+    }
+  });
+
   it("全クエリが tenant_id で絞られる（テナント越境しない）", async () => {
     await request(app)
       .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
