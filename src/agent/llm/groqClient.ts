@@ -259,7 +259,6 @@ export async function callGroqWith429Retry(
 ): Promise<string> {
   const { maxRetries = 1, baseBackoffMs = 200, logger } = options;
 
-  const now = Date.now();
   const remainingBackoff = getGroqGlobalBackoffRemainingMs();
   if (remainingBackoff > 0) {
     // すでにグローバル backoff 中の場合は、実際の API コールを行わずに即座に 429 相当で返す。
