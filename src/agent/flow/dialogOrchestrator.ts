@@ -33,6 +33,9 @@ export interface OrchestratorResult {
   ragSources?: RagSource[]
   /** LemonSliceペルソナスワップ: queryPlanner が推定した質問カテゴリ */
   category?: string
+  /** GID 1216978855735482 (PR-13): system_prompt_variants から選ばれたvariant */
+  promptVariantId?: string | null
+  promptVariantName?: string | null
 }
 
 /**
@@ -50,7 +53,7 @@ export interface OrchestratorResult {
 export async function runDialogOrchestrator(
   input: OrchestratorInput,
 ): Promise<OrchestratorResult> {
-  const { plan, options, tenantId } = input
+  const { plan, options, tenantId, sessionId } = input
   const visitorId = options?.visitorId
   const debug = options?.debug ?? false
 
@@ -104,6 +107,7 @@ export async function runDialogOrchestrator(
     useLlmPlanner: false,
     tenantId,
     visitorId,
+    sessionId,
   })
 
   // 4) Return orchestrated result
@@ -124,5 +128,7 @@ export async function runDialogOrchestrator(
     llmUsage: searchResult.llmUsage,
     ragSources: searchResult.ragSources,
     category: searchResult.category,
+    promptVariantId: searchResult.promptVariantId,
+    promptVariantName: searchResult.promptVariantName,
   }
 }

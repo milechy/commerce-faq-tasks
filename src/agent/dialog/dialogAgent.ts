@@ -234,6 +234,8 @@ export async function runDialogTurn(
       false,
     clarifyingQuestions:
       orchestrated.clarifyingQuestions ?? multiStepPlan.clarifyingQuestions,
+    promptVariantId: orchestrated.promptVariantId,
+    promptVariantName: orchestrated.promptVariantName,
     meta: {
       multiStepPlan,
       orchestratorMode: "local",

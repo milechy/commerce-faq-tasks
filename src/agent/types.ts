@@ -47,6 +47,12 @@ export interface AgentSearchParams {
   visitorId?: string;
   /** Phase69-2: 検索結果から除外するエントリID一覧 */
   excludedIds?: string[];
+  /**
+   * GID 1216978855735482 (PR-13): A/B variant を同一セッション内で固定するための
+   * sticky key。省略時は selectVariant が Math.random() にフォールバックする
+   * (1会話が複数variantにまたがり統計が無意味になる。CLAUDE.md 禁止36)。
+   */
+  sessionId?: string;
 }
 
 /**
@@ -83,6 +89,10 @@ export interface AgentSearchResponse {
   gapSignal?: { hitCount: number; topScore: number };
   /** Phase53: Groq API実トークン数 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number };
+  /** GID 1216978855735482 (PR-13): system_prompt_variants から選ばれたvariant。
+   *  未設定(0/1variant)時はnull(「割当なし」と「割当あり」を区別する)。 */
+  promptVariantId?: string | null;
+  promptVariantName?: string | null;
   debug: AgentDebug;
 }
 
