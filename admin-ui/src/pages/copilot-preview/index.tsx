@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
@@ -204,7 +204,11 @@ type Card =
   // 必要があるため、kind(UI向けにcamelCaseへ変える)以外はそこから再利用し、手書きの
   // 二重定義を避ける。actionExecutor.ts の WeeklySummaryCardPayload とはサーバ/フロント
   // という境界を跨ぐため型を共有できないが、フィールド名・形は3箇所とも一致させること。
-  | ({ kind: "weeklySummary" } & Omit<WeeklySummaryAgentActionCard, "kind">);
+  | ({ kind: "weeklySummary" } & Omit<WeeklySummaryAgentActionCard, "kind">)
+  // ルール効果(get_tuning_rule_effect)。フィールド形状は
+  // RuleEffectAgentActionCard(useAgentChatTransport.ts)と同一に保つ必要があるため、
+  // kind(UI向けにcamelCaseへ変える)以外はそこから再利用する(weeklySummaryと同じ作法)。
+  | ({ kind: "ruleEffect" } & Omit<RuleEffectAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -766,6 +770,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "weeklySummary", asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps },
+        };
+      }
+      if (a.card?.kind === "rule_effect") {
+        const { ruleId, approvedAt, truncated, analyzedSessions, comparison, progress } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "ruleEffect", ruleId, approvedAt, truncated, analyzedSessions, comparison, progress },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -2579,6 +2591,8 @@ function CardView({
     }
     case "weeklySummary":
       return <WeeklySummaryCard card={card} />;
+    case "ruleEffect":
+      return <RuleEffectCard card={card} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -2715,6 +2729,65 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
               </div>
             ))}
           </div>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+// ルール効果(get_tuning_rule_effect)。数値はすべてサーバ集計値(card)をそのまま描画し、
+// LLMの生成文を経由しない(WeeklySummaryCardと同じ権威分離)。母数不足時は現在N/必要N/
+// 見込み日数の到達条件のみを表示し、率・%・矢印・断定語(「改善しました」等)は一切出さない
+// (CLAUDE.md「絶対にやってはいけないこと」34: 計測の土台が壊れたまま効果を数値で出さない。
+// 「点推定を単独で出さない」: 母数充足時も必ず95%信頼区間を併記する)。
+function RuleEffectCard({ card }: { card: Extract<Card, { kind: "ruleEffect" }> }) {
+  if (card.progress) {
+    return (
+      <CardShell hd={<><span>📊</span>ルール効果（ID: {card.ruleId}）</>} tone="agent">
+        <div style={{ fontSize: 14, color: "var(--foreground)" }}>
+          まだ判定できません（判定に必要な会話数が不足しています）
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {card.progress.map((p) => (
+            <div
+              key={p.group}
+              style={{
+                fontSize: 13.5,
+                color: "var(--muted-foreground)",
+                background: "var(--muted, rgba(120,120,140,0.08))",
+                borderRadius: 8,
+                padding: "8px 12px",
+              }}
+            >
+              {p.groupLabel}: 現在{p.currentN}件 / 必要{p.requiredN}件
+              {p.etaDays != null && `（現ペースであと約${p.etaDays}日）`}
+            </div>
+          ))}
+        </div>
+      </CardShell>
+    );
+  }
+
+  // 型上 comparison/progress は互いに排他だが、防御的にnullガードする(実行時の値混入対策)。
+  if (!card.comparison) return null;
+
+  const { didEstimate, ci95Low, ci95High, naiveTreatmentDelta } = card.comparison;
+  const tone = ci95Low > 0 ? "good" : ci95High < 0 ? "bad" : "agent";
+  const verdict =
+    ci95Low > 0
+      ? "効いている可能性が高いです"
+      : ci95High < 0
+        ? "逆効果の可能性があります"
+        : "まだ判定できません（差が誤差の範囲内です）";
+
+  return (
+    <CardShell hd={<><span>📊</span>ルール効果（ID: {card.ruleId}）</>} tone={tone}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>{verdict}</div>
+      <Field k="推定差分" v={`${didEstimate}点（95%信頼区間: ${ci95Low}〜${ci95High}）`} />
+      <Field k="参考（対照群との比較前の単純差分）" v={`${naiveTreatmentDelta}点`} />
+      {card.truncated && (
+        <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+          ※直近{card.analyzedSessions}件のセッションで判定しています
         </div>
       )}
     </CardShell>
