@@ -11,6 +11,7 @@ import { logger } from '../../../lib/logger';
 import { decryptText } from '../../../lib/crypto/textEncrypt';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
 import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
+import { getRuleEffect } from "./ruleEffect";
 import {
   fetchAnalyticsSummary,
   fetchConversionSummary,
@@ -874,6 +875,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           previous_agg AS (
             SELECT
               chunk_id,
+              COUNT(DISTINCT session_uuid)::int AS prev_conversation_count,
               CASE
                 WHEN COUNT(DISTINCT session_uuid) > 0
                 THEN COUNT(DISTINCT CASE WHEN converted THEN session_uuid END)::float
@@ -899,7 +901,8 @@ export function registerAnalyticsRoutes(app: Express): void {
               c.avg_judge_score,
               fe.text AS raw_text,
               bu.title AS book_title,
-              COALESCE(p.prev_rate, 0) AS prev_rate
+              COALESCE(p.prev_rate, 0) AS prev_rate,
+              COALESCE(p.prev_conversation_count, 0) AS prev_conversation_count
             FROM current_agg c
             LEFT JOIN faq_embeddings fe
               ON fe.id::text = c.chunk_id AND (fe.tenant_id = $1 OR fe.tenant_id = 'global')
@@ -926,14 +929,20 @@ export function registerAnalyticsRoutes(app: Express): void {
           raw_text: string | null;
           book_title: string | null;
           prev_rate: number;
+          prev_conversation_count: number;
         };
 
         const items = (result.rows as AttrRow[]).map((row) => {
           const currentRate = row.conversion_rate ?? 0;
           const prevRate = row.prev_rate ?? 0;
           const delta = currentRate - prevRate;
-          const trend: "up" | "down" | "stable" =
-            Math.abs(delta) < 0.02 ? "stable" : delta > 0 ? "up" : "down";
+          // CLAUDE.md 禁止34: 前期間の母数が0のとき prev_rate は便宜上0扱いになっており、
+          // それを実際の「0%」と区別できないまま up/down を出すと架空のトレンドになる。
+          // 母数不足を専用の trend 値として明示する(数値・矢印を出さない)。
+          const trend: "up" | "down" | "stable" | "insufficient_data" =
+            row.prev_conversation_count === 0
+              ? "insufficient_data"
+              : Math.abs(delta) < 0.02 ? "stable" : delta > 0 ? "up" : "down";
           // タイトル: 暗号化テキストを復号し先頭50文字を表示
           const chunkTitle = row.raw_text
             ? (() => { try { return decryptText(row.raw_text).slice(0, 50); } catch { return row.raw_text.slice(0, 50); } })()
@@ -998,6 +1007,85 @@ export function registerAnalyticsRoutes(app: Express): void {
         return res
           .status(500)
           .json({ error: "ナレッジ貢献度の集計に失敗しました" });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/rule-effect/:ruleId
+  // GID 1216978677398163 (PR-14): tuning_rules 承認の効果測定（DiD比較 + 母数ゲート）
+  //   - client_admin: 自テナントのルールのみ(他テナントは404で存在有無を漏らさない)
+  //   - super_admin: 任意テナントのルールを閲覧可能
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/rule-effect/:ruleId",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
+
+      const ruleId = parseInt(req.params["ruleId"] ?? "", 10);
+      if (!Number.isFinite(ruleId)) {
+        return res.status(400).json({ error: "ruleId が不正です" });
+      }
+
+      if (!pool) {
+        return res.status(500).json({ error: "データベース接続が利用できません" });
+      }
+
+      try {
+        const result = await getRuleEffect(pool, ruleId);
+
+        if (result.status === "rule_not_found") {
+          return res.status(404).json({ error: "指定されたルールが見つかりません" });
+        }
+
+        // 越境防止: client_admin は自テナント以外のルールを見られない。
+        // 「存在しない」場合と同一の404にし、他テナントのルールIDの存在有無を漏らさない。
+        if (!isSuperAdmin && result.tenantId !== jwtTenantId) {
+          return res.status(404).json({ error: "指定されたルールが見つかりません" });
+        }
+
+        if (result.status === "not_yet_approved") {
+          return res.status(200).json({
+            rule_id: ruleId,
+            status: "not_yet_approved",
+            message: "このルールはまだ承認されていません。承認後に効果測定が可能になります。",
+          });
+        }
+
+        if (result.status === "insufficient_data") {
+          return res.status(200).json({
+            rule_id: ruleId,
+            status: "insufficient_data",
+            approved_at: result.approvedAt,
+            min_sample_size: result.minSampleSize,
+            progress: result.progress.map((p) => ({
+              group: p.group,
+              current_n: p.currentN,
+              required_n: p.requiredN,
+              eta_days: p.etaDays,
+            })),
+          });
+        }
+
+        return res.status(200).json({
+          rule_id: ruleId,
+          status: "ok",
+          approved_at: result.approvedAt,
+          comparison: result.comparison,
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/rule-effect]", err);
+        return res.status(500).json({ error: "ルール効果測定の集計に失敗しました" });
       }
     },
   );

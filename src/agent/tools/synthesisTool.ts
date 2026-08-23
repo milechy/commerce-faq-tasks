@@ -83,6 +83,13 @@ export interface SynthesisOutput {
   /** Phase46: 選択されたvariant情報 */
   variantId?: string | null;
   variantName?: string | null;
+  /**
+   * GID 1216978855735482 (PR-14): 応答生成に実際に反映された tuning_rules の id。
+   * chat_messages.metadata.applied_rule_ids に記録し、ルール効果測定(ruleEffect.ts)の
+   * 母集団判定に使う。マッチしただけで応答に反映されなかった経路(fallbackSynthesize)では
+   * 含めない。
+   */
+  appliedRuleIds?: number[];
   /** Phase53: Groq API実トークン数（取得できた場合のみ） */
   llmUsage?: GroqUsage;
 }
@@ -203,7 +210,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   if (!process.env.GROQ_API_KEY) {
     if (!items.length) {
       // FAQ なし + チューニングルールあり だが LLM なし → ルール本文を直接返す
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal };
+      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
     }
     return fallbackSynthesize(input);
   }
@@ -281,6 +288,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       llmUsage: synthResult.usage,
       variantId: selectedVariantId,
       variantName: selectedVariantName,
+      appliedRuleIds: matchedRules.length > 0 ? matchedRules.map((r) => r.id) : undefined,
       ...(shouldInjectPrinciples && usedPrinciples.length > 0
         ? {
             usedPrinciples,
@@ -291,7 +299,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   } catch {
     // フォールバック: 箇条書き
     if (!items.length) {
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal };
+      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
     }
     return { ...fallbackSynthesize(input), gapSignal };
   }

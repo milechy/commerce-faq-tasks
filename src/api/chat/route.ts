@@ -341,6 +341,8 @@ export function createChatHandler(logger: Logger) {
           rag_hit_count: gapSignal?.hitCount ?? 0,
           rag_top_score: gapSignal?.topScore ?? 0,
           knowledge_gap: isKnowledgeGap(gapSignal) || isResponseGap(content),
+          // GID 1216978677398163 (PR-14): ルール効果測定(ruleEffect.ts)の母集団判定に使う
+          applied_rule_ids: result.appliedRuleIds ?? [],
         },
         ragSources: result.meta?.ragSources,
         trafficSource,

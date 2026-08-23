@@ -159,6 +159,8 @@ export interface DialogTurnResult {
   /** GID 1216978855735482 (PR-13): system_prompt_variants から選ばれたvariant */
   promptVariantId?: string | null;
   promptVariantName?: string | null;
+  /** GID 1216978677398163 (PR-14): 応答に実際に反映された tuning_rules の id 一覧 */
+  appliedRuleIds?: number[];
 }
 
 // --- Phase8: Sales-oriented Planner types ---
