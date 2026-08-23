@@ -1,6 +1,12 @@
 // admin-ui/src/pages/admin/avatar/HermesConsentToggle.tsx
-// Phase75: Hermes Agent(会話ログ学習エージェント)へのデータ提供同意 ON/OFF トグル
+// Phase75 → GID 1216978677372391(PR-16, D1): 外部Hermes VPSへの生データ提供同意 ON/OFF トグル
 // （Client Adminのみ、自己完結型。ExcludeSearchToggleの楽観的更新+ロールバックパターンを踏襲）
+//
+// D1: データ利用同意は2階層。
+//   ①自テナント内学習(learned_memory等) = 常時ON・同意不要(このトグルの対象外)
+//   ②社外Hermes VPSへの生データ提供 = 明示同意必須(このトグルが操作するのはこちらのみ)
+// このページ(/admin/avatar)は2026-10-13まで閉鎖観察中(docs/LEGACY_UI_SUNSET.md)。
+// 閉鎖後は copilot-preview の set_hermes_consent ツールが唯一の操作経路になる。
 
 import { useEffect, useState } from "react";
 import { authFetch, API_BASE } from "../../../lib/api";
@@ -78,7 +84,7 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       setFeatures({ ...prev, ...updated.features });
       showToast(
         next
-          ? "✅ R2Cエージェントへのデータ提供に同意しました"
+          ? "✅ Hermesへのデータ提供に同意しました"
           : "✅ 同意を取り消しました",
       );
     } catch {
@@ -114,10 +120,13 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       >
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
-            🧠 R2Cエージェント 学習への同意
+            🧠 外部(Hermes)へのデータ提供同意
           </h2>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0", maxWidth: 480 }}>
-            ONにすると、貴社の過去分を含む会話ログ(QA AI・アバターの応答)がR2Cエージェントの学習・CVR向上のための分析に利用されます。OFFにすると以降の新規データ提供は停止しますが、それまでに提供済みのデータへの反映は取り消せません。
+            これは社外の分析エージェント(Hermes)へ会話ログ生データを提供するための同意です。
+            R2C社内での学習(FAQ改善・回答の自動学習)は、この同意の有無に関わらず常に行われます。
+            ONにすると、貴社の過去分を含む会話ログ(QA AI・アバターの応答)がHermesでの分析対象になります。
+            OFFにすると以降の新規データ提供は停止しますが、それまでに提供済みのデータへの反映は取り消せません。
           </p>
         </div>
         <button
@@ -127,8 +136,8 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
           aria-pressed={consentGranted}
           aria-label={
             consentGranted
-              ? "R2Cエージェントへのデータ提供同意を取り消す"
-              : "R2Cエージェントへのデータ提供に同意する"
+              ? "Hermesへのデータ提供同意を取り消す"
+              : "Hermesへのデータ提供に同意する"
           }
           style={{
             padding: "12px 28px",

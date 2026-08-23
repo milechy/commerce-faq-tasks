@@ -363,6 +363,33 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'set_hermes_consent',
+      description:
+        '外部Hermes VPS(社外の分析エージェント)への会話ログ生データ提供の同意をON/OFFする。' +
+        'これは「①自テナント内での学習(常時ON、同意不要)」とは別の、' +
+        '「②社外へのデータ提供」専用の同意であり、このツールが操作するのは②のみ。' +
+        'ONにすると翌日以降、貴社の会話ログがHermes VPSでの分析対象になる。' +
+        'OFFにすると以降の新規データ提供は止まるが、それまでに提供済みのデータは取り消せない。' +
+        'confirmed=true の場合のみ実行される。',
+      parameters: {
+        type: 'object',
+        properties: {
+          enabled: {
+            type: 'boolean',
+            description: 'true で外部提供の同意をON、false でOFF(同意取消)にする',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '変更確認フラグ（true でのみ実行）',
+          },
+        },
+        required: ['enabled', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'update_avatar_profile',
       description:
         'アバターの基本設定（名前・性格・話し方）を更新する。指定した項目だけが更新され、' +

@@ -75,6 +75,12 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // アバターの見た目が変わる、顧客が直接目にする永続コンテンツ。同じカテゴリで
   // 再保存すれば上書きで戻せるため save_tuning_rule と同じ medium。
   save_category_persona: 'medium',
+  // 外部Hermes VPSへの生データ提供同意(単一フラグ)。set_avatar_feature と同じ
+  // 「フラグを入れ直せば戻せる」形だが、OFFへ戻しても既に提供済みの過去データは
+  // 取り消せない非対称性があり、low の定義(完全に元の状態へ戻る)を満たさない。
+  // かつ社外(Hermes VPS)への継続的なデータ提供を開始させる操作のため、
+  // high(不可逆な破棄・課金・外部送出)ほどではないが low より一段重い medium に置く。
+  set_hermes_consent: 'medium',
 
   // --- high: 不可逆な破棄 / 課金 / 外部送出 ---
   delete_faq: 'high',
