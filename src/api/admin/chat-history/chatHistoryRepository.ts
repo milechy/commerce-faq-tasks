@@ -397,26 +397,27 @@ export async function getActiveEscalations(
 }
 
 /**
- * セッションをエスカレーション状態にする（存在しなければ chat_sessions を作成）。
+ * セッションをエスカレーション状態にする。
  * 既にエスカレーション済みの場合は escalated_at を上書きしない（冪等）。
+ *
+ * R0-②: 対象セッションが存在しない場合は null を返し、行を新規作成しない。
+ * 以前は ON CONFLICT DO NOTHING で無条件に chat_sessions を作成しており、
+ * メッセージを一度も送っていない訪問者がボタンを押しただけで
+ * message_count=0・metadata未設定の空セッションが量産されていた
+ * (本番実測: 未解決エスカレーション320件、全て message_count=0)。
  */
 export async function escalateSession(params: {
   tenantId: string;
   sessionId: string;
-}): Promise<{ dbSessionId: string; alreadyEscalated: boolean }> {
+}): Promise<{ dbSessionId: string; alreadyEscalated: boolean } | null> {
   const pool = getPool();
-  await pool.query(
-    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count)
-     VALUES ($1, $2, NOW(), 0)
-     ON CONFLICT (tenant_id, session_id) DO NOTHING`,
-    [params.tenantId, params.sessionId],
-  );
   const before = await pool.query<{ id: string; is_escalated: boolean }>(
     `SELECT id, is_escalated FROM chat_sessions WHERE tenant_id = $1 AND session_id = $2`,
     [params.tenantId, params.sessionId],
   );
   const row = before.rows[0];
-  const alreadyEscalated = !!row?.is_escalated;
+  if (!row) return null;
+  const alreadyEscalated = row.is_escalated;
   await pool.query(
     `UPDATE chat_sessions
      SET is_escalated = true,
@@ -425,7 +426,7 @@ export async function escalateSession(params: {
      WHERE tenant_id = $1 AND session_id = $2`,
     [params.tenantId, params.sessionId],
   );
-  return { dbSessionId: row!.id, alreadyEscalated };
+  return { dbSessionId: row.id, alreadyEscalated };
 }
 
 /** エスカレーション対応完了をマークする。tenantIdが一致しない場合はfalseを返す。 */
