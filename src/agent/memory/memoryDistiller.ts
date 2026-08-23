@@ -9,6 +9,8 @@ import pino from "pino";
 import { groqClient } from "../llm/groqClient";
 import { GPT_OSS_120B } from "../../config/groqModels";
 import { embedText } from "../llm/openaiEmbeddingClient";
+import { getPool } from "../../lib/db";
+import { getConversionTypes } from "../../api/admin/chat-history/chatHistoryRepository";
 import {
   isLearnedMemoryWriteEnabled,
   getLearnedMemoryThreshold,
@@ -84,12 +86,51 @@ async function distillConversation(
 }
 
 /**
+ * GID 1216978660043409 (PR-17, R9 / D2): セッションが「CV/outcomeを伴う会話」かを判定する。
+ * Judge スコアが高い = 売れた ではない。スコア単独で learned_memory に昇格させると、
+ * Judge が動き出した瞬間に「売れていない高スコア会話」由来の知見が大量に混入する。
+ *
+ * 判定は以下いずれかを満たすこと:
+ *   - conversion_attributions に当該セッションの行がある(構造化されたCVイベント)
+ *   - chat_sessions.outcome が設定済みで、かつテナントの conversion_types の
+ *     非成約終端2件(既定 '離脱'/'不明'、abResultsOutcomeSync.ts と同じ判定)でない
+ *
+ * abResultsOutcomeSync.ts の「非成約終端2件」判定を再利用する(第2の判定ロジックを作らない)。
+ */
+async function hasConvertingOutcome(tenantId: string, sessionId: string): Promise<boolean> {
+  const pool = getPool();
+  const result = await pool.query<{ has_attribution: boolean; outcome: string | null }>(
+    `SELECT
+       EXISTS (
+         SELECT 1 FROM conversion_attributions ca
+         WHERE ca.session_id = cs.id
+       ) AS has_attribution,
+       cs.outcome
+     FROM chat_sessions cs
+     WHERE cs.tenant_id = $1 AND cs.session_id = $2
+     LIMIT 1`,
+    [tenantId, sessionId],
+  );
+  const row = result.rows[0];
+  if (!row) return false;
+  if (row.has_attribution) return true;
+  if (!row.outcome) return false;
+
+  const conversionTypes = await getConversionTypes(tenantId);
+  const nonConvertingOutcomes = conversionTypes.slice(-2);
+  return !nonConvertingOutcomes.includes(row.outcome);
+}
+
+/**
  * 高スコア会話を蒸留して learned_memory に保存する。
  *
  * ガード:
  *   - Feature Flag (write) オフ → 何もしない
+ *     (LEARNED_MEMORY_TENANTS による段階開放は本PRで変更しない。CV/outcome判定とは
+ *      独立なゲートで、両方を満たしたテナント・セッションのみが昇格する)
  *   - judgeScore < 閾値 → 何もしない
  *   - メッセージ 2 未満 → 何もしない
+ *   - D2: CV/outcomeを伴わない会話 → 何もしない(高スコアなだけでは昇格しない)
  *   - 蒸留失敗 → 何もしない
  *
  * @returns 保存されたら true
@@ -113,6 +154,15 @@ export async function distillAndPromote(
   if (messages.length < 2) return false;
 
   try {
+    // D2: Groq課金(蒸留)の前に、CVを伴わない高スコア会話を弾く。
+    if (!(await hasConvertingOutcome(tenantId, sessionId))) {
+      logger.debug(
+        { tenantId, sessionId, judgeScore },
+        "[learnedMemory] high score but no conversion/outcome, skip",
+      );
+      return false;
+    }
+
     const qa = await distillConversation(messages);
     if (!qa) {
       logger.debug({ tenantId, sessionId }, "[learnedMemory] distill yielded no Q&A");
