@@ -3,14 +3,22 @@ import { logger } from "../logger";
 
 export type EventSource = "r2c_db" | "ga4" | "posthog";
 export type EventRank = "A" | "B" | "C" | "D";
+// conversion_attributions.conversion_type の CHECK 制約
+// (src/api/conversion/migration_conversion_attributions.sql) と一致させる。
+export type ConversionType = "purchase" | "inquiry" | "reservation" | "signup" | "other";
 
 export interface DedupeInput {
+  // conversion_attributions.event_id は UUID 型 + UNIQUE 制約
+  // (src/api/admin/tenants/migration_phase_a.sql)。UUID 形式でない値を渡すと
+  // INSERT が失敗する。
   eventId: string;
   tenantId: string;
   source: EventSource;
+  // conversion_type は NOT NULL CHECK 制約があり省略できない。
+  // 具体的な種別が分からない呼び出し元は "other" を明示的に渡すこと。
+  conversionType: ConversionType;
   eventType?: string;
   conversionValue?: number;
-  metadataJson?: string;
 }
 
 export interface DedupeResult {
@@ -26,7 +34,7 @@ export async function recordAndDedupe(
   try {
     await db.query(
       `INSERT INTO conversion_attributions
-         (event_id, tenant_id, source, event_type, conversion_value, metadata, deduplicated_at)
+         (event_id, tenant_id, source, event_type, conversion_type, conversion_value, deduplicated_at)
        VALUES ($1, $2, $3, $4, $5, $6, NOW())
        ON CONFLICT (event_id) DO UPDATE
          SET fired_count = conversion_attributions.fired_count + 1,
@@ -36,8 +44,8 @@ export async function recordAndDedupe(
         input.tenantId,
         input.source,
         input.eventType ?? "macro",
+        input.conversionType,
         input.conversionValue ?? null,
-        input.metadataJson ?? null,
       ],
     );
 

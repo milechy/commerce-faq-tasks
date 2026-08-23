@@ -115,16 +115,13 @@ import { searchPgVector } from "../../src/search/pgvector";
 import { createChatHandler } from "../../src/api/chat/route";
 import { runDialogTurn } from "../../src/agent/dialog/dialogAgent";
 import {
-  setFlowSessionMeta,
-  resetFlowSessionMeta,
-} from "../../src/agent/dialog/flowContextStore";
-import {
   setSalesSessionMeta,
   clearSalesSessionMeta,
 } from "../../src/agent/dialog/salesContextStore";
 import { searchTool } from "../../src/agent/tools/searchTool";
 import { synthesizeAnswer } from "../../src/agent/tools/synthesisTool";
 import { getActiveRulesForTenant } from "../../src/api/admin/tuning/tuningRulesRepository";
+import { approveTuningRule } from "../../src/api/admin/evaluations/evaluationsRepository";
 import { evaluateSession, SessionNotFoundError, SessionTooShortError } from "../../src/agent/judge/judgeEvaluator";
 import { sanitizeInput } from "../../src/middleware/inputSanitizer";
 import { applyPromptFirewall } from "../../src/middleware/promptFirewall";
@@ -234,50 +231,14 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
     );
   });
 
-  it("POST /api/chat returns flowState from flowContextStore (LemonSlice I-4)", async () => {
-    const SESSION_ID = "session-flowstate-i4-test";
-    const FLOW_KEY = { tenantId: "test-tenant", conversationId: SESSION_ID };
-
-    jest.spyOn(
-      require("../../src/agent/dialog/dialogAgent"),
-      "runDialogTurn"
-    ).mockResolvedValue({
-      answer: "確認です。来店予約を進めてよろしいですか？",
-      needsClarification: false,
-      clarifyingQuestions: [],
-      detectedIntents: {},
-      meta: { gapSignal: { hitCount: 1, topScore: 0.9 } },
-    });
-
-    // flowContextStore に confirm 状態をセット（langGraph パスが書き込む想定の状態を再現）
-    setFlowSessionMeta(FLOW_KEY, {
-      state: "confirm",
-      turnIndex: 2,
-      sameStateRepeats: 0,
-      clarifyRepeats: 0,
-      confirmRepeats: 1,
-      recentStates: ["answer", "confirm"],
-      lastUpdatedAt: new Date().toISOString(),
-    });
-
-    try {
-      const app = buildChatApp();
-      const res = await request(app)
-        .post("/api/chat")
-        .set("x-api-key", "test-api-key")
-        .send({ message: "予約をお願いします", sessionId: SESSION_ID });
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.flowState).toBe("confirm");
-    } finally {
-      resetFlowSessionMeta(FLOW_KEY);
-    }
-  });
-
-  it("POST /api/chat prefers salesContextStore currentStage over flowContextStore (LemonSlice I-4)", async () => {
+  // PR-10: 旧「flowContextStore からの flowState 復元」テストは、テスト自身が
+  // setFlowSessionMeta で状態を書き込んでから読み戻すだけの自己完結テストで、
+  // 実配線を何も検証していなかった（書き手は LangGraph一式のみで、それはPR-10で削除）。
+  // flowState は salesContextStore の currentStage のみが実ソースのため、
+  // そちらを実際に検証するテストに置き換える。
+  it("POST /api/chat returns flowState from salesContextStore currentStage (LemonSlice I-4)", async () => {
     const SESSION_ID = "session-flowstate-i4-sales-test";
     const SALES_KEY = { tenantId: "test-tenant", sessionId: SESSION_ID };
-    const FLOW_KEY = { tenantId: "test-tenant", conversationId: SESSION_ID };
 
     jest.spyOn(
       require("../../src/agent/dialog/dialogAgent"),
@@ -290,17 +251,7 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
       meta: { gapSignal: { hitCount: 1, topScore: 0.9 } },
     });
 
-    // sales store に propose、flow store に confirm を投入 → sales が優先されること
     setSalesSessionMeta(SALES_KEY, { currentStage: "propose" });
-    setFlowSessionMeta(FLOW_KEY, {
-      state: "confirm",
-      turnIndex: 2,
-      sameStateRepeats: 0,
-      clarifyRepeats: 0,
-      confirmRepeats: 1,
-      recentStates: ["answer", "confirm"],
-      lastUpdatedAt: new Date().toISOString(),
-    });
 
     try {
       const app = buildChatApp();
@@ -313,7 +264,6 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
       expect(res.body.data.flowState).toBe("propose");
     } finally {
       clearSalesSessionMeta(SALES_KEY);
-      resetFlowSessionMeta(FLOW_KEY);
     }
   });
 
@@ -591,6 +541,63 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
     // 1件目は含まれるが、500字の原文全体ではなく200字に切り詰められている
     expect(userPromptContent).toContain("書".repeat(50));
     expect(userPromptContent).not.toContain(longExcerpt); // 500字全文は入らない
+
+    delete process.env["GROQ_API_KEY"];
+  });
+
+  // D8/G-d: 承認したルールが実際に本番プロンプトへ入ることの端から端までの検証。
+  // これが無いと「承認 API は status だけ更新して is_active を放置」という
+  // P0(承認したのに一生本番に入らない)を単体テストでは検出できない。
+  it("D8/G-d: approveTuningRule → getActiveRulesForTenant → synthesizeAnswer のプロンプトに含まれる", async () => {
+    process.env["GROQ_API_KEY"] = "test-groq-key";
+
+    // 1) 承認 API: UPDATE 文が is_active=true を設定し、DBがそれを反映した行を返す
+    MOCK_POOL.query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: MOCK_TUNING_RULE.id,
+          tenant_id: MOCK_TUNING_RULE.tenant_id,
+          status: "active",
+          is_active: true,
+          approved_at: new Date().toISOString(),
+          rejected_at: null,
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    });
+    const approved = await approveTuningRule(MOCK_TUNING_RULE.id, MOCK_TUNING_RULE.tenant_id);
+    expect(approved).not.toBeNull();
+    expect(approved!.is_active).toBe(true);
+    const [approveSql] = MOCK_POOL.query.mock.calls[MOCK_POOL.query.mock.calls.length - 1]!;
+    expect(approveSql).toContain("is_active = true");
+
+    // 2) 本番プロンプト注入の唯一の入口。承認直後の状態(is_active=true)を
+    //    DBが返す想定で、実際にそのルールが取得できることを確認する。
+    MOCK_POOL.query.mockResolvedValueOnce({ rows: [MOCK_TUNING_RULE] });
+    const activeRules = await getActiveRulesForTenant(MOCK_TUNING_RULE.tenant_id);
+    expect(activeRules).toEqual([MOCK_TUNING_RULE]);
+
+    // 3) synthesizeAnswer: 承認済みルールが生成プロンプト文字列に実際に含まれる
+    MOCK_POOL.query.mockResolvedValueOnce({
+      rows: [{ system_prompt: null, system_prompt_variants: null }],
+      rowCount: 1,
+    });
+    jest.spyOn(
+      require("../../src/api/admin/tuning/tuningRulesRepository"),
+      "getActiveRulesForTenant"
+    ).mockResolvedValueOnce([MOCK_TUNING_RULE]);
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: "返品は7日以内です。",
+    });
+
+    await synthesizeAnswer({
+      query: "返品について教えてください",
+      items: [MOCK_HIT],
+      tenantId: MOCK_TUNING_RULE.tenant_id,
+    });
+
+    const groqCallArgs = (groqClient.callWithUsage as jest.Mock).mock.calls[0][0];
+    expect(groqCallArgs.messages[0].content).toContain(MOCK_TUNING_RULE.expected_behavior);
 
     delete process.env["GROQ_API_KEY"];
   });
