@@ -4,6 +4,8 @@ import "./config/env";
 import { pool as db } from "./lib/db";
 import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
+import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
+import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
 import express from "express";
 import multer from "multer";
 import path from "node:path";
@@ -749,6 +751,18 @@ async function startServer() {
   // Phase23: AlertEngine — 60秒周期で KPI を評価し Slack アラートを送信
   alertEngine.start();
   logger.info("[startup] AlertEngine started");
+
+  // GID 1216970103691946 (PR-11): SalesLogWriter に Notion sink を接続する。
+  // 未設定(NOTION_API_KEY / NOTION_DB_SALES_LOG_ID が無い)テナント運用も
+  // 引き続き成立させるため、設定が揃っている場合のみ接続する(best-effort)。
+  if (process.env.NOTION_API_KEY && process.env.NOTION_DB_SALES_LOG_ID) {
+    try {
+      setGlobalSalesLogWriter(new SalesLogWriter(createSalesLogNotionSink()));
+      logger.info("[startup] SalesLogWriter (Notion) initialized");
+    } catch (err) {
+      logger.warn({ err }, "[startup] SalesLogWriter (Notion) init failed (non-blocking)");
+    }
+  }
 
   // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）
   if (db && process.env.STRIPE_SECRET_KEY) {

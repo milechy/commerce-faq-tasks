@@ -110,6 +110,7 @@ const envSchema = z.object({
   NOTION_DB_FAQ_ID: z.string().optional(),
   NOTION_DB_PRODUCTS_ID: z.string().optional(),
   NOTION_DB_CLARIFY_LOG_ID: z.string().optional(),
+  NOTION_DB_SALES_LOG_ID: z.string().optional(),
   NOTION_DB_LP_POINTS_ID: z.string().optional(),
   NOTION_DB_TUNING_TEMPLATES_ID: z.string().optional(),
 
