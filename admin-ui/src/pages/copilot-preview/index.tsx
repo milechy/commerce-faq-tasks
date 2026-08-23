@@ -2316,12 +2316,16 @@ function CardView({
       return (
         <CardShell hd={<><span>🎛️</span>指示ルール一覧（{card.totalCount}件）</>}>
           {card.rules.map((r) => {
-            // P4-1: AI(judge)が提案したルールは、店主が作ったものと同じ見た目で
+            // P4-1: AI(judge/hermes)が提案したルールは、店主が作ったものと同じ見た目で
             // 並べない(出所が分からないと承認判断ができない)。is_activeだけでは
             // 未承認(pending)と却下済み(rejected)を区別できないためstatusも見る。
+            // R6: Hermes提案もJudge提案と同じ棚(tuning_rules)に着地するため、
+            // 同一の一覧・同一の承認操作の対象にしつつ、出所ラベルだけ分ける。
             const isJudgeProposal = r.source === "judge";
-            const isPendingApproval = isJudgeProposal && !r.isActive && r.status !== "rejected";
-            const isRejected = isJudgeProposal && r.status === "rejected";
+            const isHermesProposal = r.source === "hermes";
+            const isAiProposal = isJudgeProposal || isHermesProposal;
+            const isPendingApproval = isAiProposal && !r.isActive && r.status !== "rejected";
+            const isRejected = isAiProposal && r.status === "rejected";
             return (
               <div
                 key={r.id}
@@ -2330,9 +2334,10 @@ function CardView({
                 <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--muted-foreground)", flexWrap: "wrap" }}>
                   <span>{r.isActive ? "✅ 有効" : "⏸️ 無効"}</span>
                   <span>優先度: {TIER_LABEL[priorityToTier(r.priority)]}</span>
-                  {isJudgeProposal && (
+                  {isAiProposal && (
                     <span style={{ fontWeight: 700, color: "#b45309", background: "rgba(245,158,11,0.14)", borderRadius: 6, padding: "2px 8px" }}>
-                      🤖 AIの提案{isPendingApproval ? "（未承認）" : isRejected ? "（却下済み）" : ""}
+                      {isHermesProposal ? "🌐 Hermesの提案" : "🤖 AIの提案"}
+                      {isPendingApproval ? "（未承認）" : isRejected ? "（却下済み）" : ""}
                     </span>
                   )}
                 </div>
