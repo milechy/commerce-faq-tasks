@@ -215,6 +215,83 @@ describe('updateRule', () => {
     const [, updateArgs] = mockQuery.mock.calls[1];
     expect(updateArgs[4]).toBe(JSON.stringify([{ text: '2年です', style: 'plain', approved_at: '' }]));
   });
+
+  // GID 1217752900578379 (R4): approveTuningRule/rejectTuningRule と対称に、
+  // チャット経由の承認(status経由のupdateRule)でも approved_at/rejected_at を記録する。
+  // これが無いと ruleEffect.ts の before/after 境界(approved_at)が永久にNULLのままになり、
+  // チャット承認したルールの効果測定が not_yet_approved から進まない。
+  describe('approved_at / rejected_at の記録(R4)', () => {
+    it('回帰: status="active"を指定すると、approved_atはCOALESCEで初回承認のみ埋め、再承認では上書きしない', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'active' }] });
+
+      await updateRule(1, { status: 'active' }, 'tenant-abc');
+
+      const [updateSql] = mockQuery.mock.calls[1];
+      // NOW()直書きではなくCOALESCE(approved_at, NOW())であること = 既存値があれば上書きしない
+      expect(updateSql).toMatch(/approved_at\s*=\s*CASE WHEN \$6 = 'active'\s*THEN COALESCE\(approved_at, NOW\(\)\)/);
+    });
+
+    it('回帰: status="active"は同時にrejected_atをNULLに戻す(承認↔却下の対称性、両方非NULLの行を作らない)', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] });
+
+      await updateRule(1, { status: 'active' }, 'tenant-abc');
+
+      const [updateSql] = mockQuery.mock.calls[1];
+      expect(updateSql).toMatch(/rejected_at\s*=\s*CASE WHEN \$6 = 'rejected'[\s\S]*?WHEN \$6 = 'active'\s*THEN NULL/);
+    });
+
+    it('回帰: status="rejected"を指定すると、approved_atはNULLに戻り、rejected_atがCOALESCEで初回のみ埋まる', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'rejected' }] });
+
+      await updateRule(1, { status: 'rejected' }, 'tenant-abc');
+
+      const [updateSql] = mockQuery.mock.calls[1];
+      expect(updateSql).toMatch(/approved_at\s*=\s*CASE WHEN \$6 = 'active'[\s\S]*?WHEN \$6 = 'rejected'\s*THEN NULL/);
+      expect(updateSql).toMatch(/rejected_at\s*=\s*CASE WHEN \$6 = 'rejected'\s*THEN COALESCE\(rejected_at, NOW\(\)\)/);
+    });
+
+    it('statusを指定しない通常編集では、approved_at/rejected_atともにELSE分岐で既存値を維持する(数値は動かさない)', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] });
+
+      await updateRule(1, { is_active: true }, 'tenant-abc');
+
+      const [updateSql, updateArgs] = mockQuery.mock.calls[1];
+      expect(updateSql).toMatch(/approved_at\s*=\s*CASE WHEN \$6 = 'active'[\s\S]*?ELSE approved_at END/);
+      expect(updateSql).toMatch(/rejected_at\s*=\s*CASE WHEN \$6 = 'rejected'[\s\S]*?ELSE rejected_at END/);
+      expect(updateArgs[5]).toBeNull(); // $6=null → いずれのCASEもELSE分岐に落ちる
+    });
+
+    it('RETURNING句にapproved_at/rejected_at列が含まれる(呼び出し元がその場で効果測定に使うため)', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] });
+
+      await updateRule(1, { status: 'active' }, 'tenant-abc');
+
+      const [updateSql] = mockQuery.mock.calls[1];
+      expect(updateSql).toMatch(/RETURNING[\s\S]*approved_at, rejected_at/);
+    });
+
+    it('UPDATE文のプレースホルダは$7のままで、承認記録のために新しい引数を増やしていない', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] });
+
+      await updateRule(1, { status: 'active' }, 'tenant-abc');
+
+      const [updateSql, updateArgs] = mockQuery.mock.calls[1];
+      expect(updateSql).toContain('WHERE id = $7');
+      expect(updateArgs).toHaveLength(7);
+    });
+  });
 });
 
 // D7: 採用済み返答(approved_responses)が回答生成経路(getActiveRulesForTenant →
