@@ -161,20 +161,17 @@ curl -s -X POST http://localhost:3000/search \
 
 ### 2.3 対話エンドポイント（オプション）
 
+> ⚠️ **PR-10 訂正 (2026-08-23)**: `/agent.dialog` を提供していた
+> `agentDialogRoute.ts` は本番未配線の死コードと判明し、PR-10 で削除済み
+> （学習ループ監査R10/D5）。本節の手順は実行不可能。実際の対話は
+> `/api/chat` を使用すること。
+
 ```bash
-# /agent.dialog エンドポイント
+# 旧手順（現在は実行不可能・参考記録）
 curl -s -X POST http://localhost:3000/agent.dialog \
   -H 'Content-Type: application/json' \
   -d '{"message":"こんにちは","locale":"ja"}' \
   | jq '{text: .text | . [:50], route: .route}'
-```
-
-**期待結果**:
-```json
-{
-  "text": "こんにちは！ご質問をお聞かせください。",
-  "route": "20b"
-}
 ```
 
 **最小要件**: `text` が存在し、空でない
@@ -286,8 +283,13 @@ unset FF_AVATAR_FORCE_OFF
 
 **テスト**: PII導線でアヴァターが自動無効化されることを確認
 
+> ⚠️ **PR-10 訂正 (2026-08-23)**: `/agent.dialog` と `avatarPolicy.ts`
+> （`phase22.avatar.forced_off_pii` ログの発生源）は本番未配線の死コードと
+> 判明し PR-10 で削除済み。PII検出自体は `piiRouteDetector.ts` として
+> `/api/chat` に生きた形で配線されている（PR-9）。本節の手順は実行不可能。
+
 ```bash
-# PII を含むメッセージ（支払い情報）
+# 旧手順（現在は実行不可能・参考記録）
 curl -s -X POST http://localhost:3000/agent.dialog \
   -H 'Content-Type: application/json' \
   -d '{"message":"クレジットカードで支払いたい","locale":"ja"}' \
@@ -645,8 +647,12 @@ unset LEMON_SLICE_READINESS_URL
 ```
 
 **C. フォールバック動作確認**:
+
+> ⚠️ **PR-10 訂正 (2026-08-23)**: `/agent.dialog` は本番未配線の死コードと
+> 判明し PR-10 で削除済み。本節の手順は実行不可能。
+
 ```bash
-# アヴァターが失敗してもテキストUIにフォールバックすることを確認
+# 旧手順（現在は実行不可能・参考記録）
 curl -s -X POST http://localhost:3000/agent.dialog \
   -H 'Content-Type: application/json' \
   -d '{"message":"こんにちは","locale":"ja"}' \

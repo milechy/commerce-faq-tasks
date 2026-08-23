@@ -144,7 +144,12 @@ Query
 
 フォールバック: 20B 失敗 → 120B → 静的 FAQ → HITL
 
-## Dialog Flow State Machine (Phase22)
+## Dialog Flow State Machine (Phase22) — PR-10 で削除済み
+
+> ⚠️ **PR-10 訂正 (2026-08-23)**: 以下の状態機械（flowContextStore /
+> LangGraphOrchestrator）は `/api/chat`（live経路）から一度も呼ばれて
+> いない死コードと判明し、PR-10 で削除済み。実際のフロー状態は
+> `salesContextStore`（SalesFlow Pipeline、下記）が唯一の実ソース。
 
 ```mermaid
 stateDiagram-v2
@@ -336,12 +341,11 @@ VPS: 65.108.159.161 (Hetzner)
 src/
 ├── api/chat/route.ts              # /api/chat ハンドラ
 ├── agent/
-│   ├── dialog/                    # DialogAgent, FlowContext, types
-│   ├── flow/                      # DialogOrchestrator, MultiStepPlanner
-│   ├── http/                      # authMiddleware, AgentDialogOrchestrator
+│   ├── dialog/                    # DialogAgent, contextStore, types
+│   ├── flow/                      # MultiStepPlanner, searchAgent
+│   ├── http/                      # authMiddleware, agentSearchRoute
 │   ├── orchestrator/
-│   │   ├── langGraphOrchestrator.ts
-│   │   └── sales/                 # SalesFlow, IntentDetector, Rules
+│   │   └── sales/                 # SalesFlow, IntentDetector, Rules（唯一のフロー実ソース。PR-10訂正2026-08-23: langGraphOrchestrator.ts等は死コードで削除済み）
 │   └── tools/                     # searchTool
 ├── search/
 │   ├── hybrid.ts                  # ES + pgvector 並列検索

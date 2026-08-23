@@ -4,7 +4,6 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { runDialogTurn } from "../../agent/dialog/dialogAgent";
-import { peekFlowSessionMeta } from "../../agent/dialog/flowContextStore";
 import { getSalesSessionMeta } from "../../agent/dialog/salesContextStore";
 import { trackUsage } from "../../lib/billing/usageTracker";
 import type { ApiResponse, ChatAction, ChatMessage } from "../../types/contracts";
@@ -271,13 +270,10 @@ export function createChatHandler(logger: Logger) {
       }
 
       // LemonSlice I-4: フロー状態を応答に含める（アバター表情連動用、副作用なし getter）
-      // /api/chat パス（runDialogTurn）は salesContextStore を更新するためこちらが実ソース、
-      // langGraph パスでは flowContextStore をフォールバックとして参照する。
-      // "ended" は表情マッピング対象外のため flow store へフォールバック。
+      // /api/chat パス（runDialogTurn）が salesContextStore を更新する唯一の書き手。
+      // "ended" は表情マッピング対象外のため undefined を返す。
       const salesStage = getSalesSessionMeta({ tenantId, sessionId })?.currentStage;
-      const flowState =
-        (salesStage !== "ended" ? salesStage : undefined) ??
-        peekFlowSessionMeta({ tenantId, conversationId: sessionId })?.state;
+      const flowState = salesStage !== "ended" ? salesStage : undefined;
 
       const chatMessage: ChatMessage = {
         id: requestId,

@@ -11,6 +11,12 @@
 ---
 ## 10. Phase11 — Dialog Runtime / Crew Orchestrator / Planner 軽量化フック
 
+> ⚠️ **PR-10 訂正 (2026-08-23)**: 本節が指す AgentDialogOrchestrator /
+> CrewOrchestrator / LangGraphOrchestrator 一式は、学習ループ監査(R10/D5)で
+> `/api/chat`（live経路）から一度も呼ばれていない死コードと判明し、PR-10 で
+> 削除済み。本節は当時の設計記録として歴史的に残すが、現在の本番構成には
+> 該当しない。
+
 Phase11 では、Phase4 で導入した Orchestrator 群に対して「実行経路の安定化」と「パフォーマンス計測」の役割を明確にした。
 
 ### ● AgentDialogOrchestrator
@@ -39,6 +45,11 @@ Phase11 では、Phase4 で導入した Orchestrator 群に対して「実行経
   - 「Planner をどこまで Rule-based に寄せるか」の意思決定材料を提供
 
 ## 11. Phase12 — Rule-based Planner 本実装 / Fast-path 導入
+
+> ⚠️ **PR-10 訂正 (2026-08-23)**: 本節が指す `ruleBasedPlanner.ts` は
+> Phase11のOrchestrator一式にのみ依存する死コードと判明し、PR-10 で
+> 削除済み。本節は当時の設計記録として歴史的に残すが、現在の本番構成には
+> 該当しない。
 
 Phase12 では、Phase11 でスケルトンとして用意していた Rule-based Planner とログ解析を「実際に本番で使える形」に仕上げた。
 
@@ -176,6 +187,11 @@ Projects連動用のActionは削除済み。復活させる場合は別ブラン
 ---
 
 ## 9. Phase4 — Agent Orchestrator Roles（LangGraph / Planner / Safety）
+
+> ⚠️ **PR-10 訂正 (2026-08-23)**: 本節が指す LangGraph Dialog Orchestrator
+> 一式は、学習ループ監査(R10/D5)で `/api/chat`（live経路）から一度も
+> 呼ばれていない死コードと判明し、PR-10 で削除済み。本節は当時の設計記録
+> として歴史的に残すが、現在の本番構成には該当しない。
 
 ※Sales AaaSでは、Planner/Search に "promo", "campaign", "coupon", "product-intent" を追加識別。
 

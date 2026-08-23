@@ -44,11 +44,6 @@ import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
 import { evaluateSession, SessionNotFoundError, SessionTenantMismatchError, SessionTooShortError, SessionAlreadyEvaluatedError } from './judgeEvaluator';
 import { sendRewardSignal } from '../openclaw/rewardBridge';
-import {
-  getOrInitFlowSessionMeta,
-  setFlowSessionMeta,
-  resetFlowSessionMeta,
-} from '../dialog/flowContextStore';
 
 const mockCallGroq = callGeminiJudge as jest.MockedFunction<typeof callGeminiJudge>;
 const mockGetPool = getPool as jest.MockedFunction<typeof getPool>;
@@ -315,7 +310,10 @@ describe('evaluateSession', () => {
   });
 
   // Phase47-B: 評価完了後の OpenClaw-RL reward signal 配線
-  it('7. Phase47-B: 評価成功時に sendRewardSignal が正しい payload で呼ばれる', async () => {
+  // PR-10: outcome の元だった flowContextStore(terminalReason)は書き手が LangGraph一式のみで
+  // 実在しなかった（PR-10で削除）。書き手を作らず削除する側を選んだため、outcome は常に
+  // 'unknown' 固定で送られる（挙動自体は変わらない。元々 terminalReason は常に undefined だった）。
+  it('7. Phase47-B: 評価成功時に sendRewardSignal が正しい payload で呼ばれる（outcome は常に unknown 固定）', async () => {
     const mockPool = makeMockPool();
     mockGetPool.mockReturnValue(mockPool as any);
 
@@ -334,31 +332,22 @@ describe('evaluateSession', () => {
 
     mockCallGroq.mockResolvedValueOnce(makeGroqResponse({ overall_score: 75 }));
 
-    // flowContextStore に terminalReason=completed を仕込む（key = tenantId::sessionId）
-    const flowKey = { tenantId: 'tenant-reward', conversationId: 'session-reward' };
-    const meta = getOrInitFlowSessionMeta(flowKey);
-    setFlowSessionMeta(flowKey, { ...meta, terminalReason: 'completed' });
+    const result = await evaluateSession('session-reward');
+    expect(result).not.toBeNull();
 
-    try {
-      const result = await evaluateSession('session-reward');
-      expect(result).not.toBeNull();
+    await flushFireAndForget();
 
-      await flushFireAndForget();
-
-      expect(mockSendRewardSignal).toHaveBeenCalledTimes(1);
-      expect(mockSendRewardSignal).toHaveBeenCalledWith({
-        tenantId: 'tenant-reward',
-        sessionId: 'session-reward',
-        variantId: 'v-test-1',
-        score: 75,
-        outcome: 'replied', // terminalReason=completed → replied
-      });
-    } finally {
-      resetFlowSessionMeta(flowKey);
-    }
+    expect(mockSendRewardSignal).toHaveBeenCalledTimes(1);
+    expect(mockSendRewardSignal).toHaveBeenCalledWith({
+      tenantId: 'tenant-reward',
+      sessionId: 'session-reward',
+      variantId: 'v-test-1',
+      score: 75,
+      outcome: 'unknown',
+    });
   });
 
-  it('8. Phase47-B: prompt_variant_id が null / flow メタ未存在なら variantId: null, outcome: unknown', async () => {
+  it('8. Phase47-B: prompt_variant_id が null なら variantId: null, outcome: unknown', async () => {
     const mockPool = makeMockPool();
     mockGetPool.mockReturnValue(mockPool as any);
 
@@ -388,7 +377,7 @@ describe('evaluateSession', () => {
       sessionId: 'session-novariant',
       variantId: null,
       score: 80,
-      outcome: 'unknown', // flow メタ未存在（プロセス再起動後・手動評価）は中立
+      outcome: 'unknown',
     });
   });
 

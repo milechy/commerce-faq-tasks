@@ -17,8 +17,3 @@ describe("buildTenantSessionKey", () => {
     expect(buildTenantSessionKey("tenant:demo", "s1")).toBe("tenant:demo::s1");
   });
 });
-
-// flowContextStore が buildTenantSessionKey を経由することの検証は
-// ./flowContextStore.test.ts に集約した（contextStore / salesContextStore は
-// PR #819 で統一済み。flowContextStore は #837 で追随し、専用テストファイルが
-// 無かったためこのファイルに間借りしていたが、ここに移動した）。
