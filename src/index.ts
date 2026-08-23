@@ -7,6 +7,7 @@ import { alertEngine } from "./lib/alerts/alertEngine";
 import { startOpenClawHeartbeat } from "./agent/openclaw/heartbeatHandler";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
+import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
 import express from "express";
 import multer from "multer";
 import path from "node:path";
@@ -795,6 +796,17 @@ async function startServer() {
       });
     }, STUCK_JOB_CHECK_INTERVAL_MS);
     logger.info("[startup] pipelineQueue selfHeal + stuck-job monitor started");
+  }
+
+  // GID 1216970103691946 (PR-12): 離脱セッション自動評価スイープ。
+  // chat_sessions 1,041件に対し conversation_evaluations は直近30日0件だった
+  // (evaluateSessionの呼び元が本番チャットから発火しないため)。第2のJudgeは
+  // 作らず既存のevaluateSessionをそのまま15分周期で呼ぶ。既定はr2c_defaultのみ
+  // (JUDGE_SWEEP_TENANTSで段階開放、CLAUDE.md禁止35)。
+  if (db) {
+    const JUDGE_SWEEP_INTERVAL_MS = 15 * 60 * 1000; // 15分
+    judgeSweepRunner.start(JUDGE_SWEEP_INTERVAL_MS);
+    logger.info("[startup] judgeSweepRunner started (15min interval)");
   }
 }
 
