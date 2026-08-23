@@ -34,10 +34,18 @@ export function registerEscalationRoutes(app: Express, apiStack: RequestHandler[
     }
 
     try {
-      const { alreadyEscalated } = await escalateSession({
+      const escalated = await escalateSession({
         tenantId,
         sessionId: parsed.data.sessionId,
       });
+
+      if (!escalated) {
+        // R0-②: メッセージを一度も送っていないセッションはエスカレート不可
+        // (空セッション防止)。widget側は初回応答受領までボタンを無効化しているが、
+        // API直叩き等に備えてサーバ側でも同じ制約を課す。
+        return res.status(404).json({ error: "conversation_not_found" });
+      }
+      const { alreadyEscalated } = escalated;
 
       if (!alreadyEscalated) {
         const preview = `セッション: ${parsed.data.sessionId.slice(0, 20)}`;
