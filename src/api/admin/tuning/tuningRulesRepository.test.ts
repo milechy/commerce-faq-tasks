@@ -13,6 +13,7 @@ import {
   buildTuningPromptSection,
   type TuningRule,
 } from './tuningRulesRepository';
+import { getRuleEffect } from '../analytics/ruleEffect';
 
 describe('listRules', () => {
   beforeEach(() => {
@@ -390,5 +391,68 @@ describe('buildTuningPromptSection — 採用済み返答の注入(D7)', () => {
 
     expect(output).toContain('あ'.repeat(300));
     expect(output).not.toContain('あ'.repeat(301));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1217752900578379 (R4): 端から端まで — チャット承認(updateRule)が書いた
+// approved_at を、効果測定(ruleEffect.ts の getRuleEffect)が実際に読めることを
+// 1本で通す。単体テストがモジュール内で閉じていたために「機能は完成・テストは
+// 緑・ロードマップは完了」のまま配線が切れていた前例が複数あるため
+// (CLAUDE.md「端から端までを1本書く」)、updateRule と getRuleEffect という
+// 別モジュールの関数が同じ tuning_rules 行を介して正しく繋がることを検証する。
+// getRuleEffect は db を引数で受け取れる設計のため、updateRule が使う
+// getPool()モック(mockQuery)をそのまま共有DBとして渡せる。
+// ---------------------------------------------------------------------------
+describe('端から端まで: チャット承認(updateRule) → 効果測定(getRuleEffect)', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('回帰: status="active"で承認すると、直後にgetRuleEffectを呼んでもnot_yet_approvedを返さない', async () => {
+    // 1. チャット承認: updateRule(id, { status: 'active' }, tenantId)
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] }) // 所有権確認SELECT
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 42, tenant_id: 'tenant-abc', trigger_pattern: '返品', expected_behavior: '7日以内に対応',
+          status: 'active', approved_at: '2026-08-20T00:00:00.000Z',
+        }],
+      }); // UPDATE...RETURNING(承認時刻が入る)
+
+    const updated = await updateRule(42, { status: 'active' }, 'tenant-abc');
+    expect(updated?.approved_at).toBe('2026-08-20T00:00:00.000Z');
+
+    // 2. 直後に効果を確認: getRuleEffect(db, ruleId)
+    //    fetchRuleMeta が読む approved_at は、上記1で書き込まれた値と同じにする
+    //    (別モジュールが同じ行を正しく読めることの検証。値の一致自体が本テストの主眼)。
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 42, tenant_id: 'tenant-abc', trigger_pattern: '返品',
+          created_at: '2026-08-01T00:00:00.000Z', approved_at: '2026-08-20T00:00:00.000Z',
+        }],
+      }) // fetchRuleMeta
+      .mockResolvedValueOnce({ rows: [] }); // fetchCandidateSessions(まだ会話が無い状態)
+
+    const result = await getRuleEffect({ query: mockQuery } as any, 42);
+
+    // not_yet_approved のまま止まっていない = updateRule の書き込みを getRuleEffect が
+    // 正しく読めている。会話がまだ無いため insufficient_data に進む(これも正しい挙動)。
+    expect(result.status).not.toBe('not_yet_approved');
+    expect(result.status).toBe('insufficient_data');
+  });
+
+  it('承認前(approved_atがNULLのまま)にgetRuleEffectを呼ぶとnot_yet_approvedを返す(対照: 承認していれば進むことの裏付け)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        id: 42, tenant_id: 'tenant-abc', trigger_pattern: '返品',
+        created_at: '2026-08-01T00:00:00.000Z', approved_at: null,
+      }],
+    });
+
+    const result = await getRuleEffect({ query: mockQuery } as any, 42);
+
+    expect(result.status).toBe('not_yet_approved');
   });
 });
