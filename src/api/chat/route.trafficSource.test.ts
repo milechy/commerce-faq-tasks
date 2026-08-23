@@ -30,10 +30,6 @@ jest.mock("../../agent/dialog/dialogAgent", () => ({
   runDialogTurn: (...args: unknown[]) => mockRunDialogTurn(...args),
 }));
 
-jest.mock("../../agent/dialog/flowContextStore", () => ({
-  peekFlowSessionMeta: jest.fn().mockReturnValue(undefined),
-}));
-
 jest.mock("../../agent/dialog/salesContextStore", () => ({
   getSalesSessionMeta: jest.fn().mockReturnValue(undefined),
 }));

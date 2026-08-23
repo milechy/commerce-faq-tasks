@@ -16,7 +16,7 @@
 | `src/api/admin/tuning/tuningRulesRepository.ts` | チューニングルールのCRUD。`trigger_pattern → expected_behavior` 形式で保存。`priority`, `is_active`, `approved_responses[]` を持つ |
 | `src/api/admin/tuning/routes.ts` | `POST /v1/admin/tuning/suggest-rule` — Groq 8B が会話履歴からルール案を自動生成。ルール一覧/作成/更新/削除 API |
 | `src/api/admin/ai-assist/systemPrompt.ts` | `tenants` テーブルの `system_prompt` フィールドを取得し、テナント別システムプロンプトを提供 |
-| `src/agent/orchestrator/langGraphOrchestrator.ts` | `JUDGE_AUTO_EVALUATE` 環境変数でオートエバリュエーターをトリガー。Phase22フロー制御 + 安全終了保証 |
+| ~~`src/agent/orchestrator/langGraphOrchestrator.ts`~~ | ⚠️ PR-10訂正(2026-08-23): `/api/chat`から未配線の死コードだったと判明（学習ループ監査R10/D5）。PR-10で削除済み。`JUDGE_AUTO_EVALUATE`環境変数もコード上に実在しなかった |
 | `buildTuningPromptSection(rules)` (tuningRulesRepository.ts L252-260) | アクティブルールをシステムプロンプトのセクションとして整形・注入 |
 
 ### A/Bテスト基盤
@@ -66,7 +66,7 @@ taboo_violation_score   (0-100) × 20%  ← 高い = コンプライアンス良
 
 ### 自動評価ループ
 
-- **あり**: `JUDGE_AUTO_EVALUATE=true` でセッション完了後に自動評価実行  
+- ⚠️ PR-10訂正(2026-08-23): `JUDGE_AUTO_EVALUATE`はコード上に実在せず、この記述は誤り。実際の評価トリガーは呼び出し元（`/v1/admin/evaluations/*`等）を参照のこと  
 - スコアが `JUDGE_SCORE_THRESHOLD`（デフォルト60）を下回ると `suggested_rules` を `tuning_rules` テーブルに `is_active=false` でシード  
 - 管理者が `approveTuningRule()` / `rejectTuningRule()` で承認・却下 → Human-in-the-loop レビュー
 
@@ -159,13 +159,14 @@ judgeEvaluator.ts は評価前に以下を収集してプロンプトに追加:
 主要フラグ (環境変数):
 
 ```bash
-JUDGE_AUTO_EVALUATE        # Judgeの自動実行 on/off
 JUDGE_SCORE_THRESHOLD      # スコア閾値 (default: 60)
 GAP_DETECTION_ENABLED      # ギャップ検出 on/off (default: true)
 GAP_CONFIDENCE_THRESHOLD   # 信頼度閾値 (default: 0.3)
-FF_AVATAR_ENABLED          # アバター機能フラグ
-KILL_SWITCH_AVATAR         # アバター緊急停止
 ```
+
+⚠️ PR-10訂正(2026-08-23): `JUDGE_AUTO_EVALUATE`はコード上に実在しなかった。
+`FF_AVATAR_ENABLED`/`KILL_SWITCH_AVATAR`は本番未配線だった avatarPolicy.ts
+専用のフラグで、PR-10でコードごと削除済み。
 
 ### テナント別パラメータ
 
