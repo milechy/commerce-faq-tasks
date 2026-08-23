@@ -19,8 +19,13 @@ fi
 # 配列ブロック内の 'xxx', 行だけを拾うため、定数名で範囲を絞ってから quote 内を抜く。
 # 宣言行 (`... string[] = [`) は型注釈の `]` を含むため `next` でスキップし、
 # 終端は単独の `] as const` 行で判定する。中身の 'xxx' リテラルだけを抜く。
+#
+# 範囲開始は **宣言行 (`export const ...= [`) に限定する**こと。定数名が現れる行すべてを
+# 開始条件にすると、コメントでの言及や `new Set(KNOWN_DEPRECATED_GROQ_MODELS)` のような
+# 参照行でも範囲が開き、ACTIVE_GROQ_MODELS の `tier: 'instant'` / `status: 'active'` まで
+# 廃止 ID として拾って誤検知する（実際に発生した）。
 mapfile -t DEPRECATED < <(
-  awk '/KNOWN_DEPRECATED_GROQ_MODELS/{f=1; next} f && /^\] as const/{f=0} f' "$CATALOG" \
+  awk '/^export const KNOWN_DEPRECATED_GROQ_MODELS/{f=1; next} f && /^\] as const/{f=0} f' "$CATALOG" \
     | grep -oE "'[^']+'" | tr -d "'" | grep -vE '^$'
 )
 
