@@ -132,128 +132,108 @@ export interface GroqClient {
 }
 
 /**
+ * `call` / `callWithUsage` が共有する実際の HTTP 実装。
+ *
+ * 2026-08-23: 以前は 2 つのメソッドが「API キー検査 → リクエスト組み立て → エラー分類 →
+ * レスポンス検証」をそれぞれ丸ごと複製しており、差分は usage を返すかどうかだけだった。
+ * PR #847 で gpt-oss の reasoning_effort を足した際、同じ 2 行を両方へ手で入れる必要があり、
+ * 片方を忘れればその経路だけ本文が空になる（例外にならない = 無言の障害）構造だった。
+ * 実装を 1 本に統合して、次に同種の変更が来たときに同じ賭けをしなくて済むようにする。
+ *
+ * NOTE: groqClient のメソッド経由（this.callWithUsage 等）ではなくモジュールレベル関数へ
+ * 委譲している。テストが jest.spyOn(groqClient, 'call') でメソッドを差し替えるため、
+ * メソッド間の相互呼び出しにすると spy の有無で挙動が変わってしまう。
+ */
+async function performGroqCall({
+  model,
+  messages,
+  temperature,
+  maxTokens,
+}: GroqCallParams): Promise<GroqCallWithUsageResult> {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) {
+    throw new Error('GROQ_API_KEY is not set')
+  }
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: temperature ?? 0,
+      max_tokens: maxTokens ?? 512,
+      // gpt-oss は推論トークンが max_tokens を食うため effort を絞る（groqModels.ts 参照）
+      ...groqReasoningParams(model),
+    }),
+  })
+
+  if (!response.ok) {
+    const text = await response.text();
+    const bodySnippet = text.length > 500 ? `${text.slice(0, 500)}...` : text;
+
+    const retryAfterHeader = response.headers.get('retry-after');
+    let retryAfterMs: number | undefined;
+    if (retryAfterHeader) {
+      const retryAfterSeconds = Number(retryAfterHeader);
+      if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds >= 0) {
+        retryAfterMs = retryAfterSeconds * 1000;
+      }
+    }
+
+    // 分岐順序を変えないこと: 429 → 404(model_not_found) → 5xx → その他。
+    // 404 判定を 5xx より後ろへ動かすと model_not_found の分類が変わる。
+    if (response.status === 429) {
+      throw new GroqRateLimitError(response.status, bodySnippet, retryAfterMs);
+    }
+
+    if (response.status === 404 && isModelNotFoundBody(bodySnippet)) {
+      throw new GroqModelNotFoundError(response.status, bodySnippet, model);
+    }
+
+    if (response.status >= 500) {
+      throw new GroqServerError(response.status, bodySnippet);
+    }
+
+    throw new GroqBadRequestError(response.status, bodySnippet);
+  }
+
+  const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }
+
+  const content = json?.choices?.[0]?.message?.content
+  if (typeof content !== 'string') {
+    throw new Error('Groq API response has no message content')
+  }
+
+  // prompt_tokens / completion_tokens の両方が number のときだけ usage を返す。
+  // 片方でも欠けていれば undefined（callWithUsage の契約）。call からは無視される。
+  const rawUsage = json?.usage;
+  const usage: GroqUsage | undefined =
+    typeof rawUsage?.prompt_tokens === 'number' && typeof rawUsage?.completion_tokens === 'number'
+      ? { prompt_tokens: rawUsage.prompt_tokens, completion_tokens: rawUsage.completion_tokens }
+      : undefined;
+
+  return { content, usage };
+}
+
+/**
  * デフォルトの Groq クライアント実装。
  *
  * NOTE:
  * - Node 18+ で global fetch が使える前提。
  * - それ以前の環境なら、node-fetch / undici などで polyfill してください。
+ * - HTTP 実装は performGroqCall に集約済み。2 つのメソッドの違いは戻り値の形だけ。
  */
 export const groqClient: GroqClient = {
-  async call({ model, messages, temperature, maxTokens }: GroqCallParams): Promise<string> {
-    const apiKey = process.env.GROQ_API_KEY
-    if (!apiKey) {
-      throw new Error('GROQ_API_KEY is not set')
-    }
-
-    // 主の LLM 実行パスとして Groq の compound runtime を利用する
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: temperature ?? 0,
-        max_tokens: maxTokens ?? 512,
-        // gpt-oss は推論トークンが max_tokens を食うため effort を絞る（groqModels.ts 参照）
-        ...groqReasoningParams(model),
-      }),
-    })
-
-    if (!response.ok) {
-      const text = await response.text();
-      const bodySnippet = text.length > 500 ? `${text.slice(0, 500)}...` : text;
-
-      const retryAfterHeader = response.headers.get('retry-after');
-      let retryAfterMs: number | undefined;
-      if (retryAfterHeader) {
-        const retryAfterSeconds = Number(retryAfterHeader);
-        if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds >= 0) {
-          retryAfterMs = retryAfterSeconds * 1000;
-        }
-      }
-
-      if (response.status === 429) {
-        throw new GroqRateLimitError(response.status, bodySnippet, retryAfterMs);
-      }
-
-      if (response.status === 404 && isModelNotFoundBody(bodySnippet)) {
-        throw new GroqModelNotFoundError(response.status, bodySnippet, model);
-      }
-
-      if (response.status >= 500) {
-        throw new GroqServerError(response.status, bodySnippet);
-      }
-
-      throw new GroqBadRequestError(response.status, bodySnippet);
-    }
-
-    const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }
-
-    const content = json?.choices?.[0]?.message?.content
-    if (typeof content !== 'string') {
-      throw new Error('Groq API response has no message content')
-    }
-
-    return content
+  async call(params: GroqCallParams): Promise<string> {
+    return (await performGroqCall(params)).content
   },
 
-  async callWithUsage({ model, messages, temperature, maxTokens }: GroqCallParams): Promise<GroqCallWithUsageResult> {
-    const apiKey = process.env.GROQ_API_KEY
-    if (!apiKey) {
-      throw new Error('GROQ_API_KEY is not set')
-    }
-
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: temperature ?? 0,
-        max_tokens: maxTokens ?? 512,
-        // gpt-oss は推論トークンが max_tokens を食うため effort を絞る（groqModels.ts 参照）
-        ...groqReasoningParams(model),
-      }),
-    })
-
-    if (!response.ok) {
-      const text = await response.text();
-      const bodySnippet = text.length > 500 ? `${text.slice(0, 500)}...` : text;
-      const retryAfterHeader = response.headers.get('retry-after');
-      let retryAfterMs: number | undefined;
-      if (retryAfterHeader) {
-        const retryAfterSeconds = Number(retryAfterHeader);
-        if (!Number.isNaN(retryAfterSeconds) && retryAfterSeconds >= 0) {
-          retryAfterMs = retryAfterSeconds * 1000;
-        }
-      }
-      if (response.status === 429) throw new GroqRateLimitError(response.status, bodySnippet, retryAfterMs);
-      if (response.status === 404 && isModelNotFoundBody(bodySnippet)) {
-        throw new GroqModelNotFoundError(response.status, bodySnippet, model);
-      }
-      if (response.status >= 500) throw new GroqServerError(response.status, bodySnippet);
-      throw new GroqBadRequestError(response.status, bodySnippet);
-    }
-
-    const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }
-    const content = json?.choices?.[0]?.message?.content
-    if (typeof content !== 'string') {
-      throw new Error('Groq API response has no message content')
-    }
-
-    const rawUsage = json?.usage;
-    const usage: GroqUsage | undefined =
-      typeof rawUsage?.prompt_tokens === 'number' && typeof rawUsage?.completion_tokens === 'number'
-        ? { prompt_tokens: rawUsage.prompt_tokens, completion_tokens: rawUsage.completion_tokens }
-        : undefined;
-
-    return { content, usage };
+  async callWithUsage(params: GroqCallParams): Promise<GroqCallWithUsageResult> {
+    return performGroqCall(params)
   },
 }
 
