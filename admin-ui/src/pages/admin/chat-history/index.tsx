@@ -19,6 +19,7 @@ interface Session {
   message_count: number;
   first_message_preview: string;
   overallScore?: number;
+  source: string | null;
 }
 
 type SortBySession = "last_message_at" | "message_count" | "score";
@@ -377,6 +378,22 @@ export default function ChatHistoryPage() {
                     </span>
                   ) : (
                     <span style={{ fontSize: 12, color: "#4b5563" }}>—</span>
+                  )}
+                  {session.source && session.source !== "user" && (
+                    <span
+                      title="E2E/内部テストなど実ユーザー以外の会話"
+                      style={{
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        background: "rgba(148,163,184,0.15)",
+                        border: "1px solid rgba(148,163,184,0.3)",
+                        color: "#94a3b8",
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {session.source}
+                    </span>
                   )}
                 </div>
 

@@ -71,7 +71,7 @@ describe("1. 正常系 — outcome記録", () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [SESSION_ROW] })        // chat_sessions lookup
       .mockResolvedValueOnce({ rows: [TENANT_ROW_WITH_TYPES] }) // tenants conversion_types
-      .mockResolvedValueOnce({ rows: [] });                   // UPDATE chat_sessions
+      .mockResolvedValueOnce({ rows: [{ id: SESSION_ROW.id }] }); // UPDATE chat_sessions ... RETURNING id
   });
 
   it("200 + outcome + recorded_at を返す", async () => {
@@ -176,7 +176,7 @@ describe("6. super_admin 他テナントのセッション → 200", () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ ...SESSION_ROW, tenant_id: "tenant-b" }] })
       .mockResolvedValueOnce({ rows: [TENANT_ROW_WITH_TYPES] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [{ id: SESSION_ROW.id }] }); // UPDATE chat_sessions ... RETURNING id
   });
 
   it("returns 200", async () => {

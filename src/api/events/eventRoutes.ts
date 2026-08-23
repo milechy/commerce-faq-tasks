@@ -10,6 +10,12 @@ import type { Express, Request, Response, RequestHandler } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { logger } from '../../lib/logger';
+import {
+  AUTO_OUTCOME_RECORDED_BY,
+  getConversionTypes,
+  getSessionOutcome,
+  recordOutcome,
+} from '../admin/chat-history/chatHistoryRepository';
 
 const VALID_EVENT_TYPES = [
   'page_view', 'scroll_depth', 'idle_time', 'product_view',
@@ -117,6 +123,18 @@ export function registerEventRoutes(
 // ---------------------------------------------------------------------------
 
 const VALID_CONVERSION_TYPES = ['purchase', 'inquiry', 'reservation', 'signup', 'other'] as const;
+type ConversionType = (typeof VALID_CONVERSION_TYPES)[number];
+
+// GID 1216970103691946 (PR-6): conversion_type(この5値、英語)と
+// tenants.conversion_types(テナント定義、既定は日本語)は語彙が全く別。
+// 既定のconversion_typesに対応する言葉があるものだけをマッピングする。
+// signup/other はテナントの既定選択肢に対応する言葉が無いため意図的に含めない
+// (誤った値で自動記録するより、記録しない方が安全)。
+const CONVERSION_TYPE_TO_OUTCOME_LABEL: Partial<Record<ConversionType, string>> = {
+  purchase: '購入完了',
+  reservation: '予約完了',
+  inquiry: '問い合わせ送信',
+};
 
 type EventInput = z.infer<typeof EventSchema>;
 
@@ -153,6 +171,34 @@ export async function resolveChatSessionUuid(
     if (result.rows[0]) return result.rows[0].id;
   }
   return null;
+}
+
+/**
+ * CV(chat_conversion)発生時に chat_sessions.outcome を自動記録する(best-effort)。
+ * - conversion_type がこのテナントの conversion_types に対応する言葉を持たない場合は何もしない
+ * - 既にoutcomeが(人手/自動問わず)記録済みなら上書きしない(自動記録は人手の訂正を破壊しない)
+ * - 記録は recordedBy=AUTO_OUTCOME_RECORDED_BY で行い、通知を出さない(recordOutcome側で抑止)
+ */
+export async function autoRecordOutcome(
+  tenantId: string,
+  sessionDbId: string,
+  conversionType: ConversionType,
+): Promise<void> {
+  const outcomeLabel = CONVERSION_TYPE_TO_OUTCOME_LABEL[conversionType];
+  if (!outcomeLabel) return;
+
+  const conversionTypes = await getConversionTypes(tenantId);
+  if (!conversionTypes.includes(outcomeLabel)) return;
+
+  const existing = await getSessionOutcome(sessionDbId);
+  if (existing?.outcome) return;
+
+  await recordOutcome({
+    sessionDbId,
+    tenantId,
+    outcome: outcomeLabel,
+    recordedBy: AUTO_OUTCOME_RECORDED_BY,
+  });
 }
 
 export async function bridgeConversionEvents(
@@ -193,6 +239,13 @@ export async function bridgeConversionEvents(
         ],
       );
       logger.info({ msg: '[events→conversion bridge] attributed', tenantId, conversionType, conversionValue });
+
+      // GID 1216970103691946 (PR-6): CV発生時にoutcomeを自動記録する(session解決済みの場合のみ)。
+      if (sessionIdForAttribution) {
+        await autoRecordOutcome(tenantId, sessionIdForAttribution, conversionType as ConversionType).catch((err) => {
+          logger.warn({ msg: '[events→conversion bridge] auto outcome record failed', error: (err as Error).message, tenantId });
+        });
+      }
     } catch (err) {
       logger.error({ msg: '[events→conversion bridge] insert failed', error: (err as Error).message, tenantId, conversionType });
     }

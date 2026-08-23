@@ -4,6 +4,7 @@ import type { AuthedReq } from "../../middleware/roleAuth";
 import { getMonthlyLLMUsageFromPostHog } from "../../../lib/billing/posthogUsageTracker";
 import { logger } from "../../../lib/logger";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { userSourceClause } from "../analytics/summaryQueries";
 
 const PERIOD_DAYS: Record<string, number> = {
   last_7d: 7,
@@ -58,7 +59,8 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
                -- chat_sessions に created_at は存在しない。セッション開始時刻は started_at
                -- (chat-history/migration.sql)。created_at を参照していたため
                -- GET /v1/admin/tenants/:id/analytics-summary が常時500だった。
-               AND started_at >= NOW() - ($3::text)::interval`,
+               AND started_at >= NOW() - ($3::text)::interval
+               ${userSourceClause("chat_sessions")}`,
             [tenantId, days, interval],
           ),
           db.query<{ source: string; cnt: string }>(

@@ -14,6 +14,14 @@ jest.mock('../../src/admin/http/supabaseAuthMiddleware', () => ({
   },
 }));
 
+// PR-6: reconcileAbResultOutcomes が内部で getConversionTypes(独自にgetPool()を
+// 呼ぶ)を使うようになったため、この経路もモックする(このファイルの mockDb は
+// registerAbTestRoutes に注入するdbオブジェクトのみで、getPool()経路とは無関係)。
+const mockGetConversionTypes = jest.fn().mockResolvedValue(['購入完了', '予約完了', '問い合わせ送信', '離脱', '不明']);
+jest.mock('../../src/api/admin/chat-history/chatHistoryRepository', () => ({
+  getConversionTypes: (...args: unknown[]) => mockGetConversionTypes(...args),
+}));
+
 type Role = 'super_admin' | 'client_admin';
 
 function makeApp(opts: {
@@ -175,8 +183,10 @@ describe('PATCH /v1/admin/ab/experiments/:id/status', () => {
 
 describe('GET /v1/admin/ab/experiments/:id/results', () => {
   // GID 1216978855735482: reconcileAbResultOutcomes が結果集計の直前に呼ばれるようになった。
-  // 呼び出し順序: [0]tenant_id+min_sample_size取得 [1]metadata列存在確認
-  // [2]reached_two_plus_exchanges UPDATE [3]converted UPDATE [4]集計SELECT
+  // 呼び出し順序: [0]tenant_id+min_sample_size取得
+  // [1]reached_two_plus_exchanges UPDATE [2]converted UPDATE [3]集計SELECT
+  // PR-3訂正(GID 1216970103691946): metadata列存在確認(information_schema)は
+  // 「列がまだ無いかもしれない」という誤った前提に基づいていたため撤去済み。
   function queryResponsesWithReconcile(
     minSampleSize: number,
     aggregationRows: any[],
@@ -184,7 +194,6 @@ describe('GET /v1/admin/ab/experiments/:id/results', () => {
   ) {
     return [
       { rows: [{ tenant_id: tenantId, min_sample_size: minSampleSize }], rowCount: 1 },
-      { rows: [{ exists: false }] }, // metadata列なし（未移行環境を模す）
       { rows: [], rowCount: 0 }, // reached_two_plus_exchanges UPDATE
       { rows: [], rowCount: 0 }, // converted UPDATE
       { rows: aggregationRows },
@@ -234,14 +243,12 @@ describe('GET /v1/admin/ab/experiments/:id/results', () => {
   });
 
   it('reconcile自体が例外を投げても集計は継続する(best-effort)', async () => {
-    // metadata列存在確認は内部でtry/catch済みのため常に成功扱い(false)になる。
     // 1本目のUPDATE(reached_two_plus_exchanges)が例外を投げると reconcileAbResultOutcomes
     // 全体がその場でrejectし、2本目のUPDATE(converted)は呼ばれない。呼び出し元(results
     // ハンドラ)のtry/catchがこれを吸収し、次の実クエリ(集計SELECT)に進む。
     const { app } = makeApp({
       queryResponses: [
         { rows: [{ tenant_id: 'tenant-a', min_sample_size: 10 }], rowCount: 1 },
-        { rows: [{ exists: false }] },
         new Error('update failed'),
         { rows: [{ variant: 'a', exposed: 20, reached_two_plus: 10, converted: 5, avg_judge_score: 70 }] },
       ],

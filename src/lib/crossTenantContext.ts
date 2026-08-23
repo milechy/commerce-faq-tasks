@@ -11,6 +11,7 @@
 
 import { pool } from './db';
 import { logger } from './logger';
+import { userSourceExists } from '../api/admin/analytics/summaryQueries';
 
 // ─── 型定義 ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,7 @@ async function fetchAvgScores(): Promise<{ avgScores: CrossTenantContext['avgSco
         COUNT(DISTINCT tenant_id)                        AS total_tenants
       FROM conversation_evaluations
       WHERE evaluated_at > NOW() - INTERVAL '90 days'
+      ${userSourceExists("conversation_evaluations.session_id", "conversation_evaluations.tenant_id")}
     `);
     const row = result.rows[0];
     if (!row || row.total_tenants === '0' || row.total_tenants === 0) {
@@ -106,6 +108,7 @@ async function fetchTopPsychologyPrinciples(): Promise<CrossTenantContext['topPs
         )                                 AS cv_rate
       FROM conversion_attributions
       WHERE created_at > NOW() - INTERVAL '90 days'
+      ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}
       GROUP BY principle
       HAVING COUNT(*) >= 5
       ORDER BY cv_rate DESC
