@@ -125,6 +125,7 @@ import {
 import { searchTool } from "../../src/agent/tools/searchTool";
 import { synthesizeAnswer } from "../../src/agent/tools/synthesisTool";
 import { getActiveRulesForTenant } from "../../src/api/admin/tuning/tuningRulesRepository";
+import { approveTuningRule } from "../../src/api/admin/evaluations/evaluationsRepository";
 import { evaluateSession, SessionNotFoundError, SessionTooShortError } from "../../src/agent/judge/judgeEvaluator";
 import { sanitizeInput } from "../../src/middleware/inputSanitizer";
 import { applyPromptFirewall } from "../../src/middleware/promptFirewall";
@@ -546,6 +547,63 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
     expect(result.gapSignal.hitCount).toBe(0);
     // Must return a non-empty answer (gap message)
     expect(result.answer.length).toBeGreaterThan(0);
+  });
+
+  // D8/G-d: 承認したルールが実際に本番プロンプトへ入ることの端から端までの検証。
+  // これが無いと「承認 API は status だけ更新して is_active を放置」という
+  // P0(承認したのに一生本番に入らない)を単体テストでは検出できない。
+  it("D8/G-d: approveTuningRule → getActiveRulesForTenant → synthesizeAnswer のプロンプトに含まれる", async () => {
+    process.env["GROQ_API_KEY"] = "test-groq-key";
+
+    // 1) 承認 API: UPDATE 文が is_active=true を設定し、DBがそれを反映した行を返す
+    MOCK_POOL.query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: MOCK_TUNING_RULE.id,
+          tenant_id: MOCK_TUNING_RULE.tenant_id,
+          status: "active",
+          is_active: true,
+          approved_at: new Date().toISOString(),
+          rejected_at: null,
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    });
+    const approved = await approveTuningRule(MOCK_TUNING_RULE.id, MOCK_TUNING_RULE.tenant_id);
+    expect(approved).not.toBeNull();
+    expect(approved!.is_active).toBe(true);
+    const [approveSql] = MOCK_POOL.query.mock.calls[MOCK_POOL.query.mock.calls.length - 1]!;
+    expect(approveSql).toContain("is_active = true");
+
+    // 2) 本番プロンプト注入の唯一の入口。承認直後の状態(is_active=true)を
+    //    DBが返す想定で、実際にそのルールが取得できることを確認する。
+    MOCK_POOL.query.mockResolvedValueOnce({ rows: [MOCK_TUNING_RULE] });
+    const activeRules = await getActiveRulesForTenant(MOCK_TUNING_RULE.tenant_id);
+    expect(activeRules).toEqual([MOCK_TUNING_RULE]);
+
+    // 3) synthesizeAnswer: 承認済みルールが生成プロンプト文字列に実際に含まれる
+    MOCK_POOL.query.mockResolvedValueOnce({
+      rows: [{ system_prompt: null, system_prompt_variants: null }],
+      rowCount: 1,
+    });
+    jest.spyOn(
+      require("../../src/api/admin/tuning/tuningRulesRepository"),
+      "getActiveRulesForTenant"
+    ).mockResolvedValueOnce([MOCK_TUNING_RULE]);
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: "返品は7日以内です。",
+    });
+
+    await synthesizeAnswer({
+      query: "返品について教えてください",
+      items: [MOCK_HIT],
+      tenantId: MOCK_TUNING_RULE.tenant_id,
+    });
+
+    const groqCallArgs = (groqClient.callWithUsage as jest.Mock).mock.calls[0][0];
+    expect(groqCallArgs.messages[0].content).toContain(MOCK_TUNING_RULE.expected_behavior);
+
+    delete process.env["GROQ_API_KEY"];
   });
 });
 

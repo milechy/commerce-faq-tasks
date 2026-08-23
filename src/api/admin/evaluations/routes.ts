@@ -301,7 +301,7 @@ export function registerEvaluationRoutes(app: Express): void {
           if (!data) {
             return res.status(404).json({ error: "評価データが見つかりません" });
           }
-          const rules = (data.evaluation as any).suggested_rules as Array<{ rule_text?: string; status?: string }> | null;
+          const rules = (data.evaluation as any).suggested_rules as Array<{ rule_text?: string; reason?: string; status?: string }> | null;
           const rule = Array.isArray(rules) ? rules[ruleIndex] : undefined;
           if (!rule) {
             return res.status(404).json({ error: "指定されたルールが見つかりません" });
@@ -311,6 +311,7 @@ export function registerEvaluationRoutes(app: Express): void {
             tuningRuleId = await insertTuningRuleFromSuggestion(data.evaluation.tenant_id, ruleText, {
               editedText: typeof edited_text === "string" ? edited_text : undefined,
               editedBy: email || undefined,
+              expectedBehavior: rule.reason,
             });
           }
         }

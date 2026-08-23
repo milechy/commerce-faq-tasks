@@ -412,10 +412,13 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
         try {
           // source='judge' を明示する。未設定だとスキーマ既定 'manual' になり、
           // 店主が作ったルールと出所を区別できなくなる(承認導線で必須の情報)。
+          // status='pending' も明示する。省略してスキーマ既定に委ねると、
+          // 既定値が将来変わった際に無審査で有効化されうる(is_active=false と
+          // 同じ理由でDEFAULTに依存しない)。
           await pool.query(
             `INSERT INTO tuning_rules
-               (tenant_id, trigger_pattern, expected_behavior, priority, is_active, source)
-             VALUES ($1, $2, $3, $4, false, 'judge')
+               (tenant_id, trigger_pattern, expected_behavior, priority, is_active, source, status)
+             VALUES ($1, $2, $3, $4, false, 'judge', 'pending')
              ON CONFLICT (tenant_id, trigger_pattern) DO NOTHING`,
             [
               tenantId,
