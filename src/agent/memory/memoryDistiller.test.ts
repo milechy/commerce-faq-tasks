@@ -13,9 +13,33 @@ jest.mock("./learnedMemoryRepository", () => ({
   createLearnedMemoryRepository: jest.fn(),
 }));
 
+// GID 1216978660043409 (PR-17, R9): CV/outcome判定に使うDB層のモック。
+const mockQuery = jest.fn();
+jest.mock("../../lib/db", () => ({
+  getPool: () => ({ query: (...args: unknown[]) => mockQuery(...args) }),
+}));
+jest.mock("../../api/admin/chat-history/chatHistoryRepository", () => ({
+  getConversionTypes: jest.fn().mockResolvedValue(["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"]),
+}));
+
 const mockCall = groqClient.call as jest.Mock;
 const mockCreateRepo = createLearnedMemoryRepository as jest.Mock;
 const mockSave = jest.fn();
+
+/** conversion_attributions に行がある想定でDBモックを設定する(=CVを伴う会話)。 */
+function mockHasAttribution() {
+  mockQuery.mockResolvedValueOnce({ rows: [{ has_attribution: true, outcome: null }] });
+}
+
+/** outcome が成約系(非成約終端2件でない)想定でDBモックを設定する。 */
+function mockHasConvertingOutcome(outcome = "購入完了") {
+  mockQuery.mockResolvedValueOnce({ rows: [{ has_attribution: false, outcome }] });
+}
+
+/** CV/outcomeどちらも無い想定でDBモックを設定する。 */
+function mockNoConversion() {
+  mockQuery.mockResolvedValueOnce({ rows: [{ has_attribution: false, outcome: null }] });
+}
 
 const ENV_KEYS = [
   "LEARNED_MEMORY_ENABLED",
@@ -72,6 +96,7 @@ describe("distillAndPromote", () => {
 
   it("高スコアなら蒸留→保存し true", async () => {
     enable();
+    mockHasAttribution();
     mockCall.mockResolvedValue(
       '{"question":"保証はありますか","answer":"全車3ヶ月保証付きです"}',
     );
@@ -96,6 +121,7 @@ describe("distillAndPromote", () => {
 
   it("蒸留が空Q&Aを返したら保存しない", async () => {
     enable();
+    mockHasAttribution();
     mockCall.mockResolvedValue('{"question":"","answer":""}');
 
     const ok = await distillAndPromote({
@@ -123,6 +149,7 @@ describe("distillAndPromote", () => {
 
   it("Groq が例外でも伝播させず false", async () => {
     enable();
+    mockHasAttribution();
     mockCall.mockRejectedValue(new Error("groq down"));
 
     await expect(
@@ -133,5 +160,75 @@ describe("distillAndPromote", () => {
         messages: MESSAGES,
       }),
     ).resolves.toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // GID 1216978660043409 (PR-17, R9 / D2): 高スコアだが成果なしは昇格しない
+  // ---------------------------------------------------------------------
+  describe("D2: CV/outcomeを伴う会話のみ昇格する", () => {
+    it("高スコアだがCV/outcomeが無い会話は蒸留せず false(Groqを呼ばない)", async () => {
+      enable();
+      mockNoConversion();
+
+      const ok = await distillAndPromote({
+        tenantId: "carnation",
+        sessionId: "s1",
+        judgeScore: 95,
+        messages: MESSAGES,
+      });
+
+      expect(ok).toBe(false);
+      expect(mockCall).not.toHaveBeenCalled();
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
+    it("conversion_attributions に行があれば昇格する", async () => {
+      enable();
+      mockHasAttribution();
+      mockCall.mockResolvedValue(
+        '{"question":"保証はありますか","answer":"全車3ヶ月保証付きです"}',
+      );
+
+      const ok = await distillAndPromote({
+        tenantId: "carnation",
+        sessionId: "s1",
+        judgeScore: 90,
+        messages: MESSAGES,
+      });
+
+      expect(ok).toBe(true);
+    });
+
+    it("outcomeが成約系(テナントのconversion_types非成約終端2件でない)なら昇格する", async () => {
+      enable();
+      mockHasConvertingOutcome("予約完了");
+      mockCall.mockResolvedValue(
+        '{"question":"保証はありますか","answer":"全車3ヶ月保証付きです"}',
+      );
+
+      const ok = await distillAndPromote({
+        tenantId: "carnation",
+        sessionId: "s1",
+        judgeScore: 90,
+        messages: MESSAGES,
+      });
+
+      expect(ok).toBe(true);
+    });
+
+    it("outcomeが非成約終端(既定'離脱'/'不明')なら昇格しない", async () => {
+      enable();
+      mockHasConvertingOutcome("離脱");
+
+      const ok = await distillAndPromote({
+        tenantId: "carnation",
+        sessionId: "s1",
+        judgeScore: 90,
+        messages: MESSAGES,
+      });
+
+      expect(ok).toBe(false);
+      expect(mockCall).not.toHaveBeenCalled();
+    });
   });
 });
