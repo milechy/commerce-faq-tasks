@@ -75,13 +75,6 @@ const envSchema = z.object({
   // ── Elasticsearch index ───────────────────────────────────────────────
   ES_FAQ_INDEX: z.string().optional(),
 
-  // ── Phase22 state machine ─────────────────────────────────────────────
-  PHASE22_MAX_TURNS: numEnv,
-  PHASE22_MAX_CLARIFY_REPEATS: numEnv,
-  PHASE22_MAX_CONFIRM_REPEATS: numEnv,
-  PHASE22_MAX_SAME_STATE_REPEATS: numEnv,
-  PHASE22_LOOP_WINDOW_TURNS: numEnv,
-
   // ── Hybrid RAG ────────────────────────────────────────────────────────
   HYBRID_TIMEOUT_MS: numEnv,
   HYBRID_MOCK_ON_FAILURE: boolEnv,
@@ -89,11 +82,6 @@ const envSchema = z.object({
   RAGSTATS_TOPLEVEL_COMPAT: boolEnv,
 
   // ── Avatar ────────────────────────────────────────────────────────────
-  FF_AVATAR_ENABLED: boolEnv,
-  FF_AVATAR_FORCE_OFF: boolEnv,
-  KILL_SWITCH_AVATAR: boolEnv,
-  KILL_SWITCH_REASON: z.string().optional(),
-  AVATAR_READINESS_TIMEOUT_MS: numEnv,
   ANAM_API_KEY: z.string().optional(),
   FISH_AUDIO_API_KEY: z.string().optional(),
   FISH_AUDIO_REFERENCE_ID: z.string().optional(),

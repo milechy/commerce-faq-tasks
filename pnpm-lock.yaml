@@ -24,12 +24,6 @@ importers:
       '@google-analytics/data':
         specifier: ^5.2.1
         version: 5.2.1
-      '@langchain/core':
-        specifier: ^0.3.80
-        version: 0.3.80(@opentelemetry/api@1.9.0)
-      '@langchain/langgraph':
-        specifier: ^0.2.74
-        version: 0.2.74(@langchain/core@0.3.80(@opentelemetry/api@1.9.0))(zod-to-json-schema@3.25.0(zod@4.1.12))
       '@notionhq/client':
         specifier: ^5.4.0
         version: 5.4.0
@@ -342,9 +336,6 @@ packages:
 
   '@bufbuild/protobuf@1.10.1':
     resolution: {integrity: sha512-wJ8ReQbHxsAfXhrf9ixl0aYbZorRuOWpBNzm8pL8ftmSxQx/wnJD5Eg861NwJU/czy2VXFIebCeZnZrI9rktIQ==}
-
-  '@cfworker/json-schema@4.1.1':
-    resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
 
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
@@ -695,40 +686,6 @@ packages:
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
 
-  '@langchain/core@0.3.80':
-    resolution: {integrity: sha512-vcJDV2vk1AlCwSh3aBm/urQ1ZrlXFFBocv11bz/NBUfLWD5/UDNMzwPdaAd2dKvNmTWa9FM2lirLU3+JCf4cRA==}
-    engines: {node: '>=18'}
-
-  '@langchain/langgraph-checkpoint@0.0.18':
-    resolution: {integrity: sha512-IS7zJj36VgY+4pf8ZjsVuUWef7oTwt1y9ylvwu0aLuOn1d0fg05Om9DLm3v2GZ2Df6bhLV1kfWAM0IAl9O5rQQ==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@langchain/core': '>=0.2.31 <0.4.0'
-
-  '@langchain/langgraph-sdk@0.0.112':
-    resolution: {integrity: sha512-/9W5HSWCqYgwma6EoOspL4BGYxGxeJP6lIquPSF4FA0JlKopaUv58ucZC3vAgdJyCgg6sorCIV/qg7SGpEcCLw==}
-    peerDependencies:
-      '@langchain/core': '>=0.2.31 <0.4.0'
-      react: ^18 || ^19
-      react-dom: ^18 || ^19
-    peerDependenciesMeta:
-      '@langchain/core':
-        optional: true
-      react:
-        optional: true
-      react-dom:
-        optional: true
-
-  '@langchain/langgraph@0.2.74':
-    resolution: {integrity: sha512-oHpEi5sTZTPaeZX1UnzfM2OAJ21QGQrwReTV6+QnX7h8nDCBzhtipAw1cK616S+X8zpcVOjgOtJuaJhXa4mN8w==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@langchain/core': '>=0.2.36 <0.3.0 || >=0.3.40 < 0.4.0'
-      zod-to-json-schema: ^3.x
-    peerDependenciesMeta:
-      zod-to-json-schema:
-        optional: true
-
   '@livekit/protocol@1.50.4':
     resolution: {integrity: sha512-L1uggNQAqyY21smQY8AllyOYbcv9Me9TaxwuLytL1R8ck9nbYPmQLNwEDi3pOFGAMa5F8I2nUi2Jc59W5awxlA==}
 
@@ -1034,9 +991,6 @@ packages:
   '@types/js-yaml@4.0.9':
     resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
 
-  '@types/json-schema@7.0.15':
-    resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
-
   '@types/jsonwebtoken@9.0.10':
     resolution: {integrity: sha512-asx5hIG9Qmf/1oStypjanR7iKTv0gXQ1Ov/jfrX6kS/EO0OFni8orbmGCn0672NHR3kXHwpAwR+B368ZGN/2rA==}
 
@@ -1073,9 +1027,6 @@ packages:
   '@types/range-parser@1.2.7':
     resolution: {integrity: sha512-hKormJbkJqzQGhziax5PItDUTMAM9uE2XXQmM37dyd4hVM+5aVl7oVxMVUiVQn2oCQFN/LKCZdvSM0pFRqbSmQ==}
 
-  '@types/retry@0.12.0':
-    resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
-
   '@types/send@0.17.6':
     resolution: {integrity: sha512-Uqt8rPBE8SY0RK8JB1EzVOIZ32uqy8HwdxCnoCOsYrvnswqmFZ/k+9Ikidlk/ImhsdvBsloHbAlewb2IEBV/Og==}
 
@@ -1100,9 +1051,6 @@ packages:
   '@types/supertest@7.2.0':
     resolution: {integrity: sha512-uh2Lv57xvggst6lCqNdFAmDSvoMG7M/HDtX4iUCquxQ5EGPtaPM5PL5Hmi7LCvOG8db7YaCPNJEeoI8s/WzIQw==}
 
-  '@types/uuid@10.0.0':
-    resolution: {integrity: sha512-7gqG38EyHgyP1S+7+xomFtL+ZNHcKv6DwNaCZmJmo1vgMugyF3TCnXVg4t1uk89mLNwnLtnY3TpOpCOyp1/xHQ==}
-
   '@types/uuid@11.0.0':
     resolution: {integrity: sha512-HVyk8nj2m+jcFRNazzqyVKiZezyhDKrGUA3jlEcg/nZ6Ms+qHwocba1Y/AaVaznJTAM9xpdFSh+ptbNrhOGvZA==}
     deprecated: This is a stub types definition. uuid provides its own type definitions, so you do not need this installed.
@@ -1121,6 +1069,7 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+    deprecated: Potential CWE-502 - Update to 1.3.1 or higher
 
   '@unrs/resolver-binding-android-arm-eabi@1.11.1':
     resolution: {integrity: sha512-ppLRUgHVaGRWUx0R0Ut06Mjo9gBaBkg3v/8AxusGLhsIotbBLuRk51rAzqLC8gq6NyyAojEXglNjzf6R948DNw==}
@@ -1568,9 +1517,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  console-table-printer@2.15.0:
-    resolution: {integrity: sha512-SrhBq4hYVjLCkBVOWaTzceJalvn5K1Zq5aQA6wXC/cYjI3frKWNPEMK3sZsJfNNQApvCQmgBcc13ZKmFj8qExw==}
-
   content-disposition@1.0.0:
     resolution: {integrity: sha512-Au9nRL8VNUut/XSzbQA38+M78dzP4D+eqg3gfJHMIHHYa3bg067xj1KxMUWj+VULbiZMowKngFFbKczUrNJ1mg==}
     engines: {node: '>= 0.6'}
@@ -1633,10 +1579,6 @@ packages:
     peerDependenciesMeta:
       supports-color:
         optional: true
-
-  decamelize@1.2.0:
-    resolution: {integrity: sha512-z2S+W9X73hAUUki+N+9Za2lBlun89zigOyGrsax+KUQ6wKW4ZoWpEYBkGhQjwAjjDCkWxhY0VKEhk8wzY7F5cA==}
-    engines: {node: '>=0.10.0'}
 
   dedent@1.7.0:
     resolution: {integrity: sha512-HGFtf8yhuhGhqO07SV79tRp+br4MnbdjeVxotpn1QBl30pcLLCQjX5b2295ll0fv8RKDKsmWYrl05usHM9CewQ==}
@@ -1795,9 +1737,6 @@ packages:
 
   event-stream@3.3.4:
     resolution: {integrity: sha512-QHpkERcGsR0T7Qm3HNJSyXKEEj8AHNxkY3PK8TS2KJvQ7NiSHe3DDpwVKKtoYprL/AreyzFBeIkBIWChAqn60g==}
-
-  eventemitter3@4.0.7:
-    resolution: {integrity: sha512-8guHBZCwKnFhYdHr2ysuRWErTwhoN2X8XELRlrRwpmfeY2jjuUN4taQMsULKUVo1K4DvZl+0pgfyoysHxvmvEw==}
 
   execa@5.1.1:
     resolution: {integrity: sha512-8uSpZZocAZRBAPIEINJj3Lo9HyGitllczc27Eh5YYojjMFMn8yHMDMaUHE2Jqfq05D/wucwI4JGURyXt1vchyg==}
@@ -1966,11 +1905,12 @@ packages:
 
   glob@10.5.0:
     resolution: {integrity: sha512-DfXN8DfhJ7NH3Oe7cFmu3NCu1wKbkReJ8TorzSAFbSKrlNaQSKfIzqYqVY8zlbs2NLBbWpRiU52GX2PbaBVNkg==}
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
     hasBin: true
 
   glob@7.2.3:
     resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   gm@1.25.1:
     resolution: {integrity: sha512-jgcs2vKir9hFogGhXIfs0ODhJTfIrbECCehg38tqFgHm8zqXx7kAJyCYAFK4jTjx71AxrkFtkJBawbAxYUPX9A==}
@@ -2350,9 +2290,6 @@ packages:
     resolution: {integrity: sha512-Smw4xcfIQ5LVjAOuJCvN/zIodzA/BBSsluuoSykP+lUvScIi4U6RJLfwHet5cxFnCswUjISV8oAXaqaJDY3chg==}
     engines: {node: '>= 0.8'}
 
-  js-tiktoken@1.0.21:
-    resolution: {integrity: sha512-biOj/6M5qdgx5TKjDnFT1ymSpM5tbd3ylwDtrQvFQSu0Z7bBYko2dF+W/aUkXUPuk6IVpRxk/3Q2sHOzGlS36g==}
-
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
 
@@ -2393,23 +2330,6 @@ packages:
 
   jws@4.0.1:
     resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
-
-  langsmith@0.3.81:
-    resolution: {integrity: sha512-NFmp7TDrrbCE6TIfHqutN9xhdgvx0EOhULVo8bDW+ib5idprwjMTvmS0S1n9uVFwjN03zU2zVEWViXnwy5XPrw==}
-    peerDependencies:
-      '@opentelemetry/api': '*'
-      '@opentelemetry/exporter-trace-otlp-proto': '*'
-      '@opentelemetry/sdk-trace-base': '*'
-      openai: '*'
-    peerDependenciesMeta:
-      '@opentelemetry/api':
-        optional: true
-      '@opentelemetry/exporter-trace-otlp-proto':
-        optional: true
-      '@opentelemetry/sdk-trace-base':
-        optional: true
-      openai:
-        optional: true
 
   lazy-ass@1.6.0:
     resolution: {integrity: sha512-cc8oEVoctTvsFZ/Oje/kGnHbpWHYBe8IAJe4C0QNc3t8uM/0Y8+erSz/7Y1ALuXTEZTMvxXwO6YbX1ey3ujiZw==}
@@ -2590,10 +2510,6 @@ packages:
     resolution: {integrity: sha512-ypMKuglUrZUD99Tk2bUQ+xNQj43lPEfAeX2o9cTteAmShXy2VHDJpuwu1o0xqoKCt9jLVAvwyFKdLTPXKAfJyA==}
     engines: {node: '>=10'}
 
-  mustache@4.2.0:
-    resolution: {integrity: sha512-71ippSywq5Yb7/tVYyGbkBggbU8H3u5Rz56fH60jGFgr8uHwxs+aSKeqmluIVzM0m0kB7xQjKS6qPfd0b2ZoqQ==}
-    hasBin: true
-
   napi-postinstall@0.3.4:
     resolution: {integrity: sha512-PHI5f1O0EP5xJ9gQmFGMS6IZcrVvTjpXjz7Na41gTE7eE2hK11lg04CECCYEEjdc17EV4DO+fkGEtt7TpTaTiQ==}
     engines: {node: ^12.20.0 || ^14.18.0 || >=16.0.0}
@@ -2702,10 +2618,6 @@ packages:
       vite-plus:
         optional: true
 
-  p-finally@1.0.0:
-    resolution: {integrity: sha512-LICb2p9CB7FS+0eR1oqWnHhp0FljGLZCWBE9aix0Uye9W8LTQPwMTYVGWQWIw9RdQiDg4+epXQODwIYJtSJaow==}
-    engines: {node: '>=4'}
-
   p-limit@2.3.0:
     resolution: {integrity: sha512-//88mFWSJx8lxCzwdAABTJL2MyWB12+eIY7MDL2SqLmAkeKU9qxRvWuSyTjm3FUmpBEMuFfckAIqEaVGUDxb6w==}
     engines: {node: '>=6'}
@@ -2716,18 +2628,6 @@ packages:
 
   p-locate@4.1.0:
     resolution: {integrity: sha512-R79ZZ/0wAxKGu3oYMlz8jy/kbhsNrS7SKZ7PxEHBgJ5+F2mtFW2fK2cOtBh1cHYkQsbzFV7I+EoRKe6Yt0oK7A==}
-    engines: {node: '>=8'}
-
-  p-queue@6.6.2:
-    resolution: {integrity: sha512-RwFpb72c/BhQLEXIZ5K2e+AhgNVmIejGlTgiB9MzZ0e93GRvqZ7uSi0dvRF7/XIXDeNkra2fNHBxTyPDGySpjQ==}
-    engines: {node: '>=8'}
-
-  p-retry@4.6.2:
-    resolution: {integrity: sha512-312Id396EbJdvRONlngUx0NydfrIQ5lsYu0znKVUzVvArzEIt08V1qhtyESbGVd1FGX7UKtiFp5uwKZdM8wIuQ==}
-    engines: {node: '>=8'}
-
-  p-timeout@3.2.0:
-    resolution: {integrity: sha512-rhIwUycgwwKcP9yTOOFK/AKsAopjjCakVqLHePO3CC6Mir1Z99xT+R63jZxAT5lFZLa2inS5h+ZS2GvR99/FBg==}
     engines: {node: '>=8'}
 
   p-try@2.2.0:
@@ -3118,9 +3018,6 @@ packages:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
 
-  simple-wcswidth@1.1.2:
-    resolution: {integrity: sha512-j7piyCjAeTDSjzTSQ7DokZtMNwNlEAyxqSZeCS+CXH7fJ4jx3FuJ/mTW3mE+6JLs4VJBbcll0Kjn+KXI5t21Iw==}
-
   slash@3.0.0:
     resolution: {integrity: sha512-g9Q1haeby36OSStwb4ntCGGGaKsaVSjQ68fBxoQcutl5fS1vuY18H3wSt3jFyFtrkx+Kz0V1G85A4MyAdDMi2Q==}
     engines: {node: '>=8'}
@@ -3274,6 +3171,7 @@ packages:
   tar@7.5.2:
     resolution: {integrity: sha512-7NyxrTE4Anh8km8iEy7o0QYPs+0JKBTj5ZaqHg6B39erLg0qYXN3BijtShwbsNSvQ+LN75+KV+C4QR/f6Gwnpg==}
     engines: {node: '>=18'}
+    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   tdigest@0.1.2:
     resolution: {integrity: sha512-+G0LLgjjo9BZX2MfdvPfH+MKLCrxlXSYec5DaPYP1fe6Iyhf0/fSmJ0bFiZ1F8BT6cGXl2LpltQptzjXKWEkKA==}
@@ -3448,20 +3346,13 @@ packages:
   uuid-parse@1.1.0:
     resolution: {integrity: sha512-OdmXxA8rDsQ7YpNVbKSJkNzTw2I+S5WsbMDnCtIWSQaosNAcWtFuI/YK1TjzUI6nbkgiqEyh8gWngfcv8Asd9A==}
 
-  uuid@10.0.0:
-    resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
-    hasBin: true
-
   uuid@13.0.0:
     resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==}
     hasBin: true
 
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
-    hasBin: true
-
-  uuid@9.0.1:
-    resolution: {integrity: sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   v8-compile-cache-lib@3.0.1:
@@ -3573,14 +3464,6 @@ packages:
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
-
-  zod-to-json-schema@3.25.0:
-    resolution: {integrity: sha512-HvWtU2UG41LALjajJrML6uQejQhNJx+JBO9IflpSja4R03iNWfKXrj6W2h7ljuLyc1nKS+9yDyL/9tD1U/yBnQ==}
-    peerDependencies:
-      zod: ^3.25 || ^4
-
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
   zod@4.1.12:
     resolution: {integrity: sha512-JInaHOamG8pt5+Ey8kGmdcAcg3OL9reK8ltczgHTAwNhMys/6ThXHityHxVV2p3fkw/c+MAvBHFVYHFZDmjMCQ==}
@@ -3779,8 +3662,6 @@ snapshots:
   '@bcoe/v8-coverage@0.2.3': {}
 
   '@bufbuild/protobuf@1.10.1': {}
-
-  '@cfworker/json-schema@4.1.1': {}
 
   '@colors/colors@1.5.0':
     optional: true
@@ -4229,53 +4110,6 @@ snapshots:
 
   '@js-sdsl/ordered-map@4.4.2': {}
 
-  '@langchain/core@0.3.80(@opentelemetry/api@1.9.0)':
-    dependencies:
-      '@cfworker/json-schema': 4.1.1
-      ansi-styles: 5.2.0
-      camelcase: 6.3.0
-      decamelize: 1.2.0
-      js-tiktoken: 1.0.21
-      langsmith: 0.3.81(@opentelemetry/api@1.9.0)
-      mustache: 4.2.0
-      p-queue: 6.6.2
-      p-retry: 4.6.2
-      uuid: 10.0.0
-      zod: 3.25.76
-      zod-to-json-schema: 3.25.0(zod@3.25.76)
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@opentelemetry/exporter-trace-otlp-proto'
-      - '@opentelemetry/sdk-trace-base'
-      - openai
-
-  '@langchain/langgraph-checkpoint@0.0.18(@langchain/core@0.3.80(@opentelemetry/api@1.9.0))':
-    dependencies:
-      '@langchain/core': 0.3.80(@opentelemetry/api@1.9.0)
-      uuid: 10.0.0
-
-  '@langchain/langgraph-sdk@0.0.112(@langchain/core@0.3.80(@opentelemetry/api@1.9.0))':
-    dependencies:
-      '@types/json-schema': 7.0.15
-      p-queue: 6.6.2
-      p-retry: 4.6.2
-      uuid: 9.0.1
-    optionalDependencies:
-      '@langchain/core': 0.3.80(@opentelemetry/api@1.9.0)
-
-  '@langchain/langgraph@0.2.74(@langchain/core@0.3.80(@opentelemetry/api@1.9.0))(zod-to-json-schema@3.25.0(zod@4.1.12))':
-    dependencies:
-      '@langchain/core': 0.3.80(@opentelemetry/api@1.9.0)
-      '@langchain/langgraph-checkpoint': 0.0.18(@langchain/core@0.3.80(@opentelemetry/api@1.9.0))
-      '@langchain/langgraph-sdk': 0.0.112(@langchain/core@0.3.80(@opentelemetry/api@1.9.0))
-      uuid: 10.0.0
-      zod: 3.25.76
-    optionalDependencies:
-      zod-to-json-schema: 3.25.0(zod@4.1.12)
-    transitivePeerDependencies:
-      - react
-      - react-dom
-
   '@livekit/protocol@1.50.4':
     dependencies:
       '@bufbuild/protobuf': 1.10.1
@@ -4536,8 +4370,6 @@ snapshots:
 
   '@types/js-yaml@4.0.9': {}
 
-  '@types/json-schema@7.0.15': {}
-
   '@types/jsonwebtoken@9.0.10':
     dependencies:
       '@types/ms': 2.1.0
@@ -4575,8 +4407,6 @@ snapshots:
 
   '@types/range-parser@1.2.7': {}
 
-  '@types/retry@0.12.0': {}
-
   '@types/send@0.17.6':
     dependencies:
       '@types/mime': 1.3.5
@@ -4609,8 +4439,6 @@ snapshots:
     dependencies:
       '@types/methods': 1.1.4
       '@types/superagent': 8.1.9
-
-  '@types/uuid@10.0.0': {}
 
   '@types/uuid@11.0.0':
     dependencies:
@@ -5084,10 +4912,6 @@ snapshots:
       tree-kill: 1.2.2
       yargs: 17.7.2
 
-  console-table-printer@2.15.0:
-    dependencies:
-      simple-wcswidth: 1.1.2
-
   content-disposition@1.0.0:
     dependencies:
       safe-buffer: 5.2.1
@@ -5130,8 +4954,6 @@ snapshots:
   debug@4.4.3:
     dependencies:
       ms: 2.1.3
-
-  decamelize@1.2.0: {}
 
   dedent@1.7.0: {}
 
@@ -5266,8 +5088,6 @@ snapshots:
       split: 0.3.3
       stream-combiner: 0.0.4
       through: 2.3.8
-
-  eventemitter3@4.0.7: {}
 
   execa@5.1.1:
     dependencies:
@@ -6106,10 +5926,6 @@ snapshots:
 
   js-string-escape@1.0.1: {}
 
-  js-tiktoken@1.0.21:
-    dependencies:
-      base64-js: 1.5.1
-
   js-tokens@4.0.0: {}
 
   js-yaml@3.15.1:
@@ -6156,18 +5972,6 @@ snapshots:
     dependencies:
       jwa: 2.0.1
       safe-buffer: 5.2.1
-
-  langsmith@0.3.81(@opentelemetry/api@1.9.0):
-    dependencies:
-      '@types/uuid': 10.0.0
-      chalk: 4.1.2
-      console-table-printer: 2.15.0
-      p-queue: 6.6.2
-      p-retry: 4.6.2
-      semver: 7.7.3
-      uuid: 10.0.0
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.0
 
   lazy-ass@1.6.0: {}
 
@@ -6312,8 +6116,6 @@ snapshots:
       arrify: 2.0.1
       minimatch: 9.0.9
 
-  mustache@4.2.0: {}
-
   napi-postinstall@0.3.4: {}
 
   natural-compare@1.4.0: {}
@@ -6418,8 +6220,6 @@ snapshots:
       '@oxlint/binding-win32-ia32-msvc': 1.68.0
       '@oxlint/binding-win32-x64-msvc': 1.68.0
 
-  p-finally@1.0.0: {}
-
   p-limit@2.3.0:
     dependencies:
       p-try: 2.2.0
@@ -6431,20 +6231,6 @@ snapshots:
   p-locate@4.1.0:
     dependencies:
       p-limit: 2.3.0
-
-  p-queue@6.6.2:
-    dependencies:
-      eventemitter3: 4.0.7
-      p-timeout: 3.2.0
-
-  p-retry@4.6.2:
-    dependencies:
-      '@types/retry': 0.12.0
-      retry: 0.13.1
-
-  p-timeout@3.2.0:
-    dependencies:
-      p-finally: 1.0.0
 
   p-try@2.2.0: {}
 
@@ -6876,8 +6662,6 @@ snapshots:
 
   signal-exit@4.1.0: {}
 
-  simple-wcswidth@1.1.2: {}
-
   slash@3.0.0: {}
 
   sonic-boom@4.2.0:
@@ -7228,13 +7012,9 @@ snapshots:
 
   uuid-parse@1.1.0: {}
 
-  uuid@10.0.0: {}
-
   uuid@13.0.0: {}
 
   uuid@8.3.2: {}
-
-  uuid@9.0.1: {}
 
   v8-compile-cache-lib@3.0.1: {}
 
@@ -7338,16 +7118,5 @@ snapshots:
   yn@3.1.1: {}
 
   yocto-queue@0.1.0: {}
-
-  zod-to-json-schema@3.25.0(zod@3.25.76):
-    dependencies:
-      zod: 3.25.76
-
-  zod-to-json-schema@3.25.0(zod@4.1.12):
-    dependencies:
-      zod: 4.1.12
-    optional: true
-
-  zod@3.25.76: {}
 
   zod@4.1.12: {}

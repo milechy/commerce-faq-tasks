@@ -4,7 +4,6 @@ import "./config/env";
 import { pool as db } from "./lib/db";
 import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
-import { startOpenClawHeartbeat } from "./agent/openclaw/heartbeatHandler";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
 import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
@@ -94,7 +93,6 @@ import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerAbExposureRoutes } from "./api/conversion/abExposureRoutes";
 import { registerHermesMcpRoutes } from "./api/hermes-mcp/routes";
-import { registerHermesProposalAdminRoutes } from "./api/admin/hermes/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
@@ -661,10 +659,10 @@ if (db) registerAbTestRoutes(app, db);
 registerAbExposureRoutes(app, apiStack, db);
 
 // Phase75: Hermes Agent(外部, 別VPS)向けMCPデータエンドポイント(Bearer認証、同意ゲート)
+// R6: 提案(POST /v1/hermes-mcp/proposals)は tuning_rules(source='hermes')に着地する。
+// 専用の承認API(旧 registerHermesProposalAdminRoutes)は作らず、Judge提案と同じ
+// PUT /v1/admin/tuning/:id/approve|reject をそのまま使う(提案の受け皿を1つにする)。
 registerHermesMcpRoutes(app);
-
-// Phase74: Hermes Agent提案の承認ゲートAPI(super_admin/client_admin向け)
-registerHermesProposalAdminRoutes(app, db);
 
 // Phase55: Widget features check (event_tracking フラグ取得)
 //
@@ -754,10 +752,6 @@ async function startServer() {
   // Phase23: AlertEngine — 60秒周期で KPI を評価し Slack アラートを送信
   alertEngine.start();
   logger.info("[startup] AlertEngine started");
-
-  // Phase47-D: OpenClaw Heartbeat — flow 統計を30分周期で監視（Flag 判定は handler 内部）
-  startOpenClawHeartbeat();
-  logger.info("[startup] OpenClaw Heartbeat initialized");
 
   // GID 1216970103691946 (PR-11): SalesLogWriter に Notion sink を接続する。
   // 未設定(NOTION_API_KEY / NOTION_DB_SALES_LOG_ID が無い)テナント運用も
