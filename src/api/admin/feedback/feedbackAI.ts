@@ -1,7 +1,7 @@
 // src/api/admin/feedback/feedbackAI.ts
 // Phase62: FAQチャット代行提案 + 試算フロー統合
 
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import { sanitizeOutput } from "../../../lib/security/inputSanitizer";
 import { trackUsage } from "../../../lib/billing/usageTracker";
 import { logger } from '../../../lib/logger';
@@ -205,6 +205,8 @@ export async function generateFeedbackReply(
         },
         body: JSON.stringify({
           model: FEEDBACK_AI_MODEL,
+          // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+          ...groqReasoningParams(FEEDBACK_AI_MODEL),
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userMessage },

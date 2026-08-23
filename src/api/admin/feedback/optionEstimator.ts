@@ -1,7 +1,7 @@
 // src/api/admin/feedback/optionEstimator.ts
 // Phase62: オプションサービス料金試算（Groq 70B呼び出し）
 
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import { logger } from '../../../lib/logger';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 
@@ -55,6 +55,8 @@ export async function estimateOptionPrice(
       },
       body: JSON.stringify({
         model: process.env.GROQ_MODEL_70B ?? GPT_OSS_120B,
+        // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+        ...groqReasoningParams(process.env.GROQ_MODEL_70B ?? GPT_OSS_120B),
         messages: [
           { role: 'system', content: ESTIMATE_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },

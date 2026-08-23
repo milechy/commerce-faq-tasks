@@ -1,6 +1,6 @@
 // src/agent/llm/groqClient.ts
 
-import { getFallbackGroqModel } from '../../config/groqModels';
+import { getFallbackGroqModel, groqReasoningParams } from '../../config/groqModels';
 
 export type GroqRole = 'system' | 'user' | 'assistant'
 
@@ -157,6 +157,8 @@ export const groqClient: GroqClient = {
         messages,
         temperature: temperature ?? 0,
         max_tokens: maxTokens ?? 512,
+        // gpt-oss は推論トークンが max_tokens を食うため effort を絞る（groqModels.ts 参照）
+        ...groqReasoningParams(model),
       }),
     })
 
@@ -215,6 +217,8 @@ export const groqClient: GroqClient = {
         messages,
         temperature: temperature ?? 0,
         max_tokens: maxTokens ?? 512,
+        // gpt-oss は推論トークンが max_tokens を食うため effort を絞る（groqModels.ts 参照）
+        ...groqReasoningParams(model),
       }),
     })
 

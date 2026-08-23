@@ -2,7 +2,7 @@
 // Phase3: 自然文からお客様への声がけ(trigger_rules)を構造化提案する。
 // tuning/routes.ts の callGroq8bSuggestFromText と同型のパターン。
 
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 
 export type EngagementTriggerType = 'scroll_depth' | 'idle_time' | 'exit_intent' | 'page_url_match';
@@ -94,6 +94,8 @@ trigger_type は次の4種類から最も適切なものを1つ選んでくだ�
       },
       body: JSON.stringify({
         model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
+        // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+        ...groqReasoningParams(process.env.GROQ_MODEL_8B ?? GPT_OSS_120B),
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.4,
         max_tokens: 400,

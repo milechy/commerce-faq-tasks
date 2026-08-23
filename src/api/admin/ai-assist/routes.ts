@@ -3,7 +3,7 @@
 // Phase43 P2: インテント振り分け + RAG統合
 // POST /v1/admin/ai-assist/chat
 
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
@@ -64,6 +64,8 @@ async function detectIntent(message: string, tenantId: string): Promise<Intent> 
       },
       body: JSON.stringify({
         model: GPT_OSS_120B,
+        // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+        ...groqReasoningParams(GPT_OSS_120B),
         messages: [
           {
             role: "user",
@@ -71,7 +73,11 @@ async function detectIntent(message: string, tenantId: string): Promise<Intent> 
           },
         ],
         temperature: 0,
-        max_tokens: 20,
+        // gpt-oss は reasoning_effort:'low' でも推論に 18〜31 tokens 使う（実測、プロンプト依存）。
+        // 旧値 20 では推論だけで使い切って finish_reason='length' / content='' になり、
+        // 下の raw.includes() が常に false → 無言で "admin_guide" に誤分類していた。
+        // 64 なら実測 43 tokens (推論31+本文) で収まり余裕がある。
+        max_tokens: 64,
       }),
     });
 
@@ -114,6 +120,8 @@ async function callGroq8b(userMessage: string, tenantId: string): Promise<string
     },
     body: JSON.stringify({
       model: GPT_OSS_120B,
+      // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+      ...groqReasoningParams(GPT_OSS_120B),
       messages: [
         { role: "system", content: ADMIN_AI_SYSTEM_PROMPT },
         { role: "user", content: userMessage },
@@ -174,6 +182,8 @@ ${ragContext}`
     },
     body: JSON.stringify({
       model: GPT_OSS_120B,
+      // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+      ...groqReasoningParams(GPT_OSS_120B),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },
