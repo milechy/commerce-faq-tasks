@@ -932,6 +932,9 @@
   /* --- GID 1216275508391900: 有人スタッフへのエスカレーション導線 --- */
   var escalateBtn = el('button', { className: 'escalate-btn', type: 'button' });
   escalateBtn.textContent = '🙋 有人スタッフに相談する';
+  // R0-②: 会話がまだ無い状態でのエスカレーション（空セッション防止）を防ぐため、
+  // アシスタントの応答を受け取るまでは無効化しておく（renderMessages で解除）。
+  escalateBtn.disabled = true;
   var escalateRow = el('div', { className: 'escalate-row' }, [escalateBtn]);
   panel.appendChild(escalateRow);
 
@@ -2307,6 +2310,15 @@
   }
 
   function renderMessages() {
+    // R0-②: エスカレーションボタンは会話開始前(空セッション)では無効。
+    // scriptedモード/Anamクライアント側LLM/通常の/api/chatのいずれの経路で
+    // assistant応答が来ても、ここで一元的に有効化する(escalated/pending中は
+    // setEscalateBtnState 側の表示を上書きしない)。
+    if (!escalated && !escalatePending) {
+      var hasAssistantReply = messages.some(function (m) { return m.role === 'assistant'; });
+      escalateBtn.disabled = !hasAssistantReply;
+    }
+
     // DOM再構築でscrollTopがリセットされるため、クリア前に最下部付近かどうかを保存
     var wasNearBottom = (messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight) < 50;
 
@@ -2887,7 +2899,7 @@
   }
 
   escalateBtn.addEventListener('click', function () {
-    if (escalated || escalatePending) return;
+    if (escalated || escalatePending || escalateBtn.disabled) return;
     escalatePending = true;
     setEscalateBtnState('接続中…', true);
     fetch(apiBase + '/api/chat/escalate', {

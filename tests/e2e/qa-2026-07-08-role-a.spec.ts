@@ -140,10 +140,7 @@ test.describe('QA 2026-07-08 — Role A widget interactions', () => {
 
     const escalateBtnFound = await page.evaluate(() => {
       const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
-      const btn = host?.shadowRoot?.querySelector('.escalate-btn') as HTMLElement | null;
-      if (!btn) return false;
-      btn.click();
-      return true;
+      return !!(host?.shadowRoot?.querySelector('.escalate-btn') as HTMLElement | null);
     });
 
     test.info().annotations.push({ type: 'escalate-btn-found', description: String(escalateBtnFound) });
@@ -152,6 +149,41 @@ test.describe('QA 2026-07-08 — Role A widget interactions', () => {
       // Real bug candidate: escalate button not present in DOM at all.
       throw new Error('BUG-CANDIDATE: .escalate-btn ("有人スタッフに相談する") not found in widget panel DOM');
     }
+
+    // R0-②: エスカレーションは空セッション防止のため、会話開始前は無効化されている。
+    // アシスタントの応答を受け取るまでボタンは disabled のまま(仕様通り)。
+    const disabledBeforeReply = await page.evaluate(() => {
+      const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+      const btn = host?.shadowRoot?.querySelector('.escalate-btn') as HTMLButtonElement | null;
+      return btn ? btn.disabled : null;
+    });
+    expect(disabledBeforeReply).toBe(true);
+
+    // メッセージを送ってアシスタント応答を待つ(A2-2/A2-3 と同じ手順)
+    await page.evaluate(() => {
+      const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+      const textarea = host?.shadowRoot?.querySelector('textarea') as HTMLTextAreaElement | null;
+      if (!textarea) return false;
+      textarea.focus();
+      textarea.value = '営業時間を教えてください';
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      return true;
+    });
+
+    await page.waitForFunction(
+      () => {
+        const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+        const btn = host?.shadowRoot?.querySelector('.escalate-btn') as HTMLButtonElement | null;
+        return !!btn && !btn.disabled;
+      },
+      { timeout: 15000 },
+    );
+
+    await page.evaluate(() => {
+      const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+      (host?.shadowRoot?.querySelector('.escalate-btn') as HTMLElement | null)?.click();
+    });
 
     await page.waitForTimeout(5000);
     test.info().annotations.push({
