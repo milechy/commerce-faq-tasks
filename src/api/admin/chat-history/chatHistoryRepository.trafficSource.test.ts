@@ -97,3 +97,46 @@ describe("saveMessage: chat_sessions.metadata.source", () => {
     expect(JSON.parse(upsertParams[4] as string)).toEqual({ source: "user" });
   });
 });
+
+// G6: chat_sessions.visitor_id の永続化(学習ループ要件定義 G6)
+describe("saveMessage: chat_sessions.visitor_id", () => {
+  it("visitorId指定時、upsertの最後の引数としてvisitor_idを渡す", async () => {
+    await saveMessage({
+      tenantId: "t1",
+      sessionId: "s1",
+      role: "user",
+      content: "hello",
+      visitorId: "vid-123",
+    });
+
+    const upsertCall = mockQuery.mock.calls[0]!;
+    expect(upsertCall[0]).toContain("visitor_id");
+    const params = upsertCall[1] as unknown[];
+    expect(params[params.length - 1]).toBe("vid-123");
+  });
+
+  it("visitorId未指定時はnullを渡す(既存呼び出し元との後方互換)", async () => {
+    await saveMessage({
+      tenantId: "t1",
+      sessionId: "s1",
+      role: "user",
+      content: "hello",
+    });
+
+    const params = mockQuery.mock.calls[0]![1] as unknown[];
+    expect(params[params.length - 1]).toBeNull();
+  });
+
+  it("ON CONFLICT時、既存のvisitor_idを保持するCOALESCEになっている(新規値で上書きしない)", async () => {
+    await saveMessage({
+      tenantId: "t1",
+      sessionId: "s1",
+      role: "user",
+      content: "hello",
+      visitorId: "vid-456",
+    });
+
+    const sql = mockQuery.mock.calls[0]![0] as string;
+    expect(sql).toMatch(/visitor_id = COALESCE\(chat_sessions\.visitor_id, EXCLUDED\.visitor_id\)/);
+  });
+});
