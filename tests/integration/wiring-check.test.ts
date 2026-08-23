@@ -547,6 +547,53 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
     // Must return a non-empty answer (gap message)
     expect(result.answer.length).toBeGreaterThan(0);
   });
+
+  // PR-9(R10救出): 書籍著作権保護のRAG抜粋上限(src/agent/config/ragLimits.ts)を
+  // 現行経路(synthesisTool)へ適用した回帰テスト。この上限は元々 index.ts に
+  // 未登録の LangGraph 経路(llmCalls.ts)にしか実装されておらず、現行経路は
+  // 取得チャンクを丸ごとLLMへ送っていた。
+  it("RAG抜粋がRAG_EXCERPT_MAX_CHARS(200字)で切り詰められ、RAG_MAX_EXCERPTS(3件)を超える分はプロンプトに入らない", async () => {
+    process.env["GROQ_API_KEY"] = "test-groq-key";
+
+    MOCK_POOL.query.mockResolvedValueOnce({
+      rows: [{ system_prompt: null, system_prompt_variants: null }],
+      rowCount: 1,
+    });
+    jest.spyOn(
+      require("../../src/api/admin/tuning/tuningRulesRepository"),
+      "getActiveRulesForTenant"
+    ).mockResolvedValueOnce([]);
+
+    const longExcerpt = "書".repeat(500); // 書籍由来チャンクを想定した長文
+    const items = [1, 2, 3, 4].map((n) => ({
+      id: `book-chunk-${n}`,
+      text: `${longExcerpt}-chunk${n}`,
+      score: 0.9,
+      source: "es" as const,
+      metadata: { source: "book" },
+    }));
+
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: "本の内容についてお答えします。",
+    });
+
+    await synthesizeAnswer({
+      query: "本の内容について",
+      items,
+      tenantId: "test-tenant",
+    });
+
+    const groqCallArgs = (groqClient.callWithUsage as jest.Mock).mock.calls[0][0];
+    const userPromptContent = groqCallArgs.messages[1].content as string;
+
+    // 4件目(chunk4)は RAG_MAX_EXCERPTS=3 を超えるため含まれない
+    expect(userPromptContent).not.toContain("chunk4");
+    // 1件目は含まれるが、500字の原文全体ではなく200字に切り詰められている
+    expect(userPromptContent).toContain("書".repeat(50));
+    expect(userPromptContent).not.toContain(longExcerpt); // 500字全文は入らない
+
+    delete process.env["GROQ_API_KEY"];
+  });
 });
 
 // ===========================================================================
