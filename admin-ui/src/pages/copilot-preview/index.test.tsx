@@ -1489,6 +1489,43 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByRole("button", { name: "却下する" })).toBeTruthy();
   });
 
+  // R6: Hermes提案はJudge提案と同じ棚(tuning_rules)・同じ一覧・同じ承認操作の
+  // 対象になるが、出所ラベルはJudgeと区別できる(🌐 Hermesの提案)。
+  it("get_tuning_rules: Hermes提案(source=hermes)はJudge提案と同じ承認ボタンを持ちつつ、出所ラベルで区別できる", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              {
+                id: 55,
+                triggerPattern: "保証期間",
+                expectedBehavior: "3ヶ月と即答する",
+                priority: 5,
+                isActive: false,
+                source: "hermes",
+                status: "pending",
+                evidence: null,
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/Hermesの提案（未承認）/)).toBeTruthy();
+    expect(screen.queryByText(/🤖 AIの提案/)).toBeNull();
+    expect(screen.getByRole("button", { name: "有効にする" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "却下する" })).toBeTruthy();
+  });
+
   it("get_tuning_rules: 自分で作ったルール(source=manual)にはAI提案バッジも承認ボタンも出ない", async () => {
     mockAgent({
       reply: "指示ルールの状況をお伝えしました。",

@@ -39,6 +39,16 @@ describe('listRules', () => {
     expect(args).toEqual(['tenant-abc', 'judge', 'pending']);
   });
 
+  // R6: Judge/Hermes提案を同一一覧に出すため、source に配列を渡すと ANY() になる
+  it('source に配列を渡すと SQL は "source = ANY($n)" になり、配列がそのまま引数に渡る', async () => {
+    await listRules('tenant-abc', { source: ['judge', 'hermes'], status: 'pending' });
+
+    const [sql, args] = mockQuery.mock.calls[0];
+    expect(sql).toContain('source = ANY($2)');
+    expect(sql).toContain('status = $3');
+    expect(args).toEqual(['tenant-abc', ['judge', 'hermes'], 'pending']);
+  });
+
   it('SELECT句にsource/status/evidence列が含まれる（AIReportTabがこれらを必要とする）', async () => {
     await listRules('tenant-abc');
     const [sql] = mockQuery.mock.calls[0];

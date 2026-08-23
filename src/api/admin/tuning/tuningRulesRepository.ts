@@ -40,7 +40,8 @@ export interface TuningRule {
 }
 
 export interface ListRulesFilters {
-  source?: string;
+  /** R6: Judge/Hermes提案を同一一覧に出すため、複数値(配列)を受け付ける */
+  source?: string | string[];
   status?: string;
 }
 
@@ -79,9 +80,18 @@ export interface UpdateRuleParams {
 export async function listRules(tenantId?: string, filters?: ListRulesFilters): Promise<TuningRule[]> {
   const pool = getPool();
 
-  const args: string[] = tenantId ? [tenantId] : [];
+  const args: unknown[] = tenantId ? [tenantId] : [];
   const conditions: string[] = tenantId ? ["(tenant_id = $1 OR tenant_id = 'global')"] : [];
-  if (filters?.source) { args.push(filters.source); conditions.push(`source = $${args.length}`); }
+  if (filters?.source) {
+    // R6: 配列(複数source)なら ANY、単一文字列なら従来通り = で絞り込む
+    if (Array.isArray(filters.source)) {
+      args.push(filters.source);
+      conditions.push(`source = ANY($${args.length})`);
+    } else {
+      args.push(filters.source);
+      conditions.push(`source = $${args.length}`);
+    }
+  }
   if (filters?.status) { args.push(filters.status); conditions.push(`status = $${args.length}`); }
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 

@@ -2604,7 +2604,9 @@ describe('POST /v1/admin/agent/chat', () => {
 
       // Promise.allSettled の6番目(0始まりで index 5)が承認待ちルールのクエリ
       const [tuningSql] = mockQuery.mock.calls[5]!;
-      expect(tuningSql).toContain("source = 'judge'");
+      // R6: Hermes提案もJudge提案と同じ棚(tuning_rules)に着地するため、
+      // 承認待ち件数の集計にも含める
+      expect(tuningSql).toContain("source IN ('judge', 'hermes')");
       expect(tuningSql).toContain('is_active = false');
       expect(tuningSql).toMatch(/status IS DISTINCT FROM 'rejected'/);
       // 修正前の条件式が紛れ込んでいないことも確認する(巻き戻しの検出)
