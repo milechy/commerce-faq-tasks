@@ -27,7 +27,7 @@ import { logger } from '../../lib/logger';
 export async function runSearchAgent(
   params: AgentSearchParams
 ): Promise<AgentSearchResponse> {
-  const { q, topK, debug = true, useLlmPlanner, tenantId, visitorId, excludedIds } = params;
+  const { q, topK, debug = true, useLlmPlanner, tenantId, visitorId, excludedIds, sessionId } = params;
   const effectiveTenantId = tenantId ?? "demo";
   const steps: AgentStep[] = [];
 
@@ -200,6 +200,7 @@ export async function runSearchAgent(
     tenantId: effectiveTenantId,
     behaviorContext,
     similarPatterns: similarPatterns ?? [],
+    sessionId,
   });
   const tSynth1 = performance.now();
   steps.push({
@@ -246,6 +247,8 @@ export async function runSearchAgent(
     ragSources,
     category: typeof plan.filters?.category === "string" ? plan.filters.category : undefined,
     gapSignal: synth.gapSignal,
+    promptVariantId: synth.variantId,
+    promptVariantName: synth.variantName,
     // Subtask 3: synthesis が usage を返さない場合（GROQ キー無し / fallback / エラー）でも
     // 既に消費済みの embedding トークンを課金に残すため、llmUsage は常に返す。
     // chat LLM が完全に未実行なら {0,0} となり、上位で「chat 実トークン 0」を表す。
