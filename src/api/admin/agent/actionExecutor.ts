@@ -454,6 +454,35 @@ export type KnowledgeGapsListCardPayload = {
   totalCount: number;
 };
 
+// GID 1217752900578379 (R4): ルール効果(DiD推定)カード。
+// ruleEffect.ts のAPIレスポンスはトップレベルsnake_case・comparison内camelCaseが
+// 混在しているが(既存の歪みでスコープ外)、カードはここで一貫したcamelCaseに吸収する。
+// comparison/progress は互いに排他(母数充足時はcomparisonのみ、不足時はprogressのみ)。
+// 母数不足時は数値を0埋めせずnullにする(WeeklySummaryCardPayloadと同じ規約)。
+// 3層同期(useAgentChatTransport.ts の RuleEffectAgentActionCard /
+// copilot-preview/index.tsx の Card union)はこのフィールド形状と一致させること。
+export type RuleEffectCardPayload = {
+  kind: 'rule_effect';
+  ruleId: number;
+  approvedAt: string;
+  truncated: boolean;
+  analyzedSessions: number;
+  comparison: {
+    didEstimate: number;
+    ci95Low: number;
+    ci95High: number;
+    naiveTreatmentDelta: number;
+  } | null;
+  progress: Array<{
+    group: string;
+    /** 店主向けの日本語ラベル。旧UIに同等表示が無いためここが唯一の語彙(フロントに辞書を二重持ちしない)。 */
+    groupLabel: string;
+    currentN: number;
+    requiredN: number;
+    etaDays: number | null;
+  }> | null;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -464,7 +493,8 @@ export type ActionCardPayload =
   | ChatSessionListCardPayload
   | ChatSessionMessagesCardPayload
   | ConversationEvaluationCardPayload
-  | KnowledgeGapsListCardPayload;
+  | KnowledgeGapsListCardPayload
+  | RuleEffectCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -3617,37 +3647,72 @@ export async function executeToolCall(
         }
 
         if (result.status === 'insufficient_data') {
-          // ruleEffect.ts の4群ラベル。旧UIに同等の表示は無いためここが唯一の語彙。
+          // ruleEffect.ts の4群ラベル。旧UIに同等の表示は無いためここが唯一の語彙
+          // (フロントに同じ辞書を二重持ちさせない。ConversationEvaluationCardPayload の
+          // axes[].label / ChatSessionMessagesCardPayload の roleLabel と同じ作法)。
           const groupLabel: Record<string, string> = {
             beforeTreatment: '承認前・該当する会話',
             afterTreatment: '承認後・該当する会話',
             beforeControl: '承認前・該当しない会話',
             afterControl: '承認後・該当しない会話',
           };
+          const card: RuleEffectCardPayload = {
+            kind: 'rule_effect',
+            ruleId,
+            approvedAt: result.approvedAt,
+            truncated: result.truncated,
+            analyzedSessions: result.analyzedSessions,
+            comparison: null,
+            progress: result.progress.map((p) => ({
+              group: p.group,
+              groupLabel: groupLabel[p.group] ?? p.group,
+              currentN: p.currentN,
+              requiredN: p.requiredN,
+              etaDays: p.etaDays,
+            })),
+          };
           const lines = [
             `指示ルール（ID: ${ruleId}）はまだ効果を判定できません（判定に必要な会話数が不足しています）`,
           ];
-          for (const p of result.progress) {
-            const label = groupLabel[p.group] ?? p.group;
+          for (const p of card.progress!) {
             const eta = p.etaDays != null ? `、現ペースであと約${p.etaDays}日` : '';
-            lines.push(`・${label}: 現在${p.currentN}件 / 必要${p.requiredN}件${eta}`);
+            lines.push(`・${p.groupLabel}: 現在${p.currentN}件 / 必要${p.requiredN}件${eta}`);
           }
-          return truncate(lines.join('\n'));
+          return { text: truncate(lines.join('\n')), card };
         }
 
         // status === 'ok'
         const { did, naiveTreatmentDelta } = result.comparison;
         const [ciLow, ciHigh] = did.ci95;
-        const verdict = ciLow > 0 ? '効いている可能性が高いです' : ciHigh < 0 ? '逆効果の可能性があります' : 'まだ判定できません（差が誤差の範囲内です）';
+        const card: RuleEffectCardPayload = {
+          kind: 'rule_effect',
+          ruleId,
+          approvedAt: result.approvedAt,
+          truncated: result.truncated,
+          analyzedSessions: result.analyzedSessions,
+          comparison: {
+            didEstimate: did.estimate,
+            ci95Low: ciLow,
+            ci95High: ciHigh,
+            naiveTreatmentDelta,
+          },
+          progress: null,
+        };
+        const verdict =
+          card.comparison!.ci95Low > 0
+            ? '効いている可能性が高いです'
+            : card.comparison!.ci95High < 0
+              ? '逆効果の可能性があります'
+              : 'まだ判定できません（差が誤差の範囲内です）';
         const lines = [
           `指示ルール（ID: ${ruleId}）の効果: ${verdict}`,
-          `推定差分: ${did.estimate}点（95%信頼区間: ${ciLow}〜${ciHigh}）`,
-          `参考（対照群との比較前の単純差分）: ${naiveTreatmentDelta}点`,
+          `推定差分: ${card.comparison!.didEstimate}点（95%信頼区間: ${card.comparison!.ci95Low}〜${card.comparison!.ci95High}）`,
+          `参考（対照群との比較前の単純差分）: ${card.comparison!.naiveTreatmentDelta}点`,
         ];
-        if (result.truncated) {
-          lines.push(`※直近${result.analyzedSessions}件のセッションで判定しています`);
+        if (card.truncated) {
+          lines.push(`※直近${card.analyzedSessions}件のセッションで判定しています`);
         }
-        return truncate(lines.join('\n'));
+        return { text: truncate(lines.join('\n')), card };
       } catch (err) {
         logger.warn('[actionExecutor] get_tuning_rule_effect failed', err);
         return truncate('ルール効果の取得に失敗しました');

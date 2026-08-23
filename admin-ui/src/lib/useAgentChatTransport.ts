@@ -25,8 +25,9 @@ export type AnsweredFrom = "faq_list" | "tool_action" | "general";
 
 // バックエンド(actionExecutor.ts の各 *CardPayload)が自然文に添えて返す構造化カード。
 // card を返すのは get_legacy_ui_link / get_tuning_rules / get_weekly_briefing /
-// get_chat_sessions / get_chat_session_messages / get_conversation_evaluation のみで、
-// 他のツールは従来どおり result の自然文のみ。フィールド形はサーバ側の型と1:1で対応させる
+// get_chat_sessions / get_chat_session_messages / get_conversation_evaluation /
+// get_knowledge_gaps / get_tuning_rule_effect のみで、他のツールは従来どおり
+// result の自然文のみ。フィールド形はサーバ側の型と1:1で対応させる
 // (型定義箇所はサーバ/ここの2箇所に限る)。
 export type ConversationEvaluationAgentActionCard = {
   kind: "conversation_evaluation";
@@ -134,6 +135,30 @@ export type WeeklySummaryAgentActionCard = {
   gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
 };
 
+// GID 1217752900578379 (R4): ルール効果(DiD推定)カード。フィールド形状は
+// src/api/admin/agent/actionExecutor.ts の RuleEffectCardPayload と1対1に保つ。
+// comparison/progress は互いに排他(母数充足時はcomparisonのみ非null)。
+export type RuleEffectAgentActionCard = {
+  kind: "rule_effect";
+  ruleId: number;
+  approvedAt: string;
+  truncated: boolean;
+  analyzedSessions: number;
+  comparison: {
+    didEstimate: number;
+    ci95Low: number;
+    ci95High: number;
+    naiveTreatmentDelta: number;
+  } | null;
+  progress: Array<{
+    group: string;
+    groupLabel: string;
+    currentN: number;
+    requiredN: number;
+    etaDays: number | null;
+  }> | null;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -144,7 +169,8 @@ export type AgentActionCard =
   | ChatSessionListAgentActionCard
   | ChatSessionMessagesAgentActionCard
   | ConversationEvaluationAgentActionCard
-  | KnowledgeGapsListAgentActionCard;
+  | KnowledgeGapsListAgentActionCard
+  | RuleEffectAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

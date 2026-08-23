@@ -6722,6 +6722,16 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('5.2点');
       expect(result).toContain('1.1〜9.3');
       expect(result).not.toContain('直近'); // truncated=falseのときは打ち切り注記を出さない
+      // text と card は同一オブジェクトから組み立てる(2箇所で別計算しない)
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'rule_effect',
+        ruleId: 42,
+        approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false,
+        analyzedSessions: 40,
+        comparison: { didEstimate: 5.2, ci95Low: 1.1, ci95High: 9.3, naiveTreatmentDelta: 8.5 },
+        progress: null,
+      });
     });
 
     it('信頼区間の上限が0未満のときは「逆効果の可能性」と返す(断定語を使わない)', async () => {
@@ -6796,6 +6806,13 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('効果なし');
       expect(result).not.toContain('改善');
       expect(result).not.toContain('悪化');
+      // 回帰: card側も母数不足時はcomparisonがnullで、数値(0埋め)が混入していない
+      const card = res.body.actions[0].card;
+      expect(card.comparison).toBeNull();
+      expect(card.progress).toEqual([
+        { group: 'afterTreatment', groupLabel: '承認後・該当する会話', currentN: 2, requiredN: 5, etaDays: 10 },
+        { group: 'beforeControl', groupLabel: '承認前・該当しない会話', currentN: 4, requiredN: 5, etaDays: null },
+      ]);
     });
 
     it('etaDaysがnullの群は見込み日数を出さない(before群は観測期間固定のため)', async () => {
