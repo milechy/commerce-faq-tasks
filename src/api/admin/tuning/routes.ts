@@ -398,7 +398,12 @@ export function registerTuningRoutes(app: Express): void {
     const tenantFilter: string | undefined = isSuperAdmin
       ? ((req.query["tenant"] as string | undefined) || undefined)
       : jwtTenantId || undefined;
-    const sourceFilter = (req.query["source"] as string | undefined) || undefined;
+    // R6: Judge/Hermes提案を同一一覧に出すため、カンマ区切りで複数指定できる
+    // (例: source=judge,hermes)。単一値のときは従来通り文字列のまま渡す。
+    const rawSource = req.query["source"] as string | undefined;
+    const sourceValues = rawSource ? rawSource.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    const sourceFilter: string | string[] | undefined =
+      sourceValues.length > 1 ? sourceValues : sourceValues[0];
     const statusFilter = (req.query["status"] as string | undefined) || undefined;
 
     try {

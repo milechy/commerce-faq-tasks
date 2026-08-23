@@ -124,6 +124,18 @@ describe("GET /v1/admin/analytics/cv-status — source='user'フィルタ (PR-3)
   });
 });
 
+describe("GET /v1/admin/analytics/measurement-health — source='user'フィルタ (PR-7)", () => {
+  it("outcome記録率・実ユーザー有効セッション数のクエリにsource='user'絞り込みが入っている", async () => {
+    const res = await request(makeApp()).get("/v1/admin/analytics/measurement-health");
+    expect(res.status).toBe(200);
+
+    const allSql = mockQuery.mock.calls.map((c) => c[0] as string);
+    const outcomeSql = allSql.find((sql) => /outcome_recorded_by/.test(sql));
+    expect(outcomeSql).toBeDefined();
+    expect(outcomeSql).toContain(USER_SOURCE_SQL);
+  });
+});
+
 describe("GET /v1/admin/analytics/knowledge-attribution — source='user'フィルタ (PR-3)", () => {
   it("current_period・previous_period 両方のCTEにsource='user'絞り込みが入っている", async () => {
     const res = await request(makeApp()).get(

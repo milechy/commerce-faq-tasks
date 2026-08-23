@@ -115,10 +115,6 @@ import { searchPgVector } from "../../src/search/pgvector";
 import { createChatHandler } from "../../src/api/chat/route";
 import { runDialogTurn } from "../../src/agent/dialog/dialogAgent";
 import {
-  setFlowSessionMeta,
-  resetFlowSessionMeta,
-} from "../../src/agent/dialog/flowContextStore";
-import {
   setSalesSessionMeta,
   clearSalesSessionMeta,
 } from "../../src/agent/dialog/salesContextStore";
@@ -235,50 +231,14 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
     );
   });
 
-  it("POST /api/chat returns flowState from flowContextStore (LemonSlice I-4)", async () => {
-    const SESSION_ID = "session-flowstate-i4-test";
-    const FLOW_KEY = { tenantId: "test-tenant", conversationId: SESSION_ID };
-
-    jest.spyOn(
-      require("../../src/agent/dialog/dialogAgent"),
-      "runDialogTurn"
-    ).mockResolvedValue({
-      answer: "確認です。来店予約を進めてよろしいですか？",
-      needsClarification: false,
-      clarifyingQuestions: [],
-      detectedIntents: {},
-      meta: { gapSignal: { hitCount: 1, topScore: 0.9 } },
-    });
-
-    // flowContextStore に confirm 状態をセット（langGraph パスが書き込む想定の状態を再現）
-    setFlowSessionMeta(FLOW_KEY, {
-      state: "confirm",
-      turnIndex: 2,
-      sameStateRepeats: 0,
-      clarifyRepeats: 0,
-      confirmRepeats: 1,
-      recentStates: ["answer", "confirm"],
-      lastUpdatedAt: new Date().toISOString(),
-    });
-
-    try {
-      const app = buildChatApp();
-      const res = await request(app)
-        .post("/api/chat")
-        .set("x-api-key", "test-api-key")
-        .send({ message: "予約をお願いします", sessionId: SESSION_ID });
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.flowState).toBe("confirm");
-    } finally {
-      resetFlowSessionMeta(FLOW_KEY);
-    }
-  });
-
-  it("POST /api/chat prefers salesContextStore currentStage over flowContextStore (LemonSlice I-4)", async () => {
+  // PR-10: 旧「flowContextStore からの flowState 復元」テストは、テスト自身が
+  // setFlowSessionMeta で状態を書き込んでから読み戻すだけの自己完結テストで、
+  // 実配線を何も検証していなかった（書き手は LangGraph一式のみで、それはPR-10で削除）。
+  // flowState は salesContextStore の currentStage のみが実ソースのため、
+  // そちらを実際に検証するテストに置き換える。
+  it("POST /api/chat returns flowState from salesContextStore currentStage (LemonSlice I-4)", async () => {
     const SESSION_ID = "session-flowstate-i4-sales-test";
     const SALES_KEY = { tenantId: "test-tenant", sessionId: SESSION_ID };
-    const FLOW_KEY = { tenantId: "test-tenant", conversationId: SESSION_ID };
 
     jest.spyOn(
       require("../../src/agent/dialog/dialogAgent"),
@@ -291,17 +251,7 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
       meta: { gapSignal: { hitCount: 1, topScore: 0.9 } },
     });
 
-    // sales store に propose、flow store に confirm を投入 → sales が優先されること
     setSalesSessionMeta(SALES_KEY, { currentStage: "propose" });
-    setFlowSessionMeta(FLOW_KEY, {
-      state: "confirm",
-      turnIndex: 2,
-      sameStateRepeats: 0,
-      clarifyRepeats: 0,
-      confirmRepeats: 1,
-      recentStates: ["answer", "confirm"],
-      lastUpdatedAt: new Date().toISOString(),
-    });
 
     try {
       const app = buildChatApp();
@@ -314,7 +264,6 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
       expect(res.body.data.flowState).toBe("propose");
     } finally {
       clearSalesSessionMeta(SALES_KEY);
-      resetFlowSessionMeta(FLOW_KEY);
     }
   });
 
@@ -547,6 +496,53 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
     expect(result.gapSignal.hitCount).toBe(0);
     // Must return a non-empty answer (gap message)
     expect(result.answer.length).toBeGreaterThan(0);
+  });
+
+  // PR-9(R10救出): 書籍著作権保護のRAG抜粋上限(src/agent/config/ragLimits.ts)を
+  // 現行経路(synthesisTool)へ適用した回帰テスト。この上限は元々 index.ts に
+  // 未登録の LangGraph 経路(llmCalls.ts)にしか実装されておらず、現行経路は
+  // 取得チャンクを丸ごとLLMへ送っていた。
+  it("RAG抜粋がRAG_EXCERPT_MAX_CHARS(200字)で切り詰められ、RAG_MAX_EXCERPTS(3件)を超える分はプロンプトに入らない", async () => {
+    process.env["GROQ_API_KEY"] = "test-groq-key";
+
+    MOCK_POOL.query.mockResolvedValueOnce({
+      rows: [{ system_prompt: null, system_prompt_variants: null }],
+      rowCount: 1,
+    });
+    jest.spyOn(
+      require("../../src/api/admin/tuning/tuningRulesRepository"),
+      "getActiveRulesForTenant"
+    ).mockResolvedValueOnce([]);
+
+    const longExcerpt = "書".repeat(500); // 書籍由来チャンクを想定した長文
+    const items = [1, 2, 3, 4].map((n) => ({
+      id: `book-chunk-${n}`,
+      text: `${longExcerpt}-chunk${n}`,
+      score: 0.9,
+      source: "es" as const,
+      metadata: { source: "book" },
+    }));
+
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: "本の内容についてお答えします。",
+    });
+
+    await synthesizeAnswer({
+      query: "本の内容について",
+      items,
+      tenantId: "test-tenant",
+    });
+
+    const groqCallArgs = (groqClient.callWithUsage as jest.Mock).mock.calls[0][0];
+    const userPromptContent = groqCallArgs.messages[1].content as string;
+
+    // 4件目(chunk4)は RAG_MAX_EXCERPTS=3 を超えるため含まれない
+    expect(userPromptContent).not.toContain("chunk4");
+    // 1件目は含まれるが、500字の原文全体ではなく200字に切り詰められている
+    expect(userPromptContent).toContain("書".repeat(50));
+    expect(userPromptContent).not.toContain(longExcerpt); // 500字全文は入らない
+
+    delete process.env["GROQ_API_KEY"];
   });
 
   // D8/G-d: 承認したルールが実際に本番プロンプトへ入ることの端から端までの検証。

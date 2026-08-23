@@ -183,6 +183,15 @@ describe('public/widget.js アバターセッション keep-alive / 復活の不
   it('自動再生ブロックの可観測性: AudioPlaybackStatusChanged を DIAG ログに出している', () => {
     expect(WIDGET_SRC).toMatch(/AudioPlaybackStatusChanged[\s\S]{0,300}?canPlaybackAudio/);
   });
+
+  // G6: _tracker が未初期化(非同期初期化のレース)でも r2c_vid を直読みして
+  // visitor_id を送る。this がフォールバックを持たないと初回1通の結合が
+  // 常に欠落する(学習ループ要件定義 G6)。
+  it('/api/chat 送信時、_tracker 未初期化なら localStorage の r2c_vid に直読みフォールバックする', () => {
+    const m = WIDGET_SRC.match(/var chatVisitorId[\s\S]{0,500}?visitor_id: chatVisitorId,/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toMatch(/localStorage\.getItem\(\s*['"]r2c_vid['"]\s*\)/);
+  });
 });
 
 describe('public/widget.min.js が壊れたビルド成果物になっていない', () => {

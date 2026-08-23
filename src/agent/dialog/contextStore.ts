@@ -13,7 +13,7 @@ interface SessionEntry {
 
 // MVP: インメモリのセッションストア。
 // 将来 Redis 等に差し替えられるように、I/F はできるだけ単純に保つ。
-// キー生成は sessionKey.ts に一本化（salesContextStore.ts / flowContextStore.ts と共有）。
+// キー生成は sessionKey.ts に一本化（salesContextStore.ts と共有）。
 const sessions = new Map<string, SessionEntry>()
 
 // 1 セッションあたり保持する最大メッセージ数（安全のため軽く絞っておく）

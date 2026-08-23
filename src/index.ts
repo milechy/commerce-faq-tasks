@@ -4,7 +4,9 @@ import "./config/env";
 import { pool as db } from "./lib/db";
 import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
-import { startOpenClawHeartbeat } from "./agent/openclaw/heartbeatHandler";
+import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
+import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
+import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
 import express from "express";
 import multer from "multer";
 import path from "node:path";
@@ -91,7 +93,6 @@ import { registerConversionRoutes } from "./api/conversion/conversionRoutes";
 import { registerAbTestRoutes } from "./api/conversion/abTestRoutes";
 import { registerAbExposureRoutes } from "./api/conversion/abExposureRoutes";
 import { registerHermesMcpRoutes } from "./api/hermes-mcp/routes";
-import { registerHermesProposalAdminRoutes } from "./api/admin/hermes/routes";
 import { registerKnowledgeGapPhase46Routes } from "./api/admin/knowledge-gaps/routes";
 import { registerNotificationRoutes } from "./api/admin/notifications/routes";
 import { registerOptionRoutes } from "./api/admin/options/routes";
@@ -658,10 +659,10 @@ if (db) registerAbTestRoutes(app, db);
 registerAbExposureRoutes(app, apiStack, db);
 
 // Phase75: Hermes Agent(外部, 別VPS)向けMCPデータエンドポイント(Bearer認証、同意ゲート)
+// R6: 提案(POST /v1/hermes-mcp/proposals)は tuning_rules(source='hermes')に着地する。
+// 専用の承認API(旧 registerHermesProposalAdminRoutes)は作らず、Judge提案と同じ
+// PUT /v1/admin/tuning/:id/approve|reject をそのまま使う(提案の受け皿を1つにする)。
 registerHermesMcpRoutes(app);
-
-// Phase74: Hermes Agent提案の承認ゲートAPI(super_admin/client_admin向け)
-registerHermesProposalAdminRoutes(app, db);
 
 // Phase55: Widget features check (event_tracking フラグ取得)
 //
@@ -752,9 +753,17 @@ async function startServer() {
   alertEngine.start();
   logger.info("[startup] AlertEngine started");
 
-  // Phase47-D: OpenClaw Heartbeat — flow 統計を30分周期で監視（Flag 判定は handler 内部）
-  startOpenClawHeartbeat();
-  logger.info("[startup] OpenClaw Heartbeat initialized");
+  // GID 1216970103691946 (PR-11): SalesLogWriter に Notion sink を接続する。
+  // 未設定(NOTION_API_KEY / NOTION_DB_SALES_LOG_ID が無い)テナント運用も
+  // 引き続き成立させるため、設定が揃っている場合のみ接続する(best-effort)。
+  if (process.env.NOTION_API_KEY && process.env.NOTION_DB_SALES_LOG_ID) {
+    try {
+      setGlobalSalesLogWriter(new SalesLogWriter(createSalesLogNotionSink()));
+      logger.info("[startup] SalesLogWriter (Notion) initialized");
+    } catch (err) {
+      logger.warn({ err }, "[startup] SalesLogWriter (Notion) init failed (non-blocking)");
+    }
+  }
 
   // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）
   if (db && process.env.STRIPE_SECRET_KEY) {
@@ -781,6 +790,17 @@ async function startServer() {
       });
     }, STUCK_JOB_CHECK_INTERVAL_MS);
     logger.info("[startup] pipelineQueue selfHeal + stuck-job monitor started");
+  }
+
+  // GID 1216970103691946 (PR-12): 離脱セッション自動評価スイープ。
+  // chat_sessions 1,041件に対し conversation_evaluations は直近30日0件だった
+  // (evaluateSessionの呼び元が本番チャットから発火しないため)。第2のJudgeは
+  // 作らず既存のevaluateSessionをそのまま15分周期で呼ぶ。既定はr2c_defaultのみ
+  // (JUDGE_SWEEP_TENANTSで段階開放、CLAUDE.md禁止35)。
+  if (db) {
+    const JUDGE_SWEEP_INTERVAL_MS = 15 * 60 * 1000; // 15分
+    judgeSweepRunner.start(JUDGE_SWEEP_INTERVAL_MS);
+    logger.info("[startup] judgeSweepRunner started (15min interval)");
   }
 }
 

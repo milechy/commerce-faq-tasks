@@ -283,6 +283,12 @@ export function registerChatHistoryRoutes(app: Express): void {
           recordedBy: email || null,
         });
 
+        if (!recorded) {
+          // 直前のSELECTでは存在確認済みのため通常到達しないが、
+          // 競合(削除)に備えて「無い」を「空」と区別して返す(CLAUDE.md 禁止20)。
+          return res.status(404).json({ error: "セッションが見つかりません" });
+        }
+
         return res.json({
           sessionId: sessionDbId,
           outcome: recorded.outcome,

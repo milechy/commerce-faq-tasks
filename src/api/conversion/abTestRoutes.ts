@@ -218,7 +218,7 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
       // GID 1216978855735482: 成果(継続率/CV)をchat_sessionsと突合して反映してから集計する。
       // best-effort — 突合が失敗しても、その時点のab_results状態で集計は続行する。
       try {
-        await reconcileAbResultOutcomes(db, id);
+        await reconcileAbResultOutcomes(db, id, existing.rows[0].tenant_id);
       } catch {
         // noop — 集計は続行
       }

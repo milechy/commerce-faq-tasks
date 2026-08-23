@@ -29,6 +29,8 @@ interface SuggestedRule {
   response: string;
   reason?: string;
   evidence?: RuleEvidence | null;
+  /** R6: Hermes提案もJudge提案と同じ棚(tuning_rules)に着地するため、出所を表示で区別する */
+  source?: string;
 }
 
 interface TuningRuleApiRow {
@@ -36,6 +38,7 @@ interface TuningRuleApiRow {
   trigger_pattern: string;
   expected_behavior: string;
   evidence?: RuleEvidence | null;
+  source?: string;
 }
 
 interface CustomerReaction {
@@ -365,6 +368,21 @@ function SuggestedRulesList({
       {rules.map((rule) => (
         <div key={rule.id} style={{ ...CARD, display: "flex", flexDirection: "column", gap: 10 }}>
           <div>
+            {/* R6: Hermes提案もJudge提案と同一の承認導線に乗るため、出所ラベルで区別する */}
+            <span
+              style={{
+                display: "inline-block",
+                marginBottom: 6,
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "2px 8px",
+                borderRadius: 6,
+                color: "#b45309",
+                background: "rgba(245,158,11,0.14)",
+              }}
+            >
+              {rule.source === "hermes" ? "🌐 Hermesの提案" : "🤖 Judgeの提案"}
+            </span>
             <p style={{ margin: "0 0 4px", fontSize: 13, color: "#9ca3af", fontWeight: 600 }}>トリガー</p>
             <p style={{ margin: "0 0 8px", fontSize: 14, color: "#e5e7eb" }}>「{rule.trigger}」</p>
             <p style={{ margin: "0 0 4px", fontSize: 13, color: "#9ca3af", fontWeight: 600 }}>提案返答</p>
@@ -559,8 +577,11 @@ export default function AIReportTab({ tenantId }: { tenantId: string }) {
     if (!isSuperAdmin) return;
     const loadRules = async () => {
       try {
+        // R6: Hermes提案もJudge提案と同じ棚(tuning_rules)に着地するため、
+        // 同一の一覧・同一の承認操作(PUT /v1/admin/tuning/:id/approve|reject)の
+        // 対象にする。source はカンマ区切りで複数指定可(listRules 参照)。
         const res = await authFetch(
-          `${API_BASE}/v1/admin/tuning-rules?tenant=${tenantId}&source=judge&status=pending`
+          `${API_BASE}/v1/admin/tuning-rules?tenant=${tenantId}&source=judge,hermes&status=pending`
         );
         if (res.ok) {
           const data = (await res.json()) as { rules?: TuningRuleApiRow[] };
@@ -569,6 +590,7 @@ export default function AIReportTab({ tenantId }: { tenantId: string }) {
             trigger: r.trigger_pattern,
             response: r.expected_behavior,
             evidence: r.evidence ?? null,
+            source: r.source,
           }));
           setRules(mapped);
         }
