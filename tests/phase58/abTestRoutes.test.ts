@@ -14,12 +14,18 @@ jest.mock('../../src/admin/http/supabaseAuthMiddleware', () => ({
   },
 }));
 
-// PR-6: reconcileAbResultOutcomes が内部で getConversionTypes(独自にgetPool()を
-// 呼ぶ)を使うようになったため、この経路もモックする(このファイルの mockDb は
-// registerAbTestRoutes に注入するdbオブジェクトのみで、getPool()経路とは無関係)。
-const mockGetConversionTypes = jest.fn().mockResolvedValue(['購入完了', '予約完了', '問い合わせ送信', '離脱', '不明']);
+// PR-6: reconcileAbResultOutcomes が内部で getNonConvertingOutcomes(独自に
+// getPool()を呼ぶ)を使うようになったため、この経路もモックする(このファイルの
+// mockDb は registerAbTestRoutes に注入するdbオブジェクトのみで、getPool()経路
+// とは無関係)。GID 1216978660043409(P1): getConversionTypes を直接呼ぶ実装から
+// getNonConvertingOutcomes({nonConvertingOutcomes, reliable}) 経由に変わったため、
+// モックもそれに合わせる(既定は conversion_types 5件相当 = reliable=true)。
+const mockGetNonConvertingOutcomes = jest.fn().mockResolvedValue({
+  nonConvertingOutcomes: ['離脱', '不明'],
+  reliable: true,
+});
 jest.mock('../../src/api/admin/chat-history/chatHistoryRepository', () => ({
-  getConversionTypes: (...args: unknown[]) => mockGetConversionTypes(...args),
+  getNonConvertingOutcomes: (...args: unknown[]) => mockGetNonConvertingOutcomes(...args),
 }));
 
 type Role = 'super_admin' | 'client_admin';

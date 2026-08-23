@@ -612,9 +612,9 @@ describe("getRuleEffect — 群の振り分け", () => {
   });
 
   it("Anti-Slop: 会話本文(first_message)が戻り値に一切含まれない", async () => {
-    const secret = "私のメールは tanaka@example.com です。返品したい";
+    const piiLadenMessage = "私のメールは tanaka@example.com です。返品したい";
     const rows = rowsFor({ bt: 5, at: 5, bc: 5, ac: 5 });
-    rows.push(sessionRow({ session_uuid: "pii", first_message: secret }));
+    rows.push(sessionRow({ session_uuid: "pii", first_message: piiLadenMessage }));
 
     const db = fakeDb([RULE_ROW], rows);
     const result = await getRuleEffect(db as any, 42);
