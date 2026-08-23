@@ -3111,7 +3111,7 @@ export async function executeToolCall(
           );
         }
 
-        await recordOutcome({
+        const recorded = await recordOutcome({
           sessionDbId: resolved.session.id,
           tenantId,
           outcome: outcomeValue,
@@ -3119,6 +3119,11 @@ export async function executeToolCall(
           // 持たないため null に正規化する。HTTP経路(routes.ts)と同じ規約)。
           recordedBy: actor.email || null,
         });
+        if (!recorded) {
+          // 直前のresolveSessionByShortIdでは存在確認済みのため通常到達しないが、
+          // 競合(削除)に備える。
+          return truncate(`セッション[${display}]が見つかりませんでした`);
+        }
         return truncate(`セッション[${display}]の成果を「${outcomeValue}」として記録しました`);
       } catch (err) {
         logger.warn('[actionExecutor] record_session_outcome failed', err);

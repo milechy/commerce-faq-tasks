@@ -11,7 +11,13 @@
 
 import express from 'express';
 import request from 'supertest';
-import { registerEventRoutes, bridgeConversionEvents, resolveChatSessionUuid } from './eventRoutes';
+import {
+  registerEventRoutes,
+  bridgeConversionEvents,
+  resolveChatSessionUuid,
+  autoRecordOutcome,
+} from './eventRoutes';
+import { AUTO_OUTCOME_RECORDED_BY } from '../admin/chat-history/chatHistoryRepository';
 
 // ---------------------------------------------------------------------------
 // DB モック
@@ -25,6 +31,17 @@ jest.mock('../../lib/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 import { logger } from '../../lib/logger';
+
+// GID 1216970103691946 (PR-6): autoRecordOutcome が使う chatHistoryRepository をモック
+const mockGetConversionTypes = jest.fn();
+const mockGetSessionOutcome = jest.fn();
+const mockRecordOutcome = jest.fn();
+jest.mock('../admin/chat-history/chatHistoryRepository', () => ({
+  AUTO_OUTCOME_RECORDED_BY: 'system:cv_bridge',
+  getConversionTypes: (...args: unknown[]) => mockGetConversionTypes(...args),
+  getSessionOutcome: (...args: unknown[]) => mockGetSessionOutcome(...args),
+  recordOutcome: (...args: unknown[]) => mockRecordOutcome(...args),
+}));
 
 // ---------------------------------------------------------------------------
 // テスト用 Express アプリ
@@ -40,6 +57,15 @@ function makeApp(tenantId = 'carnation') {
   registerEventRoutes(app, [], mockDb);
   return app;
 }
+
+// autoRecordOutcome(chatHistoryRepository経由)は resolveChatSessionUuid/bridgeConversionEvents
+// のどのテストでも走りうる(sessionIdForAttributionが解決された時点で常に呼ばれる)ため、
+// 安全なデフォルト値を全テストに適用する。個別テストは必要に応じて上書きする。
+beforeEach(() => {
+  mockGetConversionTypes.mockReset().mockResolvedValue(['購入完了', '予約完了', '問い合わせ送信', '離脱', '不明']);
+  mockGetSessionOutcome.mockReset().mockResolvedValue(null);
+  mockRecordOutcome.mockReset().mockResolvedValue({ outcome: '購入完了', recordedAt: '2026-08-23T00:00:00.000Z', recordedBy: AUTO_OUTCOME_RECORDED_BY });
+});
 
 // ---------------------------------------------------------------------------
 // resolveChatSessionUuid 単体テスト
@@ -94,6 +120,52 @@ describe('resolveChatSessionUuid', () => {
 // bridgeConversionEvents 直接テスト
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// autoRecordOutcome 単体テスト
+// ---------------------------------------------------------------------------
+
+describe('autoRecordOutcome', () => {
+  it('conversion_type(purchase)をテナントのconversion_typesにある「購入完了」にマッピングして記録する', async () => {
+    await autoRecordOutcome('tenant-1', 'uuid-resolved', 'purchase');
+    expect(mockGetConversionTypes).toHaveBeenCalledWith('tenant-1');
+    expect(mockRecordOutcome).toHaveBeenCalledWith({
+      sessionDbId: 'uuid-resolved',
+      tenantId: 'tenant-1',
+      outcome: '購入完了',
+      recordedBy: AUTO_OUTCOME_RECORDED_BY,
+    });
+  });
+
+  it.each([
+    ['reservation', '予約完了'],
+    ['inquiry', '問い合わせ送信'],
+  ] as const)('conversion_type(%s)を「%s」にマッピングする', async (conversionType, expectedLabel) => {
+    await autoRecordOutcome('tenant-1', 'uuid-resolved', conversionType);
+    expect(mockRecordOutcome).toHaveBeenCalledWith(expect.objectContaining({ outcome: expectedLabel }));
+  });
+
+  it.each(['signup', 'other'] as const)(
+    'conversion_type(%s)は対応するテナント表記が無いため記録しない',
+    async (conversionType) => {
+      await autoRecordOutcome('tenant-1', 'uuid-resolved', conversionType);
+      expect(mockGetConversionTypes).not.toHaveBeenCalled();
+      expect(mockRecordOutcome).not.toHaveBeenCalled();
+    },
+  );
+
+  it('マッピング先の言葉がテナントのconversion_typesに含まれなければ記録しない(カスタムテナント)', async () => {
+    mockGetConversionTypes.mockResolvedValue(['成約', 'キャンセル']); // '購入完了' が無い
+    await autoRecordOutcome('tenant-custom', 'uuid-resolved', 'purchase');
+    expect(mockRecordOutcome).not.toHaveBeenCalled();
+  });
+
+  it('既にoutcomeが記録済み(人手/自動問わず)なら上書きしない', async () => {
+    mockGetSessionOutcome.mockResolvedValue({ outcome: '離脱', outcomeRecordedAt: '2026-08-01T00:00:00.000Z', outcomeRecordedBy: 'staff@example.com' });
+    await autoRecordOutcome('tenant-1', 'uuid-resolved', 'purchase');
+    expect(mockRecordOutcome).not.toHaveBeenCalled();
+  });
+});
+
 describe('bridgeConversionEvents', () => {
   beforeEach(() => {
     mockQuery.mockClear();
@@ -117,6 +189,29 @@ describe('bridgeConversionEvents', () => {
     expect(params[1]).toBe('uuid-resolved');
     expect(params[2]).toBe('inquiry');
     expect(params[3]).toBe(0);
+  });
+
+  it('INSERT成功後、解決済みsession_idでoutcome自動記録を試みる(GID 1216970103691946)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'uuid-resolved' }] }) // resolve
+      .mockResolvedValueOnce({ rowCount: 1 }); // INSERT
+    await bridgeConversionEvents(mockDb, 'tenant-1', { chatSessionId: 'conv-1' }, [
+      { event_type: 'chat_conversion', event_data: { conversion_type: 'inquiry', conversion_value: 0 } },
+    ]);
+    expect(mockRecordOutcome).toHaveBeenCalledWith({
+      sessionDbId: 'uuid-resolved',
+      tenantId: 'tenant-1',
+      outcome: '問い合わせ送信',
+      recordedBy: AUTO_OUTCOME_RECORDED_BY,
+    });
+  });
+
+  it('session_idが解決できなければoutcome自動記録も試みない(NULLセッションに記録できないため)', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1 }); // INSERTのみ(resolveは0クエリ)
+    await bridgeConversionEvents(mockDb, 'tenant-1', {}, [
+      { event_type: 'chat_conversion', event_data: { conversion_type: 'inquiry', conversion_value: 0 } },
+    ]);
+    expect(mockRecordOutcome).not.toHaveBeenCalled();
   });
 
   it('chat_conversion以外のevent_typeでは resolve も INSERT も行われない', async () => {

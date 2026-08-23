@@ -22,15 +22,11 @@
 // 一切触れていない（読み取り専用の突合のみ）。
 
 import type { Pool } from 'pg';
+import { getConversionTypes } from '../admin/chat-history/chatHistoryRepository';
 
 const USER_SOURCE_FILTER = `AND (cs.metadata->>'source' = 'user' OR cs.metadata->>'source' IS NULL)`;
 
 const TWO_PLUS_EXCHANGES_MESSAGE_COUNT = 4;
-
-// デフォルトのconversion_types終端2件（admin-ui/src/pages/admin/tenants/ConversionTypesTab.tsx
-// のデフォルト値と一致させる）。カスタムconversion_typesのテナントでは不正確になりうるが、
-// CV率は副次指標(記録のみ・判定に使わない)のため許容する。
-const NON_CONVERTING_OUTCOMES = ['離脱', '不明'];
 
 /**
  * 指定experimentの未解決(reached_two_plus_exchanges IS NULL)露出行をchat_sessionsと突合し、
@@ -42,6 +38,7 @@ const NON_CONVERTING_OUTCOMES = ['離脱', '不明'];
 export async function reconcileAbResultOutcomes(
   pool: Pick<Pool, 'query'>,
   experimentId: number,
+  tenantId: string,
 ): Promise<void> {
   // 2往復以上に到達した行: reached_two_plus_exchanges を true に更新
   // NOTE: ab_results.session_id は UUID型だが chat_sessions.session_id は TEXT型
@@ -60,7 +57,15 @@ export async function reconcileAbResultOutcomes(
     [experimentId, TWO_PLUS_EXCHANGES_MESSAGE_COUNT],
   );
 
-  // CV(副次指標): outcomeが設定済みかつ非離脱/不明の行を converted=true に更新
+  // CV(副次指標): outcomeが設定済みかつ非成約終端でない行を converted=true に更新。
+  // GID 1216970103691946 (PR-6訂正): 以前は '離脱'/'不明' を全テナント共通でハード
+  // コードしており、conversion_typesをカスタマイズしたテナントでは一致せず誤判定
+  // していた。tenants.conversion_types の末尾2件(既定配列の並び「成約...、離脱、
+  // 不明」という既存の暗黙の慣習に合わせる。ConversionTypesTab.tsx はカスタム時
+  // もこの並びを崩さない前提)を、そのテナントの「非成約終端」として使う。
+  const conversionTypes = await getConversionTypes(tenantId);
+  const nonConvertingOutcomes = conversionTypes.slice(-2);
+
   await pool.query(
     `UPDATE ab_results r
      SET converted = true
@@ -71,6 +76,6 @@ export async function reconcileAbResultOutcomes(
        AND cs.outcome IS NOT NULL
        AND cs.outcome <> ALL($2::text[])
        ${USER_SOURCE_FILTER}`,
-    [experimentId, NON_CONVERTING_OUTCOMES],
+    [experimentId, nonConvertingOutcomes],
   );
 }

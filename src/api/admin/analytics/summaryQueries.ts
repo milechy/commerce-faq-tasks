@@ -5,6 +5,7 @@
 // 同じ数値を取得できるよう、認可・レスポンス整形から切り離してここに置く。
 
 import type { Pool } from "pg";
+import { AUTO_OUTCOME_RECORDED_BY } from "../chat-history/chatHistoryRepository";
 
 type Db = Pick<Pool, "query">;
 
@@ -394,9 +395,15 @@ export async function fetchConversionSummary({
     params,
   );
   const total = parseInt(totalCountResult.rows[0]?.total ?? "0", 10);
+  // GID 1216970103691946 (PR-6): CV発生時の自動記録(outcome_recorded_by=
+  // AUTO_OUTCOME_RECORDED_BY)を除く。この指標は「オペレーターが記録した率」を
+  // 意味するため、自動記録を含めると跳ね上がり指標としての意味を失う。
   const recordedResult = await db.query(
     `SELECT COUNT(*) AS recorded FROM chat_sessions s
-     WHERE s.started_at >= NOW() - $1::interval ${tenantClause} AND s.outcome IS NOT NULL ${userSourceClause("s")}`,
+     WHERE s.started_at >= NOW() - $1::interval ${tenantClause}
+       AND s.outcome IS NOT NULL
+       AND (s.outcome_recorded_by IS NULL OR s.outcome_recorded_by <> '${AUTO_OUTCOME_RECORDED_BY}')
+       ${userSourceClause("s")}`,
     params,
   );
   const recorded = parseInt(recordedResult.rows[0]?.recorded ?? "0", 10);

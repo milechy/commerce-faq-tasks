@@ -14,6 +14,14 @@ jest.mock('../../src/admin/http/supabaseAuthMiddleware', () => ({
   },
 }));
 
+// PR-6: reconcileAbResultOutcomes が内部で getConversionTypes(独自にgetPool()を
+// 呼ぶ)を使うようになったため、この経路もモックする(このファイルの mockDb は
+// registerAbTestRoutes に注入するdbオブジェクトのみで、getPool()経路とは無関係)。
+const mockGetConversionTypes = jest.fn().mockResolvedValue(['購入完了', '予約完了', '問い合わせ送信', '離脱', '不明']);
+jest.mock('../../src/api/admin/chat-history/chatHistoryRepository', () => ({
+  getConversionTypes: (...args: unknown[]) => mockGetConversionTypes(...args),
+}));
+
 type Role = 'super_admin' | 'client_admin';
 
 function makeApp(opts: {
