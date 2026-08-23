@@ -164,10 +164,12 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 
 **既知の破れ（是正前に触るなら前提を確認する）**: 自動生成ルールの無断有効化 / 採用済み返答が回答生成に未到達 /
 一致判定が半角カンマ区切りの部分一致のみ / ツール結果500字打ち切りによる一覧欠落 /
-**`approved_at` を書くのは `approveTuningRule`・`rejectTuningRule`（`evaluationsRepository.ts`、いずれも
-super_admin 専用経路）のみで、チャット経由の `updateRule` は書かない。** 店主が使える唯一の承認経路が
-承認時刻を残さないため、`approved_at` を before/after の境界に使う効果測定（`analytics/ruleEffect.ts`）は、
-チャット承認したルールを永久に「未承認」として扱う。
+**`approved_at` を書くのは `approveTuningRule`・`rejectTuningRule`（`evaluationsRepository.ts`）のみで、
+チャット経由の `updateRule` は書かない。** 前者のエンドポイント自体は `super_admin` / `client_admin`
+双方に開いているが（`evaluations/routes.ts` の `ALLOWED_EVALUATION_ROLES`）、呼び出す旧UI
+（`AIReportTab.tsx` / `SuggestedRulesCard.tsx`）が super_admin 限定のため、店主が実際に使える唯一の
+承認経路（チャット）だけが承認時刻を残さない。`approved_at` を before/after の境界に使う効果測定
+（`analytics/ruleEffect.ts`）は、チャット承認したルールを永久に「未承認」として扱う。
 詳細と受け入れ条件: `docs/TUNING_RULE_CHAT_REQUIREMENTS.md`
 
 ## 絶対にやってはいけないこと
