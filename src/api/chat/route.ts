@@ -18,6 +18,7 @@ import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from "../../mid
 import { applyPromptFirewall } from "../../middleware/promptFirewall";
 import { checkTopic } from "../../middleware/topicGuard";
 import { guardOutput } from "../../middleware/outputGuard";
+import { detectPiiRoute } from "../../agent/avatar/piiRouteDetector";
 
 // チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
 const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? GPT_OSS_120B;
@@ -174,6 +175,16 @@ export function createChatHandler(logger: Logger) {
       return;
     }
 
+    // PII導線検知（既存 L5/L7/L6 防御層の隣で判定する）。detectPiiRoute は
+    // 依存ゼロの純関数(src/agent/avatar/piiRouteDetector.ts)。クライアントが
+    // 送る options.piiMode は信用せず、ここで判定した値のみを使う。
+    const piiCheck = detectPiiRoute({
+      userMessage: firewallResult.sanitizedMessage,
+      history: body.history?.filter(
+        (m): m is { role: "user" | "assistant"; content: string } => m.role !== "system"
+      ),
+    });
+
     logger.info(
       {
         requestId,
@@ -192,6 +203,9 @@ export function createChatHandler(logger: Logger) {
       sessionId,
       role: "user",
       content: body.message,
+      metadata: piiCheck.isPiiRoute
+        ? { piiRoute: true, piiReasons: piiCheck.reasons }
+        : undefined,
       trafficSource,
     }).catch((err) =>
       logger.warn({ err }, "[chat-history] save user message failed")
@@ -237,6 +251,8 @@ export function createChatHandler(logger: Logger) {
               }
             : {}),
           visitorId: body.visitor_id || undefined,
+          // クライアント供給値ではなく、サーバ側で判定した値を渡す
+          piiMode: piiCheck.isPiiRoute,
         },
       });
 
@@ -337,6 +353,9 @@ export function createChatHandler(logger: Logger) {
           rag_hit_count: gapSignal?.hitCount ?? 0,
           rag_top_score: gapSignal?.topScore ?? 0,
           knowledge_gap: isKnowledgeGap(gapSignal) || isResponseGap(content),
+          ...(piiCheck.isPiiRoute
+            ? { piiRoute: true, piiReasons: piiCheck.reasons }
+            : {}),
         },
         ragSources: result.meta?.ragSources,
         trafficSource,
