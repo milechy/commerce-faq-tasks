@@ -107,6 +107,14 @@ const AUDITED_SETTINGS_TOOLS: Record<
     // そのまま読むと "true"(文字列)がbooleanのつもりで監査ログに残ってしまう。
     readNewValue: (args) => parseBooleanArg(args['enabled']),
   },
+  // GID 1216978677372391(PR-16, D1): tenants.features.hermes_raw_data_consent
+  // (②外部Hermes VPSへの生データ提供同意)。①自テナント内学習はこのフラグを
+  // 参照しないため対象外(src/lib/hermesConsent.ts)。
+  set_hermes_consent: {
+    fieldName: 'features.hermes_raw_data_consent',
+    successMarker: 'Hermesへのデータ提供同意を',
+    readNewValue: (args) => parseBooleanArg(args['enabled']),
+  },
   // オンボ 是正B-2: オンボ2ツールが未登録で tenant_settings_history に一切記録されず、
   // 「各段階の到達に actor が記録される」(AC-4)が未達だった。successMarker は
   // 下のonboarding_stage_reachedメトリクス発火(478行目付近)と同じ文字列に揃える。

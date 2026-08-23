@@ -9748,6 +9748,97 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // GID 1216978677372391(PR-16, D1): set_hermes_consent — tenants.features.
+  // hermes_raw_data_consent(②外部Hermes VPSへの生データ提供同意)をチャットから
+  // 操作できるようにする。①自テナント内学習はこのフラグを参照しないため対象外。
+  // -------------------------------------------------------------------------
+  describe('set_hermes_consent', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('enabled=trueで成功し、features.hermes_raw_data_consentがtrueで更新される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-1', 'set_hermes_consent', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'Hermesへのデータ提供に同意して', sessionId: 'sess-hc-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Hermesへのデータ提供同意をONにしました');
+      expect(result).not.toContain('確認が必要');
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('UPDATE tenants SET features'),
+        [JSON.stringify({ hermes_raw_data_consent: true }), 'tenant-abc'],
+      );
+    });
+
+    it('enabled=falseで成功し、同意を取り消せる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-2', 'set_hermes_consent', { enabled: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('OFFにしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'Hermesへのデータ提供同意を取り消して', sessionId: 'sess-hc-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Hermesへのデータ提供同意をOFFにしました');
+    });
+
+    it('confirmed無しではDBに触れずブロックされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-3', 'set_hermes_consent', { enabled: true, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから切り替えます。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'Hermesへのデータ提供に同意して', sessionId: 'sess-hc-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    it('成功時に tenant_settings_history へ features.hermes_raw_data_consent の変更が記録される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-4', 'set_hermes_consent', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'Hermesへのデータ提供に同意して', sessionId: 'sess-hc-04' });
+
+      expect(res.status).toBe(200);
+      const recorded = recordedSettingsChanges();
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]!['fieldName']).toBe('features.hermes_raw_data_consent');
+      expect(recorded[0]!['newValue']).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // GID 1217536929600059(E2): update_avatar_profile — アバターの名前・性格・話し方を
   // チャットで更新できるようにする。
   // -------------------------------------------------------------------------

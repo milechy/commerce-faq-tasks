@@ -1253,6 +1253,49 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // GID 1216978677372391(PR-16, D1): データ利用同意の2階層化。
+    // ①自テナント内学習(learned_memory等)はこのフラグを一切参照せず常時ON(同意不要)。
+    // このツールが操作する tenants.features.hermes_raw_data_consent は
+    // ②外部Hermes VPSへの生データ提供の同意のみを表す(src/lib/hermesConsent.ts)。
+    // 旧UI(/admin/avatar のHermesConsentToggle)は2026-10-13まで閉鎖観察中のため、
+    // 閉鎖後もチャットから同意操作ができるようにこのツールを新設する。
+    case 'set_hermes_consent': {
+      const enabled = parseBooleanArg(args['enabled']);
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (enabled === undefined) {
+        return truncate('enabled は必須です');
+      }
+      if (!confirmed) {
+        return truncate(
+          `外部提供の同意を${enabled ? 'ON' : 'OFF'}にするには確認が必要です。confirmed=true を指定して再度実行してください`,
+        );
+      }
+
+      try {
+        // features は他のフラグ(avatar/voice等)も持つJSONBのため、キーだけをマージで
+        // 上書きする(set_avatar_feature / my-tenantハンドラと同じ形。他のフラグを消さない)。
+        const result = await db.query(
+          `UPDATE tenants SET features = COALESCE(features, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+           WHERE id = $2
+           RETURNING id`,
+          [JSON.stringify({ hermes_raw_data_consent: enabled }), tenantId],
+        );
+        if (result.rowCount === 0) {
+          return truncate('テナントが見つかりません');
+        }
+        return truncate(
+          enabled
+            ? 'Hermesへのデータ提供同意をONにしました'
+            : 'Hermesへのデータ提供同意をOFFにしました',
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] set_hermes_consent failed', err);
+        return truncate('データ提供同意の切り替えに失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // GID 1217536929600059(E2): アバターの基本設定（名前・性格・話し方）をチャットで
     // 直せるようにする。既定の見本(is_default=true)は全テナント共通のひな形のため
     // 更新対象から除外する — deactivate_avatar と同じガードの考え方（同コメント参照）。
