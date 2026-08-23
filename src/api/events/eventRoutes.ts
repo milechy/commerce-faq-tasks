@@ -27,6 +27,11 @@ const EventSchema = z.object({
 const EventBatchSchema = z.object({
   visitor_id: z.string().min(1).max(128),
   session_id: z.string().min(1).max(128),
+  // GID 1216970103691946 (PR-5): widget の conversationId(chat_sessions.session_id と
+  // 同じ値)。behavioral_events.session_id(r2c_sid)とは別物。chat_conversion の
+  // conversion_attributions への結合にのみ使う(任意: 会話が無いページでの
+  // trackConversion呼び出しでは無いことがある)。
+  chat_session_id: z.string().min(1).max(128).optional(),
   events: z.array(EventSchema).min(1).max(50),
 });
 
@@ -56,7 +61,7 @@ export function registerEventRoutes(
       return res.status(503).json({ error: 'database_unavailable' });
     }
 
-    const { visitor_id, session_id, events } = parsed.data;
+    const { visitor_id, session_id, chat_session_id, events } = parsed.data;
 
     try {
       // バッチINSERT（パラメータ化クエリ）
@@ -87,7 +92,7 @@ export function registerEventRoutes(
       );
 
       // Phase65: chat_conversion イベントを conversion_attributions にブリッジ (best-effort)
-      await bridgeConversionEvents(db, tenantId, session_id, events);
+      await bridgeConversionEvents(db, tenantId, { chatSessionId: chat_session_id, visitorId: visitor_id }, events);
 
       return res.status(202).json({ accepted: events.length });
     } catch (err) {
@@ -99,20 +104,70 @@ export function registerEventRoutes(
 // ---------------------------------------------------------------------------
 // Phase65: chat_conversion → conversion_attributions ブリッジ
 // behavioral_events INSERT 後に best-effort で呼び出す。失敗しても202維持。
+//
+// GID 1216970103691946 (PR-5訂正): 以前は widget の r2c_sid(sessionStorage、
+// behavioral_events.session_id と同じ値)を「UUIDの形をしているから」という
+// 理由で conversion_attributions.session_id にそのまま入れていたが、集計側は
+// 全て chat_sessions.id(内部UUID PK)で結合するため本番実測で0件しか結合
+// できていなかった(858/1,148件にsession_idありなのに結合0件)。
+// chat_session_id(widgetのconversationId = chat_sessions.session_id)または
+// visitor_id(chat_sessions.visitor_id、PR-4で永続化)から chat_sessions.id を
+// 解決してから挿入する。どちらでも解決できなければ NULL のまま入れる
+// (「形がUUIDだから入れる」をやめる)。
 // ---------------------------------------------------------------------------
 
 const VALID_CONVERSION_TYPES = ['purchase', 'inquiry', 'reservation', 'signup', 'other'] as const;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type EventInput = z.infer<typeof EventSchema>;
+
+export interface ConversionSessionRef {
+  chatSessionId?: string | undefined; // widget の conversationId
+  visitorId?: string | undefined;
+}
+
+/**
+ * chat_session_id(chat_sessions.session_id と一致)を優先して解決し、
+ * 見つからなければ visitor_id(同一tenant内で最新のセッション)にフォールバックする。
+ * どちらも解決できなければ null を返す(呼び出し元は session_id=NULL で挿入する)。
+ */
+export async function resolveChatSessionUuid(
+  db: Pool,
+  tenantId: string,
+  ref: ConversionSessionRef,
+): Promise<string | null> {
+  if (ref.chatSessionId) {
+    const result = await db.query<{ id: string }>(
+      `SELECT id FROM chat_sessions WHERE tenant_id = $1 AND session_id = $2 LIMIT 1`,
+      [tenantId, ref.chatSessionId],
+    );
+    if (result.rows[0]) return result.rows[0].id;
+  }
+  // visitor_id は (tenant_id, visitor_id) の複合でのみ使う(テナントを跨いで衝突しうるため)。
+  if (ref.visitorId) {
+    const result = await db.query<{ id: string }>(
+      `SELECT id FROM chat_sessions
+       WHERE tenant_id = $1 AND visitor_id = $2
+       ORDER BY started_at DESC LIMIT 1`,
+      [tenantId, ref.visitorId],
+    );
+    if (result.rows[0]) return result.rows[0].id;
+  }
+  return null;
+}
 
 export async function bridgeConversionEvents(
   db: Pool,
   tenantId: string,
-  sessionId: string,
+  sessionRef: ConversionSessionRef,
   events: EventInput[],
 ): Promise<void> {
-  const sessionIdForAttribution = UUID_PATTERN.test(sessionId) ? sessionId : null;
+  const hasConversion = events.some((e) => e.event_type === 'chat_conversion');
+  const sessionIdForAttribution = hasConversion
+    ? await resolveChatSessionUuid(db, tenantId, sessionRef).catch((err) => {
+        logger.warn({ msg: '[events→conversion bridge] session resolve failed', error: (err as Error).message, tenantId });
+        return null;
+      })
+    : null;
 
   for (const event of events) {
     if (event.event_type !== 'chat_conversion') continue;

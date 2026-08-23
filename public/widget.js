@@ -3630,6 +3630,10 @@
     var payload = {
       visitor_id: visitorId || 'unknown',
       session_id: sessionId || 'unknown',
+      // GID 1216970103691946 (PR-5): chat_sessions.session_id と同じ値を送り、
+      // conversion_attributions を正しい chat_sessions.id に結合できるようにする。
+      // 会話が発生していないページで呼ばれることもあるため任意項目として送る。
+      chat_session_id: conversationId,
       events: [{
         event_type: 'chat_conversion',
         event_data: {

@@ -12,9 +12,10 @@ function makeTrackConversion(opts: {
   apiKey: string;
   visitorId?: string;
   sessionId?: string;
+  conversationId?: string;
   fetchImpl: typeof fetch;
 }) {
-  const { apiBase, apiKey, visitorId = '', sessionId = '', fetchImpl } = opts;
+  const { apiBase, apiKey, visitorId = '', sessionId = '', conversationId = '', fetchImpl } = opts;
 
   return function trackConversion(conversionType: unknown, conversionValue?: unknown): void {
     if (!conversionType) {
@@ -25,6 +26,9 @@ function makeTrackConversion(opts: {
     const payload = {
       visitor_id: visitorId || 'unknown',
       session_id: sessionId || 'unknown',
+      // GID 1216970103691946 (PR-5): chat_sessions.session_id と同じ値を送り、
+      // conversion_attributions を正しい chat_sessions.id に結合できるようにする。
+      chat_session_id: conversationId,
       events: [
         {
           event_type: 'chat_conversion',
@@ -170,6 +174,20 @@ describe('window.r2c.trackConversion', () => {
     expect(() => fn('purchase', 1000)).not.toThrow();
     // reject の伝播が発生しないことを確認（次の tick まで待つ）
     await new Promise((r) => setTimeout(r, 0));
+  });
+
+  // GID 1216970103691946 (PR-5): payload に chat_session_id(widgetのconversationId)が
+  // 含まれる。conversion_attributions を chat_sessions.id に正しく結合するために必須。
+  it('[PR-5] payload に chat_session_id(conversationId)が含まれる', () => {
+    const fn = makeTrackConversion({
+      apiBase: API_BASE,
+      apiKey: API_KEY,
+      conversationId: 'conv-1234-5678',
+      fetchImpl: mockFetch,
+    });
+    fn('purchase', 5000);
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.chat_session_id).toBe('conv-1234-5678');
   });
 
   it('visitor_id / session_id 未取得時は "unknown" をフォールバックとして使う', () => {
