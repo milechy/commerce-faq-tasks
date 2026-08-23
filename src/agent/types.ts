@@ -93,6 +93,8 @@ export interface AgentSearchResponse {
    *  未設定(0/1variant)時はnull(「割当なし」と「割当あり」を区別する)。 */
   promptVariantId?: string | null;
   promptVariantName?: string | null;
+  /** GID 1216978677398163 (PR-14): 応答に実際に反映された tuning_rules の id 一覧 */
+  appliedRuleIds?: number[];
   debug: AgentDebug;
 }
 
