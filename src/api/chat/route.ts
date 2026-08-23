@@ -145,8 +145,18 @@ export function createChatHandler(logger: Logger) {
     }
 
     // Phase38: セッションIDを確定（クライアント指定 → conversationId → 新規生成）
+    //
+    // 空文字・空白のみは「未指定」として扱い、?? ではなく || で次候補へ落とす。
+    // zod は max(128) のみで min(1) が無いため {"sessionId": ""} は検証を通過し、
+    // ?? は null/undefined しか拾わないため '' がそのまま session_id になっていた。
+    // '' が使われると実害が2つ出る:
+    //   1. chat_sessions の upsert は ON CONFLICT (tenant_id, session_id) のため、
+    //      '' を送った全クライアントが1つのセッション行を共有し、別々の訪問者の
+    //      会話が1本にマージされる(message_count も無限に加算される)。
+    //   2. selectVariant の stickyKey は '' が falsy のため Math.random() に落ち、
+    //      A/B variant が1会話の中でメッセージ毎に振り直される(CLAUDE.md 禁止36)。
     const sessionId: string =
-      body.sessionId ?? body.conversationId ?? randomUUID();
+      body.sessionId?.trim() || body.conversationId || randomUUID();
 
     // L5: Input Sanitizer (Phase48)
     const sanitizeResult = l5SanitizeInput(body.message, body.conversationId ?? 'anon', sessionHistoryStore);

@@ -506,6 +506,40 @@ export async function getConversionTypes(tenantId: string): Promise<string[]> {
   return result.rows[0]?.conversion_types ?? ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"];
 }
 
+/** 最低限「末尾2件を非成約と見なす」慣習が意味を持つために必要な conversion_types の件数。 */
+const MIN_RELIABLE_CONVERSION_TYPES = 3;
+
+export interface NonConvertingOutcomesResult {
+  /** 非成約とみなす outcome 値。unreliable のときは呼び出し元の判断に委ねる生の配列。 */
+  nonConvertingOutcomes: string[];
+  /**
+   * false のとき: conversion_types が3件未満で「末尾2件が非成約」という慣習が成立しない
+   * (2件だと成約系の値まで非成約扱いになり、0〜1件だと逆に何を渡しても成約扱いになる)。
+   * 呼び出し元は outcome 単独の判定を「わからない」として扱うこと(数値を出す/出さないは
+   * 呼び出し元の文脈次第だが、成約と断定してはいけない)。
+   */
+  reliable: boolean;
+}
+
+/**
+ * テナントの conversion_types から「非成約の終端」を導出する単一の情報源。
+ *
+ * 慣習: 既定配列は「成約系の値…、離脱、不明」の並びで、末尾2件が非成約を表す
+ * (ConversionTypesTab.tsx はカスタム時もこの並びを崩さない前提)。この慣習は
+ * conversion_types が3件以上あるときにのみ意味を持つ:
+ *   - 2件だと slice(-2) が配列全体を返し、成約系の値まで非成約扱いになる
+ *   - 0〜1件だと非成約リストが空になり、何を渡しても成約扱いになる
+ * abResultsOutcomeSync.ts(CV副次指標) と memoryDistiller.ts(learned_memory昇格, D2)
+ * の両方がこの判定に依存するため、ここを唯一の情報源にする(第2の判定ロジックを作らない)。
+ */
+export async function getNonConvertingOutcomes(tenantId: string): Promise<NonConvertingOutcomesResult> {
+  const conversionTypes = await getConversionTypes(tenantId);
+  if (conversionTypes.length < MIN_RELIABLE_CONVERSION_TYPES) {
+    return { nonConvertingOutcomes: conversionTypes, reliable: false };
+  }
+  return { nonConvertingOutcomes: conversionTypes.slice(-2), reliable: true };
+}
+
 export interface RecordOutcomeParams {
   sessionDbId: string;  // chat_sessions.id (UUID)
   tenantId: string;

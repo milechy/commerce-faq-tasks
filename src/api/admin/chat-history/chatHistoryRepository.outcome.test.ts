@@ -10,6 +10,7 @@ jest.mock("../../../lib/db", () => ({
 
 import {
   getConversionTypes,
+  getNonConvertingOutcomes,
   recordOutcome,
   getSessionOutcome,
   getActiveEscalations,
@@ -60,6 +61,74 @@ describe("getConversionTypes", () => {
     const result = await getConversionTypes("tenant-misconfigured");
 
     expect(result).toEqual([]);
+  });
+});
+
+describe("getNonConvertingOutcomes", () => {
+  // memoryDistiller.ts(learned_memory昇格, D2) と abResultsOutcomeSync.ts(CV副次指標)が
+  // 共有する唯一の情報源。「末尾2件が非成約」という慣習は conversion_types が3件以上の
+  // ときにのみ意味を持つため、境界(2件/3件/0件)を明示的に固定する。
+
+  it("5件構成(既定値)では末尾2件('離脱','不明')が非成約、reliable=true", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ conversion_types: ["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"] }],
+    });
+
+    const result = await getNonConvertingOutcomes("tenant-abc");
+
+    expect(result).toEqual({ nonConvertingOutcomes: ["離脱", "不明"], reliable: true });
+  });
+
+  it("境界: ちょうど3件なら末尾2件が非成約、reliable=true", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ conversion_types: ["成約", "離脱", "不明"] }] });
+
+    const result = await getNonConvertingOutcomes("tenant-abc");
+
+    expect(result).toEqual({ nonConvertingOutcomes: ["離脱", "不明"], reliable: true });
+  });
+
+  it("回帰: 2件だと慣習が成立せず、reliable=falseかつ全件を返す(呼び出し元が誤って成約系を非成約扱いしないよう明示する)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ conversion_types: ["成約", "キャンセル"] }] });
+
+    const result = await getNonConvertingOutcomes("tenant-abc");
+
+    expect(result.reliable).toBe(false);
+    // slice(-2) をそのまま使うと "成約" まで非成約扱いになるため、reliable=false のときは
+    // 呼び出し元が nonConvertingOutcomes を判定に使わない前提で、生の配列を返す。
+    expect(result.nonConvertingOutcomes).toEqual(["成約", "キャンセル"]);
+  });
+
+  it("回帰: 1件だと reliable=false", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ conversion_types: ["成約"] }] });
+
+    const result = await getNonConvertingOutcomes("tenant-abc");
+
+    expect(result.reliable).toBe(false);
+  });
+
+  it("回帰: 空配列だと reliable=false(空配列のまま返す。呼び出し元が誤って全件成約扱いしないよう明示する)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ conversion_types: [] }] });
+
+    const result = await getNonConvertingOutcomes("tenant-abc");
+
+    expect(result).toEqual({ nonConvertingOutcomes: [], reliable: false });
+  });
+
+  it("conversion_types未設定(null)なら既定5件にフォールバックし、reliable=true", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ conversion_types: null }] });
+
+    const result = await getNonConvertingOutcomes("tenant-abc");
+
+    expect(result).toEqual({ nonConvertingOutcomes: ["離脱", "不明"], reliable: true });
+  });
+
+  it("10件構成でも末尾2件のみが非成約になる(先頭側の成約系を巻き込まない)", async () => {
+    const types = ["A", "B", "C", "D", "E", "F", "G", "H", "離脱", "不明"];
+    mockQuery.mockResolvedValueOnce({ rows: [{ conversion_types: types }] });
+
+    const result = await getNonConvertingOutcomes("tenant-abc");
+
+    expect(result).toEqual({ nonConvertingOutcomes: ["離脱", "不明"], reliable: true });
   });
 });
 

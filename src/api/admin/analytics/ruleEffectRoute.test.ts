@@ -111,6 +111,80 @@ describe('GET /v1/admin/analytics/rule-effect/:ruleId', () => {
     expect(res.body.comparison.did.estimate).toBe(5);
   });
 
+  it('母数充足かつ上限内(truncated=false)のときは truncated / analyzed_sessions をそのまま返す', async () => {
+    mockGetRuleEffect.mockResolvedValueOnce({
+      status: 'ok',
+      ruleId: 42,
+      tenantId: 'tenant-A',
+      approvedAt: '2026-08-01T00:00:00.000Z',
+      comparison: {
+        minSampleSize: 5,
+        groups: {},
+        did: { estimate: 5, ci95: [1, 9] },
+        naiveTreatmentDelta: 10,
+      },
+      truncated: false,
+      analyzedSessions: 20,
+    });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/rule-effect/42')
+      .set('x-tenant-id', 'tenant-A');
+
+    expect(res.status).toBe(200);
+    expect(res.body.truncated).toBe(false);
+    expect(res.body.analyzed_sessions).toBe(20);
+  });
+
+  it('回帰: 上限超過(truncated=true)のときは無言で握りつぶさず、レスポンスにその旨を出す', async () => {
+    mockGetRuleEffect.mockResolvedValueOnce({
+      status: 'ok',
+      ruleId: 42,
+      tenantId: 'tenant-A',
+      approvedAt: '2026-08-01T00:00:00.000Z',
+      comparison: {
+        minSampleSize: 5,
+        groups: {},
+        did: { estimate: 5, ci95: [1, 9] },
+        naiveTreatmentDelta: 10,
+      },
+      truncated: true,
+      analyzedSessions: 5000,
+    });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/rule-effect/42')
+      .set('x-tenant-id', 'tenant-A');
+
+    expect(res.status).toBe(200);
+    expect(res.body.truncated).toBe(true);
+    expect(res.body.analyzed_sessions).toBe(5000);
+  });
+
+  it('insufficient_data でも truncated / analyzed_sessions を返す(母数不足かつ上限超過の両立ケース)', async () => {
+    mockGetRuleEffect.mockResolvedValueOnce({
+      status: 'insufficient_data',
+      ruleId: 42,
+      tenantId: 'tenant-A',
+      approvedAt: '2026-08-01T00:00:00.000Z',
+      minSampleSize: 5,
+      progress: [
+        { group: 'afterTreatment', currentN: 2, requiredN: 5, etaDays: 10 },
+      ],
+      truncated: true,
+      analyzedSessions: 5000,
+    });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/rule-effect/42')
+      .set('x-tenant-id', 'tenant-A');
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('insufficient_data');
+    expect(res.body.truncated).toBe(true);
+    expect(res.body.analyzed_sessions).toBe(5000);
+  });
+
   it('他テナントのルールは404で存在有無を漏らさない(存在確認オラクル防止)', async () => {
     mockGetRuleEffect.mockResolvedValueOnce({
       status: 'ok',

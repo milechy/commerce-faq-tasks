@@ -125,8 +125,10 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0", maxWidth: 480 }}>
             これは社外の分析エージェント(Hermes)へ会話ログ生データを提供するための同意です。
             R2C社内での学習(FAQ改善・回答の自動学習)は、この同意の有無に関わらず常に行われます。
-            ONにすると、貴社の過去分を含む会話ログ(QA AI・アバターの応答)がHermesでの分析対象になります。
-            OFFにすると以降の新規データ提供は停止しますが、それまでに提供済みのデータへの反映は取り消せません。
+            ONにすると、貴社の過去分を含む会話ログ(QA AI・アバターの応答)に加え、その会話に至るまでの
+            ページ閲覧履歴・流入元(URLのパス部分、検索語や会員IDなどのクエリ文字列は除く)がHermesでの
+            分析対象になります。OFFにすると以降の新規データ提供は停止しますが、それまでに提供済みの
+            データへの反映は取り消せません。
           </p>
         </div>
         <button

@@ -18,8 +18,13 @@ const mockQuery = jest.fn();
 jest.mock("../../lib/db", () => ({
   getPool: () => ({ query: (...args: unknown[]) => mockQuery(...args) }),
 }));
+// getNonConvertingOutcomes(conversion_types → 非成約終端の導出)自体の単体テストは
+// chatHistoryRepository.getNonConvertingOutcomes.test.ts に置く。ここでは
+// distillAndPromote が getNonConvertingOutcomes の結果(reliable/nonConvertingOutcomes)を
+// 正しく使い分けるかだけを、結果を直接モックして検証する(導出ロジックを再実装しない)。
+const mockGetNonConvertingOutcomes = jest.fn();
 jest.mock("../../api/admin/chat-history/chatHistoryRepository", () => ({
-  getConversionTypes: jest.fn().mockResolvedValue(["購入完了", "予約完了", "問い合わせ送信", "離脱", "不明"]),
+  getNonConvertingOutcomes: (...args: unknown[]) => mockGetNonConvertingOutcomes(...args),
 }));
 
 const mockCall = groqClient.call as jest.Mock;
@@ -57,6 +62,7 @@ beforeEach(() => {
   process.env.NODE_ENV = "test"; // embedText がダミーベクトルを返す
   mockCreateRepo.mockReturnValue({ saveLearnedMemory: mockSave });
   mockSave.mockResolvedValue(true);
+  mockGetNonConvertingOutcomes.mockReset().mockResolvedValue({ nonConvertingOutcomes: ["離脱", "不明"], reliable: true });
   for (const k of ENV_KEYS) delete process.env[k];
 });
 
@@ -230,5 +236,151 @@ describe("distillAndPromote", () => {
       expect(ok).toBe(false);
       expect(mockCall).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1216978660043409 (PR-17, R9 / D2) 補強:
+// 「非成約終端2件」ヒューリスティックの境界と、テナントがconversion_typesを
+// カスタマイズしたときの挙動を固定する。
+//
+// この判定は abResultsOutcomeSync.ts と共有の慣習(既定配列の並び「成約系…、離脱、不明」の
+// 末尾2件が非成約)に依存しており、テナントが3件未満に縮めると前提が崩れる。
+// 崩れ方を明示的にテストで固定し、仕様変更時に無言で通らないようにする。
+// ---------------------------------------------------------------------------
+
+describe("D2: conversion_types をカスタマイズしたテナントでの境界", () => {
+  function enableTenant(tenant = "carnation") {
+    process.env.LEARNED_MEMORY_ENABLED = "true";
+    process.env.LEARNED_MEMORY_TENANTS = tenant;
+  }
+
+  async function promoteWithOutcome(outcome: string): Promise<boolean> {
+    mockQuery.mockResolvedValueOnce({ rows: [{ has_attribution: false, outcome }] });
+    mockCall.mockResolvedValue('{"question":"q","answer":"a"}');
+    return distillAndPromote({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 90,
+      messages: MESSAGES,
+    });
+  }
+
+  it("reliable=trueかつ非成約終端でないoutcomeなら昇格する(既定5件構成相当)", async () => {
+    enableTenant();
+    mockGetNonConvertingOutcomes.mockResolvedValue({
+      nonConvertingOutcomes: ["離脱", "不明"],
+      reliable: true,
+    });
+
+    await expect(promoteWithOutcome("問い合わせ送信")).resolves.toBe(true);
+  });
+
+  it("reliable=trueでも非成約終端に含まれるoutcomeなら昇格しない", async () => {
+    enableTenant();
+    mockGetNonConvertingOutcomes.mockResolvedValue({
+      nonConvertingOutcomes: ["離脱", "不明"],
+      reliable: true,
+    });
+
+    await expect(promoteWithOutcome("離脱")).resolves.toBe(false);
+  });
+
+  it("回帰: reliable=false(conversion_types 3件未満)なら、成約系に見えるoutcomeでも昇格しない", async () => {
+    // conversion_types が2件("成約","キャンセル")だと slice(-2) が配列全体を返し、
+    // "成約" まで非成約扱いになる(getNonConvertingOutcomes.test.ts が導出ロジック自体を検証する)。
+    // ここでは distillAndPromote が reliable=false を「わからない」として安全側に倒す
+    // (成約と断定して昇格しない)ことだけを確認する。
+    enableTenant();
+    mockGetNonConvertingOutcomes.mockResolvedValue({
+      nonConvertingOutcomes: ["成約", "キャンセル"],
+      reliable: false,
+    });
+
+    const promoted = await promoteWithOutcome("成約");
+
+    expect(promoted).toBe(false); // 本来は成約かもしれないが、断定できないため昇格しない
+    expect(mockCall).not.toHaveBeenCalled(); // Groq課金も発生しない
+  });
+
+  it("outcome が空文字なら昇格しない(未記録と同じ扱い)", async () => {
+    enableTenant();
+    mockQuery.mockResolvedValueOnce({ rows: [{ has_attribution: false, outcome: "" }] });
+
+    const promoted = await distillAndPromote({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 90,
+      messages: MESSAGES,
+    });
+
+    expect(promoted).toBe(false);
+    expect(mockGetNonConvertingOutcomes).not.toHaveBeenCalled(); // 判定まで進まない
+  });
+
+  it("conversion_attributions がある場合は conversion_types を参照せず昇格する(順序保証)", async () => {
+    // CV イベントが構造化されて存在するなら outcome ラベルの解釈は不要。
+    // 余計なDB往復を増やしていないことも同時に固定する。
+    enableTenant();
+    mockQuery.mockResolvedValueOnce({ rows: [{ has_attribution: true, outcome: "離脱" }] });
+    mockCall.mockResolvedValue('{"question":"q","answer":"a"}');
+
+    const promoted = await distillAndPromote({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 90,
+      messages: MESSAGES,
+    });
+
+    expect(promoted).toBe(true);
+    expect(mockGetNonConvertingOutcomes).not.toHaveBeenCalled();
+  });
+
+  it("セッションがDBに存在しない場合は昇格せず、Groqも呼ばない", async () => {
+    enableTenant();
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const promoted = await distillAndPromote({
+      tenantId: "carnation",
+      sessionId: "missing",
+      judgeScore: 95,
+      messages: MESSAGES,
+    });
+
+    expect(promoted).toBe(false);
+    expect(mockCall).not.toHaveBeenCalled();
+  });
+
+  it("CV判定のDBクエリが失敗しても例外を伝播させず false(本番フローを止めない)", async () => {
+    enableTenant();
+    mockQuery.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(
+      distillAndPromote({
+        tenantId: "carnation",
+        sessionId: "s1",
+        judgeScore: 90,
+        messages: MESSAGES,
+      }),
+    ).resolves.toBe(false);
+    expect(mockCall).not.toHaveBeenCalled();
+  });
+
+  it("CV判定は必ず (tenant_id, session_id) の複合で行う(session_id単独で他テナントを拾わない)", async () => {
+    enableTenant();
+    mockQuery.mockResolvedValueOnce({ rows: [{ has_attribution: true, outcome: null }] });
+    mockCall.mockResolvedValue('{"question":"q","answer":"a"}');
+
+    await distillAndPromote({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 90,
+      messages: MESSAGES,
+    });
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("cs.tenant_id = $1");
+    expect(sql).toContain("cs.session_id = $2");
+    expect(params).toEqual(["carnation", "s1"]);
   });
 });

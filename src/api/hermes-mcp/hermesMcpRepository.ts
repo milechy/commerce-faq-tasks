@@ -12,6 +12,7 @@
 
 import { getPool } from "../../lib/db";
 import { userSourceClause } from "../admin/analytics/summaryQueries";
+import { redactEmails } from "../../lib/security/piiPatterns";
 
 export interface HermesConversationMessage {
   role: "user" | "assistant";
@@ -72,13 +73,22 @@ const PAGE_CONTEXT_LOOKBACK_HOURS = 6;
 /**
  * page_url / referrer からクエリ文字列を落として正規化する(Anti-Slop)。
  * クエリ文字列には会員ID・メールアドレス・検索語等の個人情報が載りうる。
+ *
+ * パス部分にもメールアドレス(/users/tanaka@example.com/orders 等のURL設計)が
+ * 埋め込まれうるため、メール形状の部分文字列のみ伏字化する。電話番号・郵便番号の
+ * パターンは適用しない — URLパスには商品ID・注文ID等の数字-数字形式が頻出し、
+ * 誤って伏字化するとHermesの分析に必要な識別子が潰れる(outputGuard.tsのPII_PATTERNSは
+ * LLM応答の自然文向けで、URLパスとは前提が異なるため流用しない)。
+ * これでも「メールを含まないパス埋め込みPII」(例: /users/12345/のような社内ID)は
+ * 検出できない。テナントのURL設計に依存するリスクとして残る。
  */
 function normalizeUrl(url: string | null): string | null {
   if (!url) return null;
   const qIndex = url.indexOf("?");
   const withoutQuery = qIndex >= 0 ? url.slice(0, qIndex) : url;
   const hIndex = withoutQuery.indexOf("#");
-  return hIndex >= 0 ? withoutQuery.slice(0, hIndex) : withoutQuery;
+  const withoutFragment = hIndex >= 0 ? withoutQuery.slice(0, hIndex) : withoutQuery;
+  return redactEmails(withoutFragment);
 }
 
 interface SessionCandidateRow {
