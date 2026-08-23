@@ -10,28 +10,21 @@ export type RagStats = {
   rerankEngine?: string;
 };
 
+// PR-10 訂正 (2026-08-23): "agent.dialog.*" イベント種別と "/agent.dialog"
+// エンドポイントは、その送信元だった AgentDialogOrchestrator/agentDialogRoute.ts
+// が本番未配線の死コードと判明し削除されたため、ここでも削除した
+// （コード上どこからも送信されていなかった。学習ループ監査R10/D5）。
 export type AgentWebhookEvent = {
-  type:
-    | "agent.dialog.completed"
-    | "agent.dialog.fallback"
-    | "agent.dialog.error"
-    | "agent.search.completed"
-    | "agent.search.error";
+  type: "agent.search.completed" | "agent.search.error";
   timestamp: string;
-  endpoint: "/agent.dialog" | "/agent.search";
+  endpoint: "/agent.search";
   latencyMs?: number;
   // 今後 tenantId / requestId などを増やす余地を残しておく
   tenantId?: string;
   requestId?: string;
 
   meta?: {
-    orchestratorMode?: string;
-    route?: string;
-    groq429Fallback?: boolean;
-    hasLanggraphError?: boolean;
-    groqBackoffRemainingMs?: number | null;
     ragStats?: RagStats;
-    needsClarification?: boolean;
 
     // /agent.search 用フィールド
     topK?: number;

@@ -348,8 +348,14 @@ bash SCRIPTS/deploy-vps.sh
 ```
 
 **動作確認**: デプロイ後、`JUDGE_AUTO_EVALUATE=true` の状態で会話を1本終端まで進め、
-`conversation_evaluations` に**1行だけ**入ること。ターン予算(既定12)を超えて会話を続けても
-行が増えないこと（従来は1ターンごとに増えていた）。
+`conversation_evaluations` に**1行だけ**入ること。
+
+> ⚠️ **PR-10 訂正 (2026-08-23)**: 上記手順が前提とする「ターン予算(既定12)」
+> 「終端まで進める」は Phase22 の flow 状態機械(clarify→answer→confirm→terminal)
+> の概念だが、その一式は本番未配線のまま PR-10 で削除済み（学習ループ監査R10/D5）。
+> `JUDGE_AUTO_EVALUATE` という環境変数もコード上に存在しない。本節は実行不可能な
+> 検証手順だったため、実施しないこと。`conversation_evaluations` への重複挿入
+> 防止自体は `uniq_conv_eval_session` インデックス側で担保されている。
 
 ```bash
 ssh root@65.108.159.161 'cd /opt/rajiuce && psql "$(grep -m1 ^DATABASE_URL= .env | cut -d= -f2-)" -c "

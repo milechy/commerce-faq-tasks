@@ -129,6 +129,15 @@ export class SalesLogWriter {
 
 let globalWriter: SalesLogWriter | undefined;
 
+/**
+ * GID 1216970103691946 (PR-11): globalWriter を設定する唯一の入口。
+ * これが呼ばれていなかったため writeSalesLogViaGlobal は常に no-op だった。
+ * 起動時(src/index.ts)から、設定が揃っている場合のみ呼び出す(未設定なら
+ * best-effortでログを書かないだけで、SalesFlow 自体は止めない)。
+ */
+export function setGlobalSalesLogWriter(writer: SalesLogWriter | undefined): void {
+  globalWriter = writer;
+}
 
 /**
  * Convenience helper for writing via the global writer.

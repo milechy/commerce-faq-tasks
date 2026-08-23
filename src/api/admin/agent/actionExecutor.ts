@@ -2093,11 +2093,12 @@ export async function executeToolCall(
           // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標。
           // P4-1で修正: 以前は approved_at/rejected_at (どのコードパスからも
           // 更新されない列)を見ており、店主が作った通常のルールも含めて
-          // 全件を「承認待ち」として数えていた。AI提案(source='judge')かつ
-          // 未承認(is_active=false)かつ却下されていない件数に修正する。
+          // 全件を「承認待ち」として数えていた。AI提案(source IN ('judge','hermes'))
+          // かつ未承認(is_active=false)かつ却下されていない件数に修正する。
+          // R6: Hermes提案もtuning_rulesの同じ棚に着地するため、同じ集計に含める。
           db.query(
             `SELECT COUNT(*)::int AS n FROM tuning_rules
-             WHERE tenant_id = $1 AND source = 'judge' AND is_active = false
+             WHERE tenant_id = $1 AND source IN ('judge', 'hermes') AND is_active = false
                AND status IS DISTINCT FROM 'rejected'`,
             [tenantId],
           ),
@@ -3111,7 +3112,7 @@ export async function executeToolCall(
           );
         }
 
-        await recordOutcome({
+        const recorded = await recordOutcome({
           sessionDbId: resolved.session.id,
           tenantId,
           outcome: outcomeValue,
@@ -3119,6 +3120,11 @@ export async function executeToolCall(
           // 持たないため null に正規化する。HTTP経路(routes.ts)と同じ規約)。
           recordedBy: actor.email || null,
         });
+        if (!recorded) {
+          // 直前のresolveSessionByShortIdでは存在確認済みのため通常到達しないが、
+          // 競合(削除)に備える。
+          return truncate(`セッション[${display}]が見つかりませんでした`);
+        }
         return truncate(`セッション[${display}]の成果を「${outcomeValue}」として記録しました`);
       } catch (err) {
         logger.warn('[actionExecutor] record_session_outcome failed', err);

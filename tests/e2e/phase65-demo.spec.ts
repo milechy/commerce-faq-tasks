@@ -41,11 +41,18 @@ test.describe('Phase65 carnation-demo サイト', () => {
   }
 
   // test 2: inquiry-thanks.html でCV APIが呼ばれること
-  test('inquiry-thanks: POST /api/conversion/attribute が呼ばれる', async ({ page }) => {
-    const cvRequests: string[] = [];
+  //
+  // PR-5訂正 (GID 1216970103691946): 旧テストは /api/conversion/attribute を監視していたが、
+  // このページの window.r2c.trackConversion() は widget.js 経由で /api/events に
+  // chat_conversion イベントとしてPOSTする。/api/conversion/attribute はwidgetから
+  // 一度も呼ばれておらず、`if (cvRequests.length === 0) return;` により本テストは
+  // 常に無条件でパスする死にテストだった。/api/events を監視する形に直す。
+  test('inquiry-thanks: POST /api/events に chat_conversion が送信される', async ({ page }) => {
+    const cvBodies: string[] = [];
     page.on('request', (req) => {
-      if (req.url().includes('/api/conversion/attribute') && req.method() === 'POST') {
-        cvRequests.push(req.url());
+      if (req.url().includes('/api/events') && req.method() === 'POST') {
+        const body = req.postData();
+        if (body?.includes('chat_conversion')) cvBodies.push(body);
       }
     });
 
@@ -54,9 +61,12 @@ test.describe('Phase65 carnation-demo サイト', () => {
     await page.waitForTimeout(6000);
 
     // ヘッドレスCI環境ではwidgetが初期化されない場合があるため0件は許容
-    if (cvRequests.length === 0) return;
+    if (cvBodies.length === 0) return;
 
-    expect(cvRequests.length).toBeGreaterThanOrEqual(1);
+    expect(cvBodies.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(cvBodies[0] ?? '{}');
+    expect(body.events[0].event_type).toBe('chat_conversion');
+    expect(body.events[0].event_data.conversion_type).toBe('inquiry');
 
     // cv-statusの表示確認
     const statusText = await page.locator('#cv-status').textContent();
@@ -64,11 +74,13 @@ test.describe('Phase65 carnation-demo サイト', () => {
   });
 
   // test 3: purchase-thanks.html で価格付きCVが送信されること
-  test('purchase-thanks: price付きCVが送信される', async ({ page }) => {
+  // PR-5訂正: 同上、/api/events を監視する形に直す。
+  test('purchase-thanks: price付きCVが/api/eventsに送信される', async ({ page }) => {
     const cvBodies: string[] = [];
     page.on('request', (req) => {
-      if (req.url().includes('/api/conversion/attribute') && req.method() === 'POST') {
-        cvBodies.push(req.postData() ?? '');
+      if (req.url().includes('/api/events') && req.method() === 'POST') {
+        const body = req.postData();
+        if (body?.includes('chat_conversion')) cvBodies.push(body);
       }
     });
 
@@ -80,8 +92,8 @@ test.describe('Phase65 carnation-demo サイト', () => {
 
     expect(cvBodies.length).toBeGreaterThanOrEqual(1);
     const body = JSON.parse(cvBodies[0] ?? '{}');
-    expect(body.conversion_type).toBe('purchase');
-    expect(body.conversion_value).toBe(3190000);
+    expect(body.events[0].event_data.conversion_type).toBe('purchase');
+    expect(body.events[0].event_data.conversion_value).toBe(3190000);
   });
 
   // test 4b: 旧URL /carnation-demo.html が 301 で新URLへリダイレクトされること

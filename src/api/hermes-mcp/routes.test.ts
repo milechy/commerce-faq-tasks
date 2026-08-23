@@ -15,13 +15,12 @@ jest.mock("../../lib/notifications", () => ({
   createNotification: jest.fn(),
 }));
 
-const mockInsertProposal = jest.fn();
-const mockFindProposalIdByDedupKey = jest.fn();
-jest.mock("./proposalRepository", () => ({
-  createHermesProposalRepository: jest.fn(() => ({
-    insertProposal: mockInsertProposal,
-    findProposalIdByDedupKey: mockFindProposalIdByDedupKey,
-  })),
+// R6: 提案は hermes_strategy_proposals ではなく tuning_rules に着地する
+// (source='hermes', is_active=false, status='pending')。実装は生のpool.queryを
+// 使うため、DBをモックしてSQL/引数を直接検証する。
+const mockQuery = jest.fn();
+jest.mock("../../lib/db", () => ({
+  getPool: () => ({ query: (...args: unknown[]) => mockQuery(...args) }),
 }));
 
 import { isHermesDataConsentGranted, listHermesConsentingTenantIds } from "../../lib/hermesConsent";
@@ -73,8 +72,7 @@ beforeEach(() => {
   mockListConsenting.mockReset();
   mockSearchConversations.mockReset();
   mockCreateNotification.mockReset().mockResolvedValue(undefined);
-  mockInsertProposal.mockReset().mockResolvedValue(true);
-  mockFindProposalIdByDedupKey.mockReset().mockResolvedValue("1");
+  mockQuery.mockReset().mockResolvedValue({ rows: [{ id: 1 }] });
 });
 
 afterEach(() => {
@@ -158,42 +156,60 @@ describe("POST /v1/hermes-mcp/proposals", () => {
     expect(res.status).toBe(401);
   });
 
-  it("正常系: tenant提案(同意済み)を保存し201・通知がclient_admin宛に送られる", async () => {
+  it("正常系: tenant提案(同意済み)を tuning_rules(source=hermes, is_active=false) へ保存し201・通知がclient_admin宛に送られる", async () => {
     mockIsConsentGranted.mockResolvedValue(true);
     const res = await authedPost("/v1/hermes-mcp/proposals", VALID_TENANT_PROPOSAL);
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual({ proposal_id: "1", duplicate: false });
     expect(mockIsConsentGranted).toHaveBeenCalledWith("carnation");
-    expect(mockInsertProposal).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "tenant", tenantId: "carnation" }),
-    );
+
+    const [sql, args] = mockQuery.mock.calls[0]!;
+    expect(sql).toContain("INSERT INTO tuning_rules");
+    expect(sql).toContain("'hermes'");
+    expect(sql).toContain("false");
+    expect(args).toEqual([
+      "carnation",
+      "保証訴求の改善",
+      "保証訴求を初回応答に含める",
+      expect.any(String),
+      "tenant:carnation:warranty-pitch",
+    ]);
+
     expect(mockCreateNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ recipientRole: "client_admin", recipientTenantId: "carnation" }),
+      expect.objectContaining({
+        recipientRole: "client_admin",
+        recipientTenantId: "carnation",
+        link: "/admin/tenants/carnation",
+      }),
     );
   });
 
-  it("正常系: global提案を保存し201・通知がsuper_admin宛に送られる(同意チェックは呼ばれない)", async () => {
+  it("正常系: global提案は tenant_id='global' として保存され201・通知がsuper_admin宛に送られる(同意チェックは呼ばれない)", async () => {
     const res = await authedPost("/v1/hermes-mcp/proposals", VALID_GLOBAL_PROPOSAL);
 
     expect(res.status).toBe(201);
     expect(mockIsConsentGranted).not.toHaveBeenCalled();
+
+    const [, args] = mockQuery.mock.calls[0]!;
+    expect(args[0]).toBe("global");
+
     expect(mockCreateNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ recipientRole: "super_admin", recipientTenantId: undefined }),
+      expect.objectContaining({ recipientRole: "super_admin", recipientTenantId: undefined, link: "/admin/tenants" }),
     );
   });
 
-  it("未同意テナントは403、insertProposalは呼ばれない(同意チェック最優先)", async () => {
+  it("未同意テナントは403、INSERTは呼ばれない(同意チェック最優先)", async () => {
     mockIsConsentGranted.mockResolvedValue(false);
     const res = await authedPost("/v1/hermes-mcp/proposals", VALID_TENANT_PROPOSAL);
 
     expect(res.status).toBe(403);
-    expect(mockInsertProposal).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 
-  it("重複投稿(dedup_key衝突)は200でduplicate:trueを返す(エラー扱いしない)", async () => {
+  it("重複投稿(dedup_key衝突、ON CONFLICT DO NOTHING)は200でduplicate:trueを返す(エラー扱いしない)", async () => {
     mockIsConsentGranted.mockResolvedValue(true);
-    mockInsertProposal.mockResolvedValue(false);
+    mockQuery.mockResolvedValueOnce({ rows: [] });
     const res = await authedPost("/v1/hermes-mcp/proposals", VALID_TENANT_PROPOSAL);
 
     expect(res.status).toBe(200);
@@ -204,7 +220,7 @@ describe("POST /v1/hermes-mcp/proposals", () => {
   it("バリデーションエラー: 不正なscopeは400", async () => {
     const res = await authedPost("/v1/hermes-mcp/proposals", { ...VALID_GLOBAL_PROPOSAL, scope: "bogus" });
     expect(res.status).toBe(400);
-    expect(mockInsertProposal).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 
   it("バリデーションエラー: scope=tenantでtenant_id欠落は400", async () => {

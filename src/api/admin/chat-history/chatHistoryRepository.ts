@@ -6,6 +6,14 @@ import type { RagSource } from "../../../agent/types";
 import type { TrafficSource } from "../../../lib/traffic/trafficSource";
 import { createNotification } from "../../../lib/notifications";
 
+// GID 1216970103691946 (PR-6): outcome_recorded_by にこの接頭辞が入っている行は
+// 自動記録(events→conversion→outcomeブリッジ)であることを示す。人手記録(email文字列)
+// と語彙的に衝突しない。recordOutcome はこれを見て通知を抑止する。
+export const AUTO_OUTCOME_RECORDED_BY = "system:cv_bridge";
+function isAutomatedRecordedBy(recordedBy: string | null): boolean {
+  return recordedBy === AUTO_OUTCOME_RECORDED_BY;
+}
+
 export interface SaveMessageParams {
   tenantId: string;
   sessionId: string;
@@ -29,6 +37,13 @@ export interface SaveMessageParams {
    * 後方互換のため。呼び出し元がトラフィック種別を判定できない場合の安全側デフォルト)。
    */
   trafficSource?: TrafficSource;
+  /**
+   * G6: widget EventTracker が生成する visitor_id(localStorage 'r2c_vid')。
+   * chat_sessions.visitor_id に「セッション新規作成時のみ」記録する(trafficSource と
+   * 同じ理由。2回目以降のメッセージでは既存値を保持する)。テナントを跨いで衝突しうる
+   * ため、単独ではキーにせず必ず (tenant_id, visitor_id) の複合で扱うこと。
+   */
+  visitorId?: string;
 }
 
 /**
@@ -45,18 +60,19 @@ export async function saveMessage(params: SaveMessageParams): Promise<void> {
   // これにより「最初にどの経路でセッションが作られたか」がぶれずに残る。
   const initialMetadata = JSON.stringify({ source: params.trafficSource ?? "user" });
   await pool.query(
-    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count, prompt_variant_id, prompt_variant_name, metadata)
-     VALUES ($1, $2, NOW(), 1, $3, $4, $5::jsonb)
+    `INSERT INTO chat_sessions (tenant_id, session_id, last_message_at, message_count, prompt_variant_id, prompt_variant_name, metadata, visitor_id)
+     VALUES ($1, $2, NOW(), 1, $3, $4, $5::jsonb, $6)
      ON CONFLICT (tenant_id, session_id) DO UPDATE SET
        last_message_at = NOW(),
        message_count = chat_sessions.message_count + 1,
        prompt_variant_id = COALESCE(chat_sessions.prompt_variant_id, EXCLUDED.prompt_variant_id),
        prompt_variant_name = COALESCE(chat_sessions.prompt_variant_name, EXCLUDED.prompt_variant_name),
+       visitor_id = COALESCE(chat_sessions.visitor_id, EXCLUDED.visitor_id),
        metadata = CASE
          WHEN chat_sessions.metadata ? 'source' THEN chat_sessions.metadata
          ELSE COALESCE(chat_sessions.metadata, '{}'::jsonb) || EXCLUDED.metadata
        END`,
-    [params.tenantId, params.sessionId, params.promptVariantId ?? null, params.promptVariantName ?? null, initialMetadata],
+    [params.tenantId, params.sessionId, params.promptVariantId ?? null, params.promptVariantName ?? null, initialMetadata, params.visitorId ?? null],
   );
 
   // 2. chat_sessions の UUID を取得
@@ -507,24 +523,35 @@ export interface RecordedOutcome {
  * outcome を記録し、outcome_recorded 通知を発火する(fire-and-forget)。
  * 呼び出し元は conversion_types との照合を事前に済ませておくこと(この関数自身は検証しない)。
  */
-export async function recordOutcome(params: RecordOutcomeParams): Promise<RecordedOutcome> {
+/**
+ * セッションのoutcomeを記録する。sessionDbId が存在しない、または tenantId が
+ * 一致しない(越境)場合は null を返す(CLAUDE.md 禁止20: 「無い」と「空」を
+ * 同じ値で表現しない。以前は rowCount を見ておらず、この場合も無音で成功扱いだった)。
+ * recordedBy が AUTO_OUTCOME_RECORDED_BY(自動記録)のときは通知を出さない
+ * (CV発生の度に通知が大量発生するのを防ぐ)。
+ */
+export async function recordOutcome(params: RecordOutcomeParams): Promise<RecordedOutcome | null> {
   const pool = getPool();
-  await pool.query(
+  const result = await pool.query<{ id: string }>(
     `UPDATE chat_sessions
      SET outcome = $1, outcome_recorded_at = NOW(), outcome_recorded_by = $2
-     WHERE id = $3`,
-    [params.outcome, params.recordedBy, params.sessionDbId],
+     WHERE id = $3 AND tenant_id = $4
+     RETURNING id`,
+    [params.outcome, params.recordedBy, params.sessionDbId, params.tenantId],
   );
+  if (result.rows.length === 0) return null;
 
-  // Phase52h: Trigger 5 — outcome記録通知
-  void createNotification({
-    recipientRole: 'super_admin',
-    type: 'outcome_recorded',
-    title: 'コンバージョン結果が記録されました',
-    message: `「${params.outcome}」が記録されました`,
-    link: '/admin/analytics',
-    metadata: { sessionId: params.sessionDbId, outcome: params.outcome, tenantId: params.tenantId },
-  });
+  if (!isAutomatedRecordedBy(params.recordedBy)) {
+    // Phase52h: Trigger 5 — outcome記録通知(人手記録のみ)
+    void createNotification({
+      recipientRole: 'super_admin',
+      type: 'outcome_recorded',
+      title: 'コンバージョン結果が記録されました',
+      message: `「${params.outcome}」が記録されました`,
+      link: '/admin/analytics',
+      metadata: { sessionId: params.sessionDbId, outcome: params.outcome, tenantId: params.tenantId },
+    });
+  }
 
   return { outcome: params.outcome, recordedAt: new Date().toISOString(), recordedBy: params.recordedBy };
 }

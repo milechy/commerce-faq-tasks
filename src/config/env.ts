@@ -75,13 +75,6 @@ const envSchema = z.object({
   // ── Elasticsearch index ───────────────────────────────────────────────
   ES_FAQ_INDEX: z.string().optional(),
 
-  // ── Phase22 state machine ─────────────────────────────────────────────
-  PHASE22_MAX_TURNS: numEnv,
-  PHASE22_MAX_CLARIFY_REPEATS: numEnv,
-  PHASE22_MAX_CONFIRM_REPEATS: numEnv,
-  PHASE22_MAX_SAME_STATE_REPEATS: numEnv,
-  PHASE22_LOOP_WINDOW_TURNS: numEnv,
-
   // ── Hybrid RAG ────────────────────────────────────────────────────────
   HYBRID_TIMEOUT_MS: numEnv,
   HYBRID_MOCK_ON_FAILURE: boolEnv,
@@ -89,11 +82,6 @@ const envSchema = z.object({
   RAGSTATS_TOPLEVEL_COMPAT: boolEnv,
 
   // ── Avatar ────────────────────────────────────────────────────────────
-  FF_AVATAR_ENABLED: boolEnv,
-  FF_AVATAR_FORCE_OFF: boolEnv,
-  KILL_SWITCH_AVATAR: boolEnv,
-  KILL_SWITCH_REASON: z.string().optional(),
-  AVATAR_READINESS_TIMEOUT_MS: numEnv,
   ANAM_API_KEY: z.string().optional(),
   FISH_AUDIO_API_KEY: z.string().optional(),
   FISH_AUDIO_REFERENCE_ID: z.string().optional(),
@@ -107,6 +95,11 @@ const envSchema = z.object({
   LIVEKIT_ACCESS_TOKEN: z.string().optional(),
   LEMON_SLICE_ENDPOINT: z.string().optional(),
   LEMON_SLICE_READINESS_URL: z.string().optional(),
+
+  // ── Judge ─────────────────────────────────────────────────────────────
+  // GID 1216970103691946 (PR-12): 離脱セッション自動評価スイープの段階開放。
+  // カンマ区切りテナントID。未設定時はr2c_defaultのみ(CLAUDE.md禁止35)。
+  JUDGE_SWEEP_TENANTS: z.string().optional(),
 
   // ── OpenClaw / OpenViking ─────────────────────────────────────────────
   OPENCLAW_ENABLED: boolEnv,
@@ -122,6 +115,7 @@ const envSchema = z.object({
   NOTION_DB_FAQ_ID: z.string().optional(),
   NOTION_DB_PRODUCTS_ID: z.string().optional(),
   NOTION_DB_CLARIFY_LOG_ID: z.string().optional(),
+  NOTION_DB_SALES_LOG_ID: z.string().optional(),
   NOTION_DB_LP_POINTS_ID: z.string().optional(),
   NOTION_DB_TUNING_TEMPLATES_ID: z.string().optional(),
 

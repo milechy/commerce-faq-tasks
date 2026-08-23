@@ -2709,12 +2709,20 @@
       return { role: m.role, content: m.content };
     });
 
+    // G6: _tracker は /api/widget/features 取得後の非同期初期化のため、
+    // ページ表示直後の最初の1通では未生成のことがある。trackConversion と同じ
+    // localStorage直読みにフォールバックし、visitor_id の欠落を減らす。
+    var chatVisitorId = (_tracker && _tracker.visitorId) ? _tracker.visitorId : undefined;
+    if (!chatVisitorId) {
+      try { chatVisitorId = localStorage.getItem('r2c_vid') || undefined; } catch (_e) {}
+    }
+
     var requestBody = JSON.stringify({
       message: text.trim(),
       conversationId: conversationId,
       history: historyForApi,
       // Phase57: 行動コンテキスト注入のためvisitor_idを送信
-      visitor_id: (_tracker && _tracker.visitorId) ? _tracker.visitorId : undefined,
+      visitor_id: chatVisitorId,
     });
 
     var headers = {
@@ -3634,6 +3642,10 @@
     var payload = {
       visitor_id: visitorId || 'unknown',
       session_id: sessionId || 'unknown',
+      // GID 1216970103691946 (PR-5): chat_sessions.session_id と同じ値を送り、
+      // conversion_attributions を正しい chat_sessions.id に結合できるようにする。
+      // 会話が発生していないページで呼ばれることもあるため任意項目として送る。
+      chat_session_id: conversationId,
       events: [{
         event_type: 'chat_conversion',
         event_data: {

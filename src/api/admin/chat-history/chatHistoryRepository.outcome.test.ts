@@ -8,7 +8,13 @@ jest.mock("../../../lib/db", () => ({
   getPool: () => ({ query: (...args: unknown[]) => mockQuery(...args) }),
 }));
 
-import { getConversionTypes, recordOutcome, getSessionOutcome, getActiveEscalations } from "./chatHistoryRepository";
+import {
+  getConversionTypes,
+  recordOutcome,
+  getSessionOutcome,
+  getActiveEscalations,
+  AUTO_OUTCOME_RECORDED_BY,
+} from "./chatHistoryRepository";
 
 beforeEach(() => {
   mockQuery.mockReset();
@@ -58,8 +64,8 @@ describe("getConversionTypes", () => {
 });
 
 describe("recordOutcome", () => {
-  it("正しいSQL(UPDATE chat_sessions ... WHERE id = $3)とパラメータで更新する", async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1 }); // UPDATE
+  it("正しいSQL(UPDATE chat_sessions ... WHERE id = $3 AND tenant_id = $4)とパラメータで更新する", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: "sess-db-1" }] }); // UPDATE ... RETURNING id
     mockQuery.mockResolvedValueOnce({ rows: [] });     // createNotification内のINSERT(fire-and-forget)
 
     await recordOutcome({
@@ -71,12 +77,13 @@ describe("recordOutcome", () => {
 
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("UPDATE chat_sessions");
-    expect(sql).toContain("WHERE id = $3");
-    expect(params).toEqual(["購入完了", "staff@example.com", "sess-db-1"]);
+    expect(sql).toContain("WHERE id = $3 AND tenant_id = $4");
+    expect(sql).toContain("RETURNING id");
+    expect(params).toEqual(["購入完了", "staff@example.com", "sess-db-1", "tenant-abc"]);
   });
 
   it("recordedBy が null でも正しく渡る(チャット経由は実行者メールを持たないため)", async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: "sess-db-1" }] });
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     await recordOutcome({
@@ -91,7 +98,7 @@ describe("recordOutcome", () => {
   });
 
   it("戻り値の outcome/recordedBy は渡した値をそのまま反映する", async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: "sess-db-1" }] });
     mockQuery.mockResolvedValueOnce({ rows: [] });
 
     const result = await recordOutcome({
@@ -101,35 +108,32 @@ describe("recordOutcome", () => {
       recordedBy: null,
     });
 
-    expect(result.outcome).toBe("離脱");
-    expect(result.recordedBy).toBeNull();
-    expect(typeof result.recordedAt).toBe("string");
+    expect(result).not.toBeNull();
+    expect(result!.outcome).toBe("離脱");
+    expect(result!.recordedBy).toBeNull();
+    expect(typeof result!.recordedAt).toBe("string");
   });
 
-  // 既知のリスク: deleteSessionRepository.deleteSession() は削除行数(rowCount)を検証し、
-  // 0件なら null を返して呼び出し元(actionExecutor)が「見つかりません」を返せるようにしている。
-  // recordOutcome() には同種の検証が無く、UPDATE が対象行0件(セッションが競合削除された等)
-  // で終わっても例外にならず「成功」の戻り値を返す。actionExecutor.ts の
-  // record_session_outcome はこの戻り値を無条件に「記録しました」として表示するため、
-  // 実際には何も更新されていないのに成功したように見えるケースがありうる。
-  it("[既知のリスク] UPDATEが対象0件(rowCount:0)でも例外にならず「成功」の戻り値を返す", async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 0 }); // 対象セッションが既に存在しない
-    mockQuery.mockResolvedValueOnce({ rows: [] });
+  // PR-6訂正: 以前は rowCount を見ておらず、UPDATE が対象行0件(セッションが
+  // 競合削除された、または越境)で終わっても例外にならず無音で「成功」の戻り値を
+  // 返していた(CLAUDE.md 禁止20違反)。RETURNING id + rows.length===0 チェックで
+  // 「無い/越境」を null として呼び出し元に返す。
+  it("UPDATEが対象0件(RETURNING行なし)ならnullを返し、通知も出さない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // 対象セッションが存在しない/越境
 
-    await expect(
-      recordOutcome({
-        sessionDbId: "sess-does-not-exist",
-        tenantId: "tenant-abc",
-        outcome: "購入完了",
-        recordedBy: null,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({ outcome: "購入完了" }),
-    );
+    const result = await recordOutcome({
+      sessionDbId: "sess-does-not-exist",
+      tenantId: "tenant-abc",
+      outcome: "購入完了",
+      recordedBy: null,
+    });
+
+    expect(result).toBeNull();
+    expect(mockQuery).toHaveBeenCalledTimes(1); // 通知INSERTは呼ばれない
   });
 
   it("通知(createNotification)がDBエラーで失敗しても、recordOutcome自体は成功として解決する(fire-and-forgetで例外を伝播させない)", async () => {
-    mockQuery.mockResolvedValueOnce({ rowCount: 1 }); // UPDATE 成功
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: "sess-db-1" }] }); // UPDATE 成功
     mockQuery.mockRejectedValueOnce(new Error("notifications insert failed")); // 通知INSERTは失敗
 
     await expect(
@@ -140,6 +144,22 @@ describe("recordOutcome", () => {
         recordedBy: null,
       }),
     ).resolves.toEqual(expect.objectContaining({ outcome: "購入完了" }));
+  });
+
+  // GID 1216970103691946 (PR-6): 自動記録(recordedBy=AUTO_OUTCOME_RECORDED_BY)は
+  // 通知を出さない(CVの度に通知が大量発生するのを防ぐ)。
+  it("recordedByがAUTO_OUTCOME_RECORDED_BYのときは通知(createNotification)を呼ばない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: "sess-db-1" }] }); // UPDATEのみ
+
+    const result = await recordOutcome({
+      sessionDbId: "sess-db-1",
+      tenantId: "tenant-abc",
+      outcome: "購入完了",
+      recordedBy: AUTO_OUTCOME_RECORDED_BY,
+    });
+
+    expect(result).not.toBeNull();
+    expect(mockQuery).toHaveBeenCalledTimes(1); // UPDATEのみ、通知INSERTは呼ばれない
   });
 });
 
