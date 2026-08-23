@@ -65,6 +65,17 @@ describe("POST /api/chat/escalate", () => {
     const res = await request(app).post("/api/chat/escalate").send({ sessionId: "conv-1" });
     expect(res.status).toBe(401);
   });
+
+  // R0-②: メッセージを一度も送っていないセッション(空セッション防止)。
+  // escalateSession は行を新規作成せず null を返す。
+  it("メッセージが無いセッション(escalateSessionがnullを返す) → 404、通知は発行しない", async () => {
+    mockEscalateSession.mockResolvedValueOnce(null);
+    const app = makeApp("tenant-a");
+    const res = await request(app).post("/api/chat/escalate").send({ sessionId: "conv-empty" });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("conversation_not_found");
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /api/chat/poll", () => {
