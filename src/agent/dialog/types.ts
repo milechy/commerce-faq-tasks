@@ -1,6 +1,6 @@
 // src/agent/dialog/types.ts
 
-import type { PlannerRoute } from "../orchestrator/modelRouter";
+import type { RoutedModel } from "../../llm/modelRouter";
 import type { ProposeIntent } from "../orchestrator/sales/proposePromptBuilder";
 import type { RecommendIntent } from "../orchestrator/sales/recommendPromptBuilder";
 import type { CloseIntent } from "../orchestrator/sales/closePromptBuilder";
@@ -226,7 +226,7 @@ export type DialogAgentStep = {
 };
 
 export interface DialogAgentMeta {
-  route: PlannerRoute;
+  route: RoutedModel;
   plannerReasons: string[];
   orchestratorMode: DialogOrchestratorMode;
   safetyTag?: string;

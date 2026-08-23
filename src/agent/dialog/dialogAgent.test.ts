@@ -48,6 +48,7 @@ import { runSalesFlowWithLogging } from "../orchestrator/sales/runSalesFlowWithL
 import { detectSalesIntents } from "../orchestrator/sales/salesIntentDetector";
 import { pool } from "../../lib/db";
 import { getSessionHistory, appendToSessionHistory } from "./contextStore";
+import { getSalesSessionMeta, updateSalesSessionMeta } from "./salesContextStore";
 
 const mockOrchestrator = runDialogOrchestrator as jest.MockedFunction<typeof runDialogOrchestrator>;
 const mockPlanner = planMultiStepQuery as jest.MockedFunction<typeof planMultiStepQuery>;
@@ -84,6 +85,11 @@ beforeEach(() => {
     closeIntent: undefined,
   });
   mockOrchestrator.mockResolvedValue(baseOrchestrated);
+  // PR-11: isSalesStageContinuityEnabled が毎ターン最初に呼ぶ features フラグ
+  // 読み取りクエリのデフォルト応答(フラグOFF)。個別テストが recommend の
+  // 商品メタクエリを検証する場合は、このデフォルトの後に自分の
+  // mockResolvedValueOnce を積む(呼び出し順: フラグ読み取り→商品メタ)。
+  mockPool.query.mockResolvedValue({ rows: [{ enabled: null }] });
 });
 
 describe("runDialogTurn — Phase73 productCard", () => {
@@ -95,18 +101,20 @@ describe("runDialogTurn — Phase73 productCard", () => {
       meta: {} as any,
     });
 
-    // pool.query が商品メタ行を返す
-    mockPool.query.mockResolvedValueOnce({
-      rows: [
-        {
-          id: 42,
-          question: "テスト商品の特徴は？",
-          product_image_url: "https://example.com/img.jpg",
-          product_price: "9800",
-          product_cta_url: "https://example.com/product",
-        },
-      ],
-    });
+    // 1本目: フラグ読み取り(OFF) / 2本目: 商品メタ行
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 42,
+            question: "テスト商品の特徴は？",
+            product_image_url: "https://example.com/img.jpg",
+            product_price: "9800",
+            product_cta_url: "https://example.com/product",
+          },
+        ],
+      });
 
     const result = await runDialogTurn({
       sessionId: "test-session-1",
@@ -128,8 +136,10 @@ describe("runDialogTurn — Phase73 productCard", () => {
       meta: {} as any,
     });
 
-    // pool.query が空行を返す
-    mockPool.query.mockResolvedValueOnce({ rows: [] });
+    // 1本目: フラグ読み取り(OFF) / 2本目: 商品メタ行(空)
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockResolvedValueOnce({ rows: [] });
 
     const result = await runDialogTurn({
       sessionId: "test-session-2",
@@ -155,8 +165,9 @@ describe("runDialogTurn — Phase73 productCard", () => {
     });
 
     expect(result.productCard).toBeUndefined();
-    // recommend でないため pool.query が呼ばれないことを確認
-    expect(mockPool.query).not.toHaveBeenCalled();
+    // recommend でないため商品メタクエリは呼ばれない。呼ばれるのは
+    // PR-11 のフラグ読み取り(isSalesStageContinuityEnabled)の1回のみ。
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
   });
 
   it("pool.query が例外を投げても productCard なしで正常応答する", async () => {
@@ -166,8 +177,10 @@ describe("runDialogTurn — Phase73 productCard", () => {
       meta: {} as any,
     });
 
-    // DB 未適用環境を想定（migration 未実行 = column not found エラー）
-    mockPool.query.mockRejectedValueOnce(new Error('column "product_image_url" does not exist'));
+    // 1本目: フラグ読み取り(OFF) / 2本目: DB 未適用環境を想定（migration 未実行 = column not found エラー）
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockRejectedValueOnce(new Error('column "product_image_url" does not exist'));
 
     const result = await runDialogTurn({
       sessionId: "test-session-4",
@@ -213,6 +226,110 @@ describe("runDialogTurn — LemonSliceペルソナスワップ ragCategory", () 
     });
 
     expect(result.meta?.ragCategory).toBeUndefined();
+  });
+});
+
+describe("runDialogTurn — PR-11: SalesFlow 段階の引き継ぎ(tenants.features.sales_stage_continuity)", () => {
+  const mockGetSalesSessionMeta = getSalesSessionMeta as jest.MockedFunction<typeof getSalesSessionMeta>;
+  const mockUpdateSalesSessionMeta = updateSalesSessionMeta as jest.MockedFunction<typeof updateSalesSessionMeta>;
+
+  beforeEach(() => {
+    mockGetSalesSessionMeta.mockReset();
+    mockUpdateSalesSessionMeta.mockReset();
+  });
+
+  // CLAUDE.md テスト章 G-j: フラグOFFのテナントで従来挙動(clarify固定)が
+  // 変わらないことを固定する。
+  it("フラグOFF(既定)のときは salesContextStore に前ターンの段階があっても previousMeta は undefined のまま(従来挙動を変えない)", async () => {
+    // beforeEach の既定モック({enabled: null})により、フラグはOFF扱いになる
+    mockGetSalesSessionMeta.mockReturnValue({
+      currentStage: "propose",
+      proposeTriggered: true,
+      lastUpdatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    mockSalesFlow.mockResolvedValue({
+      nextStage: undefined,
+      prompt: undefined,
+      meta: {} as any,
+    });
+
+    await runDialogTurn({
+      sessionId: "test-session-flagoff",
+      tenantId: "test-tenant",
+      message: "こんにちは",
+    });
+
+    expect(mockGetSalesSessionMeta).not.toHaveBeenCalled();
+    const callArgs = mockSalesFlow.mock.calls[0]![2] as any;
+    expect((callArgs as any).previousMeta).toBeUndefined();
+  });
+
+  it("フラグONのときは salesContextStore の前ターン段階を previousMeta.phase として渡す", async () => {
+    mockPool.query.mockReset().mockResolvedValueOnce({ rows: [{ enabled: "true" }] });
+    mockGetSalesSessionMeta.mockReturnValue({
+      currentStage: "propose",
+      proposeTriggered: true,
+      recommendTriggered: false,
+      closeTriggered: false,
+      personaTags: ["beginner"],
+      lastUpdatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    mockSalesFlow.mockResolvedValue({
+      nextStage: "recommend",
+      prompt: "おすすめです",
+      meta: {} as any,
+    });
+    // recommend ステージのため商品メタクエリも発生する(空でよい)
+    mockPool.query.mockResolvedValueOnce({ rows: [] });
+
+    await runDialogTurn({
+      sessionId: "test-session-flagon",
+      tenantId: "test-tenant-flagon",
+      message: "続きをお願いします",
+    });
+
+    expect(mockGetSalesSessionMeta).toHaveBeenCalledWith({
+      tenantId: "test-tenant-flagon",
+      sessionId: "test-session-flagon",
+    });
+    const callArgs = mockSalesFlow.mock.calls[0]![2] as any;
+    expect((callArgs as any).previousMeta).toEqual(
+      expect.objectContaining({
+        phase: "propose",
+        proposeTriggered: true,
+        recommendTriggered: false,
+        closeTriggered: false,
+        personaTags: ["beginner"],
+      }),
+    );
+  });
+
+  it("salesResult.meta の *Triggered フラグを updateSalesSessionMeta に保存する(次ターンの一度だけトリガー判定に必要)", async () => {
+    mockSalesFlow.mockResolvedValue({
+      nextStage: "propose",
+      prompt: "ご提案です",
+      meta: {
+        proposeTriggered: true,
+        recommendTriggered: false,
+        closeTriggered: false,
+      } as any,
+    });
+
+    await runDialogTurn({
+      sessionId: "test-session-persist",
+      tenantId: "test-tenant",
+      message: "体験レッスンについて教えて",
+    });
+
+    expect(mockUpdateSalesSessionMeta).toHaveBeenCalledWith(
+      { tenantId: "test-tenant", sessionId: "test-session-persist" },
+      expect.objectContaining({
+        currentStage: "propose",
+        proposeTriggered: true,
+        recommendTriggered: false,
+        closeTriggered: false,
+      }),
+    );
   });
 });
 

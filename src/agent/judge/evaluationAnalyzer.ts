@@ -143,11 +143,12 @@ export async function analyzeTuningRules(
       // 一意性は uniq_tuning_rules_tenant_trigger (phase75) が DB 側で保証する。
       // is_active は必ず false で入れる。列を省略するとスキーマ既定 DEFAULT true が効いて
       // 店主の承認なしに本番の応答方針へ即反映されてしまう(CLAUDE.md「指示ルールの不変ルール」)。
+      // status='pending' も同じ理由で明示する(DEFAULT に依存しない)。
       await pool.query(
         `INSERT INTO tuning_rules
            (tenant_id, trigger_pattern, expected_behavior, priority,
-            is_active, source, suggested_at, evidence)
-         VALUES ($1, $2, $3, $4, false, 'judge', NOW(), $5::jsonb)
+            is_active, source, status, suggested_at, evidence)
+         VALUES ($1, $2, $3, $4, false, 'judge', 'pending', NOW(), $5::jsonb)
          ON CONFLICT (tenant_id, trigger_pattern) DO NOTHING`,
         [tenantId, rule.triggerPattern, rule.expectedBehavior, 0, JSON.stringify(evidence)],
       );

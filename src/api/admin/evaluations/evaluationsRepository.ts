@@ -455,11 +455,18 @@ export interface TuningRuleWithStatus {
   id: number;
   tenant_id: string;
   status: string;
+  is_active: boolean;
   approved_at: string | null;
   rejected_at: string | null;
   updated_at: string;
 }
 
+/**
+ * D8: is_active が唯一の真実、status は承認判断の記録。
+ * 承認は status='active' と is_active=true を同一UPDATEで設定する。
+ * これを分けると「承認したのに本番のプロンプトへ入らない」事故になる
+ * (getActiveRulesForTenant は is_active しか見ない)。
+ */
 export async function approveTuningRule(
   id: number,
   tenantId: string | undefined,
@@ -476,16 +483,22 @@ export async function approveTuningRule(
   const result = await pool.query<TuningRuleWithStatus>(
     `UPDATE tuning_rules
      SET status = 'active',
+         is_active = true,
          approved_at = NOW(),
          rejected_at = NULL,
          updated_at = NOW()
      ${where}
-     RETURNING id, tenant_id, status, approved_at, rejected_at, updated_at`,
+     RETURNING id, tenant_id, status, is_active, approved_at, rejected_at, updated_at`,
     args,
   );
   return result.rows[0] ?? null;
 }
 
+/**
+ * D8: 却下は is_active=false も同時に設定する。
+ * status のみの更新だと、手動作成ルール(is_active=true)を却下しても
+ * 本番プロンプトへの注入が止まらない。
+ */
 export async function rejectTuningRule(
   id: number,
   tenantId: string | undefined,
@@ -502,11 +515,12 @@ export async function rejectTuningRule(
   const result = await pool.query<TuningRuleWithStatus>(
     `UPDATE tuning_rules
      SET status = 'rejected',
+         is_active = false,
          rejected_at = NOW(),
          approved_at = NULL,
          updated_at = NOW()
      ${where}
-     RETURNING id, tenant_id, status, approved_at, rejected_at, updated_at`,
+     RETURNING id, tenant_id, status, is_active, approved_at, rejected_at, updated_at`,
     args,
   );
   return result.rows[0] ?? null;
@@ -660,34 +674,70 @@ export async function updateSuggestedRuleStatus(
 // suggested_rules から tuning_rules へ挿入 - Stream B
 // ---------------------------------------------------------------------------
 
+/**
+ * D8: この経路は evaluation.suggested_rules（Judge提案）を人間が承認して
+ * tuning_rules へ確定する唯一の入口。ここで承認しているので is_active=true /
+ * status='active' / approved_at=NOW() を明示する。
+ *
+ * 同じ (tenant_id, trigger_pattern) の行は judgeEvaluator.ts / evaluationAnalyzer.ts
+ * が is_active=false で先に seed 済みのことが多い(uniq_tuning_rules_tenant_trigger)。
+ * 従来の ON CONFLICT DO NOTHING はこの衝突で null を返すだけで承認が失われていた。
+ * DO UPDATE に変え、その seed 行を承認済みへ更新する。
+ * ただし手動作成ルール(source='manual')と偶然同じ trigger_pattern だった場合に
+ * 上書きしないよう、更新対象は source='judge' の既存行に限定する。
+ *
+ * expectedBehavior が渡されない場合のみ trigger_pattern と同じ文言を使う
+ * (旧実装は常に同じ文言を複製しており、発火条件と応答方針が同一の不正形だった)。
+ */
 export async function insertTuningRuleFromSuggestion(
   tenantId: string,
   ruleText: string,
-  options?: { editedText?: string; editedBy?: string },
+  options?: { editedText?: string; editedBy?: string; expectedBehavior?: string },
 ): Promise<number | null> {
   const pool = getPool();
-  const finalText = options?.editedText ?? ruleText;
+  const finalTrigger = options?.editedText ?? ruleText;
   const originalText = options?.editedText ? ruleText : null;
   const editedBy = options?.editedText ? (options.editedBy ?? null) : null;
   const editedAt = options?.editedText ? "NOW()" : null;
+  const expectedBehavior = options?.expectedBehavior?.trim() || finalTrigger;
 
   if (editedAt) {
     const result = await pool.query<{ id: number }>(
       `INSERT INTO tuning_rules
          (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
-          original_text, edited_by, edited_at)
-       VALUES ($1, $2, $2, 0, true, $3, $4, NOW())
-       ON CONFLICT DO NOTHING RETURNING id`,
-      [tenantId, finalText, originalText, editedBy],
+          source, status, approved_at, original_text, edited_by, edited_at)
+       VALUES ($1, $2, $3, 0, true, 'judge', 'active', NOW(), $4, $5, NOW())
+       ON CONFLICT (tenant_id, trigger_pattern) DO UPDATE SET
+         expected_behavior = EXCLUDED.expected_behavior,
+         is_active = true,
+         status = 'active',
+         approved_at = NOW(),
+         rejected_at = NULL,
+         original_text = EXCLUDED.original_text,
+         edited_by = EXCLUDED.edited_by,
+         edited_at = EXCLUDED.edited_at,
+         updated_at = NOW()
+       WHERE tuning_rules.source = 'judge'
+       RETURNING id`,
+      [tenantId, finalTrigger, expectedBehavior, originalText, editedBy],
     );
     return result.rows[0]?.id ?? null;
   } else {
     const result = await pool.query<{ id: number }>(
       `INSERT INTO tuning_rules
-         (tenant_id, trigger_pattern, expected_behavior, priority, is_active)
-       VALUES ($1, $2, $2, 0, true)
-       ON CONFLICT DO NOTHING RETURNING id`,
-      [tenantId, finalText],
+         (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
+          source, status, approved_at)
+       VALUES ($1, $2, $3, 0, true, 'judge', 'active', NOW())
+       ON CONFLICT (tenant_id, trigger_pattern) DO UPDATE SET
+         expected_behavior = EXCLUDED.expected_behavior,
+         is_active = true,
+         status = 'active',
+         approved_at = NOW(),
+         rejected_at = NULL,
+         updated_at = NOW()
+       WHERE tuning_rules.source = 'judge'
+       RETURNING id`,
+      [tenantId, finalTrigger, expectedBehavior],
     );
     return result.rows[0]?.id ?? null;
   }

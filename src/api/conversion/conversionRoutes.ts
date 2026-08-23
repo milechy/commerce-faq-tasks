@@ -38,7 +38,10 @@ const VALID_CONVERSION_TYPES = ['purchase', 'inquiry', 'reservation', 'signup', 
 
 const AttributionSchema = z.object({
   session_id: z.string().uuid().optional(),
-  visitor_id: z.string().max(128).optional(),
+  // GID 1216970103691946 (PR-5訂正): visitor_id は受け取っていたが conversion_attributions
+  // に対応する列が無く INSERT で一切使われていなかった(呼び出し元に「保存される」と
+  // 誤解させる死んだフィールド)ため撤去。session_idの解決はeventRoutes.tsの
+  // bridgeConversionEvents(/api/events経由)側で行う。
   conversion_type: z.enum(VALID_CONVERSION_TYPES),
   conversion_value: z.number().optional(),
   psychology_principle_used: z.array(z.string()).max(10).optional().default([]),

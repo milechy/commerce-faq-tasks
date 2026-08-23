@@ -18,6 +18,7 @@ import {
   userSourceClause,
   userSourceExists,
 } from "./summaryQueries";
+import { fetchMeasurementHealth } from "./measurementHealth";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,6 +161,44 @@ export function registerAnalyticsRoutes(app: Express): void {
       } catch (err) {
         logger.warn("[GET /v1/admin/analytics/summary]", err);
         return res.status(500).json({ error: "サマリーの取得に失敗しました" });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /v1/admin/analytics/measurement-health
+  // GID 1216970103691946 (PR-7): 計測パイプライン自体が機能しているかの1画面。
+  // plan gate なし(観測性であって課金対象の分析機能ではない。/v1/admin/monitoring/kpis
+  // と同じ扱い)。
+  // -------------------------------------------------------------------------
+  app.get(
+    "/v1/admin/analytics/measurement-health",
+    async (req: Request, res: Response) => {
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_ROLE_INVALID' });
+      }
+      const rawTenantId = su?.app_metadata?.tenant_id;
+      const jwtTenantId: string = typeof rawTenantId === "string" ? rawTenantId : "";
+      const isSuperAdmin: boolean = actorRole === "super_admin";
+      if (!isSuperAdmin && (!jwtTenantId || jwtTenantId.trim() === "")) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません", code: 'AUTH_TENANT_INVALID' });
+      }
+
+      const period = (req.query["period"] as string | undefined) ?? "30d";
+      const tenantId = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
+
+      if (!pool) {
+        return res.status(503).json({ error: "データベース接続が利用できません" });
+      }
+
+      try {
+        const response = await fetchMeasurementHealth(pool, tenantId, period);
+        return res.json(response);
+      } catch (err) {
+        logger.warn("[GET /v1/admin/analytics/measurement-health]", err);
+        return res.status(500).json({ error: "計測ヘルスの取得に失敗しました" });
       }
     },
   );
