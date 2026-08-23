@@ -1413,4 +1413,26 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'get_tuning_rule_effect',
+      description:
+        '承認済みの指示ルールが実際に効いているかを、承認前後のJudgeスコア比較（DiD推定）で' +
+        '確認する読み取り専用ツール。「このルール効いてる?」「効果を教えて」と聞かれた時に使う。' +
+        '判定に十分な会話数が無い場合は数値を出さず、あと何件・何日でわかりそうかを返す' +
+        '（母数不足のときに断定的な数値を出すと誤った自信を与えるため）。まだ承認されていないルールは' +
+        '効果を判定できない旨を返す。',
+      parameters: {
+        type: 'object',
+        properties: {
+          rule_id: {
+            type: 'number',
+            description: '指示ルールのID。get_tuning_rules が返す一覧の id をそのまま指定する',
+          },
+        },
+        required: ['rule_id'],
+      },
+    },
+  },
 ];
