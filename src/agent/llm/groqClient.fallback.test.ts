@@ -301,3 +301,157 @@ describe('groqClient — gpt-oss への reasoning_effort 付与', () => {
     expect(b.reasoning_effort).toBe('low');
   });
 });
+
+// ---------------------------------------------------------------------------
+// call / callWithUsage の実装共有（重複解消の回帰防止）
+// ---------------------------------------------------------------------------
+// 2026-08-23: 以前は 2 メソッドがリクエスト組み立て・エラー分類・レスポンス検証を丸ごと
+// 複製しており、#847 の reasoning_effort 追加では同じ 2 行を両方へ手で入れる必要があった。
+// 片方を忘れてもテストが無ければ気づけない（例外にならず本文が空になるだけ）ため、
+// 「両者が同じリクエストを送り、同じ例外を投げる」ことをここで固定する。
+describe('groqClient — call と callWithUsage が実装を共有する', () => {
+  const origFetch = global.fetch;
+  const origKey = process.env.GROQ_API_KEY;
+  let fetchMock: jest.Mock;
+
+  const okResponse = () => ({
+    ok: true,
+    json: async () => ({
+      choices: [{ message: { content: 'shared-ok' } }],
+      usage: { prompt_tokens: 3, completion_tokens: 4 },
+    }),
+  });
+
+  const failing = (status: number, body: string, retryAfter: string | null = null) => ({
+    ok: false,
+    status,
+    text: async () => body,
+    headers: { get: (name: string) => (name === 'retry-after' ? retryAfter : null) },
+  });
+
+  beforeEach(() => {
+    process.env.GROQ_API_KEY = 'test-key';
+    fetchMock = jest.fn().mockResolvedValue(okResponse());
+    (global as any).fetch = fetchMock;
+  });
+
+  afterEach(() => {
+    (global as any).fetch = origFetch;
+    if (origKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = origKey;
+  });
+
+  const params: GroqCallParams = {
+    model: GPT_OSS_120B,
+    messages: [{ role: 'user', content: 'hi' }],
+    temperature: 0.42,
+    maxTokens: 321,
+  };
+
+  it('【最重要】両者が完全に同一のリクエストを送る（片肺修正の再発防止）', async () => {
+    await groqClient.call(params);
+    const [callUrl, callInit] = fetchMock.mock.calls[0]!;
+
+    fetchMock.mockClear();
+    await groqClient.callWithUsage(params);
+    const [usageUrl, usageInit] = fetchMock.mock.calls[0]!;
+
+    expect(usageUrl).toBe(callUrl);
+    expect(usageInit.method).toBe(callInit.method);
+    expect(usageInit.headers).toEqual(callInit.headers);
+    // body は文字列として一致すること（キー順の差も許さない = 同一コードが組み立てた証明）
+    expect(usageInit.body).toBe(callInit.body);
+  });
+
+  it('デフォルト値(temperature=0 / max_tokens=512)も両者で一致する', async () => {
+    const bare: GroqCallParams = { model: GROQ_COMPOUND, messages: [{ role: 'user', content: 'x' }] };
+
+    await groqClient.call(bare);
+    const callBody = fetchMock.mock.calls[0]![1].body;
+
+    fetchMock.mockClear();
+    await groqClient.callWithUsage(bare);
+    const usageBody = fetchMock.mock.calls[0]![1].body;
+
+    expect(usageBody).toBe(callBody);
+    const parsed = JSON.parse(callBody);
+    expect(parsed.temperature).toBe(0);
+    expect(parsed.max_tokens).toBe(512);
+  });
+
+  const errorCases: Array<{ label: string; status: number; body: string; expected: new (...a: any[]) => Error }> = [
+    { label: '429', status: 429, body: 'rate limited', expected: GroqRateLimitError },
+    { label: '404 + model_not_found', status: 404, body: '{"error":{"code":"model_not_found"}}', expected: GroqModelNotFoundError },
+    { label: '404 (model_not_found でない)', status: 404, body: 'plain not found', expected: GroqBadRequestError },
+    { label: '500', status: 500, body: 'boom', expected: GroqServerError },
+    { label: '400', status: 400, body: 'bad request', expected: GroqBadRequestError },
+  ];
+
+  errorCases.forEach(({ label, status, body, expected }) => {
+    it(`${label} は call / callWithUsage の両方で同じ例外クラスになる`, async () => {
+      fetchMock.mockResolvedValue(failing(status, body));
+
+      await expect(groqClient.call(params)).rejects.toBeInstanceOf(expected);
+      await expect(groqClient.callWithUsage(params)).rejects.toBeInstanceOf(expected);
+    });
+  });
+
+  it('retry-after ヘッダの解釈が両者で一致する', async () => {
+    fetchMock.mockResolvedValue(failing(429, 'slow down', '2'));
+
+    const capture = async (fn: () => Promise<unknown>): Promise<GroqRateLimitError> => {
+      try {
+        await fn();
+      } catch (err) {
+        return err as GroqRateLimitError;
+      }
+      throw new Error('expected GroqRateLimitError to be thrown');
+    };
+
+    const fromCall = await capture(() => groqClient.call(params));
+    const fromUsage = await capture(() => groqClient.callWithUsage(params));
+
+    expect(fromCall.retryAfterMs).toBe(2000);
+    expect(fromUsage.retryAfterMs).toBe(2000);
+  });
+
+  it('content が無いレスポンスで両者とも同じメッセージのエラーを投げる', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) });
+
+    await expect(groqClient.call(params)).rejects.toThrow('Groq API response has no message content');
+    await expect(groqClient.callWithUsage(params)).rejects.toThrow('Groq API response has no message content');
+  });
+
+  it('GROQ_API_KEY 未設定で両者とも同じエラーを投げる', async () => {
+    delete process.env.GROQ_API_KEY;
+
+    await expect(groqClient.call(params)).rejects.toThrow('GROQ_API_KEY is not set');
+    await expect(groqClient.callWithUsage(params)).rejects.toThrow('GROQ_API_KEY is not set');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('戻り値の形だけが違う: call は content のみ / callWithUsage は usage 付き', async () => {
+    await expect(groqClient.call(params)).resolves.toBe('shared-ok');
+    await expect(groqClient.callWithUsage(params)).resolves.toEqual({
+      content: 'shared-ok',
+      usage: { prompt_tokens: 3, completion_tokens: 4 },
+    });
+  });
+
+  it('usage が片方欠けている場合は undefined（callWithUsage の契約を維持）', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: 'shared-ok' } }],
+        usage: { prompt_tokens: 3 },
+      }),
+    });
+
+    await expect(groqClient.callWithUsage(params)).resolves.toEqual({
+      content: 'shared-ok',
+      usage: undefined,
+    });
+    // call 側は usage を無視して content だけ返す
+    await expect(groqClient.call(params)).resolves.toBe('shared-ok');
+  });
+});
