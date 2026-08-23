@@ -168,6 +168,12 @@ jest.mock('../chat-history/deleteSessionRepository', () => ({
   deleteSession: (...args: any[]) => mockDeleteSession(...args),
 }));
 
+// get_tuning_rule_effect が使う依存をモック(GID 1217752900578379, R4)
+const mockGetRuleEffect = jest.fn();
+jest.mock('../analytics/ruleEffect', () => ({
+  getRuleEffect: (...args: any[]) => mockGetRuleEffect(...args),
+}));
+
 // get_monitoring_summary が使う依存をモック
 const mockComputeKpis = jest.fn();
 jest.mock('../monitoring/routes', () => ({
@@ -6657,6 +6663,272 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('総合95点');
       expect(res.body.actions[0].result).toContain('所見: 最新の再評価');
       expect(res.body.actions[0].result).not.toContain('古い評価');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // get_tuning_rule_effect（GID 1217752900578379, R4: ルール効果測定のチャット接続）
+  // 統計計算そのものは ruleEffect.test.ts で純関数として検証済みのため、ここでは
+  // ツール層の分岐(越境防止・母数不足時に数値を出さない・エラー処理)のみを確認する。
+  // -------------------------------------------------------------------------
+  describe('get_tuning_rule_effect', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    beforeEach(() => {
+      mockGetRuleEffect.mockReset();
+    });
+
+    it('母数充足(ok)のときはDiD推定値・信頼区間・参考差分をtextで返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-1', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('効果はこちらです。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'ok',
+        ruleId: 42,
+        tenantId: 'tenant-abc',
+        approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false,
+        analyzedSessions: 40,
+        comparison: {
+          minSampleSize: 5,
+          groups: {},
+          did: { estimate: 5.2, ci95: [1.1, 9.3] },
+          naiveTreatmentDelta: 8.5,
+        },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockGetRuleEffect).toHaveBeenCalledWith(expect.anything(), 42);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('効いている可能性が高いです');
+      expect(result).toContain('5.2点');
+      expect(result).toContain('1.1〜9.3');
+      expect(result).not.toContain('直近'); // truncated=falseのときは打ち切り注記を出さない
+    });
+
+    it('信頼区間の上限が0未満のときは「逆効果の可能性」と返す(断定語を使わない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-2', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('効果はこちらです。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'ok', ruleId: 42, tenantId: 'tenant-abc', approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false, analyzedSessions: 40,
+        comparison: { minSampleSize: 5, groups: {}, did: { estimate: -6, ci95: [-10, -2] }, naiveTreatmentDelta: -3 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-02' });
+
+      expect(res.body.actions[0].result).toContain('逆効果の可能性があります');
+      expect(res.body.actions[0].result).not.toContain('効いている');
+      expect(res.body.actions[0].result).not.toContain('改善しました');
+      expect(res.body.actions[0].result).not.toContain('効果あり');
+    });
+
+    it('信頼区間が0をまたぐときは「まだ判定できません」と返す(誤った自信を与えない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-3', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('効果はこちらです。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'ok', ruleId: 42, tenantId: 'tenant-abc', approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false, analyzedSessions: 40,
+        comparison: { minSampleSize: 5, groups: {}, did: { estimate: 2, ci95: [-3, 7] }, naiveTreatmentDelta: 2 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-03' });
+
+      expect(res.body.actions[0].result).toContain('まだ判定できません');
+    });
+
+    // CLAUDE.md 禁止34: 母数不足のときは差分・率・パーセント・矢印を一切出さず到達条件のみ返す。
+    it('回帰: 母数不足(insufficient_data)のときは到達条件のみを返し、率・%・矢印を一切出さない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-4', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('まだ判定できません。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'insufficient_data',
+        ruleId: 42,
+        tenantId: 'tenant-abc',
+        approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false,
+        analyzedSessions: 6,
+        minSampleSize: 5,
+        progress: [
+          { group: 'afterTreatment', currentN: 2, requiredN: 5, etaDays: 10 },
+          { group: 'beforeControl', currentN: 4, requiredN: 5, etaDays: null },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-04' });
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('現在2件 / 必要5件');
+      expect(result).toContain('あと約10日');
+      expect(result).toContain('現在4件 / 必要5件');
+      expect(result).not.toMatch(/%/);
+      expect(result).not.toMatch(/[↑↓]/);
+      expect(result).not.toContain('効果なし');
+      expect(result).not.toContain('改善');
+      expect(result).not.toContain('悪化');
+    });
+
+    it('etaDaysがnullの群は見込み日数を出さない(before群は観測期間固定のため)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-5', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('まだ判定できません。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'insufficient_data', ruleId: 42, tenantId: 'tenant-abc', approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false, analyzedSessions: 3, minSampleSize: 5,
+        progress: [{ group: 'beforeTreatment', currentN: 3, requiredN: 5, etaDays: null }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-05' });
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('現在3件 / 必要5件');
+      expect(result).not.toContain('あと約');
+    });
+
+    it('truncated=trueのときは「直近N件で判定しています」を明示する(無言の打ち切り禁止)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-6', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('効果はこちらです。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'ok', ruleId: 42, tenantId: 'tenant-abc', approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: true, analyzedSessions: 5000,
+        comparison: { minSampleSize: 5, groups: {}, did: { estimate: 5, ci95: [1, 9] }, naiveTreatmentDelta: 5 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-06' });
+
+      expect(res.body.actions[0].result).toContain('直近5000件のセッションで判定しています');
+    });
+
+    it('未承認(not_yet_approved)のルールは効果を判定できない旨を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-7', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('まだ承認されていません。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({ status: 'not_yet_approved', ruleId: 42, tenantId: 'tenant-abc' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-07' });
+
+      expect(res.body.actions[0].result).toContain('まだ承認されていません');
+    });
+
+    it('存在しないルールIDは「見つかりません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-8', 'get_tuning_rule_effect', { rule_id: 9999 }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({ status: 'rule_not_found' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール9999の効果を教えて', sessionId: 'sess-re-08' });
+
+      expect(res.body.actions[0].result).toContain('見つかりません');
+    });
+
+    // 越境防止: 他テナントのルールIDを直接指定されても、存在有無を漏らさず「見つからない」に倒す
+    it('回帰: 他テナントのルールIDを指定しても、存在有無を漏らさず「見つかりません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-9', 'get_tuning_rule_effect', { rule_id: 77 }))
+        .mockResolvedValueOnce(makeGroqResponse('見つかりませんでした。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'ok', ruleId: 77, tenantId: 'tenant-zzz', approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false, analyzedSessions: 40,
+        comparison: { minSampleSize: 5, groups: {}, did: { estimate: 5, ci95: [1, 9] }, naiveTreatmentDelta: 5 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール77の効果を教えて', sessionId: 'sess-re-09' });
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('見つかりません');
+      expect(result).not.toContain('5点'); // 他テナントの数値が漏れていない
+    });
+
+    it('getRuleEffectが例外を投げても500にならず、失敗を伝える', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-10', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('取得に失敗しました。'));
+
+      mockGetRuleEffect.mockRejectedValueOnce(new Error('connection terminated'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-10' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('失敗');
+    });
+
+    it('rule_idが数値でない場合はgetRuleEffectを呼ばずに案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-11', 'get_tuning_rule_effect', { rule_id: 'abc' }))
+        .mockResolvedValueOnce(makeGroqResponse('ルールIDを教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'そのルールの効果を教えて', sessionId: 'sess-re-11' });
+
+      expect(mockGetRuleEffect).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('ルールIDを指定してください');
+    });
+
+    it('会話本文がtext/cardいずれにも含まれない(Anti-Slop、ruleEffect.ts自体が本文を返さない契約に依存)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-re-12', 'get_tuning_rule_effect', { rule_id: 42 }))
+        .mockResolvedValueOnce(makeGroqResponse('効果はこちらです。'));
+
+      mockGetRuleEffect.mockResolvedValueOnce({
+        status: 'ok', ruleId: 42, tenantId: 'tenant-abc', approvedAt: '2026-08-01T00:00:00.000Z',
+        truncated: false, analyzedSessions: 40,
+        comparison: { minSampleSize: 5, groups: {}, did: { estimate: 5, ci95: [1, 9] }, naiveTreatmentDelta: 5 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ルール42の効果を教えて', sessionId: 'sess-re-12' });
+
+      expect(JSON.stringify(res.body)).not.toContain('返品したい');
     });
   });
 

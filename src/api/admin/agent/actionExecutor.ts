@@ -44,6 +44,7 @@ import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskReg
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
 import { fetchAnalyticsSummary, fetchConversionSummary } from '../analytics/summaryQueries';
+import { getRuleEffect } from '../analytics/ruleEffect';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 import { buildPlacementAttributes, validateWidgetPlacement } from './widgetPlacement';
 
@@ -3585,6 +3586,71 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn(`[actionExecutor] ${toolName} failed`, err);
         return truncate('分析サマリーの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // GID 1217752900578379 (R4): 承認済みルールの効果(DiD推定)をチャットから確認する。
+    // 母数不足のときは点推定・率・矢印を一切出さず到達条件のみ返す(CLAUDE.md 禁止34)。
+    case 'get_tuning_rule_effect': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const ruleId = Number(args['rule_id']);
+      if (!Number.isFinite(ruleId)) {
+        return truncate('ルールIDを指定してください');
+      }
+
+      try {
+        const result = await getRuleEffect(db, ruleId);
+
+        if (result.status === 'rule_not_found') {
+          return truncate('指定されたルールが見つかりません');
+        }
+        // 越境防止: 他テナントのルールIDを直接指定されても、存在有無を漏らさず
+        // 「見つからない」に倒す(r2c-tenant-isolation)。
+        if (result.tenantId !== tenantId) {
+          return truncate('指定されたルールが見つかりません');
+        }
+        if (result.status === 'not_yet_approved') {
+          return truncate('このルールはまだ承認されていません。承認後に効果を確認できます');
+        }
+
+        if (result.status === 'insufficient_data') {
+          // ruleEffect.ts の4群ラベル。旧UIに同等の表示は無いためここが唯一の語彙。
+          const groupLabel: Record<string, string> = {
+            beforeTreatment: '承認前・該当する会話',
+            afterTreatment: '承認後・該当する会話',
+            beforeControl: '承認前・該当しない会話',
+            afterControl: '承認後・該当しない会話',
+          };
+          const lines = [
+            `指示ルール（ID: ${ruleId}）はまだ効果を判定できません（判定に必要な会話数が不足しています）`,
+          ];
+          for (const p of result.progress) {
+            const label = groupLabel[p.group] ?? p.group;
+            const eta = p.etaDays != null ? `、現ペースであと約${p.etaDays}日` : '';
+            lines.push(`・${label}: 現在${p.currentN}件 / 必要${p.requiredN}件${eta}`);
+          }
+          return truncate(lines.join('\n'));
+        }
+
+        // status === 'ok'
+        const { did, naiveTreatmentDelta } = result.comparison;
+        const [ciLow, ciHigh] = did.ci95;
+        const verdict = ciLow > 0 ? '効いている可能性が高いです' : ciHigh < 0 ? '逆効果の可能性があります' : 'まだ判定できません（差が誤差の範囲内です）';
+        const lines = [
+          `指示ルール（ID: ${ruleId}）の効果: ${verdict}`,
+          `推定差分: ${did.estimate}点（95%信頼区間: ${ciLow}〜${ciHigh}）`,
+          `参考（対照群との比較前の単純差分）: ${naiveTreatmentDelta}点`,
+        ];
+        if (result.truncated) {
+          lines.push(`※直近${result.analyzedSessions}件のセッションで判定しています`);
+        }
+        return truncate(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] get_tuning_rule_effect failed', err);
+        return truncate('ルール効果の取得に失敗しました');
       }
     }
 
