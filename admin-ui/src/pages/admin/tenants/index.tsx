@@ -11,11 +11,11 @@ import { supabase } from "../../../lib/supabaseClient";
 interface Tenant {
   id: string;
   name: string;
-  slug: string;
   plan: "starter" | "growth" | "enterprise";
-  status: "active" | "inactive";
-  apiKeyCount: number;
-  createdAt: string;
+  is_active: boolean;
+  // POST /v1/admin/tenants (作成直後) は集計を含まないため未定義になりうる。
+  api_key_count?: number;
+  created_at: string;
   billing_enabled?: boolean;
   billing_free_from?: string | null;
   billing_free_until?: string | null;
@@ -253,7 +253,7 @@ function CreateTenantModal({ onClose, onSuccess }: CreateModalProps) {
 
 // ─── メインページ ─────────────────────────────────────────────────────────────
 
-type SortByTenant = "name" | "createdAt";
+type SortByTenant = "name" | "created_at";
 
 export default function TenantsPage() {
   const navigate = useNavigate();
@@ -268,7 +268,7 @@ export default function TenantsPage() {
   // 検索・ソート・フィルター
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [sortBy, setSortBy] = useState<SortByTenant>("createdAt");
+  const [sortBy, setSortBy] = useState<SortByTenant>("created_at");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [statusFilter, setStatusFilter] = useState<"" | "active" | "inactive">("");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -290,7 +290,8 @@ export default function TenantsPage() {
 
   const filteredTenants = tenants
     .filter((t) => {
-      if (statusFilter && t.status !== statusFilter) return false;
+      if (statusFilter === "active" && !t.is_active) return false;
+      if (statusFilter === "inactive" && t.is_active) return false;
       if (debouncedSearch && !t.name.toLowerCase().includes(debouncedSearch.toLowerCase())) return false;
       return true;
     })
@@ -299,7 +300,7 @@ export default function TenantsPage() {
       if (sortBy === "name") {
         cmp = a.name.localeCompare(b.name, locale);
       } else {
-        cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       }
       return sortOrder === "asc" ? cmp : -cmp;
     });
@@ -472,7 +473,7 @@ export default function TenantsPage() {
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 8 }}>
           <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>並び替え:</span>
           <SortableHeader label="名前" sortKey="name" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
-          <SortableHeader label="作成日" sortKey="createdAt" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
+          <SortableHeader label="作成日" sortKey="created_at" currentSortBy={sortBy} currentSortOrder={sortOrder} onSort={handleSort} />
         </div>
         <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
           全{tenants.length}件中{" "}
@@ -551,12 +552,12 @@ export default function TenantsPage() {
                         borderRadius: 999,
                         fontSize: 11,
                         fontWeight: 700,
-                        background: tenant.status === "active" ? "rgba(34,197,94,0.15)" : "rgba(107,114,128,0.2)",
-                        color: tenant.status === "active" ? "#4ade80" : "#9ca3af",
-                        border: `1px solid ${tenant.status === "active" ? "rgba(74,222,128,0.3)" : "rgba(107,114,128,0.3)"}`,
+                        background: tenant.is_active ? "rgba(34,197,94,0.15)" : "rgba(107,114,128,0.2)",
+                        color: tenant.is_active ? "#4ade80" : "#9ca3af",
+                        border: `1px solid ${tenant.is_active ? "rgba(74,222,128,0.3)" : "rgba(107,114,128,0.3)"}`,
                       }}
                     >
-                      {tenant.status === "active" ? t("tenants.status_active") : t("tenants.status_inactive")}
+                      {tenant.is_active ? t("tenants.status_active") : t("tenants.status_inactive")}
                     </span>
                     {/* 課金バッジ */}
                     {(() => {
@@ -586,7 +587,7 @@ export default function TenantsPage() {
                     })()}
                   </div>
                   <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
-                    slug: <span style={{ fontFamily: "monospace", color: "var(--muted-foreground)" }}>{tenant.slug}</span>
+                    slug: <span style={{ fontFamily: "monospace", color: "var(--muted-foreground)" }}>{tenant.id}</span>
                   </div>
                 </div>
 
@@ -601,12 +602,12 @@ export default function TenantsPage() {
                   }}
                 >
                   <div>
-                    <span style={{ color: "var(--muted-foreground)" }}>{t("tenants.api_keys", { n: tenant.apiKeyCount ?? 0 })}</span>
+                    <span style={{ color: "var(--muted-foreground)" }}>{t("tenants.api_keys", { n: tenant.api_key_count ?? 0 })}</span>
                   </div>
                   <div>
                     <span style={{ color: "var(--muted-foreground)" }}>
                       {(() => {
-                        const d = tenant.createdAt ? new Date(tenant.createdAt) : null;
+                        const d = tenant.created_at ? new Date(tenant.created_at) : null;
                         const dateStr = d && !isNaN(d.getTime())
                           ? d.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" })
                           : "-";
