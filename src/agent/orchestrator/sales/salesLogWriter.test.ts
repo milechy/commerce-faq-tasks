@@ -1,4 +1,11 @@
-import { buildSalesLogRecord } from "./salesLogWriter";
+import {
+  buildSalesLogRecord,
+  setGlobalSalesLogWriter,
+  writeSalesLogViaGlobal,
+  SalesLogWriter,
+  type SalesLogRecord,
+  type SalesLogSink,
+} from "./salesLogWriter";
 
 describe("buildSalesLogRecord", () => {
   it("ステージ遷移メタとテンプレ情報を正しくマージしてレコードを生成できる", () => {
@@ -58,5 +65,53 @@ describe("buildSalesLogRecord", () => {
     expect(record.templateText).toBe(longText);
     expect(record.promptPreview.length).toBe(120);
     expect(record.promptPreview).toBe(longText.slice(0, 120));
+  });
+});
+
+// GID 1216970103691946 (PR-11): globalWriter を設定する入口が無く、
+// writeSalesLogViaGlobal が常に no-op だった不具合の回帰テスト。
+describe("setGlobalSalesLogWriter / writeSalesLogViaGlobal", () => {
+  const DUMMY_RECORD: SalesLogRecord = {
+    tenantId: "tenant:demo",
+    sessionId: "session:123",
+    phase: "propose",
+    prevStage: "clarify",
+    nextStage: "propose",
+    stageTransitionReason: "auto_progress_by_intent",
+    intent: "trial_lesson_offer",
+    personaTags: ["beginner"],
+    userMessage: "hi",
+    templateSource: "fallback",
+    templateId: null,
+    templateText: "template",
+    promptPreview: "template",
+    timestamp: "2026-08-01T00:00:00.000Z",
+  };
+
+  afterEach(() => {
+    setGlobalSalesLogWriter(undefined); // 他テストへ副作用を残さない
+  });
+
+  it("setGlobalSalesLogWriter を呼ばない場合、writeSalesLogViaGlobal は何もせず解決する(従来のno-op挙動)", async () => {
+    await expect(writeSalesLogViaGlobal(DUMMY_RECORD)).resolves.toBeUndefined();
+  });
+
+  it("setGlobalSalesLogWriter で設定した writer の sink に実際に書き込まれる", async () => {
+    const mockSink: SalesLogSink = { write: jest.fn().mockResolvedValue(undefined) };
+    setGlobalSalesLogWriter(new SalesLogWriter(mockSink));
+
+    await writeSalesLogViaGlobal(DUMMY_RECORD);
+
+    expect(mockSink.write).toHaveBeenCalledWith(DUMMY_RECORD);
+  });
+
+  it("setGlobalSalesLogWriter(undefined) で再びno-opに戻せる", async () => {
+    const mockSink: SalesLogSink = { write: jest.fn().mockResolvedValue(undefined) };
+    setGlobalSalesLogWriter(new SalesLogWriter(mockSink));
+    setGlobalSalesLogWriter(undefined);
+
+    await writeSalesLogViaGlobal(DUMMY_RECORD);
+
+    expect(mockSink.write).not.toHaveBeenCalled();
   });
 });

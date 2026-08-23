@@ -5,6 +5,11 @@ export interface SalesSessionMeta {
   currentStage: SalesStage;
   lastIntent?: string;
   personaTags?: string[];
+  // GID 1216970103691946 (PR-11): 「一度だけトリガー」ポリシー(salesOrchestrator)を
+  // 次ターンへ引き継ぐためのフラグ。無いと毎ターン再度 propose 等がトリガーされうる。
+  proposeTriggered?: boolean;
+  recommendTriggered?: boolean;
+  closeTriggered?: boolean;
   lastUpdatedAt: string;
 }
 
@@ -50,6 +55,9 @@ export function setSalesSessionMeta(
     currentStage: meta.currentStage,
     lastIntent: meta.lastIntent,
     personaTags: meta.personaTags,
+    proposeTriggered: meta.proposeTriggered,
+    recommendTriggered: meta.recommendTriggered,
+    closeTriggered: meta.closeTriggered,
     lastUpdatedAt: now,
   };
   sessionStore.set(toInternalKey(key), {
@@ -73,6 +81,9 @@ export function updateSalesSessionMeta(
     currentStage,
     lastIntent: patch.lastIntent ?? existing?.lastIntent,
     personaTags: patch.personaTags ?? existing?.personaTags,
+    proposeTriggered: patch.proposeTriggered ?? existing?.proposeTriggered,
+    recommendTriggered: patch.recommendTriggered ?? existing?.recommendTriggered,
+    closeTriggered: patch.closeTriggered ?? existing?.closeTriggered,
     lastUpdatedAt: new Date().toISOString(),
   };
 
