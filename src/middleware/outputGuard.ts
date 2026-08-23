@@ -3,6 +3,7 @@
 
 import { logger } from '../lib/logger';
 import { isSecurityLayerEnabled } from './securityLayerConfig';
+import { EMAIL_PATTERN } from '../lib/security/piiPatterns';
 
 export interface OutputGuardResult {
   safe: boolean;
@@ -32,7 +33,7 @@ const PII_PATTERNS: Array<{ name: string; pattern: RegExp; replacement: string }
   },
   {
     name: 'email',
-    pattern: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
+    pattern: EMAIL_PATTERN,
     replacement: '[個人情報のため非表示]',
   },
   {

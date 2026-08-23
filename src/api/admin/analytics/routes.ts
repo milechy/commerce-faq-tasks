@@ -1113,6 +1113,8 @@ export function registerAnalyticsRoutes(app: Express): void {
               required_n: p.requiredN,
               eta_days: p.etaDays,
             })),
+            truncated: result.truncated,
+            analyzed_sessions: result.analyzedSessions,
           });
         }
 
@@ -1121,6 +1123,8 @@ export function registerAnalyticsRoutes(app: Express): void {
           status: "ok",
           approved_at: result.approvedAt,
           comparison: result.comparison,
+          truncated: result.truncated,
+          analyzed_sessions: result.analyzedSessions,
         });
       } catch (err) {
         logger.warn("[GET /v1/admin/analytics/rule-effect]", err);

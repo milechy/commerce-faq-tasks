@@ -7,9 +7,9 @@
 // conversion_typesをカスタマイズしたテナントで誤判定していたため撤去。
 // tenants.conversion_types の末尾2件をそのテナントの「非成約終端」として使う。
 
-const mockGetConversionTypes = jest.fn();
+const mockGetNonConvertingOutcomes = jest.fn();
 jest.mock('../admin/chat-history/chatHistoryRepository', () => ({
-  getConversionTypes: (...args: unknown[]) => mockGetConversionTypes(...args),
+  getNonConvertingOutcomes: (...args: unknown[]) => mockGetNonConvertingOutcomes(...args),
 }));
 
 import { reconcileAbResultOutcomes } from './abResultsOutcomeSync';
@@ -28,10 +28,11 @@ function makePool(queryResponses: Array<{ rows: any[]; rowCount?: number } | Err
   };
 }
 
-const DEFAULT_CONVERSION_TYPES = ['購入完了', '予約完了', '問い合わせ送信', '離脱', '不明'];
-
 beforeEach(() => {
-  mockGetConversionTypes.mockReset().mockResolvedValue(DEFAULT_CONVERSION_TYPES);
+  mockGetNonConvertingOutcomes.mockReset().mockResolvedValue({
+    nonConvertingOutcomes: ['離脱', '不明'],
+    reliable: true,
+  });
 });
 
 describe('reconcileAbResultOutcomes', () => {
@@ -95,13 +96,16 @@ describe('reconcileAbResultOutcomes', () => {
       ]);
       await reconcileAbResultOutcomes(pool as any, 42, 'tenant-a');
 
-      expect(mockGetConversionTypes).toHaveBeenCalledWith('tenant-a');
+      expect(mockGetNonConvertingOutcomes).toHaveBeenCalledWith('tenant-a');
       const [, params] = pool.calls[1] as [string, unknown[]];
       expect(params).toEqual([42, ['離脱', '不明']]);
     });
 
     it('カスタムconversion_typesのテナントでは、そのテナント自身の末尾2件を使う(全テナント共通ハードコードをしない)', async () => {
-      mockGetConversionTypes.mockResolvedValue(['成約', 'キャンセル', '対応中']);
+      mockGetNonConvertingOutcomes.mockResolvedValue({
+        nonConvertingOutcomes: ['キャンセル', '対応中'],
+        reliable: true,
+      });
       const pool = makePool([
         { rows: [], rowCount: 0 },
         { rows: [], rowCount: 0 },
@@ -112,6 +116,23 @@ describe('reconcileAbResultOutcomes', () => {
       // '離脱'/'不明' という全テナント共通のハードコード値ではなく、
       // このテナント自身のconversion_types末尾2件('キャンセル','対応中')を使う
       expect(params).toEqual([99, ['キャンセル', '対応中']]);
+    });
+
+    it('回帰: conversion_typesが3件未満(reliable=false)なら、CVのUPDATEを発行せずconvertedを未更新のまま残す', async () => {
+      // 「末尾2件が非成約」という慣習が成立しないテナントでは、断定できないconverted値を
+      // 書き込むより、副次指標を欠落させる方が安全側("わからない"を勝手に決めない)。
+      // reached_two_plus_exchanges(主要指標)は独立して更新されるため、1本目のUPDATEは発行される。
+      mockGetNonConvertingOutcomes.mockResolvedValue({
+        nonConvertingOutcomes: ['成約', 'キャンセル'],
+        reliable: false,
+      });
+      const pool = makePool([{ rows: [], rowCount: 2 }]);
+
+      await reconcileAbResultOutcomes(pool as any, 42, 'tenant-unreliable');
+
+      expect(pool.query).toHaveBeenCalledTimes(1); // reached_two_plus_exchanges のみ
+      const [reachedSql] = pool.calls[0] as [string, unknown[]];
+      expect(reachedSql).toContain('reached_two_plus_exchanges');
     });
   });
 });

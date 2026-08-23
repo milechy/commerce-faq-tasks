@@ -132,6 +132,11 @@ export function evaluateRuleEffect(
   daysSinceApproval: number,
   minSampleSize: number = MIN_SAMPLE_SIZE,
 ): RuleEffectResult {
+  // n=1 の群は標準誤差が定義できず se=NaN となり、そのまま ci95=[NaN,NaN] /
+  // did.ci95=[NaN,NaN] として出力に漏れる(JSON化で null になり、UIには
+  // 「信頼区間の無い点推定」として出てしまう)。母数不足時に数値を出さないという
+  // 本モジュールの前提(CLAUDE.md 禁止34)を満たすため、下限を 2 に固定する。
+  const effectiveMinSampleSize = Math.max(2, minSampleSize);
   const keys: RuleEffectGroupKey[] = [
     "beforeTreatment",
     "afterTreatment",
@@ -145,18 +150,18 @@ export function evaluateRuleEffect(
     afterControl: meanStats(groups.afterControl.judgeScores),
   };
 
-  const shortGroups = keys.filter((k) => (stats[k]?.n ?? 0) < minSampleSize);
+  const shortGroups = keys.filter((k) => (stats[k]?.n ?? 0) < effectiveMinSampleSize);
   if (shortGroups.length > 0) {
     const progress: GroupProgress[] = shortGroups.map((k) => {
       const currentN = stats[k]?.n ?? 0;
       let etaDays: number | null = null;
       if (ACCUMULATING_GROUPS.has(k) && daysSinceApproval > 0) {
         const rate = currentN / daysSinceApproval;
-        etaDays = rate > 0 ? Math.ceil((minSampleSize - currentN) / rate) : null;
+        etaDays = rate > 0 ? Math.ceil((effectiveMinSampleSize - currentN) / rate) : null;
       }
-      return { group: k, currentN, requiredN: minSampleSize, etaDays };
+      return { group: k, currentN, requiredN: effectiveMinSampleSize, etaDays };
     });
-    return { status: "insufficient_data", minSampleSize, progress };
+    return { status: "insufficient_data", minSampleSize: effectiveMinSampleSize, progress };
   }
 
   const bt = stats.beforeTreatment!;
@@ -175,7 +180,7 @@ export function evaluateRuleEffect(
   return {
     status: "ok",
     comparison: {
-      minSampleSize,
+      minSampleSize: effectiveMinSampleSize,
       groups: {
         beforeTreatment: {
           n: bt.n,
@@ -276,18 +281,47 @@ interface CandidateSessionRow {
 }
 
 /**
+ * ルール作成以降の全セッションを本文込みでNodeに読み込み、matchesTriggerPattern を
+ * 全件JS実行する構造上、上限を設けないと大規模テナントで1リクエストが肥大化する。
+ * SQLへマッチングロジックを移植すると triggerMatching.ts と実装が2箇所に割れるため
+ * (NFKC正規化・カタカナ→ひらがな畳み込みをPostgresで再現することになる)採らない。
+ * 代わりに直近優先で上限を設け、打ち切った場合は呼び出し元に必ず明示する
+ * (無言のsilent capにしない。CLAUDE.md「無言の打ち切り禁止」原則)。
+ *
+ * before/after で個別に上限を適用する(単純に1本の直近順で合計を切ると、蓄積し
+ * 続けるafter群が観測期間固定のbefore群を先に押し出してしまう — 稼働が長く
+ * トラフィックの多いテナントほど、比較の基準点であるbeforeが消えて恒久的に
+ * insufficient_data になりかねない。長期稼働テナントほど計測不能になるのは
+ * 本末転倒のため、before/afterそれぞれの直近優先で独立に確保する)。
+ */
+export const CANDIDATE_SESSION_LIMIT = 5000;
+const CANDIDATE_SESSION_PER_SIDE_LIMIT = CANDIDATE_SESSION_LIMIT / 2;
+
+interface FetchCandidateSessionsResult {
+  rows: CandidateSessionRow[];
+  truncated: boolean;
+}
+
+/**
  * ルールの母集団候補（最初のユーザー発言 + Judgeスコア + ユーザー発言数 + CV有無）を取得する。
  * トリガー一致判定(matchesTriggerPattern)は純関数のためSQLでは行わず、呼び出し側でJS実行する
  * (triggerMatching.ts の判定ロジックを複製しない)。
  *
  * 観測窓: [rule.createdAt, NOW()]。ルールが存在しない期間を「before」に含めても
  * 比較上意味がないため、下限をルール作成時点に揃える。
+ *
+ * before/afterそれぞれ CANDIDATE_SESSION_PER_SIDE_LIMIT+1件ずつ独立に取得し、
+ * 実際に+1件目が返ってきたかで打ち切りの有無を側ごとに判定する(別途 COUNT(*) を
+ * 発行しない。件数把握のためだけに全件スキャンするコストを避けるため)。
+ * 直近(first_message_at DESC)を優先するため、上限に掛かると各側とも古い方から
+ * 欠落する。
  */
 async function fetchCandidateSessions(
   db: Db,
   tenantId: string,
   sinceIso: string,
-): Promise<CandidateSessionRow[]> {
+  approvedAtIso: string,
+): Promise<FetchCandidateSessionsResult> {
   const result = await db.query<CandidateSessionRow>(
     `WITH first_user_msg AS (
        SELECT DISTINCT ON (cm.session_id)
@@ -301,24 +335,66 @@ async function fetchCandidateSessions(
          AND cm.created_at >= $2::timestamptz
          ${userSourceClause("cs")}
        ORDER BY cm.session_id, cm.created_at ASC
+     ),
+     before_limited AS (
+       SELECT * FROM first_user_msg
+       WHERE first_message_at < $3::timestamptz
+       ORDER BY first_message_at DESC
+       LIMIT $4
+     ),
+     after_limited AS (
+       SELECT * FROM first_user_msg
+       WHERE first_message_at >= $3::timestamptz
+       ORDER BY first_message_at DESC
+       LIMIT $4
+     ),
+     limited AS (
+       SELECT * FROM before_limited
+       UNION ALL
+       SELECT * FROM after_limited
      )
      SELECT
        f.session_uuid::text AS session_uuid,
        f.first_message,
        f.first_message_at,
-       ev.score AS judge_score,
+       -- 相関サブクエリ + EXISTS で「1セッション=1行」を保証する。
+       -- LEFT JOIN にすると行が増えて同じセッションが複数回集計される:
+       --   conversion_attributions は session_id に UNIQUE が無く(UNIQUEは event_id のみ、
+       --   migration_conversion_attributions.sql / migration_phase_a.sql)、1セッションが
+       --   複数CV(購入+問い合わせ等)を持つと行が倍化し、そのセッションの Judge スコアが
+       --   平均に二重計上されて DiD 推定が成約セッション寄りに歪む。
+       -- conversation_evaluations の UNIQUE は (tenant_id, session_id) であり session_id
+       -- 単独では一意でないため、必ず tenant_id も合わせて絞る(テナント跨ぎ混入の防止)。
+       (SELECT MAX(ev.score) FROM conversation_evaluations ev
+          WHERE ev.tenant_id = cs.tenant_id
+            AND ev.session_id = cs.session_id
+            AND ev.score > 0) AS judge_score,
        (SELECT COUNT(*)::int FROM chat_messages cm2
           WHERE cm2.session_id = f.session_uuid AND cm2.role = 'user') AS user_message_count,
-       (ca.id IS NOT NULL) AS converted
-     FROM first_user_msg f
-     JOIN chat_sessions cs ON cs.id = f.session_uuid
-     LEFT JOIN conversation_evaluations ev
-       ON ev.session_id = cs.session_id AND ev.score > 0
-     LEFT JOIN conversion_attributions ca
-       ON ca.session_id = f.session_uuid`,
-    [tenantId, sinceIso],
+       EXISTS (SELECT 1 FROM conversion_attributions ca
+                 WHERE ca.session_id = f.session_uuid) AS converted
+     FROM limited f
+     JOIN chat_sessions cs ON cs.id = f.session_uuid`,
+    [tenantId, sinceIso, approvedAtIso, CANDIDATE_SESSION_PER_SIDE_LIMIT + 1],
   );
-  return result.rows;
+
+  const approvedAtMs = new Date(approvedAtIso).getTime();
+  const beforeRows = result.rows.filter(
+    (r) => new Date(r.first_message_at).getTime() < approvedAtMs,
+  );
+  const afterRows = result.rows.filter(
+    (r) => new Date(r.first_message_at).getTime() >= approvedAtMs,
+  );
+  const beforeTruncated = beforeRows.length > CANDIDATE_SESSION_PER_SIDE_LIMIT;
+  const afterTruncated = afterRows.length > CANDIDATE_SESSION_PER_SIDE_LIMIT;
+
+  return {
+    rows: [
+      ...(beforeTruncated ? beforeRows.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT) : beforeRows),
+      ...(afterTruncated ? afterRows.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT) : afterRows),
+    ],
+    truncated: beforeTruncated || afterTruncated,
+  };
 }
 
 function emptyGroup(): GroupInput {
@@ -335,7 +411,16 @@ function addToGroup(g: GroupInput, row: CandidateSessionRow): void {
 export type RuleEffectFetchResult =
   | { status: "rule_not_found" }
   | { status: "not_yet_approved"; ruleId: number; tenantId: string }
-  | ({ status: "insufficient_data" | "ok"; ruleId: number; tenantId: string; approvedAt: string } & RuleEffectResult);
+  | ({
+      status: "insufficient_data" | "ok";
+      ruleId: number;
+      tenantId: string;
+      approvedAt: string;
+      /** 直近 CANDIDATE_SESSION_LIMIT 件で打ち切ったか。true のとき古いセッションが母集団から漏れている。 */
+      truncated: boolean;
+      /** 実際に集計対象となったセッション数(4群の合計)。truncated=true のときの目安として使う。 */
+      analyzedSessions: number;
+    } & RuleEffectResult);
 
 /**
  * ルールIDから効果測定結果を組み立てる。会話本文はここから外に出さない
@@ -354,7 +439,12 @@ export async function getRuleEffect(
 
   const { rule } = ruleResult;
   const approvedAtMs = new Date(rule.approvedAt!).getTime();
-  const rows = await fetchCandidateSessions(db, rule.tenantId, rule.createdAt);
+  const { rows, truncated } = await fetchCandidateSessions(
+    db,
+    rule.tenantId,
+    rule.createdAt,
+    rule.approvedAt!,
+  );
 
   const groups: RuleEffectGroups = {
     beforeTreatment: emptyGroup(),
@@ -379,5 +469,12 @@ export async function getRuleEffect(
   const daysSinceApproval = Math.max(0, (Date.now() - approvedAtMs) / 86_400_000);
   const evalResult = evaluateRuleEffect(groups, daysSinceApproval, minSampleSize);
 
-  return { ...evalResult, ruleId, tenantId: rule.tenantId, approvedAt: rule.approvedAt! };
+  return {
+    ...evalResult,
+    ruleId,
+    tenantId: rule.tenantId,
+    approvedAt: rule.approvedAt!,
+    truncated,
+    analyzedSessions: rows.length,
+  };
 }

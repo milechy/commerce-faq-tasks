@@ -18,8 +18,19 @@ import { getPool } from '../../lib/db';
 import { buildSentimentHint } from '../../lib/sentiment/hint';
 import { RAG_EXCERPT_MAX_CHARS, RAG_MAX_EXCERPTS } from '../config/ragLimits';
 
-// GID 1216978855735482: sessionId を sticky key として渡し、同一セッション内で
-// variant が揺れないようにする（Math.random()だと呼ばれるたびに選び直されていた）。
+// GID 1216978855735482 → GID 1216978677398163(P3): sessionIdのハッシュによる
+// 疑似sticky(hashToUnitInterval)ではなく、chat_sessions.prompt_variant_id に
+// 記録済みの割当を直接読んで使う「真のsticky」にする。
+//
+// ハッシュ方式の限界: variantの並び順(累積walkが配列順に依存)やweight設定を
+// 変更すると、同じ stickyKey でも選ばれるvariantが変わりうる。すると
+// 「chat_sessions.prompt_variant_id に記録された値」と「実際にこのターンで
+// 使われたプロンプト」が乖離し、A/B分析が実際の挙動と異なるvariantに
+// 結果を帰属させてしまう。DBの記録を真実の情報源にすることでこれを避ける。
+//
+// 記録済みのvariantIdが現在のsystem_prompt_variantsに存在しない場合
+// (variant削除・IDリネーム)は、そのvariantを再現できないためハッシュ選択に
+// フォールバックする(初回選択時と同じ経路)。
 async function getTenantsPromptWithVariant(tenantId: string, sessionId?: string): Promise<{
   prompt: string | null;
   variantId: string | null;
@@ -27,19 +38,45 @@ async function getTenantsPromptWithVariant(tenantId: string, sessionId?: string)
 }> {
   try {
     const pool = getPool();
-    const result = await pool.query<{
-      system_prompt: string | null;
-      system_prompt_variants: PromptVariant[] | null;
-    }>(
-      'SELECT system_prompt, system_prompt_variants FROM tenants WHERE id = $1',
-      [tenantId],
-    );
+
+    const result = sessionId
+      ? await pool.query<{
+          system_prompt: string | null;
+          system_prompt_variants: PromptVariant[] | null;
+          recorded_variant_id: string | null;
+        }>(
+          `SELECT t.system_prompt, t.system_prompt_variants, cs.prompt_variant_id AS recorded_variant_id
+             FROM tenants t
+             LEFT JOIN chat_sessions cs ON cs.tenant_id = t.id AND cs.session_id = $2
+            WHERE t.id = $1`,
+          [tenantId, sessionId],
+        )
+      : await pool.query<{
+          system_prompt: string | null;
+          system_prompt_variants: PromptVariant[] | null;
+          recorded_variant_id: string | null;
+        }>(
+          'SELECT system_prompt, system_prompt_variants, NULL AS recorded_variant_id FROM tenants WHERE id = $1',
+          [tenantId],
+        );
     const row = result.rows[0];
     if (!row) return { prompt: null, variantId: null, variantName: null };
 
     const variants = row.system_prompt_variants ?? [];
     const fallback = row.system_prompt?.trim() ?? '';
 
+    // 記録済みの割当が現在のvariant一覧にまだ存在すれば、それをそのまま使う
+    // (ハッシュを再計算しない = 並び順・weight変更の影響を受けない)。
+    if (row.recorded_variant_id) {
+      const recorded = variants.find((v) => v.id === row.recorded_variant_id);
+      if (recorded) {
+        return { prompt: recorded.prompt || null, variantId: recorded.id, variantName: recorded.name };
+      }
+    }
+
+    // 初回ターン、または記録済みvariantが削除済みの場合はハッシュで選択する
+    // (この結果が saveMessage 経由で chat_sessions.prompt_variant_id に
+    // COALESCE書き込みされ、以降のターンで上の分岐から読まれるようになる)。
     const selection = selectVariant(variants, fallback, sessionId);
     return {
       prompt: selection.prompt || null,

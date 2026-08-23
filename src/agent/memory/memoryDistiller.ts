@@ -10,7 +10,7 @@ import { groqClient } from "../llm/groqClient";
 import { GPT_OSS_120B } from "../../config/groqModels";
 import { embedText } from "../llm/openaiEmbeddingClient";
 import { getPool } from "../../lib/db";
-import { getConversionTypes } from "../../api/admin/chat-history/chatHistoryRepository";
+import { getNonConvertingOutcomes } from "../../api/admin/chat-history/chatHistoryRepository";
 import {
   isLearnedMemoryWriteEnabled,
   getLearnedMemoryThreshold,
@@ -95,7 +95,13 @@ async function distillConversation(
  *   - chat_sessions.outcome が設定済みで、かつテナントの conversion_types の
  *     非成約終端2件(既定 '離脱'/'不明'、abResultsOutcomeSync.ts と同じ判定)でない
  *
- * abResultsOutcomeSync.ts の「非成約終端2件」判定を再利用する(第2の判定ロジックを作らない)。
+ * getNonConvertingOutcomes (chatHistoryRepository.ts) を abResultsOutcomeSync.ts と
+ * 共有する唯一の情報源として使う(第2の判定ロジックを作らない)。
+ *
+ * conversion_types が3件未満で「末尾2件が非成約」の慣習が成立しないテナントでは、
+ * outcome 単独では昇格させない(conversion_attributions があればそちらは曖昧さが
+ * 無いため引き続き昇格する)。学習データに失注会話の知見を紛れ込ませる方が、
+ * 昇格を1件見送るより実害が大きいため安全側に倒す。
  */
 async function hasConvertingOutcome(tenantId: string, sessionId: string): Promise<boolean> {
   const pool = getPool();
@@ -116,8 +122,14 @@ async function hasConvertingOutcome(tenantId: string, sessionId: string): Promis
   if (row.has_attribution) return true;
   if (!row.outcome) return false;
 
-  const conversionTypes = await getConversionTypes(tenantId);
-  const nonConvertingOutcomes = conversionTypes.slice(-2);
+  const { nonConvertingOutcomes, reliable } = await getNonConvertingOutcomes(tenantId);
+  if (!reliable) {
+    logger.warn(
+      { tenantId },
+      "[learnedMemory] conversion_types has fewer than 3 entries; outcome-based promotion is unreliable, skipping",
+    );
+    return false;
+  }
   return !nonConvertingOutcomes.includes(row.outcome);
 }
 

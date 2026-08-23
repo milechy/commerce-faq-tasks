@@ -22,7 +22,7 @@
 // 一切触れていない（読み取り専用の突合のみ）。
 
 import type { Pool } from 'pg';
-import { getConversionTypes } from '../admin/chat-history/chatHistoryRepository';
+import { getNonConvertingOutcomes } from '../admin/chat-history/chatHistoryRepository';
 
 const USER_SOURCE_FILTER = `AND (cs.metadata->>'source' = 'user' OR cs.metadata->>'source' IS NULL)`;
 
@@ -62,9 +62,18 @@ export async function reconcileAbResultOutcomes(
   // コードしており、conversion_typesをカスタマイズしたテナントでは一致せず誤判定
   // していた。tenants.conversion_types の末尾2件(既定配列の並び「成約...、離脱、
   // 不明」という既存の暗黙の慣習に合わせる。ConversionTypesTab.tsx はカスタム時
-  // もこの並びを崩さない前提)を、そのテナントの「非成約終端」として使う。
-  const conversionTypes = await getConversionTypes(tenantId);
-  const nonConvertingOutcomes = conversionTypes.slice(-2);
+  // もこの並びを崩さない前提)を、そのテナントの「非成約終端」として使う
+  // (getNonConvertingOutcomes: memoryDistiller.ts と共有の唯一の判定ロジック)。
+  const { nonConvertingOutcomes, reliable } = await getNonConvertingOutcomes(tenantId);
+  if (!reliable) {
+    // conversion_types が3件未満だと「末尾2件が非成約」という慣習自体が成立しない
+    // (2件なら成約系まで非成約扱い、0〜1件なら逆に何でも成約扱いになる)。
+    // CV率は判定に使わない副次指標なので、断定できない値を書き込むより
+    // converted を未更新(NULL)のまま残す方が安全側("わからない"を"成約"や
+    // "非成約"にすり替えない)。reached_two_plus_exchanges は主要指標として
+    // 上のUPDATEで既に更新済みのため、ここで打ち切っても結果集計自体は壊れない。
+    return;
+  }
 
   await pool.query(
     `UPDATE ab_results r
