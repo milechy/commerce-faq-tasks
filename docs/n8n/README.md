@@ -12,6 +12,11 @@
 
    - `docs/n8n/workflows/agent-events-slack-alert.json`
    - メニュー: `Workflows -> Import from File`
+   - ⚠️ **PR-10 訂正 (2026-08-23)**: `docs/n8n/workflows/agent-dialog-slack-alert.json`
+     は `/agent.dialog` エンドポイント専用の旧ワークフローだが、そのエンドポイント
+     一式（AgentDialogOrchestrator等）は本番未配線の死コードと判明し PR-10 で
+     削除済み（`agent.dialog.fallback` / `agent.dialog.error` イベントは
+     コード上どこからも送信されていなかった）。インポートしないこと。
 
 2. Webhook ノードを開き、Production URL を確認する
 

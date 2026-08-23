@@ -14,13 +14,14 @@ import type { Express, Request, Response } from "express";
 import { hermesMcpAuthMiddleware } from "./hermesMcpAuth";
 import { isHermesDataConsentGranted, listHermesConsentingTenantIds } from "../../lib/hermesConsent";
 import { searchConversations } from "./hermesMcpRepository";
-import { createHermesProposalRepository, type HermesProposalScope } from "./proposalRepository";
+import { getPool } from "../../lib/db";
 import { createNotification } from "../../lib/notifications";
 import { logger } from "../../lib/logger";
 
 const MAX_QUERY_LEN = 200;
 const MAX_TEXT_LEN = 2000;
 
+type HermesProposalScope = "global" | "tenant";
 const VALID_PROPOSAL_SCOPES: readonly HermesProposalScope[] = ["global", "tenant"];
 
 export function registerHermesMcpRoutes(app: Express): void {
@@ -149,23 +150,43 @@ export function registerHermesMcpRoutes(app: Express): void {
       }
     }
 
-    const repo = createHermesProposalRepository();
-    try {
-      const inserted = await repo.insertProposal({
-        scope: scope as HermesProposalScope,
-        tenantId: scope === "tenant" ? (tenant_id as string) : undefined,
-        title,
-        rationale,
-        suggestedAction: suggested_action,
-        evidence: (evidence as Record<string, unknown>) ?? {},
-        dedupKey: dedup_key,
-      });
+    // R6: 提案の受け皿を1つにする。hermes_strategy_proposals を承認導線として
+    // 育てず、Judge提案と同じ tuning_rules に着地させる(source='hermes',
+    // is_active=false, status='pending')。承認は既存の
+    // approveTuningRule/rejectTuningRule/updateRule(D8で is_active との
+    // 整合性を保証済み)がそのまま使える。
+    //
+    // trigger_pattern には title をそのまま使う。Hermes の title は
+    // 「保証期間の即答」のような短い要約であり、matchesTriggerPattern の
+    // キーワード一致には必ずしも最適ではない(insertTuningRuleFromSuggestion
+    // の是正と同じ既知の限界)。承認者は copilot-preview 等で承認時に
+    // trigger_pattern を編集できる。
+    //
+    // scope='global' は tuning_rules の既存の慣習(tenant_id='global')に
+    // 合わせる(getActiveRulesForTenant が tenant_id=$1 OR tenant_id='global'
+    // で読む)。
+    const tenantIdValue = scope === "tenant" ? (tenant_id as string) : "global";
+    const evidenceJson = JSON.stringify({
+      ...(evidence as Record<string, unknown> | undefined),
+      rationale,
+    });
 
-      if (!inserted) {
+    try {
+      const pool = getPool();
+      const result = await pool.query<{ id: number }>(
+        `INSERT INTO tuning_rules
+           (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
+            source, status, evidence, dedup_key)
+         VALUES ($1, $2, $3, 0, false, 'hermes', 'pending', $4::jsonb, $5)
+         ON CONFLICT (tenant_id, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [tenantIdValue, title, suggested_action, evidenceJson, dedup_key],
+      );
+
+      const insertedId = result.rows[0]?.id ?? null;
+      if (insertedId === null) {
         return res.json({ duplicate: true });
       }
-
-      const proposalId = await repo.findProposalIdByDedupKey(dedup_key);
 
       try {
         await createNotification({
@@ -174,14 +195,18 @@ export function registerHermesMcpRoutes(app: Express): void {
           type: "hermes_proposal",
           title,
           message: rationale,
-          link: scope === "global" ? "/admin/hermes" : "/admin/conversion",
-          metadata: { proposal_id: proposalId, dedup_key, scope },
+          // R6: 実在するルートのみを指す。Hermes提案は tuning_rules の
+          // 承認一覧(AIReportTab / copilot-preview get_tuning_rules)に
+          // Judge提案と同じ形で並ぶ。global scope はテナント固有ページが
+          // 無いためテナント一覧へ誘導する。
+          link: scope === "global" ? "/admin/tenants" : `/admin/tenants/${tenant_id as string}`,
+          metadata: { tuning_rule_id: insertedId, dedup_key, scope },
         });
       } catch (err) {
         logger.warn({ err }, "[hermes-mcp] proposal notification failed (non-fatal)");
       }
 
-      return res.status(201).json({ proposal_id: proposalId, duplicate: false });
+      return res.status(201).json({ proposal_id: String(insertedId), duplicate: false });
     } catch (err) {
       logger.warn({ err }, "[hermes-mcp] insert proposal failed");
       return res.status(500).json({ error: "internal_error" });

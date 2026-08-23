@@ -40,7 +40,8 @@ export interface TuningRule {
 }
 
 export interface ListRulesFilters {
-  source?: string;
+  /** R6: Judge/Hermes提案を同一一覧に出すため、複数値(配列)を受け付ける */
+  source?: string | string[];
   status?: string;
 }
 
@@ -49,6 +50,7 @@ export interface CreateRuleParams {
   trigger_pattern: string;
   expected_behavior: string;
   priority?: number;
+  is_active?: boolean;
   created_by?: string;
   source_message_id?: number | null;
 }
@@ -79,9 +81,18 @@ export interface UpdateRuleParams {
 export async function listRules(tenantId?: string, filters?: ListRulesFilters): Promise<TuningRule[]> {
   const pool = getPool();
 
-  const args: string[] = tenantId ? [tenantId] : [];
+  const args: unknown[] = tenantId ? [tenantId] : [];
   const conditions: string[] = tenantId ? ["(tenant_id = $1 OR tenant_id = 'global')"] : [];
-  if (filters?.source) { args.push(filters.source); conditions.push(`source = $${args.length}`); }
+  if (filters?.source) {
+    // R6: 配列(複数source)なら ANY、単一文字列なら従来通り = で絞り込む
+    if (Array.isArray(filters.source)) {
+      args.push(filters.source);
+      conditions.push(`source = ANY($${args.length})`);
+    } else {
+      args.push(filters.source);
+      conditions.push(`source = $${args.length}`);
+    }
+  }
   if (filters?.status) { args.push(filters.status); conditions.push(`status = $${args.length}`); }
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -139,15 +150,20 @@ export async function getActiveRulesForTenant(
   return result.rows;
 }
 
-/** ルール作成。RETURNING * で作成済み行を返す。 */
+/**
+ * ルール作成。RETURNING * で作成済み行を返す。
+ * is_active は明示的に渡す(未指定時は true)。列を省略してスキーマ既定に
+ * 委ねると、作成モーダルが送る is_active=false が黙って無視される
+ * (createSchema で受け付けていなかった旧実装の再発防止)。
+ */
 export async function createRule(params: CreateRuleParams): Promise<TuningRule> {
   const pool = getPool();
 
   const result = await pool.query<TuningRule>(
     `INSERT INTO tuning_rules
-       (tenant_id, trigger_pattern, expected_behavior, priority,
+       (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
         created_by, source_message_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, tenant_id, trigger_pattern, expected_behavior,
                priority, is_active, created_by, source_message_id,
                created_at, updated_at, approved_responses`,
@@ -156,6 +172,7 @@ export async function createRule(params: CreateRuleParams): Promise<TuningRule> 
       params.trigger_pattern,
       params.expected_behavior,
       params.priority ?? 0,
+      params.is_active ?? true,
       params.created_by ?? null,
       params.source_message_id ?? null,
     ],
@@ -189,6 +206,17 @@ export async function updateRule(
       ? JSON.stringify(params.approved_responses)
       : null;
 
+  // D8: is_active が唯一の真実。status で承認/却下を指定した場合はここで
+  // is_active を導出し、呼び出し側(actionExecutor / LLMプロンプト)が
+  // is_active を渡し忘れても不整合が起きないようにする。
+  // status 未指定時は従来通り params.is_active(通常のON/OFF切替)を使う。
+  const derivedIsActive =
+    params.status === "active"
+      ? true
+      : params.status === "rejected"
+        ? false
+        : (params.is_active ?? null);
+
   const result = await pool.query<TuningRule>(
     `UPDATE tuning_rules SET
        trigger_pattern   = COALESCE($1, trigger_pattern),
@@ -206,7 +234,7 @@ export async function updateRule(
       params.trigger_pattern ?? null,
       params.expected_behavior ?? null,
       params.priority ?? null,
-      params.is_active ?? null,
+      derivedIsActive,
       approvedJson,
       params.status ?? null,
       id,
