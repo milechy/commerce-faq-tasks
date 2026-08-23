@@ -78,6 +78,15 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   PDF取り込み（#585）は「GUI固有の壁は越えられる」ことの実証であって、テナントへの開放判断ではない。
 - 別製品（R2C2 / aaas、DIA）とはコードを共有しない。Supabase認証と App Switcher のみ共有。
 
+- **価値は「会話が改善し続けること」にある。** ただし 2026-08-23 の実測では、実ユーザーの会話は
+  carnation 13 件・**30 日間で 2 往復に到達した会話は 0 件**、本番セッションの大半は E2E（407）と
+  空エスカレーション（320）、CV は会話と結合 0 件、`outcome` 記録は 1/1,041 だった。
+  **機能を足す前に「その効果を測れる状態か」を必ず確認する。** 測れない状態で作った機能は、
+  動いているか壊しているかを誰も判定できない（現状と要件: `docs/LEARNING_LOOP_REQUIREMENTS.md`）。
+- **「学習する」系の機能は、入口（会話→評価）と出口（承認→本番プロンプト）が繋がって初めて価値を持つ。**
+  片側だけ作らない。Judge・提案・承認・A/B・Hermes はいずれも「完成済み」に見えて、
+  1 箇所の配線欠落で全体が無効化された前例がある。
+
 ## 管理UIの構造（チャット・ファースト移行中の不変ルール）
 
 チャットUIは現在 3 実装ある。**これ以上増やさない。**
@@ -118,6 +127,14 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | 有人対応（エスカレーション）の会話取得・返信 | `src/api/admin/chat-history/` の `getMessages` / `saveMessage`。取得経路を増やさない（FAQ書き込み4系統と同じ轍を踏まない）。契約は `src/api/admin/CLAUDE.md` |
 | プラン制限のフロント判定 | `admin-ui/src/lib/planFeatures.ts`（`planHasFeature` / `GatedFeature`）。ページごとに403判定を書かない |
 | CORS の許可ヘッダ | `src/lib/cors.ts` の `ALLOWED_HEADERS`（単一情報源。第2の許可リストを作らない） |
+| 承認状態の判定・更新 | **`is_active` が唯一の真実**、`status` は承認判断の記録。両方を書くのは `approveTuningRule` / `rejectTuningRule`（`src/api/admin/evaluations/evaluationsRepository.ts`）と `updateRule`（`src/api/admin/tuning/tuningRulesRepository.ts`）の3点のみ。呼び出し側や LLM プロンプトに整合性を委ねない |
+| 本番プロンプトへのルール注入 | `tuningRulesRepository.ts` の `getActiveRulesForTenant` / `buildTuningPromptSection`（唯一の入口） |
+| 会話の自動評価 | `src/agent/judge/judgeEvaluator.ts` の `evaluateSession` のみ。**第2の Judge 実装を作らない**（評価軸が割れてスコアが比較不能になる） |
+| 定期実行 | `src/index.ts` の既存 `setInterval` 群（AlertEngine / pipelineQueue self-heal と同じ場所・同じ形）。cron / launchd / 新プロセスを増やさない |
+| 「どのルール・どの variant が効いたか」の記録 | 既存 `chat_messages.metadata`（`rag_hit_count` と同じ場所）。**新テーブルを作らない** |
+| LLM 由来の改善提案の着地先 | 既存 `tuning_rules`（`source='judge' \| 'hermes'`、`is_active=false`）。提案元ごとにテーブルを増やさない |
+| ページ行動・訪問者の文脈 | 既存 `behavioral_events`。**第2のイベント送信経路・第2の訪問者 ID を作らない**（`/api/chat` は `visitor_id` を受信済み） |
+| テスト流量の除外 | `src/api/admin/analytics/summaryQueries.ts` の `userSourceClause` / `userSourceExists` のみ。`metadata->>'source'` の判定文字列を各所に書かない |
 
 **新規ファイルを作ってよいのは**、テスト可能な純関数として切り出す場合のみ。
 その場合も `confirmPolicy.ts` / `agentAuditLog.ts` と同じ粒度・同じディレクトリに置き、隣に `*.test.ts` を作る。
@@ -271,6 +288,39 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     `req.tenantId ?? "anonymous"` の単一バケットにすると、攻撃者 1 人の flood で全テナントの
     ウィジェットが 429 になり、マルチテナント SaaS として成立しない
     （`trust proxy` 未設定のため `req.ip` は常に 127.0.0.1。IP キーには `X-Real-IP` の採用が必要）。
+29. **承認状態を 2 つの列で二重管理したまま片方だけ直す。**
+    `tuning_rules` は `is_active`（本番に効くか）が唯一の真実、`status` は承認判断の記録。
+    不変条件は `status='active' ⇒ is_active=true` / `status='rejected' ⇒ is_active=false`。
+    承認 API が `status` だけを更新していたため、**承認したルールが本番に一生入らない**状態が続いた
+    （`getActiveRulesForTenant` は `is_active` しか見ない）。逆に却下 API は `is_active` を下げないため、
+    却下済みルールが注入され続ける。効力を持つ列を新設するときは、**どちらが真実かを先に決めてから**書く
+    （先例: `src/lib/sai/saiTaskRulesRepository.ts` は「tuning_rules で status と is_active が
+    同期していなかった反省を踏まえた設計」と明記している）。
+30. **費用が発生する定期処理を、多重起動しうる形で登録する。**
+    同一対象の二重処理はそのまま二重課金になる。`intervalId` の二重登録ガードに加えて
+    **tick の重なりガード（`isRunning`）**を必ず入れる（既存の metricsFlush / alertEngine には無い）。
+    `instances: 1` はデプロイ規約であって不変条件ではない（手動起動・blue/green の重なりで破れる）。
+31. **提案の受け皿（承認インボックス）を増やす。**
+    既に judge 提案 / evaluation の `suggested_rules` / `knowledge_gaps` / Hermes 提案の 4 系統が
+    並列に存在し、Hermes だけ UI が無い。新しい提案元を足すときは**既存の着地先に合流させる**。
+    専用テーブル・専用画面・専用通知先を作らない。
+32. **効果計測のために新テーブル・新しい計測基盤を作る。**
+    `chat_messages.metadata` と既存 analytics で足りる。「効いたか」を見える化するのが目的であって、
+    基盤の刷新ではない。
+33. **外部・LLM 由来のテキストを、防御層（L5 Input Sanitizer / L6 Prompt Firewall）を迂回して
+    システムプロンプトへ入れる。** Hermes 提案・Judge 提案・採用済み返答はいずれもテナント外／
+    モデル由来の入力面。**人が承認した後も同じ**。承認は注入経路の免罪符ではない。
+34. **計測の土台が壊れたまま「効果が出た／出ない」を数値で出す。**
+    母数が E2E と空セッションで汚染されている状態の比率は、参考値としても表示しない。
+    母数不足のときに `0` や矢印（↑↓）や「効果なし」を出すと、誤った自信を与える
+    （`src/api/admin/analytics/routes.ts` は分母 1 でも trend を出している。是正対象）。
+35. **会話の振る舞いを変える機能を、全テナント一斉に有効化する。**
+    本番トラフィックの 98% が実顧客 1 社に集中しているため、「1 テナントで観察」は
+    実質「全ユーザーで本番投入」を意味する。`tenants.features` のフラグで段階的に開け、
+    自社テナント（`r2c_default`）とテストチャットで目視してから実顧客に開く。
+36. **A/B variant の割当をセッションに固定しないまま統計を出す。**
+    1 会話が複数 variant にまたがると勝敗判定が無意味になる。割当は `sessionId` で固定し、
+    `chat_sessions.prompt_variant_id` に必ず記録する（記録しないと統計が常に空になる）。
 
 ## テストの最低ライン
 
@@ -320,6 +370,17 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   再入場で二重に走らないこと。離脱後も404/401を叩き続ける実装はテストが無いと気づけない。
 - **ライト/ダーク双方で判読できることを目視で確認する。** 自動テストの対象外なので Gate で守る。
   稼働状況の赤カードとアバター作成ウィザードがライトテーマで読めない状態を長期間見逃した。
+- **端から端までを 1 本書く。** 単体テストがモジュール内で閉じていたため、
+  「機能は完成・テストは緑・ロードマップは完了」のまま配線が切れていた前例が複数ある。
+  学習・承認まわりは「会話 → 評価 → 承認 → 次の会話のプロンプトに含まれる」を 1 本で通す。
+- **承認が本番に効くことをテストで固定する。** 承認 → `getActiveRulesForTenant` が返す →
+  プロンプト文字列に含まれる、まで検証する。ステータス列の更新だけを見ない。
+- **フラグ OFF で従来挙動が変わらないことを固定する。** 段階的開放の担保はこれだけ。
+- **定期処理は「止まる」「多重起動しない」に加えて「tick が重ならない」を書く。**
+- **母数不足のときに数値を出さないことをテストで固定する。**
+- **テスト自身が前提を作ってから検証していないか確認する。**
+  `tests/integration/wiring-check.test.ts` は自分で `setFlowSessionMeta` を呼んでから
+  「本番経路が返す」ことを検証しており、存在しない配線を通していた（偽グリーン）。
 
 ## 命名・エラーハンドリング
 
@@ -354,6 +415,12 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   既存に足す場合は、**再試行または不整合の検知手段（件数照合）をセットで入れる。**
 - **エージェントのツール戻り値は日本語・500字以内に truncate する。**
 - **ログに PII・書籍内容・RAGコンテンツを出さない**（Anti-Slop と整合）。
+- **判定に足りないときは、数値を一切出さない。** 差分・率・パーセント・矢印・
+  「改善」「悪化」「効果あり」「効果なし」を使わず、`0` も描画しない。
+  代わりに**到達条件**を出す（現在 N 件 / 必要 N 件 / 現ペースでの見込み）。
+  「足りない」は「効果が無い」ではない。
+- **点推定を単独で出さない。** 母数が足りている場合も、信頼区間か
+  「この母数では ±X 以内の差は判別できません」を必ず併記する。
 
 ## Security Middleware Order (src/index.ts)
 1. requestIdMiddleware (global)
