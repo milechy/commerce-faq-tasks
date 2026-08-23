@@ -382,23 +382,17 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
 
     // 6c. Phase47-B: Judge評価完了後に OpenClaw-RL へ reward signal 送信 (fire-and-forget)
     //     Feature Flag (isOpenClawEnabled) のガードは sendRewardSignal 内で行う。
+    //     PR-10: outcome の元だった flowContextStore(terminalReason)は書き手が
+    //     LangGraph一式のみで実在しなかった（常に undefined → outcome は常に'unknown'）。
+    //     書き手を作らず削除する側を選んだため、常に'unknown'を送る挙動は変えず維持する。
     setImmediate(() => {
-      Promise.all([
-        import('../openclaw/rewardBridge'),
-        import('../dialog/flowContextStore'),
-      ]).then(([{ sendRewardSignal }, { peekFlowSessionMeta }]) => {
-        const terminalReason = peekFlowSessionMeta({ tenantId, conversationId: sessionId })?.terminalReason;
-        const outcome =
-          terminalReason === 'completed' ? 'replied' :
-          terminalReason === 'aborted_user' || terminalReason === 'aborted_budget' ||
-          terminalReason === 'aborted_loop_detected' || terminalReason === 'failed_safe_mode' ? 'lost' :
-          'unknown'; // escalated_handoff / メタ未存在（プロセス再起動後・手動評価）は中立
+      import('../openclaw/rewardBridge').then(({ sendRewardSignal }) => {
         return sendRewardSignal({
           tenantId,
           sessionId,
           variantId,
           score: result.overall_score,
-          outcome,
+          outcome: 'unknown',
         });
       }).catch((err: unknown) => {
         logger.warn({ err, sessionId }, 'openclaw.reward.failed (non-blocking)');
@@ -412,10 +406,13 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
         try {
           // source='judge' を明示する。未設定だとスキーマ既定 'manual' になり、
           // 店主が作ったルールと出所を区別できなくなる(承認導線で必須の情報)。
+          // status='pending' も明示する。省略してスキーマ既定に委ねると、
+          // 既定値が将来変わった際に無審査で有効化されうる(is_active=false と
+          // 同じ理由でDEFAULTに依存しない)。
           await pool.query(
             `INSERT INTO tuning_rules
-               (tenant_id, trigger_pattern, expected_behavior, priority, is_active, source)
-             VALUES ($1, $2, $3, $4, false, 'judge')
+               (tenant_id, trigger_pattern, expected_behavior, priority, is_active, source, status)
+             VALUES ($1, $2, $3, $4, false, 'judge', 'pending')
              ON CONFLICT (tenant_id, trigger_pattern) DO NOTHING`,
             [
               tenantId,

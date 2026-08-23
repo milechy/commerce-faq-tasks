@@ -14,7 +14,7 @@ Status: ✅ Completed
 
 ---
 
-## Phase22 – Failure-Safe Conversational Control（完了）
+## Phase22 – Failure-Safe Conversational Control（実装のみ・本番未配線のまま削除）
 
 - マルチターン制御の厳格化（clarify → answer → confirm → terminal）
 - ループ検出とループ防止（状態パターン、Clarify署名）
@@ -22,13 +22,19 @@ Status: ✅ Completed
 - 運用・可観測性（flow × 4、avatar × 7 イベント）
 - 決定的終端保証（予算制限、ループ上限）
 
-Status: ✅ Completed (2026-01-13)
+Status: ⚠️ PR-10 訂正 (2026-08-23): 学習ループ監査(R10/D5)でこの一式（LangGraph
+orchestrator, AgentDialogOrchestrator, CrewAgent, avatarPolicy.ts 等 約3,660行）が
+実際には `/api/chat`（live経路）から一度も呼ばれておらず、テストからしか到達
+できない状態だったことが判明。「完了」は実装されたことを指し、本番配線が
+完了したことは意味しない。PR-10 でコード一式を削除済み（PII検出のみ
+piiRouteDetector.ts として PR-9 で live 経路へ救出済み。詳細は
+[docs/LEARNING_LOOP_REQUIREMENTS.md](../docs/LEARNING_LOOP_REQUIREMENTS.md) 参照）。
 
-詳細: [PHASE22.md](../PHASE22.md), [docs/PHASE22_IMPLEMENTATION.md](../docs/PHASE22_IMPLEMENTATION.md)
+詳細（歴史的記録・現在は非該当）: [PHASE22.md](../PHASE22.md), [docs/PHASE22_IMPLEMENTATION.md](../docs/PHASE22_IMPLEMENTATION.md)
 
 ---
 
-## Phase23 – KPI & SLA Definitions（完了）
+## Phase23 – KPI & SLA Definitions（完了・一部KPIはPR-10で計測不能に）
 
 - MVP KPI セット定義（会話完了率、ループ検出率、アヴァターフォールバック率、検索レイテンシ、エラー率、Kill Switch発動回数）
 - SLA ゲート閾値の明文化（CI/CD vs 本番）
@@ -36,7 +42,12 @@ Status: ✅ Completed (2026-01-13)
 - インシデント対応フロー（Kill Switch First）
 - ローカル計測コマンド整備（7つのKPIスクリプト）
 
-Status: ✅ Completed (2026-01-13)
+Status: ✅ Completed (2026-01-13)。PR-10 訂正 (2026-08-23): 「ループ検出率」
+「アヴァターフォールバック率」「Kill Switch発動回数」はPhase22の
+LangGraph/avatarPolicy一式に依存していたが、その一式が本番未配線
+だったため、これらのKPIは実際には一度も計測されていなかった
+（PR-10でコード自体を削除）。会話完了率・検索レイテンシ・エラー率は
+Phase22とは無関係の別経路で計測されており、この訂正の対象外。
 
 詳細: [docs/PHASE23.md](../docs/PHASE23.md)
 
@@ -198,6 +209,13 @@ Status: ✅ Completed (2026-04-05)
 - `src/lib/gemini/client.ts`: Gemini APIクライアント
 
 Status: ✅ Completed
+
+（付記・PR-10 2026-08-23: 後続の Phase47-B で `evaluateSession` に追加された
+OpenClaw-RL への reward signal 送信は、outcome の元だった Phase22 の
+flowContextStore(terminalReason) が本番未配線で常に undefined だったため、
+実際には outcome が常に 'unknown' 固定で送られていた。PR-10 で
+flowContextStore を削除し、この既知の制約を保ったまま `outcome: 'unknown'`
+固定に簡素化した。Phase45 本体のJudge評価・スコアリング機能自体には影響なし）
 
 ---
 

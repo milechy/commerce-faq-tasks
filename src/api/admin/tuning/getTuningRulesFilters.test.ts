@@ -64,6 +64,15 @@ describe('GET /v1/admin/tuning-rules — source/status フィルタ配線', () =
     expect(mockListRules).toHaveBeenCalledWith('tenant-abc', { source: 'judge', status: 'pending' });
   });
 
+  // R6: Judge/Hermes提案を同一一覧に出すため、source をカンマ区切りで複数指定できる
+  it('super_admin: ?source=judge,hermes は配列としてlistRulesに渡る', async () => {
+    const res = await request(makeApp({ role: 'super_admin', tenant_id: '' }))
+      .get('/v1/admin/tuning-rules?tenant=tenant-abc&source=judge,hermes&status=pending');
+
+    expect(res.status).toBe(200);
+    expect(mockListRules).toHaveBeenCalledWith('tenant-abc', { source: ['judge', 'hermes'], status: 'pending' });
+  });
+
   it('source/statusクエリなし → filtersはundefinedのまま(全件取得の従来挙動を維持)', async () => {
     const res = await request(makeApp({ role: 'super_admin', tenant_id: '' }))
       .get('/v1/admin/tuning-rules');
