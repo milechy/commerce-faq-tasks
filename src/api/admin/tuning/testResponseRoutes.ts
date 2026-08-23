@@ -1,7 +1,7 @@
 // src/api/admin/tuning/testResponseRoutes.ts
 // Phase6-B: チューニングルール LLMテスト返答生成API
 
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
@@ -102,6 +102,8 @@ ${systemPrompt || "(未設定)"}
       },
       body: JSON.stringify({
         model: GROQ_MODEL_70B,
+        // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+        ...groqReasoningParams(GROQ_MODEL_70B),
         messages: [{ role: "user", content: prompt }],
         temperature: 0.7,
         max_tokens: 1200,

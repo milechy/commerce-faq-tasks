@@ -232,3 +232,72 @@ describe('callGroqWithModelFallback — エラー系', () => {
     expect(warnMock).toHaveBeenCalledTimes(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// reasoning_effort（gpt-oss の推論トークン対策）
+// ---------------------------------------------------------------------------
+// callSpy(groqClient.call の spy)を経由せず、実際に組み立てられるリクエストボディを検証する。
+// 2026-08-23: gpt-oss は推論トークンを max_tokens から消費するため、この指定が無いと
+// 小さい max_tokens の呼び出しで本文が空になる（本番のアバターチャット無言停止の原因）。
+describe('groqClient — gpt-oss への reasoning_effort 付与', () => {
+  const origFetch = global.fetch;
+  const origKey = process.env.GROQ_API_KEY;
+  let fetchMock: jest.Mock;
+
+  beforeEach(() => {
+    process.env.GROQ_API_KEY = 'test-key';
+    fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: 'ok' } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }),
+    });
+    (global as any).fetch = fetchMock;
+  });
+
+  afterEach(() => {
+    (global as any).fetch = origFetch;
+    if (origKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = origKey;
+  });
+
+  const sentBody = () => JSON.parse(fetchMock.mock.calls[0]![1].body);
+
+  it('call: gpt-oss には reasoning_effort=low が入る', async () => {
+    await groqClient.call({ model: GPT_OSS_120B, messages: [{ role: 'user', content: 'hi' }] });
+    expect(sentBody().reasoning_effort).toBe('low');
+  });
+
+  it('callWithUsage: gpt-oss には reasoning_effort=low が入る', async () => {
+    await groqClient.callWithUsage({
+      model: GPT_OSS_20B,
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(sentBody().reasoning_effort).toBe('low');
+  });
+
+  it('compound 系には付かない（無条件付与への退化を防ぐ）', async () => {
+    await groqClient.call({ model: GROQ_COMPOUND, messages: [{ role: 'user', content: 'hi' }] });
+    expect('reasoning_effort' in sentBody()).toBe(false);
+
+    fetchMock.mockClear();
+    await groqClient.call({ model: GROQ_COMPOUND_MINI, messages: [{ role: 'user', content: 'hi' }] });
+    expect('reasoning_effort' in sentBody()).toBe(false);
+  });
+
+  it('既存パラメータ(model/messages/temperature/max_tokens)を壊さない', async () => {
+    await groqClient.call({
+      model: GPT_OSS_120B,
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0.5,
+      maxTokens: 300,
+    });
+    const b = sentBody();
+    expect(b.model).toBe(GPT_OSS_120B);
+    expect(b.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(b.temperature).toBe(0.5);
+    expect(b.max_tokens).toBe(300);
+    expect(b.reasoning_effort).toBe('low');
+  });
+});

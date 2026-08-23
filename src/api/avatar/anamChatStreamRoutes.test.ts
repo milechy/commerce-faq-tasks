@@ -507,3 +507,55 @@ describe('POST /api/avatar/chat-stream — abuseカウンタのテナント/セ�
     expect(tenantBFirstOffense.status).toBe(400);
   });
 });
+
+describe('POST /api/avatar/chat-stream — gpt-oss の reasoning_effort', () => {
+  // 2026-08-23: gpt-oss は推論トークンを max_tokens から消費する。この指定が無いと
+  // max_tokens=150 のうち 136 を推論が食い、本文が1バイトも出ないまま
+  // HTTP 200 / size=0 で返る（本番でアバターチャットが無言停止した実際の症状）。
+  it('Groqへ送るボディに reasoning_effort=low が入る', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue(makeGroqStreamResponse(['はい']));
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '営業時間は' }], sessionId: 'sess-re-1' });
+
+    expect(res.status).toBe(200);
+    const fetchMock = global.fetch as jest.Mock;
+    const sentBody = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    expect(sentBody.reasoning_effort).toBe('low');
+    // 既存パラメータを壊していないこと
+    expect(sentBody.model).toBe('openai/gpt-oss-120b');
+    expect(sentBody.stream).toBe(true);
+    expect(sentBody.stream_options).toEqual({ include_usage: true });
+    expect(sentBody.max_tokens).toBe(150);
+    expect(sentBody.temperature).toBe(0.7);
+  });
+
+  it('404で退避した2回目のリクエストにも reasoning_effort が付く（退避先も gpt-oss のため）', async () => {
+    const notFound = {
+      ok: false,
+      status: 404,
+      text: async () => JSON.stringify({ error: { code: 'model_not_found' } }),
+    };
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValueOnce(notFound as any)
+      .mockResolvedValueOnce(makeGroqStreamResponse(['はい']) as any);
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '営業時間は' }], sessionId: 'sess-re-2' });
+
+    expect(res.status).toBe(200);
+    const fetchMock = global.fetch as jest.Mock;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const first = JSON.parse(fetchMock.mock.calls[0]![1].body);
+    const second = JSON.parse(fetchMock.mock.calls[1]![1].body);
+    expect(first.model).toBe('openai/gpt-oss-120b');
+    expect(second.model).toBe('openai/gpt-oss-20b'); // フォールバックチェーンの退避先
+    // 退避後に設定が抜け落ちると、退避先で同じ無言停止が起きる
+    expect(first.reasoning_effort).toBe('low');
+    expect(second.reasoning_effort).toBe('low');
+  });
+});

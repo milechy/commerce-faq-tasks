@@ -7,7 +7,7 @@
 //   Anam JS SDKのcreateTalkMessageStream()でTTS化される。
 
 import { randomUUID } from 'node:crypto';
-import { GPT_OSS_120B, getFallbackGroqModel } from '../../config/groqModels';
+import { GPT_OSS_120B, getFallbackGroqModel, groqReasoningParams } from '../../config/groqModels';
 import type { Express, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { logger } from '../../lib/logger';
@@ -216,6 +216,9 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
             stream_options: { include_usage: true },
             max_tokens: 150,
             temperature: 0.7,
+            // gpt-oss は推論トークンが max_tokens を食い、これが無いと本文が出ない。
+            // 退避先(20b)も gpt-oss 系なので、ループ内で候補ごとに評価する。
+            ...groqReasoningParams(candidateModel),
           }),
         });
 

@@ -13,6 +13,9 @@ import {
   isDeprecatedGroqModel,
   assertActiveGroqModel,
   getFallbackGroqModel,
+  isGptOssModel,
+  groqReasoningParams,
+  GPT_OSS_REASONING_EFFORT,
 } from './groqModels';
 
 describe('groqModels catalog', () => {
@@ -128,5 +131,58 @@ describe('assertActiveGroqModel', () => {
   it('EOL モデルは例外を投げる', () => {
     expect(() => assertActiveGroqModel('llama-3.1-70b-versatile')).toThrow(/decommissioned/);
     expect(() => assertActiveGroqModel('llama-3.3-70b-versatile')).toThrow(/decommissioned/);
+  });
+});
+
+describe('isGptOssModel / groqReasoningParams', () => {
+  it('gpt-oss 系を判定する', () => {
+    expect(isGptOssModel(GPT_OSS_120B)).toBe(true);
+    expect(isGptOssModel(GPT_OSS_20B)).toBe(true);
+  });
+
+  it('gpt-oss 以外は判定しない（無条件付与への退化を防ぐ）', () => {
+    expect(isGptOssModel(GROQ_COMPOUND)).toBe(false);
+    expect(isGptOssModel(GROQ_COMPOUND_MINI)).toBe(false);
+    expect(isGptOssModel('whisper-large-v3')).toBe(false);
+    expect(isGptOssModel('qwen/qwen3.6-27b')).toBe(false);
+  });
+
+  it('env override で provider prefix が変わっても拾う（完全一致では取りこぼす経路）', () => {
+    // GROQ_MODEL_8B / LLM_MODEL_120B / FEEDBACK_AI_MODEL 等に別 prefix の ID が入りうる。
+    // costCalculator.normalizeModelKey と同じ includes 判定であることの固定。
+    expect(isGptOssModel('groq/gpt-oss-20b')).toBe(true);
+    expect(isGptOssModel('GPT-OSS-120B')).toBe(true);
+    expect(isGptOssModel('gpt-oss-120b-128k')).toBe(true);
+  });
+
+  it('gpt-oss には reasoning_effort を返す', () => {
+    expect(groqReasoningParams(GPT_OSS_120B)).toEqual({
+      reasoning_effort: GPT_OSS_REASONING_EFFORT,
+    });
+    expect(GPT_OSS_REASONING_EFFORT).toBe('low');
+  });
+
+  it("'none' は使わない（Groq 未サポートで本文が一切返らないことを実測済み）", () => {
+    expect(GPT_OSS_REASONING_EFFORT).not.toBe('none');
+  });
+
+  it('gpt-oss 以外には空オブジェクトを返す（spread しても何も足さない）', () => {
+    expect(groqReasoningParams(GROQ_COMPOUND)).toEqual({});
+    expect(groqReasoningParams(GROQ_COMPOUND_MINI)).toEqual({});
+    // spread した結果に reasoning_effort キー自体が生えないこと
+    const body = { model: GROQ_COMPOUND, ...groqReasoningParams(GROQ_COMPOUND) };
+    expect('reasoning_effort' in body).toBe(false);
+  });
+
+  it('フォールバックチェーン上の全モデルで判定が一貫する（退避先で設定が消えない）', () => {
+    // 120b → 20b の退避時、退避先も gpt-oss なので reasoning_effort が付き続ける必要がある。
+    for (const [from, to] of Object.entries(GROQ_FALLBACK_CHAIN)) {
+      if (isGptOssModel(from)) {
+        expect(groqReasoningParams(from)).toHaveProperty('reasoning_effort');
+      }
+      if (isGptOssModel(to)) {
+        expect(groqReasoningParams(to)).toHaveProperty('reasoning_effort');
+      }
+    }
   });
 });

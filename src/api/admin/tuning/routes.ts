@@ -2,7 +2,7 @@
 
 // Phase38 Step4-BE: チューニングルール CRUD API
 
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
 import { roleAuthMiddleware } from "../../middleware/roleAuth";
@@ -101,6 +101,8 @@ ${knowledgePart}${rulesPart}${crossTenantPart}${researchPart}
       },
       body: JSON.stringify({
         model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
+        // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+        ...groqReasoningParams(process.env.GROQ_MODEL_8B ?? GPT_OSS_120B),
         messages: [{ role: "user", content: prompt }],
         temperature: 0.4,
         max_tokens: 400,
@@ -179,6 +181,8 @@ ${knowledgePart}${rulesPart}${crossTenantPart}
       },
       body: JSON.stringify({
         model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
+        // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+        ...groqReasoningParams(process.env.GROQ_MODEL_8B ?? GPT_OSS_120B),
         messages: [{ role: "user", content: prompt }],
         temperature: 0.4,
         max_tokens: 400,

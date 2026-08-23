@@ -2,7 +2,7 @@
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import type { Express, NextFunction, Request, Response } from "express";
 
 type AvatarReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
@@ -29,6 +29,8 @@ async function callGroqLLM(system: string, user: string): Promise<string> {
     },
     body: JSON.stringify({
       model: GPT_OSS_120B,
+      // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+      ...groqReasoningParams(GPT_OSS_120B),
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },

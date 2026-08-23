@@ -13,7 +13,7 @@ import { requiresConfirmation, WRITE_TOOL_RISK_TIERS } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
 import { recordAgentSettingsChange } from './agentAuditLog';
-import { GPT_OSS_120B } from '../../../config/groqModels';
+import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import { isUnanswered } from '../ai-assist/systemPrompt';
 
 // ---------------------------------------------------------------------------
@@ -306,6 +306,8 @@ async function callGroqWithTools(
     },
     body: JSON.stringify({
       model: GPT_OSS_120B,
+      // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+      ...groqReasoningParams(GPT_OSS_120B),
       messages,
       tools,
       tool_choice: 'auto',
@@ -343,6 +345,8 @@ async function callGroqFinal(messages: GroqMessage[]): Promise<{ reply: string; 
     },
     body: JSON.stringify({
       model: GPT_OSS_120B,
+      // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+      ...groqReasoningParams(GPT_OSS_120B),
       messages,
       max_tokens: 512,
       temperature: 0.2,
@@ -567,6 +571,8 @@ async function runStreamingHop(
 
   const body: Record<string, unknown> = {
     model: GPT_OSS_120B,
+    // gpt-oss は推論トークンが max_tokens を食う（groqModels.ts 参照）
+    ...groqReasoningParams(GPT_OSS_120B),
     messages,
     max_tokens: 1024,
     temperature: 0.2,

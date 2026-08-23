@@ -141,3 +141,48 @@ export const GROQ_FALLBACK_CHAIN: Readonly<Record<string, string>> = {
 export function getFallbackGroqModel(model: string): string | null {
   return GROQ_FALLBACK_CHAIN[model] ?? null;
 }
+
+/**
+ * gpt-oss 系に付与する reasoning_effort。
+ *
+ * gpt-oss は推論(reasoning)トークンを生成し、それが max_tokens に算入される。
+ * Llama 系にこの挙動は無かったため、コードベースの max_tokens は
+ * 「本文だけが出る」前提で小さくチューニングされていた。
+ * 2026-08-23 の gpt-oss 移行後、推論が予算を食い潰して本文が出なくなった。
+ *
+ * 実測 (openai/gpt-oss-120b, streaming, 同一プロンプト):
+ *   max_tokens=150 指定なし → completion 150 / reasoning 136 / 本文 11 文字で途切れ
+ *   max_tokens=150 + 'low'  → completion  45 / reasoning  10 / 本文 完結
+ *   max_tokens=300 + 'low'  → completion  53 / reasoning   8 / 本文 完結
+ *
+ * 'none' は Groq 側でサポートされておらず、指定すると本文が一切返らない（実測）。使用禁止。
+ * max_tokens を一律に増やす対処は、原価が増える上に
+ * 「推論量が振れると本文が消える」脆さが残るため採らない。
+ */
+export const GPT_OSS_REASONING_EFFORT = 'low' as const;
+
+/**
+ * モデルが gpt-oss 系（推論トークンを生成する）かどうか。
+ *
+ * 判定を `includes('gpt-oss')` にしているのは costCalculator.normalizeModelKey と同じ理由で、
+ * env override (LLM_MODEL_20B/120B, GROQ_MODEL_8B, FEEDBACK_AI_MODEL 等) によって
+ * provider prefix 付きの ID が渡りうるため。定数との完全一致では取りこぼす。
+ */
+export function isGptOssModel(model: string): boolean {
+  return model.toLowerCase().includes('gpt-oss');
+}
+
+/**
+ * Groq chat completions のリクエストボディに展開する追加パラメータを返す。
+ *
+ * gpt-oss 系にのみ reasoning_effort を付ける。compound 系や将来のモデルに
+ * 無条件で付けると壊れうるため、対象を絞ったうえで呼び出し側は spread するだけにする。
+ *
+ * 使い方:
+ *   body: JSON.stringify({ model, messages, max_tokens: 300, ...groqReasoningParams(model) })
+ */
+export function groqReasoningParams(
+  model: string,
+): { reasoning_effort?: typeof GPT_OSS_REASONING_EFFORT } {
+  return isGptOssModel(model) ? { reasoning_effort: GPT_OSS_REASONING_EFFORT } : {};
+}
