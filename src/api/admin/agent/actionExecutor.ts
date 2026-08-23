@@ -2134,10 +2134,12 @@ export async function executeToolCall(
             [tenantId],
           ),
           // weeklyReportGenerator(Phase46)からの唯一の引き継ぎ指標。
-          // P4-1で修正: 以前は approved_at/rejected_at (どのコードパスからも
-          // 更新されない列)を見ており、店主が作った通常のルールも含めて
-          // 全件を「承認待ち」として数えていた。AI提案(source IN ('judge','hermes'))
-          // かつ未承認(is_active=false)かつ却下されていない件数に修正する。
+          // P4-1で修正: 以前は approved_at/rejected_at を見ており、店主が作った通常の
+          // ルール(is_active=true, approved_at=NULLのまま)も含めて全件を「承認待ち」として
+          // 数えていた。AI提案(source IN ('judge','hermes'))かつ未承認(is_active=false)かつ
+          // 却下されていない件数に修正する。approved_at/rejected_at は現在 updateRule
+          // (GID 1217752900578379, R4)も更新するようになったが、この集計はAI提案の
+          // 未承認件数を数えるのが目的で判定にis_active/statusしか使わないため無関係。
           // R6: Hermes提案もtuning_rulesの同じ棚に着地するため、同じ集計に含める。
           db.query(
             `SELECT COUNT(*)::int AS n FROM tuning_rules

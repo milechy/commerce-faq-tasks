@@ -37,6 +37,9 @@ export interface TuningRule {
   source?: string;
   status?: string;
   evidence?: RuleEvidence | null;
+  /** GID 1217752900578379 (R4): before/after の分岐点。updateRule では初回承認時のみ NOW() を入れる(再承認で上書きしない)。 */
+  approved_at?: string | null;
+  rejected_at?: string | null;
 }
 
 export interface ListRulesFilters {
@@ -225,11 +228,24 @@ export async function updateRule(
        is_active         = COALESCE($4, is_active),
        approved_responses = CASE WHEN $5::text IS NOT NULL THEN $5::jsonb ELSE approved_responses END,
        status            = COALESCE($6, status),
+       -- GID 1217752900578379 (R4): approveTuningRule/rejectTuningRule と対称の記録を、
+       -- チャット経由の承認(status='active'/'rejected')でも行う。効果測定(ruleEffect.ts)は
+       -- approved_at を before/after の境界に使うため、これが無いとチャット承認したルールが
+       -- 永久に「未承認」として扱われる。初回承認で固定し、再承認では上書きしない
+       -- (COALESCE(approved_at, NOW())。観測期間の起点をずらさないため)。却下時はNULLに戻し、
+       -- approved_at/rejected_at が同時に非NULLになる状態を作らない(承認↔却下の対称性)。
+       approved_at       = CASE WHEN $6 = 'active'   THEN COALESCE(approved_at, NOW())
+                                 WHEN $6 = 'rejected' THEN NULL
+                                 ELSE approved_at END,
+       rejected_at       = CASE WHEN $6 = 'rejected' THEN COALESCE(rejected_at, NOW())
+                                 WHEN $6 = 'active'   THEN NULL
+                                 ELSE rejected_at END,
        updated_at        = NOW()
      WHERE id = $7
      RETURNING id, tenant_id, trigger_pattern, expected_behavior,
                priority, is_active, created_by, source_message_id,
-               created_at, updated_at, approved_responses, source, status, evidence`,
+               created_at, updated_at, approved_responses, source, status, evidence,
+               approved_at, rejected_at`,
     [
       params.trigger_pattern ?? null,
       params.expected_behavior ?? null,
