@@ -154,11 +154,12 @@ describe('updateRule', () => {
     expect(updateArgs[5]).toBeNull();
   });
 
-  // 壊れやすいポイント: is_active と status は呼び出し側(actionExecutor)が
-  // 独立に渡せる。statusだけ'active'を指定してis_activeを指定し忘れても、
-  // このリポジトリ層は片方だけを更新する(整合性強制は行わない設計)。
-  // 呼び出し側の責務であることをここで固定しておく。
-  it('statusのみ指定してis_activeを指定しない場合、is_active列(の引数)はnullのまま渡る', async () => {
+  // D8: is_active が唯一の真実。status で承認/却下を指定した場合は、
+  // 呼び出し側(actionExecutor)がis_activeを渡し忘れてもリポジトリ層が
+  // 自動で導出する(呼び出し側やLLMプロンプトに整合性を委ねない)。
+  // これにより「承認したのに本番プロンプトへ入らない」「却下したのに
+  // 注入され続ける」というP0を再発させない。
+  it('status="active"のみ指定してis_activeを指定しない場合、is_active列にtrueが導出されて渡る', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
       .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] });
@@ -166,8 +167,31 @@ describe('updateRule', () => {
     await updateRule(1, { status: 'active' }, 'tenant-abc');
 
     const [, updateArgs] = mockQuery.mock.calls[1];
-    expect(updateArgs[3]).toBeNull(); // is_active
+    expect(updateArgs[3]).toBe(true); // is_active(導出)
     expect(updateArgs[5]).toBe('active'); // status
+  });
+
+  it('status="rejected"のみ指定してis_activeを指定しない場合、is_active列にfalseが導出されて渡る', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] });
+
+    await updateRule(1, { status: 'rejected' }, 'tenant-abc');
+
+    const [, updateArgs] = mockQuery.mock.calls[1];
+    expect(updateArgs[3]).toBe(false); // is_active(導出)
+    expect(updateArgs[5]).toBe('rejected'); // status
+  });
+
+  it('status="active" と is_active=false が同時に渡っても、statusが優先されis_activeはtrueで導出される', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc' }] });
+
+    await updateRule(1, { status: 'active', is_active: false }, 'tenant-abc');
+
+    const [, updateArgs] = mockQuery.mock.calls[1];
+    expect(updateArgs[3]).toBe(true); // is_active(statusが優先)
   });
 
   it('RETURNING句にsource/status/evidence列が含まれる(P4-1で追加、承認カードの表示に必須)', async () => {

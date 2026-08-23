@@ -7,6 +7,20 @@ import TenantSlaTable, {
 import { API_BASE, authFetch } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 
+interface RateMetric {
+  numerator: number;
+  denominator: number;
+  rate: number | null; // null = 母数不足で判定できない(CLAUDE.md 禁止34)
+}
+
+interface MeasurementHealth {
+  sourceBreakdown: Array<{ source: string; count: number }>;
+  emptySessionCount: number;
+  cvSessionLinkRate: RateMetric;
+  outcomeRecordRate: RateMetric & { autoRecorded: number };
+  validUserSessionCount: number;
+}
+
 interface MonitoringKpis {
   completionRate: number;
   loopRate: number;
@@ -47,6 +61,77 @@ function formatMs(ms: number): string {
   return `${Math.round(ms)}ms`;
 }
 
+// GID 1216970103691946 (PR-7): 計測ヘルスカード群。KpiCardは「SLA達成/未達成」の
+// 二値判定を前提にしており、計測ヘルスの指標(内訳・件数・母数不足の可能性がある率)
+// には合わないため専用の軽量カードを使う。
+function MeasurementHealthCard({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        flex: "1 1 260px",
+        borderRadius: 14,
+        border: "1px solid var(--border)",
+        background: "var(--card)",
+        padding: "18px 18px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+      }}
+    >
+      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--foreground)" }}>{title}</div>
+      {children}
+      <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{description}</div>
+    </div>
+  );
+}
+
+function MetricPlaceholder() {
+  return (
+    <span style={{ fontSize: 14, color: "var(--muted-foreground)" }}>取得中...</span>
+  );
+}
+
+function MetricValue({ value, met }: { value: string; met?: boolean }) {
+  const color = met === undefined ? "var(--foreground)" : met ? "#4ade80" : "#fbbf24";
+  return (
+    <span style={{ fontSize: 28, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{value}</span>
+  );
+}
+
+// CLAUDE.md 禁止34: 母数(denominator)が0のときは 0% や矢印を出さず、
+// 「判定に足りない」ことと生の件数(0/0など)をそのまま示す。
+function RateDisplay({ metric }: { metric: RateMetric }) {
+  if (metric.rate === null) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <span style={{ fontSize: 20, fontWeight: 700, color: "var(--muted-foreground)" }}>判定に足りない</span>
+        <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+          {metric.numerator.toLocaleString("ja-JP")} / {metric.denominator.toLocaleString("ja-JP")}件
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+      <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>
+        {metric.rate}%
+      </span>
+      <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+        ({metric.numerator.toLocaleString("ja-JP")} / {metric.denominator.toLocaleString("ja-JP")}件)
+      </span>
+    </div>
+  );
+}
+
 export default function MonitoringPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<MonitoringKpis | null>(null);
@@ -54,6 +139,11 @@ export default function MonitoringPage() {
   const [error, setError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // GID 1216970103691946 (PR-7): 計測ヘルス(5指標)。KPIとは別APIのため
+  // 取得結果・エラーも独立させる(片方の失敗がもう片方の表示を止めないため)。
+  const [health, setHealth] = useState<MeasurementHealth | null>(null);
+  const [healthError, setHealthError] = useState(false);
 
   const fetchKpis = useCallback(async () => {
     try {
@@ -76,6 +166,19 @@ export default function MonitoringPage() {
     }
   }, [navigate]);
 
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/analytics/measurement-health`);
+      if (!res.ok) throw new Error("fetch failed");
+      const json = (await res.json()) as MeasurementHealth;
+      setHealth(json);
+      setHealthError(false);
+    } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") return; // fetchKpisが遷移を担当
+      setHealthError(true);
+    }
+  }, []);
+
   useEffect(() => {
     void (async () => {
       const { data } = await supabase.auth.getSession();
@@ -84,13 +187,14 @@ export default function MonitoringPage() {
         return;
       }
       void fetchKpis();
-      timerRef.current = setInterval(() => { void fetchKpis(); }, POLL_INTERVAL_MS);
+      void fetchHealth();
+      timerRef.current = setInterval(() => { void fetchKpis(); void fetchHealth(); }, POLL_INTERVAL_MS);
     })();
 
     return () => {
       if (timerRef.current !== null) clearInterval(timerRef.current);
     };
-  }, [fetchKpis, navigate]);
+  }, [fetchKpis, fetchHealth, navigate]);
 
   const buildTenantRows = (): TenantSlaRow[] => {
     if (!data?.tenants) return [];
@@ -318,6 +422,99 @@ export default function MonitoringPage() {
                 <KpiCard key={card.name} {...card} />
               ))}
             </div>
+          </section>
+
+          <section style={{ marginBottom: 40 }}>
+            <h2
+              style={{
+                fontSize: 15,
+                fontWeight: 600,
+                color: "var(--muted-foreground)",
+                marginBottom: 4,
+                marginTop: 0,
+              }}
+            >
+              計測ヘルス（直近30日）
+            </h2>
+            <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 0, marginBottom: 16 }}>
+              「何を直しても効果を測れない」状態を脱したかを確認する画面です。以降の効果測定の判定母数になります。
+            </p>
+            {healthError ? (
+              <div
+                style={{
+                  padding: "14px 16px",
+                  borderRadius: 12,
+                  border: "1px solid var(--border)",
+                  color: "var(--muted-foreground)",
+                  fontSize: 14,
+                }}
+              >
+                計測ヘルスの取得に失敗しました
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+                <MeasurementHealthCard
+                  title="トラフィックの内訳"
+                  description="e2e / 未タグ付けの新規発生が0に近いほど計測が汚染されていません"
+                >
+                  {health ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {health.sourceBreakdown.length === 0 ? (
+                        <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>データなし</span>
+                      ) : (
+                        health.sourceBreakdown.map((row) => (
+                          <div key={row.source} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                            <span style={{ color: "var(--muted-foreground)" }}>{row.source}</span>
+                            <span style={{ fontWeight: 700, color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>
+                              {row.count.toLocaleString("ja-JP")}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    <MetricPlaceholder />
+                  )}
+                </MeasurementHealthCard>
+
+                <MeasurementHealthCard
+                  title="空セッション（message_count = 0）"
+                  description="0件が正常です。増えている場合は記録経路の不具合を疑ってください"
+                >
+                  {health ? <MetricValue value={health.emptySessionCount.toLocaleString("ja-JP")} met={health.emptySessionCount === 0} /> : <MetricPlaceholder />}
+                </MeasurementHealthCard>
+
+                <MeasurementHealthCard
+                  title="CVの会話結合率"
+                  description="コンバージョンが会話セッションに正しく結合できた割合"
+                >
+                  {health ? <RateDisplay metric={health.cvSessionLinkRate} /> : <MetricPlaceholder />}
+                </MeasurementHealthCard>
+
+                <MeasurementHealthCard
+                  title="成果(outcome)記録率"
+                  description="実ユーザーの会話のうち成果が記録された割合（自動記録件数も表示）"
+                >
+                  {health ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <RateDisplay metric={health.outcomeRecordRate} />
+                      <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+                        うち自動記録: {health.outcomeRecordRate.autoRecorded.toLocaleString("ja-JP")}件
+                      </span>
+                    </div>
+                  ) : (
+                    <MetricPlaceholder />
+                  )}
+                </MeasurementHealthCard>
+
+                <MeasurementHealthCard
+                  title="実ユーザーの有効セッション数"
+                  description="判定に使える母数そのもの（source=userかつメッセージあり）"
+                >
+                  {health ? <MetricValue value={health.validUserSessionCount.toLocaleString("ja-JP")} /> : <MetricPlaceholder />}
+                </MeasurementHealthCard>
+              </div>
+            )}
           </section>
 
           {tenantRows.length > 0 && (

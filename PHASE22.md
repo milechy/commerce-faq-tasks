@@ -1,5 +1,12 @@
 # Phase22: Failure-Safe Conversational Control & Operational Readiness
 
+> ⚠️ **PR-10 訂正 (2026-08-23)**: 本ドキュメントが指すコード一式
+> （LangGraph orchestrator, AgentDialogOrchestrator, CrewAgent,
+> avatarPolicy.ts 等）は `/api/chat`（live経路）から一度も呼ばれておらず、
+> テストからしか到達できない状態のまま本番配線されなかったことが
+> 学習ループ監査(R10/D5)で判明した。PR-10 でコード一式を削除済み。
+> 以下は当時の設計記録として歴史的に残すが、現在の本番挙動を表さない。
+
 ## Goal（目的）
 
 Phase21 で確定した会話型セールスフローおよび外部アヴァター（Lemon Slice）を対象に、

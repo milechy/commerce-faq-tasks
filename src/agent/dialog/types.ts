@@ -1,6 +1,6 @@
 // src/agent/dialog/types.ts
 
-import type { PlannerRoute } from "../orchestrator/modelRouter";
+import type { RoutedModel } from "../../llm/modelRouter";
 import type { ProposeIntent } from "../orchestrator/sales/proposePromptBuilder";
 import type { RecommendIntent } from "../orchestrator/sales/recommendPromptBuilder";
 import type { CloseIntent } from "../orchestrator/sales/closePromptBuilder";
@@ -159,6 +159,8 @@ export interface DialogTurnResult {
   /** GID 1216978855735482 (PR-13): system_prompt_variants から選ばれたvariant */
   promptVariantId?: string | null;
   promptVariantName?: string | null;
+  /** GID 1216978677398163 (PR-14): 応答に実際に反映された tuning_rules の id 一覧 */
+  appliedRuleIds?: number[];
 }
 
 // --- Phase8: Sales-oriented Planner types ---
@@ -226,7 +228,7 @@ export type DialogAgentStep = {
 };
 
 export interface DialogAgentMeta {
-  route: PlannerRoute;
+  route: RoutedModel;
   plannerReasons: string[];
   orchestratorMode: DialogOrchestratorMode;
   safetyTag?: string;

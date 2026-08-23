@@ -101,6 +101,7 @@ async function fetchSessionCandidates(
   const limit = Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
   // 学習データ汚染防止: Hermesにはe2e/chat-test由来のセッションを一切渡さない
+  // (userSourceClauseは"AND ..."形式を返すため、conditions配列の要素としてはAND抜きで積む)
   const conditions: string[] = [
     `s.tenant_id = $1`,
     userSourceClause("s").replace(/^AND /, ""),

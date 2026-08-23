@@ -226,6 +226,9 @@ const createSchema = z.object({
   trigger_pattern: z.string().min(1).max(1000),
   expected_behavior: z.string().min(1).max(4000),
   priority: z.number().int().min(0).max(10).optional(),
+  // D8: 未指定なら zod が黙って落とし、常に DEFAULT true になっていた
+  // (作成モーダルは is_active を送っているのに受け付けていなかった)。
+  is_active: z.boolean().optional(),
   source_message_id: z.number().int().positive().nullable().optional(),
 });
 
@@ -443,7 +446,7 @@ export function registerTuningRoutes(app: Express): void {
         .json({ error: "invalid_request", details: parsed.error.issues });
     }
 
-    const { tenant_id, trigger_pattern, expected_behavior, priority, source_message_id } =
+    const { tenant_id, trigger_pattern, expected_behavior, priority, is_active, source_message_id } =
       parsed.data;
 
     // client_admin は自テナント以外 (global 含む) に作成不可
@@ -459,6 +462,7 @@ export function registerTuningRoutes(app: Express): void {
         trigger_pattern,
         expected_behavior,
         priority,
+        is_active,
         created_by: jwtEmail || undefined,
         source_message_id: source_message_id ?? null,
       });

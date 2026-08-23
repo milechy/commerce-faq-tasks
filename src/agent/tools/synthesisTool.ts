@@ -16,6 +16,7 @@ import type { SimilarPattern } from '../../api/events/similarUserMatcher';
 
 import { getPool } from '../../lib/db';
 import { buildSentimentHint } from '../../lib/sentiment/hint';
+import { RAG_EXCERPT_MAX_CHARS, RAG_MAX_EXCERPTS } from '../config/ragLimits';
 
 // GID 1216978855735482: sessionId を sticky key として渡し、同一セッション内で
 // variant が揺れないようにする（Math.random()だと呼ばれるたびに選び直されていた）。
@@ -83,6 +84,13 @@ export interface SynthesisOutput {
   /** Phase46: 選択されたvariant情報 */
   variantId?: string | null;
   variantName?: string | null;
+  /**
+   * GID 1216978855735482 (PR-14): 応答生成に実際に反映された tuning_rules の id。
+   * chat_messages.metadata.applied_rule_ids に記録し、ルール効果測定(ruleEffect.ts)の
+   * 母集団判定に使う。マッチしただけで応答に反映されなかった経路(fallbackSynthesize)では
+   * 含めない。
+   */
+  appliedRuleIds?: number[];
   /** Phase53: Groq API実トークン数（取得できた場合のみ） */
   llmUsage?: GroqUsage;
 }
@@ -203,7 +211,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   if (!process.env.GROQ_API_KEY) {
     if (!items.length) {
       // FAQ なし + チューニングルールあり だが LLM なし → ルール本文を直接返す
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal };
+      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
     }
     return fallbackSynthesize(input);
   }
@@ -251,10 +259,16 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     const systemPrompt = systemPromptParts.join('\n\n');
 
     // FAQ コンテキスト（ヒットがある場合）
+    // 書籍著作権保護: 1件あたり RAG_EXCERPT_MAX_CHARS 文字までに切り詰める
+    // (src/agent/config/ragLimits.ts)。テキストをそのままLLMへ渡すと、
+    // 書籍由来チャンク(metadata.source='book')の全文がプロンプトに乗ってしまう。
     const faqContext = items.length
       ? items
-          .slice(0, 3)
-          .map((it, i) => `FAQ${i + 1}:\nQ: ${sanitizeText(it.text)}\nA: ${sanitizeText(it.text)}`)
+          .slice(0, RAG_MAX_EXCERPTS)
+          .map((it, i) => {
+            const excerpt = truncate(sanitizeText(it.text), RAG_EXCERPT_MAX_CHARS);
+            return `FAQ${i + 1}:\nQ: ${excerpt}\nA: ${excerpt}`;
+          })
           .join('\n\n')
       : '';
 
@@ -281,6 +295,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
       llmUsage: synthResult.usage,
       variantId: selectedVariantId,
       variantName: selectedVariantName,
+      appliedRuleIds: matchedRules.length > 0 ? matchedRules.map((r) => r.id) : undefined,
       ...(shouldInjectPrinciples && usedPrinciples.length > 0
         ? {
             usedPrinciples,
@@ -291,7 +306,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   } catch {
     // フォールバック: 箇条書き
     if (!items.length) {
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal };
+      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
     }
     return { ...fallbackSynthesize(input), gapSignal };
   }

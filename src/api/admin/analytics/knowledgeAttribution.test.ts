@@ -58,6 +58,7 @@ type AttrRow = {
   raw_text: string | null;
   book_title: string | null;
   prev_rate: number;
+  prev_conversation_count?: number;
 };
 
 describe('GET /v1/admin/analytics/knowledge-attribution', () => {
@@ -125,6 +126,33 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
     expect(res.body.summary.total_chunks_used).toBe(2);
     expect(res.body.summary.top_performer.chunk_id).toBe('202');
     expect(res.body.summary.worst_performer.chunk_id).toBe('101');
+  });
+
+  it('前期間の実績が0件のチャンクは up/down/stable を出さず insufficient_data を返す(CLAUDE.md禁止34)', async () => {
+    const rows: AttrRow[] = [
+      {
+        chunk_id: '303',
+        src_type: 'faq',
+        principle: null,
+        usage_count: 5,
+        conversation_count: 5,
+        conversion_count: 3,
+        conversion_rate: 0.6,
+        avg_judge_score: null,
+        raw_text: '新規追加されたFAQ',
+        book_title: null,
+        prev_rate: 0, // 前期間データなしの便宜上の0（架空の下降と混同しないこと）
+        prev_conversation_count: 0,
+      },
+    ];
+    mockQuery.mockResolvedValueOnce({ rows });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .set('x-tenant-id', 'tenant-A');
+
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].trend).toBe('insufficient_data');
   });
 
   it('SQL の ORDER BY が sort_by に合わせて切り替わる (usage_count)', async () => {

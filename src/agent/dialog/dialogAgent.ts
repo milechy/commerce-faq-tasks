@@ -9,6 +9,7 @@ import type { ProposeIntent } from "../orchestrator/sales/proposePromptBuilder";
 import type { RecommendIntent } from "../orchestrator/sales/recommendPromptBuilder";
 import { runSalesFlowWithLogging } from "../orchestrator/sales/runSalesFlowWithLogging";
 import { detectSalesIntents } from "../orchestrator/sales/salesIntentDetector";
+import type { ExtendedSalesMeta } from "../orchestrator/sales/salesOrchestrator";
 import { appendToSessionHistory, getSessionHistory } from "./contextStore";
 import {
   getSalesSessionMeta,
@@ -17,6 +18,25 @@ import {
 } from "./salesContextStore";
 import type { DialogMessage, DialogTurnInput, DialogTurnResult, ProductCard } from "./types";
 import { pool } from "../../lib/db";
+
+// GID 1216970103691946 (PR-11): SalesFlow の段階(clarify→propose→recommend→close)を
+// 次ターンへ引き継ぐかどうかのテナント単位フラグ。CLAUDE.md 禁止35(会話の振る舞いを
+// 変える機能を全テナント一斉に有効化しない)のため、tenants.features で段階的に開ける。
+// 既定OFF = 従来通り毎ターン previousMeta=undefined(clarify固定)。
+// actionExecutor.ts の features->>'avatar' 読み取りと同じ生SQLパターンを踏襲する
+// (専用キャッシュ層は作らない。呼び出し頻度は同程度で、既存の前例が非キャッシュのため)。
+async function isSalesStageContinuityEnabled(tenantId: string): Promise<boolean> {
+  if (!pool) return false;
+  try {
+    const result = await pool.query<{ enabled: string | null }>(
+      `SELECT features->>'sales_stage_continuity' AS enabled FROM tenants WHERE id = $1`,
+      [tenantId],
+    );
+    return result.rows[0]?.enabled === "true";
+  } catch {
+    return false; // fail-closed: 従来挙動(clarify固定)を維持する
+  }
+}
 
 // ユーザー入力 + 会話履歴からざっくりトークン数を見積もる。
 // （Phase3 v1 では char/4 の雑な近似で十分）
@@ -116,6 +136,26 @@ export async function runDialogTurn(
     detectedIntents.recommendIntent ?? DEFAULT_RECOMMEND_INTENT;
   const closeIntent = detectedIntents.closeIntent ?? DEFAULT_CLOSE_INTENT;
 
+  // GID 1216970103691946 (PR-11): フラグONのテナントのみ、前ターンの段階を
+  // salesContextStore から読んで引き継ぐ。フラグOFF(既定)は従来通り undefined を
+  // 渡し、毎ターン clarify 固定の挙動を変えない。
+  const stageContinuityEnabled = await isSalesStageContinuityEnabled(effectiveTenantId);
+  const existingSalesMeta = stageContinuityEnabled
+    ? getSalesSessionMeta(salesSessionKey)
+    : undefined;
+  const previousMeta: ExtendedSalesMeta | undefined = existingSalesMeta
+    ? ({
+        // salesOrchestrator は previousMeta.phase を「前ターンの段階」として読む
+        // (result.meta.phase として書き込まれる。ExtendedSalesMeta 自体の型には
+        // 含まれていない実行時プロパティのため as any を踏襲する)。
+        phase: existingSalesMeta.currentStage,
+        proposeTriggered: existingSalesMeta.proposeTriggered,
+        recommendTriggered: existingSalesMeta.recommendTriggered,
+        closeTriggered: existingSalesMeta.closeTriggered,
+        personaTags: existingSalesMeta.personaTags,
+      } as ExtendedSalesMeta)
+    : undefined;
+
   const salesResult = await runSalesFlowWithLogging(
     effectiveTenantId,
     effectiveSessionId,
@@ -131,8 +171,7 @@ export async function runDialogTurn(
         // Phase17: MultiStepQueryPlan は PlannerPlan と構造が異なるため、
         // sales detection にはまだ渡さない（将来 PlannerPlan 側と揃えてから連携する）
       },
-      // Phase16: previousMeta はまだ SalesSessionMeta とは統合していないため、一旦 undefined とする
-      previousMeta: undefined,
+      previousMeta,
       proposeIntent,
       recommendIntent,
       closeIntent,
@@ -142,9 +181,13 @@ export async function runDialogTurn(
 
   // SalesFlow の現在ステージをセッションメタに保存（次ターンのコンテキスト用）
   if (salesResult.nextStage) {
+    const meta = salesResult.meta as ExtendedSalesMeta;
     updateSalesSessionMeta(salesSessionKey, {
       currentStage: salesResult.nextStage,
-      // lastIntent や personaTags は必要になったタイミングで拡張する
+      proposeTriggered: meta.proposeTriggered,
+      recommendTriggered: meta.recommendTriggered,
+      closeTriggered: meta.closeTriggered,
+      // lastIntent は必要になったタイミングで拡張する
     });
   }
 
@@ -193,6 +236,7 @@ export async function runDialogTurn(
       orchestrated.clarifyingQuestions ?? multiStepPlan.clarifyingQuestions,
     promptVariantId: orchestrated.promptVariantId,
     promptVariantName: orchestrated.promptVariantName,
+    appliedRuleIds: orchestrated.appliedRuleIds,
     meta: {
       multiStepPlan,
       orchestratorMode: "local",

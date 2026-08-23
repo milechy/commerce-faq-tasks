@@ -50,6 +50,7 @@ export interface CreateRuleParams {
   trigger_pattern: string;
   expected_behavior: string;
   priority?: number;
+  is_active?: boolean;
   created_by?: string;
   source_message_id?: number | null;
 }
@@ -149,15 +150,20 @@ export async function getActiveRulesForTenant(
   return result.rows;
 }
 
-/** ルール作成。RETURNING * で作成済み行を返す。 */
+/**
+ * ルール作成。RETURNING * で作成済み行を返す。
+ * is_active は明示的に渡す(未指定時は true)。列を省略してスキーマ既定に
+ * 委ねると、作成モーダルが送る is_active=false が黙って無視される
+ * (createSchema で受け付けていなかった旧実装の再発防止)。
+ */
 export async function createRule(params: CreateRuleParams): Promise<TuningRule> {
   const pool = getPool();
 
   const result = await pool.query<TuningRule>(
     `INSERT INTO tuning_rules
-       (tenant_id, trigger_pattern, expected_behavior, priority,
+       (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
         created_by, source_message_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, tenant_id, trigger_pattern, expected_behavior,
                priority, is_active, created_by, source_message_id,
                created_at, updated_at, approved_responses`,
@@ -166,6 +172,7 @@ export async function createRule(params: CreateRuleParams): Promise<TuningRule> 
       params.trigger_pattern,
       params.expected_behavior,
       params.priority ?? 0,
+      params.is_active ?? true,
       params.created_by ?? null,
       params.source_message_id ?? null,
     ],
@@ -199,6 +206,17 @@ export async function updateRule(
       ? JSON.stringify(params.approved_responses)
       : null;
 
+  // D8: is_active が唯一の真実。status で承認/却下を指定した場合はここで
+  // is_active を導出し、呼び出し側(actionExecutor / LLMプロンプト)が
+  // is_active を渡し忘れても不整合が起きないようにする。
+  // status 未指定時は従来通り params.is_active(通常のON/OFF切替)を使う。
+  const derivedIsActive =
+    params.status === "active"
+      ? true
+      : params.status === "rejected"
+        ? false
+        : (params.is_active ?? null);
+
   const result = await pool.query<TuningRule>(
     `UPDATE tuning_rules SET
        trigger_pattern   = COALESCE($1, trigger_pattern),
@@ -216,7 +234,7 @@ export async function updateRule(
       params.trigger_pattern ?? null,
       params.expected_behavior ?? null,
       params.priority ?? null,
-      params.is_active ?? null,
+      derivedIsActive,
       approvedJson,
       params.status ?? null,
       id,

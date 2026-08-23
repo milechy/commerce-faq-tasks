@@ -15,7 +15,7 @@ interface KnowledgeItem {
   conversion_count: number;
   conversion_rate: number;
   avg_judge_score: number | null;
-  trend: "up" | "down" | "stable";
+  trend: "up" | "down" | "stable" | "insufficient_data";
 }
 
 interface AttributionResponse {
@@ -121,9 +121,13 @@ function KpiCard({ icon, label, value, sub, accent }: {
   );
 }
 
-function TrendBadge({ trend }: { trend: "up" | "down" | "stable" }) {
+function TrendBadge({ trend }: { trend: "up" | "down" | "stable" | "insufficient_data" }) {
   if (trend === "up") return <span style={{ color: "#4ade80", fontSize: 14 }}>↑</span>;
   if (trend === "down") return <span style={{ color: "#ef4444", fontSize: 14 }}>↓</span>;
+  if (trend === "insufficient_data") {
+    // 前期間の実績が0件で比較不能(架空の「横這い」表示を避ける)
+    return <span style={{ color: "#6b7280", fontSize: 11 }} title="前期間の実績が0件のため比較できません">判定不可</span>;
+  }
   return <span style={{ color: "#6b7280", fontSize: 14 }}>—</span>;
 }
 

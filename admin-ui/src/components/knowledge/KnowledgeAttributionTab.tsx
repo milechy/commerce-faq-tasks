@@ -35,7 +35,7 @@ interface AttributionItem {
   conversion_count: number;
   conversion_rate: number;
   avg_judge_score: number | null;
-  trend: "up" | "down" | "stable";
+  trend: "up" | "down" | "stable" | "insufficient_data";
 }
 
 interface AttributionResponse {
@@ -100,6 +100,9 @@ function trendLabel(trend: AttributionItem["trend"]): { label: string; color: st
       return { label: "▲ 上昇", color: "#4ade80" };
     case "down":
       return { label: "▼ 下降", color: "#f87171" };
+    case "insufficient_data":
+      // 前期間の実績が0件で比較不能(架空の「横這い」表示を避ける)
+      return { label: "判定に足りないデータ", color: "#6b7280" };
     default:
       return { label: "→ 横這い", color: "#9ca3af" };
   }

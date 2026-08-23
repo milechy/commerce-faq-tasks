@@ -96,7 +96,7 @@ describe("1. 承認（edited_textなし）— AI原文をそのまま保存", ()
     expect(mockInsertTuningRuleFromSuggestion).toHaveBeenCalledWith(
       "tenant-a",
       "AI原文ルール",
-      { editedText: undefined, editedBy: "admin@example.com" },
+      { editedText: undefined, editedBy: "admin@example.com", expectedBehavior: "スコアが低い" },
     );
     expect(mockUpdateSuggestedRuleStatus).toHaveBeenCalledWith(1, 0, "approved", undefined);
   });
@@ -117,7 +117,7 @@ describe("2. 承認（edited_textあり）— 編集後テキストを保存", (
     expect(mockInsertTuningRuleFromSuggestion).toHaveBeenCalledWith(
       "tenant-a",
       "AI原文ルール",
-      { editedText: "編集後のルールテキスト", editedBy: "admin@example.com" },
+      { editedText: "編集後のルールテキスト", editedBy: "admin@example.com", expectedBehavior: "スコアが低い" },
     );
   });
 });
