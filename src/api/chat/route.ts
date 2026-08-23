@@ -344,6 +344,8 @@ export function createChatHandler(logger: Logger) {
         },
         ragSources: result.meta?.ragSources,
         trafficSource,
+        promptVariantId: result.promptVariantId,
+        promptVariantName: result.promptVariantName,
       }).catch((err) =>
         logger.warn({ err }, "[chat-history] save assistant message failed")
       );

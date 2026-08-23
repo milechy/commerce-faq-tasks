@@ -156,6 +156,9 @@ export interface DialogTurnResult {
   meta?: DialogTurnMeta;
   /** Phase73: SalesFlow recommend ステージ時に設定される商品カード情報 */
   productCard?: ProductCard;
+  /** GID 1216978855735482 (PR-13): system_prompt_variants から選ばれたvariant */
+  promptVariantId?: string | null;
+  promptVariantName?: string | null;
 }
 
 // --- Phase8: Sales-oriented Planner types ---
