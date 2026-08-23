@@ -1385,6 +1385,65 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
       expect(screen.queryByText(/推定差分/)).toBeNull();
       expect(screen.queryByText(/まだ判定できません（判定に必要な会話数が不足しています）/)).toBeNull();
     });
+
+    // GID 1217752900578379 (R4 S6): 効果を見て終わりにせず、その場で無効化に繋げられる
+    it("「このルールを無効にする」ボタンを押すと無効化の自然文が代理送信される(母数充足時)", async () => {
+      mockAgent({
+        reply: "効果はこちらです。",
+        actions: [
+          {
+            tool: "get_tuning_rule_effect",
+            result: "指示ルール（ID: 42）の効果: 逆効果の可能性があります",
+            card: {
+              kind: "rule_effect",
+              ruleId: 42,
+              approvedAt: "2026-08-01T00:00:00.000Z",
+              truncated: false,
+              analyzedSessions: 40,
+              comparison: { didEstimate: -6, ci95Low: -10, ci95High: -2, naiveTreatmentDelta: -3 },
+              progress: null,
+            },
+          },
+        ],
+      });
+
+      await send("ルール42の効果を教えて");
+
+      const disableButton = await screen.findByRole("button", { name: "このルールを無効にする" });
+      fireEvent.click(disableButton);
+
+      await waitFor(() => expect(screen.getByText("指示ルール（ID: 42）を無効にしてください")).toBeTruthy());
+      const chatBodies = vi
+        .mocked(authFetch)
+        .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+        .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+      expect(chatBodies.at(-1)?.message).toBe("指示ルール（ID: 42）を無効にしてください");
+    });
+
+    it("母数不足の判定待ちでも「このルールを無効にする」ボタンは出る(止めるかは店主の判断に委ねる)", async () => {
+      mockAgent({
+        reply: "まだ判定できません。",
+        actions: [
+          {
+            tool: "get_tuning_rule_effect",
+            result: "指示ルール（ID: 42）はまだ効果を判定できません",
+            card: {
+              kind: "rule_effect",
+              ruleId: 42,
+              approvedAt: "2026-08-01T00:00:00.000Z",
+              truncated: false,
+              analyzedSessions: 2,
+              comparison: null,
+              progress: [{ group: "afterTreatment", groupLabel: "承認後・該当する会話", currentN: 2, requiredN: 5, etaDays: 10 }],
+            },
+          },
+        ],
+      });
+
+      await send("ルール42の効果を教えて");
+
+      expect(await screen.findByRole("button", { name: "このルールを無効にする" })).toBeTruthy();
+    });
   });
 
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
@@ -1709,6 +1768,88 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(await screen.findByText(/AIの提案（却下済み）/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "有効にする" })).toBeNull();
     expect(screen.queryByRole("button", { name: "却下する" })).toBeNull();
+  });
+
+  // GID 1217752900578379 (R4 S6): 承認済み(status='active')の行にのみ「効果を見る」を出す。
+  // T1で approved_at を書くのは status='active' の書き込み経路のみと確認済みのため、
+  // それ以外の行では get_tuning_rule_effect が not_yet_approved を返すだけで押しても無意味。
+  it("get_tuning_rules: status='active'(承認済み)の行にのみ「効果を見る」ボタンが出て、押すと効果を尋ねる自然文が代理送信される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効1件・無効0件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 77, triggerPattern: "返品", expectedBehavior: "30日以内", priority: 5, isActive: true, source: "judge", status: "active", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    const effectButton = await screen.findByRole("button", { name: "📊 効果を見る" });
+    fireEvent.click(effectButton);
+
+    await waitFor(() => expect(screen.getByText("指示ルール（ID: 77）の効果を教えて")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("指示ルール（ID: 77）の効果を教えて");
+  });
+
+  it("get_tuning_rules: 自分で作ったルール(status=null)には「効果を見る」ボタンが出ない(承認フローを経ておらずapproved_atが無い)", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効1件・無効0件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 1, triggerPattern: "保証", expectedBehavior: "2年", priority: 5, isActive: true, source: "manual", status: null, evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    await screen.findByText("保証");
+
+    expect(screen.queryByRole("button", { name: "📊 効果を見る" })).toBeNull();
+  });
+
+  it("get_tuning_rules: 未承認(pending)の行には「効果を見る」ボタンが出ない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 55, triggerPattern: "保証期間", expectedBehavior: "3ヶ月と即答する", priority: 5, isActive: false, source: "hermes", status: "pending", evidence: null },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+    await screen.findByText(/Hermesの提案（未承認）/);
+
+    expect(screen.queryByRole("button", { name: "📊 効果を見る" })).toBeNull();
   });
 
   // D5: 旧UIと同じ3段階(低/普通/高)語彙でチャットからも優先度を変えられる。

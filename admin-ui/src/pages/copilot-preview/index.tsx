@@ -2418,6 +2418,17 @@ function CardView({
                     </button>
                   </div>
                 )}
+                {/* GID 1217752900578379 (R4): status==='active' のときのみ approved_at が
+                    記録されている(T1で確認済みの唯一の書き込み経路)。未承認の行に出すと
+                    効果を聞いても「まだ承認されていません」が返るだけで、押しても無意味になる。 */}
+                {r.status === "active" && onSendReal && (
+                  <button
+                    onClick={() => onSendReal(`__real:指示ルール（ID: ${r.id}）の効果を教えて`)}
+                    style={{ alignSelf: "flex-start", fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                  >
+                    📊 効果を見る
+                  </button>
+                )}
               </div>
             );
           })}
@@ -2592,7 +2603,7 @@ function CardView({
     case "weeklySummary":
       return <WeeklySummaryCard card={card} />;
     case "ruleEffect":
-      return <RuleEffectCard card={card} />;
+      return <RuleEffectCard card={card} onSendReal={onSendReal} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -2740,7 +2751,26 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
 // 見込み日数の到達条件のみを表示し、率・%・矢印・断定語(「改善しました」等)は一切出さない
 // (CLAUDE.md「絶対にやってはいけないこと」34: 計測の土台が壊れたまま効果を数値で出さない。
 // 「点推定を単独で出さない」: 母数充足時も必ず95%信頼区間を併記する)。
-function RuleEffectCard({ card }: { card: Extract<Card, { kind: "ruleEffect" }> }) {
+function RuleEffectCard({
+  card,
+  onSendReal,
+}: {
+  card: Extract<Card, { kind: "ruleEffect" }>;
+  onSendReal?: (action: string) => void;
+}) {
+  // GID 1217752900578379 (R4 S6): 効果を見て終わりにせず、その場で打ち手に繋げる
+  // (CLAUDE.md 禁止15「動線として閉じていない機能を足す」)。既存の update_tuning_rule に
+  // 自然文で着地させる(新規ツールを作らない)。母数不足・充足いずれの状態でも無効化はできる
+  // (判定待ちのルールを止めるかどうかは店主の判断であり、機能側で先回りして制限しない)。
+  const disableButton = onSendReal && (
+    <button
+      onClick={() => onSendReal(`__real:指示ルール（ID: ${card.ruleId}）を無効にしてください`)}
+      style={{ alignSelf: "flex-start", fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+    >
+      このルールを無効にする
+    </button>
+  );
+
   if (card.progress) {
     return (
       <CardShell hd={<><span>📊</span>ルール効果（ID: {card.ruleId}）</>} tone="agent">
@@ -2764,6 +2794,7 @@ function RuleEffectCard({ card }: { card: Extract<Card, { kind: "ruleEffect" }> 
             </div>
           ))}
         </div>
+        {disableButton}
       </CardShell>
     );
   }
@@ -2790,6 +2821,7 @@ function RuleEffectCard({ card }: { card: Extract<Card, { kind: "ruleEffect" }> 
           ※直近{card.analyzedSessions}件のセッションで判定しています
         </div>
       )}
+      {disableButton}
     </CardShell>
   );
 }
