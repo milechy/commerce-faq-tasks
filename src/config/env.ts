@@ -96,6 +96,11 @@ const envSchema = z.object({
   LEMON_SLICE_ENDPOINT: z.string().optional(),
   LEMON_SLICE_READINESS_URL: z.string().optional(),
 
+  // ── Judge ─────────────────────────────────────────────────────────────
+  // GID 1216970103691946 (PR-12): 離脱セッション自動評価スイープの段階開放。
+  // カンマ区切りテナントID。未設定時はr2c_defaultのみ(CLAUDE.md禁止35)。
+  JUDGE_SWEEP_TENANTS: z.string().optional(),
+
   // ── OpenClaw / OpenViking ─────────────────────────────────────────────
   OPENCLAW_ENABLED: boolEnv,
   OPENCLAW_RL_URL: z.string().optional(),
