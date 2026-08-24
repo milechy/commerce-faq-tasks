@@ -196,6 +196,22 @@ describe('GET /widget/:tenantSlug.js — 「Powered by R2C」バッジ (PR-B)', 
     expect(url.searchParams.get('utm_campaign')).toBe('powered_by');
     expect(url.searchParams.get('r2c_ref')).toBe('tenant-a');
   });
+
+  // 2026-08-24 実機確認で発覚した回帰: apex の r2c.biz は DNS が存在せず解決不能
+  // （admin.r2c.biz / api.r2c.biz は稼働中）。LP_BASE_URL の既定値には、
+  // 実際に public/lp/ を配信している到達可能なホストのみを使うこと。
+  it('badgeUrl の既定ホストは解決不能な r2c.biz apex ではなく、稼働中の API_BASE_URL と一致する', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'starter' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    const badgeUrlHost = new URL(config.badgeUrl).host;
+    const apiBaseUrlHost = new URL(config.apiBaseUrl).host;
+    expect(badgeUrlHost).toBe(apiBaseUrlHost);
+    expect(badgeUrlHost).not.toBe('r2c.biz');
+  });
 });
 
 describe('GET /widget/:tenantSlug.js — バッジが表示されない既知の経路(仕様として固定)', () => {
