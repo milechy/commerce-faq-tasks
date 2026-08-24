@@ -172,3 +172,69 @@ describe('POST /api/events', () => {
     });
   });
 });
+
+// E3a: お客様がAIの回答を評価する(👍👎)。学習ループの教師信号。
+// Judge は 4通未満の会話を評価しないため、1往復で終わる現状ではこれが
+// 唯一機能する品質シグナルになる(要件 Rj / 決定 D1)。
+describe('POST /api/events — answer_feedback', () => {
+  const feedback = (event_data: unknown) => ({
+    visitor_id: 'vid-fb',
+    session_id: 'sid-fb',
+    events: [{ event_type: 'answer_feedback', event_data }],
+  });
+
+  it('rating と message_ref が揃っていれば受理し、既存テーブルへ記録する', async () => {
+    const { app, mockDb } = makeApp({});
+    const res = await request(app).post('/api/events').send(feedback({ rating: 'up', message_ref: 'm-1' }));
+
+    expect(res.status).toBe(202);
+    // 新テーブルを作らず behavioral_events に載せる(CLAUDE.md 禁止32)
+    const sqls = mockDb.query.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(sqls.some((q: string) => /INSERT INTO behavioral_events/i.test(q))).toBe(true);
+    expect(sqls.some((q: string) => /INSERT INTO answer_feedback/i.test(q))).toBe(false);
+  });
+
+  it('👎 も受理する', async () => {
+    const { app } = makeApp({});
+    const res = await request(app).post('/api/events').send(feedback({ rating: 'down', message_ref: 'm-2' }));
+    expect(res.status).toBe(202);
+  });
+
+  it('rating が不正なら 400(集計できないデータを受け取らない)', async () => {
+    const { app } = makeApp({});
+    const res = await request(app).post('/api/events').send(feedback({ rating: 'maybe', message_ref: 'm-3' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('message_ref が無ければ 400(どの回答への評価か分からない)', async () => {
+    const { app } = makeApp({});
+    const res = await request(app).post('/api/events').send(feedback({ rating: 'up' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('event_data が空でも 400 になる', async () => {
+    const { app } = makeApp({});
+    const res = await request(app).post('/api/events').send(feedback({}));
+    expect(res.status).toBe(400);
+  });
+
+  it('他のイベント型の event_data 自由形式は従来どおり通る(既存互換を壊さない)', async () => {
+    const { app } = makeApp({});
+    const res = await request(app)
+      .post('/api/events')
+      .send({
+        visitor_id: 'vid-x',
+        session_id: 'sid-x',
+        events: [{ event_type: 'scroll_depth', event_data: { anything: 'goes' } }],
+      });
+    expect(res.status).toBe(202);
+  });
+
+  it('未知のイベント型は従来どおり 400', async () => {
+    const { app } = makeApp({});
+    const res = await request(app)
+      .post('/api/events')
+      .send({ visitor_id: 'v', session_id: 's', events: [{ event_type: 'not_a_real_event' }] });
+    expect(res.status).toBe(400);
+  });
+});
