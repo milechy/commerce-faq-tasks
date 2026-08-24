@@ -160,6 +160,77 @@ describe("PATCH /v1/admin/tenants/:id — Phase72-A 監査ログ", () => {
 // ② GET /v1/admin/tenants/:id/settings-history — { history, total } を返す
 // --------------------------------------------------------------------------
 
+// D1: 会話の段階引き継ぎ(SalesFlow)を画面から開閉できるようにする。
+// dialogAgent.ts は実装済みだったが featuresSchema にキーが無く、super_admin の
+// PATCH が zod で弾かれて **DB直更新でしか開けられなかった**。
+describe("PATCH /v1/admin/tenants/:id — sales_stage_continuity", () => {
+  const ROW = {
+    id: "tenant-a", name: "テストテナント", plan: "starter", is_active: true,
+    allowed_origins: [], system_prompt: null, billing_enabled: false,
+    billing_free_from: null, billing_free_until: null,
+    features: { avatar: false, voice: false, rag: true },
+    lemonslice_agent_id: null, conversion_types: [], tenant_contact_email: null,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  };
+
+  function makeDb(returned: Record<string, unknown>) {
+    return {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "starter", features: ROW.features, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ ...ROW, features: returned }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+  }
+
+  it("super_admin は sales_stage_continuity を有効化できる（zodで弾かれない）", async () => {
+    const features = { avatar: false, voice: false, rag: true, sales_stage_continuity: true };
+    const res = await request(makeApp(makeDb(features), "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ features });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features.sales_stage_continuity).toBe(true);
+  });
+
+  it("既存の features キーを落とさない（サーバ側は || マージ、送信側も全キーを送る）", async () => {
+    const features = {
+      avatar: true, voice: true, rag: true,
+      hermes_raw_data_consent: true, sales_stage_continuity: true,
+    };
+    const db = makeDb(features);
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ features });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features.hermes_raw_data_consent).toBe(true);
+    expect(res.body.features.avatar).toBe(true);
+  });
+
+  it("boolean 以外は 400（\"true\" のような文字列で有効化できない）", async () => {
+    const res = await request(makeApp(makeDb({}), "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, sales_stage_continuity: "true" } });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("client_admin は自己申告(my-tenant)で有効化できない（運用者が開ける機能）", async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [ROW], rowCount: 1 }) };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { sales_stage_continuity: true } });
+
+    // my-tenant の features スキーマにキーが無いので、有効化された状態では返らない
+    expect(res.body?.features?.sales_stage_continuity).not.toBe(true);
+  });
+});
+
 describe("GET /v1/admin/tenants/:id/settings-history", () => {
   const HISTORY_ROW = {
     id: 1,

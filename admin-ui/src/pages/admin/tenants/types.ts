@@ -22,6 +22,9 @@ export interface TenantFeatures {
   pre_dispatch?: boolean;
   // Phase75: Hermes Agent(会話ログ学習エージェント)へのデータ提供同意
   hermes_raw_data_consent?: boolean;
+  // 会話の段階引き継ぎ(SalesFlow)。off だと毎ターン最初の段階に戻る。
+  // 実顧客の会話の進み方が変わるため、段階的に開ける(CLAUDE.md 禁止35)。
+  sales_stage_continuity?: boolean;
 }
 
 export interface TenantDetail {

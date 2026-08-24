@@ -381,7 +381,12 @@ export default function TenantDetailPage() {
             />
           )}
           {activeTab === "tuning" && tenant && (
-            <TenantTuningTab tenantId={tenantId} tenantName={tenant.name} />
+            <TenantTuningTab
+              tenantId={tenantId}
+              tenantName={tenant.name}
+              tenant={tenant}
+              onUpdate={(updated) => setTenant(updated)}
+            />
           )}
           {activeTab === "test" && tenant && (
             <TenantTestTab tenantId={tenantId} tenantName={tenant.name} />
