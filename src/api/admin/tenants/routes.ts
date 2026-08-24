@@ -12,7 +12,8 @@ import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { DEFAULT_AVATARS } from "../avatar/routes";
 import { logger } from '../../../lib/logger';
-import { planHasFeature, resolveShareForPlan, resolveShareForTenantPlan, type TenantPlan } from "../../../lib/billing/planFeatures";
+import { planHasFeature, resolveShareForPlan, resolveShareForTenantPlan, invalidateTenantPlanCache, type TenantPlan } from "../../../lib/billing/planFeatures";
+import { invalidateBillingPlanCache } from "../../../lib/billing/usageTracker";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
 
@@ -20,6 +21,26 @@ import { isValidOriginPattern } from "../../middleware/originCheck";
 // src/lib/billing/planFeatures.ts の TenantPlan と一致させること
 // (既知の多重化。DBのCHECK制約は migration_free_ad_plan.sql で別途対応が必要)。
 const planValues = ["free_ad", "starter", "growth", "enterprise"] as const;
+
+// S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、消費者向け
+// 同意バナーの開示基盤が整うまでfree_adテナントを増やさない、という一時的なブロック。
+//
+// ★free_ad へ遷移しうる経路が増えたら、必ずこの関数を通すこと★
+// 導入時(PR #918)は super_admin の POST/PATCH の2経路しか無かったが、その後
+// テナント自身のプラン変更(PUT /v1/admin/my-tenant/plan)が加わった。経路ごとに
+// if を書き写すと、新しい経路がガードを素通りする(実際に一度素通りした)。
+// 環境変数化しない(CLAUDE.md 禁止41の精神。誰にも開ける余地を残さないため)。
+//
+// 撤去する際は、この関数の呼び出し元をすべて外すのではなく、この関数の中身だけを
+// 変えれば全経路に効く。撤去の前提だったバナー実装(S5a・PR #919)は完了済み。
+function blockFreeAdTransition(plan: string | undefined, res: Response): boolean {
+  if (plan !== "free_ad") return false;
+  res.status(403).json({
+    error: "free_ad_plan_not_yet_available",
+    message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
+  });
+  return true;
+}
 
 // 許可オリジンの検証。super_admin用(updateTenantSchema)と client_admin 自己申告用
 // (PATCH /v1/admin/my-tenant)で同一インスタンスを共有し、片方だけ緩いという事故を防ぐ。
@@ -376,6 +397,84 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
   });
 
+  // PUT /v1/admin/my-tenant/plan — Client Admin専用: テナント自身によるプラン変更。
+  //
+  // なぜ PATCH /v1/admin/my-tenant に相乗りさせないか:
+  // プランは課金額と権能の両方を動かす操作で、監査記録・キャッシュ無効化・
+  // 変更内容の返却が他フィールドと異なる。汎用PATCHに混ぜると、将来
+  // allowed_origins などを更新する呼び出しが plan を巻き添えで変えうる。
+  //
+  // tenantId は JWT の app_metadata.tenant_id のみから解決する
+  // （CLAUDE.md 禁止1: client 由来の tenantId を信用しない）。body にテナント項目は無い。
+  app.put("/v1/admin/my-tenant/plan", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
+    const su = (req as AuthedReq).supabaseUser;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+
+    const parsed = z.object({ plan: z.enum(planValues) }).safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+    const nextPlan = parsed.data.plan;
+
+    // super_admin の POST/PATCH と同じ一時ブロックを、テナント自己申告にも適用する。
+    // ここを抜くと、#918 が塞いだ「free_ad テナントを増やさない」方針を
+    // テナント側の導線が素通りする（CLAUDE.md 禁止14: UIだけの制限にしない）。
+    if (blockFreeAdTransition(nextPlan, res)) return;
+
+    try {
+      const beforeResult = await db.query<{ plan: TenantPlan | null }>(
+        `SELECT plan FROM tenants WHERE id = $1`,
+        [tenantId]
+      );
+      if (beforeResult.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
+      }
+      const previousPlan = beforeResult.rows[0].plan;
+
+      // 同一プランへの変更は no-op（連打・再送を成功として返す。監査行も増やさない）
+      if (previousPlan === nextPlan) {
+        return res.json({ plan: nextPlan, previous_plan: previousPlan, changed: false });
+      }
+
+      const result = await db.query(
+        `UPDATE tenants SET plan = $1, updated_at = NOW() WHERE id = $2
+         RETURNING id, name, plan, features`,
+        [nextPlan, tenantId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
+      }
+
+      // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。
+      // いずれも同一プロセス内のみ。PM2 の他ワーカーは最大TTL分だけ旧プランを見る。
+      invalidateTenantPlanCache(tenantId);
+      invalidateBillingPlanCache(tenantId);
+
+      // 監査記録。super_admin の PATCH /v1/admin/tenants/:id と同じテーブル・同じ形式で
+      // 残し、SettingsHistoryTab から一続きに追えるようにする（fire-and-forget）。
+      const appMeta = su?.app_metadata as Record<string, unknown> | undefined;
+      const changedBy: string = su?.email ?? (typeof appMeta?.email === "string" ? appMeta.email : "");
+      void db.query(
+        `INSERT INTO tenant_settings_history (tenant_id, changed_by, field_name, old_value, new_value)
+         VALUES ($1, $2, 'plan', $3::jsonb, $4::jsonb)`,
+        [tenantId, changedBy, JSON.stringify(previousPlan), JSON.stringify(nextPlan)]
+      ).catch((e: unknown) => logger.warn("[tenant_settings_history] insert failed", e));
+
+      logger.info(
+        { tenantId, previousPlan, nextPlan, changedBy },
+        "[PUT /v1/admin/my-tenant/plan] tenant changed its own plan"
+      );
+
+      return res.json({ ...result.rows[0], previous_plan: previousPlan, changed: true });
+    } catch (err) {
+      logger.warn("[PUT /v1/admin/my-tenant/plan]", err);
+      return res.status(500).json({ error: "更新に失敗しました" });
+    }
+  });
+
   // POST /v1/admin/my-tenant/keys — Client Admin専用: 自テナントのAPIキーを自力発行する。
   // super_admin向け POST /v1/admin/tenants/:id/keys と異なり、in-memory側は
   // registerTenant(既存キーを上書き)ではなく addTenantApiKey(既存キーを維持したまま追加)を
@@ -514,18 +613,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
     const { id, name, plan } = parsed.data;
-    // S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、
-    // ウィジェットに消費者向け同意バナーがまだ無い(docs/DATA_RETENTION_POLICY.md設計のみ)。
-    // 開示基盤が整うまでfree_adテナントを新規作成できないようにする。free_adは現状
-    // super_admin専用(公開サインアップ導線が無い)なので、ここを塞げば足りる。
-    // バナー実装後にこのブロックごと撤去する前提の一時的なガード(環境変数化しない: 誰にも
-    // 開ける余地を残さないため。撤去はコード変更のみで行う)。
-    if (plan === "free_ad") {
-      return res.status(403).json({
-        error: "free_ad_plan_not_yet_available",
-        message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
-      });
-    }
+    if (blockFreeAdTransition(plan, res)) return;
     try {
       const result = await db.query(
         `INSERT INTO tenants (id, name, plan, is_active)
@@ -639,15 +727,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     if (Object.keys(fields).length === 0) {
       return res.status(400).json({ error: "no_fields", message: "更新フィールドが必要です。" });
     }
-    // S5b(共有学習プールの参加モデル・D1決定案): 消費者向け同意バナー実装まで、
-    // free_adへの移行そのものを塞ぐ(POST /v1/admin/tenantsと同じ一時的なガード)。
-    // DBに触れる前に弾く(POSTと同様、既存テナントかどうかを問わず一律ブロック)。
-    if (fields.plan === "free_ad") {
-      return res.status(403).json({
-        error: "free_ad_plan_not_yet_available",
-        message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
-      });
-    }
+    if (blockFreeAdTransition(fields.plan, res)) return;
     try {
       // 存在チェック + Phase72-A: 変更前の監査対象フィールドを取得
       const check = await db.query("SELECT id, plan, features, billing_enabled, is_active FROM tenants WHERE id = $1", [id]);

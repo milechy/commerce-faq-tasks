@@ -128,6 +128,18 @@ export async function getTenantPlan(tenantId: string): Promise<TenantPlan> {
   return plan;
 }
 
+/**
+ * プラン変更直後に呼び、キャッシュ由来の最大60秒の遅延を消す。
+ *
+ * ★これは「同一プロセス内」のキャッシュしか消せない★
+ * 本番は PM2 で複数ワーカーが動くため、他ワーカーは最大 TTL 分だけ旧プランを見る。
+ * さらに動的ウィジェット配信は Cache-Control 24h（CLAUDE.md 禁止38）。
+ * したがってプラン変更を「即時反映」と表現してはいけない。
+ */
+export function invalidateTenantPlanCache(tenantId: string): void {
+  tenantPlanCache.delete(tenantId);
+}
+
 export async function tenantHasFeature(tenantId: string, feature: GatedFeature): Promise<boolean> {
   const plan = await getTenantPlan(tenantId);
   return planHasFeature(plan, feature);

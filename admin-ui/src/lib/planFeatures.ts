@@ -45,6 +45,43 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   hide_branding: "growth",
 };
 
+/** プラン変更の確認画面で「何が増えるか / 何が使えなくなるか」を出すための表示名。 */
+export const GATED_FEATURE_LABELS: Record<GatedFeature, string> = {
+  avatar: "AIアバター",
+  voice_clone: "音声クローン",
+  analytics: "会話分析",
+  conversion: "成果分析・A/Bテスト",
+  deep_research: "ディープリサーチ",
+  premium_avatar: "プレミアムアバター生成",
+  sai_task: "Sai代行",
+  pre_dispatch: "アバターの事前ディスパッチ(高速表示)",
+  hide_branding: "「Powered by R2C」バッジの非表示",
+};
+
+const ALL_GATED_FEATURES = Object.keys(FEATURE_MIN_PLAN) as GatedFeature[];
+
+/**
+ * プランを from → to に変えたときに使えるようになる機能と、使えなくなる機能を返す。
+ *
+ * 「失う機能」をテナントに事前提示するのが目的なので、画面ごとに
+ * planHasFeature を並べ書きせずここに集約する（CLAUDE.md 禁止6）。
+ * from が null(プラン未確定)のときは差分を出さない — 未確定を
+ * free_ad と同一視すると「全部失う」と誤表示するため（fail-safe の向きに注意）。
+ */
+export function planFeatureDelta(
+  from: TenantPlan | null,
+  to: TenantPlan,
+): { gained: GatedFeature[]; lost: GatedFeature[] } {
+  if (from === null) return { gained: [], lost: [] };
+  const gained = ALL_GATED_FEATURES.filter(
+    (f) => !planHasFeature(from, f) && planHasFeature(to, f),
+  );
+  const lost = ALL_GATED_FEATURES.filter(
+    (f) => planHasFeature(from, f) && !planHasFeature(to, f),
+  );
+  return { gained, lost };
+}
+
 /**
  * プランが指定機能を利用できるかを判定する。
  * plan未取得(null)時はfail-safeで「利用不可」として扱う

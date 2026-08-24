@@ -100,6 +100,15 @@ const _billingPlanCache: Map<string, BillingPlanCacheEntry> = new Map();
  */
 const BILLING_PLAN_CACHE_TTL_MS = 60 * 1000;
 
+/**
+ * プラン変更直後に呼び、以後の利用記録に新しい倍率を焼き付ける。
+ * planFeatures.invalidateTenantPlanCache と対で呼ぶこと（キャッシュは2つある）。
+ * 同一プロセス内のみ有効なのも同様。
+ */
+export function invalidateBillingPlanCache(tenantId: string): void {
+  _billingPlanCache.delete(tenantId);
+}
+
 /** テスト用: キャッシュを空にする。 */
 export function _resetBillingPlanCacheForTest(): void {
   _billingPlanCache.clear();
