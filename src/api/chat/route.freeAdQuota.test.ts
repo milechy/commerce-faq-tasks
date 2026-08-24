@@ -344,3 +344,57 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
     expect(params[0]).toBe("tenant-1'; DROP TABLE tenants;--");
   });
 });
+
+// ---------------------------------------------------------------------
+// 月境界ちょうどのリクエスト(実際の /api/chat 経由の統合テスト)
+// ---------------------------------------------------------------------
+//
+// 境界値の正しさ自体は src/lib/billing/planQuota.test.ts が純関数として
+// 網羅済み。ここでは「route.ts が現在時刻を正しく getMonthRangeJst へ渡し、
+// 集計クエリの monthStart/monthEnd に反映されること」という配線を、
+// jest.useFakeTimers() で時刻を固定した実際のHTTPリクエスト経由で確認する。
+describe("POST /api/chat — free_ad 月境界ちょうどのリクエスト(実ルート経由)", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("JST月末23:59:59.999ちょうどのリクエストは当月の範囲で集計される", async () => {
+    jest.useFakeTimers({ now: new Date("2026-08-31T14:59:59.999Z") }); // JST 2026-08-31 23:59:59.999
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery.mockResolvedValue(countRow(0));
+
+    const res = await request(makeApp()).post("/api/chat").send({ message: "月末ぎりぎり" });
+
+    expect(res.status).toBe(200);
+    const [, params] = mockPoolQuery.mock.calls[0] as [string, [string, Date, Date]];
+    expect(params[1].toISOString()).toBe("2026-07-31T15:00:00.000Z"); // 8月1日 00:00 JST
+    expect(params[2].toISOString()).toBe("2026-08-31T15:00:00.000Z"); // 9月1日 00:00 JST
+  });
+
+  it("JST翌月00:00:00.000ちょうどのリクエストは新しい月の範囲で集計される(前の月のカウントを引き継がない)", async () => {
+    jest.useFakeTimers({ now: new Date("2026-08-31T15:00:00.000Z") }); // JST 2026-09-01 00:00:00.000
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery.mockResolvedValue(countRow(0));
+
+    const res = await request(makeApp()).post("/api/chat").send({ message: "月またぎ直後" });
+
+    expect(res.status).toBe(200);
+    const [, params] = mockPoolQuery.mock.calls[0] as [string, [string, Date, Date]];
+    expect(params[1].toISOString()).toBe("2026-08-31T15:00:00.000Z"); // 9月1日 00:00 JST
+    expect(params[2].toISOString()).toBe("2026-09-30T15:00:00.000Z"); // 10月1日 00:00 JST
+  });
+
+  it("月末ぎりぎりに前月分で上限到達していたテナントが、翌月00:00の瞬間に新しい月としてリセットされ通る", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+
+    jest.useFakeTimers({ now: new Date("2026-08-31T14:59:59.999Z") });
+    mockPoolQuery.mockResolvedValueOnce(countRow(200)); // 前月分は上限到達
+    const resBeforeMidnight = await request(makeApp()).post("/api/chat").send({ message: "月末" });
+    expect(resBeforeMidnight.status).toBe(403);
+
+    jest.setSystemTime(new Date("2026-08-31T15:00:00.000Z")); // 日付をまたぐ
+    mockPoolQuery.mockResolvedValueOnce(countRow(0)); // 新しい月はまだ0件
+    const resAfterMidnight = await request(makeApp()).post("/api/chat").send({ message: "月初" });
+    expect(resAfterMidnight.status).toBe(200);
+  });
+});
