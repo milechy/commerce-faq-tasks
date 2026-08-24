@@ -24,6 +24,18 @@ const mockErr = (status: number): Promise<Response> =>
     json: () => Promise.resolve({ error: "err" }),
   } as Response);
 
+// 初期取得が終わるまでボタンは disabled のまま。
+// findByRole はボタンが「存在する」時点で解決するため、待たずに click すると
+// 無効なボタンを押すことになり、後続の「保存中...」が現れずCIが不定期に落ちる
+// (2026-08-24: 同一コミットで Gate 3 が success/failure に割れる形で表面化)。
+// クリック前に必ず有効化を待つ。
+async function clickWhenEnabled(): Promise<HTMLButtonElement> {
+  const btn = (await screen.findByRole("button")) as HTMLButtonElement;
+  await waitFor(() => expect(btn.disabled).toBe(false));
+  fireEvent.click(btn);
+  return btn;
+}
+
 function mockInitialFetch(consent: boolean) {
   vi.mocked(authFetch).mockReturnValueOnce(
     mockOk({ features: { avatar: true, voice: false, rag: true, hermes_raw_data_consent: consent } }),
@@ -62,8 +74,7 @@ describe("HermesConsentToggle", () => {
     );
     render(<HermesConsentToggle />);
 
-    const btn = await screen.findByRole("button");
-    fireEvent.click(btn);
+    await clickWhenEnabled();
 
     // 楽観的更新: 即座に「保存中...」になる
     expect(screen.getByText("保存中...")).toBeTruthy();
@@ -78,8 +89,7 @@ describe("HermesConsentToggle", () => {
     vi.mocked(authFetch).mockReturnValueOnce(mockErr(500));
     render(<HermesConsentToggle />);
 
-    const btn = await screen.findByRole("button");
-    fireEvent.click(btn);
+    await clickWhenEnabled();
 
     // 初期状態が「未同意」なので、getByText("⏸️ 未同意") はロールバック後だけでなく
     // クリック処理が完了する前でも通ってしまう。既定の 1000ms では CI の負荷時に
@@ -107,8 +117,7 @@ describe("HermesConsentToggle", () => {
     vi.mocked(authFetch).mockRejectedValueOnce(new Error("network"));
     render(<HermesConsentToggle />);
 
-    const btn = await screen.findByRole("button");
-    fireEvent.click(btn);
+    await clickWhenEnabled();
 
     await waitFor(() => {
       expect(screen.getByText("⏸️ 未同意")).toBeTruthy();
@@ -120,8 +129,7 @@ describe("HermesConsentToggle", () => {
     vi.mocked(authFetch).mockReturnValueOnce(mockOk({ features: {} }));
     render(<HermesConsentToggle />);
 
-    const btn = await screen.findByRole("button");
-    fireEvent.click(btn);
+    await clickWhenEnabled();
 
     await waitFor(() => {
       expect(vi.mocked(authFetch)).toHaveBeenCalledWith(
@@ -154,8 +162,7 @@ describe("HermesConsentToggle", () => {
       expect(vi.mocked(authFetch)).toHaveBeenCalledWith("http://localhost:3100/v1/admin/tenants/preview-tenant");
     });
 
-    const btn = await screen.findByRole("button");
-    fireEvent.click(btn);
+    await clickWhenEnabled();
 
     await waitFor(() => {
       expect(vi.mocked(authFetch)).toHaveBeenCalledWith(
