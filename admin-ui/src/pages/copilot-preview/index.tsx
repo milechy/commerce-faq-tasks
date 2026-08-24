@@ -1811,18 +1811,20 @@ export default function CopilotPreviewPage() {
               onDragOver={(e) => e.preventDefault()}
               onDragLeave={handlePdfDragLeave}
               onDrop={handlePdfDrop}
-              style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 12px 12px 20px", border: pdfDragOver ? `2px dashed ${AGENT}` : `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 16, background: pdfDragOver ? AGENT_SOFT : "var(--input, var(--card))" }}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 12px 12px 20px", border: canUploadBookPdf && pdfDragOver ? `2px dashed ${AGENT}` : `1px solid ${sending ? AGENT_BORDER : "var(--border)"}`, borderRadius: 16, background: canUploadBookPdf && pdfDragOver ? AGENT_SOFT : "var(--input, var(--card))" }}
             >
-              <input
-                ref={pdfInputRef}
-                type="file"
-                accept=".pdf,.zip,application/pdf,application/zip"
-                multiple
-                style={{ display: "none" }}
-                aria-hidden="true"
-                tabIndex={-1}
-                onChange={handlePdfInputChange}
-              />
+              {canUploadBookPdf && (
+                <input
+                  ref={pdfInputRef}
+                  type="file"
+                  accept=".pdf,.zip,application/pdf,application/zip"
+                  multiple
+                  style={{ display: "none" }}
+                  aria-hidden="true"
+                  tabIndex={-1}
+                  onChange={handlePdfInputChange}
+                />
+              )}
               {/* textarea(1行から始まり複数行も書ける)。Enterで送信、Shift+Enterで改行。
                   IME変換中のEnterは shouldSubmitOnEnter が弾く(旧UIパネルと共通実装) */}
               <textarea
@@ -1837,20 +1839,23 @@ export default function CopilotPreviewPage() {
                 disabled={sending}
                 style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--foreground)", fontSize: 16, maxHeight: 140, resize: "none", fontFamily: "inherit", lineHeight: 1.6, padding: 0, overflowY: "auto" }}
               />
-              <button
-                onClick={() => pdfInputRef.current?.click()}
-                aria-label="PDFを添付"
-                title="PDFを添付（ここへドラッグ＆ドロップでも取り込めます）"
-                style={{ width: 40, height: 40, borderRadius: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer", fontSize: 17, flexShrink: 0 }}
-              >
-                📎
-              </button>
+              {canUploadBookPdf && (
+                <button
+                  onClick={() => pdfInputRef.current?.click()}
+                  aria-label="PDFを添付"
+                  title="PDFを添付（ここへドラッグ＆ドロップでも取り込めます）"
+                  style={{ width: 40, height: 40, borderRadius: 12, border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer", fontSize: 17, flexShrink: 0 }}
+                >
+                  📎
+                </button>
+              )}
               <button onClick={handleSend} disabled={sending} aria-label="送信" style={{ width: 40, height: 40, borderRadius: 12, border: "none", background: AGENT, color: "#fff", cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.6 : 1, fontSize: 18 }}>
                 {sending ? "…" : "↑"}
               </button>
             </div>
             <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted-foreground)", textAlign: "center" }}>
-              実際の R2Cエージェントに接続されています。要ログイン。PDFはここへドラッグ＆ドロップできます。
+              実際の R2Cエージェントに接続されています。要ログイン。
+              {canUploadBookPdf && "PDFはここへドラッグ＆ドロップできます。"}
             </div>
           </div>
         </div>
