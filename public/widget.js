@@ -500,6 +500,33 @@
     prefersReducedMotion ? '' : '.dot:nth-child(2){animation:bounce 1.2s 0.2s infinite}',
     prefersReducedMotion ? '' : '.dot:nth-child(3){animation:bounce 1.2s 0.4s infinite}',
 
+    /* S5a: データ共有開示バナー(エラーではないため中立色。青系で情報通知トーン) */
+    '.consent-banner {',
+    '  padding: 10px 16px;',
+    '  background: #eff6ff;',
+    '  color: #1e3a8a;',
+    '  font-size: 12px;',
+    '  line-height: 1.5;',
+    '  border-bottom: 1px solid #bfdbfe;',
+    '  display: flex;',
+    '  flex-direction: column;',
+    '  gap: 8px;',
+    '  flex-shrink: 0;',
+    '}',
+    '.consent-text { margin: 0; }',
+    '.consent-ack-btn {',
+    '  align-self: flex-end;',
+    '  min-height: 36px;',
+    '  padding: 6px 14px;',
+    '  background: #2563eb;',
+    '  color: #fff;',
+    '  border: none;',
+    '  border-radius: 8px;',
+    '  font-size: 13px;',
+    '  font-weight: 600;',
+    '  cursor: pointer;',
+    '}',
+
     /* エラーバナー */
     '.error-banner {',
     '  padding: 10px 16px;',
@@ -980,6 +1007,33 @@
   closeBtn.appendChild(CLOSE_SVG.cloneNode(true));
   var header = el('div', { className: 'header' }, [headerInfo, closeBtn]);
   panel.appendChild(header);
+
+  /* --- S5a(「D1・D5決定案」): 消費者向けデータ共有開示バナー（非表示で作成） ---
+   * テナントが共有学習プールに参加(share=true)している場合のみ、
+   * /api/widget/features 取得後に表示する(下記の features フェッチ内)。
+   * 一度同意すれば以後は出さない(テナントごとにlocalStorageへ記録)。
+   * AI発話・エラーバナーとは構造的に分離したDOM(禁止40と同じ考え方: 開示は
+   * ウィジェットのUIであり、AIの発話に混ぜない)。
+   */
+  var consentAckBtn = el('button', { className: 'consent-ack-btn', type: 'button' }, '同意して続ける');
+  var consentText = el('p', { className: 'consent-text' },
+    'サービス向上のため、この会話とページ閲覧情報を外部の分析パートナーと共有することがあります。' +
+    '連絡先やお名前など会話に含まれる情報について、自動的な伏字処理は行っておりません。'
+  );
+  var consentBanner = el('div', { className: 'consent-banner', role: 'note', 'aria-label': 'データ共有に関するお知らせ' }, [consentText, consentAckBtn]);
+  consentBanner.style.display = 'none';
+  panel.appendChild(consentBanner);
+
+  function consentAckKey() {
+    return 'r2c_consent_ack_' + (tenantId || 'unknown');
+  }
+  function hasConsentAck() {
+    try { return localStorage.getItem(consentAckKey()) === '1'; } catch (_e) { return false; }
+  }
+  consentAckBtn.addEventListener('click', function () {
+    consentBanner.style.display = 'none';
+    try { localStorage.setItem(consentAckKey(), '1'); } catch (_e) { /* ストレージ不可でも表示だけは閉じる */ }
+  });
 
   /* --- エラーバナー（非表示で作成） --- */
   var errorText = el('span', {});
@@ -3707,6 +3761,11 @@
         // event_tracking(行動計測全般)とは独立した機能なので、
         // event_tracking が無効でもここは先に評価する。
         if (cfg.answer_feedback === false) _answerFeedbackEnabled = false;
+        // S5a: data_shared_externally も event_tracking とは独立(共有プール参加は
+        // 行動計測とは別の設定軸)。同意済み(localStorage記録済み)なら出さない。
+        if (cfg.data_shared_externally && !hasConsentAck()) {
+          consentBanner.style.display = 'flex';
+        }
         if (!cfg.event_tracking) return;
         _tracker = new EventTracker(apiKey, apiBase);
         _tracker.start();

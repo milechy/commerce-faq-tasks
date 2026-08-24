@@ -50,6 +50,42 @@ function isValidLearningShape(value: unknown): value is LearningConsent {
 }
 
 /**
+ * 既に取得済みの features オブジェクトから同期的に解決する純関数。
+ * resolveLearningConsent() と同じ優先順位(新形式優先→旧フラグ→fail-safe)だが、
+ * 呼び出し元が既に tenants 行を持っている場合(例: /api/widget/features のように
+ * 高頻度に呼ばれ、余分なDBラウンドトリップを避けたい経路)向けに、DBアクセスを
+ * 行わない形で切り出す。ロジック本体はここに集約し、resolveLearningConsent() は
+ * このラッパーとして実装する(優先順位のドリフトを防ぐため実装を2箇所に持たない)。
+ */
+export function resolveLearningConsentFromFeatures(
+  features: TenantFeaturesRow | null | undefined,
+  context?: { tenantId?: string },
+): LearningConsent {
+  const learning = features?.learning;
+
+  if (learning === undefined) {
+    // 新形式が未設定 → 後方互換で旧フラグから解決する。
+    return {
+      learn: true,
+      share: features?.hermes_raw_data_consent === true,
+    };
+  }
+
+  if (isValidLearningShape(learning)) {
+    return { learn: learning.learn, share: learning.share };
+  }
+
+  // features.learning が存在するが壊れた形(文字列/配列/null/不完全なオブジェクト等)。
+  // 黙って後方互換にフォールバックすると壊れたデータに気付けないため、fail-safeへ倒しつつ
+  // warnログを残す。
+  logger.warn("[resolveLearningConsent] features.learning が不正な形式です。fail-safeへ倒します。", {
+    tenantId: context?.tenantId,
+    learning,
+  });
+  return { ...FAILSAFE_CONSENT };
+}
+
+/**
  * テナントの学習同意(2軸: learn / share)を解決する。
  *
  * features.learning が新形式({learn, share})で設定されていればそれを使う。
@@ -67,29 +103,7 @@ export async function resolveLearningConsent(tenantId: string): Promise<Learning
       `SELECT features FROM tenants WHERE id = $1`,
       [tenantId],
     );
-    const features = result.rows[0]?.features;
-    const learning = features?.learning;
-
-    if (learning === undefined) {
-      // 新形式が未設定 → 後方互換で旧フラグから解決する。
-      return {
-        learn: true,
-        share: features?.hermes_raw_data_consent === true,
-      };
-    }
-
-    if (isValidLearningShape(learning)) {
-      return { learn: learning.learn, share: learning.share };
-    }
-
-    // features.learning が存在するが壊れた形(文字列/配列/null/不完全なオブジェクト等)。
-    // 黙って後方互換にフォールバックすると壊れたデータに気付けないため、fail-safeへ倒しつつ
-    // warnログを残す。
-    logger.warn("[resolveLearningConsent] features.learning が不正な形式です。fail-safeへ倒します。", {
-      tenantId,
-      learning,
-    });
-    return { ...FAILSAFE_CONSENT };
+    return resolveLearningConsentFromFeatures(result.rows[0]?.features, { tenantId });
   } catch (err) {
     // DB障害時は fail-safe で {learn:true, share:false} 扱い(データ露出よりも可用性低下を優先)
     logger.warn("[resolveLearningConsent] DB障害のためfail-safeへ倒します。", { tenantId, err });
