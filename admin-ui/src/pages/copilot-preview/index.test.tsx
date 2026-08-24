@@ -793,6 +793,45 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     );
   });
 
+  // C2b: 誤答に気づいた場所から直せるようにする(CLAUDE.md 禁止45)。
+  // 「知識かルールか」は店主に選ばせず suggest_answer_correction が判定する。
+  it("「この回答を直す」はAI応答にのみ表示され、押すと是正の判定を実送信する", async () => {
+    mockAgent({
+      reply: "会話内容はこちらです。",
+      actions: [
+        {
+          tool: "get_chat_session_messages",
+          result: "セッション[a1b2c3d4]の会話（全2件中2件）:\nお客様: 保証期間は\nAI: 1年です",
+          card: {
+            kind: "chat_session_messages",
+            shortId: "a1b2c3d4",
+            totalMessages: 2,
+            messages: [
+              { role: "user", roleLabel: "お客様", content: "保証期間は" },
+              { role: "assistant", roleLabel: "AI", content: "1年です" },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("a1b2c3d4の会話を見せて");
+
+    const chip = await screen.findByRole("button", { name: "✏️ この回答を直す" });
+    expect(screen.getAllByRole("button", { name: "✏️ この回答を直す" })).toHaveLength(1);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "この回答(お客様:「保証期間は」→AI:「1年です」)は間違っています。どこが違うか伝えるので、直し方を判定してください",
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
   it("「この会話からルールを作る」は直前のお客様発言が無いAI応答には表示されない", async () => {
     mockAgent({
       reply: "会話内容はこちらです。",
