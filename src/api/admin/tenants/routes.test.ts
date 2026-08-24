@@ -533,7 +533,7 @@ describe("PATCH /v1/admin/my-tenant — avatar/voice plan ゲート", () => {
     expect(dbQuery).toHaveBeenCalledTimes(1);
   });
 
-  it("plan列が不正/取得不能(fail-safe: starter扱い) → 403", async () => {
+  it("plan列が不正/取得不能(fail-safe: free_ad扱い) → 403", async () => {
     const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ plan: null }] });
     const db = { query: dbQuery };
 
@@ -542,6 +542,127 @@ describe("PATCH /v1/admin/my-tenant — avatar/voice plan ゲート", () => {
       .send({ features: { avatar: true, voice: false, rag: true } });
 
     expect(res.status).toBe(403);
+  });
+
+  // free_ad追加後の回帰: nullフォールバック経由ではなく、DBが明示的に"free_ad"を
+  // 返す経路(PLAN_RANK['free_ad']の直接lookup)を独立して確認する。
+  // rank()の?? PLAN_RANK.free_adフォールバックだけをテストしていると、
+  // PLAN_RANK.free_adの値そのものが壊れても検知できない(rank(undefined)は
+  // 常にfree_adの値を返すため、フォールバック経路と直接値経路は別コードパス)。
+  it("plan='free_ad'(DBの明示値。フォールバックではない) で features.avatar:true → 403", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ plan: "free_ad" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ features: { avatar: true, voice: false, rag: true } });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(dbQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("plan='free_ad' で features.voice:true → 403", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ plan: "free_ad" }] });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .send({ features: { avatar: false, voice: true, rag: true } });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+// --------------------------------------------------------------------------
+// free_ad プラン追加のP0回帰: プラン設定APIがfree_adを受理する
+// --------------------------------------------------------------------------
+//
+// 実装時に発見したP0バグ: TenantPlan/PLAN_RANK等にfree_adを追加しても、
+// このファイルのzod `planValues`(createTenantSchema/updateTenantSchemaが参照する
+// ローカル定数)を同時に直さない限り、plan='free_ad'を送るAPIリクエストは
+// 400 invalid_requestで拒否される(型はコンパイルが通るのに実行時に壊れる典型例)。
+// 型チェック・lintでは検出できず、実機で初めて気づいた。二度と壊さないための回帰テスト。
+describe("PATCH /v1/admin/tenants/:id — free_ad プラン受理(P0回帰)", () => {
+  it("plan='free_ad' への変更を400にせず受理する", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "starter", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", name: "テストテナント", plan: "free_ad", is_active: true }], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .send({ plan: "free_ad" });
+
+    expect(res.status).toBe(200);
+    expect(res.status).not.toBe(400);
+    expect(res.body.plan).toBe("free_ad");
+  });
+
+  it("存在しないプラン文字列('gold'等)は引き続き400で拒否する(何でも通す壊れ方をしていない)", async () => {
+    const dbQuery = jest.fn();
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .send({ plan: "gold" });
+
+    expect(res.status).toBe(400);
+    expect(dbQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /v1/admin/tenants — free_ad プラン受理(P0回帰)", () => {
+  it("plan='free_ad' を指定したテナント作成を400にせず受理する(201)", async () => {
+    const CREATED_ROW = {
+      id: "new-tenant",
+      name: "新規テナント",
+      plan: "free_ad",
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [CREATED_ROW], rowCount: 1 })
+      // 以降はデフォルトアバター18体分の背景INSERT(fire-and-forget)。中身は本テストの対象外。
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .post("/v1/admin/tenants")
+      .send({ id: "new-tenant", name: "新規テナント", plan: "free_ad" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.plan).toBe("free_ad");
+  });
+
+  it("plan省略時のデフォルトは引き続きstarterであり、free_adへは自動で倒れない(新規テナントは既定で有料想定)", async () => {
+    const CREATED_ROW = {
+      id: "new-tenant-2",
+      name: "新規テナント2",
+      plan: "starter",
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [CREATED_ROW], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .post("/v1/admin/tenants")
+      .send({ id: "new-tenant-2", name: "新規テナント2" });
+
+    expect(res.status).toBe(201);
+    // INSERT に渡された plan パラメータそのものを確認(レスポンスはDBモックの値をそのまま
+    // 返すだけなので、実際に "starter" がSQLへ渡されたことを見る)
+    const [, params] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(params[2]).toBe("starter");
   });
 });
 
@@ -650,5 +771,41 @@ describe("DELETE /v1/admin/tenants/:id/keys/:keyId — PM2再起動を待たず�
 
     expect(res.status).toBe(404);
     expect(revokeTenantApiKey).not.toHaveBeenCalled();
+  });
+});
+
+// --------------------------------------------------------------------------
+// migration_free_ad_plan.sql — 生SQLテキストの検証
+// （実際のDB適用結果は本番/ステージング適用時に確認済み。ここではファイル内容の
+//  意図しない改変を検知する。migration_usage_logs_billable_flag.sql と同じ方針）
+// --------------------------------------------------------------------------
+
+describe("migration_free_ad_plan.sql", () => {
+  const sql = require("fs").readFileSync(
+    require("path").join(__dirname, "migration_free_ad_plan.sql"),
+    "utf-8"
+  ) as string;
+
+  it("既存の3値制約をDROPしてから4値でADDする(片方だけ残ると適用が失敗するかDROPのみで無制約になる)", () => {
+    expect(sql).toMatch(/DROP CONSTRAINT IF EXISTS tenants_plan_check/);
+    expect(sql).toMatch(/ADD CONSTRAINT tenants_plan_check/);
+    // DROPがADDより前にあること(順序を変えると同名制約の重複エラーになる)
+    const dropIdx = sql.indexOf("DROP CONSTRAINT");
+    const addIdx = sql.indexOf("ADD CONSTRAINT");
+    expect(dropIdx).toBeGreaterThan(-1);
+    expect(addIdx).toBeGreaterThan(dropIdx);
+  });
+
+  it("CHECK制約はfree_ad/starter/growth/enterpriseの4値を過不足なく含む", () => {
+    const match = sql.match(/CHECK\s*\(plan IN \(([^)]+)\)\)/);
+    expect(match).not.toBeNull();
+    const values = (match ? match[1] : "")
+      .split(",")
+      .map((v) => v.trim().replace(/'/g, ""));
+    expect(values.sort()).toEqual(["enterprise", "free_ad", "growth", "starter"]);
+  });
+
+  it("DB migrationを自動実行しない方針の注記が含まれる(CLAUDE.md 絶対にやってはいけないこと8)", () => {
+    expect(sql).toMatch(/人間承認/);
   });
 });

@@ -194,4 +194,153 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
     expect(res1.status).toBe(403);
     expect(res2.status).toBe(403);
   });
+
+  // ---------------------------------------------------------------------
+  // 境界値・異常系: DB応答の形が想定と違う場合
+  // ---------------------------------------------------------------------
+
+  it("境界値: 集計クエリが空配列(rows:[])を返しても例外にならず0件扱いで通る", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery.mockResolvedValue({ rows: [] });
+
+    const res = await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
+  });
+
+  // COUNT(*)::text は実運用では必ず数字文字列を返すため通常発生しないが、
+  // 万一クエリの列定義が変わって非数値が返っても「静かに壊れて全ブロック」に
+  // ならないことを固定する。NaN比較は常にfalseになるため、isFreeAdMonthlyQuotaExceeded
+  // 側の負数ガード(count<0)もすり抜けて「ブロックしない」側へ倒れる — 例外や
+  // クラッシュにはならず、soft-gateとしてfail-open方向で一貫している。
+  it("異常系: 集計値が非数値文字列でも例外を投げずfail-open(ブロックしない)側に倒れる", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery.mockResolvedValue({ rows: [{ count: "not-a-number" }] });
+
+    const res = await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("異常系: count列がnull/undefinedでも0件扱いで通る", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery.mockResolvedValue({ rows: [{ count: null }] });
+
+    const res = await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+  });
+
+  // ---------------------------------------------------------------------
+  // イレギュラー: plan文字列の表記ゆれ
+  // ---------------------------------------------------------------------
+
+  it("イレギュラー: 'Free_Ad'のような大文字小文字違いはfree_adと一致せず、通常テナントとして扱われる(集計クエリを見ない)", async () => {
+    mockGetTenantPlan.mockResolvedValue("Free_Ad");
+    mockPoolQuery.mockResolvedValue(countRow(999));
+
+    const res = await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).not.toHaveBeenCalled();
+  });
+
+  it("イレギュラー: 前後に空白が付いた' free_ad 'は一致せず通常テナントとして扱われる", async () => {
+    mockGetTenantPlan.mockResolvedValue(" free_ad ");
+    mockPoolQuery.mockResolvedValue(countRow(999));
+
+    const res = await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------
+  // イレギュラー: セッション中にプランが変わる（管理者がその場でアップグレード/変更）
+  // ---------------------------------------------------------------------
+
+  it("イレギュラー: 同一テナントで1回目free_ad(上限到達)→管理者がgrowthへ変更→2回目は即座に通る(planはリクエスト毎に再取得され、キャッシュされない)", async () => {
+    const app = makeApp();
+
+    mockGetTenantPlan.mockResolvedValueOnce("free_ad");
+    mockPoolQuery.mockResolvedValueOnce(countRow(200));
+    const res1 = await request(app).post("/api/chat").send({ message: "1回目" });
+    expect(res1.status).toBe(403);
+
+    mockGetTenantPlan.mockResolvedValueOnce("growth");
+    const res2 = await request(app).post("/api/chat").send({ message: "2回目" });
+    expect(res2.status).toBe(200);
+    // growth判定時はusage_logs集計を追加で見ない(1回目の1コールのみのまま)
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("イレギュラー: 1回目starter(素通り)→管理者がfree_adへ変更(既に上限超過)→2回目は即座に403になる", async () => {
+    const app = makeApp();
+
+    mockGetTenantPlan.mockResolvedValueOnce("starter");
+    const res1 = await request(app).post("/api/chat").send({ message: "1回目" });
+    expect(res1.status).toBe(200);
+
+    mockGetTenantPlan.mockResolvedValueOnce("free_ad");
+    mockPoolQuery.mockResolvedValueOnce(countRow(300));
+    const res2 = await request(app).post("/api/chat").send({ message: "2回目" });
+    expect(res2.status).toBe(403);
+  });
+
+  // ---------------------------------------------------------------------
+  // 既知のリスク: fire-and-forget trackUsage による並行リクエストの競合
+  // ---------------------------------------------------------------------
+  //
+  // trackUsage は setImmediate の fire-and-forget であり、判定時点ではまだ
+  // usage_logs へINSERTされていない(route.ts のコメント参照)。そのため、
+  // 同一テナントから閾値ちょうど手前で複数リクエストがほぼ同時に来ると、
+  // 両方とも「まだ199件」を見て両方許可され、結果的に上限を超える。
+  // これはソフトなコスト制御ガードとして許容している設計上のトレードオフだが、
+  // 「壊れない」ことと「意図どおりの挙動」であることの両方をテストで固定する
+  // (将来ここを厳密な原子的カウンタに変更する場合の比較対象にもなる)。
+  it("既知のリスク(意図的に許容): 上限直前で2つのリクエストがほぼ同時に来ると、両方とも199件を見て両方許可される(合計は201件になり得る)", async () => {
+    const app = makeApp();
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    // 2リクエストとも同じスナップショット(199件)を見る — fire-and-forgetのため
+    // 1本目のtrackUsageがまだusage_logsに反映されていない状況を模す。
+    mockPoolQuery.mockResolvedValue(countRow(199));
+
+    const [res1, res2] = await Promise.all([
+      request(app).post("/api/chat").send({ message: "並行1" }),
+      request(app).post("/api/chat").send({ message: "並行2" }),
+    ]);
+
+    // 両方とも許可される(=合計は201件相当になり得る、上限200を1件超える)。
+    // これは既知の設計上の許容範囲であり、バグとして再発見しないようにテストで残す。
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+  });
+
+  // ---------------------------------------------------------------------
+  // イレギュラー: SQLインジェクション類の文字列を含むtenantId
+  // ---------------------------------------------------------------------
+
+  it("イレギュラー: tenantIdに引用符やSQL断片が含まれても集計クエリはパラメータ化されており、そのまま$1として渡る", async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res: any, next: any) => {
+      req.tenantId = "tenant-1'; DROP TABLE tenants;--";
+      req.lang = "ja";
+      next();
+    });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createChatHandler: freshHandler } = require("./route") as typeof import("./route");
+    app.post("/api/chat", freshHandler(pino({ level: "silent" })));
+
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery.mockResolvedValue(countRow(0));
+
+    const res = await request(app).post("/api/chat").send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    const [, params] = mockPoolQuery.mock.calls[0] as [string, unknown[]];
+    // 文字列連結ではなくバインドパラメータとしてそのまま渡っている(エスケープ不要)
+    expect(params[0]).toBe("tenant-1'; DROP TABLE tenants;--");
+  });
 });
