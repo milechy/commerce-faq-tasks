@@ -39,7 +39,36 @@ export interface MeasurementHealthResponse {
   /** 実ユーザー(source='user')かつメッセージがある(message_count>0)有効セッション数。
    *  以降のPRの判定に使える母数そのもの。 */
   validUserSessionCount: number;
+  /** チャットを開いたのに会話しなかった割合。G5(1,516回開かれて13会話)の解明用。 */
+  chatOpenDropoff: ChatOpenDropoff;
 }
+
+/**
+ * 「開いたが話さない」率。
+ *
+ * **visitor_id の記録が始まる前のセッションは永久に結合できない**ため、
+ * 期間全体で率を出すと「0%が話した」という誤った数字になる。
+ * そこで母数の開始点を trackingSince(= visitor_id を持つ最古のセッション)に切り、
+ * それ以前は集計対象から外す。trackingSince が null なら記録が一度も無い状態。
+ */
+export interface ChatOpenDropoff {
+  /** 集計の起点。null なら visitor_id を持つセッションが1件も無い。 */
+  trackingSince: string | null;
+  /** チャットを開いた訪問者数(重複排除)。 */
+  visitorsOpened: number;
+  /** そのうち実際に会話した訪問者数(実ユーザー・メッセージあり)。 */
+  visitorsConversed: number;
+  /** 離脱率。母数が MIN_VISITORS_FOR_RATE 未満なら null(数値を出さない)。 */
+  dropoffRate: number | null;
+  /** visitor_id が付いたセッションの割合。この指標自体の信頼度を示す。 */
+  sessionCoverage: RateMetric;
+}
+
+/**
+ * 率を出すのに必要な最低訪問者数。これ未満では比率を出さず「判定に足りない」を出す
+ * (CLAUDE.md 禁止34: 母数不足のときに数値を出さない)。
+ */
+export const MIN_VISITORS_FOR_RATE = 30;
 
 function toRateMetric(numerator: number, denominator: number): RateMetric {
   return {
@@ -124,11 +153,67 @@ export async function fetchMeasurementHealth(
   );
   const validUserSessionCount = parseInt(validResult.rows[0]?.count ?? "0", 10);
 
+  // G5: チャットは開かれているのに会話にならない乖離を説明する。
+  // visitor_id は widget の localStorage 由来でテナントを跨いで衝突しうるため、
+  // 必ず (tenant_id, visitor_id) の複合で扱う(migration_visitor_id.sql の警告)。
+  const coverageResult = await db.query<{ since: string | null; with_vid: string; total: string }>(
+    `SELECT MIN(s.started_at) FILTER (WHERE s.visitor_id IS NOT NULL) AS since,
+            COUNT(*) FILTER (WHERE s.visitor_id IS NOT NULL) AS with_vid,
+            COUNT(*) AS total
+     FROM chat_sessions s
+     WHERE s.started_at >= NOW() - $1::interval ${tenantClause}`,
+    params,
+  );
+  const trackingSince = coverageResult.rows[0]?.since ?? null;
+  const sessionCoverage = toRateMetric(
+    parseInt(coverageResult.rows[0]?.with_vid ?? "0", 10),
+    parseInt(coverageResult.rows[0]?.total ?? "0", 10),
+  );
+
+  // trackingSince より前は結合しようがないので、母数の開始点をそこに切る。
+  // GREATEST で期間指定とも突き合わせる。
+  const beTenantClause = tenantId ? "AND b.tenant_id = $2" : "";
+  const dropoffResult = await db.query<{ opened: string; conversed: string }>(
+    `WITH tracking AS (
+       SELECT MIN(s2.started_at) AS since FROM chat_sessions s2
+       WHERE s2.visitor_id IS NOT NULL ${tenantId ? "AND s2.tenant_id = $2" : ""}
+     )
+     SELECT
+       (SELECT COUNT(DISTINCT b.visitor_id)
+          FROM behavioral_events b, tracking t
+         WHERE b.event_type = 'chat_open'
+           AND t.since IS NOT NULL
+           AND b.created_at >= GREATEST(t.since, NOW() - $1::interval)
+           ${beTenantClause}) AS opened,
+       (SELECT COUNT(DISTINCT s.visitor_id)
+          FROM chat_sessions s, tracking t
+         WHERE s.visitor_id IS NOT NULL
+           AND t.since IS NOT NULL
+           AND s.started_at >= GREATEST(t.since, NOW() - $1::interval)
+           AND s.message_count > 0
+           ${tenantClause}
+           ${userSourceClause("s")}) AS conversed`,
+    params,
+  );
+  const visitorsOpened = parseInt(dropoffResult.rows[0]?.opened ?? "0", 10);
+  const visitorsConversed = parseInt(dropoffResult.rows[0]?.conversed ?? "0", 10);
+  const chatOpenDropoff: ChatOpenDropoff = {
+    trackingSince,
+    visitorsOpened,
+    visitorsConversed,
+    dropoffRate:
+      visitorsOpened >= MIN_VISITORS_FOR_RATE
+        ? Math.round(((visitorsOpened - visitorsConversed) / visitorsOpened) * 1000) / 10
+        : null,
+    sessionCoverage,
+  };
+
   return {
     sourceBreakdown,
     emptySessionCount,
     cvSessionLinkRate,
     outcomeRecordRate,
     validUserSessionCount,
+    chatOpenDropoff,
   };
 }
