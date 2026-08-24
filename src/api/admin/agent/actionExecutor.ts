@@ -406,6 +406,9 @@ export type WeeklySummaryCardPayload = {
   faq: { total: number; published: number; lastUpdated: string | null } | null;
   pendingTuningRules: number | null;
   gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
+  /** 今週AIが覚えたこと。faqAdded=今週追加されたFAQ、memorized=会話から自動で覚えた件数。
+   *  **0 は「動きが無かった」という正しい情報**なので、取得失敗(null)と区別して 0 のまま出す。 */
+  learned: { faqAdded: number; memorized: number } | null;
 };
 
 // 会話一覧カード。短縮ID(shortId)をそのまま次のツール呼び出しに使える形で持たせ、
@@ -2173,7 +2176,7 @@ export async function executeToolCall(
         // 指標ごとに Promise.allSettled で独立させる。以前は1本の失敗で全指標が
         // 「取得に失敗しました」に落ちていたが、指標が増えるほど1本の不調が全体を
         // 巻き込む確率が上がるため、取れた指標だけを出す方式に変更する。
-        const [sessionsRes, prevSessionsRes, evalRes, cvRes, faqRes, tuningRes, gapsRes] = await Promise.allSettled([
+        const [sessionsRes, prevSessionsRes, evalRes, cvRes, faqRes, tuningRes, gapsRes, learnedRes] = await Promise.allSettled([
           db.query(
             `SELECT COUNT(*)::int AS n FROM chat_sessions
              WHERE tenant_id = $1 AND started_at >= $2
@@ -2223,6 +2226,18 @@ export async function executeToolCall(
             [tenantId],
           ),
           getGaps({ tenantId, status: 'open', limit: 3 }),
+          // 今週AIが覚えたこと。店主に「学習が起きているか」を返すための指標。
+          // faq_docs は人が足したもの、learned_memory は会話から自動で覚えたもの。
+          // learned_memory は未適用環境もありうるので、この1本が失敗しても
+          // allSettled で他の指標を巻き込まない。
+          db.query(
+            `SELECT
+               (SELECT COUNT(*)::int FROM faq_docs
+                 WHERE tenant_id = $1 AND created_at >= $2) AS faq_added,
+               (SELECT COUNT(*)::int FROM learned_memory
+                 WHERE tenant_id = $1 AND created_at >= $2) AS memorized`,
+            [tenantId, weekStart],
+          ),
         ]);
 
         const lines: string[] = ['今週(月曜起点)の状況:'];
@@ -2237,6 +2252,7 @@ export async function executeToolCall(
           faq: null,
           pendingTuningRules: null,
           gaps: null,
+          learned: null,
         };
 
         if (sessionsRes.status === 'fulfilled') {
@@ -2309,6 +2325,20 @@ export async function executeToolCall(
               lines.push(`${i + 1}. 「${g.user_question.slice(0, 60)}」`);
             });
           }
+        }
+
+        if (learnedRes.status === 'fulfilled') {
+          const row = learnedRes.value?.rows?.[0];
+          const faqAdded = Number(row?.faq_added ?? 0);
+          const memorized = Number(row?.memorized ?? 0);
+          card.learned = { faqAdded, memorized };
+          // 0 は「今週は動きが無かった」という正しい情報。伏せずにそのまま伝える
+          // (CLAUDE.md 禁止34 の趣旨: 母数不足で率は出さないが、件数の 0 は 0 と書く)。
+          lines.push(
+            faqAdded + memorized === 0
+              ? 'AIが新しく覚えたこと なし'
+              : `AIが新しく覚えたこと ${faqAdded + memorized}件（追加したFAQ ${faqAdded}件・会話から自動 ${memorized}件）`,
+          );
         }
 
         if (lines.length === 1) {
