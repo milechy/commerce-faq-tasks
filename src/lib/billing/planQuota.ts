@@ -16,9 +16,9 @@
 // 値になる——1セッションが200ターンを超える極端な単一会話がある場合、その月の
 // 残り新規会話が止まる可能性はあるが、原価上限(月あたり最大 200 × 約0.11円
 // ≈ 22円/テナント)を超えることはなく、R2C負担としては安全側に倒れている。
-export const FREE_AD_MONTHLY_REQUEST_LIMIT = 200;
+import { JST_OFFSET_MS, shiftToJstWallClock } from "../date/jstOffset";
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+export const FREE_AD_MONTHLY_REQUEST_LIMIT = 200;
 
 export interface MonthRangeJst {
   /** 当月の開始（1日 00:00:00 JST）をUTC Dateで表したもの */
@@ -37,7 +37,7 @@ export interface MonthRangeJst {
  * UTC Date を返す。SQL 側で `AT TIME ZONE` を書く必要はない。
  */
 export function getMonthRangeJst(now: Date): MonthRangeJst {
-  const shifted = new Date(now.getTime() + JST_OFFSET_MS);
+  const shifted = shiftToJstWallClock(now);
   const shiftedMonthStart = Date.UTC(
     shifted.getUTCFullYear(),
     shifted.getUTCMonth(),

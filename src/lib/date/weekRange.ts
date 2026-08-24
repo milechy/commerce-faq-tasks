@@ -9,7 +9,8 @@
  *  #602で撤去済み。現在の唯一の利用箇所は actionExecutor.ts の get_weekly_briefing)
  */
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+import { JST_OFFSET_MS, shiftToJstWallClock } from "./jstOffset";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 
@@ -29,7 +30,7 @@ export interface WeekRange {
 export function getWeekRange(now: Date): WeekRange {
   // now を +9h シフトしてから UTC ゲッターで読むと、process TZ に依存せず JST の
   // 壁時計表現（年月日・曜日）が得られる。
-  const shifted = new Date(now.getTime() + JST_OFFSET_MS);
+  const shifted = shiftToJstWallClock(now);
   const dayOfWeek = shifted.getUTCDay(); // 0=日,1=月,...,6=土
   const daysSinceMonday = (dayOfWeek + 6) % 7;
 
