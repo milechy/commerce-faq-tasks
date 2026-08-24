@@ -235,7 +235,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   activate_avatar: "アバターの有効化",
   deactivate_avatar: "アバターの停止",
   set_avatar_feature: "アバター機能のON/OFF",
-  set_hermes_consent: "外部データ提供同意のON/OFF",
+  set_hermes_consent: "学習同意(自社内学習/共有プール参加)のON/OFF",
   update_avatar_profile: "アバターの基本設定の更新",
   reset_avatar_to_default: "アバターを既定に戻す",
   suggest_avatar_preset: "アバター見本の提案",

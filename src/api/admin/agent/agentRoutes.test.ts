@@ -10143,9 +10143,12 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
-  // GID 1216978677372391(PR-16, D1): set_hermes_consent — tenants.features.
-  // hermes_raw_data_consent(②外部Hermes VPSへの生データ提供同意)をチャットから
-  // 操作できるようにする。①自テナント内学習はこのフラグを参照しないため対象外。
+  // GID 1216978677372391(PR-16, D1) / 共有学習プールの参加モデル S4:
+  // set_hermes_consent — tenants.features.learning = {learn, share} をチャットから
+  // 2軸で操作できるようにする。learn=自社内学習(外に出ない)、
+  // share=共有プール参加(外部Hermes VPSへ出る)。
+  // free_ad(広告プラン)は share 強制ON。判定不能(DB障害・未知プラン)時は
+  // 強制しない(src/lib/billing/planFeatures.ts の resolveShareForPlan 参照)。
   // -------------------------------------------------------------------------
   describe('set_hermes_consent', () => {
     function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
@@ -10163,73 +10166,175 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
-    it('enabled=trueで成功し、features.hermes_raw_data_consentがtrueで更新される', async () => {
+    it('learn/shareを両方指定して成功し、features.learningが{learn,share}で更新される', async () => {
       mockFetch
-        .mockResolvedValueOnce(toolCallResponse('call-hc-1', 'set_hermes_consent', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(toolCallResponse('call-hc-1', 'set_hermes_consent', { learn: true, share: true, confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
 
-      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+      mockQuery
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ features: null }] }) // 現在値の読み取り
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] }); // UPDATE
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
-        .send({ message: 'Hermesへのデータ提供に同意して', sessionId: 'sess-hc-01' });
+        .send({ message: '学習にもデータ提供にも同意して', sessionId: 'sess-hc-01' });
 
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
-      expect(result).toContain('Hermesへのデータ提供同意をONにしました');
+      expect(result).toContain('学習設定を更新しました');
+      expect(result).toContain('learn=ON');
+      expect(result).toContain('share=ON');
       expect(result).not.toContain('確認が必要');
+      // 他のフラグ(avatar等)を消さないマージ表現(COALESCE(...) || $1::jsonb)を維持していること。
       expect(mockQuery).toHaveBeenNthCalledWith(
-        1,
-        expect.stringContaining('UPDATE tenants SET features'),
-        [JSON.stringify({ hermes_raw_data_consent: true }), 'tenant-abc'],
+        2,
+        expect.stringContaining('UPDATE tenants SET features = COALESCE(features'),
+        [JSON.stringify({ learning: { learn: true, share: true } }), 'tenant-abc'],
       );
     });
 
-    it('enabled=falseで成功し、同意を取り消せる', async () => {
+    it('shareのみ指定した場合、現在のlearnの値が維持される(部分更新)', async () => {
       mockFetch
-        .mockResolvedValueOnce(toolCallResponse('call-hc-2', 'set_hermes_consent', { enabled: false, confirmed: true }))
+        .mockResolvedValueOnce(toolCallResponse('call-hc-2', 'set_hermes_consent', { share: false, confirmed: true }))
         .mockResolvedValueOnce(makeGroqResponse('OFFにしました。'));
 
-      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+      mockQuery
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ features: { learning: { learn: true, share: true } } }] }) // 現在値
+        .mockResolvedValueOnce({ rows: [{ plan: 'starter' }] }) // share=false指定→forced判定(starterは強制なし)
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] }); // UPDATE
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
-        .send({ message: 'Hermesへのデータ提供同意を取り消して', sessionId: 'sess-hc-02' });
+        .send({ message: '共有プールへの参加をやめて', sessionId: 'sess-hc-02' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Hermesへのデータ提供同意をOFFにしました');
+      expect(res.body.actions[0].result).toContain('learn=ON');
+      expect(res.body.actions[0].result).toContain('share=OFF');
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        3,
+        expect.stringContaining('UPDATE tenants SET features'),
+        [JSON.stringify({ learning: { learn: true, share: false } }), 'tenant-abc'],
+      );
     });
 
-    it('confirmed無しではDBに触れずブロックされる', async () => {
+    it('旧enabled引数はshareとして解釈される(後方互換)', async () => {
       mockFetch
-        .mockResolvedValueOnce(toolCallResponse('call-hc-3', 'set_hermes_consent', { enabled: true, confirmed: false }))
-        .mockResolvedValueOnce(makeGroqResponse('確認してから切り替えます。'));
+        .mockResolvedValueOnce(toolCallResponse('call-hc-3', 'set_hermes_consent', { enabled: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ features: {} }] }) // 現在値未設定 → learn:true,share:false扱い
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] }); // UPDATE(enabled=true→share=trueなのでforced判定は通らない)
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: 'Hermesへのデータ提供に同意して', sessionId: 'sess-hc-03' });
 
       expect(res.status).toBe(200);
-      expect(mockQuery).not.toHaveBeenCalled();
-      expect(res.body.actions[0].result).toContain('確認が必要');
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET features'),
+        [JSON.stringify({ learning: { learn: true, share: true } }), 'tenant-abc'],
+      );
     });
 
-    it('成功時に tenant_settings_history へ features.hermes_raw_data_consent の変更が記録される', async () => {
+    it('confirmed無しではDBに触れずブロックされる', async () => {
       mockFetch
-        .mockResolvedValueOnce(toolCallResponse('call-hc-4', 'set_hermes_consent', { enabled: true, confirmed: true }))
-        .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
-
-      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+        .mockResolvedValueOnce(toolCallResponse('call-hc-4', 'set_hermes_consent', { share: true, confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから切り替えます。'));
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: 'Hermesへのデータ提供に同意して', sessionId: 'sess-hc-04' });
 
       expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('確認が必要');
+    });
+
+    // G3: learn=false かつ share=true は不整合として拒否する。
+    it('learn=false かつ share=true は拒否される(G3)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-5', 'set_hermes_consent', { learn: false, share: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('拒否しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rowCount: 1, rows: [{ features: {} }] }); // 現在値読み取りのみ
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '自社では学習しないけど共有プールには出して', sessionId: 'sess-hc-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('share=ON(共有プールへ提供)にはできません');
+      // 現在値読み取りの1回のみで、UPDATEには進んでいないこと。
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    // ★S4最大の罠の実測: free_adと確実に判明した場合のみ強制ON。判定不能時は強制しない。★
+    it('free_adと確実に判明したテナントがshare=falseを指定すると拒否され、理由が返る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-6', 'set_hermes_consent', { share: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('拒否しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ features: { learning: { learn: true, share: true } } }] }) // 現在値
+        .mockResolvedValueOnce({ rows: [{ plan: 'free_ad' }] }); // forced判定 → free_ad確定
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '共有プールへの参加をやめて', sessionId: 'sess-hc-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('広告プランでは共有が必須です');
+      expect(res.body.actions[0].result).toContain('有料プランへの変更が必要です');
+      // forced判定までの2回のみで、UPDATEには進んでいないこと(黙って無視せず理由を返す=G3)。
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
+    // ★噛み確認の実測版: プラン取得がDB障害等で判定不能な場合、free_ad扱いにせず
+    // 強制を適用しない(=share=falseの指定がそのまま通る)。★
+    it('プラン判定が不能(DB障害)な場合は強制されず、share=falseの指定が通る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-7', 'set_hermes_consent', { share: false, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('OFFにしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ features: { learning: { learn: true, share: true } } }] }) // 現在値
+        .mockRejectedValueOnce(new Error('db down')) // forced判定のDB問い合わせが失敗
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] }); // UPDATEは実行される
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '共有プールへの参加をやめて', sessionId: 'sess-hc-07' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).not.toContain('広告プランでは共有が必須です');
+      expect(res.body.actions[0].result).toContain('share=OFF');
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        3,
+        expect.stringContaining('UPDATE tenants SET features'),
+        [JSON.stringify({ learning: { learn: true, share: false } }), 'tenant-abc'],
+      );
+    });
+
+    it('成功時に tenant_settings_history へ features.learning の変更が記録される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hc-8', 'set_hermes_consent', { learn: true, share: true, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ONにしました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ features: null }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'tenant-abc' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '学習にもデータ提供にも同意して', sessionId: 'sess-hc-08' });
+
+      expect(res.status).toBe(200);
       const recorded = recordedSettingsChanges();
       expect(recorded).toHaveLength(1);
-      expect(recorded[0]!['fieldName']).toBe('features.hermes_raw_data_consent');
-      expect(recorded[0]!['newValue']).toBe(true);
+      expect(recorded[0]!['fieldName']).toBe('features.learning');
+      expect(recorded[0]!['newValue']).toEqual({ learn: true, share: true });
     });
   });
 
