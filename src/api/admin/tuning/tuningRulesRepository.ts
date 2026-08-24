@@ -3,6 +3,7 @@
 
 import { getPool } from "../../../lib/db";
 import { sanitizeInput } from "../../../lib/security/inputSanitizer";
+import { logger } from "../../../lib/logger";
 
 // ---------------------------------------------------------------------------
 // 型定義
@@ -323,6 +324,15 @@ function formatApprovedResponseHint(rule: TuningRule): string | null {
  * アクティブなチューニングルールをシステムプロンプト用テキストに変換する。
  * ルールが空の場合は空文字を返す（呼び出し元で条件分岐不要）。
  *
+ * S1(要件§6 X3): approved_responses は formatApprovedResponseHint 内で
+ * sanitizeInput() を通しているが、expected_behavior は無検査でシステム
+ * プロンプトに埋め込まれていた。共有学習プール(S3/S4)を開けると
+ * 「1テナントの会話に混入した注入文字列 → global ルール →
+ * 全テナントのシステムプロンプト」という横断経路が成立するため、
+ * expected_behavior も同じ sanitizeInput() を通し、safe でないルールは
+ * 行ごと生成しない(base も hint も出さない)。落としたルールは黙って
+ * 消さず logger.warn で rule id と reason を記録する。
+ *
  * 出力例:
  * 以下の応答ルールに従ってください（優先度順）:
  * - 「返品」に関する質問 → 7日以内の返品を案内し、手続きURLを提示する
@@ -333,10 +343,34 @@ export function buildTuningPromptSection(rules: TuningRule[]): string {
   if (rules.length === 0) return "";
 
   const lines = rules.flatMap((r) => {
-    const base = `- 「${r.trigger_pattern}」に関する質問 → ${r.expected_behavior}`;
+    const { safe, sanitized, reason } = sanitizeInput(r.expected_behavior);
+    if (!safe) {
+      logger.warn(
+        { event: "tuning_rule_expected_behavior_blocked", ruleId: r.id, reason },
+        "tuning rule expected_behavior failed sanitizeInput; row skipped",
+      );
+      return [];
+    }
+
+    // E5: 空文字・全角スペースのみ(sanitizeInputのtrim()で空になるケースを含む)は
+    // safe=true だが中身が無いルール行になる。「→ 」だけの空の指示行を残さない。
+    if (sanitized.length === 0) {
+      logger.warn(
+        { event: "tuning_rule_expected_behavior_blocked", ruleId: r.id, reason: "empty_expected_behavior" },
+        "tuning rule expected_behavior is empty after sanitization; row skipped",
+      );
+      return [];
+    }
+
+    const base = `- 「${r.trigger_pattern}」に関する質問 → ${sanitized}`;
     const hint = formatApprovedResponseHint(r);
     return hint ? [base, hint] : [base];
   });
+
+  // E7: 全ルールが sanitizeInput で落ちた場合、rules.length===0 と同じ扱いにする。
+  // ヘッダ文言(「以下の応答ルールに従ってください」)だけが残る空の指示ブロックを
+  // システムプロンプトに残さない。
+  if (lines.length === 0) return "";
 
   return `以下の応答ルールに従ってください（優先度順）:\n${lines.join("\n")}`;
 }
