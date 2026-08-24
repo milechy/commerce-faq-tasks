@@ -106,8 +106,14 @@ export function registerFaqCrudRoutes(
     const safeOrder = order === "asc" ? "ASC" : "DESC";
 
     try {
+      // テナントの回答は「自店の知識 + 全店舗共通(global)の知識」の合算で作られる
+      // (pgvectorSearch.ts / hybrid.ts が OR tenant_id = 'global' で引いている)。
+      // 一覧が自店分だけだと、自分の答えを作っている知識の半分が確認できず、
+      // 「精度が悪い」の原因究明が構造的に不可能になる。
+      // **読み取りだけを広げる。** 書き込み(PUT/PATCH/DELETE)は従来どおり
+      // `AND tenant_id = $n` で絞られており、テナントからグローバル行は変更できない。
       const params: unknown[] = [tenantId];
-      let whereClause = "WHERE tenant_id = $1";
+      let whereClause = "WHERE (tenant_id = $1 OR tenant_id = 'global')";
 
       if (search) {
         params.push(`%${search}%`);

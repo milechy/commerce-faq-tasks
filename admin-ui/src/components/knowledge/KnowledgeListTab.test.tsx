@@ -235,3 +235,65 @@ describe("KnowledgeListTab", () => {
     expect(screen.queryByText("🔒 Widgetの許可ドメイン設定")).toBeNull();
   });
 });
+
+// E2: 全店舗共通(global)の知識をテナントに読み取り専用で見せる。
+// テナントの回答は「自店 + global」の合算で作られるのに、一覧が自店分だけだと
+// 自分の答えを作っている知識の半分が確認できない(要件 Rg)。
+const ITEM_GLOBAL = {
+  id: 99,
+  tenant_id: "global",
+  question: "配送の一般的な流れは",
+  answer: "ご注文後、順次発送いたします",
+  category: "shipping",
+  tags: [],
+  is_published: true,
+  is_global: false,
+  created_at: "2026-06-01T00:00:00Z",
+};
+
+describe("KnowledgeListTab — 全店舗共通の知識", () => {
+  beforeEach(() => {
+    vi.mocked(fetchWithAuth).mockReset();
+    mockNavigate.mockReset();
+  });
+
+  it("一覧に表示され、出所が分かる", async () => {
+    vi.mocked(fetchWithAuth).mockReturnValue(mockList([ITEM_A, ITEM_GLOBAL]));
+    renderTab();
+
+    expect(await screen.findByText("Q: 配送の一般的な流れは")).toBeTruthy();
+    expect(screen.getByText("全店舗共通")).toBeTruthy();
+    // 自店の知識には出所バッジを付けない
+    expect(screen.getAllByText("全店舗共通")).toHaveLength(1);
+  });
+
+  it("編集・削除・公開切替のボタンを出さず、理由を書く(押せない操作を並べない)", async () => {
+    vi.mocked(fetchWithAuth).mockReturnValue(mockList([ITEM_GLOBAL]));
+    renderTab();
+
+    await screen.findByText("Q: 配送の一般的な流れは");
+    expect(screen.queryByRole("button", { name: "✏️ 編集" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "削除" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "AIが答えないようにする" })).toBeNull();
+    expect(screen.getByText(/R2Cが全店舗向けに用意した知識です/)).toBeTruthy();
+  });
+
+  it("一括操作の選択対象にしない(チェックボックスを出さない)", async () => {
+    vi.mocked(fetchWithAuth).mockReturnValue(mockList([ITEM_A, ITEM_GLOBAL]));
+    renderTab();
+
+    await screen.findByText("Q: 配送の一般的な流れは");
+    // 自店1件ぶんだけ(全選択用を除く)
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes.length).toBeLessThan(3);
+  });
+
+  it("自店の知識には従来どおり編集・削除が出る(既存挙動を壊さない)", async () => {
+    vi.mocked(fetchWithAuth).mockReturnValue(mockList([ITEM_A]));
+    renderTab();
+
+    await screen.findByText("Q: 送料はいくらですか");
+    expect(screen.getByRole("button", { name: "✏️ 編集" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "削除" })).toBeTruthy();
+  });
+});

@@ -60,6 +60,8 @@ const en: Record<TranslationKey, string> = {
   "knowledge.count": "{n} knowledge items",
   "knowledge.edit": "✏️ Edit",
   "knowledge.delete": "Delete",
+  "knowledge.source_global": "Shared",
+  "knowledge.global_readonly_hint": "Provided by R2C for all stores. It cannot be changed here.",
   "knowledge.delete_confirm_title": "Are you sure you want to delete?",
   "knowledge.delete_confirm_body": "Deleting this will prevent the AI from referencing it. This cannot be undone.",
   "knowledge.cancel_delete": "Cancel",

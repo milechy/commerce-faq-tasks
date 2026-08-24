@@ -784,3 +784,33 @@ describe("hybridSearch ES query — is_excluded_from_search must_not filter (Pha
     expect(hybridSrc).toMatch(/must_not:\s*{\s*term:\s*{\s*is_excluded_from_search:\s*true\s*}\s*}/);
   });
 });
+
+// E2: テナントの回答は「自店 + global」の合算で作られるため、一覧の読み取りだけを
+// global に広げる。書き込みは従来どおり tenant_id で絞り、グローバル行は変更できない。
+describe("GET /v1/admin/knowledge/faq — 全店舗共通(global)の読み取り", () => {
+  it("一覧の WHERE が global を含む(自分の答えを作っている知識の全体が見える)", () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../src/api/admin/knowledge/faqCrudRoutes.ts"),
+      "utf8",
+    );
+    expect(src).toContain(`WHERE (tenant_id = $1 OR tenant_id = 'global')`);
+  });
+
+  it("書き込みは tenant_id で絞られたまま(グローバル行を変更・削除できない)", () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../src/api/admin/knowledge/faqCrudRoutes.ts"),
+      "utf8",
+    );
+    // UPDATE / DELETE / 一括削除 のいずれも tenant_id 述語を持つ
+    expect(src).toMatch(/WHERE id = \$6 AND tenant_id = \$7/);
+    expect(src).toMatch(/DELETE FROM faq_docs WHERE id = \$1 AND tenant_id = \$2/);
+    expect(src).toMatch(/DELETE FROM faq_docs WHERE id = ANY\(\$1::int\[\]\) AND tenant_id = \$2/);
+    // 読み取りの拡張が書き込み側に漏れていないこと
+    expect(src).not.toMatch(/UPDATE faq_docs[\s\S]{0,400}OR tenant_id = 'global'/);
+    expect(src).not.toMatch(/DELETE FROM faq_docs[\s\S]{0,200}OR tenant_id = 'global'/);
+  });
+});

@@ -62,6 +62,8 @@ const ja = {
   "knowledge.count": "{n}件のナレッジ",
   "knowledge.edit": "✏️ 編集",
   "knowledge.delete": "削除",
+  "knowledge.source_global": "全店舗共通",
+  "knowledge.global_readonly_hint": "R2Cが全店舗向けに用意した知識です。ここからは変更できません。",
   "knowledge.delete_confirm_title": "本当に削除しますか？",
   "knowledge.delete_confirm_body": "削除するとAIがこの情報を参照できなくなります。この操作は取り消せません。",
   "knowledge.cancel_delete": "やめる",
