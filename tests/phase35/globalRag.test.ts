@@ -13,10 +13,14 @@ describe("pgvector global search — SQL source", () => {
     expect(source).toContain("OR fe.tenant_id = 'global'");
   });
 
-  it("pgvectorSearch.ts の SQL に OR tenant_id = 'global' が含まれる", () => {
+  // 2026-08-24: faq_docs との JOIN(可視性判定)を入れたため、列の修飾が必須になった
+  // (faq_docs にも tenant_id があり、無修飾だと ambiguous でSQLエラーになる)。
+  // 期待するリテラルを pgvector.ts 側と同じ fe. 修飾つきに揃える。
+  // ガードの意図(グローバル知識が全テナントの検索に合流すること)は変えていない。
+  it("pgvectorSearch.ts の SQL に OR fe.tenant_id = 'global' が含まれる", () => {
     const filePath = path.resolve(__dirname, "../../src/search/pgvectorSearch.ts");
     const source = fs.readFileSync(filePath, "utf8");
-    expect(source).toContain("OR tenant_id = 'global'");
+    expect(source).toContain("OR fe.tenant_id = 'global'");
   });
 });
 

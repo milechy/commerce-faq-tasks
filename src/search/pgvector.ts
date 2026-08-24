@@ -45,6 +45,36 @@ export interface PgVectorSearchParams {
  *     using ivfflat (embedding vector_cosine_ops)
  *     with (lists = 100);
  */
+/**
+ * FAQ の可視性判定 (Phase69-2 Round 4)。エイリアスは fe / fd に固定する。
+ *
+ * **この述語の実装はここ1箇所だけにする。** 同じ faq_embeddings を引く経路が
+ * 複数あり(searchTool→pgvector.ts / searchAgent→pgvectorSearch.ts)、
+ * 片方だけが is_published を見ている状態は「非公開にしたはずのFAQが
+ * もう片方の経路では答えに出る」という信頼の事故になる(2026-08-24 発見)。
+ *
+ * エイリアスを引数化しないのは、excludedIds.test.ts が本ファイルの SQL 文字列を
+ * そのまま検査しているため。テンプレート化すると機械的ガードが空振りする。
+ * 呼び出し側は faq_embeddings を fe、faq_docs を fd としてエイリアスすること。
+ */
+export const FAQ_VISIBILITY_JOIN = `left join faq_docs fd
+      on fe.metadata->>'faq_id' ~ '^[0-9]+$'
+     and fd.id = (fe.metadata->>'faq_id')::bigint`;
+
+export const FAQ_VISIBILITY_WHERE = `(
+        (
+          fe.metadata->>'faq_id' ~ '^[0-9]+$'
+          and fd.id IS NOT NULL
+          and fd.is_published = true
+          and (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
+        )
+        OR
+        (
+          fe.metadata->>'faq_id' IS NULL
+          OR fe.metadata->>'faq_id' !~ '^[0-9]+$'
+        )
+      )`;
+
 export async function searchPgVector(
   params: PgVectorSearchParams
 ): Promise<PgVectorSearchResult> {
@@ -100,23 +130,9 @@ export async function searchPgVector(
       fe.metadata,
       1 - (fe.embedding <-> $2::vector) as score
     from faq_embeddings fe
-    left join faq_docs fd
-      on fe.metadata->>'faq_id' ~ '^[0-9]+$'
-     and fd.id = (fe.metadata->>'faq_id')::bigint
+    ${FAQ_VISIBILITY_JOIN}
     where (fe.tenant_id = $1 OR fe.tenant_id = 'global' OR fe.tenant_id = 'r2c_docs')
-      and (
-        (
-          fe.metadata->>'faq_id' ~ '^[0-9]+$'
-          and fd.id IS NOT NULL
-          and fd.is_published = true
-          and (fd.is_excluded_from_search IS NULL OR fd.is_excluded_from_search = false)
-        )
-        OR
-        (
-          fe.metadata->>'faq_id' IS NULL
-          OR fe.metadata->>'faq_id' !~ '^[0-9]+$'
-        )
-      )
+      and ${FAQ_VISIBILITY_WHERE}
       and (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
       ${excludeClause}
     order by fe.embedding <-> $2::vector
