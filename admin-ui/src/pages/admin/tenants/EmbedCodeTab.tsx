@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useLang } from "../../../i18n/LangContext";
 import ApiKeyCreateModal from "../../../components/ApiKeyCreateModal";
 import type { TenantDetail, ApiKey } from "./types";
-import { CARD_STYLE } from "./types";
+import { CARD_STYLE, PLAN_OPTIONS } from "./types";
+import { planHasFeature } from "../../../lib/planFeatures";
 
 /** 既定値と同じ設定・不正値は出力しない（コピペ用スニペットを短く保ち、壊れた属性を出さない） */
 function buildPlacementLines(theme: TenantDetail["widget_theme"]): string {
@@ -72,6 +73,8 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
   const [showIssueModal, setShowIssueModal] = useState(false);
 
   const activeKey = apiKeys.find((k) => k.status === "active");
+  // src/api/widget/routes.ts の showBrandingBadge と同じ判定(hide_branding 未達 = バッジ表示)。
+  const brandingHidden = planHasFeature(tenant.plan, "hide_branding");
 
   const handleIssueClick = () => {
     // 既に有効なキーがある状態での発行は、そのキーを即座に無効化する
@@ -169,6 +172,14 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
       <div style={CARD_STYLE}>
         <p style={{ fontSize: 14, color: "var(--muted-foreground)", marginBottom: 16, lineHeight: 1.6 }}>
           {t("tenant_detail.embed_desc")}
+        </p>
+
+        <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginBottom: 16, lineHeight: 1.6 }}>
+          {brandingHidden
+            ? "🏷️ 「Powered by R2C」バッジ: 非表示中"
+            : `🏷️ 「Powered by R2C」バッジ: 表示中（Growth以上のプランで非表示にできます。現在のプラン: ${
+                PLAN_OPTIONS.find((p) => p.value === tenant.plan)?.label ?? tenant.plan
+              }）`}
         </p>
 
         {embedCode ? (

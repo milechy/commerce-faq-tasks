@@ -215,3 +215,22 @@ describe("EmbedCodeTab", () => {
     expect(screen.getByRole("button", { name: "📋 コードをコピー" })).toBeTruthy();
   });
 });
+
+// ─── バッジ表示ステータス: hide_branding は admin-ui にゲート判定が一切無く、
+// テナント管理者が自分のバッジ表示状態を確認する手段が無かった(planFeatures.ts の
+// hide_branding = growth はサーバ側 src/api/widget/routes.ts でしか参照されていなかった)。
+// src/api/widget/routes.ts の showBrandingBadge = !planHasFeature(plan, "hide_branding")
+// と同じ判定をここでも表示するようにした回帰ガード。
+
+describe("EmbedCodeTab バッジ表示ステータス", () => {
+  it.each(["free_ad", "starter"] as const)("plan=%s では「表示中」と表示する", (plan) => {
+    render(<EmbedCodeTab tenant={makeTenant({ plan })} apiKeys={[]} />);
+    expect(screen.getByText(/Powered by R2C.*バッジ.*表示中/)).toBeTruthy();
+    expect(screen.queryByText(/Powered by R2C.*バッジ.*非表示中/)).toBeNull();
+  });
+
+  it.each(["growth", "enterprise"] as const)("plan=%s では「非表示中」と表示する", (plan) => {
+    render(<EmbedCodeTab tenant={makeTenant({ plan })} apiKeys={[]} />);
+    expect(screen.getByText(/Powered by R2C.*バッジ.*非表示中/)).toBeTruthy();
+  });
+});
