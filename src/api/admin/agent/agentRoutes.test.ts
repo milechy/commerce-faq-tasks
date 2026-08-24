@@ -8084,6 +8084,26 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).not.toContain('data-position');
       expect(res.body.actions[0].result).not.toContain('data-offset');
     });
+
+    // GID 1217762331236037: admin-ui/EmbedCodeTab.tsx と同一根本原因(静的 /widget.js
+    // ハードコード)がこのチャットツール経由の埋め込みコード案内にも存在していた。
+    // 動的ルート(/widget/:tenantId.js)への切替そのものの再発防止テスト。
+    it('src は動的ルート(/widget/:tenantId.js)を指す。静的な /widget.js は返さない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-6', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+        .mockResolvedValueOnce({ rows: [{ widget_theme: null }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('src="https://api.r2c.biz/widget/tenant-abc.js"');
+      expect(res.body.actions[0].result).not.toContain('src="https://api.r2c.biz/widget.js"');
+    });
   });
 
   // -------------------------------------------------------------------------

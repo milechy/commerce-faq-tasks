@@ -55,7 +55,16 @@ export function buildEmbedCode(tenant: TenantDetail, apiKey: string): string {
   const placementLines = buildPlacementLines(tenant.widget_theme);
   // data-tenant は tenant.id を使う（widget.js/routes.ts のコメントで「slug = tenant ID」と
   // 明記されている。tenants テーブルに slug 列自体が存在しないため、別の slug フィールドは無い）。
-  return `<script src="https://api.r2c.biz/widget.js"
+  //
+  // src は動的ルート GET /widget/:tenantSlug.js（src/api/widget/routes.ts）を指す。
+  // 静的な /widget.js を直接返すだけの旧URLは、プラン別バッジ制御(showBrandingBadge)を
+  // 一切経由できず、free_ad等のバッジ配布経路が事実上存在しなかった(GID 1217762331236037)。
+  // 動的ルートのレスポンスは public/widget.js の全文にテナント設定ブロックを前置したものであり、
+  // data-api-key/data-tenant/data-accent-color/placement系の各属性は静的経路と全く同じ
+  // currentScript.getAttribute(...) の仕組みで読まれるため、ここでの変更は不要。
+  // 既に静的URLで埋め込み済みの稼働中テナントはこの変更の影響を受けない(後方互換)。
+  // 次回このタブでコードをコピーした時点から新URLになる。
+  return `<script src="https://api.r2c.biz/widget/${tenant.id}.js"
   data-api-key="${apiKey}"
   data-tenant="${tenant.id}"${accentColorLine}${placementLines}>
 </script>`;

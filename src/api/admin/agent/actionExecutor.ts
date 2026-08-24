@@ -1707,7 +1707,11 @@ export async function executeToolCall(
 
         return truncate(
           `ウィジェット埋め込みコードのひな形:\n\n` +
-          `<script src="https://api.r2c.biz/widget.js" data-api-key="YOUR_API_KEY"${accentColorAttr}${placementAttrs}></script>\n\n` +
+          // src は動的ルート GET /widget/:tenantSlug.js（src/api/widget/routes.ts）を指す。
+          // 静的な /widget.js への直リンクだとプラン別バッジ制御(showBrandingBadge)を
+          // 経由できず、バッジ配布経路が事実上存在しなかった(GID 1217762331236037、
+          // admin-ui/src/pages/admin/tenants/EmbedCodeTab.tsx と同一根本原因)。
+          `<script src="https://api.r2c.biz/widget/${tenantId}.js" data-api-key="YOUR_API_KEY"${accentColorAttr}${placementAttrs}></script>\n\n` +
           `現在のAPIキー先頭: ${keyPrefix}...\n` +
           `※ 実際のAPIキーは発行時のみ表示されます。再確認が必要な場合は新しいキーを発行してください`
         );
