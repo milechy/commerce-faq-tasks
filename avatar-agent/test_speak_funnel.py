@@ -1,7 +1,7 @@
 """
 agent.py の speak() ファネル導入を検証するテスト。
 
-speak() / handle_chat / handle_tts_request 等は entrypoint() 内のネストした
+speak() / handle_tts_request 等は entrypoint() 内のネストした
 クロージャのため、confirmPolicy.test.ts と同じ手法（ソースを読み込んで
 契約を検証する）で agent.py の内容を直接検査する。
 """
@@ -11,9 +11,7 @@ import json
 import os
 from pathlib import Path
 
-# agent.py はモジュールレベルで GROQ_API_KEY / FISH_AUDIO_API_KEY を要求する
-# (groq_llm = openai_plugin.LLM(api_key=os.environ["GROQ_API_KEY"], ...))。
-os.environ.setdefault("GROQ_API_KEY", "test-dummy-key")
+# agent.py はモジュールレベルで FISH_AUDIO_API_KEY を要求する。
 os.environ.setdefault("FISH_AUDIO_API_KEY", "test-dummy-key")
 
 import agent  # noqa: E402
@@ -199,15 +197,11 @@ class TestComposeSpeakTexts:
 
 
 class TestCallSitesUseSpeakFunnel:
-    """DoD: 4箇所（tts_request / handle_chat / filler / 挨拶）全てが speak() 経由。"""
+    """DoD: 3箇所（tts_request / filler / 挨拶）全てが speak() 経由。"""
 
     def test_handle_tts_request_uses_speak_without_publish(self):
         src = AGENT_PY.read_text(encoding="utf-8")
         assert "speak(reply_text, publish=False, emotion_prefix=True)" in src
-
-    def test_handle_chat_skips_publish_for_fallback_message(self):
-        src = AGENT_PY.read_text(encoding="utf-8")
-        assert "speak(reply, publish=(reply != FALLBACK_MSG), emotion_prefix=False)" in src
 
     def test_filler_uses_speak_without_publish(self):
         src = AGENT_PY.read_text(encoding="utf-8")

@@ -436,6 +436,15 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     AI提案ルールの承認がチャットにしか無く、旧UI `/admin/tuning` では提案が
     「ただの無効ルール」に見えて `is_active` トグルで**承認を経ず本番へ載る**のが実例。
     分けた瞬間に、低リテラシーのユーザーは操作をあきらめる。
+46. **知識（RAG）を通さずに顧客への回答を生成する経路を作る。**
+    顧客に出す回答は本体API `/api/chat`（FAQ/pgvector/learned_memory/tuning_rules を通る
+    実回答経路）が生成したものだけ。アバターは受け取ったテキストを TTS 再生するだけで、
+    **自分で LLM を呼んで答えを作らない**。この経路を足すと、FAQ を直しても学習が進んでも
+    その回答だけ古いまま・知識ゼロのままになり、**画面上は正常に見える**。
+    実例: `avatar-agent/agent.py` の `handle_chat`（data channel `type:"chat"` → Groq 直呼び）と
+    `/api/avatar/chat-stream`。前者は本番発火0件のまま廃止済みモデルを指し続けていた（E5で撤去）。
+    後者は既定で 503 に封鎖（`ANAM_CHAT_STREAM_ENABLED`）。**封鎖を外すなら先に知識経路を通すこと。**
+    ガード: `avatar-agent/test_no_rag_free_answer_path.py`。
 
 ## テストの最低ライン
 

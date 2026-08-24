@@ -21,6 +21,18 @@ import { checkTopic } from '../../middleware/topicGuard';
 const MAX_ANAM_MESSAGES = 20;
 const MAX_ANAM_MESSAGE_LENGTH = 2000;
 
+/**
+ * E5: RAG を介さない回答経路のため既定で封鎖する。
+ * 有効化する前に、本体API /api/chat と同じ知識経路(FAQ/pgvector/learned_memory/
+ * tuning_rules)をこのルートにも通すこと。フラグだけ立てると顧客に知識ゼロの
+ * 回答が出る。
+ * モジュール読み込み時ではなくリクエスト時に読むことで、封鎖状態を切り替えても
+ * 再デプロイ前提にならないようにする。
+ */
+function isAnamChatStreamEnabled(): boolean {
+  return process.env.ANAM_CHAT_STREAM_ENABLED === 'true';
+}
+
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 
 /**
@@ -64,6 +76,24 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
     const tenantId = (req as AuthedRequest).tenantId;
     if (!tenantId) {
       return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    // E5: この経路は RAG を介さない Groq 直呼び出しで、有効化すると顧客に
+    // 知識(FAQ/pgvector/learned_memory/tuning_rules)を通さない回答が出る。
+    // 現在 avatar_configs は全件 lemonslice で anam は0件のため到達しないが、
+    // テナントを anam に切り替えるだけで無言で知識ゼロ回答が始まる状態だった。
+    // 有効化するなら先に本体API /api/chat と同じ知識経路を通すこと。それまでは
+    // 無言で劣化した回答を返すのではなく、ここで大きく失敗させる。
+    if (!isAnamChatStreamEnabled()) {
+      logger.warn(
+        { tenantId, requestId: (req as any).requestId },
+        '[anamChatStream] blocked: RAGを介さない回答経路のため無効化されている(E5)',
+      );
+      return res.status(503).json({
+        error: 'anam_chat_stream_disabled',
+        message:
+          'この経路は知識(RAG)を通さないため無効化されています。アバターの回答は /api/chat を経由してください。',
+      });
     }
 
     const { messages, sessionId: bodySessionId } = req.body as {
