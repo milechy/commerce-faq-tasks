@@ -89,10 +89,23 @@ describe("buildEmbedCode", () => {
     expect(code).not.toContain("data-color");
   });
 
-  it("実在するホスト(api.r2c.biz)を使う（cdn.r2c.bizはDNS解決不能なため貼っても繋がらない）", () => {
-    const code = buildEmbedCode(makeTenant(), "rjc_test_abc123");
-    expect(code).toContain("https://api.r2c.biz/widget.js");
+  it("実在するホスト(api.r2c.biz)の動的ルート(/widget/:tenantId.js)を使う（cdn.r2c.bizはDNS解決不能なため貼っても繋がらない）", () => {
+    const code = buildEmbedCode(makeTenant({ id: "acme" }), "rjc_test_abc123");
+    expect(code).toContain("https://api.r2c.biz/widget/acme.js");
     expect(code).not.toContain("cdn.r2c.biz");
+  });
+
+  it("テナントごとに src のURLが異なる（テナントIDが埋め込みコードのURLに反映される回帰テスト）", () => {
+    const codeA = buildEmbedCode(makeTenant({ id: "tenant-a" }), "rjc_test_abc123");
+    const codeB = buildEmbedCode(makeTenant({ id: "tenant-b" }), "rjc_test_abc123");
+    expect(codeA).toContain("https://api.r2c.biz/widget/tenant-a.js");
+    expect(codeB).toContain("https://api.r2c.biz/widget/tenant-b.js");
+    expect(codeA).not.toContain("https://api.r2c.biz/widget/tenant-b.js");
+  });
+
+  it("静的経路(/widget.js)はもう出力しない（動的ルートに切り替わったことの再発防止: GID 1217762331236037）", () => {
+    const code = buildEmbedCode(makeTenant({ id: "acme" }), "rjc_test_abc123");
+    expect(code).not.toContain('src="https://api.r2c.biz/widget.js"');
   });
 
   it("data-tenant には tenant.id を使う（slugはバックエンドが一度も返さないため常に空だった）", () => {
