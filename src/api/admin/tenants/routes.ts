@@ -12,7 +12,7 @@ import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { DEFAULT_AVATARS } from "../avatar/routes";
 import { logger } from '../../../lib/logger';
-import { planHasFeature, type TenantPlan } from "../../../lib/billing/planFeatures";
+import { planHasFeature, resolveShareForPlan, resolveShareForTenantPlan, type TenantPlan } from "../../../lib/billing/planFeatures";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
 
@@ -330,6 +330,18 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         });
       }
     }
+    // S5: 共有学習プールの参加モデル。free_ad(確実に判定できた場合のみ)は share 強制ON。
+    // actionExecutor.ts の set_hermes_consent ツールと同じ判定を、テナント自身が直接叩ける
+    // このPATCHルートにも適用する(でないとCopilot経由をすり抜けて強制を回避できてしまう)。
+    if (fields.features?.learning?.share === false) {
+      const shareResolution = await resolveShareForTenantPlan(db, tenantId);
+      if (shareResolution.forced) {
+        return res.status(403).json({
+          error: "share_forced_by_plan",
+          message: "広告プランでは共有プールへの参加が必須です。有料プランへの変更が必要です。",
+        });
+      }
+    }
     try {
       const setClauses: string[] = [];
       const params: unknown[] = [];
@@ -622,6 +634,24 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
       }
       const beforeRow = check.rows[0] as { plan: string; features: unknown; billing_enabled: boolean; is_active: boolean };
+      // S5: 共有学習プールの参加モデル。free_ad(確実に判定できた場合のみ)は share 強制ON。
+      // 同一リクエストで plan も変更される場合は変更後のプランで判定する
+      // (例: free_ad → starter への降格と同時に share=false を送るのは正当な操作)。
+      if (fields.features?.learning?.share === false) {
+        const effectivePlan = fields.plan ?? beforeRow.plan;
+        const knownPlan =
+          effectivePlan === "free_ad" || effectivePlan === "starter" ||
+          effectivePlan === "growth" || effectivePlan === "enterprise"
+            ? effectivePlan
+            : null;
+        const shareResolution = resolveShareForPlan(knownPlan);
+        if (shareResolution.forced) {
+          return res.status(403).json({
+            error: "share_forced_by_plan",
+            message: "広告プランでは共有プールへの参加が必須です。有料プランへの変更が必要です。",
+          });
+        }
+      }
       const setClauses: string[] = [];
       const params: unknown[] = [];
       if (fields.name !== undefined) { params.push(fields.name); setClauses.push(`name = $${params.length}`); }

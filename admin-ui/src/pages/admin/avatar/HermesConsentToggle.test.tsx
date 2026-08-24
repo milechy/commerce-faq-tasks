@@ -42,6 +42,15 @@ function mockInitialFetch(consent: boolean) {
   );
 }
 
+function mockInitialFetchWithPlanAndLearning(
+  plan: string,
+  learning: { learn: boolean; share: boolean } | undefined,
+) {
+  vi.mocked(authFetch).mockReturnValueOnce(
+    mockOk({ plan, features: { avatar: true, voice: false, rag: true, learning } }),
+  );
+}
+
 beforeEach(() => {
   vi.mocked(authFetch).mockReset();
 });
@@ -124,7 +133,7 @@ describe("HermesConsentToggle", () => {
     });
   });
 
-  it("T6: PATCHリクエストの本文に既存features(avatar/voice/rag)を保持したまま送る", async () => {
+  it("T6: PATCHリクエストの本文に既存features(avatar/voice/rag)を保持したまま送る(S5: learning.shareとして送る)", async () => {
     mockInitialFetch(false);
     vi.mocked(authFetch).mockReturnValueOnce(mockOk({ features: {} }));
     render(<HermesConsentToggle />);
@@ -141,9 +150,8 @@ describe("HermesConsentToggle", () => {
               avatar: true,
               voice: false,
               rag: true,
-              deep_research: undefined,
-              pre_dispatch: undefined,
-              hermes_raw_data_consent: true,
+              hermes_raw_data_consent: false,
+              learning: { learn: true, share: true },
             },
           }),
         }),
@@ -188,5 +196,43 @@ describe("HermesConsentToggle", () => {
 
     resolve({ ok: true, status: 200, json: () => Promise.resolve({ features: {} }) } as Response);
     await waitFor(() => expect(btn.disabled).toBe(false));
+  });
+
+  it("S5: features.learningが新形式で設定されていれば旧hermes_raw_data_consentより優先する", async () => {
+    mockInitialFetchWithPlanAndLearning("starter", { learn: true, share: true });
+    render(<HermesConsentToggle />);
+
+    await waitFor(() => {
+      expect(screen.getByText("✅ 同意済み")).toBeTruthy();
+    });
+  });
+
+  it("S5: free_adプランでは強制ON表示になり、ボタンが操作不能になる", async () => {
+    mockInitialFetchWithPlanAndLearning("free_ad", { learn: true, share: true });
+    render(<HermesConsentToggle />);
+
+    await waitFor(() => {
+      expect(screen.getByText("🔒 必須(広告プラン)")).toBeTruthy();
+    });
+    const btn = screen.getByRole("button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByText(/広告プラン.*データ提供が必須/)).toBeTruthy();
+
+    // 操作不能なのでクリックしてもPATCHは飛ばない(押しても何も起きないボタンにはしないが、
+    // 「起きるべきでない操作」自体は確実に起きないことを確認する)。
+    fireEvent.click(btn);
+    expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(1); // 初期GETのみ
+  });
+
+  it("S5: 有料プランでは通常どおり操作できる(強制表示は出ない)", async () => {
+    mockInitialFetchWithPlanAndLearning("growth", { learn: true, share: false });
+    render(<HermesConsentToggle />);
+
+    await waitFor(() => {
+      expect(screen.getByText("⏸️ 未同意")).toBeTruthy();
+    });
+    expect(screen.queryByText("🔒 必須(広告プラン)")).toBeNull();
+    const btn = screen.getByRole("button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
   });
 });

@@ -275,6 +275,47 @@ describe("PATCH /v1/admin/tenants/:id — features.learning(共有学習プー�
     expect(res.body.features.learning).toEqual({ learn: true, share: false });
   });
 
+  // S5: super_admin経由のPATCHにも同じ強制ON判定を適用する回帰テスト。
+  // beforeRow.plan が free_ad の場合、追加のDBクエリを挟まず(既存のcheckクエリの
+  // 結果をそのまま使う)判定できることも合わせて確認する。
+  it("S5: beforeRow.plan が free_ad のテナントに share=false を送ると 403", async () => {
+    const db = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "free_ad", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, learning: { learn: true, share: false } } });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("share_forced_by_plan");
+    // check クエリの1回のみ。強制判定のための追加クエリは発生しない(effectivePlanは
+    // 既に取得済みのbeforeRow.planから同期的に解決する)。
+    expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("S5: free_ad → starter への降格と同時に share=false を送るのは正当な操作として通る", async () => {
+    const features = { avatar: false, voice: false, rag: true, learning: { learn: true, share: false } };
+    const updatedRow = { id: "tenant-a", name: "テストテナント", plan: "starter", is_active: true, allowed_origins: [], system_prompt: null, billing_enabled: false, billing_free_from: null, billing_free_until: null, features, lemonslice_agent_id: null, conversion_types: [], tenant_contact_email: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    const db = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "free_ad", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [updatedRow], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "starter", features });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features.learning).toEqual({ learn: true, share: false });
+  });
+
   it("E11: features.learning を送っても avatar 等の既存フラグが消えない（|| マージ、送信側は全キーを送る）", async () => {
     const features = {
       avatar: true, voice: true, rag: true,
@@ -332,11 +373,18 @@ describe("PATCH /v1/admin/my-tenant — features.learning(共有学習プール�
     // avatar/voice=true は別途プラン制限クエリを挟むため、ここでは無関係のフラグ
     // (pre_dispatch)でマージ挙動のみを確認する。avatar/voiceのゲートは既存の
     // 「PATCH /v1/admin/my-tenant — avatar/voice plan ゲート」describeでカバー済み。
+    // share=false を送るため、S5のfree_ad強制ガード(resolveShareForTenantPlan)が
+    // 先にプランを1回問い合わせる。starterプランと返し、強制対象でないことを示す。
     const updated = {
       ...ROW,
       features: { avatar: false, voice: false, rag: true, pre_dispatch: true, learning: { learn: true, share: false } },
     };
-    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [updated], rowCount: 1 }) };
+    const db = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [updated], rowCount: 1 }),
+    };
     const res = await request(makeApp(db, "client_admin"))
       .patch("/v1/admin/my-tenant")
       .set("Authorization", "Bearer dummy")
@@ -345,6 +393,35 @@ describe("PATCH /v1/admin/my-tenant — features.learning(共有学習プール�
     expect(res.status).toBe(200);
     expect(res.body.features.pre_dispatch).toBe(true);
     expect(res.body.features.learning).toEqual({ learn: true, share: false });
+  });
+
+  // S5: HermesConsentToggle等がこのPATCHルートを直接叩いた場合にも、
+  // actionExecutor.ts(Copilotツール)と同じfree_ad強制ONの判定を適用する回帰テスト。
+  // 導入前はこのルートに判定が無く、free_adテナントがshare=falseを直接PATCHで
+  // 送ればCopilot経由の強制を素通りできてしまっていた。
+  it("S5: free_adプランのテナントが share=false を送ると 403(強制ONの回避を防ぐ)", async () => {
+    const db = {
+      query: jest.fn().mockResolvedValueOnce({ rows: [{ plan: "free_ad" }], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, learning: { learn: true, share: false } } });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("share_forced_by_plan");
+  });
+
+  it("S5: free_adでも share=true(強制方向と一致)は判定クエリを挟まず更新できる", async () => {
+    const updated = { ...ROW, features: { avatar: false, voice: false, rag: true, learning: { learn: true, share: true } } };
+    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [updated], rowCount: 1 }) };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, learning: { learn: true, share: true } } });
+
+    expect(res.status).toBe(200);
+    expect(db.query).toHaveBeenCalledTimes(1);
   });
 });
 
