@@ -596,6 +596,36 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'suggest_answer_correction',
+      description:
+        '「この回答は間違っている」という店舗管理者の指摘を受け取り、事実の訂正(知識データ)と振る舞いの指示(指示ルール)のどちらとして扱うべきかを判定する。書き込みは行わない読み取り専用ツール。' +
+        '会話の全文表示でAIの回答に対して「これは違う」「正しくは〜」と言われた場合に使う。' +
+        '**店舗管理者にどちらの層か選ばせてはいけない。** このツールが返した層に従い、' +
+        'layer=knowledge なら save_faq、layer=rule なら suggest_tuning_rule(その後 save_tuning_rule)へ進むこと。' +
+        '判定結果と下書きは必ず店舗管理者に提示し、同意を得てから保存すること。',
+      parameters: {
+        type: 'object',
+        properties: {
+          user_message: {
+            type: 'string',
+            description: 'お客様側の元の質問。',
+          },
+          ai_message: {
+            type: 'string',
+            description: 'その質問に対してAIが返した誤答。',
+          },
+          correction: {
+            type: 'string',
+            description: '店舗管理者の指摘（例:「保証は2年です」「値引きの話は避けて」）。',
+          },
+        },
+        required: ['user_message', 'ai_message', 'correction'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'suggest_tuning_rule',
       description:
         '店舗管理者の自然な言葉による指示、または既存の会話のやりとり・知識ギャップから、AIチャットボットの「指示ルール」（トリガー条件・期待する応答方針・優先度）の下書きに変換する。書き込みは行わない読み取り専用ツール。' +

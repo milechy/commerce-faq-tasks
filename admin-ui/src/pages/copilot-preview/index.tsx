@@ -215,6 +215,7 @@ const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", norm
 
 // 自由入力欄からの実API呼び出しで使うツール名 → 日本語ラベル
 const REAL_TOOL_LABEL: Record<string, string> = {
+  suggest_answer_correction: "誤った回答の直し方を判定",
   get_weekly_briefing: "週次ブリーフィングの取得",
   suggest_tuning_rule: "指示ルールの下書き提案",
   save_tuning_rule: "指示ルールの保存",
@@ -2574,6 +2575,20 @@ function CardView({
                     style={{ alignSelf: "flex-start", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
                   >
                     🎛️ この会話からルールを作る
+                  </button>
+                )}
+                {/* 要件 F1: 誤答に気づいた場所から直せるようにする(CLAUDE.md 禁止45)。
+                    「知識かルールか」は店主に選ばせず suggest_answer_correction が判定する。 */}
+                {prevUser && onSendReal && (
+                  <button
+                    onClick={() =>
+                      onSendReal(
+                        `__real:この回答(お客様:「${prevUser.content.slice(0, 300)}」→AI:「${m.content.slice(0, 300)}」)は間違っています。どこが違うか伝えるので、直し方を判定してください`,
+                      )
+                    }
+                    style={{ alignSelf: "flex-start", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", minHeight: 44 }}
+                  >
+                    ✏️ この回答を直す
                   </button>
                 )}
               </div>

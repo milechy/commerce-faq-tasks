@@ -100,6 +100,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
 // 書き込みを伴わないツール。DBへの書き込みも外部への副作用のある送出も行わない。
 // （網羅性テストのために明示列挙する。新規ツールはここか上の表のどちらかへ必ず追加する）
 export const NON_WRITE_TOOLS: readonly string[] = [
+  // 誤答の是正: 層を判定して既存の save_faq / suggest_tuning_rule へ繋ぐだけ。
+  // 自身は一切書き込まないため NON_WRITE。書き込みは繋いだ先の確認ゲートが守る。
+  'suggest_answer_correction',
   'get_tenant_settings',
   'get_faq_list',
   'get_avatar_status',

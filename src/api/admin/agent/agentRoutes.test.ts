@@ -946,6 +946,82 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // C2b: suggest_answer_correction — 誤答の是正を正しい層へ振り分ける(書き込みなし)
+  // -------------------------------------------------------------------------
+  describe('suggest_answer_correction', () => {
+    function callWith(correction: string, sessionId: string) {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-ac-1',
+                  type: 'function',
+                  function: {
+                    name: 'suggest_answer_correction',
+                    arguments: JSON.stringify({
+                      user_message: '保証期間は？',
+                      ai_message: '1年です。',
+                      correction,
+                    }),
+                  },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('こう直します。よろしいですか？'));
+
+      return request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この回答は間違っています', sessionId });
+    }
+
+    it('事実の指摘は知識として扱い、save_faq へ誘導する（DB書き込みは行わない）', async () => {
+      const res = await callWith('保証は2年です', 'sess-ac-1');
+
+      expect(res.status).toBe(200);
+      const action = res.body.actions[0];
+      expect(action.tool).toBe('suggest_answer_correction');
+      expect(action.result).toContain('事実の訂正として扱います');
+      expect(action.result).toContain('save_faq');
+      // ルール側へは誘導しない
+      expect(action.result).not.toContain('suggest_tuning_rule');
+      // 読み取り専用: 書き込みは一切起きない
+      expect(mockCreateRule).not.toHaveBeenCalled();
+    });
+
+    it('振る舞いの指摘はルールとして扱い、suggest_tuning_rule へ繋ぐ（下書き生成を二重に実装しない）', async () => {
+      const res = await callWith('値引きの話は避けてください', 'sess-ac-2');
+
+      expect(res.status).toBe(200);
+      const action = res.body.actions[0];
+      expect(action.result).toContain('振る舞いの指示として扱います');
+      expect(action.result).toContain('suggest_tuning_rule');
+      expect(mockCreateRule).not.toHaveBeenCalled();
+    });
+
+    it('指摘が空なら、どこが違うかを聞き返す（層を決め打ちしない）', async () => {
+      const res = await callWith('', 'sess-ac-3');
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('どこが違うかを教えてください');
+      expect(mockCreateRule).not.toHaveBeenCalled();
+    });
+
+    it('確認ゲートの文言を成功文に混ぜない（正常応答が blocked として計測される事故を防ぐ）', async () => {
+      const res = await callWith('保証は2年です', 'sess-ac-4');
+
+      const result = String(res.body.actions[0].result);
+      expect(result).not.toContain('確認が必要です');
+      expect(result).not.toContain('確認をスキップできません');
+    });
+  });
+
   // Phase1: suggest_tuning_rule — 読み取り専用の下書き提案
   // -------------------------------------------------------------------------
   describe('suggest_tuning_rule', () => {

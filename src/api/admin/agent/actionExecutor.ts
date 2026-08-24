@@ -13,6 +13,7 @@ import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 import { callGroq8bSuggestFromText, callGroq8bSuggest } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
 import { splitTriggerKeywords } from '../tuning/triggerMatching';
+import { routeCorrection } from "../../../agent/knowledge/correctionRouter";
 import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
@@ -1746,6 +1747,49 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // 誤答の是正。**店主に「知識かルールか」を選ばせない**(要件 F1)。
+    // 層の判定は correctionRouter(純関数)が唯一の実装。ここで再実装しない。
+    // 書き込みは行わず、既存の save_faq / suggest_tuning_rule へ繋ぐだけ。
+    // 新しい書き込み経路も新しいカード種別も作らない(禁止6・32)。
+    case 'suggest_answer_correction': {
+      const userMessage = String(args['user_message'] ?? '').trim();
+      const aiMessage = String(args['ai_message'] ?? '').trim();
+      const correction = String(args['correction'] ?? '').trim();
+
+      if (!userMessage || !aiMessage) {
+        return truncate('元の質問(user_message)とAIの回答(ai_message)が必要です');
+      }
+      if (!correction) {
+        return truncate('どこが違うかを教えてください（例:「保証は2年です」「値引きの話は避けて」）');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      const route = routeCorrection({ question: userMessage, answer: aiMessage, correction });
+
+      if (route.layer === 'knowledge') {
+        // 事実の訂正 → 知識データへ。下書きは決定的に組む(質問=元の質問、答え=指摘)。
+        return truncate(
+          `事実の訂正として扱います。\n` +
+          `質問: ${userMessage}\n` +
+          `新しい答え: ${correction}\n` +
+          `\nこの内容でよいか店舗管理者に確認し、同意が得られたら save_faq を呼び出してください` +
+          `（question は上記の「質問」、answer は上記の「新しい答え」を使うこと）。` +
+          `保存後は「次に『${userMessage.slice(0, 30)}』と聞かれたら、この内容で答えます」と伝えてください。`
+        );
+      }
+
+      // 振る舞いの指示 → 指示ルールへ。下書きの生成は suggest_tuning_rule が唯一の実装なので、
+      // ここでは作らずそちらへ渡す(2箇所目を作らない)。
+      return truncate(
+        `振る舞いの指示として扱います（${route.reason}）。\n` +
+        `\n続けて suggest_tuning_rule を呼び出してください` +
+        `（user_message と ai_message は今回と同じものを渡し、指摘の内容「${correction.slice(0, 60)}」を反映させること）。` +
+        `どんな質問のときに使うかが決まっていない場合は、店舗管理者に聞き返してください。`
+      );
+    }
+
     case 'suggest_tuning_rule': {
       const freeText = String(args['free_text'] ?? '').trim();
       const userMessage = String(args['user_message'] ?? '').trim();
