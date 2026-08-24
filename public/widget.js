@@ -1121,6 +1121,10 @@
   var _fabRestored = false; // closePanel後の非同期resetFabIcon呼び出しを防ぐフラグ
   var isLoading = false;
   var messages = [];
+  // free_adプランの月次上限案内(403 plan_upgrade_required)を1会話(このウィジェット
+  // インスタンスの生存期間)につき1回だけ表示するためのフラグ。
+  // CLAUDE.md 絶対にやってはいけないこと11: 同一会話で繰り返さない。
+  var freeAdQuotaMessageShown = false;
 
   /* GID 1216275508391900: 有人チャットへのシームレスエスカレーション */
   var escalated = false;
@@ -2806,7 +2810,13 @@
       .then(function (res) {
         if (!res.ok) {
           return res.json().catch(function () { return {}; }).then(function (j) {
-            throw new Error(j.error || 'HTTP ' + res.status);
+            var e = new Error(j.error || 'HTTP ' + res.status);
+            // free_adプラン上限到達(403 plan_upgrade_required)は正常系の分岐であり、
+            // 通信エラーではない。code/serverMessage を付与して catch 側で区別する
+            // (CLAUDE.md 絶対にやってはいけないこと21: エラー文言でHTTPの意味を潰さない)。
+            e.code = j.error;
+            e.serverMessage = typeof j.message === 'string' ? j.message : undefined;
+            throw e;
           });
         }
         return res.json();
@@ -2890,6 +2900,20 @@
       })
       .catch(function (err) {
         if (err && err.name === 'AbortError') return;
+        if (err && err.code === 'plan_upgrade_required') {
+          // 正常系の分岐（赤帯にしない）。アシスタントの発言としてチャット欄に
+          // 表示し、同一会話(このウィジェットインスタンス)では1回だけに留める。
+          if (!freeAdQuotaMessageShown) {
+            freeAdQuotaMessageShown = true;
+            messages.push({
+              id: generateMsgId(),
+              role: 'assistant',
+              content: err.serverMessage || '今月のご利用可能回数の上限に達しました。プランのアップグレードについては、サイト運営者にお問い合わせください。',
+              timestamp: Date.now(),
+            });
+          }
+          return;
+        }
         showError('通信エラーが発生しました。しばらくしてから再試行してください。');
         emitToHost('widget:error', { error: err ? err.message : 'unknown' });
       })

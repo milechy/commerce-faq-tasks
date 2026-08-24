@@ -216,3 +216,31 @@ describe('public/widget.min.js が壊れたビルド成果物になっていな�
     expect(() => new vm.Script(minSrc)).not.toThrow();
   });
 });
+
+// PR-C: free_ad プランの月次上限(403 plan_upgrade_required)をエラー表示で
+// 誤描画しない不変条件(CLAUDE.md 絶対にやってはいけないこと21・禁止11)。
+describe('public/widget.js free_adプラン月次上限の不変条件', () => {
+  it('plan_upgrade_required を通信エラー(showError/赤帯)とは別経路で扱っている', () => {
+    expect(WIDGET_SRC).toMatch(/err\s*&&\s*err\.code\s*===\s*['"]plan_upgrade_required['"]/);
+  });
+
+  it('plan_upgrade_required の分岐は showError を呼ばずに return している（赤帯にしない）', () => {
+    const match = WIDGET_SRC.match(
+      /if\s*\(\s*err\s*&&\s*err\.code\s*===\s*['"]plan_upgrade_required['"]\s*\)\s*\{([\s\S]*?)\n\s{8}\}/
+    );
+    expect(match).not.toBeNull();
+    const branchBody = match ? match[1] : '';
+    expect(branchBody).not.toMatch(/showError\(/);
+    expect(branchBody).toMatch(/return;/);
+  });
+
+  it('同一会話(ウィジェットインスタンス)につき1回だけ表示するフラグを持つ', () => {
+    expect(WIDGET_SRC).toMatch(/var\s+freeAdQuotaMessageShown\s*=\s*false;/);
+    expect(WIDGET_SRC).toMatch(/if\s*\(\s*!freeAdQuotaMessageShown\s*\)/);
+    expect(WIDGET_SRC).toMatch(/freeAdQuotaMessageShown\s*=\s*true;/);
+  });
+
+  it('サーバのエラー本文(message)をアシスタント発言として表示する経路がある', () => {
+    expect(WIDGET_SRC).toMatch(/err\.serverMessage/);
+  });
+});
