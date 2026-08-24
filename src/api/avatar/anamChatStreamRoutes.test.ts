@@ -38,6 +38,17 @@ function makeApp(tenantId: string | null = 'carnation', requestId?: string) {
   return app;
 }
 
+// E5: この経路は RAG を介さないため本番では既定で封鎖されている。以下のテスト群は
+// 「有効化した場合の中身」を検証するものなので、明示的にフラグを立てて実行する。
+// 封鎖そのものの検証は describe('E5: RAGを介さない回答経路の封鎖') 側で行う。
+beforeEach(() => {
+  process.env.ANAM_CHAT_STREAM_ENABLED = 'true';
+});
+
+afterEach(() => {
+  delete process.env.ANAM_CHAT_STREAM_ENABLED;
+});
+
 /**
  * Groqのstreaming SSEレスポンスを模したReadableStream風オブジェクトを作る。
  * usage を渡すと、OpenAI互換のstream_options.include_usage同様、最終チャンクとして
@@ -557,5 +568,57 @@ describe('POST /api/avatar/chat-stream — gpt-oss の reasoning_effort', () => 
     // 退避後に設定が抜け落ちると、退避先で同じ無言停止が起きる
     expect(first.reasoning_effort).toBe('low');
     expect(second.reasoning_effort).toBe('low');
+  });
+});
+
+describe('E5: RAGを介さない回答経路の封鎖', () => {
+  // この経路は本体API /api/chat と違い RAG(FAQ/pgvector/learned_memory/tuning_rules)を
+  // 通さないため、有効化すると顧客に知識ゼロの回答が出る。既定は封鎖。
+  beforeEach(() => {
+    delete process.env.ANAM_CHAT_STREAM_ENABLED;
+  });
+
+  it('フラグ未設定なら 503 を返し、Groq を呼ばない', async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as any;
+
+    const res = await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '営業時間は' }], sessionId: 'sess-blocked' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('anam_chat_stream_disabled');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('封鎖時は会話ログを保存せず、課金も計上しない', async () => {
+    global.fetch = jest.fn() as any;
+    mockSaveMessage.mockClear();
+    mockTrackUsage.mockClear();
+
+    await request(makeApp())
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '営業時間は' }], sessionId: 'sess-blocked-2' });
+
+    expect(mockSaveMessage).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it("'true' 以外の値では有効にならない（1 / yes / TRUE を有効と誤読しない）", async () => {
+    for (const value of ['1', 'yes', 'TRUE', 'True', '']) {
+      process.env.ANAM_CHAT_STREAM_ENABLED = value;
+      const res = await request(makeApp())
+        .post('/api/avatar/chat-stream')
+        .send({ messages: [{ role: 'user', content: 'x' }], sessionId: 'sess-flag' });
+      expect(res.status).toBe(503);
+    }
+  });
+
+  it('未認証(401)の判定は封鎖より先に行われる', async () => {
+    const res = await request(makeApp(null))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: 'x' }] });
+
+    expect(res.status).toBe(401);
   });
 });

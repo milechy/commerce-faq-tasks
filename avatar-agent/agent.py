@@ -1,6 +1,11 @@
 """
 RAJIUCE Avatar Agent
-Groq LLM + Lemonslice Self-Managed Avatar orchestration via LiveKit Agents v1.4+.
+Lemonslice Self-Managed Avatar orchestration via LiveKit Agents v1.4+.
+
+このエージェントは回答を生成しない。本体API /api/chat が RAG(FAQ/pgvector/
+learned_memory/tuning_rules)を通して生成した応答テキストを widget から data channel
+の tts_request で受け取り、TTS 再生するだけ。ここで LLM を直接呼んで回答を作ると
+知識を通さない回答経路になるため、絶対に追加しないこと。
 
 NOTE: Silero VAD は除外（VPS に GPU/CUDA/libva-drm がないため SIGABRT でクラッシュ）。
 """
@@ -32,7 +37,6 @@ from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice import SpeechHandle
 from livekit.plugins import fishaudio
 from livekit.plugins import lemonslice
-from livekit.plugins import openai as openai_plugin
 from emotion_tags import sales_flow_emotion_prefix
 
 logger = logging.getLogger("rajiuce-avatar")
@@ -43,8 +47,10 @@ logger.info(f"[module] LIVEKIT_API_KEY={'SET' if os.environ.get('LIVEKIT_API_KEY
 logger.info(f"[module] LEMONSLICE_API_KEY={'SET' if os.environ.get('LEMONSLICE_API_KEY') else 'NOT SET'}")
 
 # --- 定数 ---
-FALLBACK_MSG = "申し訳ございません。もう一度お尋ねください。"
-
+# SYSTEM_PROMPT は Agent(instructions=...) のペルソナ設定にのみ使う。
+# このエージェントは回答を生成しない（本体API /api/chat が RAG を通して生成した
+# テキストを data channel の tts_request で受け取り、TTS 再生するだけ）ので、
+# ここから LLM を呼んで回答を作ってはいけない（知識を通さない回答経路になる）。
 SYSTEM_PROMPT = (
     "あなたはカーネーション自動車（BROSS新潟）のAI営業アシスタントです。\n"
     "以下のルールに従って、お客様に日本語で応答してください。\n\n"
@@ -151,7 +157,6 @@ def resolve_category_persona(category: object, category_persona_map: object) -> 
     return None
 
 
-# --- Groq LLM 直接呼び出し ---
 async def fetch_avatar_config(
     tenant_id: str, api_url: str, avatar_config_id: str | None = None
 ) -> tuple[dict | None, bool]:
@@ -224,77 +229,6 @@ def resolve_avatar_identity(
     return None
 
 
-async def call_groq_llm(
-    user_text: str,
-    http: aiohttp.ClientSession,
-    system_prompt: str = SYSTEM_PROMPT,
-    tenant_id: str | None = None,
-) -> str:
-    """Groq LLM を aiohttp で直接呼び出し、応答テキストを返す。"""
-    try:
-        async with http.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_text},
-                ],
-                "max_tokens": 300,
-                "temperature": 0.7,
-            },
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            if resp.status != 200:
-                logger.error(f"[Groq] error {resp.status}: {await resp.text()}")
-                return FALLBACK_MSG
-            data = await resp.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            # Phase53: トークン数を非同期レポート（fire-and-forget）
-            usage = data.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
-            if tenant_id and (prompt_tokens > 0 or completion_tokens > 0):
-                asyncio.ensure_future(
-                    _report_groq_usage(tenant_id, prompt_tokens, completion_tokens)
-                )
-            return content
-    except Exception as e:
-        logger.error(f"[Groq] exception: {e}")
-        return FALLBACK_MSG
-
-
-async def _report_groq_usage(
-    tenant_id: str, prompt_tokens: int, completion_tokens: int
-) -> None:
-    """Avatar内Groqトークン使用量をRAJIUCE APIに非同期レポート（fire-and-forget）。"""
-    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
-    try:
-        async with aiohttp.ClientSession() as http_session:
-            await http_session.post(
-                f"{api_url}/api/internal/usage",
-                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
-                json={
-                    "tenantId": tenant_id,
-                    "inputTokens": prompt_tokens,
-                    "outputTokens": completion_tokens,
-                    "model": "llama-3.3-70b-versatile",
-                    "featureUsed": "avatar",
-                },
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-        logger.debug(
-            f"[usage] Groq token usage reported: tenant={tenant_id} "
-            f"prompt={prompt_tokens} completion={completion_tokens}"
-        )
-    except Exception as e:
-        logger.warning(f"[usage] Groq token usage report failed (non-critical): {e}")
-
-
 # --- Fish Audio TTS ---
 
 async def _report_tts_usage(tenant_id: str, tts_text_bytes: int, tts_model: str) -> None:
@@ -315,33 +249,6 @@ async def _report_tts_usage(tenant_id: str, tts_text_bytes: int, tts_model: str)
 
 # LemonSlice は約24.5クレジット/分消費（料金表の割当 1000credit/41min・5400/220・15000/610 から逆算）。
 LEMONSLICE_CREDITS_PER_MINUTE = 24.5
-
-
-async def _report_avatar_transcript(
-    tenant_id: str, session_id: str, role: str, content: str
-) -> None:
-    """Phase75: legacy/fallbackパス(agent内でGroqを直接呼ぶ経路)の会話テキストを
-    RAJIUCE APIへ永続化リクエスト（fire-and-forget）。
-    LemonSlice経由の「本体API」応答パス(tts_request)はwidget側が既に
-    通常のchat APIでsaveMessage済みのため、ここでは呼ばない(二重保存防止)。
-    """
-    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
-    try:
-        async with aiohttp.ClientSession() as http_session:
-            await http_session.post(
-                f"{api_url}/api/internal/avatar-transcript",
-                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
-                json={
-                    "tenantId": tenant_id,
-                    "sessionId": session_id,
-                    "role": role,
-                    "content": content,
-                },
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-        logger.debug(f"[transcript] reported: tenant={tenant_id} role={role}")
-    except Exception as e:
-        logger.warning(f"[transcript] report failed (non-critical): {e}")
 
 
 async def _report_avatar_usage(tenant_id: str, session_ms: int) -> None:
@@ -420,14 +327,6 @@ def _compose_speak_texts(
     )
     tts_text = emotion_tags_prefix + publish_text
     return tts_text, publish_text
-
-
-# --- Groq LLM (AgentSession 用 — session.say() のコンテキスト保持に使用) ---
-groq_llm = openai_plugin.LLM(
-    model="llama-3.3-70b-versatile",
-    api_key=os.environ["GROQ_API_KEY"],
-    base_url="https://api.groq.com/openai/v1",
-)
 
 
 async def entrypoint(ctx: agents.JobContext) -> None:
@@ -543,8 +442,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # speak() が TTS 送信直前にテキスト先頭へ付与する（Widget のチャット吹き出しには漏らさない）。
     _emotion_tags_prefix = _build_emotion_tags_prefix(effective_emotion_tags)
 
+    # llm は渡さない(SDK上オプショナル)。このエージェントは回答を生成せず
+    # session.say() で TTS 再生するだけなので、LLM を持たせると「知識を通さない
+    # 回答経路」を復活させる余地になる。
     session = AgentSession(
-        llm=groq_llm,
         tts=fish_tts,
         user_away_timeout=None,
     )
@@ -632,31 +533,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except Exception as e:
             logger.error(f"[handle_tts_request] error: {e}")
 
-    async def handle_chat(user_text: str) -> None:
-        """レガシー/フォールバック: Groq LLM 直接呼び出し → session.say() でTTS再生。"""
-        try:
-            # 1. Groq LLM で応答生成（毎回新しいSessionで "Session is closed" を回避）
-            async with aiohttp.ClientSession() as http:
-                reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt, tenant_id=tenant_id)
-            logger.info(f"[Groq] reply ({len(reply)} chars): {reply!r}")
-
-            # 2. speak() で FishAudio TTS パイプラインに渡し、Data Channel にも送信
-            #    （フォールバックメッセージは publish スキップ）
-            speak(reply, publish=(reply != FALLBACK_MSG), emotion_prefix=False)
-            logger.debug(f"[say] sent to TTS: {reply!r}")
-
-            # Phase75: 会話ログ永続化(fire-and-forget)。room名をsession_idとして使う。
-            if tenant_id:
-                asyncio.ensure_future(
-                    _report_avatar_transcript(tenant_id, ctx.room.name, "user", user_text)
-                )
-                if reply != FALLBACK_MSG:
-                    asyncio.ensure_future(
-                        _report_avatar_transcript(tenant_id, ctx.room.name, "assistant", reply)
-                    )
-        except Exception as e:
-            logger.error(f"[handle_chat] error: {e}")
-
     @ctx.room.on("data_received")
     def on_data_received(data_packet):
         try:
@@ -673,12 +549,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 if text:
                     logger.info(f"[data_channel] tts_request received: {text[:80]}")
                     asyncio.create_task(handle_tts_request(text))
-            elif msg_type == "chat":
-                # レガシー/フォールバック: agent側でGroq呼び出し
-                text = msg.get("text", "").strip()
-                if text:
-                    logger.info(f"[data_channel] chat received (fallback): {text[:80]}")
-                    asyncio.create_task(handle_chat(text))
             elif msg_type == "state_change":
                 # I-4: フロー状態に応じて表情プロンプトを差し替え（fire-and-forget）
                 state = msg.get("state")
