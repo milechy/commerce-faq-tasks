@@ -75,6 +75,12 @@ const featuresSchema = z.object({
   // 行うべきものなので、super_admin用スキーマだけでなく client_admin 自己申告の
   // PATCH /v1/admin/my-tenant(下記)にも同じキーを追加している。
   hermes_raw_data_consent: z.boolean().optional(),
+  // 会話の段階引き継ぎ(SalesFlow)。dialogAgent.ts の isSalesStageContinuityEnabled が
+  // features->>'sales_stage_continuity' === "true" で読む。実装済みだがこのスキーマに
+  // 無かったため、super_admin の PATCH が zod で弾かれ **DB直更新でしか開けられなかった**。
+  // CLAUDE.md 禁止35: 会話の振る舞いを変える機能なので全テナント一斉に開けない。
+  // 運用者が開ける機能であり、client_admin 自己申告の PATCH /v1/admin/my-tenant には足さない。
+  sales_stage_continuity: z.boolean().optional(),
 });
 
 const updateTenantSchema = z.object({

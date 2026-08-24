@@ -7,10 +7,32 @@ import { authFetch, API_BASE } from "../../lib/api";
 import TuningRuleModal, {
   type TuningRule,
 } from "../tuning/TuningRuleModal";
+import type { TenantDetail, TenantFeatures } from "../../pages/admin/tenants/types";
 
 interface Props {
   tenantId: string;
   tenantName: string;
+  tenant: TenantDetail;
+  onUpdate: (t: TenantDetail) => void;
+}
+
+// 会話の段階引き継ぎ(SalesFlow)の開閉。DeepResearchTab と同じ
+// { ...currentFeatures, key } の形で PATCH する(未指定キーはサーバ側の
+// `features || $n::jsonb` マージで保持されるが、送る側でも落とさない)。
+async function updateStageContinuity(
+  tenantId: string,
+  enabled: boolean,
+  currentFeatures: TenantFeatures,
+): Promise<TenantDetail> {
+  const features: TenantFeatures = { ...currentFeatures, sales_stage_continuity: enabled };
+  const res = await authFetch(`${API_BASE}/v1/admin/tenants/${tenantId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ features }),
+  });
+  if (!res.ok) throw new Error("save_error");
+  const raw = (await res.json()) as Record<string, unknown>;
+  const json = ("tenant" in raw ? raw["tenant"] : raw) as TenantDetail;
+  return { ...json, features: json.features ?? features };
 }
 
 async function fetchRules(tenantId: string): Promise<TuningRule[]> {
@@ -34,7 +56,7 @@ async function toggleRule(id: number, is_active: boolean): Promise<void> {
   if (!res.ok) throw new Error("toggle_error");
 }
 
-export default function TenantTuningTab({ tenantId, tenantName }: Props) {
+export default function TenantTuningTab({ tenantId, tenantName, tenant, onUpdate }: Props) {
   const { isSuperAdmin } = useAuth();
   const [rules, setRules] = useState<TuningRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +64,7 @@ export default function TenantTuningTab({ tenantId, tenantName }: Props) {
   const [showModal, setShowModal] = useState(false);
   const [editTarget, setEditTarget] = useState<TuningRule | undefined>(undefined);
   const [toast, setToast] = useState<string | null>(null);
+  const [savingStage, setSavingStage] = useState(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -92,8 +115,56 @@ export default function TenantTuningTab({ tenantId, tenantName }: Props) {
 
   const tenantOptions = [{ value: tenantId, label: tenantName }];
 
+  const stageOn = tenant.features?.sales_stage_continuity === true;
+  const handleToggleStage = async () => {
+    setSavingStage(true);
+    try {
+      const updated = await updateStageContinuity(tenantId, !stageOn, tenant.features);
+      onUpdate(updated);
+      showToast(!stageOn ? "会話の流れを引き継ぐようにしました" : "会話の流れの引き継ぎを止めました");
+    } catch {
+      showToast("うまく保存できませんでした。もう一度お試しください 🙏");
+    } finally {
+      setSavingStage(false);
+    }
+  };
+
   return (
     <div style={{ position: "relative" }}>
+      {/* 会話の段階引き継ぎ。実装済みだが featuresSchema に無く、DB直更新でしか
+          開けられなかった機能を画面から開閉できるようにする。
+          お客様の会話の進み方が実際に変わるため、まず自社テナントで目視してから
+          実顧客に開くこと(CLAUDE.md 禁止35)。 */}
+      <div
+        style={{
+          marginBottom: 20, padding: "14px 18px", borderRadius: 12,
+          border: "1px solid var(--border)", background: "var(--card)",
+          display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 2 }}>会話の流れを引き継ぐ</div>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+            {stageOn
+              ? "前のやり取りを踏まえて会話が進みます。"
+              : "今は毎回ふりだしに戻ります。会話が1往復で終わる原因になります。"}
+          </div>
+        </div>
+        <button
+          onClick={() => void handleToggleStage()}
+          disabled={savingStage}
+          style={{
+            padding: "10px 20px", minHeight: 44, borderRadius: 999,
+            border: `1px solid ${stageOn ? "rgba(34,197,94,0.4)" : "#374151"}`,
+            background: stageOn ? "rgba(34,197,94,0.1)" : "transparent",
+            color: stageOn ? "#4ade80" : "#9ca3af",
+            fontSize: 13, fontWeight: 700, cursor: savingStage ? "not-allowed" : "pointer",
+            opacity: savingStage ? 0.6 : 1,
+          }}
+        >
+          {savingStage ? "保存中…" : stageOn ? "✅ 有効" : "⬜ 無効"}
+        </button>
+      </div>
       {/* トースト */}
       {toast && (
         <div
