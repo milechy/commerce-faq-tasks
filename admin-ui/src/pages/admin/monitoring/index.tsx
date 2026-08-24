@@ -19,6 +19,12 @@ interface MeasurementHealth {
   cvSessionLinkRate: RateMetric;
   outcomeRecordRate: RateMetric & { autoRecorded: number };
   validUserSessionCount: number;
+  /** super_admin のときだけ返る。コードが要求する列が実行中のDBに存在するか。 */
+  schemaHealth?: {
+    missing: Array<{ table: string; columns: string[]; tableMissing: boolean }>;
+    checkedTables: number;
+    checkedColumns: number;
+  };
 }
 
 interface MonitoringKpis {
@@ -513,6 +519,38 @@ export default function MonitoringPage() {
                 >
                   {health ? <MetricValue value={health.validUserSessionCount.toLocaleString("ja-JP")} /> : <MetricPlaceholder />}
                 </MeasurementHealthCard>
+
+                {/* スキーマ適用ズレ(R2C運用のみ)。コードは配備済みでも本番に列が無いと
+                    記録だけが無言で落ちる。2026-08-24 の visitor_id / product_* がその実例。 */}
+                {health?.schemaHealth && (
+                  <MeasurementHealthCard
+                    title="本番スキーマとコードの整合"
+                    description="コードが書き込む列が本番に存在するか（未適用のmigrationを検知する）"
+                  >
+                    {health.schemaHealth.missing.length === 0 ? (
+                      <div style={{ fontSize: 14, color: "var(--muted-foreground)" }}>
+                        欠落なし（{health.schemaHealth.checkedTables}テーブル / {health.schemaHealth.checkedColumns}列を確認）
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#f87171" }}>
+                          {health.schemaHealth.missing.length}件のテーブルで列が不足しています
+                        </div>
+                        {health.schemaHealth.missing.map((m) => (
+                          <div key={m.table} style={{ fontSize: 13, lineHeight: 1.7 }}>
+                            <code style={{ fontWeight: 700 }}>{m.table}</code>
+                            {m.tableMissing ? "（テーブルごと存在しません）" : "："}
+                            {!m.tableMissing && <code>{m.columns.join(", ")}</code>}
+                          </div>
+                        ))}
+                        <div style={{ fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+                          該当する migration を本番に適用してください。適用は人の承認が必要です。
+                          記録が無言で落ちるため、エラーログには現れません。
+                        </div>
+                      </div>
+                    )}
+                  </MeasurementHealthCard>
+                )}
               </div>
             )}
           </section>

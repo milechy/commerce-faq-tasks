@@ -20,6 +20,7 @@ import {
   userSourceExists,
 } from "./summaryQueries";
 import { fetchMeasurementHealth } from "./measurementHealth";
+import { fetchSchemaHealth } from "./schemaHealth";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -196,7 +197,11 @@ export function registerAnalyticsRoutes(app: Express): void {
 
       try {
         const response = await fetchMeasurementHealth(pool, tenantId, period);
-        return res.json(response);
+        // スキーマ整合はテナント固有ではなくR2C運用の情報なので、
+        // fetchMeasurementHealth(全クエリが tenant_id で絞られる契約)には入れず、
+        // ここで super_admin にだけ合成する。新エンドポイントは作らない。
+        const schemaHealth = isSuperAdmin ? await fetchSchemaHealth(pool) : undefined;
+        return res.json(schemaHealth ? { ...response, schemaHealth } : response);
       } catch (err) {
         logger.warn("[GET /v1/admin/analytics/measurement-health]", err);
         return res.status(500).json({ error: "計測ヘルスの取得に失敗しました" });
