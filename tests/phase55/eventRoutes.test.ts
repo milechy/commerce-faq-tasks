@@ -68,6 +68,23 @@ describe('POST /api/events', () => {
       expect(res.status).toBe(202);
       expect(res.body.accepted).toBe(1);
     });
+
+    // PR-B: 「Powered by R2C」バッジのクリック計測。第2の送信経路ではなく、
+    // 既存の behavioral_events / POST /api/events をそのまま使う（widget.js の _tracker.track 経由）。
+    it('branding_badge_click → 202 + accepted:1（既存 behavioral_events 経路をそのまま使う）', async () => {
+      const { app, mockDb } = makeApp({});
+      const res = await request(app)
+        .post('/api/events')
+        .send({
+          visitor_id: 'vid-a',
+          session_id: 'sid-a',
+          events: [{ event_type: 'branding_badge_click', event_data: { tenant_id: 'tenant-a' } }],
+        });
+
+      expect(res.status).toBe(202);
+      expect(res.body.accepted).toBe(1);
+      expect(mockDb.query).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('認証エラー', () => {

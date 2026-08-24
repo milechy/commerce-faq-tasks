@@ -10,9 +10,28 @@ import type { Express, Request, Response } from "express";
 import { Pool } from "pg";
 import { generateWidgetJs } from "./widgetGenerator";
 import { resolveAvatarAssignment } from "../conversion/avatarAbExperiment";
+import { planHasFeature } from "../../lib/billing/planFeatures";
 
 const API_BASE_URL =
   process.env.API_BASE_URL ?? "https://api.r2c.biz";
+
+// ウィジェットの「Powered by R2C」バッジの遷移先（LPトップではなく専用着地ページ）。
+// r2c.biz は admin-ui/LP と別ホストなので API_BASE_URL とは独立に持つ。
+const LP_BASE_URL = process.env.LP_BASE_URL ?? "https://r2c.biz";
+
+/**
+ * バッジのリンクURL（UTM + テナント識別子付き）を組み立てる。
+ * rel="nofollow sponsored" はリンク自体（widget.js側）に付与する。ここではURLのみ。
+ */
+function buildBadgeUrl(tenantId: string): string {
+  const params = new URLSearchParams({
+    utm_source: "widget",
+    utm_medium: "badge",
+    utm_campaign: "powered_by",
+    r2c_ref: tenantId,
+  });
+  return `${LP_BASE_URL}/lp/from-chat/?${params.toString()}`;
+}
 
 export function registerWidgetRoutes(app: Express, db: Pool | null): void {
   app.get("/widget/:tenantSlug.js", async (req: Request, res: Response) => {
@@ -25,7 +44,7 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
 
     try {
       const result = await db.query(
-        `SELECT id, is_active, features
+        `SELECT id, is_active, features, plan
          FROM tenants
          WHERE id = $1`,
         [tenantSlug]
@@ -53,6 +72,10 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
       const stickyKey = `${req.ip ?? "unknown"}:${tenant.id}`;
       const assignment = await resolveAvatarAssignment(db, tenant.id, stickyKey, defaultAvatarEnabled);
 
+      // planHasFeature は plan が null/未知/未設定のとき starter 相当に倒れる（fail-safe）ため、
+      // hide_branding を満たさない = true となりバッジは「表示する」側に自然に倒れる。
+      const showBrandingBadge = !planHasFeature(tenant.plan, "hide_branding");
+
       const js = await generateWidgetJs({
         tenantId: tenant.id,
         apiBaseUrl: API_BASE_URL,
@@ -60,6 +83,8 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
         themeColor: "#22c55e",
         abExperimentId: assignment.experimentId,
         abVariant: assignment.variant,
+        showBrandingBadge,
+        badgeUrl: buildBadgeUrl(tenant.id),
       });
 
       res.set("Content-Type", "application/javascript; charset=utf-8");

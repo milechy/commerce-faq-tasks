@@ -45,6 +45,11 @@
   var _rajiuceTenantCfg = (typeof window !== 'undefined' && window.__RAJIUCE_TENANT_CFG__) || {};
   var abExperimentId = _rajiuceTenantCfg.abExperimentId || null;
   var abVariant = _rajiuceTenantCfg.abVariant || null;
+  // 「Powered by R2C」バッジ。fail-safe: 静的 /widget.js 埋め込み等で _rajiuceTenantCfg が
+  // 空オブジェクトの場合、showBrandingBadge は undefined になり !== false で true 側に倒れる
+  // （plan判定不能時は「表示する」が安全なデフォルト）。badgeUrl が無ければ描画しない。
+  var showBrandingBadge = _rajiuceTenantCfg.showBrandingBadge !== false;
+  var badgeUrl = _rajiuceTenantCfg.badgeUrl || null;
   var _abExposureSent = false;
   var accentColor = currentScript ? (currentScript.getAttribute('data-accent-color') || '#2563eb') : '#2563eb';
   var greetingText = currentScript ? (currentScript.getAttribute('data-greeting') || 'ご質問はお気軽にどうぞ') : 'ご質問はお気軽にどうぞ';
@@ -496,6 +501,28 @@
     '  align-items: flex-end;',
     '  flex-shrink: 0;',
     '}',
+    /* 「Powered by R2C」バッジ。視覚サイズは小さく、タップ領域は padding で44px確保する */
+    '.r2c-badge {',
+    '  padding: 2px 12px;',
+    '  text-align: center;',
+    '  background: #fff;',
+    '  border-top: 1px solid #f1f5f9;',
+    '  flex-shrink: 0;',
+    '}',
+    '.r2c-badge a {',
+    '  display: inline-flex;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '  min-height: 44px;',
+    '  padding: 0 10px;',
+    '  font-size: 11px;',
+    '  color: #94a3b8;',
+    '  text-decoration: none;',
+    '  font-weight: 500;',
+    '  letter-spacing: 0.01em;',
+    '}',
+    '.r2c-badge a:hover { color: #64748b; }',
+    '.r2c-badge a:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; border-radius: 4px; }',
     'textarea {',
     '  flex: 1;',
     '  min-height: 44px;',
@@ -998,6 +1025,28 @@
   sendBtn.appendChild(SEND_SVG.cloneNode(true));
   var inputArea = el('div', { className: 'input-area', role: 'form', 'aria-label': 'メッセージ入力フォーム' }, [textarea, micBtn, sendBtn]);
   panel.appendChild(inputArea);
+
+  /* --- 「Powered by R2C」バッジ（パネル最終要素。tab順は入力欄より後） ---
+   * showBrandingBadge / badgeUrl は widgetGenerator.ts が plan 判定込みで注入する
+   * fail-safe な値（判定不能時は表示する側に倒れる）。badgeUrl が無ければ描画しない。
+   * EU AI Act 第50条の「AIと対話している」開示も兼ねる文言にする。
+   * rel="nofollow sponsored" は widget が多数のテナントサイトに配布される link scheme
+   * 対策として必須（付けないと r2c.biz 側が Google のペナルティ対象になる）。
+   * noreferrer は付けない（Referer が消えて流入計測が片肺になるため）。
+   */
+  if (showBrandingBadge && badgeUrl) {
+    var badgeLink = el('a', {
+      href: badgeUrl,
+      target: '_blank',
+      rel: 'nofollow sponsored noopener',
+      'aria-label': 'AIチャット by R2C（R2Cのサイトを新しいタブで開きます）',
+    }, 'AIチャット by R2C');
+    badgeLink.addEventListener('click', function () {
+      if (_tracker) _tracker.track('branding_badge_click', { tenant_id: tenantId });
+    });
+    var badgeRow = el('div', { className: 'r2c-badge' }, [badgeLink]);
+    panel.appendChild(badgeRow);
+  }
 
   shadow.appendChild(panel);
 

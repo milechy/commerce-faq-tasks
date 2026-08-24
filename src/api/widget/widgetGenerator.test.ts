@@ -120,3 +120,63 @@ describe("widgetGenerator — WIDGET_JWT_SECRET 分離 (B3)", () => {
     });
   });
 });
+
+describe("widgetGenerator — 「Powered by R2C」バッジ設定の注入 (PR-B)", () => {
+  const originalEnv = { ...process.env };
+
+  // javascript-obfuscator が使える(stringArray:true)と URL 文字列が符号化され
+  // toContain での検証ができなくなるため、この describe では毎回モジュールを
+  // リセットして require を失敗させ、必ず catch 節（生の configBlock + source）を通す。
+  // ファイル冒頭のコメント「obfuscator の有無に依存しない安定したテストにする」と同じ方針。
+  // 静的 import した generateWidgetJs は reset 前の古いモジュールを指したままになるため、
+  // このブロックでは各テスト内で fresh に require し直す。
+  function freshGenerateWidgetJs() {
+    jest.resetModules();
+    // virtual:true は付けない — javascript-obfuscator は実在パッケージ(devDep)であり、
+    // virtual指定はJestのモジュール解決と衝突して無視される（実モジュールが使われてしまう）。
+    jest.doMock("javascript-obfuscator", () => {
+      throw new Error("javascript-obfuscator not available in test");
+    });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (require("./widgetGenerator") as typeof import("./widgetGenerator"))
+      .generateWidgetJs;
+  }
+
+  beforeEach(() => {
+    process.env.WIDGET_JWT_SECRET = "s";
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.dontMock("javascript-obfuscator");
+    jest.resetModules();
+  });
+
+  it("showBrandingBadge / badgeUrl 未指定時は既定値(true / null)で埋め込まれる", async () => {
+    const out = await freshGenerateWidgetJs()(BASE_CONFIG);
+    expect(out).toContain("showBrandingBadge: true");
+    expect(out).toContain("badgeUrl: null");
+  });
+
+  it("showBrandingBadge: false, badgeUrl 指定時はそのまま埋め込まれる", async () => {
+    const out = await freshGenerateWidgetJs()({
+      ...BASE_CONFIG,
+      showBrandingBadge: false,
+      badgeUrl: "https://r2c.biz/lp/from-chat/?utm_source=widget&r2c_ref=tenant-a",
+    });
+    expect(out).toContain("showBrandingBadge: false");
+    expect(out).toContain(
+      '"https://r2c.biz/lp/from-chat/?utm_source=widget&r2c_ref=tenant-a"'
+    );
+  });
+
+  it("showBrandingBadge: true, badgeUrl 指定時はそのまま埋め込まれる", async () => {
+    const out = await freshGenerateWidgetJs()({
+      ...BASE_CONFIG,
+      showBrandingBadge: true,
+      badgeUrl: "https://r2c.biz/lp/from-chat/?r2c_ref=tenant-a",
+    });
+    expect(out).toContain("showBrandingBadge: true");
+    expect(out).toContain('"https://r2c.biz/lp/from-chat/?r2c_ref=tenant-a"');
+  });
+});
