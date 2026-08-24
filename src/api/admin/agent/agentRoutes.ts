@@ -107,13 +107,25 @@ const AUDITED_SETTINGS_TOOLS: Record<
     // そのまま読むと "true"(文字列)がbooleanのつもりで監査ログに残ってしまう。
     readNewValue: (args) => parseBooleanArg(args['enabled']),
   },
-  // GID 1216978677372391(PR-16, D1): tenants.features.hermes_raw_data_consent
-  // (②外部Hermes VPSへの生データ提供同意)。①自テナント内学習はこのフラグを
-  // 参照しないため対象外(src/lib/hermesConsent.ts)。
+  // GID 1216978677372391(PR-16, D1) / 共有学習プールの参加モデル S4:
+  // tenants.features.learning = {learn, share}。learn=自社内学習(外に出ない)、
+  // share=共有プール参加(外部Hermes VPSへ出る)。actionExecutor.ts の
+  // case 'set_hermes_consent' 参照。newValueは「今回引数で指定された軸のみ」を
+  // 記録する(set_widget_theme と同じ「当てた差分だけ」の考え方。旧enabled引数は
+  // shareとして解釈する後方互換)。
   set_hermes_consent: {
-    fieldName: 'features.hermes_raw_data_consent',
-    successMarker: 'Hermesへのデータ提供同意を',
-    readNewValue: (args) => parseBooleanArg(args['enabled']),
+    fieldName: 'features.learning',
+    successMarker: '学習設定を更新しました',
+    readNewValue: (args) => {
+      const learn = parseBooleanArg(args['learn']);
+      const shareRaw = parseBooleanArg(args['share']);
+      const enabled = parseBooleanArg(args['enabled']);
+      const share = shareRaw !== undefined ? shareRaw : enabled;
+      const value: Record<string, boolean> = {};
+      if (learn !== undefined) value['learn'] = learn;
+      if (share !== undefined) value['share'] = share;
+      return value;
+    },
   },
   // オンボ 是正B-2: オンボ2ツールが未登録で tenant_settings_history に一切記録されず、
   // 「各段階の到達に actor が記録される」(AC-4)が未達だった。successMarker は

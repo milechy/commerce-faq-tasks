@@ -132,3 +132,88 @@ export async function tenantHasFeature(tenantId: string, feature: GatedFeature):
   const plan = await getTenantPlan(tenantId);
   return planHasFeature(plan, feature);
 }
+
+// ---------------------------------------------------------------------------
+// S4(共有学習プールの参加モデル): プラン別の share(共有プール参加)既定値・強制。
+//
+// ★fail-safeの向きがqueryTenantPlanと反転する★
+// queryTenantPlan/getTenantPlanのfail-safe(未知・null・DB障害を free_ad に倒す)は
+// 機能ゲート(planHasFeature)にとっては正しい(free_adが最も制限が強い段だから)。
+// しかしデータ提供(share)にとっては free_ad が最も「開いている」側になる
+// (free_ad は share 強制ON)。そのため
+//   if (plan === "free_ad") share = true
+// を queryTenantPlan の結果にそのまま適用すると、DB障害や未知プランの瞬間に
+// 全テナントが強制データ共有になってしまう。
+//
+// これを避けるため、「プランが確実に free_ad と判明した」ケースと
+// 「プラン取得に失敗した／未知だった」ケースを型で区別できる
+// queryTenantPlanResult を queryTenantPlan とは別に用意する。判定不能時は
+// 強制を適用しない(share は既定OFFへ倒す)。
+// ---------------------------------------------------------------------------
+
+/**
+ * テナントの現在のプランを取得する。queryTenantPlan と異なり fail-safe に相乗りせず、
+ * 「確実に4値のいずれかと判明したか」を呼び出し側が区別できるよう null で失敗を表す。
+ *
+ * - DB例外 → null（取得失敗。free_ad と確定させない）
+ * - plan列が null / 未知の文字列 / テナント不在(rowsが空) → null（未確定）
+ * - 既知の4値のいずれか → その値
+ *
+ * queryTenantPlan(機能ゲート用。未知/null/DB障害はfree_adへ倒す)とは用途が異なるため、
+ * 実装を共有せず独立させている。共有すると片方の修正がもう片方のfail-safeの向きを
+ * 意図せず変えてしまう事故が起きやすい。
+ */
+export async function queryTenantPlanResult(
+  pool: Pick<Pool, "query">,
+  tenantId: string,
+): Promise<TenantPlan | null> {
+  try {
+    const result = await pool.query<{ plan: string | null }>(
+      `SELECT plan FROM tenants WHERE id = $1`,
+      [tenantId],
+    );
+    const plan = result.rows[0]?.plan;
+    if (plan === "free_ad" || plan === "starter" || plan === "growth" || plan === "enterprise") {
+      return plan;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// resolveShareForPlan の戻り値。「強制されているか」と「(強制でない場合の)既定値」を
+// 呼び出し側が区別できる形にする。強制されていない場合、default は常に false
+// (share は外部提供を伴うため、fail-safeとしても既定は無効側に倒す)。
+export type ShareForPlanResolution = { forced: true; value: true } | { forced: false; default: boolean };
+
+/**
+ * 「確実に判明したプラン(または未確定=null)」から、share(共有プール参加)の
+ * 既定値・強制を解決する。
+ *
+ * - plan が確実に free_ad と判明した場合のみ、強制ON({forced:true, value:true})。
+ * - plan が null(取得失敗・未知・未設定などプラン確定不能)の場合は、
+ *   free_ad 扱いにせず強制しない({forced:false, default:false})。
+ *   ★ここが本タスク最大の罠: queryTenantPlan の fail-safe(未知→free_ad)に
+ *   相乗りしてはいけない。相乗りすると DB障害時に全テナントが強制共有になる。★
+ * - starter/growth/enterprise は選択可能・既定OFF({forced:false, default:false})。
+ */
+export function resolveShareForPlan(plan: TenantPlan | null): ShareForPlanResolution {
+  if (plan === "free_ad") {
+    return { forced: true, value: true };
+  }
+  return { forced: false, default: false };
+}
+
+/**
+ * queryTenantPlanResult + resolveShareForPlan をまとめた便宜関数。
+ * 呼び出し元が独自にPoolを注入できる箇所(actionExecutor.ts等、テストのモックPoolと
+ * 食い違わせないため getPool() を直接呼ばない箇所)向け。
+ */
+export async function resolveShareForTenantPlan(
+  pool: Pick<Pool, "query">,
+  tenantId: string,
+): Promise<ShareForPlanResolution> {
+  const plan = await queryTenantPlanResult(pool, tenantId);
+  return resolveShareForPlan(plan);
+}

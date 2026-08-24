@@ -43,7 +43,7 @@ import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
-import { queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
+import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
 import { fetchAnalyticsSummary, fetchConversionSummary } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
@@ -1288,41 +1288,107 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
-    // GID 1216978677372391(PR-16, D1): データ利用同意の2階層化。
-    // ①自テナント内学習(learned_memory等)はこのフラグを一切参照せず常時ON(同意不要)。
-    // このツールが操作する tenants.features.hermes_raw_data_consent は
-    // ②外部Hermes VPSへの生データ提供の同意のみを表す(src/lib/hermesConsent.ts)。
+    // GID 1216978677372391(PR-16, D1) / 共有学習プールの参加モデル S4:
+    // データ利用同意の2軸化。
+    // ①自テナント内学習(learned_memory等)は learn が表す(データは外に出ない)。
+    // ②共有プール参加(R2C共有プールに出し、かつ読む。外部Hermes VPSへ出る)は share が表す。
+    // 新形式は tenants.features.learning = {learn, share}
+    // (src/lib/hermesConsent.ts の resolveLearningConsent が読む形と一致させる)。
+    // 旧フラグ features.hermes_raw_data_consent はここでは書かない(読み取り専用の
+    // 後方互換経路として resolveLearningConsent 側にのみ残す)。
     // 旧UI(/admin/avatar のHermesConsentToggle)は2026-10-13まで閉鎖観察中のため、
-    // 閉鎖後もチャットから同意操作ができるようにこのツールを新設する。
+    // 閉鎖後もチャットから同意操作ができるようにこのツールを新設した(コメントは新設時のまま)。
     case 'set_hermes_consent': {
-      const enabled = parseBooleanArg(args['enabled']);
-      const confirmed = isConfirmed(args['confirmed']);
+      const learnArg = parseBooleanArg(args['learn']);
+      const shareArgRaw = parseBooleanArg(args['share']);
+      // 後方互換: 旧セッションが enabled(boolean)だけを送ってくる場合は share として解釈する。
+      const enabledArg = parseBooleanArg(args['enabled']);
+      const shareArg = shareArgRaw !== undefined ? shareArgRaw : enabledArg;
 
-      if (enabled === undefined) {
-        return truncate('enabled は必須です');
+      if (learnArg === undefined && shareArg === undefined) {
+        return truncate('learn または share(もしくは旧enabled)のいずれかを指定してください');
       }
+
+      const confirmed = isConfirmed(args['confirmed']);
       if (!confirmed) {
+        const parts: string[] = [];
+        if (learnArg !== undefined) parts.push(`learn=${learnArg ? 'ON' : 'OFF'}`);
+        if (shareArg !== undefined) parts.push(`share=${shareArg ? 'ON' : 'OFF'}`);
         return truncate(
-          `外部提供の同意を${enabled ? 'ON' : 'OFF'}にするには確認が必要です。confirmed=true を指定して再度実行してください`,
+          `学習設定(${parts.join('、')})を変更するには確認が必要です。confirmed=true を指定して再度実行してください`,
         );
       }
 
       try {
-        // features は他のフラグ(avatar/voice等)も持つJSONBのため、キーだけをマージで
-        // 上書きする(set_avatar_feature / my-tenantハンドラと同じ形。他のフラグを消さない)。
+        // 指定されなかった軸は現在値を維持する。features の learning キー自体は
+        // JSONBのトップレベルマージでは部分更新できない({learn, share}を毎回フルで
+        // 書き直す必要がある)ため、先に現在値を読む。
+        // 注入済みの db を直接読む(resolveLearningConsent を呼ぶと内部で getPool() の
+        // 実Poolを使ってしまい、テストのモックPoolと食い違って汚染するため。
+        // queryTenantPlan を直接使っている activate_avatar / set_avatar_feature と同じ理由)。
+        const currentRes = await db.query<{
+          features: { learning?: unknown; hermes_raw_data_consent?: boolean } | null;
+        }>(`SELECT features FROM tenants WHERE id = $1`, [tenantId]);
+        if (currentRes.rowCount === 0) {
+          return truncate('テナントが見つかりません');
+        }
+        const currentFeatures = currentRes.rows[0]?.features ?? {};
+        const currentLearning = currentFeatures.learning;
+        const current =
+          typeof currentLearning === 'object' &&
+          currentLearning !== null &&
+          !Array.isArray(currentLearning) &&
+          typeof (currentLearning as Record<string, unknown>)['learn'] === 'boolean' &&
+          typeof (currentLearning as Record<string, unknown>)['share'] === 'boolean'
+            ? {
+                learn: (currentLearning as Record<string, unknown>)['learn'] as boolean,
+                share: (currentLearning as Record<string, unknown>)['share'] as boolean,
+              }
+            // 新形式未設定の場合の後方互換解決(learn=true固定、shareは旧フラグから)は
+            // resolveLearningConsent と同じルール(src/lib/hermesConsent.ts 参照)。
+            : { learn: true, share: currentFeatures.hermes_raw_data_consent === true };
+
+        const nextLearn = learnArg !== undefined ? learnArg : current.learn;
+        const nextShare = shareArg !== undefined ? shareArg : current.share;
+
+        // G3: learn=false かつ share=true は不整合として拒否する
+        // (learningConsentSchema の refine と同じルール。src/api/admin/tenants/routes.ts 参照)。
+        if (nextLearn === false && nextShare === true) {
+          return truncate(
+            'learn=OFF(自社内学習なし)のまま share=ON(共有プールへ提供)にはできません。' +
+              '先に learn をONにするか、share の指定を外してください',
+          );
+        }
+
+        // 広告プラン(free_ad、確実に判定できた場合のみ)は share 強制ON。
+        // ★fail-safeの向きが反転する: 判定不能(DB障害・未知プラン)時は強制しない★
+        // (src/lib/billing/planFeatures.ts の resolveShareForPlan 参照。
+        // queryTenantPlan の fail-safe=free_ad にここで相乗りすると、DB障害時に
+        // 全テナントの share=OFF操作が拒否される=実質強制ONになってしまう)。
+        if (shareArg === false) {
+          const shareForPlan = await resolveShareForTenantPlan(db, tenantId);
+          if (shareForPlan.forced) {
+            return truncate('広告プランでは共有が必須です。有料プランへの変更が必要です');
+          }
+        }
+
+        // features は他のフラグ(avatar/voice等)も持つJSONBのため、learningキーだけを
+        // マージで上書きする(set_avatar_feature / my-tenantハンドラと同じ形。
+        // 他のフラグを消さない)。
         const result = await db.query(
           `UPDATE tenants SET features = COALESCE(features, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
            WHERE id = $2
            RETURNING id`,
-          [JSON.stringify({ hermes_raw_data_consent: enabled }), tenantId],
+          [JSON.stringify({ learning: { learn: nextLearn, share: nextShare } }), tenantId],
         );
         if (result.rowCount === 0) {
           return truncate('テナントが見つかりません');
         }
         return truncate(
-          enabled
-            ? 'Hermesへのデータ提供同意をONにしました'
-            : 'Hermesへのデータ提供同意をOFFにしました',
+          `学習設定を更新しました(learn=${nextLearn ? 'ON' : 'OFF'}、share=${nextShare ? 'ON' : 'OFF'})。` +
+            (nextShare
+              ? ''
+              : ' 共有プールへの新規データ提供は今後止まりますが、提供済みのデータは取り消せません'),
         );
       } catch (err) {
         logger.warn('[actionExecutor] set_hermes_consent failed', err);

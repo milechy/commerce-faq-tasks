@@ -445,6 +445,15 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     `/api/avatar/chat-stream`。前者は本番発火0件のまま廃止済みモデルを指し続けていた（E5で撤去）。
     後者は既定で 503 に封鎖（`ANAM_CHAT_STREAM_ENABLED`）。**封鎖を外すなら先に知識経路を通すこと。**
     ガード: `avatar-agent/test_no_rag_free_answer_path.py`。
+47. **共有プールの読み取り権を同意と紐付けずに配る／出す(share)と読む(共有プール参照)を別フラグにする。**
+    共有学習プールの参加モデルでは「出す」と「読む」を1つの `share` 同意に統合する
+    （出すだけ同意して読み放題、読むだけ同意して提供義務なし、を作らない）。
+    プラン別の強制（free_ad は share 強制ON、有料プランは既定OFF・選択可）を実装する際も、
+    fail-safe の向きに注意する: プラン取得の「失敗」を `free_ad` の「確定」として扱うと、
+    DB障害の瞬間に全テナントが強制データ共有になる（`src/lib/billing/planFeatures.ts` の
+    `resolveShareForPlan` / `queryTenantPlanResult` 参照。判定不能時は強制しない）。
+    ガード: `tests/phase38/globalRuleGate.test.ts`（S3で追加予定。本ブランチ時点では未存在）。
+    根拠: 要件のX1/X2。
 
 ## テストの最低ライン
 

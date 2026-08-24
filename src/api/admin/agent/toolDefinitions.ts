@@ -365,27 +365,42 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'set_hermes_consent',
       description:
-        '外部Hermes VPS(社外の分析エージェント)への会話ログ生データ提供の同意をON/OFFする。' +
-        'これは「①自テナント内での学習(常時ON、同意不要)」とは別の、' +
-        '「②社外へのデータ提供」専用の同意であり、このツールが操作するのは②のみ。' +
-        'ONにすると翌日以降、貴社の会話ログ(QA AI・アバターの応答)に加え、その会話に至るまでの' +
-        'ページ閲覧履歴・流入元(URLのパス部分。検索語や会員IDなどのクエリ文字列は除く)が' +
-        'Hermes VPSでの分析対象になる。' +
-        'OFFにすると以降の新規データ提供は止まるが、それまでに提供済みのデータは取り消せない。' +
+        '共有学習プールへの参加同意(2軸)をON/OFFする。' +
+        'learn=自社内学習の同意(自テナントの会話から自テナント用に学習する。データは外に出ない)。' +
+        'share=共有プール参加の同意(R2C共有プールに出し、かつ読む。外部Hermes VPSへ出る)。' +
+        'shareをONにすると、貴社の会話ログ・行動データが外部Hermes VPSでの分析対象になる' +
+        '代わりに、他社の学びも使えるようになる。' +
+        'shareをOFFにすると以降の新規データ提供は止まるが、それまでに提供済みのデータは取り消せない。' +
+        'learn=false かつ share=true(自社が学ばないのに他社へ出す)は矛盾するため指定できない。' +
+        '広告プラン(free_ad)ではshareが強制ONのため、shareをOFFにする指定は拒否され理由が返る' +
+        '(有料プランへの変更が必要)。' +
+        '後方互換: 旧引数 enabled(boolean)が来た場合は share の指定として解釈する。' +
         'confirmed=true の場合のみ実行される。',
       parameters: {
         type: 'object',
         properties: {
+          learn: {
+            type: 'boolean',
+            description: '自社内学習(learn)の同意。true でON、false でOFF。省略時は現在の値を維持する',
+          },
+          share: {
+            type: 'boolean',
+            description:
+              '共有プール参加(share)の同意。true でON、false でOFF。省略時は現在の値を維持する' +
+              '（旧引数 enabled が指定された場合はそちらを share として使う）',
+          },
           enabled: {
             type: 'boolean',
-            description: 'true で外部提供の同意をON、false でOFF(同意取消)にする',
+            description:
+              '非推奨・後方互換用。share と同じ意味(true で外部提供の同意をON、false でOFF)。' +
+              '新規にはshareを使うこと',
           },
           confirmed: {
             type: 'boolean',
             description: '変更確認フラグ（true でのみ実行）',
           },
         },
-        required: ['enabled', 'confirmed'],
+        required: ['confirmed'],
       },
     },
   },

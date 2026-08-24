@@ -6,7 +6,15 @@ jest.mock("../db", () => ({
   getPool: () => ({ query: mockQuery }),
 }));
 
-import { planHasFeature, getTenantPlan, tenantHasFeature, tenantPlanCache } from "./planFeatures";
+import {
+  planHasFeature,
+  getTenantPlan,
+  tenantHasFeature,
+  tenantPlanCache,
+  queryTenantPlanResult,
+  resolveShareForPlan,
+  resolveShareForTenantPlan,
+} from "./planFeatures";
 
 describe("planHasFeature", () => {
   it.each([
@@ -208,5 +216,117 @@ describe("getTenantPlan TTLキャッシュ", () => {
     expect(await getTenantPlan("tenant-x")).toBe("starter");
     expect(await getTenantPlan("tenant-y")).toBe("enterprise");
     expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S4(共有学習プールの参加モデル): queryTenantPlanResult / resolveShareForPlan
+//
+// ★このタスク最大の罠のテスト★
+// queryTenantPlan の fail-safe(未知/null/DB障害 → free_ad)に share の強制ロジックが
+// 相乗りすると、DB障害の瞬間に全テナントが強制データ共有になる。
+// queryTenantPlanResult は queryTenantPlan とは独立に「確実に判明したか」を
+// null で区別して返し、resolveShareForPlan は null(判定不能)を free_ad として
+// 扱わないことを固定する。
+// ---------------------------------------------------------------------------
+
+describe("queryTenantPlanResult", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("既知の4値はそのまま返す", async () => {
+    for (const plan of ["free_ad", "starter", "growth", "enterprise"] as const) {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      expect(await queryTenantPlanResult({ query: mockQuery }, "tenant-a")).toBe(plan);
+    }
+  });
+
+  it("plan列がnullの場合は null(未確定。free_adに確定させない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: null }] });
+    expect(await queryTenantPlanResult({ query: mockQuery }, "tenant-a")).toBeNull();
+  });
+
+  it("未知のplan文字列の場合は null(未確定。free_adに確定させない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "typo-plan" }] });
+    expect(await queryTenantPlanResult({ query: mockQuery }, "tenant-a")).toBeNull();
+  });
+
+  it("テナントが存在しない場合(rowsが空)は null", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await queryTenantPlanResult({ query: mockQuery }, "nonexistent")).toBeNull();
+  });
+
+  it("★DB障害(reject)時は null(free_adに確定させない。queryTenantPlanと違いfree_adへ倒さない)★", async () => {
+    mockQuery.mockRejectedValueOnce(new Error("db down"));
+    expect(await queryTenantPlanResult({ query: mockQuery }, "tenant-a")).toBeNull();
+  });
+});
+
+describe("resolveShareForPlan", () => {
+  it("free_ad確定 → 強制ON({forced:true, value:true})", () => {
+    expect(resolveShareForPlan("free_ad")).toEqual({ forced: true, value: true });
+  });
+
+  it.each(["starter", "growth", "enterprise"] as const)(
+    "%s → 強制なし・既定OFF({forced:false, default:false})",
+    (plan) => {
+      expect(resolveShareForPlan(plan)).toEqual({ forced: false, default: false });
+    },
+  );
+
+  it("★判定不能(null)の場合は強制しない。free_ad扱いで強制ONにしない★", () => {
+    expect(resolveShareForPlan(null)).toEqual({ forced: false, default: false });
+    // free_ad確定の場合(forced:true)とは明確に異なる結果であることを対比で固定する。
+    expect(resolveShareForPlan(null)).not.toEqual(resolveShareForPlan("free_ad"));
+  });
+});
+
+describe("resolveShareForTenantPlan(queryTenantPlanResult + resolveShareForPlanの結合)", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("free_ad確定テナント → 強制ON", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "free_ad" }] });
+    expect(await resolveShareForTenantPlan({ query: mockQuery }, "tenant-a")).toEqual({
+      forced: true,
+      value: true,
+    });
+  });
+
+  it.each(["starter", "growth", "enterprise"] as const)(
+    "%sテナント → 強制なし・既定OFF",
+    async (plan) => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      expect(await resolveShareForTenantPlan({ query: mockQuery }, "tenant-a")).toEqual({
+        forced: false,
+        default: false,
+      });
+    },
+  );
+
+  it("★DB障害時 → 強制を適用せず share=OFF相当({forced:false})。free_ad扱いで強制ONにしない★", async () => {
+    mockQuery.mockRejectedValueOnce(new Error("db down"));
+    expect(await resolveShareForTenantPlan({ query: mockQuery }, "tenant-a")).toEqual({
+      forced: false,
+      default: false,
+    });
+  });
+
+  it("★plan列がnull → 同上(強制ONにしない)★", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: null }] });
+    expect(await resolveShareForTenantPlan({ query: mockQuery }, "tenant-a")).toEqual({
+      forced: false,
+      default: false,
+    });
+  });
+
+  it("★プランが未知の文字列 → 同上(強制ONにしない)★", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "typo-plan" }] });
+    expect(await resolveShareForTenantPlan({ query: mockQuery }, "tenant-a")).toEqual({
+      forced: false,
+      default: false,
+    });
   });
 });
