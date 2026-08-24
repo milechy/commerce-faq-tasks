@@ -14,8 +14,11 @@ interface MinimalLogger {
 }
 
 // プラン倍率: Stripe に報告する数量に乗じる（リクエスト課金 × プラン別単価）。
-// admin-ui PLAN_OPTIONS と一致（Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
+// admin-ui PLAN_OPTIONS と一致（Free(広告表示) ×0 / Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
+// free_ad の 0 は原価をR2Cが負担する広告原資プランであることを表す。
+// `?? 1.0` は null/undefined のみを捕捉するため 0 はそのまま通る(0が満額請求にすり替わらない)。
 export const PLAN_MULTIPLIERS: Record<string, number> = {
+  free_ad: 0,
   starter: 1.0,
   growth: 1.5,
   enterprise: 2.5,

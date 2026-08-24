@@ -132,7 +132,9 @@ describe("useAuth — tenantPlan", () => {
     expect(vi.mocked(authFetch)).not.toHaveBeenCalled();
   });
 
-  it("plan未設定(undefined)時はstarterにフォールバックする", async () => {
+  // free_ad プラン追加(PR-C)に伴い、fail-safeの落とし先を最も制限の強い free_ad へ
+  // 変更した(starterへ「昇格」させない。サーバ側 queryTenantPlan と同じ思想)。
+  it("plan未設定(undefined)時はfree_adにフォールバックする(starterへは昇格しない)", async () => {
     mockGetSession.mockResolvedValue(CLIENT_ADMIN_SESSION());
     vi.mocked(authFetch).mockReturnValueOnce(mockOk({}));
 
@@ -143,7 +145,7 @@ describe("useAuth — tenantPlan", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("probe").textContent).toContain("plan=starter");
+      expect(screen.getByTestId("probe").textContent).toContain("plan=free_ad");
     });
   });
 

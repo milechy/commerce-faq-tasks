@@ -13,20 +13,26 @@ jest.mock('stripe', () => {
 import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits } from './stripeSync';
 
 describe('planMultiplier', () => {
-  it('プラン別の倍率を返す（Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
+  it('プラン別の倍率を返す（Free(広告表示) 0 / Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
+    expect(planMultiplier('free_ad')).toBe(0);
     expect(planMultiplier('starter')).toBe(1.0);
     expect(planMultiplier('growth')).toBe(1.5);
     expect(planMultiplier('enterprise')).toBe(2.5);
   });
 
-  it('null / undefined / 未知のプランは Starter 扱い（1.0）でフォールバック', () => {
+  // 意図的な非対称性: queryTenantPlan 等のエンタイトルメント判定は fail-safe で
+  // 最も制限の強い free_ad へ倒すが、課金倍率の未知時フォールバックは逆に
+  // starter(1.0)のまま変更しない。plan不明時に 0 へ倒すと請求漏れ(取りっぱぐれ)の
+  // リスクになるため、「機能を隠す」側は最も厳しく、「請求額」側は取りすぎる方向に
+  // 倒すのが安全(過剰請求は問い合わせで発覚するが、請求漏れは気づけない)。
+  it('null / undefined / 未知のプランは Starter 扱い（1.0）でフォールバックし続ける(free_adへは倒さない)', () => {
     expect(planMultiplier(null)).toBe(1.0);
     expect(planMultiplier(undefined)).toBe(1.0);
     expect(planMultiplier('unknown-plan')).toBe(1.0);
   });
 
-  it('PLAN_MULTIPLIERS は admin-ui PLAN_OPTIONS と同一の3プランを持つ', () => {
-    expect(Object.keys(PLAN_MULTIPLIERS).sort()).toEqual(['enterprise', 'growth', 'starter']);
+  it('PLAN_MULTIPLIERS は admin-ui PLAN_OPTIONS と同一の4プランを持つ', () => {
+    expect(Object.keys(PLAN_MULTIPLIERS).sort()).toEqual(['enterprise', 'free_ad', 'growth', 'starter']);
   });
 });
 

@@ -28,6 +28,16 @@ describe("planHasFeature", () => {
     ["starter", "hide_branding", false],
     ["growth", "hide_branding", true],
     ["enterprise", "hide_branding", true],
+    // free_ad(starterより下の最下段)はどのゲートも通らない
+    ["free_ad", "avatar", false],
+    ["free_ad", "voice_clone", false],
+    ["free_ad", "analytics", false],
+    ["free_ad", "conversion", false],
+    ["free_ad", "deep_research", false],
+    ["free_ad", "premium_avatar", false],
+    ["free_ad", "sai_task", false],
+    ["free_ad", "pre_dispatch", false],
+    ["free_ad", "hide_branding", false],
   ] as const)("%s プランで %s = %s", (plan, feature, expected) => {
     expect(planHasFeature(plan, feature)).toBe(expected);
   });
