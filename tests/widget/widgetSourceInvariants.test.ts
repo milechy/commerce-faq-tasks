@@ -328,3 +328,42 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
     });
   });
 });
+
+// S5a(「D1・D5決定案」): 消費者向けデータ共有開示バナー
+describe('public/widget.js — S5a データ共有開示バナー', () => {
+  it('consent-banner は非表示で作成される(displayをnoneで初期化)', () => {
+    const idx = WIDGET_SRC.indexOf("className: 'consent-banner'");
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 200);
+    expect(block).toMatch(/consentBanner\.style\.display = 'none';/);
+  });
+
+  it('data_shared_externally かつ 未同意のときだけバナーを表示する(event_trackingとは独立)', () => {
+    // answer_feedback と同じく event_tracking の早期returnより前で評価されていること
+    // (event_tracking=falseのテナントでも開示が必要なため)。
+    const earlyReturnIdx = WIDGET_SRC.indexOf('if (!cfg.event_tracking) return;');
+    expect(earlyReturnIdx).toBeGreaterThan(-1);
+    const before = WIDGET_SRC.slice(Math.max(0, earlyReturnIdx - 300), earlyReturnIdx);
+    expect(before).toMatch(/cfg\.data_shared_externally\s*&&\s*!hasConsentAck\(\)/);
+  });
+
+  it('同意はテナントごとにlocalStorageへ記録し、以後は表示しない(hasConsentAck)', () => {
+    expect(WIDGET_SRC).toMatch(/function hasConsentAck\(\)\s*\{[\s\S]{0,150}localStorage\.getItem\(consentAckKey\(\)\)/);
+    expect(WIDGET_SRC).toMatch(/function consentAckKey\(\)\s*\{[\s\S]{0,80}tenantId/);
+  });
+
+  it('同意ボタンのクリックでバナーを閉じ、localStorageに記録する', () => {
+    const idx = WIDGET_SRC.indexOf('consentAckBtn.addEventListener');
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 250);
+    expect(block).toMatch(/consentBanner\.style\.display = 'none';/);
+    expect(block).toMatch(/localStorage\.setItem\(consentAckKey\(\), '1'\);/);
+  });
+
+  it('セキュリティ原則: 開示バナーもinnerHTMLを使わずel()/createElementで構築している', () => {
+    const idx = WIDGET_SRC.indexOf("className: 'consent-banner'");
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(Math.max(0, idx - 500), idx + 100);
+    expect(block).not.toMatch(/\.innerHTML\s*=/);
+  });
+});

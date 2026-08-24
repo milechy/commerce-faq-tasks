@@ -15,7 +15,7 @@ function extractRouteBody(): string {
   const start = SRC.indexOf("app.get('/api/widget/features'");
   expect(start).toBeGreaterThan(-1);
   // 次のルート登録までを本体とみなす(十分な余白)
-  return SRC.slice(start, start + 1200);
+  return SRC.slice(start, start + 1500);
 }
 
 describe('GET /api/widget/features ソース不変条件', () => {
@@ -43,8 +43,22 @@ describe('GET /api/widget/features ソース不変条件', () => {
 
   it('DBクエリ失敗時(catch節)も既定ONを維持する', () => {
     const body = extractRouteBody();
-    const catchBlock = body.match(/\} catch \{[\s\S]{0,150}\}/);
+    const catchBlock = body.match(/\} catch \{[\s\S]{0,260}\}/);
     expect(catchBlock).not.toBeNull();
     expect(catchBlock![0]).toMatch(/answer_feedback:\s*true/);
+  });
+
+  it('S5a: data_shared_externally を全ての応答経路(正常系/フォールバック2箇所)で返している', () => {
+    const body = extractRouteBody();
+    // 正常系: resolveLearningConsentFromFeatures の share をそのまま使う
+    expect(body).toMatch(/data_shared_externally:\s*resolveLearningConsentFromFeatures\(features,\s*\{\s*tenantId\s*\}\)\.share/);
+    // db/tenantId不明フォールバック
+    const fallback = body.match(/if \(!db \|\| !tenantId\) \{[\s\S]{0,120}\}/);
+    expect(fallback).not.toBeNull();
+    expect(fallback![0]).toMatch(/data_shared_externally:\s*false/);
+    // catch節フォールバック。falseで固定(fail-safe: DB障害時に「外に出ている」と誤表示しない)。
+    const catchBlock = body.match(/\} catch \{[\s\S]{0,260}\}/);
+    expect(catchBlock).not.toBeNull();
+    expect(catchBlock![0]).toMatch(/data_shared_externally:\s*false/);
   });
 });

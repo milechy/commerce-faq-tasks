@@ -53,6 +53,7 @@ import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
 import { initFlowLogger } from "./lib/analytics/flowLogger";
+import { resolveLearningConsentFromFeatures } from "./lib/hermesConsent";
 import { reportUsageToStripe } from "./lib/billing/stripeSync";
 import { pipelineQueue } from "./lib/book-pipeline/pipelineQueue";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
@@ -674,7 +675,7 @@ registerHermesMcpRoutes(app);
 app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: express.Response) => {
   const tenantId: string = (req as any).tenantId ?? '';
   if (!db || !tenantId) {
-    return res.json({ event_tracking: false });
+    return res.json({ event_tracking: false, data_shared_externally: false });
   }
   void recordWidgetSeenOnce(db, tenantId);
   try {
@@ -689,10 +690,16 @@ app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: e
       // (機能追加時は既定OFFにする既存の慣習に対し、本件は「教師信号を
       // 増やす」ことが目的で、テナントが積極的にOFFを選ぶ場合だけ切る設計)。
       answer_feedback: features.answer_feedback !== false,
+      // S5a(「D1・D5決定案」): 共有学習プールへの参加(share)がONのテナントは、
+      // 会話ログが外部Hermes VPSへ送られる。ウィジェット側で消費者向け開示バナーを
+      // 出す判定に使う。プラン(free_ad等)ではなく実際にデータが外に出る条件(share)
+      // そのもので判定する(resolveLearningConsentFromFeaturesと優先順位を共有)。
+      data_shared_externally: resolveLearningConsentFromFeatures(features, { tenantId }).share,
     });
   } catch {
     // フラグ取得に失敗した場合も既定ONを維持する(D1: 出さない方が例外)。
-    return res.json({ event_tracking: false, answer_feedback: true });
+    // data_shared_externally は fail-safeでfalse(resolveLearningConsentと同じ向き)。
+    return res.json({ event_tracking: false, answer_feedback: true, data_shared_externally: false });
   }
 });
 
