@@ -683,9 +683,16 @@ app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: e
       [tenantId],
     );
     const features = result.rows[0]?.features ?? {};
-    return res.json({ event_tracking: !!features.event_tracking });
+    return res.json({
+      event_tracking: !!features.event_tracking,
+      // 決定D1: 未設定は「出す」(既定ON)。event_tracking とは極性が逆
+      // (機能追加時は既定OFFにする既存の慣習に対し、本件は「教師信号を
+      // 増やす」ことが目的で、テナントが積極的にOFFを選ぶ場合だけ切る設計)。
+      answer_feedback: features.answer_feedback !== false,
+    });
   } catch {
-    return res.json({ event_tracking: false });
+    // フラグ取得に失敗した場合も既定ONを維持する(D1: 出さない方が例外)。
+    return res.json({ event_tracking: false, answer_feedback: true });
   }
 });
 

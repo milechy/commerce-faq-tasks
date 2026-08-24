@@ -416,6 +416,38 @@
     '  color: #1e293b;',
     '  border-radius: 18px 18px 18px 4px;',
     '}',
+    // 要件K-6: 購入・相談導線より視覚的に弱く置く(CVを邪魔しない)。
+    // タップ領域は44px以上を確保しつつ、見た目は控えめにする。
+    '.feedback-row {',
+    '  display: flex;',
+    '  gap: 4px;',
+    '  margin-top: 2px;',
+    '}',
+    // box-sizing: border-box 前提(グローバルリセット済み)。
+    // 見た目は小さく(24pxのグリフ領域)保ちつつ、実タップ領域は
+    // 透明パディングで44x44を確保する(視覚サイズとタップ領域を分離)。
+    '.feedback-btn {',
+    '  width: 44px;',
+    '  height: 44px;',
+    '  padding: 0;',
+    '  border: none;',
+    '  background: transparent;',
+    '  border-radius: 8px;',
+    '  font-size: 14px;',
+    '  line-height: 1;',
+    '  opacity: 0.45;',
+    '  cursor: pointer;',
+    '  margin: -10px -6px;',
+    '}',
+    '.feedback-btn:hover { opacity: 0.75; }',
+    '.feedback-btn.active { opacity: 1; background-color: rgba(0,0,0,0.06); }',
+    '.escalate-btn.feedback-hint {',
+    '  animation: r2c-feedback-pulse 1.2s ease-in-out 2;',
+    '}',
+    '@keyframes r2c-feedback-pulse {',
+    '  0%, 100% { box-shadow: none; }',
+    '  50% { box-shadow: 0 0 0 3px rgba(59,130,246,0.35); }',
+    '}',
     '.msg-wrapper.operator { justify-content: flex-start; }',
     '.bubble.operator {',
     '  background-color: #dcfce7;',
@@ -1121,6 +1153,12 @@
   var _fabRestored = false; // closePanel後の非同期resetFabIcon呼び出しを防ぐフラグ
   var isLoading = false;
   var messages = [];
+  // E3a/E3b: お客様の回答評価(👍👎)。教師信号(要件Rj/決定D1)。
+  // サーバ側フラグの既定はON。fetch失敗時もD1の既定(出す)を維持する。
+  var _answerFeedbackEnabled = true;
+  // メッセージid -> 'up'|'down'。連打や複数クリックは最後の1つに収束させる
+  // (behavioral_eventsは追記専用なので、表示上の見た目をここで確定させる)。
+  var _feedbackGiven = {};
   // free_adプランの月次上限案内(403 plan_upgrade_required)を1会話(このウィジェット
   // インスタンスの生存期間)につき1回だけ表示するためのフラグ。
   // CLAUDE.md 絶対にやってはいけないこと11: 同一会話で繰り返さない。
@@ -2362,6 +2400,43 @@
     if (pipIdleDisconnectTimer) { clearTimeout(pipIdleDisconnectTimer); pipIdleDisconnectTimer = null; }
   }
 
+  // AI回答ごとの評価行(👍👎)を組み立てる。bubbleの兄弟要素として呼ばれる。
+  function buildFeedbackRow(messageRef) {
+    var given = _feedbackGiven[messageRef];
+    var row = el('div', { className: 'feedback-row' });
+
+    function makeBtn(rating, glyph, ariaLabel) {
+      var active = given === rating;
+      var btn = el('button', {
+        type: 'button',
+        className: 'feedback-btn' + (active ? ' active' : ''),
+        'aria-label': ariaLabel,
+        'aria-pressed': active ? 'true' : 'false',
+      });
+      btn.textContent = glyph;
+      btn.addEventListener('click', function () {
+        // 連打・複数クリックは最後の1つに収束させる(表示も送信も)。
+        if (_feedbackGiven[messageRef] === rating) return;
+        _feedbackGiven[messageRef] = rating;
+        sendAnswerFeedback(messageRef, rating);
+        renderMessages();
+        if (rating === 'down') {
+          // I-10相当: 👎の後は有人相談への導線を示す。会話を切らず、
+          // 既存の相談ボタンを一瞬強調するだけ(state/文言は変更しない)。
+          try {
+            escalateBtn.classList.add('feedback-hint');
+            setTimeout(function () { escalateBtn.classList.remove('feedback-hint'); }, 2400);
+          } catch (_e) {}
+        }
+      });
+      return btn;
+    }
+
+    row.appendChild(makeBtn('up', '👍', '役に立った'));
+    row.appendChild(makeBtn('down', '👎', '役に立たなかった'));
+    return row;
+  }
+
   function renderMessages() {
     // R0-②: エスカレーションボタンは会話開始前(空セッション)では無効。
     // scriptedモード/Anamクライアント側LLM/通常の/api/chatのいずれの経路で
@@ -2428,6 +2503,11 @@
         }
       } else {
         inner.appendChild(bubble);
+      }
+      // 要件Rj/F5: AI回答テキストと構造的に分離したDOM(禁止40)。
+      // bubble/actions/ts の兄弟要素として追加し、textContentの一部にしない。
+      if (msg.role === 'assistant' && !msg.system && _answerFeedbackEnabled) {
+        inner.appendChild(buildFeedbackRow(msg.id));
       }
       var ts = el('div', { className: 'ts' });
       ts.textContent = formatTime(msg.timestamp);
@@ -2910,6 +2990,7 @@
               role: 'assistant',
               content: err.serverMessage || '今月のご利用可能回数の上限に達しました。プランのアップグレードについては、サイト運営者にお問い合わせください。',
               timestamp: Date.now(),
+              system: true, // 実際のAI回答ではないため評価対象にしない
             });
           }
           return;
@@ -2974,6 +3055,7 @@
       role: 'assistant',
       content: 'スタッフにおつなぎしています。少々お待ちください。',
       timestamp: Date.now(),
+      system: true, // 実際のAI回答ではないため評価対象にしない
     });
     renderMessages();
     startEscalatePolling();
@@ -3603,6 +3685,7 @@
       role: 'assistant',
       content: rule.message_template,
       timestamp: Date.now(),
+      system: true, // ルール発火の声がけであり質問への回答ではないため評価対象にしない
     };
     messages.push(proactiveMsg);
     renderMessages();
@@ -3621,6 +3704,9 @@
     })
       .then(function (r) { return r.ok ? r.json() : { event_tracking: false }; })
       .then(function (cfg) {
+        // event_tracking(行動計測全般)とは独立した機能なので、
+        // event_tracking が無効でもここは先に評価する。
+        if (cfg.answer_feedback === false) _answerFeedbackEnabled = false;
         if (!cfg.event_tracking) return;
         _tracker = new EventTracker(apiKey, apiBase);
         _tracker.start();
@@ -3700,6 +3786,36 @@
   }
 
   // ─── R2C Conversion Tracking API ─────────────────────────────────────────
+  // お客様の回答評価(👍👎)を送信する。trackConversion と同じ独立パターンにする理由:
+  // event_tracking が無効なテナントでも answer_feedback は別フラグで動くため、
+  // _tracker(EventTrackerインスタンス)の有無に依存できない。
+  function sendAnswerFeedback(messageRef, rating) {
+    var visitorId = '';
+    var sessionId = '';
+    try { visitorId = localStorage.getItem('r2c_vid') || ''; } catch (_e) {}
+    try { sessionId = sessionStorage.getItem('r2c_sid') || ''; } catch (_e) {}
+
+    var payload = {
+      visitor_id: visitorId || 'unknown',
+      session_id: sessionId || 'unknown',
+      chat_session_id: conversationId,
+      events: [{
+        event_type: 'answer_feedback',
+        event_data: { rating: rating, message_ref: messageRef },
+        page_url: location.href,
+        referrer: document.referrer
+      }]
+    };
+
+    // keepalive: true — I-11(評価直後にページを閉じる)でも取りこぼさない。
+    fetch(apiBase + '/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify(payload),
+      keepalive: true
+    }).catch(function () { /* fire-and-forget: 評価UIの見た目は既に確定済み */ });
+  }
+
   // パートナーが購入完了ページ等で呼び出す: window.r2c.trackConversion('purchase', 50000)
   window.r2c = window.r2c || {};
   window.r2c.trackConversion = function(conversionType, conversionValue) {
