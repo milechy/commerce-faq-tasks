@@ -6,6 +6,8 @@ G2(要件定義v1.3): アバター応答レイテンシ計測の回帰テスト�
 切り出した純関数(DB・LiveKit・LLMに一切触れない)。
 """
 
+import asyncio
+import logging
 import os
 from types import SimpleNamespace
 
@@ -106,3 +108,57 @@ def test_tenant_id_none_is_handled():
     line = agent.format_g2_latency_log(ev, None, "room-abc")
     assert line is not None
     assert "tenant=None" in line
+
+
+class _FakeSpeechHandle:
+    """SpeechHandle の最小フェイク(wait_for_playout + chat_items のみ)。"""
+
+    def __init__(self, chat_items, raise_on_wait=False):
+        self._chat_items = chat_items
+        self._raise_on_wait = raise_on_wait
+
+    @property
+    def chat_items(self):
+        return self._chat_items
+
+    async def wait_for_playout(self):
+        if self._raise_on_wait:
+            raise RuntimeError("interrupted before playout")
+
+
+def _item(role="assistant", metrics=None):
+    return SimpleNamespace(role=role, metrics=metrics if metrics is not None else {})
+
+
+def test_log_g2_reply_wait_logs_computed_value(caplog):
+    """speak()呼び出し1回にスコープを閉じた計測: 共有stateを使わないため、
+    フィラー等の別ターンの reply_arrived_at を誤って使い回すことがない
+    (共有state版で reply_wait_s が負値になる形で実測時に発覚, 2026-08-24)。"""
+    handle = _FakeSpeechHandle([_item(metrics={"started_speaking_at": 1001.0})])
+    with caplog.at_level(logging.INFO, logger="rajiuce-avatar"):
+        asyncio.run(agent._log_g2_reply_wait(handle, 1000.0, "r2c_default", "room-abc"))
+    assert any("reply_wait_s=1.0" in r.message for r in caplog.records)
+
+
+def test_log_g2_reply_wait_skips_non_assistant_items(caplog):
+    handle = _FakeSpeechHandle([_item(role="user", metrics={"started_speaking_at": 1001.0})])
+    with caplog.at_level(logging.INFO, logger="rajiuce-avatar"):
+        asyncio.run(agent._log_g2_reply_wait(handle, 1000.0, "r2c_default", "room-abc"))
+    assert not any("G2-latency" in r.message for r in caplog.records)
+
+
+def test_log_g2_reply_wait_skips_when_started_speaking_at_missing(caplog):
+    handle = _FakeSpeechHandle([_item(metrics={})])
+    with caplog.at_level(logging.INFO, logger="rajiuce-avatar"):
+        asyncio.run(agent._log_g2_reply_wait(handle, 1000.0, "r2c_default", "room-abc"))
+    assert not any("G2-latency" in r.message for r in caplog.records)
+
+
+def test_log_g2_reply_wait_does_not_raise_when_wait_for_playout_fails(caplog):
+    """interrupt()されたspeech handleでも音声パイプラインを止めない(例外を握り潰す)。"""
+    handle = _FakeSpeechHandle(
+        [_item(metrics={"started_speaking_at": 1001.0})], raise_on_wait=True
+    )
+    with caplog.at_level(logging.INFO, logger="rajiuce-avatar"):
+        asyncio.run(agent._log_g2_reply_wait(handle, 1000.0, "r2c_default", "room-abc"))
+    assert any("reply_wait_s=1.0" in r.message for r in caplog.records)

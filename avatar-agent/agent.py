@@ -481,6 +481,42 @@ def format_g2_latency_log(
     )
 
 
+async def _log_g2_reply_wait(
+    handle: SpeechHandle,
+    reply_arrived_at: float,
+    tenant_id: str | None,
+    room_name: str,
+) -> None:
+    """G2: speak()呼び出し1回にスコープを閉じて reply_wait_s を計測する。
+
+    conversation_item_added(グローバルハンドラ)と違い、この関数は呼び出し元の
+    speak()が返した SpeechHandle 自身の chat_items だけを見るため、フィラーや
+    別ターンの reply_arrived_at を誤って使い回すことがない(共有state版で
+    reply_wait_s が負値になる形で実測時に発覚, 2026-08-24)。
+    計測が失敗しても音声パイプラインには一切影響しない(再生済みのhandleを
+    待つだけで、speak()の戻り値やTTS本体には触れない)。
+    """
+    try:
+        await handle.wait_for_playout()
+    except Exception:
+        pass
+    try:
+        for item in handle.chat_items:
+            if getattr(item, "role", None) != "assistant":
+                continue
+            m = getattr(item, "metrics", None) or {}
+            started_speaking_at = m.get("started_speaking_at")
+            if started_speaking_at is None:
+                continue
+            reply_wait = started_speaking_at - reply_arrived_at
+            logger.info(
+                f"[G2-latency] tenant={tenant_id} room={room_name} reply_wait_s={reply_wait}"
+            )
+            break
+    except Exception as e:
+        logger.warning(f"[G2-latency] reply_wait log failed (non-fatal): {e}")
+
+
 async def entrypoint(ctx: agents.JobContext) -> None:
     # 子プロセスでも確実に再ロード
     for _c in [_here / ".env", _here.parent / ".env"]:
@@ -600,9 +636,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
-    # G2(要件定義v1.3): 応答テキスト到着時刻の一時計測。役目を終えたら削除する。
-    _g2_state: dict = {"reply_arrived_at": None}
-
     # G2(要件定義v1.3): アバターの応答レイテンシを実測し、知識連動(RAG)の
     # 実現方式を決めるための一時的な計測。手動でタイムスタンプを打つのではなく、
     # livekit-agents 1.6.7 が ChatMessage.metrics として公式に収集している値を読む
@@ -610,15 +643,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # ChatMessage.metrics が代替として明示されている)。
     # 計測が失敗しても音声パイプラインを絶対に止めない(try/exceptで握り潰す)。
     # 役目を終えたら削除する一時コードであることを明示しておく。
+    #
+    # reply_wait_s は意図的にここでは出さない: conversation_item_added はフィラー/
+    # 挨拶などの assistant ターンにも発火するため、グローバルな1スロットで
+    # reply_arrived_at を共有すると別ターンの値を誤って使い回す(実測でreply_wait_s
+    # が負値になる形で発覚, 2026-08-24)。reply_wait_s は speak() 呼び出し1回に
+    # スコープを閉じた _log_g2_reply_wait() 側でのみ計測する。
     @session.on("conversation_item_added")
     def on_conversation_item_added(ev) -> None:
         try:
-            reply_arrived_at = _g2_state["reply_arrived_at"]
-            log_line = format_g2_latency_log(ev, tenant_id, ctx.room.name, reply_arrived_at)
+            log_line = format_g2_latency_log(ev, tenant_id, ctx.room.name)
             if log_line:
                 logger.info(log_line)
-                # 次のターンに前ターンの到着時刻を誤って使い回さないようにする
-                _g2_state["reply_arrived_at"] = None
         except Exception as e:
             logger.warning(f"[G2-latency] failed to log metrics (non-fatal): {e}")
 
@@ -664,6 +700,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         publish: bool,
         emotion_prefix: bool,
         allow_interruptions: bool | None = None,
+        reply_arrived_at: float | None = None,
     ) -> SpeechHandle:
         """発話の唯一の入口。emotion prefix 適用・課金計上・Data Channel publish を一元化する。
 
@@ -671,6 +708,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         歓迎メッセージのチャット履歴欠落バグ（agent_reply 未送出）を起こした。
         emotion_tags（テナントDB設定）は _emotion_tags_prefix で TTS 音声にのみ適用し、
         Widget のチャット吹き出しには漏らさない（旧 FishAudioTTS.synthesize() の挙動を踏襲）。
+
+        reply_arrived_at: G2(要件定義v1.3)の一時計測。本体APIの応答テキストが
+        届いた時刻を渡すと、このspeak()呼び出し1回にスコープを閉じた形で
+        reply_wait_s(応答到着→発話開始)をログに出す。フィラー等では渡さない。
         """
         tts_text, publish_text = _compose_speak_texts(
             text,
@@ -686,13 +727,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
         if publish:
             asyncio.create_task(_publish_agent_reply(publish_text))
+        if reply_arrived_at is not None:
+            asyncio.create_task(
+                _log_g2_reply_wait(handle, reply_arrived_at, tenant_id, ctx.room.name)
+            )
         return handle
 
     async def handle_tts_request(reply_text: str) -> None:
         """本体APIの応答テキストをそのままTTSに渡す（Groq呼び出しなし）。"""
         try:
             # G2: 応答テキストがこの関数に届いた時刻を記録(speak()より前)。
-            _g2_state["reply_arrived_at"] = time.time()
+            g2_reply_arrived_at = time.time()
             # thinking_start フィラーが再生中なら interrupt して本来の発話に切り替える
             fh = _filler_state["handle"]
             if fh is not None:
@@ -703,7 +748,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _filler_state["handle"] = None
             prefix = sales_flow_emotion_prefix(_sales_state["current"])
             logger.info(f"[tts_request] TTS直渡し state={_sales_state['current']!r} prefix={prefix!r} ({len(reply_text)} chars): {reply_text[:80]!r}")
-            speak(reply_text, publish=False, emotion_prefix=True)
+            speak(reply_text, publish=False, emotion_prefix=True, reply_arrived_at=g2_reply_arrived_at)
         except Exception as e:
             logger.error(f"[handle_tts_request] error: {e}")
 
@@ -715,11 +760,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt, tenant_id=tenant_id)
             logger.info(f"[Groq] reply ({len(reply)} chars): {reply!r}")
             # G2: 応答テキストが確定した時刻を記録(speak()より前)。
-            _g2_state["reply_arrived_at"] = time.time()
+            g2_reply_arrived_at = time.time()
 
             # 2. speak() で FishAudio TTS パイプラインに渡し、Data Channel にも送信
             #    （フォールバックメッセージは publish スキップ）
-            speak(reply, publish=(reply != FALLBACK_MSG), emotion_prefix=False)
+            speak(
+                reply,
+                publish=(reply != FALLBACK_MSG),
+                emotion_prefix=False,
+                reply_arrived_at=g2_reply_arrived_at,
+            )
             logger.debug(f"[say] sent to TTS: {reply!r}")
 
             # Phase75: 会話ログ永続化(fire-and-forget)。room名をsession_idとして使う。
