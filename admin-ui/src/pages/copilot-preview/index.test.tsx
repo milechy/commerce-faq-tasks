@@ -4362,6 +4362,17 @@ describe("CopilotPreviewPage — コンポーザへのPDFドラッグ＆ドロ�
     await waitFor(() => expect(screen.getByLabelText("実際の操作 1件")).toBeTruthy());
   });
 
+  // 禁止13の回帰: useAuth の isSuperAdmin は previewMode 中 false に落ちるため、
+  // 表示条件に isSuperAdmin を使うと R2C 運用者自身から機能が消える。
+  // canUploadBookPdf は生の user.role を見ているのでここが緑であり続けること。
+  it("previewMode中のsuper_adminでも📎とフッタ文言が消えない", async () => {
+    await readyPage(SUPER_ADMIN_IN_PREVIEW);
+
+    expect(screen.getByLabelText("PDFを添付")).toBeTruthy();
+    expect(document.querySelector('input[type="file"]')).toBeTruthy();
+    expect(screen.getByText(/PDFはここへドラッグ＆ドロップできます/)).toBeTruthy();
+  });
+
   it("📎ボタンからでも同じ取り込みができる(ドラッグできない環境向け)", async () => {
     await readyPage(SUPER_ADMIN_IN_PREVIEW);
 
@@ -4476,11 +4487,30 @@ describe("CopilotPreviewPage — PDF取り込みのR2C運用限定ガード(clie
     expect(screen.queryByText(/確認が必要です|確認をスキップできません/)).toBeNull();
   });
 
-  it("client_adminが📎ボタンから選んでも同様に断る", async () => {
+  // 旧: 「📎から選んでも断る」。CLAUDE.md 禁止44(押せるのに何も起きないUIを置かない)により、
+  // client_admin には 📎 とファイル入力そのものを出さない方針へ変更した。
+  // 「選んでから断られる」体験自体が無くなったので、非表示を固定する。
+  it("client_adminには📎ボタンもファイル入力も描画されない", async () => {
     await readyPage();
 
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [makeFile("料金表.pdf", "application/pdf")] } });
+    expect(screen.queryByLabelText("PDFを添付")).toBeNull();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  it("client_adminにはD&Dを宣伝するフッタ文言を出さない", async () => {
+    await readyPage();
+
+    expect(screen.queryByText(/PDFはここへドラッグ＆ドロップできます/)).toBeNull();
+    // 接続状態の案内自体は残す(空白にしない)
+    expect(screen.getByText(/実際の R2Cエージェントに接続されています/)).toBeTruthy();
+  });
+
+  // 受け皿(onDrop)は残す。外すとブラウザ既定動作でPDFが開かれ、会話ごとページを離脱する。
+  // 誤ってドロップされた場合に丁寧に断る挙動は上のテストで固定済み。
+  it("宣伝を消してもドロップの受け皿は残っている(ブラウザ既定の離脱を防ぐ)", async () => {
+    await readyPage();
+
+    dropFiles([makeFile("料金表.pdf", "application/pdf")]);
 
     expect(await screen.findByText("PDFを受け取れませんでした")).toBeTruthy();
     expect(MockXHR.instances.length).toBe(0);
