@@ -16,6 +16,7 @@ import {
   updateRule,
   getActiveRulesForTenant,
   buildTuningPromptSection,
+  GLOBAL_RULE_VISIBILITY_WHERE,
   type TuningRule,
 } from './tuningRulesRepository';
 import { getRuleEffect } from '../analytics/ruleEffect';
@@ -26,11 +27,14 @@ describe('listRules', () => {
     mockQuery.mockResolvedValue({ rows: [] });
   });
 
-  it('tenantId指定・filtersなし → 従来通りWHERE tenant_id/global のみ、引数は[tenantId]', async () => {
+  // S3(GID 1217769376950104): 管理UI一覧も回答経路(getActiveRulesForTenant)と
+  // 同じ述語(GLOBAL_RULE_VISIBILITY_WHERE)でフィルタする方針にした
+  // (share=OFF のテナントに「効かないルール」を一覧に出さない)。
+  it('tenantId指定・filtersなし → WHERE句にGLOBAL_RULE_VISIBILITY_WHEREが使われ、引数は[tenantId]', async () => {
     await listRules('tenant-abc');
 
     const [sql, args] = mockQuery.mock.calls[0];
-    expect(sql).toContain("tenant_id = $1 OR tenant_id = 'global'");
+    expect(sql).toContain(GLOBAL_RULE_VISIBILITY_WHERE);
     expect(sql).not.toContain('source =');
     expect(sql).not.toContain('status =');
     expect(args).toEqual(['tenant-abc']);
@@ -315,6 +319,241 @@ describe('getActiveRulesForTenant', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toMatch(/SELECT[\s\S]*approved_responses/);
+  });
+
+  // S3(GID 1217769376950104): 回答経路にDBラウンドトリップを追加しない(1クエリ内の
+  // EXISTS相関サブクエリで share 同意判定する)。バインドは tenantId のみ([tenantId])。
+  it('WHERE句にGLOBAL_RULE_VISIBILITY_WHEREが使われ、バインドはtenantId 1つのみ(追加クエリなし)', async () => {
+    await getActiveRulesForTenant('tenant-abc');
+
+    const [sql, args] = mockQuery.mock.calls[0];
+    expect(sql).toContain(GLOBAL_RULE_VISIBILITY_WHERE);
+    expect(args).toEqual(['tenant-abc']);
+  });
+
+  it('DB障害時: getActiveRulesForTenantはrejectする(呼び出し元 synthesisTool.ts:219 が.catch(()=>[])で拾い、global行を含め何も返さない側に倒す)', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('db down'));
+    await expect(getActiveRulesForTenant('tenant-abc')).rejects.toThrow('db down');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3(GID 1217769376950104 / 要件§6 X1・X2 / 受け入れ G1・E4・E9・E10):
+// global ルール可視性の挙動テスト。
+//
+// globalRuleGate.test.ts(機械ガード)とは別に必須。ここでは pool.query を
+// 「実際に渡されたSQL文字列を見て判定を変えるフェイク」に差し替える。
+// これにより、述語を GLOBAL_RULE_VISIBILITY_WHERE(EXISTS...tenants t...)経由から
+// 生の "tenant_id = $1 OR tenant_id = 'global'" に戻すと、下記の挙動テストが
+// 実際に赤くなる(噛み確認)。単純に固定の rows を返すだけのモックでは
+// 「渡したSQLの中身」を無視してしまい、この退行を検出できないため。
+// ---------------------------------------------------------------------------
+describe('S3: global ルール可視性の挙動テスト', () => {
+  type TenantFixture = {
+    learning?: { learn: boolean; share: boolean };
+    hermes_raw_data_consent?: boolean;
+  };
+
+  function makeGlobalTestRule(overrides: Partial<TuningRule> = {}): TuningRule {
+    return {
+      id: 1,
+      tenant_id: 'tenant-abc',
+      trigger_pattern: 'x',
+      expected_behavior: 'y',
+      priority: 0,
+      is_active: true,
+      created_by: null,
+      source_message_id: null,
+      created_at: '',
+      updated_at: '',
+      ...overrides,
+    };
+  }
+
+  /**
+   * pool.query を「渡されたSQL文字列に EXISTS(...tenants t...) 述語が含まれるか」で
+   * 挙動を分岐するフェイクに差し替える。
+   * - 述語を経由している(isGated=true): fixture.tenants の share 判定(hermesConsent.ts と
+   *   同じ優先順位: features.learning があればそちらを優先、無ければ旧フラグ)に従って
+   *   global 行の有無を決める。
+   * - 述語を経由していない(isGated=false, 生SQLへ後退した場合): global 行は常に含む
+   *   (=旧脆弱挙動の再現。噛み確認でこの分岐に落ちることを確認する)。
+   */
+  function installFakePool(fixture: { tuningRules: TuningRule[]; tenants: Record<string, TenantFixture | undefined> }) {
+    mockQuery.mockReset();
+    mockQuery.mockImplementation((sql: string, args: unknown[]) => {
+      const tenantId = args[0] as string | undefined;
+      const isGated = /EXISTS\s*\(\s*SELECT 1 FROM tenants t/.test(sql);
+      const tenantRow = tenantId ? fixture.tenants[tenantId] : undefined;
+      const shareGranted =
+        tenantRow !== undefined &&
+        (tenantRow.learning !== undefined
+          ? tenantRow.learning.share === true
+          : tenantRow.hermes_raw_data_consent === true);
+
+      const rows = fixture.tuningRules
+        .filter((r) => {
+          if (r.tenant_id === tenantId) return true;
+          if (r.tenant_id === 'global') {
+            if (!isGated) return true; // 生SQL: 無条件にglobalを返す(脆弱)
+            return shareGranted; // 述語経由: share同意が無ければ返さない
+          }
+          return false;
+        })
+        // 実SQLのORDER BY(global を後ろ、各グループ内 priority DESC)を模す
+        .slice()
+        .sort((a, b) => {
+          const aGlobal = a.tenant_id === 'global' ? 1 : 0;
+          const bGlobal = b.tenant_id === 'global' ? 1 : 0;
+          if (aGlobal !== bGlobal) return aGlobal - bGlobal;
+          return b.priority - a.priority;
+        });
+
+      return Promise.resolve({ rows });
+    });
+  }
+
+  const FIXTURE_RULES: TuningRule[] = [
+    makeGlobalTestRule({ id: 1, tenant_id: 'tenant-abc', trigger_pattern: '自テナント', priority: 5 }),
+    makeGlobalTestRule({ id: 2, tenant_id: 'global', trigger_pattern: 'global高優先', priority: 10 }),
+    makeGlobalTestRule({ id: 3, tenant_id: 'global', trigger_pattern: 'global低優先', priority: 1 }),
+  ];
+
+  it('share=ON のテナント: global + 自テナントの両方が返り、ORDER(globalを後ろ)が維持される', async () => {
+    installFakePool({
+      tuningRules: FIXTURE_RULES,
+      tenants: { 'tenant-abc': { learning: { learn: true, share: true } } },
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    expect(rows.map((r) => r.id)).toEqual([1, 2, 3]); // 自テナント→global(priority降順)
+  });
+
+  it('share=OFF のテナント: 自テナントのみが返り、global が1行も混ざらない(G1)', async () => {
+    installFakePool({
+      tuningRules: FIXTURE_RULES,
+      tenants: { 'tenant-abc': { learning: { learn: true, share: false } } },
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    expect(rows.map((r) => r.id)).toEqual([1]);
+    expect(rows.some((r) => r.tenant_id === 'global')).toBe(false);
+  });
+
+  it('旧フラグのみ(hermes_raw_data_consent=true, learning未設定): global が返る(後方互換)', async () => {
+    installFakePool({
+      tuningRules: FIXTURE_RULES,
+      tenants: { 'tenant-abc': { hermes_raw_data_consent: true } },
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    expect(rows.map((r) => r.id)).toEqual([1, 2, 3]);
+  });
+
+  it('旧フラグがfalse(hermes_raw_data_consent=false, learning未設定): global が返らない', async () => {
+    installFakePool({
+      tuningRules: FIXTURE_RULES,
+      tenants: { 'tenant-abc': { hermes_raw_data_consent: false } },
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    expect(rows.map((r) => r.id)).toEqual([1]);
+  });
+
+  it('新形式が優先される: learning.share=false かつ旧フラグ=true でも global は返らない', async () => {
+    installFakePool({
+      tuningRules: FIXTURE_RULES,
+      tenants: { 'tenant-abc': { learning: { learn: true, share: false }, hermes_raw_data_consent: true } },
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    expect(rows.map((r) => r.id)).toEqual([1]);
+  });
+
+  it('テナント行が存在しないtenantId: 自テナントのルールは返るが、global は返らない(fail-closed)', async () => {
+    installFakePool({
+      tuningRules: FIXTURE_RULES,
+      tenants: {}, // tenant-abc の行が無い
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    expect(rows.map((r) => r.id)).toEqual([1]);
+    expect(rows.some((r) => r.tenant_id === 'global')).toBe(false);
+  });
+
+  it('share を ON→OFF に切り替えた直後: 次のクエリから global が返らない', async () => {
+    const fixture = {
+      tuningRules: FIXTURE_RULES,
+      tenants: { 'tenant-abc': { learning: { learn: true, share: true } } } as Record<string, TenantFixture | undefined>,
+    };
+    installFakePool(fixture);
+
+    const before = await getActiveRulesForTenant('tenant-abc');
+    expect(before.some((r) => r.tenant_id === 'global')).toBe(true);
+
+    // share を OFF に切り替え(同じ fixture オブジェクトを書き換えて即時反映)
+    fixture.tenants['tenant-abc'] = { learning: { learn: true, share: false } };
+
+    const after = await getActiveRulesForTenant('tenant-abc');
+    expect(after.some((r) => r.tenant_id === 'global')).toBe(false);
+  });
+
+  it('global ルールが多数(200件)でも黙って切らない(LIMIT等での暗黙の打ち切りが無い)', async () => {
+    const manyGlobalRules: TuningRule[] = Array.from({ length: 200 }, (_, i) =>
+      makeGlobalTestRule({ id: 100 + i, tenant_id: 'global', trigger_pattern: `g${i}`, priority: i }),
+    );
+    installFakePool({
+      tuningRules: [makeGlobalTestRule({ id: 1, tenant_id: 'tenant-abc' }), ...manyGlobalRules],
+      tenants: { 'tenant-abc': { learning: { learn: true, share: true } } },
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    expect(rows).toHaveLength(201); // 自テナント1件 + global 200件、暗黙の打ち切りなし
+  });
+
+  // 噛み確認そのもの: このテストファイル内のフェイクpoolは「渡されたSQLにEXISTS述語が
+  // 含まれるか」で挙動を変えるため、実装側が述語を生SQLへ後退させると isGated=false に
+  // 落ち、share=OFFでもglobalが混ざるようになる(=下記のような結果になり、上記
+  // 'share=OFFのテナント...' のテストが実際に赤くなる)。この事実をコメントで明示する。
+  it('(ドキュメント用) 生SQL相当(isGated=false)をシミュレートすると share=OFF でも global が混ざる', async () => {
+    mockQuery.mockReset();
+    mockQuery.mockImplementation((_sql: string, args: unknown[]) => {
+      const tenantId = args[0] as string;
+      // 生SQL: tenant_id = $1 OR tenant_id = 'global' 相当(share判定なし)
+      const rows = FIXTURE_RULES.filter((r) => r.tenant_id === tenantId || r.tenant_id === 'global');
+      return Promise.resolve({ rows });
+    });
+
+    const rows = await getActiveRulesForTenant('tenant-abc');
+    // share=OFFのはずが global が漏れる = これが本タスクで塞ぐ脆弱性そのもの
+    expect(rows.some((r) => r.tenant_id === 'global')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listRules も同じ述語でフィルタする(本タスクの既定方針)。
+// share=OFF のテナントに「効かないルール」を一覧に出すのは「押せるのに何も
+// 起きないUI」の禁止に触れるため、getActiveRulesForTenant と同じ可視性にする。
+// ---------------------------------------------------------------------------
+describe('S3: listRules も同じ可視性判定を使う(管理UI一覧)', () => {
+  it('share=OFF のテナントの一覧には global ルールが出ない(押せるのに何も起きないUIを作らない)', async () => {
+    mockQuery.mockReset();
+    mockQuery.mockImplementation((sql: string, args: unknown[]) => {
+      const tenantId = args[0] as string;
+      const isGated = /EXISTS\s*\(\s*SELECT 1 FROM tenants t/.test(sql);
+      // このテストの fixture では share=false
+      const rows = [
+        { id: 1, tenant_id: tenantId },
+        ...(isGated ? [] : [{ id: 2, tenant_id: 'global' }]),
+      ];
+      return Promise.resolve({ rows });
+    });
+
+    const rows = await listRules('tenant-abc');
+    expect(rows.some((r) => r.tenant_id === 'global')).toBe(false);
+    // 実装がGLOBAL_RULE_VISIBILITY_WHERE(EXISTS述語)を使っていること自体もSQLで確認する
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain(GLOBAL_RULE_VISIBILITY_WHERE);
   });
 });
 

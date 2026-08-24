@@ -101,7 +101,10 @@ describe("synthesizeAnswer — variant選択(真のsticky)", () => {
     expect(result.variantName).toBe("積極版");
 
     // JOIN で chat_sessions.session_id を絞り込んでいることを確認する
-    const tenantsCall = query.mock.calls.find(([sql]) => sql.includes("FROM tenants"));
+    // S3(共有学習プールの参加モデル): tuning_rules クエリの EXISTS 述語にも
+    // "FROM tenants" という部分文字列が含まれるようになったため、実際の
+    // variant取得クエリだけに現れる "system_prompt_variants" で区別する。
+    const tenantsCall = query.mock.calls.find(([sql]) => sql.includes("system_prompt_variants"));
     expect(tenantsCall![0]).toContain("LEFT JOIN chat_sessions");
     expect(tenantsCall![1]).toEqual(["tenant-1", "sess-sticky-1"]);
   });
@@ -182,7 +185,10 @@ describe("synthesizeAnswer — variant選択(真のsticky)", () => {
     });
 
     expect(["variant_a", "variant_b"]).toContain(result.variantId);
-    const tenantsCall = query.mock.calls.find(([sql]) => sql.includes("FROM tenants"));
+    // S3(共有学習プールの参加モデル): tuning_rules クエリの EXISTS 述語にも
+    // "FROM tenants" という部分文字列が含まれるようになったため、実際の
+    // variant取得クエリだけに現れる "system_prompt_variants" で区別する。
+    const tenantsCall = query.mock.calls.find(([sql]) => sql.includes("system_prompt_variants"));
     expect(tenantsCall![0]).not.toContain("chat_sessions");
   });
 

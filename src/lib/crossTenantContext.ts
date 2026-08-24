@@ -8,6 +8,14 @@
 //   - 集計値（平均・件数・比率）のみを返す
 // キャッシュ: 1時間TTL のインメモリキャッシュ（DB負荷最小化）
 // エラー: 全クエリ失敗時は空コンテキストを返す（silent fail）
+//
+// 共有学習プールS3(GID 1217769376950104)スコープ対象外の理由:
+// このファイルは tuning_rules を一切読まず、tenant_id='global' 判定の
+// GLOBAL_RULE_VISIBILITY_WHERE(tuningRulesRepository.ts)の対象にもならない。
+// conversation_evaluations 等からの匿名集計(平均・件数・比率)のみを返し、
+// tenant_id・会話内容・faq_embeddings に一切触れない設計(上記PII除去ルール参照)。
+// 「global を読む箇所」として塞ぎ忘れていると誤解されないよう、対象外である理由を
+// ここに明記する(S3タスクの噛み確認で確認済み)。
 
 import { pool } from './db';
 import { logger } from './logger';

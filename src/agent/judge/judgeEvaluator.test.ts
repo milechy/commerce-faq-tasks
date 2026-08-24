@@ -44,6 +44,7 @@ import { getPool } from '../../lib/db';
 import { readFile } from 'fs/promises';
 import { evaluateSession, SessionNotFoundError, SessionTenantMismatchError, SessionTooShortError, SessionAlreadyEvaluatedError } from './judgeEvaluator';
 import { sendRewardSignal } from '../openclaw/rewardBridge';
+import { GLOBAL_RULE_VISIBILITY_WHERE } from '../../api/admin/tuning/tuningRulesRepository';
 
 const mockCallGroq = callGeminiJudge as jest.MockedFunction<typeof callGeminiJudge>;
 const mockGetPool = getPool as jest.MockedFunction<typeof getPool>;
@@ -143,11 +144,12 @@ describe('evaluateSession', () => {
     expect(result!.stage_progress_score).toBe(75);
     expect(result!.taboo_violation_score).toBe(90);
 
-    // tuning_rules SELECT (call index 2) must include the 'global' shared-tenant fallback
-    // so judge evaluates against the same rule set runtime applies (tenant + global)
+    // tuning_rules SELECT (call index 2) must use the same GLOBAL_RULE_VISIBILITY_WHERE
+    // predicate as runtime (tuningRulesRepository) so judge evaluates against the same
+    // rule set (tenant + share同意済みなら global) — S3(GID 1217769376950104)
     const tuningSelectCall = mockPool.query.mock.calls[2]!;
     expect(tuningSelectCall[0]).toContain('tuning_rules');
-    expect(tuningSelectCall[0]).toMatch(/tenant_id = \$1\s+OR\s+tenant_id = 'global'/);
+    expect(tuningSelectCall[0]).toContain(GLOBAL_RULE_VISIBILITY_WHERE);
 
     // INSERT was called with tenant_id and session_id (index 3 after Phase60-A tuning_rules SELECT)
     const insertCall = mockPool.query.mock.calls[3]!;

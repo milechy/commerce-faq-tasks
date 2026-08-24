@@ -49,6 +49,58 @@ export interface ListRulesFilters {
   status?: string;
 }
 
+// ---------------------------------------------------------------------------
+// 共有学習プール S3(要件§6 X1・X2 / 受け入れ G1・E4・E9・E10): global ルール可視性判定
+// ---------------------------------------------------------------------------
+
+/**
+ * global(tenant_id='global') な tuning_rules 行を「読んでよいか」の判定述語。
+ *
+ * S1/S2までは「共有プールに出す」側(hermesConsent.ts の share フラグ)だけが同意で
+ * 絞られ、「読む」側は無条件に全テナントが global 行の恩恵を受けていた。出す側だけ
+ * 絞ると「参加しない」ことが常に得なテナントの最適戦略になり、差別化が成立しない
+ * ため、読み取り側にも hermesConsent.ts の resolveLearningConsent と同じ share
+ * 判定を適用する(このコメント末尾の優先順位の再現)。
+ *
+ * バインド変数は $1 = tenantId 固定。呼び出し側は tenantId を必ずクエリの $1 に
+ * 置くこと(listRules / getActiveRulesForTenant / judgeEvaluator.ts で共通)。
+ *
+ * 1クエリで完結させるため EXISTS 相関サブクエリで表現する(回答経路にDBラウンド
+ * トリップを追加しない)。対象テナント行が存在しない、または share が真でなければ
+ * EXISTS が false になり global 行は返らない(fail-closed)。
+ *
+ * SQL述語の優先順位は hermesConsent.ts の listHermesConsentingTenantIds と同一にする
+ * (新形式 features.learning.share を優先し、features.learning が未設定の場合のみ
+ * 旧フラグ features.hermes_raw_data_consent にフォールバック):
+ *   (features->'learning'->>'share') = 'true'
+ *      OR (
+ *           (features->'learning') IS NULL
+ *           AND (features->>'hermes_raw_data_consent') = 'true'
+ *         )
+ *
+ * ★この述語はここ1箇所だけで定義する(コピーして各所に書かない)。★
+ * ★tenants テーブルのエイリアスは t に固定する★。エイリアスを引数化すると
+ * tests/phase38/globalRuleGate.test.ts の正規表現検査(alias t を要求)が
+ * 空振りする(PR #896 で FAQ_VISIBILITY_WHERE のエイリアスを固定した際と同じ理由)。
+ */
+export const GLOBAL_RULE_VISIBILITY_WHERE = `(
+        tenant_id = $1
+        OR (
+          tenant_id = 'global'
+          AND EXISTS (
+            SELECT 1 FROM tenants t
+             WHERE t.id = $1
+               AND (
+                 (t.features->'learning'->>'share') = 'true'
+                 OR (
+                      (t.features->'learning') IS NULL
+                      AND (t.features->>'hermes_raw_data_consent') = 'true'
+                    )
+               )
+          )
+        )
+      )`;
+
 export interface CreateRuleParams {
   tenant_id: string;
   trigger_pattern: string;
@@ -78,15 +130,20 @@ export interface UpdateRuleParams {
 
 /**
  * ルール一覧取得。
- * - tenantId 指定: そのテナント + global のルールを返す
- * - tenantId 未指定 (super_admin): 全ルールを返す
+ * - tenantId 指定: そのテナントのルール + (S3) share 同意済みなら global のルールも返す
+ *   (GLOBAL_RULE_VISIBILITY_WHERE 参照。share=OFF のテナントには global 行を出さない)
+ * - tenantId 未指定 (super_admin): 全ルールを返す(share の有無に関わらず全件)
  * - ORDER: tenant_id = 'global' を後ろ、各グループ内で priority DESC
  */
 export async function listRules(tenantId?: string, filters?: ListRulesFilters): Promise<TuningRule[]> {
   const pool = getPool();
 
   const args: unknown[] = tenantId ? [tenantId] : [];
-  const conditions: string[] = tenantId ? ["(tenant_id = $1 OR tenant_id = 'global')"] : [];
+  // S3(GID 1217769376950104): 管理UI一覧も同じ述語でフィルタする方針(既定方針を採用)。
+  // share=OFF のテナントに「効かないルール(global)」を一覧に出すのは
+  // 「押せるのに何も起きないUI」の禁止に触れるため、share を ON にすれば
+  // global 行が現れる、という素直な挙動にする(PR本文に理由を記載)。
+  const conditions: string[] = tenantId ? [GLOBAL_RULE_VISIBILITY_WHERE] : [];
   if (filters?.source) {
     // R6: 配列(複数source)なら ANY、単一文字列なら従来通り = で絞り込む
     if (Array.isArray(filters.source)) {
@@ -133,6 +190,8 @@ export async function listRules(tenantId?: string, filters?: ListRulesFilters): 
 /**
  * アクティブなルールをテナント用に取得（RAG / プロンプト注入向け）。
  * テナント固有ルールを先に、次に global ルール、各グループ内で priority DESC。
+ * S3: global ルールは GLOBAL_RULE_VISIBILITY_WHERE により share 同意済みテナントのみ
+ * 返る(1クエリ内の EXISTS 相関サブクエリで判定。追加のDBラウンドトリップなし)。
  */
 export async function getActiveRulesForTenant(
   tenantId: string,
@@ -144,7 +203,7 @@ export async function getActiveRulesForTenant(
             priority, is_active, created_by, source_message_id,
             created_at, updated_at, approved_responses
      FROM tuning_rules
-     WHERE (tenant_id = $1 OR tenant_id = 'global')
+     WHERE ${GLOBAL_RULE_VISIBILITY_WHERE}
        AND is_active = true
      ORDER BY
        CASE WHEN tenant_id = 'global' THEN 1 ELSE 0 END ASC,
