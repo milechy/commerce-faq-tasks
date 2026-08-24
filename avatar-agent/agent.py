@@ -430,6 +430,38 @@ groq_llm = openai_plugin.LLM(
 )
 
 
+def format_g2_latency_log(ev, tenant_id: str | None, room_name: str) -> str | None:
+    """G2(要件定義v1.3): アバターの応答レイテンシを実測するための一時計測。
+
+    conversation_item_added イベントから assistant ターンの ChatMessage.metrics
+    (livekit-agents 1.6.7 が公式に収集する e2e_latency/llm_node_ttft/tts_node_ttfb/
+    playback_latency)を読み、ログ1行に整形する。手動でタイムスタンプを打つより
+    フレームワーク計測を使う方が正確で壊れにくい
+    (session.on("metrics_collected") は本バージョンで非推奨、ChatMessage.metrics が代替)。
+
+    役目を終えたら(G2実測完了・方式決定後)削除する一時コードであることを明示しておく。
+    計測が失敗しても呼び出し側(entrypoint)が音声パイプラインを止めないよう、
+    例外はここでは投げず None を返すに留める(呼び出し側の try/except は保険)。
+
+    戻り値: ログに出す1行。計測値が無いターン(会話開始直後の挨拶等)は None。
+    """
+    item = getattr(ev, "item", None)
+    if getattr(item, "role", None) != "assistant":
+        return None
+    m = getattr(item, "metrics", None) or {}
+    e2e = m.get("e2e_latency")
+    ttft = m.get("llm_node_ttft")
+    ttfb = m.get("tts_node_ttfb")
+    playback = m.get("playback_latency")
+    if e2e is None and ttft is None and ttfb is None:
+        return None
+    return (
+        f"[G2-latency] tenant={tenant_id} room={room_name} "
+        f"e2e_latency_s={e2e} llm_ttft_s={ttft} tts_ttfb_s={ttfb} "
+        f"playback_latency_s={playback}"
+    )
+
+
 async def entrypoint(ctx: agents.JobContext) -> None:
     # 子プロセスでも確実に再ロード
     for _c in [_here / ".env", _here.parent / ".env"]:
@@ -548,6 +580,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         tts=fish_tts,
         user_away_timeout=None,
     )
+
+    # G2(要件定義v1.3): アバターの応答レイテンシを実測し、知識連動(RAG)の
+    # 実現方式を決めるための一時的な計測。手動でタイムスタンプを打つのではなく、
+    # livekit-agents 1.6.7 が ChatMessage.metrics として公式に収集している値を読む
+    # (session.on("metrics_collected") は本バージョンで非推奨。
+    # ChatMessage.metrics が代替として明示されている)。
+    # 計測が失敗しても音声パイプラインを絶対に止めない(try/exceptで握り潰す)。
+    # 役目を終えたら削除する一時コードであることを明示しておく。
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(ev) -> None:
+        try:
+            log_line = format_g2_latency_log(ev, tenant_id, ctx.room.name)
+            if log_line:
+                logger.info(log_line)
+        except Exception as e:
+            logger.warning(f"[G2-latency] failed to log metrics (non-fatal): {e}")
 
     @session.on("error")
     def on_session_error(ev) -> None:
