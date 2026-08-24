@@ -33,6 +33,15 @@ async function deleteRule(id: number): Promise<void> {
   if (!res.ok) throw new Error("delete_error");
 }
 
+// AI提案の承認/却下。既存の PUT /v1/admin/tuning/:id/{approve,reject} を使う。
+// このエンドポイントだけが status と is_active を同時に更新する(CLAUDE.md 禁止29)。
+// AIReportTab.tsx と同一の操作。承認APIを新設しない。
+async function decideRule(id: number, action: "approve" | "reject", tenantId?: string): Promise<void> {
+  const qs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : "";
+  const res = await authFetch(`${API_BASE}/v1/admin/tuning/${id}/${action}${qs}`, { method: "PUT" });
+  if (!res.ok) throw new Error("save_error");
+}
+
 async function toggleActive(id: number, is_active: boolean): Promise<void> {
   const res = await authFetch(`${API_BASE}/v1/admin/tuning-rules/${id}`, {
     method: "PUT",
@@ -210,6 +219,30 @@ export default function TuningRulesPage() {
         body: JSON.stringify({ status: "resolved" }),
       }).catch(() => {/* best-effort */});
       setResolveGapId(undefined);
+    }
+  };
+
+  // ─── Approve / Reject（AI提案） ─────────────────────────────────────────────
+  // CLAUDE.md 禁止29: is_active が唯一の真実で status は承認判断の記録。
+  // 両方を同時に更新できるのは approve/reject エンドポイントだけなので、
+  // 提案に対しては is_active トグルを出さず必ずここを通す。
+  const handleDecide = async (rule: TuningRule, action: "approve" | "reject") => {
+    try {
+      await decideRule(rule.id, action, isSuperAdmin ? rule.tenant_id : undefined);
+      setRules((prev) =>
+        prev.map((r) =>
+          r.id === rule.id
+            ? {
+                ...r,
+                status: action === "approve" ? "active" : "rejected",
+                is_active: action === "approve",
+              }
+            : r,
+        ),
+      );
+      showToast(t(action === "approve" ? "tuning.approved" : "tuning.rejected"));
+    } catch {
+      showToast(t("tuning.save_error"));
     }
   };
 
@@ -521,7 +554,32 @@ export default function TuningRulesPage() {
                   {formatDate(rule.created_at)}
                 </span>
 
-                {/* Active toggle */}
+                {/* AIの提案は承認前。is_active トグルは出さず、承認/却下だけを出す。
+                    ここでトグルを出すと status を pending のまま本番の応答方針に載せられてしまう。 */}
+                {rule.status === "pending" ? (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => void handleDecide(rule, "approve")}
+                      style={{
+                        padding: "4px 12px", minHeight: 28, borderRadius: 999,
+                        border: "1px solid rgba(34,197,94,0.4)", background: "rgba(34,197,94,0.1)",
+                        color: "#4ade80", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                      }}
+                    >
+                      {t("tuning.approve")}
+                    </button>
+                    <button
+                      onClick={() => void handleDecide(rule, "reject")}
+                      style={{
+                        padding: "4px 12px", minHeight: 28, borderRadius: 999,
+                        border: "1px solid #374151", background: "transparent",
+                        color: "#9ca3af", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                      }}
+                    >
+                      {t("tuning.reject")}
+                    </button>
+                  </div>
+                ) : (
                 <button
                   onClick={() => handleToggleActive(rule)}
                   style={{
@@ -543,7 +601,27 @@ export default function TuningRulesPage() {
                     ? `✅ ${t("tuning.is_active")}`
                     : `⬜ ${t("tuning.is_inactive")}`}
                 </button>
+                )}
               </div>
+
+              {/* 出所と根拠。示さずに承認させない(要件 F2)。 */}
+              {rule.status === "pending" && (
+                <div
+                  style={{
+                    margin: "0 0 10px", padding: "8px 12px", borderRadius: 8,
+                    background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.25)",
+                    fontSize: 12, lineHeight: 1.7, color: "#fbbf24",
+                  }}
+                >
+                  <strong>{t(rule.source === "hermes" ? "tuning.source_hermes" : "tuning.source_judge")}</strong>
+                  <span style={{ color: "var(--muted-foreground)", marginLeft: 8 }}>
+                    {t("tuning.pending_hint")}
+                  </span>
+                  {rule.evidence && (
+                    <div style={{ marginTop: 4, color: "var(--muted-foreground)" }}>{rule.evidence}</div>
+                  )}
+                </div>
+              )}
 
               {/* Trigger pattern */}
               <div style={{ marginBottom: 8 }}>
