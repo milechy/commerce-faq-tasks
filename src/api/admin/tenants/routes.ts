@@ -12,7 +12,8 @@ import { generateApiKey, hashApiKey, maskApiKeyPrefix } from "./apiKeyUtils";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { DEFAULT_AVATARS } from "../avatar/routes";
 import { logger } from '../../../lib/logger';
-import { planHasFeature, resolveShareForPlan, resolveShareForTenantPlan, type TenantPlan } from "../../../lib/billing/planFeatures";
+import { planHasFeature, resolveShareForPlan, resolveShareForTenantPlan, invalidateTenantPlanCache, type TenantPlan } from "../../../lib/billing/planFeatures";
+import { invalidateBillingPlanCache } from "../../../lib/billing/usageTracker";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
 
@@ -372,6 +373,79 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       return res.json(result.rows[0]);
     } catch (err) {
       logger.warn("[PATCH /v1/admin/my-tenant]", err);
+      return res.status(500).json({ error: "更新に失敗しました" });
+    }
+  });
+
+  // PUT /v1/admin/my-tenant/plan — Client Admin専用: テナント自身によるプラン変更。
+  //
+  // なぜ PATCH /v1/admin/my-tenant に相乗りさせないか:
+  // プランは課金額と権能の両方を動かす操作で、監査記録・キャッシュ無効化・
+  // 変更内容の返却が他フィールドと異なる。汎用PATCHに混ぜると、将来
+  // allowed_origins などを更新する呼び出しが plan を巻き添えで変えうる。
+  //
+  // tenantId は JWT の app_metadata.tenant_id のみから解決する
+  // （CLAUDE.md 禁止1: client 由来の tenantId を信用しない）。body にテナント項目は無い。
+  app.put("/v1/admin/my-tenant/plan", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
+    const su = (req as AuthedReq).supabaseUser;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+
+    const parsed = z.object({ plan: z.enum(planValues) }).safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+    const nextPlan = parsed.data.plan;
+
+    try {
+      const beforeResult = await db.query<{ plan: TenantPlan | null }>(
+        `SELECT plan FROM tenants WHERE id = $1`,
+        [tenantId]
+      );
+      if (beforeResult.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
+      }
+      const previousPlan = beforeResult.rows[0].plan;
+
+      // 同一プランへの変更は no-op（連打・再送を成功として返す。監査行も増やさない）
+      if (previousPlan === nextPlan) {
+        return res.json({ plan: nextPlan, previous_plan: previousPlan, changed: false });
+      }
+
+      const result = await db.query(
+        `UPDATE tenants SET plan = $1, updated_at = NOW() WHERE id = $2
+         RETURNING id, name, plan, features`,
+        [nextPlan, tenantId]
+      );
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
+      }
+
+      // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。
+      // いずれも同一プロセス内のみ。PM2 の他ワーカーは最大TTL分だけ旧プランを見る。
+      invalidateTenantPlanCache(tenantId);
+      invalidateBillingPlanCache(tenantId);
+
+      // 監査記録。super_admin の PATCH /v1/admin/tenants/:id と同じテーブル・同じ形式で
+      // 残し、SettingsHistoryTab から一続きに追えるようにする（fire-and-forget）。
+      const appMeta = su?.app_metadata as Record<string, unknown> | undefined;
+      const changedBy: string = su?.email ?? (typeof appMeta?.email === "string" ? appMeta.email : "");
+      void db.query(
+        `INSERT INTO tenant_settings_history (tenant_id, changed_by, field_name, old_value, new_value)
+         VALUES ($1, $2, 'plan', $3::jsonb, $4::jsonb)`,
+        [tenantId, changedBy, JSON.stringify(previousPlan), JSON.stringify(nextPlan)]
+      ).catch((e: unknown) => logger.warn("[tenant_settings_history] insert failed", e));
+
+      logger.info(
+        { tenantId, previousPlan, nextPlan, changedBy },
+        "[PUT /v1/admin/my-tenant/plan] tenant changed its own plan"
+      );
+
+      return res.json({ ...result.rows[0], previous_plan: previousPlan, changed: true });
+    } catch (err) {
+      logger.warn("[PUT /v1/admin/my-tenant/plan]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
     }
   });

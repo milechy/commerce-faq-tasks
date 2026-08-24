@@ -1030,3 +1030,153 @@ describe("migration_free_ad_plan.sql", () => {
     expect(sql).toMatch(/人間承認/);
   });
 });
+
+// --------------------------------------------------------------------------
+// PUT /v1/admin/my-tenant/plan — テナント自身によるプラン変更
+// --------------------------------------------------------------------------
+
+describe("PUT /v1/admin/my-tenant/plan", () => {
+  const updatedRow = (plan: string) => ({
+    id: "tenant-a", name: "テストテナント", plan, features: { avatar: false, voice: false, rag: true },
+  });
+
+  it("client_admin は自テナントのプランを変更でき、変更前後を返す", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })   // before
+        .mockResolvedValueOnce({ rows: [updatedRow("growth")], rowCount: 1 })  // update
+        .mockResolvedValue({ rows: [], rowCount: 1 }),                          // audit
+    };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("growth");
+    expect(res.body.previous_plan).toBe("starter");
+    expect(res.body.changed).toBe(true);
+  });
+
+  it("free_ad への降格も許可する（解約・休会の導線を閉じるため）", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ plan: "enterprise" }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [updatedRow("free_ad")], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "free_ad" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("free_ad");
+  });
+
+  it("プラン変更は tenant_settings_history に field_name='plan' で記録される", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [updatedRow("enterprise")], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "enterprise" });
+    await new Promise((r) => setImmediate(r));
+
+    const auditCall = db.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === "string" && sql.includes("INSERT INTO tenant_settings_history")
+    );
+    expect(auditCall).toBeDefined();
+    expect(auditCall![1][0]).toBe("tenant-a");           // tenant_id は JWT 由来
+    expect(auditCall![1][2]).toBe(JSON.stringify("starter"));
+    expect(auditCall![1][3]).toBe(JSON.stringify("enterprise"));
+  });
+
+  it("同じプランへの変更は no-op で、監査行を増やさない", async () => {
+    const db = {
+      query: jest.fn().mockResolvedValueOnce({ rows: [{ plan: "growth" }], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.changed).toBe(false);
+    expect(db.query).toHaveBeenCalledTimes(1); // UPDATE も INSERT も走らない
+  });
+
+  it("未知のプラン値は 400 で弾く", async () => {
+    const db = { query: jest.fn() };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "platinum" });
+
+    expect(res.status).toBe(400);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  // ★越境防止★ body に tenantId を足しても、更新対象は JWT の tenant_id のまま。
+  it("body で他テナントを指定しても JWT のテナントしか更新されない", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [updatedRow("growth")], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    await request(makeApp(db, "client_admin", "tenant-a"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth", tenantId: "victim-tenant", tenant_id: "victim-tenant", id: "victim-tenant" });
+
+    for (const [, params] of db.query.mock.calls) {
+      expect(JSON.stringify(params ?? [])).not.toContain("victim-tenant");
+    }
+    const updateCall = db.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === "string" && sql.includes("UPDATE tenants SET plan")
+    );
+    expect(updateCall![1]).toEqual(["growth", "tenant-a"]);
+  });
+
+  /**
+   * makeApp は role/tenantId にデフォルト引数を持つため、undefined を渡すと
+   * 既定値が入ってしまいガードを検証できない。claim 自体を落とした app を組む。
+   */
+  function makeAppWithClaims(db: any, appMetadata: Record<string, unknown>) {
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res: any, next: any) => {
+      req.supabaseUser = { email: "admin@example.com", app_metadata: appMetadata };
+      next();
+    });
+    registerTenantAdminRoutes(app, db);
+    return app;
+  }
+
+  it("role が無いトークン(tenant_idのみ)は 403", async () => {
+    const db = { query: jest.fn() };
+    const res = await request(makeAppWithClaims(db, { tenant_id: "tenant-a" }))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(403);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("tenant_id claim が無い場合は 403（super_admin でも自テナント扱いにしない）", async () => {
+    const db = { query: jest.fn() };
+    const res = await request(makeAppWithClaims(db, { role: "super_admin" }))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(403);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+});
