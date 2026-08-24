@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { decryptText } from "../lib/crypto/textEncrypt";
 import { pool } from "../lib/db";
 import { logger } from '../lib/logger';
+import { FAQ_VISIBILITY_JOIN, FAQ_VISIBILITY_WHERE } from "./pgvector";
 
 export type PgvectorSearchParams = {
   tenantId: string;
@@ -44,20 +45,25 @@ export async function searchPgVector(
 
   const safeExcludedIds = (excludedIds ?? []).filter(Boolean);
   const excludeClause = safeExcludedIds.length > 0
-    ? `AND id::text != ALL($4::text[])`
+    ? `AND fe.id::text != ALL($4::text[])`
     : "";
 
+  // 非公開にしたFAQを回答に混ぜないため、faq_docs の可視性判定を必ず通す。
+  // 判定は pgvector.ts の 1 実装を共有する(第2の解釈を書かない)。
+  // エイリアスは fe / fd に揃える必要がある(FAQ_VISIBILITY_* の前提)。
   const query = `
       SELECT
-        id::text,
-        text,
-        metadata,
-        1 - (embedding <-> $1::vector) / 2 AS score
-      FROM faq_embeddings
-      WHERE (tenant_id = $2 OR tenant_id = 'global' OR tenant_id = 'r2c_docs')
-        AND (is_excluded_from_search IS NULL OR is_excluded_from_search = false)
+        fe.id::text,
+        fe.text,
+        fe.metadata,
+        1 - (fe.embedding <-> $1::vector) / 2 AS score
+      FROM faq_embeddings fe
+      ${FAQ_VISIBILITY_JOIN}
+      WHERE (fe.tenant_id = $2 OR fe.tenant_id = 'global' OR fe.tenant_id = 'r2c_docs')
+        AND (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
+        AND ${FAQ_VISIBILITY_WHERE}
         ${excludeClause}
-      ORDER BY embedding <-> $1::vector
+      ORDER BY fe.embedding <-> $1::vector
       LIMIT $3
     `;
 
