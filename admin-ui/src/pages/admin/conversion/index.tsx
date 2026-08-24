@@ -254,14 +254,8 @@ export default function ConversionDashboardPage() {
 
       {/* A/B Tests */}
       <div id="ab-section" style={CARD}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ marginBottom: 14 }}>
           <div style={SECTION_TITLE}>🔬 {t("conversion.ab_tests")}</div>
-          <button
-            onClick={() => document.getElementById('ab-section')?.scrollIntoView({ behavior: 'smooth' })}
-            style={{ padding: "8px 16px", minHeight: 36, borderRadius: 8, border: "1px solid #3b82f6", background: "none", color: "#60a5fa", fontSize: 13, cursor: "pointer" }}
-          >
-            管理
-          </button>
         </div>
         {experiments.length === 0 ? (
           <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>{t("conversion.no_data")}</p>

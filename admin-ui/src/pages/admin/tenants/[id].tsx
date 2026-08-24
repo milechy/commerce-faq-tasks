@@ -5,8 +5,6 @@ import { API_BASE } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 import { useAuth } from "../../../auth/useAuth";
 import AIReportTab from "../../../components/admin/AIReportTab";
-import ABTestTab from "../../../components/admin/ABTestTab";
-import ObjectionPatternsTab from "../../../components/admin/ObjectionPatternsTab";
 import TenantTuningTab from "../../../components/admin/TenantTuningTab";
 import TenantTestTab from "../../../components/admin/TenantTestTab";
 import PostHogIntegrationTab from "./PostHogIntegrationTab";
@@ -253,8 +251,6 @@ export default function TenantDetailPage() {
   const TABS: { id: TabId; label: React.ReactNode }[] = isSuperAdmin
     ? [
         ...baseTabs,
-        { id: "ab-test", label: "🔬 A/Bテスト" },
-        { id: "objection-patterns", label: "💬 反論パターン" },
         { id: "settings-history", label: "設定変更履歴" },
         { id: "invite", label: "✉️ 招待" },
       ]
@@ -364,12 +360,6 @@ export default function TenantDetailPage() {
           )}
           {activeTab === "ai-report" && (
             <AIReportTab tenantId={tenantId} />
-          )}
-          {activeTab === "ab-test" && isSuperAdmin && (
-            <ABTestTab tenantId={tenantId} />
-          )}
-          {activeTab === "objection-patterns" && isSuperAdmin && (
-            <ObjectionPatternsTab tenantId={tenantId} />
           )}
           {activeTab === "settings-history" && isSuperAdmin && (
             <SettingsHistoryTab tenantId={tenantId} />
