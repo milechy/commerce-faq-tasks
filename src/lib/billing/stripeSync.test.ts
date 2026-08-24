@@ -53,6 +53,30 @@ describe('billedQuantity 算出（Math.ceil(totalRequests * multiplier)）', () 
     expect(billed(100, 'enterprise')).toBe(250);
     expect(billed(3, 'enterprise')).toBe(8); // 7.5 → 8
   });
+
+  // Asana 1217759064329998 AC: 「請求数量が0になること」と「usage_logsに原価が
+  // 計上されること」は別々にアサートする(前者だけ見ると赤字が不可視のまま通る)。
+  it('free_ad は倍率0のため請求数量は常に0（何件使っても課金されない）', () => {
+    expect(billed(0, 'free_ad')).toBe(0);
+    expect(billed(1, 'free_ad')).toBe(0);
+    expect(billed(200, 'free_ad')).toBe(0); // 月次上限いっぱいまで使っても0
+  });
+
+  it('free_adの請求数量が0でも、原価(cost_total_cents)の計算はplanを見ないため0にならない', () => {
+    // calculateBillingAmountCents(costCalculator.ts)はplan引数を取らない —
+    // 倍率(MARGIN_MULTIPLIER)はfeatureUsedのみで決まり、Stripe請求数量とは無関係に
+    // 常に計算される。free_adでも「使った」という事実そのものはusage_logsに残る。
+    const { calculateBillingAmountCents } = require('./costCalculator') as typeof import('./costCalculator');
+    const costCents = calculateBillingAmountCents({
+      model: 'gpt-oss-120b',
+      inputTokens: 1000,
+      outputTokens: 200,
+      featureUsed: 'chat',
+    });
+    expect(costCents).toBeGreaterThan(0);
+    // 同時に、この行のStripe請求数量はfree_adなら0
+    expect(billed(1, 'free_ad')).toBe(0);
+  });
 });
 
 // GID 1216944002701788: Anam.aiは$0.16/分の時間課金だが、Stripe報告数量は他機能と同じ
