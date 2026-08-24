@@ -227,9 +227,12 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     });
   };
 
-  const allOnPageSelected = items.length > 0 && items.every((i) => selectedIds.has(i.id));
+  // 全店舗共通(global)の知識はテナントからは読み取り専用。一括操作の対象にしない。
+  // サーバ側も tenant_id で絞って弾くが、選べる見た目を出さないこと自体が要件(禁止44)。
+  const ownItems = items.filter((i) => i.tenant_id !== "global");
+  const allOnPageSelected = ownItems.length > 0 && ownItems.every((i) => selectedIds.has(i.id));
   const toggleSelectAll = () => {
-    setSelectedIds(allOnPageSelected ? new Set() : new Set(items.map((i) => i.id)));
+    setSelectedIds(allOnPageSelected ? new Set() : new Set(ownItems.map((i) => i.id)));
   };
 
   const handleBulkUnpublish = async () => {
@@ -474,12 +477,17 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                 transition: "opacity 0.2s",
               }}
             >
-              <input
-                type="checkbox"
-                checked={selectedIds.has(item.id)}
-                onChange={() => toggleSelect(item.id)}
-                style={{ width: 20, height: 20, marginTop: 2, flexShrink: 0, cursor: "pointer" }}
-              />
+              {item.tenant_id === "global" ? (
+                // 読み取り専用。チェックボックスの位置は空けて行の高さを揃える。
+                <span style={{ width: 20, flexShrink: 0 }} aria-hidden="true" />
+              ) : (
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(item.id)}
+                  onChange={() => toggleSelect(item.id)}
+                  style={{ width: 20, height: 20, marginTop: 2, flexShrink: 0, cursor: "pointer" }}
+                />
+              )}
               <div style={{ flex: 1, minWidth: 200 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
                   <span style={{
@@ -506,6 +514,14 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                       ? t("knowledge.badge_not_answering")
                       : t("knowledge.badge_answering")}
                   </span>
+                  {item.tenant_id === "global" && (
+                    <span style={{
+                      padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+                      background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.3)", color: "#93c5fd",
+                    }}>
+                      {t("knowledge.source_global")}
+                    </span>
+                  )}
                   <span style={{ fontSize: 11, color: "#6b7280" }}>{formatDate(item.created_at, locale)}</span>
                 </div>
                 <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 4px", lineHeight: 1.4 }}>
@@ -515,62 +531,70 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                   A: {item.answer.slice(0, 120)}{item.answer.length > 120 ? "…" : ""}
                 </p>
               </div>
-              <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center", flexWrap: "wrap" }}>
-                <button
-                  onClick={() => handleTogglePublish(item)}
-                  disabled={togglingId === item.id}
-                  style={{
-                    padding: "10px 14px",
-                    minHeight: 44,
-                    borderRadius: 10,
-                    border: `1px solid ${item.is_published === false ? "rgba(34,197,94,0.4)" : "#4b5563"}`,
-                    background: item.is_published === false ? "rgba(34,197,94,0.1)" : "rgba(75,85,99,0.15)",
-                    color: item.is_published === false ? "#4ade80" : "#9ca3af",
-                    fontSize: 13,
-                    cursor: togglingId === item.id ? "default" : "pointer",
-                    fontWeight: 500,
-                    whiteSpace: "nowrap",
-                    opacity: togglingId === item.id ? 0.6 : 1,
-                  }}
-                >
-                  {item.is_published === false
-                    ? t("knowledge.action_unmute")
-                    : t("knowledge.action_mute")}
-                </button>
-                <button
-                  onClick={() =>
-                    setEditTarget({
-                      id: item.id,
-                      question: item.question,
-                      answer: item.answer,
-                      category: item.category,
-                      tags: item.tags,
-                      is_published: item.is_published,
-                      is_excluded_from_search: item.is_excluded_from_search,
-                    })
-                  }
-                  style={{
-                    padding: "10px 16px",
-                    minHeight: 44,
-                    borderRadius: 10,
-                    border: "1px solid #1d4ed8",
-                    background: "rgba(29,78,216,0.15)",
-                    color: "#93c5fd",
-                    fontSize: 14,
-                    cursor: "pointer",
-                    fontWeight: 500,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {t("knowledge.edit")}
-                </button>
-                <button
-                  onClick={() => setDeleteTarget({ id: item.id, question: item.question, state: "confirming" })}
-                  style={BTN_DANGER}
-                >
-                  {t("knowledge.delete")}
-                </button>
-              </div>
+              {item.tenant_id === "global" ? (
+                // 全店舗共通の知識はR2Cが管理する。テナントからは読むだけ。
+                // 押せない操作を並べない(禁止44)ので、ボタン自体を出さず理由を書く。
+                <div style={{ flexShrink: 0, maxWidth: 220, fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+                  {t("knowledge.global_readonly_hint")}
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => handleTogglePublish(item)}
+                    disabled={togglingId === item.id}
+                    style={{
+                      padding: "10px 14px",
+                      minHeight: 44,
+                      borderRadius: 10,
+                      border: `1px solid ${item.is_published === false ? "rgba(34,197,94,0.4)" : "#4b5563"}`,
+                      background: item.is_published === false ? "rgba(34,197,94,0.1)" : "rgba(75,85,99,0.15)",
+                      color: item.is_published === false ? "#4ade80" : "#9ca3af",
+                      fontSize: 13,
+                      cursor: togglingId === item.id ? "default" : "pointer",
+                      fontWeight: 500,
+                      whiteSpace: "nowrap",
+                      opacity: togglingId === item.id ? 0.6 : 1,
+                    }}
+                  >
+                    {item.is_published === false
+                      ? t("knowledge.action_unmute")
+                      : t("knowledge.action_mute")}
+                  </button>
+                  <button
+                    onClick={() =>
+                      setEditTarget({
+                        id: item.id,
+                        question: item.question,
+                        answer: item.answer,
+                        category: item.category,
+                        tags: item.tags,
+                        is_published: item.is_published,
+                        is_excluded_from_search: item.is_excluded_from_search,
+                      })
+                    }
+                    style={{
+                      padding: "10px 16px",
+                      minHeight: 44,
+                      borderRadius: 10,
+                      border: "1px solid #1d4ed8",
+                      background: "rgba(29,78,216,0.15)",
+                      color: "#93c5fd",
+                      fontSize: 14,
+                      cursor: "pointer",
+                      fontWeight: 500,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {t("knowledge.edit")}
+                  </button>
+                  <button
+                    onClick={() => setDeleteTarget({ id: item.id, question: item.question, state: "confirming" })}
+                    style={BTN_DANGER}
+                  >
+                    {t("knowledge.delete")}
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
