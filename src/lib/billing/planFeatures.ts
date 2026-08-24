@@ -98,9 +98,34 @@ export async function queryTenantPlan(
   }
 }
 
-/** DBからテナントの現在のプランを取得する（getPool()経由）。 */
+// /api/chat は全リクエストで getTenantPlan() を呼ぶ(free_ad以外のプランでも毎回)。
+// この関数がコードベース全体でqueryTenantPlanのprod唯一の呼び出し元であり、
+// 恒久的なDBラウンドトリップが最高トラフィックエンドポイントに乗っている状態を
+// 緩和するため、TTL 60秒の薄いインメモリキャッシュを手前に挟む。
+// queryTenantPlan自体(DB問い合わせ+fail-safe処理)は変更しない。
+// プラン変更(管理操作)がTTL内は反映されないトレードオフを許容する
+// (動的ウィジェットルート自体が既に24hキャッシュを許容している設計と整合、
+// src/lib/billing/planFeatures.test.ts 参照)。
+const TENANT_PLAN_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
+interface TenantPlanCacheEntry {
+  plan: TenantPlan;
+  expiresAt: number;
+}
+
+export const tenantPlanCache: Map<string, TenantPlanCacheEntry> = new Map();
+
+/** DBからテナントの現在のプランを取得する（getPool()経由、TTLキャッシュ付き）。 */
 export async function getTenantPlan(tenantId: string): Promise<TenantPlan> {
-  return queryTenantPlan(getPool(), tenantId);
+  const cached = tenantPlanCache.get(tenantId);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.plan;
+  }
+
+  const plan = await queryTenantPlan(getPool(), tenantId);
+  tenantPlanCache.set(tenantId, { plan, expiresAt: now + TENANT_PLAN_CACHE_TTL_MS });
+  return plan;
 }
 
 export async function tenantHasFeature(tenantId: string, feature: GatedFeature): Promise<boolean> {
