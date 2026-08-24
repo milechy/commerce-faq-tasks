@@ -3,6 +3,14 @@
 
 import { trackUsage, initUsageTracker } from './usageTracker';
 
+/**
+ * INSERT INTO usage_logs のパラメータ配列における billable($13) の添字。
+ * plan($14) / plan_multiplier($15) を後ろに足したため末尾からは取れない。
+ */
+const BILLABLE_PARAM_INDEX = 12;
+const PLAN_PARAM_INDEX = 13;
+const PLAN_MULTIPLIER_PARAM_INDEX = 14;
+
 // 各テスト前に pool を null にリセットして状態漏洩を防ぐ
 beforeEach(() => {
   initUsageTracker(null as any, {
@@ -210,7 +218,7 @@ describe('usageTracker', () => {
       expect(insertCall).toBeDefined();
       const [sql, params] = insertCall!;
       expect(sql).toContain('billable');
-      expect(params[params.length - 1]).toBe(true);
+      expect(params[BILLABLE_PARAM_INDEX]).toBe(true);
     });
 
     it('featureUsed=admin_tuning（NON_BILLABLE_FEATURES）はbillable=falseでINSERTされ、costは0にならない', async () => {
@@ -235,7 +243,7 @@ describe('usageTracker', () => {
       );
       expect(insertCall).toBeDefined();
       const [, params] = insertCall!;
-      expect(params[params.length - 1]).toBe(false); // billable=false
+      expect(params[BILLABLE_PARAM_INDEX]).toBe(false); // billable=false
       expect(params[7]).toBeGreaterThan(0); // cost_total_centsは原価可視化のため0にならない
     });
 
@@ -261,7 +269,7 @@ describe('usageTracker', () => {
         ([, p]: [string, any[]]) => p?.[1] === 'req-sai-agent-non-billable'
       );
       const [, params] = insertCall!;
-      expect(params[params.length - 1]).toBe(false);
+      expect(params[BILLABLE_PARAM_INDEX]).toBe(false);
     });
 
     it('billableを明示指定すると自動判定より優先される（オーバーライド）', async () => {
@@ -286,7 +294,7 @@ describe('usageTracker', () => {
         ([, p]: [string, any[]]) => p?.[1] === 'req-explicit-billable-override'
       );
       const [, params] = insertCall!;
-      expect(params[params.length - 1]).toBe(false);
+      expect(params[BILLABLE_PARAM_INDEX]).toBe(false);
     });
   });
 
@@ -414,10 +422,182 @@ describe('usageTracker', () => {
       await flushSetImmediate();
 
       // 2回INSERTが試みられるが、SQL に ON CONFLICT DO NOTHING が含まれる
-      expect(mockQuery.mock.calls.length).toBeGreaterThanOrEqual(2);
-      for (const call of mockQuery.mock.calls) {
+      const insertCalls = mockQuery.mock.calls.filter(
+        ([sql]: [string]) => sql.includes('INSERT INTO usage_logs')
+      );
+      expect(insertCalls.length).toBeGreaterThanOrEqual(2);
+      for (const call of insertCalls) {
         expect(call[0]).toContain('ON CONFLICT (request_id) DO NOTHING');
       }
+    });
+  });
+  // ─── プラン倍率の焼き付け（遡及請求の封じ込め） ─────────────────────────────
+  describe('plan / plan_multiplier の焼き付け', () => {
+    /** plan の SELECT には rows を返し、INSERT には rowCount を返す mock */
+    function makePool(planValue: string | null) {
+      const query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('SELECT plan FROM tenants')) {
+          return Promise.resolve({ rows: planValue === null ? [] : [{ plan: planValue }] });
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+      return query;
+    }
+
+    function findInsert(mockQuery: jest.Mock, requestId: string) {
+      const call = mockQuery.mock.calls.find(
+        ([sql, p]: [string, any[]]) => sql.includes('INSERT INTO usage_logs') && p?.[1] === requestId
+      );
+      return call![1];
+    }
+
+    async function track(mockQuery: jest.Mock, requestId: string) {
+      initUsageTracker({ query: mockQuery } as any, {
+        warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn(),
+      } as any);
+      trackUsage({
+        tenantId: 'tenant-plan-stamp',
+        requestId,
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 10,
+        outputTokens: 10,
+        featureUsed: 'chat',
+      });
+      await flushSetImmediate();
+      await flushSetImmediate();
+      await flushSetImmediate();
+    }
+
+    it.each([
+      ['free_ad', 0],
+      ['starter', 1.0],
+      ['growth', 1.5],
+      ['enterprise', 2.5],
+    ])('plan=%s は倍率 %s を行に焼き付ける', async (plan, expected) => {
+      const mockQuery = makePool(plan);
+      await track(mockQuery, `req-stamp-${plan}`);
+      const params = findInsert(mockQuery, `req-stamp-${plan}`);
+      expect(params[PLAN_PARAM_INDEX]).toBe(plan);
+      expect(params[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(expected);
+    });
+
+    it('free_ad の 0 は「倍率0」として焼かれ、1.0 にすり替わらない', async () => {
+      const mockQuery = makePool('free_ad');
+      await track(mockQuery, 'req-stamp-free-ad-zero');
+      const params = findInsert(mockQuery, 'req-stamp-free-ad-zero');
+      expect(params[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(0);
+      expect(params[PLAN_MULTIPLIER_PARAM_INDEX]).not.toBe(1.0);
+    });
+
+    // ★fail-safe の向き★ ここが本変更の最大の罠。
+    // 機能ゲート用 queryTenantPlan は取得失敗時 free_ad(=倍率0) を返すが、
+    // その値を焼き付けると請求が恒久的に 0 円で固着する。
+    it('テナントが見つからない場合は free_ad ではなく NULL を焼く', async () => {
+      const mockQuery = makePool(null); // rows: []
+      await track(mockQuery, 'req-stamp-missing-tenant');
+      const params = findInsert(mockQuery, 'req-stamp-missing-tenant');
+      expect(params[PLAN_PARAM_INDEX]).toBeNull();
+      expect(params[PLAN_MULTIPLIER_PARAM_INDEX]).toBeNull();
+    });
+
+    it('未知のプラン文字列も free_ad へ倒さず NULL を焼く', async () => {
+      const mockQuery = makePool('legacy-unknown-plan');
+      await track(mockQuery, 'req-stamp-unknown-plan');
+      const params = findInsert(mockQuery, 'req-stamp-unknown-plan');
+      expect(params[PLAN_PARAM_INDEX]).toBeNull();
+      expect(params[PLAN_MULTIPLIER_PARAM_INDEX]).toBeNull();
+    });
+
+    it('プラン取得がDB障害で落ちても NULL を焼き、利用記録自体は残す', async () => {
+      const query = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('SELECT plan FROM tenants')) {
+          return Promise.reject(new Error('connection terminated'));
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+      await track(query, 'req-stamp-db-down');
+      const params = findInsert(query, 'req-stamp-db-down');
+      expect(params[PLAN_PARAM_INDEX]).toBeNull();
+      expect(params[PLAN_MULTIPLIER_PARAM_INDEX]).toBeNull();
+      // 記録が消えないこと（INSERT は実行されている）
+      expect(params[1]).toBe('req-stamp-db-down');
+    });
+
+    it('確定したプランは60秒キャッシュされ、行ごとにSELECTしない', async () => {
+      const mockQuery = makePool('growth');
+      await track(mockQuery, 'req-stamp-cache-1');
+      trackUsage({
+        tenantId: 'tenant-plan-stamp',
+        requestId: 'req-stamp-cache-2',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 10, outputTokens: 10, featureUsed: 'chat',
+      });
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const planSelects = mockQuery.mock.calls.filter(
+        ([sql]: [string]) => sql.includes('SELECT plan FROM tenants')
+      );
+      expect(planSelects.length).toBe(1);
+      expect(findInsert(mockQuery, 'req-stamp-cache-2')[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(1.5);
+    });
+
+    it('未確定(null)はキャッシュせず、次のリクエストで再取得する', async () => {
+      let planValue: string | null = null;
+      const mockQuery = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('SELECT plan FROM tenants')) {
+          return Promise.resolve({ rows: planValue === null ? [] : [{ plan: planValue }] });
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+      await track(mockQuery, 'req-stamp-nocache-1');
+      planValue = 'enterprise'; // 障害から復旧
+      trackUsage({
+        tenantId: 'tenant-plan-stamp',
+        requestId: 'req-stamp-nocache-2',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 10, outputTokens: 10, featureUsed: 'chat',
+      });
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      expect(findInsert(mockQuery, 'req-stamp-nocache-2')[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(2.5);
+    });
+    it('migration 未適用(42703)でも旧カラム構成で記録を継続する', async () => {
+      const errorLog = jest.fn();
+      const mockQuery = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('SELECT plan FROM tenants')) {
+          return Promise.resolve({ rows: [{ plan: 'growth' }] });
+        }
+        if (sql.includes('plan_multiplier')) {
+          const e: any = new Error('column "plan_multiplier" of relation "usage_logs" does not exist');
+          e.code = '42703';
+          return Promise.reject(e);
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+      initUsageTracker({ query: mockQuery } as any, {
+        warn: jest.fn(), error: errorLog, debug: jest.fn(), info: jest.fn(),
+      } as any);
+      trackUsage({
+        tenantId: 'tenant-no-migration',
+        requestId: 'req-42703',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 10, outputTokens: 10, featureUsed: 'chat',
+      });
+      await flushSetImmediate();
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      // 旧カラム構成(13パラメータ)での INSERT が実行されている
+      const legacyInsert = mockQuery.mock.calls.find(
+        ([sql, p]: [string, any[]]) =>
+          sql.includes('INSERT INTO usage_logs') && !sql.includes('plan_multiplier') && p?.[1] === 'req-42703'
+      );
+      expect(legacyInsert).toBeDefined();
+      expect(legacyInsert![1]).toHaveLength(13);
+      // 気づけるように error で鳴らす（warn ではなく）
+      expect(errorLog).toHaveBeenCalled();
     });
   });
 });

@@ -62,7 +62,10 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   tenants: ["id", "is_active", "name", "plan"],
   trigger_rules: ["is_active", "message_template", "priority", "tenant_id", "trigger_config", "trigger_type"],
   tuning_rules: ["approved_at", "created_by", "dedup_key", "edited_at", "edited_by", "evidence", "expected_behavior", "is_active", "original_text", "priority", "source", "source_message_id", "status", "suggested_at", "tenant_id", "trigger_pattern"],
-  usage_logs: ["anam_session_seconds", "avatar_credits", "avatar_session_ms", "billable", "cost_llm_cents", "cost_total_cents", "feature_used", "input_tokens", "model", "output_tokens", "request_id", "tenant_id", "tts_text_bytes"],
+  // plan / plan_multiplier は migration_usage_logs_plan_snapshot.sql で追加。
+  // 未適用のまま配備すると usage_logs への INSERT が全滅する（= 利用記録も請求も止まる）ため、
+  // 計測ヘルスで欠落を検知できるようレジストリに載せる。
+  usage_logs: ["anam_session_seconds", "avatar_credits", "avatar_session_ms", "billable", "cost_llm_cents", "cost_total_cents", "feature_used", "input_tokens", "model", "output_tokens", "plan", "plan_multiplier", "request_id", "tenant_id", "tts_text_bytes"],
 };
 
 export interface MissingColumn {

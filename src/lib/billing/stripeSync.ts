@@ -13,19 +13,11 @@ interface MinimalLogger {
   error(obj: unknown, msg?: string): void;
 }
 
-// プラン倍率: Stripe に報告する数量に乗じる（リクエスト課金 × プラン別単価）。
-// admin-ui PLAN_OPTIONS と一致（Free(広告表示) ×0 / Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
-// free_ad の 0 は原価をR2Cが負担する広告原資プランであることを表す。
-// `?? 1.0` は null/undefined のみを捕捉するため 0 はそのまま通る(0が満額請求にすり替わらない)。
-export const PLAN_MULTIPLIERS: Record<string, number> = {
-  free_ad: 0,
-  starter: 1.0,
-  growth: 1.5,
-  enterprise: 2.5,
-};
-export function planMultiplier(plan: string | null | undefined): number {
-  return PLAN_MULTIPLIERS[plan ?? 'starter'] ?? 1.0;
-}
+// プラン倍率の定義は planPricing.ts に移した（usageTracker.ts が利用記録時に
+// 焼き付けるため、Stripe連携モジュールへの依存を持たせたくない）。
+// 既存の import 元を壊さないよう、ここから re-export する。
+export { PLAN_MULTIPLIERS, planMultiplier } from './planPricing';
+import { planMultiplier } from './planPricing';
 
 /** 環境変数から LemonSlice 月額固定費(JPY)を取得。未設定/0 なら按分課金は無効。 */
 export function getLemonsliceMonthlyFeeJpy(): number {
@@ -341,8 +333,18 @@ async function _reportTenantUsage(
 
   const { startDate, endDate } = periodToDateRange(periodYyyyMm);
 
+  // 倍率は行ごとに「利用時点で焼き付けた」 usage_logs.plan_multiplier を使う
+  // （migration_usage_logs_plan_snapshot.sql）。tenants.plan を読んで月全体に
+  // 掛けると、月中のプラン変更が月初まで遡って請求を書き換えてしまう
+  // （enterprise で1か月使って月末に free_ad へ落とすと全額0円になる）。
+  //
+  // $4 = tenants.plan 由来の倍率。plan_multiplier が NULL の行
+  // （本カラム追加前の既存行 / 記録時にプランを確定できなかった行）だけに
+  // 適用する後方互換のフォールバックであり、確定済みの行には効かない。
+  //
   // GID 1216944003337186: billable=false（管理系LLM機能・chargeOneOffJpyで別途請求済みの
   // sai_agent等）は原価がusage_logsに記録されていてもStripe請求数量の集計対象から除外する。
+  const fallbackMultiplier = planMultiplier(plan);
   const aggResult = await db.query(
     `SELECT
        COUNT(*)::integer           AS total_requests,
@@ -352,14 +354,21 @@ async function _reportTenantUsage(
               THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
               ELSE 1
          END
-       ), 0)::integer AS billable_units
+       ), 0)::integer AS billable_units,
+       COALESCE(SUM(
+         (CASE WHEN feature_used = 'anam_session'
+               THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
+               ELSE 1
+          END) * COALESCE(plan_multiplier, $4::numeric)
+       ), 0)::numeric AS billed_units_weighted,
+       COUNT(*) FILTER (WHERE plan_multiplier IS NULL)::integer AS unstamped_rows
      FROM usage_logs
      WHERE tenant_id = $1
        AND created_at >= $2
        AND created_at <  $3
        AND billing_status = 'pending'
        AND billable = true`,
-    [tenantId, startDate, endDate]
+    [tenantId, startDate, endDate, fallbackMultiplier]
   );
 
   const totalRequests: number = aggResult.rows[0].total_requests;
@@ -367,16 +376,27 @@ async function _reportTenantUsage(
   // anam_session行は秒→分換算（anamSessionBillableUnits と同じ切り上げ規則をSQL側でも適用）、
   // それ以外は従来通り1行=1単位。テキストのみのテナントは billableUnits === totalRequests。
   const billableUnits: number = aggResult.rows[0].billable_units;
+  const unstampedRows: number = aggResult.rows[0].unstamped_rows;
 
   if (totalRequests === 0) {
     logger.debug({ tenantId, periodYyyyMm }, '[stripeSync] no pending usage');
     return;
   }
 
-  // プラン倍率を Stripe 報告数量に適用（リクエスト課金 × プラン別単価）。
-  // 実リクエスト数は stripe_usage_reports.total_requests に保持し、請求数量のみ倍率適用する。
-  const multiplier = planMultiplier(plan);
-  const billedQuantity = Math.ceil(billableUnits * multiplier);
+  // 行ごとの倍率で重み付けした合計を最後に1回だけ切り上げる
+  // （行ごとに切り上げると小数倍率のテナントで請求が膨らむ）。
+  // pg は numeric を文字列で返すため Number() を通す。
+  const billedQuantity = Math.ceil(Number(aggResult.rows[0].billed_units_weighted));
+
+  if (unstampedRows > 0) {
+    // migration 適用直後は既存行が NULL のまま残るため、当面は正常に出る。
+    // 適用から1か月以上経っても出続ける場合は usageTracker の焼き付けが
+    // 効いていない（= 遡及請求の穴が残っている）ことを意味する。
+    logger.warn(
+      { tenantId, periodYyyyMm, unstampedRows, totalRequests, fallbackMultiplier },
+      '[stripeSync] rows without plan_multiplier fell back to current tenants.plan'
+    );
+  }
 
   const idempotencyKey = `billing:${tenantId}:${periodYyyyMm}`;
 
@@ -441,7 +461,10 @@ async function _reportTenantUsage(
       );
 
       logger.info(
-        { tenantId, periodYyyyMm, totalRequests, billableUnits, billedQuantity, plan, multiplier, totalCostCents },
+        // plan / fallbackMultiplier は「未焼き付け行に適用した値」であって、
+        // 焼き付け済み行の倍率ではない（月中に変更があれば行ごとに異なる）。
+        { tenantId, periodYyyyMm, totalRequests, billableUnits, billedQuantity,
+          currentPlan: plan, fallbackMultiplier, unstampedRows, totalCostCents },
         '[stripeSync] usage reported to Stripe'
       );
 
