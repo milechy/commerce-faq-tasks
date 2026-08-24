@@ -274,4 +274,57 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
     expect(rel).toContain('noopener');
     expect(rel).not.toContain('noreferrer');
   });
+
+  // E3b: お客様の回答評価(👍👎)。要件Rj/F5。
+  describe('answer_feedback (回答評価)', () => {
+    it('event_tracking とは独立に判定している(event_trackingが無効でも動く)', () => {
+      // answer_feedback の判定は event_tracking の早期returnより前にある
+      const idx1 = WIDGET_SRC.indexOf("cfg.answer_feedback === false");
+      const idx2 = WIDGET_SRC.indexOf('if (!cfg.event_tracking) return;');
+      expect(idx1).toBeGreaterThan(-1);
+      expect(idx2).toBeGreaterThan(-1);
+      expect(idx1).toBeLessThan(idx2);
+    });
+
+    it('既定は有効(D1)。fetch失敗時に無効化するコードが無い', () => {
+      // 唯一の無効化条件は明示 false のときだけ
+      expect(WIDGET_SRC).toMatch(/if\s*\(cfg\.answer_feedback === false\)\s*_answerFeedbackEnabled = false;/);
+      // 変数宣言時点の既定値
+      expect(WIDGET_SRC).toMatch(/var _answerFeedbackEnabled = true;/);
+    });
+
+    it('AI回答テキストと構造的に分離したDOMに描画している(bubbleのtextContentに混ぜない)', () => {
+      // buildFeedbackRow は bubble とは別要素として inner に append される
+      const idx = WIDGET_SRC.indexOf('buildFeedbackRow(msg.id)');
+      expect(idx).toBeGreaterThan(-1);
+      const before = WIDGET_SRC.slice(Math.max(0, idx - 1400), idx);
+      expect(before).toMatch(/bubble\.textContent = msg\.content;/);
+    });
+
+    it('system: true が付いた assistant メッセージ(通知・声がけ)には出さない', () => {
+      expect(WIDGET_SRC).toMatch(/msg\.role === 'assistant' && !msg\.system && _answerFeedbackEnabled/);
+    });
+
+    it('送信は event_tracking の EventTracker に依存しない独立経路を使う(keepalive付き)', () => {
+      const fnMatch = WIDGET_SRC.match(/function sendAnswerFeedback\(messageRef, rating\) \{[\s\S]{0,900}/);
+      expect(fnMatch).not.toBeNull();
+      const body = fnMatch ? fnMatch[0] : '';
+      expect(body).toMatch(/event_type:\s*'answer_feedback'/);
+      expect(body).toMatch(/rating:\s*rating/);
+      expect(body).toMatch(/message_ref:\s*messageRef/);
+      expect(body).toMatch(/keepalive:\s*true/);
+    });
+
+    it('連打しても同じ評価では再送信しない(最後の1つに収束)', () => {
+      expect(WIDGET_SRC).toMatch(/if\s*\(_feedbackGiven\[messageRef\] === rating\)\s*return;/);
+    });
+
+    it('👎の後にエスカレーションの状態(escalated/pending)やボタン文言を変更しない', () => {
+      const idx = WIDGET_SRC.indexOf("rating === 'down'");
+      expect(idx).toBeGreaterThan(-1);
+      const block = WIDGET_SRC.slice(idx, idx + 400);
+      expect(block).not.toMatch(/setEscalateBtnState/);
+      expect(block).toMatch(/feedback-hint/);
+    });
+  });
 });
