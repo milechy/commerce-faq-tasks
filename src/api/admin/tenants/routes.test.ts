@@ -1058,20 +1058,19 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
     expect(res.body.changed).toBe(true);
   });
 
-  it("free_ad への降格も許可する（解約・休会の導線を閉じるため）", async () => {
-    const db = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ plan: "enterprise" }], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [updatedRow("free_ad")], rowCount: 1 })
-        .mockResolvedValue({ rows: [], rowCount: 1 }),
-    };
+  // S5b(#918): free_ad への遷移は同意バナー基盤が整うまで全経路でブロック中。
+  // テナント自己申告が super_admin 経路のガードを素通りしないことを固定する。
+  // ブロック撤去時は blockFreeAdTransition の中身を変えれば全経路に効く。
+  it("free_ad への降格は S5b ブロック中のため 403（DBに触れない）", async () => {
+    const db = { query: jest.fn() };
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "free_ad" });
 
-    expect(res.status).toBe(200);
-    expect(res.body.plan).toBe("free_ad");
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
+    expect(db.query).not.toHaveBeenCalled();
   });
 
   it("プラン変更は tenant_settings_history に field_name='plan' で記録される", async () => {

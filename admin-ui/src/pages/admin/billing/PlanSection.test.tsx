@@ -68,13 +68,21 @@ describe("PlanSection", () => {
     expect(screen.getByText("ディープリサーチ")).toBeTruthy();
   });
 
-  it("free_ad を選ぶと上限・バッジ・共有プール必須を出す", () => {
+  // S5b(#918): free_ad への遷移はサーバが 403 で塞いでいる。
+  // 押せるのに失敗するボタンを出さない(CLAUDE.md 禁止15: 動線として閉じていないものを足さない)。
+  it("free_ad は選択できず、受け付けていない理由を出す", () => {
     renderSection("growth");
-    fireEvent.click(screen.getByRole("button", { name: /Free/ }));
-    expect(screen.getByText(/月200リクエストまで/)).toBeTruthy();
-    // プラン選択肢の説明文にも同じ文言があるため複数ヒットする
-    expect(screen.getAllByText(/Powered by R2C/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/共有学習プール/)).toBeTruthy();
+    const freeBtn = screen.getByRole("button", { name: /Free/ }) as HTMLButtonElement;
+    expect(freeBtn.disabled).toBe(true);
+    expect(screen.getByText(/無料プランへの変更は現在受け付けていません/)).toBeTruthy();
+
+    fireEvent.click(freeBtn);
+    expect(screen.queryByText(/変更しますか？/)).toBeNull();
+  });
+
+  it("free_ad が現在のプランなら「利用中」として表示は残る", () => {
+    renderSection("free_ad");
+    expect(screen.getByText(/利用中/)).toBeTruthy();
   });
 
   it("既発生分が遡らないことを明示する", () => {

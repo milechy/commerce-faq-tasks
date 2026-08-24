@@ -19,6 +19,19 @@ import { GATED_FEATURE_LABELS, planFeatureDelta } from "../../../lib/planFeature
 import { PLAN_OPTIONS } from "../tenants/types";
 import { CARD, BTN_LINK } from "./utils";
 
+/**
+ * S5b(PR #918): free_ad への遷移はサーバ側で一時的に 403 ブロック中。
+ * free_ad は共有学習プールへの参加が強制ONで、消費者向け同意バナーの
+ * 開示基盤が整うまで free_ad テナントを増やさない方針のため。
+ *
+ * 強制はあくまでサーバ側(blockFreeAdTransition)で行う。ここは
+ * 「押せるのに403になるボタン」を出さないための表示上の配慮にすぎない
+ * (CLAUDE.md 禁止14: 機能ゲートをUI側だけに置かない)。
+ * サーバのブロックを外すときは、この定数も false にすること。
+ */
+const FREE_AD_BLOCKED = true;
+const FREE_AD_BLOCKED_NOTE = "無料プランへの変更は現在受け付けていません（データ共有の同意表示を準備中のため）。";
+
 /** free_ad は「原価をR2Cが負担する」枠なので、選ぶ前に制約を明示する。 */
 const FREE_AD_NOTES = [
   "月200リクエストまで（超過すると新しい会話が止まります）",
@@ -110,11 +123,12 @@ export function PlanSection({
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
         {PLAN_OPTIONS.map((opt) => {
           const isCurrent = opt.value === currentPlan;
+          const isBlocked = FREE_AD_BLOCKED && opt.value === "free_ad" && !isCurrent;
           return (
             <button
               key={opt.value}
               type="button"
-              disabled={!canChangePlan || isCurrent}
+              disabled={!canChangePlan || isCurrent || isBlocked}
               onClick={() => { setError(null); setPending(opt.value); }}
               style={{
                 flex: "1 1 200px",
@@ -125,8 +139,8 @@ export function PlanSection({
                 border: `1px solid ${isCurrent ? "rgba(124,58,237,0.6)" : "var(--border)"}`,
                 background: isCurrent ? "rgba(124,58,237,0.15)" : "rgba(255,255,255,0.02)",
                 color: "var(--foreground)",
-                cursor: !canChangePlan || isCurrent ? "default" : "pointer",
-                opacity: canChangePlan || isCurrent ? 1 : 0.6,
+                cursor: !canChangePlan || isCurrent || isBlocked ? "default" : "pointer",
+                opacity: isBlocked || (!canChangePlan && !isCurrent) ? 0.6 : 1,
               }}
             >
               <span style={{ display: "block", fontWeight: 700, fontSize: 14 }}>
@@ -139,7 +153,7 @@ export function PlanSection({
                 )}
               </span>
               <span style={{ display: "block", fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                {opt.desc}
+                {isBlocked ? FREE_AD_BLOCKED_NOTE : opt.desc}
               </span>
             </button>
           );

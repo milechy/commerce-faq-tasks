@@ -22,6 +22,26 @@ import { isValidOriginPattern } from "../../middleware/originCheck";
 // (既知の多重化。DBのCHECK制約は migration_free_ad_plan.sql で別途対応が必要)。
 const planValues = ["free_ad", "starter", "growth", "enterprise"] as const;
 
+// S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、消費者向け
+// 同意バナーの開示基盤が整うまでfree_adテナントを増やさない、という一時的なブロック。
+//
+// ★free_ad へ遷移しうる経路が増えたら、必ずこの関数を通すこと★
+// 導入時(PR #918)は super_admin の POST/PATCH の2経路しか無かったが、その後
+// テナント自身のプラン変更(PUT /v1/admin/my-tenant/plan)が加わった。経路ごとに
+// if を書き写すと、新しい経路がガードを素通りする(実際に一度素通りした)。
+// 環境変数化しない(CLAUDE.md 禁止41の精神。誰にも開ける余地を残さないため)。
+//
+// 撤去する際は、この関数の呼び出し元をすべて外すのではなく、この関数の中身だけを
+// 変えれば全経路に効く。撤去の前提だったバナー実装(S5a・PR #919)は完了済み。
+function blockFreeAdTransition(plan: string | undefined, res: Response): boolean {
+  if (plan !== "free_ad") return false;
+  res.status(403).json({
+    error: "free_ad_plan_not_yet_available",
+    message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
+  });
+  return true;
+}
+
 // 許可オリジンの検証。super_admin用(updateTenantSchema)と client_admin 自己申告用
 // (PATCH /v1/admin/my-tenant)で同一インスタンスを共有し、片方だけ緩いという事故を防ぐ。
 // 判定本体は originCheck.ts の isValidOriginPattern に置き、照合ロジックと同じ定義を使う。
@@ -399,6 +419,11 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     const nextPlan = parsed.data.plan;
 
+    // super_admin の POST/PATCH と同じ一時ブロックを、テナント自己申告にも適用する。
+    // ここを抜くと、#918 が塞いだ「free_ad テナントを増やさない」方針を
+    // テナント側の導線が素通りする（CLAUDE.md 禁止14: UIだけの制限にしない）。
+    if (blockFreeAdTransition(nextPlan, res)) return;
+
     try {
       const beforeResult = await db.query<{ plan: TenantPlan | null }>(
         `SELECT plan FROM tenants WHERE id = $1`,
@@ -588,18 +613,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
     const { id, name, plan } = parsed.data;
-    // S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、
-    // ウィジェットに消費者向け同意バナーがまだ無い(docs/DATA_RETENTION_POLICY.md設計のみ)。
-    // 開示基盤が整うまでfree_adテナントを新規作成できないようにする。free_adは現状
-    // super_admin専用(公開サインアップ導線が無い)なので、ここを塞げば足りる。
-    // バナー実装後にこのブロックごと撤去する前提の一時的なガード(環境変数化しない: 誰にも
-    // 開ける余地を残さないため。撤去はコード変更のみで行う)。
-    if (plan === "free_ad") {
-      return res.status(403).json({
-        error: "free_ad_plan_not_yet_available",
-        message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
-      });
-    }
+    if (blockFreeAdTransition(plan, res)) return;
     try {
       const result = await db.query(
         `INSERT INTO tenants (id, name, plan, is_active)
@@ -713,15 +727,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     if (Object.keys(fields).length === 0) {
       return res.status(400).json({ error: "no_fields", message: "更新フィールドが必要です。" });
     }
-    // S5b(共有学習プールの参加モデル・D1決定案): 消費者向け同意バナー実装まで、
-    // free_adへの移行そのものを塞ぐ(POST /v1/admin/tenantsと同じ一時的なガード)。
-    // DBに触れる前に弾く(POSTと同様、既存テナントかどうかを問わず一律ブロック)。
-    if (fields.plan === "free_ad") {
-      return res.status(403).json({
-        error: "free_ad_plan_not_yet_available",
-        message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
-      });
-    }
+    if (blockFreeAdTransition(fields.plan, res)) return;
     try {
       // 存在チェック + Phase72-A: 変更前の監査対象フィールドを取得
       const check = await db.query("SELECT id, plan, features, billing_enabled, is_active FROM tenants WHERE id = $1", [id]);
