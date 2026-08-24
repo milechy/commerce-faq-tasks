@@ -16,8 +16,12 @@ const API_BASE_URL =
   process.env.API_BASE_URL ?? "https://api.r2c.biz";
 
 // ウィジェットの「Powered by R2C」バッジの遷移先（LPトップではなく専用着地ページ）。
-// r2c.biz は admin-ui/LP と別ホストなので API_BASE_URL とは独立に持つ。
-const LP_BASE_URL = process.env.LP_BASE_URL ?? "https://r2c.biz";
+// 2026-08-24 実機確認: apex の r2c.biz は DNS レコードが存在せず解決不能
+// （admin.r2c.biz / api.r2c.biz は稼働中。R2C がローンチ前でマーケティング用
+// apex ドメインが未取得/未設定のため）。public/lp/ は本リポジトリの Express アプリ
+// (api.r2c.biz) が express.static で配信しているため、確実に到達できるこちらを既定にする。
+// r2c.biz apex が将来取得され次第、env で上書きする。
+const LP_BASE_URL = process.env.LP_BASE_URL ?? API_BASE_URL;
 
 /**
  * バッジのリンクURL（UTM + テナント識別子付き）を組み立てる。
