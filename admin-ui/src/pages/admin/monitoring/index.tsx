@@ -19,6 +19,15 @@ interface MeasurementHealth {
   cvSessionLinkRate: RateMetric;
   outcomeRecordRate: RateMetric & { autoRecorded: number };
   validUserSessionCount: number;
+  /** 「開いたのに会話しなかった」割合。visitor_id 記録開始前は結合不能なので
+   *  trackingSince より前は母数に含めない。 */
+  chatOpenDropoff?: {
+    trackingSince: string | null;
+    visitorsOpened: number;
+    visitorsConversed: number;
+    dropoffRate: number | null;
+    sessionCoverage: RateMetric;
+  };
   /** super_admin のときだけ返る。コードが要求する列が実行中のDBに存在するか。 */
   schemaHealth?: {
     missing: Array<{ table: string; columns: string[]; tableMissing: boolean }>;
@@ -552,6 +561,40 @@ export default function MonitoringPage() {
                   description="判定に使える母数そのもの（source=userかつメッセージあり）"
                 >
                   {health ? <MetricValue value={health.validUserSessionCount.toLocaleString("ja-JP")} /> : <MetricPlaceholder />}
+                </MeasurementHealthCard>
+
+                {/* G5: チャットは開かれているのに会話にならない乖離。
+                    visitor_id の記録が始まる前のセッションは結合しようがないため、
+                    期間全体で率を出すと「0%が話した」という誤った数字になる。 */}
+                <MeasurementHealthCard
+                  title="開いたのに話さなかった割合"
+                  description="チャットを開いた人のうち、会話に至らなかった割合"
+                >
+                  {!health?.chatOpenDropoff ? (
+                    <MetricPlaceholder />
+                  ) : health.chatOpenDropoff.trackingSince === null ? (
+                    <div style={{ fontSize: 13.5, color: "var(--muted-foreground)", lineHeight: 1.8 }}>
+                      まだ集計できません。会話に訪問者IDが付いた記録がありません。
+                    </div>
+                  ) : health.chatOpenDropoff.dropoffRate === null ? (
+                    <div style={{ fontSize: 13.5, color: "var(--muted-foreground)", lineHeight: 1.8 }}>
+                      判定に足りません（開いた人 {health.chatOpenDropoff.visitorsOpened} 人 / 必要 30 人）。
+                      <br />
+                      {new Date(health.chatOpenDropoff.trackingSince).toLocaleDateString("ja-JP")} 以降の記録のみを数えています。
+                      それ以前の会話には訪問者IDが無く、結合できません。
+                    </div>
+                  ) : (
+                    <>
+                      <MetricValue value={`${health.chatOpenDropoff.dropoffRate}%`} />
+                      <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.8, marginTop: 4 }}>
+                        開いた {health.chatOpenDropoff.visitorsOpened} 人のうち、話したのは {health.chatOpenDropoff.visitorsConversed} 人
+                        <br />
+                        訪問者IDが付いた会話: {health.chatOpenDropoff.sessionCoverage.numerator}／
+                        {health.chatOpenDropoff.sessionCoverage.denominator} 件
+                        （この割合が低いほど上の数字は当てになりません）
+                      </div>
+                    </>
+                  )}
                 </MeasurementHealthCard>
 
                 {/* スキーマ適用ズレ(R2C運用のみ)。コードは配備済みでも本番に列が無いと
