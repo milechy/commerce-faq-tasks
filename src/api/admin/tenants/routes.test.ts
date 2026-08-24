@@ -231,6 +231,123 @@ describe("PATCH /v1/admin/tenants/:id — sales_stage_continuity", () => {
   });
 });
 
+// --------------------------------------------------------------------------
+// S2: 共有学習プールの参加モデル — 同意の2軸化(features.learning: {learn, share})
+// --------------------------------------------------------------------------
+
+describe("PATCH /v1/admin/tenants/:id — features.learning(共有学習プール同意の2軸化)", () => {
+  const ROW = {
+    id: "tenant-a", name: "テストテナント", plan: "starter", is_active: true,
+    allowed_origins: [], system_prompt: null, billing_enabled: false,
+    billing_free_from: null, billing_free_until: null,
+    features: { avatar: false, voice: false, rag: true },
+    lemonslice_agent_id: null, conversion_types: [], tenant_contact_email: null,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  };
+
+  function makeDb(returned: Record<string, unknown>) {
+    return {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "starter", features: ROW.features, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ ...ROW, features: returned }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+  }
+
+  it("E8: learn=false かつ share=true は super_admin 経由でも 400", async () => {
+    const res = await request(makeApp(makeDb({}), "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, learning: { learn: false, share: true } } });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("learn=true, share=false のような整合する組み合わせは super_admin 経由で更新できる", async () => {
+    const features = { avatar: false, voice: false, rag: true, learning: { learn: true, share: false } };
+    const res = await request(makeApp(makeDb(features), "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ features });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features.learning).toEqual({ learn: true, share: false });
+  });
+
+  it("E11: features.learning を送っても avatar 等の既存フラグが消えない（|| マージ、送信側は全キーを送る）", async () => {
+    const features = {
+      avatar: true, voice: true, rag: true,
+      learning: { learn: true, share: true },
+    };
+    const db = makeDb(features);
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ features });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features.avatar).toBe(true);
+    expect(res.body.features.voice).toBe(true);
+    expect(res.body.features.learning).toEqual({ learn: true, share: true });
+  });
+});
+
+describe("PATCH /v1/admin/my-tenant — features.learning(共有学習プール同意の2軸化・自己申告)", () => {
+  const ROW = {
+    id: "tenant-a", name: "テストテナント",
+    features: { avatar: false, voice: false, rag: true },
+    lemonslice_agent_id: null, faq_question_hint: null, faq_answer_hint: null,
+    onboarding_industry: null, onboarding_completed_at: null, allowed_origins: [],
+  };
+
+  it("E8: learn=false かつ share=true は my-tenant(client_admin自己申告)でも 400", async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [ROW], rowCount: 1 }) };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, learning: { learn: false, share: true } } });
+
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toMatch(/learn=false.*share=true|learning/);
+  });
+
+  it("client_admin は自己申告(my-tenant)で learn/share の整合する組み合わせを更新できる", async () => {
+    const updated = { ...ROW, features: { avatar: false, voice: false, rag: true, learning: { learn: true, share: true } } };
+    const db = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [updated], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, learning: { learn: true, share: true } } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features.learning).toEqual({ learn: true, share: true });
+  });
+
+  it("E11: my-tenant 経由で features.learning を送っても他の既存フラグ(pre_dispatch)が消えない", async () => {
+    // avatar/voice=true は別途プラン制限クエリを挟むため、ここでは無関係のフラグ
+    // (pre_dispatch)でマージ挙動のみを確認する。avatar/voiceのゲートは既存の
+    // 「PATCH /v1/admin/my-tenant — avatar/voice plan ゲート」describeでカバー済み。
+    const updated = {
+      ...ROW,
+      features: { avatar: false, voice: false, rag: true, pre_dispatch: true, learning: { learn: true, share: false } },
+    };
+    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [updated], rowCount: 1 }) };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ features: { avatar: false, voice: false, rag: true, pre_dispatch: true, learning: { learn: true, share: false } } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features.pre_dispatch).toBe(true);
+    expect(res.body.features.learning).toEqual({ learn: true, share: false });
+  });
+});
+
 describe("GET /v1/admin/tenants/:id/settings-history", () => {
   const HISTORY_ROW = {
     id: 1,

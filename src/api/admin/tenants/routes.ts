@@ -36,6 +36,26 @@ const allowedOriginsSchema = z
   .max(20)
   .optional();
 
+// S2: 共有学習プールの参加モデル。同意を「1フラグ」から独立した2軸に分ける。
+// - learn : 自社内学習。自テナントの会話から自テナント用に学習する(データは外に出ない)。
+// - share : 共有プール参加。R2C共有プールに「出し、かつ読む」(外部Hermes VPSへ出る)。
+// learn=false かつ share=true(自社が学ばないのに他社へ出す)は不整合として拒否する。
+// 同意は本来テナント自身のものなので、super_admin用スキーマ(featuresSchema)と
+// client_admin自己申告用(PATCH /v1/admin/my-tenant)の両方に足す必要がある。ただし
+// featuresSchema全体を共有インスタンス化すると sales_stage_continuity 等の
+// 運用者限定フラグ(上記コメント参照)まで自己申告できてしまうため、featuresSchema自体は
+// 共有せず、learning部分だけを切り出して同一インスタンスを共有する
+// (allowed_originsSchemaと同じ考え方: 検証ロジック・エラーメッセージの重複による
+// 片方だけ緩くなる事故を防ぐ)。
+const learningConsentSchema = z
+  .object({
+    learn: z.boolean(),
+    share: z.boolean(),
+  })
+  .refine((v) => !(v.learn === false && v.share === true), {
+    message: "learn=false かつ share=true は指定できません",
+  });
+
 // 日付のみの文字列("2026-01-01"等)はUTC深夜と解釈されるため、意図したタイムゾーンと
 // ズレて「まだ未来のつもりが過去判定される」事故が起きやすい。バリデーションのロジックは
 // 変えず、エラーメッセージでタイムゾーン付きISO-8601形式を案内する。
@@ -89,6 +109,10 @@ const featuresSchema = z.object({
   // 出さない選択はテナント側の事情(購入導線を邪魔したくない等)にのみ使う。
   // false を明示したテナントだけ非表示にする。
   answer_feedback: z.boolean().optional(),
+  // S2: 共有学習プールの参加モデル。同意の2軸(learn/share)。詳細は learningConsentSchema
+  // のコメント参照。未設定時の後方互換解決(learn=true固定、shareは旧hermes_raw_data_consent
+  // から)は src/lib/hermesConsent.ts の resolveLearningConsent が行う。
+  learning: learningConsentSchema.optional(),
 });
 
 const updateTenantSchema = z.object({
@@ -269,6 +293,9 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         pre_dispatch: z.boolean().optional(),
         // Phase75: テナント自身によるHermes Agent向け生データ利用同意の自己申告
         hermes_raw_data_consent: z.boolean().optional(),
+        // S2: 共有学習プールの参加モデル。同意はテナント自身のものなので、super_admin用の
+        // featuresSchemaと同一インスタンス(learningConsentSchema)を共有する。
+        learning: learningConsentSchema.optional(),
       }).optional(),
       // GID 1216274385106667: FAQ登録フォームの質問/回答欄カスタムヒント（client_admin自己申告）
       faq_question_hint: z.string().max(200).nullable().optional(),
