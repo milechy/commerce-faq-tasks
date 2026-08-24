@@ -84,6 +84,11 @@ const featuresSchema = z.object({
   // CLAUDE.md 禁止35: 会話の振る舞いを変える機能なので全テナント一斉に開けない。
   // 運用者が開ける機能であり、client_admin 自己申告の PATCH /v1/admin/my-tenant には足さない。
   sales_stage_continuity: z.boolean().optional(),
+  // お客様がAIの回答を評価する(👍👎)UIをウィジェットに出すか。
+  // **未設定は「出す」**(決定 D1: 既定ON)。教師信号を集めるのが目的で、
+  // 出さない選択はテナント側の事情(購入導線を邪魔したくない等)にのみ使う。
+  // false を明示したテナントだけ非表示にする。
+  answer_feedback: z.boolean().optional(),
 });
 
 const updateTenantSchema = z.object({

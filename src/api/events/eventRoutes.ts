@@ -22,7 +22,20 @@ const VALID_EVENT_TYPES = [
   'exit_intent', 'chat_open', 'chat_message', 'chat_conversion',
   // 「Powered by R2C」バッジのクリック（widget.js）
   'branding_badge_click',
+  // AIの回答に対するお客様の評価(👍👎)。学習ループの教師信号。
+  // Judge は 4通未満の会話を評価しないため、1往復で終わる現状ではこれが
+  // 唯一機能する品質シグナルになる(要件 Rj / 決定 D1)。
+  // **新テーブルを作らない**(CLAUDE.md 禁止32)。既存 behavioral_events に載せる。
+  'answer_feedback',
 ] as const;
+
+/** answer_feedback の event_data。どの回答への評価かを識別できる必要がある。 */
+const AnswerFeedbackDataSchema = z.object({
+  rating: z.enum(['up', 'down']),
+  /** 評価対象のAI回答を指す識別子(widget が採番する会話内の連番など)。
+   *  同じ回答への評価はこの値で名寄せする。 */
+  message_ref: z.string().min(1).max(128),
+});
 
 const EventSchema = z.object({
   event_type: z.enum(VALID_EVENT_TYPES),
@@ -30,6 +43,21 @@ const EventSchema = z.object({
   page_url: z.string().max(2048).optional(),
   referrer: z.string().max(2048).optional(),
   timestamp: z.string().optional(),
+});
+
+// answer_feedback だけは event_data の形を強制する。
+// 他イベントは自由形式(既存互換)だが、評価は集計に使うため
+// rating/message_ref が無いものを受け取ると後段で数えられなくなる。
+const EventSchemaWithFeedback = EventSchema.superRefine((ev, ctx) => {
+  if (ev.event_type !== 'answer_feedback') return;
+  const parsed = AnswerFeedbackDataSchema.safeParse(ev.event_data);
+  if (!parsed.success) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['event_data'],
+      message: 'answer_feedback には rating(up|down)と message_ref が必要です',
+    });
+  }
 });
 
 const EventBatchSchema = z.object({
@@ -40,7 +68,7 @@ const EventBatchSchema = z.object({
   // conversion_attributions への結合にのみ使う(任意: 会話が無いページでの
   // trackConversion呼び出しでは無いことがある)。
   chat_session_id: z.string().min(1).max(128).optional(),
-  events: z.array(EventSchema).min(1).max(50),
+  events: z.array(EventSchemaWithFeedback).min(1).max(50),
 });
 
 export function registerEventRoutes(

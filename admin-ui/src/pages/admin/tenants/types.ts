@@ -25,6 +25,8 @@ export interface TenantFeatures {
   // 会話の段階引き継ぎ(SalesFlow)。off だと毎ターン最初の段階に戻る。
   // 実顧客の会話の進み方が変わるため、段階的に開ける(CLAUDE.md 禁止35)。
   sales_stage_continuity?: boolean;
+  /** お客様の回答評価(👍👎)をウィジェットに出すか。未設定は「出す」(既定ON)。 */
+  answer_feedback?: boolean;
 }
 
 export interface TenantDetail {
