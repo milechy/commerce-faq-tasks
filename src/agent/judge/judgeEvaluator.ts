@@ -18,6 +18,7 @@ import {
   getCrossTenantContext,
   formatCrossTenantContext,
 } from '../../lib/crossTenantContext';
+import { GLOBAL_RULE_VISIBILITY_WHERE } from '../../api/admin/tuning/tuningRulesRepository';
 
 const logger = pino();
 
@@ -266,9 +267,11 @@ export async function evaluateSession(sessionId: string, expectedTenantId?: stri
         : Promise.resolve({ results: [] }),
       pool
         .query(
-          // runtime (tuningRulesRepository) は tenant + 'global' 共有ルールを適用するため、
-          // judge も同じルール集合で psychology_fit を評価する (他RAG経路と一貫)。
-          "SELECT trigger_pattern, expected_behavior FROM tuning_rules WHERE (tenant_id = $1 OR tenant_id = 'global') AND is_active = true LIMIT 10",
+          // S3(共有学習プールの参加モデル): runtime (tuningRulesRepository) と同じ述語
+          // GLOBAL_RULE_VISIBILITY_WHERE を共有しているため、judge も同じルール集合
+          // (tenant + share同意済みなら global) で psychology_fit を評価する
+          // (他RAG経路と一貫。述語をコピーせず1箇所を import して使う)。
+          `SELECT trigger_pattern, expected_behavior FROM tuning_rules WHERE ${GLOBAL_RULE_VISIBILITY_WHERE} AND is_active = true LIMIT 10`,
           [tenantId],
         )
         .then((res: { rows: Array<{ trigger_pattern: string; expected_behavior: string }> }) => res.rows)
