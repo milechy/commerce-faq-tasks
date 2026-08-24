@@ -430,93 +430,6 @@ groq_llm = openai_plugin.LLM(
 )
 
 
-def format_g2_latency_log(
-    ev,
-    tenant_id: str | None,
-    room_name: str,
-    reply_arrived_at: float | None = None,
-) -> str | None:
-    """G2(要件定義v1.3): アバターの応答レイテンシを実測するための一時計測。
-
-    conversation_item_added イベントから assistant ターンの ChatMessage.metrics
-    (livekit-agents 1.6.7 が公式に収集する e2e_latency/llm_node_ttft/tts_node_ttfb/
-    playback_latency)を読み、ログ1行に整形する。
-
-    実測で判明した点(2026-08-24): R2Cのアバターは Silero VAD を意図的に除外(VPSに
-    GPU無しでSIGABRTするため)しておりSTT/VADパイプラインが存在せず、応答テキストも
-    Node.js側 /api/chat から Data Channel 経由で届いて speak()/session.say() に
-    直渡しされる(groq_llm はAgentSessionコンストラクタ用のダミーで応答生成に未使用)。
-    そのため e2e_latency(STTの発話終了起点)と llm_node_ttft(SDKのLLM
-    ストリーミングタスク起点)は発火経路自体が無く、常に None になる
-    (バグではなく本アーキテクチャの構造上の制約)。
-    代わりに reply_arrived_at(応答テキスト到着時刻、呼び出し側で手動計測)から
-    ChatMessage.metrics の started_speaking_at(TTS発話開始時刻、フレームワーク計測)
-    までの差分を reply_wait_s として出す。これが「本体APIの応答が届いてから
-    アバターが喋り始めるまで」の体感レイテンシに相当する。
-
-    役目を終えたら(G2実測完了・方式決定後)削除する一時コードであることを明示しておく。
-    計測が失敗しても呼び出し側(entrypoint)が音声パイプラインを止めないよう、
-    例外はここでは投げず None を返すに留める(呼び出し側の try/except は保険)。
-
-    戻り値: ログに出す1行。計測値が無いターン(会話開始直後の挨拶等)は None。
-    """
-    item = getattr(ev, "item", None)
-    if getattr(item, "role", None) != "assistant":
-        return None
-    m = getattr(item, "metrics", None) or {}
-    e2e = m.get("e2e_latency")
-    ttft = m.get("llm_node_ttft")
-    ttfb = m.get("tts_node_ttfb")
-    playback = m.get("playback_latency")
-    started_speaking_at = m.get("started_speaking_at")
-    if e2e is None and ttft is None and ttfb is None:
-        return None
-    reply_wait = None
-    if started_speaking_at is not None and reply_arrived_at is not None:
-        reply_wait = started_speaking_at - reply_arrived_at
-    return (
-        f"[G2-latency] tenant={tenant_id} room={room_name} "
-        f"e2e_latency_s={e2e} llm_ttft_s={ttft} tts_ttfb_s={ttfb} "
-        f"playback_latency_s={playback} reply_wait_s={reply_wait}"
-    )
-
-
-async def _log_g2_reply_wait(
-    handle: SpeechHandle,
-    reply_arrived_at: float,
-    tenant_id: str | None,
-    room_name: str,
-) -> None:
-    """G2: speak()呼び出し1回にスコープを閉じて reply_wait_s を計測する。
-
-    conversation_item_added(グローバルハンドラ)と違い、この関数は呼び出し元の
-    speak()が返した SpeechHandle 自身の chat_items だけを見るため、フィラーや
-    別ターンの reply_arrived_at を誤って使い回すことがない(共有state版で
-    reply_wait_s が負値になる形で実測時に発覚, 2026-08-24)。
-    計測が失敗しても音声パイプラインには一切影響しない(再生済みのhandleを
-    待つだけで、speak()の戻り値やTTS本体には触れない)。
-    """
-    try:
-        await handle.wait_for_playout()
-    except Exception:
-        pass
-    try:
-        for item in handle.chat_items:
-            if getattr(item, "role", None) != "assistant":
-                continue
-            m = getattr(item, "metrics", None) or {}
-            started_speaking_at = m.get("started_speaking_at")
-            if started_speaking_at is None:
-                continue
-            reply_wait = started_speaking_at - reply_arrived_at
-            logger.info(
-                f"[G2-latency] tenant={tenant_id} room={room_name} reply_wait_s={reply_wait}"
-            )
-            break
-    except Exception as e:
-        logger.warning(f"[G2-latency] reply_wait log failed (non-fatal): {e}")
-
-
 async def entrypoint(ctx: agents.JobContext) -> None:
     # 子プロセスでも確実に再ロード
     for _c in [_here / ".env", _here.parent / ".env"]:
@@ -636,28 +549,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
-    # G2(要件定義v1.3): アバターの応答レイテンシを実測し、知識連動(RAG)の
-    # 実現方式を決めるための一時的な計測。手動でタイムスタンプを打つのではなく、
-    # livekit-agents 1.6.7 が ChatMessage.metrics として公式に収集している値を読む
-    # (session.on("metrics_collected") は本バージョンで非推奨。
-    # ChatMessage.metrics が代替として明示されている)。
-    # 計測が失敗しても音声パイプラインを絶対に止めない(try/exceptで握り潰す)。
-    # 役目を終えたら削除する一時コードであることを明示しておく。
-    #
-    # reply_wait_s は意図的にここでは出さない: conversation_item_added はフィラー/
-    # 挨拶などの assistant ターンにも発火するため、グローバルな1スロットで
-    # reply_arrived_at を共有すると別ターンの値を誤って使い回す(実測でreply_wait_s
-    # が負値になる形で発覚, 2026-08-24)。reply_wait_s は speak() 呼び出し1回に
-    # スコープを閉じた _log_g2_reply_wait() 側でのみ計測する。
-    @session.on("conversation_item_added")
-    def on_conversation_item_added(ev) -> None:
-        try:
-            log_line = format_g2_latency_log(ev, tenant_id, ctx.room.name)
-            if log_line:
-                logger.info(log_line)
-        except Exception as e:
-            logger.warning(f"[G2-latency] failed to log metrics (non-fatal): {e}")
-
     @session.on("error")
     def on_session_error(ev) -> None:
         """LemonSlice Production Best Practices: pipeline error handling."""
@@ -700,7 +591,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         publish: bool,
         emotion_prefix: bool,
         allow_interruptions: bool | None = None,
-        reply_arrived_at: float | None = None,
     ) -> SpeechHandle:
         """発話の唯一の入口。emotion prefix 適用・課金計上・Data Channel publish を一元化する。
 
@@ -708,10 +598,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         歓迎メッセージのチャット履歴欠落バグ（agent_reply 未送出）を起こした。
         emotion_tags（テナントDB設定）は _emotion_tags_prefix で TTS 音声にのみ適用し、
         Widget のチャット吹き出しには漏らさない（旧 FishAudioTTS.synthesize() の挙動を踏襲）。
-
-        reply_arrived_at: G2(要件定義v1.3)の一時計測。本体APIの応答テキストが
-        届いた時刻を渡すと、このspeak()呼び出し1回にスコープを閉じた形で
-        reply_wait_s(応答到着→発話開始)をログに出す。フィラー等では渡さない。
         """
         tts_text, publish_text = _compose_speak_texts(
             text,
@@ -727,17 +613,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
         if publish:
             asyncio.create_task(_publish_agent_reply(publish_text))
-        if reply_arrived_at is not None:
-            asyncio.create_task(
-                _log_g2_reply_wait(handle, reply_arrived_at, tenant_id, ctx.room.name)
-            )
         return handle
 
     async def handle_tts_request(reply_text: str) -> None:
         """本体APIの応答テキストをそのままTTSに渡す（Groq呼び出しなし）。"""
         try:
-            # G2: 応答テキストがこの関数に届いた時刻を記録(speak()より前)。
-            g2_reply_arrived_at = time.time()
             # thinking_start フィラーが再生中なら interrupt して本来の発話に切り替える
             fh = _filler_state["handle"]
             if fh is not None:
@@ -748,7 +628,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _filler_state["handle"] = None
             prefix = sales_flow_emotion_prefix(_sales_state["current"])
             logger.info(f"[tts_request] TTS直渡し state={_sales_state['current']!r} prefix={prefix!r} ({len(reply_text)} chars): {reply_text[:80]!r}")
-            speak(reply_text, publish=False, emotion_prefix=True, reply_arrived_at=g2_reply_arrived_at)
+            speak(reply_text, publish=False, emotion_prefix=True)
         except Exception as e:
             logger.error(f"[handle_tts_request] error: {e}")
 
@@ -759,17 +639,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             async with aiohttp.ClientSession() as http:
                 reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt, tenant_id=tenant_id)
             logger.info(f"[Groq] reply ({len(reply)} chars): {reply!r}")
-            # G2: 応答テキストが確定した時刻を記録(speak()より前)。
-            g2_reply_arrived_at = time.time()
 
             # 2. speak() で FishAudio TTS パイプラインに渡し、Data Channel にも送信
             #    （フォールバックメッセージは publish スキップ）
-            speak(
-                reply,
-                publish=(reply != FALLBACK_MSG),
-                emotion_prefix=False,
-                reply_arrived_at=g2_reply_arrived_at,
-            )
+            speak(reply, publish=(reply != FALLBACK_MSG), emotion_prefix=False)
             logger.debug(f"[say] sent to TTS: {reply!r}")
 
             # Phase75: 会話ログ永続化(fire-and-forget)。room名をsession_idとして使う。
