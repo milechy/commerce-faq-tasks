@@ -35,8 +35,10 @@ import { buildSweepCandidatesQuery, type SweepCandidateRow } from "./sweepCandid
 
 const logger = pino({ name: "judge-sweep" });
 
-/** 既定は r2c_default のみ(段階的開放。CLAUDE.md 禁止35と同じ理由)。 */
-function resolveSweepTenants(): string[] {
+/** 既定は r2c_default のみ(段階的開放。CLAUDE.md 禁止35と同じ理由)。
+ *  点火状態の可視化(analytics/ignitionStatus.ts)からも参照する。
+ *  **第2の解釈を書かない** — 対象テナントの判定はここが唯一の実装。 */
+export function resolveSweepTenants(): string[] {
   const raw = process.env.JUDGE_SWEEP_TENANTS;
   if (!raw || raw.trim() === "") return ["r2c_default"];
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
