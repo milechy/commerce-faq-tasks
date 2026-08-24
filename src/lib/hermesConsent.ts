@@ -39,6 +39,40 @@ interface TenantFeaturesRow {
   hermes_raw_data_consent?: boolean;
 }
 
+/**
+ * 「share=ON か」を判定する SQL 述語を組み立てる。JS 側 resolveLearningConsentFromFeatures と
+ * 同じ判定を SQL でも表現するための唯一の定義。
+ *
+ * ★ 実装を2箇所に持たないこと ★
+ * 以前は tuningRulesRepository.ts(globalルールの読み取り権)と
+ * listHermesConsentingTenantIds(export対象の一覧)がそれぞれ生SQLを持っており、
+ * どちらも `(features->'learning'->>'share') = 'true'` という緩い形だった。
+ * この形は ->> がテキスト化するため、以下が JS 側と食い違う:
+ *   - {"learn":true,"share":"true"}  (share が文字列) → SQL:true / JS:false
+ *   - {"share":true}                 (learn 欠落)     → SQL:true / JS:false
+ * どちらも「globalルールは読めるが export は 403」= 共有プールへのタダ乗りが
+ * 無言で成立する状態になり、要件 X1/X2 に反する。
+ * jsonb_typeof で learn/share が両方 boolean であることを要求し、値の比較も
+ * ->> (text) ではなく -> (jsonb) と 'true'::jsonb で行うことで JS と一致させる。
+ * (2026-08-25 に本番Postgresで11ケースを実測し、JS側と全一致することを確認済み)
+ *
+ * @param featuresExpr features 列を指す SQL 式。呼び出し側のエイリアスに合わせる
+ *   (例: "features" / "t.features")。
+ */
+export function shareConsentSqlPredicate(featuresExpr: string): string {
+  return `(
+                 (
+                   jsonb_typeof(${featuresExpr}->'learning'->'learn') = 'boolean'
+                   AND jsonb_typeof(${featuresExpr}->'learning'->'share') = 'boolean'
+                   AND (${featuresExpr}->'learning'->'share') = 'true'::jsonb
+                 )
+                 OR (
+                      (${featuresExpr}->'learning') IS NULL
+                      AND (${featuresExpr}->>'hermes_raw_data_consent') = 'true'
+                    )
+               )`;
+}
+
 function isValidLearningShape(value: unknown): value is LearningConsent {
   return (
     typeof value === "object" &&
@@ -129,11 +163,7 @@ export async function listHermesConsentingTenantIds(): Promise<string[]> {
   try {
     const result = await pool.query<{ id: string }>(
       `SELECT id FROM tenants
-       WHERE (features->'learning'->>'share') = 'true'
-          OR (
-               (features->'learning') IS NULL
-               AND (features->>'hermes_raw_data_consent') = 'true'
-             )`,
+       WHERE ${shareConsentSqlPredicate("features")}`,
     );
     return result.rows.map((r) => r.id);
   } catch {

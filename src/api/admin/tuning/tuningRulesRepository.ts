@@ -4,6 +4,7 @@
 import { getPool } from "../../../lib/db";
 import { sanitizeInput } from "../../../lib/security/inputSanitizer";
 import { logger } from "../../../lib/logger";
+import { shareConsentSqlPredicate } from "../../../lib/hermesConsent";
 
 // ---------------------------------------------------------------------------
 // 型定義
@@ -69,19 +70,17 @@ export interface ListRulesFilters {
  * トリップを追加しない)。対象テナント行が存在しない、または share が真でなければ
  * EXISTS が false になり global 行は返らない(fail-closed)。
  *
- * SQL述語の優先順位は hermesConsent.ts の listHermesConsentingTenantIds と同一にする
- * (新形式 features.learning.share を優先し、features.learning が未設定の場合のみ
- * 旧フラグ features.hermes_raw_data_consent にフォールバック):
- *   (features->'learning'->>'share') = 'true'
- *      OR (
- *           (features->'learning') IS NULL
- *           AND (features->>'hermes_raw_data_consent') = 'true'
- *         )
+ * ★share の判定そのものは hermesConsent.ts の shareConsentSqlPredicate() が唯一の定義★
+ * (この定数は「global 行に限って」その判定を適用するラッパー)。以前はここと
+ * listHermesConsentingTenantIds が別々に生SQLを持っており、どちらも
+ * `->>'share' = 'true'` という緩い形だったため JS 側リゾルバと食い違っていた。
+ * 詳細と実測結果は shareConsentSqlPredicate() のコメントを参照。
  *
- * ★この述語はここ1箇所だけで定義する(コピーして各所に書かない)。★
- * ★tenants テーブルのエイリアスは t に固定する★。エイリアスを引数化すると
- * tests/phase38/globalRuleGate.test.ts の正規表現検査(alias t を要求)が
- * 空振りする(PR #896 で FAQ_VISIBILITY_WHERE のエイリアスを固定した際と同じ理由)。
+ * ★tenants テーブルのエイリアスは t に固定する★
+ * (FROM tenants t / t.features)。tests/phase38/globalRuleGate.test.ts が
+ * 生成後の文字列に対して alias t を要求している(PR #896 で FAQ_VISIBILITY_WHERE の
+ * エイリアスを固定したのと同じ理由)。share 判定式だけを関数に切り出しても、
+ * このラッパー側で "t.features" を渡す形は変えないこと。
  */
 export const GLOBAL_RULE_VISIBILITY_WHERE = `(
         tenant_id = $1
@@ -90,13 +89,7 @@ export const GLOBAL_RULE_VISIBILITY_WHERE = `(
           AND EXISTS (
             SELECT 1 FROM tenants t
              WHERE t.id = $1
-               AND (
-                 (t.features->'learning'->>'share') = 'true'
-                 OR (
-                      (t.features->'learning') IS NULL
-                      AND (t.features->>'hermes_raw_data_consent') = 'true'
-                    )
-               )
+               AND ${shareConsentSqlPredicate("t.features")}
           )
         )
       )`;
@@ -364,6 +357,20 @@ const APPROVED_RESPONSE_MAX_CHARS = 300;
  * - 逐語コピーは強制しない(X9)
  * - 防御層(L5 Input Sanitizer)を通し、危険なパターンを含む場合は注入しない(X11)
  */
+/**
+ * システムプロンプトの1行に埋め込むテキストから改行を潰す。
+ *
+ * buildTuningPromptSection は行を "\n" で join して箇条書きを組み立てるため、
+ * 1フィールドの中に改行が入ると「- 「x」に関する質問 → ...」という偽の
+ * ルール行を1件のルールから何行でも捏造できる(sanitizeInput は URL/script 等の
+ * パターンしか見ておらず、改行は素通しする)。承認者の目視は防御層の代替に
+ * ならない(要件 X11 / E11)ため、構造そのものを壊せないようにここで潰す。
+ */
+function flattenForPromptLine(text: string): string {
+  // \u3000 = 全角スペース。改行・タブ・全角/半角スペースの連続を半角1個に潰す。
+  return text.replace(/[\r\n\t\u3000 ]+/g, " ").trim();
+}
+
 function formatApprovedResponseHint(rule: TuningRule): string | null {
   const responses = rule.approved_responses;
   if (!responses || responses.length === 0) return null;
@@ -375,7 +382,9 @@ function formatApprovedResponseHint(rule: TuningRule): string | null {
   const { safe, sanitized } = sanitizeInput(latest.text);
   if (!safe) return null;
 
-  const excerpt = sanitized.slice(0, APPROVED_RESPONSE_MAX_CHARS);
+  // 改行を潰してから切り出す(切り出し後だと末尾に改行が残りうる)。
+  const excerpt = flattenForPromptLine(sanitized).slice(0, APPROVED_RESPONSE_MAX_CHARS);
+  if (excerpt.length === 0) return null;
   return `  文体の見本（逐語コピーは不要。事実がFAQと異なる場合はFAQを優先する）: 「${excerpt}」`;
 }
 
@@ -402,26 +411,41 @@ export function buildTuningPromptSection(rules: TuningRule[]): string {
   if (rules.length === 0) return "";
 
   const lines = rules.flatMap((r) => {
-    const { safe, sanitized, reason } = sanitizeInput(r.expected_behavior);
-    if (!safe) {
-      logger.warn(
-        { event: "tuning_rule_expected_behavior_blocked", ruleId: r.id, reason },
-        "tuning rule expected_behavior failed sanitizeInput; row skipped",
-      );
-      return [];
+    // trigger_pattern / expected_behavior はどちらもプロンプトの同じ1行に
+    // 埋め込まれ、どちらも Hermes 提案経由で外部から入りうる
+    // (hermes-mcp/routes.ts: title → trigger_pattern, suggested_action →
+    // expected_behavior。長さ検証のみで sanitizeInput は通らない)。
+    // 片方だけ検査すると、もう片方が同じ注入経路として残る。
+    const fields: Array<{ name: "trigger_pattern" | "expected_behavior"; raw: string }> = [
+      { name: "trigger_pattern", raw: r.trigger_pattern },
+      { name: "expected_behavior", raw: r.expected_behavior },
+    ];
+
+    const cleaned: Record<string, string> = {};
+    for (const { name, raw } of fields) {
+      const { safe, sanitized, reason } = sanitizeInput(raw ?? "");
+      if (!safe) {
+        logger.warn(
+          { event: "tuning_rule_field_blocked", ruleId: r.id, field: name, reason },
+          "tuning rule field failed sanitizeInput; row skipped",
+        );
+        return [];
+      }
+      // E5: 空文字・全角スペースのみ(sanitizeInputのtrim()で空になるケースを含む)は
+      // safe=true だが中身が無いルール行になる。「→ 」だけの空の指示行を残さない。
+      // 改行潰し(flattenForPromptLine)の後に判定する(改行だけの入力もここで落ちる)。
+      const flattened = flattenForPromptLine(sanitized);
+      if (flattened.length === 0) {
+        logger.warn(
+          { event: "tuning_rule_field_blocked", ruleId: r.id, field: name, reason: "empty_after_sanitize" },
+          "tuning rule field is empty after sanitization; row skipped",
+        );
+        return [];
+      }
+      cleaned[name] = flattened;
     }
 
-    // E5: 空文字・全角スペースのみ(sanitizeInputのtrim()で空になるケースを含む)は
-    // safe=true だが中身が無いルール行になる。「→ 」だけの空の指示行を残さない。
-    if (sanitized.length === 0) {
-      logger.warn(
-        { event: "tuning_rule_expected_behavior_blocked", ruleId: r.id, reason: "empty_expected_behavior" },
-        "tuning rule expected_behavior is empty after sanitization; row skipped",
-      );
-      return [];
-    }
-
-    const base = `- 「${r.trigger_pattern}」に関する質問 → ${sanitized}`;
+    const base = `- 「${cleaned["trigger_pattern"]}」に関する質問 → ${cleaned["expected_behavior"]}`;
     const hint = formatApprovedResponseHint(r);
     return hint ? [base, hint] : [base];
   });
