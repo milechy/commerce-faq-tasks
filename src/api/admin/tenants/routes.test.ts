@@ -778,21 +778,23 @@ describe("PATCH /v1/admin/my-tenant — avatar/voice plan ゲート", () => {
 // 400 invalid_requestで拒否される(型はコンパイルが通るのに実行時に壊れる典型例)。
 // 型チェック・lintでは検出できず、実機で初めて気づいた。二度と壊さないための回帰テスト。
 describe("PATCH /v1/admin/tenants/:id — free_ad プラン受理(P0回帰)", () => {
-  it("plan='free_ad' への変更を400にせず受理する", async () => {
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "starter", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", name: "テストテナント", plan: "free_ad", is_active: true }], rowCount: 1 })
-      .mockResolvedValue({ rows: [], rowCount: 1 });
+  // S5b(共有学習プールの参加モデル・D1決定案)により、free_adは消費者向け同意バナー
+  // 実装まで一時的に403でブロックされるようになった。ただしこのテストの本来の目的
+  // (zodのplanValuesにfree_adが登録されておらず400 invalid_requestで弾かれる、という
+  // P0バグの再発防止)は今も生きている: 403(S5bの意図的なブロック)と400(スキーマが
+  // 値自体を知らない)は全く別の失敗であり、後者に戻っていないことを確認する。
+  it("plan='free_ad' はスキーマ未知の値としては拒否されない(400にはならない。S5bにより403でブロックされる)", async () => {
+    const dbQuery = jest.fn();
     const db = { query: dbQuery };
 
     const res = await request(makeApp(db, "super_admin"))
       .patch("/v1/admin/tenants/tenant-a")
       .send({ plan: "free_ad" });
 
-    expect(res.status).toBe(200);
     expect(res.status).not.toBe(400);
-    expect(res.body.plan).toBe("free_ad");
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
+    expect(dbQuery).not.toHaveBeenCalled();
   });
 
   it("存在しないプラン文字列('gold'等)は引き続き400で拒否する(何でも通す壊れ方をしていない)", async () => {
@@ -806,31 +808,56 @@ describe("PATCH /v1/admin/tenants/:id — free_ad プラン受理(P0回帰)", ()
     expect(res.status).toBe(400);
     expect(dbQuery).not.toHaveBeenCalled();
   });
+
+  // S5b: ガードは fields.plan === "free_ad" のみを見る。plan を含まない更新
+  // (free_adテナントが既に存在する場合の他フィールド編集を含む)は一律ブロックしない。
+  it("S5b: planを含まない更新(free_adテナントの改名等)はブロックしない", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "free_ad", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", name: "改名後", plan: "free_ad", is_active: true }], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .send({ name: "改名後" });
+
+    expect(res.status).toBe(200);
+  });
+
+  // S5b: free_adからの降格(離脱)は同ガードの対象外。塞ぐのは「新規移行」のみ。
+  it("S5b: free_ad → starter への降格はブロックしない", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "free_ad", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", name: "テストテナント", plan: "starter", is_active: true }], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .send({ plan: "starter" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("starter");
+  });
 });
 
 describe("POST /v1/admin/tenants — free_ad プラン受理(P0回帰)", () => {
-  it("plan='free_ad' を指定したテナント作成を400にせず受理する(201)", async () => {
-    const CREATED_ROW = {
-      id: "new-tenant",
-      name: "新規テナント",
-      plan: "free_ad",
-      is_active: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    const dbQuery = jest
-      .fn()
-      .mockResolvedValueOnce({ rows: [CREATED_ROW], rowCount: 1 })
-      // 以降はデフォルトアバター18体分の背景INSERT(fire-and-forget)。中身は本テストの対象外。
-      .mockResolvedValue({ rows: [], rowCount: 1 });
+  // S5bにより新規作成時点でのfree_ad指定は403でブロックされる(理由は上記PATCH側と同じ)。
+  it("plan='free_ad' を指定したテナント作成はスキーマ未知の値としては拒否されない(S5bにより403でブロックされる)", async () => {
+    const dbQuery = jest.fn();
     const db = { query: dbQuery };
 
     const res = await request(makeApp(db, "super_admin"))
       .post("/v1/admin/tenants")
       .send({ id: "new-tenant", name: "新規テナント", plan: "free_ad" });
 
-    expect(res.status).toBe(201);
-    expect(res.body.plan).toBe("free_ad");
+    expect(res.status).not.toBe(400);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
+    expect(dbQuery).not.toHaveBeenCalled();
   });
 
   it("plan省略時のデフォルトは引き続きstarterであり、free_adへは自動で倒れない(新規テナントは既定で有料想定)", async () => {

@@ -514,6 +514,18 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
     }
     const { id, name, plan } = parsed.data;
+    // S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、
+    // ウィジェットに消費者向け同意バナーがまだ無い(docs/DATA_RETENTION_POLICY.md設計のみ)。
+    // 開示基盤が整うまでfree_adテナントを新規作成できないようにする。free_adは現状
+    // super_admin専用(公開サインアップ導線が無い)なので、ここを塞げば足りる。
+    // バナー実装後にこのブロックごと撤去する前提の一時的なガード(環境変数化しない: 誰にも
+    // 開ける余地を残さないため。撤去はコード変更のみで行う)。
+    if (plan === "free_ad") {
+      return res.status(403).json({
+        error: "free_ad_plan_not_yet_available",
+        message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
+      });
+    }
     try {
       const result = await db.query(
         `INSERT INTO tenants (id, name, plan, is_active)
@@ -626,6 +638,15 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const fields = parsed.data;
     if (Object.keys(fields).length === 0) {
       return res.status(400).json({ error: "no_fields", message: "更新フィールドが必要です。" });
+    }
+    // S5b(共有学習プールの参加モデル・D1決定案): 消費者向け同意バナー実装まで、
+    // free_adへの移行そのものを塞ぐ(POST /v1/admin/tenantsと同じ一時的なガード)。
+    // DBに触れる前に弾く(POSTと同様、既存テナントかどうかを問わず一律ブロック)。
+    if (fields.plan === "free_ad") {
+      return res.status(403).json({
+        error: "free_ad_plan_not_yet_available",
+        message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
+      });
     }
     try {
       // 存在チェック + Phase72-A: 変更前の監査対象フィールドを取得
