@@ -25,6 +25,22 @@ interface MeasurementHealth {
     checkedTables: number;
     checkedColumns: number;
   };
+  /** super_admin のときだけ返る。テナント×機能の点火状態。 */
+  ignitionStatus?: {
+    rows: Array<{
+      tenantId: string;
+      cells: Array<{
+        feature: string;
+        label: string;
+        enabled: boolean;
+        reason: string;
+        configKey: string;
+        controlledBy: "env" | "tenants.features";
+      }>;
+    }>;
+    envControlledFeatures: string[];
+    anyEnabled: boolean;
+  };
 }
 
 interface MonitoringKpis {
@@ -442,6 +458,24 @@ export default function MonitoringPage() {
             >
               計測ヘルス（直近30日）
             </h2>
+            {health?.schemaHealth && (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 700,
+                  background: health.schemaHealth.missing.length === 0 ? "rgba(34,197,94,0.10)" : "rgba(248,113,113,0.12)",
+                  border: `1px solid ${health.schemaHealth.missing.length === 0 ? "rgba(34,197,94,0.35)" : "rgba(248,113,113,0.4)"}`,
+                  color: health.schemaHealth.missing.length === 0 ? "#4ade80" : "#f87171",
+                }}
+              >
+                {health.schemaHealth.missing.length === 0
+                  ? "異常なし — 本番スキーマはコードと一致しています"
+                  : `要対応 — 本番に存在しない列があります（${health.schemaHealth.missing.length}テーブル）`}
+              </div>
+            )}
             <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 0, marginBottom: 16 }}>
               「何を直しても効果を測れない」状態を脱したかを確認する画面です。以降の効果測定の判定母数になります。
             </p>
@@ -547,6 +581,50 @@ export default function MonitoringPage() {
                           該当する migration を本番に適用してください。適用は人の承認が必要です。
                           記録が無言で落ちるため、エラーログには現れません。
                         </div>
+                      </div>
+                    )}
+                  </MeasurementHealthCard>
+                )}
+
+                {/* 点火状態(R2C運用のみ)。フラグの実効値を知る手段がSSHしかない状態を解消する。
+                    env でしか開閉できないものは画面から変えられない(CLAUDE.md 禁止41の是正対象)。 */}
+                {health?.ignitionStatus && (
+                  <MeasurementHealthCard
+                    title="学習機能の点火状態"
+                    description="どのテナントで何が有効か。無効なものは理由も出す"
+                  >
+                    {health.ignitionStatus.rows.length === 0 ? (
+                      <div style={{ fontSize: 14, color: "var(--muted-foreground)" }}>テナントがありません</div>
+                    ) : !health.ignitionStatus.anyEnabled ? (
+                      <div style={{ fontSize: 14, color: "var(--muted-foreground)" }}>
+                        有効な機能はありません
+                      </div>
+                    ) : null}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 8 }}>
+                      {health.ignitionStatus.rows.map((row) => (
+                        <div key={row.tenantId}>
+                          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{row.tenantId}</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            {row.cells.map((c) => (
+                              <div key={c.feature} style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+                                <span style={{ color: c.enabled ? "#4ade80" : "#6b7280", fontWeight: 700 }}>
+                                  {c.enabled ? "有効" : "無効"}
+                                </span>
+                                <span style={{ margin: "0 6px" }}>{c.label}</span>
+                                <span style={{ color: "var(--muted-foreground)" }}>— {c.reason}</span>
+                                <span style={{ color: "#6b7280", marginLeft: 6 }}>
+                                  <code>{c.configKey}</code>
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {health.ignitionStatus.envControlledFeatures.length > 0 && (
+                      <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+                        このうち {health.ignitionStatus.envControlledFeatures.length} 機能は環境変数でしか切り替えられません。
+                        画面から開閉できないため、点火し忘れに気づけない構造です（順次 tenants.features へ移行）。
                       </div>
                     )}
                   </MeasurementHealthCard>
