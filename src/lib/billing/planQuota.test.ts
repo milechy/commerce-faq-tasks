@@ -5,7 +5,7 @@
  * - isFreeAdMonthlyQuotaExceeded: 境界値(N-1/N/N+1) / 上限0 / 負の値で例外
  */
 
-import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded, FREE_AD_MONTHLY_SESSION_LIMIT } from './planQuota';
+import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded, FREE_AD_MONTHLY_REQUEST_LIMIT } from './planQuota';
 
 describe('getMonthRangeJst', () => {
   it('JST月初(1日00:00:00.000)ちょうどでは monthStart が現在時刻と一致する', () => {
@@ -90,14 +90,14 @@ describe('getMonthRangeJst', () => {
 
 describe('isFreeAdMonthlyQuotaExceeded', () => {
   it('既定の上限は200である', () => {
-    expect(FREE_AD_MONTHLY_SESSION_LIMIT).toBe(200);
+    expect(FREE_AD_MONTHLY_REQUEST_LIMIT).toBe(200);
   });
 
-  it('上限未満(199件)なら false（200件目の新規セッションを許可する）', () => {
+  it('上限未満(199件)なら false（200件目のリクエストを許可する）', () => {
     expect(isFreeAdMonthlyQuotaExceeded(199)).toBe(false);
   });
 
-  it('ちょうど上限(200件)なら true（201件目は拒否する）', () => {
+  it('ちょうど上限(200件)なら true（201件目のリクエストは拒否する）', () => {
     expect(isFreeAdMonthlyQuotaExceeded(200)).toBe(true);
   });
 
@@ -109,12 +109,12 @@ describe('isFreeAdMonthlyQuotaExceeded', () => {
     expect(isFreeAdMonthlyQuotaExceeded(0)).toBe(false);
   });
 
-  it('上限を明示的に0にすると、0件でも true（初回から拒否。無限ループ・無応答にならない）', () => {
+  it('上限を明示的に0にすると、0件でも true（初回のリクエストから拒否。無限ループ・無応答にならない）', () => {
     expect(isFreeAdMonthlyQuotaExceeded(0, 0)).toBe(true);
   });
 
   it('負のcountは例外を投げる', () => {
-    expect(() => isFreeAdMonthlyQuotaExceeded(-1)).toThrow(/Invalid currentMonthSessionCount/);
+    expect(() => isFreeAdMonthlyQuotaExceeded(-1)).toThrow(/Invalid currentMonthRequestCount/);
   });
 
   it('負のlimitは例外を投げる', () => {

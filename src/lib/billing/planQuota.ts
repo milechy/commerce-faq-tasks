@@ -1,5 +1,5 @@
 // src/lib/billing/planQuota.ts
-// free_ad プランの月次会話数(セッション数)上限判定。
+// free_ad プランの月次上限判定。
 //
 // なぜ分離したか: 月次境界の計算は CLAUDE.md 絶対にやってはいけないこと16
 // 「AT TIME ZONE を片側だけ書く」の典型的な事故箇所（本番でのみズレ、数値は
@@ -8,21 +8,17 @@
 // 純粋関数として切り出す。呼び出し元は src/api/chat/route.ts（createChatHandler）で、
 // このファイル自体は DB に触れない。
 //
-// 単位は「会話(chat_sessions の行数)」であって「メッセージ(usage_logs の行数)」では
-// ない。1会話内の往復数は無制限（費用の根拠は costCalculator.ts の 1会話(5ターン)
-// 約0.55円 × 200会話 = 月あたり約110円）。呼び出し元は「このリクエストの session_id が
-// 当月すでに chat_sessions に存在するか」を先に見て、存在する場合（継続会話）は
-// このモジュールを経由せず常に許可すること。新規セッションのときだけ、当月の
-// 既存セッション数をこのモジュールで判定する。
+// 単位は「usage_logs の行数(= /api/chat 1回のリクエスト)」。Asana 1217759064329998
+// item(7)の指示どおり既存 usage_logs の集計から出し、新しいDB列・新しい集計対象
+// (chat_sessions の distinct 数など)を作らない。1会話あたり平均5ターンという
+// costCalculator.ts の原価モデル（1会話(5ターン)約0.55円）を踏まえると、上限200は
+// 「約200会話分のリクエスト」を安全側(実際の会話数換算では下回る方向)に見積もった
+// 値になる——1セッションが200ターンを超える極端な単一会話がある場合、その月の
+// 残り新規会話が止まる可能性はあるが、原価上限(月あたり最大 200 × 約0.11円
+// ≈ 22円/テナント)を超えることはなく、R2C負担としては安全側に倒れている。
+export const FREE_AD_MONTHLY_REQUEST_LIMIT = 200;
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-/**
- * free_ad プランの月次会話数(セッション数)上限。
- * 200会話 × 約0.55円/会話(costCalculator.ts の1会話(5ターン)原価) ≈ 月110円/テナント。
- * R2C 負担で許容できる水準として決定（Asana 1217759064329998 の既定値）。
- */
-export const FREE_AD_MONTHLY_SESSION_LIMIT = 200;
 
 export interface MonthRangeJst {
   /** 当月の開始（1日 00:00:00 JST）をUTC Dateで表したもの */
@@ -68,21 +64,20 @@ export function getMonthRangeJst(now: Date): MonthRangeJst {
 }
 
 /**
- * 当月の既存セッション数（新規セッションを作る「前」の件数）が上限に達しているかを
- * 判定する。継続会話（既存 session_id）はこの判定の対象外——呼び出し元で
- * 先に存在チェックを行い、存在する場合は本関数を呼ばず常に許可すること。
+ * 当月の既存リクエスト数（このリクエストを記録する「前」の usage_logs 件数）が
+ * 上限に達しているかを判定する。
  *
- * @throws currentMonthSessionCount / limit が負の場合
+ * @throws currentMonthRequestCount / limit が負の場合
  */
 export function isFreeAdMonthlyQuotaExceeded(
-  currentMonthSessionCount: number,
-  limit: number = FREE_AD_MONTHLY_SESSION_LIMIT,
+  currentMonthRequestCount: number,
+  limit: number = FREE_AD_MONTHLY_REQUEST_LIMIT,
 ): boolean {
-  if (currentMonthSessionCount < 0) {
-    throw new Error(`Invalid currentMonthSessionCount: ${currentMonthSessionCount}`);
+  if (currentMonthRequestCount < 0) {
+    throw new Error(`Invalid currentMonthRequestCount: ${currentMonthRequestCount}`);
   }
   if (limit < 0) {
     throw new Error(`Invalid limit: ${limit}`);
   }
-  return currentMonthSessionCount >= limit;
+  return currentMonthRequestCount >= limit;
 }

@@ -19,9 +19,62 @@ import { applyPromptFirewall } from "../../middleware/promptFirewall";
 import { checkTopic } from "../../middleware/topicGuard";
 import { guardOutput } from "../../middleware/outputGuard";
 import { detectPiiRoute } from "../../agent/avatar/piiRouteDetector";
+import { getTenantPlan } from "../../lib/billing/planFeatures";
+import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded } from "../../lib/billing/planQuota";
+import { getPool } from "../../lib/db";
 
 // チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
 const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? GPT_OSS_120B;
+
+// ---------------------------------------------------------------------------
+// free_ad プランの月次上限判定（Asana 1217759064329998 item(7)）
+// ---------------------------------------------------------------------------
+
+/**
+ * free_ad プランのテナントに限り、当月の usage_logs(feature_used='chat') 件数が
+ * 上限に達しているかを判定する。free_ad 以外のプランは常に false（既存動作は
+ * 一切変えない）。上限・月次境界の計算自体は src/lib/billing/planQuota.ts の
+ * 純関数に委ね、ここでは DB 集計のみを行う。
+ *
+ * fail-open: plan取得・集計クエリのいずれかが失敗した場合は false（ブロックしない）
+ * を返す。エンタイトルメント判定(機能を隠す側)は最も制限の強い方へ倒すのが
+ * 正しい方向だが、ここは「既に受理されたチャットリクエストを処理してよいか」の
+ * 可用性の話であり、billing系の一時的な障害(pool未初期化・DB瞬断)で
+ * 全テナントのチャットが止まるほうが実害が大きい。DB接続自体の障害時は
+ * queryTenantPlan 内部のcatchで既に free_ad にfail-safeされる(意図どおり)ため、
+ * ここで追加で捕まえるのは getPool() 自体が投げるケース(未初期化)のみ。
+ *
+ * 数え方は「このリクエストの前に何件あったか」。trackUsage は setImmediate の
+ * fire-and-forget（本関数の呼び出し時点ではまだ当該行がINSERTされていない）ため、
+ * ごく短時間の連続リクエストでは上限を若干超えて許可されうるが、費用面のソフトな
+ * ガードであり、原価上限は許容範囲内に収まる（planQuota.ts のコメント参照）。
+ */
+async function isFreeAdQuotaExceededForTenant(
+  tenantId: string,
+  logger: Logger,
+): Promise<boolean> {
+  try {
+    const plan = await getTenantPlan(tenantId);
+    if (plan !== "free_ad") return false;
+
+    const { monthStart, monthEnd } = getMonthRangeJst(new Date());
+    const pool = getPool();
+    const result = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+         FROM usage_logs
+        WHERE tenant_id = $1
+          AND feature_used = 'chat'
+          AND created_at >= $2
+          AND created_at <  $3`,
+      [tenantId, monthStart, monthEnd],
+    );
+    const currentMonthRequestCount = Number(result.rows[0]?.count ?? 0);
+    return isFreeAdMonthlyQuotaExceeded(currentMonthRequestCount);
+  } catch (err) {
+    logger.warn({ tenantId, err }, "chat.request.free_ad_quota_check_failed");
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ナレッジギャップ検出
@@ -157,6 +210,23 @@ export function createChatHandler(logger: Logger) {
     //      A/B variant が1会話の中でメッセージ毎に振り直される(CLAUDE.md 禁止36)。
     const sessionId: string =
       body.sessionId?.trim() || body.conversationId || randomUUID();
+
+    // free_ad プランの月次上限（Asana 1217759064329998）。free_ad 以外のテナントは
+    // isFreeAdQuotaExceededForTenant が即 false を返すため既存動作は変わらない。
+    // 403 plan_upgrade_required は正常系の分岐であり、エラーではない
+    // （CLAUDE.md 絶対にやってはいけないこと21。赤帯にしない・「0件」と描画しない
+    // のはフロント側の責務。ここでは構造化した理由コードのみ返す）。
+    if (await isFreeAdQuotaExceededForTenant(tenantId, logger)) {
+      logger.info({ requestId, tenantId }, "chat.request.free_ad_quota_exceeded");
+      res.status(403).json({
+        error: "plan_upgrade_required",
+        message: t("error.free_ad_quota_exceeded", lang),
+        requestId,
+        tenantId,
+        lang,
+      });
+      return;
+    }
 
     // L5: Input Sanitizer (Phase48)
     const sanitizeResult = l5SanitizeInput(body.message, body.conversationId ?? 'anon', sessionHistoryStore);
