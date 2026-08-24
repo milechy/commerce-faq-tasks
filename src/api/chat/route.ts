@@ -48,16 +48,21 @@ const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? GPT_OSS_120B;
  * fire-and-forget（本関数の呼び出し時点ではまだ当該行がINSERTされていない）ため、
  * ごく短時間の連続リクエストでは上限を若干超えて許可されうるが、費用面のソフトな
  * ガードであり、原価上限は許容範囲内に収まる（planQuota.ts のコメント参照）。
+ *
+ * @param now 月次境界の計算基準時刻。省略時は呼び出し時点の現在時刻(既定動作)。
+ *   テストから月境界ちょうどのリクエストを再現できるように注入可能にしている
+ *   （route.freeAdQuota.test.ts の月境界統合テスト参照）。
  */
 async function isFreeAdQuotaExceededForTenant(
   tenantId: string,
   logger: Logger,
+  now: Date = new Date(),
 ): Promise<boolean> {
   try {
     const plan = await getTenantPlan(tenantId);
     if (plan !== "free_ad") return false;
 
-    const { monthStart, monthEnd } = getMonthRangeJst(new Date());
+    const { monthStart, monthEnd } = getMonthRangeJst(now);
     const pool = getPool();
     const result = await pool.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count
