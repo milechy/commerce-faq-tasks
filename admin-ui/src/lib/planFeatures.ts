@@ -26,7 +26,8 @@ export type GatedFeature =
   | "deep_research"
   | "premium_avatar"
   | "sai_task"
-  | "pre_dispatch";
+  | "pre_dispatch"
+  | "hide_branding";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   avatar: "growth",
@@ -39,6 +40,8 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   sai_task: "enterprise",
   // GID 1216944004404664: 事前ディスパッチ(アバター高速表示)はLP表記どおりEnterprise限定
   pre_dispatch: "enterprise",
+  // ウィジェットの「Powered by R2C」バッジ非表示権。Growth以上の特典として料金表に明記する。
+  hide_branding: "growth",
 };
 
 /**

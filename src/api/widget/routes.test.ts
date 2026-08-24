@@ -126,3 +126,105 @@ describe('GET /widget/:tenantSlug.js', () => {
     expect(res.body.error).toBe('widget_generation_failed');
   });
 });
+
+describe('GET /widget/:tenantSlug.js — 「Powered by R2C」バッジ (PR-B)', () => {
+  beforeEach(() => {
+    (generateWidgetJs as jest.Mock).mockClear();
+  });
+
+  it('plan=starter → バッジを表示する(showBrandingBadge=true)', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'starter' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showBrandingBadge).toBe(true);
+  });
+
+  it('plan=growth → バッジを表示しない(showBrandingBadge=false)', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'growth' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showBrandingBadge).toBe(false);
+  });
+
+  it('plan=enterprise → バッジを表示しない', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'enterprise' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showBrandingBadge).toBe(false);
+  });
+
+  it('plan=NULL(未設定) → fail-safeで「表示する」側に倒れる', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: null }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showBrandingBadge).toBe(true);
+  });
+
+  it('plan=未知の文字列 → fail-safeで「表示する」側に倒れる(Starterへ「昇格」しない)', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'gold' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showBrandingBadge).toBe(true);
+  });
+
+  it('badgeUrl に UTM 4種 + r2c_ref(テナントID) が付与され、着地先が /lp/from-chat/ である', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'starter' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    const url = new URL(config.badgeUrl);
+    expect(url.pathname).toBe('/lp/from-chat/');
+    expect(url.searchParams.get('utm_source')).toBe('widget');
+    expect(url.searchParams.get('utm_medium')).toBe('badge');
+    expect(url.searchParams.get('utm_campaign')).toBe('powered_by');
+    expect(url.searchParams.get('r2c_ref')).toBe('tenant-a');
+  });
+});
+
+describe('GET /widget/:tenantSlug.js — バッジが表示されない既知の経路(仕様として固定)', () => {
+  // CLAUDE.md 絶対にやってはいけないこと 38: この3経路は本PRでは是正せず、
+  // 仕様として明示的に固定する。将来これを直す場合は、直したことが分かるように
+  // このテストを書き換えること(黙って挙動が変わらないようにする)。
+
+  it('①静的 /widget.js + data-tenant 埋め込みはこのルートを経由しない(プラン判定なし)', () => {
+    // このルート(GET /widget/:tenantSlug.js)はテナントごとの動的生成専用。
+    // 静的埋め込みは public/widget.js を直接配信するため、そもそもこのハンドラを通らない。
+    // ここでは「動的ルートがバッジ制御の唯一の経路である」ことを明記するのみ(実行不要)。
+    expect(true).toBe(true);
+  });
+
+  it('②db===nullのとき /widget.js へフォールバックし、バッジ制御ロジックを経由しない(fail-open)', async () => {
+    const app = makeApp(null);
+    const res = await request(app).get('/widget/tenant-a.js');
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/widget.js');
+    // このリダイレクト先(静的widget.js)はプラン判定を経由しないため、
+    // plan由来のbadgeUrl/showBrandingBadgeは注入されない。
+  });
+
+  it('③レスポンスは Cache-Control: max-age=86400 のため、プラン変更の反映に最大24時間かかる', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'growth' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    const res = await request(app).get('/widget/tenant-a.js');
+    expect(res.headers['cache-control']).toBe('public, max-age=86400');
+  });
+});

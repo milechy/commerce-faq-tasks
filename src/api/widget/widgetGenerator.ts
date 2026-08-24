@@ -16,6 +16,10 @@ export interface TenantWidgetConfig {
   abExperimentId?: number | null;
   /** GID 1216978855735482: アバターA/Bテストの割当variant（実験が無ければnull） */
   abVariant?: "a" | "b" | null;
+  /** 「Powered by R2C」バッジを表示するか（Growth以上は非表示。fail-safeで未設定時はtrue側） */
+  showBrandingBadge?: boolean;
+  /** バッジのリンク先（着地ページ、UTM + テナント識別子付き） */
+  badgeUrl?: string;
 }
 
 const WIDGET_SRC_PATH = path.resolve(process.cwd(), "public", "widget.js");
@@ -65,6 +69,8 @@ export async function generateWidgetJs(config: TenantWidgetConfig): Promise<stri
     avatarEnabled: ${JSON.stringify(config.avatarEnabled ?? false)},
     abExperimentId: ${JSON.stringify(config.abExperimentId ?? null)},
     abVariant: ${JSON.stringify(config.abVariant ?? null)},
+    showBrandingBadge: ${JSON.stringify(config.showBrandingBadge ?? true)},
+    badgeUrl: ${JSON.stringify(config.badgeUrl ?? null)},
     _wt: ${JSON.stringify(token)}
   };
   if (typeof window !== "undefined") {

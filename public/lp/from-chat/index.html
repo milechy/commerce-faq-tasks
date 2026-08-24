@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>今のAIチャットについて — R2C</title>
+  <meta name="description" content="今お使いだったAIチャットは「R2C」です。あなたのサイトにも、24時間365日働くAI接客を導入できます。">
+  <meta name="robots" content="noindex">
+  <style>
+    :root {
+      --bg: #050508;
+      --accent: #7c3aed;
+      --accent-light: #8b5cf6;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      background-color: var(--bg);
+      color: #fff;
+      font-family: system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      line-height: 1.7;
+    }
+    .card {
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(124, 58, 237, 0.12);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 999px;
+      padding: 6px 16px;
+      margin-bottom: 28px;
+      font-size: 13px;
+      color: #c4b5fd;
+      font-weight: 600;
+    }
+    .logo-dot {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 14px;
+      color: #fff;
+      margin: 0 auto 20px;
+    }
+    h1 {
+      font-size: clamp(22px, 5vw, 30px);
+      font-weight: 800;
+      line-height: 1.4;
+      margin: 0 0 16px;
+      letter-spacing: -0.5px;
+    }
+    .gradient-text {
+      background: linear-gradient(135deg, #8b5cf6, #d946ef, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    p {
+      font-size: 16px;
+      color: #e5e7eb;
+      margin: 0 0 14px;
+    }
+    p.muted {
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .glass-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 22px 20px;
+      margin: 28px 0;
+      text-align: left;
+    }
+    .glass-card ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .glass-card li {
+      display: flex;
+      gap: 10px;
+      font-size: 15px;
+      color: #e5e7eb;
+    }
+    .glass-card li span {
+      color: #4ade80;
+      flex-shrink: 0;
+    }
+    .cta {
+      display: block;
+      background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 16px 24px;
+      min-height: 44px;
+      border-radius: 10px;
+      margin-bottom: 14px;
+    }
+    .cta-secondary {
+      display: inline-block;
+      color: #c4b5fd;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      padding: 12px 16px;
+      min-height: 44px;
+      line-height: 20px;
+    }
+    footer {
+      margin-top: 32px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    footer a {
+      color: var(--muted);
+    }
+    @media (prefers-color-scheme: light) {
+      /* このページは常にダークテーマで固定表示する(LP本体 public/lp/index.html と同じ扱い)。 */
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo-dot">R2C</div>
+    <div class="badge">💬 今、お話しされていたAIについて</div>
+
+    <h1>それは<span class="gradient-text">R2C</span>という<br>AI接客サービスです</h1>
+    <p class="muted">このサイトに導入されているAIチャットは、R2Cが提供しています。</p>
+
+    <div class="glass-card">
+      <ul>
+        <li><span>✓</span>24時間365日、休まず接客</li>
+        <li><span>✓</span>気になることをすぐ聞ける</li>
+        <li><span>✓</span>導入サイトの情報にもとづいて答える(でたらめを言わない)</li>
+      </ul>
+    </div>
+
+    <p>ご自身のサイトにも、同じようにAI接客を導入できます。</p>
+
+    <a class="cta" href="/lp/index.html#contact" id="cta-primary">自分のサイトにも導入したい →</a>
+    <a class="cta-secondary" href="/lp/index.html">R2Cについてもっと詳しく見る</a>
+
+    <footer>
+      <p class="muted" style="margin:0;">R2C（RAJIUSEC） / <a href="/lp/index.html">r2c.biz</a></p>
+    </footer>
+  </div>
+
+  <script>
+    // バッジ経由の流入(utm_source等・r2c_ref)を、問い合わせ導線まで引き継ぐ。
+    // 新しい問い合わせ経路は作らず、既存LPの #contact フォームへそのまま渡すだけ。
+    (function () {
+      var q = window.location.search;
+      if (!q) return;
+      var cta = document.getElementById('cta-primary');
+      if (cta) cta.href = '/lp/index.html' + q + '#contact';
+    })();
+  </script>
+</body>
+</html>

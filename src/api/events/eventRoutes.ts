@@ -20,6 +20,8 @@ import {
 const VALID_EVENT_TYPES = [
   'page_view', 'scroll_depth', 'idle_time', 'product_view',
   'exit_intent', 'chat_open', 'chat_message', 'chat_conversion',
+  // 「Powered by R2C」バッジのクリック（widget.js）
+  'branding_badge_click',
 ] as const;
 
 const EventSchema = z.object({
