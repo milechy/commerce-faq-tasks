@@ -430,14 +430,29 @@ groq_llm = openai_plugin.LLM(
 )
 
 
-def format_g2_latency_log(ev, tenant_id: str | None, room_name: str) -> str | None:
+def format_g2_latency_log(
+    ev,
+    tenant_id: str | None,
+    room_name: str,
+    reply_arrived_at: float | None = None,
+) -> str | None:
     """G2(要件定義v1.3): アバターの応答レイテンシを実測するための一時計測。
 
     conversation_item_added イベントから assistant ターンの ChatMessage.metrics
     (livekit-agents 1.6.7 が公式に収集する e2e_latency/llm_node_ttft/tts_node_ttfb/
-    playback_latency)を読み、ログ1行に整形する。手動でタイムスタンプを打つより
-    フレームワーク計測を使う方が正確で壊れにくい
-    (session.on("metrics_collected") は本バージョンで非推奨、ChatMessage.metrics が代替)。
+    playback_latency)を読み、ログ1行に整形する。
+
+    実測で判明した点(2026-08-24): R2Cのアバターは Silero VAD を意図的に除外(VPSに
+    GPU無しでSIGABRTするため)しておりSTT/VADパイプラインが存在せず、応答テキストも
+    Node.js側 /api/chat から Data Channel 経由で届いて speak()/session.say() に
+    直渡しされる(groq_llm はAgentSessionコンストラクタ用のダミーで応答生成に未使用)。
+    そのため e2e_latency(STTの発話終了起点)と llm_node_ttft(SDKのLLM
+    ストリーミングタスク起点)は発火経路自体が無く、常に None になる
+    (バグではなく本アーキテクチャの構造上の制約)。
+    代わりに reply_arrived_at(応答テキスト到着時刻、呼び出し側で手動計測)から
+    ChatMessage.metrics の started_speaking_at(TTS発話開始時刻、フレームワーク計測)
+    までの差分を reply_wait_s として出す。これが「本体APIの応答が届いてから
+    アバターが喋り始めるまで」の体感レイテンシに相当する。
 
     役目を終えたら(G2実測完了・方式決定後)削除する一時コードであることを明示しておく。
     計測が失敗しても呼び出し側(entrypoint)が音声パイプラインを止めないよう、
@@ -453,12 +468,16 @@ def format_g2_latency_log(ev, tenant_id: str | None, room_name: str) -> str | No
     ttft = m.get("llm_node_ttft")
     ttfb = m.get("tts_node_ttfb")
     playback = m.get("playback_latency")
+    started_speaking_at = m.get("started_speaking_at")
     if e2e is None and ttft is None and ttfb is None:
         return None
+    reply_wait = None
+    if started_speaking_at is not None and reply_arrived_at is not None:
+        reply_wait = started_speaking_at - reply_arrived_at
     return (
         f"[G2-latency] tenant={tenant_id} room={room_name} "
         f"e2e_latency_s={e2e} llm_ttft_s={ttft} tts_ttfb_s={ttfb} "
-        f"playback_latency_s={playback}"
+        f"playback_latency_s={playback} reply_wait_s={reply_wait}"
     )
 
 
@@ -581,6 +600,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         user_away_timeout=None,
     )
 
+    # G2(要件定義v1.3): 応答テキスト到着時刻の一時計測。役目を終えたら削除する。
+    _g2_state: dict = {"reply_arrived_at": None}
+
     # G2(要件定義v1.3): アバターの応答レイテンシを実測し、知識連動(RAG)の
     # 実現方式を決めるための一時的な計測。手動でタイムスタンプを打つのではなく、
     # livekit-agents 1.6.7 が ChatMessage.metrics として公式に収集している値を読む
@@ -591,9 +613,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     @session.on("conversation_item_added")
     def on_conversation_item_added(ev) -> None:
         try:
-            log_line = format_g2_latency_log(ev, tenant_id, ctx.room.name)
+            reply_arrived_at = _g2_state["reply_arrived_at"]
+            log_line = format_g2_latency_log(ev, tenant_id, ctx.room.name, reply_arrived_at)
             if log_line:
                 logger.info(log_line)
+                # 次のターンに前ターンの到着時刻を誤って使い回さないようにする
+                _g2_state["reply_arrived_at"] = None
         except Exception as e:
             logger.warning(f"[G2-latency] failed to log metrics (non-fatal): {e}")
 
@@ -666,6 +691,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     async def handle_tts_request(reply_text: str) -> None:
         """本体APIの応答テキストをそのままTTSに渡す（Groq呼び出しなし）。"""
         try:
+            # G2: 応答テキストがこの関数に届いた時刻を記録(speak()より前)。
+            _g2_state["reply_arrived_at"] = time.time()
             # thinking_start フィラーが再生中なら interrupt して本来の発話に切り替える
             fh = _filler_state["handle"]
             if fh is not None:
@@ -687,6 +714,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             async with aiohttp.ClientSession() as http:
                 reply = await call_groq_llm(user_text, http, system_prompt=effective_system_prompt, tenant_id=tenant_id)
             logger.info(f"[Groq] reply ({len(reply)} chars): {reply!r}")
+            # G2: 応答テキストが確定した時刻を記録(speak()より前)。
+            _g2_state["reply_arrived_at"] = time.time()
 
             # 2. speak() で FishAudio TTS パイプラインに渡し、Data Channel にも送信
             #    （フォールバックメッセージは publish スキップ）

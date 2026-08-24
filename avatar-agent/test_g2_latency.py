@@ -38,6 +38,32 @@ def test_assistant_turn_with_full_metrics_formats_all_fields():
     assert "llm_ttft_s=0.456" in line
     assert "tts_ttfb_s=0.321" in line
     assert "playback_latency_s=0.05" in line
+    assert "reply_wait_s=None" in line
+
+
+def test_reply_wait_s_computed_from_reply_arrived_at_and_started_speaking_at():
+    """R2Cの実アーキテクチャ(STT/VAD無し、応答テキストはData Channel直渡し)では
+    e2e_latency/llm_node_ttft が発火経路自体を持たず常に None になる(2026-08-24実測で判明)。
+    その代替として、呼び出し側が手動計測した reply_arrived_at と
+    フレームワーク計測の started_speaking_at の差分を reply_wait_s として出す。"""
+    ev = _ev(
+        role="assistant",
+        metrics={
+            "tts_node_ttfb": 0.3,
+            "playback_latency": 0.8,
+            "started_speaking_at": 1001.0,
+        },
+    )
+    line = agent.format_g2_latency_log(ev, "r2c_default", "room-abc", reply_arrived_at=1000.0)
+    assert line is not None
+    assert "reply_wait_s=1.0" in line
+
+
+def test_reply_wait_s_none_when_started_speaking_at_missing():
+    ev = _ev(role="assistant", metrics={"tts_node_ttfb": 0.3})
+    line = agent.format_g2_latency_log(ev, "r2c_default", "room-abc", reply_arrived_at=999.7)
+    assert line is not None
+    assert "reply_wait_s=None" in line
 
 
 def test_user_turn_is_ignored():
