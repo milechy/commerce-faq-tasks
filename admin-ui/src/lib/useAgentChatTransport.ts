@@ -133,6 +133,8 @@ export type WeeklySummaryAgentActionCard = {
   faq: { total: number; published: number; lastUpdated: string | null } | null;
   pendingTuningRules: number | null;
   gaps: { total: number; top: Array<{ id: number; question: string }> } | null;
+  /** 今週AIが覚えたこと。0 は「動きが無かった」なので取得失敗(null)と区別する。 */
+  learned: { faqAdded: number; memorized: number } | null;
 };
 
 // GID 1217752900578379 (R4): ルール効果(DiD推定)カード。フィールド形状は

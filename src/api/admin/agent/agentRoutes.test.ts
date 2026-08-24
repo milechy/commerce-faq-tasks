@@ -2122,6 +2122,16 @@ describe('POST /v1/admin/agent/chat', () => {
   // Phase2 (P7): get_weekly_briefing — 直近7日間の状況を1回で要約取得
   // -------------------------------------------------------------------------
   describe('get_weekly_briefing', () => {
+    // 指標は Promise.allSettled で並列に投げており、本数は増えていく。
+    // 各テストが mockResolvedValueOnce の連鎖で必要な分だけ用意する形なので、
+    // 指標を1本足すたびに全テストが「連鎖を使い切って未定義」になり、
+    // await が解決せず 5000ms タイムアウトで落ちる(E4 で実際に踏んだ)。
+    // 連鎖を使い切った後の既定値をここで与え、追加した指標は「0件」として扱う。
+    // 個々のテストは自分が検証したい指標だけを Once で上書きすればよい。
+    beforeEach(() => {
+      mockQuery.mockResolvedValue({ rows: [{ faq_added: 0, memorized: 0 }] });
+    });
+
     it('会話数・前週比・品質スコア・成約・FAQ集計・承認待ちルール・未回答質問トップ3を1つの結果文字列にまとめる', async () => {
       mockFetch
         .mockResolvedValueOnce({

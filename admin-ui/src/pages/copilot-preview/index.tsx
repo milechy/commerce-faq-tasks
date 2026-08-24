@@ -766,11 +766,11 @@ export default function CopilotPreviewPage() {
         return { id: nextId(), role: "ai", card: { kind: "knowledgeGapsList", gaps, totalCount } };
       }
       if (a.card?.kind === "weekly_summary") {
-        const { asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps } = a.card;
+        const { asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps, learned } = a.card;
         return {
           id: nextId(),
           role: "ai",
-          card: { kind: "weeklySummary", asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps },
+          card: { kind: "weeklySummary", asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps, learned },
         };
       }
       if (a.card?.kind === "rule_effect") {
@@ -2656,7 +2656,7 @@ function CardView({
 // (権威の分離: 数値=サーバ、解釈と「次にやるべきこと」=LLMの文)。各グループが null なのは
 // 取得できなかった場合で、0とは区別して表示自体を省く。
 function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummary" }> }) {
-  const { sessions, avgScore, conversions, faq, pendingTuningRules, gaps } = card;
+  const { sessions, avgScore, conversions, faq, pendingTuningRules, gaps, learned } = card;
   const stats: Array<{ label: string; value: string; sub?: string }> = [];
 
   if (sessions) {
@@ -2684,6 +2684,14 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
   }
   if (pendingTuningRules !== null) stats.push({ label: "承認待ちの指示ルール", value: `${pendingTuningRules}件` });
   if (gaps) stats.push({ label: "AIが答えられなかった質問", value: `${gaps.total}件（未対応の累計）` });
+  if (learned) {
+    const total = learned.faqAdded + learned.memorized;
+    stats.push({
+      label: "AIが新しく覚えたこと",
+      value: total === 0 ? "なし" : `${total}件`,
+      sub: total === 0 ? undefined : `追加したFAQ ${learned.faqAdded}件・会話から自動 ${learned.memorized}件`,
+    });
+  }
 
   // 会話復元(sessionStorage)で古いまとめがそのまま画面に残るケースがあるため、
   // 集計時点(asOf)を常に表示する。取得日時をJSTの暦日で比較し、今日でなければ
@@ -2719,6 +2727,13 @@ function WeeklySummaryCard({ card }: { card: Extract<Card, { kind: "weeklySummar
         </div>
       }
     >
+      {stats.length === 0 && (
+        // 全指標が取得できなかった場合。空のカードを出すと「壊れている」のか
+        // 「動きが無かった」のか区別できないため、必ず文で伝える。
+        <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.8 }}>
+          今週は動きがありませんでした。
+        </div>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
         {stats.map((s) => (
           <div

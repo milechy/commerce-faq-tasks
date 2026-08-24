@@ -1141,6 +1141,80 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.getByRole("button", { name: "確認する" })).toBeTruthy();
   });
 
+  // E4: 「今週AIが覚えたこと」。学習が起きているかを店主の言葉で返す。
+  it("AIが覚えたことを描画する(FAQ追加と会話からの自動学習の内訳つき)", async () => {
+    mockAgent({
+      reply: "今週の学習です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\nAIが新しく覚えたこと 5件",
+          card: {
+            kind: "weekly_summary",
+            asOf: new Date().toISOString(),
+            sessions: null, avgScore: null, conversions: null, faq: null,
+            pendingTuningRules: null, gaps: null,
+            learned: { faqAdded: 3, memorized: 2 },
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    expect(await screen.findByText("AIが新しく覚えたこと")).toBeTruthy();
+    expect(screen.getByText("5件")).toBeTruthy();
+    expect(screen.getByText(/追加したFAQ 3件・会話から自動 2件/)).toBeTruthy();
+  });
+
+  it("覚えたことが0件なら「なし」と出す(伏せない)", async () => {
+    mockAgent({
+      reply: "今週の学習です。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:\nAIが新しく覚えたこと なし",
+          card: {
+            kind: "weekly_summary",
+            asOf: new Date().toISOString(),
+            sessions: null, avgScore: null, conversions: null, faq: null,
+            pendingTuningRules: null, gaps: null,
+            learned: { faqAdded: 0, memorized: 0 },
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    expect(await screen.findByText("AIが新しく覚えたこと")).toBeTruthy();
+    expect(screen.getByText("なし")).toBeTruthy();
+    // 0件は「動きが無かった」という情報。取得失敗のメッセージは出さない
+    expect(screen.queryByText("今週は動きがありませんでした。")).toBeNull();
+  });
+
+  it("全指標が取得できなかったら空のカードにせず文で伝える", async () => {
+    mockAgent({
+      reply: "取得できませんでした。",
+      actions: [
+        {
+          tool: "get_weekly_briefing",
+          result: "今週(月曜起点)の状況:",
+          card: {
+            kind: "weekly_summary",
+            asOf: new Date().toISOString(),
+            sessions: null, avgScore: null, conversions: null, faq: null,
+            pendingTuningRules: null, gaps: null, learned: null,
+          },
+        },
+      ],
+    });
+
+    await send("今週の状況を教えて");
+
+    expect(await screen.findByText("今週は動きがありませんでした。")).toBeTruthy();
+  });
+
   it("未回答質問・承認待ちルールが0件なら行動チップを出さない", async () => {
     mockAgent({
       reply: "順調です。",
