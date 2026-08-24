@@ -95,7 +95,6 @@ export function registerFaqCrudRoutes(
 
     const { limit, offset, search, sort, order, category } = parsed.data;
     const isPublishedRaw = req.query.is_published as string | undefined;
-    const isGlobalRaw = req.query.is_global as string | undefined;
 
     // ORDER BY — Zodのenum検証済み値を明示的なマッピングで二重保護
     const SORT_COLUMN_MAP: Record<string, string> = {
@@ -125,11 +124,6 @@ export function registerFaqCrudRoutes(
         whereClause += ` AND is_published = $${params.length}`;
       }
 
-      if (isGlobalRaw === "true") {
-        whereClause += ` AND is_global = true`;
-      } else if (isGlobalRaw === "false") {
-        whereClause += ` AND (is_global = false OR is_global IS NULL)`;
-      }
 
       const countResult = await db.query(
         `SELECT COUNT(*)::int AS total FROM faq_docs ${whereClause}`,
@@ -140,7 +134,7 @@ export function registerFaqCrudRoutes(
       params.push(limit);
       params.push(offset);
       const itemsResult = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, is_global, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
          FROM faq_docs
          ${whereClause}
          ORDER BY ${safeSortCol} ${safeOrder}
@@ -172,7 +166,7 @@ export function registerFaqCrudRoutes(
 
     try {
       const result = await db.query(
-        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, is_global, created_at, updated_at
+        `SELECT id, tenant_id, question, answer, category, tags, is_published, is_excluded_from_search, created_at, updated_at
          FROM faq_docs
          WHERE id = $1`,
         [id]

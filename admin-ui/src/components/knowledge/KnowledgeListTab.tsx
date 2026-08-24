@@ -19,7 +19,6 @@ interface KnowledgeItem {
   category: string | null;
   tags: string[] | null;
   is_published?: boolean;
-  is_global?: boolean;
   is_excluded_from_search?: boolean;
   created_at: string;
 }
@@ -59,7 +58,6 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
   const [sortOption, setSortOption] = useState<SortOption>("newest");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [publishFilter, setPublishFilter] = useState<"all" | "published" | "draft">("all");
-  const [globalFilter, setGlobalFilter] = useState<"all" | "global" | "tenant">("all");
 
   const [togglingId, setTogglingId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -94,7 +92,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
   // 絞り込み条件が変わったら1ページ目に戻す
   useEffect(() => {
     setOffset(0);
-  }, [search, sortOption, categoryFilter, publishFilter, globalFilter]);
+  }, [search, sortOption, categoryFilter, publishFilter]);
 
   const categoryLabel = useCallback(
     (cat: string | null) => {
@@ -120,8 +118,6 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
       if (categoryFilter !== "all") params.set("category", categoryFilter);
       if (publishFilter === "published") params.set("is_published", "true");
       if (publishFilter === "draft") params.set("is_published", "false");
-      if (globalFilter === "global") params.set("is_global", "true");
-      if (globalFilter === "tenant") params.set("is_global", "false");
 
       const res = await fetchWithAuth(`${API_BASE}/v1/admin/knowledge/faq?${params}`);
       if (!res.ok) throw new Error(t("knowledge.load_error"));
@@ -151,7 +147,7 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [navigate, tenantId, offset, search, sortOption, categoryFilter, publishFilter, globalFilter, t]);
+  }, [navigate, tenantId, offset, search, sortOption, categoryFilter, publishFilter, t]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
@@ -420,35 +416,6 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           );
         })}
       </div>
-      {/* グローバルナレッジフィルター */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
-        {([
-          { v: "all", label: "全て" },
-          { v: "tenant", label: "テナント別" },
-          { v: "global", label: "⭐ グローバルのみ" },
-        ] as const).map(({ v, label }) => {
-          const active = globalFilter === v;
-          return (
-            <button
-              key={v}
-              onClick={() => setGlobalFilter(v)}
-              style={{
-                padding: "4px 12px",
-                minHeight: 32,
-                borderRadius: 999,
-                border: `1px solid ${active ? "rgba(234,179,8,0.5)" : "#374151"}`,
-                background: active ? "rgba(234,179,8,0.1)" : "transparent",
-                color: active ? "#fbbf24" : "#6b7280",
-                fontSize: 12,
-                cursor: "pointer",
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-
       {error && (
         <div style={{ marginBottom: 16, padding: "14px 18px", borderRadius: 12, background: "rgba(127,29,29,0.4)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: 15 }}>
           {error}
@@ -539,14 +506,6 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
                       ? t("knowledge.badge_not_answering")
                       : t("knowledge.badge_answering")}
                   </span>
-                  {item.is_global && (
-                    <span style={{
-                      padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600,
-                      background: "rgba(234,179,8,0.12)", border: "1px solid rgba(234,179,8,0.3)", color: "#fbbf24",
-                    }}>
-                      ⭐ グローバル
-                    </span>
-                  )}
                   <span style={{ fontSize: 11, color: "#6b7280" }}>{formatDate(item.created_at, locale)}</span>
                 </div>
                 <p style={{ fontSize: 15, fontWeight: 600, color: "#f9fafb", margin: "0 0 4px", lineHeight: 1.4 }}>
