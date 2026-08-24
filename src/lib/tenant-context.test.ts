@@ -644,6 +644,45 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
     expect(getTenantConfig(TENANT)?.security.apiKeyHash).toBe("seed-primary-expected");
   });
 
+  // free_ad プラン追加時に発見・修正した箇所: 起動時DB同期の plan フォールバックが
+  // ["starter","growth","enterprise"] の三値allowlistのままだと、free_ad行を
+  // 読み込んだ際にstarterへ「昇格」してしまう(CLAUDE.md 絶対にやってはいけないこと37と
+  // 同型のバグ)。fail-safeの落とし先が最も制限の強い free_ad になっていることを固定する。
+  it("plan='free_ad'の行はそのままfree_adとして復元される（starterへ昇格しない）", async () => {
+    const TENANT = "seed-free-ad-tenant";
+    await seedTenantsFromDB(
+      fakePool([row({ tenant_id: TENANT, key_hash: "seed-free-ad-key", plan: "free_ad" })])
+    );
+
+    expect(getTenantConfig(TENANT)?.plan).toBe("free_ad");
+  });
+
+  it("未知のplan文字列は最も制限の強いfree_adへ倒れる（starterへ昇格しない）", async () => {
+    const TENANT = "seed-unknown-plan-tenant";
+    await seedTenantsFromDB(
+      fakePool([row({ tenant_id: TENANT, key_hash: "seed-unknown-plan-key", plan: "typo-plan" })])
+    );
+
+    expect(getTenantConfig(TENANT)?.plan).toBe("free_ad");
+  });
+
+  it("plan列がnull/未設定の行もfree_adへ倒れる", async () => {
+    const TENANT = "seed-null-plan-tenant";
+    await seedTenantsFromDB(
+      fakePool([row({ tenant_id: TENANT, key_hash: "seed-null-plan-key", plan: null as unknown as string })])
+    );
+
+    expect(getTenantConfig(TENANT)?.plan).toBe("free_ad");
+  });
+
+  it("既知の4値(free_ad/starter/growth/enterprise)はすべてそのまま復元される", async () => {
+    for (const plan of ["free_ad", "starter", "growth", "enterprise"] as const) {
+      const TENANT = `seed-plan-${plan}-tenant`;
+      await seedTenantsFromDB(fakePool([row({ tenant_id: TENANT, key_hash: `seed-${plan}-key`, plan })]));
+      expect(getTenantConfig(TENANT)?.plan).toBe(plan);
+    }
+  });
+
   it("複数テナントを取り違えずに復元する（キーがテナント間で混ざらない）", async () => {
     await seedTenantsFromDB(
       fakePool([

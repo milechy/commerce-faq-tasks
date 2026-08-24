@@ -244,3 +244,34 @@ describe('public/widget.js free_adプラン月次上限の不変条件', () => {
     expect(WIDGET_SRC).toMatch(/err\.serverMessage/);
   });
 });
+
+// PR-B/PR-C: バッジ描画判定・上限メッセージ判定は tests/widget/freeAdBadgeLogic.test.ts で
+// 抽出ロジックとして網羅的にテストしている。ここではその契約(=同一の条件式)が
+// 実ファイル側から乖離していないことだけを固定する(findScriptedAnswer.test.ts と同じ二層構成)。
+describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契約(freeAdBadgeLogic.test.ts)', () => {
+  it('バッジは showBrandingBadge && badgeUrl の両方が真のときだけ描画する', () => {
+    expect(WIDGET_SRC).toMatch(/if\s*\(\s*showBrandingBadge\s*&&\s*badgeUrl\s*\)\s*\{/);
+  });
+
+  it('showBrandingBadge の既定値は fail-safe で true 側(!== false)に倒れる', () => {
+    expect(WIDGET_SRC).toMatch(/showBrandingBadge\s*=\s*_rajiuceTenantCfg\.showBrandingBadge\s*!==\s*false;/);
+  });
+
+  it('badgeUrl 未注入(静的埋め込み等)では null になり、descriptionどおり描画されない', () => {
+    expect(WIDGET_SRC).toMatch(/badgeUrl\s*=\s*_rajiuceTenantCfg\.badgeUrl\s*\|\|\s*null;/);
+  });
+
+  it('バッジのクリックは _tracker が未初期化(null)でも例外を投げないガードを持つ', () => {
+    expect(WIDGET_SRC).toMatch(/if\s*\(\s*_tracker\s*\)\s*_tracker\.track\(\s*['"]branding_badge_click['"]/);
+  });
+
+  it('バッジリンクに rel="nofollow sponsored noopener" があり、noreferrer は含まない（link scheme対策・流入計測維持）', () => {
+    const match = WIDGET_SRC.match(/rel:\s*['"]([^'"]+)['"]/);
+    expect(match).not.toBeNull();
+    const rel = match ? match[1] : '';
+    expect(rel).toContain('nofollow');
+    expect(rel).toContain('sponsored');
+    expect(rel).toContain('noopener');
+    expect(rel).not.toContain('noreferrer');
+  });
+});
