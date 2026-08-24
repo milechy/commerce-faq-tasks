@@ -398,3 +398,111 @@ describe('chargeOneOffJpy（単発JPY請求）', () => {
     expect(mockLogger.error).toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// プラン倍率の遡及適用を封じる変更（migration_usage_logs_plan_snapshot.sql）。
+//
+// SQL の意味論そのものは実 Postgres でしか検証できないため、ここでは
+// 「壊れると請求が静かにズレる不変条件」だけを固定する。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('migration_usage_logs_plan_snapshot.sql', () => {
+  const readSql = () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    return fs.readFileSync(path.join(__dirname, 'migration_usage_logs_plan_snapshot.sql'), 'utf-8');
+  };
+
+  it('plan / plan_multiplier の2列を追加する', () => {
+    const sql = readSql();
+    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS plan\s+TEXT/);
+    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS plan_multiplier\s+NUMERIC/);
+  });
+
+  // ★DEFAULT を置くと「未確定」と「free_ad(x0)」が同じ値になり、
+  //   既存行の請求が静かに全額消える（CLAUDE.md 禁止20）。
+  it('DEFAULT を持たない（NULL=未確定 と 0=free_ad を区別するため）', () => {
+    const sql = readSql();
+    expect(sql).not.toMatch(/plan_multiplier\s+NUMERIC\([^)]*\)\s+[^;]*DEFAULT/i);
+    expect(sql).not.toMatch(/ADD COLUMN IF NOT EXISTS plan\s+TEXT[^;,]*DEFAULT/i);
+  });
+
+  // usage_logs は毎リクエスト書き込まれる。ここで CHECK を張ると、
+  // tenants.plan の CHECK 未適用事故（migration_free_ad_plan.sql）と同じことが
+  // 起きたときに利用記録そのものが失われ、請求不能になる。
+  it('usage_logs 側に plan の CHECK 制約を張らない', () => {
+    expect(readSql()).not.toMatch(/CHECK\s*\(\s*plan/i);
+  });
+});
+
+describe('集計SQL: 倍率は行ごとに適用する（月全体への遡及を禁じる）', () => {
+  const readSource = () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    return fs.readFileSync(path.join(__dirname, 'stripeSync.ts'), 'utf-8');
+  };
+
+  it('請求数量は usage_logs.plan_multiplier を行ごとに掛けて集計する', () => {
+    expect(readSource()).toMatch(/\*\s*COALESCE\(plan_multiplier,\s*\$4::numeric\)/);
+  });
+
+  // 回帰の本体: billableUnits（月合計）に tenants.plan の倍率を掛け直すと、
+  // 月中のプラン変更が月初まで遡って請求を書き換える状態に戻る。
+  it('月合計 billableUnits に現在プランの倍率を掛け直さない', () => {
+    expect(readSource()).not.toMatch(/Math\.ceil\(\s*billableUnits\s*\*/);
+  });
+
+  it('未焼き付け行が残っていることを検知できるよう unstamped_rows を数える', () => {
+    expect(readSource()).toMatch(/COUNT\(\*\) FILTER \(WHERE plan_multiplier IS NULL\)/);
+  });
+});
+
+describe('billedQuantity（行ごとに倍率が異なる月＝月中プラン変更）', () => {
+  /**
+   * 新しい集計規則の再現:
+   *   billedQuantity = ceil( Σ(row の billable_units × row の倍率) )
+   * 旧規則（ceil(Σ billable_units × 現在プランの倍率)）との差がテストの主眼。
+   */
+  const billedQuantity = (rows: Array<{ units: number; multiplier: number }>) =>
+    Math.ceil(rows.reduce((s, r) => s + r.units * r.multiplier, 0));
+
+  it('月初 starter・月末 growth の月は、それぞれの倍率で按分される', () => {
+    // 100件を starter(x1.0) で、100件を growth(x1.5) で使った月
+    const rows = [
+      { units: 100, multiplier: 1.0 },
+      { units: 100, multiplier: 1.5 },
+    ];
+    expect(billedQuantity(rows)).toBe(250);
+    // 旧規則なら「現在プラン = growth」が月全体に掛かり 300 になっていた
+    expect(billedQuantity(rows)).not.toBe(Math.ceil(200 * 1.5));
+  });
+
+  it('月末に free_ad へ落としても、それ以前の利用分は 0 円にならない', () => {
+    const rows = [
+      { units: 500, multiplier: 2.5 }, // enterprise で1か月使い
+      { units: 1, multiplier: 0 },     // 月末に free_ad へ降格した後の1件
+    ];
+    expect(billedQuantity(rows)).toBe(1250);
+    // 旧規則なら「現在プラン = free_ad(x0)」が月全体に掛かり 0 になっていた
+    expect(billedQuantity(rows)).not.toBe(0);
+  });
+
+  it('月中に上げても、上げる前の利用分まで遡って高くならない', () => {
+    const rows = [
+      { units: 200, multiplier: 1.0 }, // starter 期間
+      { units: 10,  multiplier: 2.5 }, // enterprise へ上げた後
+    ];
+    expect(billedQuantity(rows)).toBe(225);
+    // 旧規則なら 210 件すべてが x2.5 で 525 になっていた（後出しの値上げ）
+    expect(billedQuantity(rows)).not.toBe(Math.ceil(210 * 2.5));
+  });
+
+  it('切り上げは行ごとではなく合計に対して1回だけ行う', () => {
+    // 1件 x1.5 が3行。行ごとに切り上げると 2+2+2=6 に膨らむ。
+    const rows = [
+      { units: 1, multiplier: 1.5 },
+      { units: 1, multiplier: 1.5 },
+      { units: 1, multiplier: 1.5 },
+    ];
+    expect(billedQuantity(rows)).toBe(5);
+  });
+});
