@@ -13,20 +13,26 @@ jest.mock('stripe', () => {
 import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits } from './stripeSync';
 
 describe('planMultiplier', () => {
-  it('プラン別の倍率を返す（Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
+  it('プラン別の倍率を返す（Free(広告表示) 0 / Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
+    expect(planMultiplier('free_ad')).toBe(0);
     expect(planMultiplier('starter')).toBe(1.0);
     expect(planMultiplier('growth')).toBe(1.5);
     expect(planMultiplier('enterprise')).toBe(2.5);
   });
 
-  it('null / undefined / 未知のプランは Starter 扱い（1.0）でフォールバック', () => {
+  // 意図的な非対称性: queryTenantPlan 等のエンタイトルメント判定は fail-safe で
+  // 最も制限の強い free_ad へ倒すが、課金倍率の未知時フォールバックは逆に
+  // starter(1.0)のまま変更しない。plan不明時に 0 へ倒すと請求漏れ(取りっぱぐれ)の
+  // リスクになるため、「機能を隠す」側は最も厳しく、「請求額」側は取りすぎる方向に
+  // 倒すのが安全(過剰請求は問い合わせで発覚するが、請求漏れは気づけない)。
+  it('null / undefined / 未知のプランは Starter 扱い（1.0）でフォールバックし続ける(free_adへは倒さない)', () => {
     expect(planMultiplier(null)).toBe(1.0);
     expect(planMultiplier(undefined)).toBe(1.0);
     expect(planMultiplier('unknown-plan')).toBe(1.0);
   });
 
-  it('PLAN_MULTIPLIERS は admin-ui PLAN_OPTIONS と同一の3プランを持つ', () => {
-    expect(Object.keys(PLAN_MULTIPLIERS).sort()).toEqual(['enterprise', 'growth', 'starter']);
+  it('PLAN_MULTIPLIERS は admin-ui PLAN_OPTIONS と同一の4プランを持つ', () => {
+    expect(Object.keys(PLAN_MULTIPLIERS).sort()).toEqual(['enterprise', 'free_ad', 'growth', 'starter']);
   });
 });
 
@@ -46,6 +52,30 @@ describe('billedQuantity 算出（Math.ceil(totalRequests * multiplier)）', () 
   it('Enterprise は 2.5 倍', () => {
     expect(billed(100, 'enterprise')).toBe(250);
     expect(billed(3, 'enterprise')).toBe(8); // 7.5 → 8
+  });
+
+  // Asana 1217759064329998 AC: 「請求数量が0になること」と「usage_logsに原価が
+  // 計上されること」は別々にアサートする(前者だけ見ると赤字が不可視のまま通る)。
+  it('free_ad は倍率0のため請求数量は常に0（何件使っても課金されない）', () => {
+    expect(billed(0, 'free_ad')).toBe(0);
+    expect(billed(1, 'free_ad')).toBe(0);
+    expect(billed(200, 'free_ad')).toBe(0); // 月次上限いっぱいまで使っても0
+  });
+
+  it('free_adの請求数量が0でも、原価(cost_total_cents)の計算はplanを見ないため0にならない', () => {
+    // calculateBillingAmountCents(costCalculator.ts)はplan引数を取らない —
+    // 倍率(MARGIN_MULTIPLIER)はfeatureUsedのみで決まり、Stripe請求数量とは無関係に
+    // 常に計算される。free_adでも「使った」という事実そのものはusage_logsに残る。
+    const { calculateBillingAmountCents } = require('./costCalculator') as typeof import('./costCalculator');
+    const costCents = calculateBillingAmountCents({
+      model: 'gpt-oss-120b',
+      inputTokens: 1000,
+      outputTokens: 200,
+      featureUsed: 'chat',
+    });
+    expect(costCents).toBeGreaterThan(0);
+    // 同時に、この行のStripe請求数量はfree_adなら0
+    expect(billed(1, 'free_ad')).toBe(0);
   });
 });
 

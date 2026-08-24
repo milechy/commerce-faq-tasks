@@ -452,14 +452,17 @@ describe("POST /api/avatar/room-token", () => {
       expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
     });
 
-    it("plan取得失敗時はfail-safeでstarter扱いとなり事前ディスパッチされない", async () => {
+    it("plan取得失敗時はfail-safeで最も制限の強いプラン扱いとなり事前ディスパッチされない", async () => {
       mockQuery
         .mockResolvedValueOnce({
           rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: true } }],
           rowCount: 1,
         })
         .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }) // Q3 fallback
-        .mockRejectedValueOnce(new Error("db down")); // queryTenantPlan内部でcatchされstarter扱いになる
+        // queryTenantPlan内部でcatchされfree_ad扱いになる(free_adプラン追加後の
+        // fail-safeの落とし先。starterでもfree_adでもpre_dispatchはenterprise限定
+        // のためpreDispatchEnabledの結果は変わらない)
+        .mockRejectedValueOnce(new Error("db down"));
 
       const app = makeApp("tenant-a");
       const res = await request(app)

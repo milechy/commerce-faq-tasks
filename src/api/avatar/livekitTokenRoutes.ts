@@ -220,7 +220,7 @@ export function registerLiveKitTokenRoutes(
       const preDispatchFeatureFlag = row.features?.pre_dispatch === true;
       let preDispatchEnabled = false;
       if (preDispatchFeatureFlag) {
-        // fail-safe: plan取得失敗時は queryTenantPlan が starter を返す(=事前ディスパッチしない)
+        // fail-safe: plan取得失敗時は queryTenantPlan が free_ad を返す(=事前ディスパッチしない)
         const plan = await queryTenantPlan(pool, tenantId);
         preDispatchEnabled = planHasFeature(plan, "pre_dispatch");
         if (!preDispatchEnabled) {

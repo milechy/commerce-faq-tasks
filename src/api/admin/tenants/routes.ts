@@ -16,7 +16,10 @@ import { planHasFeature, type TenantPlan } from "../../../lib/billing/planFeatur
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
 
-const planValues = ["starter", "growth", "enterprise"] as const;
+// free_ad(starterより下の最下段。広告原資の無料プラン)を含む4値。
+// src/lib/billing/planFeatures.ts の TenantPlan と一致させること
+// (既知の多重化。DBのCHECK制約は migration_free_ad_plan.sql で別途対応が必要)。
+const planValues = ["free_ad", "starter", "growth", "enterprise"] as const;
 
 // 許可オリジンの検証。super_admin用(updateTenantSchema)と client_admin 自己申告用
 // (PATCH /v1/admin/my-tenant)で同一インスタンスを共有し、片方だけ緩いという事故を防ぐ。

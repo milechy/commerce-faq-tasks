@@ -19,9 +19,17 @@
 import type { Pool } from "pg";
 import { getPool } from "../db";
 
-export type TenantPlan = "starter" | "growth" | "enterprise";
+export type TenantPlan = "free_ad" | "starter" | "growth" | "enterprise";
 
+// free_ad は starter よりさらに下の最下段（広告原資の無料プラン。テキストチャット限定・
+// 月次会話数上限あり）。既存の fail-safe（取得失敗・未設定時は最も制限の強い段）の
+// 落とし先を starter から free_ad へ移す。CLAUDE.md 絶対にやってはいけないこと37:
+// この落とし先は rank() ・ queryTenantPlan の allowlist ・ queryTenantPlan の catch
+// 返り値の3箇所すべてで同時に直すこと。1箇所でも取り残すと、DB障害時に
+// 無料テナントが starter へ「昇格」する経路になる（型チェック・テストは通り、
+// 障害時にしか発現しないため気づけない）。
 const PLAN_RANK: Record<TenantPlan, number> = {
+  free_ad: -1,
   starter: 0,
   growth: 1,
   enterprise: 2,
@@ -53,8 +61,9 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   hide_branding: "growth",
 };
 
+// (a) fail-safe 3箇所のうち1つ目: 未知/null/undefinedは最も制限の強い free_ad 扱い。
 function rank(plan: string | null | undefined): number {
-  return PLAN_RANK[plan as TenantPlan] ?? PLAN_RANK.starter;
+  return PLAN_RANK[plan as TenantPlan] ?? PLAN_RANK.free_ad;
 }
 
 export function planHasFeature(plan: string | null | undefined, feature: GatedFeature): boolean {
@@ -63,7 +72,7 @@ export function planHasFeature(plan: string | null | undefined, feature: GatedFe
 
 /**
  * 指定のPoolを使ってテナントの現在のプランを取得する。
- * fail-safe: 取得失敗・未設定時は最も制限の強い starter 扱いにする。
+ * fail-safe: 取得失敗・未設定時は最も制限の強い free_ad 扱いにする。
  * 呼び出し元が既にpool可用性を確認済みの場合はこちらを直接使う
  * （DB障害時に「plan_upgrade_required」で503を覆い隠さないため）。
  */
@@ -77,9 +86,15 @@ export async function queryTenantPlan(
       [tenantId],
     );
     const plan = result.rows[0]?.plan;
-    return plan === "growth" || plan === "enterprise" ? plan : "starter";
+    // (b) fail-safe 3箇所のうち2つ目: 既知の4値のみ通す allowlist。
+    // それ以外(null・未知の文字列・テナント不在で rows が空)は free_ad へ倒す。
+    if (plan === "free_ad" || plan === "starter" || plan === "growth" || plan === "enterprise") {
+      return plan;
+    }
+    return "free_ad";
   } catch {
-    return "starter";
+    // (c) fail-safe 3箇所のうち3つ目: DB障害時も free_ad へ倒す。
+    return "free_ad";
   }
 }
 

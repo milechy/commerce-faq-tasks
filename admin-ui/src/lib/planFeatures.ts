@@ -13,6 +13,7 @@
 import type { TenantPlan } from "../auth/useAuth";
 
 const PLAN_RANK: Record<TenantPlan, number> = {
+  free_ad: -1,
   starter: 0,
   growth: 1,
   enterprise: 2,

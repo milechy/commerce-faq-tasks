@@ -337,7 +337,10 @@ export async function seedTenantsFromDB(pool: Pool, logger?: Logger): Promise<vo
       registerTenant({
         tenantId: primary.tenant_id,
         name: primary.name || primary.tenant_id,
-        plan: (["starter", "growth", "enterprise"].includes(primary.plan) ? primary.plan : "starter") as TenantConfig["plan"],
+        // fail-safe: 未知/null値は最も制限の強い free_ad へ倒す(starterへ「昇格」しない)。
+        // 2026-08-24時点で getTenantConfig() の呼び出し元は無く(TenantConfig.plan は
+        // 現状どこからも読まれていない)実害は無いが、planFeatures.ts と同じ不変条件を保つ。
+        plan: (["free_ad", "starter", "growth", "enterprise"].includes(primary.plan) ? primary.plan : "free_ad") as TenantConfig["plan"],
         features: (primary.features as TenantConfig["features"]) ?? { avatar: false, voice: false, rag: true },
         security: {
           apiKeyHash: primary.key_hash,

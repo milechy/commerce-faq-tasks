@@ -11,7 +11,7 @@ import { supabase } from "../../../lib/supabaseClient";
 interface Tenant {
   id: string;
   name: string;
-  plan: "starter" | "growth" | "enterprise";
+  plan: "free_ad" | "starter" | "growth" | "enterprise";
   is_active: boolean;
   // POST /v1/admin/tenants (作成直後) は集計を含まないため未定義になりうる。
   api_key_count?: number;
