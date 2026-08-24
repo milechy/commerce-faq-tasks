@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { planHasFeature, isPlanUpgradeRequired, applyFetchResults } from "./planFeatures";
+import { planHasFeature, isPlanUpgradeRequired, applyFetchResults, planFeatureDelta, GATED_FEATURE_LABELS } from "./planFeatures";
 
 describe("planHasFeature", () => {
   it.each([
@@ -160,5 +160,50 @@ describe("applyFetchResults", () => {
   it("空配列でも例外にならない", async () => {
     const outcome = await applyFetchResults([]);
     expect(outcome).toEqual({ planLimited: false, planLimitMessage: null, genericFailure: false });
+  });
+});
+
+describe("planFeatureDelta（プラン変更の確認画面に出す増減）", () => {
+  it("starter → growth で使えるようになる機能を返す", () => {
+    const { gained, lost } = planFeatureDelta("starter", "growth");
+    expect(gained).toEqual(
+      expect.arrayContaining(["avatar", "analytics", "conversion", "premium_avatar", "hide_branding"]),
+    );
+    expect(lost).toEqual([]);
+  });
+
+  it("enterprise → starter で失う機能を漏れなく返す", () => {
+    const { gained, lost } = planFeatureDelta("enterprise", "starter");
+    expect(gained).toEqual([]);
+    expect(lost).toEqual(
+      expect.arrayContaining([
+        "avatar", "voice_clone", "analytics", "conversion",
+        "deep_research", "premium_avatar", "sai_task", "pre_dispatch", "hide_branding",
+      ]),
+    );
+  });
+
+  it("growth → enterprise は enterprise 限定機能だけを増分として返す", () => {
+    const { gained, lost } = planFeatureDelta("growth", "enterprise");
+    expect(gained.sort()).toEqual(["deep_research", "pre_dispatch", "sai_task", "voice_clone"]);
+    expect(lost).toEqual([]);
+  });
+
+  it("同じプランなら増減なし", () => {
+    expect(planFeatureDelta("growth", "growth")).toEqual({ gained: [], lost: [] });
+  });
+
+  // ★fail-safe の向き★ plan未確定(null)を free_ad と同一視すると
+  // 「全機能を失う」と誤表示してテナントを不安にさせる。
+  it("プラン未確定(null)のときは差分を出さない", () => {
+    expect(planFeatureDelta(null, "starter")).toEqual({ gained: [], lost: [] });
+    expect(planFeatureDelta(null, "enterprise")).toEqual({ gained: [], lost: [] });
+  });
+
+  it("全ゲート機能に表示名が定義されている（名前の無い項目を出さない）", () => {
+    const { lost } = planFeatureDelta("enterprise", "free_ad");
+    for (const f of lost) {
+      expect(GATED_FEATURE_LABELS[f]).toBeTruthy();
+    }
   });
 });

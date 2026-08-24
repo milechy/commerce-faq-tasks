@@ -5,6 +5,7 @@ import { supabase } from "../../../lib/supabaseClient";
 import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
+import type { TenantPlan } from "../../../auth/useAuth";
 import type {
   Tenant,
   BillingAdjustment,
@@ -27,12 +28,17 @@ import { UsageChartSection } from "./UsageChartSection";
 import { DailyUsageTable } from "./DailyUsageTable";
 import { BillingMainContent } from "./BillingMainContent";
 import { AdminBillingModals } from "./AdminBillingModals";
+import { PlanSection } from "./PlanSection";
 
 // ─── メインページ ─────────────────────────────────────────
 export default function BillingPage() {
   const navigate = useNavigate();
   const { t } = useLang();
-  const { isSuperAdmin, user, previewMode, previewTenantId, previewTenantName } = useAuth();
+  const { isSuperAdmin, user, previewMode, previewTenantId, previewTenantName, tenantPlan } = useAuth();
+
+  // プラン変更後は useAuth 側の再取得を待たず、この画面の表示を即座に合わせる。
+  const [planOverride, setPlanOverride] = useState<TenantPlan | null>(null);
+  const effectivePlan = planOverride ?? tenantPlan;
 
   const currentMonth = new Date().toISOString().slice(0, 7);
 
@@ -663,6 +669,13 @@ export default function BillingPage() {
           );
         })()}
       </section>
+
+      {/* プラン変更（テナント自身の操作。super_admin は /admin/tenants/:id 側で行う） */}
+      <PlanSection
+        currentPlan={effectivePlan}
+        onChanged={(p) => setPlanOverride(p)}
+        showToast={showToast}
+      />
 
       {/* ローディング */}
       {loadingData ? (
