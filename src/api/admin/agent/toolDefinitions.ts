@@ -1542,7 +1542,8 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'ユーザーが明示した場合にのみ案内すること。' +
         'また会話分析・成約/効果分析は get_analytics_summary / get_analytics_trend / get_conversion_summary / ' +
         'get_ab_test_results / get_knowledge_attribution でチャット上に直接返せるため、まずそちらを使うこと。' +
-        'この5つでこのツールを使うのは、ユーザーが明示的に旧UIの画面そのものを見たいと言った場合に限る。' +
+        '利用料金・請求書の確認は get_billing_summary でチャット上に直接返せるため、まずそちらを使うこと。' +
+        'この6つでこのツールを使うのは、ユーザーが明示的に旧UIの画面そのものを見たいと言った場合に限る。' +
         'FAQごとの公開/非公開切替は set_faq_published で直接実行できるため、まずそちらを使うこと。' +
         'feature="faq_publish_toggle" は set_faq_published で対応できない場合にのみ使うこと' +
         '（まとめて非公開・まとめて削除をしたい場合は feature="faq_bulk_ops" を使うこと）。' +
@@ -1682,6 +1683,30 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             type: 'string',
             description: '絞り込み（既定はall=FAQ+書籍の両方）',
             enum: ['all', 'faq', 'book'],
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_billing_summary',
+      description:
+        '現在の契約プラン・今期の利用料金（機能別内訳）・直近の請求書をチャット上に直接返す' +
+        '読み取り専用ツール。「今月いくら?」「プランは?」「請求書を見たい」のように聞かれたときに' +
+        '使うこと。これは閲覧専用であり、請求書の再送・金額調整・無料期間の設定・プラン変更・' +
+        'サービスの一時停止/再開はこのツールでは一切行えない（それらはsuper_admin専用の別画面の' +
+        '操作であり、テナント自身は実行できない）。お支払い方法の確認・変更が必要な場合は' +
+        'この結果に含まれるポータルURLを案内すること。',
+      parameters: {
+        type: 'object',
+        properties: {
+          period: {
+            type: 'string',
+            description: '集計期間（既定は30d）',
+            enum: ['7d', '30d', '90d'],
           },
         },
         required: [],

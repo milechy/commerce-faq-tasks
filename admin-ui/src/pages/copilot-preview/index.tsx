@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
@@ -218,7 +218,10 @@ type Card =
   | ({ kind: "abTestResults" } & Omit<AbTestResultsAgentActionCard, "kind">)
   // W2-6: ナレッジ別の成約貢献度。フィールド形状は
   // KnowledgeAttributionAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
-  | ({ kind: "knowledgeAttribution" } & Omit<KnowledgeAttributionAgentActionCard, "kind">);
+  | ({ kind: "knowledgeAttribution" } & Omit<KnowledgeAttributionAgentActionCard, "kind">)
+  // W2-7: ご利用状況・お支払い(閲覧専用)。フィールド形状は
+  // BillingSummaryAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
+  | ({ kind: "billingSummary" } & Omit<BillingSummaryAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -287,6 +290,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_conversion_summary: "成約・効果分析サマリーの取得",
   get_ab_test_results: "A/Bテスト結果・改善提案の取得",
   get_knowledge_attribution: "ナレッジ別の成約貢献度の取得",
+  get_billing_summary: "ご利用状況・お支払いの取得",
   get_tuning_rule_effect: "ルール効果の取得",
   get_avatar_status: "アバター稼働状況の取得",
   request_sai_task: "Saiへの代行依頼",
@@ -835,6 +839,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "knowledgeAttribution", period, sourceType, totalChunksUsed, avgConversionRate, topItems, worstPerformer },
+        };
+      }
+      if (a.card?.kind === "billing_summary") {
+        const { period, plan, totalYen, breakdown, invoicesAvailable, invoices, portalUrl } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "billingSummary", period, plan, totalYen, breakdown, invoicesAvailable, invoices, portalUrl },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -2690,6 +2702,8 @@ function CardView({
       return <AbTestResultsCard card={card} onSendReal={onSendReal} />;
     case "knowledgeAttribution":
       return <KnowledgeAttributionCard card={card} />;
+    case "billingSummary":
+      return <BillingSummaryCard card={card} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -3145,6 +3159,81 @@ function KnowledgeAttributionCard({ card }: { card: Extract<Card, { kind: "knowl
             </div>
           )}
         </>
+      )}
+    </CardShell>
+  );
+}
+
+// W2-7(docs/COPILOT_UI_PARITY.md §3.1 #15): ご利用状況・お支払い(閲覧専用)。旧UI
+// (pages/admin/billing/index.tsx)の再現だが、D2決定により閲覧一式に限定する — 請求書の
+// 再送・金額調整・無料期間・プラン変更・一時停止/再開のボタンは一切出さない(旧UIでは
+// それらもsuper_admin以外には隠れているが、この画面はテナント自身が見るものなので
+// そもそもボタン自体を存在させない)。portalUrlはStripeが発行する読み取り専用の顧客
+// ポータル(支払い方法の確認・変更・請求書ダウンロードができる、Stripe自身の認証で
+// 保護された画面)なので、外部リンクとして案内する(旧UIの「invoices」タブと同じ導線)。
+function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSummary" }> }) {
+  const { period, plan, totalYen, breakdown, invoicesAvailable, invoices, portalUrl } = card;
+  const periodLabel = period === "7d" ? "直近7日間" : period === "90d" ? "直近90日間" : "直近30日間";
+
+  return (
+    <CardShell hd={<><span>💳</span>ご利用状況・お支払い（{periodLabel}）</>} tone="agent">
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ padding: "3px 10px", borderRadius: 999, background: "rgba(120,120,140,0.15)", fontSize: 12, fontWeight: 700, color: "var(--foreground)", whiteSpace: "nowrap" }}>
+          {plan}
+        </span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>
+          今期の費用 {totalYen.toLocaleString("ja-JP")}円
+        </span>
+      </div>
+      {breakdown.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {breakdown.map((b) => (
+            <div key={b.feature} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+              <span style={{ width: 80, flexShrink: 0, color: "var(--muted-foreground)" }}>{b.label}</span>
+              <div style={{ flex: 1, height: 8, borderRadius: 4, background: "rgba(120,120,140,0.15)", overflow: "hidden" }}>
+                <div style={{ width: `${b.percentage}%`, height: "100%", background: "linear-gradient(90deg, #3b82f6, #8b5cf6)" }} />
+              </div>
+              <span style={{ width: 90, flexShrink: 0, textAlign: "right", color: "var(--foreground)" }}>{b.percentage}%（{b.costYen.toLocaleString("ja-JP")}円）</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div>
+        <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
+          直近の請求書
+        </div>
+        {!invoicesAvailable ? (
+          <div style={{ fontSize: 13.5, color: "var(--muted-foreground)" }}>
+            現在確認できません（契約中のサブスクリプションがないか、一時的に取得できません）
+          </div>
+        ) : invoices.length === 0 ? (
+          <div style={{ fontSize: 13.5, color: "var(--muted-foreground)" }}>請求書はまだありません</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {invoices.map((inv) => (
+              <div key={inv.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13.5, background: "var(--muted, rgba(120,120,140,0.08))", borderRadius: 8, padding: "8px 12px" }}>
+                <span style={{ color: "var(--foreground)" }}>
+                  [{inv.statusLabel}] {inv.amountDue.toLocaleString("ja-JP")}円（{new Date(inv.created * 1000).toISOString().slice(0, 10)}）
+                </span>
+                {inv.hostedInvoiceUrl && (
+                  <a href={inv.hostedInvoiceUrl} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: AGENT }}>
+                    詳細 ↗
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {portalUrl && (
+        <a
+          href={portalUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ display: "inline-flex", alignSelf: "flex-start", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 10, border: "1px solid var(--border)", background: "transparent", color: AGENT, fontSize: 13.5, fontWeight: 700, textDecoration: "none" }}
+        >
+          お支払い方法の確認・変更 ↗
+        </a>
       )}
     </CardShell>
   );
