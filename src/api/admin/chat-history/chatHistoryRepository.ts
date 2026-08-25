@@ -360,6 +360,16 @@ export interface EscalatedSessionSummary {
 
 /** 対応中（未解決）のエスカレーション一覧のうち、どこまで含めるかの範囲。 */
 export type EscalationSourceFilter = "user" | "all";
+const VALID_ESCALATION_SOURCE_FILTER = ["user", "all"] as const;
+
+/**
+ * source クエリパラメータを検証する。normalizeSessionListParams (period/sort_order等)
+ * と同じ pickAllowlisted 規約に揃え、allowlist外は例外にせず安全側の既定 'user' に
+ * フォールバックする。routes.ts に手書きの分岐を作らないため、ここへ一本化する。
+ */
+export function normalizeEscalationSourceFilter(value: unknown): EscalationSourceFilter {
+  return pickAllowlisted(value, VALID_ESCALATION_SOURCE_FILTER) ?? "user";
+}
 
 /** 対応中（未解決）のエスカレーション一覧を取得する。tenantId未指定 = 全テナント（super_admin用）。 */
 /**

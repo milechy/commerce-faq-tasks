@@ -337,6 +337,23 @@ describe("getActiveEscalations", () => {
     expect(listSql).toContain(SOURCE_FILTER_CONDITION);
   });
 
+  // actionExecutor.ts の get_escalations ツールは getActiveEscalations(tenantId, limit) の
+  // 2引数で呼ぶ(source は渡さない)。JSのデフォルト引数は「呼び出し側の引数の個数」ではなく
+  // 「その位置の値がundefinedか」で発火するため2引数呼び出しでも既定'user'が効くはずだが、
+  // 実際にそのシェイプ(位置引数2つ)で呼んでも同じ結果になることを固定しておく
+  // (チャットエージェントがe2e残骸を店主に見せてしまう回帰を防ぐ)。
+  it("[get_escalationsツール回帰] tenantIdとlimitの2引数のみの呼び出しでも既定sourceフィルタが効く", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "1" }] }); // COUNT
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] }); // SELECT
+
+    await getActiveEscalations("tenant-abc", 20);
+
+    const countSql = mockQuery.mock.calls[0]![0] as string;
+    const listSql = mockQuery.mock.calls[1]![0] as string;
+    expect(countSql).toContain(SOURCE_FILTER_CONDITION);
+    expect(listSql).toContain(SOURCE_FILTER_CONDITION);
+  });
+
   it("source='all' を渡すと source 条件を追加せず、e2e等も含めた全件になる", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ count: "3" }] }); // COUNT
     mockQuery.mockResolvedValueOnce({ rows: [ROW] }); // SELECT

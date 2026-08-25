@@ -6,7 +6,13 @@ import express from "express";
 import request from "supertest";
 import { registerChatHistoryRoutes } from "./routes";
 
-jest.mock("./chatHistoryRepository");
+// getActiveEscalations(DB依存)だけをモックし、normalizeEscalationSourceFilter は
+// 実装をそのまま使う(automockすると既定'user'/allowlistロジックまでundefinedを返す
+// jest.fn()に潰れ、source未指定/不正値のフォールバックを検証できなくなるため)。
+jest.mock("./chatHistoryRepository", () => ({
+  ...jest.requireActual("./chatHistoryRepository"),
+  getActiveEscalations: jest.fn(),
+}));
 jest.mock("../../../lib/db");
 jest.mock("../../../lib/logger", () => ({
   logger: {

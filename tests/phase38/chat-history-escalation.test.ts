@@ -12,12 +12,22 @@ import {
   getActiveEscalations,
   resolveEscalation,
   saveMessage,
+  normalizeEscalationSourceFilter,
 } from "../../src/api/admin/chat-history/chatHistoryRepository";
 
 const mockGetPool = getPool as jest.MockedFunction<typeof getPool>;
 const mockGetActiveEscalations = getActiveEscalations as jest.MockedFunction<typeof getActiveEscalations>;
 const mockResolveEscalation = resolveEscalation as jest.MockedFunction<typeof resolveEscalation>;
 const mockSaveMessage = saveMessage as jest.MockedFunction<typeof saveMessage>;
+// chatHistoryRepository は automock されるため、routes.ts が呼ぶ
+// normalizeEscalationSourceFilter も既定では undefined を返す jest.fn() になる。
+// 実装と同じ「'all'指定時のみ'all'、それ以外は'user'」の挙動を与えて回帰を防ぐ
+// (jest.clearAllMocks() は呼び出し履歴のみクリアし、mockImplementationは保持される)。
+const mockNormalizeEscalationSourceFilter =
+  normalizeEscalationSourceFilter as jest.MockedFunction<typeof normalizeEscalationSourceFilter>;
+mockNormalizeEscalationSourceFilter.mockImplementation((value: unknown) =>
+  value === "all" ? "all" : "user",
+);
 
 function makeDevJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");

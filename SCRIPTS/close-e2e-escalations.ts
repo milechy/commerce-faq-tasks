@@ -86,10 +86,18 @@ async function main(): Promise<void> {
       return;
     }
 
+    // 上で表示した内訳(rows)と実際に更新する行を一致させる。TARGET_CONDITION を
+    // UPDATE 側で単独に再実行すると、この関数内での SELECT〜UPDATE のわずかな間に
+    // 新たにescalateしたセッションを巻き込んだり、逆に人間が対応完了させたセッションを
+    // 上書きしうる(TOCTOU)。id = ANY(...) で対象を上のSELECT結果に固定したうえで、
+    // AND TARGET_CONDITION は再確認として残す(その間に人間が対応完了させていたら
+    // escalation_resolved_at IS NULL が外れ、その行はUPDATEされない=安全側)。
+    const targetIds = rows.map((row) => row.id);
     const updateResult = await pool.query(
       `UPDATE chat_sessions s
        SET escalation_resolved_at = NOW()
-       WHERE ${TARGET_CONDITION}`,
+       WHERE s.id = ANY($1::uuid[]) AND ${TARGET_CONDITION}`,
+      [targetIds],
     );
     console.log(`[close-e2e-escalations] closed ${updateResult.rowCount ?? 0} escalations.`);
   } finally {

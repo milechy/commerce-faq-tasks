@@ -5,7 +5,7 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
-import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
+import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, normalizeEscalationSourceFilter, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole, roleAuthMiddleware } from "../../middleware/roleAuth";
@@ -322,7 +322,7 @@ export function registerChatHistoryRoutes(app: Express): void {
       }
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
       // 未指定/不正値は既定の 'user' にフォールバックする(安全側)。'all' のときだけ全件。
-      const source = req.query["source"] === "all" ? "all" : "user";
+      const source = normalizeEscalationSourceFilter(req.query["source"]);
 
       try {
         // limit を渡さないため従来どおり全件。レスポンスの形も従来と同一。
