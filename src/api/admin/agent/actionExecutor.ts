@@ -2852,10 +2852,16 @@ export async function executeToolCall(
                ${userSourceExists("conversation_evaluations.session_id", "conversation_evaluations.tenant_id")}`,
             [tenantId, weekStart],
           ),
+          // GID 1217810487918908: 隣接する sessionsRes/prevSessionsRes/evalRes には
+          // userSourceClause/userSourceExists が付いているが、このCVクエリだけ実ユーザー
+          // 判定が無く、e2e/chat-testのconversion_attributionsも合算していた
+          // (PR #954/#958と同根)。conversion_attributions.session_idはUUIDで
+          // chat_sessions.id(UUID)を参照するため第3引数は"id"。
           db.query(
             `SELECT COUNT(*)::int AS n, COALESCE(SUM(conversion_value), 0)::numeric AS total
              FROM conversion_attributions
-             WHERE tenant_id = $1 AND created_at >= $2`,
+             WHERE tenant_id = $1 AND created_at >= $2
+               ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}`,
             [tenantId, weekStart],
           ),
           // 旧ダッシュボードStatCard代替: FAQ総数・公開数・最終更新日(週に限定しないテナント全体の値)
