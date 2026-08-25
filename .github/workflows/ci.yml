@@ -45,6 +45,64 @@ jobs:
       - name: Test shell scripts
         run: bash SCRIPTS/backup-postgres.test.sh
 
+  billing-sql:
+    name: Gate 4 — billing SQL integration (Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # 課金集計SQL(computeExpectedBilling)を、正規表現照合や再現実装ではなく
+    # 実際にPostgresへ実行して検証する(A-2)。stripeSync.test.ts は集計SQLの
+    # 意味論(GROUP BY・NUMERIC の丸め・タイムゾーン境界)を一度も実行しないまま
+    # 守っていたため、他のGateとは別ジョブとして独立させた
+    # (Gate 1 と並列実行できるようにし、失敗時にどちらが原因か切り分けやすくする)。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: billing_sql_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      BILLING_SQL_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/billing_sql_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ubuntu-latest ランナーに postgresql-client が入っている保証が無いため明示的に導入する。
+      - name: Install psql client
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # 課金集計SQLが参照するテーブル(tenants / usage_logs / stripe_subscriptions /
+      # stripe_usage_reports)だけを、実際のmigrationファイルを本番へ適用された
+      # 順序どおりに流して作る。スコープを絞っている理由は
+      # SCRIPTS/ci-billing-schema.sh のコメント参照(全74本超のmigrationを
+      # 機械的に適用する仕組みはこのリポジトリに無く、依存順序が
+      # ファイル名のアルファベット順とは一致しない箇所があるため)。
+      - name: Apply billing schema migrations
+        env:
+          DATABASE_URL: ${{ env.BILLING_SQL_TEST_DATABASE_URL }}
+        run: bash SCRIPTS/ci-billing-schema.sh
+
+      - name: Test billing SQL against real Postgres
+        run: pnpm jest --runInBand src/lib/billing/billingSqlIntegration.test.ts
+
   admin-ui-build:
     name: Gate 3 — admin-ui typecheck + test + build
     runs-on: ubuntu-latest
