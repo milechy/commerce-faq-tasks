@@ -112,7 +112,7 @@ interface KnowledgeGapRow {
 
 export type ApproveGapRecommendationResult =
   | { ok: true; userQuestion: string; detectionSource: string | null; frequency: number | null }
-  | { ok: false; reason: 'not_found' };
+  | { ok: false; reason: 'not_found' | 'already_resolved' };
 
 /**
  * ギャップのAI推薦を承認する(recommendation_status → 'approved')。
@@ -121,6 +121,13 @@ export type ApproveGapRecommendationResult =
  *
  * 呼び出し元がその場で承認の根拠(質問文・検出源・頻度)を提示できるよう、
  * UPDATE と同時に RETURNING で返す(禁止29/33の趣旨: 出所を示さずに承認させない)。
+ *
+ * 2026-08-25是正(壊れやすいポイント監査): 以前は現在の状態を確認せず
+ * recommendation_status を無条件に 'approved' へ上書きしていたため、既に
+ * status='resolved'(=このギャップから既にFAQが作られている)なギャップも
+ * 再承認できてしまい、続けて add_knowledge_from_gap を呼べば2件目のFAQが
+ * 作られる逐次的な重複経路になっていた。status != 'resolved' を条件に加え、
+ * 解決済みギャップの再承認そのものを拒否する。
  */
 export async function approveGapRecommendation(
   gapId: number,
@@ -133,12 +140,25 @@ export async function approveGapRecommendation(
   if (!isSuperAdmin) args.push(tenantId);
 
   const result = await pool.query<{ user_question: string; detection_source: string | null; frequency: number | null }>(
-    `UPDATE knowledge_gaps SET recommendation_status = $1 WHERE id = $2${tenantCondition}
+    `UPDATE knowledge_gaps SET recommendation_status = $1 WHERE id = $2 AND status != 'resolved'${tenantCondition}
      RETURNING user_question, detection_source, frequency`,
     args,
   );
 
-  if ((result.rowCount ?? 0) === 0) return { ok: false, reason: 'not_found' };
+  if ((result.rowCount ?? 0) === 0) {
+    // 失敗理由を特定する(この分岐は書き込みを行わないため、ここでの競合は問題にならない)。
+    const tenantProbeCondition = isSuperAdmin ? '' : ' AND tenant_id = $2';
+    const probeArgs: unknown[] = [gapId];
+    if (!isSuperAdmin) probeArgs.push(tenantId);
+    const probe = await pool.query<{ status: string }>(
+      `SELECT status FROM knowledge_gaps WHERE id = $1${tenantProbeCondition}`,
+      probeArgs,
+    );
+    if (probe.rows.length > 0 && probe.rows[0]!.status === 'resolved') {
+      return { ok: false, reason: 'already_resolved' };
+    }
+    return { ok: false, reason: 'not_found' };
+  }
   const row = result.rows[0]!;
   return {
     ok: true,
@@ -150,7 +170,7 @@ export async function approveGapRecommendation(
 
 export type AddKnowledgeFromGapResult =
   | { ok: true; faqDocId: number; gapQuestion: string; detectionSource: string | null; frequency: number | null }
-  | { ok: false; reason: 'not_found' | 'forbidden' | 'not_approved' };
+  | { ok: false; reason: 'not_found' | 'forbidden' | 'not_approved' | 'already_resolved' };
 
 /**
  * 承認済みギャップから FAQ を作成する(faq_docs INSERT + embedding + ES同期 +
@@ -174,6 +194,15 @@ export async function addKnowledgeFromGap(
   // 原子的に「claim」し(Postgresの行ロックにより同時に1件しか成功しない)、
   // 成功した1件だけがFAQ作成に進む。resolved_faq_id はFAQ作成後に別UPDATEで埋める
   // (claimの時点ではまだ存在しないため)。
+  //
+  // 2026-08-25追加是正: 上記だけでは「同時」の競合しか防げない。approveGapRecommendation
+  // は現在の状態を見ずに recommendation_status を 'approved' に上書きするため、
+  // 一度 resolved になったギャップでも後から再承認→再度このclaimを呼べば通ってしまい、
+  // 同じギャップから2件目のFAQが作られる(逐次的な再利用による重複)。
+  // status='resolved' はこのギャップから既にFAQが作られたことを示す不変の記録
+  // (resolved_faq_id とあわせてこのUPDATEでのみ確定させる)であり、
+  // recommendation_status が後から何度書き換えられても揺らがないため、
+  // status != 'resolved' もclaimの条件に加えて「1ギャップ=最大1FAQ」を直接保証する。
   const tenantCondition = isSuperAdmin ? '' : ' AND tenant_id = $3';
   const claimArgs: unknown[] = [gapId];
   if (!isSuperAdmin) claimArgs.push(tenantId);
@@ -185,7 +214,7 @@ export async function addKnowledgeFromGap(
   }>(
     `UPDATE knowledge_gaps
      SET recommendation_status = 'resolved'
-     WHERE id = $1 AND recommendation_status = 'approved'${tenantCondition}
+     WHERE id = $1 AND recommendation_status = 'approved' AND status != 'resolved'${tenantCondition}
      RETURNING tenant_id, user_question, detection_source, frequency`,
     claimArgs,
   );
@@ -193,12 +222,16 @@ export async function addKnowledgeFromGap(
   if (claimResult.rows.length === 0) {
     // claimに失敗した理由を特定するため、失敗時のみ読み取り専用で状態を確認する
     // (この分岐は書き込みを行わないため、ここでの競合は問題にならない)。
-    const probe = await pool.query<{ tenant_id: string; recommendation_status: string }>(
-      `SELECT tenant_id, recommendation_status FROM knowledge_gaps WHERE id = $1`,
+    const probe = await pool.query<{ tenant_id: string; recommendation_status: string; status: string }>(
+      `SELECT tenant_id, recommendation_status, status FROM knowledge_gaps WHERE id = $1`,
       [gapId],
     );
     if (probe.rows.length === 0) return { ok: false, reason: 'not_found' };
     if (!isSuperAdmin && probe.rows[0]!.tenant_id !== tenantId) return { ok: false, reason: 'forbidden' };
+    // status='resolved' は「既にこのギャップからFAQが作られている」ことを示す不変の記録。
+    // recommendation_status が(再承認等で)'approved'に戻っていても、既に解決済みなら
+    // 「承認されていません」ではなく正確に「既に解決済みです」を返す。
+    if (probe.rows[0]!.status === 'resolved') return { ok: false, reason: 'already_resolved' };
     return { ok: false, reason: 'not_approved' };
   }
   const gap = claimResult.rows[0]!;
@@ -439,6 +472,9 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
         if (actionParsed.success && actionParsed.data.action === 'approve') {
           const approveResult = await approveGapRecommendation(id, jwtTenantId, isSuperAdmin);
           if (!approveResult.ok) {
+            if (approveResult.reason === 'already_resolved') {
+              return res.status(409).json({ error: 'このギャップは既に解決済みです' });
+            }
             return res.status(404).json({ error: 'ギャップが見つかりません' });
           }
           return res.json({ ok: true });
@@ -532,6 +568,9 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
           }
           if (result.reason === 'forbidden') {
             return res.status(403).json({ error: 'forbidden' });
+          }
+          if (result.reason === 'already_resolved') {
+            return res.status(409).json({ error: 'このギャップは既に解決済みです' });
           }
           return res.status(409).json({ error: 'approved 状態のギャップのみナレッジを追加できます' });
         }
