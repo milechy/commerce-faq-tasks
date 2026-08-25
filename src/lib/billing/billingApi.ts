@@ -69,6 +69,10 @@ const adjustmentsQuerySchema = z.object({
   tenantId: z.string().min(1),
 });
 
+const onboardSchema = z.object({
+  tenantId: z.string().min(1),
+});
+
 function getStripe(secretKey: string): any {
   const Stripe = require('stripe');
   return new Stripe(secretKey, { apiVersion: '2024-06-20' });
@@ -392,14 +396,18 @@ export function registerBillingAdminRoutes(
       const resolvedTenantId = tenantId ?? '';
 
       if (!resolvedTenantId) {
-        res.json({ tenantId: 'all', customerId: null, portalUrl: null, invoices: [] });
+        res.json({ tenantId: 'all', status: 'no_subscription', customerId: null, portalUrl: null, invoices: [] });
         return;
       }
 
       try {
         const result = await fetchBillingInvoices(db, resolvedTenantId);
         if (result.status === 'no_subscription') {
-          res.json({ tenantId: resolvedTenantId, customerId: null, portalUrl: null, invoices: [] });
+          // PR-7(2026-08-25収益監査): 従来はここで status を落としており、
+          // クライアントは portalUrl===null からしか「未登録」を推測できなかった
+          // (「未登録」と「登録済みだが偶然0件」を同じ値で表現しない — CLAUDE.md 禁止20)。
+          // admin-ui はこの status を見て「支払い方法を登録する」導線(onboard呼び出し)を出す。
+          res.json({ tenantId: resolvedTenantId, status: 'no_subscription', customerId: null, portalUrl: null, invoices: [] });
           return;
         }
         if (result.status === 'stripe_not_configured') {
@@ -408,6 +416,7 @@ export function registerBillingAdminRoutes(
         }
         res.json({
           tenantId: result.tenantId,
+          status: 'ok',
           customerId: result.customerId,
           portalUrl: result.portalUrl,
           invoices: result.invoices,
@@ -415,6 +424,101 @@ export function registerBillingAdminRoutes(
       } catch (err) {
         logger.error({ err, tenantId: resolvedTenantId }, '[billingApi] invoices query failed');
         res.status(500).json({ error: 'internal_error' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // POST /v1/admin/billing/onboard  (super_admin)
+  //
+  // PR-7(2026-08-25収益監査): リポジトリ全体に customers.create / subscriptions.create /
+  // checkout.sessions が1件も存在せず、stripe_subscriptions は手動投入の2行のみだった。
+  // サブスク行が無いテナントはポータルボタンすら表示されず、決済手段登録に到達不能だった
+  // (CLAUDE.md 禁止44「押せるのに何も起きないUIを置く」の一段手前=導線自体が無い状態)。
+  // ここでは Customer + metered Subscription を作成し stripe_subscriptions へ記録する。
+  // テナント自身によるセルフサービス化は本エンドポイントのスコープ外(super_admin限定)。
+  // ──────────────────────────────────────────────────────────────
+  app.post(
+    '/v1/admin/billing/onboard',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = onboardSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { tenantId } = parsed.data;
+
+      try {
+        // 冪等性: 既にアクティブなサブスクがあれば新しい Customer/Subscription を
+        // Stripe側に重複作成しない(DB側のON CONFLICTだけでは「Stripe APIを呼ばない」
+        // ことまでは守れないため、ここで明示的に先にチェックする)。
+        const existing = await db.query(
+          `SELECT stripe_subscription_id, stripe_customer_id FROM stripe_subscriptions
+           WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId]
+        );
+        if (existing.rows.length > 0) {
+          res.json({
+            ok: true,
+            alreadyOnboarded: true,
+            subscriptionId: existing.rows[0].stripe_subscription_id,
+            customerId: existing.rows[0].stripe_customer_id,
+          });
+          return;
+        }
+
+        const stripeKey = process.env.STRIPE_SECRET_KEY;
+        if (!stripeKey) { res.status(500).json({ error: 'stripe_not_configured' }); return; }
+        const priceId = process.env.STRIPE_METERED_PRICE_ID;
+        if (!priceId) { res.status(500).json({ error: 'stripe_price_not_configured' }); return; }
+
+        const tenantRow = await db.query(
+          `SELECT id, name, tenant_contact_email FROM tenants WHERE id = $1`,
+          [tenantId]
+        );
+        if (tenantRow.rows.length === 0) {
+          res.status(404).json({ error: 'tenant not found' });
+          return;
+        }
+        const tenant = tenantRow.rows[0] as { id: string; name: string; tenant_contact_email: string | null };
+
+        const stripe = getStripe(stripeKey);
+        const customer = await stripe.customers.create({
+          name: tenant.name,
+          email: tenant.tenant_contact_email ?? undefined,
+          metadata: { tenant_id: tenantId },
+        });
+
+        const subscription = await stripe.subscriptions.create({
+          customer: customer.id,
+          items: [{ price: priceId }],
+          metadata: { tenant_id: tenantId },
+        });
+
+        // tenant_id が PRIMARY KEY のため、過去に解約済み(is_active=false)の行が
+        // 残っているケースの再オンボーディングも ON CONFLICT で受ける。
+        await db.query(
+          `INSERT INTO stripe_subscriptions
+             (tenant_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, is_active)
+           VALUES ($1, $2, $3, $4, true)
+           ON CONFLICT (tenant_id) DO UPDATE SET
+             stripe_customer_id     = EXCLUDED.stripe_customer_id,
+             stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+             stripe_price_id        = EXCLUDED.stripe_price_id,
+             is_active               = true,
+             updated_at              = NOW()`,
+          [tenantId, customer.id, subscription.id, priceId]
+        );
+
+        logger.info(
+          { tenantId, subscriptionId: subscription.id, customerId: customer.id },
+          '[billingApi] tenant onboarded to Stripe'
+        );
+        res.json({ ok: true, alreadyOnboarded: false, subscriptionId: subscription.id, customerId: customer.id });
+      } catch (err: any) {
+        logger.error({ err, tenantId }, '[billingApi] onboard failed');
+        res.status(500).json({ error: 'Stripeオンボーディングに失敗しました', detail: String(err?.message ?? err) });
       }
     }
   );

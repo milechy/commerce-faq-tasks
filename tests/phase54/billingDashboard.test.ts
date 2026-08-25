@@ -6,6 +6,10 @@ import request from "supertest";
 import { registerBillingAdminRoutes } from "../../src/lib/billing/billingApi";
 
 // Stripe をモック
+// PR-7: customers.create / subscriptions.create をテストごとに差し替えられるよう
+// モジュールスコープの jest.fn() として外に出す(mock prefix はjestのhoist許可対象)。
+const mockCustomersCreate = jest.fn();
+const mockSubscriptionsCreate = jest.fn();
 jest.mock("stripe", () => {
   return jest.fn().mockImplementation(() => ({
     invoices: {
@@ -15,6 +19,12 @@ jest.mock("stripe", () => {
       sessions: {
         create: jest.fn().mockResolvedValue({ url: "https://billing.stripe.com/portal/test" }),
       },
+    },
+    customers: {
+      create: (...args: unknown[]) => mockCustomersCreate(...args),
+    },
+    subscriptions: {
+      create: (...args: unknown[]) => mockSubscriptionsCreate(...args),
     },
   }));
 });
@@ -156,6 +166,191 @@ describe("GET /v1/admin/billing/invoices", () => {
 
     expect(res.body.invoices).toEqual([]);
     expect(res.body.customerId).toBeNull();
+    // PR-7(2026-08-25収益監査): 「未登録」と「登録済みだが偶然0件」を同じ値で
+    // 表現しない(CLAUDE.md禁止20)。status で明示的に区別する。
+    expect(res.body.status).toBe("no_subscription");
+  });
+});
+
+// ─── POST /v1/admin/billing/onboard ─────────────────────────────────────────
+// PR-7(2026-08-25収益監査): リポジトリ全体に customers.create / subscriptions.create が
+// 1件も存在せず、サブスク行が無いテナントは決済手段登録に到達不能だった。
+describe("POST /v1/admin/billing/onboard", () => {
+  const ORIG_ENV = process.env;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...ORIG_ENV, STRIPE_SECRET_KEY: "sk_test_dummy", STRIPE_METERED_PRICE_ID: "price_dummy" };
+    mockCustomersCreate.mockResolvedValue({ id: "cus_new_001" });
+    mockSubscriptionsCreate.mockResolvedValue({ id: "sub_new_001" });
+  });
+
+  afterAll(() => {
+    process.env = ORIG_ENV;
+  });
+
+  test("8: 正常系 — Customer + Subscription を作成し stripe_subscriptions に記録する", async () => {
+    const { app, db } = makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [], // 未登録
+        "select id, name, tenant_contact_email from tenants": [
+          { id: "tenant-onboard", name: "テストテナント", tenant_contact_email: "owner@example.com" },
+        ],
+      },
+    });
+
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "tenant-onboard" })
+      .expect(200);
+
+    expect(res.body).toEqual({
+      ok: true,
+      alreadyOnboarded: false,
+      subscriptionId: "sub_new_001",
+      customerId: "cus_new_001",
+    });
+    expect(mockCustomersCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "テストテナント", email: "owner@example.com" })
+    );
+    expect(mockSubscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ customer: "cus_new_001", items: [{ price: "price_dummy" }] })
+    );
+    // DBに書き込まれたことを確認(ON CONFLICT DO UPDATE を含む1行のINSERT)
+    const insertCall = db.query.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).toLowerCase().includes("insert into stripe_subscriptions")
+    );
+    expect(insertCall).toBeDefined();
+    expect(insertCall![1]).toEqual(["tenant-onboard", "cus_new_001", "sub_new_001", "price_dummy"]);
+  });
+
+  test("9: 既にアクティブなサブスクがあれば冪等に既存値を返し、Stripe APIを呼ばない(重複作成防止)", async () => {
+    const { app } = makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [
+          { stripe_subscription_id: "sub_existing", stripe_customer_id: "cus_existing" },
+        ],
+      },
+    });
+
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "tenant-already" })
+      .expect(200);
+
+    expect(res.body).toEqual({
+      ok: true,
+      alreadyOnboarded: true,
+      subscriptionId: "sub_existing",
+      customerId: "cus_existing",
+    });
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  test("10: client_admin は 403(super_admin限定)", async () => {
+    const { app } = makeApp({ role: "client_admin", tenantId: "tenant-a" });
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "tenant-a" })
+      .expect(403);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  test("11: STRIPE_SECRET_KEY未設定は500・Stripeを呼ばない", async () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    const { app } = makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
+      },
+    });
+
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "tenant-no-key" })
+      .expect(500);
+
+    expect(res.body).toEqual({ error: "stripe_not_configured" });
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  test("12: STRIPE_METERED_PRICE_ID未設定は500・Customerも作成しない", async () => {
+    delete process.env.STRIPE_METERED_PRICE_ID;
+    const { app } = makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
+      },
+    });
+
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "tenant-no-price" })
+      .expect(500);
+
+    expect(res.body).toEqual({ error: "stripe_price_not_configured" });
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  test("13: 存在しないtenantIdは404", async () => {
+    const { app } = makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
+        "select id, name, tenant_contact_email from tenants": [],
+      },
+    });
+
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "tenant-not-exist" })
+      .expect(404);
+
+    expect(res.body).toEqual({ error: "tenant not found" });
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  test("14: tenantId未指定は400", async () => {
+    const { app } = makeApp({ role: "super_admin", tenantId: null });
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({})
+      .expect(400);
+  });
+
+  test("15: 過去に解約済み(is_active=false)のテナントも再オンボーディングできる(tenant_idがPRIMARY KEYのためON CONFLICTで受ける)", async () => {
+    // is_active=true の行は無い(WHERE is_active=trueで0件) → 新規作成フローに進む。
+    // ただしDB上には解約済みの行(is_active=false)が既に存在する想定。
+    const { app, db } = makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
+        "select id, name, tenant_contact_email from tenants": [
+          { id: "tenant-rejoin", name: "再開テナント", tenant_contact_email: null },
+        ],
+      },
+    });
+
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "tenant-rejoin" })
+      .expect(200);
+
+    expect(res.body.ok).toBe(true);
+    expect(res.body.alreadyOnboarded).toBe(false);
+    const insertCall = db.query.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).toLowerCase().includes("insert into stripe_subscriptions")
+    );
+    expect(insertCall![0]).toMatch(/on conflict \(tenant_id\) do update/i);
   });
 });
 

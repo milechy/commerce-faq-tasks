@@ -81,6 +81,10 @@ export default function BillingPage() {
   const [daily, setDaily] = useState<DailyUsage[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [portalUrl, setPortalUrl] = useState<string | null>(null);
+  // PR-7(2026-08-25収益監査): 「未登録」と「登録済みだが偶然0件」を同じ値
+  // (portalUrl===null)で表現しない(CLAUDE.md禁止20)。APIのstatusをそのまま保持する。
+  const [billingStatus, setBillingStatus] = useState<"ok" | "no_subscription" | null>(null);
+  const [onboardLoading, setOnboardLoading] = useState(false);
   const [costBreakdown, setCostBreakdown] = useState<CostBreakdown | null>(null);
   const [crossTenantRows, setCrossTenantRows] = useState<CrossTenantRow[]>([]);
 
@@ -271,6 +275,30 @@ export default function BillingPage() {
     finally { setToggleLoading(false); }
   };
 
+  // PR-7(2026-08-25収益監査): サブスク行が無いテナントはポータルボタンすら
+  // 表示されず、決済手段登録に到達不能だった(押せるのに何も起きないUIの
+  // 一段手前=導線自体が無い状態。禁止44)。super_admin がここから
+  // Customer + Subscription を作成し、成功したら請求データを再取得して
+  // 通常のポータルボタン表示に切り替える。
+  const handleOnboard = async () => {
+    if (!selectedTenantId) return;
+    setOnboardLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/billing/onboard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: selectedTenantId }),
+      });
+      if (res.ok) {
+        showToast("✅ Stripeへの登録が完了しました");
+        await fetchBillingData();
+      } else {
+        showToast("❌ Stripeへの登録に失敗しました");
+      }
+    } catch { showToast("❌ Stripeへの登録に失敗しました"); }
+    finally { setOnboardLoading(false); }
+  };
+
   // 請求データを取得
   const fetchBillingData = useCallback(async () => {
     if (!selectedTenantId) return;
@@ -281,6 +309,7 @@ export default function BillingPage() {
     setDaily([]);
     setInvoices([]);
     setPortalUrl(null);
+    setBillingStatus(null);
     setCostBreakdown(null);
     setCrossTenantRows([]);
 
@@ -378,6 +407,7 @@ export default function BillingPage() {
       if (invoicesRes.status === "fulfilled" && invoicesRes.value.ok) {
         const data = (await invoicesRes.value.json()) as {
           tenantId: string;
+          status?: "ok" | "no_subscription";
           customerId: string;
           portalUrl: string;
           invoices: Array<{
@@ -395,6 +425,7 @@ export default function BillingPage() {
         };
 
         setPortalUrl(data.portalUrl ?? null);
+        setBillingStatus(data.status ?? null);
 
         const mappedInvoices: Invoice[] = data.invoices.map((inv) => ({
           id: inv.id,
@@ -656,6 +687,26 @@ export default function BillingPage() {
             >
               {t("billing.change_payment")}
             </a>
+          )}
+          {/* PR-7: サブスク未登録(status='no_subscription')のテナントは、押せるのに
+              何も起きないボタンを置かない代わりに、ここから登録できる導線を出す。
+              super_admin限定(バックエンドのsaMwと一致)。 */}
+          {!portalUrl && billingStatus === "no_subscription" && isSuperAdmin && (
+            <button
+              disabled={onboardLoading}
+              onClick={() => void handleOnboard()}
+              style={{
+                ...BTN_LINK,
+                borderColor: "#22c55e",
+                color: "#4ade80",
+                fontSize: 14,
+                alignSelf: "flex-end",
+                opacity: onboardLoading ? 0.6 : 1,
+                cursor: onboardLoading ? "not-allowed" : "pointer",
+              }}
+            >
+              {onboardLoading ? t("billing.register_payment_loading") : t("billing.register_payment")}
+            </button>
           )}
         </div>
 

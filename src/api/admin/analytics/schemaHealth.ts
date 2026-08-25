@@ -66,6 +66,11 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   platform_monthly_charges: ["amount_jpy", "period_yyyymm", "tenant_count", "tenant_id"],
   sai_task_rules: ["created_by", "evidence", "expected_behavior", "priority", "source", "tenant_id", "trigger_pattern"],
   sai_tasks: ["description", "order_id", "requested_by", "task_id", "tenant_id"],
+  // PR-7(2026-08-25収益監査): POST /v1/admin/billing/onboard が新規テナントの
+  // Stripe Customer/Subscription を作成した直後に INSERT する。テーブル自体は
+  // migration.sql で既に本番適用済みだが、未適用環境でここが無言で失敗すると
+  // 「オンボーディングは成功したのにDBに紐付かない」状態になる。
+  stripe_subscriptions: ["is_active", "stripe_customer_id", "stripe_price_id", "stripe_subscription_id", "tenant_id"],
   // billed_quantity は migration_stripe_usage_reports_billed_quantity.sql で追加。
   // 未適用のままだと INSERT が全滅し、月次請求が本番で一切送信できなくなる。
   stripe_usage_reports: ["billed_quantity", "idempotency_key", "period_yyyymm", "tenant_id", "total_cost_cents", "total_requests"],

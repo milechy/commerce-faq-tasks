@@ -299,6 +299,8 @@ const en: Record<TranslationKey, string> = {
   "billing.view_invoice": "📄 View Invoice",
   "billing.view_detail": "🔗 Invoice & Receipt",
   "billing.change_payment": "💳 Change Payment Settings",
+  "billing.register_payment": "💳 Register Payment Method",
+  "billing.register_payment_loading": "Registering...",
   "billing.status_pending": "Pending",
   "billing.status_invoiced": "Invoiced",
   "billing.status_error": "Error",

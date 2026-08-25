@@ -206,3 +206,100 @@ describe("BillingPage — プラン表示 (GID 1217808323616744 / P1-7)", () => 
     await waitFor(() => expect(screen.getByText(/取得できませんでした/)).toBeTruthy());
   });
 });
+
+// PR-7(2026-08-25収益監査): Stripeオンボーディング導線の回帰テスト。
+// バックエンド(POST /v1/admin/billing/onboard)は tests/phase54/billingDashboard.test.ts
+// で網羅済み。ここではUI側の配線 — 未契約(status='no_subscription')の時だけ
+// ボタンが出る/押すとonboard APIを叩いて再取得する/super_admin限定 — だけを確認する。
+describe("BillingPage — Stripeオンボーディング導線 (PR-7)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSession.mockResolvedValue(okSession);
+  });
+
+  function mockOnboardingFetchImpl(opts: {
+    invoicesStatus?: "ok" | "no_subscription";
+    portalUrl?: string | null;
+    onboardResponse?: () => ReturnType<typeof jsonResponse>;
+  }) {
+    const { invoicesStatus = "no_subscription", portalUrl = null, onboardResponse } = opts;
+    mockAuthFetch.mockImplementation((url: string, init?: { method?: string }) => {
+      if (url === "http://localhost:3100/v1/admin/tenants") {
+        return Promise.resolve(jsonResponse(200, {
+          tenants: [{ id: "lp-demo-avator", name: "LPデモ", plan: "starter", is_active: true }],
+        }));
+      }
+      if (url.startsWith("http://localhost:3100/v1/admin/billing/invoices")) {
+        return Promise.resolve(jsonResponse(200, {
+          tenantId: "lp-demo-avator",
+          status: invoicesStatus,
+          customerId: "",
+          portalUrl,
+          invoices: [],
+        }));
+      }
+      if (url === "http://localhost:3100/v1/admin/billing/onboard" && init?.method === "POST") {
+        return Promise.resolve((onboardResponse ?? (() => jsonResponse(200, { ok: true, alreadyOnboarded: false })))());
+      }
+      return Promise.reject(new Error("out of scope (onboarding test)"));
+    });
+  }
+
+  it("super_admin: 未契約テナント(no_subscription)では登録ボタンが出て、押すとonboard APIを叩いて再取得する", async () => {
+    mockOnboardingFetchImpl({ invoicesStatus: "no_subscription", portalUrl: null });
+    superAdminAuth();
+    renderPage();
+
+    const button = await screen.findByText("💳 支払い方法を登録する");
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      const onboardCalls = mockAuthFetch.mock.calls.filter(
+        (c) => c[0] === "http://localhost:3100/v1/admin/billing/onboard"
+      );
+      expect(onboardCalls.length).toBe(1);
+    });
+
+    const onboardCall = mockAuthFetch.mock.calls.find(
+      (c) => c[0] === "http://localhost:3100/v1/admin/billing/onboard"
+    ) as [string, { method?: string; body?: string }];
+    expect(onboardCall[1].method).toBe("POST");
+    expect(JSON.parse(onboardCall[1].body ?? "{}")).toEqual({ tenantId: "lp-demo-avator" });
+
+    await waitFor(() => expect(screen.getByText(/登録が完了しました/)).toBeTruthy());
+  });
+
+  it("super_admin: 契約済み(portalUrlあり)の場合は登録ボタンを出さず、変更リンクだけを出す", async () => {
+    mockOnboardingFetchImpl({ invoicesStatus: "ok", portalUrl: "https://billing.stripe.com/session/abc" });
+    superAdminAuth();
+    renderPage();
+
+    await screen.findByText("💳 支払い設定を変更");
+    expect(screen.queryByText("💳 支払い方法を登録する")).toBeNull();
+  });
+
+  it("client_admin: super_admin限定ボタンなので未契約でも出ない", async () => {
+    mockOnboardingFetchImpl({ invoicesStatus: "no_subscription", portalUrl: null });
+    clientAdminAuth({ tenantPlan: "starter" });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/現在のプラン/).textContent).toContain("Starter"));
+    expect(screen.queryByText("💳 支払い方法を登録する")).toBeNull();
+  });
+
+  it("super_admin: onboard APIが失敗レスポンスを返したら失敗トーストを出し、ボタンは残る(再試行可能)", async () => {
+    mockOnboardingFetchImpl({
+      invoicesStatus: "no_subscription",
+      portalUrl: null,
+      onboardResponse: () => jsonResponse(500, { error: "stripe_not_configured" }),
+    });
+    superAdminAuth();
+    renderPage();
+
+    const button = await screen.findByText("💳 支払い方法を登録する");
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText(/登録に失敗しました/)).toBeTruthy());
+    expect(screen.getByText("💳 支払い方法を登録する")).toBeTruthy();
+  });
+});
