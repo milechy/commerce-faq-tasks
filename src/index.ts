@@ -5,6 +5,7 @@ import { pool as db } from "./lib/db";
 import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import { billingHealthMonitor } from "./lib/billing/billingHealthCheck";
+import { billingReconciliationMonitor } from "./lib/billing/billingReconciliation";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
 import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
@@ -802,6 +803,15 @@ async function startServer() {
   if (db) {
     billingHealthMonitor.start(db, logger);
     logger.info("[startup] Billing health monitor started (1h interval)");
+  }
+
+  // 月次請求突合ジョブ。導入時は SCRIPTS/reconcile-billing.ts のCLIからしか
+  // 呼ばれず、cron/systemd timer のいずれにも登録されておらず孤立していた
+  // (厳格レビューで発覚)。billingHealthMonitor と同じく起動プロセスへ配線し、
+  // デプロイに追従する形にする(cron登録は別途人間が行う運用に依存しない)。
+  if (db) {
+    billingReconciliationMonitor.start(db, logger);
+    logger.info("[startup] Billing reconciliation monitor started (24h interval)");
   }
 
   // Phase70K: pipelineQueue self-heal — PM2再起動で stuck した job を自動復旧

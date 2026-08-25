@@ -2,7 +2,7 @@ jest.mock('../alerts/slackNotifier', () => ({
   sendSlackAlert: jest.fn().mockResolvedValue(undefined),
 }));
 
-import { reconcileTenantPeriod, reconcileMonth } from './billingReconciliation';
+import { reconcileTenantPeriod, reconcileMonth, billingReconciliationMonitor } from './billingReconciliation';
 import { sendSlackAlert } from '../alerts/slackNotifier';
 
 const mockLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any;
@@ -131,7 +131,7 @@ describe('reconcileMonth', () => {
     expect(sendSlackAlert).toHaveBeenCalledTimes(1);
     const [msg] = (sendSlackAlert as jest.Mock).mock.calls[0];
     expect(msg.level).toBe('CRITICAL');
-    expect(msg.details).toContain('1/3'); // 3テナント中1件不一致
+    expect(msg.details).toContain('乖離 1 件'); // 3テナント中1件不一致
     expect(msg.details).toContain('t2');
     expect(msg.details).not.toContain('t1: 再計算'); // 一致したテナントは列挙しない
   });
@@ -180,5 +180,129 @@ describe('reconcileMonth', () => {
     const db = makeDb({ tenants: [], expected: {}, lastSent: {} });
     await expect(reconcileMonth(db as any, mockLogger, '202603')).resolves.toEqual([]);
     expect(sendSlackAlert).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P1: テナント単位の突合失敗を可視化する。
+// 導入時は catch → logger.error のみで、失敗したテナントは results から
+// 単純に消えるだけだった(Slackには一切出ない)。DB接続不調などで一部テナントだけ
+// 突合できていない状態が、突合ジョブ自身に見えない状態だった。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('reconcileMonth: 突合失敗の可視化', () => {
+  beforeEach(() => {
+    (sendSlackAlert as jest.Mock).mockClear();
+  });
+
+  it('乖離が0件でも、突合失敗があればSlackに通知する', async () => {
+    const db = {
+      query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+        if (sql.includes('SELECT DISTINCT tenant_id FROM stripe_usage_reports')) {
+          return Promise.resolve({ rows: [{ tenant_id: 'broken' }, { tenant_id: 'ok' }] });
+        }
+        if (sql.includes('SELECT plan FROM tenants')) {
+          if ((params as unknown[])[0] === 'broken') return Promise.reject(new Error('connection terminated'));
+          return Promise.resolve({ rows: [{ plan: 'starter' }] });
+        }
+        if (sql.includes('billed_units_weighted')) {
+          return Promise.resolve({ rows: [{ total_requests: 10, total_cost_cents: 50, billable_units: 10, billed_units_weighted: '10', unstamped_rows: 0 }] });
+        }
+        if (sql.includes("status = 'sent'")) {
+          return Promise.resolve({ rows: [{ billed_quantity: 10 }] });
+        }
+        return Promise.resolve({ rows: [] });
+      }),
+    };
+
+    await reconcileMonth(db as any, mockLogger, '202603');
+
+    expect(sendSlackAlert).toHaveBeenCalledTimes(1);
+    const [msg] = (sendSlackAlert as jest.Mock).mock.calls[0];
+    expect(msg.level).toBe('CRITICAL');
+    expect(msg.details).toContain('突合失敗 1 件');
+    expect(msg.details).toContain('broken');
+    expect(msg.details).toContain('実態不明'); // 「乖離なし」と混同しないことを明示する文言
+  });
+
+  it('突合失敗も乖離も無ければSlackを鳴らさない(既存動作の維持)', async () => {
+    const db = {
+      query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+        if (sql.includes('SELECT DISTINCT tenant_id FROM stripe_usage_reports')) {
+          return Promise.resolve({ rows: [{ tenant_id: 'ok' }] });
+        }
+        if (sql.includes('SELECT plan FROM tenants')) return Promise.resolve({ rows: [{ plan: 'starter' }] });
+        if (sql.includes('billed_units_weighted')) {
+          return Promise.resolve({ rows: [{ total_requests: 10, total_cost_cents: 50, billable_units: 10, billed_units_weighted: '10', unstamped_rows: 0 }] });
+        }
+        if (sql.includes("status = 'sent'")) return Promise.resolve({ rows: [{ billed_quantity: 10 }] });
+        return Promise.resolve({ rows: [] });
+      }),
+    };
+    await reconcileMonth(db as any, mockLogger, '202603');
+    expect(sendSlackAlert).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// billingReconciliationMonitor（定期実行ラッパー）
+// billingHealthCheck.ts と同じ理由で fake timers を使う
+// (global.setInterval への spyOn/mockRestore は環境依存で不安定)。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('billingReconciliationMonitor', () => {
+  beforeEach(() => {
+    (sendSlackAlert as jest.Mock).mockClear();
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    billingReconciliationMonitor.stop();
+    jest.useRealTimers();
+  });
+
+  const cleanDb = () => ({
+    query: jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('SELECT DISTINCT tenant_id FROM stripe_usage_reports')) return Promise.resolve({ rows: [] });
+      return Promise.resolve({ rows: [] });
+    }),
+  });
+
+  // ★禁止30: 費用が発生する定期処理を多重起動しうる形で登録しない★
+  it('start() を2回呼んでもタイマーは1本だけ登録される', () => {
+    const db = cleanDb();
+    billingReconciliationMonitor.start(db as any, mockLogger);
+    billingReconciliationMonitor.start(db as any, mockLogger);
+    expect(jest.getTimerCount()).toBe(1);
+  });
+
+  it('起動直後に1回実行される(次の24hを待たない)', async () => {
+    const db = cleanDb();
+    billingReconciliationMonitor.start(db as any, mockLogger);
+    await jest.advanceTimersByTimeAsync(0);
+    const listCalls = db.query.mock.calls.filter(([sql]: [string]) => sql.includes('SELECT DISTINCT tenant_id'));
+    expect(listCalls.length).toBeGreaterThan(0);
+  });
+
+  it('24時間ごとに再実行される', async () => {
+    const db = cleanDb();
+    billingReconciliationMonitor.start(db as any, mockLogger);
+    await jest.advanceTimersByTimeAsync(0);
+    const callsAfterStart = db.query.mock.calls.length;
+
+    await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+    expect(db.query.mock.calls.length).toBeGreaterThan(callsAfterStart);
+  });
+
+  it('DBクエリが例外を投げても評価ループごと落ちない', async () => {
+    const db = { query: jest.fn().mockRejectedValue(new Error('connection terminated')) };
+    billingReconciliationMonitor.start(db as any, mockLogger);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockLogger.error).toHaveBeenCalled();
+  });
+
+  it('stop() 後はタイマーが残らない', () => {
+    const db = cleanDb();
+    billingReconciliationMonitor.start(db as any, mockLogger);
+    billingReconciliationMonitor.stop();
+    expect(jest.getTimerCount()).toBe(0);
   });
 });
