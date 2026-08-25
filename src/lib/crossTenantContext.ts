@@ -145,6 +145,7 @@ async function fetchCommonGapPatterns(): Promise<string[]> {
       FROM knowledge_gaps
       WHERE status = 'open'
         AND created_at > NOW() - INTERVAL '90 days'
+      ${userSourceExists("knowledge_gaps.session_id", "knowledge_gaps.tenant_id", "id")}
       GROUP BY detection_source
       ORDER BY gap_count DESC
       LIMIT 5
