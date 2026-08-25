@@ -3,6 +3,7 @@
 // スキーマ: judge-engine (Stream C) が定義した conversation_evaluations に準拠
 
 import { getPool } from "../../../lib/db";
+import { userSourceExistsForTable } from "../analytics/summaryQueries";
 
 // ---------------------------------------------------------------------------
 // 型定義（judge-engine スキーマ確定版）
@@ -115,7 +116,7 @@ export async function listEvaluations(
     args.push(params.max_score);
   }
 
-  const where = `WHERE ${conditions.join(" AND ")}`;
+  const where = `WHERE ${conditions.join(" AND ")} ${userSourceExistsForTable("conversation_evaluations", "conversation_evaluations")}`;
 
   const countResult = await pool.query<{ count: string; avg_score: string }>(
     `SELECT COUNT(*) AS count, COALESCE(AVG(score), 0) AS avg_score
@@ -168,7 +169,7 @@ export async function getDetailedStats(
     args.push(tenantId);
   }
 
-  const where = `WHERE ${conditions.join(" AND ")}`;
+  const where = `WHERE ${conditions.join(" AND ")} ${userSourceExistsForTable("conversation_evaluations", "conversation_evaluations")}`;
 
   // avg_score
   const avgResult = await pool.query<{ avg_score: string }>(
@@ -358,7 +359,7 @@ export async function getKpiStats(
     args.push(tenantId);
   }
 
-  const where = `WHERE ${conditions.join(" AND ")}`;
+  const where = `WHERE ${conditions.join(" AND ")} ${userSourceExistsForTable("conversation_evaluations", "conversation_evaluations")}`;
 
   // 全体集計
   const totalResult = await pool.query<{ total: string }>(
@@ -408,7 +409,7 @@ export async function getKpiStats(
     prevConditions.push(`tenant_id = $${prevArgs.length + 1}`);
     prevArgs.push(tenantId);
   }
-  const prevWhere = `WHERE ${prevConditions.join(" AND ")}`;
+  const prevWhere = `WHERE ${prevConditions.join(" AND ")} ${userSourceExistsForTable("conversation_evaluations", "conversation_evaluations")}`;
 
   const prevTotalResult = await pool.query<{ total: string }>(
     `SELECT COUNT(*) AS total FROM conversation_evaluations ${prevWhere}`,
