@@ -48,7 +48,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_tenant_settings',
-      description: 'テナントの現在の設定（GA4 Measurement ID、PostHog ホスト、ウィジェットテーマ）を取得する',
+      description: 'テナントの現在の設定（GA4 Measurement ID、PostHog ホスト、ウィジェットテーマ、Widget埋め込みを許可するドメイン）を取得する',
       parameters: {
         type: 'object',
         properties: {},
@@ -88,6 +88,41 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           },
         },
         required: ['host'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_allowed_origins',
+      description:
+        'Widget埋め込みを許可するドメイン(allowed_origins)を1件追加・削除する読み書きツール。' +
+        '未登録(0件)の間は全ドメインからの埋め込みを許可している。初めて1件追加すると、それ以降は' +
+        'このリストに無いドメインからの埋め込みが拒否されるようになるため、追加前に必ず実際の' +
+        '掲載URL(www の有無・http/https・末尾スラッシュまで)をユーザーに確認すること。' +
+        '逆に登録済みの最後の1件を削除すると、再び全ドメインからの埋め込みが許可される' +
+        '(無制限に戻る)状態になるため、これも削除前に必ず伝えること。' +
+        'ワイルドカードは https://*.example.com のようなサブドメイン全体を許す形のみ有効で、' +
+        'https://*.com のような誰でも取得できるドメイン直下の形は登録できない。' +
+        '必ず先に get_tenant_settings で現在の登録状況を確認し、変更後にどうなるかを' +
+        'ユーザーに提示して、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['add', 'remove'],
+            description: '追加するか削除するか',
+          },
+          origin: {
+            type: 'string',
+            description:
+              '対象のオリジン。https:// から始まる完全な形で指定する' +
+              '（例: https://shop.example.com、サブドメイン全体を許可する場合は https://*.example.com）',
+          },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['action', 'origin', 'confirmed'],
       },
     },
   },

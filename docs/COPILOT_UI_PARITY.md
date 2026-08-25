@@ -88,7 +88,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 
 | # | 機能 | 型 | 現状 | 旧UI実装 |
 |---|---|---|---|---|
-| 1 | Widget許可ドメインの自己設定 | T1 | 不可視 | `AllowedOriginsSettings.tsx` |
+| 1 | Widget許可ドメインの自己設定 | T1 | tool化(2026-08-25, `update_allowed_origins`) | `AllowedOriginsSettings.tsx` |
 | 2 | FAQ の検索対象から除外 | T1 | 不可視 | `KnowledgeFaqEditModal.tsx:71` |
 | 3 | FAQ入力例 (`faq_question_hint` / `faq_answer_hint`) | T1 | handoff無し | `FaqHintSettings.tsx` |
 | 4 | アバター設定の削除 | T1 | 不可視 | `avatar/index.tsx:227` |
@@ -503,7 +503,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 
 | # | 機能 | 参照 |
 |---|---|---|
-| 1 | Widget許可ドメインの自己設定 | `pending` |
+| 1 | Widget許可ドメインの自己設定 | `tool:update_allowed_origins` |
 | 2 | FAQの検索対象から除外 | `pending` |
 | 3 | FAQ入力例(faq_question_hint/faq_answer_hint) | `pending` |
 | 4 | アバター設定の削除 | `pending` |
@@ -520,4 +520,4 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 15 | ご利用状況・お支払い | `handoff:billing` |
 | 16 | 集計期間90日 | `pending` |
 
-現在地（2026-08-25、W0時点）: `tool:` 0 / `handoff:` 8 / `pending` 8。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
+現在地（2026-08-25、W1-1着手時点）: `tool:` 1 / `handoff:` 8 / `pending` 7。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
