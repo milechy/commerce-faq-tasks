@@ -203,6 +203,33 @@ export type AbTestResultsAgentActionCard = {
   }>;
 };
 
+// W2-6: ナレッジ別の成約貢献度。フィールド形状は
+// src/api/admin/agent/actionExecutor.ts の KnowledgeAttributionCardPayload と1対1に保つ。
+export type KnowledgeAttributionAgentActionCard = {
+  kind: "knowledge_attribution";
+  period: string;
+  sourceType: "all" | "faq" | "book";
+  totalChunksUsed: number;
+  avgConversionRate: number;
+  topItems: Array<{
+    chunkId: string;
+    source: "faq" | "book";
+    title: string;
+    principle?: string;
+    usageCount: number;
+    conversationCount: number;
+    conversionRate: number;
+    avgJudgeScore: number | null;
+    trend: "up" | "down" | "stable" | "insufficient_data";
+  }>;
+  worstPerformer: {
+    chunkId: string;
+    source: "faq" | "book";
+    title: string;
+    conversionRate: number;
+  } | null;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -216,7 +243,8 @@ export type AgentActionCard =
   | KnowledgeGapsListAgentActionCard
   | RuleEffectAgentActionCard
   | AnalyticsTrendAgentActionCard
-  | AbTestResultsAgentActionCard;
+  | AbTestResultsAgentActionCard
+  | KnowledgeAttributionAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

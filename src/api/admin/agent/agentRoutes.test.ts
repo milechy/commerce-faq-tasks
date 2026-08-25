@@ -185,11 +185,13 @@ const mockFetchAnalyticsSummary = jest.fn();
 const mockFetchConversionSummary = jest.fn();
 const mockFetchAnalyticsTrend = jest.fn();
 const mockFetchLowScoreSessions = jest.fn();
+const mockFetchKnowledgeAttribution = jest.fn();
 jest.mock('../analytics/summaryQueries', () => ({
   fetchAnalyticsSummary: (...args: any[]) => mockFetchAnalyticsSummary(...args),
   fetchConversionSummary: (...args: any[]) => mockFetchConversionSummary(...args),
   fetchAnalyticsTrend: (...args: any[]) => mockFetchAnalyticsTrend(...args),
   fetchLowScoreSessions: (...args: any[]) => mockFetchLowScoreSessions(...args),
+  fetchKnowledgeAttribution: (...args: any[]) => mockFetchKnowledgeAttribution(...args),
   // PR-3: get_weekly_briefing の集計クエリにsource='user'絞り込みを追加した際に実配線した
   userSourceClause: (alias: string) => `AND ${alias}.metadata->>'source' = 'user'`,
   userSourceExists: (sessionIdExpr: string, tenantIdExpr: string, chatSessionsColumn = 'session_id') =>
@@ -9410,6 +9412,128 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('get_knowledge_attribution', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const ITEM_A = {
+      chunk_id: 'chunk-1', source: 'faq' as const, title: '送料について', principle: undefined,
+      usage_count: 20, conversation_count: 15, conversion_count: 6, conversion_rate: 0.4,
+      avg_judge_score: 78, trend: 'up' as const,
+    };
+    const ITEM_B = {
+      chunk_id: 'chunk-2', source: 'book' as const, title: '接客マニュアル — 返品対応', principle: 'reassurance',
+      usage_count: 10, conversation_count: 8, conversion_count: 1, conversion_rate: 0.125,
+      avg_judge_score: 60, trend: 'down' as const,
+    };
+
+    it('プラン制限なしで上位アイテムと要改善(worst_performer)をcard付きで返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ka-1', 'get_knowledge_attribution', { period: '30d' }))
+        .mockResolvedValueOnce(makeGroqResponse('貢献度をお伝えします。'));
+
+      mockFetchKnowledgeAttribution.mockResolvedValueOnce({
+        items: [ITEM_A, ITEM_B],
+        summary: { total_chunks_used: 2, avg_conversion_rate: 0.2625, top_performer: ITEM_A, worst_performer: ITEM_B },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'どのFAQが売れてる?', sessionId: 'sess-ka-01' });
+
+      expect(res.status).toBe(200);
+      // プラン制限が無いツールなのでqueryTenantPlanを叩かない(mockQueryは呼ばれない)
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockFetchKnowledgeAttribution).toHaveBeenCalledWith({ db: mockDb, tenantId: 'tenant-abc', period: '30d' }, 'all', 50);
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('送料について');
+      expect(result).toContain('成約率40.0%');
+      expect(result).toContain('要改善');
+      expect(result).toContain('接客マニュアル — 返品対応');
+
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'knowledge_attribution',
+        period: '30d',
+        sourceType: 'all',
+        totalChunksUsed: 2,
+        avgConversionRate: 0.2625,
+        topItems: [
+          { chunkId: 'chunk-1', source: 'faq', title: '送料について', principle: undefined, usageCount: 20, conversationCount: 15, conversionRate: 0.4, avgJudgeScore: 78, trend: 'up' },
+          { chunkId: 'chunk-2', source: 'book', title: '接客マニュアル — 返品対応', principle: 'reassurance', usageCount: 10, conversationCount: 8, conversionRate: 0.125, avgJudgeScore: 60, trend: 'down' },
+        ],
+        worstPerformer: { chunkId: 'chunk-2', source: 'book', title: '接客マニュアル — 返品対応', conversionRate: 0.125 },
+      });
+    });
+
+    it('source_type=bookを指定するとfetchKnowledgeAttributionにそのまま渡る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ka-2', 'get_knowledge_attribution', { source_type: 'book' }))
+        .mockResolvedValueOnce(makeGroqResponse('書籍のみでお伝えします。'));
+
+      mockFetchKnowledgeAttribution.mockResolvedValueOnce({
+        items: [ITEM_B],
+        summary: { total_chunks_used: 1, avg_conversion_rate: 0.125, top_performer: ITEM_B, worst_performer: ITEM_B },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '書籍だけで教えて', sessionId: 'sess-ka-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchKnowledgeAttribution).toHaveBeenCalledWith({ db: mockDb, tenantId: 'tenant-abc', period: '30d' }, 'book', 50);
+      // 1件のみのときtop_performer===worst_performerなので「要改善」を二重表示しない
+      expect(res.body.actions[0].result).not.toContain('要改善');
+      expect(res.body.actions[0].card.sourceType).toBe('book');
+    });
+
+    it('対象期間にRAG参照が無い場合は「ありません」と案内し、cardのtopItemsは空配列', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ka-3', 'get_knowledge_attribution'))
+        .mockResolvedValueOnce(makeGroqResponse('データがありませんでした。'));
+
+      mockFetchKnowledgeAttribution.mockResolvedValueOnce({
+        items: [],
+        summary: { total_chunks_used: 0, avg_conversion_rate: 0, top_performer: null, worst_performer: null },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'どのFAQが売れてる?', sessionId: 'sess-ka-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('対象期間にRAGで参照されたナレッジはありません');
+      expect(res.body.actions[0].card.topItems).toEqual([]);
+      expect(res.body.actions[0].card.worstPerformer).toBeNull();
+    });
+
+    it('super_adminがテナント未特定の場合は「テナントが特定できません」を返し、集計に到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ka-4', 'get_knowledge_attribution'))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'どのFAQが売れてる?', sessionId: 'sess-ka-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+      expect(mockFetchKnowledgeAttribution).not.toHaveBeenCalled();
     });
   });
 

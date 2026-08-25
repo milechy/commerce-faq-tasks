@@ -1702,6 +1702,64 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     });
   });
 
+  describe("knowledge_attribution カード", () => {
+    it("成約率が高い順の上位アイテムと要改善(worstPerformer)が描画される", async () => {
+      mockAgent({
+        reply: "貢献度をお伝えします。",
+        actions: [
+          {
+            tool: "get_knowledge_attribution",
+            result: "ナレッジ別の成約貢献度（直近30日間）\n• 送料について: 成約率40.0%",
+            card: {
+              kind: "knowledge_attribution",
+              period: "30d",
+              sourceType: "all",
+              totalChunksUsed: 2,
+              avgConversionRate: 0.2625,
+              topItems: [
+                { chunkId: "chunk-1", source: "faq", title: "送料について", usageCount: 20, conversationCount: 15, conversionRate: 0.4, avgJudgeScore: 78, trend: "up" },
+                { chunkId: "chunk-2", source: "book", title: "接客マニュアル — 返品対応", usageCount: 10, conversationCount: 8, conversionRate: 0.125, avgJudgeScore: 60, trend: "down" },
+              ],
+              worstPerformer: { chunkId: "chunk-2", source: "book", title: "接客マニュアル — 返品対応", conversionRate: 0.125 },
+            },
+          },
+        ],
+      });
+
+      await send("どのFAQが売れてる?");
+
+      expect(await screen.findByText("送料について")).toBeTruthy();
+      expect(screen.getAllByText(/成約率/).length).toBeGreaterThan(0);
+      expect(screen.getByText("40.0%")).toBeTruthy();
+      expect(screen.getByText(/要改善/)).toBeTruthy();
+    });
+
+    it("対象期間にRAG参照が無いときは「ありません」と描画される(空のリストを黙って出さない)", async () => {
+      mockAgent({
+        reply: "データがありませんでした。",
+        actions: [
+          {
+            tool: "get_knowledge_attribution",
+            result: "ナレッジ別の成約貢献度（直近30日間）\n• 対象期間にRAGで参照されたナレッジはありません",
+            card: {
+              kind: "knowledge_attribution",
+              period: "30d",
+              sourceType: "all",
+              totalChunksUsed: 0,
+              avgConversionRate: 0,
+              topItems: [],
+              worstPerformer: null,
+            },
+          },
+        ],
+      });
+
+      await send("どのFAQが売れてる?");
+
+      expect(await screen.findByText("対象期間にRAGで参照されたナレッジはありません")).toBeTruthy();
+    });
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {

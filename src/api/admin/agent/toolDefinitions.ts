@@ -1541,8 +1541,8 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         '直接実行できるため、feature="escalation_reply" は「旧画面で会話の履歴を見返したい」と' +
         'ユーザーが明示した場合にのみ案内すること。' +
         'また会話分析・成約/効果分析は get_analytics_summary / get_analytics_trend / get_conversion_summary / ' +
-        'get_ab_test_results でチャット上に直接返せるため、まずそちらを使うこと。この4つでこのツールを使うのは、' +
-        'ユーザーが明示的に旧UIの画面そのものを見たいと言った場合に限る。' +
+        'get_ab_test_results / get_knowledge_attribution でチャット上に直接返せるため、まずそちらを使うこと。' +
+        'この5つでこのツールを使うのは、ユーザーが明示的に旧UIの画面そのものを見たいと言った場合に限る。' +
         'FAQごとの公開/非公開切替は set_faq_published で直接実行できるため、まずそちらを使うこと。' +
         'feature="faq_publish_toggle" は set_faq_published で対応できない場合にのみ使うこと' +
         '（まとめて非公開・まとめて削除をしたい場合は feature="faq_bulk_ops" を使うこと）。' +
@@ -1657,6 +1657,33 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       parameters: {
         type: 'object',
         properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_knowledge_attribution',
+      description:
+        'FAQ・書籍の各知識チャンクごとに、実際に成約(CV)へどれだけ貢献しているか（利用回数・' +
+        '会話数・成約率、前期間比のトレンド）をチャット上に直接返す読み取り専用ツール。' +
+        '「どのFAQが売れてる?」「効いているナレッジは?」「成約に貢献しているのはどれ?」の' +
+        'ように聞かれたときに使うこと。成約率が高い順の上位と、逆に低い順（要改善）も含める。',
+      parameters: {
+        type: 'object',
+        properties: {
+          period: {
+            type: 'string',
+            description: '集計期間（既定は30d）',
+            enum: ['7d', '30d', '90d'],
+          },
+          source_type: {
+            type: 'string',
+            description: '絞り込み（既定はall=FAQ+書籍の両方）',
+            enum: ['all', 'faq', 'book'],
+          },
+        },
         required: [],
       },
     },

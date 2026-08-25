@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
@@ -215,7 +215,10 @@ type Card =
   | ({ kind: "analyticsTrend" } & Omit<AnalyticsTrendAgentActionCard, "kind">)
   // W2-5: A/Bテスト結果+改善提案。フィールド形状は
   // AbTestResultsAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
-  | ({ kind: "abTestResults" } & Omit<AbTestResultsAgentActionCard, "kind">);
+  | ({ kind: "abTestResults" } & Omit<AbTestResultsAgentActionCard, "kind">)
+  // W2-6: ナレッジ別の成約貢献度。フィールド形状は
+  // KnowledgeAttributionAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
+  | ({ kind: "knowledgeAttribution" } & Omit<KnowledgeAttributionAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -283,6 +286,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_analytics_trend: "会話数の推移・低評価セッションの取得",
   get_conversion_summary: "成約・効果分析サマリーの取得",
   get_ab_test_results: "A/Bテスト結果・改善提案の取得",
+  get_knowledge_attribution: "ナレッジ別の成約貢献度の取得",
   get_tuning_rule_effect: "ルール効果の取得",
   get_avatar_status: "アバター稼働状況の取得",
   request_sai_task: "Saiへの代行依頼",
@@ -814,6 +818,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "abTestResults", experiments, suggestions },
+        };
+      }
+      if (a.card?.kind === "knowledge_attribution") {
+        const { period, sourceType, totalChunksUsed, avgConversionRate, topItems, worstPerformer } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "knowledgeAttribution", period, sourceType, totalChunksUsed, avgConversionRate, topItems, worstPerformer },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -2665,6 +2677,8 @@ function CardView({
       return <AnalyticsTrendCard card={card} onSendReal={onSendReal} />;
     case "abTestResults":
       return <AbTestResultsCard card={card} onSendReal={onSendReal} />;
+    case "knowledgeAttribution":
+      return <KnowledgeAttributionCard card={card} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -3065,6 +3079,62 @@ function AbTestResultsCard({
           </div>
         )}
       </div>
+    </CardShell>
+  );
+}
+
+const KNOWLEDGE_SOURCE_LABEL: Record<string, string> = { faq: "FAQ", book: "書籍" };
+const KNOWLEDGE_TREND_LABEL: Record<string, { label: string; color: string }> = {
+  up: { label: "▲", color: "#4ade80" },
+  down: { label: "▼", color: "#f87171" },
+  stable: { label: "→", color: "var(--muted-foreground)" },
+  insufficient_data: { label: "判定不能", color: "var(--muted-foreground)" },
+};
+
+// W2-6(docs/COPILOT_UI_PARITY.md §3.1 #14): FAQ・書籍の知識チャンクごとの成約(CV)貢献度。
+// 旧UI(KnowledgeAttributionTab.tsx)の再現。数値はすべてサーバ集計値(card)をそのまま
+// 描画する(AbTestResultsCardと同じ権威分離)。旧UIのTop10棒グラフ+chart.jsは持ち込まず、
+// 成約率が高い順の上位5件をリスト表示に絞る(AnalyticsTrendCardと同じ簡素化方針)。
+function KnowledgeAttributionCard({ card }: { card: Extract<Card, { kind: "knowledgeAttribution" }> }) {
+  const { period, totalChunksUsed, avgConversionRate, topItems, worstPerformer } = card;
+  const periodLabel = period === "7d" ? "直近7日間" : period === "90d" ? "直近90日間" : "直近30日間";
+
+  return (
+    <CardShell hd={<><span>🧠</span>ナレッジ別の成約貢献度（{periodLabel}）</>} tone="agent">
+      {topItems.length === 0 ? (
+        <div style={{ fontSize: 13.5, color: "var(--muted-foreground)" }}>対象期間にRAGで参照されたナレッジはありません</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
+            利用チャンク数 {totalChunksUsed}件（平均成約率 {(avgConversionRate * 100).toFixed(1)}%）
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {topItems.map((it) => {
+              const trend = KNOWLEDGE_TREND_LABEL[it.trend] ?? KNOWLEDGE_TREND_LABEL["stable"]!;
+              return (
+                <div key={it.chunkId} style={{ display: "flex", flexDirection: "column", gap: 2, background: "var(--muted, rgba(120,120,140,0.08))", borderRadius: 8, padding: "8px 12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ padding: "2px 8px", borderRadius: 999, background: "rgba(120,120,140,0.15)", fontSize: 11, fontWeight: 700, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
+                      {KNOWLEDGE_SOURCE_LABEL[it.source] ?? it.source}
+                    </span>
+                    <span style={{ fontSize: 13.5, color: "var(--foreground)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+                    成約率 <strong style={{ color: "var(--foreground)" }}>{(it.conversionRate * 100).toFixed(1)}%</strong>
+                    <span style={{ color: trend.color, marginLeft: 4 }}>{trend.label}</span>
+                    {` （${it.usageCount}回利用/${it.conversationCount}会話）`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {worstPerformer && worstPerformer.chunkId !== topItems[0]?.chunkId && (
+            <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+              要改善: [{KNOWLEDGE_SOURCE_LABEL[worstPerformer.source] ?? worstPerformer.source}] {worstPerformer.title}: 成約率{(worstPerformer.conversionRate * 100).toFixed(1)}%
+            </div>
+          )}
+        </>
+      )}
     </CardShell>
   );
 }
