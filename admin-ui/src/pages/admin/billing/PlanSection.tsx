@@ -41,10 +41,19 @@ const FREE_AD_NOTES = [
 
 export function PlanSection({
   currentPlan,
+  planStatus = "ready",
   onChanged,
   showToast,
 }: {
   currentPlan: TenantPlan | null;
+  /**
+   * currentPlan が null の理由を明示するための状態。
+   * GID 1217808323616744(P1-7): super_admin で常に「確認中」に固まっていたバグの原因は
+   * 未取得(loading)・失敗(error)・単に値が無い の3つを区別していなかったこと。
+   * 呼び出し元が取得中/失敗を把握していない場合は既定の "ready" のままでよい
+   * (currentPlan が null なら従来どおり不明表示になる)。
+   */
+  planStatus?: "loading" | "error" | "ready";
   onChanged: (plan: TenantPlan) => void;
   showToast: (msg: string) => void;
 }) {
@@ -97,15 +106,29 @@ export function PlanSection({
       <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 4px" }}>
         プラン
       </h2>
-      <p style={{ margin: "0 0 16px", fontSize: 14, color: "var(--foreground)" }}>
+      <p style={{ margin: planStatus === "error" ? "0 0 4px" : "0 0 16px", fontSize: 14, color: "var(--foreground)" }}>
         現在のプラン:{" "}
-        <strong style={{ fontSize: 16 }}>{currentOption?.label ?? "確認中"}</strong>
-        {currentOption && (
+        {planStatus === "loading" ? (
+          <strong style={{ fontSize: 16, color: "var(--muted-foreground)", fontWeight: 600 }}>
+            読み込み中…
+          </strong>
+        ) : planStatus === "error" ? (
+          <strong style={{ fontSize: 16, color: "#fbbf24" }}>取得できませんでした</strong>
+        ) : (
+          <strong style={{ fontSize: 16 }}>{currentOption?.label ?? "不明"}</strong>
+        )}
+        {planStatus === "ready" && currentOption && (
           <span style={{ color: "#a78bfa", marginLeft: 8 }}>
             対話単価 ×{currentOption.multiplier.toFixed(1)}
           </span>
         )}
       </p>
+
+      {planStatus === "error" && (
+        <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--muted-foreground)" }}>
+          通信状況をご確認のうえ、ページを再読み込みしてください。
+        </p>
+      )}
 
       {error && (
         <div

@@ -31,10 +31,20 @@ beforeEach(() => {
   });
 });
 
-function renderSection(currentPlan: "free_ad" | "starter" | "growth" | "enterprise" | null) {
+function renderSection(
+  currentPlan: "free_ad" | "starter" | "growth" | "enterprise" | null,
+  planStatus?: "loading" | "error" | "ready"
+) {
   const onChanged = vi.fn();
   const showToast = vi.fn();
-  render(<PlanSection currentPlan={currentPlan} onChanged={onChanged} showToast={showToast} />);
+  render(
+    <PlanSection
+      currentPlan={currentPlan}
+      planStatus={planStatus}
+      onChanged={onChanged}
+      showToast={showToast}
+    />
+  );
   return { onChanged, showToast };
 }
 
@@ -135,9 +145,41 @@ describe("PlanSection", () => {
     expect(screen.getByText(/テナント管理者アカウントから/)).toBeTruthy();
   });
 
-  it("プラン未確定でも画面が壊れない", () => {
+  it("プラン未確定でも画面が壊れない（状態不明なら「不明」、確認中を騙らない）", () => {
     renderSection(null);
-    expect(screen.getByText(/確認中/)).toBeTruthy();
+    expect(screen.getByText(/不明/)).toBeTruthy();
+    expect(screen.queryByText(/確認中/)).toBeNull();
+  });
+
+  // GID 1217808323616744(P1-7): super_admin で常に「確認中」に固まっていたバグの直接の回帰テスト。
+  // loading/error/ready の3状態を無言のフォールバックではなく明示的に描き分けること。
+  describe("planStatus の3状態", () => {
+    it("loading: 「読み込み中」と出し、プラン名やエラー文言は出さない", () => {
+      renderSection(null, "loading");
+      expect(screen.getByText(/読み込み中/)).toBeTruthy();
+      expect(screen.queryByText(/確認中/)).toBeNull();
+      expect(screen.queryByText(/取得できませんでした/)).toBeNull();
+    });
+
+    it("error: 「取得できませんでした」と出し、無言で確認中のまま固まらない", () => {
+      renderSection(null, "error");
+      expect(screen.getByText(/取得できませんでした/)).toBeTruthy();
+      expect(screen.queryByText(/確認中/)).toBeNull();
+      // 専門用語を使わず、次にやることが分かる
+      expect(screen.getByText(/再読み込みしてください/)).toBeTruthy();
+    });
+
+    it("ready: プラン名をそのまま出す（従来通り）", () => {
+      renderSection("growth", "ready");
+      expect(screen.getByText(/現在のプラン/).textContent).toContain("Growth");
+      expect(screen.queryByText(/取得できませんでした/)).toBeNull();
+      expect(screen.queryByText(/読み込み中/)).toBeNull();
+    });
+
+    it("loading でも対話単価バッジは出さない（未確定の値を確定情報のように見せない）", () => {
+      renderSection("growth", "loading");
+      expect(screen.queryByText(/対話単価/)).toBeNull();
+    });
   });
   // ─── ユーザーがやりそうなイレギュラー操作 ───────────────────────────────
   describe("イレギュラー操作", () => {
