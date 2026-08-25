@@ -86,10 +86,18 @@ const ja = {
   "knowledge.allowed_origins_settings_desc": "チャットWidgetを設置してよいドメインを登録します。空欄のままにすると全ドメインで動作します（開発用途のみ推奨）。",
   "knowledge.allowed_origins_input_placeholder": "https://shop.example.com",
   "knowledge.allowed_origins_add": "追加",
-  "knowledge.allowed_origins_empty": "許可ドメインが登録されていません",
+  // allowed_origins=[] はfail-open(全ドメイン許可)。「未設定」の中立な空状態ではなく
+  // 「保護なし」の警告状態として明示する(空欄と保護なしを同じ見た目にしない)。
+  "knowledge.allowed_origins_empty": "⚠️ 保護なし：現在すべてのドメインからこのWidgetにアクセスできます",
+  "knowledge.allowed_origins_empty_desc": "ドメインを1件以上登録すると、登録したドメイン以外からのアクセスを拒否するようになります。",
   "knowledge.allowed_origins_invalid_https": "URLはhttps://で始まる必要があります",
   "knowledge.allowed_origins_invalid_wildcard": "このフォームからはワイルドカード（*）を含むドメインは登録できません",
   "knowledge.allowed_origins_duplicate": "既に登録されています",
+  // 最後の1件を削除する操作＝fail-openに戻り無制限になる操作。無言で保護が外れないよう確認する。
+  "knowledge.allowed_origins_remove_last_confirm": "最後の1件を削除します。削除すると許可ドメインの制限がなくなり、すべてのドメインからこのWidgetにアクセスできるようになります。\n\n削除してもよろしいですか？",
+  // 初回登録＝fail-open(全許可)からfail-closed相当への切り替え操作。保存前に正規化後の値と、
+  // 「ここに無いドメインは以後弾かれる」ことを提示する。
+  "knowledge.allowed_origins_first_add_confirm": "この内容で保存すると、これ以降は登録したドメイン以外からのアクセスを拒否するようになります。\n\n保存される値: {origin}\n\n実際に設置するURLと完全に一致している必要があります（www の有無・httpとhttpsの違い・末尾のスラッシュ・ポート番号の違いでも拒否されます）。\n\nこの内容で登録しますか？",
   "knowledge.allowed_origins_saved": "✅ 許可ドメインを保存しました",
   "knowledge.allowed_origins_save_error": "❌ 保存に失敗しました。もう一度お試しください。",
 
