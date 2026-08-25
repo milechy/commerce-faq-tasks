@@ -5,27 +5,7 @@ import { useState, useEffect } from "react";
 import { Bar } from "react-chartjs-2";
 import { authFetch, API_BASE } from "../../../lib/api";
 import { chartCardStyle } from "./utils";
-
-// ---------------------------------------------------------------------------
-// 型
-// ---------------------------------------------------------------------------
-
-interface FlowTransitionsResponse {
-  period: string;
-  total_sessions: number;
-  transitions: Array<{
-    from_state: string;
-    to_state: string;
-    count: number;
-  }>;
-  funnel: {
-    clarify_rate: number;
-    answer_rate: number;
-    confirm_rate: number;
-    terminal_rate: number;
-    loop_abort_rate: number;
-  };
-}
+import { parseFlowTransitionsResponse, type FlowTransitionsResponse } from "./flowTransitions.schema";
 
 interface FlowFunnelSectionProps {
   period: string;
@@ -44,12 +24,16 @@ const STATE_LABELS: Record<string, string> = {
   terminal: "完了",
 };
 
-function stateLabel(state: string): string {
+function stateLabel(state: string | null): string {
+  if (state === null) return "(開始)";
   return STATE_LABELS[state] ?? state;
 }
 
-function formatPct(rate: number): string {
-  return `${(rate * 100).toFixed(1)}%`;
+// サーバーは confirm_rate_pct / completion_rate_pct を「既に100倍した実数」で
+// 返す(safeRate() が n/d*100 を計算済み)。ここで再度 *100 すると二重に
+// 100倍してしまうため、そのまま小数第1位で表示する。
+function formatPct(ratePct: number): string {
+  return `${ratePct.toFixed(1)}%`;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,34 +60,39 @@ export function FlowFunnelSection({ period, tenantId, isSuperAdmin }: FlowFunnel
     authFetch(`${API_BASE}/v1/admin/analytics/flow-transitions?${params}`)
       .then((r) => {
         if (!r.ok) throw new Error("fetch_failed");
-        return r.json() as Promise<FlowTransitionsResponse>;
+        return r.json();
       })
-      .then((d) => setData(d))
+      // サーバーの実レスポンスを実行時に検証する。ここを通さず `as` で
+      // キャストしていたために、フィールド名が食い違っても tsc が
+      // 気付けなかった(P0-1の直接の原因)。
+      .then((raw) => setData(parseFlowTransitionsResponse(raw)))
       .catch(() =>
         setError("フロー遷移データの読み込みに失敗しました。しばらく経ってから再度お試しください。"),
       )
       .finally(() => setLoading(false));
   }, [period, tenantId, isSuperAdmin]);
 
+  // サーバーは clarify(質問確認)/loop_abort(ループ中断)に相当する値を
+  // 返さない(funnelにそのフィールドが無い)。存在しない指標を0で埋めて
+  // 出すと「計測しているが常に0」に見え、本当に0件なのか未計測なのか
+  // 区別できなくなるため、サーバーが実際に返す4指標だけを表示する。
   const funnelBarData = data
     ? {
-        labels: ["質問確認", "回答", "クロージング", "完了", "ループ中断"],
+        labels: ["回答到達", "クロージング到達", "完了", "完了(正常終了)"],
         datasets: [
           {
-            label: "到達率",
+            label: "件数",
             data: [
-              data.funnel.clarify_rate * 100,
-              data.funnel.answer_rate * 100,
-              data.funnel.confirm_rate * 100,
-              data.funnel.terminal_rate * 100,
-              data.funnel.loop_abort_rate * 100,
+              data.funnel.to_answer_count,
+              data.funnel.to_confirm_count,
+              data.funnel.to_terminal_count,
+              data.funnel.completed_count,
             ],
             backgroundColor: [
               "rgba(96, 165, 250, 0.75)",
-              "rgba(52, 211, 153, 0.75)",
               "rgba(251, 191, 36, 0.75)",
               "rgba(99, 102, 241, 0.75)",
-              "rgba(248, 113, 113, 0.75)",
+              "rgba(52, 211, 153, 0.75)",
             ],
             borderRadius: 6,
           },
@@ -118,17 +107,16 @@ export function FlowFunnelSection({ period, tenantId, isSuperAdmin }: FlowFunnel
       title: { display: false },
       tooltip: {
         callbacks: {
-          label: (ctx: { parsed: { y: number } }) => `${ctx.parsed.y.toFixed(1)}%`,
+          label: (ctx: { parsed: { y: number } }) => `${ctx.parsed.y.toLocaleString()}件`,
         },
       },
     },
     scales: {
       y: {
         beginAtZero: true,
-        max: 100,
         ticks: {
           color: "var(--muted-foreground)",
-          callback: (v: number | string) => `${v}%`,
+          precision: 0,
         },
         grid: { color: "rgba(255,255,255,0.05)" },
       },
@@ -188,9 +176,9 @@ export function FlowFunnelSection({ period, tenantId, isSuperAdmin }: FlowFunnel
               color: "var(--muted-foreground)",
             }}
           >
-            集計セッション数:{" "}
+            総遷移数:{" "}
             <span style={{ fontWeight: 700, color: "var(--foreground)", fontSize: 18 }}>
-              {data.total_sessions.toLocaleString()}
+              {data.total_transitions.toLocaleString()}
             </span>{" "}
             件
           </div>
@@ -206,7 +194,7 @@ export function FlowFunnelSection({ period, tenantId, isSuperAdmin }: FlowFunnel
                   marginBottom: 14,
                 }}
               >
-                ステージ別到達率（セッション比）
+ステージ別到達件数
               </div>
               <Bar data={funnelBarData} options={barOptions as any} />
             </div>
@@ -258,7 +246,7 @@ export function FlowFunnelSection({ period, tenantId, isSuperAdmin }: FlowFunnel
                         <td style={{ padding: "8px 12px" }}>{stateLabel(t.from_state)}</td>
                         <td style={{ padding: "8px 12px" }}>{stateLabel(t.to_state)}</td>
                         <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 600 }}>
-                          {t.count.toLocaleString()}
+                          {t.transition_count.toLocaleString()}
                         </td>
                       </tr>
                     ))}
@@ -278,11 +266,11 @@ export function FlowFunnelSection({ period, tenantId, isSuperAdmin }: FlowFunnel
             }}
           >
             {[
-              { label: "質問確認 到達率", value: formatPct(data.funnel.clarify_rate) },
-              { label: "回答 到達率", value: formatPct(data.funnel.answer_rate) },
-              { label: "クロージング 到達率", value: formatPct(data.funnel.confirm_rate) },
-              { label: "完了 到達率", value: formatPct(data.funnel.terminal_rate) },
-              { label: "ループ中断率", value: formatPct(data.funnel.loop_abort_rate) },
+              { label: "クロージング到達率", value: formatPct(data.funnel.confirm_rate_pct) },
+              { label: "完了率(クロージング中)", value: formatPct(data.funnel.completion_rate_pct) },
+              { label: "回答到達", value: `${data.funnel.to_answer_count.toLocaleString()}件` },
+              { label: "クロージング到達", value: `${data.funnel.to_confirm_count.toLocaleString()}件` },
+              { label: "完了(正常終了)", value: `${data.funnel.completed_count.toLocaleString()}件` },
             ].map((item) => (
               <div
                 key={item.label}

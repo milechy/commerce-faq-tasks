@@ -13,31 +13,15 @@ import {
 } from "chart.js";
 import { Bar } from "react-chartjs-2";
 import { authFetch, API_BASE } from "../../../lib/api";
+import {
+  parseFlowTransitionsResponse,
+  type FlowTransitionsPeriod,
+  type FlowTransitionsResponse,
+} from "./flowTransitions.schema";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
-type AllowedPeriod = "7d" | "30d" | "90d";
-
-interface TransitionRow {
-  from_state: string | null;
-  to_state: string;
-  transition_count: number;
-}
-
-interface FlowTransitionsResponse {
-  period: AllowedPeriod;
-  tenant_id: string | null;
-  total_transitions: number;
-  funnel: {
-    to_answer_count: number;
-    to_confirm_count: number;
-    to_terminal_count: number;
-    completed_count: number;
-    confirm_rate_pct: number;
-    completion_rate_pct: number;
-  };
-  transitions: TransitionRow[];
-}
+type AllowedPeriod = FlowTransitionsPeriod;
 
 const PERIOD_LABELS: Record<AllowedPeriod, string> = {
   "7d": "過去7日",
@@ -57,9 +41,9 @@ export default function FlowAnalyticsPage() {
     authFetch(`${API_BASE}/v1/admin/analytics/flow-transitions?period=${period}`)
       .then((r) => {
         if (!r.ok) throw new Error(`取得失敗 (status ${r.status})`);
-        return r.json() as Promise<FlowTransitionsResponse>;
+        return r.json();
       })
-      .then(setData)
+      .then((raw) => setData(parseFlowTransitionsResponse(raw)))
       .catch(() => setError("フロー遷移データの取得に失敗しました。しばらく待ってから再試行してください。"))
       .finally(() => setLoading(false));
   }, [period]);
