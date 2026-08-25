@@ -102,6 +102,11 @@ type Card =
   // (画像URL群はツール結果の500字に収まらないため)。フロントから直接叩き、
   // タイムアウト・5xx・429いずれの失敗でも status="failed" で確定させる
   // (無限スピナーを残さない)。adoptedUrl は採用済みの1枚(二重採用の防止・ハイライト用)。
+  // W3-3(docs/COPILOT_UI_PARITY.md §3.1 #10、T3 候補カード): premiumはPOST
+  // /generate-premium(Flux 2 Pro + Magnific、1枚高品質)の結果。既存の候補+採用
+  // (adoptAvatarCandidate/PATCH /configs/:id)をそのまま使えるため新しいカード種別は
+  // 増やさず、images配列に1枚だけ入れて流用する。premiumはヘッダ・コスト文言の
+  // 出し分けにのみ使う(採用の仕組みは標準生成と完全に同じ)。
   | {
       kind: "avatarCandidates";
       configId: string;
@@ -110,6 +115,7 @@ type Card =
       images?: string[];
       message?: string;
       adoptedUrl?: string;
+      premium?: boolean;
     }
   // W3-1(docs/COPILOT_UI_PARITY.md §3.1 #8、T3 候補カード+添付): 自分の写真をアバター
   // 画像として使う。旧UI(StudioImageSection.tsx「写真をアップロード」タブ)の再現。
@@ -524,6 +530,7 @@ const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
   "この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。";
 
 const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
+const AVATAR_PREMIUM_GENERATE_GENERIC_ERROR = "高品質画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_VOICE_MATCH_GENERIC_ERROR = "声を検索できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_VOICE_MATCH_EMPTY_ERROR = "合う声が見つかりませんでした。もう一度お試しください。";
@@ -1553,6 +1560,54 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // W3-3(docs/COPILOT_UI_PARITY.md §3.1 #10): 高品質画像(Flux 2 Pro + Magnific、1枚)の
+  // 生成。generateAvatarCandidatesと違いconfirmingを経てから呼ばれる(通常生成より
+  // 高い費用がかかるため、AvatarAdoptedCard側で「生成する/やめる」の確認を挟む。
+  // Asana制約U-17: 繰り返し頼まれても毎回明示する — ここではボタン側で確認状態を
+  // 生成完了/キャンセルのたびにリセットすることで満たす)。採用(PATCH)はimages配列に
+  // 1枚だけ入れてavatarCandidates/adoptAvatarCandidateをそのまま使う。
+  const generatePremiumAvatarCandidate = async (configId: string, name: string) => {
+    const cardId = nextId();
+    push({ id: cardId, role: "ai", card: { kind: "avatarCandidates", configId, name, status: "generating", premium: true } });
+
+    const { prompt } = buildAvatarPrompt({
+      type: "human",
+      composition: "bust",
+      expression: "smile",
+      background: "simple",
+    });
+
+    const generateUrl = isSuperAdmin && scopedTenantId
+      ? `${API_BASE}/v1/admin/avatar/generate-premium?tenant=${encodeURIComponent(scopedTenantId)}`
+      : `${API_BASE}/v1/admin/avatar/generate-premium`;
+
+    try {
+      const res = await authFetch(generateUrl, {
+        method: "POST",
+        body: JSON.stringify({ prompt }),
+      });
+      if (!res.ok) {
+        // plan_upgrade_required等はerrorがコード・messageが日本語文言(voice-cloneと同じ
+        // dual-field形状)。messageを優先し、無ければerrorをそのまま出す。
+        const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+        updateAvatarCandidatesCard(cardId, { status: "failed", message: body?.message || body?.error || AVATAR_PREMIUM_GENERATE_GENERIC_ERROR });
+        return;
+      }
+      const data = (await res.json()) as { imageUrl?: string };
+      if (!data.imageUrl) {
+        updateAvatarCandidatesCard(cardId, { status: "failed", message: AVATAR_PREMIUM_GENERATE_GENERIC_ERROR });
+        return;
+      }
+      updateAvatarCandidatesCard(cardId, { status: "done", images: [data.imageUrl] });
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_PREMIUM_GENERATE_GENERIC_ERROR;
+      updateAvatarCandidatesCard(cardId, { status: "failed", message });
+    }
+  };
+
   const adoptAvatarCandidate = async (cardMsgId: number, configId: string, imageUrl: string) => {
     try {
       const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${configId}`, {
@@ -2005,6 +2060,7 @@ export default function CopilotPreviewPage() {
                 m={m}
                 onChip={runAction}
                 onGenerateAvatarCandidates={generateAvatarCandidates}
+                onGeneratePremiumAvatarCandidate={generatePremiumAvatarCandidate}
                 onAdoptAvatarCandidate={adoptAvatarCandidate}
                 onUploadAvatarPhoto={uploadAvatarPhoto}
                 onCloneAvatarVoice={cloneAvatarVoice}
@@ -2261,6 +2317,7 @@ function MessageRow({
   m,
   onChip,
   onGenerateAvatarCandidates,
+  onGeneratePremiumAvatarCandidate,
   onAdoptAvatarCandidate,
   onUploadAvatarPhoto,
   onCloneAvatarVoice,
@@ -2272,6 +2329,7 @@ function MessageRow({
   m: Msg;
   onChip: (a: string, id: number) => void;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
+  onGeneratePremiumAvatarCandidate: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
   onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
   onCloneAvatarVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
@@ -2304,6 +2362,7 @@ function MessageRow({
           card={m.card}
           msgId={m.id}
           onGenerateAvatarCandidates={onGenerateAvatarCandidates}
+          onGeneratePremiumAvatarCandidate={onGeneratePremiumAvatarCandidate}
           onAdoptAvatarCandidate={onAdoptAvatarCandidate}
           onUploadAvatarPhoto={onUploadAvatarPhoto}
           onCloneAvatarVoice={onCloneAvatarVoice}
@@ -2505,6 +2564,7 @@ function CardView({
   card,
   msgId,
   onGenerateAvatarCandidates,
+  onGeneratePremiumAvatarCandidate,
   onAdoptAvatarCandidate,
   onUploadAvatarPhoto,
   onCloneAvatarVoice,
@@ -2517,6 +2577,7 @@ function CardView({
   card: Card;
   msgId: number;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
+  onGeneratePremiumAvatarCandidate: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
   onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
   onCloneAvatarVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
@@ -2716,9 +2777,9 @@ function CardView({
         </CardShell>
       );
     case "avatarAdopted":
-      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onUploadPhoto={onUploadAvatarPhoto} onCloneVoice={onCloneAvatarVoice} onMatchVoice={onMatchAvatarVoice} onDesignVoice={onDesignAvatarVoice} />;
+      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onGeneratePremium={onGeneratePremiumAvatarCandidate} onUploadPhoto={onUploadAvatarPhoto} onCloneVoice={onCloneAvatarVoice} onMatchVoice={onMatchAvatarVoice} onDesignVoice={onDesignAvatarVoice} />;
     case "avatarCandidates":
-      return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onAdopt={onAdoptAvatarCandidate} />;
+      return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onGeneratePremium={onGeneratePremiumAvatarCandidate} onAdopt={onAdoptAvatarCandidate} />;
     case "avatarPhotoUpload":
       return <AvatarPhotoUploadCard card={card} />;
     case "avatarVoiceCandidates":
@@ -3419,6 +3480,7 @@ function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSumm
 function AvatarAdoptedCard({
   card,
   onGenerate,
+  onGeneratePremium,
   onUploadPhoto,
   onCloneVoice,
   onMatchVoice,
@@ -3426,6 +3488,7 @@ function AvatarAdoptedCard({
 }: {
   card: Extract<Card, { kind: "avatarAdopted" }>;
   onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onGeneratePremium: (configId: string, name: string) => void | Promise<void>;
   onUploadPhoto: (configId: string, file: File) => void | Promise<void>;
   onCloneVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
   onMatchVoice: (configId: string, description: string) => void | Promise<void>;
@@ -3434,11 +3497,24 @@ function AvatarAdoptedCard({
   const [busyImage, setBusyImage] = useState(false);
   const [busyVoice, setBusyVoice] = useState(false);
   const [busyDesignVoice, setBusyDesignVoice] = useState(false);
+  const [busyPremium, setBusyPremium] = useState(false);
+  const [premiumConfirming, setPremiumConfirming] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const voiceCloneInputRef = useRef<HTMLInputElement>(null);
   const handleGenerate = () => {
     setBusyImage(true);
     void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusyImage(false));
+  };
+  // W3-3: 高品質生成(Flux 2 Pro + Magnific)は通常生成より高い費用がかかるため、
+  // Asana制約U-17(実行前の費用明示。繰り返し頼まれても毎回明示する)に沿って
+  // ボタン1回目の押下では確定させず、確認文を挟む。confirming状態は生成完了/
+  // キャンセルのたびにfalseへ戻す(押すたびに毎回訊く。前回同意を記憶しない)。
+  const handlePremiumClick = () => setPremiumConfirming(true);
+  const handlePremiumCancel = () => setPremiumConfirming(false);
+  const handlePremiumConfirm = () => {
+    setPremiumConfirming(false);
+    setBusyPremium(true);
+    void Promise.resolve(onGeneratePremium(card.configId, card.name)).finally(() => setBusyPremium(false));
   };
   // W3-1: 旧UI(StudioImageSection.tsx)の「AIで生成」「写真をアップロード」2タブを
   // ここで並列の2ボタンとして提示する(ボタンを押した瞬間にファイル選択が開き、
@@ -3515,6 +3591,17 @@ function AvatarAdoptedCard({
           自分の写真を使う
         </button>
         <button
+          onClick={handlePremiumClick}
+          disabled={busyPremium || premiumConfirming}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)",
+            cursor: busyPremium || premiumConfirming ? "not-allowed" : "pointer", opacity: busyPremium || premiumConfirming ? 0.6 : 1,
+          }}
+        >
+          {busyPremium ? "高品質画像を生成しています…" : "💎 高品質な画像を生成する"}
+        </button>
+        <button
           onClick={handleMatchVoice}
           disabled={busyVoice}
           style={{
@@ -3555,6 +3642,33 @@ function AvatarAdoptedCard({
           自分の声をクローンする
         </button>
       </div>
+      {premiumConfirming && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 14px", borderRadius: 12, border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT }}>
+          <div style={{ fontSize: 13.5, color: "var(--foreground)", lineHeight: 1.6 }}>
+            高品質な画像の生成には、通常の生成より高い費用がかかります。生成してよろしいですか？
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              onClick={handlePremiumConfirm}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "8px 16px", borderRadius: 10, minHeight: 40,
+                border: "none", background: AGENT, color: "#fff", cursor: "pointer",
+              }}
+            >
+              生成する
+            </button>
+            <button
+              onClick={handlePremiumCancel}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "8px 16px", borderRadius: 10, minHeight: 40,
+                border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer",
+              }}
+            >
+              やめる
+            </button>
+          </div>
+        </div>
+      )}
     </CardShell>
   );
 }
@@ -3566,20 +3680,26 @@ function AvatarCandidatesCard({
   card,
   msgId,
   onGenerate,
+  onGeneratePremium,
   onAdopt,
 }: {
   card: Extract<Card, { kind: "avatarCandidates" }>;
   msgId: number;
   onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onGeneratePremium: (configId: string, name: string) => void | Promise<void>;
   onAdopt: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
 }) {
   const [adopting, setAdopting] = useState<string | null>(null);
+  // W3-3: premiumはヘッダ・再生成先の出し分けにのみ使う。再生成(「もう一度試す」
+  // 「別の候補を見る」)は費用の再確認を挟まない — この2ボタンはユーザーが直前に
+  // 明示的に選んだ「高品質生成」の続き操作であり、U-17が指す新規の依頼ではない。
+  const retry = () => void (card.premium ? onGeneratePremium(card.configId, card.name) : onGenerate(card.configId, card.name));
 
   if (card.status === "generating") {
     return (
-      <CardShell hd={<><span>🎨</span>新しい画像を生成しています</>}>
+      <CardShell hd={<><span>{card.premium ? "💎" : "🎨"}</span>{card.premium ? "高品質な画像を生成しています" : "新しい画像を生成しています"}</>}>
         <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
-          数十秒かかることがあります。このまま他の操作もできます。
+          {card.premium ? "1〜2分ほどかかることがあります。このまま他の操作もできます。" : "数十秒かかることがあります。このまま他の操作もできます。"}
         </div>
       </CardShell>
     );
@@ -3589,11 +3709,11 @@ function AvatarCandidatesCard({
     return (
       <CardShell
         tone="bad"
-        hd={<><span>🎨</span>画像を生成できませんでした</>}
+        hd={<><span>{card.premium ? "💎" : "🎨"}</span>{card.premium ? "高品質な画像を生成できませんでした" : "画像を生成できませんでした"}</>}
         foot={
           <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
             <button
-              onClick={() => void onGenerate(card.configId, card.name)}
+              onClick={retry}
               style={{
                 fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
                 border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
@@ -3617,12 +3737,12 @@ function AvatarCandidatesCard({
   return (
     <CardShell
       tone="good"
-      hd={<><span>🎨</span>新しい候補です</>}
+      hd={<><span>{card.premium ? "💎" : "🎨"}</span>{card.premium ? "高品質な候補です" : "新しい候補です"}</>}
       foot={
         !card.adoptedUrl ? (
           <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
             <button
-              onClick={() => void onGenerate(card.configId, card.name)}
+              onClick={retry}
               style={{
                 fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
                 border: "1px solid var(--border)", background: "transparent", color: "var(--muted-foreground)", cursor: "pointer",
