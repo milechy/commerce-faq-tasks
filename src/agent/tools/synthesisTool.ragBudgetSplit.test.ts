@@ -134,6 +134,36 @@ describe("buildFaqContext — 出所別のRAG予算(ナレッジ配線是正P18)
     expect(bookExcerpt.length).toBeLessThanOrEqual(BOOK_EXCERPT_MAX_CHARS);
   });
 
+  it("壊れやすいポイント: 書籍とFAQが順位順に交互に並んでいても、各バケツは全体の先頭何件かではなく出所ごとの上位を独立に選ぶ", async () => {
+    // ランク順: FAQ1(top) → BOOK1 → FAQ2 → BOOK2 → FAQ3 → BOOK3 → FAQ4 → BOOK4(4件目の書籍。溢れる)
+    mockPool([
+      { id: 1, question: "Q1", answer: "A1" },
+      { id: 2, question: "Q2", answer: "A2" },
+      { id: 3, question: "Q3", answer: "A3" },
+      { id: 4, question: "Q4", answer: "A4" },
+    ]);
+
+    const userMessage = await userPromptOf([
+      { id: "faq-1", text: "e1", score: 0.95, source: "es", metadata: { faq_id: 1 } },
+      { id: "book-1", text: "書1", score: 0.9, source: "es", metadata: { source: "book" } },
+      { id: "faq-2", text: "e2", score: 0.85, source: "es", metadata: { faq_id: 2 } },
+      { id: "book-2", text: "書2", score: 0.8, source: "es", metadata: { source: "book" } },
+      { id: "faq-3", text: "e3", score: 0.75, source: "es", metadata: { faq_id: 3 } },
+      { id: "book-3", text: "書3", score: 0.7, source: "es", metadata: { source: "book" } },
+      { id: "faq-4", text: "e4", score: 0.65, source: "es", metadata: { faq_id: 4 } },
+      { id: "book-4", text: "書4", score: 0.6, source: "es", metadata: { source: "book" } },
+    ]);
+
+    const context = extractFaqContext(userMessage);
+    // 全4件のFAQ(FAQ_MAX_EXCERPTS=5未満なので全件)が採用される
+    for (const q of ["Q1", "Q2", "Q3", "Q4"]) expect(context).toContain(q);
+    // 書籍は先頭からBOOK_MAX_EXCERPTS=3件のみ。4件目(book-4、全体では最下位)は溢れて出ない
+    expect(context).toContain("書1");
+    expect(context).toContain("書2");
+    expect(context).toContain("書3");
+    expect(context).not.toContain("書4");
+  });
+
   it("OCR由来チャンク(metadata.source='book:pdf:qwen-ocr')も書籍として200字/3件の予算で扱われる", async () => {
     mockPool();
     const ocrItems = Array.from({ length: 5 }, (_, i) => ({

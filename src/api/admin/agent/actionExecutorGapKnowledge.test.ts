@@ -89,9 +89,74 @@ describe("executeToolCall: approve_gap_recommendation", () => {
 
     expect(result).toContain("見つかりません");
   });
+
+  it("イレギュラー操作: gap_idが数値に変換できない文字列でも承認処理を呼ばない", async () => {
+    const result = await executeToolCall(
+      "approve_gap_recommendation",
+      { gap_id: "abc", confirmed: true },
+      TENANT,
+      makeMockPool(),
+      "session-1",
+      false,
+      ACTOR,
+    );
+
+    expect(result).toContain("不正です");
+    expect(mockApproveGapRecommendation).not.toHaveBeenCalled();
+  });
 });
 
 describe("executeToolCall: add_knowledge_from_gap", () => {
+  it("イレギュラー操作: answer_textが空白のみでもFAQ作成処理を呼ばない", async () => {
+    const result = await executeToolCall(
+      "add_knowledge_from_gap",
+      { gap_id: 42, answer_text: "   \n\t  ", confirmed: true },
+      TENANT,
+      makeMockPool(),
+      "session-1",
+      false,
+      ACTOR,
+    );
+
+    expect(result).toContain("answer_text は必須です");
+    expect(mockAddKnowledgeFromGap).not.toHaveBeenCalled();
+  });
+
+  it("イレギュラー操作: gap_idが数値に変換できない文字列でもFAQ作成処理を呼ばない", async () => {
+    const result = await executeToolCall(
+      "add_knowledge_from_gap",
+      { gap_id: "not-a-number", answer_text: "3ヶ月保証です", confirmed: true },
+      TENANT,
+      makeMockPool(),
+      "session-1",
+      false,
+      ACTOR,
+    );
+
+    expect(result).toContain("不正です");
+    expect(mockAddKnowledgeFromGap).not.toHaveBeenCalled();
+  });
+
+  it("イレギュラー操作: 二重送信(同じギャップに対する連続呼び出し)は2回目が not_approved として拒否される(resolved化により再承認が必要になるため)", async () => {
+    mockAddKnowledgeFromGap
+      .mockResolvedValueOnce({
+        ok: true,
+        faqDocId: 1,
+        gapQuestion: "保証期間はどのくらいですか",
+        detectionSource: "no_rag",
+        frequency: 1,
+      })
+      .mockResolvedValueOnce({ ok: false, reason: "not_approved" });
+
+    const args = { gap_id: 42, answer_text: "3ヶ月保証です", confirmed: true };
+    const first = await executeToolCall("add_knowledge_from_gap", args, TENANT, makeMockPool(), "session-1", false, ACTOR);
+    const second = await executeToolCall("add_knowledge_from_gap", args, TENANT, makeMockPool(), "session-1", false, ACTOR);
+
+    expect(first).toContain("解決済み");
+    expect(second).toContain("承認されていません");
+    expect(mockAddKnowledgeFromGap).toHaveBeenCalledTimes(2);
+  });
+
   it("confirmed未指定ならFAQ作成処理を呼ばない(確認ゲート)", async () => {
     const result = await executeToolCall(
       "add_knowledge_from_gap",

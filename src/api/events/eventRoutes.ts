@@ -322,7 +322,7 @@ export async function bridgeAnswerFeedbackToGaps(
        ORDER BY created_at DESC LIMIT 1`,
       [sessionDbId],
     );
-    const userMessage = lastUserMessage.rows[0]?.content;
+    const userMessage = lastUserMessage.rows[0]?.content?.trim();
     if (!userMessage) return;
 
     // 1回のイベントバッチに複数の👎が含まれても、同一セッション・同一質問の

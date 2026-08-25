@@ -228,6 +228,38 @@ describe("computeSeriesGates(ナレッジ配線是正P15)", () => {
     expect(gate.ofTotal).toBe(LIMIT);
     expect(gate.label).toContain("サンプル");
   });
+
+  it("壊れやすいポイント: hasConvertingOutcomeが1件で例外を投げても /measurement-health 全体を落とさず、その1件だけを分母から除外する", async () => {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/message_count >= \$2\) AS ge_msg/.test(sql)) return Promise.resolve({ rows: [{ total: "0", ge_msg: "0", ge_len: "0" }] });
+      if (/^\s*SELECT ce\.tenant_id, ce\.session_id/.test(sql)) {
+        return Promise.resolve({
+          rows: [
+            { tenant_id: "carnation", session_id: "s1" },
+            { tenant_id: "carnation", session_id: "s2" },
+            { tenant_id: "carnation", session_id: "s3" },
+          ],
+        });
+      }
+      if (/ce\.score >= \$2\) AS ge_score/.test(sql)) return Promise.resolve({ rows: [{ total: "0", ge_score: "0" }] });
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+    const hasConvertingOutcome = jest
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(true);
+
+    // 例外を投げても computeSeriesGates 自体は reject せず、正常に完走すること
+    const gates = await computeSeriesGates(db as any, ["carnation"], seriesDeps({ hasConvertingOutcome }));
+
+    const gate = gates.find((g) => g.gate === "converting_outcome")!;
+    // s2は例外により分子・分母どちらからも除外される(2/3ではなく2/2。母数を偽らない)
+    expect(gate.currentCount).toBe(2);
+    expect(gate.ofTotal).toBe(2);
+    expect(hasConvertingOutcome).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("fetchIgnitionStatus — 交差テナントをcomputeSeriesGatesに渡す配線(ナレッジ配線是正P15)", () => {

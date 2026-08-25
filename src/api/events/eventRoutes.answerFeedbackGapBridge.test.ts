@@ -72,6 +72,16 @@ describe('bridgeAnswerFeedbackToGaps', () => {
     expect(mockDetectGap).not.toHaveBeenCalled();
   });
 
+  it('壊れやすいポイント: 直近ユーザー発話が空白のみ(スペース/改行)のときもdetectGapを呼ばない(無意味なギャップ起票を防ぐ)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'session-uuid-1' }] })
+      .mockResolvedValueOnce({ rows: [{ content: '   \n\t  ' }] });
+    await bridgeAnswerFeedbackToGaps(mockDb, 'tenant-1', { chatSessionId: 'conv-1' }, [
+      { event_type: 'answer_feedback', event_data: { rating: 'down', message_ref: 'm1' } },
+    ]);
+    expect(mockDetectGap).not.toHaveBeenCalled();
+  });
+
   it('1バッチに複数のdown評価があっても、同一質問でdetectGapがその件数分呼ばれる(重複起票はupsertGap側の7日ILIKE一致で吸収)', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 'session-uuid-1' }] })

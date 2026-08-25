@@ -138,6 +138,24 @@ describe("KnowledgeGapsPage — 承認と知識化", () => {
     expect(screen.queryByRole("button", { name: "推薦を承認する" })).toBeNull();
   });
 
+  it("壊れやすいポイント: 承認APIが失敗したら「承認済み」を楽観的に表示せず、ボタンも元のまま残す", async () => {
+    const mockRes = (data: unknown, ok: boolean): Promise<Response> =>
+      Promise.resolve({ ok, json: () => Promise.resolve(data) } as Response);
+    vi.mocked(authFetch).mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") return mockRes({ error: "server error" }, false);
+      return mockRes({ gaps: [GAP_WITH_RECOMMENDATION] }, true);
+    });
+    renderPage();
+
+    const approveButton = await screen.findByRole("button", { name: "推薦を承認する" });
+    fireEvent.click(approveButton);
+
+    expect(await screen.findByText("推薦の承認に失敗しました")).toBeTruthy();
+    // 失敗時は「承認済み」表示に切り替わらず、承認ボタンも消えない(状態を偽らない)
+    expect(screen.queryByText("✓ 承認済み")).toBeNull();
+    expect(screen.getByRole("button", { name: "推薦を承認する" })).toBeTruthy();
+  });
+
   it("承認前は「知識にする」ボタンが無効(押しても何も起きないUIにしない。禁止44)", async () => {
     vi.mocked(authFetch).mockImplementation(() => mockOk({ gaps: [GAP_WITH_RECOMMENDATION] }));
     renderPage();
