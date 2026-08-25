@@ -159,6 +159,25 @@ export function buildPrinciplePrompt(chunks: PrincipleChunk[]): string {
 
 const DEFAULT_MAX_CHARS = 420;
 
+// 検索ヒットが0件のときに顧客へ返す定型メッセージ。
+// GROQ_API_KEY 未設定時・LLM呼び出し失敗時・チューニングルールが1件も無いときの
+// 3箇所で同じ文言を使う(2つ目の文言を作らない)。
+const NO_MATCH_MESSAGE =
+  'ご質問の内容に完全に一致するFAQは見つかりませんでした。' +
+  'キーワード（商品名・機能名・「返品」「送料」など）を含めて、もう一度お試しください。';
+
+// 検索ヒット0件・チューニングルールのみ一致のときにLLMへ渡す接地ブロック。
+// このブロックが無いと、faqContext='' のまま LLM が呼ばれ、応答ルール
+// (expected_behavior は「方針」であって「事実」ではない)だけを根拠に
+// 事実の主張(価格・在庫・仕様・期間・保証など)を生成しうる。
+// 3層モデル(FAQ=事実 / expected_behavior=方針 / approved_responses=文体)を
+// 守るため、ヒット0件のときは事実の生成そのものを禁じる。
+const NO_GROUNDING_BLOCK = `【重要: このご質問に一致する参照可能な知識がありません】
+- 価格・在庫・仕様・期間・保証などの事実を、推測や一般論で答えてはいけません
+- 上記の応答ルールは文体・案内の仕方にのみ適用し、事実の代わりに使ってはいけません
+- 「恐れ入りますが、こちらでは正確にお答えできる情報がございません」のように伝え、
+  問い合わせ窓口へ案内してください`;
+
 const BASE_SYSTEM_PROMPT = `あなたは中古車販売店のAIコンシェルジュです。
 お客様の質問に対して、提供されたFAQ情報をもとに
 親切で自然な日本語で回答してください。
@@ -234,10 +253,7 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
 
   // FAQ ヒットなし & マッチするチューニングルールもなし → デフォルトメッセージ
   if (!items.length && matchedRules.length === 0) {
-    const msg =
-      'ご質問の内容に完全に一致するFAQは見つかりませんでした。' +
-      'キーワード（商品名・機能名・「返品」「送料」など）を含めて、もう一度お試しください。';
-    return { answer: truncate(msg, maxChars), gapSignal };
+    return { answer: truncate(NO_MATCH_MESSAGE, maxChars), gapSignal };
   }
 
   // Phase44: SalesFlow ステージが propose/recommend/close の場合のみ原則注入を準備
@@ -247,8 +263,10 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   // Groq APIキーがなければ即フォールバック（FAQ ヒットありの場合のみ）
   if (!process.env.GROQ_API_KEY) {
     if (!items.length) {
-      // FAQ なし + チューニングルールあり だが LLM なし → ルール本文を直接返す
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
+      // FAQ なし + チューニングルールあり だが LLM なし。
+      // expected_behavior は内部の方針文であり顧客向けの文面ではないため、
+      // そのまま返さず定型メッセージに差し替える(3層モデル: 方針を事実の代わりにしない)。
+      return { answer: truncate(NO_MATCH_MESSAGE, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
     }
     return fallbackSynthesize(input);
   }
@@ -262,6 +280,10 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     }
     if (tuningSection) {
       systemPromptParts.push(tuningSection);
+    }
+    // ヒット0件・チューニングルールのみ一致のとき、事実の生成を禁じる接地ブロックを注入する
+    if (!items.length) {
+      systemPromptParts.push(NO_GROUNDING_BLOCK);
     }
     // Phase51: sentiment hint — チューニングルール注入の後に追加
     if (input.sessionId) {
@@ -343,7 +365,8 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   } catch {
     // フォールバック: 箇条書き
     if (!items.length) {
-      return { answer: truncate(matchedRules[0]!.expected_behavior, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
+      // 上と同じ理由で expected_behavior を顧客にそのまま返さない
+      return { answer: truncate(NO_MATCH_MESSAGE, maxChars), gapSignal, appliedRuleIds: matchedRules.map((r) => r.id) };
     }
     return { ...fallbackSynthesize(input), gapSignal };
   }
