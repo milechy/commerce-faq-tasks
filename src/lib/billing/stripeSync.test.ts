@@ -506,3 +506,118 @@ describe('billedQuantity（行ごとに倍率が異なる月＝月中プラン�
     expect(billedQuantity(rows)).toBe(5);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 集計SQLの不変条件。SQLの意味論は実Postgresでしか検証できないため、
+// 「壊れると請求が静かにズレる」条件だけをソース上で固定する。
+// (実DBでの突合は Asana 1217806758545725)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('集計SQL: 絞り込み条件(壊れると請求額が変わる)', () => {
+  const readSource = () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    return fs.readFileSync(path.join(__dirname, 'stripeSync.ts'), 'utf-8');
+  };
+  /** _reportTenantUsage の集計クエリ本体を切り出す */
+  const aggregationSql = () => {
+    const src = readSource();
+    const start = src.indexOf('AS billed_units_weighted');
+    expect(start).toBeGreaterThan(-1);
+    const from = src.lastIndexOf('SELECT', start);
+    const end = src.indexOf('[tenantId, startDate, endDate', start);
+    expect(end).toBeGreaterThan(from);
+    return src.slice(from, end);
+  };
+
+  // ★CLAUDE.md 禁止24: tenant述語のないSQLを書かない★
+  // 落とすと全テナントの利用量が1テナントに請求される。
+  it('テナント述語を持つ', () => {
+    expect(aggregationSql()).toMatch(/WHERE\s+tenant_id\s*=\s*\$1/);
+  });
+
+  it('請求期間で半開区間に絞る(月またぎの二重計上を防ぐ)', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/created_at\s*>=\s*\$2/);
+    expect(sql).toMatch(/created_at\s*<\s+\$3/);
+    expect(sql).not.toMatch(/created_at\s*<=\s*\$3/); // 終端を含めると翌月分を巻き込む
+  });
+
+  // 落とすと、既に Stripe へ送った分をもう一度請求する。
+  it('未送信(pending)の行だけを対象にする', () => {
+    expect(aggregationSql()).toMatch(/billing_status\s*=\s*'pending'/);
+  });
+
+  // 落とすと、chargeOneOffJpy で請求済みの sai_agent 等を二重請求する。
+  it('billable=false の行を除外する', () => {
+    expect(aggregationSql()).toMatch(/billable\s*=\s*true/);
+  });
+
+  // フォールバック倍率は「現在のテナントのプラン」から作り、$4 で束縛する。
+  // 定数に置き換えると、未焼き付け行が誤った単価で請求される。
+  it('フォールバック倍率は planMultiplier(plan) を $4 として渡す', () => {
+    const src = readSource();
+    expect(src).toMatch(/const fallbackMultiplier = planMultiplier\(plan\);/);
+    expect(src).toMatch(/\[tenantId, startDate, endDate, fallbackMultiplier\]/);
+  });
+
+  // 焼き付け済みの行にフォールバックが効いてしまうと、月中変更の按分が消える。
+  it('フォールバックは plan_multiplier が NULL の行にだけ効く(COALESCE)', () => {
+    expect(aggregationSql()).toMatch(/COALESCE\(plan_multiplier,\s*\$4::numeric\)/);
+  });
+
+  it('anam_session は秒→分に切り上げ、それ以外は1単位として数える', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/feature_used\s*=\s*'anam_session'/);
+    expect(sql).toMatch(/CEIL\(COALESCE\(anam_session_seconds,\s*0\)\s*\/\s*60\.0\)/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 倍率テーブルの多重定義ドリフト。
+// planPricing.ts(請求に使う値) と admin-ui/pages/admin/tenants/types.ts の
+// PLAN_OPTIONS(画面に出す値) は独立定義で、既存テストはキー名しか照合していない。
+// ズレると「×1.5 と表示して ×2.5 で請求する」状態が全テスト緑のまま作れる。
+// admin-ui は別 tsconfig / 別テストランナーなので、ソースを読んで突き合わせる。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('PLAN_MULTIPLIERS と admin-ui PLAN_OPTIONS の倍率一致', () => {
+  /** admin-ui の PLAN_OPTIONS から value→multiplier を抜き出す */
+  function readUiMultipliers(): Record<string, number> {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const src = fs.readFileSync(
+      path.join(__dirname, '../../../admin-ui/src/pages/admin/tenants/types.ts'),
+      'utf-8',
+    );
+    const block = src.slice(src.indexOf('PLAN_OPTIONS'));
+    const out: Record<string, number> = {};
+    const re = /value:\s*"([a-z_]+)"[^}]*?multiplier:\s*([0-9.]+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(block)) !== null) out[m[1]] = Number(m[2]);
+    return out;
+  }
+
+  it('抽出できている(正規表現が空振りしていないことの自己検査)', () => {
+    const ui = readUiMultipliers();
+    expect(Object.keys(ui).sort()).toEqual(['enterprise', 'free_ad', 'growth', 'starter']);
+  });
+
+  it('4プランすべてで倍率が一致する', () => {
+    const ui = readUiMultipliers();
+    for (const [plan, multiplier] of Object.entries(PLAN_MULTIPLIERS)) {
+      expect([plan, ui[plan]]).toEqual([plan, multiplier]);
+    }
+  });
+});
+
+describe('planMultiplier の異常入力', () => {
+  // Object.prototype 由来のキーで関数が返ると、$4 に関数が束縛されて
+  // 集計SQLが壊れる/意図しない値になる。?? 1.0 は null/undefined しか捕まえない。
+  it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf'])(
+    'プロトタイプ由来のキー %s でも数値を返す',
+    (key) => {
+      const v = planMultiplier(key);
+      expect(typeof v).toBe('number');
+      expect(Number.isFinite(v)).toBe(true);
+    },
+  );
+});

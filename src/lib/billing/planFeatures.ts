@@ -132,9 +132,13 @@ export async function getTenantPlan(tenantId: string): Promise<TenantPlan> {
  * プラン変更直後に呼び、キャッシュ由来の最大60秒の遅延を消す。
  *
  * ★これは「同一プロセス内」のキャッシュしか消せない★
- * 本番は PM2 で複数ワーカーが動くため、他ワーカーは最大 TTL 分だけ旧プランを見る。
- * さらに動的ウィジェット配信は Cache-Control 24h（CLAUDE.md 禁止38）。
- * したがってプラン変更を「即時反映」と表現してはいけない。
+ * 現構成は単一プロセス(ecosystem.config.cjs: instances 1 / exec_mode fork)なので、
+ * この呼び出しでプロセス内の判定は即座に新プランへ切り替わる。
+ * ただしキャッシュはプロセスローカルなので、将来スケールアウトすると
+ * 他ワーカーが最大 TTL 分だけ旧プランを見る。その前提で書いてある。
+ *
+ * なお動的ウィジェット配信は Cache-Control 24h（CLAUDE.md 禁止38）で、
+ * こちらはワーカー数に関係なく残る。プラン変更を「即時反映」と表現しないこと。
  */
 export function invalidateTenantPlanCache(tenantId: string): void {
   tenantPlanCache.delete(tenantId);

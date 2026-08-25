@@ -74,8 +74,11 @@ export function PlanSection({
         body: JSON.stringify({ plan: target }),
       });
       if (res.ok) {
-        const data = (await res.json()) as { plan: TenantPlan };
-        onChanged(data.plan);
+        // 成功応答でも本文がJSONとは限らない(204・空ボディ・プロキシの割り込み)。
+        // ここで throw させると「サーバは変更済みなのに失敗表示」になり、
+        // ユーザーが再送する(2回目はサーバ側 no-op)。本文が読めなくても成功は成功として扱う。
+        const data = (await res.json().catch(() => ({}))) as { plan?: TenantPlan };
+        onChanged(data.plan ?? target);
         setPending(null);
         showToast("✅ プランを変更しました");
       } else {
