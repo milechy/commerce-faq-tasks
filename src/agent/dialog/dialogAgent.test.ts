@@ -212,6 +212,44 @@ describe("runDialogTurn — LemonSliceペルソナスワップ ragCategory", () 
     expect(result.meta?.ragCategory).toBe("fashion");
   });
 
+  // PR-2(2026-08-25収益監査): クエリ埋め込みのトークン消費は llmUsage(chatモデル
+  // レート)に合算せず、meta.embeddingUsage として別途 chat/route.ts に渡す。
+  it("orchestrator の embeddingUsage が meta.embeddingUsage にそのまま転送される", async () => {
+    mockOrchestrator.mockResolvedValue({
+      ...baseOrchestrated,
+      embeddingUsage: { model: "text-embedding-3-small", totalTokens: 12 },
+    });
+    mockSalesFlow.mockResolvedValue({
+      nextStage: undefined,
+      prompt: undefined,
+      meta: {} as any,
+    });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-embedding-usage",
+      tenantId: "test-tenant",
+      message: "送料について",
+    });
+
+    expect(result.meta?.embeddingUsage).toEqual({ model: "text-embedding-3-small", totalTokens: 12 });
+  });
+
+  it("orchestrator が embeddingUsage を返さない場合 meta.embeddingUsage は undefined", async () => {
+    mockSalesFlow.mockResolvedValue({
+      nextStage: undefined,
+      prompt: undefined,
+      meta: {} as any,
+    });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-no-embedding-usage",
+      tenantId: "test-tenant",
+      message: "こんにちは",
+    });
+
+    expect(result.meta?.embeddingUsage).toBeUndefined();
+  });
+
   it("orchestrator が category を返さない場合 meta.ragCategory は undefined", async () => {
     mockSalesFlow.mockResolvedValue({
       nextStage: undefined,

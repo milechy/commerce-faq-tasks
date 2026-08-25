@@ -101,7 +101,10 @@ export function insertFaqEmbeddingAsync(
   opts?: { encrypt?: boolean }
 ): void {
   const isExcluded = Boolean(meta.is_excluded_from_search);
-  embedText(text)
+  // PR-2(2026-08-25収益監査): tenantId をスコープに持ちながら渡し忘れており、
+  // unknown計上され続けていた。billable:false は課金対象化の方針が未確定なため
+  // (原価の可視化のみ)。
+  embedText(text, { tenantId, billable: false })
     .then(async (vec) => {
       let storedText = text;
       if (opts?.encrypt) {

@@ -37,6 +37,9 @@ jest.mock("../../agent/dialog/salesContextStore", () => ({
 
 import { createChatHandler } from "./route";
 import { requestIdMiddleware } from "../../lib/request-id";
+import { trackUsage } from "../../lib/billing/usageTracker";
+
+const mockTrackUsage = trackUsage as jest.MockedFunction<typeof trackUsage>;
 
 function makeApp() {
   const app = express();
@@ -65,6 +68,7 @@ function baseDialogResult(meta: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   mockRunDialogTurn.mockReset();
+  mockTrackUsage.mockReset();
 });
 
 describe("POST /api/chat — ragCategory の応答転送", () => {
@@ -119,5 +123,72 @@ describe("POST /api/chat — ragCategory の応答転送", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.ragCategory).toBe(12345);
+  });
+});
+
+// PR-2(2026-08-25収益監査): meta.embeddingUsage → trackUsage の extraLlmUsages への
+// 配線(route.ts側)はどのテストにもカバーされていなかった。以前は searchAgent.ts が
+// embeddingトークンを chat モデルの prompt_tokens に直接合算していたため、
+// embedding($0.02/1M)が chat モデル(はるかに高レート)で計上され、かつ
+// embedTextWithUsage 自身が別途 tenant_id='unknown' の行も作っていた(二重計上)。
+describe("POST /api/chat — embeddingUsage の extraLlmUsages 配線 (PR-2)", () => {
+  it("meta.embeddingUsageがあればextraLlmUsagesに実モデル名で内包される", async () => {
+    mockRunDialogTurn.mockResolvedValue(
+      baseDialogResult({
+        llmUsage: { prompt_tokens: 100, completion_tokens: 30 },
+        embeddingUsage: { model: "text-embedding-3-small", totalTokens: 12 },
+      }),
+    );
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "送料について" });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-1",
+        featureUsed: "chat",
+        inputTokens: 100, // embeddingトークン(12)を含まない
+        outputTokens: 30,
+        extraLlmUsages: [{ model: "text-embedding-3-small", inputTokens: 12, outputTokens: 0 }],
+      }),
+    );
+  });
+
+  it("meta.embeddingUsageが無ければextraLlmUsagesは空のまま(plannerLlmUsagesと共存する)", async () => {
+    mockRunDialogTurn.mockResolvedValue(
+      baseDialogResult({
+        llmUsage: { prompt_tokens: 50, completion_tokens: 10 },
+        plannerLlmUsages: [{ model: "openai/gpt-oss-20b", prompt_tokens: 20, completion_tokens: 5 }],
+      }),
+    );
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    const call = mockTrackUsage.mock.calls[0]![0];
+    expect(call.extraLlmUsages).toEqual([
+      { model: "openai/gpt-oss-20b", inputTokens: 20, outputTokens: 5 },
+    ]);
+  });
+
+  it("embeddingUsage.totalTokensが0ならextraLlmUsagesに含めない", async () => {
+    mockRunDialogTurn.mockResolvedValue(
+      baseDialogResult({
+        llmUsage: { prompt_tokens: 100, completion_tokens: 30 },
+        embeddingUsage: { model: "text-embedding-3-small", totalTokens: 0 },
+      }),
+    );
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "送料について" });
+
+    expect(res.status).toBe(200);
+    const call = mockTrackUsage.mock.calls[0]![0];
+    expect(call.extraLlmUsages ?? []).toEqual([]);
   });
 });

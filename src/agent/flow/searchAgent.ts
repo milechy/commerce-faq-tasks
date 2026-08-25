@@ -63,10 +63,18 @@ export async function runSearchAgent(
   let pgVectorError = false;
   let learnedItems: LearnedMemoryHit[] = [];
   let embeddingTokens = 0;
+  let embeddingModel = "";
   try {
     const tPg0 = performance.now();
-    const { embedding, totalTokens: _et } = await embedTextWithUsage(plan.searchQuery ?? q);
+    // PR-2(2026-08-25収益監査): skipTracking=true — このトークンは chat 行の
+    // extraLlmUsages に実モデル名で内包されるため、ここでは単独行を作らない
+    // (単独行を作ると tenantId 未伝播で unknown 計上され、かつ chat 行と二重計上になる)。
+    const { embedding, totalTokens: _et, model: _em } = await embedTextWithUsage(
+      plan.searchQuery ?? q,
+      { skipTracking: true },
+    );
     embeddingTokens = _et;
+    embeddingModel = _em;
     const learnedReadEnabled = isLearnedMemoryReadEnabled(effectiveTenantId);
     const [pgRes, learnedRes] = await Promise.all([
       searchPgVector({
@@ -258,12 +266,16 @@ export async function runSearchAgent(
     promptVariantName: synth.variantName,
     appliedRuleIds: synth.appliedRuleIds,
     // Subtask 3: synthesis が usage を返さない場合（GROQ キー無し / fallback / エラー）でも
-    // 既に消費済みの embedding トークンを課金に残すため、llmUsage は常に返す。
     // chat LLM が完全に未実行なら {0,0} となり、上位で「chat 実トークン 0」を表す。
+    // PR-2(2026-08-25収益監査): embedding トークンはここに合算しない
+    // （以前は合算しており chat モデルのレートで誤計上されていた）。embeddingUsage で別途返す。
     llmUsage: {
-      prompt_tokens:     (synth.llmUsage?.prompt_tokens ?? 0) + embeddingTokens,
+      prompt_tokens:     synth.llmUsage?.prompt_tokens ?? 0,
       completion_tokens: synth.llmUsage?.completion_tokens ?? 0,
     },
+    // embeddingTokens===0 は「未消費」と「計測不能」を区別しないが、0トークンなら
+    // extraLlmUsages 側のフィルタ(inputTokens>0)で自然に除外されるため実害はない。
+    embeddingUsage: embeddingTokens > 0 ? { model: embeddingModel, totalTokens: embeddingTokens } : undefined,
     debug: {
       query: {
         original: q,

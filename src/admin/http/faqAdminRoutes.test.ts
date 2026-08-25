@@ -284,6 +284,53 @@ describe("DELETE /admin/faqs/:id — faq_embeddings 連鎖削除 (F1)", () => {
   });
 });
 
+// PR-2(2026-08-25収益監査): tenantId をスコープに持ちながら embedText に
+// 渡し忘れており、unknown計上され続けていた。
+describe("POST/PUT /admin/faqs — embedText への tenantId 伝播", () => {
+  const mockEmbedText = jest.requireMock("../../agent/llm/openaiEmbeddingClient").embedText as jest.Mock;
+
+  beforeEach(() => {
+    mockEmbedText.mockClear();
+  });
+
+  it("POST: embedTextにtenantIdとbillable:falseが渡される", async () => {
+    mockQuery
+      .mockReset()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [FAQ_ROW] }) // faq_docs INSERT
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }); // faq_embeddings INSERT
+
+    const res = await request(makeApp())
+      .post("/admin/faqs")
+      .set("Authorization", bearerOf(CLIENT_A))
+      .send({ tenantId: "tenant-a", question: "q", answer: "a" });
+
+    expect(res.status).toBe(201);
+    expect(mockEmbedText).toHaveBeenCalledWith(
+      expect.any(String),
+      { tenantId: "tenant-a", billable: false },
+    );
+  });
+
+  it("PUT: embedTextにtenantIdとbillable:falseが渡される", async () => {
+    mockQuery
+      .mockReset()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [FAQ_ROW] }) // faq_docs UPDATE
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // faq_embeddings DELETE(既存分)
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }); // faq_embeddings INSERT
+
+    const res = await request(makeApp())
+      .put("/admin/faqs/1")
+      .set("Authorization", bearerOf(CLIENT_A))
+      .send({ tenantId: "tenant-a", question: "q2", answer: "a2" });
+
+    expect(res.status).toBe(200);
+    expect(mockEmbedText).toHaveBeenCalledWith(
+      expect.any(String),
+      { tenantId: "tenant-a", billable: false },
+    );
+  });
+});
+
 describe("500エラー応答のサニタイズ（D1c: detail: String(err) 撤去の回帰防止）", () => {
   const DB_ERROR = new Error(
     "relation \"faq_docs\" does not exist: SELECT * FROM faq_docs WHERE tenant_id=$1 [password=hunter2]"

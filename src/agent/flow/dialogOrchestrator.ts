@@ -29,6 +29,8 @@ export interface OrchestratorResult {
   gapSignal?: { hitCount: number; topScore: number }
   /** Phase53: Groq API実トークン数 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number }
+  /** PR-2(2026-08-25収益監査): クエリ埋め込みのトークン消費（chat とは別単価） */
+  embeddingUsage?: { model: string; totalTokens: number }
   /** Phase68: 応答生成に使用された RAG チャンク */
   ragSources?: RagSource[]
   /** LemonSliceペルソナスワップ: queryPlanner が推定した質問カテゴリ */
@@ -128,6 +130,7 @@ export async function runDialogOrchestrator(
     final: true,
     gapSignal: searchResult.gapSignal,
     llmUsage: searchResult.llmUsage,
+    embeddingUsage: searchResult.embeddingUsage,
     ragSources: searchResult.ragSources,
     category: searchResult.category,
     promptVariantId: searchResult.promptVariantId,

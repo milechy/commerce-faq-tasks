@@ -85,4 +85,32 @@ describe("embedAndStore — tenantId が ES sync index まで伝播する (F3)",
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]![0]).toContain("/faq_carnation/_doc/book_7_chunk_0");
   });
+
+  // PR-2(2026-08-25収益監査): tenantId をスコープに持ちながら embedFn に
+  // 渡し忘れており、embedding が tenant_id='unknown' で計上され続けていた。
+  it("embedFnにtenantIdとbillable:falseが渡される", async () => {
+    const chunk: StructuredChunk = {
+      chunkIndex: 0,
+      pageNumber: 1,
+      originalText: "原文テキスト",
+      category: "概念",
+      summary: "要約",
+      keywords: ["k"],
+      question: "質問",
+      answer: "回答",
+      confidence: 0.9,
+    };
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ id: 1 }] }) };
+    const mockEmbedFn = jest.fn().mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await embedAndStore("carnation", 7, [chunk], {
+      db: db as unknown as Pool,
+      embedFn: mockEmbedFn,
+    });
+
+    expect(mockEmbedFn).toHaveBeenCalledWith(
+      expect.any(String),
+      { tenantId: "carnation", billable: false },
+    );
+  });
 });

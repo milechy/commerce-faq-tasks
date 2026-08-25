@@ -102,6 +102,12 @@ describe('runOcrPipeline: trackUsage計測（GID 1216944049264977）', () => {
 
     expect(result).toEqual({ pages: 3, chunks: 9 }); // 3ページ × 3チャンク = 9チャンク
     expect(mockEmbedTextWithUsage).toHaveBeenCalledTimes(9);
+    // PR-2(2026-08-25収益監査): チャンク単位の埋め込みは skipTracking=true で呼ぶ。
+    // トークンは下の extraLlmUsages に合算される1行に内包するため、ここで別行(かつ
+    // tenant_id='unknown')を作らせない。
+    for (const call of mockEmbedTextWithUsage.mock.calls) {
+      expect(call[1]).toEqual({ skipTracking: true });
+    }
 
     // 行数ベース課金のため、ページ/チャンク単位で行を増やさず1回だけ記録する
     expect(mockTrackUsage).toHaveBeenCalledTimes(1);

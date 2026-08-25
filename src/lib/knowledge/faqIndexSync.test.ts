@@ -151,6 +151,15 @@ describe("insertFaqEmbeddingAsync", () => {
     );
   });
 
+  // PR-2(2026-08-25収益監査): tenantId をスコープに持ちながら embedText に
+  // 渡し忘れており、unknown計上され続けていた。
+  it("embedTextにtenantIdとbillable:falseが渡される", async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) } as unknown as Pool;
+    insertFaqEmbeddingAsync(db, "acme", "Q\nA", 7, { source: "test" });
+    await new Promise((r) => setImmediate(r));
+    expect(mockEmbedText).toHaveBeenCalledWith("Q\nA", { tenantId: "acme", billable: false });
+  });
+
   it("opts.encrypt=trueなら本文を暗号化してからINSERTする", async () => {
     const queryMock = jest.fn().mockResolvedValue({ rows: [] });
     const db = { query: queryMock } as unknown as Pool;
