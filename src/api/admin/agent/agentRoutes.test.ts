@@ -8669,6 +8669,58 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // GID 1217807010083465(P2) LEGACY_UI_LINKS.billing / get_legacy_ui_link の description が
+  // 「請求書の再送・金額調整・無料期間設定・一時停止/再開」を案内していたが、これらは
+  // 実装上すべて super_admin ガードの内側(admin-ui/src/pages/admin/billing/index.tsx:545,623)
+  // にあり、テナントは旧UIへ渡っても実行できない(空振りする)。案内文はテナントが実際に
+  // できること(利用量・請求額の確認)だけを書く契約を固定する。
+  // -------------------------------------------------------------------------
+  describe('get_legacy_ui_link description/案内文: super_admin限定操作への言及禁止', () => {
+    const SUPER_ADMIN_ONLY_BILLING_OPS = ['再送', '金額調整', '無料期間', '一時停止', 'プラン変更'];
+
+    it.each(SUPER_ADMIN_ONLY_BILLING_OPS)(
+      'ツール説明文(description)は「%s」に言及しない',
+      (op) => {
+        const tool = ADMIN_AGENT_TOOLS.find((t) => t.function.name === 'get_legacy_ui_link');
+        expect(tool).toBeDefined();
+        expect(tool!.function.description).not.toContain(op);
+      }
+    );
+
+    it.each(SUPER_ADMIN_ONLY_BILLING_OPS)(
+      'feature=billing の案内文(result)は「%s」に言及しない',
+      async (op) => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponseTop('call-lu-noop', 'get_legacy_ui_link', { feature: 'billing' }))
+          .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご対応ください。'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '請求について', sessionId: `sess-lu-noop-${op}` });
+
+        expect(res.status).toBe(200);
+        const result = res.body.actions[0].result as string;
+        expect(result).not.toContain(op);
+      }
+    );
+
+    function toolCallResponseTop(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // 構造化カード(card)チャネル
   //
   // ツールが自然文に加えて構造化データを返せる経路。フロントが自然文を正規表現で

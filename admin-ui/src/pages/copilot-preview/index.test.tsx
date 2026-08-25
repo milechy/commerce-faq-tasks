@@ -425,7 +425,7 @@ describe("CopilotPreviewPage — 旧UI案内リンクカード", () => {
             tool: "get_legacy_ui_link",
             result:
               "この操作は請求管理画面から行えます。\n画面: 請求管理\nURL: /admin/billing\n" +
-              "説明: 請求書の再送・金額調整・無料期間設定・一時停止/再開はこちらの画面で行えます",
+              "説明: 今月の利用量と請求額の確認はこちらの画面で行えます",
           },
         ],
       });
