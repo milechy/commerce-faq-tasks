@@ -518,7 +518,7 @@ function useTypewriter(setMsgs: Dispatch<SetStateAction<Msg[]>>) {
       const reduceMotion =
         typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       if (reduceMotion || !fullText) {
-        setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, text: fullText } : m)));
+        setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, text: fullText, revealing: false } : m)));
         onDone?.();
         return;
       }
@@ -527,8 +527,13 @@ function useTypewriter(setMsgs: Dispatch<SetStateAction<Msg[]>>) {
       const CHARS_PER_TICK = 3;
       const timer = setInterval(() => {
         i = Math.min(chars.length, i + CHARS_PER_TICK);
-        setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, text: chars.slice(0, i).join("") } : m)));
-        if (i >= chars.length) {
+        const done = i >= chars.length;
+        // revealing中はMarkdownとして再パースしない(閉じていない**等が
+        // 生の記法のままチラつくため)。完了した瞬間にfalseへ倒す。
+        setMsgs((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, text: chars.slice(0, i).join(""), revealing: !done } : m)),
+        );
+        if (done) {
           clearInterval(timer);
           onDone?.();
         }
@@ -553,6 +558,10 @@ interface Msg {
   chipsUsed?: boolean;
   /** この回答がどこから来たか(サーバの answered_from をそのまま持つ) */
   answeredFrom?: AnsweredFrom;
+  /** タイプライター演出で少しずつ流し込み中かどうか。true の間は text が
+      不完全なMarkdown断片(閉じていない**等)を含みうるため、Markdownとして
+      再パースせず素のテキストで表示する(生の記法がチラつくのを防ぐ)。 */
+  revealing?: boolean;
 }
 
 // 回答の出どころ表示。3値の語彙と文言はパネル(Surface A)と同一にする — 同じ回答が
@@ -977,7 +986,7 @@ export default function CopilotPreviewPage() {
 
     // 最終返信だけを少しずつ流し込む(演出)。チップは流し込み完了後に表示する。
     const replyId = nextId();
-    push({ id: replyId, role: "ai", text: "", answeredFrom: data.answered_from });
+    push({ id: replyId, role: "ai", text: "", answeredFrom: data.answered_from, revealing: true });
     revealText(replyId, data.reply || "（応答なし）", () => {
       // タイプライター演出の完了は非同期(setInterval)のため、演出中により新しい
       // 呼び出し(テナント再切替等)に追い越されている可能性がある。追い越されていたら
@@ -2097,10 +2106,12 @@ function MessageRow({
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 10 }}>
       {m.text && (
-        <div style={{ maxWidth: "90%", padding: "14px 18px", borderRadius: isMe ? "18px 18px 6px 18px" : "18px 18px 18px 6px", background: isMe ? AGENT : "var(--muted, rgba(120,120,140,0.12))", color: isMe ? "#fff" : "var(--foreground)", fontSize: 16, lineHeight: 1.7, wordBreak: "break-word", ...(isMe ? { whiteSpace: "pre-wrap" } : {}) }}>
+        <div style={{ maxWidth: "90%", padding: "14px 18px", borderRadius: isMe ? "18px 18px 6px 18px" : "18px 18px 18px 6px", background: isMe ? AGENT : "var(--muted, rgba(120,120,140,0.12))", color: isMe ? "#fff" : "var(--foreground)", fontSize: 16, lineHeight: 1.7, wordBreak: "break-word", ...(isMe || m.revealing ? { whiteSpace: "pre-wrap" } : {}) }}>
           {/* 自分自身の発話はMarkdown解釈させない(意図しない**強調**表示等を避ける)。
-              AI発話のみAgentMarkdownで描画する */}
-          {isMe ? m.text : <AgentMarkdown content={m.text} />}
+              タイプライター演出で流し込み中(m.revealing)は閉じていない**等の
+              不完全なMarkdown断片を含みうるため、完了するまでは素のテキストで
+              表示する(生の記法がチラついて見えるのを防ぐ)。 */}
+          {isMe || m.revealing ? m.text : <AgentMarkdown content={m.text} />}
         </div>
       )}
       {/* 回答の出どころ。テキストが流し込まれるまでは出さない(空バブルの下に
