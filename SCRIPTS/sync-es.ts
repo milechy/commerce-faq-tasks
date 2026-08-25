@@ -21,6 +21,11 @@
 const { Pool } = require("pg") as { Pool: any };
 
 import { faqEsDocId } from "../src/lib/knowledge/faqIndexSync";
+import {
+  findBookChunkDocIds,
+  copyBookDocsToNewIndex,
+  type CopyBookDocsResult,
+} from "../src/lib/knowledge/bookIndexPreservation";
 
 const pgUrl = process.env.DATABASE_URL;
 const esUrl = (process.env.ES_URL || "").replace(/\/$/, "");
@@ -294,6 +299,13 @@ async function syncTenant(tenantId: string): Promise<void> {
 
   const expected = await countTenantDocs(tenantId);
 
+  // faq_docs を持たない書籍/OCRチャンクは以下のFAQ再構築では拾えない。
+  // 旧index/aliasの有無を先に確認しておく(2026-08-25是正: 以前はここを見ずに
+  // 新indexへswapし、旧indexごと削除して書籍知識が全消失していた)。
+  const state = await resolveAliasState(alias);
+  const bookRefs = await findBookChunkDocIds(pool, tenantId);
+  console.log(`  [BOOK] 書籍/OCRチャンク: ${bookRefs.length}件を確認`);
+
   // 1. 新インデックス作成（旧 index/alias には一切触れない）
   await createIndex(newIndex);
 
@@ -301,6 +313,7 @@ async function syncTenant(tenantId: string): Promise<void> {
   const BATCH_SIZE = 100;
   let offset = 0;
   let totalSuccess = 0;
+  let bookCopyResult: CopyBookDocsResult;
   try {
     while (true) {
       const res = await pool.query(
@@ -320,21 +333,42 @@ async function syncTenant(tenantId: string): Promise<void> {
 
       if (rows.length < BATCH_SIZE) break;
     }
+
+    // 書籍/OCRチャンクを旧index(または alias)から実体コピーで引き継ぐ。
+    // FAQのバルク登録と同じ try ブロックに入れ、失敗時は同じく新indexを掃除する。
+    bookCopyResult = await copyBookDocsToNewIndex(
+      esUrl,
+      state.kind === "absent" ? null : alias,
+      newIndex,
+      bookRefs
+    );
   } catch (e) {
     await deleteIndex(newIndex);
     throw e;
   }
 
-  // 3. 全件成功したときだけ alias を張り替える。部分失敗は旧 index を温存して中断。
-  if (totalSuccess !== expected) {
+  console.log(
+    `  [BOOK] 引き継ぎ: ${bookCopyResult.copied}/${bookCopyResult.expected}件` +
+      (bookCopyResult.missing.length > 0 ? ` (missing: ${bookCopyResult.missing.join(", ")})` : "")
+  );
+
+  // 3. FAQ・書籍チャンクとも全件成功したときだけ alias を張り替える。
+  //    部分失敗は旧 index を温存して中断する(fail-closed)。
+  if (totalSuccess !== expected || bookCopyResult.copied !== bookCopyResult.expected) {
     console.error(
-      `  [ABORT] ${tenantId}: indexed ${totalSuccess}/${expected} → alias 張り替えを中止し旧 index を温存`
+      `  [ABORT] ${tenantId}: FAQ ${totalSuccess}/${expected}件, 書籍/OCR ${bookCopyResult.copied}/${bookCopyResult.expected}件` +
+        ` → alias 張り替えを中止し旧 index を温存`
     );
     await deleteIndex(newIndex);
-    throw new Error(`sync incomplete for ${tenantId}: ${totalSuccess}/${expected}`);
+    throw new Error(
+      `sync incomplete for ${tenantId}: faq=${totalSuccess}/${expected} book=${bookCopyResult.copied}/${bookCopyResult.expected}`
+    );
   }
 
-  const state = await resolveAliasState(alias);
+  console.log(
+    `  [SUMMARY] ${tenantId}: FAQ ${totalSuccess}件 + 書籍/OCR ${bookCopyResult.copied}件 を ${newIndex} へ再構築`
+  );
+
   await swapAlias(alias, newIndex, state);
 
   console.log(`[DONE] ${tenantId}: ${totalSuccess} docs indexed → alias ${alias} → ${newIndex}`);
