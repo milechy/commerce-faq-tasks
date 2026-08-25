@@ -517,7 +517,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 12 | 会話分析の推移グラフ・低評価セッション | `tool:get_analytics_trend` |
 | 13 | ABテスト結果・改善提案 | `tool:get_ab_test_results` |
 | 14 | ナレッジ別の成約貢献度 | `tool:get_knowledge_attribution` |
-| 15 | ご利用状況・お支払い | `handoff:billing` |
+| 15 | ご利用状況・お支払い | `tool:get_billing_summary` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W2-6完了時点）: `tool:` 11 / `handoff:` 4 / `pending` 1。W1完了。W2-1(#5)/W2-2(#6)/W2-3(#7)/W2-4(#12)/W2-5(#13)/W2-6(#14)/W2-8(#16)tool化。残るpendingは#8写真アップロードのみ。残るT4(#15請求)とT3(#9,10,11)は未着手。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
+現在地（2026-08-25、W2-7完了時点）: `tool:` 12 / `handoff:` 3 / `pending` 1。W1完了。W2全8件完了(W2-1〜W2-8)。残るpendingは#8写真アップロードのみ。残るT3(#9,10,11 アバター音声クローン/高品質生成/新規作成ウィザード)のみ未着手(W3)。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。

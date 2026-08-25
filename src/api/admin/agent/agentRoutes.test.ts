@@ -210,6 +210,14 @@ jest.mock('../../../lib/notifications', () => ({
   fetchUnreadNotificationsByType: (...args: any[]) => mockFetchUnreadNotificationsByType(...args),
 }));
 
+// get_billing_summary が使う依存をモック
+const mockFetchBillingCostBreakdown = jest.fn();
+const mockFetchBillingInvoices = jest.fn();
+jest.mock('../../../lib/billing/billingApi', () => ({
+  fetchBillingCostBreakdown: (...args: any[]) => mockFetchBillingCostBreakdown(...args),
+  fetchBillingInvoices: (...args: any[]) => mockFetchBillingInvoices(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -9534,6 +9542,140 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
       expect(mockFetchKnowledgeAttribution).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('get_billing_summary', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const BREAKDOWN = {
+      tenantId: 'tenant-abc',
+      total_yen: 3300,
+      breakdown: {
+        chat: { label: 'AI応答', cost_yen: 2000, request_count: 100, percentage: 61 },
+        avatar: { label: 'アバター映像', cost_yen: 1000, request_count: 20, percentage: 30 },
+        voice: { label: '音声合成', cost_yen: 300, request_count: 10, percentage: 9 },
+      },
+    };
+    const INVOICE = {
+      id: 'in_1', status: 'paid', status_label: 'お支払い済み', amountDue: 3300, amountPaid: 3300,
+      currency: 'jpy', periodStart: 1754006400, periodEnd: 1756684800, hostedInvoiceUrl: 'https://stripe.example/inv_1',
+      invoicePdf: null, created: 1754006400,
+    };
+
+    it('契約プラン・今期費用の内訳・直近の請求書をcard付きで返す(operationsボタンは一切出さない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bs-1', 'get_billing_summary', { period: '30d' }))
+        .mockResolvedValueOnce(makeGroqResponse('ご利用状況をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchBillingCostBreakdown.mockResolvedValueOnce(BREAKDOWN);
+      mockFetchBillingInvoices.mockResolvedValueOnce({
+        status: 'ok', tenantId: 'tenant-abc', customerId: 'cus_1',
+        portalUrl: 'https://billing.stripe.com/portal/test', invoices: [INVOICE],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今月の請求額を教えて', sessionId: 'sess-bs-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchBillingCostBreakdown).toHaveBeenCalledWith(
+        mockDb, 'tenant-abc',
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      );
+      expect(mockFetchBillingInvoices).toHaveBeenCalledWith(mockDb, 'tenant-abc');
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growth');
+      expect(result).toContain('3,300円');
+      expect(result).toContain('お支払い済み');
+
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'billing_summary',
+        period: '30d',
+        plan: 'Growth',
+        totalYen: 3300,
+        breakdown: [
+          { feature: 'chat', label: 'AI応答', costYen: 2000, percentage: 61 },
+          { feature: 'avatar', label: 'アバター映像', costYen: 1000, percentage: 30 },
+          { feature: 'voice', label: '音声合成', costYen: 300, percentage: 9 },
+        ],
+        invoicesAvailable: true,
+        invoices: [{
+          id: 'in_1', statusLabel: 'お支払い済み', amountDue: 3300, currency: 'jpy',
+          created: 1754006400, hostedInvoiceUrl: 'https://stripe.example/inv_1',
+        }],
+        portalUrl: 'https://billing.stripe.com/portal/test',
+      });
+    });
+
+    it('サブスクリプションが無い場合はinvoicesAvailable=falseで「確認できません」と案内する(エラー扱いにしない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bs-2', 'get_billing_summary'))
+        .mockResolvedValueOnce(makeGroqResponse('ご利用状況をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+      mockFetchBillingCostBreakdown.mockResolvedValueOnce({ tenantId: 'tenant-abc', total_yen: 0, breakdown: {} });
+      mockFetchBillingInvoices.mockResolvedValueOnce({ status: 'no_subscription', tenantId: 'tenant-abc' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を見せて', sessionId: 'sess-bs-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('現在確認できません');
+      expect(res.body.actions[0].card.invoicesAvailable).toBe(false);
+      expect(res.body.actions[0].card.invoices).toEqual([]);
+      expect(res.body.actions[0].card.portalUrl).toBeNull();
+    });
+
+    it('Stripe未設定の場合もinvoicesAvailable=falseで同じ文言に落ちる(500エラーにしない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bs-3', 'get_billing_summary'))
+        .mockResolvedValueOnce(makeGroqResponse('ご利用状況をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchBillingCostBreakdown.mockResolvedValueOnce(BREAKDOWN);
+      mockFetchBillingInvoices.mockResolvedValueOnce({ status: 'stripe_not_configured' });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求書を見せて', sessionId: 'sess-bs-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('現在確認できません');
+      expect(res.body.actions[0].card.invoicesAvailable).toBe(false);
+    });
+
+    it('super_adminがテナント未特定の場合は「テナントが特定できません」を返し、集計に到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bs-4', 'get_billing_summary'))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '請求額を教えて', sessionId: 'sess-bs-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockFetchBillingCostBreakdown).not.toHaveBeenCalled();
+      expect(mockFetchBillingInvoices).not.toHaveBeenCalled();
     });
   });
 

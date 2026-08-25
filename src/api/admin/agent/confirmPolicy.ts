@@ -144,6 +144,7 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_conversion_summary',
   'get_ab_test_results',
   'get_knowledge_attribution',
+  'get_billing_summary',
   'get_tuning_rule_effect',
   // suggest_* / generate_* はLLMを呼ぶため課金は発生するが、永続化はしない下書き生成。
   'suggest_tuning_rule',

@@ -45,6 +45,7 @@ import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
+import { fetchBillingCostBreakdown, fetchBillingInvoices } from '../../../lib/billing/billingApi';
 import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchKnowledgeAttribution, fetchLowScoreSessions } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
 import { computeAbExperimentResults, fetchAbExperimentsOverview } from '../../conversion/abResultsQuery';
@@ -147,6 +148,15 @@ function parseFaqCategoryArg(raw: unknown): { ok: true; category: string | null 
 // 空文字列・重複・前後空白は正規化して除く(黙って保存せず、そのまま保存すると一覧表示が崩れるため)。
 const MAX_FAQ_TAGS = 10;
 const MAX_FAQ_TAG_LENGTH = 30;
+
+// W2-7: プラン名の日本語表示。旧UI(tenants/types.ts PLAN_OPTIONS)と同じ表記に揃える
+// (バックエンドから直接importできないため、ラベルのみここに複製する)。
+const BILLING_PLAN_LABEL: Record<string, string> = {
+  free_ad: 'Free（広告表示）',
+  starter: 'Starter',
+  growth: 'Growth',
+  enterprise: 'Enterprise',
+};
 
 function normalizeFaqTags(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -598,6 +608,32 @@ export type KnowledgeAttributionCardPayload = {
   } | null;
 };
 
+// W2-7(docs/COPILOT_UI_PARITY.md §3.1 #15、T4 要約+可視化): 現在の契約プラン・今期の
+// 利用料金(機能別内訳)・直近の請求書。D2決定により閲覧専用 — 請求書の再送/金額調整/
+// 無料期間設定/プラン変更/一時停止再開は一切含めない(それらはsuper_admin専用の別画面の
+// 操作であり、confirmPolicy.tsのNON_WRITE_TOOLSにこのツールを入れているのもそのため)。
+// 数値はすべてfetchBillingCostBreakdown/fetchBillingInvoices(billingApi.ts)の
+// サーバ集計値をそのまま持たせる(AbTestResultsCardPayloadと同じ権威分離)。
+// invoicesAvailable=falseはStripe未設定/アクティブなサブスクリプション無しのいずれか
+// (テナントには区別する意味が無いため単一のフラグに畳む)。
+export type BillingSummaryCardPayload = {
+  kind: 'billing_summary';
+  period: string;
+  plan: string;
+  totalYen: number;
+  breakdown: Array<{ feature: string; label: string; costYen: number; percentage: number }>;
+  invoicesAvailable: boolean;
+  invoices: Array<{
+    id: string;
+    statusLabel: string;
+    amountDue: number;
+    currency: string;
+    created: number;
+    hostedInvoiceUrl: string | null;
+  }>;
+  portalUrl: string | null;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -612,7 +648,8 @@ export type ActionCardPayload =
   | RuleEffectCardPayload
   | AnalyticsTrendCardPayload
   | AbTestResultsCardPayload
-  | KnowledgeAttributionCardPayload;
+  | KnowledgeAttributionCardPayload
+  | BillingSummaryCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -4366,6 +4403,83 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_knowledge_attribution failed', err);
         return truncate('ナレッジ貢献度の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // W2-7(docs/COPILOT_UI_PARITY.md §3.1 #15、T4 要約+可視化): 現在のプラン・今期の
+    // 利用料金(機能別内訳)・直近の請求書。D2決定により閲覧専用。旧UI
+    // (pages/admin/billing/index.tsx)の書き込み系(再送・金額調整・無料期間・一時停止)は
+    // すべてsuper_admin専用の別APIであり、このツールからは呼べない(NON_WRITE_TOOLS)。
+    case 'get_billing_summary': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      const period = args['period'] === '7d' || args['period'] === '90d' ? args['period'] : '30d';
+      const periodLabel = period === '7d' ? '直近7日間' : period === '90d' ? '直近90日間' : '直近30日間';
+      const days = period === '7d' ? 7 : period === '90d' ? 90 : 30;
+      const now = new Date();
+      const to = now.toISOString().slice(0, 10);
+      const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+      try {
+        const [plan, breakdown, invoicesResult] = await Promise.all([
+          queryTenantPlan(db, tenantId),
+          fetchBillingCostBreakdown(db, tenantId, from, to),
+          fetchBillingInvoices(db, tenantId),
+        ]);
+        const planLabel = BILLING_PLAN_LABEL[plan] ?? plan;
+
+        const lines = [
+          `ご利用状況・お支払い（${periodLabel}）`,
+          `• 契約プラン: ${planLabel}`,
+          `• 今期の費用: ${breakdown.total_yen.toLocaleString('ja-JP')}円`,
+        ];
+        const breakdownEntries = Object.values(breakdown.breakdown);
+        if (breakdownEntries.length > 0) {
+          lines.push(`  内訳: ${breakdownEntries.map((b) => `${b.label} ${b.percentage}%（${b.cost_yen.toLocaleString('ja-JP')}円）`).join(' / ')}`);
+        }
+
+        const invoicesAvailable = invoicesResult.status === 'ok';
+        const invoices = invoicesResult.status === 'ok' ? invoicesResult.invoices.slice(0, 3) : [];
+        if (invoicesAvailable) {
+          lines.push(`• 直近の請求書（${invoices.length}件）:`);
+          for (const inv of invoices) {
+            const date = new Date(inv.created * 1000).toISOString().slice(0, 10);
+            lines.push(`  [${inv.status_label}] ${inv.amountDue.toLocaleString('ja-JP')}円（${date}）`);
+          }
+        } else {
+          lines.push('• 請求書情報: 現在確認できません（契約中のサブスクリプションがないか、一時的に取得できません）');
+        }
+
+        const card: BillingSummaryCardPayload = {
+          kind: 'billing_summary',
+          period,
+          plan: planLabel,
+          totalYen: breakdown.total_yen,
+          breakdown: Object.entries(breakdown.breakdown).map(([feature, b]) => ({
+            feature,
+            label: b.label,
+            costYen: b.cost_yen,
+            percentage: b.percentage,
+          })),
+          invoicesAvailable,
+          invoices: invoices.map((inv) => ({
+            id: inv.id,
+            statusLabel: inv.status_label,
+            amountDue: inv.amountDue,
+            currency: inv.currency,
+            created: inv.created,
+            hostedInvoiceUrl: inv.hostedInvoiceUrl,
+          })),
+          portalUrl: invoicesResult.status === 'ok' ? invoicesResult.portalUrl : null,
+        };
+
+        return { text: truncateRead(lines.join('\n')), card };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_billing_summary failed', err);
+        return truncate('ご利用状況・お支払い情報の取得に失敗しました');
       }
     }
 

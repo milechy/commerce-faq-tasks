@@ -1760,6 +1760,76 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     });
   });
 
+  describe("billing_summary カード", () => {
+    it("契約プラン・費用内訳・請求書・お支払いポータルへのリンクが描画される(操作ボタンは出ない)", async () => {
+      mockAgent({
+        reply: "ご利用状況をお伝えします。",
+        actions: [
+          {
+            tool: "get_billing_summary",
+            result: "ご利用状況・お支払い（直近30日間）\n• 契約プラン: Growth",
+            card: {
+              kind: "billing_summary",
+              period: "30d",
+              plan: "Growth",
+              totalYen: 3300,
+              breakdown: [
+                { feature: "chat", label: "AI応答", costYen: 2000, percentage: 61 },
+                { feature: "avatar", label: "アバター映像", costYen: 1000, percentage: 30 },
+                { feature: "voice", label: "音声合成", costYen: 300, percentage: 9 },
+              ],
+              invoicesAvailable: true,
+              invoices: [
+                { id: "in_1", statusLabel: "お支払い済み", amountDue: 3300, currency: "jpy", created: 1754006400, hostedInvoiceUrl: "https://stripe.example/inv_1" },
+              ],
+              portalUrl: "https://billing.stripe.com/portal/test",
+            },
+          },
+        ],
+      });
+
+      await send("今月の請求額を教えて");
+
+      expect(await screen.findByText("Growth")).toBeTruthy();
+      expect(screen.getByText(/今期の費用/)).toBeTruthy();
+      expect(screen.getAllByText(/3,300円/).length).toBeGreaterThan(0);
+      expect(screen.getByText(/お支払い済み/)).toBeTruthy();
+      const portalLink = screen.getByText(/お支払い方法の確認・変更/).closest("a");
+      expect(portalLink?.getAttribute("href")).toBe("https://billing.stripe.com/portal/test");
+      // D2決定: 再送・金額調整・無料期間・プラン変更・一時停止/再開のボタンは一切出さない
+      expect(screen.queryByRole("button", { name: /プランを変更/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /停止/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /金額調整/ })).toBeNull();
+    });
+
+    it("請求書が確認できない場合は「現在確認できません」と描画され、ポータルリンクは出ない", async () => {
+      mockAgent({
+        reply: "ご利用状況をお伝えします。",
+        actions: [
+          {
+            tool: "get_billing_summary",
+            result: "ご利用状況・お支払い（直近30日間）\n• 請求書情報: 現在確認できません",
+            card: {
+              kind: "billing_summary",
+              period: "30d",
+              plan: "Starter",
+              totalYen: 0,
+              breakdown: [],
+              invoicesAvailable: false,
+              invoices: [],
+              portalUrl: null,
+            },
+          },
+        ],
+      });
+
+      await send("請求書を見せて");
+
+      expect(await screen.findByText(/現在確認できません/)).toBeTruthy();
+      expect(screen.queryByText(/お支払い方法の確認・変更/)).toBeNull();
+    });
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {

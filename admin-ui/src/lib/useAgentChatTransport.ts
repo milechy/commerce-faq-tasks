@@ -230,6 +230,26 @@ export type KnowledgeAttributionAgentActionCard = {
   } | null;
 };
 
+// W2-7: ご利用状況・お支払い(閲覧専用)。フィールド形状は
+// src/api/admin/agent/actionExecutor.ts の BillingSummaryCardPayload と1対1に保つ。
+export type BillingSummaryAgentActionCard = {
+  kind: "billing_summary";
+  period: string;
+  plan: string;
+  totalYen: number;
+  breakdown: Array<{ feature: string; label: string; costYen: number; percentage: number }>;
+  invoicesAvailable: boolean;
+  invoices: Array<{
+    id: string;
+    statusLabel: string;
+    amountDue: number;
+    currency: string;
+    created: number;
+    hostedInvoiceUrl: string | null;
+  }>;
+  portalUrl: string | null;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -244,7 +264,8 @@ export type AgentActionCard =
   | RuleEffectAgentActionCard
   | AnalyticsTrendAgentActionCard
   | AbTestResultsAgentActionCard
-  | KnowledgeAttributionAgentActionCard;
+  | KnowledgeAttributionAgentActionCard
+  | BillingSummaryAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 
