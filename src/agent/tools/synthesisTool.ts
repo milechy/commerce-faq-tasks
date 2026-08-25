@@ -178,15 +178,28 @@ const NO_GROUNDING_BLOCK = `【重要: このご質問に一致する参照可�
 - 「恐れ入りますが、こちらでは正確にお答えできる情報がございません」のように伝え、
   問い合わせ窓口へ案内してください`;
 
-const BASE_SYSTEM_PROMPT = `あなたは中古車販売店のAIコンシェルジュです。
-お客様の質問に対して、提供されたFAQ情報をもとに
-親切で自然な日本語で回答してください。
-ルール:
+// ナレッジ配線是正P17: 以前は BASE_SYSTEM_PROMPT が「あなたは中古車販売店の
+// AIコンシェルジュです」で固定され、テナントの system_prompt はその後ろに
+// 追記されるだけだった(基底を置換しない)。本番テナントには carnation
+// (フラワー系)等、業種が一致しないテナントが含まれており、業種を誤って
+// 名乗る欠陥だった。役割定義(業種依存)とルール(業種非依存)を分離し、
+// 役割定義はテナントの system_prompt を第一候補にする。
+
+/** 業種非依存のルール。テナントの有無に関わらず全テナントに適用する。 */
+const INDUSTRY_AGNOSTIC_RULES = `ルール:
 - 回答は200文字以内で簡潔に
 - FAQにない情報は推測で答えない
 - 敬語を使う
 - 箇条書きではなく自然な文章で答える
 - FAQ情報が不十分な場合は「詳しくはお問い合わせください」と案内する`;
+
+/**
+ * テナントの system_prompt が未設定のときだけ使う中立既定。
+ * 業種を名乗らない(「この店舗」に留める)ことで、誤った業種を騙る事故を構造的に防ぐ。
+ */
+const NEUTRAL_ROLE_PROMPT = `あなたはこの店舗のAIコンシェルジュです。
+お客様の質問に対して、提供されたFAQ情報をもとに
+親切で自然な日本語で回答してください。`;
 
 /**
  * Groq LLM（openai/gpt-oss-120b）で自然な日本語回答を生成する。
@@ -278,10 +291,13 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
   try {
     // チューニングルールをシステムプロンプトに注入
     const tuningSection = buildTuningPromptSection(matchedRules);
-    const systemPromptParts = [BASE_SYSTEM_PROMPT];
-    if (tenantSystemPrompt) {
-      systemPromptParts.push(`--- テナント固有の指示 ---\n${tenantSystemPrompt}`);
-    }
+    // ナレッジ配線是正P17: 役割定義はテナントの system_prompt を第一候補にする
+    // (「追記」ではなく置換)。未設定時のみ業種を名乗らない中立既定にフォールバックする。
+    // テナントの system_prompt は運用者が管理画面から設定する信頼済みの管理コンテンツ
+    // (ユーザー入力ではない)であり、長さの妥当性はテナント自身の責任とし、
+    // ここでは切り詰めない(role定義を途中で欠落させるリスクの方が大きいため)。
+    const roleSection = tenantSystemPrompt || NEUTRAL_ROLE_PROMPT;
+    const systemPromptParts = [roleSection, INDUSTRY_AGNOSTIC_RULES];
     if (tuningSection) {
       systemPromptParts.push(tuningSection);
     }
