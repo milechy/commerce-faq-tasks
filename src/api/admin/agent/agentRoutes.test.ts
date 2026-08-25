@@ -180,12 +180,16 @@ jest.mock('../monitoring/routes', () => ({
   computeKpis: (...args: any[]) => mockComputeKpis(...args),
 }));
 
-// get_analytics_summary / get_conversion_summary が使う依存をモック
+// get_analytics_summary / get_conversion_summary / get_analytics_trend が使う依存をモック
 const mockFetchAnalyticsSummary = jest.fn();
 const mockFetchConversionSummary = jest.fn();
+const mockFetchAnalyticsTrend = jest.fn();
+const mockFetchLowScoreSessions = jest.fn();
 jest.mock('../analytics/summaryQueries', () => ({
   fetchAnalyticsSummary: (...args: any[]) => mockFetchAnalyticsSummary(...args),
   fetchConversionSummary: (...args: any[]) => mockFetchConversionSummary(...args),
+  fetchAnalyticsTrend: (...args: any[]) => mockFetchAnalyticsTrend(...args),
+  fetchLowScoreSessions: (...args: any[]) => mockFetchLowScoreSessions(...args),
   // PR-3: get_weekly_briefing の集計クエリにsource='user'絞り込みを追加した際に実配線した
   userSourceClause: (alias: string) => `AND ${alias}.metadata->>'source' = 'user'`,
   userSourceExists: (sessionIdExpr: string, tenantIdExpr: string, chatSessionsColumn = 'session_id') =>
@@ -9102,6 +9106,123 @@ describe('POST /v1/admin/agent/chat', () => {
         period: '90d',
       });
       expect(res.body.actions[0].result).toContain('直近90日間');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // W2-4: get_analytics_trend(docs/COPILOT_UI_PARITY.md §3.1 #12)
+  // -------------------------------------------------------------------------
+  describe('get_analytics_trend', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const TREND_DAILY = [
+      { date: '2026-08-01', sessions: 2, avg_score: 70, knowledge_gaps: 0, sentiment_positive: 1, sentiment_negative: 0, sentiment_neutral: 1 },
+      { date: '2026-08-02', sessions: 8, avg_score: 65, knowledge_gaps: 1, sentiment_positive: 3, sentiment_negative: 1, sentiment_neutral: 4 },
+    ];
+
+    const LOW_SCORE_SESSIONS = [
+      { session_id: 'abcd1234efgh5678', score: 25, evaluated_at: '2026-08-02T03:00:00.000Z', message_count: 4, feedback_summary: '対応が遅い' },
+      { session_id: 'zzzz9999yyyy8888', score: 30, evaluated_at: '2026-08-02T05:00:00.000Z', message_count: 2, feedback_summary: '' },
+    ];
+
+    it('growthプランなら推移と低評価セッションをcard付きで返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-at-1', 'get_analytics_trend', { period: '30d' }))
+        .mockResolvedValueOnce(makeGroqResponse('推移をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAnalyticsTrend.mockResolvedValueOnce({ period: '30d', tenant_id: 'tenant-abc', daily: TREND_DAILY });
+      mockFetchLowScoreSessions.mockResolvedValueOnce(LOW_SCORE_SESSIONS);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話数の推移をグラフで見せて', sessionId: 'sess-at-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchAnalyticsTrend).toHaveBeenCalledWith({ db: mockDb, tenantId: 'tenant-abc', period: '30d' });
+      expect(mockFetchLowScoreSessions).toHaveBeenCalledWith({ db: mockDb, tenantId: 'tenant-abc', period: '30d' }, 5);
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('合計 10件');
+      // 短縮ID(8文字)が本文にもcardにも一致する形で現れる(get_chat_session_messagesへ
+      // そのまま渡せることの固定)。
+      expect(result).toContain('[abcd1234]');
+      expect(result).toContain('スコア25');
+
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'analytics_trend',
+        period: '30d',
+        daily: [
+          { date: '2026-08-01', sessions: 2, avgScore: 70 },
+          { date: '2026-08-02', sessions: 8, avgScore: 65 },
+        ],
+        lowScoreSessions: [
+          { shortId: 'abcd1234', score: 25, evaluatedAt: '2026-08-02T03:00:00.000Z', messageCount: 4 },
+          { shortId: 'zzzz9999', score: 30, evaluatedAt: '2026-08-02T05:00:00.000Z', messageCount: 2 },
+        ],
+      });
+    });
+
+    it('低評価セッションが0件なら「なし」と案内し、cardのlowScoreSessionsは空配列', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-at-2', 'get_analytics_trend', { period: '30d' }))
+        .mockResolvedValueOnce(makeGroqResponse('推移をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAnalyticsTrend.mockResolvedValueOnce({ period: '30d', tenant_id: 'tenant-abc', daily: TREND_DAILY });
+      mockFetchLowScoreSessions.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '推移を見せて', sessionId: 'sess-at-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('低評価セッション（スコア40未満）: なし');
+      expect(res.body.actions[0].card.lowScoreSessions).toEqual([]);
+    });
+
+    it('growthプラン未契約(starter)は拒否され、fetchAnalyticsTrendに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-at-3', 'get_analytics_trend', {}))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '推移を見せて', sessionId: 'sess-at-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(mockFetchAnalyticsTrend).not.toHaveBeenCalled();
+      expect(mockFetchLowScoreSessions).not.toHaveBeenCalled();
+    });
+
+    it('super_adminがテナント未特定の場合はプラン制限ではなく「テナントが特定できません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-at-4', 'get_analytics_trend', {}))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '推移を見せて', sessionId: 'sess-at-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 

@@ -1584,7 +1584,30 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         '会話分析の数値サマリー（会話数・前期間比・満足度スコア・1会話あたりのメッセージ数・' +
         '知識ギャップ件数・感情の内訳）をチャット上に直接返す読み取り専用ツール。' +
         '「会話は増えている?」「満足度はどう?」のように数字で答えられる質問にはこのツールを使うこと。' +
-        'グラフの詳細や個別の低評価セッションを見たい場合のみ get_legacy_ui_link(analytics) で旧UIへ案内する。',
+        '日ごとの推移や個別の低評価セッションを見たい場合は get_analytics_trend を使うこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          period: {
+            type: 'string',
+            description: '集計期間（既定は30d）',
+            enum: ['7d', '30d', '90d'],
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_analytics_trend',
+      description:
+        '会話数の日ごとの推移と、低評価セッション（AI品質評価スコア40未満）の一覧をチャット上に' +
+        '直接返す読み取り専用ツール。「グラフで見せて」「日ごとの動きは?」「評価が低かった会話は?」' +
+        'のように推移や個別セッションを聞かれたときに使うこと。数字だけのサマリーで足りる場合は' +
+        'get_analytics_summary を使うこと。低評価セッションの本文を見たい場合は、この結果が返す' +
+        '短縮ID（[xxxxxxxx]）をそのまま get_chat_session_messages に渡せる。',
       parameters: {
         type: 'object',
         properties: {

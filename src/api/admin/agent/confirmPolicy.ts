@@ -140,6 +140,7 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_sai_task_status',
   'get_legacy_ui_link',
   'get_analytics_summary',
+  'get_analytics_trend',
   'get_conversion_summary',
   'get_tuning_rule_effect',
   // suggest_* / generate_* はLLMを呼ぶため課金は発生するが、永続化はしない下書き生成。

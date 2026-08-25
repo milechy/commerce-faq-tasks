@@ -540,3 +540,173 @@ export async function fetchConversionSummary({
     stage_dropout: stageDropout,
   };
 }
+
+// ---------------------------------------------------------------------------
+// W2-4: 会話分析の推移グラフ・低評価セッション
+//
+// GET /v1/admin/analytics/trends の日次推移クエリと、GET /v1/admin/analytics/evaluations
+// の低評価セッション抽出クエリを、チャットエージェント(get_analytics_trend)から再利用
+// できるよう切り出す。fetchAnalyticsSummary と同じ理由(HTTPレイヤとチャットエージェント
+// が同じ数値を取得する)。score_distribution / axis_averages は旧UIの詳細ドリルダウン
+// (棒グラフの内訳)向けで、チャットの要約には過剰なため切り出し対象に含めない
+// (旧UIの/evaluationsエンドポイント自体は変更しない)。
+// ---------------------------------------------------------------------------
+
+export interface AnalyticsTrendResponse {
+  period: string;
+  tenant_id: string | null;
+  daily: Array<{
+    date: string;
+    sessions: number;
+    avg_score: number | null;
+    knowledge_gaps: number;
+    sentiment_positive: number;
+    sentiment_negative: number;
+    sentiment_neutral: number;
+  }>;
+}
+
+export async function fetchAnalyticsTrend({ db, tenantId, period }: SummaryQueryParams): Promise<AnalyticsTrendResponse> {
+  const interval = periodToInterval(period);
+  const params: (string | number)[] = [`${interval}`];
+  const tenantClause = tenantId ? "AND s.tenant_id = $2" : "";
+  if (tenantId) params.push(tenantId);
+
+  const evalTenantClause = tenantId ? "AND e.tenant_id = $2" : "";
+  const kgTenantClause = tenantId ? "AND kg.tenant_id = $2" : "";
+
+  const result = await db.query(
+    `SELECT
+       d.date::text AS date,
+       COALESCE(s_count.sessions, 0)::int AS sessions,
+       e_avg.avg_score,
+       COALESCE(kg_count.knowledge_gaps, 0)::int AS knowledge_gaps
+     FROM (
+       SELECT generate_series(
+         date_trunc('day', NOW() - $1::interval),
+         date_trunc('day', NOW()),
+         '1 day'::interval
+       )::date AS date
+     ) d
+     LEFT JOIN (
+       SELECT date_trunc('day', s.started_at)::date AS day, COUNT(*) AS sessions
+       FROM chat_sessions s
+       WHERE s.started_at >= NOW() - $1::interval
+       ${tenantClause}
+       ${userSourceClause("s")}
+       GROUP BY day
+     ) s_count ON s_count.day = d.date
+     LEFT JOIN (
+       SELECT date_trunc('day', e.evaluated_at)::date AS day, AVG(e.score) AS avg_score
+       FROM conversation_evaluations e
+       WHERE e.evaluated_at >= NOW() - $1::interval
+         AND e.score > 0
+       ${evalTenantClause}
+       ${userSourceExists("e.session_id", "e.tenant_id")}
+       GROUP BY day
+     ) e_avg ON e_avg.day = d.date
+     LEFT JOIN (
+       SELECT date_trunc('day', kg.created_at)::date AS day, COUNT(*) AS knowledge_gaps
+       FROM knowledge_gaps kg
+       WHERE kg.created_at >= NOW() - $1::interval
+       ${kgTenantClause}
+       GROUP BY day
+     ) kg_count ON kg_count.day = d.date
+     ORDER BY d.date ASC`,
+    params,
+  );
+
+  const sentTrendsParams: (string | number)[] = [`${interval}`];
+  const sentTrendsTenantClause = tenantId ? "AND cm.tenant_id = $2" : "";
+  if (tenantId) sentTrendsParams.push(tenantId);
+
+  const sentTrendsResult = await db.query(
+    `SELECT
+       DATE_TRUNC('day', cm.created_at)::date::text AS day,
+       COUNT(*) FILTER (WHERE cm.sentiment->>'label' = 'positive')::int AS positive,
+       COUNT(*) FILTER (WHERE cm.sentiment->>'label' = 'negative')::int AS negative,
+       COUNT(*) FILTER (WHERE cm.sentiment->>'label' = 'neutral')::int AS neutral
+     FROM chat_messages cm
+     WHERE cm.sentiment IS NOT NULL
+       AND cm.created_at >= NOW() - $1::interval
+     ${sentTrendsTenantClause}
+     GROUP BY day ORDER BY day`,
+    sentTrendsParams,
+  );
+
+  const sentTrendsMap = new Map<string, { positive: number; negative: number; neutral: number }>();
+  for (const row of sentTrendsResult.rows) {
+    sentTrendsMap.set(String(row.day), {
+      positive: row.positive as number,
+      negative: row.negative as number,
+      neutral: row.neutral as number,
+    });
+  }
+
+  type TrendRow = { date: string; sessions: number; avg_score: string | null; knowledge_gaps: number };
+  const daily = (result.rows as TrendRow[]).map((row) => {
+    const sent = sentTrendsMap.get(row.date) ?? { positive: 0, negative: 0, neutral: 0 };
+    return {
+      date: row.date,
+      sessions: row.sessions,
+      avg_score: row.avg_score != null ? parseFloat(row.avg_score) : null,
+      knowledge_gaps: row.knowledge_gaps,
+      sentiment_positive: sent.positive,
+      sentiment_negative: sent.negative,
+      sentiment_neutral: sent.neutral,
+    };
+  });
+
+  return { period, tenant_id: tenantId, daily };
+}
+
+export interface LowScoreSession {
+  session_id: string;
+  score: number;
+  evaluated_at: string;
+  message_count: number;
+  feedback_summary: string;
+}
+
+export async function fetchLowScoreSessions(
+  { db, tenantId, period }: SummaryQueryParams,
+  limit = 10,
+): Promise<LowScoreSession[]> {
+  const interval = periodToInterval(period);
+  const lowScoreParams: (string | number)[] = [`${interval}`];
+  const lowTenantClause = tenantId ? "AND e.tenant_id = $2" : "";
+  if (tenantId) lowScoreParams.push(tenantId);
+  lowScoreParams.push(limit);
+
+  const lowResult = await db.query(
+    `SELECT
+       e.session_id,
+       e.score,
+       e.evaluated_at,
+       COALESCE(msg_counts.message_count, 0)::int AS message_count,
+       SUBSTRING(COALESCE(e.feedback::text, ''), 1, 100) AS feedback_summary
+     FROM conversation_evaluations e
+     LEFT JOIN (
+       SELECT session_id, COUNT(*) AS message_count
+       FROM chat_messages
+       GROUP BY session_id
+     ) msg_counts ON msg_counts.session_id::text = e.session_id
+     WHERE e.evaluated_at >= NOW() - $1::interval
+       AND e.score > 0
+       AND e.score < 40
+     ${lowTenantClause}
+     ${userSourceExists("e.session_id", "e.tenant_id")}
+     ORDER BY e.score ASC
+     LIMIT $${lowScoreParams.length}`,
+    lowScoreParams,
+  );
+
+  type LowScoreRow = { session_id: string; score: string; evaluated_at: Date | string; message_count: number; feedback_summary: string | null };
+  return (lowResult.rows as LowScoreRow[]).map((row) => ({
+    session_id: row.session_id,
+    score: parseFloat(row.score),
+    evaluated_at: row.evaluated_at instanceof Date ? row.evaluated_at.toISOString() : row.evaluated_at,
+    message_count: row.message_count,
+    feedback_summary: row.feedback_summary ?? "",
+  }));
+}
