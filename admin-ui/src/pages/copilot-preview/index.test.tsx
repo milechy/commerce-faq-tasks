@@ -2757,6 +2757,108 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
   });
 });
 
+// W3-1(docs/COPILOT_UI_PARITY.md §3.1 #8): 自分の写真をアバター画像にする。
+// PDF取り込みと同じくエージェントツール経由にせず、AvatarAdoptedCard から直接
+// PATCH /v1/admin/avatar/configs/:id を叩く(fal/generateは呼ばない)。
+describe("CopilotPreviewPage — アバター画像の自前アップロード", () => {
+  function mockAdoptedThenPatch(patch?: () => Promise<Response>) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/configs/")) return patch ? patch() : mockOk({ id: "cfg-1" });
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+  }
+
+  async function sendAndGetPhotoInput(): Promise<HTMLInputElement> {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    await screen.findByRole("button", { name: "自分の写真を使う" });
+    // role="client_admin"既定ではPDF入力は描画されないため一意に取れる
+    return document.querySelector('input[type="file"][accept^="image/"]') as HTMLInputElement;
+  }
+
+  it("有効な画像を選ぶと即PATCHされ、成功カードが描画される(fal/generateは呼ばれない)", async () => {
+    mockAdoptedThenPatch();
+    const input = await sendAndGetPhotoInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("me.jpg", "image/jpeg", 1024)] } });
+
+    await waitFor(() => expect(screen.getByText("アバター画像を差し替えました")).toBeTruthy());
+    const patchCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(patchCall).toBeTruthy();
+    expect((patchCall![1] as RequestInit).method).toBe("PATCH");
+    const body = JSON.parse(String((patchCall![1] as RequestInit).body)) as { image_url: string };
+    expect(body.image_url.startsWith("data:image/jpeg;base64,")).toBe(true);
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/fal/generate"))).toBe(false);
+  });
+
+  it("5MBを超える画像は通信せずその場で拒否される", async () => {
+    mockAdoptedThenPatch();
+    const input = await sendAndGetPhotoInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("big.jpg", "image/jpeg", 6 * 1024 * 1024)] } });
+
+    await waitFor(() => expect(screen.getByText("写真を反映できませんでした")).toBeTruthy());
+    expect(screen.getByText(/5MB以下/)).toBeTruthy();
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"))).toBe(false);
+  });
+
+  it("画像でないファイル(type偽装含む)は通信せずその場で拒否される", async () => {
+    mockAdoptedThenPatch();
+    const input = await sendAndGetPhotoInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("me.jpg", "text/plain", 1024)] } });
+
+    await waitFor(() => expect(screen.getByText("写真を反映できませんでした")).toBeTruthy());
+    expect(screen.getByText(/JPG・PNG・WEBP/)).toBeTruthy();
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"))).toBe(false);
+  });
+
+  it("0バイトのファイルは通信せずその場で拒否される", async () => {
+    mockAdoptedThenPatch();
+    const input = await sendAndGetPhotoInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("empty.jpg", "image/jpeg", 0)] } });
+
+    await waitFor(() => expect(screen.getByText("写真を反映できませんでした")).toBeTruthy());
+    expect(screen.getByText(/空のファイル/)).toBeTruthy();
+  });
+
+  it("PATCHが失敗しても無限スピナーにならずエラーカードで確定する", async () => {
+    mockAdoptedThenPatch(() =>
+      Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "internal_error" }) } as Response),
+    );
+    const input = await sendAndGetPhotoInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("me.png", "image/png", 2048)] } });
+
+    await waitFor(() => expect(screen.getByText("写真を反映できませんでした")).toBeTruthy());
+    expect(screen.getByText("me.png")).toBeTruthy();
+  });
+});
+
 // POST /match-voice はテキストの候補(id/title/description/score)のみを返し音声
 // プレビューURLを持たない(旧UIウィザードのStudioVoiceSectionも試聴機能を持たない)。
 // 計画は「試聴要素の存在」を前提にしていたが、実装を確認するとその基盤が無いため、

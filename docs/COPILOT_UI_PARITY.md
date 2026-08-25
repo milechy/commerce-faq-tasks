@@ -497,7 +497,8 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 「参照」列の値は以下のいずれかのみ:
 - `` `tool:<name>` `` — その機能がツール `<name>`（複数ある場合は `tool:a,b`）で実行可能。`<name>` は `toolDefinitions.ts` の `ADMIN_AGENT_TOOLS` に実在すること
 - `` `handoff:<key>` `` — その機能は `<key>` の `get_legacy_ui_link` 案内で旧UIへ委譲している。`<key>` は `LEGACY_UI_FEATURES` に実在すること
-- `` `pending` `` — まだどちらでもない（不可視）。S0 未達の状態を隠さず明示する
+- `` `direct` `` — Copilot UI内で完結しているが、LLMのツール呼び出しを経由しない(バイナリ添付・生成画像URL群など500字のツール結果に収まらない、または「ファイルを選ぶ/落とす行為自体が意思表示」でLLMの判断を挟む余地が無いもの)。既存の画像候補生成・採用(`avatarCandidates`)と同じ、フロントから直接バックエンドAPIを叩く既存パターンを踏襲する場合にのみ使う
+- `` `pending` `` — まだどれでもない（不可視）。S0 未達の状態を隠さず明示する
 
 **W1〜W3 の各PRは、その機能を実装したタイミングで該当行を `pending` から `tool:` または `handoff:` に更新すること。** 更新を忘れると実装後もこの表だけが古いままになり、`docs/LEGACY_UI_SUNSET.md` と同じ drift が再発する（`legacyUiParity.test.ts` は参照先の実在は検査するが、実装済みなのに `pending` のまま残っているケースまでは検出できない — レビューで見る）。
 
@@ -510,7 +511,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 5 | FAQ一括非公開・一括削除 | `tool:bulk_unpublish_faqs,bulk_delete_faqs` |
 | 6 | FAQ一覧のカテゴリ絞り込み | `tool:get_faq_list` |
 | 7 | FAQのタグ | `tool:add_faq,update_faq` |
-| 8 | アバター画像「写真をアップロード」 | `pending` |
+| 8 | アバター画像「写真をアップロード」 | `direct` |
 | 9 | 音声クローン | `handoff:avatar_studio` |
 | 10 | 高品質画像の生成 | `handoff:avatar_premium` |
 | 11 | アバター新規作成ウィザード | `handoff:avatar_wizard` |
@@ -520,4 +521,4 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 15 | ご利用状況・お支払い | `tool:get_billing_summary` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W2-7完了時点）: `tool:` 12 / `handoff:` 3 / `pending` 1。W1完了。W2全8件完了(W2-1〜W2-8)。残るpendingは#8写真アップロードのみ。残るT3(#9,10,11 アバター音声クローン/高品質生成/新規作成ウィザード)のみ未着手(W3)。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
+現在地（2026-08-25、W3-1完了時点）: `tool:` 12 / `handoff:` 3 / `direct` 1 / `pending` 0。**S0(可視化)達成** — 16件全てが `pending` から抜けた。W1・W2(全8件)完了に加え、W3-1(#8写真アップロード)は既存の画像候補生成・採用(`avatarCandidates`)と同じフロントエンド直叩きパターンで実装し `direct` に分類した(専用のチャットツールを持たない)。残るT3(#9,10,11 アバター音声クローン/高品質生成/新規作成ウィザード)が未着手(W3-2〜W3-4)。S0 の完了は `pending` が 0 になった時点（`tool:` / `handoff:` / `direct` のいずれかに必ず分類されている状態）。
