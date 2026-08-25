@@ -1024,8 +1024,15 @@
   consentBanner.style.display = 'none';
   panel.appendChild(consentBanner);
 
+  // S6(共有学習プールの参加モデル・同意記録の分離是正): 同意キーはサーバが
+  // x-api-key から解決した本物の tenantId を優先する。data-tenant 属性はDOM由来
+  // (埋め込みコードの手動編集・欠落で崩れうる)で、欠落時は全テナントが
+  // 'unknown' キーに集約され、他テナントの同意状態を誤って引き継ぐ可能性がある。
+  // /api/widget/features または /api/chat の応答が届くまでは data-tenant を暫定値
+  // として使う(初回表示が空白になるのを避けるため)。
+  var _resolvedTenantId = null;
   function consentAckKey() {
-    return 'r2c_consent_ack_' + (tenantId || 'unknown');
+    return 'r2c_consent_ack_' + (_resolvedTenantId || tenantId || 'unknown');
   }
   function hasConsentAck() {
     try { return localStorage.getItem(consentAckKey()) === '1'; } catch (_e) { return false; }
@@ -2983,6 +2990,20 @@
         };
         messages.push(assistantMsg);
 
+        // S6: サーバ解決済みtenantId(ChatMessage.tenantId)を同意キーに反映する。
+        if (json.data && typeof json.data.tenantId === 'string' && json.data.tenantId) {
+          _resolvedTenantId = json.data.tenantId;
+        }
+
+        // S6(共有学習プールの参加モデル・fail-open是正): 開示バナーのバックストップ。
+        // /api/widget/features の取得が失敗すると data_shared_externally が届かず
+        // consent-banner を出せないままになる(fail-open)。会話が成立する限り
+        // 必ず届くこの応答にも同じ判定が載っているため、まだ表示していなければ
+        // ここで出す。event_tracking の有無や _tracker の初期化状態には依存しない。
+        if (json.data && json.data.data_shared_externally && !hasConsentAck()) {
+          consentBanner.style.display = 'flex';
+        }
+
         // アバター有効（LiveKit接続中）→ 応答テキストをTTSリクエストとして送信
         var lkRoom = window.__rajiuceRoom;
         console.log('[FAQ Widget] sendMessage after API: avatarProvider=' + avatarProvider + ' roomState=' + (lkRoom ? lkRoom.state : 'null') + ' hasParticipant=' + !!(lkRoom && lkRoom.localParticipant) + ' sessionDead=' + avatarSessionDead);
@@ -3758,6 +3779,10 @@
     })
       .then(function (r) { return r.ok ? r.json() : { event_tracking: false }; })
       .then(function (cfg) {
+        // S6: hasConsentAck() より前に反映する(この判定自体が同意キーに使うため)。
+        if (typeof cfg.tenant_id === 'string' && cfg.tenant_id) {
+          _resolvedTenantId = cfg.tenant_id;
+        }
         // event_tracking(行動計測全般)とは独立した機能なので、
         // event_tracking が無効でもここは先に評価する。
         if (cfg.answer_feedback === false) _answerFeedbackEnabled = false;

@@ -367,3 +367,37 @@ describe('public/widget.js — S5a データ共有開示バナー', () => {
     expect(block).not.toMatch(/\.innerHTML\s*=/);
   });
 });
+
+// S6(共有学習プールの参加モデル・fail-open是正): /api/chatバックストップと
+// サーバ解決済みtenantIdの反映が実ソースから消えていないことを機械的に検知する。
+describe('public/widget.js — S6 開示バナーのfail-open是正', () => {
+  it('/api/chat応答のdata_shared_externallyでもバナーを出す分岐がある(featuresの取得失敗をバックストップする)', () => {
+    const idx = WIDGET_SRC.indexOf("_resolvedTenantId = json.data.tenantId");
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 500);
+    expect(block).toMatch(/json\.data\s*&&\s*json\.data\.data_shared_externally\s*&&\s*!hasConsentAck\(\)/);
+  });
+
+  it('/api/chat応答のtenantIdを_resolvedTenantIdへ反映する処理が、バックストップ判定より前にある', () => {
+    const idx = WIDGET_SRC.indexOf("_resolvedTenantId = json.data.tenantId");
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 500);
+    const tenantIdIdx = block.indexOf('_resolvedTenantId = json.data.tenantId');
+    const backstopIdx = block.indexOf('data_shared_externally && !hasConsentAck()');
+    expect(tenantIdIdx).toBe(0);
+    expect(backstopIdx).toBeGreaterThan(-1);
+    expect(tenantIdIdx).toBeLessThan(backstopIdx);
+  });
+
+  it('/api/widget/features応答のtenant_idも_resolvedTenantIdへ反映し、hasConsentAck()の判定より前にある', () => {
+    const idx = WIDGET_SRC.indexOf('_resolvedTenantId = cfg.tenant_id');
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 500);
+    const bannerIdx = block.indexOf('!hasConsentAck()');
+    expect(bannerIdx).toBeGreaterThan(-1);
+  });
+
+  it('consentAckKey() は _resolvedTenantId(サーバ解決値) を data-tenant属性より優先する', () => {
+    expect(WIDGET_SRC).toMatch(/function consentAckKey\(\)\s*\{[\s\S]{0,80}_resolvedTenantId \|\| tenantId \|\| 'unknown'/);
+  });
+});

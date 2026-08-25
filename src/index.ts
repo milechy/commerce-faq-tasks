@@ -695,11 +695,16 @@ app.get('/api/widget/features', ...apiStack, async (req: express.Request, res: e
       // 出す判定に使う。プラン(free_ad等)ではなく実際にデータが外に出る条件(share)
       // そのもので判定する(resolveLearningConsentFromFeaturesと優先順位を共有)。
       data_shared_externally: resolveLearningConsentFromFeatures(features, { tenantId }).share,
+      // S6(共有学習プールの参加モデル・同意記録の分離是正): x-api-key から
+      // サーバが解決した本物の tenantId。ウィジェット埋め込みの data-tenant 属性
+      // (DOM由来・欠落/誤設定しうる)より信頼できるため、同意状態の永続化キーは
+      // こちらを優先して使う(widget.js側)。
+      tenant_id: tenantId,
     });
   } catch {
     // フラグ取得に失敗した場合も既定ONを維持する(D1: 出さない方が例外)。
     // data_shared_externally は fail-safeでfalse(resolveLearningConsentと同じ向き)。
-    return res.json({ event_tracking: false, answer_feedback: true, data_shared_externally: false });
+    return res.json({ event_tracking: false, answer_feedback: true, data_shared_externally: false, tenant_id: tenantId });
   }
 });
 

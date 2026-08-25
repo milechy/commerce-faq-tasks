@@ -41,6 +41,16 @@ jest.mock("../../lib/billing/planFeatures", () => ({
   getTenantPlan: (...args: unknown[]) => mockGetTenantPlan(...args),
 }));
 
+// S6: このファイルの対象は free_ad の月次上限判定であり、共有学習プールの同意判定
+// (S1〜S6, hermesConsent.ts / shareConsentDrift.test.ts で別途固定)は対象外。
+// モックしないと getCachedShareConsent の内部キャッシュがテスト間で共有され、
+// 「usage_logs集計を一切見ない」という本題のアサーションが実行順に依存して
+// 揺れる(実際に発生した: 1つ目のテストでキャッシュされ、2つ目以降はDBを
+// 見ずに素通りしてしまい、本来検知すべき呼び出しを見逃す)。
+jest.mock("../../lib/hermesConsent", () => ({
+  getCachedShareConsent: jest.fn().mockResolvedValue(false),
+}));
+
 const mockPoolQuery = jest.fn();
 jest.mock("../../lib/db", () => ({
   getPool: () => ({ query: (...args: unknown[]) => mockPoolQuery(...args) }),

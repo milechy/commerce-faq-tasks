@@ -15,7 +15,7 @@ function extractRouteBody(): string {
   const start = SRC.indexOf("app.get('/api/widget/features'");
   expect(start).toBeGreaterThan(-1);
   // 次のルート登録までを本体とみなす(十分な余白)
-  return SRC.slice(start, start + 1500);
+  return SRC.slice(start, start + 2000);
 }
 
 describe('GET /api/widget/features ソース不変条件', () => {
