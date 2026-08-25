@@ -384,6 +384,18 @@ export type AvatarAdoptedCardPayload = {
   name: string;
   imageUrl: string | null;
   description: string;
+  // W3-4(docs/COPILOT_UI_PARITY.md §3.1 #11): create_avatar_config でゼロから作成した
+  // 場合のみ埋まる。フロントの generateAvatarCandidates/generatePremiumAvatarCandidate が
+  // buildAvatarPrompt(admin-ui/src/lib/buildAvatarPrompt.ts)への入力として使う
+  // (旧UIウィザードの6ステップのうち「見た目」に関わる意思決定を引き継ぐため)。
+  // adopt_avatar_preset由来のカードでは常にundefined(=既存のhuman/bust/smile/simple既定のまま)。
+  avatarType?: 'human' | 'anime' | '3d' | 'animal' | 'robot';
+  gender?: 'male' | 'female';
+  age?: '20s' | '30s' | '40s' | '50s+';
+  outfit?: 'business_suit' | 'casual' | 'white_coat' | 'uniform';
+  animalKind?: 'dog' | 'cat' | 'bird' | 'bear' | 'fox' | 'other';
+  animalVibe?: 'cute' | 'cool' | 'silly';
+  robotDesign?: 'simple' | 'mecha' | 'scifi' | 'cute';
 };
 
 // get_tuning_rules の全件データ。text(自然文・500字)は件数の要約のみとし、
@@ -2114,6 +2126,96 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] adopt_avatar_preset failed', err);
         return truncate('アバターの採用に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // W3-4(docs/COPILOT_UI_PARITY.md §3.1 #11): 見本からではなくゼロから作成する。
+    // 旧UI(AvatarWizard.tsx、全6ステップ)の再現だが、ステップをそのまま写像しない —
+    // 写像するのは意思決定(見た目の種別・性別/年代/服装 等)であり、構図・表情・背景は
+    // generateAvatarCandidatesと同じ既定(bust/smile/simple)に固定する(選ばせない方針)。
+    // is_active=false で作るためadopt_avatar_presetと同じくまだ公開されない。画像は
+    // まだ無い(image_url=null) — フロントの「画像を新しく生成する」ボタンに合流する。
+    case 'create_avatar_config': {
+      const name = String(args['name'] ?? '').trim();
+      const personalityPrompt = String(args['personality_prompt'] ?? '').trim();
+      const avatarTypeRaw = args['avatar_type'];
+      const AVATAR_TYPES = ['human', 'anime', '3d', 'animal', 'robot'] as const;
+      const avatarType = AVATAR_TYPES.includes(avatarTypeRaw as typeof AVATAR_TYPES[number])
+        ? (avatarTypeRaw as typeof AVATAR_TYPES[number])
+        : undefined;
+
+      if (!name || name.length > 100) {
+        return truncate('name は1〜100文字で指定してください');
+      }
+      if (!personalityPrompt) {
+        return truncate('personality_prompt は必須です');
+      }
+      if (!avatarType) {
+        return truncate('avatar_type は human/anime/3d/animal/robot のいずれかで指定してください');
+      }
+
+      const confirmed = isConfirmed(args['confirmed']);
+      if (!confirmed) {
+        return truncate(
+          '作成には確認が必要です。ユーザーに名前・性格・見た目の内容を提示し、同意を得てから ' +
+          'confirmed=true で再度呼び出してください',
+        );
+      }
+
+      // 各種別に応じた補足のみを拾う(buildAvatarPrompt.tsの種別ごとの使い分けと同じ —
+      // 例えばavatar_type=humanのときはanimal_kind等が同時に来ても無視する)。
+      const isHumanLike = avatarType === 'human' || avatarType === 'anime' || avatarType === '3d';
+      const gender = isHumanLike && ['male', 'female'].includes(String(args['gender'])) ? (args['gender'] as 'male' | 'female') : undefined;
+      const age = avatarType === 'human' && ['20s', '30s', '40s', '50s+'].includes(String(args['age']))
+        ? (args['age'] as '20s' | '30s' | '40s' | '50s+') : undefined;
+      const outfit = avatarType === 'human' && ['business_suit', 'casual', 'white_coat', 'uniform'].includes(String(args['outfit']))
+        ? (args['outfit'] as 'business_suit' | 'casual' | 'white_coat' | 'uniform') : undefined;
+      const animalKind = avatarType === 'animal' && ['dog', 'cat', 'bird', 'bear', 'fox', 'other'].includes(String(args['animal_kind']))
+        ? (args['animal_kind'] as 'dog' | 'cat' | 'bird' | 'bear' | 'fox' | 'other') : undefined;
+      const animalVibe = avatarType === 'animal' && ['cute', 'cool', 'silly'].includes(String(args['animal_vibe']))
+        ? (args['animal_vibe'] as 'cute' | 'cool' | 'silly') : undefined;
+      const robotDesign = avatarType === 'robot' && ['simple', 'mecha', 'scifi', 'cute'].includes(String(args['robot_design']))
+        ? (args['robot_design'] as 'simple' | 'mecha' | 'scifi' | 'cute') : undefined;
+
+      try {
+        const result = await db.query(
+          `INSERT INTO avatar_configs
+             (tenant_id, name, personality_prompt, avatar_provider, is_default, is_active)
+           VALUES ($1, $2, $3, 'lemonslice', false, false)
+           RETURNING id, name`,
+          [tenantId, name, personalityPrompt],
+        );
+        const created = result.rows[0] as { id: string; name: string } | undefined;
+        if (!created) {
+          return truncate('アバターの作成に失敗しました');
+        }
+
+        const card: AvatarAdoptedCardPayload = {
+          kind: 'avatar_adopted',
+          configId: created.id,
+          name: created.name,
+          imageUrl: null,
+          description: personalityPrompt.slice(0, 120),
+          avatarType,
+          gender,
+          age,
+          outfit,
+          animalKind,
+          animalVibe,
+          robotDesign,
+        };
+
+        return {
+          text: truncate(
+            `アバター「${created.name}」を作成しました。まだ公開はされていません。` +
+            'このまま画像・声を用意してから activate_avatar で公開できます',
+          ),
+          card,
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] create_avatar_config failed', err);
+        return truncate('アバターの作成に失敗しました');
       }
     }
 

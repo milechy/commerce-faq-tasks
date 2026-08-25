@@ -33,7 +33,7 @@ import {
 import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
-import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
+import { buildAvatarPrompt, type AvatarPromptInput } from "../../lib/buildAvatarPrompt";
 // 相談窓口(担当者への相談 → 返信 → 解決確認)のループ。ポーリング・既読化・相談投稿は
 // パネル(Surface A)と同じ実装を共有し(lib/feedbackReplies.ts)、見せ方だけこの面の
 // カード/メッセージの作法に合わせる。
@@ -94,9 +94,25 @@ type Card =
   | { kind: "link"; label: string; url: string; description: string }
   | { kind: "agentAction"; tool: string; result: string }
   | { kind: "avatarPreset"; presetId: string; name: string; imageUrl: string | null; description: string }
-  // adopt_avatar_preset の採用直後カード。configId は自テナント側の avatar_configs.id
-  // (presetIdとは別物)で、以降の画像候補生成・採用はすべてこのidを使う。
-  | { kind: "avatarAdopted"; configId: string; name: string; imageUrl: string | null; description: string }
+  // adopt_avatar_preset / create_avatar_config の採用・作成直後カード。configId は
+  // 自テナント側の avatar_configs.id(presetIdとは別物)で、以降の画像候補生成・採用は
+  // すべてこのidを使う。avatarType以下はcreate_avatar_config(W3-4)由来のときのみ埋まり、
+  // generateAvatarCandidates/generatePremiumAvatarCandidateがbuildAvatarPromptへの
+  // 入力として使う。
+  | {
+      kind: "avatarAdopted";
+      configId: string;
+      name: string;
+      imageUrl: string | null;
+      description: string;
+      avatarType?: "human" | "anime" | "3d" | "animal" | "robot";
+      gender?: "male" | "female";
+      age?: "20s" | "30s" | "40s" | "50s+";
+      outfit?: "business_suit" | "casual" | "white_coat" | "uniform";
+      animalKind?: "dog" | "cat" | "bird" | "bear" | "fox" | "other";
+      animalVibe?: "cute" | "cool" | "silly";
+      robotDesign?: "simple" | "mecha" | "scifi" | "cute";
+    }
   // 画像候補の生成(POST /v1/admin/avatar/fal/generate)と採用(PATCH /configs/:id)を
   // チャット画面内で完結させるためのカード。生成はエージェントツール経由にしない
   // (画像URL群はツール結果の500字に収まらないため)。フロントから直接叩き、
@@ -116,6 +132,11 @@ type Card =
       message?: string;
       adoptedUrl?: string;
       premium?: boolean;
+      // W3-4: create_avatar_config(ゼロから作成)由来のavatarAdoptedカードから引き継いだ
+      // 見た目の意思決定。「もう一度試す」「別の候補を見る」の再生成でも同じ見た目を
+      // 保つために、カード自身にも複製して持たせる(avatarAdoptedカードは既に画面外に
+      // 流れている可能性があるため、そこへ都度遡らない)。
+      promptInput?: AvatarPromptInput;
     }
   // W3-1(docs/COPILOT_UI_PARITY.md §3.1 #8、T3 候補カード+添付): 自分の写真をアバター
   // 画像として使う。旧UI(StudioImageSection.tsx「写真をアップロード」タブ)の再現。
@@ -284,6 +305,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   reset_avatar_to_default: "アバターを既定に戻す",
   suggest_avatar_preset: "アバター見本の提案",
   adopt_avatar_preset: "アバター見本の採用",
+  create_avatar_config: "アバターの新規作成",
   get_category_personas: "カテゴリ別ペルソナの一覧取得",
   suggest_category_persona: "カテゴリ別ペルソナの下書き提案",
   save_category_persona: "カテゴリ別ペルソナの保存",
@@ -363,6 +385,7 @@ const REAL_WRITE_TOOLS = new Set([
   "update_avatar_profile",
   "reset_avatar_to_default",
   "adopt_avatar_preset",
+  "create_avatar_config",
   "save_category_persona",
   "import_industry_faq_templates",
   "commit_faq_import",
@@ -569,6 +592,28 @@ function validateVoiceCloneFile(file: File): string | null {
   if (file.size > MAX_VOICE_CLONE_FILE_SIZE) return VOICE_CLONE_SIZE_ERROR;
   if (!VOICE_CLONE_MIME_TYPES.has(file.type)) return VOICE_CLONE_TYPE_ERROR;
   return null;
+}
+
+// ─── W3-4: ゼロから作成したアバターの見た目の要約表示 ───────────────────────────
+// buildAvatarPrompt.tsに渡す英語の値と1対1の日本語ラベル。プロンプト自体はfal.aiへの
+// 入力としてbuildAvatarPromptが組み立てる(ここでは会話への表示にのみ使う)。
+const AVATAR_TYPE_LABEL: Record<string, string> = { human: "人物", anime: "アニメ調", "3d": "3Dキャラクター", animal: "動物", robot: "ロボット" };
+const AVATAR_GENDER_LABEL: Record<string, string> = { male: "男性", female: "女性" };
+const AVATAR_AGE_LABEL: Record<string, string> = { "20s": "20代", "30s": "30代", "40s": "40代", "50s+": "50代以上" };
+const AVATAR_OUTFIT_LABEL: Record<string, string> = { business_suit: "ビジネススーツ", casual: "カジュアル", white_coat: "白衣", uniform: "制服" };
+const AVATAR_ANIMAL_KIND_LABEL: Record<string, string> = { dog: "犬", cat: "猫", bird: "鳥", bear: "熊", fox: "狐", other: "動物" };
+const AVATAR_ANIMAL_VIBE_LABEL: Record<string, string> = { cute: "可愛らしい", cool: "クール", silly: "コミカル" };
+const AVATAR_ROBOT_DESIGN_LABEL: Record<string, string> = { simple: "シンプル", mecha: "メカ", scifi: "SF風", cute: "可愛らしい" };
+
+function describeAvatarAppearance(card: Extract<Card, { kind: "avatarAdopted" }>): string {
+  const parts = [AVATAR_TYPE_LABEL[card.avatarType ?? ""] ?? card.avatarType];
+  if (card.gender) parts.push(AVATAR_GENDER_LABEL[card.gender] ?? card.gender);
+  if (card.age) parts.push(AVATAR_AGE_LABEL[card.age] ?? card.age);
+  if (card.outfit) parts.push(AVATAR_OUTFIT_LABEL[card.outfit] ?? card.outfit);
+  if (card.animalKind) parts.push(AVATAR_ANIMAL_KIND_LABEL[card.animalKind] ?? card.animalKind);
+  if (card.animalVibe) parts.push(AVATAR_ANIMAL_VIBE_LABEL[card.animalVibe] ?? card.animalVibe);
+  if (card.robotDesign) parts.push(AVATAR_ROBOT_DESIGN_LABEL[card.robotDesign] ?? card.robotDesign);
+  return parts.filter(Boolean).join("・");
 }
 
 const AVATAR_VOICE_DESIGN_GENERIC_ERROR = "声を作成できませんでした。少し時間をおいてもう一度お試しください。";
@@ -853,8 +898,12 @@ export default function CopilotPreviewPage() {
         return { id: nextId(), role: "ai", card: { kind: "avatarPreset", presetId, name, imageUrl, description } };
       }
       if (a.card?.kind === "avatar_adopted") {
-        const { configId, name, imageUrl, description } = a.card;
-        return { id: nextId(), role: "ai", card: { kind: "avatarAdopted", configId, name, imageUrl, description } };
+        const { configId, name, imageUrl, description, avatarType, gender, age, outfit, animalKind, animalVibe, robotDesign } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "avatarAdopted", configId, name, imageUrl, description, avatarType, gender, age, outfit, animalKind, animalVibe, robotDesign },
+        };
       }
       if (a.card?.kind === "tuning_rules_list") {
         const { rules, totalCount } = a.card;
@@ -1516,16 +1565,11 @@ export default function CopilotPreviewPage() {
     );
   }, []);
 
-  const generateAvatarCandidates = async (configId: string, name: string) => {
+  const generateAvatarCandidates = async (configId: string, name: string, promptInput: AvatarPromptInput) => {
     const cardId = nextId();
-    push({ id: cardId, role: "ai", card: { kind: "avatarCandidates", configId, name, status: "generating" } });
+    push({ id: cardId, role: "ai", card: { kind: "avatarCandidates", configId, name, status: "generating", promptInput } });
 
-    const { prompt } = buildAvatarPrompt({
-      type: "human",
-      composition: "bust",
-      expression: "smile",
-      background: "simple",
-    });
+    const { prompt } = buildAvatarPrompt(promptInput);
 
     // previewMode(super_adminのクライアントビュー)中は操作対象テナントを
     // ?tenant= で明示する。付けないとバックエンドが自身の(空の)テナントで
@@ -1566,16 +1610,11 @@ export default function CopilotPreviewPage() {
   // Asana制約U-17: 繰り返し頼まれても毎回明示する — ここではボタン側で確認状態を
   // 生成完了/キャンセルのたびにリセットすることで満たす)。採用(PATCH)はimages配列に
   // 1枚だけ入れてavatarCandidates/adoptAvatarCandidateをそのまま使う。
-  const generatePremiumAvatarCandidate = async (configId: string, name: string) => {
+  const generatePremiumAvatarCandidate = async (configId: string, name: string, promptInput: AvatarPromptInput) => {
     const cardId = nextId();
-    push({ id: cardId, role: "ai", card: { kind: "avatarCandidates", configId, name, status: "generating", premium: true } });
+    push({ id: cardId, role: "ai", card: { kind: "avatarCandidates", configId, name, status: "generating", premium: true, promptInput } });
 
-    const { prompt } = buildAvatarPrompt({
-      type: "human",
-      composition: "bust",
-      expression: "smile",
-      background: "simple",
-    });
+    const { prompt } = buildAvatarPrompt(promptInput);
 
     const generateUrl = isSuperAdmin && scopedTenantId
       ? `${API_BASE}/v1/admin/avatar/generate-premium?tenant=${encodeURIComponent(scopedTenantId)}`
@@ -2328,8 +2367,8 @@ function MessageRow({
 }: {
   m: Msg;
   onChip: (a: string, id: number) => void;
-  onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
-  onGeneratePremiumAvatarCandidate: (configId: string, name: string) => void | Promise<void>;
+  onGenerateAvatarCandidates: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
+  onGeneratePremiumAvatarCandidate: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
   onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
   onCloneAvatarVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
@@ -2576,8 +2615,8 @@ function CardView({
 }: {
   card: Card;
   msgId: number;
-  onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
-  onGeneratePremiumAvatarCandidate: (configId: string, name: string) => void | Promise<void>;
+  onGenerateAvatarCandidates: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
+  onGeneratePremiumAvatarCandidate: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
   onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
   onCloneAvatarVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
@@ -3487,8 +3526,8 @@ function AvatarAdoptedCard({
   onDesignVoice,
 }: {
   card: Extract<Card, { kind: "avatarAdopted" }>;
-  onGenerate: (configId: string, name: string) => void | Promise<void>;
-  onGeneratePremium: (configId: string, name: string) => void | Promise<void>;
+  onGenerate: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
+  onGeneratePremium: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
   onUploadPhoto: (configId: string, file: File) => void | Promise<void>;
   onCloneVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
   onMatchVoice: (configId: string, description: string) => void | Promise<void>;
@@ -3501,9 +3540,24 @@ function AvatarAdoptedCard({
   const [premiumConfirming, setPremiumConfirming] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const voiceCloneInputRef = useRef<HTMLInputElement>(null);
+  // W3-4: create_avatar_config(ゼロから作成)由来のカードはavatarType以下が埋まっている。
+  // adopt_avatar_preset由来のカードは常にundefinedのため、既存どおりhuman/bust/smile/simple
+  // に落ち着く(挙動を変えない)。
+  const promptInput: AvatarPromptInput = {
+    type: card.avatarType ?? "human",
+    gender: card.gender,
+    age: card.age,
+    outfit: card.outfit,
+    animalKind: card.animalKind,
+    animalVibe: card.animalVibe,
+    robotDesign: card.robotDesign,
+    composition: "bust",
+    expression: "smile",
+    background: "simple",
+  };
   const handleGenerate = () => {
     setBusyImage(true);
-    void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusyImage(false));
+    void Promise.resolve(onGenerate(card.configId, card.name, promptInput)).finally(() => setBusyImage(false));
   };
   // W3-3: 高品質生成(Flux 2 Pro + Magnific)は通常生成より高い費用がかかるため、
   // Asana制約U-17(実行前の費用明示。繰り返し頼まれても毎回明示する)に沿って
@@ -3514,7 +3568,7 @@ function AvatarAdoptedCard({
   const handlePremiumConfirm = () => {
     setPremiumConfirming(false);
     setBusyPremium(true);
-    void Promise.resolve(onGeneratePremium(card.configId, card.name)).finally(() => setBusyPremium(false));
+    void Promise.resolve(onGeneratePremium(card.configId, card.name, promptInput)).finally(() => setBusyPremium(false));
   };
   // W3-1: 旧UI(StudioImageSection.tsx)の「AIで生成」「写真をアップロード」2タブを
   // ここで並列の2ボタンとして提示する(ボタンを押した瞬間にファイル選択が開き、
@@ -3549,7 +3603,7 @@ function AvatarAdoptedCard({
   return (
     <CardShell
       tone="good"
-      hd={<><span>✅</span>アバター「{card.name}」を採用しました</>}
+      hd={<><span>✅</span>アバター「{card.name}」を{card.avatarType ? "作成" : "採用"}しました</>}
       foot={<CardActionsNote note="AIでの生成・声の検索・音声クローンのたびに少額の費用が発生します（写真のアップロードは無料です）。気に入るまで何度でもやり直せます。" />}
     >
       {card.imageUrl && (
@@ -3559,6 +3613,7 @@ function AvatarAdoptedCard({
           style={{ width: 96, height: 96, borderRadius: 12, objectFit: "cover", alignSelf: "flex-start" }}
         />
       )}
+      {card.avatarType && <Field k="見た目" v={describeAvatarAppearance(card)} />}
       <Field k="性格・話し方" v={card.description} quote />
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button
@@ -3685,15 +3740,19 @@ function AvatarCandidatesCard({
 }: {
   card: Extract<Card, { kind: "avatarCandidates" }>;
   msgId: number;
-  onGenerate: (configId: string, name: string) => void | Promise<void>;
-  onGeneratePremium: (configId: string, name: string) => void | Promise<void>;
+  onGenerate: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
+  onGeneratePremium: (configId: string, name: string, promptInput: AvatarPromptInput) => void | Promise<void>;
   onAdopt: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
 }) {
   const [adopting, setAdopting] = useState<string | null>(null);
   // W3-3: premiumはヘッダ・再生成先の出し分けにのみ使う。再生成(「もう一度試す」
   // 「別の候補を見る」)は費用の再確認を挟まない — この2ボタンはユーザーが直前に
   // 明示的に選んだ「高品質生成」の続き操作であり、U-17が指す新規の依頼ではない。
-  const retry = () => void (card.premium ? onGeneratePremium(card.configId, card.name) : onGenerate(card.configId, card.name));
+  // card.promptInputはgenerateAvatarCandidates/generatePremiumAvatarCandidateが
+  // 生成開始時に複製した値。無い(=旧カードとの後方互換)場合はhuman/bust/smile/simpleの
+  // 既存既定にフォールバックする。
+  const retryPromptInput: AvatarPromptInput = card.promptInput ?? { type: "human", composition: "bust", expression: "smile", background: "simple" };
+  const retry = () => void (card.premium ? onGeneratePremium(card.configId, card.name, retryPromptInput) : onGenerate(card.configId, card.name, retryPromptInput));
 
   if (card.status === "generating") {
     return (

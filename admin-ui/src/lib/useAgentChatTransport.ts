@@ -79,13 +79,22 @@ export type AvatarPresetAgentActionCard = {
   description: string;
 };
 
-// adopt_avatar_preset の採用直後カード。configId は自テナント側の avatar_configs.id。
+// adopt_avatar_preset / create_avatar_config の採用・作成直後カード。configId は
+// 自テナント側の avatar_configs.id。avatarType以下はcreate_avatar_config由来のときのみ
+// 埋まる(W3-4)。フィールド形状はactionExecutor.tsのAvatarAdoptedCardPayloadと1対1に保つ。
 export type AvatarAdoptedAgentActionCard = {
   kind: "avatar_adopted";
   configId: string;
   name: string;
   imageUrl: string | null;
   description: string;
+  avatarType?: "human" | "anime" | "3d" | "animal" | "robot";
+  gender?: "male" | "female";
+  age?: "20s" | "30s" | "40s" | "50s+";
+  outfit?: "business_suit" | "casual" | "white_coat" | "uniform";
+  animalKind?: "dog" | "cat" | "bird" | "bear" | "fox" | "other";
+  animalVibe?: "cute" | "cool" | "silly";
+  robotDesign?: "simple" | "mecha" | "scifi" | "cute";
 };
 
 export type TuningRuleEvidence = {

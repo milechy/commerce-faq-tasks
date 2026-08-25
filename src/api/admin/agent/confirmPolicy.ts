@@ -47,6 +47,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 既定見本の自テナントへの複製。is_active=false で作るため公開はされないが、
   // 永続レコードを作成する点は add_faq と同じ階層。
   adopt_avatar_preset: 'medium',
+  // ゼロからの新規作成。is_active=false で作るため公開はされないが、永続レコードを
+  // 作成する点はadopt_avatar_presetと同じ階層。
+  create_avatar_config: 'medium',
   // 名前・性格・話し方という顧客が接する内容そのものの変更。update_faq と同じ階層。
   update_avatar_profile: 'medium',
   // 既定値への戻しは1操作で完結し、対象も既定の見本に限られるが、顧客が接する

@@ -635,7 +635,10 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       description:
         'アバターをまだ持っていないユーザーに、既定の見本（見た目・性格が作り込まれた雛形）から' +
         '1件を提案する読み取り専用ツール。この時点では何も作成しない。ユーザーが' +
-        '「アバターを作りたい」「初めて設定したい」等と言ったときに使う。',
+        '「アバターを作りたい」「初めて設定したい」等、具体的な要望を言わずに始めたときに' +
+        'まず使うこと（迷わず10分で出せることを優先する）。見本を気に入らない、または' +
+        '「動物にしたい」「アニメ調がいい」等ユーザーが最初から具体的な見た目・性格を' +
+        '指定してきた場合は、こちらを使わず create_avatar_config で直接ゼロから作成すること。',
       parameters: {
         type: 'object',
         properties: {},
@@ -664,6 +667,74 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           },
         },
         required: ['preset_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_avatar_config',
+      description:
+        'アバターを既定の見本からではなく、ユーザーが指定した見た目・性格でゼロから作成する。' +
+        '旧UIのアバター新規作成ウィザード（種別→性別/年代→服装→構図→表情→背景の6ステップ）に' +
+        '相当するが、ステップをそのまま質問しない。名前・性格（話し方）・見た目の種別（人物/' +
+        'アニメ/3D/動物/ロボット）を会話の中で1〜2問にまとめて聞き、必要ならそれぞれの種別に' +
+        '応じた見た目の補足（性別・年代・服装、または動物の種類・雰囲気、またはロボットの' +
+        'デザイン）も合わせて聞くこと。作成しても画像はまだ無い（配置は既存の「画像を新しく' +
+        '生成する」に合流する）。ユーザーの明確な同意を得たターンでのみ confirmed=true で' +
+        '呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'アバターの名前',
+          },
+          personality_prompt: {
+            type: 'string',
+            description: '性格・話し方の説明',
+          },
+          avatar_type: {
+            type: 'string',
+            description: '見た目の種別',
+            enum: ['human', 'anime', '3d', 'animal', 'robot'],
+          },
+          gender: {
+            type: 'string',
+            description: '性別（avatar_type=human/anime/3dのときのみ意味を持つ）',
+            enum: ['male', 'female'],
+          },
+          age: {
+            type: 'string',
+            description: '年代（avatar_type=humanのときのみ意味を持つ）',
+            enum: ['20s', '30s', '40s', '50s+'],
+          },
+          outfit: {
+            type: 'string',
+            description: '服装（avatar_type=humanのときのみ意味を持つ）',
+            enum: ['business_suit', 'casual', 'white_coat', 'uniform'],
+          },
+          animal_kind: {
+            type: 'string',
+            description: '動物の種類（avatar_type=animalのときのみ意味を持つ）',
+            enum: ['dog', 'cat', 'bird', 'bear', 'fox', 'other'],
+          },
+          animal_vibe: {
+            type: 'string',
+            description: '動物の雰囲気（avatar_type=animalのときのみ意味を持つ）',
+            enum: ['cute', 'cool', 'silly'],
+          },
+          robot_design: {
+            type: 'string',
+            description: 'ロボットのデザイン（avatar_type=robotのときのみ意味を持つ）',
+            enum: ['simple', 'mecha', 'scifi', 'cute'],
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['name', 'personality_prompt', 'avatar_type'],
       },
     },
   },
@@ -1553,7 +1624,10 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'feature="avatar_profile" は update_avatar_profile で対応できない場合にのみ使うこと。' +
         '高品質なアバター画像の生成は adopt_avatar_preset 採用後にチャット内の「💎 高品質な画像を' +
         '生成する」ボタンから直接行える(通常生成より費用が高いため、押すと生成前に確認が入る)。' +
-        'feature="avatar_premium" は、その画面自体を旧UIで見たいとユーザーが明示した場合にのみ使うこと。',
+        'feature="avatar_premium" は、その画面自体を旧UIで見たいとユーザーが明示した場合にのみ使うこと。' +
+        'アバターの新規作成は suggest_avatar_preset（見本から選ぶ）または create_avatar_config' +
+        '（ゼロから作る）でチャット内に完結できるため、まずそちらを使うこと。' +
+        'feature="avatar_wizard" は、その画面自体を旧UIで見たいとユーザーが明示した場合にのみ使うこと。',
       parameters: {
         type: 'object',
         properties: {

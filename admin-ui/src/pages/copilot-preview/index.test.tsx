@@ -2757,6 +2757,91 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
   });
 });
 
+// W3-4(docs/COPILOT_UI_PARITY.md §3.1 #11): アバター新規作成(ウィザード相当)。
+// create_avatar_configが返すavatarAdoptedカードは、見本採用(adopt_avatar_preset)と違い
+// avatarType以下の見た目の意思決定を持つ。generateAvatarCandidatesがこれを使って
+// buildAvatarPromptへの入力を組み立てる(人物以外・性別/年代/服装等が実際にプロンプトへ
+// 反映されることを、fal/generateへ送られる本文で確認する)。
+describe("CopilotPreviewPage — アバターの新規作成(ゼロから)", () => {
+  function mockCreatedThenEndpoints(opts: { generate?: () => Promise<Response> }) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/fal/generate")) {
+        return opts.generate ? opts.generate() : mockOk({ images: ["https://img/1.png"] });
+      }
+      if (String(url).includes("/v1/admin/avatar/configs/")) return mockOk({ id: "cfg-1" });
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "作成しました。",
+          actions: [
+            {
+              tool: "create_avatar_config",
+              result: "アバター「ポチ」を作成しました。まだ公開はされていません。",
+              card: {
+                kind: "avatar_adopted", configId: "cfg-1", name: "ポチ", imageUrl: null,
+                description: "元気で人懐っこい柴犬です。", avatarType: "animal", animalKind: "dog", animalVibe: "cute",
+              },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+  }
+
+  async function sendAndCreate() {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "柴犬っぽい元気な子で作って" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByRole("button", { name: "画像を新しく生成する" });
+  }
+
+  it("見出しが「作成しました」になり、見た目の意思決定が表示される", async () => {
+    mockCreatedThenEndpoints({});
+    await sendAndCreate();
+
+    expect(await screen.findByText("アバター「ポチ」を作成しました")).toBeTruthy();
+    expect(screen.getByText("動物・犬・可愛らしい")).toBeTruthy();
+  });
+
+  it("「画像を新しく生成する」が種別に応じたプロンプトでfal/generateを呼ぶ(人物既定に落ちない)", async () => {
+    mockCreatedThenEndpoints({});
+    const generateButton = await sendAndCreate();
+
+    fireEvent.click(generateButton);
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+
+    const generateCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/fal/generate"));
+    const sentPrompt = JSON.parse(String((generateCall![1] as RequestInit).body)).prompt as string;
+    expect(sentPrompt).toContain("anthropomorphic dog");
+    expect(sentPrompt).toContain("cute and adorable");
+    expect(sentPrompt).not.toContain("Japanese person");
+  });
+
+  it("「別の候補を見る」で再生成しても、同じ見た目のプロンプトが使われる", async () => {
+    mockCreatedThenEndpoints({});
+    const generateButton = await sendAndCreate();
+    fireEvent.click(generateButton);
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "別の候補を見る" }));
+    await waitFor(() => expect(vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/fal/generate")).length).toBe(2));
+
+    const secondCall = vi.mocked(authFetch).mock.calls.filter(([url]) => String(url).includes("/fal/generate"))[1]!;
+    const sentPrompt = JSON.parse(String((secondCall[1] as RequestInit).body)).prompt as string;
+    expect(sentPrompt).toContain("anthropomorphic dog");
+  });
+});
+
 // W3-3(docs/COPILOT_UI_PARITY.md §3.1 #10): 高品質な画像(Flux 2 Pro + Magnific、1枚)の
 // 生成。通常生成より費用が高いため、生成前に確認(生成する/やめる)を挟む(U-17)。
 // 採用は既存のavatarCandidates/PATCH /configs/:idをそのまま使う。

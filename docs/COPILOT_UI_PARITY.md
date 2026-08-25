@@ -514,11 +514,11 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 8 | アバター画像「写真をアップロード」 | `direct` |
 | 9 | 音声クローン | `direct` |
 | 10 | 高品質画像の生成 | `direct` |
-| 11 | アバター新規作成ウィザード | `handoff:avatar_wizard` |
+| 11 | アバター新規作成ウィザード | `tool:create_avatar_config` |
 | 12 | 会話分析の推移グラフ・低評価セッション | `tool:get_analytics_trend` |
 | 13 | ABテスト結果・改善提案 | `tool:get_ab_test_results` |
 | 14 | ナレッジ別の成約貢献度 | `tool:get_knowledge_attribution` |
 | 15 | ご利用状況・お支払い | `tool:get_billing_summary` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W3-3完了時点）: `tool:` 12 / `handoff:` 1 / `direct` 3 / `pending` 0。S0(可視化)達成済み。W3-3(#10高品質画像の生成)は既存の画像候補提示・採用カード(`avatarCandidates`)に `premium` フラグを追加する形で実装し(新しいカード種別は増やさない)、`direct` に分類した。通常生成より費用が高いため、生成前にチャット内で確認(生成する/やめる)を挟む(Asana制約U-17)。残るT3(#11新規作成ウィザード)のみ未着手(W3-4)。
+現在地（2026-08-25、W3-4完了時点）: `tool:` 13 / `handoff:` 0 / `direct` 3 / `pending` 0。**16件全ての実装が完了**（`handoff:` が0件になった）。W3-4(#11新規作成ウィザード)は新規ツール `create_avatar_config` を追加した — 旧UIウィザード(全6ステップ)をそのまま写像せず、見た目に関わる意思決定(種別・性別/年代/服装 等)だけを会話で受け取り、既存の `avatar_adopted` カードに合流させる(画像生成・声の用意はW3-1〜W3-3の既存フローがそのまま使える)。カードに引き継いだ見た目の意思決定は `generateAvatarCandidates`/`generatePremiumAvatarCandidate` が `buildAvatarPrompt` への入力として使い、`adopt_avatar_preset` 由来のカード(意思決定を持たない)は従来どおり人物/bust/smile/simple の既定のまま変わらない。
