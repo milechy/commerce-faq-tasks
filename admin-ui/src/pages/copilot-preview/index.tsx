@@ -777,7 +777,7 @@ export default function CopilotPreviewPage() {
       // 失敗しても店主には何も見せない(バッジが出ないだけ)。片方だけ失敗しても
       // もう片方は出せるよう allSettled で個別に扱う。
       const [gapRes, escRes] = await Promise.allSettled([
-        authFetch(`${API_BASE}/v1/admin/knowledge/gaps/count${qs}`),
+        authFetch(`${API_BASE}/v1/admin/knowledge-gaps/count${qs}`),
         authFetch(`${API_BASE}/v1/admin/chat-history/escalations${qs}`),
       ]);
       const next: RailCounts = {};

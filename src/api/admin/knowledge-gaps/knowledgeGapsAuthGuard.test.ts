@@ -53,6 +53,7 @@ function makeApp(user: Record<string, unknown> | null) {
 }
 
 const ROUTES = [
+  { method: 'get' as const, path: '/v1/admin/knowledge-gaps/count' },
   { method: 'get' as const, path: '/v1/admin/knowledge-gaps' },
   { method: 'patch' as const, path: '/v1/admin/knowledge-gaps/123' },
   { method: 'post' as const, path: '/v1/admin/knowledge-gaps/123/add-knowledge' },

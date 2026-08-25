@@ -174,8 +174,8 @@ export default function AdminDashboard() {
           : `${API_BASE}/v1/admin/knowledge`;
 
         const gapCountUrl = effectiveTenantId
-          ? `${API_BASE}/v1/admin/knowledge/gaps/count?tenant=${effectiveTenantId}`
-          : `${API_BASE}/v1/admin/knowledge/gaps/count`;
+          ? `${API_BASE}/v1/admin/knowledge-gaps/count?tenant=${effectiveTenantId}`
+          : `${API_BASE}/v1/admin/knowledge-gaps/count`;
 
         const [faqRes, bookRes, gapRes, feedbackRes] = await Promise.allSettled([
           authFetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`),
