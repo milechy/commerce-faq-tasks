@@ -49,6 +49,63 @@ export function userSourceExists(
            )`;
 }
 
+// ---------------------------------------------------------------------------
+// GID 1217810341674380: userSourceExists() の第3引数(chatSessionsColumn)を
+// テーブルごとに手で書く運用は、同じ欠陥を7回発生させた(#863→#954→#958→
+// #962→#963→#964→本タスク)。原因は2つ:
+//   1. 呼び忘れても型エラーにもテスト失敗にもならない(静かな誤集計)
+//   2. 第3引数を間違えると本番で 500 になる
+//      (TEXT=UUID の暗黙キャスト不可。session_id列の型はテーブルごとに違う)
+//
+// userSourceExistsForTable() はテーブル名をこのファイル内の1箇所の対応表
+// (KNOWN_TABLE_JOIN_COLUMN)から引くため、呼び出し側は結合列を書けない
+// (=間違えようがない)。呼び忘れは userSourceFilterCoverage.test.ts の
+// 網羅スイープが検知する。
+//
+// 既存の44箇所の呼び出しはそのまま(手で確認済み・テスト済みのコードを
+// 一括置換するリスクを避けるため)。新規のクエリはこちらを使うこと。
+// ---------------------------------------------------------------------------
+
+/** userSourceExistsForTable() が対応表を持つテーブル。新しいテーブルを追加したら必ずここに登録すること。 */
+export type KnownUserSourceTable =
+  | "conversation_evaluations"
+  | "conversion_attributions"
+  | "knowledge_gaps"
+  | "chat_messages";
+
+/**
+ * 各テーブルの session_id 列が chat_sessions のどの列(id=UUID / session_id=TEXT)と
+ * 対応するかの唯一の情報源。第3引数を人間が書かないための対応表。
+ *
+ * 変更するときは、対応する migration の列定義を確認してから直すこと
+ * (chat_sessions.id は UUID PRIMARY KEY、chat_sessions.session_id は TEXT)。
+ */
+const KNOWN_TABLE_JOIN_COLUMN: Record<KnownUserSourceTable, "session_id" | "id"> = {
+  // conversation_evaluations.session_id は TEXT (chat_history/migration.sql)。
+  // chat_sessions.session_id (TEXT) と対応する。
+  conversation_evaluations: "session_id",
+  // conversion_attributions.session_id は UUID (migration_conversion_attributions.sql)。
+  // chat_sessions.id (UUID PK) と対応する。
+  conversion_attributions: "id",
+  // knowledge_gaps.session_id は UUID (migration_knowledge_gaps.sql)。
+  knowledge_gaps: "id",
+  // chat_messages.session_id は UUID REFERENCES chat_sessions(id) (chat-history/migration.sql)。
+  chat_messages: "id",
+};
+
+/**
+ * userSourceExists() の安全な呼び出し方。テーブル名とエイリアスを渡すだけで、
+ * 結合列(第3引数)を KNOWN_TABLE_JOIN_COLUMN から自動的に選ぶ。
+ * 誤った結合列を渡す余地が無いため、TEXT=UUID の本番500を構造的に防ぐ。
+ *
+ * 例: ${userSourceExistsForTable("knowledge_gaps", "kg")}
+ *     → ${userSourceExists("kg.session_id", "kg.tenant_id", "id")} と同じ
+ */
+export function userSourceExistsForTable(table: KnownUserSourceTable, alias: string): string {
+  const chatSessionsColumn = KNOWN_TABLE_JOIN_COLUMN[table];
+  return userSourceExists(`${alias}.session_id`, `${alias}.tenant_id`, chatSessionsColumn);
+}
+
 /**
  * period 文字列を SQL INTERVAL 文字列に変換する。
  * 未知の値は "30 days" にフォールバック。
@@ -330,12 +387,18 @@ export async function fetchAnalyticsSummary({
   let cvDaysSinceFirstSession: number | null = null;
   if (tenantId) {
     const ageResult = await db.query(
+      // GID 1217810341674380 sweepで検出: この cs_min サブクエリに source='user' 絞り込みが
+      // 無く、e2e/テストトラフィックのセッションが MIN(started_at) に混入していた。
+      // e2eセッションはテナント作成直後から継続的に生成されるため、実ユーザーの初回セッションより
+      // 早い日時を MIN が拾い、cv_days_since_first_session が実際より過大に出ていた。
       `SELECT EXTRACT(DAYS FROM (NOW() - COALESCE(cs_min.first_session_at, t.created_at)))::int AS days
        FROM tenants t
        LEFT JOIN (
-         SELECT tenant_id, MIN(started_at) AS first_session_at
-         FROM chat_sessions
-         GROUP BY tenant_id
+         SELECT cs.tenant_id, MIN(cs.started_at) AS first_session_at
+         FROM chat_sessions cs
+         WHERE cs.tenant_id = t.id
+           ${userSourceClause("cs")}
+         GROUP BY cs.tenant_id
        ) cs_min ON cs_min.tenant_id = t.id
        WHERE t.id = $1`,
       [tenantId],
