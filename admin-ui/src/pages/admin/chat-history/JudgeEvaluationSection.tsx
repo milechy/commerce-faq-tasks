@@ -2,6 +2,7 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import type { Evaluation } from "./types";
 import { SuggestedRulesCard } from "./SuggestedRulesCard";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { LoadErrorBanner } from "../../../components/common/LoadErrorBanner";
 
 // ─── Judge評価セクション（AI品質評価） ─────────────────────────────────────────
 
@@ -26,6 +27,7 @@ export function JudgeEvaluationSection({
   setEvaluation,
   sessionId,
   fetchFailed = false,
+  onRetryFetch,
 }: {
   evaluation: Evaluation | null;
   isSuperAdmin: boolean;
@@ -34,6 +36,8 @@ export function JudgeEvaluationSection({
   // GID 1217808301732050: 評価の初期取得(GET /v1/admin/evaluations/:sessionId)が
   // 本当に失敗した場合のみ true。「未評価」（0件・200）とは区別する。
   fetchFailed?: boolean;
+  /** 取得失敗時の再試行。CLAUDE.md「再試行を促すなら再試行ボタンを同時に置く」を満たすため必須。 */
+  onRetryFetch?: () => void;
 }) {
   const [triggering, setTriggering] = useState(false);
   const [triggerError, setTriggerError] = useState<string | null>(null);
@@ -77,22 +81,20 @@ export function JudgeEvaluationSection({
       {evaluation == null ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
           {fetchFailed ? (
-            <span style={{
-              display: "inline-flex", alignItems: "center", padding: "4px 12px",
-              borderRadius: 999, fontSize: 12, fontWeight: 700,
-              background: "rgba(248,113,113,0.15)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5",
-            }}>⚠️ 取得に失敗しました</span>
+            // 取得失敗は共通バナーを使う。--destructive-* トークンでライト/ダーク
+            // 両テーマで読め、再試行ボタンが本体に含まれる
+            // (ハードコードの rgba(248,113,113,*) + #fca5a5 は LoadErrorBanner の
+            //  ヘッダーコメントが「ライトテーマで判読不能」と名指しで警告している配色)。
+            <LoadErrorBanner
+              message="評価データを読み込めませんでした。"
+              onRetry={() => onRetryFetch?.()}
+            />
           ) : (
             <span style={{
               display: "inline-flex", alignItems: "center", padding: "4px 12px",
               borderRadius: 999, fontSize: 12, fontWeight: 700,
               background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "var(--muted-foreground)",
             }}>未評価</span>
-          )}
-          {fetchFailed && (
-            <p style={{ margin: 0, fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.5 }}>
-              評価データの読み込みに失敗しました。少し時間をおいてページを再読み込みしてみてください 🙏
-            </p>
           )}
           {sessionId && (
             <button
